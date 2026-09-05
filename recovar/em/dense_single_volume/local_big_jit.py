@@ -421,6 +421,367 @@ def _relion_wavg_direct_triplet_shells(
     return shell_triplets, per_image_cutoff
 
 
+class _LocalExactNoiseResult(NamedTuple):
+    """Noise carries and per-bucket outputs from the shared exact reduction."""
+
+    noise_wsum: jax.Array
+    noise_img_power: jax.Array
+    noise_a2: jax.Array
+    noise_xa: jax.Array
+    noise_scale_xa: jax.Array
+    noise_scale_aa: jax.Array
+    bucket_norm_correction: jax.Array
+    noise_sigma2_offset: jax.Array
+    noise_sumw: jax.Array
+    debug_wavg_cutoff_triplet: jax.Array
+
+
+def compute_local_exact_noise(
+    noise_wsum,
+    noise_img_power,
+    noise_a2,
+    noise_xa,
+    noise_scale_xa,
+    noise_scale_aa,
+    noise_sigma2_offset,
+    noise_sumw,
+    scalar_reconstruction_probs,
+    pixel_reconstruction_probs,
+    pixel_proj_for_noise,
+    pixel_ctf_probs,
+    shifted_noise_split,
+    processed_score_half,
+    image_only_corr,
+    translation_sqdist_ang,
+    valid_image_mask,
+    shell_indices_half,
+    shell_indices_noise,
+    noise_variance_for_noise,
+    scale_correction_pixel_mask,
+    group_ids,
+    ctf_rfloat_half,
+    batch_scale,
+    relion_score_translation_angles,
+    relion_wavg_rectangle_indices,
+    relion_wavg_exact_positions,
+    relion_wavg_rectangle_shell_indices,
+    recon_window_indices,
+    noise_projection_max_r,
+    wavg_cutoff_shell,
+    runtime_current_size,
+    logical_recon_pixel_count,
+    logical_rectangle_pixel_count,
+    *,
+    image_shape,
+    shell_count: int,
+    norm_current_size,
+    include_unweighted_norm_high_shell: bool,
+    use_relion_cuda_powerclass_spectrum: bool,
+    source_faithful_spectrum_norm: bool,
+    accumulate_scale_correction: bool,
+    return_noise_split: bool,
+    use_relion_wavg_cutoff: bool,
+    relion_wavg_sequential_cuda: bool | None,
+    return_debug_wavg_cutoff_triplet: bool = False,
+):
+    """Compose the exact-local noise reduction without a JIT boundary.
+
+    The scalar posterior keeps the dense padded layout and its exact reduction
+    tree. Pixel-heavy operands may use the smaller final-support layout while
+    retaining its established row order. Ordinary EM traces this helper inside
+    its existing big JIT; VDAM puts one outer JIT around the deferred call.
+    """
+
+    norm_dtype = jnp.float64 if source_faithful_spectrum_norm else jnp.float32
+    support_mass, _translation_posterior, noise_sumw_offset = (
+        compute_local_noise_scalar_terms(
+            scalar_reconstruction_probs,
+            translation_sqdist_ang,
+            valid_image_mask,
+        )
+    )
+    processed_noise_power_half = processed_score_half * image_only_corr[:, None]
+    batch_img_power_shells, batch_img_power_per_image = (
+        _noise_image_power_shells_and_per_image(
+            processed_noise_power_half,
+            support_mass,
+            shell_indices_half,
+            valid_image_mask,
+            noise_projection_max_r,
+            shell_count=shell_count,
+            image_shape=image_shape,
+            current_size=norm_current_size,
+            runtime_current_size=runtime_current_size,
+            include_unweighted_high_shell=include_unweighted_norm_high_shell,
+            use_relion_cuda_powerclass_spectrum=use_relion_cuda_powerclass_spectrum,
+            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+        )
+    )
+    noise_sumw = noise_sumw + jnp.sum(support_mass)
+
+    pixel_batch_size = pixel_reconstruction_probs.shape[0]
+    pixel_valid_image_mask = valid_image_mask[:pixel_batch_size]
+    shifted_for_noise = jnp.where(
+        support_mass[:pixel_batch_size, None, None] != 0.0,
+        shifted_noise_split[:pixel_batch_size],
+        0.0,
+    )
+    summed_masked_noise = compute_local_weighted_sums(
+        pixel_reconstruction_probs,
+        shifted_for_noise,
+    )
+    flat_proj_for_noise = pixel_proj_for_noise.reshape(-1, pixel_proj_for_noise.shape[-1])
+    proj_abs2_for_norm = jnp.abs(pixel_proj_for_noise) ** 2
+    block_noise_shells, block_a2_shells, block_xa_shells = _compute_noise_block(
+        flat_proj_for_noise,
+        (jnp.abs(flat_proj_for_noise) ** 2),
+        summed_masked_noise.reshape(-1, summed_masked_noise.shape[-1]),
+        pixel_ctf_probs.reshape(-1, pixel_ctf_probs.shape[-1]),
+        noise_variance_for_noise,
+        shell_indices_noise,
+        shell_count,
+        return_noise_split,
+    )
+
+    debug_wavg_cutoff_triplet = jnp.zeros((1, 3), dtype=jnp.float64)
+    if use_relion_wavg_cutoff:
+        direct_triplet_shells, debug_wavg_cutoff_triplet = (
+            _relion_wavg_direct_triplet_shells(
+                processed_score_half[:pixel_batch_size],
+                relion_score_translation_angles,
+                relion_wavg_rectangle_indices,
+                relion_wavg_exact_positions,
+                relion_wavg_rectangle_shell_indices,
+                recon_window_indices,
+                pixel_proj_for_noise,
+                ctf_rfloat_half[:pixel_batch_size],
+                batch_scale[:pixel_batch_size],
+                pixel_reconstruction_probs,
+                pixel_valid_image_mask,
+                image_shape=image_shape,
+                shell_count=shell_count,
+                cutoff_shell=wavg_cutoff_shell,
+                relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
+                logical_recon_pixel_count=logical_recon_pixel_count,
+                logical_rectangle_pixel_count=logical_rectangle_pixel_count,
+                return_per_image_cutoff=return_debug_wavg_cutoff_triplet,
+            )
+        )
+        cutoff_mask = jnp.arange(shell_count, dtype=jnp.int32) == wavg_cutoff_shell
+        block_noise_shells = jnp.where(
+            cutoff_mask, direct_triplet_shells[2], block_noise_shells
+        )
+        batch_img_power_shells = jnp.where(
+            cutoff_mask, 0.0, batch_img_power_shells
+        )
+        if return_noise_split:
+            block_a2_shells = jnp.where(
+                cutoff_mask, direct_triplet_shells[1], block_a2_shells
+            )
+            block_xa_shells = jnp.where(
+                cutoff_mask, direct_triplet_shells[0], block_xa_shells
+            )
+
+    noise_wsum = noise_wsum + block_noise_shells
+    noise_img_power = noise_img_power + batch_img_power_shells
+    if return_noise_split:
+        noise_a2 = noise_a2 + block_a2_shells
+        noise_xa = noise_xa + block_xa_shells
+    if accumulate_scale_correction:
+        scale_xa_per_image, scale_aa_per_image = (
+            _compute_scale_correction_terms_per_image(
+                pixel_proj_for_noise,
+                proj_abs2_for_norm,
+                summed_masked_noise,
+                pixel_ctf_probs,
+                noise_variance_for_noise,
+                batch_scale[:pixel_batch_size],
+                scale_correction_pixel_mask,
+            )
+        )
+        scale_xa_per_image = jnp.where(
+            pixel_valid_image_mask, scale_xa_per_image, 0.0
+        )
+        scale_aa_per_image = jnp.where(
+            pixel_valid_image_mask, scale_aa_per_image, 0.0
+        )
+        pixel_group_ids = group_ids[:pixel_batch_size]
+        noise_scale_xa = noise_scale_xa.at[pixel_group_ids].add(scale_xa_per_image)
+        noise_scale_aa = noise_scale_aa.at[pixel_group_ids].add(scale_aa_per_image)
+    noise_sigma2_offset = noise_sigma2_offset + noise_sumw_offset
+    bucket_norm_correction = (
+        batch_img_power_per_image[:pixel_batch_size]
+        + _compute_norm_residual_per_image(
+            pixel_proj_for_noise,
+            proj_abs2_for_norm,
+            summed_masked_noise,
+            pixel_ctf_probs,
+            noise_variance_for_noise,
+        )
+    )
+    bucket_norm_correction = jnp.where(
+        pixel_valid_image_mask, bucket_norm_correction, 0.0
+    ).astype(norm_dtype)
+    return _LocalExactNoiseResult(
+        noise_wsum,
+        noise_img_power,
+        noise_a2,
+        noise_xa,
+        noise_scale_xa,
+        noise_scale_aa,
+        bucket_norm_correction,
+        noise_sigma2_offset,
+        noise_sumw,
+        debug_wavg_cutoff_triplet,
+    )
+
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "image_shape",
+        "shell_count",
+        "norm_current_size",
+        "stable_fourier_window_shapes",
+        "include_unweighted_norm_high_shell",
+        "use_relion_cuda_powerclass_spectrum",
+        "source_faithful_spectrum_norm",
+        "accumulate_scale_correction",
+        "return_noise_split",
+        "use_relion_wavg_cutoff",
+        "relion_wavg_sequential_cuda",
+    ),
+)
+def run_deferred_local_exact_noise_jit(
+    noise_wsum,
+    noise_img_power,
+    noise_a2,
+    noise_xa,
+    noise_scale_xa,
+    noise_scale_aa,
+    noise_norm_correction,
+    noise_sigma2_offset,
+    noise_sumw,
+    scalar_reconstruction_probs,
+    pixel_reconstruction_probs,
+    pixel_proj_for_noise,
+    pixel_ctf_probs,
+    shifted_noise_split,
+    processed_score_half,
+    image_only_corr,
+    translation_sqdist_ang,
+    valid_image_mask,
+    shell_indices_half,
+    shell_indices_noise,
+    noise_variance_for_noise,
+    scale_correction_pixel_mask,
+    group_ids,
+    ctf_rfloat_half,
+    batch_scale,
+    relion_score_translation_angles,
+    relion_wavg_rectangle_indices,
+    relion_wavg_exact_positions,
+    relion_wavg_rectangle_shell_indices,
+    recon_window_indices,
+    bucket_image_indices,
+    runtime_logical_current_size,
+    *,
+    image_shape,
+    shell_count: int,
+    norm_current_size,
+    stable_fourier_window_shapes: bool,
+    include_unweighted_norm_high_shell: bool,
+    use_relion_cuda_powerclass_spectrum: bool,
+    source_faithful_spectrum_norm: bool,
+    accumulate_scale_correction: bool,
+    return_noise_split: bool,
+    use_relion_wavg_cutoff: bool,
+    relion_wavg_sequential_cuda: bool | None,
+):
+    """Run one deferred VDAM exact-noise bucket through one outer JIT."""
+
+    runtime_logical_current_size = jnp.asarray(
+        runtime_logical_current_size, dtype=jnp.int32
+    )
+    noise_projection_max_r = runtime_logical_current_size // 2
+    runtime_current_size = (
+        runtime_logical_current_size if stable_fourier_window_shapes else None
+    )
+    logical_recon_pixel_count = (
+        jnp.sum(
+            jnp.asarray(shell_indices_noise, dtype=jnp.int32) >= 0,
+            dtype=jnp.int32,
+        )
+        if stable_fourier_window_shapes
+        else None
+    )
+    logical_rectangle_pixel_count = (
+        runtime_logical_current_size * (runtime_logical_current_size // 2 + 1)
+        if stable_fourier_window_shapes
+        else None
+    )
+    result = compute_local_exact_noise(
+        noise_wsum,
+        noise_img_power,
+        noise_a2,
+        noise_xa,
+        noise_scale_xa,
+        noise_scale_aa,
+        noise_sigma2_offset,
+        noise_sumw,
+        scalar_reconstruction_probs,
+        pixel_reconstruction_probs,
+        pixel_proj_for_noise,
+        pixel_ctf_probs,
+        shifted_noise_split,
+        processed_score_half,
+        image_only_corr,
+        translation_sqdist_ang,
+        valid_image_mask,
+        shell_indices_half,
+        shell_indices_noise,
+        noise_variance_for_noise,
+        scale_correction_pixel_mask,
+        group_ids,
+        ctf_rfloat_half,
+        batch_scale,
+        relion_score_translation_angles,
+        relion_wavg_rectangle_indices,
+        relion_wavg_exact_positions,
+        relion_wavg_rectangle_shell_indices,
+        recon_window_indices,
+        noise_projection_max_r,
+        noise_projection_max_r,
+        runtime_current_size,
+        logical_recon_pixel_count,
+        logical_rectangle_pixel_count,
+        image_shape=image_shape,
+        shell_count=shell_count,
+        norm_current_size=norm_current_size,
+        include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
+        use_relion_cuda_powerclass_spectrum=use_relion_cuda_powerclass_spectrum,
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+        accumulate_scale_correction=accumulate_scale_correction,
+        return_noise_split=return_noise_split,
+        use_relion_wavg_cutoff=use_relion_wavg_cutoff,
+        relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
+    )
+    noise_norm_correction = noise_norm_correction.at[
+        jnp.asarray(bucket_image_indices, dtype=jnp.int32)
+    ].add(result.bucket_norm_correction)
+    return (
+        result.noise_wsum,
+        result.noise_img_power,
+        result.noise_a2,
+        result.noise_xa,
+        result.noise_scale_xa,
+        result.noise_scale_aa,
+        noise_norm_correction,
+        result.noise_sigma2_offset,
+        result.noise_sumw,
+    )
+
+
 def _exact_local_mstep_should_split_adjoints(recon_volume_shape, *arrays) -> bool:
     """Return whether exact-local y/CTF adjoints must run separately."""
 
@@ -2272,139 +2633,83 @@ def run_local_bucket_big_jit(
             if stable_fourier_window_shapes
             else projection_max_r
         )
-        (
-            support_mass,
-            _translation_posterior,
-            noise_sumw_offset,
-        ) = compute_local_noise_scalar_terms(
-            reconstruction_probs,
-            translation_sqdist_ang,
-            valid_image_mask,
-        )
-        processed_noise_power_half = processed_score_half * image_only_corr[:, None]
-        batch_img_power_shells, batch_img_power_per_image = _noise_image_power_shells_and_per_image(
-            processed_noise_power_half,
-            support_mass,
-            shell_indices_half,
-            valid_image_mask,
-            noise_projection_max_r,
-            shell_count=n_shells,
-            image_shape=image_shape,
-            current_size=norm_current_size,
-            runtime_current_size=(
-                runtime_logical_current_size
-                if stable_fourier_window_shapes
-                else None
-            ),
-            include_unweighted_high_shell=include_unweighted_norm_high_shell,
-            use_relion_cuda_powerclass_spectrum=relion_exact_fine_diff2,
-            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
-        )
-        noise_sumw = noise_sumw + jnp.sum(support_mass)
-
-        shifted_noise_split = shifted_noise.reshape(batch_size, n_trans, -1)
-        shifted_noise_split = jnp.where(support_mass[:, None, None] != 0.0, shifted_noise_split, 0.0)
-        summed_masked_noise = compute_local_weighted_sums(
-            reconstruction_probs,
-            shifted_noise_split,
-        )
-        flat_summed_masked_noise = summed_masked_noise.reshape(
-            batch_size * local_rotations.shape[1],
-            summed_masked_noise.shape[-1],
-        )
-        flat_proj_for_noise = proj_for_noise.reshape(batch_size * local_rotations.shape[1], proj_for_noise.shape[-1])
-        proj_abs2_for_norm = jnp.abs(proj_for_noise) ** 2
-        flat_proj_abs2_for_noise = jnp.abs(flat_proj_for_noise) ** 2
-        block_noise_shells, block_a2_shells, block_xa_shells = _compute_noise_block(
-            flat_proj_for_noise,
-            flat_proj_abs2_for_noise,
-            flat_summed_masked_noise,
-            flat_ctf_probs,
-            noise_variance_for_noise,
-            shell_indices_noise,
-            n_shells,
-            return_noise_split,
-        )
         use_relion_wavg_cutoff = bool(
             relion_exact_fine_diff2 and use_window and norm_current_size is not None
         )
-        if use_relion_wavg_cutoff:
-            direct_triplet_shells, debug_wavg_cutoff_triplet = _relion_wavg_direct_triplet_shells(
-                processed_score_half,
-                relion_score_translation_angles,
-                relion_wavg_rectangle_indices,
-                relion_wavg_exact_positions,
-                relion_wavg_rectangle_shell_indices,
-                recon_window_indices,
-                proj_for_noise,
-                ctf_rfloat_half,
-                batch_scale,
-                reconstruction_probs,
-                valid_image_mask,
-                image_shape=image_shape,
-                shell_count=n_shells,
-                cutoff_shell=(
-                    runtime_logical_current_size // 2
-                    if stable_fourier_window_shapes
-                    else int(norm_current_size) // 2
-                ),
-                relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
-                logical_recon_pixel_count=(
-                    jnp.sum(
-                        jnp.asarray(shell_indices_noise, dtype=jnp.int32) >= 0,
-                        dtype=jnp.int32,
-                    )
-                    if stable_fourier_window_shapes
-                    else None
-                ),
-                logical_rectangle_pixel_count=(
-                    runtime_logical_current_size
-                    * (runtime_logical_current_size // 2 + 1)
-                    if stable_fourier_window_shapes
-                    else None
-                ),
-                return_per_image_cutoff=return_debug_operands,
-            )
-            cutoff_mask = jnp.arange(n_shells, dtype=jnp.int32) == (
-                runtime_logical_current_size // 2
-                if stable_fourier_window_shapes
-                else int(norm_current_size) // 2
-            )
-            block_noise_shells = jnp.where(cutoff_mask, direct_triplet_shells[2], block_noise_shells)
-            batch_img_power_shells = jnp.where(cutoff_mask, 0.0, batch_img_power_shells)
-            if return_noise_split:
-                block_a2_shells = jnp.where(cutoff_mask, direct_triplet_shells[1], block_a2_shells)
-                block_xa_shells = jnp.where(cutoff_mask, direct_triplet_shells[0], block_xa_shells)
-        noise_wsum = noise_wsum + block_noise_shells
-        noise_img_power = noise_img_power + batch_img_power_shells
-        if return_noise_split:
-            noise_a2 = noise_a2 + block_a2_shells
-            noise_xa = noise_xa + block_xa_shells
-        if accumulate_scale_correction:
-            scale_xa_per_image, scale_aa_per_image = _compute_scale_correction_terms_per_image(
-                proj_for_noise,
-                proj_abs2_for_norm,
-                summed_masked_noise,
-                ctf_probs,
-                noise_variance_for_noise,
-                batch_scale,
-                scale_correction_pixel_mask,
-            )
-            scale_xa_per_image = jnp.where(valid_image_mask, scale_xa_per_image, 0.0)
-            scale_aa_per_image = jnp.where(valid_image_mask, scale_aa_per_image, 0.0)
-            noise_scale_xa = noise_scale_xa.at[group_ids].add(scale_xa_per_image)
-            noise_scale_aa = noise_scale_aa.at[group_ids].add(scale_aa_per_image)
-        noise_sigma2_offset = noise_sigma2_offset + noise_sumw_offset
-        bucket_norm_correction = batch_img_power_per_image + _compute_norm_residual_per_image(
+        wavg_cutoff_shell = (
+            runtime_logical_current_size // 2
+            if stable_fourier_window_shapes
+            else (int(norm_current_size) // 2 if use_relion_wavg_cutoff else 0)
+        )
+        noise_result = compute_local_exact_noise(
+            noise_wsum,
+            noise_img_power,
+            noise_a2,
+            noise_xa,
+            noise_scale_xa,
+            noise_scale_aa,
+            noise_sigma2_offset,
+            noise_sumw,
+            reconstruction_probs,
+            reconstruction_probs,
             proj_for_noise,
-            proj_abs2_for_norm,
-            summed_masked_noise,
             ctf_probs,
+            shifted_noise.reshape(batch_size, n_trans, -1),
+            processed_score_half,
+            image_only_corr,
+            translation_sqdist_ang,
+            valid_image_mask,
+            shell_indices_half,
+            shell_indices_noise,
             noise_variance_for_noise,
+            scale_correction_pixel_mask,
+            group_ids,
+            ctf_rfloat_half,
+            batch_scale,
+            relion_score_translation_angles,
+            relion_wavg_rectangle_indices,
+            relion_wavg_exact_positions,
+            relion_wavg_rectangle_shell_indices,
+            recon_window_indices,
+            noise_projection_max_r,
+            wavg_cutoff_shell,
+            runtime_logical_current_size if stable_fourier_window_shapes else None,
+            (
+                jnp.sum(
+                    jnp.asarray(shell_indices_noise, dtype=jnp.int32) >= 0,
+                    dtype=jnp.int32,
+                )
+                if stable_fourier_window_shapes
+                else None
+            ),
+            (
+                runtime_logical_current_size
+                * (runtime_logical_current_size // 2 + 1)
+                if stable_fourier_window_shapes
+                else None
+            ),
+            image_shape=image_shape,
+            shell_count=n_shells,
+            norm_current_size=norm_current_size,
+            include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
+            use_relion_cuda_powerclass_spectrum=relion_exact_fine_diff2,
+            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+            accumulate_scale_correction=accumulate_scale_correction,
+            return_noise_split=return_noise_split,
+            use_relion_wavg_cutoff=use_relion_wavg_cutoff,
+            relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
+            return_debug_wavg_cutoff_triplet=return_debug_operands,
         )
-        bucket_norm_correction = jnp.where(valid_image_mask, bucket_norm_correction, 0.0).astype(
-            norm_correction_dtype
-        )
+        noise_wsum = noise_result.noise_wsum
+        noise_img_power = noise_result.noise_img_power
+        noise_a2 = noise_result.noise_a2
+        noise_xa = noise_result.noise_xa
+        noise_scale_xa = noise_result.noise_scale_xa
+        noise_scale_aa = noise_result.noise_scale_aa
+        bucket_norm_correction = noise_result.bucket_norm_correction
+        noise_sigma2_offset = noise_result.noise_sigma2_offset
+        noise_sumw = noise_result.noise_sumw
+        debug_wavg_cutoff_triplet = noise_result.debug_wavg_cutoff_triplet
 
     reconstruction_row_count = jnp.sum(reconstruction_rotation_mask & rotation_mask).astype(jnp.int32)
     if return_mstep_tensors:

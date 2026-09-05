@@ -1070,7 +1070,17 @@ def test_deferred_packed_vdam_keeps_dense_oracle_and_packed_final_noise_lane():
     assert '"packed_final_noise_preserves_dense_scalar_order"' in engine
     assert "preserve_dense_scalar_reduction = bool(" in engine
     assert "scalar_noise_reconstruction_probs = reconstruction_probs" in engine
-    assert "pixel_support_mass = support_mass[:unpadded_batch_size]" in engine
+    packed_noise_start = engine.index("if use_packed_final_noise:")
+    packed_noise_stop = engine.index(
+        "and not use_packed_final_noise",
+        packed_noise_start,
+    )
+    packed_noise = engine[packed_noise_start:packed_noise_stop]
+    assert packed_noise.count("run_deferred_local_exact_noise_jit(") == 1
+    assert "compute_local_weighted_sums(" not in packed_noise
+    assert "support_mass[:pixel_batch_size, None, None]" in big_jit
+    assert "def compute_local_exact_noise(" in big_jit
+    assert "def run_deferred_local_exact_noise_jit(" in big_jit
     assert "compute_local_noise_scalar_terms(" in engine
     assert "compute_local_noise_scalar_terms(" in big_jit
     assert "support_mass = jnp.sum(reconstruction_probs.reshape" not in big_jit
