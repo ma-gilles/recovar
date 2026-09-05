@@ -67,6 +67,15 @@ largest cross pair exceeds its observed repeat envelope by about `2.6%`.
 Nothing indicates a hard-state or layout error; equally, the strict result may
 not be relabeled as parity.
 
+Independent post-run review found an additional promotion blocker: each phase
+manifest hashes `run_it048_model.star`, but this analyzer does not parse or
+compare its continuous model state. That file includes resolution/Pmax/sigma
+offset and class-distribution fields plus per-shell data-versus-prior, FSC,
+coverage, sigma2/tau2, direction priors, and sigma2-noise. This omission cannot
+reverse the existing NO-GO result, but any future reusable promotion gate must
+compare model-STAR state against its repeat envelope and include an adversarial
+mutation test; a file digest alone proves provenance, not semantic parity.
+
 ## Next action
 
 Do not spend another standalone H100 gate on this sub-5%-likely boundary. Keep
