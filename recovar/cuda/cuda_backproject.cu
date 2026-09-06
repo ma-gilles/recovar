@@ -2631,6 +2631,7 @@ cudaError_t launch_relion_wavg_sequential_triplet_f32(
     return cudaGetLastError();
 }
 
+template <bool INDEXED_RECTANGLE = false>
 __global__ void __launch_bounds__(256)
 relion_wavg_sequential_runtime_triplet_f32_kernel(
     const float2* __restrict__ projections,
@@ -2643,11 +2644,18 @@ relion_wavg_sequential_runtime_triplet_f32_kernel(
     int64_t rotation_count,
     int64_t translation_count,
     int64_t pixel_capacity,
-    const int32_t* __restrict__ runtime_logical_pixel_count)
+    const int32_t* __restrict__ runtime_logical_pixel_count,
+    const double* __restrict__ full_ctf = nullptr,
+    const int32_t* __restrict__ exact_positions = nullptr,
+    const int32_t* __restrict__ recon_indices = nullptr,
+    int64_t rectangle_capacity = 0,
+    int64_t full_pixel_count = 0,
+    const int32_t* __restrict__ invalid = nullptr)
 {
     const int64_t rotation = blockIdx.x;
     const int64_t batch = blockIdx.y;
     if (batch >= batch_size || rotation >= rotation_count) return;
+    if constexpr (INDEXED_RECTANGLE) { if (*invalid) return; }
     const int64_t logical_pixel_count = runtime_logical_pixel_count == nullptr
         ? pixel_capacity
         : static_cast<int64_t>(runtime_logical_pixel_count[0]);
@@ -2659,15 +2667,30 @@ relion_wavg_sequential_runtime_triplet_f32_kernel(
     const float batch_scale = scale[batch];
     const int64_t posterior_base =
         (batch * rotation_count + rotation) * translation_count;
-    const int64_t shifted_base = batch * translation_count * pixel_capacity;
+    const int64_t shifted_stride = INDEXED_RECTANGLE ? rectangle_capacity : pixel_capacity;
+    const int64_t shifted_base = batch * translation_count * shifted_stride;
     const int64_t projection_base =
         (batch * rotation_count + rotation) * pixel_capacity;
     for (int64_t pixel = threadIdx.x;
-         pixel < logical_pixel_count;
+         pixel < (INDEXED_RECTANGLE ? pixel_capacity : logical_pixel_count);
          pixel += blockDim.x)
     {
-        const float ctf_with_scale = __fmul_rn(
-            raw_ctf[batch * pixel_capacity + pixel], batch_scale);
+        const int64_t stored_pixel = INDEXED_RECTANGLE ? exact_positions[pixel] : pixel;
+        const int64_t output_base = INDEXED_RECTANGLE
+            ? ((batch * rotation_count + rotation) * rectangle_capacity + stored_pixel) * 3
+            : (projection_base + pixel) * 3;
+        if constexpr (INDEXED_RECTANGLE) {
+            if (pixel >= logical_pixel_count) {
+                output[output_base] = 0.0f;
+                output[output_base + 1] = 0.0f;
+                output[output_base + 2] = 0.0f;
+                continue;
+            }
+        }
+        const float ctf_value = INDEXED_RECTANGLE
+            ? __double2float_rn(full_ctf[batch * full_pixel_count + recon_indices[pixel]])
+            : raw_ctf[batch * pixel_capacity + pixel];
+        const float ctf_with_scale = __fmul_rn(ctf_value, batch_scale);
         const float2 projection = projections[projection_base + pixel];
         const float ref_real = __fmul_rn(projection.x, ctf_with_scale);
         const float ref_imag = __fmul_rn(projection.y, ctf_with_scale);
@@ -2684,7 +2707,7 @@ relion_wavg_sequential_runtime_triplet_f32_kernel(
         {
             const float weight = posterior[posterior_base + translation];
             const float2 translated = shifted_images[
-                shifted_base + translation * pixel_capacity + pixel];
+                shifted_base + translation * shifted_stride + stored_pixel];
             const float diff_real = __fsub_rn(ref_real, translated.x);
             const float diff_imag = __fsub_rn(ref_imag, translated.y);
             const float diff_abs2 = __fadd_rn(
@@ -2699,7 +2722,6 @@ relion_wavg_sequential_runtime_triplet_f32_kernel(
         }
 
         const float safe_scale = fmaxf(batch_scale, 1.0e-30f);
-        const int64_t output_base = (projection_base + pixel) * 3;
         output[output_base] = __fmul_rn(xa_raw, __frcp_rn(safe_scale));
         output[output_base + 1] = __fmul_rn(
             aa_raw, __frcp_rn(__fmul_rn(safe_scale, safe_scale)));
@@ -2732,7 +2754,7 @@ cudaError_t launch_relion_wavg_sequential_runtime_triplet_f32(
     dim3 grid(
         static_cast<unsigned>(rotation_count),
         static_cast<unsigned>(batch_size));
-    relion_wavg_sequential_runtime_triplet_f32_kernel<<<grid, 256, 0, stream>>>(
+    relion_wavg_sequential_runtime_triplet_f32_kernel<false><<<grid, 256, 0, stream>>>(
         projections,
         raw_ctf,
         scale,
@@ -16800,6 +16822,187 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>());
+
+// Native Wavg prefix: preserve the exact translation arithmetic above and the
+// separate native-order rotation-atomic launch. No scalar readback or sync.
+__global__ void validate_wavg_prefix_maps_kernel(
+    const int32_t* exact_positions, const int32_t* recon_indices,
+    const int32_t* logical_exact, const int32_t* logical_rectangle,
+    int64_t exact, int64_t rectangle, int64_t full_pixels,
+    int32_t* owners, int32_t* invalid)
+{
+    const int64_t pixel = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const int32_t ne = *logical_exact, nr = *logical_rectangle;
+    if (ne < 0 || ne > exact || nr < 0 || nr > rectangle) {
+        if (pixel == 0) atomicExch(invalid, 1);
+        return;
+    }
+    if (pixel >= exact) return;
+    const int32_t position = exact_positions[pixel];
+    const int32_t index = recon_indices[pixel];
+    if (position < 0 || position >= rectangle || index < 0 || index >= full_pixels ||
+        (pixel < ne ? position >= nr : position < nr)) {
+        atomicExch(invalid, 1);
+        return;
+    }
+    if (atomicCAS(owners + position, -1, static_cast<int32_t>(pixel)) != -1)
+        atomicExch(invalid, 1);
+}
+
+__global__ void initialize_wavg_prefix_rectangle_kernel(
+    const float* image_power, float* rectangle_terms, int64_t count)
+{
+    const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i >= count) return;
+    rectangle_terms[3 * i] = 0.0f;
+    rectangle_terms[3 * i + 1] = 0.0f;
+    rectangle_terms[3 * i + 2] = image_power[i];
+}
+
+__global__ void invalidate_wavg_prefix_output_kernel(
+    const int32_t* invalid, float* output, int64_t count)
+{
+    if (!*invalid) return;
+    const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i < count) output[i] = nanf("");
+}
+
+ffi::Error RelionWavgNativePrefixCommon(
+    cudaStream_t stream, ffi::AnyBuffer raw_rectangle, ffi::AnyBuffer image_power,
+    ffi::AnyBuffer projections, ffi::AnyBuffer full_ctf, ffi::AnyBuffer scale,
+    ffi::AnyBuffer posterior, ffi::AnyBuffer exact_positions,
+    ffi::AnyBuffer recon_indices, ffi::AnyBuffer logical_exact,
+    ffi::AnyBuffer logical_rectangle, ffi::AnyBuffer output,
+    float* debug_terms)
+{
+    if (raw_rectangle.element_type() != ffi::DataType::C64 ||
+        image_power.element_type() != ffi::DataType::F32 ||
+        projections.element_type() != ffi::DataType::C64 ||
+        full_ctf.element_type() != ffi::DataType::F64 ||
+        scale.element_type() != ffi::DataType::F32 ||
+        posterior.element_type() != ffi::DataType::F32 ||
+        exact_positions.element_type() != ffi::DataType::S32 ||
+        recon_indices.element_type() != ffi::DataType::S32 ||
+        logical_exact.element_type() != ffi::DataType::S32 ||
+        logical_rectangle.element_type() != ffi::DataType::S32 ||
+        output.element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument("RelionWavgNativePrefix: operand dtype mismatch");
+    const auto p = projections.dimensions(), raw = raw_rectangle.dimensions();
+    const auto power = image_power.dimensions(), ctf = full_ctf.dimensions();
+    const auto sc = scale.dimensions(), post = posterior.dimensions();
+    const auto ep = exact_positions.dimensions(), ri = recon_indices.dimensions();
+    const auto out = output.dimensions();
+    if (p.size() != 3 || raw.size() != 3 || power.size() != 3 || ctf.size() != 2 ||
+        sc.size() != 1 || post.size() != 3 || ep.size() != 1 || ri.size() != 1 ||
+        logical_exact.dimensions().size() != 0 ||
+        logical_rectangle.dimensions().size() != 0 || out.size() != 3)
+        return ffi::Error::InvalidArgument("RelionWavgNativePrefix: operand rank mismatch");
+    const int64_t B = p[0], R = p[1], Pe = p[2], T = raw[1], Pr = raw[2], F = ctf[1];
+    if (B <= 0 || B > 65535 || R <= 0 || R > std::numeric_limits<int>::max() ||
+        Pe <= 0 || Pe > std::numeric_limits<int>::max() || T <= 0 ||
+        T > std::numeric_limits<int>::max() || Pr <= 0 ||
+        Pr > std::numeric_limits<int>::max() || F <= 0 || F > std::numeric_limits<int>::max() ||
+        raw[0] != B || power[0] != B || power[1] != R || power[2] != Pr ||
+        ctf[0] != B || sc[0] != B || post[0] != B || post[1] != R || post[2] != T ||
+        ep[0] != Pe || ri[0] != Pe || out[0] != B || out[1] != Pr || out[2] != 3)
+        return ffi::Error::InvalidArgument("RelionWavgNativePrefix: inconsistent geometry");
+    const int64_t max_threads = static_cast<int64_t>(std::numeric_limits<int>::max()) * 256;
+    if (B * R > max_threads / Pr || B > max_threads / (Pr * 3))
+        return ffi::Error::InvalidArgument("RelionWavgNativePrefix: launch extent overflow");
+    const int64_t terms_count = B * R * Pr;
+    const size_t terms_bytes = static_cast<size_t>(terms_count) * 3 * sizeof(float);
+    const size_t map_bytes = (static_cast<size_t>(Pr) + 1) * sizeof(int32_t);
+    void* allocation = nullptr;
+    cudaError_t err = cudaMallocAsync(&allocation, (debug_terms ? 0 : terms_bytes) + map_bytes, stream);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("RelionWavgNativePrefix allocation: ") + cudaGetErrorString(err));
+    float* terms = debug_terms ? debug_terms : static_cast<float*>(allocation);
+    int32_t* owners = reinterpret_cast<int32_t*>(
+        static_cast<char*>(allocation) + (debug_terms ? 0 : terms_bytes));
+    int32_t* invalid = owners + Pr;
+    auto finish = [&](cudaError_t result) {
+        const cudaError_t free_error = cudaFreeAsync(allocation, stream);
+        if (result == cudaSuccess) result = free_error;
+        return result == cudaSuccess ? ffi::Error::Success()
+            : ffi::Error::Internal(std::string("RelionWavgNativePrefix CUDA: ") + cudaGetErrorString(result));
+    };
+    err = cudaMemsetAsync(owners, 0xff, static_cast<size_t>(Pr) * sizeof(int32_t), stream);
+    if (err != cudaSuccess) return finish(err);
+    err = cudaMemsetAsync(invalid, 0, sizeof(int32_t), stream);
+    if (err != cudaSuccess) return finish(err);
+    validate_wavg_prefix_maps_kernel<<<static_cast<unsigned>((Pe + 255) / 256), 256, 0, stream>>>(
+        static_cast<const int32_t*>(exact_positions.untyped_data()),
+        static_cast<const int32_t*>(recon_indices.untyped_data()),
+        static_cast<const int32_t*>(logical_exact.untyped_data()),
+        static_cast<const int32_t*>(logical_rectangle.untyped_data()), Pe, Pr, F, owners, invalid);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) return finish(err);
+    initialize_wavg_prefix_rectangle_kernel<<<static_cast<unsigned>((terms_count + 255) / 256), 256, 0, stream>>>(
+        static_cast<const float*>(image_power.untyped_data()), terms, terms_count);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) return finish(err);
+    dim3 grid(static_cast<unsigned>(R), static_cast<unsigned>(B));
+    relion_wavg_sequential_runtime_triplet_f32_kernel<true><<<grid, 256, 0, stream>>>(
+        reinterpret_cast<const float2*>(projections.untyped_data()), nullptr,
+        static_cast<const float*>(scale.untyped_data()),
+        reinterpret_cast<const float2*>(raw_rectangle.untyped_data()),
+        static_cast<const float*>(posterior.untyped_data()), terms, B, R, T, Pe,
+        static_cast<const int32_t*>(logical_exact.untyped_data()),
+        static_cast<const double*>(full_ctf.untyped_data()),
+        static_cast<const int32_t*>(exact_positions.untyped_data()),
+        static_cast<const int32_t*>(recon_indices.untyped_data()), Pr, F, invalid);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) return finish(err);
+    auto* result = static_cast<float*>(output.untyped_data());
+    err = cudaMemsetAsync(result, 0, static_cast<size_t>(B * Pr * 3) * sizeof(float), stream);
+    if (err != cudaSuccess) return finish(err);
+    err = launch_relion_wavg_rotation_atomic_runtime_triplet_add_f32(
+        stream, terms, result, B, R, Pr,
+        static_cast<const int32_t*>(logical_rectangle.untyped_data()));
+    if (err != cudaSuccess) return finish(err);
+    invalidate_wavg_prefix_output_kernel<<<static_cast<unsigned>((B * Pr * 3 + 255) / 256), 256, 0, stream>>>(
+        invalid, result, B * Pr * 3);
+    return finish(cudaGetLastError());
+}
+
+ffi::Error RelionWavgNativePrefixF32Impl(
+    cudaStream_t stream, ffi::AnyBuffer raw, ffi::AnyBuffer power, ffi::AnyBuffer proj,
+    ffi::AnyBuffer ctf, ffi::AnyBuffer scale, ffi::AnyBuffer posterior,
+    ffi::AnyBuffer positions, ffi::AnyBuffer indices, ffi::AnyBuffer ne, ffi::AnyBuffer nr,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    return RelionWavgNativePrefixCommon(stream, raw, power, proj, ctf, scale,
+        posterior, positions, indices, ne, nr, *output, nullptr);
+}
+
+ffi::Error RelionWavgNativePrefixDebugF32Impl(
+    cudaStream_t stream, ffi::AnyBuffer raw, ffi::AnyBuffer power, ffi::AnyBuffer proj,
+    ffi::AnyBuffer ctf, ffi::AnyBuffer scale, ffi::AnyBuffer posterior,
+    ffi::AnyBuffer positions, ffi::AnyBuffer indices, ffi::AnyBuffer ne, ffi::AnyBuffer nr,
+    ffi::Result<ffi::AnyBuffer> output, ffi::Result<ffi::AnyBuffer> debug)
+{
+    const auto p = proj.dimensions(), r = raw.dimensions(), d = debug->dimensions();
+    if (debug->element_type() != ffi::DataType::F32 || p.size() != 3 || r.size() != 3 ||
+        d.size() != 4 || d[0] != p[0] || d[1] != p[1] || d[2] != r[2] || d[3] != 3)
+        return ffi::Error::InvalidArgument("RelionWavgNativePrefixDebug: output geometry differs");
+    return RelionWavgNativePrefixCommon(stream, raw, power, proj, ctf, scale,
+        posterior, positions, indices, ne, nr, *output,
+        static_cast<float*>(debug->untyped_data()));
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(RelionWavgNativePrefixF32, RelionWavgNativePrefixF32Impl,
+    ffi::Ffi::Bind().Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>());
+XLA_FFI_DEFINE_HANDLER_SYMBOL(RelionWavgNativePrefixDebugF32, RelionWavgNativePrefixDebugF32Impl,
+    ffi::Ffi::Bind().Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>());
+
 
 static __device__ __forceinline__ float dual_weighted_fma(
     float weight, float value, float accumulator)

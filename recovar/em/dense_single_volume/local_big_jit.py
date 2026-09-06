@@ -343,6 +343,7 @@ def _relion_wavg_direct_triplet_shells(
     logical_recon_pixel_count=None,
     logical_rectangle_pixel_count=None,
     return_per_image_cutoff=False,
+    native_prefix: bool = False,
 ):
     """Return RELION Wavg shells and optional per-image cutoff triplets."""
 
@@ -354,43 +355,69 @@ def _relion_wavg_direct_triplet_shells(
         rectangle_indices,
         image_shape,
     )
-    raw_exact = raw_rectangle[:, :, exact_positions]
-    raw_ctf_exact = jnp.asarray(ctf_rfloat_half, dtype=jnp.float64)[:, recon_window_indices]
-    exact_terms = _relion_wavg_sequential_triplet_terms(
-        proj_for_noise,
-        raw_ctf_exact,
-        batch_scale,
-        raw_exact,
-        reconstruction_probs,
-        relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
-        logical_pixel_count=logical_recon_pixel_count,
+    if type(native_prefix) is not bool:
+        raise TypeError("native_prefix must be an explicit static bool")
+    pixel_loop_stop = (
+        raw_rectangle.shape[2]
+        if logical_rectangle_pixel_count is None
+        else jnp.asarray(logical_rectangle_pixel_count, dtype=jnp.int32)
     )
-    rectangle_terms = _relion_wavg_rectangle_triplet_terms(
-        exact_terms,
-        raw_rectangle,
-        reconstruction_probs,
-        exact_positions,
-    )
-    atomic_accumulator = jnp.zeros(
-        rectangle_terms.shape[:1] + rectangle_terms.shape[2:],
-        dtype=jnp.float32,
-    )
-    if logical_rectangle_pixel_count is None:
-        atomic = cuda_backproject.relion_wavg_rotation_atomic_triplet_add_f32(
-            rectangle_terms,
-            atomic_accumulator,
+    if native_prefix:
+        if relion_wavg_sequential_cuda is not True:
+            raise ValueError("native prefix requires explicit sequential CUDA policy")
+        from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+            _relion_wavg_rectangle_image_power,
         )
-        pixel_loop_stop = int(rectangle_terms.shape[2])
+
+        image_power = _relion_wavg_rectangle_image_power(raw_rectangle, reconstruction_probs)
+        atomic = cuda_backproject.relion_wavg_native_prefix_f32(
+            raw_rectangle,
+            image_power,
+            proj_for_noise,
+            jnp.asarray(ctf_rfloat_half, dtype=jnp.float64),
+            jnp.asarray(batch_scale, dtype=jnp.float32).reshape(-1),
+            jnp.asarray(reconstruction_probs, dtype=jnp.float32),
+            jnp.asarray(exact_positions, dtype=jnp.int32),
+            jnp.asarray(recon_window_indices, dtype=jnp.int32),
+            jnp.asarray(
+                proj_for_noise.shape[2] if logical_recon_pixel_count is None else logical_recon_pixel_count,
+                dtype=jnp.int32,
+            ),
+            jnp.asarray(pixel_loop_stop, dtype=jnp.int32),
+        )
     else:
-        atomic = cuda_backproject.relion_wavg_rotation_atomic_runtime_triplet_add_f32(
-            rectangle_terms,
-            atomic_accumulator,
-            jnp.asarray(logical_rectangle_pixel_count, dtype=jnp.int32),
+        raw_exact = raw_rectangle[:, :, exact_positions]
+        raw_ctf_exact = jnp.asarray(ctf_rfloat_half, dtype=jnp.float64)[:, recon_window_indices]
+        exact_terms = _relion_wavg_sequential_triplet_terms(
+            proj_for_noise,
+            raw_ctf_exact,
+            batch_scale,
+            raw_exact,
+            reconstruction_probs,
+            relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
+            logical_pixel_count=logical_recon_pixel_count,
         )
-        pixel_loop_stop = jnp.asarray(
-            logical_rectangle_pixel_count,
-            dtype=jnp.int32,
+        rectangle_terms = _relion_wavg_rectangle_triplet_terms(
+            exact_terms,
+            raw_rectangle,
+            reconstruction_probs,
+            exact_positions,
         )
+        atomic_accumulator = jnp.zeros(
+            rectangle_terms.shape[:1] + rectangle_terms.shape[2:],
+            dtype=jnp.float32,
+        )
+        if logical_rectangle_pixel_count is None:
+            atomic = cuda_backproject.relion_wavg_rotation_atomic_triplet_add_f32(
+                rectangle_terms,
+                atomic_accumulator,
+            )
+        else:
+            atomic = cuda_backproject.relion_wavg_rotation_atomic_runtime_triplet_add_f32(
+                rectangle_terms,
+                atomic_accumulator,
+                jnp.asarray(logical_rectangle_pixel_count, dtype=jnp.int32),
+            )
     atomic = jnp.where(valid_image_mask[:, None, None], atomic, 0.0)
     atomic_f64 = atomic.astype(jnp.float64)
     pixel_triplets = jnp.sum(atomic_f64, axis=0)

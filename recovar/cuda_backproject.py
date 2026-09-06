@@ -660,6 +660,10 @@ _TARGET_RELION_WAVG_SEQUENTIAL_TRIPLET_F32 = (
 _TARGET_RELION_WAVG_SEQUENTIAL_RUNTIME_TRIPLET_F32 = (
     "cuda_relion_wavg_sequential_runtime_triplet_f32"
 )
+_TARGET_RELION_WAVG_NATIVE_PREFIX_F32 = "cuda_relion_wavg_native_prefix_f32"
+_TARGET_RELION_WAVG_NATIVE_PREFIX_DEBUG_F32 = "cuda_relion_wavg_native_prefix_debug_f32"
+_wavg_native_prefix_ffi_registered = False
+
 _TARGET_DUAL_WEIGHTED_SUMS_F32 = "cuda_dual_weighted_sums_f32"
 
 # Single source of truth: (FFI target name, C symbol exported by libcuda_backproject.so).
@@ -1117,6 +1121,27 @@ def _ensure_bpref_projector_capacity_ffi():
             jax.ffi.pycapsule(symbol), platform="CUDA",
         )
         _bpref_projector_capacity_ffi_registered = True
+
+
+def _ensure_wavg_native_prefix_ffi():
+    """Optional targets must never invalidate a qualified legacy library."""
+    global _wavg_native_prefix_ffi_registered
+    _ensure_ffi()
+    if _wavg_native_prefix_ffi_registered:
+        return
+    with _ffi_lock:
+        if _wavg_native_prefix_ffi_registered:
+            return
+        registrations = (
+            (_TARGET_RELION_WAVG_NATIVE_PREFIX_F32, "RelionWavgNativePrefixF32"),
+            (_TARGET_RELION_WAVG_NATIVE_PREFIX_DEBUG_F32, "RelionWavgNativePrefixDebugF32"),
+        )
+        symbols = [(target, getattr(_get_lib(), symbol, None)) for target, symbol in registrations]
+        if any(symbol is None for _, symbol in symbols):
+            raise RuntimeError("Native Wavg prefix requires an explicitly rebuilt CUDA library")
+        for target, symbol in symbols:
+            jax.ffi.register_ffi_target(target, jax.ffi.pycapsule(symbol), platform="CUDA")
+        _wavg_native_prefix_ffi_registered = True
 
 
 _cuda_ok = None  # cached result: None = not checked, True/False = result
@@ -5812,6 +5837,86 @@ def relion_wavg_rotation_atomic_triplet_add_f32(
         input_output_aliases={1: 0},
         vmap_method="sequential",
     )(terms, accumulator)
+
+
+def relion_wavg_native_prefix_f32(
+    raw_rectangle,
+    rectangle_image_power,
+    projections,
+    full_ctf,
+    scale,
+    posterior,
+    exact_positions,
+    recon_window_indices,
+    logical_exact_count,
+    logical_rectangle_count,
+    *,
+    debug=False,
+):
+    """Native exact-triplet/rectangle/atomic prefix, without host value reads.
+
+    Inputs preserve packed B/R/T axes. Maps must be unique and in range, with
+    capacity-only exact positions in the inert rectangle tail. Invalid runtime
+    maps/counts produce NaNs, matching the runtime-kernel fail-closed convention.
+    Debug additionally returns the actual preatomic rectangle buffer; production
+    allocates that buffer only as stream-ordered private CUDA scratch.
+    """
+    if type(debug) is not bool:
+        raise TypeError("debug must be a static bool")
+    operands = (
+        raw_rectangle,
+        rectangle_image_power,
+        projections,
+        full_ctf,
+        scale,
+        posterior,
+        exact_positions,
+        recon_window_indices,
+        logical_exact_count,
+        logical_rectangle_count,
+    )
+    dtypes = (
+        jnp.complex64,
+        jnp.float32,
+        jnp.complex64,
+        jnp.float64,
+        jnp.float32,
+        jnp.float32,
+        jnp.int32,
+        jnp.int32,
+        jnp.int32,
+        jnp.int32,
+    )
+    for value, dtype in zip(operands, dtypes, strict=True):
+        if not hasattr(value, "dtype") or np.dtype(value.dtype) != np.dtype(dtype):
+            raise ValueError(f"native Wavg prefix requires operand dtype {np.dtype(dtype)}")
+    if projections.ndim != 3 or raw_rectangle.ndim != 3:
+        raise ValueError("projections/raw rectangle must have ranks 3")
+    batch, rotations, exact = projections.shape
+    raw_batch, translations, rectangle = raw_rectangle.shape
+    if min(batch, rotations, exact, translations, rectangle) <= 0 or batch > 65535:
+        raise ValueError("native Wavg prefix dimensions outside supported bounds")
+    if full_ctf.ndim != 2 or full_ctf.shape[0] != batch or full_ctf.shape[1] <= 0:
+        raise ValueError("full CTF must have shape [B,F]")
+    if (
+        raw_batch != batch
+        or rectangle_image_power.shape != (batch, rotations, rectangle)
+        or scale.shape != (batch,)
+        or posterior.shape != (batch, rotations, translations)
+        or exact_positions.shape != (exact,)
+        or recon_window_indices.shape != (exact,)
+        or logical_exact_count.shape != ()
+        or logical_rectangle_count.shape != ()
+    ):
+        raise ValueError("native Wavg prefix operand geometry differs")
+    _ensure_wavg_native_prefix_ffi()
+    output = jax.ShapeDtypeStruct((batch, rectangle, 3), jnp.float32)
+    if debug:
+        result_types = (output, jax.ShapeDtypeStruct((batch, rotations, rectangle, 3), jnp.float32))
+        target = _TARGET_RELION_WAVG_NATIVE_PREFIX_DEBUG_F32
+    else:
+        result_types, target = output, _TARGET_RELION_WAVG_NATIVE_PREFIX_F32
+    return jax.ffi.ffi_call(target, result_types, vmap_method="sequential")(*operands)
 
 
 @jax.jit

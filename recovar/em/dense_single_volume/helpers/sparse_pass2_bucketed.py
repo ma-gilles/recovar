@@ -5240,6 +5240,22 @@ def _select_optional_wavg_exact_pixels(values, rectangle):
     return values[:, rectangle.exact_positions]
 
 
+def _relion_wavg_rectangle_image_power(raw_shifted, posterior):
+    """Shared rectangle power contraction; keep the original F32/barrier order."""
+    raw_shifted = jnp.asarray(raw_shifted, dtype=jnp.complex64)
+    posterior = jnp.asarray(posterior, dtype=jnp.float32)
+    shifted_power = (raw_shifted.real * raw_shifted.real).astype(jnp.float32)
+    shifted_power = jax.lax.optimization_barrier(shifted_power)
+    shifted_power = (shifted_power + raw_shifted.imag * raw_shifted.imag).astype(jnp.float32)
+    image_power = jnp.einsum(
+        "brt,btp->brp",
+        posterior,
+        shifted_power,
+        preferred_element_type=jnp.float32,
+    ).astype(jnp.float32)
+    return image_power
+
+
 @jax.jit
 def _relion_wavg_rectangle_triplet_terms(
     exact_triplet_terms,
@@ -5266,15 +5282,7 @@ def _relion_wavg_rectangle_triplet_terms(
             f"positions={exact_positions.shape}, terms={exact_terms.shape}"
         )
 
-    shifted_power = (raw_shifted.real * raw_shifted.real).astype(jnp.float32)
-    shifted_power = jax.lax.optimization_barrier(shifted_power)
-    shifted_power = (shifted_power + raw_shifted.imag * raw_shifted.imag).astype(jnp.float32)
-    image_power = jnp.einsum(
-        "brt,btp->brp",
-        posterior,
-        shifted_power,
-        preferred_element_type=jnp.float32,
-    ).astype(jnp.float32)
+    image_power = _relion_wavg_rectangle_image_power(raw_shifted, posterior)
     rectangle_terms = jnp.zeros(
         exact_terms.shape[:2] + (raw_shifted.shape[-1], 3),
         dtype=jnp.float32,
