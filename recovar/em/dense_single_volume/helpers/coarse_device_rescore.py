@@ -1,6 +1,6 @@
 """Opt-in composed certificate, source16 CUDA rescore and compact assembly.
 
-No production caller uses this primitive. Only the mature CUDA scorer produces
+Used only by explicitly opted-in routes. Only the mature CUDA scorer produces
 published scores; the certificate is used solely to select ordered source blocks.
 """
 

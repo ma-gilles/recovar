@@ -19,6 +19,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.dense_single_volume.helpers import projection_cache as projection_cache_helpers
+from recovar.em.dense_single_volume.helpers.coarse_device_selection import DeviceCoarseBlockSelection
 from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
     DEFAULT_ROTATION_BLOCK_CAPACITY,
     SOURCE_ROTATION_BLOCK_SIZE,
@@ -103,6 +104,9 @@ _COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY_ENV = (
 )
 _COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR_ENV = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR"
+)
+_COARSE_GAUSSIAN_GEMM_DEVICE_TRANSACTION_ENV = (
+    "RECOVAR_COARSE_GAUSSIAN_GEMM_DEVICE_TRANSACTION"
 )
 _COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE_ENV = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_IMAGE_BATCH_SIZE"
@@ -913,6 +917,16 @@ def _coarse_gaussian_gemm_compact_posterior_enabled(
     )
 
 
+def _coarse_gaussian_gemm_device_transaction_enabled() -> bool:
+    """Opt into device certificate/selection/exact rescore composition."""
+    token = os.environ.get(_COARSE_GAUSSIAN_GEMM_DEVICE_TRANSACTION_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(
+            f"Unsupported {_COARSE_GAUSSIAN_GEMM_DEVICE_TRANSACTION_ENV}={token!r}",
+        )
+    return token == "1"
+
+
 def _coarse_gaussian_gemm_hybrid_image_batch_size_request() -> int | None:
     """Return the explicit compact-hybrid image-batch override, if any."""
 
@@ -1620,11 +1634,13 @@ class CoarseGaussianGemmHybridBatchResult(NamedTuple):
     scores_include_priors: bool
     used_selected_rescore: bool
     fallback_reason: str | None
-    selection: CoarseGemmHybridBlockSelection
+    selection: CoarseGemmHybridBlockSelection | DeviceCoarseBlockSelection
     compact_scores: CoarseGemmHybridCompactScores | None = None
     score_representation: str = "compact_selected_exact"
     diagnostic_selected_diff2: jax.Array | None = None
     full_dense_backend: str | None = None
+    selected_block_count: int | None = None
+    max_selected_blocks: int | None = None
 
 
 def _select_coarse_gaussian_gemm_score_representation(
@@ -1667,6 +1683,7 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
     logical_full_pixel_count=None,
     capture_selected_diff2: bool = False,
     full_dense_diff2_fn=None,
+    device_transaction: bool = False,
 ) -> CoarseGaussianGemmHybridBatchResult:
     """Certify, exactly rescore, and restore one K=1 coarse score table.
 
@@ -1737,6 +1754,10 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
         raise ValueError("force_static_dense_after_overflow must be boolean")
     if full_dense_diff2_fn is not None and not callable(full_dense_diff2_fn):
         raise TypeError("full_dense_diff2_fn must be callable or None")
+    if not isinstance(device_transaction, (bool, np.bool_)):
+        raise TypeError("device_transaction must be boolean")
+    if device_transaction and not compact_posterior:
+        raise ValueError("device_transaction requires compact_posterior")
 
     rotation_prior = None
     if rotation_log_prior is not None:
@@ -1754,6 +1775,8 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
             compact_posterior=compact_posterior,
         )
     )
+    device_result = None
+    device_fallback_reason = None
     if score_representation == "dense_full_direct_static_capacity":
         empty_counts = np.zeros(batch_size, dtype=np.int32)
         selection = CoarseGemmHybridBlockSelection(
@@ -1768,6 +1791,55 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
             posterior_block_count=empty_counts.copy(),
             raw_max_block_count=empty_counts.copy(),
         )
+    elif device_transaction:
+        from recovar.em.dense_single_volume.helpers.coarse_device_rescore import (
+            RESCORE_REASONS,
+            rescore_coarse_rotation_blocks,
+        )
+
+        device_result = rescore_coarse_rotation_blocks(
+            cache[0], shifted, weight, initial, jnp.int32(actual_count),
+            topology=topology, class_log_prior=class_log_prior,
+            rotation_log_prior=rotation_prior,
+            translation_log_prior=translation_log_prior,
+            chunk_rows=chunk_rows, block_capacity=capacity,
+            logical_full_pixel_count=logical_full_pixel_count,
+            capture_selected_diff2=capture_selected_diff2,
+        )
+        # One compact transfer governs publication and supplies telemetry.
+        # Interval tables, ordered block IDs and per-image counts stay on device.
+        status = np.asarray(device_result.status)
+        if status.dtype != np.dtype(np.int64) or status.shape != (5,):
+            raise RuntimeError("Invalid device coarse transaction status")
+        valid, reason, used_selected, selected_count, max_selected = map(int, status)
+        if (
+            valid not in (0, 1) or used_selected not in (0, 1)
+            or not 0 <= reason < len(RESCORE_REASONS)
+        ):
+            raise RuntimeError("Invalid device coarse transaction status values")
+        if bool(valid) != (reason == 0):
+            raise RuntimeError("Device coarse validity and reason disagree")
+        if valid and (
+            not used_selected or not 0 < max_selected <= capacity
+            or not max_selected <= selected_count <= actual_count * capacity
+        ):
+            raise RuntimeError("Device coarse selected counts are inconsistent")
+        selection = device_result.selection
+        if valid:
+            assembled = device_result.compact_scores
+            return CoarseGaussianGemmHybridBatchResult(
+                scores=None,
+                raw_score_max=jnp.where(
+                    jnp.arange(batch_size, dtype=jnp.int32) < actual_count,
+                    assembled.raw_score_max, jnp.float32(0.0),
+                ),
+                scores_include_priors=True, used_selected_rescore=True,
+                fallback_reason=None, selection=selection,
+                compact_scores=assembled, score_representation=score_representation,
+                diagnostic_selected_diff2=device_result.selected_diff2,
+                selected_block_count=selected_count, max_selected_blocks=max_selected,
+            )
+        device_fallback_reason = RESCORE_REASONS[reason]
     else:
         image_batch = _prepare_relion_coarse_gaussian_gemm_f64_image_batch(
             shifted,
@@ -1803,8 +1875,10 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
             certificate_valid=True,
             block_capacity=capacity,
         )
-    fallback_reason = selection.fallback_reason
-    if selection.eligible:
+    fallback_reason = (
+        device_fallback_reason if device_result is not None else selection.fallback_reason
+    )
+    if device_result is None and selection.eligible:
         selected_rescore_kwargs = {"topology": topology}
         if logical_full_pixel_count is not None:
             selected_rescore_kwargs["logical_full_pixel_count"] = (
@@ -5201,6 +5275,17 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_gemm_compact_posterior_requested = (
         _coarse_gaussian_gemm_compact_posterior_enabled()
     )
+    coarse_gaussian_gemm_device_transaction_requested = (
+        _coarse_gaussian_gemm_device_transaction_enabled()
+    )
+    if coarse_gaussian_gemm_device_transaction_requested and not (
+        coarse_gaussian_gemm_hybrid_requested
+        and coarse_gaussian_gemm_compact_posterior_requested
+    ):
+        raise ValueError(
+            f"{_COARSE_GAUSSIAN_GEMM_DEVICE_TRANSACTION_ENV}=1 requires "
+            "the compact coarse GEMM hybrid",
+        )
     coarse_gaussian_gemm_hybrid_image_batch_size_request = (
         _coarse_gaussian_gemm_hybrid_image_batch_size_request()
     )
@@ -7104,6 +7189,7 @@ def _compute_k_class_significance_batched(
                         coarse_runtime_prefix_dump_positions.size
                     ),
                     full_dense_diff2_fn=full_dense_diff2_fn,
+                    device_transaction=coarse_gaussian_gemm_device_transaction_requested,
                 )
             )
             coarse_gaussian_gemm_hybrid_batch_count += 1
@@ -7134,16 +7220,19 @@ def _compute_k_class_significance_batched(
                     )
                 coarse_gaussian_gemm_hybrid_selected_batch_count += 1
                 coarse_gaussian_gemm_hybrid_selected_image_count += actual_batch_size
-                selected_counts = np.asarray(
-                    coarse_gaussian_gemm_hybrid_batch_result.selection.block_count,
-                    dtype=np.int32,
-                )[:actual_batch_size]
-                coarse_gaussian_gemm_hybrid_selected_block_count += int(
-                    np.sum(selected_counts, dtype=np.int64),
-                )
+                selected_count = coarse_gaussian_gemm_hybrid_batch_result.selected_block_count
+                max_selected = coarse_gaussian_gemm_hybrid_batch_result.max_selected_blocks
+                if selected_count is None or max_selected is None:
+                    selected_counts = np.asarray(
+                        coarse_gaussian_gemm_hybrid_batch_result.selection.block_count,
+                        dtype=np.int32,
+                    )[:actual_batch_size]
+                    selected_count = int(np.sum(selected_counts, dtype=np.int64))
+                    max_selected = int(np.max(selected_counts))
+                coarse_gaussian_gemm_hybrid_selected_block_count += selected_count
                 coarse_gaussian_gemm_hybrid_max_blocks_per_image = max(
                     coarse_gaussian_gemm_hybrid_max_blocks_per_image,
-                    int(np.max(selected_counts)),
+                    max_selected,
                 )
                 coarse_gaussian_gemm_hybrid_selected_table_capacity_candidates += (
                     batch_size
