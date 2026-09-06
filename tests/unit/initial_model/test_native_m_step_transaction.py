@@ -20,7 +20,7 @@ def transaction_bind():
     return bind
 
 
-def _case(K, pseudo, current_size, populated_moments):
+def _case(K, pseudo, current_size, populated_moments, padding_factor=1):
     n = 16
     state = initialise_denovo_state(
         ori_size=n,
@@ -29,6 +29,7 @@ def _case(K, pseudo, current_size, populated_moments):
         nr_iter=200,
         n_directions=12,
         pseudo_halfsets=pseudo,
+        padding_factor=padding_factor,
     )
     state.current_size = current_size
     state.iter = 48
@@ -39,7 +40,7 @@ def _case(K, pseudo, current_size, populated_moments):
     if populated_moments:
         state.Igrad1[:] = rng.normal(size=state.Igrad1.shape) + 1j * rng.normal(size=state.Igrad1.shape)
         state.Igrad2[:] = rng.uniform(0.5, 2, state.Igrad2.shape) + 1j
-    pad = current_size + 3
+    pad = (current_size or n) * padding_factor + 3
     shape = (pad, pad, pad // 2 + 1)
     accumulators = [
         VdamAccumulator(
@@ -63,7 +64,8 @@ def _assert_state_exact(actual, expected):
 
 
 @pytest.mark.parametrize("K,pseudo", [(1, False), (1, True), (4, False), (4, True)])
-@pytest.mark.parametrize("current_size", [8, 16])
+@pytest.mark.parametrize("current_size", [0, 8, 16])
+@pytest.mark.parametrize("padding_factor", [1, 2])
 @pytest.mark.parametrize("populated_moments", [False, True])
 def test_transaction_matches_primitives_exactly(
     transaction_bind,
@@ -71,8 +73,9 @@ def test_transaction_matches_primitives_exactly(
     pseudo,
     current_size,
     populated_moments,
+    padding_factor,
 ):
-    state, accumulators = _case(K, pseudo, current_size, populated_moments)
+    state, accumulators = _case(K, pseudo, current_size, populated_moments, padding_factor)
     original = deepcopy(state)
     original_accum = deepcopy(accumulators)
     args = dict(
@@ -81,6 +84,7 @@ def test_transaction_matches_primitives_exactly(
         accum_h1=accumulators[1] if pseudo else None,
         grad_current_stepsize=0.3,
         tau2_fudge_factor=4.0,
+        padding_factor=padding_factor,
     )
     expected = vdam_m_step_single_class(state, **args, use_native_transaction=False)
     actual = vdam_m_step_single_class(state, **args, use_native_transaction=True)
