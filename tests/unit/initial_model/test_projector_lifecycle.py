@@ -63,19 +63,21 @@ def test_shared_projector_matches_both_original_native_calls(
     np.testing.assert_array_equal(state.Iref, references_before)
 
 
-def test_context_builds_once_and_consumes_once(monkeypatch):
+@pytest.mark.parametrize("backend", ["native", "jax"])
+def test_context_builds_once_and_consumes_once(monkeypatch, backend):
     state = initialise_denovo_state(
         ori_size=8, pixel_size=1.0, K=1, nr_iter=2,
         n_directions=3, pseudo_halfsets=True,
     )
     calls = []
 
-    def prepare(current, *, padding_factor, interpolator):
+    def prepare(current, *, padding_factor, interpolator, projector_setup_backend):
+        assert projector_setup_backend == backend
         calls.append((current.iter, current.Iref.copy()))
         return (None, None, current.Iref.copy(), 4), np.full((1, 5), current.iter)
 
     monkeypatch.setattr(driver, "prepare_relion_projector_class_inputs_and_power", prepare)
-    ctx = driver._IterationProjectorContext()
+    ctx = driver._IterationProjectorContext(projector_setup_backend=backend)
     for iteration in (1, 2):
         state = replace(state, iter=iteration, Iref=state.Iref + 1)
         before = state.tau2_class.copy()

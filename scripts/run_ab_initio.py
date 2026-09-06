@@ -380,6 +380,10 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=INITIAL_MODEL_GUI_DEFAULTS.padding_factor,
         help="K-class M-step BPref padding factor. Use 2 to give the M-step the trilinear-interpolation margin RELION's BackProjector expects (closer parity for c2 CC).",
     )
+    p.add_argument(
+        "--projector-setup-backend", choices=("native", "jax"), default="native",
+        help="Reference projector preparation backend (JAX supports trilinear padding 1/2).",
+    )
     return p.parse_args(argv)
 
 
@@ -485,6 +489,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         write_iter_artifacts=not args.no_iter_artifacts,
         grad_write_iter=opts.grad_write_iter,
         padding_factor=int(args.padding_factor),
+        projector_setup_backend=args.projector_setup_backend,
         image_fourier_backend=(
             "relion_cuda"
             if args.image_fourier_backend == "auto" and bool(args.gpu_ids)

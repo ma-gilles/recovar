@@ -13,7 +13,7 @@ import os
 import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Literal
 
 import numpy as np
 
@@ -170,6 +170,7 @@ class NativeInitialModelOptions:
     sigma2_min_particles: int = INITIAL_MODEL_GUI_DEFAULTS.sigma2_min_particles
     padding_factor: int = INITIAL_MODEL_GUI_DEFAULTS.padding_factor
     image_fourier_backend: str = "host_numpy"
+    projector_setup_backend: Literal["native", "jax"] = "native"
     deterministic_cuda: bool = INITIAL_MODEL_GUI_DEFAULTS.deterministic_cuda
     lazy: bool = INITIAL_MODEL_GUI_DEFAULTS.lazy
     datadir: str | None = None
@@ -1886,6 +1887,7 @@ def _dense_estep_config(
         ),
         stable_fourier_window_shapes=bool(opts.stable_fourier_window_shapes),
         padding_factor=int(opts.padding_factor),
+        projector_setup_backend=opts.projector_setup_backend,
         relion_bpref_frame=True,
         relion_projector_frame=True,
         class_log_priors=class_log_priors,
@@ -1897,6 +1899,7 @@ def _dense_estep_config(
 class _IterationProjectorContext:
     """One refresh-to-E-step handoff; never a cache across iterations."""
 
+    projector_setup_backend: Literal["native", "jax"] = "native"
     prepared: tuple | None = None
     reference: np.ndarray | None = None
     geometry: tuple | None = None
@@ -1905,7 +1908,8 @@ class _IterationProjectorContext:
         # Clear even if construction fails, so stale data cannot survive a retry.
         self.prepared = self.reference = self.geometry = None
         inputs, power = prepare_relion_projector_class_inputs_and_power(
-            state, padding_factor=padding_factor, interpolator=interpolator
+            state, padding_factor=padding_factor, interpolator=interpolator,
+            projector_setup_backend=self.projector_setup_backend,
         )
         self.prepared = inputs
         self.reference = state.Iref
@@ -1988,6 +1992,7 @@ def _native_expectation_step(
                     prepared_projector_inputs = prepare_relion_projector_class_inputs(
                         state,
                         padding_factor=int(opts.padding_factor),
+                        projector_setup_backend=opts.projector_setup_backend,
                     )
                 accuracy_meta = _estimate_native_sampling_accuracy(
                     sampling_state,
@@ -2819,7 +2824,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     ).strip().lower()
     projector_context = (
         None if exact_projector_setting in {"0", "false", "no", "off"}
-        else _IterationProjectorContext()
+        else _IterationProjectorContext(projector_setup_backend=opts.projector_setup_backend)
     )
     expectation_step = _native_expectation_step(
         dataset,
