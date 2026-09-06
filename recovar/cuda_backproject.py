@@ -1067,6 +1067,10 @@ def _ensure_ffi():
 
 
 _projector_capacity_ffi_registered = False
+_bpref_projector_capacity_ffi_registered = False
+_TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF = (
+    "cuda_relion_vdam_mstep_fused_projector_capacity_x_half"
+)
 
 
 def _ensure_projector_capacity_ffi():
@@ -1091,6 +1095,28 @@ def _ensure_projector_capacity_ffi():
             platform="CUDA",
         )
         _projector_capacity_ffi_registered = True
+
+
+def _ensure_bpref_projector_capacity_ffi():
+    """Register only on explicit use, preserving qualified legacy libraries."""
+    global _bpref_projector_capacity_ffi_registered
+    _ensure_ffi()
+    if _bpref_projector_capacity_ffi_registered:
+        return
+    with _ffi_lock:
+        if _bpref_projector_capacity_ffi_registered:
+            return
+        symbol = getattr(_get_lib(), "RelionVdamMstepFusedProjectorCapacityXHalf", None)
+        if symbol is None:
+            raise RuntimeError(
+                "BPref projector capacity requires RelionVdamMstepFusedProjectorCapacityXHalf; "
+                "explicitly rebuild the custom CUDA library"
+            )
+        jax.ffi.register_ffi_target(
+            _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF,
+            jax.ffi.pycapsule(symbol), platform="CUDA",
+        )
+        _bpref_projector_capacity_ffi_registered = True
 
 
 _cuda_ok = None  # cached result: None = not checked, True/False = result
@@ -2330,16 +2356,71 @@ def relion_vdam_mstep_fused_projector_x_half(
     persistent_serial_rotation_replay: bool = False,
     stable_dense_positions: jax.Array | None = None,
     logical_current_size: jax.Array | int | None = None,
+    runtime_projector_radius: jax.Array | None = None,
 ) -> tuple[jax.Array, jax.Array, jax.Array]:
-    """Project, form residuals, and scatter VDAM rows in one native launch."""
+    """Project, form residuals, and scatter VDAM rows in one native launch.
+
+    Explicit ``runtime_projector_radius`` opts into fixed projector storage:
+    ``projector_full`` then holds a C64 [z,y,x>=0] capacity HALF slab with shape
+    [pf*Q+3,pf*Q+3,pf*Q//2+2], centered on y/z, including the logical ghost
+    planes (e.g. from ``prepare_relion_projector_capacity``). The static
+    ``projector_max_r`` must be zero; the independent logical projector radius
+    is an S32 scalar with 1 <= radius <= Q//2, validated by CUDA. Requires the
+    existing stable image geometry operands and pf=1 or 2. Legacy replay/trace
+    diagnostics remain on the original route.
+
+    CUDA stages the original logical texture extent and origin, not a larger
+    padded texture. It reads the radius with the existing particle metadata
+    D2H synchronization, moved earlier only for this opt-in route. This changes
+    preparation timing, not the subsequent particle/rotation/atomic program.
+    """
 
     _validate_inputs(volume_shape, image_shape, 1, True, True, max_r=max_r)
     if int(volume_shape[2]) % 2 == 0:
         raise ValueError(
             f"RELION fused VDAM projector requires an odd BPref grid, got {volume_shape}"
         )
+    projector_capacity = runtime_projector_radius is not None
+    if projector_capacity:
+        # Validate before this body's local conversion. The public jitted
+        # entry has already applied JAX argument canonicalization; use the
+        # qualified x64 environment and explicit C64/S32 device operands.
+        if getattr(projector_full, "dtype", None) != np.dtype("complex64"):
+            raise ValueError("BPref projector capacity requires complex64 storage")
+        if (
+            getattr(runtime_projector_radius, "dtype", None) != np.dtype("int32")
+            or getattr(runtime_projector_radius, "shape", None) != ()
+        ):
+            raise ValueError("runtime_projector_radius must be an S32 scalar")
     projector_full = jnp.asarray(projector_full)
-    if (
+    if projector_capacity:
+        shape = projector_full.shape
+        if projection_padding_factor not in (1, 2):
+            raise ValueError("BPref projector capacity requires padding factor 1 or 2")
+        if (
+            projector_full.dtype != jnp.complex64 or len(shape) != 3
+            or not 5 <= shape[0] <= 1025 or shape[0] != shape[1]
+            or shape[0] % 2 != 1 or shape[2] != shape[0] // 2 + 1
+            or (shape[0] - 3) % (2 * projection_padding_factor) != 0
+        ):
+            raise ValueError("BPref projector capacity requires a C64 centered half slab for even Q")
+        if projector_max_r != 0:
+            raise ValueError("BPref projector capacity requires static projector_max_r=0")
+        runtime_projector_radius = jnp.asarray(runtime_projector_radius)
+        if runtime_projector_radius.dtype != jnp.int32 or runtime_projector_radius.shape != ():
+            raise ValueError("runtime_projector_radius must be an S32 scalar")
+        if stable_dense_positions is None or logical_current_size is None:
+            raise ValueError("BPref projector capacity requires stable image geometry")
+        if (
+            rotation_replay_order is not None or rotation_replay_counts is not None
+            or particle_start_offsets_ns is not None or serial_rotation_replay
+            or persistent_serial_rotation_replay or float64_accumulator_replay
+            or reverse_rotation_replay or rotation_replay_stride
+            or native_trace_shape_replay or candidate_trace_active
+            or os.environ.get(_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY_ENV, "").strip()
+        ):
+            raise ValueError("BPref projector capacity does not support replay/trace diagnostics")
+    elif (
         projector_full.dtype != jnp.complex64
         or projector_full.ndim != 3
         or projector_full.shape[0] <= 0
@@ -2349,7 +2430,7 @@ def relion_vdam_mstep_fused_projector_x_half(
             "projector_full must be a nonempty complex64 cube, got "
             f"{projector_full.shape} {projector_full.dtype}"
         )
-    if int(projector_max_r) <= 0 or int(projection_padding_factor) <= 0:
+    if (not projector_capacity and int(projector_max_r) <= 0) or int(projection_padding_factor) <= 0:
         raise ValueError("projector radius and projection padding factor must be positive")
     if images.dtype != jnp.complex64:
         raise TypeError("images must be complex64")
@@ -2470,7 +2551,10 @@ def relion_vdam_mstep_fused_projector_x_half(
         raise ValueError(
             "persistent serial VDAM rotations require serial_rotation_replay"
         )
-    _ensure_ffi()
+    if projector_capacity:
+        _ensure_bpref_projector_capacity_ffi()
+    else:
+        _ensure_ffi()
 
     if stable_capacity:
         physical_current_size = 2 * int(round(float(max_r)))
@@ -2590,7 +2674,9 @@ def relion_vdam_mstep_fused_projector_x_half(
         )
     else:
         target = (
-            _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_RUNTIME_X_HALF
+            _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF
+            if projector_capacity
+            else _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_RUNTIME_X_HALF
             if stable_capacity
             else _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_X_HALF
         )
@@ -2615,6 +2701,8 @@ def relion_vdam_mstep_fused_projector_x_half(
         )
         if stable_capacity:
             operands += (logical_current_size,)
+        if projector_capacity:
+            operands += (runtime_projector_radius,)
         fused_real, fused_imag, fused_weight, dense_denominator = jax.ffi.ffi_call(
             target,
             output_types,
