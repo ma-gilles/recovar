@@ -1573,7 +1573,29 @@ static py::dict vdam_m_step_transaction(
 // ===========================================================================
 
 
+// getFristMoment's branch uses MultidimArray<Complex>::sum(): the
+// sequential RFLOAT sum of real components over the complete moment array.
+// Keep this certificate on already-host-resident inputs; a parallel device
+// reduction can change the exact-zero branch for cancelling nonzero moments.
+static bool vdam_first_moment_initializes(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> moment
+) {
+    const auto buf = moment.request();
+    if (buf.ndim != 3)
+        throw std::invalid_argument("moment must be a three-dimensional complex array");
+    const auto *values = static_cast<const std::complex<double> *>(buf.ptr);
+    RFLOAT sum = 0;
+    for (py::ssize_t index = 0; index < buf.size; ++index)
+        sum += values[index].real();
+    return sum == 0.;
+}
+
+
 void init_initialmodel_bindings(py::module_ &m) {
+    m.def("vdam_first_moment_initializes", &vdam_first_moment_initializes,
+          py::arg("moment"),
+          "Return the native serial real-sum==0 first-moment branch certificate.");
+
     // ----- Moment primitives -----
 
     m.def("vdam_m_step_transaction", &vdam_m_step_transaction,
