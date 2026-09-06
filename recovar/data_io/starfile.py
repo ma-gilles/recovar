@@ -117,13 +117,18 @@ def _parse_star_file(filepath: str) -> Tuple[pd.DataFrame, Optional[pd.DataFrame
     return main_df, optics_df
 
 
-def write_star(filepath: str, data: pd.DataFrame, data_optics: Optional[pd.DataFrame] = None) -> None:
+def write_star(
+    filepath: str, data: pd.DataFrame, data_optics: Optional[pd.DataFrame] = None,
+    *, array_rows: bool = False,
+) -> None:
     """Write data to a RELION .star file.
 
     Args:
         filepath: Output file path
         data: Main data table
         data_optics: Optional optics table (for RELION 3.1 format)
+        array_rows: Avoid per-row Series construction for scalar numeric/string
+            tables. Other types retain the existing Series conversion.
     """
     with open(filepath, "w") as f:
         # Header comment
@@ -131,16 +136,16 @@ def write_star(filepath: str, data: pd.DataFrame, data_optics: Optional[pd.DataF
 
         # RELION 3.1 format (with optics)
         if data_optics is not None:
-            _write_block(f, data_optics, "data_optics")
+            _write_block(f, data_optics, "data_optics", array_rows=array_rows)
             f.write("\n\n")
-            _write_block(f, data, "data_particles")
+            _write_block(f, data, "data_particles", array_rows=array_rows)
 
         # RELION 3.0 format (no optics)
         else:
-            _write_block(f, data, "data_")
+            _write_block(f, data, "data_", array_rows=array_rows)
 
 
-def _write_block(f: TextIO, df: pd.DataFrame, block_name: str) -> None:
+def _write_block(f: TextIO, df: pd.DataFrame, block_name: str, *, array_rows: bool = False) -> None:
     """Write a single data block to file.
 
     Args:
@@ -155,9 +160,17 @@ def _write_block(f: TextIO, df: pd.DataFrame, block_name: str) -> None:
     for col in df.columns:
         f.write(f"{col}\n")
 
-    # Write data rows
-    for _, row in df.iterrows():
-        f.write(" ".join(str(val) for val in row.values))
+    # iterrows starts with this same common-dtype array, then allocates a
+    # Series for every row. Retain that conversion for temporal/extension or
+    # arbitrary object data whose Series construction can change scalar types.
+    scalar_kinds = {"string", "integer", "floating", "boolean", "complex", "empty"}
+    use_array = array_rows and all(
+        pd.api.types.infer_dtype(df.iloc[:, i], skipna=False) in scalar_kinds
+        for i in range(len(df.columns))
+    )
+    rows = df.values if use_array else (row.values for _, row in df.iterrows())
+    for row in rows:
+        f.write(" ".join(str(val) for val in row))
         f.write("\n")
 
 
