@@ -596,6 +596,23 @@ def reference_to_relion_projector_half_maps(
     padding_factor: int = 1,
     interpolator: int = 1,
 ) -> tuple[np.ndarray, int]:
+    """Convert references to RELION half maps without retaining their spectrum."""
+    half_maps, _power, r_max = reference_to_relion_projector_half_maps_and_power(
+        references,
+        current_size=current_size,
+        padding_factor=padding_factor,
+        interpolator=interpolator,
+    )
+    return half_maps, r_max
+
+
+def reference_to_relion_projector_half_maps_and_power(
+    references: np.ndarray,
+    *,
+    current_size: int,
+    padding_factor: int = 1,
+    interpolator: int = 1,
+) -> tuple[np.ndarray, np.ndarray, int]:
     """Convert recovar-frame references to RELION ``Projector::data`` half maps."""
     from recovar.relion_bind import _relion_bind_core as bind
     from recovar.utils.helpers import recovar_volume_to_relion
@@ -605,10 +622,14 @@ def reference_to_relion_projector_half_maps(
         raise ValueError(f"references must have shape (K, N, N, N), got {refs.shape}")
     n = int(refs.shape[-1])
     halves = []
+    power_spectra = []
     r_max_values = []
     for ref in refs:
         ref_relion = np.asarray(recovar_volume_to_relion(ref), dtype=np.float64)
-        projector_data, *_unused, r_max, _padding_factor_out, _interpolator_out = bind.compute_fourier_transform_map(
+        (
+            projector_data, power, _ori_size, _padding_factor_out,
+            r_max, _r_min_nn, _interpolator_out,
+        ) = bind.compute_fourier_transform_map(
             ref_relion,
             n,
             int(padding_factor),
@@ -618,10 +639,15 @@ def reference_to_relion_projector_half_maps(
             2,
         )
         halves.append(np.asarray(projector_data, dtype=np.complex64))
+        power_spectra.append(np.asarray(power, dtype=np.float64))
         r_max_values.append(int(r_max))
     if len(set(r_max_values)) != 1:
         raise ValueError(f"RELION projector maps disagree on r_max: {r_max_values}")
-    return np.asarray(halves, dtype=np.complex64), int(r_max_values[0])
+    return (
+        np.asarray(halves, dtype=np.complex64),
+        np.asarray(power_spectra, dtype=np.float64),
+        int(r_max_values[0]),
+    )
 
 
 def relion_projector_half_maps_to_dense_means(projector_half_maps: np.ndarray, ori_size: int) -> np.ndarray:
@@ -1672,6 +1698,34 @@ def prepare_relion_projector_class_inputs(
         current_size=state.current_size if state.current_size > 0 else state.ori_size,
         padding_factor=padding_factor,
     )
+    return _finish_relion_projector_class_inputs(
+        state, padding_factor, projector_half_by_class, projector_r_max
+    )
+
+
+def prepare_relion_projector_class_inputs_and_power(
+    state: InitialModelState,
+    *,
+    padding_factor: int,
+    interpolator: int = 1,
+) -> tuple[tuple[np.ndarray, np.ndarray, np.ndarray, int], np.ndarray]:
+    """Produce scoring operands and tau2 from the identical corrected FFT."""
+    half_maps, power, r_max = reference_to_relion_projector_half_maps_and_power(
+        state.Iref,
+        current_size=state.current_size if state.current_size > 0 else state.ori_size,
+        padding_factor=padding_factor,
+        interpolator=interpolator,
+    )
+    inputs = _finish_relion_projector_class_inputs(state, padding_factor, half_maps, r_max)
+    return inputs, power
+
+
+def _finish_relion_projector_class_inputs(
+    state: InitialModelState,
+    padding_factor: int,
+    projector_half_by_class: np.ndarray,
+    projector_r_max: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     projector_dump_dir = os.environ.get(_RELION_PROJECTOR_DUMP_DIR_ENV, "").strip()
     if projector_dump_dir:
         os.makedirs(projector_dump_dir, exist_ok=True)

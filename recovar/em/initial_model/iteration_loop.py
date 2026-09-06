@@ -801,6 +801,7 @@ def run_vdam_iterations(
     grad_stepsize: float | None = None,
     mu: float = DEFAULT_GRAD_MU,
     refresh_tau2_from_projector: bool = True,
+    projector_refresh_fn: Callable[..., InitialModelState] | None = None,
     projector_padding_factor: int = 1,
     projector_interpolator: int = 1,
     start_iteration: int = 0,
@@ -873,7 +874,8 @@ def run_vdam_iterations(
 
         current = update_image_size_and_resolution_pointers(current)
         if refresh_tau2_from_projector:
-            current = refresh_tau2_from_projector_power(
+            refresh = projector_refresh_fn or refresh_tau2_from_projector_power
+            current = refresh(
                 current,
                 padding_factor=projector_padding_factor,
                 interpolator=projector_interpolator,

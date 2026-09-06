@@ -51,6 +51,7 @@ from .bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstra
 from .dense_adapter import (
     DenseInitialModelEstepConfig,
     prepare_relion_projector_class_inputs,
+    prepare_relion_projector_class_inputs_and_power,
     run_dense_initial_model_estep,
 )
 from .init import initialise_data_vs_prior_from_references, initialise_denovo_state, seed_noise_from_mavg
@@ -1892,6 +1893,42 @@ def _dense_estep_config(
     )
 
 
+@dataclass
+class _IterationProjectorContext:
+    """One refresh-to-E-step handoff; never a cache across iterations."""
+
+    prepared: tuple | None = None
+    reference: np.ndarray | None = None
+    geometry: tuple | None = None
+
+    def refresh(self, state, *, padding_factor, interpolator):
+        # Clear even if construction fails, so stale data cannot survive a retry.
+        self.prepared = self.reference = self.geometry = None
+        inputs, power = prepare_relion_projector_class_inputs_and_power(
+            state, padding_factor=padding_factor, interpolator=interpolator
+        )
+        self.prepared = inputs
+        self.reference = state.Iref
+        self.geometry = (
+            int(state.iter), int(state.ori_size), int(state.current_size),
+            int(state.K), int(padding_factor), int(interpolator),
+        )
+        return replace(state, tau2_class=power)
+
+    def take(self, state, *, padding_factor, interpolator=1):
+        if self.prepared is None:
+            return None  # No refresh callback: preserve standalone/disabled behavior.
+        inputs, reference, geometry = self.prepared, self.reference, self.geometry
+        self.prepared = self.reference = self.geometry = None
+        expected = (
+            int(state.iter), int(state.ori_size), int(state.current_size),
+            int(state.K), int(padding_factor), int(interpolator),
+        )
+        if reference is not state.Iref or geometry != expected:
+            raise ValueError("projector refresh/E-step reference or geometry changed")
+        return inputs
+
+
 def _native_expectation_step(
     dataset,
     opts: NativeInitialModelOptions,
@@ -1899,6 +1936,8 @@ def _native_expectation_step(
     particle_state: NativeParticleState | np.ndarray,
     sampling_state: NativeSamplingState | None = None,
     optics_state: NativeOpticsState | None = None,
+    *,
+    projector_context: _IterationProjectorContext | None = None,
 ):
     if not isinstance(particle_state, NativeParticleState):
         particle_state = NativeParticleState(
@@ -1917,7 +1956,11 @@ def _native_expectation_step(
         )
         sampling_updated = False
         accuracy_meta = None
-        prepared_projector_inputs = None
+        prepared_projector_inputs = (
+            None if projector_context is None else projector_context.take(
+                state, padding_factor=int(opts.padding_factor)
+            )
+        )
         pass1_healpix_order = (
             int(opts.healpix_order)
             if sampling_state is None
@@ -1941,10 +1984,11 @@ def _native_expectation_step(
                 # for scoring. Build RECOVAR's production projector in the
                 # same order and pass it through the shared E-step adapter so
                 # the accuracy helper cannot perturb a later rebuild.
-                prepared_projector_inputs = prepare_relion_projector_class_inputs(
-                    state,
-                    padding_factor=int(opts.padding_factor),
-                )
+                if prepared_projector_inputs is None:
+                    prepared_projector_inputs = prepare_relion_projector_class_inputs(
+                        state,
+                        padding_factor=int(opts.padding_factor),
+                    )
                 accuracy_meta = _estimate_native_sampling_accuracy(
                     sampling_state,
                     state,
@@ -2770,6 +2814,13 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         sampling_state = continuation.sampling_state
     _record_driver_stage("state_setup")
     noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
+    exact_projector_setting = os.environ.get(
+        "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR", "1"
+    ).strip().lower()
+    projector_context = (
+        None if exact_projector_setting in {"0", "false", "no", "off"}
+        else _IterationProjectorContext()
+    )
     expectation_step = _native_expectation_step(
         dataset,
         opts,
@@ -2777,6 +2828,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         particle_state,
         sampling_state,
         optics_state,
+        projector_context=projector_context,
     )
     _record_driver_stage("expectation_setup")
 
@@ -2893,6 +2945,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         grad_stepsize=float(opts.stepsize),
         mu=float(opts.mu),
         projector_padding_factor=int(opts.padding_factor),
+        projector_refresh_fn=None if projector_context is None else projector_context.refresh,
         start_iteration=int(state.iter),
         diagnostic_stop_after_iteration=opts.diagnostic_stop_after_iteration,
     )
