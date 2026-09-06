@@ -128,6 +128,7 @@ from recovar.em.dense_single_volume.local_big_jit import (
     _prepare_fixed_capacity_local_call,
     _reconstruct_fixed_capacity_score_only_result,
     _relion_wavg_direct_triplet_shells,
+    run_deferred_local_exact_noise_core_jit,
     run_deferred_local_exact_noise_jit,
     run_fixed_capacity_segmented_local_scan,
     run_local_bucket_big_jit,
@@ -387,6 +388,7 @@ EXACT_LOCAL_DEFER_PACKED_MSTEP_ENV = "RECOVAR_EXACT_LOCAL_DEFER_PACKED_MSTEP"
 EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV = "RECOVAR_EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB = 0.0
 EXACT_LOCAL_PROJECTOR_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_PROJECTOR_CAPACITY"
+EXACT_LOCAL_NOISE_STABLE_CORE_ENV = "RECOVAR_EXACT_LOCAL_NOISE_STABLE_CORE"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS = 64_000_000
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS_ENV = (
@@ -2048,6 +2050,13 @@ def _local_projector_capacity_requested() -> bool:
     token = os.environ.get(EXACT_LOCAL_PROJECTOR_CAPACITY_ENV, "0").strip()
     if token not in {"0", "1"}:
         raise ValueError(f"{EXACT_LOCAL_PROJECTOR_CAPACITY_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_noise_stable_core_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_NOISE_STABLE_CORE_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_NOISE_STABLE_CORE_ENV} must be 0 or 1")
     return token == "1"
 
 
@@ -4465,6 +4474,11 @@ def run_local_em_exact(
     if projector_capacity_enabled and not stable_fourier_window_shapes:
         raise ValueError("projector capacity requires stable exact-local VDAM Fourier windows")
     packed_final_noise_enabled = bool(_packed_final_noise_enabled)
+    noise_stable_core_enabled = _local_noise_stable_core_requested()
+    if noise_stable_core_enabled and not (
+        stable_fourier_window_shapes and packed_final_noise_enabled
+    ):
+        raise ValueError("separate noise core requires stable packed final-noise execution")
     if fixed_capacity_whole_boundary_enabled and not fixed_capacity_enabled:
         raise ValueError(
             "fixed-capacity whole-local boundary requires fixed-capacity execution"
@@ -7759,6 +7773,8 @@ def run_local_em_exact(
                 and return_deferred_source_vdam_operands
                 and packed_final_noise_enabled
             )
+            if noise_stable_core_enabled and not use_packed_final_noise:
+                raise ValueError("separate noise core requires a deferred VDAM noise bucket")
             if use_packed_final_noise:
                 if packed_reconstruction_probs is None:
                     raise RuntimeError(
@@ -7782,6 +7798,31 @@ def run_local_em_exact(
                     else disabled_noise_scale
                 )
                 noise_t0 = time.time()
+                prepared_noise_core = None
+                if noise_stable_core_enabled:
+                    prepared_noise_core = run_deferred_local_exact_noise_core_jit(
+                        reconstruction_probs,
+                        processed_score_half,
+                        image_only_corrections_arg,
+                        translation_sqdist_arg,
+                        valid_image_mask,
+                        shell_indices_half,
+                        jnp.asarray(logical_current_size, dtype=jnp.int32),
+                        image_shape=image_shape,
+                        shell_count=n_shells,
+                        norm_current_size=(
+                            physical_current_size
+                            if stable_window_active
+                            else current_size
+                        ),
+                        stable_fourier_window_shapes=stable_window_active,
+                        include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
+                        use_relion_cuda_powerclass_spectrum=bool(
+                            relion_exact_fine_diff2
+                            and return_deferred_source_vdam_operands
+                        ),
+                        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                    )
                 (
                     noise_wsum,
                     noise_img_power,
@@ -7847,6 +7888,7 @@ def run_local_em_exact(
                         and logical_current_size is not None
                     ),
                     relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
+                    prepared_core=prepared_noise_core,
                 )
                 if noise_scale_xa is not None:
                     noise_scale_xa = packed_noise_scale_xa
