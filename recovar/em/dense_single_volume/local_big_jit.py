@@ -436,6 +436,123 @@ class _LocalExactNoiseResult(NamedTuple):
     debug_wavg_cutoff_triplet: jax.Array
 
 
+class _LocalExactNoiseCore(NamedTuple):
+    """Physical-shape statistics shared by inline and deferred exact noise."""
+
+    support_mass: jax.Array
+    noise_sumw_offset: jax.Array
+    batch_img_power_shells: jax.Array
+    batch_img_power_per_image: jax.Array
+
+
+def compute_local_exact_noise_core(
+    scalar_reconstruction_probs,
+    processed_score_half,
+    image_only_corr,
+    translation_sqdist_ang,
+    valid_image_mask,
+    shell_indices_half,
+    noise_projection_max_r,
+    runtime_current_size,
+    *,
+    image_shape,
+    shell_count: int,
+    norm_current_size,
+    include_unweighted_norm_high_shell: bool,
+    use_relion_cuda_powerclass_spectrum: bool,
+    source_faithful_spectrum_norm: bool,
+):
+    """Compute scalar and image terms without a new inline JIT boundary.
+
+    All inputs have physical bucket/image shapes. Ragged pixel operands and
+    image IDs deliberately stay in the consumer so they cannot specialize this
+    core. Ordinary EM inlines this same arithmetic in its existing BigJIT.
+    """
+
+    support_mass, _translation_posterior, noise_sumw_offset = (
+        compute_local_noise_scalar_terms(
+            scalar_reconstruction_probs,
+            translation_sqdist_ang,
+            valid_image_mask,
+        )
+    )
+    processed_noise_power_half = processed_score_half * image_only_corr[:, None]
+    batch_img_power_shells, batch_img_power_per_image = (
+        _noise_image_power_shells_and_per_image(
+            processed_noise_power_half,
+            support_mass,
+            shell_indices_half,
+            valid_image_mask,
+            noise_projection_max_r,
+            shell_count=shell_count,
+            image_shape=image_shape,
+            current_size=norm_current_size,
+            runtime_current_size=runtime_current_size,
+            include_unweighted_high_shell=include_unweighted_norm_high_shell,
+            use_relion_cuda_powerclass_spectrum=use_relion_cuda_powerclass_spectrum,
+            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+        )
+    )
+    return _LocalExactNoiseCore(
+        support_mass,
+        noise_sumw_offset,
+        batch_img_power_shells,
+        batch_img_power_per_image,
+    )
+
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "image_shape",
+        "shell_count",
+        "norm_current_size",
+        "stable_fourier_window_shapes",
+        "include_unweighted_norm_high_shell",
+        "use_relion_cuda_powerclass_spectrum",
+        "source_faithful_spectrum_norm",
+    ),
+)
+def run_deferred_local_exact_noise_core_jit(
+    scalar_reconstruction_probs,
+    processed_score_half,
+    image_only_corr,
+    translation_sqdist_ang,
+    valid_image_mask,
+    shell_indices_half,
+    runtime_logical_current_size,
+    *,
+    image_shape,
+    shell_count: int,
+    norm_current_size,
+    stable_fourier_window_shapes: bool,
+    include_unweighted_norm_high_shell: bool,
+    use_relion_cuda_powerclass_spectrum: bool,
+    source_faithful_spectrum_norm: bool,
+):
+    """Acquire one physical-shape core independently of packed pixel shapes."""
+
+    runtime_logical_current_size = jnp.asarray(
+        runtime_logical_current_size, dtype=jnp.int32
+    )
+    return compute_local_exact_noise_core(
+        scalar_reconstruction_probs,
+        processed_score_half,
+        image_only_corr,
+        translation_sqdist_ang,
+        valid_image_mask,
+        shell_indices_half,
+        runtime_logical_current_size // 2,
+        runtime_logical_current_size if stable_fourier_window_shapes else None,
+        image_shape=image_shape,
+        shell_count=shell_count,
+        norm_current_size=norm_current_size,
+        include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
+        use_relion_cuda_powerclass_spectrum=use_relion_cuda_powerclass_spectrum,
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+    )
+
+
 def compute_local_exact_noise(
     noise_wsum,
     noise_img_power,
@@ -483,6 +600,7 @@ def compute_local_exact_noise(
     use_relion_wavg_cutoff: bool,
     relion_wavg_sequential_cuda: bool | None,
     return_debug_wavg_cutoff_triplet: bool = False,
+    prepared_core: _LocalExactNoiseCore | None = None,
 ):
     """Compose the exact-local noise reduction without a JIT boundary.
 
@@ -493,30 +611,37 @@ def compute_local_exact_noise(
     """
 
     norm_dtype = jnp.float64 if source_faithful_spectrum_norm else jnp.float32
-    support_mass, _translation_posterior, noise_sumw_offset = (
-        compute_local_noise_scalar_terms(
+    if prepared_core is None:
+        prepared_core = compute_local_exact_noise_core(
             scalar_reconstruction_probs,
+            processed_score_half,
+            image_only_corr,
             translation_sqdist_ang,
             valid_image_mask,
-        )
-    )
-    processed_noise_power_half = processed_score_half * image_only_corr[:, None]
-    batch_img_power_shells, batch_img_power_per_image = (
-        _noise_image_power_shells_and_per_image(
-            processed_noise_power_half,
-            support_mass,
             shell_indices_half,
-            valid_image_mask,
             noise_projection_max_r,
-            shell_count=shell_count,
+            runtime_current_size,
             image_shape=image_shape,
-            current_size=norm_current_size,
-            runtime_current_size=runtime_current_size,
-            include_unweighted_high_shell=include_unweighted_norm_high_shell,
+            shell_count=shell_count,
+            norm_current_size=norm_current_size,
+            include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
             use_relion_cuda_powerclass_spectrum=use_relion_cuda_powerclass_spectrum,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         )
-    )
+    elif (
+        prepared_core.support_mass.shape != scalar_reconstruction_probs.shape[:1]
+        or prepared_core.noise_sumw_offset.shape != ()
+        or prepared_core.batch_img_power_shells.shape != (shell_count,)
+        or prepared_core.batch_img_power_per_image.shape
+        != scalar_reconstruction_probs.shape[:1]
+    ):
+        raise ValueError("Prepared noise core must retain physical batch and shell shapes")
+    (
+        support_mass,
+        noise_sumw_offset,
+        batch_img_power_shells,
+        batch_img_power_per_image,
+    ) = prepared_core
     noise_sumw = noise_sumw + jnp.sum(support_mass)
 
     pixel_batch_size = pixel_reconstruction_probs.shape[0]
@@ -697,6 +822,7 @@ def run_deferred_local_exact_noise_jit(
     return_noise_split: bool,
     use_relion_wavg_cutoff: bool,
     relion_wavg_sequential_cuda: bool | None,
+    prepared_core: _LocalExactNoiseCore | None = None,
 ):
     """Run one deferred VDAM exact-noise bucket through one outer JIT."""
 
@@ -765,6 +891,7 @@ def run_deferred_local_exact_noise_jit(
         return_noise_split=return_noise_split,
         use_relion_wavg_cutoff=use_relion_wavg_cutoff,
         relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
+        prepared_core=prepared_core,
     )
     noise_norm_correction = noise_norm_correction.at[
         jnp.asarray(bucket_image_indices, dtype=jnp.int32)
