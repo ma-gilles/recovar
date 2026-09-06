@@ -18,6 +18,16 @@ from recovar.em.dense_single_volume.helpers import scoring
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def isolate_rescore_executables():
+    """Never reuse a graph traced with a CPU scorer double in an oracle test."""
+    module._rescore_coarse_rotation_blocks_jit.clear_cache()
+    try:
+        yield
+    finally:
+        module._rescore_coarse_rotation_blocks_jit.clear_cache()
+
+
 def case(priors="none", mapping=None, omitted=()):
     # Dyadic small operands make native atomic additions exactly representable;
     # these tests check composition, not a tolerance for unordered reductions.
