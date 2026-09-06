@@ -390,6 +390,7 @@ EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB = 0.0
 EXACT_LOCAL_PROJECTOR_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_PROJECTOR_CAPACITY"
 EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY"
 EXACT_LOCAL_NOISE_STABLE_CORE_ENV = "RECOVAR_EXACT_LOCAL_NOISE_STABLE_CORE"
+EXACT_LOCAL_HOST_PLAN_PACK_ENV = "RECOVAR_EXACT_LOCAL_HOST_PLAN_PACK"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS = 64_000_000
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS_ENV = (
@@ -2062,6 +2063,13 @@ def _local_noise_stable_core_requested() -> bool:
     token = os.environ.get(EXACT_LOCAL_NOISE_STABLE_CORE_ENV, "0").strip()
     if token not in {"0", "1"}:
         raise ValueError(f"{EXACT_LOCAL_NOISE_STABLE_CORE_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_host_plan_pack_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_HOST_PLAN_PACK_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_HOST_PLAN_PACK_ENV} must be 0 or 1")
     return token == "1"
 
 
@@ -4489,6 +4497,11 @@ def run_local_em_exact(
     if bpref_projector_capacity_enabled and not projector_capacity_enabled:
         raise ValueError("BPref projector capacity requires the shared local projector capacity")
     packed_final_noise_enabled = bool(_packed_final_noise_enabled)
+    host_plan_pack_enabled = _local_host_plan_pack_requested()
+    if host_plan_pack_enabled and not (
+        defer_packed_vdam_enabled and packed_final_noise_enabled
+    ):
+        raise ValueError("host-plan packing requires deferred packed final-noise execution")
     noise_stable_core_enabled = _local_noise_stable_core_requested()
     if noise_stable_core_enabled and not (
         stable_fourier_window_shapes and packed_final_noise_enabled
@@ -6195,6 +6208,12 @@ def run_local_em_exact(
                 return_big_jit_deferred_mstep_inputs
                 and defer_packed_vdam_enabled
             )
+            if host_plan_pack_enabled and not (
+                return_big_jit_deferred_mstep_inputs
+                and return_deferred_source_vdam_operands
+                and packed_final_noise_enabled
+            ):
+                raise ValueError("host-plan packing did not reach the deferred source-noise lane")
             if stable_window_active and not (
                 return_source_vdam_operands
                 or return_deferred_source_vdam_operands
@@ -7019,37 +7038,39 @@ def run_local_em_exact(
                     reconstruction_take_indices[:, :, None, None],
                     axis=1,
                 )
-                packed_reconstruction_probs = jnp.take_along_axis(
-                    reconstruction_probs[:unpadded_batch_size],
-                    reconstruction_take_indices_jnp[:, :, None],
-                    axis=1,
-                )
-                packed_reconstruction_probs = jnp.where(
-                    reconstruction_pack_mask_jnp[:, :, None],
-                    packed_reconstruction_probs,
-                    0.0,
-                )
-                packed_reconstruction_probs_sum_t = jnp.take_along_axis(
-                    reconstruction_probs_sum_t[:unpadded_batch_size],
-                    reconstruction_take_indices_jnp,
-                    axis=1,
-                )
-                packed_reconstruction_probs_sum_t = jnp.where(
-                    reconstruction_pack_mask_jnp,
-                    packed_reconstruction_probs_sum_t,
-                    0.0,
-                )
-                if return_deferred_source_vdam_operands:
-                    packed_source_vdam_images = deferred_source_vdam_images[
-                        :unpadded_batch_size
-                    ]
-                    packed_source_vdam_ctf = deferred_source_vdam_ctf[
-                        :unpadded_batch_size
-                    ]
-                    packed_source_vdam_minvsigma2 = (
-                        deferred_source_vdam_minvsigma2[:unpadded_batch_size]
+                if not host_plan_pack_enabled:
+                    packed_reconstruction_probs = jnp.take_along_axis(
+                        reconstruction_probs[:unpadded_batch_size],
+                        reconstruction_take_indices_jnp[:, :, None],
+                        axis=1,
                     )
-                    packed_source_vdam_posterior = packed_reconstruction_probs
+                    packed_reconstruction_probs = jnp.where(
+                        reconstruction_pack_mask_jnp[:, :, None],
+                        packed_reconstruction_probs,
+                        0.0,
+                    )
+                    packed_reconstruction_probs_sum_t = jnp.take_along_axis(
+                        reconstruction_probs_sum_t[:unpadded_batch_size],
+                        reconstruction_take_indices_jnp,
+                        axis=1,
+                    )
+                    packed_reconstruction_probs_sum_t = jnp.where(
+                        reconstruction_pack_mask_jnp,
+                        packed_reconstruction_probs_sum_t,
+                        0.0,
+                    )
+                if return_deferred_source_vdam_operands:
+                    if not host_plan_pack_enabled:
+                        packed_source_vdam_images = deferred_source_vdam_images[
+                            :unpadded_batch_size
+                        ]
+                        packed_source_vdam_ctf = deferred_source_vdam_ctf[
+                            :unpadded_batch_size
+                        ]
+                        packed_source_vdam_minvsigma2 = (
+                            deferred_source_vdam_minvsigma2[:unpadded_batch_size]
+                        )
+                        packed_source_vdam_posterior = packed_reconstruction_probs
                     if packed_final_noise_enabled:
                         flat_proj_for_noise = jnp.asarray(
                             deferred_flat_proj_for_noise,
@@ -7078,42 +7099,69 @@ def run_local_em_exact(
                             reconstruction_take_indices,
                             reconstruction_pack_mask_np,
                         )
-                        packed_source_vdam_noise_projection = jnp.take(
-                            flat_proj_for_noise,
-                            jnp.asarray(packed_flat_take_indices).reshape(-1),
-                            axis=0,
-                        ).reshape(
-                            (
-                                *packed_flat_take_indices.shape,
-                                flat_proj_for_noise.shape[-1],
+                        if host_plan_pack_enabled:
+                            from recovar.em.dense_single_volume.helpers.deferred_vdam_host_pack import (
+                                pack_deferred_vdam_host_plan,
                             )
-                        )
-                        packed_source_vdam_noise_projection = jnp.where(
-                            reconstruction_pack_mask_jnp[:, :, None],
-                            packed_source_vdam_noise_projection,
-                            0.0,
-                        )
 
-                        from recovar import cuda_backproject
-
-                        packed_source_vdam_ctf_probs = (
-                            cuda_backproject.relion_vdam_mstep_denominator_f32(
+                            (
+                                packed_reconstruction_probs,
+                                packed_reconstruction_probs_sum_t,
+                                packed_source_vdam_images,
                                 packed_source_vdam_ctf,
                                 packed_source_vdam_minvsigma2,
-                                packed_source_vdam_posterior,
+                                packed_source_vdam_noise_projection,
+                                packed_source_vdam_ctf_probs,
+                            ) = pack_deferred_vdam_host_plan(
+                                reconstruction_probs,
+                                reconstruction_probs_sum_t,
+                                deferred_source_vdam_images,
+                                deferred_source_vdam_ctf,
+                                deferred_source_vdam_minvsigma2,
+                                flat_proj_for_noise,
+                                reconstruction_take_indices_jnp,
+                                reconstruction_pack_mask_jnp,
+                                jnp.asarray(packed_flat_take_indices, dtype=jnp.int32),
                             )
-                        )
+                            packed_source_vdam_posterior = packed_reconstruction_probs
+                        else:
+                            packed_source_vdam_noise_projection = jnp.take(
+                                flat_proj_for_noise,
+                                jnp.asarray(packed_flat_take_indices).reshape(-1),
+                                axis=0,
+                            ).reshape(
+                                (
+                                    *packed_flat_take_indices.shape,
+                                    flat_proj_for_noise.shape[-1],
+                                )
+                            )
+                            packed_source_vdam_noise_projection = jnp.where(
+                                reconstruction_pack_mask_jnp[:, :, None],
+                                packed_source_vdam_noise_projection,
+                                0.0,
+                            )
+
+                            from recovar import cuda_backproject
+
+                            packed_source_vdam_ctf_probs = (
+                                cuda_backproject.relion_vdam_mstep_denominator_f32(
+                                    packed_source_vdam_ctf,
+                                    packed_source_vdam_minvsigma2,
+                                    packed_source_vdam_posterior,
+                                )
+                            )
                     else:
                         packed_source_vdam_ctf_probs = jnp.take_along_axis(
                             deferred_source_vdam_ctf_probs[:unpadded_batch_size],
                             reconstruction_take_indices_jnp[:, :, None],
                             axis=1,
                         )
-                    packed_source_vdam_ctf_probs = jnp.where(
-                        reconstruction_pack_mask_jnp[:, :, None],
-                        packed_source_vdam_ctf_probs,
-                        0.0,
-                    )
+                    if not host_plan_pack_enabled:
+                        packed_source_vdam_ctf_probs = jnp.where(
+                            reconstruction_pack_mask_jnp[:, :, None],
+                            packed_source_vdam_ctf_probs,
+                            0.0,
+                        )
                 packed_summed = None
                 packed_ctf_probs = None
                 packed_flat_rotations = None
