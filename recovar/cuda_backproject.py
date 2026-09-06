@@ -538,6 +538,7 @@ _TARGET_BACKPROJECT = "cuda_backproject"
 _TARGET_BACKPROJECT_INDEXED = "cuda_backproject_indexed"
 _TARGET_BACKPROJECT_INDEXED_SIGNATURE = "cuda_backproject_indexed_signature"
 _TARGET_PROJECT = "cuda_project"
+_TARGET_PROJECT_RELION_HALF_RUNTIME = "cuda_project_relion_half_runtime"
 _TARGET_PROJECT_INDEXED = "cuda_project_indexed"
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
 _TARGET_BATCH_BACKPROJECT_INDEXED = "cuda_batch_backproject_indexed"
@@ -1063,6 +1064,33 @@ def _ensure_ffi():
             jax.ffi.register_ffi_target(target, jax.ffi.pycapsule(getattr(lib, symbol)), platform="CUDA")
         _ffi_registered = True
         logger.debug("Registered CUDA FFI targets")
+
+
+_projector_capacity_ffi_registered = False
+
+
+def _ensure_projector_capacity_ffi():
+    """Register the opt-in ABI without invalidating qualified older libraries."""
+    global _projector_capacity_ffi_registered
+    _ensure_ffi()
+    if _projector_capacity_ffi_registered:
+        return
+    with _ffi_lock:
+        if _projector_capacity_ffi_registered:
+            return
+        lib = _get_lib()
+        symbol = getattr(lib, "ProjectRelionHalfRuntime", None)
+        if symbol is None:
+            raise RuntimeError(
+                "Projector capacity was requested but the loaded CUDA library lacks "
+                "ProjectRelionHalfRuntime; explicitly rebuild the custom CUDA library"
+            )
+        jax.ffi.register_ffi_target(
+            _TARGET_PROJECT_RELION_HALF_RUNTIME,
+            jax.ffi.pycapsule(symbol),
+            platform="CUDA",
+        )
+        _projector_capacity_ffi_registered = True
 
 
 _cuda_ok = None  # cached result: None = not checked, True/False = result
@@ -5436,6 +5464,82 @@ def batch_backproject_indexed(
         input_output_aliases={3: 0},
         vmap_method="sequential",
     )(images, pixel_indices, rot6, volumes, **kw)
+
+
+@functools.partial(jax.jit, static_argnames=("image_shape", "padding_factor"))
+def project_relion_half_capacity(
+    projector_half: jax.Array,
+    rotation_matrices: jax.Array,
+    logical_r_max: jax.Array,
+    *,
+    image_shape: Tuple[int, int],
+    padding_factor: int = 1,
+) -> jax.Array:
+    """Opt-in RELION texture projection with physical storage and runtime radius.
+
+    ``projector_half`` is C64 [z,y,x>=0], centered on y/z, with physical
+    shape (pf*Q+3, pf*Q+3, pf*Q//2+2). Center-pad the *logical* projector,
+    including its ghost planes; rebuilding at the physical radius is not
+    equivalent. Rotations use the same F32 matrix convention as ``project``.
+    Radius is an S32 scalar in unpadded units, with 0 <= r <= Q//2. Invalid
+    runtime values return NaNs without a host readback; producers must enforce
+    this range. Physical geometry, rotations and output shape control caching.
+
+    Returns C64 [rotation, H*(W//2+1)] with the existing texture projector's
+    centered rows/positive Nyquist convention. Compact pixel gathering and
+    current-image masks remain the existing caller's responsibility. This
+    transaction includes texture allocation, staging, synchronization and
+    cleanup; there is no persistent resource cache or automatic fallback.
+    """
+    projector_half = jnp.asarray(projector_half)
+    rotation_matrices = jnp.asarray(rotation_matrices)
+    logical_r_max = jnp.asarray(logical_r_max)
+    shape = projector_half.shape
+    if padding_factor not in (1, 2):
+        raise ValueError("padding_factor must be 1 or 2")
+    if (
+        projector_half.dtype != jnp.complex64
+        or len(shape) != 3
+        or shape[0] < 5
+        or shape[0] > 1025
+        or shape[0] != shape[1]
+        or shape[0] % 2 != 1
+        or shape[2] != shape[0] // 2 + 1
+        or (shape[0] - 3) % (2 * padding_factor) != 0
+    ):
+        raise ValueError("projector_half must be C64 [pf*Q+3,pf*Q+3,pf*Q//2+2] for even Q")
+    if (
+        rotation_matrices.dtype != jnp.float32
+        or rotation_matrices.ndim != 3
+        or rotation_matrices.shape[1:] != (3, 3)
+        or not 0 < rotation_matrices.shape[0] <= 65535
+    ):
+        raise ValueError("rotation_matrices must be nonempty F32 [rotation,3,3]")
+    if logical_r_max.dtype != jnp.int32 or logical_r_max.shape != ():
+        raise ValueError("logical_r_max must be an S32 scalar")
+    if (
+        len(image_shape) != 2
+        or image_shape[0] != image_shape[1]
+        or not 0 < image_shape[0] <= 4096
+        or image_shape[0] % 2 != 0
+    ):
+        raise ValueError("image_shape must be a positive even square <=4096")
+    n_pixels = image_shape[0] * (image_shape[1] // 2 + 1)
+    if rotation_matrices.shape[0] * n_pixels > np.iinfo(np.int32).max:
+        raise ValueError("projection output exceeds int32 kernel indexing")
+    _ensure_projector_capacity_ffi()
+    rot6 = _rot_to_compact(rotation_matrices, jnp.float32)
+    output = jax.ShapeDtypeStruct((rotation_matrices.shape[0], n_pixels), jnp.complex64)
+    return jax.ffi.ffi_call(
+        _TARGET_PROJECT_RELION_HALF_RUNTIME, output, vmap_method="sequential"
+    )(
+        projector_half,
+        rot6,
+        logical_r_max,
+        image_h=np.int64(image_shape[0]),
+        image_w=np.int64(image_shape[1]),
+        padding_factor=np.int64(padding_factor),
+    )
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8))

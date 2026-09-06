@@ -2265,7 +2265,34 @@ fill_relion_texture_compact_kernel(
     imag[idx] = im;
 }
 
-template <bool HALF_IMG>
+/* Physical half storage is [z,y,x>=0]. Stage the logical texture at its
+ * original origin, retaining ghost texels and the old sampling coordinates. */
+__global__ void __launch_bounds__(BLOCK_SIZE)
+fill_relion_texture_capacity_kernel(
+    const float2* __restrict__ vol, float* real, float* imag,
+    const int32_t* logical_radius, int upsampling,
+    int texX, int texY, int texZ)
+{
+    const int idx = blockIdx.x * BLOCK_SIZE + threadIdx.x;
+    if (idx >= texX * texY * texZ) return;
+    const int x = idx % texX;
+    const int y = (idx / texX) % texY;
+    const int z = idx / (texX * texY);
+    const int radius = *logical_radius;
+    float2 value = make_float2(0.0f, 0.0f);
+    if (radius >= 0 && radius <= (texY / 2 - 1) / upsampling) {
+        const int R = radius * upsampling;
+        if (x < R + 2 && y < 2 * R + 3 && z < 2 * R + 3) {
+            const int iy = texY / 2 + y - (R + 1);
+            const int iz = texZ / 2 + z - (R + 1);
+            value = vol[(iz * texY + iy) * texX + x];
+        }
+    }
+    real[idx] = value.x;
+    imag[idx] = value.y;
+}
+
+template <bool HALF_IMG, bool RUNTIME_RADIUS = false>
 __global__ void __launch_bounds__(BLOCK_SIZE)
 project_texture_kernel(
     cudaTextureObject_t texReal,
@@ -2275,7 +2302,8 @@ project_texture_kernel(
     int n_pixels, int image_h, int image_w,
     int tex_yinit, int tex_zinit,
     int upsampling, int full_image_w,
-    int maxR2_padded)
+    int maxR2_padded,
+    const int32_t* logical_radius = nullptr, int capacity_radius = 0)
 {
     __shared__ float R[6];
 
@@ -2302,6 +2330,17 @@ project_texture_kernel(
 
     float2* img2 = reinterpret_cast<float2*>(img);
     const int img_off = img_idx * n_pixels + pix;
+    if constexpr (RUNTIME_RADIUS) {
+        const int radius = *logical_radius;
+        if (radius < 0 || radius > capacity_radius / upsampling) {
+            img2[img_off] = make_float2(CUDART_NAN_F, CUDART_NAN_F);
+            return;
+        }
+        const int padded_radius = radius * upsampling;
+        maxR2_padded = padded_radius * padded_radius;
+        tex_yinit = -(padded_radius + 1);
+        tex_zinit = -(padded_radius + 1);
+    }
 
     /* Match RELION AccProjectorKernel source order exactly under RECOVAR's
      * compact row-swapped R mapping: matrix-x*source-x is the first addend.
@@ -3259,19 +3298,21 @@ cudaError_t launch_project_indexed(
     return cudaGetLastError();
 }
 
+template <bool CAPACITY_HALF = false>
 cudaError_t launch_project_texture_float(
     cudaStream_t s, const float* vol, float* img, const float* rot,
     int64_t n_images, int64_t n_pixels,
     int64_t ih, int64_t iw,
     int64_t N0, int64_t N1, int64_t N2,
     int64_t ups, int64_t half_img,
-    int64_t full_iw, int64_t max_r2_x4 = -1)
+    int64_t full_iw, int64_t max_r2_x4 = -1,
+    const int32_t* logical_radius = nullptr)
 {
     const float max_r2 = max_r2_x4 < 0 ? (float)((N0 / 2 - 1) * (N0 / 2 - 1)) : (float)max_r2_x4 / 4.0f;
     const int maxR = (int)floorf(sqrtf(max_r2) + 0.5f);
-    const int texX = maxR + 2;
-    const int texY = 2 * maxR + 3;
-    const int texZ = 2 * maxR + 3;
+    const int texX = CAPACITY_HALF ? (int)N2 : maxR + 2;
+    const int texY = CAPACITY_HALF ? (int)N1 : 2 * maxR + 3;
+    const int texZ = CAPACITY_HALF ? (int)N0 : 2 * maxR + 3;
     const int texYInit = -(maxR + 1);
     const int texZInit = -(maxR + 1);
     const int n_voxels = texX * texY * texZ;
@@ -3287,8 +3328,14 @@ cudaError_t launch_project_texture_float(
     {
         dim3 block(BLOCK_SIZE);
         dim3 grid((n_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE);
-        fill_relion_texture_compact_kernel<float><<<grid, block, 0, s>>>(
-            vol, real, imag, texX, texY, texZ, texYInit, texZInit, (int)N0, (int)N1, (int)N2);
+        if constexpr (CAPACITY_HALF) {
+            fill_relion_texture_capacity_kernel<<<grid, block, 0, s>>>(
+                reinterpret_cast<const float2*>(vol), real, imag,
+                logical_radius, (int)ups, texX, texY, texZ);
+        } else {
+            fill_relion_texture_compact_kernel<float><<<grid, block, 0, s>>>(
+                vol, real, imag, texX, texY, texZ, texYInit, texZInit, (int)N0, (int)N1, (int)N2);
+        }
         err = cudaGetLastError();
         if (err != cudaSuccess) goto cleanup;
     }
@@ -3338,13 +3385,13 @@ cudaError_t launch_project_texture_float(
         dim3 grid((int)n_images, ((int)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
         dim3 block(BLOCK_SIZE);
         if (half_img) {
-            project_texture_kernel<true><<<grid, block, 0, s>>>(
+            project_texture_kernel<true, CAPACITY_HALF><<<grid, block, 0, s>>>(
                 texReal, texImag, img, rot, (int)n_pixels, (int)ih, (int)iw,
-                texYInit, texZInit, (int)ups, (int)full_iw, maxR * maxR);
+                texYInit, texZInit, (int)ups, (int)full_iw, maxR * maxR, logical_radius, maxR);
         } else {
-            project_texture_kernel<false><<<grid, block, 0, s>>>(
+            project_texture_kernel<false, CAPACITY_HALF><<<grid, block, 0, s>>>(
                 texReal, texImag, img, rot, (int)n_pixels, (int)ih, (int)iw,
-                texYInit, texZInit, (int)ups, (int)full_iw, maxR * maxR);
+                texYInit, texZInit, (int)ups, (int)full_iw, maxR * maxR, logical_radius, maxR);
         }
         err = cudaGetLastError();
         if (err != cudaSuccess) goto cleanup;
@@ -16052,6 +16099,53 @@ ffi::Error ProjectImpl(
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
 }
+
+ffi::Error ProjectRelionHalfRuntimeImpl(
+    cudaStream_t stream, int64_t image_h, int64_t image_w,
+    int64_t padding_factor,
+    ffi::AnyBuffer half, ffi::AnyBuffer rot, ffi::AnyBuffer radius,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    const auto h = half.dimensions();
+    const auto r = rot.dimensions();
+    const auto o = output->dimensions();
+    if (half.element_type() != ffi::DataType::C64 ||
+        rot.element_type() != ffi::DataType::F32 ||
+        radius.element_type() != ffi::DataType::S32 ||
+        output->element_type() != ffi::DataType::C64 ||
+        radius.dimensions().size() != 0)
+        return ffi::Error::InvalidArgument("ProjectRelionHalfRuntime: require C64 half, F32 rotations, scalar S32 radius and C64 output");
+    if (padding_factor != 1 && padding_factor != 2)
+        return ffi::Error::InvalidArgument("ProjectRelionHalfRuntime: padding must be 1 or 2");
+    if (h.size() != 3 || h[0] < 5 || h[0] != h[1] || h[0] % 2 != 1 ||
+        h[2] != h[0] / 2 + 1 || (h[0] - 3) % (2 * padding_factor) != 0 ||
+        h[0] > 1025 || r.size() != 2 || r[1] != 6 || r[0] <= 0 || r[0] > 65535 ||
+        image_h <= 0 || image_h != image_w || image_h % 2 != 0 || image_h > 4096 ||
+        o.size() != 2 || o[0] != r[0] || o[1] != image_h * (image_w / 2 + 1) ||
+        r[0] * o[1] > std::numeric_limits<int>::max())
+        return ffi::Error::InvalidArgument("ProjectRelionHalfRuntime: invalid capacity, rotation or image geometry");
+    cudaError_t err = launch_project_texture_float<true>(
+        stream, static_cast<const float*>(half.untyped_data()),
+        static_cast<float*>(output->untyped_data()), static_cast<const float*>(rot.untyped_data()),
+        r[0], o[1], image_h, image_w / 2 + 1,
+        h[0], h[1], h[2], padding_factor, 1, image_w, -1,
+        static_cast<const int32_t*>(radius.untyped_data()));
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    ProjectRelionHalfRuntime, ProjectRelionHalfRuntimeImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_w")
+        .Attr<int64_t>("padding_factor")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
 
 ffi::Error ProjectIndexedImpl(
     cudaStream_t stream,
