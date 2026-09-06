@@ -2051,8 +2051,6 @@ def run_dense_initial_model_estep(
         state,
         config,
     )
-    dense_rotations = _dense_rotations_for_config(config.rotations, config)
-
     if bool(engine_kwargs.get("sparse_pass2", False)):
         return _run_sparse_pass2_initial_model_estep(
             experiment_dataset,
@@ -2069,6 +2067,8 @@ def run_dense_initial_model_estep(
             engine_kwargs=engine_kwargs,
         )
 
+    # Sparse execution constructs its own coarse/local rotation operands.
+    dense_rotations = _dense_rotations_for_config(config.rotations, config)
     halfset_results: dict[int, Any] = {}
     by_halfset: dict[int, list[VdamAccumulator]] = {}
     for halfset_idx, image_indices in groups:

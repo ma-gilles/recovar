@@ -298,7 +298,17 @@ def test_class_log_priors_from_state_allows_inactive_class():
 
 
 def test_dense_initial_model_estep_runs_separate_k_class_calls_for_pseudo_halfsets(monkeypatch):
+    from recovar.em.initial_model import dense_adapter
+
     calls = []
+    conversions = []
+    original_conversion = dense_adapter._dense_rotations_for_config
+
+    def convert(rotations, config):
+        conversions.append(rotations)
+        return original_conversion(rotations, config)
+
+    monkeypatch.setattr(dense_adapter, "_dense_rotations_for_config", convert)
 
     def fake_run_dense_k_class_em(
         dataset, means, mean_variance, noise_variance, rotations, translations, disc_type, **kwargs
@@ -339,6 +349,9 @@ def test_dense_initial_model_estep_runs_separate_k_class_calls_for_pseudo_halfse
         halfset_ids=np.asarray([0, 1, 0, 1], dtype=np.int8),
     )
 
+    assert len(conversions) == 1
+    assert conversions[0] is config.rotations
+    np.testing.assert_array_equal(config.rotations, np.eye(3, dtype=np.float32)[None])
     assert len(calls) == 2
     assert calls[0]["means_shape"] == (2, 8**3)
     assert calls[1]["means_shape"] == (2, 8**3)
@@ -927,6 +940,14 @@ def test_dense_initial_model_estep_handles_empty_halfset(monkeypatch):
 
 def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeypatch):
     calls = {}
+
+    def unused_dense_conversion(*args, **kwargs):
+        raise AssertionError("Sparse execution computed unused dense rotations")
+
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter._dense_rotations_for_config",
+        unused_dense_conversion,
+    )
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2", raising=False)
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS", raising=False)
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY", raising=False)
