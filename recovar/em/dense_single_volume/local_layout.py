@@ -1571,6 +1571,7 @@ def build_pass2_hypothesis_layout(
     log_prior_parts: list[np.ndarray] = []
     sample_mask_parts: list[np.ndarray] = []
 
+    coarse_rows = []
     for image_idx, sig_samples in enumerate(significant_sample_indices):
         if sig_samples is None:
             unique_rot = np.arange(n_coarse_rotations, dtype=np.int32)
@@ -1594,17 +1595,37 @@ def build_pass2_hypothesis_layout(
         if np.any(unique_rot < 0) or np.any(unique_rot >= int(n_coarse_rotations)):
             raise ValueError(f"Image {image_idx} has significant rotation ids outside the coarse grid")
 
-        oversampled_rots, parent_map, oversampled_rot_indices = get_oversampled_rotation_grid_from_samples(
-            unique_rot,
-            int(nside_level),
-            oversampling_order=oversampling_order,
-            random_perturbation=random_perturbation,
-            return_rotation_indices=True,
-            rotation_index_order=rotation_index_order,
-        )
-        oversampled_rots = np.asarray(oversampled_rots, dtype=np.float32)
-        parent_map = np.asarray(parent_map, dtype=np.int32)
-        oversampled_rot_indices = np.asarray(oversampled_rot_indices, dtype=np.int32)
+        coarse_rows.append((unique_rot, coarse_rot, coarse_trans, use_full_candidate_mask))
+
+    # Child orientations depend on the coarse sample and iteration perturbation,
+    # not on the image. Generate only the requested union once, then gather each
+    # image's rows in the same parent/child order as independent generation.
+    shared_parent_ids = (
+        np.unique(np.concatenate([row[0] for row in coarse_rows]))
+        if coarse_rows else np.zeros(0, dtype=np.int64)
+    )
+    shared_rotations, shared_parent_map, shared_rotation_ids = get_oversampled_rotation_grid_from_samples(
+        shared_parent_ids,
+        int(nside_level),
+        oversampling_order=oversampling_order,
+        random_perturbation=random_perturbation,
+        return_rotation_indices=True,
+        rotation_index_order=rotation_index_order,
+    )
+    children_per_parent = 8 ** int(oversampling_order)
+    if not np.array_equal(
+        shared_parent_map,
+        np.repeat(np.arange(shared_parent_ids.size), children_per_parent),
+    ):
+        raise RuntimeError("Pass-2 oversampling must retain contiguous children per parent")
+    child_offsets = np.arange(children_per_parent, dtype=np.int64)
+
+    for image_idx, (unique_rot, coarse_rot, coarse_trans, use_full_candidate_mask) in enumerate(coarse_rows):
+        shared_positions = np.searchsorted(shared_parent_ids, unique_rot)
+        rows = (shared_positions[:, None] * children_per_parent + child_offsets).reshape(-1)
+        oversampled_rots = np.asarray(shared_rotations[rows], dtype=np.float32)
+        oversampled_rot_indices = np.asarray(shared_rotation_ids[rows], dtype=np.int32)
+        parent_map = np.repeat(np.arange(unique_rot.size, dtype=np.int32), children_per_parent)
         coarse_parent_ids = unique_rot[parent_map].astype(np.int32, copy=False)
 
         if rotation_log_prior_np is None:
