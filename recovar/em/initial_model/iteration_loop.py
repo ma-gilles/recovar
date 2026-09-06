@@ -803,6 +803,7 @@ def run_vdam_iterations(
     refresh_tau2_from_projector: bool = True,
     projector_refresh_fn: Callable[..., InitialModelState] | None = None,
     projector_padding_factor: int = 1,
+    mstep_backend: str = "native",
     projector_interpolator: int = 1,
     start_iteration: int = 0,
     diagnostic_stop_after_iteration: int | None = None,
@@ -899,6 +900,7 @@ def run_vdam_iterations(
             grad_current_stepsize=current.grad_current_stepsize,
             tau2_fudge_factor=current.tau2_fudge_factor,
             padding_factor=projector_padding_factor,
+            mstep_backend=mstep_backend,
         )
         if profile_iterations:
             _record_stage("mstep")

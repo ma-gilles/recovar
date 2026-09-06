@@ -1,4 +1,4 @@
-"""Opt-in pure FP64 RELION VDAM M-step prototype; no production dispatch.
+"""Opt-in FP64 RELION VDAM M-step with an explicit native capability fallback.
 
 The device transaction uses full original-size Fourier capacity and a dynamic
 logical radius. First-moment initialization certificates are explicit inputs:
@@ -6,12 +6,11 @@ RELION tests a sequential real-component sum, which a parallel reduction cannot
 replace. The host wrapper obtains these certificates from existing host moments.
 BPref accumulation and its CUDA atomic chronology are outside this module.
 
-This is NOT a general replacement for the native transaction: the native
-inverse FFT differs on some arbitrary non-Hermitian half-volume fixtures even
-when their updated Fourier coefficients agree. Physical synthetic fixtures and
-one captured N128 input pass the FP64 oracle, but neither establishes a general
-input contract. Keep this prototype out of production pending that boundary
-investigation and GPU oracle results.
+Native execution is retained for FFT grids smaller than 16: at FFT size 8,
+some arbitrary half-volume fixtures have matching updated Fourier coefficients
+but different native/device inverse outputs. The codelet-level cause remains
+unproven. Larger tested geometries and the captured N128 input pass the FP64
+oracle; broader GPU geometries and full trajectories remain unqualified.
 """
 
 from functools import partial
@@ -90,6 +89,8 @@ def relion_vdam_m_step_device(
     if ori_size <= 0 or ori_size % 2 or padding_factor not in (1, 2):
         raise ValueError("device M-step supports positive even boxes and padding 1/2")
     fft_size = padding_factor * ori_size
+    if fft_size < 16:
+        raise ValueError("device M-step requires FFT grid >=16; use the native host fallback")
     capacity = fft_size + 3
     half_shape = (capacity, capacity, capacity // 2 + 1)
     moment_shape = (fft_size, fft_size, fft_size // 2 + 1)
@@ -166,7 +167,7 @@ def relion_vdam_m_step_device(
 
     # updateSSNRarrays(false,false,false): half-0 weight and unchanged tau2.
     inverse_sigma = shell_sum(float(padding_factor**3) * w0)
-    invalid_sigma = jnp.any((inverse_sigma != 0.0) & (inverse_sigma <= 1e-20))
+    invalid_sigma = jnp.any(~((inverse_sigma > 1e-20) | (inverse_sigma == 0.0)))
     sigma2 = jnp.where(inverse_sigma > 1e-20, counts / inverse_sigma, 0.0)
     shell_tau = tau2[shell_lookup]
     inverse_tau = jnp.where(
@@ -182,7 +183,7 @@ def relion_vdam_m_step_device(
         jnp.where(counts < 0.001, 999.0, data_vs_prior / safe_counts),
     )
     coverage = shell_sum((evidence >= 1.0).astype(jnp.float64)) / safe_counts
-    invalid_tau = jnp.any((tau2 < 0.0) & (counts > 0.0))
+    invalid_tau = jnp.any(~((tau2 > 0.0) | (tau2 == 0.0)) & (counts > 0.0))
 
     # reconstructGrad: uncorrected projector, never the E-step's corrected FFT.
     projector, _unused_power = setup_relion_projector(
@@ -250,7 +251,7 @@ def relion_vdam_m_step_host(
     r_max=-1,
     min_resol_shell=0.0,
 ):
-    """Host-facing native-compatible oracle adapter; requires branch export.
+    """Host-facing oracle adapter with native fallback for FFT grids <16.
 
     ``fsc_ssnr`` is unused with native update_tau2_with_fsc=false.
     ``min_resol_shell`` is unused in the pinned native reconstructGrad body.
@@ -258,6 +259,29 @@ def relion_vdam_m_step_host(
     """
     from recovar.relion_bind import _relion_bind_core as bind
 
+    # Preserve all native arithmetic for the unsupported small FFT capability.
+    # Do this before certificate/packing/device setup: no GPU work is required.
+    if ori_size * padding_factor < 16:
+        return bind.vdam_m_step_transaction(
+            reference_relion,
+            data_h0,
+            weight_h0,
+            data_h1,
+            weight_h1,
+            mom1_h0,
+            mom1_h1,
+            mom2,
+            fsc_ssnr,
+            fsc_reconstruct,
+            tau2,
+            grad_stepsize,
+            tau2_fudge,
+            ori_size,
+            padding_factor,
+            interpolator,
+            r_max,
+            min_resol_shell,
+        )
     if interpolator != 1 or r_max > ori_size // 2:
         raise ValueError("unsupported interpolator or radius")
     pseudo = data_h1 is not None

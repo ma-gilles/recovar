@@ -1,8 +1,7 @@
 """VDAM M-step: gradient moment update + reference reconstruction.
 
-Routes each step through the RELION C++ binding (backprojector.cpp:1933-2054)
-for bit-identical parity: reweightGrad, getFristMoment, getSecondMoment,
-applyMomenta, updateSSNRarrays, reconstructGrad.
+Defaults to the RELION C++ moment/reconstruction transaction. The opt-in JAX
+backend retains the same state layout and native diagnostic boundaries.
 """
 
 from __future__ import annotations
@@ -10,7 +9,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 import numpy as np
 
@@ -275,8 +274,8 @@ def _maybe_replay_native_second_moment(
     return _read_native_complex_replay(replay_path, expected_shape=computed.shape)
 
 
-def _run_native_m_step_transaction(
-    bind,
+def _run_m_step_transaction(
+    transaction,
     state: InitialModelState,
     k: int,
     accum_h0: VdamAccumulator,
@@ -288,7 +287,7 @@ def _run_native_m_step_transaction(
     r_max: int,
     min_resol_shell: float,
 ) -> InitialModelState:
-    """Keep native intermediates inside one RELION BackProjector lifecycle."""
+    """Apply one shared-layout transaction and preserve state ownership."""
     from recovar.utils.helpers import recovar_volume_to_relion, relion_volume_to_recovar
 
     slot_h0 = half_slot_index(k, 0, state.K, state.pseudo_halfsets)
@@ -296,7 +295,7 @@ def _run_native_m_step_transaction(
     effective_stepsize = float(grad_current_stepsize) * (
         1.0 - np.exp(-float(3 * state.K + 10) * float(np.asarray(state.pdf_class)[k]))
     )
-    result = bind.vdam_m_step_transaction(
+    result = transaction(
         recovar_volume_to_relion(np.asarray(state.Iref[k])),
         accum_h0.data,
         accum_h0.weight,
@@ -348,12 +347,15 @@ def vdam_m_step_single_class(
     grad_min_resol_shell: float | None = None,
     padding_factor: int = 1,
     use_native_transaction: bool = True,
+    mstep_backend: Literal["native", "jax"] = "native",
 ) -> InitialModelState:
     """VDAM M-step for one class (per-class loop matches RELION's binding shape).
 
     Pseudo-halfsets: FSC/noise-power is derived from the halfset-data difference
     in ``applyMomenta``; ``reconstructGrad`` then uses ``mom1_noise_power``.
     """
+    if mstep_backend not in {"native", "jax"}:
+        raise ValueError(f"Unknown mstep_backend: {mstep_backend!r}")
     if not (0 <= k < state.K):
         raise ValueError(f"class index {k} out of range")
     if state.pseudo_halfsets and accum_h1 is None:
@@ -399,8 +401,15 @@ def vdam_m_step_single_class(
         and not replay_requested
         and hasattr(bind, "vdam_m_step_transaction")
     ):
-        return _run_native_m_step_transaction(
-            bind,
+        transaction = bind.vdam_m_step_transaction
+        if mstep_backend == "jax":
+            if not hasattr(bind, "vdam_first_moment_initializes"):
+                raise RuntimeError("JAX M-step requires the native moment initialization binding")
+            from recovar.em.dense_single_volume.helpers.relion_vdam_mstep import relion_vdam_m_step_host
+
+            transaction = relion_vdam_m_step_host
+        return _run_m_step_transaction(
+            transaction,
             state,
             k,
             accum_h0,
@@ -615,6 +624,7 @@ def vdam_m_step(
     grad_min_resol_shell: float | None = None,
     padding_factor: int = 1,
     use_native_transaction: bool = True,
+    mstep_backend: Literal["native", "jax"] = "native",
 ) -> InitialModelState:
     """Full VDAM M-step over K classes.
 
@@ -638,5 +648,6 @@ def vdam_m_step(
             grad_min_resol_shell=grad_min_resol_shell,
             padding_factor=padding_factor,
             use_native_transaction=use_native_transaction,
+            mstep_backend=mstep_backend,
         )
     return out

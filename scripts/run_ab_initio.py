@@ -384,6 +384,10 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--projector-setup-backend", choices=("native", "jax"), default="native",
         help="Reference projector preparation backend (JAX supports trilinear padding 1/2).",
     )
+    p.add_argument(
+        "--mstep-backend", choices=("native", "jax"), default="native",
+        help="VDAM M-step transaction backend (small FFT grids retain native execution).",
+    )
     return p.parse_args(argv)
 
 
@@ -490,6 +494,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         grad_write_iter=opts.grad_write_iter,
         padding_factor=int(args.padding_factor),
         projector_setup_backend=args.projector_setup_backend,
+        mstep_backend=args.mstep_backend,
         image_fourier_backend=(
             "relion_cuda"
             if args.image_fourier_backend == "auto" and bool(args.gpu_ids)

@@ -171,6 +171,7 @@ class NativeInitialModelOptions:
     padding_factor: int = INITIAL_MODEL_GUI_DEFAULTS.padding_factor
     image_fourier_backend: str = "host_numpy"
     projector_setup_backend: Literal["native", "jax"] = "native"
+    mstep_backend: Literal["native", "jax"] = "native"
     deterministic_cuda: bool = INITIAL_MODEL_GUI_DEFAULTS.deterministic_cuda
     lazy: bool = INITIAL_MODEL_GUI_DEFAULTS.lazy
     datadir: str | None = None
@@ -2950,6 +2951,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         grad_stepsize=float(opts.stepsize),
         mu=float(opts.mu),
         projector_padding_factor=int(opts.padding_factor),
+        mstep_backend=opts.mstep_backend,
         projector_refresh_fn=None if projector_context is None else projector_context.refresh,
         start_iteration=int(state.iter),
         diagnostic_stop_after_iteration=opts.diagnostic_stop_after_iteration,

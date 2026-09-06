@@ -4,9 +4,9 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model import dense_adapter as adapter
-from recovar.em.initial_model import driver, iteration_loop as loop
+from recovar.em.initial_model import driver, initialise_denovo_state
+from recovar.em.initial_model import iteration_loop as loop
 from recovar.em.initial_model.subset import numpy_rnd_unif_factory
 from recovar.utils.helpers import recovar_volume_to_relion
 
@@ -117,7 +117,8 @@ def test_context_rejects_stale_handoff_and_clears(monkeypatch, change):
 
 
 @pytest.mark.parametrize("refresh_enabled", [False, True])
-def test_loop_callback_is_once_before_estep_and_respects_disabled(monkeypatch, refresh_enabled):
+@pytest.mark.parametrize("mstep_backend", ["native", "jax"])
+def test_loop_callback_is_once_before_estep_and_respects_disabled(monkeypatch, refresh_enabled, mstep_backend):
     state = initialise_denovo_state(
         ori_size=8, pixel_size=1.0, K=1, nr_iter=2,
         n_directions=3, pseudo_halfsets=True,
@@ -133,13 +134,17 @@ def test_loop_callback_is_once_before_estep_and_respects_disabled(monkeypatch, r
         events.append((current.iter, "estep", current.current_size))
         return [], {"max_posterior_per_image": np.ones(len(ids))}
 
-    monkeypatch.setattr(loop, "vdam_m_step", lambda current, **kwargs: current)
+    def mstep(current, **kwargs):
+        assert kwargs["mstep_backend"] == mstep_backend
+        return current
+
+    monkeypatch.setattr(loop, "vdam_m_step", mstep)
     loop.run_vdam_iterations(
         state, nr_particles=20, optics_group_by_particle=[0] * 20,
         grad_ini_subset_size=10, grad_fin_subset_size=10, tau2_fudge_arg=4.0,
         grad_em_iters=0, random_seed=29, rnd_unif_factory=numpy_rnd_unif_factory,
         expectation_step=estep, refresh_tau2_from_projector=refresh_enabled,
-        projector_refresh_fn=refresh,
+        projector_refresh_fn=refresh, mstep_backend=mstep_backend,
     )
     expected = ["refresh", "estep"] * 2 if refresh_enabled else ["estep"] * 2
     assert [event[1] for event in events] == expected

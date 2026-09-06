@@ -143,19 +143,23 @@ def test_native_branch_certificate_real_only_and_serial_order(bind):
 
 def test_dynamic_radius_reuses_device_executable(bind):
     relion_vdam_m_step_device.clear_cache()
-    for radius in (1, 2, 4, 0):
-        case = _case(radius=radius or 4)
+    for radius in (1, 2, 8, 0):
+        case = _case(size=16, radius=radius or 8)
         case["r_max"] = radius
         result = relion_vdam_m_step_host(**case)
         assert np.all(np.isfinite(result["iref"]))
     assert relion_vdam_m_step_device._cache_size() == 1
 
 
-@pytest.mark.parametrize("kind", ["tiny_sigma", "negative_tau"])
+@pytest.mark.parametrize("kind", ["tiny_sigma", "negative_tau", "nan_sigma", "nan_tau"])
 def test_native_ssnr_error_branches(bind, kind):
-    case = _case()
+    case = _case(size=16)
     if kind == "tiny_sigma":
         case["weight_h0"].fill(1e-30)
+    elif kind == "nan_sigma":
+        case["weight_h0"].fill(np.nan)
+    elif kind == "nan_tau":
+        case["tau2"][0] = np.nan
     else:
         case["tau2"][0] = -1.0
     with pytest.raises(Exception):
@@ -172,8 +176,8 @@ def test_native_ssnr_error_branches(bind, kind):
 def test_physical_hermitian_transaction_native_fp64(bind, size, padding, full, pseudo, moments):
     case = _case(size, padding, size // (2 if full else 4), pseudo, moments)
     # Half-volume inputs require Hermitian symmetry on the x=0 plane. Generate
-    # that physical contract explicitly; the separate arbitrary-input oracle
-    # remains a failing diagnostic until native FFTW's wider behavior is covered.
+    # that physical contract explicitly. The arbitrary-input panel also remains;
+    # its FFT8 cases now verify the original native capability fallback.
     for key in ("data_h0", "weight_h0", "data_h1", "weight_h1", "mom1_h0", "mom1_h1", "mom2"):
         value = case[key]
         if value is None:
@@ -182,3 +186,57 @@ def test_physical_hermitian_transaction_native_fp64(bind, size, padding, full, p
         indices = (2 * (n // 2) - np.arange(n)) % n
         value[:, :, 0] = (value[:, :, 0] + value[indices[:, None], indices[None, :], 0].conj()) / 2.0
     _assert_case(bind, case)
+
+
+@pytest.mark.parametrize("size,padding,expected_backend", [(8, 1, "native"), (8, 2, "device"), (16, 1, "device")])
+def test_host_backend_capability_attestation(bind, monkeypatch, size, padding, expected_backend):
+    from recovar.em.dense_single_volume.helpers import relion_vdam_mstep as helper
+
+    case = _case(size=size, padding=padding, radius=size // 4)
+    expected = _native(bind, case)
+    calls = []
+    native_transaction = bind.vdam_m_step_transaction
+    device_transaction = helper.relion_vdam_m_step_device
+
+    def native(*args, **kwargs):
+        calls.append("native")
+        assert expected_backend == "native"
+        return native_transaction(*args, **kwargs)
+
+    def device(*args, **kwargs):
+        calls.append("device")
+        assert expected_backend == "device"
+        return device_transaction(*args, **kwargs)
+
+    monkeypatch.setattr(bind, "vdam_m_step_transaction", native)
+    monkeypatch.setattr(helper, "relion_vdam_m_step_device", device)
+    if expected_backend == "native":
+
+        def forbidden_certificate(*args, **kwargs):
+            raise AssertionError("native fallback must not prepare device inputs")
+
+        monkeypatch.setattr(bind, "vdam_first_moment_initializes", forbidden_certificate)
+    actual = helper.relion_vdam_m_step_host(**case)
+    assert calls == [expected_backend]
+    for key in expected:
+        if expected[key] is None:
+            assert actual[key] is None
+        elif expected_backend == "native":
+            np.testing.assert_array_equal(actual[key], expected[key])
+        else:
+            assert np.all(_metrics(actual[key], expected[key]) < 1e-12)
+
+
+def test_pure_device_rejects_unsupported_small_fft():
+    with pytest.raises(ValueError, match="FFT grid >=16"):
+        relion_vdam_m_step_device(
+            *([None] * 10),
+            0.3,
+            4.0,
+            2,
+            False,
+            False,
+            ori_size=8,
+            padding_factor=1,
+            pseudo_halfsets=True,
+        )
