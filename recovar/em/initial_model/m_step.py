@@ -275,6 +275,68 @@ def _maybe_replay_native_second_moment(
     return _read_native_complex_replay(replay_path, expected_shape=computed.shape)
 
 
+def _run_native_m_step_transaction(
+    bind,
+    state: InitialModelState,
+    k: int,
+    accum_h0: VdamAccumulator,
+    accum_h1: VdamAccumulator | None,
+    *,
+    grad_current_stepsize: float,
+    tau2_fudge_factor: float,
+    padding_factor: int,
+    r_max: int,
+    min_resol_shell: float,
+) -> InitialModelState:
+    """Keep native intermediates inside one RELION BackProjector lifecycle."""
+    from recovar.utils.helpers import recovar_volume_to_relion, relion_volume_to_recovar
+
+    slot_h0 = half_slot_index(k, 0, state.K, state.pseudo_halfsets)
+    slot_h1 = half_slot_index(k, 1, state.K, True) if state.pseudo_halfsets else None
+    effective_stepsize = float(grad_current_stepsize) * (
+        1.0 - np.exp(-float(3 * state.K + 10) * float(np.asarray(state.pdf_class)[k]))
+    )
+    result = bind.vdam_m_step_transaction(
+        recovar_volume_to_relion(np.asarray(state.Iref[k])),
+        accum_h0.data,
+        accum_h0.weight,
+        accum_h1.data if accum_h1 is not None else None,
+        accum_h1.weight if accum_h1 is not None else None,
+        state.Igrad1[slot_h0],
+        state.Igrad1[slot_h1] if slot_h1 is not None else None,
+        state.Igrad2[k],
+        state.fsc_halves_class[0],
+        state.fsc_halves_class[k],
+        state.tau2_class[k],
+        effective_stepsize,
+        tau2_fudge_factor,
+        state.ori_size,
+        padding_factor,
+        1,
+        r_max,
+        min_resol_shell,
+    )
+    out = replace(state)
+    out.Iref = state.Iref.copy()
+    out.Iref[k] = relion_volume_to_recovar(np.asarray(result["iref"]))
+    out.Igrad1 = state.Igrad1.copy()
+    out.Igrad1[slot_h0] = np.asarray(result["mom1_h0"])
+    if slot_h1 is not None:
+        out.Igrad1[slot_h1] = np.asarray(result["mom1_h1"])
+    out.Igrad2 = state.Igrad2.copy()
+    out.Igrad2[k] = np.asarray(result["mom2"])
+    for attribute, key in (
+        ("tau2_class", "tau2"),
+        ("sigma2_class", "sigma2"),
+        ("data_vs_prior_class", "data_vs_prior"),
+        ("fourier_coverage_class", "fourier_coverage"),
+    ):
+        values = getattr(state, attribute).copy()
+        values[k] = np.asarray(result[key], dtype=np.float64)
+        setattr(out, attribute, values)
+    return out
+
+
 def vdam_m_step_single_class(
     state: InitialModelState,
     k: int,
@@ -285,6 +347,7 @@ def vdam_m_step_single_class(
     tau2_fudge_factor: float,
     grad_min_resol_shell: float | None = None,
     padding_factor: int = 1,
+    use_native_transaction: bool = True,
 ) -> InitialModelState:
     """VDAM M-step for one class (per-class loop matches RELION's binding shape).
 
@@ -318,6 +381,36 @@ def vdam_m_step_single_class(
         os.environ.get("RECOVAR_MSTEP_DUMP_ITER", "1")
     )
     _dump_prefix = f"c{k}_" if state.K > 1 else ""
+
+    # Replay and intermediate dump diagnostics retain their original boundaries.
+    replay_requested = any(
+        os.environ.get(name, "").strip()
+        for name in (
+            VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV,
+            VDAM_NATIVE_FIRST_MOMENT_REPLAY_ENV,
+            VDAM_NATIVE_BPREF_DATA_REPLAY_ENV,
+            VDAM_NATIVE_BPREF_WEIGHT_REPLAY_ENV,
+            VDAM_NATIVE_IREF_INPUT_REPLAY_ENV,
+        )
+    )
+    if (
+        use_native_transaction
+        and not _do_dump
+        and not replay_requested
+        and hasattr(bind, "vdam_m_step_transaction")
+    ):
+        return _run_native_m_step_transaction(
+            bind,
+            state,
+            k,
+            accum_h0,
+            accum_h1,
+            grad_current_stepsize=grad_current_stepsize,
+            tau2_fudge_factor=tau2_fudge_factor,
+            padding_factor=padding_factor,
+            r_max=r_max,
+            min_resol_shell=min_resol_shell,
+        )
 
     def _dump(name, arr):
         if not _do_dump:
@@ -521,6 +614,7 @@ def vdam_m_step(
     tau2_fudge_factor: float,
     grad_min_resol_shell: float | None = None,
     padding_factor: int = 1,
+    use_native_transaction: bool = True,
 ) -> InitialModelState:
     """Full VDAM M-step over K classes.
 
@@ -543,5 +637,6 @@ def vdam_m_step(
             tau2_fudge_factor=tau2_fudge_factor,
             grad_min_resol_shell=grad_min_resol_shell,
             padding_factor=padding_factor,
+            use_native_transaction=use_native_transaction,
         )
     return out
