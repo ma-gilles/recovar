@@ -388,6 +388,7 @@ EXACT_LOCAL_DEFER_PACKED_MSTEP_ENV = "RECOVAR_EXACT_LOCAL_DEFER_PACKED_MSTEP"
 EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV = "RECOVAR_EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB = 0.0
 EXACT_LOCAL_PROJECTOR_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_PROJECTOR_CAPACITY"
+EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY"
 EXACT_LOCAL_NOISE_STABLE_CORE_ENV = "RECOVAR_EXACT_LOCAL_NOISE_STABLE_CORE"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS = 64_000_000
@@ -1707,11 +1708,14 @@ def _accumulate_relion_vdam_physical_particle_grid(
     particle_replay_order=None,
     candidate_trace_active=False,
     serial_particle_accumulation=False,
+    runtime_projector_radius=None,
 ):
     """Form and scatter VDAM residuals in physical particle order."""
 
     if max_r is None:
         raise ValueError("RELION VDAM physical particle-grid accumulation requires max_r")
+    if runtime_projector_radius is not None and projector_full is None:
+        raise ValueError("BPref projector capacity requires the inline projector")
     images = jnp.asarray(images, dtype=jnp.complex64)
     ctf = jnp.asarray(ctf, dtype=jnp.float32)
     minvsigma2 = jnp.asarray(minvsigma2, dtype=jnp.float32)
@@ -1922,6 +1926,7 @@ def _accumulate_relion_vdam_physical_particle_grid(
                 candidate_trace_active=candidate_trace_active,
                 stable_dense_positions=stable_dense_positions,
                 logical_current_size=logical_current_size,
+                runtime_projector_radius=runtime_projector_radius,
             )
         )
     return Ft_y, Ft_ctf
@@ -2057,6 +2062,13 @@ def _local_noise_stable_core_requested() -> bool:
     token = os.environ.get(EXACT_LOCAL_NOISE_STABLE_CORE_ENV, "0").strip()
     if token not in {"0", "1"}:
         raise ValueError(f"{EXACT_LOCAL_NOISE_STABLE_CORE_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_bpref_projector_capacity_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV} must be 0 or 1")
     return token == "1"
 
 
@@ -4473,6 +4485,9 @@ def run_local_em_exact(
     projector_capacity_enabled = _local_projector_capacity_requested()
     if projector_capacity_enabled and not stable_fourier_window_shapes:
         raise ValueError("projector capacity requires stable exact-local VDAM Fourier windows")
+    bpref_projector_capacity_enabled = _local_bpref_projector_capacity_requested()
+    if bpref_projector_capacity_enabled and not projector_capacity_enabled:
+        raise ValueError("BPref projector capacity requires the shared local projector capacity")
     packed_final_noise_enabled = bool(_packed_final_noise_enabled)
     noise_stable_core_enabled = _local_noise_stable_core_requested()
     if noise_stable_core_enabled and not (
@@ -5512,6 +5527,8 @@ def run_local_em_exact(
         EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV, EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB
     ) > 0:
         raise ValueError("projector capacity cannot be combined with the local projection cache")
+    if bpref_projector_capacity_enabled and (not source_faithful_bpref or score_only):
+        raise ValueError("BPref projector capacity requires the source-faithful VDAM accumulator route")
     if fixed_capacity_enabled and not use_big_jit_buckets:
         raise ValueError(
             "fixed-capacity score-only execution requires the mature local big-JIT bucket path",
@@ -5571,7 +5588,7 @@ def run_local_em_exact(
                 big_jit_projection_pixel_indices_arg = jnp.asarray(window_spec.projection_indices, dtype=jnp.int32)
                 big_jit_projection_score_take_arg = jnp.asarray(window_spec.score_projection_take, dtype=jnp.int32)
                 big_jit_projection_recon_take_arg = jnp.asarray(window_spec.recon_projection_take, dtype=jnp.int32)
-        if source_faithful_bpref and not score_only:
+        if source_faithful_bpref and not score_only and not bpref_projector_capacity_enabled:
             from recovar.em.dense_single_volume.helpers.projection import (
                 relion_projector_half_to_texture_full,
             )
@@ -5593,6 +5610,14 @@ def run_local_em_exact(
             padding_factor=projection_padding_factor,
         )
         local_projection_static_radius = 0
+    source_vdam_projector_static_radius = relion_projector_r_max_big_jit
+    source_vdam_projector_runtime_radius = None
+    if bpref_projector_capacity_enabled:
+        # Reuse the exact same physical half slab and device radius as BigJIT.
+        # No logical full-cube materialization is needed for this BPref ABI.
+        source_vdam_projector_full = local_projection_half_arg
+        source_vdam_projector_static_radius = 0
+        source_vdam_projector_runtime_radius = local_projection_runtime_radius
     if (
         use_big_jit_buckets
         and compact_relion_projector_big_jit
@@ -6748,7 +6773,8 @@ def run_local_em_exact(
                                     scoring_rotations=unpadded_bucket.local_rotations[
                                         target_slice
                                     ],
-                                    projector_r_max=relion_projector_r_max_big_jit,
+                                    projector_r_max=source_vdam_projector_static_radius,
+                                    runtime_projector_radius=source_vdam_projector_runtime_radius,
                                     projection_padding_factor=projection_padding_factor,
                                     pixel_indices=mstep_recon_window_indices,
                                     image_shape=image_shape,
@@ -7657,7 +7683,8 @@ def run_local_em_exact(
                         scoring_rotations=_particle_slice(
                             packed_rotations_np, particle_start, particle_stop
                         ),
-                        projector_r_max=relion_projector_r_max_big_jit,
+                        projector_r_max=source_vdam_projector_static_radius,
+                        runtime_projector_radius=source_vdam_projector_runtime_radius,
                         projection_padding_factor=projection_padding_factor,
                         pixel_indices=mstep_recon_window_indices,
                         image_shape=image_shape,
