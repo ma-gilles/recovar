@@ -221,6 +221,37 @@ def _relion_projector_texture_enabled(
     )
 
 
+def prepare_relion_projector_capacity(volume_relion_half, *, r_max, physical_size, padding_factor):
+    """Center-pad the original logical texture slab, including its ghost texels."""
+    from recovar.core import slicing
+
+    radius = int(r_max)
+    physical_size = int(physical_size)
+    pf = int(padding_factor)
+    logical = jnp.asarray(volume_relion_half)
+    if (
+        pf not in (1, 2) or physical_size <= 0 or physical_size % 2
+        or not 0 <= radius <= physical_size // 2
+    ):
+        raise ValueError("projector capacity requires padding 1/2 and a radius inside an even physical size")
+    size = 2 * (pf * radius + 1) + 1
+    if logical.dtype != jnp.complex64 or logical.shape != (size, size, size // 2 + 1):
+        raise ValueError("projector capacity requires the original C64 logical half shape including ghost planes")
+    if not _relion_projector_texture_enabled(
+        logical, r_max=radius, padding_factor=pf
+    ) or not slicing._use_cuda(1):
+        raise ValueError("projector capacity requires the existing custom CUDA texture projection route")
+    capacity = pf * physical_size + 3
+    if capacity > 1025:
+        raise ValueError("projector capacity exceeds the CUDA ABI extent")
+    offset = (capacity - size) // 2
+    padded = jnp.pad(
+        logical,
+        ((offset, offset), (offset, offset), (0, capacity // 2 + 1 - logical.shape[2])),
+    )
+    return padded, jnp.asarray(radius, dtype=jnp.int32)
+
+
 def _texture_centered_crop_to_full(
     projection_crop,
     *,
@@ -317,20 +348,31 @@ def _project_relion_projector_texture(
     mask_current_image_disk: bool = True,
     current_image_mask_size=None,
     pixel_indices=None,
+    runtime_r_max=None,
+    padding_factor=1,
 ):
     """Project one RELION ``PPref`` block with RELION's CUDA texture arithmetic."""
 
-    projector_full = relion_projector_half_to_texture_full(volume_relion_half)
-    pad_size = int(projector_full.shape[0])
-    projection_crop = project_half_spectrum(
-        projector_full.reshape(-1),
-        rotations_block,
-        (int(projector_output_size), int(projector_output_size)),
-        (pad_size, pad_size, pad_size),
-        "linear_interp",
-        max_r=float(r_max),
-        relion_texture_interp=True,
-    )
+    if runtime_r_max is None:
+        projector_full = relion_projector_half_to_texture_full(volume_relion_half)
+        pad_size = int(projector_full.shape[0])
+        projection_crop = project_half_spectrum(
+            projector_full.reshape(-1),
+            rotations_block,
+            (int(projector_output_size), int(projector_output_size)),
+            (pad_size, pad_size, pad_size),
+            "linear_interp",
+            max_r=float(r_max),
+            relion_texture_interp=True,
+        )
+    else:
+        from recovar.cuda_backproject import project_relion_half_capacity
+
+        projection_crop = project_relion_half_capacity(
+            volume_relion_half, rotations_block, runtime_r_max,
+            image_shape=(int(projector_output_size), int(projector_output_size)),
+            padding_factor=int(padding_factor),
+        )
     if pixel_indices is not None:
         return _texture_centered_crop_at_indices(
             projection_crop,
@@ -364,6 +406,8 @@ def compute_relion_projector_projections_block(
     relion_texture_interp: bool | None = None,
     mask_current_image_disk: bool = True,
     current_image_mask_size=None,
+    projector_capacity: bool = False,
+    runtime_r_max=None,
 ):
     """Project precomputed RELION ``PPref`` data for one rotation block.
 
@@ -377,12 +421,27 @@ def compute_relion_projector_projections_block(
     resolved_output_size = int(r_max) * 2 if projector_output_size is None else int(projector_output_size)
     if resolved_output_size <= 0 or resolved_output_size > image_size:
         resolved_output_size = image_size
-    use_texture = _relion_projector_texture_enabled(
-        volume_relion_half,
-        r_max=int(r_max),
-        padding_factor=int(padding_factor),
-        enabled=relion_texture_interp,
-    )
+    if projector_capacity:
+        if (
+            int(r_max) != 0 or runtime_r_max is None or not centered_rows
+            or pixel_indices is None or projector_output_size is None
+            or not 0 < int(projector_output_size) <= image_size
+            or int(projector_output_size) % 2
+        ):
+            raise ValueError(
+                "projector capacity requires compact centered pixels, valid explicit "
+                "output size, runtime radius and static radius sentinel 0"
+            )
+        if relion_texture_interp is False:
+            raise ValueError("projector capacity cannot use the manual projection fallback")
+        use_texture = True
+    else:
+        use_texture = _relion_projector_texture_enabled(
+            volume_relion_half,
+            r_max=int(r_max),
+            padding_factor=int(padding_factor),
+            enabled=relion_texture_interp,
+        )
 
     if use_texture:
         if not centered_rows and pixel_indices is not None:
@@ -403,6 +462,9 @@ def compute_relion_projector_projections_block(
             texture_kwargs["mask_current_image_disk"] = False
         if current_image_mask_size is not None:
             texture_kwargs["current_image_mask_size"] = current_image_mask_size
+        if projector_capacity:
+            texture_kwargs["runtime_r_max"] = runtime_r_max
+            texture_kwargs["padding_factor"] = int(padding_factor)
         proj_centered = _project_relion_projector_texture(
             volume_relion_half,
             rotations_block,

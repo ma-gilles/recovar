@@ -386,6 +386,7 @@ EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV = "RECOVAR_EXACT_LOCAL_RECONSTRUCTIO
 EXACT_LOCAL_DEFER_PACKED_MSTEP_ENV = "RECOVAR_EXACT_LOCAL_DEFER_PACKED_MSTEP"
 EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV = "RECOVAR_EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB = 0.0
+EXACT_LOCAL_PROJECTOR_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_PROJECTOR_CAPACITY"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS = 64_000_000
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS_ENV = (
@@ -2041,6 +2042,13 @@ def _stable_fourier_window_quantum() -> int:
 
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
+
+
+def _local_projector_capacity_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_PROJECTOR_CAPACITY_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_PROJECTOR_CAPACITY_ENV} must be 0 or 1")
+    return token == "1"
 
 
 def _optional_nonnegative_float_env(name: str, default: float) -> float:
@@ -4453,6 +4461,9 @@ def run_local_em_exact(
     fused_pair_fine_score_enabled = bool(fused_pair_fine_score)
     defer_packed_vdam_enabled = bool(_defer_packed_vdam_enabled)
     stable_fourier_window_shapes = bool(stable_fourier_window_shapes)
+    projector_capacity_enabled = _local_projector_capacity_requested()
+    if projector_capacity_enabled and not stable_fourier_window_shapes:
+        raise ValueError("projector capacity requires stable exact-local VDAM Fourier windows")
     packed_final_noise_enabled = bool(_packed_final_noise_enabled)
     if fixed_capacity_whole_boundary_enabled and not fixed_capacity_enabled:
         raise ValueError(
@@ -5477,6 +5488,16 @@ def run_local_em_exact(
         and not (accumulate_noise and debug_noise_dump_dir is not None)
         and not processed_half_cache_preferred
     )
+    if projector_capacity_enabled and not (
+        stable_window_active and use_big_jit_buckets and compact_relion_projector_big_jit
+        and flat_local_rows_enabled and packed_local_projection_enabled
+        and not projection_force_jax and not fixed_capacity_enabled
+    ):
+        raise ValueError("projector capacity requires the stable packed compact local BigJIT VDAM route")
+    if projector_capacity_enabled and _optional_nonnegative_float_env(
+        EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV, EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB
+    ) > 0:
+        raise ValueError("projector capacity cannot be combined with the local projection cache")
     if fixed_capacity_enabled and not use_big_jit_buckets:
         raise ValueError(
             "fixed-capacity score-only execution requires the mature local big-JIT bucket path",
@@ -5544,6 +5565,20 @@ def run_local_em_exact(
             source_vdam_projector_full = relion_projector_half_to_texture_full(
                 relion_projector_half_big_jit
             )
+    # Keep logical inputs above unchanged for BPref and the legacy projection cache.
+    local_projection_half_arg = relion_projector_half_big_jit
+    local_projection_static_radius = relion_projector_r_max_big_jit
+    local_projection_runtime_radius = None
+    if projector_capacity_enabled:
+        from recovar.em.dense_single_volume.helpers.projection import prepare_relion_projector_capacity
+
+        local_projection_half_arg, local_projection_runtime_radius = prepare_relion_projector_capacity(
+            relion_projector_half_big_jit,
+            r_max=relion_projector_r_max_big_jit,
+            physical_size=physical_current_size,
+            padding_factor=projection_padding_factor,
+        )
+        local_projection_static_radius = 0
     if (
         use_big_jit_buckets
         and compact_relion_projector_big_jit
@@ -6207,7 +6242,7 @@ def run_local_em_exact(
                 inverse_noise_rfloat_cast_arg,
                 corr_img_rfloat_square_arg,
                 mean_for_proj_big_jit,
-                relion_projector_half_big_jit,
+                local_projection_half_arg,
                 Ft_y,
                 Ft_ctf,
                 noise_wsum_arg,
@@ -6263,6 +6298,7 @@ def run_local_em_exact(
                 reconstruction_probability_threshold_arg,
                 jnp.asarray(logical_current_size, dtype=jnp.int32),
                 big_jit_config,
+                local_projection_runtime_radius,
             )
             big_jit_static_options = dict(
                 mask_mode=big_jit_mask_mode,
@@ -6328,7 +6364,8 @@ def run_local_em_exact(
                 has_reconstruction_probability_threshold=has_reconstruction_probability_threshold,
                 score_only=score_only,
                 use_relion_projector=bool(use_relion_projector),
-                relion_projector_r_max=relion_projector_r_max_big_jit,
+                relion_projector_r_max=local_projection_static_radius,
+                projector_capacity=projector_capacity_enabled,
                 projection_padding_factor=int(projection_padding_factor),
                 return_debug_arrays=return_big_jit_debug_arrays,
                 return_debug_scores=return_big_jit_debug_scores,

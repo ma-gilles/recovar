@@ -1215,6 +1215,8 @@ def _project_local_half_spectrum(
     use_relion_projector: bool,
     relion_projector_r_max: int,
     projection_padding_factor: int,
+    projector_capacity: bool = False,
+    runtime_projector_r_max=None,
 ):
     """Project local candidates with the requested exact-local interpolation contract."""
 
@@ -1224,6 +1226,9 @@ def _project_local_half_spectrum(
             projector_kwargs["projector_output_size"] = int(relion_projector_output_size)
         if projection_pixel_indices is not None:
             projector_kwargs["pixel_indices"] = projection_pixel_indices
+        if projector_capacity:
+            projector_kwargs["projector_capacity"] = True
+            projector_kwargs["runtime_r_max"] = runtime_projector_r_max
         proj_half, _ = compute_relion_projector_projections_block(
             relion_projector_half,
             flat_rotations,
@@ -1318,6 +1323,7 @@ def _project_local_half_spectrum(
         "score_only",
         "use_relion_projector",
         "relion_projector_r_max",
+        "projector_capacity",
         "projection_padding_factor",
         "return_debug_arrays",
         "return_debug_scores",
@@ -1387,6 +1393,7 @@ def run_local_bucket_big_jit(
     reconstruction_probability_threshold,
     runtime_logical_current_size,
     config,
+    runtime_projector_r_max=None,
     *,
     mask_mode: str,
     score_with_masked_images: bool,
@@ -1447,6 +1454,7 @@ def run_local_bucket_big_jit(
     score_only: bool = False,
     use_relion_projector: bool = False,
     relion_projector_r_max: int = 0,
+    projector_capacity: bool = False,
     projection_padding_factor: int = 1,
     return_debug_arrays: bool = False,
     return_debug_scores: bool = False,
@@ -1881,6 +1889,12 @@ def run_local_bucket_big_jit(
             3,
             3,
         )
+    if projector_capacity and (
+        not use_relion_projector or use_relion_projection_cache
+        or not use_compact_relion_projector_projection or relion_projector_r_max != 0
+        or runtime_projector_r_max is None
+    ):
+        raise ValueError("projector capacity requires an uncached compact RELION projection and canonical static radius")
     if use_relion_projection_cache:
         if packed_local_projection:
             selected_rotation_ids = local_rotation_ids_for_projection_cache[
@@ -1910,6 +1924,8 @@ def run_local_bucket_big_jit(
             use_relion_projector=use_relion_projector,
             relion_projector_r_max=relion_projector_r_max,
             projection_padding_factor=projection_padding_factor,
+            projector_capacity=projector_capacity,
+            runtime_projector_r_max=runtime_projector_r_max,
         )
     if use_window:
         if use_compact_relion_projector_projection:
