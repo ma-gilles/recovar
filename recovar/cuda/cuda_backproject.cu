@@ -2333,7 +2333,7 @@ project_texture_kernel(
     if constexpr (RUNTIME_RADIUS) {
         const int radius = *logical_radius;
         if (radius < 0 || radius > capacity_radius / upsampling) {
-            img2[img_off] = make_float2(CUDART_NAN_F, CUDART_NAN_F);
+            img2[img_off] = make_float2(nanf(""), nanf(""));
             return;
         }
         const int padded_radius = radius * upsampling;
