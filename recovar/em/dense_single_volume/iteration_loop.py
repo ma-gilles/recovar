@@ -89,24 +89,10 @@ from recovar.em.dense_single_volume.k_class import (
     run_dense_k_class_em_adaptive,
 )
 
-# Re-exports kept for test back-compat: tests monkeypatch these names at the
-# ``iteration_loop`` module level (``monkeypatch.setattr(iteration_loop, ...)``)
-# even though the call sites now live in the focused submodules. The submodules
-# resolve the symbols through ``recovar.em.dense_single_volume.iteration_loop``
-# at call time, so keeping the bindings here lets the existing monkeypatches
-# continue to win without test churn.
-from recovar.em.dense_single_volume.k_class import (  # noqa: F401
-    run_local_k_class_em as run_local_k_class_em,
-)
-from recovar.em.dense_single_volume.local_em_engine import (  # noqa: F401
-    run_local_em_exact as run_local_em_exact,
-)
 from recovar.em.dense_single_volume.local_layout import (
     _selected_rotation_matrices,
     build_local_adaptive_pass2_hypothesis_layout,
-)
-from recovar.em.dense_single_volume.local_layout import (  # noqa: F401
-    build_local_hypothesis_layout as build_local_hypothesis_layout,
+    build_local_hypothesis_layout,
 )
 from recovar.em.dense_single_volume.local_search_iteration import (
     _precompute_exact_local_fine_grid_enabled,

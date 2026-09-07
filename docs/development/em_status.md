@@ -40,6 +40,10 @@ source identities when incorporating evidence into a future PR.
 | Private embedding/state/linalg helpers | `48776ce7b`; retained AST unchanged apart from unused standard-library import; 143 passed, 7 GPU cases deselected, Slurm13562799 |
 | Unreachable cubic-mask branch | `924187933`; existing linear policy preserved; 4 tests and 32 exact original/candidate comparisons passed, Slurm13562921 |
 | Ten identical JSON conversion helpers | `358db66f3`; shared body unchanged; 16 tests and 10 CLI import/help checks passed, Slurm13563062 |
+| Twenty-five identical file-hash helpers | `0ab668be8`; 139 CPU and 5 GPU cases passed, Slurm13565059/13565290; all 25 module CLIs pass; 12 direct-entry import failures match PR158, Slurm13565356 |
+| Sixteen historical scorecard CLIs | `df09caa3b`; validators and renderers unchanged; 88 tests, 32 help checks and 32 pinned-report checks passed without site packages, Slurm13565574 |
+| Exhaustive orientation-test memory | `7f8200e09`; blocked comparison matches dense float32/float64 results exactly; all 32 cases pass with the original angular gate, 592640 KiB peak RSS, Slurm13565654 |
+| Direct local-search dependencies | 79 cases passed, Slurm13566158; planner/kernel bindings and numerical AST unchanged; tests migrated to the modules that call each dependency |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance
@@ -52,6 +56,15 @@ remains available through
 `fused_score_normalize_support_probs_abs2_with_log_z_on_demand`; active callers
 perform M-step reductions after packing significant rows. The common fused
 `fused_score_normalize_mstep_abs2_on_demand` API remains available.
+
+Local-search kernels are imported from `local_em_engine.run_local_em_exact`
+and `k_class.run_local_k_class_em`. Their unused aliases in `iteration_loop`
+have been removed. `local_search_iteration` imports its layout builder, batch
+planner and kernels directly; its tests patch those call-site bindings.
+`iteration_loop.build_local_hypothesis_layout` remains an active dependency of
+the controller's adaptive parent-layout construction. The batch planner imports
+the shared memory-query utilities directly, avoiding a reverse dependency on
+the controller. No scoring, batching formula or output layout changed.
 
 Report scripts now share `recovar.utils.json_utils.to_jsonable`. Conversion
 preserves the old NumPy/path/nested-container behavior. It does not establish
@@ -75,8 +88,11 @@ as a repaired control, never as the unchanged PR158 source.
 
 ## Next check
 
-The initial structural series and strict documentation build have passed their
-focused checks. The separate K-class correctness decision is pending. Two
+The initial structural series through `430f46325` is frozen for three paired
+cold synthetic K1 comparisons in Slurm13564282, followed by audit13564283.
+Subsequent structural commits have their own focused checks; that frozen run
+does not establish end-to-end qualification for later source revisions.
+The separate K-class correctness decision is pending. Two
 unchanged-PR158 real-data repeats are running in Slurm13562724, with comparison
 job13562837, to test repeatability before attributing the earlier candidate's
 trajectory difference to a source change. The two repeats share an allocated

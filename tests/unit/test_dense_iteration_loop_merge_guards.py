@@ -737,7 +737,7 @@ def test_native_final_perturbation_uses_active_local_order_but_preserves_global_
     assert "final_perturbation_healpix_order = _native_final_perturbation_healpix_order(" in source
 
 
-def test_iteration_loop_monkeypatch_ppca_and_vdam_surfaces_survive_merges():
+def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
     required_iteration_loop_symbols = [
         "_align_fourier_volume_sign_to_reference",
         "_combined_noise_stats",
@@ -760,13 +760,13 @@ def test_iteration_loop_monkeypatch_ppca_and_vdam_surfaces_survive_merges():
         "read_relion_optimiser_metadata",
         "read_relion_sampling_metadata",
         "run_dense_ppca_refinement_with_kclass_schedule",
-        "run_local_em_exact",
-        "run_local_k_class_em",
         "run_local_ppca_refinement_with_kclass_schedule",
     ]
 
     missing = [name for name in required_iteration_loop_symbols if not hasattr(iteration_loop, name)]
     assert missing == []
+    assert callable(local_search_iteration.run_local_em_exact)
+    assert callable(local_search_iteration.run_local_k_class_em)
     assert callable(run_vdam_iterations)
 
 

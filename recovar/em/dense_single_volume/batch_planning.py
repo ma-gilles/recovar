@@ -22,8 +22,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-# Constants mirror those in iteration_loop.py so monkeypatches at either
-# module level continue to bind correctly.
+# Memory budgets and cache defaults used by this planner.
 RELION_SCORE_TENSOR_FLOAT_BUDGET = 200_000_000
 _RELION_EM_BATCH_DEFAULT_GPU_GB = 80.0
 _RELION_EM_BATCH_USABLE_FRACTION = 0.65
@@ -116,10 +115,7 @@ def _estimate_relion_em_batch_sizes(
     current_size: int | None = None,
 ) -> _RelionEMBatchPlan:
     """Choose EM microbatch sizes from pose-grid, image, class, and GPU size."""
-    # Indirection through iteration_loop module so test monkeypatches on
-    # ``iteration_loop.utils.get_gpu_memory_total`` / ``get_gpu_memory_used``
-    # win at this call site too.
-    from recovar.em.dense_single_volume import iteration_loop as _il
+    from recovar import utils
 
     requested_image_batch_size = max(1, _safe_int(requested_image_batch_size, 1))
     requested_rotation_block_size = max(1, _safe_int(requested_rotation_block_size, 1))
@@ -133,11 +129,11 @@ def _estimate_relion_em_batch_sizes(
     gpu_used_gb = 0.0
     if gpu_memory_gb is None:
         try:
-            gpu_memory_gb = float(_il.utils.get_gpu_memory_total())
+            gpu_memory_gb = float(utils.get_gpu_memory_total())
         except Exception:
             gpu_memory_gb = _RELION_EM_BATCH_DEFAULT_GPU_GB
         try:
-            gpu_used_gb = float(_il.utils.get_gpu_memory_used())
+            gpu_used_gb = float(utils.get_gpu_memory_used())
         except Exception:
             gpu_used_gb = 0.0
     if not np.isfinite(gpu_memory_gb) or gpu_memory_gb <= 0:

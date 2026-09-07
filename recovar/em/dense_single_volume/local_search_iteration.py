@@ -1,17 +1,8 @@
-"""Exact local-search iteration body.
+"""Build and execute one exact local-search iteration.
 
-Encapsulates ``_run_local_search_iteration`` and its supporting helpers
-(``_LocalSearchIterationResult``, ``_unpack_local_search_engine_outputs``,
-``_pack_local_search_iteration_result``, ``_precompute_exact_local_fine_grid_enabled``)
-out of ``iteration_loop.py``. The main loop in iteration_loop.py imports them back
-under their underscored names so existing test monkeypatches at
-``iteration_loop._run_local_search_iteration`` continue to bind correctly.
-
-Patched symbols that live in iteration_loop's namespace
-(``build_local_hypothesis_layout``, ``run_local_em_exact``,
-``_estimate_relion_em_batch_sizes``) are accessed via the iteration_loop module
-reference (lazy import inside the function) so ``monkeypatch.setattr(iteration_loop, ...)``
-calls in the existing test suite remain effective.
+Construct image-specific pose neighborhoods, apply the batch memory budget,
+dispatch the single-class or K-class kernel, and pack its statistics for the
+refinement controller. Dependencies are imported from their owning modules.
 """
 
 from __future__ import annotations
@@ -23,11 +14,14 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from recovar.em.dense_single_volume.batch_planning import _estimate_relion_em_batch_sizes
 from recovar.em.dense_single_volume.helpers.local_search import (
     _local_search_engine_rotation_block_size,
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.k_class import run_local_k_class_em
+from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
+from recovar.em.dense_single_volume.local_layout import build_local_hypothesis_layout
 from recovar.em.sampling import build_local_search_grid_metadata
 
 logger = logging.getLogger(__name__)
@@ -225,12 +219,6 @@ def _run_local_search_iteration(
     generate_relion_mstep_rotations=False,
 ):
     """Run exact local search over image-specific rotation neighborhoods."""
-    # Indirection through the iteration_loop module so test monkeypatches that
-    # target ``iteration_loop.build_local_hypothesis_layout``,
-    # ``iteration_loop.run_local_em_exact``, etc. continue to win at the call
-    # site even though this function lives in a sibling module.
-    from recovar.em.dense_single_volume import iteration_loop as _il
-
     requested_image_batch_size = int(image_batch_size)
     requested_rotation_block_size = int(rotation_block_size)
     rotation_block_size = _local_search_engine_rotation_block_size(rotation_block_size)
@@ -267,7 +255,7 @@ def _run_local_search_iteration(
             layout_kwargs["rotation_grid_mstep_rotations"] = rotation_grid_mstep_rotations
         if bool(generate_relion_mstep_rotations):
             layout_kwargs["generate_relion_mstep_rotations"] = True
-        local_layout = _il.build_local_hypothesis_layout(
+        local_layout = build_local_hypothesis_layout(
             prior_rotations,
             rotation_grid_rotations,
             sigma_rot,
@@ -323,7 +311,7 @@ def _run_local_search_iteration(
             raise ValueError(
                 f"{EXACT_LOCAL_XHALF_BATCH_GUARD_ENV} must be 'full' or 'windowed', got {xhalf_guard_mode!r}"
             )
-    local_batch_plan = _il._estimate_relion_em_batch_sizes(
+    local_batch_plan = _estimate_relion_em_batch_sizes(
         requested_image_batch_size=image_batch_size,
         requested_rotation_block_size=rotation_block_size,
         n_rot=max(1, local_rotation_count),
@@ -444,7 +432,7 @@ def _run_local_search_iteration(
         )
     else:
         class_details = None
-        engine_outputs = _il.run_local_em_exact(
+        engine_outputs = run_local_em_exact(
             experiment_dataset,
             mean,
             mean_variance,

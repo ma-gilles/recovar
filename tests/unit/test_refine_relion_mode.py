@@ -4514,6 +4514,8 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
 
 
 def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translation_prior(monkeypatch, rng):
+    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
+
     mock_dataset = MockDataset(1, rng)
     captured = {}
 
@@ -4588,8 +4590,8 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
             output += (np.full(mock_dataset.n_units, 7, dtype=np.int32),)
         return output
 
-    monkeypatch.setattr(iteration_loop_module, "build_local_hypothesis_layout", fake_build_local_hypothesis_layout)
-    monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
+    monkeypatch.setattr(local_iteration_module, "build_local_hypothesis_layout", fake_build_local_hypothesis_layout)
+    monkeypatch.setattr(local_iteration_module, "run_local_em_exact", fake_run_local_em_exact)
 
     prior_rotations = np.zeros((1, 3), dtype=np.float32)
     rotation_grid_rotations = get_relion_rotation_grid(0).astype(np.float32)
@@ -4663,7 +4665,7 @@ def test_run_local_search_iteration_dispatches_aligned_mstep_grid(monkeypatch, r
     if k_class_enabled:
         monkeypatch.setattr(local_iteration_module, "run_local_k_class_em", capture_dispatch)
     else:
-        monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", capture_dispatch)
+        monkeypatch.setattr(local_iteration_module, "run_local_em_exact", capture_dispatch)
 
     with pytest.raises(DispatchCaptured):
         iteration_loop_module._run_local_search_iteration(
@@ -4722,6 +4724,8 @@ def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
     # suite when the queries return stale or inconsistent values. The 42 GB
     # / 0 GB-used pair is the historical isolation reading that this test
     # was originally calibrated against.
+    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
+
     monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_total", lambda: 42.0)
     monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_used", lambda: 0.0)
 
@@ -4766,7 +4770,7 @@ def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
             ),
         )
 
-    monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
+    monkeypatch.setattr(local_iteration_module, "run_local_em_exact", fake_run_local_em_exact)
 
     outputs = iteration_loop_module._run_local_search_iteration(
         HighresDataset(),
@@ -4799,6 +4803,8 @@ def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
 
 
 def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_default(monkeypatch):
+    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
+
     monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_total", lambda: 42.0)
     monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_used", lambda: 0.0)
 
@@ -4844,7 +4850,7 @@ def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_de
             ),
         )
 
-    monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
+    monkeypatch.setattr(local_iteration_module, "run_local_em_exact", fake_run_local_em_exact)
     monkeypatch.delenv("RECOVAR_LOCAL_XHALF_BATCH_GUARD", raising=False)
 
     iteration_loop_module._run_local_search_iteration(
@@ -4912,6 +4918,8 @@ def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_de
 
 
 def test_run_local_search_iteration_plumbs_score_only_to_exact_engine(monkeypatch, rng):
+    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
+
     mock_dataset = MockDataset(2, rng)
     layout = LocalHypothesisLayout(
         n_global_rotations=3,
@@ -4943,7 +4951,7 @@ def test_run_local_search_iteration_plumbs_score_only_to_exact_engine(monkeypatc
             {"score_only": kwargs["score_only"]},
         )
 
-    monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
+    monkeypatch.setattr(local_iteration_module, "run_local_em_exact", fake_run_local_em_exact)
 
     outputs = iteration_loop_module._run_local_search_iteration(
         mock_dataset,
@@ -4992,6 +5000,8 @@ def test_local_adaptive_parent_support_probe_is_score_only():
 
 
 def test_run_local_search_iteration_plumbs_normalization_log_evidence(monkeypatch, rng):
+    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
+
     mock_dataset = MockDataset(2, rng)
     layout = LocalHypothesisLayout(
         n_global_rotations=3,
@@ -5023,7 +5033,7 @@ def test_run_local_search_iteration_plumbs_normalization_log_evidence(monkeypatc
             ),
         )
 
-    monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
+    monkeypatch.setattr(local_iteration_module, "run_local_em_exact", fake_run_local_em_exact)
 
     outputs = iteration_loop_module._run_local_search_iteration(
         mock_dataset,
@@ -5054,6 +5064,8 @@ def test_run_local_search_iteration_plumbs_normalization_log_evidence(monkeypatc
 
 
 def test_run_local_search_iteration_plumbs_stats_use_reconstruction_probs(monkeypatch, rng):
+    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
+
     mock_dataset = MockDataset(2, rng)
     layout = LocalHypothesisLayout(
         n_global_rotations=3,
@@ -5084,7 +5096,7 @@ def test_run_local_search_iteration_plumbs_stats_use_reconstruction_probs(monkey
             ),
         )
 
-    monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
+    monkeypatch.setattr(local_iteration_module, "run_local_em_exact", fake_run_local_em_exact)
 
     outputs = iteration_loop_module._run_local_search_iteration(
         mock_dataset,
@@ -5161,6 +5173,7 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
     rng,
 ):
     from recovar import utils
+    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
 
     mock_dataset = MockDataset(1, rng)
     captured = {}
@@ -5236,8 +5249,8 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
             ),
         )
 
-    monkeypatch.setattr(iteration_loop_module, "build_local_hypothesis_layout", fake_build_local_hypothesis_layout)
-    monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
+    monkeypatch.setattr(local_iteration_module, "build_local_hypothesis_layout", fake_build_local_hypothesis_layout)
+    monkeypatch.setattr(local_iteration_module, "run_local_em_exact", fake_run_local_em_exact)
 
     healpix_order = 1
     canonical_rotations = get_relion_rotation_grid(healpix_order).astype(np.float32)
