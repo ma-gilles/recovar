@@ -15,9 +15,10 @@ from recovar.cuda_backproject import (
     relion_wavg_rotation_atomic_add_f32,
     relion_wavg_rotation_atomic_f32,
 )
+from recovar.utils.file_hash import sha256_file
 from scripts.analyze_k1_bpref_contributor_membership import match_rotations
 from scripts.analyze_k1_projected_power_boundary import _native_probabilities, _raw_f32
-from scripts.analyze_k1_scale_aa_candidates import _metric, _real, _scalar, _sha256
+from scripts.analyze_k1_scale_aa_candidates import _metric, _real, _scalar
 from scripts.analyze_k1_wavg_accumulation_boundary import (
     _flat_int,
     _native_pixel_aa,
@@ -149,7 +150,7 @@ def replay(
             ),
             "recovar_order_native_terms_vs_native": _metric(recovar_order_atomic, native),
         }
-        recovar_capture_sha256 = _sha256(recovar_capture)
+        recovar_capture_sha256 = sha256_file(recovar_capture)
     float64_sum = np.sum(terms, axis=0, dtype=np.float64)
     forward_float32 = np.cumsum(terms, axis=0, dtype=np.float32)[-1].astype(np.float64)
     baseline_norm = float(np.linalg.norm(float64_sum - native))
@@ -191,7 +192,7 @@ def replay(
         "artifacts": {
             "native_directory": str(native_directory.resolve()),
             "native_pixels": str(native_pixels.resolve()),
-            "native_pixels_sha256": _sha256(native_pixels),
+            "native_pixels_sha256": sha256_file(native_pixels),
             "recovar_capture": (
                 None if recovar_capture is None else str(recovar_capture.resolve())
             ),
