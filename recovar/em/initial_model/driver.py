@@ -2078,6 +2078,11 @@ def _native_expectation_step(
             else np.asarray(particle_state.best_pose_rotations, dtype=np.float64).copy()
         )
         previous_classes = np.asarray(particle_state.class_assignments, dtype=np.int32).copy()
+        if particle_state.visited is not None:
+            # RELION's old class number is zero until the first visit. Our
+            # scorer uses zero-based classes, so preserve that distinct old
+            # state only in this change-monitor snapshot, before visits update.
+            previous_classes[~np.asarray(particle_state.visited, dtype=bool)] = -1
         result = run_dense_initial_model_estep(
             dataset, state, config, particle_ids=particle_ids, halfset_ids=halfset_ids
         )

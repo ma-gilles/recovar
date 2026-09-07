@@ -2027,7 +2027,10 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
     np.testing.assert_array_equal(dump["random_seed_particle_ids"], np.asarray([9, 4]))
 
 
-def test_native_expectation_step_records_sampling_changes_each_gradient_iteration(monkeypatch):
+@pytest.mark.parametrize("visited, expected_class_changes", [([False, True], 0.5), ([True, True], 0.0)])
+def test_native_expectation_step_records_sampling_changes_each_gradient_iteration(
+    monkeypatch, visited, expected_class_changes
+):
     build_calls = []
 
     def fake_build_sampling_plan(opts, *, iteration, sampling_state=None):
@@ -2065,6 +2068,7 @@ def test_native_expectation_step_records_sampling_changes_each_gradient_iteratio
         class_assignments=np.zeros(2, dtype=np.int32),
         max_posterior=np.zeros(2, dtype=np.float32),
         pose_assignments=np.full(2, -1, dtype=np.int32),
+        visited=np.asarray(visited, dtype=bool),
     )
     state = initialise_denovo_state(ori_size=8, pixel_size=2.0, K=1, nr_iter=200, n_directions=1)
     state.iter = 9
@@ -2083,6 +2087,16 @@ def test_native_expectation_step_records_sampling_changes_each_gradient_iteratio
     assert meta["sampling_updated"] is False
     assert meta["current_changes_optimal_offsets_angstrom"] == pytest.approx(2.0)
     assert sampling_state.current_changes_optimal_offsets_angstrom == pytest.approx(2.0)
+    # The E-step marks both rows visited before recording sampling changes.
+    # RELION nevertheless compares against each row's old class-zero sentinel.
+    assert meta["current_changes_optimal_classes"] == expected_class_changes
+    np.testing.assert_array_equal(particle_state.class_assignments, [0, 0])
+    np.testing.assert_array_equal(particle_state.visited, [True, True])
+
+    _accumulators, repeated = expectation_step(
+        state, np.asarray([0, 1]), np.asarray([0, 1], dtype=np.int8)
+    )
+    assert repeated["current_changes_optimal_classes"] == 0.0
 
 
 def test_native_expectation_step_expands_class_rotation_prior_for_dense_fallback(monkeypatch):
