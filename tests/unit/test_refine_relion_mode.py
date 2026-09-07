@@ -76,7 +76,6 @@ from recovar.em.dense_single_volume.helpers.score_constraints import DenseScoreC
 from recovar.em.dense_single_volume.helpers.significance import (
     _capture_offset_free_and_absolute_float32_scores,
     _compute_k_class_significance_batched,
-    _compute_significance_batched,
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.iteration_loop import (
@@ -8708,13 +8707,14 @@ def test_coarse_gaussian_routes_relion_cuda_norm_and_shift_before_fft(rng):
 
     dataset.process_images_half = capture_process
     with pytest.raises(_CapturedStrictPreprocess):
-        _compute_significance_batched(
+        _compute_k_class_significance_batched(
             dataset,
-            _hermitian_volume(VOLUME_SHAPE, seed=885),
+            _hermitian_volume(VOLUME_SHAPE, seed=885)[None, :],
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             _make_rotations(1, seed=886),
             np.zeros((1, 2), dtype=np.float32),
             "linear_interp",
+            class_log_priors=np.zeros(1, dtype=np.float64),
             adaptive_fraction=1.0,
             max_significants=1,
             image_batch_size=1,
@@ -11028,22 +11028,23 @@ class TestRelionModeSmokeTest:
     ):
         """Rotation priors should work even when the last block is padded."""
         rotations = _make_rotations(5, seed=19)
-        sig_rot_any, n_sig, ha = _compute_significance_batched(
+        sig_rot_any, n_sig, ha, _, _, _ = _compute_k_class_significance_batched(
             half_datasets[0],
-            init_volume,
+            init_volume[None, :],
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             rotations,
             translations,
             "linear_interp",
-            0.999,
-            -1,
+            class_log_priors=np.zeros(1, dtype=np.float64),
+            adaptive_fraction=0.999,
+            max_significants=-1,
             image_batch_size=N_IMAGES,
             rotation_block_size=rotations.shape[0] + 1,
             current_size=None,
             rotation_log_prior=np.zeros(rotations.shape[0], dtype=np.float32),
         )
 
-        assert sig_rot_any.shape == (rotations.shape[0],)
+        assert sig_rot_any.shape == (1, rotations.shape[0])
         assert n_sig.shape == (half_datasets[0].n_units,)
         assert ha.shape == (half_datasets[0].n_units,)
 
@@ -11285,13 +11286,14 @@ class TestRelionModeSmokeTest:
         )
 
         monkeypatch.setenv("RECOVAR_SIGNIFICANCE_SCORE_CACHE", "off")
-        _, _, actual_ha = _compute_significance_batched(
+        _, _, actual_ha, _, _, _ = _compute_k_class_significance_batched(
             dataset,
-            init_volume,
+            init_volume[None, :],
             init_noise,
             rotations,
             translations,
             "linear_interp",
+            class_log_priors=np.zeros(1, dtype=np.float64),
             adaptive_fraction=0.999,
             max_significants=-1,
             image_batch_size=dataset.n_units,
@@ -11309,13 +11311,14 @@ class TestRelionModeSmokeTest:
         np.testing.assert_array_equal(np.asarray(actual_ha), np.asarray(expected_ha))
 
         monkeypatch.setenv("RECOVAR_SIGNIFICANCE_SCORE_CACHE", "force")
-        cached_result = _compute_significance_batched(
+        cached_result = _compute_k_class_significance_batched(
             dataset,
-            init_volume,
+            init_volume[None, :],
             init_noise,
             rotations,
             translations,
             "linear_interp",
+            class_log_priors=np.zeros(1, dtype=np.float64),
             adaptive_fraction=0.999,
             max_significants=-1,
             image_batch_size=dataset.n_units,
@@ -11328,17 +11331,16 @@ class TestRelionModeSmokeTest:
             half_spectrum_scoring=True,
             projection_padding_factor=2,
             use_float64_scoring=True,
-            return_significant_sample_indices=True,
-            return_full_stats=True,
         )
         monkeypatch.setenv("RECOVAR_SIGNIFICANCE_SCORE_CACHE", "off")
-        uncached_result = _compute_significance_batched(
+        uncached_result = _compute_k_class_significance_batched(
             dataset,
-            init_volume,
+            init_volume[None, :],
             init_noise,
             rotations,
             translations,
             "linear_interp",
+            class_log_priors=np.zeros(1, dtype=np.float64),
             adaptive_fraction=0.999,
             max_significants=-1,
             image_batch_size=dataset.n_units,
@@ -11351,20 +11353,18 @@ class TestRelionModeSmokeTest:
             half_spectrum_scoring=True,
             projection_padding_factor=2,
             use_float64_scoring=True,
-            return_significant_sample_indices=True,
-            return_full_stats=True,
         )
-        for cached, uncached in zip(cached_result[:3], uncached_result[:3]):
+        for cached, uncached in zip(cached_result[:4], uncached_result[:4]):
             np.testing.assert_array_equal(np.asarray(cached), np.asarray(uncached))
-        for cached_sig, uncached_sig in zip(cached_result[3], uncached_result[3]):
+        for cached_sig, uncached_sig in zip(cached_result[4][0], uncached_result[4][0]):
             if cached_sig is None or uncached_sig is None:
                 assert cached_sig is uncached_sig
             else:
                 np.testing.assert_array_equal(cached_sig, uncached_sig)
-        for key, cached in cached_result[4].items():
+        for key, cached in cached_result[5].items():
             np.testing.assert_allclose(
                 np.asarray(cached),
-                np.asarray(uncached_result[4][key]),
+                np.asarray(uncached_result[5][key]),
                 rtol=1e-6,
                 atol=1e-6,
             )

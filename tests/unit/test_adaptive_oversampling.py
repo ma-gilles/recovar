@@ -668,7 +668,7 @@ class TestSignificantCountsReasonable:
 
     def test_batched_significance_returns_sparse_sample_lists(self):
         """The batched coarse pass should preserve per-image significant samples."""
-        from recovar.em.dense_single_volume.helpers.significance import _compute_significance_batched
+        from recovar.em.dense_single_volume.helpers.significance import _compute_k_class_significance_batched
 
         n_images = 6
         n_rot = 12
@@ -701,20 +701,19 @@ class TestSignificantCountsReasonable:
             max_significants=500,
         )
 
-        sig_rot_any, n_sig_b, hard_b, sparse_sig, full_stats = _compute_significance_batched(
+        sig_rot_any, n_sig_b, hard_b, class_b, sparse_sig, full_stats = _compute_k_class_significance_batched(
             ds,
-            volume,
+            volume[None, :],
             noise_variance,
             rotations,
             translations,
             "linear_interp",
+            class_log_priors=np.zeros(1, dtype=np.float64),
             adaptive_fraction=0.999,
             max_significants=500,
             image_batch_size=3,
             rotation_block_size=5,
             current_size=None,
-            return_significant_sample_indices=True,
-            return_full_stats=True,
         )
 
         np.testing.assert_array_equal(np.asarray(hard_b), np.asarray(hard_assignments))
@@ -727,9 +726,10 @@ class TestSignificantCountsReasonable:
         )
         assert np.all(np.isfinite(full_stats["normalization_log_z"]))
         assert np.any(sig_rot_any)
+        np.testing.assert_array_equal(class_b, np.zeros(n_images, dtype=np.int32))
         for i in range(n_images):
             np.testing.assert_array_equal(
-                np.asarray(sparse_sig[i]),
+                np.asarray(sparse_sig[0][i]),
                 np.flatnonzero(np.asarray(sig_mask[i])),
             )
 

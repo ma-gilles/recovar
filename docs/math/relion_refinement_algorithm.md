@@ -610,9 +610,10 @@ grows exponentially with K, which is why RELION uses K=1 in practice.
   caller (`_run_relion_iteration_loop` or `_run_local_search_iteration`), which calls
   `run_em` twice: once for coarse scoring, once for fine scoring with the
   oversampled grid restricted to significant orientations.
-- [`significance.py:12`](../../recovar/em/dense_single_volume/helpers/significance.py#L12) -- `_compute_significance_batched()`: batched wrapper that calls
-  `find_significant_rotations` per image and collects the significant rotation
-  indices for pass 2.
+- [`significance.py`](../../recovar/em/dense_single_volume/helpers/significance.py) --
+  `_compute_k_class_significance_batched()` handles K=1 and multiclass scoring,
+  normalizes one class/rotation/translation posterior per image, and collects
+  significant samples for pass 2.
 
 ---
 
