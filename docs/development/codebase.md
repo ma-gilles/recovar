@@ -128,4 +128,6 @@ when the snapshot is taken and applies it after the RELION replay override.
 Snapshots preserve the existing ownership contract: array inputs are copied,
 while `state_fields` is a shallow copy of `state.__dict__`. Changing that
 ownership, the ordered return tuple or the restoration sequence requires its
-own behavior review. Frozen-scoring integrity checks remain in the controller.
+own behavior review. The in-memory scoring-state inventory and overwrite guard are owned by
+`dense_single_volume/frozen_boundary.py`, alongside the sealed-boundary loader.
+The controller takes and checks those snapshots at the existing boundaries.

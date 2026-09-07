@@ -9,8 +9,8 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume.helpers.state_swap_probe import (
-    REQUIRED_STATE_SWAP_REPLAY_KEYS,
     _STATE_SWAP_VARIANT_COMPONENTS,
+    REQUIRED_STATE_SWAP_REPLAY_KEYS,
     add_state_swap_probe_arguments,
     build_state_swap_probe,
     state_swap_probe_loop_index,

@@ -64,8 +64,7 @@ _STATE_SWAP_STATE_FIELD_GROUPS = {
 
 
 _STATE_SWAP_STATE_NO_GRID_EXCLUDE = (
-    _STATE_SWAP_STATE_FIELD_GROUPS["state_sampling_grid"]
-    | _STATE_SWAP_STATE_FIELD_GROUPS["state_local_priors"]
+    _STATE_SWAP_STATE_FIELD_GROUPS["state_sampling_grid"] | _STATE_SWAP_STATE_FIELD_GROUPS["state_local_priors"]
 )
 
 
@@ -137,9 +136,7 @@ def _snapshot_state_swap_inputs(
         "previous_best_rotation_eulers": _copy_half_pair(relion_half_inputs.previous_best_rotation_eulers),
         "previous_best_rotations": _copy_half_pair(previous_best_rotations),
         "current_sigma_offset_angstrom": float(current_sigma_offset_angstrom),
-        "current_sigma_offset_angstrom_per_half": _copy_optional_float_pair(
-            current_sigma_offset_angstrom_per_half
-        ),
+        "current_sigma_offset_angstrom_per_half": _copy_optional_float_pair(current_sigma_offset_angstrom_per_half),
         "class_direction_prior_per_half": class_priors,
         "class_direction_prior_order_per_half": class_prior_orders,
         "global_direction_prior_per_half": global_priors,
@@ -186,10 +183,7 @@ def _state_swap_map_shell_labels(volume_shape):
 
     shape = tuple(int(size) for size in volume_shape)
     if len(shape) != 3 or any(size <= 0 for size in shape):
-        raise ValueError(
-            "State-swap map scaling requires a positive three-dimensional "
-            f"volume shape, got {shape}"
-        )
+        raise ValueError(f"State-swap map scaling requires a positive three-dimensional volume shape, got {shape}")
     axes = [np.fft.fftfreq(size) * size for size in shape]
     grids = np.meshgrid(*axes, indexing="ij")
     return np.rint(np.sqrt(sum(grid * grid for grid in grids))).astype(np.int32).reshape(-1)
@@ -207,25 +201,15 @@ def _scale_state_swap_reference_maps(
     if mode not in {"global", "shell"}:
         raise ValueError(f"Unknown state-swap map scaling mode {mode!r}")
     if len(source_means) != len(target_means) or not source_means:
-        raise ValueError(
-            "State-swap map scaling requires equal non-empty source and target map lists"
-        )
+        raise ValueError("State-swap map scaling requires equal non-empty source and target map lists")
 
     expected_size = int(np.prod(tuple(int(size) for size in volume_shape)))
-    shell_labels = (
-        _state_swap_map_shell_labels(volume_shape)
-        if mode == "shell"
-        else None
-    )
+    shell_labels = _state_swap_map_shell_labels(volume_shape) if mode == "shell" else None
     scaled_means = []
     summaries = []
-    for map_index, (source_value, target_value) in enumerate(
-        zip(source_means, target_means, strict=True)
-    ):
+    for map_index, (source_value, target_value) in enumerate(zip(source_means, target_means, strict=True)):
         if source_value is None or target_value is None:
-            raise ValueError(
-                f"State-swap map scaling requires map {map_index + 1} in both states"
-            )
+            raise ValueError(f"State-swap map scaling requires map {map_index + 1} in both states")
         source = np.asarray(source_value)
         target = np.asarray(target_value)
         if source.shape != target.shape or source.size != expected_size:
@@ -235,9 +219,7 @@ def _scale_state_swap_reference_maps(
                 f"expected_size={expected_size}"
             )
         if not np.all(np.isfinite(source)) or not np.all(np.isfinite(target)):
-            raise ValueError(
-                f"State-swap map scaling requires finite map {map_index + 1} values"
-            )
+            raise ValueError(f"State-swap map scaling requires finite map {map_index + 1} values")
 
         source_flat = source.reshape(-1)
         target_flat = target.reshape(-1)
@@ -248,14 +230,10 @@ def _scale_state_swap_reference_maps(
         if mode == "global":
             denominator = float(np.vdot(source_flat, source_flat).real)
             if not np.isfinite(denominator) or denominator <= 0.0:
-                raise ValueError(
-                    f"State-swap map {map_index + 1} has zero or invalid source energy"
-                )
+                raise ValueError(f"State-swap map {map_index + 1} has zero or invalid source energy")
             scale = float(np.vdot(source_flat, target_flat).real / denominator)
             if not np.isfinite(scale) or scale <= 0.0:
-                raise ValueError(
-                    f"State-swap map {map_index + 1} has invalid global scale {scale}"
-                )
+                raise ValueError(f"State-swap map {map_index + 1} has invalid global scale {scale}")
             scaled_flat = source_flat * scale
             scale_values = np.asarray([scale], dtype=np.float64)
         else:
@@ -420,8 +398,7 @@ def _apply_state_swap_probe(
         means = [jnp.asarray(mean) for mean in scaled_means]
         for summary in scale_summaries:
             logger.warning(
-                "STATE-SWAP map amplitude: variant=%s map=%d mode=%s "
-                "scale=[%.9g, %.9g] relative_l2=%.9g->%.9g",
+                "STATE-SWAP map amplitude: variant=%s map=%d mode=%s scale=[%.9g, %.9g] relative_l2=%.9g->%.9g",
                 variant,
                 int(summary["map_index"]) + 1,
                 summary["mode"],

@@ -21,10 +21,10 @@ import pytest
 from recovar.em.dense_single_volume.frozen_boundary import (
     FROZEN_BOUNDARY_NUMERICAL_CLASSIFICATION_SCOPE,
     FROZEN_BOUNDARY_PROVENANCE_VERIFICATION_SCOPE,
-)
-from recovar.em.dense_single_volume.iteration_loop import (
     _assert_frozen_scoring_state_unchanged,
     _frozen_scoring_state_arrays,
+)
+from recovar.em.dense_single_volume.iteration_loop import (
     _mean_variance_for_scoring_half,
     _updated_mean_variance_per_half,
 )

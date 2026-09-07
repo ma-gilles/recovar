@@ -9,7 +9,6 @@ See ``docs/math/relion_refinement_algorithm.md`` for the algorithm map.
 
 import gc
 import hashlib
-import json
 import logging
 import os
 import re
@@ -31,6 +30,10 @@ from recovar.em.dense_single_volume.batch_planning import (
     _maybe_cache_raw_image_loaders,
 )
 from recovar.em.dense_single_volume.em_engine import run_em
+from recovar.em.dense_single_volume.frozen_boundary import (
+    _assert_frozen_scoring_state_unchanged,
+    _frozen_scoring_state_arrays,
+)
 from recovar.em.dense_single_volume.firstiter_cc import (
     _build_firstiter_cc_pass2_grids,
     _safe_dense_k_class_rotation_block_size,
@@ -3665,148 +3668,6 @@ def _format_relion_correction_range(values):
     if arr.size == 0:
         return "empty"
     return f"[{float(np.min(arr)):.6g}, {float(np.max(arr)):.6g}]"
-
-
-def _frozen_scoring_state_arrays(
-    *,
-    means,
-    mean_variance,
-    mean_variance_per_half=None,
-    relion_half_inputs,
-    noise_variance_per_half,
-    current_sigma_offset_angstrom_per_half,
-    global_direction_prior_per_half,
-    experiment_datasets=None,
-    sealed_sampling_state=None,
-    sealed_scoring_context=None,
-):
-    """Materialize every K=1 scoring primitive owned by a frozen restart."""
-
-    pair_fields = {
-        "mean": means,
-        "previous_best_rotation_eulers": relion_half_inputs.previous_best_rotation_eulers,
-        "previous_best_translations": relion_half_inputs.previous_best_translations,
-        "image_corrections": relion_half_inputs.image_corrections,
-        "scale_corrections": relion_half_inputs.scale_corrections,
-        "noise_variance": noise_variance_per_half,
-        "direction_prior": global_direction_prior_per_half,
-    }
-    arrays = {}
-    for field_name, values in pair_fields.items():
-        if values is None or len(values) != 2:
-            raise RuntimeError(
-                f"Frozen scoring-state ownership requires two {field_name} arrays"
-            )
-        for half_index, value in enumerate(values):
-            if value is None:
-                raise RuntimeError(
-                    "Frozen scoring-state ownership requires "
-                    f"{field_name} for half {half_index + 1}"
-                )
-            array = np.asarray(value)
-            if not np.issubdtype(array.dtype, np.number):
-                raise RuntimeError(
-                    f"Frozen scoring-state field {field_name} half {half_index + 1} "
-                    f"must be numeric, got {array.dtype}"
-                )
-            if not np.all(np.isfinite(array)):
-                raise RuntimeError(
-                    f"Frozen scoring-state field {field_name} half {half_index + 1} "
-                    "contains non-finite values"
-                )
-            arrays[f"{field_name}.half{half_index + 1}"] = np.ascontiguousarray(array).copy()
-
-    if mean_variance_per_half is None:
-        tau2 = np.asarray(mean_variance)
-        if not np.issubdtype(tau2.dtype, np.number) or not np.all(np.isfinite(tau2)):
-            raise RuntimeError("Frozen scoring-state mean_variance must be a finite numeric array")
-        arrays["mean_variance"] = np.ascontiguousarray(tau2).copy()
-    else:
-        if len(mean_variance_per_half) != 2:
-            raise RuntimeError("Frozen scoring-state ownership requires two mean_variance arrays")
-        for half_index, value in enumerate(mean_variance_per_half):
-            tau2 = np.asarray(value)
-            if not np.issubdtype(tau2.dtype, np.number) or not np.all(np.isfinite(tau2)):
-                raise RuntimeError(
-                    f"Frozen scoring-state mean_variance half {half_index + 1} must be finite numeric"
-                )
-            arrays[f"mean_variance.half{half_index + 1}"] = np.ascontiguousarray(tau2).copy()
-
-    sigma_pair = np.asarray(current_sigma_offset_angstrom_per_half, dtype=np.float64)
-    if sigma_pair.shape != (2,) or not np.all(np.isfinite(sigma_pair)):
-        raise RuntimeError(
-            "Frozen scoring-state ownership requires two finite translation sigmas"
-        )
-    arrays["translation_sigma_angstrom_per_half"] = sigma_pair
-    if experiment_datasets is not None:
-        if len(experiment_datasets) != 2:
-            raise RuntimeError("Frozen scoring-state ownership requires two datasets")
-        for half_index, dataset in enumerate(experiment_datasets):
-            ctf_params = np.asarray(dataset.CTF_params)
-            if not np.issubdtype(ctf_params.dtype, np.number) or not np.all(np.isfinite(ctf_params)):
-                raise RuntimeError(
-                    f"Frozen scoring-state CTF parameters half {half_index + 1} must be finite numeric"
-                )
-            arrays[f"ctf_params.half{half_index + 1}"] = np.ascontiguousarray(ctf_params).copy()
-    if sealed_sampling_state is not None:
-        for key, value in sorted(sealed_sampling_state.items()):
-            if isinstance(value, np.ndarray):
-                array = np.asarray(value)
-            elif isinstance(value, (bool, int, float, np.bool_, np.integer, np.floating)):
-                array = np.asarray(value)
-            else:
-                array = np.frombuffer(str(value).encode("utf-8"), dtype=np.uint8)
-            arrays[f"sampling.{key}"] = np.ascontiguousarray(array).copy()
-    if sealed_scoring_context is not None:
-        context_bytes = json.dumps(
-            sealed_scoring_context,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        arrays["sealed_scoring_context_json"] = np.frombuffer(context_bytes, dtype=np.uint8).copy()
-    return arrays
-
-
-def _assert_frozen_scoring_state_unchanged(expected, actual):
-    """Fail closed if replay or setup mutated a sealed scoring primitive."""
-
-    if set(expected) != set(actual):
-        missing = sorted(set(expected) - set(actual))
-        extra = sorted(set(actual) - set(expected))
-        raise RuntimeError(
-            "Frozen scoring-state fields changed: "
-            f"missing={missing}, extra={extra}"
-        )
-    hashes = {}
-    for field_name in sorted(expected):
-        expected_array = np.asarray(expected[field_name])
-        actual_array = np.asarray(actual[field_name])
-        if expected_array.shape != actual_array.shape:
-            raise RuntimeError(
-                f"Frozen scoring-state field {field_name} shape changed: "
-                f"{expected_array.shape} != {actual_array.shape}"
-            )
-        if expected_array.dtype != actual_array.dtype:
-            raise RuntimeError(
-                f"Frozen scoring-state field {field_name} dtype changed: "
-                f"{expected_array.dtype} != {actual_array.dtype}"
-            )
-        if not np.all(np.isfinite(actual_array)):
-            raise RuntimeError(
-                f"Frozen scoring-state field {field_name} contains non-finite values"
-            )
-        if not np.array_equal(expected_array, actual_array):
-            raise RuntimeError(
-                f"Frozen scoring-state field {field_name} was overwritten before scoring"
-            )
-        hashes[field_name] = {
-            "dtype": str(actual_array.dtype),
-            "shape": list(actual_array.shape),
-            "sha256": hashlib.sha256(
-                np.ascontiguousarray(actual_array).view(np.uint8)
-            ).hexdigest(),
-        }
-    return hashes
 
 
 def _sigma_offset_for_half(current_sigma_offset_angstrom, current_sigma_offset_angstrom_per_half, half_index):
