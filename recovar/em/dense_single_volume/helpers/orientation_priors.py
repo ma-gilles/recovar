@@ -80,7 +80,7 @@ def relion_translation_search_base(previous_best_translations):
 
 
 def relion_translation_prior_center(previous_best_translations, voxel_size, prior_offsets=None):
-    """Return RELION's offset-prior center in RECOVAR search-grid pixels.
+    """Return dense/local score-prior centers in RECOVAR search-grid pixels.
 
     RELION's accelerated path builds ``pdf_offset`` from
     ``old_offset + sampling.translations - prior``.  The sampling grid is in
@@ -88,28 +88,10 @@ def relion_translation_prior_center(previous_best_translations, voxel_size, prio
     rounded ``old_offset`` image pre-shift the score-grid prior center is
     ``(prior - rounded_old_offset) / pixel_size``.  In ordinary AutoRefine
     there is no separate origin prior, so ``prior`` defaults to zero.
-    """
-    old_offset = relion_translation_search_base(previous_best_translations)
-    if old_offset is None:
-        return None
-    voxel_size = float(voxel_size if voxel_size > 0 else 1.0)
-    if prior_offsets is None:
-        prior = np.zeros_like(old_offset, dtype=np.float32)
-    else:
-        prior = np.asarray(prior_offsets, dtype=np.float32).reshape(old_offset.shape)
-    return ((prior - old_offset) / voxel_size).astype(np.float32)
 
-
-def relion_local_translation_prior_center(previous_best_translations, voxel_size, prior_offsets=None):
-    """Return RELION's local-search offset-prior center in RECOVAR pixels.
-
-    RELION's accelerated global path and local-search path use different
-    translation-grid conventions in practice: the global path scores
-    getTranslationsInPixel-style samples after the rounded old offset is
-    pre-applied, while the local path keeps the older Angstrom sampling
-    convention for ``pdf_offset``. With no explicit offset prior, that local
-    convention is represented in RECOVAR's pixel grid as
-    ``-rounded_old_offset / pixel_size``.
+    Dense and local scoring use this same center calculation. Sigma-offset
+    sufficient statistics use ``relion_sigma_offset_prior_center`` instead;
+    that center remains in pixels without the division by pixel size.
     """
     old_offset = relion_translation_search_base(previous_best_translations)
     if old_offset is None:

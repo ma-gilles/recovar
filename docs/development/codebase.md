@@ -74,6 +74,12 @@ Their unused controller re-exports have been retired. Helper-only callers also
 import sign alignment and combined noise statistics from `mean_helpers`, rotation
 metadata from `relion_metadata`, and replay iteration mapping from `relion_replay`.
 
+Dense and local scoring share `orientation_priors.relion_translation_prior_center`;
+the duplicate `relion_local_translation_prior_center` entry point has been removed.
+Both use `(prior - rounded_old_offset) / pixel_size`, as before. The separate
+`relion_sigma_offset_prior_center` serves sufficient statistics and keeps its
+pixel-space formula without that division.
+
 For an extraction, identify the actual boundary first: array layout, casts,
 reduction order, JIT scope, device placement, buffer ownership and returned
 statistics. Preserve those contracts during structural cleanup. The

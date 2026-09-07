@@ -53,7 +53,6 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     make_relion_direction_log_prior,
     make_relion_translation_log_prior,
     normalize_direction_prior_per_half,
-    relion_local_translation_prior_center,
     relion_sigma_offset_prior_center,
     relion_translation_prior_center,
     relion_translation_search_base,
@@ -10917,16 +10916,6 @@ class TestRelionModeSmokeTest:
         np.testing.assert_allclose(
             relion_translation_prior_center(prev[:1], voxel_size=4.25, prior_offsets=explicit_prior),
             np.array([[0.0, 1.0 / 4.25]], dtype=np.float32),
-            rtol=1e-6,
-            atol=1e-6,
-        )
-
-    def test_relion_local_translation_prior_center_keeps_angstrom_sampling_units(self):
-        prev = np.array([[0.0, -1.0], [1.0, 0.0], [-0.82310355, -0.82310355]], dtype=np.float32)
-        expected = np.array([[0.0, 1.0 / 4.25], [-1.0 / 4.25, 0.0], [1.0 / 4.25, 1.0 / 4.25]], dtype=np.float32)
-        np.testing.assert_allclose(
-            relion_local_translation_prior_center(prev, voxel_size=4.25),
-            expected,
             rtol=1e-6,
             atol=1e-6,
         )

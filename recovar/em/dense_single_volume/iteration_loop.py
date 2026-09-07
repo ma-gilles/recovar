@@ -67,7 +67,6 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     normalize_class_direction_prior_per_half,
     normalize_direction_prior_per_half,
     remap_direction_prior_to_healpix_order,
-    relion_local_translation_prior_center,
     relion_sigma_offset_prior_center,
     relion_translation_prior_center,
     relion_translation_search_base,
@@ -7154,7 +7153,7 @@ def _run_relion_iteration_loop(
                 previous_translations_k,
                 cryo.voxel_size,
             )
-            local_trans_prior_center = relion_local_translation_prior_center(
+            local_trans_prior_center = relion_translation_prior_center(
                 previous_translations_k,
                 cryo.voxel_size,
             )
@@ -10212,7 +10211,7 @@ def _run_relion_iteration_loop(
             previous_translations_k,
             cryo.voxel_size,
         )
-        final_local_trans_prior_center = relion_local_translation_prior_center(
+        final_local_trans_prior_center = relion_translation_prior_center(
             previous_translations_k,
             cryo.voxel_size,
         )
