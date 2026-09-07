@@ -55,10 +55,11 @@ as a repaired control, never as the unchanged PR158 source.
 
 ## Next check
 
-Validate the mirrored instructions and linked runbooks, then continue reviewed
-EM dead-code removal and duplicate-helper consolidation. Freeze the resulting
-candidate for the applicable shared and EM regression workloads. Keep new
-scientific work separate until cleanup is qualified.
+Validate the clarified array/return contracts and strict documentation build.
+The mirrored guide check has passed, and the obsolete significance scorer and
+duplicate environment parsers have been removed with focused checks passing.
+Freeze the resulting candidate for the applicable shared and EM regression
+workloads. Keep new scientific work separate until cleanup is qualified.
 
 The [historical program](../math/em_parity_program.md),
 [parity notes](../math/relion_parity_agent_notes.md) and

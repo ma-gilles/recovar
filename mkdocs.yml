@@ -5,6 +5,9 @@ site_url: https://ma-gilles.github.io/recovar
 repo_name: ma-gilles/recovar
 repo_url: https://github.com/ma-gilles/recovar
 
+hooks:
+  - scripts/mkdocs_source_links.py
+
 extra_css:
   - stylesheets/extra.css
 
@@ -44,6 +47,7 @@ plugins:
       handlers:
         python:
           options:
+            allow_inspection: false
             docstring_style: google
             show_source: false
             show_root_heading: true

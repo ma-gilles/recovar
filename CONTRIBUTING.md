@@ -91,6 +91,21 @@ can auto-save hardware entries. Isolate their result-writing paths before
 qualification. Do not overwrite established baselines as a side effect of a
 benchmark. An optional local fixture skip is not accepted qualification.
 
+## Documentation environment
+
+Documentation builds use a separate locked environment with no scientific or
+GPU dependencies. The default environment remains unchanged.
+
+```bash
+pixi install -e docs --locked
+pixi run -e docs docs-build
+```
+
+For a local preview, run `pixi run -e docs mkdocs serve`. API references are
+collected statically from source; building docs must not require importing JAX
+or native extensions. Keep user-site packages disabled when invoking Python
+directly, and record the docs lockfile identity with build evidence.
+
 ## Before pushing or creating a PR
 
 For shared/non-EM changes, including this codebase cleanup:

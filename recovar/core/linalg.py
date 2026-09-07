@@ -270,11 +270,11 @@ def rfft2_hermitian_weights(image_shape, dtype=jnp.float32):
     Built from :func:`half_spectrum_last_axis_weights`, then tiled over the H rows.
 
     Args:
-        image_shape: ``(H, W)`` tuple.
-        dtype: dtype for the returned array (default float32).
+        image_shape (tuple[int, int]): ``(H, W)`` tuple.
+        dtype (numpy.typing.DTypeLike): dtype for the returned array (default float32).
 
     Returns:
-        JAX array of shape ``(H * (W // 2 + 1),)`` with values in ``{1, sqrt(2)}``.
+        weights (jax.Array): JAX array of shape ``(H * (W // 2 + 1),)`` with values in ``{1, sqrt(2)}``.
     """
     H, W = int(image_shape[0]), int(image_shape[1])
     w1d = jnp.sqrt(half_spectrum_last_axis_weights(W, dtype=dtype))  # (W//2+1,)

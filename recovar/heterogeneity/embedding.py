@@ -144,32 +144,36 @@ def get_per_image_embedding(
     optionally estimating per-image contrast and covariance.
 
     Args:
-        mean: Mean volume in Fourier space, shape ``(volume_size,)``.
-        u: Eigenvectors, shape ``(volume_size, n_components)``.
-        s: Eigenvalues, shape ``(n_components,)``.
-        basis_size: Number of principal components to use.
-        dataset: A ``CryoEMDataset`` with ``halfset_indices`` set, or
-            a list of two half-set ``CryoEMDataset`` instances.
-        volume_mask: Binary mask selecting valid voxels.
-        gpu_memory: Available GPU memory in GB.
-        disc_type: Discretization type (``'linear_interp'`` or ``'cubic'``).
-        contrast_grid: Grid of contrast values to search over.
-        contrast_option: Contrast estimation mode (``'contrast'``,
+        mean (numpy.ndarray | jax.Array): Mean volume in Fourier space, shape ``(volume_size,)``.
+        u (numpy.ndarray | jax.Array): Eigenvectors, shape ``(volume_size, n_components)``.
+        s (numpy.ndarray | jax.Array): Eigenvalues, shape ``(n_components,)``.
+        basis_size (int): Number of principal components to use.
+        dataset (CryoEMDataset): Dataset supplying images, poses, CTF and noise.
+        volume_mask (numpy.ndarray | jax.Array): Binary mask selecting valid voxels.
+        gpu_memory (float): Available GPU memory in GB.
+        disc_type (str): Discretization type (``'linear_interp'`` or ``'cubic'``).
+        contrast_grid (numpy.ndarray | jax.Array | None): Grid of contrast values to search over.
+        contrast_option (str): Contrast estimation mode (``'contrast'``,
             ``'contrast_shared'``, or ``'none'``).
-        compute_covariances: Compute per-image latent covariance matrices.
-        ignore_zero_frequency: Exclude the DC component.
-        contrast_mean: Prior mean for contrast estimation.
-        contrast_variance: Prior variance for contrast estimation.
-        compute_bias: Compute per-image bias terms.
-        image_subset_in_tilt_series: Subset of tilt images to use.
+        compute_covariances (bool): Compute latent posterior precision matrices.
+        ignore_zero_frequency (bool): Replace the volume mask with ones. This wrapper
+            does not pass a separate DC-exclusion flag to the embedding solver.
+        contrast_mean (float): Prior mean for contrast estimation.
+        contrast_variance (float): Prior variance for contrast estimation.
+        compute_bias (bool): Compute per-image bias terms.
+        image_subset_in_tilt_series (numpy.ndarray | jax.Array | None): Compatibility argument;
+            forwarded to the solver but currently unused.
 
     Returns:
-        Tuple ``(zs, precision_zs, est_contrasts, bias)`` where *zs* has shape
-        ``(n_images, basis_size)``, *precision_zs* is the per-image posterior
-        precision matrix (inverse covariance) with shape
-        ``(n_images, basis_size, basis_size)`` (or ``None``),
-        *est_contrasts* has shape ``(n_images,)``, and *bias* is
-        ``None`` unless *compute_bias* is ``True``.
+        zs (numpy.ndarray): Latent coordinates, shape ``(n_units, basis_size)``.
+            A unit is an image for SPA or a particle for tilt-series data.
+        precision_zs (numpy.ndarray | None): Posterior precision matrices
+            (inverse covariances), shape ``(n_units, basis_size, basis_size)``;
+            ``None`` when ``compute_covariances`` is false.
+        est_contrasts (numpy.ndarray): Contrast per image, or per particle when
+            contrast is shared across a tilt series.
+        bias (numpy.ndarray | None): Bias matrices, shape
+            ``(n_units, basis_size, basis_size)``; ``None`` unless requested.
     """
     if u.shape[0] != dataset.volume_size:
         raise ValueError(f"input u should be volume_size x basis_size, got {u.shape[0]} != {dataset.volume_size}")

@@ -41,8 +41,9 @@ When a user lands on the homepage, they should immediately see:
 
 ```bash
 pip install mkdocs mkdocs-material mkdocstrings mkdocstrings-python
-mkdocs serve    # preview at http://localhost:8000/recovar/
-mkdocs build    # build to site/
+pixi install -e docs --locked
+pixi run -e docs mkdocs serve    # preview at http://localhost:8000/recovar/
+pixi run -e docs docs-build      # strict build to site/
 ```
 
 The docs workflow deploys on matching pushes to `dev` or manual dispatch; see `.github/workflows/docs.yml`.

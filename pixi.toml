@@ -109,8 +109,22 @@ aiofiles = ">=23.0"
 tomli_w = ">=1.0"
 jinja2 = ">=3.1"
 
+# Static documentation builds have no scientific or GPU dependencies.
+[feature.docs.dependencies]
+python = ">=3.11, <3.12"
+
+[feature.docs.pypi-dependencies]
+mkdocs = "==1.6.1"
+mkdocs-material = "==9.7.6"
+mkdocstrings = { extras = ["python"], version = "==1.0.6" }
+mkdocstrings-python = "==2.0.7"
+
+[feature.docs.tasks]
+docs-build = "mkdocs build --strict"
+
 [environments]
 default = { features = ["cuda", "gui"] }
+docs = { features = ["docs"], no-default-feature = true }
 
 [tasks]
 # Install RECOVAR in editable mode without dependencies

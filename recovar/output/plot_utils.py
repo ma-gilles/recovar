@@ -18,12 +18,14 @@ def plot_noise_profile(pipeline_output, yscale='linear', ax=None):
     """Plot noise power spectrum profiles from pipeline output.
 
     Args:
-        pipeline_output: Pipeline output object with noise variance data.
-        yscale: Y-axis scale ('linear' or 'log').
-        ax: Optional matplotlib Axes to draw into. If None, creates a new figure.
+        pipeline_output (PipelineOutput): Pipeline output object with noise variance data.
+        yscale (str): Y-axis scale ('linear' or 'log').
+        ax (matplotlib.axes.Axes | None): Optional matplotlib Axes to draw into. If None, creates a
+            new figure.
 
     Returns:
-        Tuple of (fig, ax) matplotlib Figure and Axes objects.
+        fig (matplotlib.figure.Figure): Figure containing the noise profiles.
+        ax (matplotlib.axes.Axes): Axes used for drawing.
     """
     plt.style.use('default')
     if ax is None:
@@ -186,10 +188,14 @@ def plot_summary_t(pipeline_output, n_eigs=3, filename=None):
     mean/mask/variance plus one row per eigenvolume.
 
     Args:
-        pipeline_output: Pipeline output object with 'mean', 'volume_mask',
+        pipeline_output (PipelineOutput): Pipeline output object with 'mean', 'volume_mask',
             'variance', and eigenvolume data.
-        n_eigs: Number of eigenvolumes (principal components) to show.
-        filename: Path to save the figure. If None, figure is not saved.
+        n_eigs (int): Number of eigenvolumes (principal components) to show.
+        filename (str | os.PathLike | None): Path to save the figure. If None, figure is not saved.
+
+    Returns:
+        result (None): Leaves the figure open unless ``filename`` is supplied;
+            saved figures are closed.
     """
     plt.rcParams.update({})
     font = {'weight' : 'bold',
@@ -295,15 +301,15 @@ def plot_cov_results(u, s, max_eig=40, savefile=None):
     """Plot eigenvalue spectra and subspace angle comparison.
 
     Args:
-        u: Dict of eigenvector arrays keyed by method name.
-        s: Dict of eigenvalue arrays keyed by method name.
-        max_eig: Maximum number of eigenvalues to display.
-        savefile: If provided, saves eigenvalue plot to ``{savefile}s.png``
+        u (dict[str, numpy.ndarray | jax.Array]): Dict of eigenvector arrays keyed by method name.
+        s (dict[str, numpy.ndarray | jax.Array]): Dict of eigenvalue arrays keyed by method name.
+        max_eig (int): Maximum number of eigenvalues to display.
+        savefile (str | None): If provided, saves eigenvalue plot to ``{savefile}s.png``
             and subspace angle plot to ``{savefile}u.png``.
 
     Returns:
-        Dict mapping method names to their subspace angle arrays
-        (empty if no ground truth key ``'gt'`` is present in *u*).
+        angles (dict[str, numpy.ndarray]): Per-method subspace-angle arrays;
+            empty when ``u`` has no ``gt`` entry.
     """
     plt.rcParams.update({})
     font = {'weight' : 'bold',
@@ -364,12 +370,12 @@ def plot_mean_fsc(pipeline_output, cryos):
     """Plot FSC curves for the mean reconstruction (masked and unmasked).
 
     Args:
-        pipeline_output: Pipeline output object with 'mean_halfmaps',
+        pipeline_output (PipelineOutput): Pipeline output object with 'mean_halfmaps',
             'volume_shape', 'voxel_size', and 'volume_mask'.
-        cryos: Unused (kept for backward compatibility).
+        cryos (object): Unused (kept for backward compatibility).
 
     Returns:
-        Matplotlib Axes with the FSC curves.
+        ax (matplotlib.axes.Axes): Axes containing the FSC curves.
     """
     halfmap1, halfmap2 = pipeline_output.get('mean_halfmaps')
 
@@ -387,20 +393,21 @@ def plot_fsc(cryo, vol1, vol2, mask=None, threshold=1/7, ax=None, voxel_size=Non
     """Plot FSC between two volumes using cryo dataset metadata.
 
     Args:
-        cryo: CryoEMDataset providing voxel_size and volume_shape.
-        vol1: First half-map (flattened Fourier volume).
-        vol2: Second half-map (flattened Fourier volume).
-        mask: Optional real-space mask to apply before FSC.
-        threshold: FSC resolution threshold (default 1/7).
-        ax: Optional Axes to draw into.
-        voxel_size: Override voxel size from cryo.
-        volume_shape: Override volume shape from cryo.
-        name: Label for the curve in the legend.
-        fmat: Matplotlib format string for the line.
-        filename: Path to save the figure.
+        cryo (CryoEMDataset | None): Dataset providing voxel size and volume shape; may be ``None``
+            when both metadata overrides are supplied.
+        vol1 (numpy.ndarray | jax.Array): First half-map (flattened Fourier volume).
+        vol2 (numpy.ndarray | jax.Array): Second half-map (flattened Fourier volume).
+        mask (numpy.ndarray | jax.Array | None): Optional real-space mask to apply before FSC.
+        threshold (float | None): FSC resolution threshold (default 1/7).
+        ax (matplotlib.axes.Axes | None): Optional Axes to draw into.
+        voxel_size (float | None): Override voxel size from cryo.
+        volume_shape (tuple[int, int, int] | None): Override volume shape from cryo.
+        name (str): Label for the curve in the legend.
+        fmat (str): Matplotlib format string for the line.
+        filename (str | os.PathLike | None): Path to save the figure.
 
     Returns:
-        Matplotlib Axes with the FSC curve.
+        ax (matplotlib.axes.Axes): Axes containing the FSC curve.
     """
     voxel_size = cryo.voxel_size if voxel_size is None else voxel_size
     volume_shape = cryo.volume_shape if volume_shape is None else volume_shape
@@ -414,21 +421,23 @@ def plot_fsc_new(image1, image2, volume_shape=None, voxel_size=1, curve=None, ax
     """Plot Fourier Shell Correlation between two half-maps.
 
     Args:
-        image1: First half-map (flattened Fourier or real-space volume).
-        image2: Second half-map.
-        volume_shape: 3-tuple giving the volume dimensions.
-        voxel_size: Voxel size in Angstroms.
-        curve: Pre-computed FSC curve. If None, computed from the inputs.
-        ax: Optional Axes to draw into. If None, creates a new figure.
-        threshold: FSC threshold for resolution estimation (default 1/7).
-        filename: Path to save the figure.
-        volume_mask: Optional real-space mask applied before FSC.
-        name: Label prefix for the resolution annotation.
-        fmat: Matplotlib format string for the line.
+        image1 (numpy.ndarray | jax.Array): First half-map in centered Fourier space, flat or 3-D.
+        image2 (numpy.ndarray | jax.Array): Second half-map in the same Fourier layout.
+        volume_shape (tuple[int, int, int] | None): 3-tuple giving the volume dimensions.
+        voxel_size (float): Voxel size in Angstroms.
+        curve (numpy.ndarray | jax.Array | None): Pre-computed FSC curve. If None, computed from the
+            inputs.
+        ax (matplotlib.axes.Axes | None): Optional Axes to draw into. If None, creates a new figure.
+        threshold (float | None): FSC threshold for resolution estimation (default 1/7).
+        filename (str | os.PathLike | None): Path to save the figure.
+        volume_mask (numpy.ndarray | jax.Array | None): Optional real-space mask applied before FSC.
+        name (str): Label prefix for the resolution annotation.
+        fmat (str): Matplotlib format string for the line.
 
     Returns:
-        Tuple of (ax, score) where score is the frequency at which FSC
-        crosses the threshold.
+        ax (matplotlib.axes.Axes): Axes containing the FSC curve.
+        score (numpy.floating | jax.Array | None): Threshold-crossing frequency
+            in inverse Angstroms, or ``None`` when ``threshold`` is ``None``.
     """
     volume_shape = utils.guess_vol_shape_from_vol_size(image1.size) if volume_shape is None else volume_shape
 
@@ -486,12 +495,12 @@ def FSC(image1, image2, r_dict=None):
     """Compute Fourier Shell Correlation between two 3-D volumes.
 
     Args:
-        image1: First volume as a 3-D numpy array.
-        image2: Second volume as a 3-D numpy array.
-        r_dict: Unused (kept for backward compatibility).
+        image1 (numpy.ndarray | jax.Array): First centered Fourier volume as a 3-D array.
+        image2 (numpy.ndarray | jax.Array): Second centered Fourier volume as a 3-D array.
+        r_dict (object): Unused (kept for backward compatibility).
 
     Returns:
-        1-D array of FSC values per frequency shell.
+        fsc (jax.Array): FSC values for ``image1.shape[0] // 2 - 1`` shells.
     """
     from recovar.reconstruction import regularization
     fsc = regularization.get_fsc_gpu(image1, image2, image1.shape, False, frequency_shift = 0 )
@@ -502,17 +511,20 @@ def FSC(image1, image2, r_dict=None):
 def fsc_score(fsc_curve, grid_size, voxel_size, threshold=0.5):
     """Find the frequency at which FSC crosses a threshold.
 
-    Uses linear interpolation between the last shell above threshold
-    and the first shell below.
+    Excludes DC and linearly interpolates at the first downward crossing.
+    Curves wholly above or below threshold use frequency-grid endpoints;
+    late crossings use the upper endpoint. The interpolated branch retains
+    the historical numeric cap ``2 * voxel_size``.
 
     Args:
-        fsc_curve: 1-D array of FSC values per shell.
-        grid_size: Number of voxels along one side of the volume.
-        voxel_size: Voxel size in Angstroms.
-        threshold: FSC threshold (default 0.5).
+        fsc_curve (numpy.ndarray | jax.Array): 1-D array of FSC values per shell.
+        grid_size (int): Number of voxels along one side of the volume.
+        voxel_size (float): Voxel size in Angstroms.
+        threshold (float): FSC threshold (default 0.5).
 
     Returns:
-        Frequency value (in 1/Angstrom) at the threshold crossing.
+        frequency (numpy.floating | jax.Array): Threshold-crossing frequency
+            in inverse Angstroms, subject to the legacy boundary rules.
     """
     freq = fourier_transform_utils.get_1d_frequency_grid(2*grid_size, voxel_size = 0.5*voxel_size, scaled = True)
     freq = freq[freq >= 0 ]
@@ -549,18 +561,22 @@ def plot_latent_space_scatter(z, axes=None, centers=None, labels=None, title="La
     """Create scatter plots for latent space visualization.
 
     Args:
-        z: Latent coordinates of shape (n_particles, n_dimensions).
-        axes: List of (i, j) tuples specifying which dimensions to plot.
+        z (numpy.ndarray | jax.Array): Latent coordinates of shape (n_particles, n_dimensions).
+        axes (Sequence[tuple[int, int]] | None): List of (i, j) tuples specifying which dimensions
+            to plot.
             If None, plots all pairwise combinations of first 4 dimensions.
-        centers: Cluster centers to overlay, shape (n_clusters, n_dimensions).
-        labels: Labels for cluster centers.
-        title: Main title for the plot.
-        figsize: Figure size as (width, height).
-        save_path: Path to save the plot. If None, figure is not saved.
-        show_plot: Whether to display the plot interactively.
+        centers (numpy.ndarray | jax.Array | None): Cluster centers to overlay, shape (n_clusters,
+            n_dimensions).
+        labels (Sequence[object] | None): Labels for cluster centers.
+        title (str): Main title for the plot.
+        figsize (tuple[float, float]): Figure size as (width, height).
+        save_path (str | os.PathLike | None): Path to save the plot. If None, figure is not saved.
+        show_plot (bool): Whether to display the plot interactively.
 
     Returns:
-        Tuple of (fig, axes_plt) matplotlib Figure and array of Axes.
+        fig (matplotlib.figure.Figure): Figure containing the scatter plots.
+        axes_plt (numpy.ndarray | list[matplotlib.axes.Axes]): Flat axes array,
+            or a one-element list for a single panel.
     """
     if axes is None:
         n_dims = min(4, z.shape[1])
@@ -628,12 +644,12 @@ def plot_eigenvalues(eigenvalues, ax=None, n_eigs=40):
     """Plot eigenvalue spectrum on a semilogy scale.
 
     Args:
-        eigenvalues: 1-D array of eigenvalues.
-        ax: Optional Axes to draw into. If None, creates a new figure.
-        n_eigs: Number of eigenvalues to display.
+        eigenvalues (numpy.ndarray | jax.Array): 1-D array of eigenvalues.
+        ax (matplotlib.axes.Axes | None): Optional Axes to draw into. If None, creates a new figure.
+        n_eigs (int): Number of eigenvalues to display.
 
     Returns:
-        Matplotlib Axes with the eigenvalue plot.
+        ax (matplotlib.axes.Axes): Axes containing the eigenvalue spectrum.
     """
     if ax is None:
         fig, ax = plt.subplots(figsize=(8, 6))
@@ -650,12 +666,12 @@ def plot_contrast_histogram(contrasts, ax=None, zdim_key=None):
     """Plot histogram of per-particle contrast values.
 
     Args:
-        contrasts: 1-D array of contrast values.
-        ax: Optional Axes to draw into. If None, creates a new figure.
-        zdim_key: Latent dimension key for the title annotation.
+        contrasts (numpy.ndarray | jax.Array): 1-D array of contrast values.
+        ax (matplotlib.axes.Axes | None): Optional Axes to draw into. If None, creates a new figure.
+        zdim_key (int | str | None): Latent dimension key for the title annotation.
 
     Returns:
-        Matplotlib Axes with the histogram.
+        ax (matplotlib.axes.Axes): Axes containing the contrast histogram.
     """
     if ax is None:
         fig, ax = plt.subplots(figsize=(8, 6))
@@ -677,9 +693,12 @@ def plot_pipeline_summary(po, zdim_key, output_folder):
     variance, PC scatter plots, noise profile, and contrast histogram.
 
     Args:
-        po: Pipeline output object.
-        zdim_key: Latent dimension key for accessing embeddings/contrasts.
-        output_folder: Directory to save the summary PNG.
+        po (PipelineOutput): Pipeline output object.
+        zdim_key (int | str): Latent dimension key for accessing embeddings/contrasts.
+        output_folder (str | os.PathLike): Directory to save the summary PNG.
+
+    Returns:
+        result (None): Saves ``pipeline_summary.png`` and closes the figure.
     """
     import os
     fig = plt.figure(figsize=(20, 18), constrained_layout=True)

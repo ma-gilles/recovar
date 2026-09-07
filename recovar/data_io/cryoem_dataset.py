@@ -688,13 +688,14 @@ class CryoEMDataset:
         """Get predicted images for given indices using forward model.
 
         Args:
-            indices: Array of indices to predict images for
-            volume: Volume to use for prediction
-            skip_ctf: Whether to skip CTF application
-            spatial: Whether to return images in real space (True) or Fourier space (False)
+            indices (numpy.ndarray | list[int]): Image indices to predict.
+            volume (numpy.ndarray | jax.Array): Flattened, centered Fourier-space volume.
+            skip_ctf (bool): Whether to skip CTF application.
+            spatial (bool): Return real-space images when True, Fourier-space images otherwise.
 
         Returns:
-            Predicted images in real space if spatial=True, otherwise in Fourier space
+            images (jax.Array): Real-space images of shape ``(N, H, W)`` when
+                ``spatial=True``, otherwise flattened Fourier images of shape ``(N, H * W)``.
         """
         import recovar.core.forward as core_forward
         from recovar.core.configs import ForwardModelConfig

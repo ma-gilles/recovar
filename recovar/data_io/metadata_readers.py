@@ -102,12 +102,12 @@ def parse_ctf_from_star(
     Args:
         star_path: Path to .star file.
         D: Target image dimension in pixels. Pixel size is adjusted
-           for the ratio ``original_D / D``.
+            for the ratio ``original_D / D``.
 
     Returns:
-        ``(N, 8)`` array with columns
-        ``[Apix, DFU, DFV, DFANG, VOLT, CS, W, PHASE_SHIFT]``.
-        This matches the output format of ``load_utils.load_ctf_params``.
+        ctf (numpy.ndarray): ``(N, 8)`` array with columns
+            ``[Apix, DFU, DFV, DFANG, VOLT, CS, W, PHASE_SHIFT]``.
+            This matches the output format of ``load_utils.load_ctf_params``.
     """
     sf = StarFile.load(star_path)
     n = len(sf)

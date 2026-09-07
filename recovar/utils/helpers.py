@@ -424,11 +424,11 @@ def get_image_batch_size(grid_size, gpu_memory):
     """Calculate batch size for image processing.
 
     Args:
-        grid_size: Size of the grid
-        gpu_memory: Available GPU memory in GB
+        grid_size (int): Image side length in pixels.
+        gpu_memory (float): Available GPU memory in GB.
 
     Returns:
-        Integer batch size with reasonable bounds
+        batch_size (int): Heuristic batch size, clamped to ``[1, 2**20]``.
     """
     if grid_size < 1:
         raise ValueError("grid_size must be positive")
@@ -441,7 +441,7 @@ def get_image_batch_size(grid_size, gpu_memory):
     gpu_memory_f = float(gpu_memory)
 
     # Each image is grid_size^2 complex64 values (8 bytes each).
-    # 2^18 / grid_size^2 targets ~2 GB per batch at gpu_memory=1.
+    # 2^18 / grid_size^2 gives 2 MiB of image data per GB of supplied budget.
     batch_size = (2.0**18.0) / (grid_size_f * grid_size_f) * gpu_memory_f
 
     # Add reasonable bounds

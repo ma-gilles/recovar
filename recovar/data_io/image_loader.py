@@ -162,7 +162,7 @@ def load_images(
             like downsampling where staging the full-res data is wasteful)
 
     Returns:
-        ImageLoader instance for the specified file
+        loader (ImageLoader): Loader for the specified file.
     """
     ext = filepath.rsplit(".", 1)[-1].lower()
 
@@ -277,10 +277,11 @@ class ImageLoader:
         """Get images at specified indices.
 
         Args:
-            indices: Indices to retrieve (int, slice, array, or None for all)
+            indices (int | slice | numpy.ndarray | list[int] | None): Indices to
+                retrieve, or None for all images.
 
         Returns:
-            Array of shape (N, image_size, image_size)
+            images (numpy.ndarray): Array of shape ``(N, image_size, image_size)``.
         """
         idx_array = self._parse_indices(indices)
 
