@@ -21,6 +21,7 @@ import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
+from recovar.em.dense_single_volume import score_outputs
 import recovar.em.dense_single_volume.local_layout as local_layout_module
 import recovar.em.dense_single_volume.relion_metadata as relion_metadata_module
 import recovar.em.dense_single_volume.relion_replay as relion_replay_module
@@ -3033,7 +3034,7 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
             k_class_enabled=False,
             collect_local_search_profile=False,
             safe_batch_sizes=lambda *args, **kwargs: (1, 1),
-            outputs=iteration_loop_module.PerHalfOutputs.empty(),
+            outputs=score_outputs.PerHalfOutputs.empty(),
             local_profile_history=[],
         )
 
@@ -3100,7 +3101,7 @@ def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch,
             k_class_enabled=k_class_enabled,
             collect_local_search_profile=False,
             safe_batch_sizes=lambda *args, **kwargs: (1, 16),
-            outputs=iteration_loop_module.PerHalfOutputs.empty(),
+            outputs=score_outputs.PerHalfOutputs.empty(),
             local_profile_history=[],
         )
 
@@ -4315,7 +4316,7 @@ def test_relion_projector_direct_real_reference_bypasses_fourier_roundtrip(monke
 
 
 def test_half0_local_relion_accumulators_offload_to_host():
-    result = iteration_loop_module.HalfScoreResult(
+    result = score_outputs.HalfScoreResult(
         ha=np.zeros(1, dtype=np.int32),
         Ft_y=jnp.asarray([1.0 + 2.0j, 3.0 + 4.0j], dtype=jnp.complex64),
         Ft_ctf=jnp.asarray([5.0, 6.0], dtype=jnp.float32),
@@ -4340,7 +4341,7 @@ def test_half0_local_relion_accumulators_offload_to_host():
 
 
 def test_half0_local_relion_accumulator_offload_skips_non_x_half():
-    result = iteration_loop_module.HalfScoreResult(
+    result = score_outputs.HalfScoreResult(
         ha=np.zeros(1, dtype=np.int32),
         Ft_y=jnp.asarray([1.0 + 0.0j], dtype=jnp.complex64),
         Ft_ctf=jnp.asarray([1.0], dtype=jnp.float32),

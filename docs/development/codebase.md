@@ -56,6 +56,8 @@ adaptive and local K-class orchestration. Class evidence and posterior mass
 must be handled at the K-class level, not inferred from independently normalized
 single-class probabilities.
 
+[`score_outputs`](../../recovar/em/dense_single_volume/score_outputs.py) owns
+the scoring containers and class/coarse-grid result adapters.
 `HalfScoreResult` carries one halfset's common scoring output.
 `PerHalfOutputs` owns separate two-slot lists for a scoring phase; slot 0/1
 always selects the halfset, including for class-related fields. Image arrays

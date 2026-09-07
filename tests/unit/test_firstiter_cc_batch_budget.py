@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.dense_single_volume import batch_planning, iteration_loop, k_class
+from recovar.em.dense_single_volume import score_outputs
 from recovar.em.dense_single_volume.batch_planning import (
     _estimate_relion_em_batch_sizes,
     _safe_dense_k_class_rotation_block_size,
@@ -288,7 +289,7 @@ def test_k1_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch
         disable_adjoint_ctf=False,
         safe_batch_sizes=fake_safe_batch_sizes,
         max_significants=None,
-        outputs=iteration_loop.PerHalfOutputs.empty(),
+        outputs=score_outputs.PerHalfOutputs.empty(),
         firstiter_coarse_current_size=40,
         firstiter_fine_current_size=90,
         bpref_device_signature_active=True,
@@ -409,7 +410,7 @@ def test_kclass_nonfirstiter_adaptive_dispatch_sizes_actual_fine_grid(monkeypatc
         disable_adjoint_ctf=False,
         safe_batch_sizes=fake_safe_batch_sizes,
         max_significants=None,
-        outputs=iteration_loop.PerHalfOutputs.empty(),
+        outputs=score_outputs.PerHalfOutputs.empty(),
         k_class_image_batch_size_override=50,
         k_class_rotation_block_size_override=2000,
         firstiter_coarse_current_size=40,

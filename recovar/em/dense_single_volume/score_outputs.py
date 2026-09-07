@@ -1,0 +1,261 @@
+"""Scoring payloads and per-half adapters for dense and local refinement.
+
+The controller owns the lifetime of these containers and their array buffers.
+Adapters preserve engine layouts and normalize only the fields documented by
+their existing casts and coarse-grid reductions.
+"""
+
+from dataclasses import dataclass
+
+import numpy as np
+
+from recovar import utils
+from recovar.em.dense_single_volume.helpers.types import make_relion_stats
+
+
+@dataclass
+class HalfScoreResult:
+    """Scoring result for one halfset, from a dense or local engine.
+
+    Per-image fields follow the halfset dataset's local image order. ``ha``
+    encodes pose assignments in the scoring grid; adaptive paths may also
+    provide ``coarse_ha`` and explicit best poses for downstream pose export.
+    Class assignments and class posterior summaries are written separately
+    into ``PerHalfOutputs`` by the K-class scoring adapters.
+
+    Accumulators retain the engine's layout and device until reconstruction
+    or explicit host offloading. Interpret them with ``mstep_full_half_axis``
+    and ``mstep_accumulator_shape``; K-class results retain their class axis.
+    This container does not copy arrays or standardize their precision.
+    """
+
+    # Always populated by every scoring branch.
+    ha: np.ndarray
+    Ft_y: object
+    Ft_ctf: object
+    em_stats: object
+    noise_stats: object
+
+    # Local-search and explicit best-pose paths.
+    best_pose_rotations: np.ndarray | None = None
+    best_pose_rotation_eulers: np.ndarray | None = None
+    best_pose_translations: np.ndarray | None = None
+
+    # Diagnostics emitted by some branches.
+    coarse_ha: np.ndarray | None = None
+    pose_rotations: object | None = None
+    pose_rotation_eulers: object | None = None
+    significant_counts: np.ndarray | None = None
+    profile_summary: dict | None = None
+    mstep_full_half_axis: int | None = None
+    mstep_accumulator_shape: tuple[int, int, int] | None = None
+
+
+@dataclass(frozen=True)
+class PerHalfOutputs:
+    """Own the two halfset slots used during one scoring phase.
+
+    Every field is a separate two-element list indexed by halfset (0 or 1),
+    including fields whose names start with ``class_``. Per-image arrays stay
+    in each halfset's local order; the two halfsets may have different sizes.
+    Class counts and class/rotation summaries live inside their halfset slot.
+    Unpopulated slots are ``None``; an empty scored half can hold empty arrays.
+
+    ``frozen=True`` prevents rebinding fields, while scoring adapters mutate
+    their lists. The controller deliberately aliases these lists. ``update_from``
+    stores the common scoring payload; K-class adapters separately populate
+    class assignments, posterior summaries and per-class noise statistics.
+    """
+
+    hard_assignments: list
+    Ft_y: list
+    Ft_ctf: list
+    coarse_ha: list
+    max_posterior: list
+    rotation_posterior: list
+    class_assignments: list
+    class_posterior: list
+    class_full_posterior: list
+    class_rotation_posterior: list
+    noise_stats: list
+    noise_stats_per_class: list
+    best_pose_rotations: list
+    best_pose_rotation_eulers: list
+    best_pose_translations: list
+    translation_search_bases: list
+    pose_rotations: list
+    pose_rotation_eulers: list
+    mstep_full_half_axis: list
+    mstep_accumulator_shape: list
+
+    @classmethod
+    def empty(cls) -> "PerHalfOutputs":
+        return cls(
+            hard_assignments=[None, None],
+            Ft_y=[None, None],
+            Ft_ctf=[None, None],
+            coarse_ha=[None, None],
+            max_posterior=[None, None],
+            rotation_posterior=[None, None],
+            class_assignments=[None, None],
+            class_posterior=[None, None],
+            class_full_posterior=[None, None],
+            class_rotation_posterior=[None, None],
+            noise_stats=[None, None],
+            noise_stats_per_class=[None, None],
+            best_pose_rotations=[None, None],
+            best_pose_rotation_eulers=[None, None],
+            best_pose_translations=[None, None],
+            translation_search_bases=[None, None],
+            pose_rotations=[None, None],
+            pose_rotation_eulers=[None, None],
+            mstep_full_half_axis=[None, None],
+            mstep_accumulator_shape=[None, None],
+        )
+
+    def update_from(self, half_index: int, score_result: HalfScoreResult) -> None:
+        """Store one half's payload, retaining arrays except for posterior casts.
+
+        Missing optional pose fields leave existing slot values intact. Layout
+        metadata is always replaced, including ``None``. Class-specific fields
+        are owned by the scoring adapter and remain untouched here.
+        """
+        self.hard_assignments[half_index] = score_result.ha
+        self.Ft_y[half_index] = score_result.Ft_y
+        self.Ft_ctf[half_index] = score_result.Ft_ctf
+        self.noise_stats[half_index] = score_result.noise_stats
+        self.max_posterior[half_index] = np.asarray(
+            score_result.em_stats.max_posterior_per_image,
+            dtype=np.float32,
+        )
+        self.rotation_posterior[half_index] = np.asarray(
+            score_result.em_stats.rotation_posterior_sums,
+            dtype=np.float32,
+        )
+        if score_result.best_pose_rotations is not None:
+            self.best_pose_rotations[half_index] = score_result.best_pose_rotations
+        if score_result.best_pose_rotation_eulers is not None:
+            self.best_pose_rotation_eulers[half_index] = score_result.best_pose_rotation_eulers
+        if score_result.best_pose_translations is not None:
+            self.best_pose_translations[half_index] = score_result.best_pose_translations
+        if score_result.coarse_ha is not None:
+            self.coarse_ha[half_index] = score_result.coarse_ha
+        if score_result.pose_rotations is not None:
+            self.pose_rotations[half_index] = score_result.pose_rotations
+        if score_result.pose_rotation_eulers is not None:
+            self.pose_rotation_eulers[half_index] = score_result.pose_rotation_eulers
+        self.mstep_full_half_axis[half_index] = score_result.mstep_full_half_axis
+        self.mstep_accumulator_shape[half_index] = score_result.mstep_accumulator_shape
+
+
+def _scatter_dense_k_class_result(
+    k_class_result,
+    *,
+    k: int,
+    effective_rotations,
+    rot_pmap_for_collapse,
+    adaptive_os_local: int,
+    outputs: "PerHalfOutputs",
+    require_best_pose_details: bool = True,
+):
+    """Scatter ``run_dense_k_class_em*`` result into per-half output lists.
+
+    Returns the five tuple of E-step outputs ``(ha_k, Ft_y_k, Ft_ctf_k,
+    em_stats_k, noise_stats_k)`` used downstream by both the adaptive
+    pass-2 and single-pass branches.
+    """
+    ha_k = np.asarray(k_class_result.pose_assignments, dtype=np.int32)
+    outputs.noise_stats_per_class[k] = k_class_result.noise_stats
+    outputs.class_assignments[k] = np.asarray(k_class_result.class_assignments, dtype=np.int32)
+    class_mass_for_priors = getattr(k_class_result, "class_mstep_posterior_sums", None)
+    if class_mass_for_priors is None:
+        class_mass_for_priors = k_class_result.class_posterior_sums
+    outputs.class_posterior[k] = np.asarray(class_mass_for_priors, dtype=np.float64)
+    if outputs.class_full_posterior is not None:
+        outputs.class_full_posterior[k] = np.asarray(k_class_result.class_posterior_sums, dtype=np.float64)
+    # Collapse fine-grid rotation posteriors to coarse via the parent map
+    # when iter-1 firstiter_cc routes through the adaptive 2-pass engine
+    # with adaptive_oversampling > 0; downstream
+    # _combined_class_direction_prior_from_halves expects the coarse-grid
+    # shape (n_rot_coarse,).
+    n_rot_coarse = int(effective_rotations.shape[0])
+    per_class_rot_post_coarse = []
+    for stats in k_class_result.per_class_stats:
+        rot_post = np.asarray(stats.rotation_posterior_sums, dtype=np.float64)
+        if rot_post.shape[0] == n_rot_coarse:
+            per_class_rot_post_coarse.append(rot_post)
+        elif rot_pmap_for_collapse is not None and adaptive_os_local > 0:
+            coarse_post = np.zeros(n_rot_coarse, dtype=np.float64)
+            np.add.at(
+                coarse_post,
+                np.asarray(rot_pmap_for_collapse, dtype=np.int64),
+                rot_post,
+            )
+            per_class_rot_post_coarse.append(coarse_post)
+        else:
+            raise RuntimeError(
+                f"Unexpected K-class rotation_posterior_sums shape {rot_post.shape}; expected ({n_rot_coarse},)"
+            )
+    outputs.class_rotation_posterior[k] = np.stack(per_class_rot_post_coarse, axis=0)
+    if require_best_pose_details:
+        if k_class_result.best_pose_rotations is None or k_class_result.best_pose_translations is None:
+            raise RuntimeError("Dense K-class path did not return best pose details")
+        best_rots = np.asarray(k_class_result.best_pose_rotations, dtype=np.float32)
+        outputs.best_pose_rotations[k] = best_rots
+        outputs.best_pose_rotation_eulers[k] = utils.R_to_relion(best_rots, degrees=True).astype(np.float32)
+        outputs.best_pose_translations[k] = np.asarray(k_class_result.best_pose_translations, dtype=np.float32)
+    return (
+        ha_k,
+        k_class_result.Ft_y,
+        k_class_result.Ft_ctf,
+        k_class_result.stats,
+        k_class_result.aggregate_noise_stats,
+    )
+
+
+def _collapse_fine_pose_assignments_to_coarse(
+    pose_assignments,
+    *,
+    rot_parent_map,
+    trans_parent_map,
+    n_trans_coarse: int,
+    n_trans_fine: int,
+):
+    pose = np.asarray(pose_assignments, dtype=np.int64)
+    rot_idx = pose // int(n_trans_fine)
+    trans_idx = pose % int(n_trans_fine)
+    coarse_rot = np.asarray(rot_parent_map, dtype=np.int64)[rot_idx]
+    coarse_trans = np.asarray(trans_parent_map, dtype=np.int64)[trans_idx]
+    return (coarse_rot * int(n_trans_coarse) + coarse_trans).astype(np.int32, copy=False)
+
+
+def _select_single_class_accumulator(value, *, label: str):
+    shape = getattr(value, "shape", None)
+    if shape is None or len(shape) < 2 or int(shape[0]) != 1:
+        raise RuntimeError(f"K=1 adaptive {label} accumulator must have leading class axis 1; got {shape}")
+    return value[0]
+
+
+def _collapse_single_class_stats_to_coarse(stats, *, rot_parent_map, n_rot_coarse: int):
+    rot_post = np.asarray(stats.rotation_posterior_sums, dtype=np.float64)
+    n_rot_coarse = int(n_rot_coarse)
+    if rot_post.shape == (n_rot_coarse,):
+        return stats
+    if rot_parent_map is None:
+        raise RuntimeError(
+            f"K=1 adaptive rotation_posterior_sums has shape {rot_post.shape}; expected ({n_rot_coarse},)"
+        )
+    rot_parent = np.asarray(rot_parent_map, dtype=np.int64)
+    if rot_post.shape != rot_parent.shape:
+        raise RuntimeError(
+            "K=1 adaptive rotation posterior and parent map disagree: "
+            f"{rot_post.shape} vs {rot_parent.shape}"
+        )
+    coarse_post = np.zeros(n_rot_coarse, dtype=np.float64)
+    np.add.at(coarse_post, rot_parent, rot_post)
+    return make_relion_stats(
+        log_evidence_per_image=np.asarray(stats.log_evidence_per_image, dtype=np.float32),
+        best_log_score_per_image=np.asarray(stats.best_log_score_per_image, dtype=np.float32),
+        max_posterior_per_image=np.asarray(stats.max_posterior_per_image, dtype=np.float32),
+        rotation_posterior_sums=coarse_post.astype(np.float32),
+    )

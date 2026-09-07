@@ -46,6 +46,7 @@ import recovar.em.dense_single_volume.helpers.score_constraints as score_constra
 import recovar.em.dense_single_volume.helpers.significance as sig_mod
 import recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed as sparse_pass2_mod
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop
+from recovar.em.dense_single_volume import score_outputs
 import recovar.em.dense_single_volume.k_class as k_class_mod
 
 pytestmark = pytest.mark.unit
@@ -183,9 +184,9 @@ def test_kclass_scatter_uses_mstep_class_mass_for_relion_priors():
         best_pose_rotations=None,
         best_pose_translations=None,
     )
-    outputs = iteration_loop.PerHalfOutputs.empty()
+    outputs = score_outputs.PerHalfOutputs.empty()
 
-    iteration_loop._scatter_dense_k_class_result(
+    score_outputs._scatter_dense_k_class_result(
         result,
         k=0,
         effective_rotations=np.repeat(np.eye(3, dtype=np.float32)[None], 3, axis=0),

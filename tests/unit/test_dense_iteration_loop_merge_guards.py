@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop
+from recovar.em.dense_single_volume import score_outputs
 import recovar.em.dense_single_volume.local_search_iteration as local_search_iteration
 from recovar.em.dense_single_volume import mean_helpers, ppca_bridge, relion_replay
 from recovar.em.initial_model.iteration_loop import run_vdam_iterations
@@ -25,12 +26,12 @@ pytestmark = pytest.mark.unit
 def test_per_half_output_shape_stays_bundled_and_trimmed():
     """The refactor depends on one owner for per-half outputs, without dead fields."""
 
-    assert is_dataclass(iteration_loop.HalfScoreResult)
-    assert is_dataclass(iteration_loop.PerHalfOutputs)
+    assert is_dataclass(score_outputs.HalfScoreResult)
+    assert is_dataclass(score_outputs.PerHalfOutputs)
     assert not hasattr(iteration_loop, "IterationRunSpec")
-    assert not hasattr(iteration_loop.PerHalfOutputs, "for_half")
+    assert not hasattr(score_outputs.PerHalfOutputs, "for_half")
 
-    half_score_fields = {field.name for field in fields(iteration_loop.HalfScoreResult)}
+    half_score_fields = {field.name for field in fields(score_outputs.HalfScoreResult)}
     assert half_score_fields == {
         "ha",
         "Ft_y",
@@ -59,7 +60,7 @@ def test_per_half_output_shape_stays_bundled_and_trimmed():
         }
     )
 
-    per_half_fields = {field.name for field in fields(iteration_loop.PerHalfOutputs)}
+    per_half_fields = {field.name for field in fields(score_outputs.PerHalfOutputs)}
     assert per_half_fields == {
         "hard_assignments",
         "Ft_y",
@@ -89,8 +90,8 @@ def test_per_half_update_from_half_score_result_updates_only_score_payload():
         max_posterior_per_image = np.array([0.25, 0.75], dtype=np.float64)
         rotation_posterior_sums = np.array([1.0, 2.0, 3.0], dtype=np.float64)
 
-    outs = iteration_loop.PerHalfOutputs.empty()
-    hs = iteration_loop.HalfScoreResult(
+    outs = score_outputs.PerHalfOutputs.empty()
+    hs = score_outputs.HalfScoreResult(
         ha=np.array([0, 1], dtype=np.int32),
         Ft_y="ft_y",
         Ft_ctf="ft_ctf",
@@ -353,7 +354,7 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
         collect_local_search_profile=False,
         diagnostic_score_only=False,
         safe_batch_sizes=lambda *_args, **_kwargs: (2, 3),
-        outputs=iteration_loop.PerHalfOutputs.empty(),
+        outputs=score_outputs.PerHalfOutputs.empty(),
         local_profile_history=[],
     )
 
@@ -475,7 +476,7 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
         collect_local_search_profile=False,
         diagnostic_score_only=False,
         safe_batch_sizes=lambda *_args, **_kwargs: (2, 3),
-        outputs=iteration_loop.PerHalfOutputs.empty(),
+        outputs=score_outputs.PerHalfOutputs.empty(),
         local_profile_history=[],
     )
 
@@ -573,7 +574,7 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
         collect_local_search_profile=False,
         diagnostic_score_only=False,
         safe_batch_sizes=lambda *_args, **_kwargs: (2, 3),
-        outputs=iteration_loop.PerHalfOutputs.empty(),
+        outputs=score_outputs.PerHalfOutputs.empty(),
         local_profile_history=[],
     )
 
