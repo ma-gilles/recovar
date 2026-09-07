@@ -123,7 +123,7 @@ def test_runtime_radius_appended_without_changing_legacy_static_positions():
         if k.arg == "static_argnums"
     ]
     parameters = inspect.signature(getattr(cb, FUNCTION)).parameters
-    assert static == [OLD_STATIC_POSITIONS + (32,)]
+    assert static == [OLD_STATIC_POSITIONS + (32, 33)]
     assert list(parameters).index("runtime_projector_radius") == 31
     assert list(parameters)[32] == "return_denominator"
     assert parameters["return_denominator"].default is True

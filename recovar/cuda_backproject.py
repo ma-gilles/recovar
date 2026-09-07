@@ -2347,7 +2347,7 @@ def _run_vdam_external_host_replay_callback(
 
 @functools.partial(
     jax.jit,
-    static_argnums=(10, 11, 12, 13, 14, 21, 22, 23, 24, 25, 26, 27, 28, 32),
+    static_argnums=(10, 11, 12, 13, 14, 21, 22, 23, 24, 25, 26, 27, 28, 32, 33),
 )
 def relion_vdam_mstep_fused_projector_x_half(
     data_volume: jax.Array,
@@ -2383,6 +2383,7 @@ def relion_vdam_mstep_fused_projector_x_half(
     logical_current_size: jax.Array | int | None = None,
     runtime_projector_radius: jax.Array | None = None,
     return_denominator: bool = True,
+    particle_tail_mask: bool = False,
 ) -> tuple[jax.Array, jax.Array, jax.Array | None]:
     """Project, form residuals, and scatter VDAM rows in one native launch.
 
@@ -2404,10 +2405,34 @@ def relion_vdam_mstep_fused_projector_x_half(
     skips the separate terminal denominator kernel and its dense/compact
     storage. The scatter arithmetic and final stream synchronization remain
     unchanged. This requires a CUDA library supporting the empty-output ABI.
+
+    ``particle_tail_mask=True`` permits a contiguous suffix of group IDs equal
+    to -1. CUDA excludes these rows from the particle scatter loop after its
+    existing metadata synchronization. The active prefix must be nonempty;
+    interior negative IDs and other invalid active metadata are rejected.
+    This opt-in requires grouped accumulators, no denominator, explicit serial
+    particle scheduling, and no replay/trace or projector-capacity diagnostics.
     """
 
     if not isinstance(return_denominator, bool):
         raise TypeError("return_denominator must be a Python bool")
+    if not isinstance(particle_tail_mask, bool):
+        raise TypeError("particle_tail_mask must be a Python bool")
+    if particle_tail_mask and (
+        return_denominator or reconstruction_group_ids is None
+        or parallel_worker_replay is not False
+        or runtime_projector_radius is not None
+        or rotation_replay_order is not None or rotation_replay_counts is not None
+        or particle_start_offsets_ns is not None
+        or serial_rotation_replay or persistent_serial_rotation_replay
+        or float64_accumulator_replay or reverse_rotation_replay
+        or rotation_replay_stride != 0 or native_trace_shape_replay
+        or candidate_trace_active
+    ):
+        raise ValueError(
+            "particle_tail_mask requires grouped accumulator-only work, "
+            "parallel_worker_replay=False and no replay/trace or projector capacity"
+        )
     if not return_denominator and os.environ.get(
         _VDAM_EXTERNAL_HOST_REPLAY_LIBRARY_ENV, ""
     ).strip():
@@ -2530,6 +2555,8 @@ def relion_vdam_mstep_fused_projector_x_half(
         if data_volume.shape != weight_volume.shape or data_volume.shape[0] <= 0:
             raise ValueError("grouped VDAM accumulators must have matching nonempty shapes")
         reconstruction_group_count = int(data_volume.shape[0])
+    if particle_tail_mask and reconstruction_group_count <= 1:
+        raise ValueError("particle_tail_mask requires at least two accumulator groups")
     captured_worker_lanes = worker_lane_ids is not None
     if parallel_worker_replay is None:
         parallel_worker_replay = captured_worker_lanes
@@ -2771,6 +2798,7 @@ def relion_vdam_mstep_fused_projector_x_half(
             native_trace_shape_replay=np.int64(native_trace_shape_replay),
             captured_particle_timing_replay=np.int64(captured_particle_timing_replay),
             candidate_trace_active=np.int64(candidate_trace_active),
+            particle_tail_mask=np.int64(particle_tail_mask),
         )
     fused_data = jax.lax.complex(fused_real, fused_imag)
     if not return_denominator:

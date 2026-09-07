@@ -5837,7 +5837,8 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     std::int32_t* quiesced_prelaunch_particle_row,
     std::int32_t* quiesced_prelaunch_worker_lane,
     std::int32_t* quiesced_prelaunch_reconstruction_group,
-    const int32_t* runtime_projector_radius = nullptr)
+    const int32_t* runtime_projector_radius = nullptr,
+    bool particle_tail_mask = false)
 {
     const bool serial_rotation_replay = serial_rotation_replay_mode != 0;
     const bool persistent_serial_rotation_replay =
@@ -6062,6 +6063,19 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
     const bool capacity_projector = runtime_projector_radius != nullptr;
     if (capacity_projector &&
         (runtime_current_size == nullptr || projector_max_r != 0 ||
+         captured_rotation_replay || serial_rotation_replay ||
+         float64_accumulator_replay || reverse_rotation_replay ||
+         rotation_replay_stride != 0 || native_trace_shape_replay ||
+         captured_particle_timing_replay || candidate_trace_active ||
+         quiesced_prelaunch_capture_requested || exact_native_ptx_requested ||
+         exact_wavg_predecessor_requested || preproject_persistent_requested ||
+         fixed_warp_order_scatter_requested || ordered_scatter_cuda_graph_requested ||
+         runtime_bpref_with_exact_wavg_requested || wavg_bpref_host_gap_requested ||
+         wavg_bpref_host_gap_trace_requested))
+        return cudaErrorInvalidValue;
+    if (particle_tail_mask &&
+        (denominator_sum != nullptr || reconstruction_group_count <= 1 ||
+         parallel_worker_replay || capacity_projector ||
          captured_rotation_replay || serial_rotation_replay ||
          float64_accumulator_replay || reverse_rotation_replay ||
          rotation_replay_stride != 0 || native_trace_shape_replay ||
@@ -6488,6 +6502,21 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
         {
             err = cudaStreamSynchronize(stream);
             if (err != cudaSuccess) goto cleanup;
+        }
+        // The existing metadata copy covers physical capacity. Only a trailing
+        // -1 group suffix is padding; the original loop below validates every
+        // active row, rejecting holes and other negative/out-of-range IDs.
+        // No padded row reaches worker scheduling or scientific scatter.
+        if (particle_tail_mask)
+        {
+            while (n_particles > 0 &&
+                   reconstruction_groups_host[n_particles - 1] == -1)
+                --n_particles;
+            if (n_particles == 0)
+            {
+                err = cudaErrorInvalidValue;
+                goto cleanup;
+            }
         }
         const int32_t preproject_worker_lane =
             n_particles > 0 ? worker_lanes_host[0] : -1;
@@ -11421,6 +11450,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfCommon(
     int64_t native_trace_shape_replay,
     int64_t captured_particle_timing_replay,
     int64_t candidate_trace_active,
+    int64_t particle_tail_mask,
     ffi::AnyBuffer projector_full,
     ffi::AnyBuffer images,
     ffi::AnyBuffer ctf,
@@ -11468,6 +11498,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
     int64_t native_trace_shape_replay,
     int64_t captured_particle_timing_replay,
     int64_t candidate_trace_active,
+    int64_t particle_tail_mask,
     ffi::AnyBuffer projector_full,
     ffi::AnyBuffer images,
     ffi::AnyBuffer ctf,
@@ -11498,7 +11529,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfImpl(
         serial_rotation_replay, float64_accumulator_replay,
         reverse_rotation_replay, rotation_replay_stride,
         native_trace_shape_replay, captured_particle_timing_replay,
-        candidate_trace_active, projector_full, images, ctf, minvsigma2,
+        candidate_trace_active, particle_tail_mask, projector_full, images, ctf, minvsigma2,
         posterior, translation_angles, eulers, rot, reconstruction_group_ids,
         worker_lane_ids, particle_trace_ids, rotation_replay_order,
         rotation_replay_counts, particle_start_offsets_ns,
@@ -11530,6 +11561,7 @@ ffi::Error RelionVdamMstepFusedProjectorRuntimeXHalfImpl(
     int64_t native_trace_shape_replay,
     int64_t captured_particle_timing_replay,
     int64_t candidate_trace_active,
+    int64_t particle_tail_mask,
     ffi::AnyBuffer projector_full,
     ffi::AnyBuffer images,
     ffi::AnyBuffer ctf,
@@ -11561,7 +11593,7 @@ ffi::Error RelionVdamMstepFusedProjectorRuntimeXHalfImpl(
         serial_rotation_replay, float64_accumulator_replay,
         reverse_rotation_replay, rotation_replay_stride,
         native_trace_shape_replay, captured_particle_timing_replay,
-        candidate_trace_active, projector_full, images, ctf, minvsigma2,
+        candidate_trace_active, particle_tail_mask, projector_full, images, ctf, minvsigma2,
         posterior, translation_angles, eulers, rot, reconstruction_group_ids,
         worker_lane_ids, particle_trace_ids, rotation_replay_order,
         rotation_replay_counts, particle_start_offsets_ns,
@@ -11593,6 +11625,7 @@ ffi::Error RelionVdamMstepFusedProjectorCapacityXHalfImpl(
     int64_t native_trace_shape_replay,
     int64_t captured_particle_timing_replay,
     int64_t candidate_trace_active,
+    int64_t particle_tail_mask,
     ffi::AnyBuffer projector_full,
     ffi::AnyBuffer images,
     ffi::AnyBuffer ctf,
@@ -11625,7 +11658,7 @@ ffi::Error RelionVdamMstepFusedProjectorCapacityXHalfImpl(
         serial_rotation_replay, float64_accumulator_replay,
         reverse_rotation_replay, rotation_replay_stride,
         native_trace_shape_replay, captured_particle_timing_replay,
-        candidate_trace_active, projector_full, images, ctf, minvsigma2,
+        candidate_trace_active, particle_tail_mask, projector_full, images, ctf, minvsigma2,
         posterior, translation_angles, eulers, rot, reconstruction_group_ids,
         worker_lane_ids, particle_trace_ids, rotation_replay_order,
         rotation_replay_counts, particle_start_offsets_ns,
@@ -12841,6 +12874,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfCommon(
     int64_t native_trace_shape_replay,
     int64_t captured_particle_timing_replay,
     int64_t candidate_trace_active,
+    int64_t particle_tail_mask,
     ffi::AnyBuffer projector_full,
     ffi::AnyBuffer images,
     ffi::AnyBuffer ctf,
@@ -12954,6 +12988,17 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfCommon(
     // Every nonempty result must retain the full legacy denominator topology.
     const bool omit_denominator =
         denominator_dims.size() == 1 && denominator_dims[0] == 0;
+    if ((particle_tail_mask != 0 && particle_tail_mask != 1) ||
+        (particle_tail_mask != 0 &&
+         (!omit_denominator || reconstruction_group_count <= 1 ||
+          parallel_worker_replay != 0 || capacity_projector ||
+          captured_rotation_replay != 0 || serial_rotation_replay != 0 ||
+          float64_accumulator_replay != 0 || reverse_rotation_replay != 0 ||
+          rotation_replay_stride != 0 || native_trace_shape_replay != 0 ||
+          captured_particle_timing_replay != 0 || candidate_trace_active != 0)))
+        return ffi::Error::InvalidArgument(
+            "BPref particle tail mask requires grouped accumulator-only work "
+            "and no parallel/replay/trace or projector capacity");
     const int64_t pixel_count = image_h * image_w;
     const bool valid_projector = capacity_projector
         ? (projector_dims.size() == 3 && projector_dims[0] >= 5 &&
@@ -13067,7 +13112,8 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfCommon(
         nullptr,
         nullptr,
         runtime_projector_radius == nullptr ? nullptr
-            : static_cast<const int32_t*>(runtime_projector_radius->untyped_data()));
+            : static_cast<const int32_t*>(runtime_projector_radius->untyped_data()),
+        particle_tail_mask != 0);
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
@@ -13099,6 +13145,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("native_trace_shape_replay")
         .Attr<int64_t>("captured_particle_timing_replay")
         .Attr<int64_t>("candidate_trace_active")
+        .Attr<int64_t>("particle_tail_mask")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
@@ -13148,6 +13195,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("native_trace_shape_replay")
         .Attr<int64_t>("captured_particle_timing_replay")
         .Attr<int64_t>("candidate_trace_active")
+        .Attr<int64_t>("particle_tail_mask")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
@@ -13198,6 +13246,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("native_trace_shape_replay")
         .Attr<int64_t>("captured_particle_timing_replay")
         .Attr<int64_t>("candidate_trace_active")
+        .Attr<int64_t>("particle_tail_mask")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
