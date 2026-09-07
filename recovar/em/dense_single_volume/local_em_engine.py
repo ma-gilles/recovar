@@ -2111,6 +2111,14 @@ def _local_noise_pixel_capacity_requested() -> bool:
     return token == "1"
 
 
+def _local_noise_pixel_cuda_requested() -> bool:
+    name = "RECOVAR_EXACT_LOCAL_NOISE_PIXEL_CUDA"
+    token = os.environ.get(name, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{name} must be 0 or 1")
+    return token == "1"
+
+
 def _local_host_plan_pack_requested() -> bool:
     token = os.environ.get(EXACT_LOCAL_HOST_PLAN_PACK_ENV, "0").strip()
     if token not in {"0", "1"}:
@@ -4639,6 +4647,9 @@ def run_local_em_exact(
     ):
         raise ValueError("noise norm capacity requires stable deferred packed final-noise accumulation")
     noise_pixel_capacity_enabled = _local_noise_pixel_capacity_requested()
+    noise_pixel_cuda_enabled = _local_noise_pixel_cuda_requested()
+    if noise_pixel_cuda_enabled and not noise_pixel_capacity_enabled:
+        raise ValueError("noise pixel CUDA packing requires noise pixel capacity")
     if noise_pixel_capacity_enabled and not noise_norm_capacity_enabled:
         raise ValueError("noise pixel capacity requires noise norm capacity")
     if fixed_capacity_whole_boundary_enabled and not fixed_capacity_enabled:
@@ -8067,6 +8078,7 @@ def run_local_em_exact(
                         target_batch=reconstruction_probs.shape[0],
                         n_images=n_images,
                         norm_capacity=noise_norm_correction.shape[0],
+                        cuda_packing=noise_pixel_cuda_enabled,
                     )
                 if noise_stable_core_enabled:
                     prepared_noise_core = run_deferred_local_exact_noise_core_jit(

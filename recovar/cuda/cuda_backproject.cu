@@ -13031,6 +13031,82 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
+__global__ void noise_pixel_pad_words_kernel(
+    const uint32_t* input, const uint32_t* tail_value, int64_t prefix_words,
+    int64_t total_words, int tail_words, uint32_t* output)
+{
+    const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i < total_words)
+        output[i] = i < prefix_words ? input[i] : (tail_value ? tail_value[i % tail_words] : 0u);
+}
+
+ffi::Error NoisePixelPackImpl(
+    cudaStream_t stream, int64_t target_batch,
+    ffi::AnyBuffer probs, ffi::AnyBuffer projection, ffi::AnyBuffer ctf_probs,
+    ffi::AnyBuffer indices, ffi::AnyBuffer spare_index,
+    ffi::Result<ffi::AnyBuffer> padded_probs, ffi::Result<ffi::AnyBuffer> padded_projection,
+    ffi::Result<ffi::AnyBuffer> padded_ctf_probs, ffi::Result<ffi::AnyBuffer> padded_indices)
+{
+    const auto invalid = [](const char* message) {
+        return ffi::Error::InvalidArgument(std::string("NoisePixelPack: ") + message);
+    };
+    using D = ffi::DataType;
+    const auto pd = probs.dimensions(), rd = projection.dimensions(), cd = ctf_probs.dimensions();
+    const auto ids = indices.dimensions();
+    if (pd.size() != 3 || rd.size() != 3 || cd.size() != 3 || ids.size() != 1 ||
+        spare_index.dimensions().size() != 0)
+        return invalid("input ranks differ");
+    if (target_batch < pd[0] || pd[0] <= 0 || pd[1] <= 0 || pd[2] <= 0 ||
+        rd[0] != pd[0] || rd[1] != pd[1] || rd[2] <= 0 ||
+        cd[0] != rd[0] || cd[1] != rd[1] || cd[2] != rd[2] || ids[0] != pd[0])
+        return invalid("input geometry differs");
+    if ((probs.element_type() != D::F32 && probs.element_type() != D::F64) ||
+        (projection.element_type() != D::C64 && projection.element_type() != D::C128) ||
+        (ctf_probs.element_type() != D::F32 && ctf_probs.element_type() != D::F64) ||
+        (indices.element_type() != D::S32 && indices.element_type() != D::S64) ||
+        spare_index.element_type() != indices.element_type())
+        return invalid("input dtypes differ");
+    const ffi::AnyBuffer inputs[] = {probs, projection, ctf_probs, indices};
+    const ffi::AnyBuffer outputs[] = {*padded_probs, *padded_projection, *padded_ctf_probs, *padded_indices};
+    int64_t row_words[4];
+    const int64_t word_limit = static_cast<int64_t>(std::numeric_limits<int32_t>::max()) * 256;
+    for (int field = 0; field < 4; ++field) {
+        const auto in = inputs[field].dimensions(), out = outputs[field].dimensions();
+        if (out.size() != in.size() || out[0] != target_batch ||
+            outputs[field].element_type() != inputs[field].element_type())
+            return invalid("output shape or dtype differs");
+        const D type = inputs[field].element_type();
+        int64_t words = type == D::C128 ? 4 : (type == D::F64 || type == D::C64 || type == D::S64 ? 2 : 1);
+        for (size_t axis = 1; axis < in.size(); ++axis) {
+            if (out[axis] != in[axis] || in[axis] <= 0 || in[axis] > word_limit / words)
+                return invalid("overflowing or mismatched output geometry");
+            words *= in[axis];
+        }
+        if (target_batch > word_limit / words) return invalid("overflowing output size");
+        row_words[field] = words;
+    }
+    // Every shape/type is validated before any copy. The spare index stays device resident.
+    for (int field = 0; field < 4; ++field) {
+        const int64_t count = target_batch * row_words[field];
+        const auto fill = field == 3 ? static_cast<const uint32_t*>(spare_index.untyped_data()) : nullptr;
+        noise_pixel_pad_words_kernel<<<static_cast<unsigned int>((count - 1) / 256 + 1), 256, 0, stream>>>(
+            static_cast<const uint32_t*>(inputs[field].untyped_data()), fill,
+            pd[0] * row_words[field], count, static_cast<int>(field == 3 ? row_words[field] : 1),
+            static_cast<uint32_t*>(outputs[field].untyped_data()));
+        const auto error = cudaGetLastError();
+        if (error != cudaSuccess) return ffi::Error::Internal(cudaGetErrorString(error));
+    }
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    NoisePixelPack, NoisePixelPackImpl,
+    ffi::Ffi::Bind().Ctx<ffi::PlatformStream<cudaStream_t>>().Attr<int64_t>("target_batch")
+        .Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>()
+);
+
 ffi::Error RelionVdamMstepFusedXHalfImpl(
     cudaStream_t stream,
     int64_t image_h,

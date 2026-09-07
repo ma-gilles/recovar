@@ -564,6 +564,7 @@ _TARGET_RELION_TRANSLATE_BPREF_F32 = "cuda_relion_translate_bpref_f32"
 _TARGET_RELION_BPREF_OPERANDS_F32 = "cuda_relion_bpref_operands_f32"
 _TARGET_BPREF_PARTICLE_PACK = "cuda_bpref_particle_pack"
 _TARGET_DEFERRED_VDAM_HOST_PACK = "cuda_deferred_vdam_host_pack"
+_TARGET_NOISE_PIXEL_PACK = "cuda_noise_pixel_pack"
 _TARGET_RELION_VDAM_MSTEP_SUMS_F32 = "cuda_relion_vdam_mstep_sums_f32"
 _TARGET_RELION_VDAM_MSTEP_DENOMINATOR_F32 = (
     "cuda_relion_vdam_mstep_denominator_f32"
@@ -1997,6 +1998,53 @@ def relion_vdam_mstep_sums_f32(
 
 _bpref_particle_pack_ffi_registered = False
 _deferred_vdam_host_pack_ffi_registered = False
+_noise_pixel_pack_ffi_registered = False
+
+
+def _ensure_noise_pixel_pack_ffi():
+    global _noise_pixel_pack_ffi_registered
+    _ensure_ffi()
+    if _noise_pixel_pack_ffi_registered:
+        return
+    with _ffi_lock:
+        if _noise_pixel_pack_ffi_registered:
+            return
+        symbol = getattr(_get_lib(), "NoisePixelPack", None)
+        if symbol is None:
+            raise RuntimeError("CUDA noise pixel packing requires an explicit build with NoisePixelPack")
+        jax.ffi.register_ffi_target(_TARGET_NOISE_PIXEL_PACK, jax.ffi.pycapsule(symbol), platform="CUDA")
+        _noise_pixel_pack_ffi_registered = True
+
+
+def _noise_pixel_pack_shapes(probs, projection, ctf_probs, indices, spare_index, *, target_batch):
+    if type(target_batch) is not int or target_batch <= 0:
+        raise ValueError("Noise pixel target batch must be a positive integer")
+    values = (probs, projection, ctf_probs, indices, spare_index)
+    types = ((jnp.float32, jnp.float64), (jnp.complex64, jnp.complex128),
+             (jnp.float32, jnp.float64), (jnp.int32, jnp.int64), (jnp.int32, jnp.int64))
+    for value, allowed, rank in zip(values, types, (3, 3, 3, 1, 0), strict=True):
+        if value.dtype not in allowed:
+            raise TypeError("Noise pixel input dtype differs")
+        if value.ndim != rank or any(n <= 0 for n in value.shape):
+            raise ValueError("Noise pixel input rank or dimension differs")
+    batch, rotations, _ = probs.shape
+    if (projection.shape[:2] != (batch, rotations) or ctf_probs.shape != projection.shape
+            or indices.shape != (batch,) or spare_index.dtype != indices.dtype or target_batch < batch):
+        raise ValueError("Noise pixel input geometry or index dtype differs")
+    return tuple(jax.ShapeDtypeStruct((target_batch, *v.shape[1:]), v.dtype) for v in values[:4])
+
+
+@functools.partial(jax.jit, static_argnames=("target_batch",))
+def pad_noise_pixels_cuda(probs, projection, ctf_probs, indices, spare_index, *, target_batch):
+    """Preserve all prefix bytes and fill zero/data or spare-index tails on device."""
+    args = (probs, projection, ctf_probs, indices, spare_index)
+    outputs = _noise_pixel_pack_shapes(*args, target_batch=target_batch)
+    if jax.default_backend() != "gpu" or not custom_cuda_requested():
+        raise RuntimeError("CUDA noise pixel packing requires an enabled JAX GPU backend")
+    _ensure_noise_pixel_pack_ffi()
+    return tuple(jax.ffi.ffi_call(_TARGET_NOISE_PIXEL_PACK, outputs, vmap_method="sequential")(
+        *args, target_batch=target_batch,
+    ))
 
 
 def _ensure_deferred_vdam_host_pack_ffi():

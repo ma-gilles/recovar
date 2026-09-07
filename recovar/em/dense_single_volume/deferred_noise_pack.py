@@ -25,7 +25,17 @@ def _pad_noise_pixels(probs, projection, ctf_probs, indices, spare_index, *, tar
     )
 
 
-def pack_noise_pixel_capacity(probs, projection, ctf_probs, indices, *, target_batch, n_images, norm_capacity):
+def pack_noise_pixel_capacity(
+    probs,
+    projection,
+    ctf_probs,
+    indices,
+    *,
+    target_batch,
+    n_images,
+    norm_capacity,
+    cuda_packing=False,
+):
     """Pad only noise pixel operands to the already allocated scalar batch.
 
     The caller supplies a scalar valid-image mask whose rows beyond the pixel
@@ -34,12 +44,25 @@ def pack_noise_pixel_capacity(probs, projection, ctf_probs, indices, *, target_b
     image count. When the norm carry has no spare slot, retain the original
     pixel shape. Original pixel rows/indices and BPref operands are unchanged.
     """
+    if type(cuda_packing) is not bool:
+        raise TypeError("cuda_packing must be a boolean")
     if n_images < 0 or norm_capacity < n_images:
         raise ValueError("Invalid logical image count or norm capacity")
     if target_batch < probs.shape[0]:
         raise ValueError("Cannot truncate noise pixel rows")
     if target_batch == probs.shape[0] or norm_capacity == n_images:
         return probs, projection, ctf_probs, indices
+    if cuda_packing:
+        from recovar.cuda_backproject import pad_noise_pixels_cuda
+
+        return pad_noise_pixels_cuda(
+            probs,
+            projection,
+            ctf_probs,
+            indices,
+            jnp.asarray(n_images, dtype=indices.dtype),
+            target_batch=target_batch,
+        )
     return _pad_noise_pixels(
         probs,
         projection,
