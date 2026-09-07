@@ -394,6 +394,7 @@ EXACT_LOCAL_NOISE_STABLE_CORE_ENV = "RECOVAR_EXACT_LOCAL_NOISE_STABLE_CORE"
 EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_NOISE_NORM_CAPACITY"
 EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_NOISE_PIXEL_CAPACITY"
 EXACT_LOCAL_HOST_PLAN_PACK_ENV = "RECOVAR_EXACT_LOCAL_HOST_PLAN_PACK"
+EXACT_LOCAL_HOST_PUBLICATION_ENV = "RECOVAR_EXACT_LOCAL_HOST_PUBLICATION"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS = 64_000_000
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS_ENV = (
@@ -2099,6 +2100,13 @@ def _local_host_plan_pack_requested() -> bool:
     return token == "1"
 
 
+def _local_host_publication_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_HOST_PUBLICATION_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_HOST_PUBLICATION_ENV} must be 0 or 1")
+    return token == "1"
+
+
 def _local_bpref_projector_capacity_requested() -> bool:
     token = os.environ.get(EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV, "0").strip()
     if token not in {"0", "1"}:
@@ -2844,14 +2852,26 @@ def _postprocess_local_bucket(
     reconstruction_take_indices,
     reconstruction_pack_mask,
     buffers: _LocalPostprocessBuffers,
+    host_prefix: bool = False,
 ):
-    """Scatter one local bucket's host-side pose, posterior, and profile stats."""
+    """Scatter one local bucket's host-side pose, posterior, and profile stats.
+
+    With host_prefix, small device outputs retain their physical batch until
+    their existing NumPy consumer. Slice and decode after that transfer so a
+    changing tail does not compile separate device bookkeeping executables.
+    """
 
     image_indices_np = np.asarray(image_indices, dtype=np.int32)
     local_rotation_ids_np = np.asarray(local_rotation_ids, dtype=np.int32)
     local_mask_np = np.asarray(local_rotation_mask, dtype=bool)
 
+    def host_array(value, dtype=None):
+        array = np.asarray(value, dtype=dtype)
+        return array[:len(image_indices_np)] if host_prefix else array
+
     transfer_t0 = time.time()
+    if host_prefix:
+        best_argmax = host_array(best_argmax)
     best_rot_idx = np.asarray(best_argmax // n_trans, dtype=np.int32)
     best_trans_idx = np.asarray(best_argmax % n_trans, dtype=np.int32)
     buffers.transfer_profile["postprocess_argmax_to_host_s"] += time.time() - transfer_t0
@@ -2866,20 +2886,24 @@ def _postprocess_local_bucket(
     buffers.hard_assignment[image_indices_np] = (best_rotation_ids * n_trans + best_trans_idx).astype(np.int32)
 
     transfer_t0 = time.time()
-    log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
-    log_z_np = np.asarray(log_Z, dtype=np.float32)
-    best_log_score_np = np.asarray(best_log_score, dtype=np.float32)
-    max_posterior_np = np.asarray(max_posterior, dtype=np.float32)
+    log_score_offset = -0.5 * (
+        np.squeeze(host_array(batch_norm, np.float64), axis=1)
+        if host_prefix
+        else np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+    )
+    log_z_np = host_array(log_Z, np.float32)
+    best_log_score_np = host_array(best_log_score, np.float32)
+    max_posterior_np = host_array(max_posterior, np.float32)
     buffers.transfer_profile["postprocess_scores_to_host_s"] += time.time() - transfer_t0
     buffers.log_evidence_per_image[image_indices_np] = log_z_np + log_score_offset.astype(np.float32)
     buffers.best_log_score_per_image[image_indices_np] = best_log_score_np + log_score_offset.astype(np.float32)
     buffers.max_posterior_per_image[image_indices_np] = max_posterior_np
 
     transfer_t0 = time.time()
-    probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
+    probs_sum_t_np = host_array(probs_sum_t, np.float64)
     collect_significant_counts = collect_profile_stats or buffers.significant_counts is not None
     n_significant_samples_np = (
-        np.asarray(n_significant_samples, dtype=np.int32) if collect_significant_counts else None
+        host_array(n_significant_samples, np.int32) if collect_significant_counts else None
     )
     buffers.transfer_profile["postprocess_posterior_to_host_s"] += time.time() - transfer_t0
 
@@ -2911,7 +2935,7 @@ def _postprocess_local_bucket(
     if buffers.reconstruction_sample_indices_by_image is not None:
         if reconstruction_sample_mask is None:
             raise RuntimeError("reconstruction_sample_mask is required when collecting local significant samples")
-        sample_mask_np = np.asarray(reconstruction_sample_mask, dtype=bool)
+        sample_mask_np = host_array(reconstruction_sample_mask, bool)
         for row, image_idx in enumerate(image_indices_np):
             valid_sample_mask = sample_mask_np[row] & local_mask_np[row, :, None]
             rot_rows, trans_cols = np.nonzero(valid_sample_mask)
@@ -4524,6 +4548,9 @@ def run_local_em_exact(
         raise ValueError("BPref projector capacity requires the shared local projector capacity")
     packed_final_noise_enabled = bool(_packed_final_noise_enabled)
     host_plan_pack_enabled = _local_host_plan_pack_requested()
+    host_publication_enabled = _local_host_publication_requested()
+    if host_publication_enabled and not defer_packed_vdam_enabled:
+        raise ValueError("host publication requires deferred packed VDAM execution")
     if host_plan_pack_enabled and not (
         defer_packed_vdam_enabled and packed_final_noise_enabled
     ):
@@ -7054,7 +7081,11 @@ def run_local_em_exact(
             packed_source_vdam_ctf_probs = None
             packed_source_vdam_noise_projection = None
             if return_big_jit_deferred_mstep_inputs:
-                probs_sum_t_np = np.asarray(probs_sum_t[:unpadded_batch_size], dtype=np.float64)
+                probs_sum_t_np = (
+                    np.asarray(probs_sum_t, dtype=np.float64)[:unpadded_batch_size]
+                    if host_publication_enabled
+                    else np.asarray(probs_sum_t[:unpadded_batch_size], dtype=np.float64)
+                )
                 (
                     reconstruction_take_indices,
                     reconstruction_pack_mask_np,
@@ -8452,10 +8483,15 @@ def run_local_em_exact(
 
             postprocess_t0 = time.time()
             stats_probs_sum_t = reconstruction_probs_sum_t if stats_use_reconstruction_probs else probs_sum_t
+            # The postprocessor already needs these small arrays on the host.
+            # Preserve their physical shapes until that consumer when enabled.
+            def postprocess_rows(value):
+                return value if host_publication_enabled else value[:unpadded_batch_size]
+
             stats_probs_sum_t_np = (
                 None
                 if probs_sum_t_np is None
-                else np.asarray(stats_probs_sum_t[:unpadded_batch_size], dtype=np.float64)
+                else np.asarray(postprocess_rows(stats_probs_sum_t), dtype=np.float64)[:unpadded_batch_size]
             )
             significant_sample_count, reconstruction_row_count = _postprocess_local_bucket(
                 image_indices=unpadded_bucket.image_indices,
@@ -8469,23 +8505,28 @@ def run_local_em_exact(
                 ),
                 translation_grid=local_layout.translation_grid,
                 n_trans=n_trans,
-                best_argmax=best_argmax[:unpadded_batch_size],
-                batch_norm=batch_norm[:unpadded_batch_size],
-                log_Z=log_Z[:unpadded_batch_size],
-                best_log_score=best_log_score[:unpadded_batch_size],
-                max_posterior=max_posterior[:unpadded_batch_size],
+                best_argmax=postprocess_rows(best_argmax),
+                batch_norm=postprocess_rows(batch_norm),
+                log_Z=postprocess_rows(log_Z),
+                best_log_score=postprocess_rows(best_log_score),
+                max_posterior=postprocess_rows(max_posterior),
                 probs_sum_t=(
-                    stats_probs_sum_t[:unpadded_batch_size]
+                    postprocess_rows(stats_probs_sum_t)
                     if stats_probs_sum_t_np is None
                     else stats_probs_sum_t_np
                 ),
-                n_significant_samples=n_significant_samples[:unpadded_batch_size],
-                reconstruction_sample_mask=reconstruction_sample_mask[:unpadded_batch_size],
+                n_significant_samples=postprocess_rows(n_significant_samples),
+                reconstruction_sample_mask=(
+                    None
+                    if host_publication_enabled and postprocess_buffers.reconstruction_sample_indices_by_image is None
+                    else postprocess_rows(reconstruction_sample_mask)
+                ),
                 collect_profile_stats=collect_profile_stats,
                 reconstruction_row_count=reconstruction_row_count,
                 reconstruction_take_indices=reconstruction_take_indices,
                 reconstruction_pack_mask=reconstruction_pack_mask_np,
                 buffers=postprocess_buffers,
+                host_prefix=host_publication_enabled,
             )
             if collect_profile_stats:
                 total_significant_samples += significant_sample_count
