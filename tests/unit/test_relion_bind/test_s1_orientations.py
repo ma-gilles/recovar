@@ -66,6 +66,32 @@ def _direction_set_match(dirs_a, dirs_b, atol=1e-10):
     return True, f"All matched (worst dot = {worst:.15f})"
 
 
+def _best_rotation_traces(matrices_a, matrices_b, block_size=128):
+    """Find each matrix's best match without storing the quadratic score matrix."""
+    best = np.empty(len(matrices_a), dtype=np.result_type(matrices_a, matrices_b))
+    for start in range(0, len(matrices_a), block_size):
+        traces = np.einsum("nij,mij->nm", matrices_a[start : start + block_size], matrices_b)
+        best[start : start + block_size] = np.max(traces, axis=1)
+    return best
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("block_size", [1, 7, 128])
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_blocked_rotation_comparison_matches_dense(block_size, dtype):
+    rng = np.random.default_rng(813)
+    matrices_a = np.stack([euler_angles_to_matrix(*angles) for angles in rng.uniform(-180, 180, (19, 3))]).astype(dtype)
+    matrices_b = np.stack([euler_angles_to_matrix(*angles) for angles in rng.uniform(-180, 180, (31, 3))]).astype(dtype)
+    traces = np.einsum("nij,mij->nm", matrices_a, matrices_b)
+    expected = np.max(traces, axis=1)
+    best_traces = _best_rotation_traces(matrices_a, matrices_b, block_size)
+    np.testing.assert_array_equal(best_traces, expected)
+    np.testing.assert_array_equal(
+        np.clip((best_traces - 1.0) / 2.0, -1, 1),
+        np.max(np.clip((traces - 1.0) / 2.0, -1, 1), axis=1),
+    )
+
+
 class TestDirectionCount:
     """Verify RELION and recovar produce the same number of HEALPix directions."""
 
@@ -139,9 +165,8 @@ class TestRotationMatrices:
             f"Grid size mismatch: RELION={relion_mats.shape[0]} vs recovar={recovar_mats.shape[0]}"
         )
 
-        traces = np.einsum("nij,mij->nm", relion_mats, recovar_mats)
-        cos_angle = np.clip((traces - 1.0) / 2.0, -1, 1)
-        best_per_relion = np.max(cos_angle, axis=1)
+        best_traces = _best_rotation_traces(relion_mats, recovar_mats)
+        best_per_relion = np.clip((best_traces - 1.0) / 2.0, -1, 1)
         angles_deg = np.rad2deg(np.arccos(np.clip(best_per_relion, -1, 1)))
 
         worst_angle = np.max(angles_deg)
