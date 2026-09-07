@@ -14,7 +14,7 @@ def test_foo():
     compare(d, atol=1e-5)
 
 def test_foo_f64():
-    """Float64 companion — proves float32 gaps are rounding noise."""
+    """Float64 companion — checks the same comparison at higher precision."""
     jax.config.update("jax_enable_x64", True)
     d = make_data(float_dtype=np.float64)
     compare(d, atol=1e-8)  # ≥3 orders tighter

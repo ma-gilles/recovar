@@ -18,6 +18,12 @@ The control is PR158 commit
 An earlier preparation branch mixes structural changes, runtime repairs and
 GUI work; its commits and benchmark results do not qualify this selected series.
 
+[Draft PR179](https://github.com/ma-gilles/recovar/pull/179) is stacked on
+[PR158](https://github.com/ma-gilles/recovar/pull/158) so its diff contains only
+the cleanup. It was opened at the user's request as a review checkpoint before
+qualification is complete. Both changes remain unready for merge until the
+applicable checks establish that they preserve the required behavior.
+
 The full source review covered 1,654 text files and 89 other assets. Its finding
 inventory, selection evidence, exact test commands and live job records are
 stored on Della under:
@@ -28,7 +34,7 @@ stored on Della under:
 
 Use `WORK_STATE.json`, `REVIEW_FOR_SCOPE_DECISION.md`,
 `PREPARED_CHANGE_INVENTORY.md` and `structural_cleanup/` there. Preserve their
-source identities when incorporating evidence into a future PR.
+source identities when incorporating evidence into the draft or later results.
 
 ## Selected cleanup evidence
 
@@ -153,6 +159,14 @@ post-join buffers exactly equal the late saved arrays. Audit13576847 verifies
 49 consumed files; the other 11 first-iteration fields also match the original
 autonomous run by file hash. This narrows the next diagnostic to upstream
 scoring/accumulation without identifying the responsible kernel.
+
+The next unchanged-source capture is Slurm13579420, with dependent operand
+comparison13579421. It records all 5,000 half-1 particles in two first-iteration
+runs, preserving valid zero-weight rows and the actual scatter radius. The
+preflight checks exact STAR, dataset and shuffled half-local identities plus
+all 1,743 source and 177 fixture/mapping-file hashes. These jobs are pending;
+operand equality and repeated production-kernel output are not yet established.
+
 This negative control means a single real-data candidate mismatch cannot be
 attributed to cleanup alone. The [structural real-data pair at `be1f2913e`](evidence/real10076-structural-pair-20260907/README.md)
 completed in Slurm13569949. Audit13569953 verifies source/artifact integrity
