@@ -353,12 +353,7 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
         collect_local_search_profile=False,
         diagnostic_score_only=False,
         safe_batch_sizes=lambda *_args, **_kwargs: (2, 3),
-        class_assignments=[None, None],
-        class_posterior_per_half=[None, None],
-        class_full_posterior_per_half=[None, None],
-        best_pose_rotations=[None, None],
-        best_pose_rotation_eulers=[None, None],
-        best_pose_translations=[None, None],
+        outputs=iteration_loop.PerHalfOutputs.empty(),
         local_profile_history=[],
     )
 
@@ -480,12 +475,7 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
         collect_local_search_profile=False,
         diagnostic_score_only=False,
         safe_batch_sizes=lambda *_args, **_kwargs: (2, 3),
-        class_assignments=[None, None],
-        class_posterior_per_half=[None, None],
-        class_full_posterior_per_half=[None, None],
-        best_pose_rotations=[None, None],
-        best_pose_rotation_eulers=[None, None],
-        best_pose_translations=[None, None],
+        outputs=iteration_loop.PerHalfOutputs.empty(),
         local_profile_history=[],
     )
 
@@ -583,12 +573,7 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
         collect_local_search_profile=False,
         diagnostic_score_only=False,
         safe_batch_sizes=lambda *_args, **_kwargs: (2, 3),
-        class_assignments=[None, None],
-        class_posterior_per_half=[None, None],
-        class_full_posterior_per_half=[None, None],
-        best_pose_rotations=[None, None],
-        best_pose_rotation_eulers=[None, None],
-        best_pose_translations=[None, None],
+        outputs=iteration_loop.PerHalfOutputs.empty(),
         local_profile_history=[],
     )
 

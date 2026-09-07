@@ -183,8 +183,7 @@ def test_kclass_scatter_uses_mstep_class_mass_for_relion_priors():
         best_pose_rotations=None,
         best_pose_translations=None,
     )
-    class_posterior_per_half = [None]
-    class_full_posterior_per_half = [None]
+    outputs = iteration_loop.PerHalfOutputs.empty()
 
     iteration_loop._scatter_dense_k_class_result(
         result,
@@ -192,19 +191,12 @@ def test_kclass_scatter_uses_mstep_class_mass_for_relion_priors():
         effective_rotations=np.repeat(np.eye(3, dtype=np.float32)[None], 3, axis=0),
         rot_pmap_for_collapse=None,
         adaptive_os_local=0,
-        noise_stats_per_half_per_class=[None],
-        class_assignments=[None],
-        class_posterior_per_half=class_posterior_per_half,
-        class_full_posterior_per_half=class_full_posterior_per_half,
-        class_rotation_posterior_per_half=[None],
-        best_pose_rotations=[None],
-        best_pose_rotation_eulers=[None],
-        best_pose_translations=[None],
+        outputs=outputs,
         require_best_pose_details=False,
     )
 
-    np.testing.assert_allclose(class_posterior_per_half[0], [1.2, 1.8])
-    np.testing.assert_allclose(class_full_posterior_per_half[0], [1.7, 1.3])
+    np.testing.assert_allclose(outputs.class_posterior[0], [1.2, 1.8])
+    np.testing.assert_allclose(outputs.class_full_posterior[0], [1.7, 1.3])
 
 
 def test_kclass_weight_trajectories_record_mstep_and_full_posterior_provenance():

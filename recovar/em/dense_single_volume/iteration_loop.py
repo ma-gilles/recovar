@@ -1329,14 +1329,7 @@ def _scatter_dense_k_class_result(
     effective_rotations,
     rot_pmap_for_collapse,
     adaptive_os_local: int,
-    noise_stats_per_half_per_class,
-    class_assignments,
-    class_posterior_per_half,
-    class_full_posterior_per_half,
-    class_rotation_posterior_per_half,
-    best_pose_rotations,
-    best_pose_rotation_eulers,
-    best_pose_translations,
+    outputs: "PerHalfOutputs",
     require_best_pose_details: bool = True,
 ):
     """Scatter ``run_dense_k_class_em*`` result into per-half output lists.
@@ -1346,14 +1339,14 @@ def _scatter_dense_k_class_result(
     pass-2 and single-pass branches.
     """
     ha_k = np.asarray(k_class_result.pose_assignments, dtype=np.int32)
-    noise_stats_per_half_per_class[k] = k_class_result.noise_stats
-    class_assignments[k] = np.asarray(k_class_result.class_assignments, dtype=np.int32)
+    outputs.noise_stats_per_class[k] = k_class_result.noise_stats
+    outputs.class_assignments[k] = np.asarray(k_class_result.class_assignments, dtype=np.int32)
     class_mass_for_priors = getattr(k_class_result, "class_mstep_posterior_sums", None)
     if class_mass_for_priors is None:
         class_mass_for_priors = k_class_result.class_posterior_sums
-    class_posterior_per_half[k] = np.asarray(class_mass_for_priors, dtype=np.float64)
-    if class_full_posterior_per_half is not None:
-        class_full_posterior_per_half[k] = np.asarray(k_class_result.class_posterior_sums, dtype=np.float64)
+    outputs.class_posterior[k] = np.asarray(class_mass_for_priors, dtype=np.float64)
+    if outputs.class_full_posterior is not None:
+        outputs.class_full_posterior[k] = np.asarray(k_class_result.class_posterior_sums, dtype=np.float64)
     # Collapse fine-grid rotation posteriors to coarse via the parent map
     # when iter-1 firstiter_cc routes through the adaptive 2-pass engine
     # with adaptive_oversampling > 0; downstream
@@ -1377,14 +1370,14 @@ def _scatter_dense_k_class_result(
             raise RuntimeError(
                 f"Unexpected K-class rotation_posterior_sums shape {rot_post.shape}; expected ({n_rot_coarse},)"
             )
-    class_rotation_posterior_per_half[k] = np.stack(per_class_rot_post_coarse, axis=0)
+    outputs.class_rotation_posterior[k] = np.stack(per_class_rot_post_coarse, axis=0)
     if require_best_pose_details:
         if k_class_result.best_pose_rotations is None or k_class_result.best_pose_translations is None:
             raise RuntimeError("Dense K-class path did not return best pose details")
         best_rots = np.asarray(k_class_result.best_pose_rotations, dtype=np.float32)
-        best_pose_rotations[k] = best_rots
-        best_pose_rotation_eulers[k] = utils.R_to_relion(best_rots, degrees=True).astype(np.float32)
-        best_pose_translations[k] = np.asarray(k_class_result.best_pose_translations, dtype=np.float32)
+        outputs.best_pose_rotations[k] = best_rots
+        outputs.best_pose_rotation_eulers[k] = utils.R_to_relion(best_rots, degrees=True).astype(np.float32)
+        outputs.best_pose_translations[k] = np.asarray(k_class_result.best_pose_translations, dtype=np.float32)
     return (
         ha_k,
         k_class_result.Ft_y,
@@ -2075,15 +2068,8 @@ def _score_half_dense(
     disable_adjoint_ctf: bool,
     safe_batch_sizes,
     max_significants,
-    # K-class scatter targets (mutated in place):
-    noise_stats_per_half_per_class,
-    class_assignments,
-    class_posterior_per_half,
-    class_full_posterior_per_half,
-    class_rotation_posterior_per_half,
-    best_pose_rotations,
-    best_pose_rotation_eulers,
-    best_pose_translations,
+    # Output lists are owned by the caller and mutated in place:
+    outputs: "PerHalfOutputs",
     group_ids_k=None,
     group_count_k=None,
     scale_correction_data_vs_prior=None,
@@ -2110,7 +2096,7 @@ def _score_half_dense(
 
     Used by both the single-pass (``else``) and adaptive-2-pass
     (``elif use_adaptive``) branches of the half-set loop. The two modes
-    differ in four places, all controlled by trailing parameters:
+    differ in five places, all controlled by trailing parameters:
 
     1. ``k_class_image_batch_size_override`` /
        ``k_class_rotation_block_size_override`` — adaptive overrides
@@ -2126,10 +2112,10 @@ def _score_half_dense(
        em_kwargs["image_batch_size"] with the firstiter clamp; single-pass
        leaves em_kwargs untouched.
 
-    Mutates the per-half K-class scatter lists when ``k_class_enabled`` is
-    True (via ``_scatter_dense_k_class_result``); the K=1 per-half lists
-    are still owned by the caller. ``safe_batch_sizes`` is the
-    closure-bound batch sizer from ``_run_relion_iteration_loop``.
+    Stores K-class summaries and explicit best poses in ``outputs``. The
+    caller records the common payload from the returned ``HalfScoreResult``.
+    ``safe_batch_sizes`` is the closure-bound batch sizer from
+    ``_run_relion_iteration_loop``.
     """
 
     safe_ibs, safe_rbs = safe_batch_sizes(
@@ -2377,14 +2363,7 @@ def _score_half_dense(
             effective_rotations=effective_rotations,
             rot_pmap_for_collapse=rot_pmap_for_collapse,
             adaptive_os_local=adaptive_os_local,
-            noise_stats_per_half_per_class=noise_stats_per_half_per_class,
-            class_assignments=class_assignments,
-            class_posterior_per_half=class_posterior_per_half,
-            class_full_posterior_per_half=class_full_posterior_per_half,
-            class_rotation_posterior_per_half=class_rotation_posterior_per_half,
-            best_pose_rotations=best_pose_rotations,
-            best_pose_rotation_eulers=best_pose_rotation_eulers,
-            best_pose_translations=best_pose_translations,
+            outputs=outputs,
             require_best_pose_details=return_best_pose_details,
         )
         coarse_ha_k = None
@@ -2575,9 +2554,9 @@ def _score_half_dense(
             ):
                 raise RuntimeError("K=1 adaptive path did not return best pose details")
             best_rots = np.asarray(k1_adaptive_result.best_pose_rotations, dtype=np.float32)
-            best_pose_rotations[k] = best_rots
-            best_pose_rotation_eulers[k] = utils.R_to_relion(best_rots, degrees=True).astype(np.float32)
-            best_pose_translations[k] = np.asarray(k1_adaptive_result.best_pose_translations, dtype=np.float32)
+            outputs.best_pose_rotations[k] = best_rots
+            outputs.best_pose_rotation_eulers[k] = utils.R_to_relion(best_rots, degrees=True).astype(np.float32)
+            outputs.best_pose_translations[k] = np.asarray(k1_adaptive_result.best_pose_translations, dtype=np.float32)
         if fine_rotations_for_pose is None and rot_pmap_for_collapse is not None:
             fine_rotations_for_pose = _build_firstiter_cc_pass2_grids(
                 effective_rotations,
@@ -2605,9 +2584,9 @@ def _score_half_dense(
             Ft_ctf=Ft_ctf_k,
             em_stats=em_stats_k,
             noise_stats=noise_stats_k,
-            best_pose_rotations=best_pose_rotations[k],
-            best_pose_rotation_eulers=best_pose_rotation_eulers[k],
-            best_pose_translations=best_pose_translations[k],
+            best_pose_rotations=outputs.best_pose_rotations[k],
+            best_pose_rotation_eulers=outputs.best_pose_rotation_eulers[k],
+            best_pose_translations=outputs.best_pose_translations[k],
             coarse_ha=coarse_ha_k,
             pose_rotations=fine_rotations_for_pose,
             pose_rotation_eulers=fine_rotation_eulers_for_pose,
@@ -2749,13 +2728,8 @@ def _score_half_local(
     collect_local_search_profile: bool,
     diagnostic_score_only: bool,
     safe_batch_sizes,
-    # Scatter targets (mutated in place):
-    class_assignments,
-    class_posterior_per_half,
-    class_full_posterior_per_half,
-    best_pose_rotations,
-    best_pose_rotation_eulers,
-    best_pose_translations,
+    # Output lists are owned by the caller and mutated in place:
+    outputs: "PerHalfOutputs",
     local_profile_history,
     local_search_mstep_rotations=None,
     group_ids_k=None,
@@ -3346,25 +3320,25 @@ def _score_half_local(
             _tail_idx += 1
         else:
             class_full_posterior_sums_k = class_posterior_sums_k
-        class_assignments[k] = np.asarray(class_assignments_k, dtype=np.int32)
-        class_posterior_per_half[k] = np.asarray(class_posterior_sums_k, dtype=np.float64)
-        if class_full_posterior_per_half is not None:
-            class_full_posterior_per_half[k] = np.asarray(class_full_posterior_sums_k, dtype=np.float64)
-    best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
-    best_pose_rotation_eulers[k] = utils.R_to_relion(
+        outputs.class_assignments[k] = np.asarray(class_assignments_k, dtype=np.int32)
+        outputs.class_posterior[k] = np.asarray(class_posterior_sums_k, dtype=np.float64)
+        if outputs.class_full_posterior is not None:
+            outputs.class_full_posterior[k] = np.asarray(class_full_posterior_sums_k, dtype=np.float64)
+    outputs.best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
+    outputs.best_pose_rotation_eulers[k] = utils.R_to_relion(
         np.asarray(best_rots_k),
         degrees=True,
     ).astype(np.float32)
-    best_pose_translations[k] = np.asarray(best_trans_k, dtype=np.float32)
+    outputs.best_pose_translations[k] = np.asarray(best_trans_k, dtype=np.float32)
     return HalfScoreResult(
         ha=ha_k,
         Ft_y=Ft_y_k,
         Ft_ctf=Ft_ctf_k,
         em_stats=em_stats_k,
         noise_stats=noise_stats_k,
-        best_pose_rotations=best_pose_rotations[k],
-        best_pose_rotation_eulers=best_pose_rotation_eulers[k],
-        best_pose_translations=best_pose_translations[k],
+        best_pose_rotations=outputs.best_pose_rotations[k],
+        best_pose_rotation_eulers=outputs.best_pose_rotation_eulers[k],
+        best_pose_translations=outputs.best_pose_translations[k],
         significant_counts=relion_significant_counts_k,
         mstep_full_half_axis=0 if local_relion_x_half_mstep else None,
         mstep_accumulator_shape=(
@@ -6414,12 +6388,7 @@ def _run_relion_iteration_loop(
                     collect_local_search_profile=collect_local_search_profile,
                     diagnostic_score_only=bool(stop_after_local_search_score_only),
                     safe_batch_sizes=_safe_batch_sizes,
-                    class_assignments=class_assignments,
-                    class_posterior_per_half=class_posterior_per_half,
-                    class_full_posterior_per_half=class_full_posterior_per_half,
-                    best_pose_rotations=best_pose_rotations,
-                    best_pose_rotation_eulers=best_pose_rotation_eulers,
-                    best_pose_translations=best_pose_translations,
+                    outputs=per_half,
                     local_profile_history=local_profile_history,
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
@@ -6476,14 +6445,7 @@ def _run_relion_iteration_loop(
                     disable_adjoint_ctf=disable_adjoint_ctf,
                     safe_batch_sizes=_safe_batch_sizes,
                     max_significants=max_significants,
-                    noise_stats_per_half_per_class=noise_stats_per_half_per_class,
-                    class_assignments=class_assignments,
-                    class_posterior_per_half=class_posterior_per_half,
-                    class_full_posterior_per_half=class_full_posterior_per_half,
-                    class_rotation_posterior_per_half=class_rotation_posterior_per_half,
-                    best_pose_rotations=best_pose_rotations,
-                    best_pose_rotation_eulers=best_pose_rotation_eulers,
-                    best_pose_translations=best_pose_translations,
+                    outputs=per_half,
                     # Adaptive-specific:
                     k_class_image_batch_size_override=k_class_image_batch_size,
                     k_class_rotation_block_size_override=dense_k_class_rotation_block_size,
@@ -6553,14 +6515,7 @@ def _run_relion_iteration_loop(
                     disable_adjoint_ctf=disable_adjoint_ctf,
                     safe_batch_sizes=_safe_batch_sizes,
                     max_significants=max_significants,
-                    noise_stats_per_half_per_class=noise_stats_per_half_per_class,
-                    class_assignments=class_assignments,
-                    class_posterior_per_half=class_posterior_per_half,
-                    class_full_posterior_per_half=class_full_posterior_per_half,
-                    class_rotation_posterior_per_half=class_rotation_posterior_per_half,
-                    best_pose_rotations=best_pose_rotations,
-                    best_pose_rotation_eulers=best_pose_rotation_eulers,
-                    best_pose_translations=best_pose_translations,
+                    outputs=per_half,
                     preserve_bpref_particle_order=preserve_bpref_particle_order,
                     source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                     relion_projector_half=relion_projector_half_by_half[k],
@@ -9396,12 +9351,7 @@ def _run_relion_iteration_loop(
                 collect_local_search_profile=collect_local_search_profile,
                 diagnostic_score_only=False,
                 safe_batch_sizes=_safe_batch_sizes,
-                class_assignments=final_outs.class_assignments,
-                class_posterior_per_half=final_outs.class_posterior,
-                class_full_posterior_per_half=final_outs.class_full_posterior,
-                best_pose_rotations=final_outs.best_pose_rotations,
-                best_pose_rotation_eulers=final_outs.best_pose_rotation_eulers,
-                best_pose_translations=final_outs.best_pose_translations,
+                outputs=final_outs,
                 local_profile_history=local_profile_history,
                 relion_projector_half=final_relion_projector_half_by_half[k],
                 relion_projector_r_max=final_relion_projector_r_max_by_half[k],
@@ -9442,14 +9392,7 @@ def _run_relion_iteration_loop(
                 disable_adjoint_ctf=disable_adjoint_ctf,
                 safe_batch_sizes=_safe_batch_sizes,
                 max_significants=max_significants,
-                noise_stats_per_half_per_class=final_outs.noise_stats_per_class,
-                class_assignments=final_outs.class_assignments,
-                class_posterior_per_half=final_outs.class_posterior,
-                class_full_posterior_per_half=final_outs.class_full_posterior,
-                class_rotation_posterior_per_half=final_outs.class_rotation_posterior,
-                best_pose_rotations=final_outs.best_pose_rotations,
-                best_pose_rotation_eulers=final_outs.best_pose_rotation_eulers,
-                best_pose_translations=final_outs.best_pose_translations,
+                outputs=final_outs,
                 relion_projector_half=final_relion_projector_half_by_half[k],
                 relion_projector_r_max=final_relion_projector_r_max_by_half[k],
                 firstiter_coarse_current_size=final_adaptive_pass1_current_size,

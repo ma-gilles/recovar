@@ -3033,12 +3033,7 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
             k_class_enabled=False,
             collect_local_search_profile=False,
             safe_batch_sizes=lambda *args, **kwargs: (1, 1),
-            class_assignments=[None],
-            class_posterior_per_half=[None],
-            class_full_posterior_per_half=[None],
-            best_pose_rotations=[None],
-            best_pose_rotation_eulers=[None],
-            best_pose_translations=[None],
+            outputs=iteration_loop_module.PerHalfOutputs.empty(),
             local_profile_history=[],
         )
 
@@ -3105,12 +3100,7 @@ def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch,
             k_class_enabled=k_class_enabled,
             collect_local_search_profile=False,
             safe_batch_sizes=lambda *args, **kwargs: (1, 16),
-            class_assignments=[None],
-            class_posterior_per_half=[None],
-            class_full_posterior_per_half=[None],
-            best_pose_rotations=[None],
-            best_pose_rotation_eulers=[None],
-            best_pose_translations=[None],
+            outputs=iteration_loop_module.PerHalfOutputs.empty(),
             local_profile_history=[],
         )
 
