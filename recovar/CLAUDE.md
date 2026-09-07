@@ -59,9 +59,13 @@ files:
 ## JAX / Equinox Patterns
 
 ### Static vs Dynamic
-- `ForwardModelConfig`, `CTFEvaluator`, `ModelState`, `EmbeddingOpts`, `CovarianceOpts` are **Equinox modules** (static, immutable). Changing any field triggers JIT recompilation.
-- Image data, poses, CTF parameters are **dynamic** JAX arrays passed as function arguments.
-- Rule: if it doesn't change between batches, put it in a config struct.
+- `ForwardModelConfig` and option modules declare compile-time fields with
+  `eqx.field(static=True)`. Changing static configuration can trigger recompilation.
+- `ModelState` contains dynamic array leaves (mean, mask, basis, eigenvalues);
+  being an Equinox module does not make every field static.
+- Keep image data, poses, CTF parameters and evolving numerical state dynamic.
+  Put compile-time choices in configuration; inspect the actual JIT boundary
+  before changing static/dynamic ownership.
 
 ### Float64
 JAX is configured with `jax_enable_x64 = True` globally (`jax_config.py`). Float64 is required for numerical stability in covariance estimation and eigendecomposition. Do not disable this.
@@ -71,7 +75,7 @@ Images and volumes can use rfft-packed layouts for ~50% memory savings. The `sli
 
 ## Module Boundaries
 
-- **`core/`** — Low-level JAX ops. No knowledge of datasets, pipelines, or file I/O. Everything here is JIT-compiled.
+- **`core/`** — Low-level JAX ops. Keep numerical kernels independent of pipeline orchestration. This package contains JIT kernels and host-side geometry/configuration helpers; preserve their actual compilation boundaries.
 - **`data_io/`** — File formats, loading, indexing. `CryoEMDataset` is the single entry point for all downstream code. Never bypass it to load data directly.
 - **`heterogeneity/`** — The science. Covariance estimation, PCA, embedding, volume generation. Operates on batches from `CryoEMDataset`.
 - **`reconstruction/`** — Classical 3D reconstruction (mean, noise, regularization). Used by `heterogeneity/` and `commands/`.

@@ -1,9 +1,12 @@
 # EM / RELION Parity Program Board
 
-This is the living source of truth for the active milestone and next
-experiment. Keep permanent rules in `recovar/em/AGENTS.md`, detailed dated
-evidence in `docs/math/relion_parity_agent_notes.md`, and accepted completion
-runs in `docs/math/em_parity_best_metrics.md`.
+This file preserves quantitative gates and historical program records. The
+active cleanup milestone and next check live in
+[the EM status page](../development/em_status.md). Keep permanent rules in
+`recovar/em/AGENTS.md`, detailed dated evidence in
+`docs/math/relion_parity_agent_notes.md`, and completion records in
+`docs/math/em_parity_best_metrics.md`. Historical next actions below are not
+current task instructions.
 
 ## Objective
 

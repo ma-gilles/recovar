@@ -1,9 +1,12 @@
 # EM / RELION Parity Operating Contract
 
 This file contains durable rules for work under `recovar/em/`. Current program
-state and the next experiment live in `docs/math/em_parity_program.md`; detailed
-findings live in `docs/math/relion_parity_agent_notes.md`; accepted completion
-runs live in `docs/math/em_parity_best_metrics.md`.
+state and the next check live in
+[the EM status page](../../docs/development/em_status.md). Quantitative gates
+and historical program records remain in `docs/math/em_parity_program.md`;
+detailed findings remain in `docs/math/relion_parity_agent_notes.md`, and
+completion records in `docs/math/em_parity_best_metrics.md`. Historical records
+do not qualify the source currently checked out.
 
 `recovar/em/AGENTS.md` and `recovar/em/CLAUDE.md` must remain byte-for-byte
 identical. After editing either, mirror the change and verify:
@@ -11,6 +14,13 @@ identical. After editing either, mirror the change and verify:
 ```bash
 cmp recovar/em/CLAUDE.md recovar/em/AGENTS.md
 ```
+
+## API cleanup
+
+EM public APIs may change when this simplifies the code. Update callers, tests
+and documentation together; remove obsolete forwarding wrappers when unused.
+Preserve scientific defaults, numerical behavior and saved-data compatibility
+during structural cleanup. Propose numerical repairs separately.
 
 ## North Star
 
@@ -44,8 +54,10 @@ submission, and before declaring completion:
 
 1. Re-read this file and state the validation scope: docs-only, diagnostic,
    algorithmic quality, performance-only, or PR preparation.
-2. Read `docs/math/em_parity_program.md`. Read only the relevant sections of
-   `docs/math/relion_parity_agent_notes.md` and source/tests for the active item.
+2. Read `docs/development/em_status.md`, the applicable quantitative gates in
+   `docs/math/em_parity_program.md`, and source/tests for the active item.
+   Follow links into the historical program/notes only for the relevant evidence;
+   do not reload the entire archive at every resumption.
 3. Print the immutable worktree provenance:
 
    ```bash
@@ -59,7 +71,8 @@ submission, and before declaring completion:
 4. Confirm the active checkout contains the required parity ancestors through
    `recovar.utils.parity_provenance` or `scripts/run_multi_iter_parity.py`.
 5. Select exactly one measurable hypothesis and the cheapest experiment that
-   could disprove it. Update the program board before switching hypotheses.
+   could disprove it. Update the active status before switching hypotheses.
+   Preserve source snapshots while their jobs are queued or running.
 
 A directory or branch name is not provenance. Every result must cite the HEAD
 commit and, for a dirty tree, its diff SHA-256 plus an untracked-file manifest.
@@ -143,9 +156,11 @@ extraction. Forbidden by default:
 - unfiltered `pytest --long-test`
 - `scripts/extract_regression_tables.py`
 
-If a change crosses into shared `commands/`, `data_io/`, `output/`, or
-non-EM reconstruction/heterogeneity behavior, ask the user before expanding
-validation. Never modify `heterogeneity.py` for an EM-only task.
+If the task includes shared `commands/`, `data_io/`, `output/`, reconstruction
+or heterogeneity behavior, use the applicable shared validation as well. Existing
+user authorization for that scope covers its necessary checks. Ask only if the
+proposed work introduces a new objective not already authorized. Keep shared
+scientific changes separate from EM-only fixes.
 
 The EM long tier is Slurm-only:
 
@@ -160,19 +175,16 @@ evidence, not edit-loop tests.
 
 ## Environment, GPU, And Scratch
 
-Use pixi only. Before tests or jobs:
-
-```bash
-unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
-export PYTHONNOUSERSITE=1
-PIXI_PY="$(pixi run which python)"
-"$PIXI_PY" -m pip install -e . --no-deps --no-build-isolation --ignore-installed
-PYTHON="$PIXI_PY" make -C recovar/cuda clean all
-"$PIXI_PY" -c "import pathlib,recovar,jax; repo=pathlib.Path.cwd().resolve(); assert str(pathlib.Path(recovar.__file__).resolve()).startswith(str(repo) + '/'); assert '.pixi/envs/default/' in str(pathlib.Path(jax.__file__).resolve()); print(jax.devices())"
-```
+Use the frozen pixi environment and import-provenance checks in
+[CONTRIBUTING.md](../../CONTRIBUTING.md). Select CPU or allocated GPU visibility
+before Python imports. Build custom CUDA explicitly for GPU qualification and
+protect the recorded binary from runtime rebuilds as described there.
 
 Before a short local GPU check, run `nvidia-smi` and do not use a device already
-used by another person or process. Use at most three idle local GPUs in total.
+used by another person or process. On the user's four-GPU development machine,
+leave physical GPU 0 free and use only idle physical GPUs 1, 2 or 3, at most three
+in total. Set visibility by GPU UUID before Python imports or pytest collection.
+On Slurm nodes, preserve the scheduler's allocation.
 Use Slurm for multi-iteration, long, or contention-sensitive GPU work; cluster
 jobs may be submitted broadly and allowed to queue. Compare RECOVAR and RELION
 on the same GPU model within each timing pair; no single GPU architecture is
@@ -221,9 +233,12 @@ GILLES project filesystem. Preserve curated fixtures in place.
 - Current-size BPref half joins use the explicit RELION padding factor.
 - K-class quality claims use the RELION x-half/current-size BPref path. Native
   half-volume K-class accumulation is diagnostic unless explicitly selected.
-- Do not force K-class final-all-data after non-convergence. Final all-data
-  gridding correction defaults on for strict RELION parity; use
-  `RECOVAR_FINAL_ALL_DATA_GRID_CORRECT=0` only for a named quality ablation.
+- Do not force K-class final-all-data after non-convergence. The strict-parity
+  target specifies final gridding correction on. The reviewed PR158 source
+  actually defaults it off; preserve that implementation during cleanup and
+  record the effective setting. Resolving this scientific-policy discrepancy
+  requires a separate, explicitly qualified change. Do not label the off path
+  as satisfying the on-policy contract.
 - Preserve shared contracts: `split_E_M_v2` reads `state.Ft_y` and
   `state.Ft_CTF` after `finish_up_M_step`.
 
@@ -266,10 +281,10 @@ Every reported run includes:
 - comparison to the accepted run with every delta labeled better, worse, or same;
   use mixed or not measured only when no single directional label is valid.
 
-Append detailed findings to `docs/math/relion_parity_agent_notes.md`; update
-`docs/math/em_parity_program.md` when the active conclusion or next action
-changes; update `docs/math/em_parity_best_metrics.md` only for completion
-attempts. Do not paste large run histories into this file.
+Keep the active conclusion, evidence state and next check in
+`docs/development/em_status.md`. Preserve detailed dated evidence in the linked
+program/notes archives; update `docs/math/em_parity_best_metrics.md` only for
+completion attempts. Do not paste large run histories into this contract.
 
 ## Subagents And Ownership
 

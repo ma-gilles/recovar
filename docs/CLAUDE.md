@@ -1,5 +1,13 @@
 # Documentation Development Guide
 
+## Scope
+
+The GUI-first guidance below applies to user-facing product documentation.
+`docs/development/` and `docs/math/` are for contributors and methods developers:
+use precise technical prose, runnable commands, mathematical/code references
+and explicit evidence states there. Follow the root development contract and
+keep historical experiments separate from current instructions.
+
 ## Vision
 
 The docs should be the **best documentation among cryo-EM heterogeneity tools** (cryoDRGN, RELION multi-body, 3DFlex, etc.). Inspired by **cryoSPARC docs**: clean, GUI-focused, professional, good screenshots.
@@ -37,7 +45,7 @@ mkdocs serve    # preview at http://localhost:8000/recovar/
 mkdocs build    # build to site/
 ```
 
-GitHub Pages deploys from the `main` branch automatically.
+The docs workflow deploys on matching pushes to `dev` or manual dispatch; see `.github/workflows/docs.yml`.
 
 ## Structure
 
