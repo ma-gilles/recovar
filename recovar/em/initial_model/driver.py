@@ -1259,11 +1259,9 @@ def _prepare_native_sampling_for_iteration(
         return False
     if sampling_state.nr_iter_wo_resol_gain < RELION_INITIALMODEL_MAX_NR_ITER_WO_RESOL_GAIN:
         return False
-    if (
-        sampling_state.nr_iter_wo_large_hidden_variable_changes
-        < RELION_INITIALMODEL_MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES
-    ):
-        return False
+    # RELION initialiseGeneral sets auto_ignore_angle_changes for the entire
+    # gradient_refine run, including its final EM phase. InitialModel therefore
+    # updates sampling on resolution stalls even when assignments still change.
     return _relion_update_native_sampling_state(sampling_state, do_grad=do_grad)
 
 

@@ -1098,7 +1098,38 @@ def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
     assert sampling_state.uniform_local_orientation_prior is True
 
 
-def test_native_sampling_waits_for_hidden_variable_stability():
+@pytest.mark.parametrize("do_grad,expected_order", [(True, 3), (False, 4)])
+def test_native_sampling_refreshes_gf46_translation_grid_without_stable_assignments(do_grad, expected_order):
+    # GF46's completed iteration 59 has resolution-stall=2 but assignment-
+    # stall=0. RELION's gradient_refine initialization sets auto_ignore_angles
+    # permanently, including the later EM phase, so iteration 60 still updates.
+    sampling_state = driver.NativeSamplingState(
+        healpix_order=3,
+        adaptive_oversampling=1,
+        offset_range_angstrom=5.4232808710042635,
+        offset_step_angstrom=1.498125,
+        offset_range_ori_angstrom=25.5,
+        offset_step_ori_angstrom=8.5,
+        pixel_size=4.25,
+        acc_rot=0.527,
+        acc_trans_angstrom=0.8075,
+        current_changes_optimal_offsets_angstrom=0.7050266,
+        nr_iter_wo_resol_gain=2,
+        nr_iter_wo_large_hidden_variable_changes=0,
+    )
+    state = initialise_denovo_state(ori_size=8, pixel_size=4.25, K=1, nr_iter=200, n_directions=1)
+
+    assert driver._prepare_native_sampling_for_iteration(sampling_state, state, iteration=60, do_grad=do_grad) is True
+    assert sampling_state.healpix_order == expected_order
+    assert sampling_state.offset_step_angstrom == 0.75 * 0.8075 * 2
+    assert sampling_state.offset_range_angstrom == 5 * 0.7050266
+    assert round(sampling_state.offset_step_angstrom, 6) == 1.21125
+    assert round(sampling_state.offset_range_angstrom, 6) == 3.525133
+    assert sampling_state.nr_iter_wo_resol_gain == 0
+    assert sampling_state.nr_iter_wo_large_hidden_variable_changes == 0
+
+
+def test_native_sampling_still_waits_for_resolution_stall():
     opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200)
     sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
     state = initialise_denovo_state(
@@ -1108,7 +1139,7 @@ def test_native_sampling_waits_for_hidden_variable_stability():
         nr_iter=200,
         n_directions=1,
     )
-    sampling_state.nr_iter_wo_resol_gain = 1
+    sampling_state.nr_iter_wo_resol_gain = 0
 
     assert driver._prepare_native_sampling_for_iteration(
         sampling_state,
@@ -1116,10 +1147,10 @@ def test_native_sampling_waits_for_hidden_variable_stability():
         iteration=10,
         do_grad=True,
     ) is False
-    assert sampling_state.nr_iter_wo_resol_gain == 1
+    assert sampling_state.nr_iter_wo_resol_gain == 0
     assert sampling_state.healpix_order == 1
 
-    sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
+    sampling_state.nr_iter_wo_resol_gain = 1
     assert driver._prepare_native_sampling_for_iteration(
         sampling_state,
         state,
