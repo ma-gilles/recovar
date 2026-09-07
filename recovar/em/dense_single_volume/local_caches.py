@@ -17,8 +17,8 @@ from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_bat
 from recovar.em.dense_single_volume.helpers.image_shifts import apply_relion_integer_pre_shifts
 from recovar.em.dense_single_volume.helpers.preprocessing import process_half_image
 
-# Mirror local_em_engine's environment-tunable caps. Re-exporting the
-# constants from local_em_engine keeps test imports stable.
+# Cache and sparse-M-step allocation limits are owned here. Engine callers
+# and tests import this module rather than maintaining copies of the caps.
 EXACT_LOCAL_RAW_CACHE_MAX_GB = 16.0
 EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RAW_CACHE_MAX_GB"
 
@@ -55,22 +55,6 @@ def _local_processed_half_cache_enabled(n_images: int, n_half: int, dtype, *, st
         )
     )
     return estimated_gb <= max_gb
-
-
-def _sparse_big_jit_mstep_tensors_within_memory(
-    *,
-    image_count: int,
-    rotation_count: int,
-    n_recon_windowed: int,
-    use_float64_scoring: bool,
-) -> bool:
-    estimated_gb, max_gb = _sparse_big_jit_mstep_tensors_memory_gb(
-        image_count=image_count,
-        rotation_count=rotation_count,
-        n_recon_windowed=n_recon_windowed,
-        use_float64_scoring=use_float64_scoring,
-    )
-    return max_gb > 0.0 and estimated_gb <= max_gb
 
 
 def _sparse_big_jit_mstep_tensors_memory_gb(

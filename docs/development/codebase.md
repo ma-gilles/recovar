@@ -91,6 +91,21 @@ Both use `(prior - rounded_old_offset) / pixel_size`, as before. The separate
 `relion_sigma_offset_prior_center` serves sufficient statistics and keeps its
 pixel-space formula without that division.
 
+Local cache limits belong to
+[`local_caches.py`](../../recovar/em/dense_single_volume/local_caches.py), and
+profile field definitions belong to
+[`local_timing.py`](../../recovar/em/dense_single_volume/local_timing.py).
+Their unused local-engine re-exports have been removed. Tests import cache
+limit names directly from their owner.
+
+The former runtime `compute_e_step_weights` API had only test consumers.
+Its materialized dense posterior implementation is preserved in
+[`tests/helpers/dense_posterior_reference.py`](../../tests/helpers/dense_posterior_reference.py).
+The adaptive-oversampling tests still compare its complete posterior with active
+significance paths. This reference keeps separate orchestration but shares
+production preprocessing/scoring kernels; it does not independently validate
+those kernels. Production significance belongs to `helpers/significance.py`.
+
 For an extraction, identify the actual boundary first: array layout, casts,
 reduction order, JIT scope, device placement, buffer ownership and returned
 statistics. Preserve those contracts during structural cleanup. The
