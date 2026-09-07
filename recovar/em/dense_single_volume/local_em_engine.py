@@ -390,6 +390,7 @@ EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB = 0.0
 EXACT_LOCAL_PROJECTOR_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_PROJECTOR_CAPACITY"
 EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY"
 EXACT_LOCAL_NOISE_STABLE_CORE_ENV = "RECOVAR_EXACT_LOCAL_NOISE_STABLE_CORE"
+EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_NOISE_NORM_CAPACITY"
 EXACT_LOCAL_HOST_PLAN_PACK_ENV = "RECOVAR_EXACT_LOCAL_HOST_PLAN_PACK"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS = 64_000_000
@@ -2064,6 +2065,22 @@ def _local_noise_stable_core_requested() -> bool:
     if token not in {"0", "1"}:
         raise ValueError(f"{EXACT_LOCAL_NOISE_STABLE_CORE_ENV} must be 0 or 1")
     return token == "1"
+
+
+def _local_noise_norm_capacity_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _noise_norm_capacity(n_images: int, *, enabled: bool) -> int:
+    """Keep the global norm carry from specializing each packed noise bucket.
+
+    This pads only a scalar per-image accumulator, never image/pose batches.
+    Logical indices remain unchanged; publication crops the unused zero tail.
+    """
+    return ((n_images + 1023) // 1024) * 1024 if enabled else n_images
 
 
 def _local_host_plan_pack_requested() -> bool:
@@ -4507,6 +4524,14 @@ def run_local_em_exact(
         stable_fourier_window_shapes and packed_final_noise_enabled
     ):
         raise ValueError("separate noise core requires stable packed final-noise execution")
+    noise_norm_capacity_enabled = _local_noise_norm_capacity_requested()
+    if noise_norm_capacity_enabled and not (
+        stable_fourier_window_shapes
+        and defer_packed_vdam_enabled
+        and packed_final_noise_enabled
+        and accumulate_noise
+    ):
+        raise ValueError("noise norm capacity requires stable deferred packed final-noise accumulation")
     if fixed_capacity_whole_boundary_enabled and not fixed_capacity_enabled:
         raise ValueError(
             "fixed-capacity whole-local boundary requires fixed-capacity execution"
@@ -5071,7 +5096,7 @@ def run_local_em_exact(
         )
         noise_img_power = jnp.zeros(n_shells, dtype=jnp.float32)
         noise_norm_correction = jnp.zeros(
-            n_images,
+            _noise_norm_capacity(n_images, enabled=noise_norm_capacity_enabled),
             dtype=jnp.float64 if source_faithful_spectrum_norm else jnp.float32,
         )
         noise_a2 = jnp.zeros(n_shells, dtype=jnp.float32)
@@ -9809,7 +9834,11 @@ def run_local_em_exact(
             sumw=noise_sumw_value,
             wsum_noise_a2=(noise_a2 if return_noise_split else None),
             wsum_noise_xa=(noise_xa if return_noise_split else None),
-            wsum_norm_correction=noise_norm_correction,
+            wsum_norm_correction=(
+                noise_norm_correction[:n_images]
+                if noise_norm_capacity_enabled
+                else noise_norm_correction
+            ),
             wsum_scale_correction_xa=noise_scale_xa,
             wsum_scale_correction_aa=noise_scale_aa,
         )

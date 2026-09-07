@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_big_jit
+from recovar.em.dense_single_volume import local_big_jit, local_em_engine
 
 pytestmark = pytest.mark.unit
 
@@ -337,7 +337,7 @@ def test_shared_exact_noise_preserves_wavg_cutoff_wiring(monkeypatch):
     np.testing.assert_array_equal(np.asarray(with_wavg[-1]), np.asarray(debug))
 
 
-def _call_deferred_wrapper(inputs):
+def _call_deferred_wrapper(inputs, *, source_faithful_spectrum_norm=True):
     return local_big_jit.run_deferred_local_exact_noise_jit(
         *(
             inputs[name]
@@ -382,7 +382,7 @@ def _call_deferred_wrapper(inputs):
         stable_fourier_window_shapes=False,
         include_unweighted_norm_high_shell=True,
         use_relion_cuda_powerclass_spectrum=False,
-        source_faithful_spectrum_norm=True,
+        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         accumulate_scale_correction=True,
         return_noise_split=True,
         use_relion_wavg_cutoff=False,
@@ -400,6 +400,57 @@ def _legacy_deferred_outputs(inputs):
         inputs["bucket_image_indices"]
     ].add(local[6])
     return (*local[:6], global_norm, *local[7:9])
+
+
+@pytest.mark.parametrize("dtype", (jnp.float32, jnp.float64))
+def test_norm_capacity_reuses_noise_executable_and_preserves_logical_carries(dtype):
+    function = local_big_jit.run_deferred_local_exact_noise_jit
+    carry_names = (
+        "noise_wsum", "noise_img_power", "noise_a2", "noise_xa",
+        "noise_scale_xa", "noise_scale_aa", "noise_norm_correction",
+        "noise_sigma2_offset", "noise_sumw",
+    )
+    function.clear_cache()
+    seen_capacities = set()
+    seen_shapes = set()
+    try:
+        for n_images in (200, 208, 272, 1000, 1024, 1025, 2000):
+            capacity = local_em_engine._noise_norm_capacity(n_images, enabled=True)
+            assert 0 <= capacity - n_images < 1024
+            inputs = _make_noise_inputs(32)
+            # Nonzero existing carries and repeated, non-prefix image indices.
+            inputs["noise_norm_correction"] = jnp.arange(n_images, dtype=dtype) / 8
+            inputs["bucket_image_indices"] = jnp.asarray(
+                (np.arange(32) // 2 * 17 + n_images - 1) % n_images,
+                dtype=jnp.int32,
+            )
+            padded = dict(inputs)
+            padded["noise_norm_correction"] = jnp.pad(
+                inputs["noise_norm_correction"], (0, capacity - n_images)
+            )
+            for _ in range(2):
+                expected = _call_deferred_wrapper(inputs, source_faithful_spectrum_norm=dtype == jnp.float64)
+                seen_shapes.add(n_images)
+                before = function._cache_size()
+                actual = _call_deferred_wrapper(padded, source_faithful_spectrum_norm=dtype == jnp.float64)
+                assert function._cache_size() == before + (capacity not in seen_shapes)
+                seen_shapes.add(capacity)
+                seen_capacities.add(capacity)
+                for index, (got, want) in enumerate(zip(actual, expected, strict=True)):
+                    assert got.dtype == want.dtype
+                    if index == 6:
+                        assert got.shape == (capacity,) and want.shape == (n_images,)
+                        np.testing.assert_array_equal(np.asarray(got[:n_images]), np.asarray(want))
+                        np.testing.assert_array_equal(np.asarray(got[n_images:]), np.zeros(capacity - n_images))
+                    else:
+                        assert got.shape == want.shape
+                        np.testing.assert_array_equal(np.asarray(got), np.asarray(want))
+                inputs.update(zip(carry_names, expected, strict=True))
+                padded.update(zip(carry_names, actual, strict=True))
+        assert seen_capacities == {1024, 2048}
+        assert function._cache_size() == len(seen_shapes)
+    finally:
+        function.clear_cache()
 
 
 def test_deferred_exact_noise_wrapper_has_one_boundary_and_b42_b32_cache_keys():
