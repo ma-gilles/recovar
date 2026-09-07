@@ -44,6 +44,10 @@ source identities when incorporating evidence into a future PR.
 | Sixteen historical scorecard CLIs | `df09caa3b`; validators and renderers unchanged; 88 tests, 32 help checks and 32 pinned-report checks passed without site packages, Slurm13565574 |
 | Exhaustive orientation-test memory | `7f8200e09`; blocked comparison matches dense float32/float64 results exactly; all 32 cases pass with the original angular gate, 592640 KiB peak RSS, Slurm13565654 |
 | Direct local-search dependencies | 79 cases passed, Slurm13566158; planner/kernel bindings and numerical AST unchanged; tests migrated to the modules that call each dependency |
+| Contributor workflow map and development navigation | `3a7c26863`; guide links, strict docs and four rendered development pages passed, Slurm13566512 |
+| Unused controller constant copies | `bebd22faf`; 27 cache, batch and fine-grid cases passed, Slurm13566781; active owner values unchanged |
+| Shared diagnostic original-image mapping | `352681db9`; 10 dump-targeting tests and 36 exact mapping/precedence/error comparisons passed, Slurm13567159 |
+| Remaining hash-helper importers | `159059131`; three missed script imports caused collection failure in Slurm13567024; after migration, three tests, three CLI helps and collection of 6,708 non-GUI tests passed, Slurm13567239 |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance
@@ -88,10 +92,22 @@ as a repaired control, never as the unchanged PR158 source.
 
 ## Next check
 
-The initial structural series through `430f46325` is frozen for three paired
-cold synthetic K1 comparisons in Slurm13564282, followed by audit13564283.
-Subsequent structural commits have their own focused checks; that frozen run
-does not establish end-to-end qualification for later source revisions.
+The initial structural series through `430f46325` passed three paired cold
+synthetic K1 comparisons in Slurm13564282/audit13564283. All eight compared
+controller fields agree; all 81 direct map curves pass, with minimum FSC-AUC
+0.999999989582. Pairwise wall-time changes are -0.415%, +0.253% and -0.835%.
+Peak host-RSS changes are +0.055%, +3.505% and +11.772%; the last pair retains
+the existing memory-regression warning. All six memory traces are admissible,
+but these capture-enabled runs do not qualify ordinary execution performance.
+Subsequent structural commits have their own focused checks; these results
+do not establish end-to-end qualification for later source revisions.
+
+The corrected source `159059131` is frozen for broad CPU inventory job13567313.
+The inventory excludes three deferred GUI files and one test whose existing
+production call can delete a shared `/tmp` directory. The five known GPU-only
+cases without markers remain in the unchanged CPU selection; their failures
+must be recorded explicitly. The earlier import-failed attempt13567024 is
+preserved. This selection is not full-suite or GitHub-hosted CI qualification.
 The separate K-class correctness decision is pending. Two
 unchanged-PR158 real-data repeats are running in Slurm13562724, with comparison
 job13562837, to test repeatability before attributing the earlier candidate's

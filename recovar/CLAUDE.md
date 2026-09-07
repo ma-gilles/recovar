@@ -103,14 +103,32 @@ Pipeline stores `grid_size//2 - 1` shells (63 for 128^3). Ground truth has `grid
 
 ### Batch iteration
 ```python
-for batch in dataset.iter_batches(batch_size):
-    images, metadata_batch = batch
-    # metadata_batch has .rotation_matrices, .ctf_params, .translations, etc.
+for (
+    images, rotation_matrices, translations, ctf_params,
+    noise_variance, particle_indices, image_indices,
+) in dataset.iter_batches(batch_size, by_image=True):
+    original_ids = dataset.original_image_indices_from_local(image_indices)
+    ...
 ```
+
+`CryoEMDataset.iter_batches` yields seven explicit fields. Image indices are
+local to the dataset; use its mapper when a diagnostic needs original image
+identity. `by_image=False` selects particle-grouped iteration for tilt series;
+inspect the caller's group and noise-indexing requirements before changing it.
 
 ### Forward model
 ```python
-config = ForwardModelConfig(image_shape=..., volume_shape=..., ctf=ctf_eval, ...)
-projected = forward_model(config, volume, batch_data)        # volume → images
-backprojected = adjoint_forward_model(config, images, batch_data)  # images → volume
+from recovar.core.configs import ForwardModelConfig
+from recovar.core.forward import forward_model, adjoint_forward_model
+
+config = ForwardModelConfig.from_dataset(dataset, disc_type="linear_interp")
+projected_ft = forward_model(config, volume_ft, ctf_params, rotation_matrices)
+backprojected_ft = adjoint_forward_model(
+    config, projected_ft, ctf_params, rotation_matrices,
+)
 ```
+
+These default calls use full, centered Fourier arrays and apply the CTF at the
+supplied rotations. Image preprocessing and translation correction belong to
+the calling workflow. Inspect `half_image` and `half_volume` when using packed
+layouts; do not pass raw real-space images as Fourier slices.

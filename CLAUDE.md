@@ -40,6 +40,9 @@ Engineering priorities are correctness, GPU performance, then clarity.
 - Remove private dead code only after checking callers, dynamic registration,
   CLI entry points, tests, notebooks and serialized/imported names. Keep
   independent numerical references independent of production code.
+- For shared-helper extraction, trace imports through dependent modules as
+  well as direct call sites. Collect the applicable test inventory before a
+  broad run; testing only the edited modules can miss a retired re-export.
 - Validate assumptions early. Do not hide errors with fallback results, skipped
   checks or fabricated success. Resolve TODOs with evidence before removing them.
 - Keep math documentation linked to implementing functions, and docstrings
