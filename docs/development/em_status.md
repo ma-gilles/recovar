@@ -73,6 +73,7 @@ source identities when incorporating evidence into the draft or later results.
 | Replay sampling dependencies | `cbfbcdc8c`; 12 tests and 90 exact K1/K2/K4/K8/K16 grid/value/dtype/error comparisons passed, Slurm13585641; shared grid policy now belongs to sampling |
 | Metadata sampling dependencies and dead Euler-grid helper | `1bb616533`; 17 tests passed, Slurm13586745; retained numerical AST unchanged; 53 implementation helper modules have no direct controller imports |
 | Dense/local output interfaces | `03aa2dde2`; 133 tests passed, Slurm13587342, plus 120 exact K1/K2/K4/K8/K16 two-half mutation/return/error comparisons; list identities and normalized controller AST unchanged |
+| Unused controller imports and ineffective test stubs | `dbada1eb5`; 23 tests passed, Slurm13588076; four unused aliases removed; tests now patch active call-site dependencies; retained executable controller AST unchanged |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance

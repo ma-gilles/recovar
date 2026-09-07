@@ -43,6 +43,16 @@ or a new class that merely stores every local variable does not solve this.
 | Shared pipeline orchestration | `commands/pipeline.py` and domain modules | Keep loading, covariance/PPCA, embedding and output ownership explicit. Preserve non-EM public APIs and serialized results. Validate the affected shared workflows at a source checkpoint. |
 | Historical experiment scripts | `scripts/`, shared JSON/hash and scorecard helpers | Retain independent numerical references. Remove or consolidate only after reviewing imports, CLI entry points, notebooks and serialized names; preserve recorded reproduction commands. |
 
+A read-only trace of the existing two-iteration CPU test at `dbada1eb5`
+(Slurm13588500) finds live accumulator references after the controller's cleanup
+boundary. `PerHalfOutputs` still holds both halves; the last-half result and
+payload aliases survive into the next iteration's first scoring call. The test
+passes and source hashes remain unchanged. Tracing may affect reclamation;
+these named-reference observations do not measure GPU memory or prove an OOM.
+The trace, source identity and eight distinct binding snapshots are preserved
+in the review directory under `structural_cleanup/result_lifetime_probe/`.
+Changing these lifetimes requires separate measurement and validation.
+
 Do not combine these into a single executor rewrite. Each change should state
 its input/output ownership, preserve the relevant executable behavior, and
 carry focused caller checks. Move to larger scientific workloads after those
