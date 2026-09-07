@@ -397,6 +397,7 @@ EXACT_LOCAL_HOST_PLAN_PACK_ENV = "RECOVAR_EXACT_LOCAL_HOST_PLAN_PACK"
 EXACT_LOCAL_HOST_PUBLICATION_ENV = "RECOVAR_EXACT_LOCAL_HOST_PUBLICATION"
 EXACT_LOCAL_BPREF_TRANSACTION_ENV = "RECOVAR_EXACT_LOCAL_BPREF_TRANSACTION"
 EXACT_LOCAL_BPREF_PARTICLE_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_BPREF_PARTICLE_CAPACITY"
+EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV = "RECOVAR_EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS = 64_000_000
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS_ENV = (
@@ -2126,6 +2127,13 @@ def _local_bpref_particle_capacity_requested() -> bool:
     token = os.environ.get(EXACT_LOCAL_BPREF_PARTICLE_CAPACITY_ENV, "0").strip()
     if token not in {"0", "1"}:
         raise ValueError(f"{EXACT_LOCAL_BPREF_PARTICLE_CAPACITY_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_skip_deferred_zero_norm_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV} must be 0 or 1")
     return token == "1"
 
 
@@ -4588,6 +4596,7 @@ def run_local_em_exact(
         raise ValueError("BPref transactions require deferred packed final-noise execution")
     host_plan_pack_enabled = _local_host_plan_pack_requested()
     host_publication_enabled = _local_host_publication_requested()
+    skip_deferred_zero_norm = _local_skip_deferred_zero_norm_requested()
     if host_publication_enabled and not defer_packed_vdam_enabled:
         raise ValueError("host publication requires deferred packed VDAM execution")
     if host_plan_pack_enabled and not (
@@ -6843,7 +6852,11 @@ def run_local_em_exact(
                         )
                     ),
                 )
-            if accumulate_noise:
+            # Deferred BigJIT returns float32 zero norm rows without computing
+            # noise. The later deferred noise path owns the real update.
+            if accumulate_noise and not (
+                skip_deferred_zero_norm and return_big_jit_deferred_mstep_inputs
+            ):
                 noise_norm_correction = noise_norm_correction.at[jnp.asarray(bucket_image_indices, dtype=jnp.int32)].add(
                     bucket_norm_correction[:unpadded_batch_size],
                 )

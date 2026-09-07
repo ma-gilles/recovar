@@ -8978,6 +8978,87 @@ def test_run_local_em_exact_over_cap_significant_support_defaults_to_deferred_bi
     _assert_noise_stats_allclose(deferred[4], sparse[4])
 
 
+@pytest.mark.parametrize("deferred", [False, True])
+@pytest.mark.parametrize("spectrum_norm", [False, True])
+def test_skip_deferred_zero_norm_preserves_real_local_outputs(monkeypatch, rng, deferred, spectrum_norm):
+    import jax
+    from recovar.em.dense_single_volume import local_em_engine as engine
+
+    case = _sparse_big_jit_local_case(rng)
+    for key in ("RECOVAR_LOCAL_SCORE_DUMP_DIR", "RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES",
+                "RECOVAR_DISABLE_LOCAL_BIG_JIT", EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv(EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV, "0" if deferred else "1000")
+    original = engine._invoke_local_bucket_big_jit
+    captured = []
+
+    def observe(*args, **kwargs):
+        result = original(*args, **kwargs)
+        # Inspect the real compiled return, not a simulated zero operand.
+        assert kwargs["return_deferred_mstep_inputs"] is deferred
+        assert kwargs["accumulate_noise"] is (not deferred)
+        norm = np.asarray(result[8])
+        assert norm.dtype == np.dtype(np.float64 if spectrum_norm and not deferred else np.float32)
+        if deferred:
+            assert norm.tobytes() == np.zeros_like(norm).tobytes()
+        else:
+            assert np.any(norm != 0)
+        captured.append(norm.copy())
+        return result
+
+    monkeypatch.setattr(engine, "_invoke_local_bucket_big_jit", observe)
+    original_stats = engine.make_noise_stats
+    raw_norms = []
+
+    def observe_stats(**kwargs):
+        raw = np.asarray(kwargs["wsum_norm_correction"])
+        assert raw.dtype == np.dtype(np.float64 if spectrum_norm else np.float32)
+        raw_norms.append(raw.copy())
+        return original_stats(**kwargs)
+
+    monkeypatch.setattr(engine, "make_noise_stats", observe_stats)
+    results = []
+    for enabled in ("0", "1"):
+        monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, enabled)
+        results.append(engine.run_local_em_exact(
+            *case, "linear_interp", image_batch_size=2, rotation_block_size=8,
+            current_size=6, accumulate_noise=True, reconstruct_significant_only=True,
+            return_profile=True, score_with_masked_images=False,
+            half_spectrum_scoring=False, max_significants=-1,
+            source_faithful_spectrum_norm=spectrum_norm,
+        ))
+    assert len(captured) == 4  # Two real buckets in each treatment.
+    assert all(int(result[-1]["big_jit_bucket_count"]) == 2 for result in results)
+    assert np.any(np.asarray(results[0][4].wsum_norm_correction) != 0)
+    # Public NoiseStats casts to float32; compare the raw carry before that cast.
+    assert len(raw_norms) == 2 and raw_norms[0].tobytes() == raw_norms[1].tobytes()
+    assert results[0][4].wsum_norm_correction.dtype == np.dtype(np.float32)
+    first, first_tree = jax.tree_util.tree_flatten(results[0][:-1])
+    second, second_tree = jax.tree_util.tree_flatten(results[1][:-1])
+    assert first_tree == second_tree
+    for left, right in zip(first, second, strict=True):
+        left, right = np.asarray(left), np.asarray(right)
+        assert left.dtype == right.dtype and left.shape == right.shape
+        assert left.tobytes() == right.tobytes()
+
+
+@pytest.mark.parametrize("token, expected", [(None, False), ("0", False), ("1", True), (" 1 ", True)])
+def test_skip_deferred_zero_norm_selector(monkeypatch, token, expected):
+    from recovar.em.dense_single_volume import local_em_engine as engine
+    monkeypatch.delenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, raising=False)
+    if token is not None:
+        monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, token)
+    assert engine._local_skip_deferred_zero_norm_requested() is expected
+
+
+@pytest.mark.parametrize("token", ["", "2", "true", "false", "-1"])
+def test_skip_deferred_zero_norm_rejects_invalid_selector(monkeypatch, token):
+    from recovar.em.dense_single_volume import local_em_engine as engine
+    monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, token)
+    with pytest.raises(ValueError, match="RECOVAR_EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM"):
+        engine._local_skip_deferred_zero_norm_requested()
+
+
 def test_run_local_em_exact_deferred_big_jit_no_noise_matches_sparse_big_jit(monkeypatch, rng):
     dataset, mean, mean_variance, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
     kwargs = dict(
