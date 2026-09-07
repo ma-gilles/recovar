@@ -68,8 +68,8 @@ def _safe_k_class_replay_batch_plan(
 ) -> _ReplayBatchPlan:
     """Mirror the main RELION replay loop's K-class microbatch planner."""
 
-    from recovar.em.dense_single_volume.batch_planning import _estimate_relion_em_batch_sizes
-    from recovar.em.dense_single_volume.firstiter_cc import (
+    from recovar.em.dense_single_volume.batch_planning import (
+        _estimate_relion_em_batch_sizes,
         _safe_dense_k_class_rotation_block_size,
         _safe_firstiter_cc_image_batch_size,
     )

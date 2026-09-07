@@ -49,6 +49,12 @@ _EM_RAW_IMAGE_CACHE_MAX_GB_ENV = "RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB"
 _EM_RAW_IMAGE_CACHE_DEFAULT_MAX_GB = 16.0
 
 
+# Dense reconstruction-tile and class-hypothesis limits.
+RELION_FIRSTITER_RECON_COMPLEX_BUDGET = 268_435_456
+RELION_FIRSTITER_RECON_COMPLEX_BUDGET_ENV = "RECOVAR_RELION_FIRSTITER_RECON_COMPLEX_BUDGET"
+RELION_DENSE_K_CLASS_HYPOTHESES_BUDGET = 2_000_000
+
+
 @dataclass(frozen=True)
 class _RelionEMBatchPlan:
     image_batch_size: int
@@ -66,6 +72,181 @@ class _RelionEMBatchPlan:
     pose_pixel_tile_gb: float
     translation_tile_gb: float
     score_pixel_count: int
+
+
+def _firstiter_cc_recon_complex_budget() -> int:
+    raw = os.environ.get(RELION_FIRSTITER_RECON_COMPLEX_BUDGET_ENV)
+    if raw is None or raw.strip() == "":
+        return int(RELION_FIRSTITER_RECON_COMPLEX_BUDGET)
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{RELION_FIRSTITER_RECON_COMPLEX_BUDGET_ENV} must be a positive integer") from exc
+    if value <= 0:
+        raise ValueError(f"{RELION_FIRSTITER_RECON_COMPLEX_BUDGET_ENV} must be a positive integer")
+    return value
+
+
+def _safe_firstiter_cc_image_batch_size(n_trans, image_shape):
+    """Cap dense K-class reconstruction batches by the temporary footprint.
+
+    ``prepare_reconstruction_batch`` materializes a
+    ``batch_size × n_trans × n_half`` complex tensor before any class or
+    pose masking can trim anything.  The generic score-tensor budget does
+    not account for that temporary, so dense K-class runs that keep
+    ``score_with_masked_images=True`` need a separate clamp.  The
+    first-iteration winner-take-all route is the most obvious case, but
+    the same bound also protects later dense K-class iterations that reuse
+    the same reconstruction path.
+    """
+
+    n_half = int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
+    return max(1, _firstiter_cc_recon_complex_budget() // max(int(n_trans) * n_half, 1))
+
+
+def _safe_dense_k_class_rotation_block_size(n_trans, image_batch_size):
+    """Cap dense K-class rotation buckets by a microbatch hypothesis budget.
+
+    The dense K-class adaptive probe still has to evaluate a dense (batch,
+    rotation, translation) tensor in its big-JIT path.  RELION's own
+    bucketed pass2 code keeps similar hypothesis tensors under a ~2e6
+    per-microbatch ceiling, so mirror that bound here to keep the probe
+    memory-safe without changing the score math.
+    """
+
+    return max(
+        64,
+        RELION_DENSE_K_CLASS_HYPOTHESES_BUDGET // max(int(image_batch_size) * max(int(n_trans), 1), 1),
+    )
+
+
+@dataclass(frozen=True)
+class _AdaptiveDenseBatchSizes:
+    """Separate dense batch plans for adaptive pass 1 and pass 2."""
+
+    pass2_image_batch_size: int
+    pass2_rotation_block_size: int
+    significance_image_batch_size: int
+    significance_rotation_block_size: int
+
+
+def _plan_adaptive_dense_batch_sizes(
+    *,
+    n_rot: int,
+    n_trans: int,
+    n_classes: int,
+    image_shape,
+    cs_for_engine,
+    coarse_cs,
+    k_class_enabled: bool,
+    safe_batch_sizes,
+) -> _AdaptiveDenseBatchSizes:
+    """Plan adaptive dense microbatches from each pass' Fourier window."""
+
+    pass2_image_batch_size, pass2_rotation_block_size = safe_batch_sizes(
+        n_rot,
+        n_trans,
+        classes=n_classes,
+        image_shape_for_batch=image_shape,
+        current_size_for_batch=cs_for_engine,
+    )
+    if k_class_enabled:
+        pass2_image_batch_size = min(
+            pass2_image_batch_size,
+            _safe_firstiter_cc_image_batch_size(
+                n_trans,
+                image_shape,
+            ),
+        )
+        pass2_rotation_block_size = min(
+            pass2_rotation_block_size,
+            _safe_dense_k_class_rotation_block_size(
+                n_trans,
+                pass2_image_batch_size,
+            ),
+        )
+
+    significance_image_batch_size, significance_rotation_block_size = safe_batch_sizes(
+        n_rot,
+        n_trans,
+        classes=n_classes,
+        image_shape_for_batch=image_shape,
+        current_size_for_batch=coarse_cs,
+    )
+    return _AdaptiveDenseBatchSizes(
+        pass2_image_batch_size=int(pass2_image_batch_size),
+        pass2_rotation_block_size=int(pass2_rotation_block_size),
+        significance_image_batch_size=int(significance_image_batch_size),
+        significance_rotation_block_size=int(significance_rotation_block_size),
+    )
+
+
+def _plan_kclass_adaptive_grid_batch_sizes(
+    *,
+    coarse_rotations,
+    coarse_translations,
+    fine_rotations,
+    fine_translations,
+    n_classes: int,
+    image_shape,
+    coarse_current_size,
+    fine_current_size,
+    safe_batch_sizes,
+) -> _AdaptiveDenseBatchSizes:
+    """Plan K-class adaptive pass-1/pass-2 batches from the actual grids."""
+
+    pass2_image_batch_size, pass2_rotation_block_size = safe_batch_sizes(
+        int(np.asarray(fine_rotations).shape[0]),
+        int(np.asarray(fine_translations).shape[0]),
+        classes=n_classes,
+        image_shape_for_batch=image_shape,
+        current_size_for_batch=fine_current_size,
+    )
+    pass2_image_batch_size = min(
+        pass2_image_batch_size,
+        _safe_firstiter_cc_image_batch_size(
+            int(np.asarray(fine_translations).shape[0]),
+            image_shape,
+        ),
+    )
+    if int(n_classes) > 1:
+        pass2_rotation_block_size = min(
+            pass2_rotation_block_size,
+            _safe_dense_k_class_rotation_block_size(
+                int(np.asarray(fine_translations).shape[0]),
+                pass2_image_batch_size,
+            ),
+        )
+
+    significance_image_batch_size, significance_rotation_block_size = safe_batch_sizes(
+        int(np.asarray(coarse_rotations).shape[0]),
+        int(np.asarray(coarse_translations).shape[0]),
+        classes=n_classes,
+        image_shape_for_batch=image_shape,
+        current_size_for_batch=coarse_current_size,
+    )
+    significance_image_batch_size = min(
+        significance_image_batch_size,
+        _safe_firstiter_cc_image_batch_size(
+            int(np.asarray(coarse_translations).shape[0]),
+            image_shape,
+        ),
+    )
+    if int(n_classes) > 1:
+        significance_rotation_block_size = min(
+            significance_rotation_block_size,
+            _safe_dense_k_class_rotation_block_size(
+                int(np.asarray(coarse_translations).shape[0]),
+                significance_image_batch_size,
+            ),
+        )
+
+    return _AdaptiveDenseBatchSizes(
+        pass2_image_batch_size=int(pass2_image_batch_size),
+        pass2_rotation_block_size=int(pass2_rotation_block_size),
+        significance_image_batch_size=int(significance_image_batch_size),
+        significance_rotation_block_size=int(significance_rotation_block_size),
+    )
 
 
 def _safe_int(value, default):

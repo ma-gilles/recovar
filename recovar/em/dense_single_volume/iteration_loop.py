@@ -28,17 +28,17 @@ from recovar.em.dense_single_volume.batch_planning import (
     _estimate_relion_em_batch_sizes,
     _image_backend,
     _maybe_cache_raw_image_loaders,
+    _plan_adaptive_dense_batch_sizes,
+    _plan_kclass_adaptive_grid_batch_sizes,
+    _safe_dense_k_class_rotation_block_size,
+    _safe_firstiter_cc_image_batch_size,
 )
 from recovar.em.dense_single_volume.em_engine import run_em
 from recovar.em.dense_single_volume.frozen_boundary import (
     _assert_frozen_scoring_state_unchanged,
     _frozen_scoring_state_arrays,
 )
-from recovar.em.dense_single_volume.firstiter_cc import (
-    _build_firstiter_cc_pass2_grids,
-    _safe_dense_k_class_rotation_block_size,
-    _safe_firstiter_cc_image_batch_size,
-)
+from recovar.em.dense_single_volume.firstiter_cc import _build_firstiter_cc_pass2_grids
 from recovar.em.dense_single_volume.helpers.convergence import (
     LOCAL_SEARCH_HEALPIX_ORDER,
     RefinementState,
@@ -1657,135 +1657,6 @@ def _record_score_profile(
         }
     )
     profile_history.append(row)
-
-
-@dataclass(frozen=True)
-class _AdaptiveDenseBatchSizes:
-    """Separate dense batch plans for adaptive pass 1 and pass 2."""
-
-    pass2_image_batch_size: int
-    pass2_rotation_block_size: int
-    significance_image_batch_size: int
-    significance_rotation_block_size: int
-
-
-def _plan_adaptive_dense_batch_sizes(
-    *,
-    n_rot: int,
-    n_trans: int,
-    n_classes: int,
-    image_shape,
-    cs_for_engine,
-    coarse_cs,
-    k_class_enabled: bool,
-    safe_batch_sizes,
-) -> _AdaptiveDenseBatchSizes:
-    """Plan adaptive dense microbatches from each pass' Fourier window."""
-
-    pass2_image_batch_size, pass2_rotation_block_size = safe_batch_sizes(
-        n_rot,
-        n_trans,
-        classes=n_classes,
-        image_shape_for_batch=image_shape,
-        current_size_for_batch=cs_for_engine,
-    )
-    if k_class_enabled:
-        pass2_image_batch_size = min(
-            pass2_image_batch_size,
-            _safe_firstiter_cc_image_batch_size(
-                n_trans,
-                image_shape,
-            ),
-        )
-        pass2_rotation_block_size = min(
-            pass2_rotation_block_size,
-            _safe_dense_k_class_rotation_block_size(
-                n_trans,
-                pass2_image_batch_size,
-            ),
-        )
-
-    significance_image_batch_size, significance_rotation_block_size = safe_batch_sizes(
-        n_rot,
-        n_trans,
-        classes=n_classes,
-        image_shape_for_batch=image_shape,
-        current_size_for_batch=coarse_cs,
-    )
-    return _AdaptiveDenseBatchSizes(
-        pass2_image_batch_size=int(pass2_image_batch_size),
-        pass2_rotation_block_size=int(pass2_rotation_block_size),
-        significance_image_batch_size=int(significance_image_batch_size),
-        significance_rotation_block_size=int(significance_rotation_block_size),
-    )
-
-
-def _plan_kclass_adaptive_grid_batch_sizes(
-    *,
-    coarse_rotations,
-    coarse_translations,
-    fine_rotations,
-    fine_translations,
-    n_classes: int,
-    image_shape,
-    coarse_current_size,
-    fine_current_size,
-    safe_batch_sizes,
-) -> _AdaptiveDenseBatchSizes:
-    """Plan K-class adaptive pass-1/pass-2 batches from the actual grids."""
-
-    pass2_image_batch_size, pass2_rotation_block_size = safe_batch_sizes(
-        int(np.asarray(fine_rotations).shape[0]),
-        int(np.asarray(fine_translations).shape[0]),
-        classes=n_classes,
-        image_shape_for_batch=image_shape,
-        current_size_for_batch=fine_current_size,
-    )
-    pass2_image_batch_size = min(
-        pass2_image_batch_size,
-        _safe_firstiter_cc_image_batch_size(
-            int(np.asarray(fine_translations).shape[0]),
-            image_shape,
-        ),
-    )
-    if int(n_classes) > 1:
-        pass2_rotation_block_size = min(
-            pass2_rotation_block_size,
-            _safe_dense_k_class_rotation_block_size(
-                int(np.asarray(fine_translations).shape[0]),
-                pass2_image_batch_size,
-            ),
-        )
-
-    significance_image_batch_size, significance_rotation_block_size = safe_batch_sizes(
-        int(np.asarray(coarse_rotations).shape[0]),
-        int(np.asarray(coarse_translations).shape[0]),
-        classes=n_classes,
-        image_shape_for_batch=image_shape,
-        current_size_for_batch=coarse_current_size,
-    )
-    significance_image_batch_size = min(
-        significance_image_batch_size,
-        _safe_firstiter_cc_image_batch_size(
-            int(np.asarray(coarse_translations).shape[0]),
-            image_shape,
-        ),
-    )
-    if int(n_classes) > 1:
-        significance_rotation_block_size = min(
-            significance_rotation_block_size,
-            _safe_dense_k_class_rotation_block_size(
-                int(np.asarray(coarse_translations).shape[0]),
-                significance_image_batch_size,
-            ),
-        )
-
-    return _AdaptiveDenseBatchSizes(
-        pass2_image_batch_size=int(pass2_image_batch_size),
-        pass2_rotation_block_size=int(pass2_rotation_block_size),
-        significance_image_batch_size=int(significance_image_batch_size),
-        significance_rotation_block_size=int(significance_rotation_block_size),
-    )
 
 
 @dataclass(frozen=True)
