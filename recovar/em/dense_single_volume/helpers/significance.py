@@ -14,6 +14,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers.batch_fetch import original_image_indices
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_int_set
 from recovar.em.dense_single_volume.helpers.projection import compute_projections_block
 from recovar.em.dense_single_volume.helpers.scoring import (
@@ -688,18 +689,6 @@ def _significance_debug_dump_matches(*, current_size, debug_iteration) -> bool:
     return True
 
 
-def _original_indices_for_local(experiment_dataset, local_indices) -> np.ndarray:
-    """Map local batch image indices to original image ids for debug dumps."""
-    local_indices = np.asarray(local_indices, dtype=np.int64)
-    mapper = getattr(experiment_dataset, "original_image_indices_from_local", None)
-    if mapper is not None:
-        return np.asarray(mapper(local_indices), dtype=np.int64)
-    original_indices_all = getattr(experiment_dataset, "dataset_indices", None)
-    if original_indices_all is None:
-        return local_indices
-    return np.asarray(original_indices_all, dtype=np.int64)[local_indices]
-
-
 def _maybe_dump_tree_rescore_batch(
     *,
     experiment_dataset,
@@ -736,7 +725,7 @@ def _maybe_dump_tree_rescore_batch(
     target_original_indices = parse_env_int_set(
         "RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES"
     )
-    batch_original_indices = _original_indices_for_local(experiment_dataset, indices)
+    batch_original_indices = original_image_indices(experiment_dataset, indices)
     ambiguous_original_indices = batch_original_indices[
         np.asarray(ambiguous_rows, dtype=np.int64)
     ]
@@ -854,7 +843,7 @@ def _maybe_dump_k_class_significance_batch(
     target_iteration = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_ITERATION")
 
     local_indices = np.asarray(indices, dtype=np.int64)
-    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
+    original_indices = original_image_indices(experiment_dataset, local_indices)
 
     os.makedirs(dump_dir, exist_ok=True)
     n_rot = int(rotations.shape[0])
@@ -2271,7 +2260,7 @@ def _compute_k_class_significance_batched(
             _dump_targets = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
             if _dump_targets:
                 _local_for_dump = np.asarray(indices, dtype=np.int64)
-                _orig = _original_indices_for_local(experiment_dataset, _local_for_dump)
+                _orig = original_image_indices(experiment_dataset, _local_for_dump)
                 _positions = np.flatnonzero(np.isin(_orig, np.fromiter(_dump_targets, dtype=np.int64)))
                 if _positions.size:
                     dump_target_local_positions = _positions.astype(np.int64)

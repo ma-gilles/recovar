@@ -47,7 +47,7 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
 )
-from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
+from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch, original_image_indices
 from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
     compact_capture_requested_for_original_indices,
     compact_capture_requested_particle_count,
@@ -448,18 +448,6 @@ def _k1_pass2_dump_progress(
     return sum(path.is_file() for path in expected_paths), len(expected_paths)
 
 
-def _original_indices_for_local(experiment_dataset, local_indices) -> np.ndarray:
-    """Map local batch image indices to original image ids for debug dumps."""
-    local_indices = np.asarray(local_indices, dtype=np.int64)
-    mapper = getattr(experiment_dataset, "original_image_indices_from_local", None)
-    if mapper is not None:
-        return np.asarray(mapper(local_indices), dtype=np.int64)
-    original_indices_all = getattr(experiment_dataset, "dataset_indices", None)
-    if original_indices_all is None:
-        return local_indices
-    return np.asarray(original_indices_all, dtype=np.int64)[local_indices]
-
-
 def _bpref_contribution_target_rows(experiment_dataset, image_indices) -> np.ndarray:
     """Return bucket rows selected by the optional frozen original-index target."""
 
@@ -474,7 +462,7 @@ def _bpref_contribution_target_rows(experiment_dataset, image_indices) -> np.nda
         [int(value.strip()) for value in target_raw.split(",") if value.strip()],
         dtype=np.int64,
     )
-    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
+    original_indices = original_image_indices(experiment_dataset, local_indices)
     return np.flatnonzero(np.isin(original_indices, targets)).astype(np.int64, copy=False)
 
 
@@ -1121,7 +1109,7 @@ def _maybe_dump_bpref_contribution_rows(
         )
 
     local_indices = np.asarray(image_indices, dtype=np.int64)
-    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
+    original_indices = original_image_indices(experiment_dataset, local_indices)
     image_identities = _bpref_image_identities_for_original_indices(original_indices)
     stack_sha256 = _bpref_required_stack_checksum()
     selected_particle_rows = _bpref_contribution_target_rows(
@@ -8690,7 +8678,7 @@ def _maybe_dump_k1_bpref_rotation_mass(
     context_half = int(_bpref_contribution_context["half"])
 
     local_indices = np.asarray(image_indices, dtype=np.int64)
-    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
+    original_indices = original_image_indices(experiment_dataset, local_indices)
     counts = np.asarray(actual_counts, dtype=np.int64)
     rotations_np = np.asarray(rotations, dtype=np.float32)
     rotation_indices_np = np.asarray(rotation_indices, dtype=np.int64)
@@ -8876,7 +8864,7 @@ def _maybe_dump_pass2_bucket(
     if target_iteration and context_iteration != int(target_iteration):
         return 0
     local_indices = np.asarray(image_indices, dtype=np.int64)
-    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
+    original_indices = original_image_indices(experiment_dataset, local_indices)
 
     wanted_rows = [i for i, original_idx in enumerate(original_indices) if int(original_idx) in target_original_indices]
     if not wanted_rows:
@@ -9593,7 +9581,7 @@ def _maybe_dump_norm_residual_inputs(
         atomic_rectangle_shells_np.size,
     ):
         raise ValueError("ordinary Wavg rectangle diff2 topology changed")
-    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
+    original_indices = original_image_indices(experiment_dataset, local_indices)
     os.makedirs(dump_dir, exist_ok=True)
     context_half = int(_bpref_contribution_context["half"])
     size_label = -1 if current_size is None else int(current_size)
@@ -9723,7 +9711,7 @@ def _write_chunked_scale_aa_dump(
     if target_rows.size == 0:
         return 0
     local_indices = np.asarray(image_indices, dtype=np.int64)
-    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
+    original_indices = original_image_indices(experiment_dataset, local_indices)
     group_ids = np.asarray(bucket_group_ids, dtype=np.int64)[target_rows]
     scales = np.asarray(bucket_scale_for_stats, dtype=np.float32)[target_rows]
     mask = np.asarray(scale_correction_pixel_mask, dtype=bool).reshape(-1)
@@ -10063,7 +10051,7 @@ def _maybe_dump_k_class_pass2_bucket(
         return 0
 
     local_indices = np.asarray(image_indices, dtype=np.int64)
-    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
+    original_indices = original_image_indices(experiment_dataset, local_indices)
     wanted_rows = [i for i, original_idx in enumerate(original_indices) if int(original_idx) in target_original_indices]
     if not wanted_rows:
         return 0
@@ -10510,7 +10498,7 @@ def _pass2_dump_target_rows(
             return np.empty((0,), dtype=np.int64)
 
     local_indices = np.asarray(image_indices, dtype=np.int64)
-    original_indices = _original_indices_for_local(experiment_dataset, local_indices)
+    original_indices = original_image_indices(experiment_dataset, local_indices)
     return np.flatnonzero(
         np.isin(
             original_indices,
@@ -10649,7 +10637,7 @@ def _relion_exact_ctf_half_from_source_star(
         }
         _RELION_EXACT_CTF_SOURCE_CACHE[cache_key] = cache
 
-    original_indices = _original_indices_for_local(
+    original_indices = original_image_indices(
         experiment_dataset,
         np.asarray(image_indices, dtype=np.int64),
     )
@@ -12912,7 +12900,7 @@ def compute_pass2_stats_sparse_bucketed(
                     jnp.ones_like(global_max_posterior),
                     jnp.zeros_like(global_max_posterior),
                 )
-            bucket_original_indices = _original_indices_for_local(
+            bucket_original_indices = original_image_indices(
                 experiment_dataset,
                 image_indices,
             )
@@ -14402,7 +14390,7 @@ def compute_pass2_stats_sparse_bucketed(
             elif use_relion_x_half_mstep:
                 recon_window_indices_for_dump = jnp.arange(int(n_half), dtype=jnp.int32)
         if probs is not None:
-            bucket_original_indices = _original_indices_for_local(
+            bucket_original_indices = original_image_indices(
                 experiment_dataset,
                 image_indices,
             )
@@ -15220,7 +15208,7 @@ def compute_pass2_stats_sparse_bucketed(
                 context_iteration = int(_bpref_contribution_context["iteration"])
                 context_half = int(_bpref_contribution_context["half"])
                 local_rows = np.arange(n_images, dtype=np.int64)
-                original_rows = _original_indices_for_local(experiment_dataset, local_rows)
+                original_rows = original_image_indices(experiment_dataset, local_rows)
                 norm_dump_path = os.path.join(
                     norm_dump_dir,
                     f"recovar_wavg_norm_it{context_iteration:03d}_half{context_half}.npz",
