@@ -39,6 +39,12 @@ for the corresponding numbered RELION iterations. Each group also contains
 final products. Preserve this offset when joining the groups. Curve samples
 retain their original order and values; no smoothing or interpolation was used.
 
+An [additional particle-field audit](particle_fields_audit.json) compares all
+37 explicitly image-ordered fields in the two result archives. Recorded
+pose/support decisions agree exactly. Pmax differences have maximum 0.000155002
+and largest per-field p95 0.0000503063. This extends the recorded-field evidence;
+it does not compare all candidate scores or accumulator states.
+
 ## Reproduction
 
 Create separate checkouts at the two full commits in `run_record.json`, install

@@ -48,6 +48,9 @@ source identities when incorporating evidence into a future PR.
 | Unused controller constant copies | `bebd22faf`; 27 cache, batch and fine-grid cases passed, Slurm13566781; active owner values unchanged |
 | Shared diagnostic original-image mapping | `352681db9`; 10 dump-targeting tests and 36 exact mapping/precedence/error comparisons passed, Slurm13567159 |
 | Remaining hash-helper importers | `159059131`; three missed script imports caused collection failure in Slurm13567024; after migration, three tests, three CLI helps and collection of 6,708 non-GUI tests passed, Slurm13567239 |
+| Canonical EM helper and PPCA bridge imports | `6ebaf5fad`; 32 focused tests and non-GUI collection passed, Slurm13569139; controller computations unchanged |
+| Versioned K1 run archive | `02e5d79ec`; 84 fixture identities and 189 losslessly converted FSC curves; archive integrity and strict docs build passed |
+| Shared dense/local translation-prior center | `be1f2913e`; 7 existing caller tests, 48 exact value/dtype/error comparisons and non-GUI collection passed, Slurm13569721 |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance
@@ -90,7 +93,7 @@ prepared one-line policy repair is held outside this structural series pending
 its separate correctness decision. Label any baseline containing that repair
 as a repaired control, never as the unchanged PR158 source.
 
-## Next check
+## Checkpoint results and next checks
 
 The initial structural series through `430f46325` passed three paired cold
 synthetic K1 comparisons in Slurm13564282/audit13564283. All eight compared
@@ -102,21 +105,84 @@ but these capture-enabled runs do not qualify ordinary execution performance.
 Subsequent structural commits have their own focused checks; these results
 do not establish end-to-end qualification for later source revisions.
 
-The corrected source `159059131` is frozen for broad CPU inventory job13567313.
-The inventory excludes three deferred GUI files and one test whose existing
-production call can delete a shared `/tmp` directory. The five known GPU-only
-cases without markers remain in the unchanged CPU selection; their failures
-must be recorded explicitly. The earlier import-failed attempt13567024 is
-preserved. This selection is not full-suite or GitHub-hosted CI qualification.
-The separate K-class correctness decision is pending. Two
-unchanged-PR158 real-data repeats are running in Slurm13562724, with comparison
-job13562837, to test repeatability before attributing the earlier candidate's
-trajectory difference to a source change. The two repeats share an allocated
-H100; its UUID differs from the original control, which the report must retain.
+Source `159059131` passed a further cold K1 case25 pair in
+Slurm13567539/audit13567540. All eight compared controller fields match and all
+27 direct map curves pass; minimum FSC-AUC is 0.999999998203. Wall time changed
+by +0.081%, GPU peak by 0%, and host RSS by +1.561%. The
+[versioned archive](evidence/k1-case25-20260907/README.md) preserves the commands,
+fixture identities, measurements and shellwise curves. An additional audit of
+37 explicitly image-ordered fields found exact recorded pose/support decisions;
+maximum Pmax difference was 0.000155002 and the largest per-field p95 difference
+was 0.0000503063. This still does not compare all candidate scores or accumulators.
 
-Finish the baseline/evidence review, then freeze a candidate for the applicable
-shared and EM regression workloads. Larger executor extraction and the new
-engine remain later work. Keep numerical fixes separate until approved.
+The broad CPU inventory at `159059131` finished in Slurm13567313 with 6,355
+passed, 337 skipped and 15 failed. It excludes three deferred GUI files and one
+test whose existing production call can delete a shared `/tmp` directory.
+Ten failures reproduce on unchanged PR158 in comparisons13569182/13569637;
+the other five are known GPU-only diagnostic cases. All eight GPU-dependent
+failures pass on frozen source `be1f2913e` in Slurm13569842 with a verified CUDA
+library. The remaining failures concern unavailable cluster tools, one float32
+comparison and the separately proposed K-class undefined-variable repair.
+No tolerance or test marker was changed. This is not full-suite or hosted-CI
+qualification; the original import-failed attempt13567024 is also preserved.
+
+Both unchanged-PR158 real-data repeats in Slurm13562724 emitted 16 numbered
+iterations on the same physical H100. Audit13562837 fails the unchanged 0.995
+direct-map gate starting at iteration 8; final merged FSC-AUC is 0.964376533.
+All eight compared controller fields agree. A separate audit of 69 image-ordered
+fields finds the first support/Pmax differences at iteration 2, and two images
+change translations by 0.5 pixel at iteration 3. The cause is unresolved.
+This negative control means a single real-data candidate mismatch cannot be
+attributed to cleanup alone. The structural real-data pair at `be1f2913e` is
+running in Slurm13569949, with audit13569953; it remains diagnostic until the
+baseline's repeatability is understood.
+
+The no-intermediate-capture K1 study at `be1f2913e` completed seven trajectories
+in Slurm13570225; audit13570230 completed its comparison but exits 2 because
+one of three control/candidate pairs fails particle-level gates. All final-map
+and reference gates pass, and all eight controller fields agree. The failed
+pair changes one support count at iteration 7 and exceeds the existing Pmax
+limit at iterations 7 and 8. Comparing the existing repeats requires no further
+GPU execution: all three unchanged-source repeat pairs pass the recorded-field
+contract, while the first candidate differs from both later candidate runs at
+image 685's iteration-7 support count. This is unresolved; it does not establish
+that the structural changes caused the variation or qualify the candidate.
+
+The capture/no-capture calibration passes the recorded quality contract.
+All seven memory traces have no sampling errors or unrelated GPU processes.
+Candidate wall-time changes are +4.789%, +6.711% and +6.101%; sampled host-RSS
+changes are -10.676%, +4.723% and -0.996%. The unchanged-source calibration itself
+has +10.709% sampled host RSS despite -0.421% GNU-time process high-water RSS.
+These are distinct memory measurements; neither cancels the other. The failed
+particle gate prevents a performance-qualified result. Stage timing remains
+enabled, and this single case does not qualify broader workloads.
+
+The older mixed K16 comparison13561074 fails its historical RELION gate. Its
+legacy direct-comparison report passes aggregate thresholds, but one particle
+changes class and pose at iteration 5. Competing score margins were not
+captured, so strict equivalence is not established. The older K4 pair remains
+queued; neither old result qualifies the selected structural revision.
+
+Shared SPA and cryo-ET 50k/128 regression tests pass in jobs13569618/13569619
+at frozen source `6ebaf5fad`. The first external inventory audit fails because
+the committed baselines retain ten retired aliases for metrics now emitted
+under canonical names. Historical commits establish those aliases, and every
+alias equals its canonical baseline value. Audit-only job13570324 verifies all
+16 distinct required quality metrics pass in each workload, plus four finite
+local-resolution measurements without historical baselines. Source, library
+and baseline contents remain unchanged; no GPU workload was rerun for this audit.
+
+Historical performance comparisons retain warnings over 10%, including dataset
+generation, metrics, cryo-ET state computation and recorded stage GPU memory.
+These stage memory values are the existing endpoint/cumulative measurements,
+not independently sampled process peaks. The runs do not establish paired
+performance qualification. Outlier/downstream and remaining shared checks are
+still outstanding.
+
+Complete these comparisons and classify failures before larger executor
+extraction. The K-class correctness, workflow and benchmark-validation proposals
+remain outside this series pending their separate decisions. New-engine work
+remains a later milestone.
 
 The [historical program](../math/em_parity_program.md),
 [parity notes](../math/relion_parity_agent_notes.md) and
