@@ -22,6 +22,7 @@ import jax.numpy as jnp
 import recovar.core.fourier_transform_utils as ftu
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 import recovar.em.dense_single_volume.local_layout as local_layout_module
+import recovar.em.dense_single_volume.relion_metadata as relion_metadata_module
 import recovar.em.dense_single_volume.relion_replay as relion_replay_module
 import recovar.em.sampling as sampling_module
 import recovar.reconstruction.regularization as regularization_module
@@ -91,9 +92,6 @@ from recovar.em.dense_single_volume.iteration_loop import (
 from recovar.em.dense_single_volume.mean_helpers import (
     _align_fourier_volume_sign_to_reference,
     _combined_noise_stats,
-)
-from recovar.em.dense_single_volume.relion_metadata import (
-    _rotation_eulers_for_canonical_or_custom_grid,
 )
 from recovar.em.dense_single_volume.relion_replay import _replay_control_model_iteration
 from recovar.em.dense_single_volume.k_class import (
@@ -13632,21 +13630,6 @@ class TestRelionDefault:
         assert captured["n_classes"] == 4
         assert captured["init_group_count"] == [7, 8]
 
-    def test_canonical_rotation_grid_reuses_relion_euler_table(self, monkeypatch):
-        """The auto-refine setup path must not convert canonical grids via SciPy."""
-        order = 1
-        canonical_rotations = np.asarray(get_relion_rotation_grid(order), dtype=np.float32)
-        expected_eulers = np.asarray(get_relion_rotation_grid_eulers(order), dtype=np.float32)
-
-        def fail_r_to_relion(*_args, **_kwargs):
-            raise AssertionError("generic R_to_relion should not be called for canonical grids")
-
-        monkeypatch.setattr(iteration_loop_module.utils, "R_to_relion", fail_r_to_relion)
-
-        got = _rotation_eulers_for_canonical_or_custom_grid(canonical_rotations, order)
-        np.testing.assert_allclose(got, expected_eulers, rtol=0.0, atol=0.0)
-
-
 # ===========================================================================
 # Test 3: Local search oversampling regression
 # ===========================================================================
@@ -14153,6 +14136,11 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
     monkeypatch.setattr(
         refine_mod,
+        "_get_relion_rotation_grid_eulers_float64",
+        lambda order: fake_get_grid_eulers(order).astype(np.float64),
+    )
+    monkeypatch.setattr(
+        relion_metadata_module,
         "_get_relion_rotation_grid_eulers_float64",
         lambda order: fake_get_grid_eulers(order).astype(np.float64),
     )

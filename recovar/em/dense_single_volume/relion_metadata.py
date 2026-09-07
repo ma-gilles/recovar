@@ -1,10 +1,4 @@
-"""RELION metadata helpers used by the dense single-volume iteration loop.
-
-These helpers manipulate per-image RELION metadata (translations, rotation
-grids, radial shell counts) and depend on the iteration_loop's namespace
-(via ``_il``) for symbols that test fixtures monkeypatch at
-``recovar.em.dense_single_volume.iteration_loop``.
-"""
+"""RELION translation, rotation-grid and noise-shell metadata helpers."""
 
 from __future__ import annotations
 
@@ -13,6 +7,10 @@ import numpy as np
 from recovar.core import fourier_transform_utils
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
     relion_translation_search_base,
+)
+from recovar.em.sampling import (
+    _get_relion_rotation_grid_eulers_float64,
+    _relion_mstep_rotations_from_eulers,
 )
 
 
@@ -51,34 +49,14 @@ def _relion_half_plane_shell_counts(image_shape):
 
 def _relion_rotation_grid_float32(healpix_order: int):
     """Return scorer matrices/eulers using RELION's accelerated-path policy."""
-    # Indirection through iteration_loop module so test monkeypatches on
-    # ``iteration_loop.get_relion_rotation_grid`` / ``get_relion_rotation_grid_eulers``
-    # win at the call site.
-    from recovar.em.dense_single_volume import iteration_loop as _il
-
     order = int(healpix_order)
-    source_eulers = _il._get_relion_rotation_grid_eulers_float64(order)
+    source_eulers = _get_relion_rotation_grid_eulers_float64(order)
     eulers = source_eulers.astype(np.float32)
     # RELION's accelerated expectation path constructs inverse projector
     # matrices on the host in RFLOAT precision, casts to XFLOAT, then copies
     # them to the device.  Preserve source Euler precision until that cast.
-    from recovar.em.sampling import _relion_mstep_rotations_from_eulers
-
     rotations = _relion_mstep_rotations_from_eulers(source_eulers)
     return rotations, eulers
-
-
-def _rotation_eulers_for_canonical_or_custom_grid(rotations: np.ndarray, healpix_order: int) -> np.ndarray:
-    """Avoid expensive matrix->Euler conversion for canonical RELION grids."""
-    from recovar.em.dense_single_volume import iteration_loop as _il
-
-    rotations = np.asarray(rotations, dtype=np.float32)
-    order = int(healpix_order)
-    if rotations.shape[0] == _il.rotation_grid_size(order):
-        canonical_rotations, canonical_eulers = _relion_rotation_grid_float32(order)
-        if np.allclose(rotations, canonical_rotations, rtol=0.0, atol=1e-6):
-            return canonical_eulers
-    return _il.utils.R_to_relion(np.asarray(rotations), degrees=True).astype(np.float32)
 
 
 def _radial_profile_from_noise_variance(noise_variance, image_shape):

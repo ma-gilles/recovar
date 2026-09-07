@@ -4,7 +4,6 @@ import inspect
 
 import numpy as np
 
-from recovar.em.dense_single_volume import iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume import relion_metadata
 from recovar.em.sampling import (
     _relion_adaptive_pass1_rotations_f32,
@@ -264,7 +263,7 @@ def test_unperturbed_scorer_and_mstep_share_host_generated_path():
 def test_relion_global_grid_preserves_source_euler_precision_until_matrix_cast(monkeypatch):
     source_eulers = _UNPERTURBED_FINE_EULERS_F64[:2]
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_metadata,
         "_get_relion_rotation_grid_eulers_float64",
         lambda _order: source_eulers,
     )
