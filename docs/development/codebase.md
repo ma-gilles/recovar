@@ -62,6 +62,12 @@ The controller still has its own active `build_local_hypothesis_layout` binding
 for adaptive parent-layout construction. Patch the call site exercised by the
 test; do not add reverse imports merely to preserve an old monkeypatch location.
 
+Unused constant copies in `iteration_loop` have also been retired. Batch and
+raw-image-cache limits belong to `batch_planning`; first-iteration reconstruction
+and dense K-class hypothesis budgets belong to `firstiter_cc`; the fine-grid
+precomputation limit belongs to `local_search_iteration`. Their values and
+environment overrides are unchanged.
+
 For an extraction, identify the actual boundary first: array layout, casts,
 reduction order, JIT scope, device placement, buffer ownership and returned
 statistics. Preserve those contracts during structural cleanup. The
