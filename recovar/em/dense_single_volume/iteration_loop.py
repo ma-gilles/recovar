@@ -1593,7 +1593,19 @@ def _collapse_single_class_stats_to_coarse(stats, *, rot_parent_map, n_rot_coars
 
 @dataclass
 class HalfScoreResult:
-    """Per-half scoring output shared by the dense scoring branches."""
+    """Scoring result for one halfset, from a dense or local engine.
+
+    Per-image fields follow the halfset dataset's local image order. ``ha``
+    encodes pose assignments in the scoring grid; adaptive paths may also
+    provide ``coarse_ha`` and explicit best poses for downstream pose export.
+    Class assignments and class posterior summaries are written separately
+    into ``PerHalfOutputs`` by the K-class scoring adapters.
+
+    Accumulators retain the engine's layout and device until reconstruction
+    or explicit host offloading. Interpret them with ``mstep_full_half_axis``
+    and ``mstep_accumulator_shape``; K-class results retain their class axis.
+    This container does not copy arrays or standardize their precision.
+    """
 
     # Always populated by every scoring branch.
     ha: np.ndarray
@@ -1778,7 +1790,19 @@ def _plan_kclass_adaptive_grid_batch_sizes(
 
 @dataclass(frozen=True)
 class PerHalfOutputs:
-    """Mutable per-half E-step outputs grouped behind one owner."""
+    """Own the two halfset slots used during one scoring phase.
+
+    Every field is a separate two-element list indexed by halfset (0 or 1),
+    including fields whose names start with ``class_``. Per-image arrays stay
+    in each halfset's local order; the two halfsets may have different sizes.
+    Class counts and class/rotation summaries live inside their halfset slot.
+    Unpopulated slots are ``None``; an empty scored half can hold empty arrays.
+
+    ``frozen=True`` prevents rebinding fields, while scoring adapters mutate
+    their lists. The controller deliberately aliases these lists. ``update_from``
+    stores the common scoring payload; K-class adapters separately populate
+    class assignments, posterior summaries and per-class noise statistics.
+    """
 
     hard_assignments: list
     Ft_y: list
@@ -1826,33 +1850,39 @@ class PerHalfOutputs:
             mstep_accumulator_shape=[None, None],
         )
 
-    def update_from(self, idx: int, hs: HalfScoreResult) -> None:
-        self.hard_assignments[idx] = hs.ha
-        self.Ft_y[idx] = hs.Ft_y
-        self.Ft_ctf[idx] = hs.Ft_ctf
-        self.noise_stats[idx] = hs.noise_stats
-        self.max_posterior[idx] = np.asarray(
-            hs.em_stats.max_posterior_per_image,
+    def update_from(self, half_index: int, score_result: HalfScoreResult) -> None:
+        """Store one half's payload, retaining arrays except for posterior casts.
+
+        Missing optional pose fields leave existing slot values intact. Layout
+        metadata is always replaced, including ``None``. Class-specific fields
+        are owned by the scoring adapter and remain untouched here.
+        """
+        self.hard_assignments[half_index] = score_result.ha
+        self.Ft_y[half_index] = score_result.Ft_y
+        self.Ft_ctf[half_index] = score_result.Ft_ctf
+        self.noise_stats[half_index] = score_result.noise_stats
+        self.max_posterior[half_index] = np.asarray(
+            score_result.em_stats.max_posterior_per_image,
             dtype=np.float32,
         )
-        self.rotation_posterior[idx] = np.asarray(
-            hs.em_stats.rotation_posterior_sums,
+        self.rotation_posterior[half_index] = np.asarray(
+            score_result.em_stats.rotation_posterior_sums,
             dtype=np.float32,
         )
-        if hs.best_pose_rotations is not None:
-            self.best_pose_rotations[idx] = hs.best_pose_rotations
-        if hs.best_pose_rotation_eulers is not None:
-            self.best_pose_rotation_eulers[idx] = hs.best_pose_rotation_eulers
-        if hs.best_pose_translations is not None:
-            self.best_pose_translations[idx] = hs.best_pose_translations
-        if hs.coarse_ha is not None:
-            self.coarse_ha[idx] = hs.coarse_ha
-        if hs.pose_rotations is not None:
-            self.pose_rotations[idx] = hs.pose_rotations
-        if hs.pose_rotation_eulers is not None:
-            self.pose_rotation_eulers[idx] = hs.pose_rotation_eulers
-        self.mstep_full_half_axis[idx] = hs.mstep_full_half_axis
-        self.mstep_accumulator_shape[idx] = hs.mstep_accumulator_shape
+        if score_result.best_pose_rotations is not None:
+            self.best_pose_rotations[half_index] = score_result.best_pose_rotations
+        if score_result.best_pose_rotation_eulers is not None:
+            self.best_pose_rotation_eulers[half_index] = score_result.best_pose_rotation_eulers
+        if score_result.best_pose_translations is not None:
+            self.best_pose_translations[half_index] = score_result.best_pose_translations
+        if score_result.coarse_ha is not None:
+            self.coarse_ha[half_index] = score_result.coarse_ha
+        if score_result.pose_rotations is not None:
+            self.pose_rotations[half_index] = score_result.pose_rotations
+        if score_result.pose_rotation_eulers is not None:
+            self.pose_rotation_eulers[half_index] = score_result.pose_rotation_eulers
+        self.mstep_full_half_axis[half_index] = score_result.mstep_full_half_axis
+        self.mstep_accumulator_shape[half_index] = score_result.mstep_accumulator_shape
 
 
 def _host_offload_array(value):
