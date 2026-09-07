@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any
 
 import jax.numpy as jnp
 import matplotlib
@@ -16,20 +15,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from recovar.core import fourier_transform_utils as ftu
-
-
-def _jsonable(value: Any):
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, np.ndarray):
-        return _jsonable(value.tolist())
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Path):
-        return str(value)
-    return value
+from recovar.utils.json_utils import to_jsonable
 
 
 def _half_to_real(half_volume, volume_shape):
@@ -128,8 +114,8 @@ def plot_iteration_maps(*, init_npz: Path, run_dir: Path, output_dir: Path, volu
         "W_rms": W_rms,
     }
     summary_path = output_dir / "summary.json"
-    summary_path.write_text(json.dumps(_jsonable(summary), indent=2, sort_keys=True) + "\n")
-    return _jsonable(summary)
+    summary_path.write_text(json.dumps(to_jsonable(summary), indent=2, sort_keys=True) + "\n")
+    return to_jsonable(summary)
 
 
 def _parse_args():

@@ -13,20 +13,7 @@ import numpy as np
 
 from recovar.core import fourier_transform_utils as ftu
 from recovar.em.ppca_refinement.initialization import real_volume_to_centered_fourier_half
-
-
-def _jsonable(value: Any):
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, np.ndarray):
-        return _jsonable(value.tolist())
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Path):
-        return str(value)
-    return value
+from recovar.utils.json_utils import to_jsonable
 
 
 def _half_shell_labels(volume_shape) -> np.ndarray:
@@ -140,8 +127,8 @@ def prepare_gt_mean_random_w_init(
         "max_relative_shell_power_error_all_shells": float(np.max(rel_err)) if rel_err.size else 0.0,
         "shell_power_error_significance_threshold": "max(1e-8 * component_max_shell_power, 1e-12)",
     }
-    (output_dir / "summary.json").write_text(json.dumps(_jsonable(summary), indent=2, sort_keys=True) + "\n")
-    return _jsonable(summary)
+    (output_dir / "summary.json").write_text(json.dumps(to_jsonable(summary), indent=2, sort_keys=True) + "\n")
+    return to_jsonable(summary)
 
 
 def _parse_args() -> argparse.Namespace:

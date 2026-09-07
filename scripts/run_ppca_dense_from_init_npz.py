@@ -42,20 +42,7 @@ from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
 from recovar.em.sampling import get_rotation_grid_at_order, get_translation_grid
 from recovar.reconstruction import noise as recon_noise
 from recovar.utils import helpers
-
-
-def _jsonable(value: Any):
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, np.ndarray):
-        return _jsonable(value.tolist())
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Path):
-        return str(value)
-    return value
+from recovar.utils.json_utils import to_jsonable
 
 
 def _load_noise_variance(simulation_info: str | Path | None, image_shape) -> np.ndarray:
@@ -398,7 +385,7 @@ def _run_with_halfset_fsc_schedule(
             "resolution_increased": bool(rec.resolution_decision.allow_increase),
             "gate_reasons": list(rec.resolution_decision.reasons),
             "pose_change_fraction": float(rec.resolution_decision.pose_change_fraction),
-            "diagnostics": _jsonable(rec.diagnostics),
+            "diagnostics": to_jsonable(rec.diagnostics),
         }
         iter_summaries.append(rec_summary)
         print(json.dumps(rec_summary, indent=2, sort_keys=True), flush=True)
@@ -501,8 +488,8 @@ def _run_with_halfset_fsc_schedule(
         "output_dir": str(output_dir),
         "final_npz": str(final_npz),
     }
-    (output_dir / "summary.json").write_text(json.dumps(_jsonable(summary), indent=2, sort_keys=True) + "\n")
-    print(json.dumps(_jsonable(summary), indent=2, sort_keys=True))
+    (output_dir / "summary.json").write_text(json.dumps(to_jsonable(summary), indent=2, sort_keys=True) + "\n")
+    print(json.dumps(to_jsonable(summary), indent=2, sort_keys=True))
 
 
 def _parse_args() -> argparse.Namespace:
@@ -1147,7 +1134,7 @@ def main() -> None:
         if gt_pose_diagnostics is not None:
             iter_summary["gt_pose_diagnostics"] = gt_pose_diagnostics
         iter_summaries.append(iter_summary)
-        print(json.dumps(_jsonable(iter_summary), indent=2, sort_keys=True), flush=True)
+        print(json.dumps(to_jsonable(iter_summary), indent=2, sort_keys=True), flush=True)
         current_mu = np.asarray(result.mu_half)
         current_W = np.asarray(result.W_half)
         volume_domain = "fourier_half"
@@ -1242,8 +1229,8 @@ def main() -> None:
         "iterations": iter_summaries,
     }
     summary_path = output_dir / "summary.json"
-    summary_path.write_text(json.dumps(_jsonable(summary), indent=2, sort_keys=True) + "\n")
-    print(json.dumps(_jsonable(summary), indent=2, sort_keys=True))
+    summary_path.write_text(json.dumps(to_jsonable(summary), indent=2, sort_keys=True) + "\n")
+    print(json.dumps(to_jsonable(summary), indent=2, sort_keys=True))
     if not summary["passed"]:
         raise SystemExit(1)
 

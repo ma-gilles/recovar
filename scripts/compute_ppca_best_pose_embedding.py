@@ -27,20 +27,7 @@ from recovar.em.ppca_refinement.dense_dataset import (
 )
 from recovar.em.sampling import get_rotation_grid_at_order, get_translation_grid
 from recovar.reconstruction import noise as noise_utils
-
-
-def _jsonable(value: Any):
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, np.ndarray):
-        return _jsonable(value.tolist())
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Path):
-        return str(value)
-    return value
+from recovar.utils.json_utils import to_jsonable
 
 
 def _load_simulation_info(path: str | Path | None) -> dict[str, Any] | None:
@@ -310,8 +297,8 @@ def compute_best_pose_embedding(
         ],
     }
     summary_path = output_dir / "summary.json"
-    summary_path.write_text(json.dumps(_jsonable(summary), indent=2, sort_keys=True) + "\n")
-    return _jsonable(summary)
+    summary_path.write_text(json.dumps(to_jsonable(summary), indent=2, sort_keys=True) + "\n")
+    return to_jsonable(summary)
 
 
 def _parse_args() -> argparse.Namespace:

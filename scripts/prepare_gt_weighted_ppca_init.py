@@ -8,7 +8,6 @@ import glob
 import json
 import pickle
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
@@ -16,20 +15,7 @@ from recovar.core import fourier_transform_utils as ftu
 from recovar.em.ppca_refinement.initialization import initialize_ppca_from_gt_volumes
 from recovar.simulation import synthetic_dataset
 from recovar.utils import helpers
-
-
-def _jsonable(value: Any):
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, np.ndarray):
-        return _jsonable(value.tolist())
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Path):
-        return str(value)
-    return value
+from recovar.utils.json_utils import to_jsonable
 
 
 def _load_simulation_info(path: Path):
@@ -171,8 +157,8 @@ def prepare_gt_weighted_ppca_init(
         "written_maps": written_maps,
     }
     summary_path = output_dir / "summary.json"
-    summary_path.write_text(json.dumps(_jsonable(summary), indent=2, sort_keys=True) + "\n")
-    return _jsonable(summary)
+    summary_path.write_text(json.dumps(to_jsonable(summary), indent=2, sort_keys=True) + "\n")
+    return to_jsonable(summary)
 
 
 def _parse_args():

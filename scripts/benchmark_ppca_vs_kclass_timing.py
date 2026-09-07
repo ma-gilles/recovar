@@ -9,7 +9,6 @@ import os
 import pickle
 import time
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 
@@ -35,20 +34,7 @@ from recovar.em.ppca_refinement.initialization import (
 from recovar.em.ppca_refinement.postprocess import PostprocessConfig
 from recovar.em.sampling import get_rotation_grid_at_order, get_translation_grid
 from recovar.reconstruction import noise as recon_noise
-
-
-def _jsonable(value: Any):
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, np.ndarray):
-        return _jsonable(value.tolist())
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Path):
-        return str(value)
-    return value
+from recovar.utils.json_utils import to_jsonable
 
 
 def _load_simulation_info(path: str | Path | None):
@@ -312,7 +298,7 @@ def main() -> None:
             "kclass_class_posterior_sums": np.asarray(kclass_result.class_posterior_sums).astype(float),
         },
     }
-    text = json.dumps(_jsonable(result), indent=2, sort_keys=True) + "\n"
+    text = json.dumps(to_jsonable(result), indent=2, sort_keys=True) + "\n"
     if output is not None:
         output.write_text(text)
     print(text, end="")
