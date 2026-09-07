@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from pathlib import Path
@@ -24,6 +23,7 @@ from recovar.em.dense_single_volume.helpers.projection import (
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_fine_full_to_compact_lookup,
 )
+from recovar.utils.file_hash import sha256_file  # noqa: E402 - follows repository path setup
 from scripts.analyze_k1_exact_ppref_fine_boundary import _load_ppref
 from scripts.analyze_k1_fine_operand_tuple import (
     _largest_mismatches,
@@ -43,14 +43,6 @@ from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_c
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _float32_ulp_stats(reference: np.ndarray, candidate: np.ndarray) -> dict[str, Any]:
@@ -432,7 +424,7 @@ def analyze(
             "native_active_candidate_count": int(np.count_nonzero(active)),
             "native_active_weight_sum": native_weight_sum,
             "fine_score_path": str(fine_score_path.resolve()),
-            "fine_score_sha256": _sha256(fine_score_path),
+            "fine_score_sha256": sha256_file(fine_score_path),
         }
     return {
         "schema": "recovar.em.k1_exact_ppref_operand_tuple.v1",
@@ -498,11 +490,11 @@ def analyze(
         "native_capture_validation": capture_validation,
         "artifacts": {
             "ppref": str(ppref_path.resolve()),
-            "ppref_sha256": _sha256(ppref_path),
+            "ppref_sha256": sha256_file(ppref_path),
             "native_capture": str(capture_path.resolve()),
-            "native_capture_sha256": _sha256(capture_path),
+            "native_capture_sha256": sha256_file(capture_path),
             "recovar": str(recovar_path.resolve()),
-            "recovar_sha256": _sha256(recovar_path),
+            "recovar_sha256": sha256_file(recovar_path),
         },
     }
 

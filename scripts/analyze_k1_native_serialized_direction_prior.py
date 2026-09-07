@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from pathlib import Path
@@ -19,15 +18,8 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     make_relion_direction_log_prior,
 )
 from recovar.em.sampling import read_relion_direction_prior
+from recovar.utils.file_hash import sha256_file  # noqa: E402 - follows repository path setup
 from scripts.parse_relion_dump_dir import _read_flat_real
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _error_stats(values: np.ndarray) -> dict[str, float | int]:
@@ -97,9 +89,9 @@ def analyze(
         "raw_difference_median": float(np.median(raw_difference)),
         "artifacts": {
             "native_log_prior": str(native_log_prior_path.resolve()),
-            "native_log_prior_sha256": _sha256(native_log_prior_path),
+            "native_log_prior_sha256": sha256_file(native_log_prior_path),
             "model_star": str(model_star_path.resolve()),
-            "model_star_sha256": _sha256(model_star_path),
+            "model_star_sha256": sha256_file(model_star_path),
         },
     }
 

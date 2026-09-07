@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
@@ -26,16 +25,9 @@ from recovar.em.initial_model.dense_adapter import (
     reference_to_relion_projector_half_maps,
 )
 from recovar.utils import helpers
+from recovar.utils.file_hash import sha256_file
 from scripts.analyze_em_k1_coarse_pass1_boundary import _map_relion_table
 from scripts.analyze_k1_native_coarse_boundary import load_native_coarse_capture
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _score_margin(diff2: np.ndarray, *, winner: tuple[int, int], target: tuple[int, int]) -> float:
@@ -366,14 +358,14 @@ def analyze(
         ),
         "artifacts": {
             "native_capture": str(native_capture_path.resolve()),
-            "native_capture_sha256": _sha256(native_capture_path),
+            "native_capture_sha256": sha256_file(native_capture_path),
             "recovar_capture": str(recovar_capture_path.resolve()),
-            "recovar_capture_sha256": _sha256(recovar_capture_path),
+            "recovar_capture_sha256": sha256_file(recovar_capture_path),
             "native_map": str(native_map_path.resolve()),
-            "native_map_sha256": _sha256(native_map_path),
+            "native_map_sha256": sha256_file(native_map_path),
             "native_map_convention": native_map_convention,
             "recovar_map": str(recovar_map_path.resolve()),
-            "recovar_map_sha256": _sha256(recovar_map_path),
+            "recovar_map_sha256": sha256_file(recovar_map_path),
             "recovar_map_convention": recovar_map_convention,
         },
     }

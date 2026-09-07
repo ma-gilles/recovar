@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import struct
 from pathlib import Path
@@ -12,15 +11,8 @@ from pathlib import Path
 import numpy as np
 
 from recovar.utils import helpers
+from recovar.utils.file_hash import sha256_file
 from scripts.summarize_em_completion_bench import normalized_fsc_auc, shell_fsc
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _load_native_real(path: Path) -> np.ndarray:
@@ -58,7 +50,7 @@ def _premask_metrics(path: Path, native_recovar: np.ndarray) -> dict[str, object
         "real_dtype": str(real.dtype),
         "relative_l2": _relative_l2(real, native_recovar),
         "max_absolute": float(np.max(np.abs(real - native_recovar))),
-        "sha256": _sha256(path),
+        "sha256": sha256_file(path),
     }
 
 
@@ -107,20 +99,20 @@ def main() -> None:
                 "baseline": {
                     "relative_l2": baseline_rel,
                     "signed_fsc_auc_non_dc": _fsc_auc(baseline_map, native_map),
-                    "sha256": _sha256(baseline_map_path),
+                    "sha256": sha256_file(baseline_map_path),
                 },
                 "candidate": {
                     "relative_l2": candidate_rel,
                     "signed_fsc_auc_non_dc": _fsc_auc(candidate_map, native_map),
-                    "sha256": _sha256(candidate_map_path),
+                    "sha256": sha256_file(candidate_map_path),
                 },
                 "relative_l2_improvement_factor": baseline_rel / candidate_rel,
             },
             "native_artifacts": {
                 "reconstruction_dump": str(native_dump.resolve()),
-                "reconstruction_dump_sha256": _sha256(native_dump),
+                "reconstruction_dump_sha256": sha256_file(native_dump),
                 "numbered_map": str(native_map_path.resolve()),
-                "numbered_map_sha256": _sha256(native_map_path),
+                "numbered_map_sha256": sha256_file(native_map_path),
             },
         }
 

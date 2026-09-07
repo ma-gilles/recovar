@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import struct
 from pathlib import Path
@@ -22,6 +21,7 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _half_translation_phase_table_for_indices,
 )
+from recovar.utils.file_hash import sha256_file
 
 if __package__:
     from .validate_relion_bpref_factor_capture import (
@@ -42,14 +42,6 @@ PHYSICAL_IMAGE_SIZE = 256
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _float32_from_bits(value: int) -> np.float32:
@@ -138,7 +130,7 @@ def _contribution_locations(directory: Path, stacks: list[int]) -> tuple[dict[in
         matched = wanted.intersection(int(value) for value in shard_stacks)
         if not matched:
             continue
-        hashes[path.name] = _sha256(path)
+        hashes[path.name] = sha256_file(path)
         for stack in matched:
             rows = np.flatnonzero(shard_stacks == stack)
             _require(rows.size == 1 and stack not in locations, f"stack {stack}: duplicate contribution shard")
@@ -656,8 +648,8 @@ def compare(
         ),
         "status": "complete",
         "factor_validation": validation,
-        "selection_sha256": _sha256(selection_json),
-        "prescatter_scalar_sha256": _sha256(scalar_json),
+        "selection_sha256": sha256_file(selection_json),
+        "prescatter_scalar_sha256": sha256_file(scalar_json),
         "contribution_artifact_sha256": contribution_hashes,
         "device": str(jax.devices()[0]),
         "device_kind": str(jax.devices()[0].device_kind),

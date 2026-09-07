@@ -20,6 +20,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _half_translation_phase_table_for_indices,
     _relion_cuda_fine_full_to_compact_lookup,
 )
+from recovar.utils.file_hash import sha256_file
 
 if __package__:
     from .validate_relion_bpref_factor_capture import load_factor_pixel_capture
@@ -48,14 +49,6 @@ else:
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _array_sha256(array: np.ndarray) -> str:
@@ -662,7 +655,7 @@ def _compare_particle(
         substitutions["recovar_with_exact_boundary_reference"] = alternate_raw
         exact_boundary_counterfactual = {
             "alternate_recovar_path": str(alternate_recovar_path.resolve()),
-            "alternate_recovar_sha256": _sha256(alternate_recovar_path),
+            "alternate_recovar_sha256": sha256_file(alternate_recovar_path),
             "projected_reference": _metric(
                 native_reference[supported_full],
                 alternate_reference[supported_full],
@@ -802,11 +795,11 @@ def _compare_particle(
     return {
         "stack_index_one_based": expected_stack,
         "capture_path": str(capture_path.resolve()),
-        "capture_sha256": _sha256(capture_path),
+        "capture_sha256": sha256_file(capture_path),
         "recovar_path": str(recovar_path.resolve()),
-        "recovar_sha256": _sha256(recovar_path),
+        "recovar_sha256": sha256_file(recovar_path),
         "dump_path": str(dump_path.resolve()),
-        "dump_sha256": _sha256(dump_path),
+        "dump_sha256": sha256_file(dump_path),
         "validation": validation,
         "current_size": current_size,
         "physical_image_size": physical_image_size,

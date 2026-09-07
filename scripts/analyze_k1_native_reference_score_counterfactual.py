@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
@@ -17,6 +16,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_fine_full_to_compact_lookup,
     _relion_translation_angles_f32,
 )
+from recovar.utils.file_hash import sha256_file
 from scripts.analyze_em_k1_coarse_pass1_boundary import (
     _map_relion_table,
     _translation_permutation,
@@ -38,14 +38,6 @@ from scripts.validate_relion_coarse_pass1_components import (
 from scripts.validate_relion_coarse_pass1_components import (
     load_artifact as load_components,
 )
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _require(condition: bool, message: str) -> None:
@@ -628,16 +620,16 @@ def main() -> None:
         },
         "artifacts": {
             "components": str(args.components.resolve()),
-            "components_sha256": _sha256(args.components),
+            "components_sha256": sha256_file(args.components),
             "operands": str(args.operands.resolve()),
-            "operands_sha256": _sha256(args.operands),
+            "operands_sha256": sha256_file(args.operands),
             "recovar": str(args.recovar.resolve()),
-            "recovar_sha256": _sha256(args.recovar),
+            "recovar_sha256": sha256_file(args.recovar),
         },
     }
     if native_coarse is not None:
         report["artifacts"]["native_coarse"] = str(args.native_coarse.resolve())
-        report["artifacts"]["native_coarse_sha256"] = _sha256(args.native_coarse)
+        report["artifacts"]["native_coarse_sha256"] = sha256_file(args.native_coarse)
         report["artifacts"]["components_semantics"] = (
             "metadata_and_translation_grid_only; raw scores supplied by native_coarse"
         )
@@ -664,7 +656,7 @@ def main() -> None:
     if noise_corrected_weight is not None:
         report["noise_shell_intervention"] = {
             "report": str(args.noise_report_json.resolve()),
-            "report_sha256": _sha256(args.noise_report_json),
+            "report_sha256": sha256_file(args.noise_report_json),
             "shell_max_inclusive": args.noise_shell_max,
             "shell_factors": {str(key): value for key, value in sorted(noise_shell_factors.items())},
             "corrected_pixel_count": noise_corrected_count,

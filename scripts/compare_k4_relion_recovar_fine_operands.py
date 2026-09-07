@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import subprocess
@@ -34,6 +33,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_fine_full_to_compact_lookup,
     _relion_cuda_fine_pixel_weights,
 )
+from recovar.utils.file_hash import sha256_file
 
 if __package__:
     from .validate_relion_fine_operand_capture import (
@@ -56,14 +56,6 @@ else:
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _require_execution_gpu_uuid(expected_gpu_uuid: str) -> str:
@@ -1184,11 +1176,11 @@ def compare(
         "capture_validation": validation,
         "inputs": {
             "capture": str(capture_path.resolve()),
-            "capture_sha256": _sha256(capture_path),
+            "capture_sha256": sha256_file(capture_path),
             "pass2": str(pass2_path.resolve()),
-            "pass2_sha256": _sha256(pass2_path),
+            "pass2_sha256": sha256_file(pass2_path),
             "contribution": str(contribution_path.resolve()),
-            "contribution_sha256": _sha256(contribution_path),
+            "contribution_sha256": sha256_file(contribution_path),
         },
         "scope": {
             "stack_index_one_based": capture.stack_index,

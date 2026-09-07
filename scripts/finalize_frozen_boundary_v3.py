@@ -39,14 +39,7 @@ from recovar.em.dense_single_volume.frozen_boundary import (
     v3_source_role,
 )
 from recovar.utils import helpers
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+from recovar.utils.file_hash import sha256_file
 
 
 def _array_sha256(value) -> str:
@@ -112,7 +105,7 @@ def _validate_capture_manifest(path: Path) -> _ValidatedCapture:
         source = source.resolve()
         if source in members:
             raise ValueError(f"duplicate live-capture manifest member: {source}")
-        if not source.is_file() or _sha256(source) != digest:
+        if not source.is_file() or sha256_file(source) != digest:
             raise ValueError(f"live-capture manifest verification failed: {source}")
         members[source] = digest
     return _ValidatedCapture(path.resolve(), members)
@@ -338,9 +331,9 @@ def _validate_base_v2_state(
 
     particle_star = source_paths["particle_star"]
     completed_data = source_paths["completed_data"]
-    if base.source_star_sha256 != _sha256(particle_star):
+    if base.source_star_sha256 != sha256_file(particle_star):
         raise ValueError("base v2 particle-STAR provenance differs from v3 source")
-    if base.relion_half_star_sha256 != _sha256(source_paths["relion_half_star"]):
+    if base.relion_half_star_sha256 != sha256_file(source_paths["relion_half_star"]):
         raise ValueError("base v2 RELION half-STAR provenance differs from v3 source")
 
     fixture, fixture_optics = _particle_tables(particle_star)
@@ -815,7 +808,7 @@ def main() -> None:
                 dtype=np.float32,
             ),
             "source_sha256_names": np.asarray(source_names),
-            "source_sha256_digests": np.asarray([_sha256(source_paths[name]) for name in source_names]),
+            "source_sha256_digests": np.asarray([sha256_file(source_paths[name]) for name in source_names]),
             "source_sha256_roles": np.asarray([v3_source_role(name) for name in source_names]),
             "sampling_healpix_order": np.int32(shared_scalar("sampling_healpix_order")),
             "sampling_healpix_order_original": np.int32(shared_scalar("sampling_healpix_order_original")),
@@ -839,8 +832,8 @@ def main() -> None:
             "half2_captured_iref_sha256": np.asarray(captured_iref_sha256[1]),
             "half1_transformed_mean_sha256": np.asarray(_array_sha256(means[0])),
             "half2_transformed_mean_sha256": np.asarray(_array_sha256(means[1])),
-            "source_star_sha256": np.asarray(_sha256(source_paths["particle_star"])),
-            "relion_half_star_sha256": np.asarray(_sha256(source_paths["relion_half_star"])),
+            "source_star_sha256": np.asarray(sha256_file(source_paths["particle_star"])),
+            "relion_half_star_sha256": np.asarray(sha256_file(source_paths["relion_half_star"])),
             **sampling_arrays,
             **runtime_payload,
         }
@@ -853,7 +846,7 @@ def main() -> None:
         np.savez(stream, **payload)
         stream.flush()
         os.fsync(stream.fileno())
-    digest = _sha256(output_path)
+    digest = sha256_file(output_path)
     manifest = output_dir / FROZEN_BOUNDARY_MANIFEST
     manifest.write_text(f"{digest}  {FROZEN_BOUNDARY_FILENAME}\n", encoding="utf-8")
     loaded = load_frozen_refinement_boundary(output_dir)
@@ -864,7 +857,7 @@ def main() -> None:
         "boundary_sha256": loaded.boundary_sha256,
         "source_count": len(loaded.source_sha256),
         "live_capture_manifest": str(capture_manifest),
-        "live_capture_manifest_sha256": _sha256(capture_manifest),
+        "live_capture_manifest_sha256": sha256_file(capture_manifest),
         "map_lineage": loaded.map_lineage,
         "source_roles": loaded.source_roles,
         "projector_boundary_kind": loaded.runtime_config["projector_boundary_kind"],

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from pathlib import Path
@@ -22,6 +21,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_fine_full_to_compact_lookup,
     _relion_translation_angles_f32,
 )
+from recovar.utils.file_hash import sha256_file  # noqa: E402 - follows repository path setup
 from scripts.analyze_k1_exact_ppref_operand_tuple import _float32_ulp_stats
 from scripts.analyze_k1_fine_operand_tuple import _metric, _translation_alignment
 from scripts.validate_relion_fine_operand_capture import (
@@ -33,14 +33,6 @@ from scripts.validate_relion_fine_operand_capture import (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _scatter_compact(
@@ -228,9 +220,9 @@ def analyze(
         "native_capture_validation": validation,
         "artifacts": {
             "native_capture": str(capture_path.resolve()),
-            "native_capture_sha256": _sha256(capture_path),
+            "native_capture_sha256": sha256_file(capture_path),
             "recovar": str(recovar_path.resolve()),
-            "recovar_sha256": _sha256(recovar_path),
+            "recovar_sha256": sha256_file(recovar_path),
         },
     }
 

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import struct
 from pathlib import Path
@@ -17,20 +16,13 @@ from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_w
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_relion_projector_projections_block,
 )
+from recovar.utils.file_hash import sha256_file
 from scripts.analyze_k1_scale_aa_boundary import _native_aa_shells
 
 
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _flat(path: Path, dtype: np.dtype) -> np.ndarray:
@@ -223,11 +215,11 @@ def analyze(
         },
         "artifacts": {
             "recovar_candidates": str(recovar_candidates.resolve()),
-            "recovar_candidates_sha256": _sha256(recovar_candidates),
+            "recovar_candidates_sha256": sha256_file(recovar_candidates),
             "recovar_projector": str(recovar_projector.resolve()),
-            "recovar_projector_sha256": _sha256(recovar_projector),
+            "recovar_projector_sha256": sha256_file(recovar_projector),
             "native_components": str(native_components.resolve()),
-            "native_components_sha256": _sha256(native_components),
+            "native_components_sha256": sha256_file(native_components),
         },
         "classification": (
             "incoming PPref is causally sufficient for the AA residual"

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import struct
 import sys
@@ -26,6 +25,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_fine_diff2_sum,
     _relion_cuda_fine_full_to_compact_lookup,
 )
+from recovar.utils.file_hash import sha256_file  # noqa: E402 - follows repository path setup
 from scripts.analyze_k1_bpref_contributor_membership import match_rotations
 from scripts.analyze_k1_fine_direction_boundary import (
     _float32_key,
@@ -44,14 +44,6 @@ PPREF_HEADER_WORDS = 16
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _load_ppref(path: Path) -> tuple[np.ndarray, dict[str, Any]]:
@@ -453,18 +445,18 @@ def analyze(
         ),
         "artifacts": {
             "ppref": str(ppref_path.resolve()),
-            "ppref_sha256": _sha256(ppref_path),
+            "ppref_sha256": sha256_file(ppref_path),
             "recovar": str(recovar_path.resolve()),
-            "recovar_sha256": _sha256(recovar_path),
+            "recovar_sha256": sha256_file(recovar_path),
             "native_directory": str(native_directory.resolve()),
             "native_fine_score": (
                 None if native_fine_score_path is None else str(native_fine_score_path.resolve())
             ),
             "native_fine_score_sha256": (
-                None if native_fine_score_path is None else _sha256(native_fine_score_path)
+                None if native_fine_score_path is None else sha256_file(native_fine_score_path)
             ),
             "fine_operand": str(fine_operand_path.resolve()),
-            "fine_operand_sha256": _sha256(fine_operand_path),
+            "fine_operand_sha256": sha256_file(fine_operand_path),
             "raw_dump": None if output_npz is None else str(output_npz.resolve()),
         },
     }

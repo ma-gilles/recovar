@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -17,6 +16,7 @@ from recovar import cuda_backproject
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_translation_angles_f32,
 )
+from recovar.utils.file_hash import sha256_file
 from scripts.validate_relion_fine_operand_capture import load_fine_operand_capture
 from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
@@ -24,14 +24,6 @@ from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_c
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, Any]:
@@ -235,11 +227,11 @@ def analyze(
         ),
         "artifacts": {
             "fine_operand": str(fine_operand_path.resolve()),
-            "fine_operand_sha256": _sha256(fine_operand_path),
+            "fine_operand_sha256": sha256_file(fine_operand_path),
             "fine_score": str(fine_score_path.resolve()),
-            "fine_score_sha256": _sha256(fine_score_path),
+            "fine_score_sha256": sha256_file(fine_score_path),
             "recovar_pass2": str(pass2_path.resolve()),
-            "recovar_pass2_sha256": _sha256(pass2_path),
+            "recovar_pass2_sha256": sha256_file(pass2_path),
         },
     }
 

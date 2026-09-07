@@ -9,7 +9,6 @@ All arrays are joined by immutable particle identity and Fourier coordinate.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,6 +26,7 @@ from recovar.data_io.image_backends import (
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_translation_angles_f32,
 )
+from recovar.utils.file_hash import sha256_file
 
 if __package__:
     from .analyze_k1_bpref_factor_boundary import _pixel_coordinates, _translation_map
@@ -49,14 +49,6 @@ SCHEMA = "recovar.em.k1_bpref_primitive_boundary.v2"
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _load_live_initial_sigma2(path: Path) -> np.ndarray:
@@ -570,11 +562,11 @@ def _compare_particle(
         "factor_capture": str(factor.path.resolve()),
         "factor_capture_sha256": factor.sha256,
         "pass2_capture": str(pass2_path.resolve()),
-        "pass2_capture_sha256": _sha256(pass2_path),
+        "pass2_capture_sha256": sha256_file(pass2_path),
         "contribution_bundle": str(contribution_path.resolve()),
-        "contribution_bundle_sha256": _sha256(contribution_path),
+        "contribution_bundle_sha256": sha256_file(contribution_path),
         "operand_dump": str(dump_path.resolve()),
-        "operand_dump_sha256": _sha256(dump_path),
+        "operand_dump_sha256": sha256_file(dump_path),
         "translation_map_max_abs": translation_error,
         "recovar_scale_correction": float(rec_scale),
         "recovar_preprocess_backend": preprocess_backend,
@@ -653,13 +645,13 @@ def main() -> None:
         "metric_policy": "exact and relative-L2 intermediates; no correlation",
         "device": str(jax.devices()[0]),
         "selection_json": str(args.selection_json.resolve()),
-        "selection_sha256": _sha256(args.selection_json),
+        "selection_sha256": sha256_file(args.selection_json),
         "source_star": str(args.source_star.resolve()),
-        "source_star_sha256": _sha256(args.source_star),
+        "source_star_sha256": sha256_file(args.source_star),
         "relion_bind_module": str(Path(relion_bind.__file__).resolve()),
-        "relion_bind_module_sha256": _sha256(Path(relion_bind.__file__)),
+        "relion_bind_module_sha256": sha256_file(Path(relion_bind.__file__)),
         "live_initial_sigma2": str(args.live_initial_sigma2.resolve()),
-        "live_initial_sigma2_sha256": _sha256(args.live_initial_sigma2),
+        "live_initial_sigma2_sha256": sha256_file(args.live_initial_sigma2),
         "particle_count": len(particles),
         "particles": particles,
     }

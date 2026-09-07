@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
@@ -21,6 +20,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_fine_full_to_compact_lookup,
     _relion_translation_angles_f32,
 )
+from recovar.utils.file_hash import sha256_file
 from scripts.analyze_em_k1_coarse_pass1_boundary import (
     _map_relion_table,
     _translation_permutation,
@@ -39,14 +39,6 @@ from scripts.validate_relion_coarse_pass1_components import (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _centered_stats(candidate: np.ndarray, reference: np.ndarray, mask: np.ndarray) -> dict[str, float]:
@@ -244,11 +236,11 @@ def analyze(
         "translation_mapping": translation_mapping,
         "artifacts": {
             "ppref": str(ppref_path.resolve()),
-            "ppref_sha256": _sha256(ppref_path),
+            "ppref_sha256": sha256_file(ppref_path),
             "recovar": str(recovar_path.resolve()),
-            "recovar_sha256": _sha256(recovar_path),
+            "recovar_sha256": sha256_file(recovar_path),
             "native_components": str(native_components_path.resolve()),
-            "native_components_sha256": _sha256(native_components_path),
+            "native_components_sha256": sha256_file(native_components_path),
         },
     }
     return report
