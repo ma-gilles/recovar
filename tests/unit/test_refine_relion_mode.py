@@ -2948,7 +2948,6 @@ def test_build_local_hypothesis_layout_parent_expands_relion_coarse_support():
 def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adaptive_pass2(monkeypatch, rng):
     dataset = MockDataset(2, rng)
     captured = {}
-    rotation_log_prior = np.linspace(-0.75, 0.25, rotation_grid_size(0), dtype=np.float32)
 
     class StopAfterParentLayout(Exception):
         pass
@@ -3023,7 +3022,6 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
             disable_adjoint_y=False,
             disable_adjoint_ctf=False,
             max_significants=None,
-            state=type("State", (), {"adaptive_oversampling": 1})(),
             iteration=3,
             save_intermediates_dir=None,
             local_search_random_perturbation=0.0,
@@ -3032,7 +3030,6 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
             diagnostic_score_only=False,
             local_search_translation_prior_mode="coarse",
             replay_prior_translations=None,
-            rotation_log_prior_k=rotation_log_prior,
             class_log_priors=None,
             k_class_enabled=False,
             collect_local_search_profile=False,
@@ -3097,7 +3094,6 @@ def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch,
             disable_adjoint_y=False,
             disable_adjoint_ctf=False,
             max_significants=-1,
-            state=type("State", (), {"adaptive_oversampling": 0})(),
             iteration=3,
             save_intermediates_dir=None,
             local_search_random_perturbation=0.0,
@@ -3106,7 +3102,6 @@ def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch,
             diagnostic_score_only=False,
             local_search_translation_prior_mode="current",
             replay_prior_translations=None,
-            rotation_log_prior_k=None,
             class_log_priors=np.zeros(2, dtype=np.float32) if k_class_enabled else None,
             k_class_enabled=k_class_enabled,
             collect_local_search_profile=False,

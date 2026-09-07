@@ -191,7 +191,6 @@ def test_kclass_scatter_uses_mstep_class_mass_for_relion_priors():
         k=0,
         effective_rotations=np.repeat(np.eye(3, dtype=np.float32)[None], 3, axis=0),
         rot_pmap_for_collapse=None,
-        relion_firstiter_cc_this_iter=False,
         adaptive_os_local=0,
         noise_stats_per_half_per_class=[None],
         class_assignments=[None],
