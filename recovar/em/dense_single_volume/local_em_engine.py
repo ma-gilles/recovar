@@ -5530,6 +5530,14 @@ def run_local_em_exact(
         and not (accumulate_noise and debug_noise_dump_dir is not None)
         and not processed_half_cache_preferred
     )
+    if projector_capacity_enabled and use_relion_projector and logical_current_size == H and not use_window:
+        if bpref_projector_capacity_enabled:
+            raise ValueError("BPref projector capacity is not supported for full-box local projection")
+        # The full-box projector already occupies its maximum capacity. Keep
+        # the existing full-spectrum projection path and its pixel ordering;
+        # scientific window/DC/noise behavior must not change to admit this
+        # optimization, which only combines cropped projector shapes.
+        projector_capacity_enabled = False
     if projector_capacity_enabled and not (
         stable_window_active and use_big_jit_buckets and compact_relion_projector_big_jit
         and flat_local_rows_enabled and packed_local_projection_enabled
