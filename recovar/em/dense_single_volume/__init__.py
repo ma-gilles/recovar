@@ -1,14 +1,10 @@
-"""Dense single-volume EM subpackage.
+"""RELION-style volume refinement with dense, adaptive and exact-local routes.
 
-Provides a clean, isolated implementation of the dense homogeneous
-EM algorithm for single-volume reconstruction on a dense pose grid.
-
-Supported mode: disc_type="linear_interp", one volume, dense grid, GPU.
+The package exposes the refinement controller, K-class entry points, grouped
+options and sampling/statistics helpers. See the algorithm and ownership map
+in ``docs/math/relion_refinement_algorithm.md``.
 """
 
-from .em_engine import (
-    compute_e_step_weights as compute_e_step_weights,
-)
 from .helpers.fourier_window import (
     ALLOWED_CURRENT_SIZES as ALLOWED_CURRENT_SIZES,
 )

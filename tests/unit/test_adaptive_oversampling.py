@@ -18,10 +18,8 @@ pytest.importorskip("jax")
 import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
-from recovar.em.dense_single_volume.em_engine import (
-    compute_e_step_weights,
-    run_em,
-)
+from helpers.dense_posterior_reference import compute_e_step_weights
+from recovar.em.dense_single_volume.em_engine import run_em
 from recovar.em.dense_single_volume.helpers.oversampling import (
     _find_significant_mask_full_sort,
     _find_significant_mask_topk,
