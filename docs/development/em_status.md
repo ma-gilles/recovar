@@ -57,6 +57,7 @@ source identities when incorporating evidence into a future PR.
 | Replay/state-swap diagnostic ownership | `db9576bd6`; 28 caller tests and 122 exact variant/snapshot/mutation/error comparisons passed, Slurm13572837; variant choices work without importing the controller |
 | Frozen scoring-state integrity ownership | `05976cdf4`; two function ASTs unchanged; 74 focused tests and 44 exact payload/hash/error checks passed, Slurm13572933; final import/style check includes 100 passing cases, Slurm13572973 |
 | Pipeline downsample/cache preparation | `2531c66b3`; 22 caller tests and 50 exact callback/mutation/error comparisons passed, Slurm13573180; public API and numerical stages unchanged |
+| Shared pre-/post-join accumulator writer | `e05ca337f`; 48 caller/format tests and 144 exact payload/gate/error comparisons passed, Slurm13576398; numerical controller AST outside dump bodies unchanged |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance
@@ -137,7 +138,13 @@ iterations on the same physical H100. Audit13562837 fails the unchanged 0.995
 direct-map gate starting at iteration 8; final merged FSC-AUC is 0.964376533.
 All eight compared controller fields agree. A separate audit of 69 image-ordered
 fields finds the first support/Pmax differences at iteration 2, and two images
-change translations by 0.5 pixel at iteration 3. The cause is unresolved.
+change translations by 0.5 pixel at iteration 3. An earlier boundary is visible
+in [15 saved first-iteration arrays](evidence/real10076-repeatability-20260907/README.md):
+the four accumulator arrays differ, while the saved noise, tau2, FSC, grid and
+assignment arrays match exactly. Audit13575086 verifies all 30 original output
+hashes and leaves the files unchanged. These arrays are saved after
+reconstruction; complete live E-step input identity is not established, and the
+cause remains unresolved.
 This negative control means a single real-data candidate mismatch cannot be
 attributed to cleanup alone. The structural real-data pair at `be1f2913e` is
 running in Slurm13569949, with audit13569953; it remains diagnostic until the
