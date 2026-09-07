@@ -1,0 +1,139 @@
+{
+  "repo": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_hia_pr158_baseline_20260906",
+  "commit": "44d770de3f9336ab2f3f6a34203394bae8d1aeed",
+  "output": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_fixed_scatter_20260907",
+  "cuda_library": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_fixed_scatter_20260907/library/libcuda_backproject.so",
+  "cuda_sha256": "00cd5880d601c1f170e585722aabc8b94a8e3d83b143ae9e184992213bee8a05",
+  "packets": [
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000000_dump000000_cs048.npz",
+      "sha256": "4d30ea3bc660c72092af541c0adcfff4b555e296c6c3d4be935bbcf4f5faba56"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000001_dump000001_cs048.npz",
+      "sha256": "03b5eae7afa250e7db23595357cc344a1809ab02546ecdcd9c5c0ae26e08b627"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000002_dump000002_cs048.npz",
+      "sha256": "9964cc1b12b857cdf8246dbb97088c70835efc019f25a3c7178b07aa1ffca104"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000003_dump000003_cs048.npz",
+      "sha256": "c36f91f4b4ff0074cd62d6fc2a5ece625a6b8615b9470c7eaac92fdc9f459e42"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000004_dump000004_cs048.npz",
+      "sha256": "6ccd270c7eb00004c7dc934ed41a68ab45cd0dc76e7581605bad7e46e15cd111"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000005_dump000005_cs048.npz",
+      "sha256": "1d8f390b0a46f43f59b3aeb4f6f72c47786c4458d681c460155ed69be1d3492b"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000006_dump000006_cs048.npz",
+      "sha256": "b7e042b2076cc6ac8540d1e6bfcd8b7a82da1b5e0984ba201fee7f8e812f2fc7"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000007_dump000007_cs048.npz",
+      "sha256": "7f562ffb867851ca678313e7ce826e6760e18c764f8fddc09546efaa974472e5"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000008_dump000008_cs048.npz",
+      "sha256": "003bd813e47478da112a31b7d74f9af809c977c358f3ece31c832da163106e64"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000009_dump000009_cs048.npz",
+      "sha256": "114fb6bf35fe770f65a603c6bc30785c3140444e2a72100aee6cbda324d95b74"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000010_dump000010_cs048.npz",
+      "sha256": "702e0c76e6b694e29676fb202ee8cdd3c699022629f1df4bff446682d18f9735"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000011_dump000011_cs048.npz",
+      "sha256": "0776b8e5ddac8fc0577465ad9dbb3028fb3a8aace7a9c42cb626b11a0846ea83"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000012_dump000012_cs048.npz",
+      "sha256": "c728b0a5aab9f273bc74181564e27a520d82cc92f5c115a2cbb00cdc735fc368"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000013_dump000013_cs048.npz",
+      "sha256": "1822b6fc271f09001860582795990be404735b9573a420960387ebafed3835ec"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000014_dump000014_cs048.npz",
+      "sha256": "9786a79567ab9b4ae1c2f2140ee31f4cd12ca58677a403cecd3e84f037bc2dc3"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000015_dump000015_cs048.npz",
+      "sha256": "9315b15df94eed10ee22698d8b3e2aeb8d47dbbdf4ac2f01bda8d8038a378313"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000016_dump000016_cs048.npz",
+      "sha256": "070759bbed2553b79173e6e4d8c0e06c141e0f0d1fb333eef574884a70a75036"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000017_dump000017_cs048.npz",
+      "sha256": "ed2df40be76eb98b1ff68c670f26b99591d9773dc03f469942ebf604dc29af9b"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000018_dump000018_cs048.npz",
+      "sha256": "51e87d80027dd154b708dd7409dbd6477acf1b36d53b8aad2c12a173ed80fcdc"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000019_dump000019_cs048.npz",
+      "sha256": "220d8e04372938555f561c418703f9f111c1906ebc663ebff40baeb4d601f366"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000020_dump000020_cs048.npz",
+      "sha256": "c0b3718b1c45476848ee4e649aa638a9ceef31981c92123aebb9cbf3047de4ca"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000021_dump000021_cs048.npz",
+      "sha256": "31d3043a6416fc7d0e704a503967c0ca6af6eec37637c9f807771203093145a0"
+    },
+    {
+      "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/contributions/bpref_contribution_rows_it001_h1_call000022_dump000022_cs048.npz",
+      "sha256": "9c6a91f9dd4cc1c4cf3a19ee282c85bb3fae7cea14c2b7d5de54ff28972334e4"
+    }
+  ],
+  "prejoin": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/00_operands/prejoin/recovar_bpref_prejoin_it001.npz",
+  "audit_script": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/real10076_prescatter_operands/audit.py",
+  "half_indices": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/real10076_prescatter_operands/half1_original_indices.npy",
+  "stack_sha256": "70d0c19995221491d27c9323f21c40df27e153bdf1e783bc78c4d38fe41a9c09",
+  "capture_gpu_uuid": "GPU-75c2d200-95d1-ef57-fb52-1698386c756c",
+  "image_shape": [
+    256,
+    256
+  ],
+  "volume_shape": [
+    99,
+    99,
+    99
+  ],
+  "max_r": 24.0,
+  "rotation_dtype": "float32",
+  "particles": 5000,
+  "rotation_rows": 40000,
+  "trials": 3,
+  "launch_contract": "one production fused kernel call per particle; all actual rows retained, including zero-weight rows",
+  "capture_report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/audit/report.json",
+  "source_selection": "first capture by predeclared order, 00_operands",
+  "capture_job_id": "13579420",
+  "operand_audit_job_id": "13579421",
+  "fixed_input_job_id": "13585254",
+  "diagnostic_only": true,
+  "source_manifests": {
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_prescatter_operands_20260907/audit/report.json": "e75900dda325313d23068d92b251b58762aa5eb985e6eef540439f3e86015635",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_fixed_scatter_20260907/outcome.json": "f3a2e47fd76e56f4d88243319e0610d4ff50b8a98c6f2cf0f096ec5f3d8e9412",
+    "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/real10076_fixed_scatter/inputs.json": "73d9c8f713fb05c04ab2eece825c27eefa095b6abd6e0fbef46bc51484814512",
+    "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/real10076_fixed_scatter/replay.py": "d6089afa820aca2ed2ebd94364bbf4de0f57baff0e3b2e7f2030266c48dd8100",
+    "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/real10076_fixed_scatter/run.sbatch": "49c91a68ca939069a9922df5cf51042e53b288e7a2d7d0049676b9bbab7a7b0b",
+    "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/real10076_prescatter_operands/audit.py": "e64beca9cef003514e582aac2f366aaf670e015066c4b91795bf91b37e6b7f81"
+  },
+  "archive_files": {
+    "operand_comparison.json": "e75900dda325313d23068d92b251b58762aa5eb985e6eef540439f3e86015635",
+    "fixed_input_comparison.json": "f3a2e47fd76e56f4d88243319e0610d4ff50b8a98c6f2cf0f096ec5f3d8e9412"
+  }
+}

@@ -107,3 +107,11 @@ firstiter-CC. Preserve these limitations when selecting a replay tool.
 Capture introduces host synchronization, so diagnostic repeatability does not
 automatically qualify ordinary execution. These shortened runs cannot replace
 the complete trajectory gate.
+
+## Completed fixed-input follow-up
+
+The subsequent [operand capture and production accumulation replay](../real10076-scatter-repeatability-20260907/README.md)
+completed on unchanged PR158. Captured half-1 operands agree exactly; three
+identical-input accumulation trials produce different native outputs, including
+the warm pair. The linked archive preserves this narrower finding and its
+limitations. Its relationship to the autonomous trajectory failure remains open.

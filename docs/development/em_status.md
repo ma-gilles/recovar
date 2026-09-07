@@ -69,6 +69,9 @@ source identities when incorporating evidence into the draft or later results.
 | Numeric convergence environment overrides | `e7533f762`; 6 existing caller tests and 240 exact value/type/warning comparisons passed; parser bodies and surrounding computations unchanged |
 | Halfset output ownership | `89d901f99`; 4 existing output/offload tests passed; documentation and two local parameter names clarified, with executable AST otherwise unchanged |
 | Adaptive batch-plan ownership | `58e2069cd`; 42 tests and 160 exact K1/K2/K4/K8/K16 plan/callback/error comparisons passed, Slurm13581512; 9 moved declarations unchanged, K-class replay CLI loads, all 1,780 source hashes stable during validation |
+| Restart/replay policy ownership | `30163cdcd`; four moved function ASTs unchanged; 67 tests passed, Slurm13585434; controller and sampling bindings verified |
+| Replay sampling dependencies | `cbfbcdc8c`; 12 tests and 90 exact K1/K2/K4/K8/K16 grid/value/dtype/error comparisons passed, Slurm13585641; shared grid policy now belongs to sampling |
+| Metadata sampling dependencies and dead Euler-grid helper | `1bb616533`; 17 tests passed, Slurm13586745; retained numerical AST unchanged; 53 implementation helper modules have no direct controller imports |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance
@@ -163,12 +166,21 @@ post-join buffers exactly equal the late saved arrays. Audit13576847 verifies
 autonomous run by file hash. This narrows the next diagnostic to upstream
 scoring/accumulation without identifying the responsible kernel.
 
-The next unchanged-source capture is Slurm13579420, with dependent operand
-comparison13579421. It records all 5,000 half-1 particles in two first-iteration
-runs, preserving valid zero-weight rows and the actual scatter radius. The
-preflight checks exact STAR, dataset and shuffled half-local identities plus
-all 1,743 source and 177 fixture/mapping-file hashes. These jobs are pending;
-operand equality and repeated production-kernel output are not yet established.
+Unchanged-source capture13579420 and operand comparison13579421 completed.
+Both runs contain all 5,000 half-1 particles and 40,000 valid rotation rows in
+23 packets. All recorded scatter operands and identities match exactly.
+The pre-join data and weight arrays still differ: maximum absolute differences
+are 1.53598e-8 and 2.32831e-10, respectively. The audit verifies the sealed
+source/input/output identities. [Fixed-input replay13585254](evidence/real10076-scatter-repeatability-20260907/README.md)
+then repeats the first captured stream three times through the unchanged
+production accumulation function from fresh zeros on the same physical H100.
+Native data differ in 2,137–2,177 elements, with maximum gap 1.66600e-8;
+native weights differ in 274–295 elements, with maximum gap 1.16415e-10.
+The two warm trials also differ. All 1,774 recorded identities remain unchanged.
+This demonstrates non-bitwise repeatability of the production accumulation
+function, including its operand preparation. It does not identify a particular
+low-level instruction or prove the cause of later trajectory divergence.
+Replay synchronization and transfer timings do not qualify ordinary performance.
 
 This negative control means a single real-data candidate mismatch cannot be
 attributed to cleanup alone. The [structural real-data pair at `be1f2913e`](evidence/real10076-structural-pair-20260907/README.md)
