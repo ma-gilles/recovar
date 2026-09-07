@@ -83,6 +83,24 @@ class BprefTransactionQueue:
         self._key = None
         self._images = 0
         self._bytes = 0
+        self._scorer_carry = None
+
+    def run_deferred_scorer(self, callback, arguments, options):
+        """Keep real accumulators out of the scorer's donated pass-through slots."""
+        if not all(
+            options.get(name) is True
+            for name in ("return_deferred_mstep_inputs", "disable_adjoint_y", "disable_adjoint_ctf")
+        ):
+            raise ValueError("Queued BPref requires a deferred scorer with both adjoints disabled")
+        carry = arguments[7:9]
+        self._check_carry(*carry)
+        if self._scorer_carry is None:
+            self._scorer_carry = tuple(jnp.zeros((0,), dtype=value.dtype) for value in carry)
+        if any(dummy.dtype != value.dtype for dummy, value in zip(self._scorer_carry, carry, strict=True)):
+            raise ValueError("Queued BPref scorer carry dtype changed")
+        result = callback(*arguments[:7], *self._scorer_carry, *arguments[9:], **options)
+        self._scorer_carry = result[:2]
+        return (*carry, *result[2:])
 
     @staticmethod
     def _compatible_key(values):

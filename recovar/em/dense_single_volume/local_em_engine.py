@@ -6607,10 +6607,15 @@ def run_local_em_exact(
                 for context in fixed_capacity_whole_call_contexts:
                     _mark_exact_local_bucket_done(context.padded_bucket)
                 continue
-            big_jit_result = _invoke_local_bucket_big_jit(
-                *big_jit_arguments,
-                **big_jit_static_options,
-            )
+            if bpref_transaction_queue is not None:
+                big_jit_result = bpref_transaction_queue.run_deferred_scorer(
+                    _invoke_local_bucket_big_jit, big_jit_arguments, big_jit_static_options
+                )
+            else:
+                big_jit_result = _invoke_local_bucket_big_jit(
+                    *big_jit_arguments,
+                    **big_jit_static_options,
+                )
             debug_scores = None
             debug_probs = None
             debug_shifted_score_split = None

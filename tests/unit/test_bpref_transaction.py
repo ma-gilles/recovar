@@ -8,6 +8,43 @@ from recovar.em.dense_single_volume.bpref_transaction import BprefTransactionQue
 pytestmark = pytest.mark.unit
 
 
+def test_deferred_scorer_donation_cannot_replace_pending_accumulators():
+    from functools import partial
+    import jax
+    import jax.numpy as jnp
+
+    options = dict(return_deferred_mstep_inputs=True, disable_adjoint_y=True, disable_adjoint_ctf=True)
+    shapes = []
+
+    @partial(jax.jit, donate_argnums=(7, 8), static_argnames=tuple(options))
+    def scorer(a, b, c, d, e, f, g, data, weight, **options):
+        shapes.append((data.shape, weight.shape))
+        return data, weight, jnp.asarray(19, jnp.int32)
+
+    common, calls, callback = setup()
+    queue = BprefTransactionQueue()
+    data = jnp.zeros(1, jnp.complex64)
+    weight = jnp.zeros(1, jnp.float32)
+    for first in (0, 2):
+        args, kwargs = operands(2, first, common, data, weight)
+        data, weight, _ = queue.accumulate(callback, *args, **kwargs)
+        result = queue.run_deferred_scorer(scorer, (None,) * 7 + (data, weight), options)
+        assert result[0] is data and result[1] is weight and int(result[2]) == 19
+        assert not data.is_deleted() and not weight.is_deleted()
+    assert shapes == [((0,), (0,))]
+    assert not calls
+    queue.flush(data, weight)
+    assert len(calls) == 1 and calls[0]["images"].shape[0] == 4
+
+
+@pytest.mark.parametrize("invalid", ["return_deferred_mstep_inputs", "disable_adjoint_y", "disable_adjoint_ctf"])
+def test_scorer_with_active_accumulation_rejected(invalid):
+    options = dict(return_deferred_mstep_inputs=True, disable_adjoint_y=True, disable_adjoint_ctf=True)
+    options[invalid] = False
+    with pytest.raises(ValueError, match="both adjoints disabled"):
+        BprefTransactionQueue().run_deferred_scorer(None, (), options)
+
+
 class Shared:
     shape = (9, 9, 9)
     dtype = np.dtype("complex64")
