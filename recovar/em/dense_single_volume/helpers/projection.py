@@ -350,10 +350,22 @@ def _project_relion_projector_texture(
     pixel_indices=None,
     runtime_r_max=None,
     padding_factor=1,
+    image_r_max=None,
 ):
     """Project one RELION ``PPref`` block with RELION's CUDA texture arithmetic."""
 
-    if runtime_r_max is None:
+    if image_r_max is not None:
+        if mask_current_image_disk:
+            raise ValueError("rotated image radius cannot be combined with an exact image-disk mask")
+        from recovar.cuda_backproject import project_relion_half_capacity
+
+        projection_crop = project_relion_half_capacity(
+            volume_relion_half, rotations_block,
+            jnp.asarray(r_max, jnp.int32) if runtime_r_max is None else runtime_r_max,
+            image_shape=(int(projector_output_size), int(projector_output_size)),
+            padding_factor=int(padding_factor), image_r_max=image_r_max,
+        )
+    elif runtime_r_max is None:
         projector_full = relion_projector_half_to_texture_full(volume_relion_half)
         pad_size = int(projector_full.shape[0])
         projection_crop = project_half_spectrum(
@@ -408,6 +420,7 @@ def compute_relion_projector_projections_block(
     current_image_mask_size=None,
     projector_capacity: bool = False,
     runtime_r_max=None,
+    image_r_max=None,
 ):
     """Project precomputed RELION ``PPref`` data for one rotation block.
 
@@ -456,6 +469,9 @@ def compute_relion_projector_projections_block(
             "r_max": int(r_max),
             "projector_output_size": resolved_output_size,
         }
+        if image_r_max is not None:
+            texture_kwargs["image_r_max"] = image_r_max
+            texture_kwargs["padding_factor"] = int(padding_factor)
         if centered_rows and pixel_indices is not None:
             texture_kwargs["pixel_indices"] = pixel_indices
         if not mask_current_image_disk:
@@ -479,7 +495,7 @@ def compute_relion_projector_projections_block(
                 axes=1,
             ).reshape((proj_centered.shape[0], -1))
 
-    elif current_image_mask_size is not None:
+    elif current_image_mask_size is not None or image_r_max is not None:
         raise RuntimeError(
             "a runtime current-image projection mask requires the RELION "
             "texture projector",

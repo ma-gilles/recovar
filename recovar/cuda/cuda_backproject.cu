@@ -2308,7 +2308,8 @@ project_texture_kernel(
     int tex_yinit, int tex_zinit,
     int upsampling, int full_image_w,
     int maxR2_padded,
-    const int32_t* logical_radius = nullptr, int capacity_radius = 0)
+    const int32_t* logical_radius = nullptr, int capacity_radius = 0,
+    const int32_t* image_radius = nullptr)
 {
     __shared__ float R[6];
 
@@ -2345,6 +2346,18 @@ project_texture_kernel(
         maxR2_padded = padded_radius * padded_radius;
         tex_yinit = -(padded_radius + 1);
         tex_zinit = -(padded_radius + 1);
+    }
+
+    if (image_radius != nullptr) {
+        const int radius = *image_radius;
+        if (radius < 0 || radius > image_h / 2) {
+            img2[img_off] = make_float2(nanf(""), nanf(""));
+            return;
+        }
+        const int padded_radius = radius * upsampling;
+        // AccProjectorKernel::makeKernel clips at the smaller image/model
+        // radius. Texture staging still uses the original model extent.
+        maxR2_padded = min(maxR2_padded, padded_radius * padded_radius);
     }
 
     /* Match RELION AccProjectorKernel source order exactly under RECOVAR's
@@ -3333,7 +3346,8 @@ cudaError_t launch_project_texture_float(
     int64_t N0, int64_t N1, int64_t N2,
     int64_t ups, int64_t half_img,
     int64_t full_iw, int64_t max_r2_x4 = -1,
-    const int32_t* logical_radius = nullptr)
+    const int32_t* logical_radius = nullptr,
+    const int32_t* image_radius = nullptr)
 {
     const float max_r2 = max_r2_x4 < 0 ? (float)((N0 / 2 - 1) * (N0 / 2 - 1)) : (float)max_r2_x4 / 4.0f;
     const int maxR = (int)floorf(sqrtf(max_r2) + 0.5f);
@@ -3414,11 +3428,11 @@ cudaError_t launch_project_texture_float(
         if (half_img) {
             project_texture_kernel<true, CAPACITY_HALF><<<grid, block, 0, s>>>(
                 texReal, texImag, img, rot, (int)n_pixels, (int)ih, (int)iw,
-                texYInit, texZInit, (int)ups, (int)full_iw, maxR * maxR, logical_radius, maxR);
+                texYInit, texZInit, (int)ups, (int)full_iw, maxR * maxR, logical_radius, maxR, image_radius);
         } else {
             project_texture_kernel<false, CAPACITY_HALF><<<grid, block, 0, s>>>(
                 texReal, texImag, img, rot, (int)n_pixels, (int)ih, (int)iw,
-                texYInit, texZInit, (int)ups, (int)full_iw, maxR * maxR, logical_radius, maxR);
+                texYInit, texZInit, (int)ups, (int)full_iw, maxR * maxR, logical_radius, maxR, image_radius);
         }
         err = cudaGetLastError();
         if (err != cudaSuccess) goto cleanup;
@@ -16815,11 +16829,11 @@ ffi::Error ProjectImpl(
     return ffi::Error::Success();
 }
 
-ffi::Error ProjectRelionHalfRuntimeImpl(
+ffi::Error ProjectRelionHalfRuntimeCore(
     cudaStream_t stream, int64_t image_h, int64_t image_w,
     int64_t padding_factor,
     ffi::AnyBuffer half, ffi::AnyBuffer rot, ffi::AnyBuffer radius,
-    ffi::Result<ffi::AnyBuffer> output)
+    ffi::Result<ffi::AnyBuffer> output, const int32_t* image_radius)
 {
     const auto h = half.dimensions();
     const auto r = rot.dimensions();
@@ -16844,11 +16858,48 @@ ffi::Error ProjectRelionHalfRuntimeImpl(
         static_cast<float*>(output->untyped_data()), static_cast<const float*>(rot.untyped_data()),
         r[0], o[1], image_h, image_w / 2 + 1,
         h[0], h[1], h[2], padding_factor, 1, image_w, -1,
-        static_cast<const int32_t*>(radius.untyped_data()));
+        static_cast<const int32_t*>(radius.untyped_data()), image_radius);
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
 }
+
+ffi::Error ProjectRelionHalfRuntimeImpl(
+    cudaStream_t stream, int64_t image_h, int64_t image_w,
+    int64_t padding_factor,
+    ffi::AnyBuffer half, ffi::AnyBuffer rot, ffi::AnyBuffer radius,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    return ProjectRelionHalfRuntimeCore(
+        stream, image_h, image_w, padding_factor, half, rot, radius, output, nullptr);
+}
+
+ffi::Error ProjectRelionHalfImageRadiusImpl(
+    cudaStream_t stream, int64_t image_h, int64_t image_w,
+    int64_t padding_factor,
+    ffi::AnyBuffer half, ffi::AnyBuffer rot, ffi::AnyBuffer radius,
+    ffi::AnyBuffer image_radius, ffi::Result<ffi::AnyBuffer> output)
+{
+    if (image_radius.element_type() != ffi::DataType::S32 ||
+        image_radius.dimensions().size() != 0)
+        return ffi::Error::InvalidArgument("ProjectRelionHalfImageRadius: image radius must be scalar S32");
+    return ProjectRelionHalfRuntimeCore(
+        stream, image_h, image_w, padding_factor, half, rot, radius, output,
+        static_cast<const int32_t*>(image_radius.untyped_data()));
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    ProjectRelionHalfImageRadius, ProjectRelionHalfImageRadiusImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_w")
+        .Attr<int64_t>("padding_factor")
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     ProjectRelionHalfRuntime, ProjectRelionHalfRuntimeImpl,

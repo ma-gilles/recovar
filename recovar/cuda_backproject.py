@@ -539,6 +539,7 @@ _TARGET_BACKPROJECT_INDEXED = "cuda_backproject_indexed"
 _TARGET_BACKPROJECT_INDEXED_SIGNATURE = "cuda_backproject_indexed_signature"
 _TARGET_PROJECT = "cuda_project"
 _TARGET_PROJECT_RELION_HALF_RUNTIME = "cuda_project_relion_half_runtime"
+_TARGET_PROJECT_RELION_HALF_IMAGE_RADIUS = "cuda_project_relion_half_image_radius"
 _TARGET_PROJECT_INDEXED = "cuda_project_indexed"
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
 _TARGET_BATCH_BACKPROJECT_INDEXED = "cuda_batch_backproject_indexed"
@@ -1074,6 +1075,7 @@ def _ensure_ffi():
 
 
 _projector_capacity_ffi_registered = False
+_projector_image_radius_ffi_registered = False
 _bpref_projector_capacity_ffi_registered = False
 _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF = (
     "cuda_relion_vdam_mstep_fused_projector_capacity_x_half"
@@ -1102,6 +1104,29 @@ def _ensure_projector_capacity_ffi():
             platform="CUDA",
         )
         _projector_capacity_ffi_registered = True
+
+
+def _ensure_projector_image_radius_ffi():
+    """Load the image-radius ABI only when the corrected projector is used."""
+    global _projector_image_radius_ffi_registered
+    _ensure_ffi()
+    if _projector_image_radius_ffi_registered:
+        return
+    with _ffi_lock:
+        if _projector_image_radius_ffi_registered:
+            return
+        symbol = getattr(_get_lib(), "ProjectRelionHalfImageRadius", None)
+        if symbol is None:
+            raise RuntimeError(
+                "Image-radius projection requires ProjectRelionHalfImageRadius; "
+                "explicitly rebuild the custom CUDA library"
+            )
+        jax.ffi.register_ffi_target(
+            _TARGET_PROJECT_RELION_HALF_IMAGE_RADIUS,
+            jax.ffi.pycapsule(symbol),
+            platform="CUDA",
+        )
+        _projector_image_radius_ffi_registered = True
 
 
 def _ensure_bpref_projector_capacity_ffi():
@@ -5819,6 +5844,7 @@ def project_relion_half_capacity(
     *,
     image_shape: Tuple[int, int],
     padding_factor: int = 1,
+    image_r_max: jax.Array | None = None,
 ) -> jax.Array:
     """Opt-in RELION texture projection with physical storage and runtime radius.
 
@@ -5832,7 +5858,12 @@ def project_relion_half_capacity(
 
     Returns C64 [rotation, H*(W//2+1)] with the existing texture projector's
     centered rows/positive Nyquist convention. Compact pixel gathering and
-    current-image masks remain the existing caller's responsibility. This
+    current-image masks remain the existing caller's responsibility unless
+    ``image_r_max`` is supplied. That S32 scalar applies RELION's rotated
+    float32 radius test at min(logical_r_max, image_r_max), preserving model
+    texture staging. Do not additionally apply an exact source-pixel disk:
+    it rejects valid boundary contributions. Image radius must be between
+    zero and H//2; invalid runtime values return NaNs. This
     transaction includes texture allocation, staging, synchronization and
     cleanup; there is no persistent resource cache or automatic fallback.
     """
@@ -5862,6 +5893,10 @@ def project_relion_half_capacity(
         raise ValueError("rotation_matrices must be nonempty F32 [rotation,3,3]")
     if logical_r_max.dtype != jnp.int32 or logical_r_max.shape != ():
         raise ValueError("logical_r_max must be an S32 scalar")
+    if image_r_max is not None:
+        image_r_max = jnp.asarray(image_r_max)
+        if image_r_max.dtype != jnp.int32 or image_r_max.shape != ():
+            raise ValueError("image_r_max must be an S32 scalar")
     if (
         len(image_shape) != 2
         or image_shape[0] != image_shape[1]
@@ -5872,15 +5907,21 @@ def project_relion_half_capacity(
     n_pixels = image_shape[0] * (image_shape[1] // 2 + 1)
     if rotation_matrices.shape[0] * n_pixels > np.iinfo(np.int32).max:
         raise ValueError("projection output exceeds int32 kernel indexing")
-    _ensure_projector_capacity_ffi()
+    if image_r_max is None:
+        _ensure_projector_capacity_ffi()
+        target = _TARGET_PROJECT_RELION_HALF_RUNTIME
+    else:
+        _ensure_projector_image_radius_ffi()
+        target = _TARGET_PROJECT_RELION_HALF_IMAGE_RADIUS
     rot6 = _rot_to_compact(rotation_matrices, jnp.float32)
     output = jax.ShapeDtypeStruct((rotation_matrices.shape[0], n_pixels), jnp.complex64)
+    operands = (projector_half, rot6, logical_r_max)
+    if image_r_max is not None:
+        operands += (image_r_max,)
     return jax.ffi.ffi_call(
-        _TARGET_PROJECT_RELION_HALF_RUNTIME, output, vmap_method="sequential"
+        target, output, vmap_method="sequential"
     )(
-        projector_half,
-        rot6,
-        logical_r_max,
+        *operands,
         image_h=np.int64(image_shape[0]),
         image_w=np.int64(image_shape[1]),
         padding_factor=np.int64(padding_factor),

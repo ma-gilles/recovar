@@ -452,6 +452,14 @@ def _maybe_stop_after_significance_dump(
     raise SignificanceDumpComplete(dump_path=dump_path)
 
 
+def _coarse_rotated_radius_enabled() -> bool:
+    """Opt-in qualification of RELION's rotated image-radius clipping."""
+    token = os.environ.get("RECOVAR_K1_COARSE_ROTATED_RADIUS", "0")
+    if token not in {"0", "1"}:
+        raise ValueError("RECOVAR_K1_COARSE_ROTATED_RADIUS must be 0 or 1")
+    return token == "1"
+
+
 def _k1_coarse_gaussian_ffi_enabled(*, default: bool = False) -> bool:
     """Return whether the RELION coarse Gaussian FFI is active."""
 
@@ -6087,6 +6095,12 @@ def _compute_k_class_significance_batched(
             projector_compact_indices = window_indices
     projector_returns_compact = projector_compact_indices is not None
 
+    coarse_rotated_radius = _coarse_rotated_radius_enabled()
+    if coarse_rotated_radius and not (
+        use_relion_projector and coarse_texture_interp and projector_returns_compact
+    ):
+        raise ValueError("rotated coarse radius requires the compact RELION texture projector")
+
     def _project_relion_compact_score_rows(
         class_index,
         rots_b,
@@ -6118,11 +6132,14 @@ def _compute_k_class_significance_batched(
             # cannot materialize its JAX mirror once per score block.
             pixel_indices=coarse_gaussian_score_indices_np,
             relion_texture_interp=True,
-            # This is the mature rectangular/EM operand convention.  The
-            # certificate and selected rescore must consume the same zeros in
-            # current-image crop corners rather than silently rebuilding a
-            # different projection table.
-            mask_current_image_disk=True,
+            # Certificate and exact scorer share this table. The qualified
+            # legacy convention masks source pixels; the opt-in correction
+            # uses RELION's rotated float32 radius without changing storage.
+            mask_current_image_disk=not coarse_rotated_radius,
+            image_r_max=(
+                jnp.asarray(score_size // 2, dtype=jnp.int32)
+                if coarse_rotated_radius else None
+            ),
             current_image_mask_size=(
                 jnp.asarray(score_size, dtype=jnp.int32)
                 if stable_fourier_window_shapes
