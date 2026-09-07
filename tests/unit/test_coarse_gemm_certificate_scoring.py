@@ -259,7 +259,8 @@ def _exact_stored_score(projected, shifted, weight, initial, image, rotation, tr
     return -residual
 
 
-def test_promoted_certificate_encloses_exact_stored_residual_candidatewise() -> None:
+@pytest.mark.parametrize("real_cross", [False, True])
+def test_promoted_certificate_encloses_exact_stored_residual_candidatewise(real_cross) -> None:
     projected, shifted, weight, initial = _stored_operands()
     with jax.enable_x64(False):
         assert not jax.config.x64_enabled
@@ -270,6 +271,7 @@ def test_promoted_certificate_encloses_exact_stored_residual_candidatewise() -> 
             initial,
             2,
             topology=_stored_topology(),
+            real_cross=real_cross,
         )
         assert not jax.config.x64_enabled
 
@@ -295,7 +297,8 @@ def test_promoted_certificate_encloses_exact_stored_residual_candidatewise() -> 
                 assert exact <= _fraction(upper[image, rotation, translation])
 
 
-def test_certificate_fails_closed_before_direct_f32_square_overflow() -> None:
+@pytest.mark.parametrize("real_cross", [False, True])
+def test_certificate_fails_closed_before_direct_f32_square_overflow(real_cross) -> None:
     projected = np.asarray([[np.complex64(1.0e20 + 0.0j)]], dtype=np.complex64)
     shifted = np.zeros((1, 1, 1), dtype=np.complex64)
     weight = np.ones((1, 1), dtype=np.float32)
@@ -315,7 +318,8 @@ def test_certificate_fails_closed_before_direct_f32_square_overflow() -> None:
     assert np.isnan(np.asarray(result.raw_upper)).all()
 
 
-def test_certificate_ftz_envelope_contains_underflowed_direct_f32_score() -> None:
+@pytest.mark.parametrize("real_cross", [False, True])
+def test_certificate_ftz_envelope_contains_underflowed_direct_f32_score(real_cross) -> None:
     projected = np.asarray([[np.complex64(1.0e-30 + 0.0j)]], dtype=np.complex64)
     shifted = np.zeros((1, 1, 1), dtype=np.complex64)
     weight = np.ones((1, 1), dtype=np.float32)
@@ -343,7 +347,8 @@ def test_certificate_ftz_envelope_contains_underflowed_direct_f32_score() -> Non
     assert lower <= np.float64(direct_score) <= upper
 
 
-def test_certificate_masks_padded_garbage_before_promoted_arithmetic() -> None:
+@pytest.mark.parametrize("real_cross", [False, True])
+def test_certificate_masks_padded_garbage_before_promoted_arithmetic(real_cross) -> None:
     projected, shifted, weight, initial = _stored_operands()
     shifted[1] = np.complex64(np.nan + 1j * np.nan)
     weight[1] = np.float32(np.nan)
@@ -356,6 +361,7 @@ def test_certificate_masks_padded_garbage_before_promoted_arithmetic() -> None:
         initial,
         1,
         topology=_stored_topology(),
+        real_cross=real_cross,
     )
 
     assert np.all(np.isfinite(np.asarray(result.raw_lower[0])))
@@ -365,7 +371,8 @@ def test_certificate_masks_padded_garbage_before_promoted_arithmetic() -> None:
 
 
 @pytest.mark.parametrize("invalid", ["weight", "initial", "reference", "image"])
-def test_certificate_turns_invalid_active_stored_inputs_into_nan_endpoints(invalid) -> None:
+@pytest.mark.parametrize("real_cross", [False, True])
+def test_certificate_turns_invalid_active_stored_inputs_into_nan_endpoints(invalid, real_cross) -> None:
     projected, shifted, weight, initial = _stored_operands()
     if invalid == "weight":
         weight[0, 0] = -1.0
@@ -383,6 +390,7 @@ def test_certificate_turns_invalid_active_stored_inputs_into_nan_endpoints(inval
         initial,
         2,
         topology=_stored_topology(),
+        real_cross=real_cross,
     )
 
     if invalid == "reference":
@@ -422,7 +430,8 @@ def test_certificate_rejects_wrong_storage_dtype_shape_and_topology() -> None:
         )
 
 
-def test_fused_certificate_state_update_matches_explicit_interval_pipeline() -> None:
+@pytest.mark.parametrize("real_cross", [False, True])
+def test_fused_certificate_state_update_matches_explicit_interval_pipeline(real_cross) -> None:
     projected_seed, shifted, weight, initial = _stored_operands()
     projected = np.tile(projected_seed, (8, 1))
     rotation_prior = np.linspace(-2.0, 1.0, 16, dtype=np.float32)
@@ -440,6 +449,7 @@ def test_fused_certificate_state_update_matches_explicit_interval_pipeline() -> 
         initial,
         2,
         topology=_stored_topology(),
+        real_cross=real_cross,
     )
     posterior_lower, posterior_upper = propagate_coarse_gemm_intervals_through_f32_priors(
         certificate.raw_lower,
@@ -470,6 +480,7 @@ def test_fused_certificate_state_update_matches_explicit_interval_pipeline() -> 
         projected,
         image_batch,
         topology=_stored_topology(),
+        real_cross=real_cross,
         rotation_offset=0,
         class_log_prior=class_prior,
         rotation_log_prior=rotation_prior,

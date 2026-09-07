@@ -215,3 +215,24 @@ def test_device_route_rejects_noncompact_request(monkeypatch):
     with pytest.raises(ValueError, match="requires compact_posterior"):
         significance._compute_coarse_gaussian_gemm_hybrid_batch(*operands, **kwargs, device_transaction=True)
     assert calls == []
+
+
+@pytest.mark.parametrize("token, expected", [("0", False), ("1", True)])
+def test_real_cross_selector_is_explicit(monkeypatch, token, expected):
+    monkeypatch.setenv("RECOVAR_COARSE_GAUSSIAN_GEMM_REAL_CROSS", token)
+    assert significance._coarse_gaussian_gemm_real_cross_enabled() is expected
+
+
+def test_real_cross_selector_rejects_unknown_token(monkeypatch):
+    monkeypatch.setenv("RECOVAR_COARSE_GAUSSIAN_GEMM_REAL_CROSS", "true")
+    with pytest.raises(ValueError, match="REAL_CROSS"):
+        significance._coarse_gaussian_gemm_real_cross_enabled()
+
+
+def test_real_cross_cannot_silently_fall_back_to_complex_device_certificate(monkeypatch):
+    operands, kwargs, _result, calls = _fixture(monkeypatch)
+    with pytest.raises(ValueError, match="not yet qualified"):
+        significance._compute_coarse_gaussian_gemm_hybrid_batch(
+            *operands, **kwargs, device_transaction=True, real_cross=True
+        )
+    assert calls == []

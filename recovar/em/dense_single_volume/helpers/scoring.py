@@ -623,7 +623,7 @@ def _prepare_relion_coarse_gaussian_gemm_f64_image_batch(
         )
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("real_cross",))
 def _relion_coarse_gaussian_gemm_certificate_from_prepared_jit(
     projected_reference,
     image_batch,
@@ -633,6 +633,8 @@ def _relion_coarse_gaussian_gemm_certificate_from_prepared_jit(
     energy_envelope_gamma,
     direct_gamma,
     traversed_full_position_count,
+    *,
+    real_cross=False,
 ):
     """Evaluate the promoted center and reduce it to certified endpoints.
 
@@ -652,14 +654,30 @@ def _relion_coarse_gaussian_gemm_certificate_from_prepared_jit(
         # The certificate assumes two explicit component squares.  Do not use
         # abs/hypot or the upstream FP32 abs2 companion on this path.
         projected_abs2 = projected.real * projected.real + projected.imag * projected.imag
-        cross, reference_energy = _e_step_block_score_components_windowed(
-            image_batch.weighted_shifted,
-            image_batch.pixel_weight,
-            projected,
-            projected_abs2,
-            n_images,
-            n_trans,
-        )
+        if real_cross:
+            # The certificate needs only Re(conj(Y) @ P.T). One real dot
+            # over 2*n FP64 components avoids computing the unused imaginary
+            # output. The existing gamma(2*n+4) covers this reduction too.
+            image_components = jnp.concatenate(
+                (image_batch.weighted_shifted.real, image_batch.weighted_shifted.imag), axis=1
+            )
+            reference_components = jnp.concatenate((projected.real, projected.imag), axis=1)
+            cross = -2.0 * jnp.matmul(
+                image_components, reference_components.T, precision=jax.lax.Precision.HIGHEST
+            )
+            cross = cross.reshape(n_images, n_trans, projected.shape[0]).swapaxes(1, 2)
+            reference_energy = jnp.matmul(
+                image_batch.pixel_weight, projected_abs2.T, precision=jax.lax.Precision.HIGHEST
+            )
+        else:
+            cross, reference_energy = _e_step_block_score_components_windowed(
+                image_batch.weighted_shifted,
+                image_batch.pixel_weight,
+                projected,
+                projected_abs2,
+                n_images,
+                n_trans,
+            )
         model_scores = jnp.float64(-0.5) * (cross + reference_energy[..., None])
         expanded_score = (
             model_scores
@@ -789,6 +807,7 @@ def _relion_coarse_gaussian_gemm_certificate(
     actual_image_count,
     *,
     topology,
+    real_cross=False,
 ):
     """Validate stored RELION operands and construct a promoted certificate."""
 
@@ -810,10 +829,11 @@ def _relion_coarse_gaussian_gemm_certificate(
             *topology.expanded_f64_gammas,
             topology.direct_f32_gamma,
             np.int32(topology.full_position_count),
+            real_cross=real_cross,
         )
 
 
-@jax.jit
+@partial(jax.jit, static_argnames=("real_cross",))
 def _relion_coarse_gaussian_gemm_update_certificate_state_jit(
     state,
     projected_reference,
@@ -828,6 +848,8 @@ def _relion_coarse_gaussian_gemm_update_certificate_state_jit(
     direct_gamma,
     traversed_full_position_count,
     rotation_offset,
+    *,
+    real_cross=False,
 ):
     """Fuse the promoted certificate, ordered priors, and compact reduction."""
 
@@ -845,6 +867,7 @@ def _relion_coarse_gaussian_gemm_update_certificate_state_jit(
         energy_envelope_gamma,
         direct_gamma,
         traversed_full_position_count,
+        real_cross=real_cross,
     )
     posterior_lower, posterior_upper = propagate_coarse_gemm_intervals_through_f32_priors(
         certificate.raw_lower,
@@ -878,6 +901,7 @@ def _relion_coarse_gaussian_gemm_update_certificate_state(
     class_log_prior,
     rotation_log_prior=None,
     translation_log_prior=None,
+    real_cross=False,
 ):
     """Update the K=1 complete-block selector without publishing score cubes."""
 
@@ -913,6 +937,7 @@ def _relion_coarse_gaussian_gemm_update_certificate_state(
             topology.direct_f32_gamma,
             np.int32(topology.full_position_count),
             jnp.int32(rotation_offset),
+            real_cross=real_cross,
         )
 
 

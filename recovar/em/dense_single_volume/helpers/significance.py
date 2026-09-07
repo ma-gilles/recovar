@@ -927,6 +927,15 @@ def _coarse_gaussian_gemm_device_transaction_enabled() -> bool:
     return token == "1"
 
 
+def _coarse_gaussian_gemm_real_cross_enabled() -> bool:
+    """Use FP64 real-component GEMM only in the coarse certificate."""
+    name = "RECOVAR_COARSE_GAUSSIAN_GEMM_REAL_CROSS"
+    token = os.environ.get(name, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"Unsupported {name}={token!r}")
+    return token == "1"
+
+
 def _coarse_gaussian_gemm_hybrid_image_batch_size_request() -> int | None:
     """Return the explicit compact-hybrid image-batch override, if any."""
 
@@ -1684,6 +1693,7 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
     capture_selected_diff2: bool = False,
     full_dense_diff2_fn=None,
     device_transaction: bool = False,
+    real_cross: bool = False,
 ) -> CoarseGaussianGemmHybridBatchResult:
     """Certify, exactly rescore, and restore one K=1 coarse score table.
 
@@ -1756,6 +1766,10 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
         raise TypeError("full_dense_diff2_fn must be callable or None")
     if not isinstance(device_transaction, (bool, np.bool_)):
         raise TypeError("device_transaction must be boolean")
+    if not isinstance(real_cross, (bool, np.bool_)):
+        raise TypeError("real_cross must be boolean")
+    if real_cross and device_transaction:
+        raise ValueError("real_cross with device_transaction is not yet qualified")
     if device_transaction and not compact_posterior:
         raise ValueError("device_transaction requires compact_posterior")
 
@@ -1866,6 +1880,7 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
                     else rotation_prior[rotation_start:rotation_stop]
                 ),
                 translation_log_prior=translation_log_prior,
+                real_cross=real_cross,
             )
         selection = select_coarse_gemm_hybrid_rotation_blocks(
             state,
@@ -5278,6 +5293,11 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_gemm_device_transaction_requested = (
         _coarse_gaussian_gemm_device_transaction_enabled()
     )
+    coarse_gaussian_gemm_real_cross_requested = _coarse_gaussian_gemm_real_cross_enabled()
+    if coarse_gaussian_gemm_real_cross_requested and (
+        not coarse_gaussian_gemm_hybrid_requested or coarse_gaussian_gemm_device_transaction_requested
+    ):
+        raise ValueError("Real-cross certificate requires host-orchestrated coarse GEMM hybrid")
     if coarse_gaussian_gemm_device_transaction_requested and not (
         coarse_gaussian_gemm_hybrid_requested
         and coarse_gaussian_gemm_compact_posterior_requested
@@ -7190,6 +7210,7 @@ def _compute_k_class_significance_batched(
                     ),
                     full_dense_diff2_fn=full_dense_diff2_fn,
                     device_transaction=coarse_gaussian_gemm_device_transaction_requested,
+                    real_cross=coarse_gaussian_gemm_real_cross_requested,
                 )
             )
             coarse_gaussian_gemm_hybrid_batch_count += 1
