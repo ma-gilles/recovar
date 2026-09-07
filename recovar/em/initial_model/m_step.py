@@ -274,6 +274,22 @@ def _maybe_replay_native_second_moment(
     return _read_native_complex_replay(replay_path, expected_shape=computed.shape)
 
 
+def _copy_mstep_untouched_slots(values: np.ndarray, updated_slots: tuple[int, ...]) -> np.ndarray:
+    """Allocate independent C-order state, leaving only replaced slots unwritten.
+
+    The caller must fill every listed slot before publishing the new state.
+    In K=1 all large slots are replaced, so none of the previous values need
+    copying. In K-class updates the other classes retain their original bytes.
+    """
+    out = np.empty_like(values, order="C")
+    start = 0
+    for slot in updated_slots:
+        out[start:slot] = values[start:slot]
+        start = slot + 1
+    out[start:] = values[start:]
+    return out
+
+
 def _run_m_step_transaction(
     transaction,
     state: InitialModelState,
@@ -290,6 +306,10 @@ def _run_m_step_transaction(
     """Apply one shared-layout transaction and preserve state ownership."""
     from recovar.utils.helpers import recovar_volume_to_relion, relion_volume_to_recovar
 
+    copy_token = os.environ.get("RECOVAR_VDAM_MSTEP_COPY_UNTOUCHED", "0")
+    if copy_token not in {"0", "1"}:
+        raise ValueError("RECOVAR_VDAM_MSTEP_COPY_UNTOUCHED must be 0 or 1")
+    copy_untouched = copy_token == "1"
     slot_h0 = half_slot_index(k, 0, state.K, state.pseudo_halfsets)
     slot_h1 = half_slot_index(k, 1, state.K, True) if state.pseudo_halfsets else None
     effective_stepsize = float(grad_current_stepsize) * (
@@ -316,13 +336,16 @@ def _run_m_step_transaction(
         min_resol_shell,
     )
     out = replace(state)
-    out.Iref = state.Iref.copy()
+    out.Iref = _copy_mstep_untouched_slots(state.Iref, (k,)) if copy_untouched else state.Iref.copy()
     out.Iref[k] = relion_volume_to_recovar(np.asarray(result["iref"]))
-    out.Igrad1 = state.Igrad1.copy()
+    moment_slots = (slot_h0,) if slot_h1 is None else (slot_h0, slot_h1)
+    out.Igrad1 = (
+        _copy_mstep_untouched_slots(state.Igrad1, moment_slots) if copy_untouched else state.Igrad1.copy()
+    )
     out.Igrad1[slot_h0] = np.asarray(result["mom1_h0"])
     if slot_h1 is not None:
         out.Igrad1[slot_h1] = np.asarray(result["mom1_h1"])
-    out.Igrad2 = state.Igrad2.copy()
+    out.Igrad2 = _copy_mstep_untouched_slots(state.Igrad2, (k,)) if copy_untouched else state.Igrad2.copy()
     out.Igrad2[k] = np.asarray(result["mom2"])
     for attribute, key in (
         ("tau2_class", "tau2"),
