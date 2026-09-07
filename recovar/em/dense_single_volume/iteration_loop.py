@@ -150,7 +150,7 @@ from recovar.em.dense_single_volume.relion_worker_scale import (
     validate_relion_follower_scale_replay_application,
     validate_relion_follower_scale_start,
 )
-from recovar.em.sampling import (  # noqa: F401  -- monkeypatched by tests/unit/test_refine_relion_mode.py
+from recovar.em.sampling import (
     _get_relion_rotation_grid_eulers_float64,
     _translation_grid_for_class_count,
     _relion_adaptive_pass1_rotations_f32,
@@ -160,8 +160,6 @@ from recovar.em.sampling import (  # noqa: F401  -- monkeypatched by tests/unit/
     apply_relion_rotation_perturbation_to_eulers,
     apply_relion_translation_perturbation,
     build_local_search_grid_metadata,
-    get_relion_rotation_grid,
-    get_relion_rotation_grid_eulers,
     read_relion_model_metadata,
     read_relion_optimiser_metadata,
     read_relion_sampling_metadata,
@@ -169,17 +167,11 @@ from recovar.em.sampling import (  # noqa: F401  -- monkeypatched by tests/unit/
     relion_sampling_perturbation_for_iteration,
     rotation_grid_size,
 )
-from recovar.em.sampling import (  # noqa: F401
-    get_oversampled_rotation_grid_from_samples as get_oversampled_rotation_grid_from_samples,
-)
 from recovar.reconstruction.regularization import (
     compute_current_size_relion,
     fsc_to_relion_ssnr,
     resolution_from_data_vs_prior,
     update_relion_growth_state_from_fsc,
-)
-from recovar.reconstruction.regularization import (  # noqa: F401
-    compute_data_vs_prior as compute_data_vs_prior,
 )
 
 _SIGNIFICANCE_DUMP_TARGET_HALF_ENV = "RECOVAR_SIGNIFICANCE_DUMP_TARGET_HALF"
