@@ -66,6 +66,9 @@ source identities when incorporating evidence into the draft or later results.
 | Shared pre-/post-join accumulator writer | `e05ca337f`; 48 caller/format tests and 144 exact payload/gate/error comparisons passed, Slurm13576398; numerical controller AST outside dump bodies unchanged |
 | Unused EM helper inputs | `9f1fde1a7`; three unused keyword parameters and nine callers migrated; 30 cases passed, Slurm13576908; retained function bodies and assertions unchanged |
 | Redundant module aliases and stale comments | `facf535c3`; 17 cases and 228 exact noise/metadata/precision-flag comparisons passed, Slurm13577241; calculations and defaults unchanged |
+| Numeric convergence environment overrides | `e7533f762`; 6 existing caller tests and 240 exact value/type/warning comparisons passed; parser bodies and surrounding computations unchanged |
+| Halfset output ownership | `89d901f99`; 4 existing output/offload tests passed; documentation and two local parameter names clarified, with executable AST otherwise unchanged |
+| Adaptive batch-plan ownership | `58e2069cd`; 42 tests and 160 exact K1/K2/K4/K8/K16 plan/callback/error comparisons passed, Slurm13581512; 9 moved declarations unchanged, K-class replay CLI loads, all 1,780 source hashes stable during validation |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance

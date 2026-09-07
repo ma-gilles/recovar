@@ -56,6 +56,14 @@ adaptive and local K-class orchestration. Class evidence and posterior mass
 must be handled at the K-class level, not inferred from independently normalized
 single-class probabilities.
 
+`HalfScoreResult` carries one halfset's common scoring output.
+`PerHalfOutputs` owns separate two-slot lists for a scoring phase; slot 0/1
+always selects the halfset, including for class-related fields. Image arrays
+retain each halfset's local order and size. The K-class adapters populate class
+assignments, posterior summaries and per-class noise statistics separately from
+`update_from`. That method preserves existing optional pose fields when the
+new result omits them, while always replacing accumulator-layout metadata.
+
 Local-search dependencies are imported from their owners. Tests that replace a
 kernel for a local dispatch check patch its binding in `local_search_iteration`.
 The controller still has its own active `build_local_hypothesis_layout` binding
@@ -63,8 +71,9 @@ for adaptive parent-layout construction. Patch the call site exercised by the
 test; do not add reverse imports merely to preserve an old monkeypatch location.
 
 Unused constant copies in `iteration_loop` have also been retired. Batch and
-raw-image-cache limits belong to `batch_planning`; first-iteration reconstruction
-and dense K-class hypothesis budgets belong to `firstiter_cc`; the fine-grid
+raw-image-cache limits, first-iteration reconstruction caps, dense K-class
+hypothesis budgets and adaptive pass plans belong to `batch_planning`.
+`firstiter_cc` constructs the first-iteration coarse/fine grids; the fine-grid
 precomputation limit belongs to `local_search_iteration`. Their values and
 environment overrides are unchanged.
 
