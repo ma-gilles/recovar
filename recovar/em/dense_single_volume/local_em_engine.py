@@ -146,7 +146,6 @@ from recovar.em.dense_single_volume.local_score_pass import (
     compute_reconstruction_support,
     compute_reconstruction_support_from_threshold,
     fused_score_normalize_mstep_abs2_on_demand,
-    fused_score_normalize_mstep_abs2_with_log_z_on_demand,
     fused_score_normalize_support_abs2_on_demand,
     fused_score_normalize_support_probs_abs2_with_log_z_on_demand,
     fused_score_normalize_support_probs_abs2_on_demand,

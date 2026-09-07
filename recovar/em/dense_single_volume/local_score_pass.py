@@ -593,9 +593,8 @@ def fused_score_normalize_support_probs_abs2_with_log_z_on_demand(
 ):
     """Fuse exact-local score/posterior/support using an external log normalizer.
 
-    Unlike ``fused_score_normalize_mstep_abs2_with_log_z_on_demand``, this does
-    not form per-rotation image reductions.  Callers can pack significant rows
-    first, then run the M-step matmul only on those rows.
+    Callers can pack significant rows before computing per-rotation image
+    reductions, then run the M-step matmul only on those rows.
     """
 
     return _fused_score_normalize_support_abs2_with_log_z_on_demand_impl(
@@ -676,85 +675,6 @@ def fused_score_normalize_mstep_abs2_on_demand(
         reconstruction_probability_threshold,
         half_spectrum_scoring=half_spectrum_scoring,
         use_float64_normalization=use_float64_normalization,
-        reconstruct_significant_only=reconstruct_significant_only,
-        adaptive_fraction=adaptive_fraction,
-        max_significants=max_significants,
-    )
-    summed = compute_local_weighted_sums(reconstruction_probs, shifted_recon_split)
-    ctf_probs = jnp.where(
-        reconstruction_probs_sum_t[..., None] != 0.0,
-        reconstruction_probs_sum_t[..., None] * ctf2_over_nv_recon[:, None, :],
-        0.0,
-    )
-    return (
-        log_Z,
-        probs,
-        best_log_score,
-        best_argmax,
-        max_posterior,
-        reconstruction_sample_mask,
-        reconstruction_rotation_mask,
-        n_significant_samples,
-        reconstruction_probs,
-        probs_sum_t,
-        reconstruction_probs_sum_t,
-        summed,
-        ctf_probs,
-    )
-
-
-@partial(
-    jax.jit,
-    static_argnames=(
-        "half_spectrum_scoring",
-        "reconstruct_significant_only",
-        "adaptive_fraction",
-        "max_significants",
-    ),
-)
-def fused_score_normalize_mstep_abs2_with_log_z_on_demand(
-    shifted_score_split,
-    ctf2_over_nv_score,
-    proj_weighted,
-    half_weights,
-    rotation_log_prior,
-    translation_log_prior,
-    rotation_mask,
-    sample_mask,
-    log_z,
-    shifted_recon_split,
-    ctf2_over_nv_recon,
-    *,
-    half_spectrum_scoring: bool,
-    reconstruct_significant_only: bool,
-    adaptive_fraction: float,
-    max_significants: int,
-):
-    """Fuse exact-local score/M-step using an externally computed log normalizer."""
-
-    (
-        log_Z,
-        probs,
-        best_log_score,
-        best_argmax,
-        max_posterior,
-        reconstruction_sample_mask,
-        reconstruction_rotation_mask,
-        n_significant_samples,
-        reconstruction_probs,
-        probs_sum_t,
-        reconstruction_probs_sum_t,
-    ) = _fused_score_normalize_support_abs2_with_log_z_on_demand_impl(
-        shifted_score_split,
-        ctf2_over_nv_score,
-        proj_weighted,
-        half_weights,
-        rotation_log_prior,
-        translation_log_prior,
-        rotation_mask,
-        sample_mask,
-        log_z,
-        half_spectrum_scoring=half_spectrum_scoring,
         reconstruct_significant_only=reconstruct_significant_only,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
