@@ -10,7 +10,8 @@ Engineering priorities are correctness, GPU performance, then clarity.
    for work already covered by the task.
 2. Read the applicable scoped guides below. Historical experiment notes are
    evidence for their recorded source; their old next actions are not current
-   instructions.
+   instructions. Use the [codebase map](docs/development/codebase.md) to locate
+   the workflow entry point and the modules that own its state and kernels.
 3. Print `git rev-parse HEAD`, `git status --short --branch`,
    `git diff HEAD --stat`, and `git diff HEAD | sha256sum` before validation.
    Record untracked files used by a run. A worktree name is not provenance.

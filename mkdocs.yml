@@ -104,6 +104,11 @@ nav:
   - Reference:
     - CLI Commands: reference/cli.md
     - File Formats: reference/file-formats.md
+    - Development:
+      - Codebase Map: development/codebase.md
+      - Della Setup: development/della.md
+      - Benchmark Contract: development/benchmarks.md
+      - Current EM Status: development/em_status.md
     - Developer API:
       - recovar.core: reference/api/core.md
       - recovar.data_io: reference/api/data_io.md

@@ -40,7 +40,6 @@ When a user lands on the homepage, they should immediately see:
 ## Build & Preview
 
 ```bash
-pip install mkdocs mkdocs-material mkdocstrings mkdocstrings-python
 pixi install -e docs --locked
 pixi run -e docs mkdocs serve    # preview at http://localhost:8000/recovar/
 pixi run -e docs docs-build      # strict build to site/
@@ -53,6 +52,7 @@ The docs workflow deploys on matching pushes to `dev` or manual dispatch; see `.
 ```
 docs/
   index.md                    # Homepage — hero, features, example outputs
+  development/                # Contributor code map, Della runbook, benchmark contract and current EM status
   getting-started/            # Install tab: installation, quickstart, docker, testing
   guide/                      # Processing tab: tutorials, workflow, advanced topics
   reference/                  # CLI & API tab: CLI commands, file formats, Python API

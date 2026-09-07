@@ -16,6 +16,9 @@ The covariance pipeline runs dataset loading → mean/noise reconstruction →
 covariance → PCA → embedding → kernel regression → output. Consult the scoped
 source guide for FFT frames, packed layouts and normalization before changing
 those boundaries. PPCA latent dimension and classification K are different axes.
+The [contributor codebase map](docs/development/codebase.md) identifies the
+separate pipeline PPCA, pose-refinement, K-class, VDAM and earlier EM entry
+points, along with their state, kernel and diagnostic dependencies.
 
 ## Reproducible environment
 
