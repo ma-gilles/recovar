@@ -1389,6 +1389,7 @@ def _k1_skip_significance_pruning_enabled() -> bool:
 
 from recovar.em.dense_single_volume.debug_dumps import (  # noqa: F401
     _maybe_dump_noise_update_debug,
+    _save_bpref_accumulators,
     _save_iteration_intermediates,
 )
 
@@ -7108,25 +7109,20 @@ def _run_relion_iteration_loop(
             or iteration + 1 == int(_bpref_boundary_target_iteration)
         )
         if _bpref_prejoin_dir and not k_class_enabled and _bpref_boundary_iteration_matches:
-            import pathlib
-
-            pathlib.Path(_bpref_prejoin_dir).mkdir(parents=True, exist_ok=True)
-            np.savez(
-                pathlib.Path(_bpref_prejoin_dir)
-                / f"recovar_bpref_prejoin_it{iteration + 1:03d}.npz",
-                schema=np.asarray("recovar-bpref-prejoin-v2"),
-                run_id=np.asarray(os.environ.get("RECOVAR_BPREF_BOUNDARY_DUMP_RUN_ID", "unset")),
-                iteration=np.int32(iteration + 1),
-                current_size=np.int32(cs),
-                padding_factor=np.int32(PADDING_FACTOR),
-                grid_size=np.int32(grid_size),
-                voxel_size=np.float32(cryo.voxel_size),
-                volume_shape=np.asarray(volume_shape, dtype=np.int32),
-                mstep_accumulator_shape=np.asarray(mstep_accumulator_shape, dtype=np.int32),
-                Ft_y_0=np.asarray(Ft_y_0),
-                Ft_y_1=np.asarray(Ft_y_1),
-                Ft_ctf_0=np.asarray(Ft_ctf_0).real,
-                Ft_ctf_1=np.asarray(Ft_ctf_1).real,
+            _save_bpref_accumulators(
+                _bpref_prejoin_dir,
+                stage="prejoin",
+                iteration=iteration,
+                current_size=cs,
+                padding_factor=PADDING_FACTOR,
+                grid_size=grid_size,
+                voxel_size=cryo.voxel_size,
+                volume_shape=volume_shape,
+                accumulator_shape=mstep_accumulator_shape,
+                Ft_y_0=Ft_y_0,
+                Ft_y_1=Ft_y_1,
+                Ft_ctf_0=Ft_ctf_0,
+                Ft_ctf_1=Ft_ctf_1,
             )
 
         # --- RELION's --low_resol_join_halves: average the low-resolution
@@ -7480,24 +7476,20 @@ def _run_relion_iteration_loop(
             # RECOVAR_BPREF_ACCUM_DUMP_DIR. One npz per iteration.
             _bpref_accum_dir = os.environ.get("RECOVAR_BPREF_ACCUM_DUMP_DIR")
             if _bpref_accum_dir and _bpref_boundary_iteration_matches:
-                import pathlib
-
-                pathlib.Path(_bpref_accum_dir).mkdir(parents=True, exist_ok=True)
-                np.savez(
-                    pathlib.Path(_bpref_accum_dir) / f"recovar_bpref_accum_it{iteration + 1:03d}.npz",
-                    schema=np.asarray("recovar-bpref-accum-v2"),
-                    run_id=np.asarray(os.environ.get("RECOVAR_BPREF_BOUNDARY_DUMP_RUN_ID", "unset")),
-                    iteration=np.int32(iteration + 1),
-                    current_size=np.int32(cs),
-                    padding_factor=np.int32(PADDING_FACTOR),
-                    grid_size=np.int32(grid_size),
-                    voxel_size=np.float32(cryo.voxel_size),
-                    volume_shape=np.asarray(volume_shape, dtype=np.int32),
-                    mstep_accumulator_shape=np.asarray(mstep_accumulator_shape, dtype=np.int32),
-                    Ft_y_0=np.asarray(Ft_y_0),
-                    Ft_y_1=np.asarray(Ft_y_1),
-                    Ft_ctf_0=np.asarray(Ft_ctf_0).real,
-                    Ft_ctf_1=np.asarray(Ft_ctf_1).real,
+                _save_bpref_accumulators(
+                    _bpref_accum_dir,
+                    stage="accum",
+                    iteration=iteration,
+                    current_size=cs,
+                    padding_factor=PADDING_FACTOR,
+                    grid_size=grid_size,
+                    voxel_size=cryo.voxel_size,
+                    volume_shape=volume_shape,
+                    accumulator_shape=mstep_accumulator_shape,
+                    Ft_y_0=Ft_y_0,
+                    Ft_y_1=Ft_y_1,
+                    Ft_ctf_0=Ft_ctf_0,
+                    Ft_ctf_1=Ft_ctf_1,
                 )
             current_iter_fsc = regularization.compute_relion_fsc_from_backprojector(
                 Ft_y_0,

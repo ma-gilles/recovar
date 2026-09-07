@@ -8,6 +8,8 @@ Extracted from ``iteration_loop.py``:
 - ``_save_iteration_intermediates`` writes per-iteration regularized and
   unregularized volumes, FSC, noise, tau2, hard assignments, and metadata
   when ``--save_intermediates_dir`` is provided.
+- ``_save_bpref_accumulators`` writes the same accumulator schema before or
+  after the low-resolution half-map join. The controller owns dump gating.
 """
 
 from __future__ import annotations
@@ -26,6 +28,50 @@ from recovar.em.dense_single_volume.relion_metadata import _relion_half_plane_sh
 from recovar.em.sampling import rotation_grid_size
 
 logger = logging.getLogger(__name__)
+
+
+def _save_bpref_accumulators(
+    dump_dir: str,
+    *,
+    stage: str,
+    iteration: int,
+    current_size: int,
+    padding_factor: int,
+    grid_size: int,
+    voxel_size: float,
+    volume_shape,
+    accumulator_shape,
+    Ft_y_0,
+    Ft_y_1,
+    Ft_ctf_0,
+    Ft_ctf_1,
+) -> None:
+    """Save K1 accumulators at the controller's ``prejoin`` or ``accum`` stage.
+
+    ``iteration`` is zero-based; filenames and payload metadata are one-based.
+    Preserve the numerator dtype and save the real part of each weight array.
+    These captures locate a state boundary, without establishing that every
+    upstream scoring input matched between runs.
+    """
+    import pathlib
+
+    pathlib.Path(dump_dir).mkdir(parents=True, exist_ok=True)
+    np.savez(
+        pathlib.Path(dump_dir) / f"recovar_bpref_{stage}_it{iteration + 1:03d}.npz",
+        schema=np.asarray(f"recovar-bpref-{stage}-v2"),
+        run_id=np.asarray(os.environ.get("RECOVAR_BPREF_BOUNDARY_DUMP_RUN_ID", "unset")),
+        iteration=np.int32(iteration + 1),
+        current_size=np.int32(current_size),
+        padding_factor=np.int32(padding_factor),
+        grid_size=np.int32(grid_size),
+        voxel_size=np.float32(voxel_size),
+        volume_shape=np.asarray(volume_shape, dtype=np.int32),
+        mstep_accumulator_shape=np.asarray(accumulator_shape, dtype=np.int32),
+        Ft_y_0=np.asarray(Ft_y_0),
+        Ft_y_1=np.asarray(Ft_y_1),
+        Ft_ctf_0=np.asarray(Ft_ctf_0).real,
+        Ft_ctf_1=np.asarray(Ft_ctf_1).real,
+    )
 
 
 def _dump_array_or_empty(arr):
