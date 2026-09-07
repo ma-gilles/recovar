@@ -152,6 +152,7 @@ from recovar.em.dense_single_volume.relion_worker_scale import (
 )
 from recovar.em.sampling import (  # noqa: F401  -- monkeypatched by tests/unit/test_refine_relion_mode.py
     _get_relion_rotation_grid_eulers_float64,
+    _translation_grid_for_class_count,
     _relion_adaptive_pass1_rotations_f32,
     advance_relion_perturbation,
     advance_relion_perturbation_from_seed,
@@ -161,10 +162,6 @@ from recovar.em.sampling import (  # noqa: F401  -- monkeypatched by tests/unit/
     build_local_search_grid_metadata,
     get_relion_rotation_grid,
     get_relion_rotation_grid_eulers,
-    get_relion_translation_grid,
-    get_translation_grid,
-    read_relion_direction_prior,
-    read_relion_direction_priors,
     read_relion_model_metadata,
     read_relion_optimiser_metadata,
     read_relion_sampling_metadata,
@@ -185,29 +182,8 @@ from recovar.reconstruction.regularization import (  # noqa: F401
     compute_data_vs_prior as compute_data_vs_prior,
 )
 
-_K1_RELION_EXACT_TRANSLATION_GRID_ENV = "RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID"
 _SIGNIFICANCE_DUMP_TARGET_HALF_ENV = "RECOVAR_SIGNIFICANCE_DUMP_TARGET_HALF"
 _PASS2_NORM_DUMP_TARGET_HALF_ENV = "RECOVAR_PASS2_DUMP_TARGET_HALF"
-
-
-def _k1_relion_exact_translation_grid_enabled(environ=None):
-    """Return the production-on K=1 grid policy with a diagnostic opt-out."""
-    env = os.environ if environ is None else environ
-    raw = str(env.get(_K1_RELION_EXACT_TRANSLATION_GRID_ENV, "")).strip().lower()
-    if raw in {"", "1", "true", "yes", "on"}:
-        return True
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(
-        f"{_K1_RELION_EXACT_TRANSLATION_GRID_ENV} must be a boolean value, got {raw!r}"
-    )
-
-
-def _translation_grid_for_class_count(max_pixel, pixel_offset, *, n_classes):
-    """Use source-exact RELION translation enumeration for K=1 only."""
-    if int(n_classes) == 1 and _k1_relion_exact_translation_grid_enabled():
-        return get_relion_translation_grid(max_pixel, pixel_offset)
-    return get_translation_grid(max_pixel, pixel_offset)
 
 
 def _significance_dump_half_indices(

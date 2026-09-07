@@ -23,6 +23,7 @@ import recovar.core.fourier_transform_utils as ftu
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 import recovar.em.dense_single_volume.local_layout as local_layout_module
 import recovar.em.dense_single_volume.relion_replay as relion_replay_module
+import recovar.em.sampling as sampling_module
 import recovar.reconstruction.regularization as regularization_module
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
@@ -461,7 +462,7 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
             "offset_step": 1.416667,
         }
 
-    monkeypatch.setattr(iteration_loop_module, "read_relion_sampling_metadata", fake_sampling_metadata)
+    monkeypatch.setattr(relion_replay_module, "read_relion_sampling_metadata", fake_sampling_metadata)
 
     state = State()
     state_grid = get_translation_grid(state.translation_range, state.translation_step)
@@ -511,18 +512,18 @@ def test_k1_translation_grid_matches_relion_ceil_boundary_without_changing_k4(mo
     rounded_range = 4.25 / 1.4166666666666667
     rounded_step = 1.416667 / 1.4166666666666667
 
-    k1_grid = iteration_loop_module._translation_grid_for_class_count(
+    k1_grid = sampling_module._translation_grid_for_class_count(
         rounded_range,
         rounded_step,
         n_classes=1,
     )
-    k4_grid = iteration_loop_module._translation_grid_for_class_count(
+    k4_grid = sampling_module._translation_grid_for_class_count(
         rounded_range,
         rounded_step,
         n_classes=4,
     )
     monkeypatch.setenv("RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID", "0")
-    diagnostic_control_grid = iteration_loop_module._translation_grid_for_class_count(
+    diagnostic_control_grid = sampling_module._translation_grid_for_class_count(
         rounded_range,
         rounded_step,
         n_classes=1,
@@ -542,7 +543,7 @@ def test_k1_translation_grid_matches_relion_ceil_boundary_without_changing_k4(mo
 def test_k1_translation_grid_rejects_invalid_diagnostic_switch(monkeypatch):
     monkeypatch.setenv("RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID", "sometimes")
     with pytest.raises(ValueError, match="must be a boolean value"):
-        iteration_loop_module._translation_grid_for_class_count(3.0, 1.0, n_classes=1)
+        sampling_module._translation_grid_for_class_count(3.0, 1.0, n_classes=1)
 
 
 def _sealed_sampling_fixture():
@@ -625,12 +626,12 @@ def test_sealed_sampling_override_never_reads_external_replay_files(monkeypatch,
         translation_step=99.0,
     )
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_replay_module,
         "read_relion_sampling_metadata",
         lambda path: pytest.fail(f"unexpected external sampling read: {path}"),
     )
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_replay_module,
         "read_relion_model_metadata",
         lambda path: pytest.fail(f"unexpected external model read: {path}"),
     )
@@ -691,7 +692,7 @@ def test_frozen_replay_explicitly_suppresses_external_direction_prior_reload(
     for half in (1, 2):
         (tmp_path / f"run_it001_half{half}_model.star").write_text("must not read\n")
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_replay_module,
         "read_relion_sampling_metadata",
         lambda path: {
             "random_perturbation": 0.0,
@@ -703,12 +704,12 @@ def test_frozen_replay_explicitly_suppresses_external_direction_prior_reload(
         },
     )
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_replay_module,
         "read_relion_model_metadata",
         lambda path: {"current_image_size": 8},
     )
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_replay_module,
         "read_relion_direction_prior",
         lambda path: pytest.fail(f"unexpected direction-prior reload: {path}"),
     )
@@ -14967,6 +14968,9 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
             "offset_range": replay_offset_range,
             "offset_step": replay_offset_step,
         },
+    )
+    monkeypatch.setattr(
+        relion_replay_module, "read_relion_sampling_metadata", refine_mod.read_relion_sampling_metadata,
     )
     monkeypatch.setattr(refine_mod.os.path, "exists", lambda _path: False)
 

@@ -2039,7 +2039,8 @@ def test_class_direction_prior_normalizes_relion_joint_rows():
 def test_class3d_replay_loads_shared_model_direction_prior(tmp_path, monkeypatch):
     """Class3D replay uses run_itNNN_model.star when half-model files are absent."""
 
-    from recovar.em.dense_single_volume import iteration_loop
+    from recovar.em.dense_single_volume import relion_replay
+    from recovar.em import sampling
     from recovar.em.dense_single_volume.relion_replay import (
         _RelionHalfInputState,
         apply_iter_replay_overrides,
@@ -2053,7 +2054,7 @@ def test_class3d_replay_loads_shared_model_direction_prior(tmp_path, monkeypatch
     raw_prior[1, :2] = [0.15, 0.55]
 
     monkeypatch.setattr(
-        iteration_loop,
+        relion_replay,
         "read_relion_sampling_metadata",
         lambda _path: {
             "healpix_order": 0,
@@ -2063,11 +2064,11 @@ def test_class3d_replay_loads_shared_model_direction_prior(tmp_path, monkeypatch
         },
     )
     monkeypatch.setattr(
-        iteration_loop,
+        relion_replay,
         "read_relion_model_metadata",
         lambda _path: {"current_image_size": 8},
     )
-    monkeypatch.setattr(iteration_loop, "get_translation_grid", lambda _range, _step: np.zeros((1, 2), dtype=np.float32))
+    monkeypatch.setattr(sampling, "get_translation_grid", lambda _range, _step: np.zeros((1, 2), dtype=np.float32))
     calls = []
 
     def fake_read_priors(path, n_classes):
@@ -2075,7 +2076,7 @@ def test_class3d_replay_loads_shared_model_direction_prior(tmp_path, monkeypatch
         assert n_classes == 2
         return raw_prior
 
-    monkeypatch.setattr(iteration_loop, "read_relion_direction_priors", fake_read_priors)
+    monkeypatch.setattr(relion_replay, "read_relion_direction_priors", fake_read_priors)
 
     state = SimpleNamespace(
         healpix_order=0,

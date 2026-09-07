@@ -744,9 +744,6 @@ def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
         "compute_data_vs_prior",
         "get_relion_rotation_grid",
         "get_relion_rotation_grid_eulers",
-        "get_translation_grid",
-        "read_relion_direction_prior",
-        "read_relion_direction_priors",
         "read_relion_model_metadata",
         "read_relion_optimiser_metadata",
         "read_relion_sampling_metadata",
@@ -759,6 +756,9 @@ def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
     assert callable(mean_helpers._align_fourier_volume_sign_to_reference)
     assert callable(mean_helpers._combined_noise_stats)
     assert callable(relion_replay._replay_control_model_iteration)
+    assert callable(relion_replay.read_relion_direction_prior)
+    assert callable(relion_replay.read_relion_direction_priors)
+    assert iteration_loop._translation_grid_for_class_count is relion_replay._translation_grid_for_class_count
     assert callable(ppca_bridge.PPCAKClassScheduleBridge)
     assert callable(ppca_bridge.run_dense_ppca_refinement_with_kclass_schedule)
     assert callable(ppca_bridge.run_local_ppca_refinement_with_kclass_schedule)

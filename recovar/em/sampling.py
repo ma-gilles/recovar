@@ -1,4 +1,5 @@
 import functools
+import os
 
 import healpy as hp
 import jax
@@ -311,6 +312,29 @@ def get_relion_translation_grid(max_pixel, pixel_offset):
     grid *= pixel_offset
     squared_radius = np.sum(grid * grid, axis=1)
     return grid[squared_radius < max_pixel * max_pixel + 0.001]
+
+
+_K1_RELION_EXACT_TRANSLATION_GRID_ENV = "RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID"
+
+
+def _k1_relion_exact_translation_grid_enabled(environ=None):
+    """Return the production-on K=1 grid policy with a diagnostic opt-out."""
+    env = os.environ if environ is None else environ
+    raw = str(env.get(_K1_RELION_EXACT_TRANSLATION_GRID_ENV, "")).strip().lower()
+    if raw in {"", "1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(
+        f"{_K1_RELION_EXACT_TRANSLATION_GRID_ENV} must be a boolean value, got {raw!r}"
+    )
+
+
+def _translation_grid_for_class_count(max_pixel, pixel_offset, *, n_classes):
+    """Use source-exact RELION translation enumeration for K=1 only."""
+    if int(n_classes) == 1 and _k1_relion_exact_translation_grid_enabled():
+        return get_relion_translation_grid(max_pixel, pixel_offset)
+    return get_translation_grid(max_pixel, pixel_offset)
 
 
 def rotation_indices_to_relion_eulers(indices, healpix_order, *, rotation_index_order: str = "recovar"):
