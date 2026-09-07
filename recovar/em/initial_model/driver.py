@@ -200,9 +200,9 @@ class NativeInitialModelResult:
 
 @dataclass(frozen=True)
 class NativeSamplingPlan:
-    """Dense trial grid used by one native InitialModel E-step."""
+    """Trial geometry; sparse execution can defer the unused dense fine grid."""
 
-    rotations: np.ndarray
+    rotations: np.ndarray | None
     translations: np.ndarray
     random_perturbation: float
     healpix_order: int = DEFAULT_HEALPIX_ORDER
@@ -215,6 +215,12 @@ class NativeSamplingPlan:
     coarse_prior_translations: np.ndarray | None = None
     translation_parent: np.ndarray | None = None
     metadata_translations: np.ndarray | None = None
+
+    @property
+    def n_rotations(self) -> int:
+        if self.rotations is not None:
+            return int(self.rotations.shape[0])
+        return int(sampling.rotation_grid_size(self.healpix_order)) * 8 ** int(self.oversampling)
 
 
 @dataclass
@@ -1526,6 +1532,7 @@ def _build_sampling_plan(
     *,
     iteration: int = 1,
     sampling_state: NativeSamplingState | None = None,
+    defer_fine_rotations: bool = False,
 ) -> NativeSamplingPlan:
     if sampling_state is None:
         healpix_order = int(opts.healpix_order)
@@ -1578,12 +1585,14 @@ def _build_sampling_plan(
             )
         translation_parent = None
     else:
-        rotations, _ = sampling.get_oversampled_relion_hidden_rotation_grid_from_samples(
-            np.arange(sampling.rotation_grid_size(healpix_order), dtype=np.int64),
-            parent_nside_level=healpix_order,
-            oversampling_order=oversampling,
-            random_perturbation=random_perturbation,
-        )
+        rotations = None
+        if not defer_fine_rotations:
+            rotations, _ = sampling.get_oversampled_relion_hidden_rotation_grid_from_samples(
+                np.arange(sampling.rotation_grid_size(healpix_order), dtype=np.int64),
+                parent_nside_level=healpix_order,
+                oversampling_order=oversampling,
+                random_perturbation=random_perturbation,
+            )
         oversampled_trans, _translation_parent = sampling.get_oversampled_translation_grid(
             coarse_translations, pixel_offset=offset_step_px, oversampling_order=oversampling
         )
@@ -1605,7 +1614,7 @@ def _build_sampling_plan(
         translation_parent = np.asarray(_translation_parent, dtype=np.int64)
 
     return NativeSamplingPlan(
-        rotations=np.asarray(rotations, dtype=np.float32),
+        rotations=None if rotations is None else np.asarray(rotations, dtype=np.float32),
         translations=np.asarray(translations, dtype=np.float32),
         random_perturbation=random_perturbation,
         healpix_order=healpix_order,
@@ -1807,6 +1816,8 @@ def _dense_estep_config(
         "true",
         "TRUE",
     )
+    if sampling_plan.rotations is None and not sparse_pass2_enabled:
+        raise ValueError("Deferred fine rotations require sparse pass 2")
     engine_kwargs: dict = {
         "score_with_masked_images": True,
         "reconstruct_with_masked_images": False,
@@ -1953,6 +1964,10 @@ def _native_expectation_step(
         )
 
     def _expectation_step(state: InitialModelState, particle_ids: np.ndarray, halfset_ids: np.ndarray):
+        defer_token = os.environ.get("RECOVAR_VDAM_DEFER_SPARSE_ROTATIONS", "0").strip()
+        if defer_token not in {"0", "1"}:
+            raise ValueError("RECOVAR_VDAM_DEFER_SPARSE_ROTATIONS must be 0 or 1")
+        sampling_kwargs = {"defer_fine_rotations": True} if defer_token == "1" else {}
         iteration = max(1, int(state.iter))
         do_grad = _native_initialmodel_do_grad(
             state,
@@ -1972,7 +1987,7 @@ def _native_expectation_step(
             else int(sampling_state.healpix_order)
         )
         if sampling_state is None:
-            sampling_plan = _build_sampling_plan(opts, iteration=iteration)
+            sampling_plan = _build_sampling_plan(opts, iteration=iteration, **sampling_kwargs)
         else:
             skip_expected_accuracy = _skip_native_sampling_accuracy_diagnostic()
             if (
@@ -2015,6 +2030,7 @@ def _native_expectation_step(
                 opts,
                 iteration=iteration,
                 sampling_state=sampling_state,
+                **sampling_kwargs,
             )
         sigma_offset_angstrom = float(np.sqrt(max(float(state.sigma2_offset), 0.0)))
         current_noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
@@ -2067,7 +2083,7 @@ def _native_expectation_step(
         )
         result.meta.update(
             random_perturbation=float(sampling_plan.random_perturbation),
-            n_rotations=int(sampling_plan.rotations.shape[0]),
+            n_rotations=sampling_plan.n_rotations,
             n_translations=int(sampling_plan.translations.shape[0]),
             requested_image_batch_size=int(opts.image_batch_size),
             effective_image_batch_size=int(config.image_batch_size),

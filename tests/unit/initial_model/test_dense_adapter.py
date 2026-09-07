@@ -938,7 +938,8 @@ def test_dense_initial_model_estep_handles_empty_halfset(monkeypatch):
     np.testing.assert_allclose(result.accumulators[1].weight, 0.0)
 
 
-def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeypatch):
+@pytest.mark.parametrize("deferred_rotations", [False, True])
+def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeypatch, deferred_rotations):
     calls = {}
 
     def unused_dense_conversion(*args, **kwargs):
@@ -1150,7 +1151,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         means=np.zeros((1, 8**3), dtype=np.complex64),
         mean_variance=np.ones((1, 8**3), dtype=np.float32),
         noise_variance=np.ones(8 * 8, dtype=np.float32),
-        rotations=np.zeros((12, 3, 3), dtype=np.float32),
+        rotations=None if deferred_rotations else np.zeros((12, 3, 3), dtype=np.float32),
         translations=np.zeros((4, 2), dtype=np.float32),
         relion_bpref_frame=False,
         engine_kwargs={

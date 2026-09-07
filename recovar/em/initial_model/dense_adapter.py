@@ -1081,7 +1081,7 @@ def _run_sparse_pass2_initial_model_estep(
     translation_step = float(options.get("translation_step", _translation_step_from_grid(coarse_translations)))
     coarse_translation_log_prior = options.get("coarse_translation_log_prior")
     n_coarse_rotations = rotation_grid_size(healpix_order)
-    if int(np.asarray(config.rotations).shape[0]) == n_coarse_rotations:
+    if config.rotations is not None and int(np.asarray(config.rotations).shape[0]) == n_coarse_rotations:
         coarse_rotations = np.asarray(config.rotations, dtype=np.float32)
         coarse_metadata_rotations = coarse_rotations
     else:
@@ -2068,6 +2068,8 @@ def run_dense_initial_model_estep(
         )
 
     # Sparse execution constructs its own coarse/local rotation operands.
+    if config.rotations is None:
+        raise ValueError("Dense execution requires materialized rotations")
     dense_rotations = _dense_rotations_for_config(config.rotations, config)
     halfset_results: dict[int, Any] = {}
     by_halfset: dict[int, list[VdamAccumulator]] = {}
