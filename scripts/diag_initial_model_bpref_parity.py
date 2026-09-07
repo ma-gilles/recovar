@@ -343,50 +343,6 @@ def _load_sampling(fixture_dir: Path, estep_dump_dir: Path):
     )
 
 
-def _relion_projector_dense_volume_from_dump(ppref: np.ndarray, ori_size: int) -> np.ndarray:
-    """Embed RELION ``Projector::data`` into dense full-centered Fourier layout."""
-
-    from recovar.core import fourier_transform_utils as ftu
-
-    ppref = np.asarray(ppref, dtype=np.complex128)
-    if ppref.ndim != 3:
-        raise ValueError(f"ppref must be 3D, got {ppref.shape}")
-    n = int(ori_size)
-    if n % 2:
-        raise ValueError(f"expected even ori_size, got {ori_size}")
-    center = n // 2
-    half = np.zeros((n, n, center + 1), dtype=np.complex128)
-    slab = ppref[::-1, :, :]
-    zdim, ydim, xdim = slab.shape
-    z_center = zdim // 2
-    y_center = ydim // 2
-    if xdim > center + 1:
-        raise ValueError(f"ppref x half-axis {xdim} does not fit ori_size={ori_size}")
-    for iz in range(zdim):
-        for iy in range(ydim):
-            half[(iz - z_center) + center, (iy - y_center) + center, :xdim] = slab[iz, iy, :]
-    return np.asarray(ftu.half_volume_to_full_volume(half, (n, n, n)), dtype=np.complex128)
-
-
-def _relion_projector_dense_rotations(rotations: np.ndarray) -> np.ndarray:
-    """Map RELION rotation matrices to the dense frame for embedded projector data."""
-
-    rotations = np.asarray(rotations, dtype=np.float64)
-    if rotations.ndim != 3 or rotations.shape[1:] != (3, 3):
-        raise ValueError(f"rotations must have shape (R, 3, 3), got {rotations.shape}")
-    swap_xz = np.array(
-        [
-            [0.0, 0.0, 1.0],
-            [0.0, 1.0, 0.0],
-            [1.0, 0.0, 0.0],
-        ],
-        dtype=np.float64,
-    )
-    flip_x = np.diag([-1.0, 1.0, 1.0]).astype(np.float64)
-    inv_t = np.linalg.inv(rotations).transpose(0, 2, 1)
-    return np.einsum("rij,jk,kl->ril", inv_t, swap_xz, flip_x).astype(np.float32)
-
-
 def _build_config(args, ds, fixture_dir: Path, estep_dump_dir: Path, current_size: int):
     import jax.numpy as jnp
 
