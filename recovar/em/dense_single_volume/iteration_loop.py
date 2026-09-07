@@ -11,7 +11,6 @@ import gc
 import hashlib
 import logging
 import os
-import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -131,6 +130,9 @@ from recovar.em.dense_single_volume.relion_metadata import (
 )
 from recovar.em.dense_single_volume.relion_replay import (
     RelionProjectorReplayState,
+    _perturbation_restart_state_iteration,
+    _resolve_replay_random_perturbation,
+    _validate_coupled_relion_restart_state,
     _RelionHalfInputState,
     _apply_replay_correction_overrides,
     _as_sigma_offset_half_pair,
@@ -377,133 +379,6 @@ def _use_approx_acc_rot_for_convergence() -> bool:
 def _disable_approx_acc_rot_for_convergence() -> bool:
     """Return whether all native support-width convergence gating is disabled."""
     return os.environ.get(_APPROX_ACC_ROT_CONVERGENCE_DISABLE_ENV, "").strip().lower() in _TRUE_ENV_VALUES
-
-
-def _replay_perturbation_seed(
-    replay_dir: str,
-    relion_iteration: int,
-    explicit_seed: int | None,
-    replay_prefix: str = "run",
-) -> int | None:
-    """Return the RELION optimiser seed that generated a sampling state."""
-    if explicit_seed is not None:
-        return int(explicit_seed)
-    candidates = [
-        os.path.join(replay_dir, f"{replay_prefix}_it{int(relion_iteration):03d}_optimiser.star"),
-        os.path.join(replay_dir, f"{replay_prefix}_optimiser.star"),
-    ]
-    for path in candidates:
-        if not os.path.exists(path):
-            continue
-        seed = read_relion_optimiser_metadata(path).get("random_seed")
-        if seed is not None:
-            return int(seed)
-    return None
-
-
-def _resolve_replay_random_perturbation(
-    *,
-    star_value: float,
-    perturbation_factor: float,
-    relion_iteration: int,
-    replay_dir: str,
-    replay_prefix: str = "run",
-    explicit_seed: int | None,
-    precision_mode: str,
-    restart_state_iteration: int | None = None,
-) -> tuple[float, str]:
-    """Recover RELION's live perturbation without STAR decimal truncation."""
-    if precision_mode not in {"auto", "seed_exact", "star"}:
-        raise ValueError(f"Unsupported perturb_replay_precision={precision_mode!r}")
-    if precision_mode == "star":
-        return float(star_value), "star"
-
-    seed = _replay_perturbation_seed(
-        replay_dir,
-        relion_iteration,
-        explicit_seed,
-        replay_prefix=replay_prefix,
-    )
-    if seed is None:
-        if precision_mode == "seed_exact":
-            raise ValueError(
-                "perturb_replay_precision='seed_exact' requires perturb_seed or "
-                "_rlnRandomSeed in a replay optimiser STAR"
-            )
-        return float(star_value), "star-fallback"
-
-    exact = relion_sampling_perturbation_for_iteration(
-        float(perturbation_factor),
-        int(seed),
-        int(relion_iteration),
-        restart_state_iteration=restart_state_iteration,
-    )
-    # RELION writes this field with as few as five digits after the decimal.
-    # Treat the STAR value as a provenance guard, not as the arithmetic input.
-    if not np.isclose(exact, float(star_value), rtol=0.0, atol=5.1e-6):
-        raise ValueError(
-            "Seed-reconstructed SamplingPerturbation disagrees with replay STAR: "
-            f"iteration={relion_iteration} seed={seed} exact={exact:+.12g} "
-            f"star={float(star_value):+.12g}"
-        )
-    source = "seed-exact"
-    if restart_state_iteration is not None:
-        source = f"seed-exact-restart@{int(restart_state_iteration)}"
-    return float(exact), source
-
-
-def _perturbation_restart_state_iteration(
-    restart_state_iterations,
-    relion_iteration: int,
-) -> int | None:
-    """Return the latest explicit restart boundary preceding an iteration."""
-    if restart_state_iterations is None:
-        return None
-    candidates = [
-        int(value)
-        for value in restart_state_iterations
-        if int(value) < int(relion_iteration)
-    ]
-    return max(candidates) if candidates else None
-
-
-def _validate_coupled_relion_restart_state(
-    perturb_restart_state_iterations,
-    follower_replay_by_iteration,
-    follower_replay_source_artifacts,
-) -> None:
-    """Fail closed when a strict Class3D continuation restores partial state."""
-    restart_numbered_iterations = {
-        int(saved_state_iteration) + 1
-        for saved_state_iteration in perturb_restart_state_iterations
-    }
-    follower_replay_numbered_iterations = {
-        int(relion_iteration) for relion_iteration in follower_replay_by_iteration
-    }
-    missing_follower_restarts = sorted(
-        restart_numbered_iterations - follower_replay_numbered_iterations
-    )
-    if missing_follower_restarts:
-        raise ValueError(
-            "RELION perturbation restart boundaries require matching follower-scale "
-            "replay at numbered_pre_score; missing numbered iterations "
-            f"{missing_follower_restarts}"
-        )
-
-    model_source_restart_iterations = set()
-    for source_path in follower_replay_source_artifacts:
-        match = re.fullmatch(r"run_it(\d+)_model\.star", os.path.basename(str(source_path)))
-        if match is not None:
-            model_source_restart_iterations.add(int(match.group(1)) + 1)
-    unmatched_model_restarts = sorted(
-        model_source_restart_iterations - restart_numbered_iterations
-    )
-    if unmatched_model_restarts:
-        raise ValueError(
-            "RELION follower-scale replay loaded from continuation model state requires "
-            "a matching perturbation restart boundary; unmatched numbered iterations "
-            f"{unmatched_model_restarts}"
-        )
 
 
 def _debug_replay_relion_references_enabled(iteration_number: int) -> bool:

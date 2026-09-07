@@ -11,10 +11,10 @@ from recovar.em.dense_single_volume.iteration_loop import (
     _remap_relion_follower_runtime_inputs,
     _require_relion_follower_owners,
     _run_relion_iteration_loop,
-    _validate_coupled_relion_restart_state,
 )
 from recovar.em.dense_single_volume.mean_helpers import update_relion_norm_scale_corrections
 from recovar.em.dense_single_volume.relion_replay import (
+    _validate_coupled_relion_restart_state,
     _apply_replay_correction_overrides,
     _RelionHalfInputState,
 )
