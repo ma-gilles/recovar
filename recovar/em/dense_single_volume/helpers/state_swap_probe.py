@@ -2,6 +2,59 @@
 
 from collections.abc import Mapping, Sequence
 
+_STATE_SWAP_VARIANT_COMPONENTS = {
+    "all_relion": set(),
+    "all_recovar": {
+        "state",
+        "maps",
+        "tau2_noise",
+        "image_scale",
+        "direction_prior",
+        "sigma_offset",
+        "current_size",
+        "poses",
+    },
+    "recovar_maps": {"maps"},
+    "recovar_tau2_noise": {"tau2_noise"},
+    "recovar_image_scale": {"image_scale"},
+    "recovar_direction_prior": {"direction_prior"},
+    # Preserve every live RECOVAR boundary component except the learned
+    # direction prior.  The replayed RELION prior then becomes the sole
+    # intervention for first-divergence diagnostics.
+    "relion_direction_prior": {
+        "state",
+        "maps",
+        "tau2_noise",
+        "image_scale",
+        "sigma_offset",
+        "current_size",
+        "poses",
+    },
+    "recovar_sigma_offset": {"sigma_offset"},
+    "recovar_current_size": {"current_size"},
+    "recovar_poses": {"poses"},
+    "recovar_state": {"state"},
+    "recovar_state_sampling_grid": {"state_sampling_grid"},
+    "recovar_state_local_priors": {"state_local_priors"},
+    "recovar_state_convergence_only": {"state_convergence_only"},
+    "recovar_state_no_grid": {"state_no_grid"},
+    "recovar_tau2_only": {"tau2"},
+    "recovar_noise_variance_only": {"noise_variance"},
+    "recovar_previous_noise_radial_only": {"previous_noise_radial"},
+    "recovar_image_correction_only": {"image_correction"},
+    "recovar_scale_correction_only": {"scale_correction"},
+    "recovar_maps_tau2_noise": {"maps", "tau2_noise"},
+    "recovar_tau2_noise_image_scale": {"tau2_noise", "image_scale"},
+    "recovar_state_poses": {"state", "poses"},
+    "recovar_image_scale_poses": {"image_scale", "poses"},
+    "recovar_maps_global_scale_to_relion": {"map_scale"},
+    "recovar_maps_shell_scale_to_relion": {"map_scale"},
+    "relion_maps_global_scale_to_recovar": {"map_scale"},
+    "relion_maps_shell_scale_to_recovar": {"map_scale"},
+}
+
+
+
 REQUIRED_STATE_SWAP_REPLAY_KEYS = frozenset(
     {
         "direction_prior",
@@ -20,9 +73,7 @@ REQUIRED_STATE_SWAP_REPLAY_KEYS = frozenset(
 
 
 def state_swap_variant_choices() -> tuple[str, ...]:
-    """Return the variants implemented by the iteration-loop diagnostic."""
-    from recovar.em.dense_single_volume.iteration_loop import _STATE_SWAP_VARIANT_COMPONENTS
-
+    """Return the supported resident-state diagnostic variants."""
     return tuple(sorted(_STATE_SWAP_VARIANT_COMPONENTS))
 
 

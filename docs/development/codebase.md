@@ -116,3 +116,16 @@ quality and performance evidence. [Current EM status](em_status.md) separates
 the selected source from historical results and records open qualification gaps.
 Historical scorecards describe their pinned runs; they do not qualify a new
 checkout merely because the same report can still be rendered.
+
+### Replay state diagnostics
+
+`helpers/state_swap_probe.py` owns the supported component variants and CLI
+validation. It can enumerate variants without importing the refinement
+controller. `helpers/state_swap_runtime.py` owns snapshot copying, map-amplitude
+scaling and restoration of the selected components. The controller still owns
+when the snapshot is taken and applies it after the RELION replay override.
+
+Snapshots preserve the existing ownership contract: array inputs are copied,
+while `state_fields` is a shallow copy of `state.__dict__`. Changing that
+ownership, the ordered return tuple or the restoration sequence requires its
+own behavior review. Frozen-scoring integrity checks remain in the controller.

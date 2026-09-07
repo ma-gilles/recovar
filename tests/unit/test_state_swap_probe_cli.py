@@ -10,14 +10,14 @@ import pytest
 
 from recovar.em.dense_single_volume.helpers.state_swap_probe import (
     REQUIRED_STATE_SWAP_REPLAY_KEYS,
+    _STATE_SWAP_VARIANT_COMPONENTS,
     add_state_swap_probe_arguments,
     build_state_swap_probe,
     state_swap_probe_loop_index,
     state_swap_variant_choices,
     validate_state_swap_probe_application,
 )
-from recovar.em.dense_single_volume.iteration_loop import (
-    _STATE_SWAP_VARIANT_COMPONENTS,
+from recovar.em.dense_single_volume.helpers.state_swap_runtime import (
     _apply_state_swap_probe,
     _scale_state_swap_reference_maps,
     _snapshot_state_swap_inputs,
