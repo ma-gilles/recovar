@@ -56,7 +56,7 @@ from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
     require_chunked_capture_capacity,
 )
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
-from recovar.em.dense_single_volume.helpers.env_flags import parse_env_int_set
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_int_set, parse_env_nonnegative_int
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     centered_half_indices_to_fftw_half_indices,
     make_fourier_window_indices_np,
@@ -2938,19 +2938,6 @@ def _resolve_bpref_execution_bucket_policy(
     return processing_order_chunk_size, batch_consecutive_bucket_sizes
 
 
-def _optional_nonnegative_int_env(name: str) -> int | None:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return None
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be a non-negative integer, got {raw!r}") from exc
-    if value < 0:
-        raise ValueError(f"{name} must be a non-negative integer, got {raw!r}")
-    return value
-
-
 def _optional_positive_float_env(name: str) -> float | None:
     raw = os.environ.get(name)
     if raw is None or raw == "":
@@ -3254,7 +3241,7 @@ def _small_bucket_coalesce_size_for_pass(n_images: int) -> int | None:
     explicit = _optional_positive_int_env(_SMALL_BUCKET_COALESCE_SIZE_ENV)
     if explicit is not None:
         return explicit
-    max_images = _optional_nonnegative_int_env(_AUTO_SMALL_BUCKET_COALESCE_MAX_IMAGES_ENV)
+    max_images = parse_env_nonnegative_int(_AUTO_SMALL_BUCKET_COALESCE_MAX_IMAGES_ENV)
     if max_images is None:
         max_images = _DEFAULT_AUTO_SMALL_BUCKET_COALESCE_MAX_IMAGES
     if int(n_images) > int(max_images):
@@ -3272,7 +3259,7 @@ def _tail_bucket_coalesce_params_for_pass(*, fused_k_class: bool) -> tuple[int |
     tiny high-rotation tail.
     """
 
-    explicit_max_images = _optional_nonnegative_int_env(_TAIL_BUCKET_COALESCE_MAX_IMAGES_ENV)
+    explicit_max_images = parse_env_nonnegative_int(_TAIL_BUCKET_COALESCE_MAX_IMAGES_ENV)
     if explicit_max_images is None:
         max_images = _DEFAULT_TAIL_BUCKET_COALESCE_MAX_IMAGES_FUSED_KCLASS if fused_k_class else 0
     else:
@@ -3293,9 +3280,9 @@ def _tail_bucket_coalesce_params_for_pass(*, fused_k_class: bool) -> tuple[int |
 def _compact_pair_tail_bucket_coalesce_params_for_pass() -> tuple[int | None, float | None, int | None]:
     """Return bounded tail-coalescing controls for compact-pair K-class buckets."""
 
-    max_images = _optional_nonnegative_int_env(_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MAX_IMAGES_ENV)
+    max_images = parse_env_nonnegative_int(_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MAX_IMAGES_ENV)
     if max_images is None:
-        max_images = _optional_nonnegative_int_env(_TAIL_BUCKET_COALESCE_MAX_IMAGES_ENV)
+        max_images = parse_env_nonnegative_int(_TAIL_BUCKET_COALESCE_MAX_IMAGES_ENV)
     if max_images is None:
         max_images = _DEFAULT_COMPACT_PAIR_TAIL_BUCKET_COALESCE_MAX_IMAGES
     if int(max_images) <= 1:
@@ -3765,7 +3752,7 @@ def _compact_pair_dense_mstep_max_bytes_for_pass(device_memory_bytes: int | None
 
 
 def _projection_cache_max_bytes_for_pass(device_memory_bytes: int | None = None) -> int:
-    override = _optional_nonnegative_int_env(_PROJECTION_CACHE_MAX_BYTES_ENV)
+    override = parse_env_nonnegative_int(_PROJECTION_CACHE_MAX_BYTES_ENV)
     if override is not None:
         return override
     if device_memory_bytes is None:
@@ -3774,7 +3761,7 @@ def _projection_cache_max_bytes_for_pass(device_memory_bytes: int | None = None)
 
 
 def _projection_call_max_bytes_for_pass(device_memory_bytes: int | None = None) -> int:
-    override = _optional_nonnegative_int_env(_PROJECTION_CACHE_MAX_BYTES_ENV)
+    override = parse_env_nonnegative_int(_PROJECTION_CACHE_MAX_BYTES_ENV)
     if override is not None:
         return override
     if device_memory_bytes is None:
@@ -12113,7 +12100,7 @@ def compute_pass2_stats_sparse_bucketed(
     if use_exact_relion_gaussian:
         free_device_memory_bytes = _device_free_memory_bytes()
         allocator_free_memory_bytes = _jax_allocator_free_memory_bytes()
-        exact_raw_diff2_cache_max_bytes = _optional_nonnegative_int_env(
+        exact_raw_diff2_cache_max_bytes = parse_env_nonnegative_int(
             _EXACT_RAW_DIFF2_CACHE_MAX_BYTES_ENV,
         )
         if exact_raw_diff2_cache_max_bytes is None:
@@ -12144,8 +12131,8 @@ def compute_pass2_stats_sparse_bucketed(
     group_completed_chunks = 0
     group_completed_images = 0
     group_last_progress_t = None
-    progress_chunks_override = _optional_nonnegative_int_env(_SPARSE_PASS2_GROUP_PROGRESS_CHUNKS_ENV)
-    progress_seconds_override = _optional_nonnegative_int_env(_SPARSE_PASS2_GROUP_PROGRESS_SECONDS_ENV)
+    progress_chunks_override = parse_env_nonnegative_int(_SPARSE_PASS2_GROUP_PROGRESS_CHUNKS_ENV)
+    progress_seconds_override = parse_env_nonnegative_int(_SPARSE_PASS2_GROUP_PROGRESS_SECONDS_ENV)
     group_progress_chunks = (
         _DEFAULT_PASS2_GROUP_PROGRESS_CHUNKS
         if progress_chunks_override is None

@@ -21,6 +21,9 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
 )
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
+from recovar.em.dense_single_volume.helpers.env_flags import (
+    parse_env_nonnegative_int,
+)
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     centered_half_indices_to_fftw_half_indices,
     make_fourier_window_spec,
@@ -435,19 +438,6 @@ def _reconstruction_pack_large_bucket_quantum() -> int:
                 EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM,
             )
     return int(EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM)
-
-
-def _optional_nonnegative_int_env(name: str) -> int | None:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return None
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be a non-negative integer, got {raw!r}") from exc
-    if value < 0:
-        raise ValueError(f"{name} must be a non-negative integer, got {raw!r}")
-    return value
 
 
 def _env_flag(name: str) -> bool:
@@ -2215,7 +2205,7 @@ def run_local_em_exact(
     sparse_big_jit_bucket_count = 0
     big_jit_debug_bucket_count = 0
     sparse_adjoint_chunk_count = 0
-    sparse_adjoint_target_rows = _optional_nonnegative_int_env(EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS_ENV) or 0
+    sparse_adjoint_target_rows = parse_env_nonnegative_int(EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS_ENV) or 0
     total_local_rotations = int(local_layout.total_local_rotations)
     logged_deferred_mstep_chunking = False
     logged_deferred_noise_projection_chunking = False
@@ -2436,8 +2426,8 @@ def run_local_em_exact(
             bool(score_only),
             bool(mstep_relion_x_half),
         )
-    progress_chunks_override = _optional_nonnegative_int_env(EXACT_LOCAL_PROGRESS_CHUNKS_ENV)
-    progress_seconds_override = _optional_nonnegative_int_env(EXACT_LOCAL_PROGRESS_SECONDS_ENV)
+    progress_chunks_override = parse_env_nonnegative_int(EXACT_LOCAL_PROGRESS_CHUNKS_ENV)
+    progress_seconds_override = parse_env_nonnegative_int(EXACT_LOCAL_PROGRESS_SECONDS_ENV)
     exact_local_progress_chunks = (
         DEFAULT_EXACT_LOCAL_PROGRESS_CHUNKS
         if progress_chunks_override is None

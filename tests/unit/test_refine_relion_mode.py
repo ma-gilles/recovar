@@ -4189,19 +4189,20 @@ def test_packed_local_noise_projection_default_cap_is_memory_safe(monkeypatch):
 
 def test_exact_local_progress_env_and_hook(monkeypatch):
     from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.dense_single_volume.helpers.env_flags import parse_env_nonnegative_int
 
     monkeypatch.delenv(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV, raising=False)
-    assert local_em_engine._optional_nonnegative_int_env(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV) is None
+    assert parse_env_nonnegative_int(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV) is None
 
     monkeypatch.setenv(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV, "0")
-    assert local_em_engine._optional_nonnegative_int_env(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV) == 0
+    assert parse_env_nonnegative_int(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV) == 0
 
     monkeypatch.setenv(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV, "25")
-    assert local_em_engine._optional_nonnegative_int_env(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV) == 25
+    assert parse_env_nonnegative_int(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV) == 25
 
     monkeypatch.setenv(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV, "-1")
     with pytest.raises(ValueError, match="non-negative integer"):
-        local_em_engine._optional_nonnegative_int_env(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV)
+        parse_env_nonnegative_int(local_em_engine.EXACT_LOCAL_PROGRESS_CHUNKS_ENV)
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     assert "Exact local bucket loop start" in src
