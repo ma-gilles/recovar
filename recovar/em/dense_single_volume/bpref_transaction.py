@@ -2,7 +2,6 @@
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 
 _POSITIONAL = (
@@ -55,7 +54,13 @@ _FALSE_REPLAY = (
 
 @jax.jit
 def _concatenate_fields(columns):
-    return tuple(jnp.concatenate(column, axis=0) for column in columns)
+    counts = tuple(batch.shape[0] for batch in columns[0])
+    local_ids = tuple(jnp.arange(n, dtype=jnp.int32) for n in counts)
+    return (
+        *tuple(jnp.concatenate(column, axis=0) for column in columns),
+        jnp.concatenate(tuple(ids % 8 for ids in local_ids)),
+        jnp.concatenate(local_ids),
+    )
 
 
 class BprefTransactionQueue:
@@ -156,14 +161,7 @@ class BprefTransactionQueue:
             columns = [tuple(call[name] for call in self._pending) for name in names]
             # The old CUDA wrapper restarts arange(B) for each bucket. Explicit
             # IDs must keep that assignment without enabling parallel replay.
-            counts = [call["images"].shape[0] for call in self._pending]
             names.extend(("worker_lane_ids", "particle_trace_ids"))
-            columns.extend(
-                (
-                    tuple(np.arange(n, dtype=np.int32) % 8 for n in counts),
-                    tuple(np.arange(n, dtype=np.int32) for n in counts),
-                )
-            )
             merged.update(zip(names, _concatenate_fields(tuple(columns)), strict=True))
             merged["parallel_worker_replay"] = False
         merged.update(data_volume=data, weight_volume=weight, return_denominator=False)

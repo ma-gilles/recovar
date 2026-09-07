@@ -395,6 +395,7 @@ EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_NOISE_NORM_CAPACITY"
 EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_NOISE_PIXEL_CAPACITY"
 EXACT_LOCAL_HOST_PLAN_PACK_ENV = "RECOVAR_EXACT_LOCAL_HOST_PLAN_PACK"
 EXACT_LOCAL_HOST_PUBLICATION_ENV = "RECOVAR_EXACT_LOCAL_HOST_PUBLICATION"
+EXACT_LOCAL_BPREF_TRANSACTION_ENV = "RECOVAR_EXACT_LOCAL_BPREF_TRANSACTION"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS = 64_000_000
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS_ENV = (
@@ -1714,11 +1715,21 @@ def _accumulate_relion_vdam_physical_particle_grid(
     candidate_trace_active=False,
     serial_particle_accumulation=False,
     runtime_projector_radius=None,
+    transaction_queue=None,
 ):
     """Form and scatter VDAM residuals in physical particle order."""
 
     if max_r is None:
         raise ValueError("RELION VDAM physical particle-grid accumulation requires max_r")
+    if transaction_queue is not None and (
+        projector_full is None
+        or materialized_rotation_replay
+        or particle_replay_order is not None
+        or serial_particle_accumulation
+    ):
+        raise ValueError(
+            "BPref transactions require inline projection without materialized or serial particle replay"
+        )
     if runtime_projector_radius is not None and projector_full is None:
         raise ValueError("BPref projector capacity requires the inline projector")
     images = jnp.asarray(images, dtype=jnp.complex64)
@@ -1901,8 +1912,11 @@ def _accumulate_relion_vdam_physical_particle_grid(
             raise ValueError(
                 "inline RELION VDAM projection requires scoring rotations and projector radius"
             )
+        callback = cuda_backproject.relion_vdam_mstep_fused_projector_x_half
+        if transaction_queue is not None:
+            callback = functools.partial(transaction_queue.accumulate, callback)
         Ft_y, Ft_ctf, _ = (
-            cuda_backproject.relion_vdam_mstep_fused_projector_x_half(
+            callback(
                 *common_args,
                 jnp.asarray(projector_full, dtype=jnp.complex64),
                 jnp.asarray(scoring_rotations, dtype=jnp.float32),
@@ -2097,6 +2111,13 @@ def _local_host_plan_pack_requested() -> bool:
     token = os.environ.get(EXACT_LOCAL_HOST_PLAN_PACK_ENV, "0").strip()
     if token not in {"0", "1"}:
         raise ValueError(f"{EXACT_LOCAL_HOST_PLAN_PACK_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_bpref_transaction_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_BPREF_TRANSACTION_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_BPREF_TRANSACTION_ENV} must be 0 or 1")
     return token == "1"
 
 
@@ -4547,6 +4568,11 @@ def run_local_em_exact(
     if bpref_projector_capacity_enabled and not projector_capacity_enabled:
         raise ValueError("BPref projector capacity requires the shared local projector capacity")
     packed_final_noise_enabled = bool(_packed_final_noise_enabled)
+    bpref_transaction_enabled = _local_bpref_transaction_requested()
+    if bpref_transaction_enabled and not (
+        defer_packed_vdam_enabled and packed_final_noise_enabled
+    ):
+        raise ValueError("BPref transactions require deferred packed final-noise execution")
     host_plan_pack_enabled = _local_host_plan_pack_requested()
     host_publication_enabled = _local_host_publication_requested()
     if host_publication_enabled and not defer_packed_vdam_enabled:
@@ -5614,6 +5640,18 @@ def run_local_em_exact(
         raise ValueError("projector capacity cannot be combined with the local projection cache")
     if bpref_projector_capacity_enabled and (not source_faithful_bpref or score_only):
         raise ValueError("BPref projector capacity requires the source-faithful VDAM accumulator route")
+    bpref_transaction_queue = None
+    if bpref_transaction_enabled:
+        if (
+            not source_faithful_bpref or score_only
+            or not use_big_jit_buckets or fixed_capacity_enabled
+        ):
+            raise ValueError(
+                "BPref transactions require the source-faithful packed local BigJIT VDAM route"
+            )
+        from recovar.em.dense_single_volume.bpref_transaction import BprefTransactionQueue
+
+        bpref_transaction_queue = BprefTransactionQueue()
     if fixed_capacity_enabled and not use_big_jit_buckets:
         raise ValueError(
             "fixed-capacity score-only execution requires the mature local big-JIT bucket path",
@@ -7803,6 +7841,7 @@ def run_local_em_exact(
                         ),
                         Ft_y,
                         Ft_ctf,
+                        transaction_queue=bpref_transaction_queue,
                         projector_full=source_vdam_projector_full,
                         scoring_rotations=_particle_slice(
                             packed_rotations_np, particle_start, particle_stop
@@ -9821,6 +9860,12 @@ def run_local_em_exact(
             jax.clear_caches()
             timing.host_stats_s += time.time() - cleanup_t0
 
+    if bpref_transaction_queue is not None:
+        adjoint_t0 = time.time()
+        Ft_y, Ft_ctf, _ = bpref_transaction_queue.flush(Ft_y, Ft_ctf)
+        if return_profile:
+            _block_until_ready(Ft_y, Ft_ctf)
+        timing.adjoint_y_s += time.time() - adjoint_t0
     _log_exact_local_progress(force=True, done=True)
     final_accumulator_t0 = time.time()
     if not score_only:
