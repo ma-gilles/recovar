@@ -398,6 +398,7 @@ EXACT_LOCAL_HOST_PUBLICATION_ENV = "RECOVAR_EXACT_LOCAL_HOST_PUBLICATION"
 EXACT_LOCAL_BPREF_TRANSACTION_ENV = "RECOVAR_EXACT_LOCAL_BPREF_TRANSACTION"
 EXACT_LOCAL_BPREF_PARTICLE_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_BPREF_PARTICLE_CAPACITY"
 EXACT_LOCAL_BPREF_CUDA_PACKING_ENV = "RECOVAR_EXACT_LOCAL_BPREF_CUDA_PACKING"
+EXACT_LOCAL_HOST_PLAN_CUDA_ENV = "RECOVAR_EXACT_LOCAL_HOST_PLAN_CUDA"
 EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV = "RECOVAR_EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS = 64_000_000
@@ -2114,6 +2115,13 @@ def _local_host_plan_pack_requested() -> bool:
     token = os.environ.get(EXACT_LOCAL_HOST_PLAN_PACK_ENV, "0").strip()
     if token not in {"0", "1"}:
         raise ValueError(f"{EXACT_LOCAL_HOST_PLAN_PACK_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_host_plan_cuda_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_HOST_PLAN_CUDA_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_HOST_PLAN_CUDA_ENV} must be 0 or 1")
     return token == "1"
 
 
@@ -4606,6 +4614,9 @@ def run_local_em_exact(
     ):
         raise ValueError("BPref transactions require deferred packed final-noise execution")
     host_plan_pack_enabled = _local_host_plan_pack_requested()
+    host_plan_cuda_enabled = _local_host_plan_cuda_requested()
+    if host_plan_cuda_enabled and not host_plan_pack_enabled:
+        raise ValueError("CUDA host-plan packing requires host-plan packing")
     host_publication_enabled = _local_host_publication_requested()
     skip_deferred_zero_norm = _local_skip_deferred_zero_norm_requested()
     if host_publication_enabled and not defer_packed_vdam_enabled:
@@ -7262,6 +7273,10 @@ def run_local_em_exact(
                             from recovar.em.dense_single_volume.helpers.deferred_vdam_host_pack import (
                                 pack_deferred_vdam_host_plan,
                             )
+                            if host_plan_cuda_enabled:
+                                from recovar.em.dense_single_volume.helpers.deferred_vdam_host_pack import (
+                                    pack_deferred_vdam_host_plan_cuda as pack_deferred_vdam_host_plan,
+                                )
 
                             (
                                 packed_reconstruction_probs,

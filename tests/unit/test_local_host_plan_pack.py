@@ -101,6 +101,13 @@ def test_actual_bucket_eligibility(deferred, source, noise):
 
 def test_disabled_packing_statement_order_matches_frozen_parent():
     class Disable(ast.NodeTransformer):
+        def visit_IfExp(self, node):
+            # The separately qualified host-publication option was added after
+            # this fixture. Compare its disabled path to the original parent.
+            if ast.unparse(node.test) == "host_publication_enabled":
+                return self.visit(node.orelse)
+            return self.generic_visit(node)
+
         def visit_If(self, node):
             if ast.unparse(node.test) == "host_plan_pack_enabled":
                 return [self.visit(n) for n in node.orelse]
@@ -115,7 +122,7 @@ def test_disabled_packing_statement_order_matches_frozen_parent():
     assert digest == "2aad4cc3e721ba61736b47a031e252d2b2c1097abda8e653812adfb58f967e4f"
 
 
-def _execute(monkeypatch, enabled, batch=2, use_window=True, bad_shape=False, fail_helper=False):
+def _execute(monkeypatch, enabled, batch=2, use_window=True, bad_shape=False, fail_helper=False, cuda_enabled=False):
     b, r, t, p = 3, 4, 3, 2
     probabilities = jnp.asarray(np.arange(b * r * t, dtype=np.float32).reshape(b, r, t) / 16)
     sums = jnp.sum(probabilities, axis=2)
@@ -164,11 +171,18 @@ def _execute(monkeypatch, enabled, batch=2, use_window=True, bad_shape=False, fa
         return result
 
     monkeypatch.setattr(cuda, "relion_vdam_mstep_denominator_f32", denominator)
-    monkeypatch.setattr(helper, "pack_deferred_vdam_host_plan", compiled_helper)
+
+    def wrong_route(*args):
+        raise AssertionError("Packing selected the wrong backend")
+
+    monkeypatch.setattr(helper, "pack_deferred_vdam_host_plan", wrong_route if cuda_enabled else compiled_helper)
+    monkeypatch.setattr(helper, "pack_deferred_vdam_host_plan_cuda", compiled_helper if cuda_enabled else wrong_route)
     env = dict(
         np=np,
         jnp=jnp,
         host_plan_pack_enabled=enabled,
+        host_plan_cuda_enabled=cuda_enabled,
+        host_publication_enabled=False,
         unpadded_batch_size=batch,
         batch_size=b,
         probs_sum_t=sums,
@@ -240,11 +254,12 @@ def _execute(monkeypatch, enabled, batch=2, use_window=True, bad_shape=False, fa
 
 
 @pytest.mark.parametrize("batch,use_window", [(2, True), (3, True), (2, False), (3, False)])
-def test_actual_pack_route_preserves_host_plan_and_forwards_every_operand(monkeypatch, batch, use_window):
+@pytest.mark.parametrize("cuda_enabled", [False, True])
+def test_actual_pack_route_preserves_host_plan_and_forwards_every_operand(monkeypatch, batch, use_window, cuda_enabled):
     with monkeypatch.context() as m:
         old = _execute(m, False, batch, use_window)
     with monkeypatch.context() as m:
-        new = _execute(m, True, batch, use_window)
+        new = _execute(m, True, batch, use_window, cuda_enabled=cuda_enabled)
     for a, b in zip(old, new, strict=True):
         assert a.shape == b.shape and a.dtype == b.dtype
         np.testing.assert_array_equal(a.view(np.uint8), b.view(np.uint8))
@@ -255,5 +270,6 @@ def test_projection_shape_check_precedes_cuda_or_helper(monkeypatch, enabled):
     _execute(monkeypatch, enabled, bad_shape=True)
 
 
-def test_compiled_helper_failure_is_not_silently_replayed(monkeypatch):
-    _execute(monkeypatch, True, fail_helper=True)
+@pytest.mark.parametrize("cuda_enabled", [False, True])
+def test_compiled_helper_failure_is_not_silently_replayed(monkeypatch, cuda_enabled):
+    _execute(monkeypatch, True, fail_helper=True, cuda_enabled=cuda_enabled)

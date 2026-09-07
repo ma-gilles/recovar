@@ -106,3 +106,24 @@ def pack_deferred_vdam_host_plan(
     ctf_probs = cuda_backproject.relion_vdam_mstep_denominator_f32(ctf, minvsigma2, posterior)
     ctf_probs = jnp.where(row_mask[:, :, None], ctf_probs, 0.0)
     return DeferredVdamHostPackedOperands(*packed, ctf_probs)
+
+
+@jax.jit
+def pack_deferred_vdam_host_plan_cuda(
+    reconstruction_probs,
+    reconstruction_probs_sum_t,
+    source_images,
+    source_ctf,
+    source_minvsigma2,
+    flat_noise_projection,
+    take_indices,
+    row_mask,
+    flat_take_indices,
+):
+    """Same host-selected seven-output contract through one CUDA transaction."""
+    from recovar import cuda_backproject
+
+    return DeferredVdamHostPackedOperands(*cuda_backproject.pack_deferred_vdam_host_plan_cuda(
+        reconstruction_probs, reconstruction_probs_sum_t, source_images, source_ctf,
+        source_minvsigma2, flat_noise_projection, take_indices, row_mask, flat_take_indices,
+    ))

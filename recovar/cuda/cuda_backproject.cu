@@ -47,6 +47,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <initializer_list>
 #include <limits>
 #include <mutex>
 #include <shared_mutex>
@@ -12849,6 +12850,184 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
+__device__ int64_t deferred_host_gather_index(int32_t index, int64_t size)
+{
+    int64_t normalized = index;
+    if (normalized < 0) normalized += size;
+    return normalized >= 0 && normalized < size ? normalized : -1;
+}
+
+__global__ void deferred_host_posterior_pack_kernel(
+    const uint32_t* posterior, const uint32_t* sum_t, const int32_t* take,
+    const uint8_t* mask, int64_t rows, int64_t packed_rotations,
+    int64_t dense_rotations, int64_t translations, uint32_t* packed, uint32_t* packed_sum)
+{
+    const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i >= rows * translations) return;
+    const int64_t row = i / translations, translation = i % translations;
+    const int64_t rotation = deferred_host_gather_index(take[row], dense_rotations);
+    uint32_t value = 0, sum = 0;
+    if (mask[row]) {
+        if (rotation < 0) {
+            value = sum = 0x7fc00000u; // JAX float32 gather fill value.
+        } else {
+            const int64_t source_row = (row / packed_rotations) * dense_rotations + rotation;
+            value = posterior[source_row * translations + translation];
+            if (translation == 0) sum = sum_t[source_row];
+        }
+    }
+    packed[i] = value;
+    if (translation == 0) packed_sum[row] = sum;
+}
+
+__global__ void deferred_host_projection_pack_kernel(
+    const uint32_t* projection, const int32_t* take, const uint8_t* mask,
+    int64_t rows, int64_t flat_rows, int64_t pixel_words, uint32_t* output)
+{
+    const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i >= rows * pixel_words) return;
+    const int64_t row = i / pixel_words, word = i % pixel_words;
+    uint32_t value = 0;
+    if (mask[row]) {
+        const int64_t source_row = deferred_host_gather_index(take[row], flat_rows);
+        // JAX complex64 gather fill is NaN + 0j, not NaN + NaNj.
+        value = source_row < 0 ? (word % 2 == 0 ? 0x7fc00000u : 0u)
+                              : projection[source_row * pixel_words + word];
+    }
+    output[i] = value;
+}
+
+__global__ void deferred_host_image_prefix_kernel(
+    const uint2* images, const uint32_t* ctf, const uint32_t* noise, int64_t count,
+    uint2* packed_images, uint32_t* packed_ctf, uint32_t* packed_noise)
+{
+    const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i >= count) return;
+    packed_images[i] = images[i];
+    packed_ctf[i] = ctf[i];
+    packed_noise[i] = noise[i];
+}
+
+__global__ void deferred_host_denominator_mask_kernel(
+    const uint8_t* mask, int64_t count, int64_t pixels, uint32_t* output)
+{
+    const int64_t i = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i < count && !mask[i / pixels]) output[i] = 0;
+}
+
+ffi::Error DeferredVdamHostPackImpl(
+    cudaStream_t stream,
+    ffi::AnyBuffer posterior, ffi::AnyBuffer sum_t, ffi::AnyBuffer images,
+    ffi::AnyBuffer ctf, ffi::AnyBuffer minvsigma2, ffi::AnyBuffer flat_projection,
+    ffi::AnyBuffer take, ffi::AnyBuffer mask, ffi::AnyBuffer flat_take,
+    ffi::Result<ffi::AnyBuffer> packed_posterior, ffi::Result<ffi::AnyBuffer> packed_sum,
+    ffi::Result<ffi::AnyBuffer> packed_images, ffi::Result<ffi::AnyBuffer> packed_ctf,
+    ffi::Result<ffi::AnyBuffer> packed_noise, ffi::Result<ffi::AnyBuffer> packed_projection,
+    ffi::Result<ffi::AnyBuffer> denominator)
+{
+    const auto invalid = [](const char* message) {
+        return ffi::Error::InvalidArgument(std::string("DeferredVdamHostPack: ") + message);
+    };
+    const auto dense = posterior.dimensions(), image_dims = images.dimensions();
+    const auto flat = flat_projection.dimensions(), plan = take.dimensions();
+    if (dense.size() != 3 || image_dims.size() != 2 || flat.size() != 2 || plan.size() != 2)
+        return invalid("input ranks differ");
+    const int64_t batch = plan[0], rotations = plan[1], pixels = image_dims[1], translations = dense[2];
+    const auto valid_count = [](std::initializer_list<int64_t> shape) {
+        const int64_t limit = static_cast<int64_t>(std::numeric_limits<int32_t>::max()) * 256;
+        int64_t count = 1;
+        for (int64_t n : shape) {
+            if (n <= 0 || n > limit / count) return false;
+            count *= n;
+        }
+        return true;
+    };
+    if (!valid_count({batch, rotations, translations}) ||
+        !valid_count({batch, rotations, pixels, 2}) ||
+        !valid_count({dense[0], dense[1], translations}) ||
+        !valid_count({image_dims[0], pixels, 2}) || !valid_count({flat[0], pixels, 2}) ||
+        dense[0] < batch || image_dims[0] < batch)
+        return invalid("invalid batch or overflowing geometry");
+    const auto matches = [](ffi::AnyBuffer value, ffi::DataType type,
+                            std::initializer_list<int64_t> shape) {
+        const auto dims = value.dimensions();
+        if (value.element_type() != type || dims.size() != shape.size()) return false;
+        auto current = dims.begin();
+        for (int64_t n : shape) if (*current++ != n) return false;
+        return true;
+    };
+    using D = ffi::DataType;
+    if (!matches(posterior, D::F32, {dense[0], dense[1], translations}) ||
+        !matches(sum_t, D::F32, {dense[0], dense[1]}) ||
+        !matches(images, D::C64, {image_dims[0], pixels}) ||
+        !matches(ctf, D::F32, {image_dims[0], pixels}) ||
+        !matches(minvsigma2, D::F32, {image_dims[0], pixels}) ||
+        !matches(flat_projection, D::C64, {flat[0], pixels}) ||
+        !matches(take, D::S32, {batch, rotations}) ||
+        !matches(mask, D::PRED, {batch, rotations}) ||
+        !matches(flat_take, D::S32, {batch, rotations}) ||
+        !matches(*packed_posterior, D::F32, {batch, rotations, translations}) ||
+        !matches(*packed_sum, D::F32, {batch, rotations}) ||
+        !matches(*packed_images, D::C64, {batch, pixels}) ||
+        !matches(*packed_ctf, D::F32, {batch, pixels}) ||
+        !matches(*packed_noise, D::F32, {batch, pixels}) ||
+        !matches(*packed_projection, D::C64, {batch, rotations, pixels}) ||
+        !matches(*denominator, D::F32, {batch, rotations, pixels}))
+        return invalid("input/output shape or dtype differs");
+    const auto grid = [](int64_t count) {
+        return static_cast<unsigned int>((count - 1) / 256 + 1);
+    };
+    const int64_t rows = batch * rotations;
+    const auto row_mask = static_cast<const uint8_t*>(mask.untyped_data());
+    deferred_host_posterior_pack_kernel<<<grid(rows * translations), 256, 0, stream>>>(
+        static_cast<const uint32_t*>(posterior.untyped_data()),
+        static_cast<const uint32_t*>(sum_t.untyped_data()),
+        static_cast<const int32_t*>(take.untyped_data()), row_mask, rows, rotations, dense[1], translations,
+        static_cast<uint32_t*>(packed_posterior->untyped_data()),
+        static_cast<uint32_t*>(packed_sum->untyped_data()));
+    auto error = cudaGetLastError();
+    if (error != cudaSuccess) return ffi::Error::Internal(cudaGetErrorString(error));
+    deferred_host_projection_pack_kernel<<<grid(rows * pixels * 2), 256, 0, stream>>>(
+        static_cast<const uint32_t*>(flat_projection.untyped_data()),
+        static_cast<const int32_t*>(flat_take.untyped_data()), row_mask, rows, flat[0], pixels * 2,
+        static_cast<uint32_t*>(packed_projection->untyped_data()));
+    error = cudaGetLastError();
+    if (error != cudaSuccess) return ffi::Error::Internal(cudaGetErrorString(error));
+    deferred_host_image_prefix_kernel<<<grid(batch * pixels), 256, 0, stream>>>(
+        static_cast<const uint2*>(images.untyped_data()),
+        static_cast<const uint32_t*>(ctf.untyped_data()),
+        static_cast<const uint32_t*>(minvsigma2.untyped_data()), batch * pixels,
+        static_cast<uint2*>(packed_images->untyped_data()),
+        static_cast<uint32_t*>(packed_ctf->untyped_data()),
+        static_cast<uint32_t*>(packed_noise->untyped_data()));
+    error = cudaGetLastError();
+    if (error != cudaSuccess) return ffi::Error::Internal(cudaGetErrorString(error));
+    // Reuse exactly the original sequential translation arithmetic and launch.
+    error = launch_relion_vdam_mstep_denominator_f32(
+        stream, static_cast<const float*>(packed_ctf->untyped_data()),
+        static_cast<const float*>(packed_noise->untyped_data()),
+        static_cast<const float*>(packed_posterior->untyped_data()),
+        static_cast<float*>(denominator->untyped_data()),
+        batch, rotations, translations, pixels, pixels, nullptr);
+    if (error != cudaSuccess) return ffi::Error::Internal(cudaGetErrorString(error));
+    deferred_host_denominator_mask_kernel<<<grid(rows * pixels), 256, 0, stream>>>(
+        row_mask, rows * pixels, pixels, static_cast<uint32_t*>(denominator->untyped_data()));
+    error = cudaGetLastError();
+    if (error != cudaSuccess) return ffi::Error::Internal(cudaGetErrorString(error));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    DeferredVdamHostPack, DeferredVdamHostPackImpl,
+    ffi::Ffi::Bind().Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>().Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>().Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
 );
 

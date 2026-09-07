@@ -563,6 +563,7 @@ _TARGET_RELION_TRANSLATE_SCORE_F32 = "cuda_relion_translate_score_f32"
 _TARGET_RELION_TRANSLATE_BPREF_F32 = "cuda_relion_translate_bpref_f32"
 _TARGET_RELION_BPREF_OPERANDS_F32 = "cuda_relion_bpref_operands_f32"
 _TARGET_BPREF_PARTICLE_PACK = "cuda_bpref_particle_pack"
+_TARGET_DEFERRED_VDAM_HOST_PACK = "cuda_deferred_vdam_host_pack"
 _TARGET_RELION_VDAM_MSTEP_SUMS_F32 = "cuda_relion_vdam_mstep_sums_f32"
 _TARGET_RELION_VDAM_MSTEP_DENOMINATOR_F32 = (
     "cuda_relion_vdam_mstep_denominator_f32"
@@ -1995,6 +1996,71 @@ def relion_vdam_mstep_sums_f32(
 
 
 _bpref_particle_pack_ffi_registered = False
+_deferred_vdam_host_pack_ffi_registered = False
+
+
+def _ensure_deferred_vdam_host_pack_ffi():
+    global _deferred_vdam_host_pack_ffi_registered
+    _ensure_ffi()
+    if _deferred_vdam_host_pack_ffi_registered:
+        return
+    with _ffi_lock:
+        if _deferred_vdam_host_pack_ffi_registered:
+            return
+        symbol = getattr(_get_lib(), "DeferredVdamHostPack", None)
+        if symbol is None:
+            raise RuntimeError("CUDA host-plan packing requires an explicit build with DeferredVdamHostPack")
+        jax.ffi.register_ffi_target(
+            _TARGET_DEFERRED_VDAM_HOST_PACK, jax.ffi.pycapsule(symbol), platform="CUDA",
+        )
+        _deferred_vdam_host_pack_ffi_registered = True
+
+
+def _deferred_vdam_host_pack_shapes(
+    posterior, sum_t, images, ctf, minvsigma2, flat_projection, take, mask, flat_take,
+):
+    for value, dtype, rank in zip(
+        (posterior, sum_t, images, ctf, minvsigma2, flat_projection, take, mask, flat_take),
+        (jnp.float32, jnp.float32, jnp.complex64, jnp.float32, jnp.float32,
+         jnp.complex64, jnp.int32, jnp.bool_, jnp.int32),
+        (3, 2, 2, 2, 2, 2, 2, 2, 2), strict=True,
+    ):
+        if value.dtype != dtype:
+            raise TypeError("CUDA host-plan packing input dtype differs")
+        if value.ndim != rank or any(n <= 0 for n in value.shape):
+            raise ValueError("CUDA host-plan packing requires positive dimensions and matching ranks")
+    batch, rotations = take.shape
+    if posterior.shape[0] < batch or images.shape[0] < batch or sum_t.shape != posterior.shape[:2]:
+        raise ValueError("CUDA host-plan packing posterior/image batch geometry differs")
+    if ctf.shape != images.shape or minvsigma2.shape != images.shape or flat_projection.shape[1] != images.shape[1]:
+        raise ValueError("CUDA host-plan packing pixel geometry differs")
+    if mask.shape != take.shape or flat_take.shape != take.shape:
+        raise ValueError("CUDA host-plan packing descriptor shapes differ")
+    pixels, translations = images.shape[1], posterior.shape[2]
+    return tuple(jax.ShapeDtypeStruct(shape, dtype) for shape, dtype in (
+        ((batch, rotations, translations), jnp.float32),
+        ((batch, rotations), jnp.float32),
+        ((batch, pixels), jnp.complex64),
+        ((batch, pixels), jnp.float32),
+        ((batch, pixels), jnp.float32),
+        ((batch, rotations, pixels), jnp.complex64),
+        ((batch, rotations, pixels), jnp.float32),
+    ))
+
+
+@jax.jit
+def pack_deferred_vdam_host_plan_cuda(
+    posterior, sum_t, images, ctf, minvsigma2, flat_projection, take, mask, flat_take,
+):
+    """Gather/mask on device and reuse the original sequential CUDA denominator."""
+    args = (posterior, sum_t, images, ctf, minvsigma2, flat_projection, take, mask, flat_take)
+    outputs = _deferred_vdam_host_pack_shapes(*args)
+    if jax.default_backend() != "gpu" or not custom_cuda_requested():
+        raise RuntimeError("CUDA host-plan packing requires an enabled JAX GPU backend")
+    _ensure_deferred_vdam_host_pack_ffi()
+    return tuple(jax.ffi.ffi_call(
+        _TARGET_DEFERRED_VDAM_HOST_PACK, outputs, vmap_method="sequential",
+    )(*args))
 
 
 def _ensure_bpref_particle_pack_ffi():
