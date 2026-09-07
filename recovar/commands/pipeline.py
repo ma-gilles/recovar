@@ -482,9 +482,6 @@ def add_args(parser: argparse.ArgumentParser):
 # ---------------------------------------------------------------------------
 # Helper functions — extracted from standard_recovar_pipeline for clarity
 # ---------------------------------------------------------------------------
-# NOTE(refactor): _peek_image_size and _resolve_downsample could live in
-# data_io, but they depend on argparse args and are only used here, so
-# moving them would require an intermediate data class.  Low priority.
 
 
 def _peek_image_size(particles_file: str, datadir: str = "", strip_prefix=None) -> int:
@@ -497,7 +494,7 @@ def _peek_image_size(particles_file: str, datadir: str = "", strip_prefix=None) 
     ``StarLoader`` performs for every unique stack file.
 
     For .mrc/.mrcs files we open with ``header_only=True`` (~1 kB read).
-    For .cs files we load just the numpy structured array header.
+    For .cs files we load the NumPy structured metadata array.
     Falls back to a full ``load_images()`` call for anything not handled above.
     """
     ext = particles_file.rsplit(".", 1)[-1].lower()
@@ -570,10 +567,9 @@ def _peek_image_size(particles_file: str, datadir: str = "", strip_prefix=None) 
 def _resolve_downsample(args):
     """Decide whether downsampling is actually needed.
 
-    Skips downsampling if --no-downsample was passed, if the original image
-    size is already <= the target, or if it is within 12.5% of the target
-    (not worth the overhead).  Sets ``args.downsample`` to ``None`` when
-    skipping.
+    Skips downsampling if --no-downsample was passed or if the original image
+    size is already <= the target. Sets ``args.downsample`` to ``None`` when
+    skipping; a missing target also leaves the input unchanged.
     """
     if getattr(args, "no_downsample", False):
         logger.info("Downsampling disabled by --no-downsample")

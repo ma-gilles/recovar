@@ -273,10 +273,9 @@ def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us
     # in its natural half-Fourier shape (half_vol, q); this function was
     # written for the legacy full-Fourier shape and uses linalg.batch_idft3
     # which expects full Fourier. Detect and convert.
-    import numpy as _np
-    vol_size = int(_np.prod(volume_shape))
-    half_vol_size = int(_np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)))
-    u_arr = _np.asarray(u)
+    vol_size = int(np.prod(volume_shape))
+    half_vol_size = int(np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)))
+    u_arr = np.asarray(u)
     if u_arr.shape[0] == half_vol_size:
         u = fourier_transform_utils.half_volume_to_full_volume(u_arr.T, volume_shape).T
     elif u_arr.shape[0] != vol_size:

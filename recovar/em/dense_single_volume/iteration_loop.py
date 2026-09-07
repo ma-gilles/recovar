@@ -1411,7 +1411,6 @@ PROJECTION_PADDING_FACTOR = 2
 # Dense ``run_em`` kwargs that are identical for every E-step in RELION mode.
 # Per-iter and per-half values are layered on top at each call site via
 # ``{**_DENSE_EM_STATIC_KWARGS, ...}``.
-import os as _os_for_f64
 
 _DENSE_EM_STATIC_KWARGS: dict = {
     "score_with_masked_images": True,
@@ -1420,24 +1419,21 @@ _DENSE_EM_STATIC_KWARGS: dict = {
     "reconstruction_padding_factor": PADDING_FACTOR,
     # Default float32. Set ``RECOVAR_USE_FLOAT64_SCORING=1`` /
     # ``RECOVAR_USE_FLOAT64_PROJECTIONS=1`` to upgrade to double precision.
-    # Diagnostic: K=4 100k/256² shows growing per-iter drift (8e-4 at it4→it5
-    # rising to 19e-4 at it14→it15 vs RELION), pattern consistent with
-    # single-precision accumulating in the K-class M-step + projector at high
-    # ``current_size``. Flipping these to True for the dense K-class path
-    # should remove that precision floor at ~2× wall cost.
+    # Use fixed-state comparisons to evaluate precision changes; these flags
+    # alone do not establish the cause of a trajectory mismatch.
     "use_float64_scoring": bool(
-        _os_for_f64.environ.get("RECOVAR_USE_FLOAT64_SCORING", "0").strip().lower()
+        os.environ.get("RECOVAR_USE_FLOAT64_SCORING", "0").strip().lower()
         in {"1", "true", "yes", "on"}
     ),
     "use_float64_projections": bool(
-        _os_for_f64.environ.get("RECOVAR_USE_FLOAT64_PROJECTIONS", "0").strip().lower()
+        os.environ.get("RECOVAR_USE_FLOAT64_PROJECTIONS", "0").strip().lower()
         in {"1", "true", "yes", "on"}
     ),
     # Default to RELION's float32 fine-search diff2/minimum ordering. This
     # diagnostic bypass retains the historical algebraic sparse scorer for
     # controlled full-trajectory A/B comparisons.
     "relion_exact_fine_gaussian": not bool(
-        _os_for_f64.environ.get(
+        os.environ.get(
             "RECOVAR_DISABLE_RELION_EXACT_FINE_GAUSSIAN",
             "0",
         ).strip().lower()
@@ -1452,7 +1448,7 @@ _DENSE_EM_STATIC_KWARGS: dict = {
 def _diagnostic_float64_pass2_matches(debug_iteration: int | None) -> bool:
     """Select genuine-f64 pass 2 without perturbing an earlier f32 boundary."""
 
-    raw = _os_for_f64.environ.get("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "")
+    raw = os.environ.get("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "")
     if debug_iteration is None or not raw.strip():
         return False
     try:
@@ -2032,7 +2028,7 @@ def _score_kclass_firstiter_cc_pass2(
     firstiter_significance_image_batch_size = None
     firstiter_significance_rotation_block_size = None
     firstiter_sparse_pass2 = not bool(
-        _os_for_f64.environ.get("RECOVAR_K_CLASS_DENSE_PASS2", "0").strip().lower()
+        os.environ.get("RECOVAR_K_CLASS_DENSE_PASS2", "0").strip().lower()
         in {"1", "true", "yes", "on"}
     )
     if safe_batch_sizes is not None:
@@ -2565,7 +2561,7 @@ def _score_half_dense(
             # Diagnostic: tests whether the sparse-bucket reduction order
             # carries a structural bias vs the dense in-place reduction.
             kclass_sparse_pass2 = not bool(
-                _os_for_f64.environ.get("RECOVAR_K_CLASS_DENSE_PASS2", "0").strip().lower()
+                os.environ.get("RECOVAR_K_CLASS_DENSE_PASS2", "0").strip().lower()
                 in {"1", "true", "yes", "on"}
             )
             adaptive_em_kwargs["sparse_pass2"] = kclass_sparse_pass2
@@ -2754,7 +2750,7 @@ def _score_half_dense(
             fine_rotations_for_pose = fine_rot
             adaptive_em_kwargs = dict(em_kwargs)
             k1_sparse_pass2 = not bool(
-                _os_for_f64.environ.get("RECOVAR_K1_DENSE_PASS2", "0").strip().lower()
+                os.environ.get("RECOVAR_K1_DENSE_PASS2", "0").strip().lower()
                 in {"1", "true", "yes", "on"}
             )
             k1_skip_significance_pruning = _k1_skip_significance_pruning_enabled()

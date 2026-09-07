@@ -167,9 +167,8 @@ def as_noise_model(cov_noise, image_shape):
     -------
     RadialNoiseModel or ConstantNoiseModel
     """
-    import numpy as _np
 
-    arr = _np.asarray(cov_noise)
+    arr = np.asarray(cov_noise)
     half_pixel_count = image_shape[0] * (image_shape[1] // 2 + 1)
     pixel_count = image_shape[0] * image_shape[1]
     if arr.ndim == 1 and arr.size not in (pixel_count, half_pixel_count):
