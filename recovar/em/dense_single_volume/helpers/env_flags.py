@@ -2,7 +2,32 @@
 
 from __future__ import annotations
 
+import logging
 import os
+
+
+def parse_env_float_or_default(name: str, default: float, *, logger: logging.Logger) -> float:
+    """Read a float override, warning through the caller's logger if invalid."""
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r; using %.3f", name, value, default)
+        return default
+
+
+def parse_env_int_or_default(name: str, default: int, *, logger: logging.Logger) -> int:
+    """Read an integer override, warning through the caller's logger if invalid."""
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r; using %d", name, value, default)
+        return default
 
 
 def parse_int_set(value: str | None) -> set[int] | None:

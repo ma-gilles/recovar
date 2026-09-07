@@ -25,6 +25,11 @@ from typing import Optional
 
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers.env_flags import (
+    parse_env_float_or_default,
+    parse_env_int_or_default,
+)
+
 logger = logging.getLogger(__name__)
 
 # RELION defaults
@@ -861,28 +866,6 @@ def _env_flag_enabled(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
 
 
-def _env_float(name: str, default: float) -> float:
-    value = os.environ.get(name)
-    if value is None or value.strip() == "":
-        return default
-    try:
-        return float(value)
-    except ValueError:
-        logger.warning("Ignoring invalid %s=%r; using %.3f", name, value, default)
-        return default
-
-
-def _env_int(name: str, default: int) -> int:
-    value = os.environ.get(name)
-    if value is None or value.strip() == "":
-        return default
-    try:
-        return int(value)
-    except ValueError:
-        logger.warning("Ignoring invalid %s=%r; using %d", name, value, default)
-        return default
-
-
 def _env_bool(name: str, default: bool) -> bool:
     value = os.environ.get(name)
     if value is None or value.strip() == "":
@@ -908,13 +891,15 @@ def _low_pmax_refinement_guard_blocks(state: RefinementState) -> bool:
     require_local_search = _env_bool(_LOW_PMAX_REFINE_REQUIRE_LOCAL_ENV, True)
     if require_local_search and not state.do_local_search:
         return False
-    max_ave_pmax = _env_float(
+    max_ave_pmax = parse_env_float_or_default(
         _LOW_PMAX_REFINE_MAX_AVE_PMAX_ENV,
         _LOW_PMAX_REFINE_DEFAULT_MAX_AVE_PMAX,
+        logger=logger,
     )
-    min_res_stall = _env_int(
+    min_res_stall = parse_env_int_or_default(
         _LOW_PMAX_REFINE_MIN_RES_STALL_ENV,
         _LOW_PMAX_REFINE_DEFAULT_MIN_RES_STALL,
+        logger=logger,
     )
     if not np.isfinite(state.ave_Pmax) or float(state.ave_Pmax) > max_ave_pmax:
         return False

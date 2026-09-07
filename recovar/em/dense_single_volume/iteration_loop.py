@@ -49,6 +49,10 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     update_angular_sampling,
     update_refinement_state,
 )
+from recovar.em.dense_single_volume.helpers.env_flags import (
+    parse_env_float_or_default,
+    parse_env_int_or_default,
+)
 from recovar.em.dense_single_volume.helpers.expected_accuracy import (
     estimate_relion_expected_accuracy,
     relion_half1_trial_order,
@@ -373,28 +377,6 @@ def _use_approx_acc_rot_for_convergence() -> bool:
 def _disable_approx_acc_rot_for_convergence() -> bool:
     """Return whether all native support-width convergence gating is disabled."""
     return os.environ.get(_APPROX_ACC_ROT_CONVERGENCE_DISABLE_ENV, "").strip().lower() in _TRUE_ENV_VALUES
-
-
-def _float_env_or_default(name: str, default: float) -> float:
-    value = os.environ.get(name)
-    if value is None or value.strip() == "":
-        return default
-    try:
-        return float(value)
-    except ValueError:
-        logger.warning("Ignoring invalid %s=%r; using %.3f", name, value, default)
-        return default
-
-
-def _int_env_or_default(name: str, default: int) -> int:
-    value = os.environ.get(name)
-    if value is None or value.strip() == "":
-        return default
-    try:
-        return int(value)
-    except ValueError:
-        logger.warning("Ignoring invalid %s=%r; using %d", name, value, default)
-        return default
 
 
 def _replay_perturbation_seed(
@@ -949,11 +931,18 @@ def _approx_acc_rot_policy_for_convergence(
     if state.healpix_order + 1 < state.auto_local_healpix_order:
         return False, "diagnostic-only-not-prelocal"
 
-    min_iter = max(1, _int_env_or_default(_APPROX_ACC_ROT_MIN_ITER_ENV, _APPROX_ACC_ROT_DEFAULT_MIN_ITER))
+    min_iter = max(
+        1,
+        parse_env_int_or_default(
+            _APPROX_ACC_ROT_MIN_ITER_ENV, _APPROX_ACC_ROT_DEFAULT_MIN_ITER, logger=logger,
+        ),
+    )
     if int(iteration_number) < min_iter:
         return False, f"diagnostic-only-before-iter-{min_iter}"
 
-    max_ave_pmax = _float_env_or_default(_APPROX_ACC_ROT_MAX_AVE_PMAX_ENV, _APPROX_ACC_ROT_DEFAULT_MAX_AVE_PMAX)
+    max_ave_pmax = parse_env_float_or_default(
+        _APPROX_ACC_ROT_MAX_AVE_PMAX_ENV, _APPROX_ACC_ROT_DEFAULT_MAX_AVE_PMAX, logger=logger,
+    )
     if np.isfinite(ave_pmax) and float(ave_pmax) > max_ave_pmax:
         return False, f"diagnostic-only-high-pmax>{max_ave_pmax:.2f}"
 
