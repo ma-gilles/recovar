@@ -233,15 +233,6 @@ def batch_inner_product(x, y):
     return jnp.sum(jnp.conj(x_flat) * y_flat, axis=-1)
 
 
-def _half_spectrum_to_full_spectrum(x_half, full_shape):
-    full_shape = tuple(int(s) for s in full_shape)
-    if len(full_shape) == 2:
-        return fourier_transform_utils.half_image_to_full_image(x_half, full_shape)
-    if len(full_shape) == 3:
-        return fourier_transform_utils.half_volume_to_full_volume(x_half, full_shape)
-    raise ValueError(f"full_shape must have 2 or 3 dims, got {full_shape}")
-
-
 def half_spectrum_last_axis_weights(last_axis_size, dtype=jnp.float32):
     """Weights to recover full-spectrum inner products from packed real FFT coefficients."""
     n = int(last_axis_size)
