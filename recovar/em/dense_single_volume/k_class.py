@@ -32,6 +32,7 @@ _RUN_EM_ALLOWED_KWARGS = frozenset(inspect.signature(run_em).parameters)
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE"
 _RELION_X_HALF_BP_FUSED_ATOMICS_ENV = "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS"
 _DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES_ENV = "RECOVAR_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES"
+_K1_POSE_PUBLISH_DIRECT_ENV = "RECOVAR_K1_POSE_PUBLISH_DIRECT"
 
 
 class KClassEMResult(NamedTuple):
@@ -853,7 +854,27 @@ def _stack_or_none(values):
     return jnp.stack([jnp.asarray(value) for value in values], axis=0)
 
 
-def _selected_by_class(per_class_values, class_assignments: np.ndarray):
+def _k1_pose_publish_direct_requested() -> bool:
+    token = os.environ.get(_K1_POSE_PUBLISH_DIRECT_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{_K1_POSE_PUBLISH_DIRECT_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _selected_by_class(per_class_values, class_assignments: np.ndarray, *, direct_single_class: bool = False):
+    if (
+        direct_single_class
+        and per_class_values is not None
+        and len(per_class_values) == 1
+        and isinstance(class_assignments, np.ndarray)
+        and class_assignments.ndim == 1
+        and np.all(class_assignments == 0)
+    ):
+        # The sole class already has the requested image order. Avoid stacking,
+        # index normalization and a device gather for each changing subset N.
+        value = jnp.asarray(per_class_values[0])
+        if value.ndim > 0 and value.shape[0] == class_assignments.shape[0]:
+            return value
     stacked = _stack_or_none(per_class_values)
     if stacked is None:
         return None
@@ -1538,9 +1559,16 @@ def _assemble_result(
         rotation_posterior_sums=rotation_posterior_sums,
         image_dtype=jnp.float32,
     )
-    best_pose_rotations = _selected_by_class(per_class_best_pose_rotations, class_assignments)
-    best_pose_translations = _selected_by_class(per_class_best_pose_translations, class_assignments)
-    best_pose_rotation_ids = _selected_by_class(per_class_best_pose_rotation_ids, class_assignments)
+    direct_single_class = _k1_pose_publish_direct_requested()
+    best_pose_rotations = _selected_by_class(
+        per_class_best_pose_rotations, class_assignments, direct_single_class=direct_single_class
+    )
+    best_pose_translations = _selected_by_class(
+        per_class_best_pose_translations, class_assignments, direct_single_class=direct_single_class
+    )
+    best_pose_rotation_ids = _selected_by_class(
+        per_class_best_pose_rotation_ids, class_assignments, direct_single_class=direct_single_class
+    )
     if new_means is None or all(mean is None for mean in new_means):
         stacked_new_means = None
     elif any(mean is None for mean in new_means):
