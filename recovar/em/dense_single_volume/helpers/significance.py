@@ -936,6 +936,32 @@ def _coarse_gaussian_gemm_real_cross_enabled() -> bool:
     return token == "1"
 
 
+def _coarse_max_posterior_physical_batch_enabled() -> bool:
+    """Keep the physical row count through coarse Pmax publication."""
+    name = "RECOVAR_COARSE_MAX_POSTERIOR_PHYSICAL_BATCH"
+    token = os.environ.get(name, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"Unsupported {name}={token!r}")
+    return token == "1"
+
+
+def _coarse_max_posterior_for_host(
+    batch_weights, actual_batch_size, *, physical_batch=False,
+):
+    """Publish active row maxima without specializing on fringe batch sizes.
+
+    Rows are independent. Reducing the physical table before slicing the
+    compact host vector keeps padded rows out of the published statistics.
+    """
+    if physical_batch:
+        return np.asarray(jnp.max(batch_weights, axis=1), dtype=np.float32)[
+            :actual_batch_size
+        ]
+    return np.asarray(
+        jnp.max(batch_weights[:actual_batch_size], axis=1), dtype=np.float32,
+    )
+
+
 def _coarse_gaussian_gemm_hybrid_image_batch_size_request() -> int | None:
     """Return the explicit compact-hybrid image-batch override, if any."""
 
@@ -5294,6 +5320,7 @@ def _compute_k_class_significance_batched(
         _coarse_gaussian_gemm_device_transaction_enabled()
     )
     coarse_gaussian_gemm_real_cross_requested = _coarse_gaussian_gemm_real_cross_enabled()
+    coarse_max_posterior_physical_batch = _coarse_max_posterior_physical_batch_enabled()
     if coarse_gaussian_gemm_real_cross_requested and (
         not coarse_gaussian_gemm_hybrid_requested or coarse_gaussian_gemm_device_transaction_requested
     ):
@@ -8162,9 +8189,9 @@ def _compute_k_class_significance_batched(
             best_score_np[output_slice] + log_score_offset[output_slice]
         ).astype(np.float32)
         if relion_f32_coarse_support_enabled and collect_significance:
-            max_posterior[start_idx:end_idx] = np.asarray(
-                jnp.max(batch_weights[:actual_batch_size], axis=1),
-                dtype=np.float32,
+            max_posterior[start_idx:end_idx] = _coarse_max_posterior_for_host(
+                batch_weights, actual_batch_size,
+                physical_batch=coarse_max_posterior_physical_batch,
             )
         else:
             max_posterior[start_idx:end_idx] = np.exp(
