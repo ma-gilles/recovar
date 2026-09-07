@@ -62,26 +62,14 @@ from recovar.em.dense_single_volume.helpers.preprocessing import (
     process_half_image,
     resolve_image_mask_for_half_preprocess,
 )
-from recovar.em.dense_single_volume.local_timing import (  # noqa: F401
-    _LOCAL_ACCOUNTED_TIMING_FIELDS,
-    _LOCAL_ACCOUNTED_TIMING_SETUP_FIELDS,
-    _LOCAL_PREPROCESS_TIMER_KEYS,
-    _LOCAL_TIMING_PROFILE_FIELDS,
-    _LOCAL_TRANSFER_TIMER_KEYS,
+from recovar.em.dense_single_volume.local_timing import (
     _LocalTiming,
     _local_timing_profile,
     _new_local_preprocess_timer,
     _new_local_transfer_timer,
-    _new_zero_timer,
     _prefixed_timer_profile,
 )
-from recovar.em.dense_single_volume.local_caches import (  # noqa: F401
-    EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB,
-    EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV,
-    EXACT_LOCAL_RAW_CACHE_MAX_GB,
-    EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
-    EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB,
-    EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
+from recovar.em.dense_single_volume.local_caches import (
     _LocalProcessedHalfCache,
     _all_integer_pre_shifts_or_none,
     _build_local_processed_half_cache,
@@ -109,7 +97,6 @@ from recovar.em.dense_single_volume.helpers.projection import (
 from recovar.em.dense_single_volume.helpers.projection import (
     project_indexed_half_spectrum as _project_indexed_half_spectrum,
 )
-from recovar.em.dense_single_volume.helpers.timing import TimingAccumulator
 from recovar.em.dense_single_volume.helpers.translation_prior import (
     translation_prior_centers_for_images,
     translation_sqdist_angstrom,
