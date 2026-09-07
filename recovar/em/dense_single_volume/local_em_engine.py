@@ -17,6 +17,7 @@ import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
+from recovar.em.dense_single_volume.deferred_noise_pack import pack_noise_pixel_capacity
 from recovar.em.dense_single_volume.fixed_capacity_local import (
     _FixedCapacityLocalCallView,
     _FixedCapacityLocalExecutionBundle,
@@ -391,6 +392,7 @@ EXACT_LOCAL_PROJECTOR_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_PROJECTOR_CAPACITY"
 EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY"
 EXACT_LOCAL_NOISE_STABLE_CORE_ENV = "RECOVAR_EXACT_LOCAL_NOISE_STABLE_CORE"
 EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_NOISE_NORM_CAPACITY"
+EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_NOISE_PIXEL_CAPACITY"
 EXACT_LOCAL_HOST_PLAN_PACK_ENV = "RECOVAR_EXACT_LOCAL_HOST_PLAN_PACK"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS = 64_000_000
@@ -2081,6 +2083,13 @@ def _noise_norm_capacity(n_images: int, *, enabled: bool) -> int:
     Logical indices remain unchanged; publication crops the unused zero tail.
     """
     return ((n_images + 1023) // 1024) * 1024 if enabled else n_images
+
+
+def _local_noise_pixel_capacity_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV} must be 0 or 1")
+    return token == "1"
 
 
 def _local_host_plan_pack_requested() -> bool:
@@ -4532,6 +4541,9 @@ def run_local_em_exact(
         and accumulate_noise
     ):
         raise ValueError("noise norm capacity requires stable deferred packed final-noise accumulation")
+    noise_pixel_capacity_enabled = _local_noise_pixel_capacity_requested()
+    if noise_pixel_capacity_enabled and not noise_norm_capacity_enabled:
+        raise ValueError("noise pixel capacity requires noise norm capacity")
     if fixed_capacity_whole_boundary_enabled and not fixed_capacity_enabled:
         raise ValueError(
             "fixed-capacity whole-local boundary requires fixed-capacity execution"
@@ -7907,6 +7919,25 @@ def run_local_em_exact(
                 )
                 noise_t0 = time.time()
                 prepared_noise_core = None
+                noise_pixel_probs = packed_reconstruction_probs
+                noise_pixel_projection = packed_source_vdam_noise_projection
+                noise_pixel_ctf_probs = packed_source_vdam_ctf_probs
+                noise_image_indices = jnp.asarray(bucket_image_indices, dtype=jnp.int32)
+                if noise_pixel_capacity_enabled:
+                    (
+                        noise_pixel_probs,
+                        noise_pixel_projection,
+                        noise_pixel_ctf_probs,
+                        noise_image_indices,
+                    ) = pack_noise_pixel_capacity(
+                        noise_pixel_probs,
+                        noise_pixel_projection,
+                        noise_pixel_ctf_probs,
+                        noise_image_indices,
+                        target_batch=reconstruction_probs.shape[0],
+                        n_images=n_images,
+                        norm_capacity=noise_norm_correction.shape[0],
+                    )
                 if noise_stable_core_enabled:
                     prepared_noise_core = run_deferred_local_exact_noise_core_jit(
                         reconstruction_probs,
@@ -7952,9 +7983,9 @@ def run_local_em_exact(
                     noise_sigma2_offset,
                     noise_sumw,
                     reconstruction_probs,
-                    packed_reconstruction_probs,
-                    packed_source_vdam_noise_projection,
-                    packed_source_vdam_ctf_probs,
+                    noise_pixel_probs,
+                    noise_pixel_projection,
+                    noise_pixel_ctf_probs,
                     shifted_noise_split,
                     processed_score_half,
                     image_only_corrections_arg,
@@ -7972,7 +8003,7 @@ def run_local_em_exact(
                     big_jit_relion_wavg_exact_positions_arg,
                     big_jit_relion_wavg_rectangle_shell_indices_arg,
                     big_jit_recon_window_indices_arg,
-                    jnp.asarray(bucket_image_indices, dtype=jnp.int32),
+                    noise_image_indices,
                     jnp.asarray(logical_current_size, dtype=jnp.int32),
                     image_shape=image_shape,
                     shell_count=n_shells,
