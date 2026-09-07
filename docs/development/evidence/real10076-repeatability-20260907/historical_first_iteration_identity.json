@@ -1,0 +1,54 @@
+{
+  "scope": "Byte identity of the 11 unchanged fields from original autonomous run and each shortened diagnostic; not complete scoring-input identity. GPU UUID differs from historical run.",
+  "historical_report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_first_saved_state_audit_20260907/report.json",
+  "results": [
+    {
+      "run": "00_original_capture",
+      "same_original_first_iteration_files": {
+        "noise": true,
+        "noise_half1": true,
+        "noise_half2": true,
+        "tau2": true,
+        "fsc": true,
+        "rotations": true,
+        "translations": true,
+        "ha_half1": true,
+        "ha_half2": true,
+        "coarse_ha_half1": true,
+        "coarse_ha_half2": true
+      }
+    },
+    {
+      "run": "01_boundary_capture",
+      "same_original_first_iteration_files": {
+        "noise": true,
+        "noise_half1": true,
+        "noise_half2": true,
+        "tau2": true,
+        "fsc": true,
+        "rotations": true,
+        "translations": true,
+        "ha_half1": true,
+        "ha_half2": true,
+        "coarse_ha_half1": true,
+        "coarse_ha_half2": true
+      }
+    },
+    {
+      "run": "02_boundary_capture",
+      "same_original_first_iteration_files": {
+        "noise": true,
+        "noise_half1": true,
+        "noise_half2": true,
+        "tau2": true,
+        "fsc": true,
+        "rotations": true,
+        "translations": true,
+        "ha_half1": true,
+        "ha_half2": true,
+        "coarse_ha_half1": true,
+        "coarse_ha_half2": true
+      }
+    }
+  ]
+}

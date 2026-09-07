@@ -58,6 +58,8 @@ source identities when incorporating evidence into a future PR.
 | Frozen scoring-state integrity ownership | `05976cdf4`; two function ASTs unchanged; 74 focused tests and 44 exact payload/hash/error checks passed, Slurm13572933; final import/style check includes 100 passing cases, Slurm13572973 |
 | Pipeline downsample/cache preparation | `2531c66b3`; 22 caller tests and 50 exact callback/mutation/error comparisons passed, Slurm13573180; public API and numerical stages unchanged |
 | Shared pre-/post-join accumulator writer | `e05ca337f`; 48 caller/format tests and 144 exact payload/gate/error comparisons passed, Slurm13576398; numerical controller AST outside dump bodies unchanged |
+| Unused EM helper inputs | `9f1fde1a7`; three unused keyword parameters and nine callers migrated; 30 cases passed, Slurm13576908; retained function bodies and assertions unchanged |
+| Redundant module aliases and stale comments | `facf535c3`; 17 cases and 228 exact noise/metadata/precision-flag comparisons passed, Slurm13577241; calculations and defaults unchanged |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance
@@ -145,10 +147,21 @@ assignment arrays match exactly. Audit13575086 verifies all 30 original output
 hashes and leaves the files unchanged. These arrays are saved after
 reconstruction; complete live E-step input identity is not established, and the
 cause remains unresolved.
+Three shortened first-iteration controls in Slurm13576748 locate different
+accumulators before the low-resolution half join. Within each captured run,
+post-join buffers exactly equal the late saved arrays. Audit13576847 verifies
+49 consumed files; the other 11 first-iteration fields also match the original
+autonomous run by file hash. This narrows the next diagnostic to upstream
+scoring/accumulation without identifying the responsible kernel.
 This negative control means a single real-data candidate mismatch cannot be
-attributed to cleanup alone. The structural real-data pair at `be1f2913e` is
-running in Slurm13569949, with audit13569953; it remains diagnostic until the
-baseline's repeatability is understood.
+attributed to cleanup alone. The [structural real-data pair at `be1f2913e`](evidence/real10076-structural-pair-20260907/README.md)
+completed in Slurm13569949. Audit13569953 verifies source/artifact integrity
+but fails 27 of 51 map comparisons, starting with half 1 in iteration 8;
+final merged FSC-AUC is 0.972350364. Audit13577514 fails 60 of 69 recorded
+particle fields, starting with support counts in iteration 2 and a 0.5-pixel
+translation change in iteration 3. Both runs execute 16 numbered iterations
+and all eight controller fields agree. The result remains unqualified;
+baseline repeatability and the cause of the differences are unresolved.
 
 The no-intermediate-capture K1 study at `be1f2913e` completed seven trajectories
 in Slurm13570225; audit13570230 completed its comparison but exits 2 because

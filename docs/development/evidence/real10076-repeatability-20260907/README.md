@@ -50,7 +50,36 @@ Slurm script to recreate the run in fresh output directories. The array audit
 records its script digest and all consumed file digests. This archive preserves
 observations, not new expected baselines or a performance qualification.
 
-## Next diagnostic boundary
+## First-iteration boundary diagnostic
+
+[Three shortened runs](boundary_run_record.json) at the same unchanged source
+completed in Slurm13576748 (669.83 seconds including setup, execution and
+identity checks). The only scientific option changed from the autonomous run
+was `--max_iter 999` to `--max_iter 1`. The first run retained original capture
+settings; the next two added both boundary captures below. All three used the
+same physical H100, `GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`, with independent
+empty caches and private immutable CUDA copies.
+
+[CPU audit13576847](first_iteration_boundaries.json) took 4.32 seconds and
+verified all 49 consumed files against execution-time hashes, then rechecked
+them after comparison. The two boundary-capture runs already differ in all four
+pre-join buffers. Their maximum numerator differences are 2.9802322e-8 and
+1.4901161e-8; maximum weight differences are 2.3283064e-10 and 1.1641532e-10.
+Within each run, all four post-join buffers exactly equal the later saved arrays.
+
+The remaining 11 fields match across all three runs. They also
+[match the original autonomous run by file hash](historical_first_iteration_identity.json),
+giving 33 historical file matches. The shortened runs reproduce those recorded
+first-iteration states, but have a different GPU UUID from the historical pair
+and do not prove complete E-step input identity or autonomous repeatability.
+
+This result places the observed difference upstream of the half join. It does
+not identify a responsible kernel or explain the later particle/trajectory
+failure. Original-capture versus boundary-capture runs also differ in the four
+accumulators; neither capture calibration nor a null capture result may waive
+the full trajectory gate.
+
+## Capture settings and next replay
 
 PR158 already supports two captures around the low-resolution half join:
 
@@ -66,10 +95,15 @@ The iteration selector is one-based. The pre-join file uses schema
 The writer preserves numerator dtype and stores the real part of the weight
 arrays. Keep original dtype information when checking a stage boundary.
 
-Compare pre-join operands between unchanged-source repeats first. If they
-already differ, move into scoring and accumulation. If they agree but post-join
-operands differ, replay the join with identical inputs and layout metadata.
+The next replay needs identical scoring/accumulation operands, the actual
+`mstep_max_r`, original particle/rotation identities, all valid rows including
+zeros, and the production fused per-particle launch boundaries. The existing
+`replay_bpref_contribution_bundle.py` compares active-row order and precision
+using shard partitions and separate data/weight launches; it is not an exact
+replay of this production path. It also derives support from `current_size`
+instead of the separately captured M-step radius, which can differ during
+firstiter-CC. Preserve these limitations when selecting a replay tool.
+
 Capture introduces host synchronization, so diagnostic repeatability does not
-automatically qualify ordinary execution. Any shortened diagnostic also needs
-its first-iteration scheduling checked against the autonomous run; it cannot
-replace the complete trajectory gate.
+automatically qualify ordinary execution. These shortened runs cannot replace
+the complete trajectory gate.

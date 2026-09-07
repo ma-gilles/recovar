@@ -1,0 +1,910 @@
+{
+  "scope": "One autonomous real10076 control/candidate pair; failed comparison retained, no quality or ordinary-performance qualification",
+  "source": {
+    "control": "44d770de3f9336ab2f3f6a34203394bae8d1aeed",
+    "candidate": "be1f2913e2f4d4e16d1329cfb4b0054768727451"
+  },
+  "execution_job_id": "13569949",
+  "map_audit_job_id": "13569953",
+  "particle_audit_job_id": "13577514",
+  "run_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907",
+  "archive_files": {
+    "map_and_controller.json": {
+      "source_path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/quality/comparison.json",
+      "sha256": "f1d6fb78a72a5e4890b62d388ef3b3f15aa19df55bb08c82c987c0ab73347cc8"
+    },
+    "particle_fields.json": {
+      "source_path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/particle_audit/report.json",
+      "sha256": "6dbced5ebd4f459ed3e8c4bc183442a62771c75e4138baf1ccca58083355cb2b"
+    },
+    "shellwise_fsc.json": {
+      "source_path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/quality/shellwise.npz",
+      "source_sha256": "30efa20a52c797b2129df7a53f050329fcb968c3377a130374c4fd5507da01c8",
+      "json_sha256": "76140d67c462561a5ef2eb8ba0b048b2b9f8c7d9c69adcef2dd0157aa3f16134",
+      "curves": 51,
+      "shells_per_curve": 127,
+      "lossless_numeric_roundtrip": true
+    }
+  },
+  "runs": {
+    "control": {
+      "repo": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_hia_pr158_baseline_20260906",
+      "commit": "44d770de3f9336ab2f3f6a34203394bae8d1aeed",
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command": [
+        "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_hia_pr158_baseline_20260906/.pixi/envs/default/bin/python",
+        "-m",
+        "scripts.run_full_refinement",
+        "--data_dir",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data",
+        "--output",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/control/recovar",
+        "--max_iter",
+        "999",
+        "--healpix_order",
+        "3",
+        "--auto_local_healpix_order",
+        "4",
+        "--offset_range",
+        "3.0",
+        "--offset_step",
+        "1.0",
+        "--adaptive_oversampling",
+        "1",
+        "--init_resolution",
+        "30.0",
+        "--image_batch_size",
+        "187",
+        "--rotation_block_size",
+        "8192",
+        "--image-fourier-backend",
+        "relion_cuda",
+        "--seed",
+        "20260712",
+        "--perturb_seed",
+        "20260712",
+        "--particle_diameter_ang",
+        "280",
+        "--tau2_fudge",
+        "1.0",
+        "--max_significants",
+        "-1",
+        "--firstiter_cc",
+        "--apply-initial-lowpass",
+        "--benchmark_ledger_json",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/control/recovar/benchmark_ledger.json",
+        "--timing_dir",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/control/recovar/timing",
+        "--save_intermediates_dir",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/control/recovar/intermediates",
+        "--relion_half_sets",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it000_data.star",
+        "--relion_optimiser",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it000_optimiser.star",
+        "--relion_init_dir",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion"
+      ],
+      "environment": {
+        "RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION": "0.40",
+        "RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT": "0"
+      },
+      "jax_cache": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/cache/control",
+      "cuda_library": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/libraries/control/libcuda_backproject.so",
+      "cuda_sha256": "00cd5880d601c1f170e585722aabc8b94a8e3d83b143ae9e184992213bee8a05",
+      "binding_library": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_baseline_relion_binding_20260907/build/_relion_bind_core.cpython-311-x86_64-linux-gnu.so",
+      "binding_sha256": "eaf538460cbd1e9af33c7cc1d6fb470b4fc51d0e437f4c2c73a7176bc86ca553",
+      "manifest_path": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/structural_real10076_pair/control_inputs.json",
+      "manifest_sha256": "51b77efe479b7fbbf4e78e0161e29ff9fcce505c2401cde7e87879e3593a37a6",
+      "physical_gpu_uuid": "GPU-202f2d43-7a0a-bec1-135f-bb496ab059a7",
+      "source_before_equals_after": true,
+      "refinement_wall_seconds": 5235.848190286,
+      "refinement_log": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/control/refinement.log",
+      "refinement_log_sha256": "8ff6e399548e0f4f979caacb0039dbba75a93e736be1db1229407573fd753348",
+      "source_file_count": 1743,
+      "effective_backend_environment": {
+        "XLA_PYTHON_CLIENT_MEM_FRACTION": ".50",
+        "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+        "CUDA_VISIBLE_DEVICES": "GPU-202f2d43-7a0a-bec1-135f-bb496ab059a7",
+        "RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION": "0.40",
+        "RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT": "0",
+        "JAX_PLATFORMS": "cuda,cpu",
+        "RECOVAR_JAX_CACHE_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/cache/control",
+        "RECOVAR_CUDA_LIB": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/libraries/control/libcuda_backproject.so",
+        "RECOVAR_RELION_BIND_BUILD_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_baseline_relion_binding_20260907/build",
+        "JAX_COMPILATION_CACHE_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/cache/control"
+      }
+    },
+    "candidate": {
+      "repo": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cpu_20260907",
+      "commit": "be1f2913e2f4d4e16d1329cfb4b0054768727451",
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "command": [
+        "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cpu_20260907/.pixi/envs/default/bin/python",
+        "-m",
+        "scripts.run_full_refinement",
+        "--data_dir",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data",
+        "--output",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/candidate/recovar",
+        "--max_iter",
+        "999",
+        "--healpix_order",
+        "3",
+        "--auto_local_healpix_order",
+        "4",
+        "--offset_range",
+        "3.0",
+        "--offset_step",
+        "1.0",
+        "--adaptive_oversampling",
+        "1",
+        "--init_resolution",
+        "30.0",
+        "--image_batch_size",
+        "187",
+        "--rotation_block_size",
+        "8192",
+        "--image-fourier-backend",
+        "relion_cuda",
+        "--seed",
+        "20260712",
+        "--perturb_seed",
+        "20260712",
+        "--particle_diameter_ang",
+        "280",
+        "--tau2_fudge",
+        "1.0",
+        "--max_significants",
+        "-1",
+        "--firstiter_cc",
+        "--apply-initial-lowpass",
+        "--benchmark_ledger_json",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/candidate/recovar/benchmark_ledger.json",
+        "--timing_dir",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/candidate/recovar/timing",
+        "--save_intermediates_dir",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/candidate/recovar/intermediates",
+        "--relion_half_sets",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it000_data.star",
+        "--relion_optimiser",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it000_optimiser.star",
+        "--relion_init_dir",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion"
+      ],
+      "environment": {
+        "RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION": "0.40",
+        "RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT": "0"
+      },
+      "jax_cache": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/cache/candidate",
+      "cuda_library": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/libraries/candidate/libcuda_backproject.so",
+      "cuda_sha256": "00cd5880d601c1f170e585722aabc8b94a8e3d83b143ae9e184992213bee8a05",
+      "binding_library": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_baseline_relion_binding_20260907/build/_relion_bind_core.cpython-311-x86_64-linux-gnu.so",
+      "binding_sha256": "eaf538460cbd1e9af33c7cc1d6fb470b4fc51d0e437f4c2c73a7176bc86ca553",
+      "manifest_path": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/structural_real10076_pair/candidate_inputs.json",
+      "manifest_sha256": "9c3ff68a311960fa7f4885f3acb2f19fcddd27aa8fa2ff6130b7c7de8944b22a",
+      "physical_gpu_uuid": "GPU-202f2d43-7a0a-bec1-135f-bb496ab059a7",
+      "source_before_equals_after": true,
+      "refinement_wall_seconds": 5283.017818248998,
+      "refinement_log": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/candidate/refinement.log",
+      "refinement_log_sha256": "73e97af845e60524f8c16077f9f6bbbf03c363cce4fc54c9ff031561da9b1ba5",
+      "source_file_count": 1761,
+      "effective_backend_environment": {
+        "XLA_PYTHON_CLIENT_MEM_FRACTION": ".50",
+        "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+        "CUDA_VISIBLE_DEVICES": "GPU-202f2d43-7a0a-bec1-135f-bb496ab059a7",
+        "RECOVAR_RELION_EM_BATCH_PROJECTION_FRACTION": "0.40",
+        "RECOVAR_LOCAL_ADAPTIVE_PASS2_FULL_PARENT": "0",
+        "JAX_PLATFORMS": "cuda,cpu",
+        "RECOVAR_JAX_CACHE_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/cache/candidate",
+        "RECOVAR_CUDA_LIB": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/libraries/candidate/libcuda_backproject.so",
+        "RECOVAR_RELION_BIND_BUILD_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_baseline_relion_binding_20260907/build",
+        "JAX_COMPILATION_CACHE_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_real10076_pair_20260907/cache/candidate"
+      }
+    }
+  },
+  "fixture_files": {
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/fixture_manifest.json": {
+      "sha256": "762645e0d77c53bb9ce61701e1fd0d03868021c494f84b73a281b39d753d9750",
+      "bytes": 585
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/particles.256.mrcs": {
+      "sha256": "70d0c19995221491d27c9323f21c40df27e153bdf1e783bc78c4d38fe41a9c09",
+      "bytes": 34576532480
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/particles.star": {
+      "sha256": "2560afeea6839dddbb38b47d26cdf8944535a799d1e6d3e1441535c96043998f",
+      "bytes": 1267736
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/reference_init.mrc": {
+      "sha256": "d4003ff463074edee43188d9bb515db67cff01b377eba14347b400ce6a0c5a6d",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/reference_init_relion.mrc": {
+      "sha256": "c2a24e0f4a9733c99e4b3a8238143ed1e8b07d50437158ada945cdf508e890fd",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/source_indices.npy": {
+      "sha256": "b58a6d11fb292a9ed9573ac75c6a0673f4a0e8c216f4dadf11a7f0537b0e2c9d",
+      "bytes": 80128
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/prepare.py": {
+      "sha256": "f005c57581ff2cb0105d3018e18bd86c87e8c819183543ae78ae098edd39e354",
+      "bytes": 1744
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_class001.mrc": {
+      "sha256": "61424a1eeac344aa318cf918246236273cffe2306811c7b0b4514c85c3ba2992",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_class001_angdist.bild": {
+      "sha256": "97bac7e8e547dd6f04327359a9ccdbdc13097e52d0550825a8ce84aced64a583",
+      "bytes": 2491862
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_data.star": {
+      "sha256": "d437a4a07eafc8b0affb2919d3cb3b3375b722be3ebc7a0312b67854a58ba4b1",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_half1_class001_unfil.mrc": {
+      "sha256": "d90d15aae4391aae28b00a0493e6c5a944604b3e64007f5bc6513950445c5361",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_half2_class001_unfil.mrc": {
+      "sha256": "0584f16259c8306663623f34b080cfe222ebd13304c114e3ab808cc0b694dd99",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it000_data.star": {
+      "sha256": "f2d06e0afae00b175830a01609e01289bf7a4b3450b8cf16be937bba3f75e0ee",
+      "bytes": 2082209
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it000_half1_class001.mrc": {
+      "sha256": "5c62a800d3bc53d7741e4478ac15f0ec98e2cec119c3335215168b1fb553255a",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it000_half1_class001_angdist.bild": {
+      "sha256": "0e55e82adbf3f4811ee70957ceae338bad15c7ca8243bf0800454d1bfdcbfe69",
+      "bytes": 70300
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it000_half1_model.star": {
+      "sha256": "b78f282b0bd43b353e7fc62f1c0e3b7da2622322d631535b535956d43f5130ea",
+      "bytes": 31764
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it000_half2_class001.mrc": {
+      "sha256": "5c62a800d3bc53d7741e4478ac15f0ec98e2cec119c3335215168b1fb553255a",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it000_half2_class001_angdist.bild": {
+      "sha256": "0e55e82adbf3f4811ee70957ceae338bad15c7ca8243bf0800454d1bfdcbfe69",
+      "bytes": 70300
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it000_half2_model.star": {
+      "sha256": "412a2ef1d61947561fca2d9b8915f8799800242ec8bd2e7ff2a9163fed14afd4",
+      "bytes": 31764
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it000_optimiser.star": {
+      "sha256": "2c3a969050cfff4b2d77ac758c74598ac6b533b18351b9a393944dd580f33d95",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it000_sampling.star": {
+      "sha256": "6555310cd911aabb4db7194e1fef8a2ba6245728e691dd725df60eee3b315961",
+      "bytes": 21667
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it001_data.star": {
+      "sha256": "48427de910d5a02741c713ec027b3807d0e66b2b5c95e8b443428af35d54893b",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it001_half1_class001.mrc": {
+      "sha256": "714f5222f3a7234d8dd38f562541d1f65471ac88fa24e9afeae1d3bee2562325",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it001_half1_class001_angdist.bild": {
+      "sha256": "84effc89a43613284a544eaf5900a9385f0535de2e14ee1fb99aa79f9f29375a",
+      "bytes": 68887
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it001_half1_model.star": {
+      "sha256": "46a8bae0d92d46bdf1a49138d3951009ed8e89a24f06cfe0264ed11ea7c0e94a",
+      "bytes": 31764
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it001_half2_class001.mrc": {
+      "sha256": "055746b40231e6862b839621415e09fd4ea3ab470e9f8b58856860d5b99ae49b",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it001_half2_class001_angdist.bild": {
+      "sha256": "39e745bd5b809ba7f813ea4ea3efaa627bca91d1dbb7991755abb61c47f58962",
+      "bytes": 68206
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it001_half2_model.star": {
+      "sha256": "d61202ad04c9469767a5225a3d77f34e2f133a3fa8b34ce15db0ee89377b54ce",
+      "bytes": 31764
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it001_optimiser.star": {
+      "sha256": "03eb934dcaf1bb75c7081e5bbc2c56caab74d186f9e4a06ec451e529abbb3d16",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it001_sampling.star": {
+      "sha256": "3aaad19204d90cf741f725f64c35b54d05d9c96c931470a66253ed3e4a2c550e",
+      "bytes": 21667
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it002_data.star": {
+      "sha256": "cf706355b63cf3be399f2b27edd621e2ce72b417b8ffdafb2498fa58416599b6",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it002_half1_class001.mrc": {
+      "sha256": "494c9f7cf4d75b9e2bea2b3fd78e58334d01f72371182379f45212633d6ae868",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it002_half1_class001_angdist.bild": {
+      "sha256": "924a1549f44e50851f18fbb86317b2b86b290da976fca748ac986e750e5c6ed0",
+      "bytes": 68516
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it002_half1_model.star": {
+      "sha256": "03207f9da02511da31e56ee9ff5581b173466db2b2f0a5bf4ca4f723acae47cd",
+      "bytes": 33483
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it002_half2_class001.mrc": {
+      "sha256": "158b8f832b1aa8f2c4e23acbe12fec558ffb3268d87adf71da89aa8cbf01f17c",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it002_half2_class001_angdist.bild": {
+      "sha256": "93e3636b76b50477ebb4759d557e9f80a4135cae98974f5a920b3f23da8e961e",
+      "bytes": 68378
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it002_half2_model.star": {
+      "sha256": "b8828d9da49ce675da771d710b9029481508ba580c846a50c7cbda52cbaed757",
+      "bytes": 31764
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it002_optimiser.star": {
+      "sha256": "5685aae412f0d9847606c4501df4967ab5e41fdd970b40b759034d4502329907",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it002_sampling.star": {
+      "sha256": "f505d4897f63c37996581e51d231d9179d239b0550fac3bb83bde90cd713c554",
+      "bytes": 21667
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it003_data.star": {
+      "sha256": "abd821d32db14560302c4d4b52efe0ee6aeba534bf77690ec26cb689b31c1c1c",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it003_half1_class001.mrc": {
+      "sha256": "87ce627d6952da8bb8de4af84034f93896574aa1ed0d25c438f9928510b8b297",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it003_half1_class001_angdist.bild": {
+      "sha256": "290e27afdd997325859d358915ddb8d5a6730875f5d505136a67f51afba81704",
+      "bytes": 68385
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it003_half1_model.star": {
+      "sha256": "f2942073b7ae1d5fe1cd87d32ba43c343817fba2c2a0b12eae2a9a224b64afdc",
+      "bytes": 33483
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it003_half2_class001.mrc": {
+      "sha256": "6212c46b0966a1c8495fb9a5d238fcd4df0dc7ccc6c8d7d2d249728779e1449e",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it003_half2_class001_angdist.bild": {
+      "sha256": "e34734a221b31c33dd2356f6224ef11e4ed46466def8123b204c5a9ebe17d4c1",
+      "bytes": 67829
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it003_half2_model.star": {
+      "sha256": "4a6d452e0e13aa58638ebd5584983c197c607e53335037aec1c9f5dfd4c0db7a",
+      "bytes": 31764
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it003_optimiser.star": {
+      "sha256": "64dd5f9c4dc23e87ae4ef5bc61a650818d86557daf75c11f9fc8ea56def112ac",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it003_sampling.star": {
+      "sha256": "24837711ccfd3348d8f69a10f38604db97a4f500b0bf3e310654303575001d11",
+      "bytes": 21667
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it004_data.star": {
+      "sha256": "7b126c8892c7c0babdfb72380e5a34d1e291ca36e88abbbc412dfaab768f15b6",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it004_half1_class001.mrc": {
+      "sha256": "000515c8d21f7b133804719bb10a989570d256828b13f7489bc529e91d192bf3",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it004_half1_class001_angdist.bild": {
+      "sha256": "f05892ebc82ce7402804e81d0d4c663392bab3b9647e8502d654a0b1773e6f73",
+      "bytes": 67843
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it004_half1_model.star": {
+      "sha256": "82489c631296df9a9ad3846cd03c7cd8c33a620d9dc38b39bba5c76d9e557019",
+      "bytes": 33483
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it004_half2_class001.mrc": {
+      "sha256": "9c9d32c917be675ab66109d26c3a3cca77461ca531cc02911e10bf92f8639c6c",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it004_half2_class001_angdist.bild": {
+      "sha256": "a06032c772157bb1ea5bfc9c17fc09b380cbca7f0f3ddc886b46c39ee8f84b99",
+      "bytes": 67519
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it004_half2_model.star": {
+      "sha256": "fe9e319c8b497e7d16cc4925d0b519802da0127c88b69e116cf433c2156c8035",
+      "bytes": 31764
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it004_optimiser.star": {
+      "sha256": "319b2f47feef94d84d411d88c39285627bd00b1c07579ae089a3759aa327fe41",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it004_sampling.star": {
+      "sha256": "46ba3053d05085654a8bb0ede0c9893b6086449fb77b819a18833a7074f3045a",
+      "bytes": 21667
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it005_data.star": {
+      "sha256": "eaa7248b7329e244603a4714a58ca63909828e2c8804a3209ad81a4812fafd07",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it005_half1_class001.mrc": {
+      "sha256": "586c92e0549bad81aebacabf3c7b41e593252c0b520bb9c2bec603f9d81b8506",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it005_half1_class001_angdist.bild": {
+      "sha256": "0ed93a751b32af489648daf71d84c6f02862bda2fef1d4389a8fb4ad16f43606",
+      "bytes": 67475
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it005_half1_model.star": {
+      "sha256": "f7fc0a8c1e3691043268dbeaef965843e180a08bc6dd820a9544857e844cd693",
+      "bytes": 33483
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it005_half2_class001.mrc": {
+      "sha256": "4d1a4da433a35937623298bad551e28b255301c010a2e552e8526ef529b50bc5",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it005_half2_class001_angdist.bild": {
+      "sha256": "9d1c4df86cdae77effa73c433934b0e66342b38d1c77e24acb2be860c4492bc5",
+      "bytes": 66897
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it005_half2_model.star": {
+      "sha256": "4ef366716eecc81cbee9186152467136dd46e66b58a2d68326024f83c26d1fd4",
+      "bytes": 31764
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it005_optimiser.star": {
+      "sha256": "6de4eb11b2fbf7dbcb4c82531cadc60b7615aa8984bac981854419c66b305ac3",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it005_sampling.star": {
+      "sha256": "ad8221b4285f1f10a67100246641dcb4aab34331065b8268a34edc001841231c",
+      "bytes": 21667
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it006_data.star": {
+      "sha256": "9d8c17f8a8a91f4bfb9035f33615d92a1511a87126f06f531a940625efa070db",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it006_half1_class001.mrc": {
+      "sha256": "cc30f57de787ab9ea59607e11279bae40a991c3c78fbaeed67e7e0acff31719b",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it006_half1_class001_angdist.bild": {
+      "sha256": "2889b915700bce5fb3cbd01da15b2e1c7f09b439bf24f0c82b36e0293018709f",
+      "bytes": 67195
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it006_half1_model.star": {
+      "sha256": "74befd8b54ff20c756439ebf50d754782018ab14f05a4b1b95150bba01814468",
+      "bytes": 33483
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it006_half2_class001.mrc": {
+      "sha256": "dddff3f36586ee600d2785235cb7cdc024f711faf7e6e1ddb4d922b27e95bacf",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it006_half2_class001_angdist.bild": {
+      "sha256": "32b841cd34e46b469487ae85ec55afec2225811bac3efbcd1003422eb0254eee",
+      "bytes": 66569
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it006_half2_model.star": {
+      "sha256": "97365a22eefb89807ac57b014b040bd2c1e41d09f2c6313ec6cfc6e5ad523866",
+      "bytes": 31764
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it006_optimiser.star": {
+      "sha256": "968bfabec33bbc72c6b88a66f574d0308e9db68e2a222d1600e4b31102bf6c50",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it006_sampling.star": {
+      "sha256": "19f88044da3abb5b5def910fff6a7d6a7c08a0c01539451c57cd57bdade28a5a",
+      "bytes": 21667
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it007_data.star": {
+      "sha256": "876dd3ad82429daae638b2df6d1787c86bc7ac6f45d12b6a269fd6c992ff7798",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it007_half1_class001.mrc": {
+      "sha256": "9149b2ec925216d42123c6f9f0b42ee9606e340600b432731381ac87b4fae296",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it007_half1_class001_angdist.bild": {
+      "sha256": "e200a700c792507201c2b8c8812da106abf65c69f90fb60eb455a27416cf2b47",
+      "bytes": 66878
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it007_half1_model.star": {
+      "sha256": "a7b6fe1f521351d5acd0fe2c602dfa3e21055c281a73f5d8b6e62aba296ebca6",
+      "bytes": 33483
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it007_half2_class001.mrc": {
+      "sha256": "509a3b78efebe4b73236b71d3f1d9be12771de8dd9ddaf8f01e8bad600c24ccd",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it007_half2_class001_angdist.bild": {
+      "sha256": "19e5ff994c6609b567df763b7a4439291504fb74d9ba1f9c44345e5564a557b9",
+      "bytes": 65979
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it007_half2_model.star": {
+      "sha256": "7a1d21534178cd9c9e879ffef525abf207d4e173041c088bb02a3f95a915545d",
+      "bytes": 31764
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it007_optimiser.star": {
+      "sha256": "7ddb60760a742247d67883bb9c17e8b7d3674922529e68eac020d4f1cd4cd087",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it007_sampling.star": {
+      "sha256": "458d486b93052e045037aab431a536ad4f4a61ea9c7c0e57204a4f30233a48cd",
+      "bytes": 21667
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it008_data.star": {
+      "sha256": "958dee281e1b78a09b5d1000d2d7ed3ddc3dca92eff09eb858960b45f5432f3d",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it008_half1_class001.mrc": {
+      "sha256": "35a130b33a0833667030231eac07fd3e1f817329b346cc496625ca9f5e57f685",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it008_half1_class001_angdist.bild": {
+      "sha256": "4db0c6b3416fd8e995970ad787da621bb311df803d6dc8a8904873ec09769fbd",
+      "bytes": 230883
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it008_half1_model.star": {
+      "sha256": "84e8a791c45b2c34782d27cd61b1881b233eac98d32f6f14cf42f1213b912688",
+      "bytes": 65739
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it008_half2_class001.mrc": {
+      "sha256": "abc6dbd6ff44b70f396a768dafde4bba78f4a2daf8d516d266a0da2bea1d1560",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it008_half2_class001_angdist.bild": {
+      "sha256": "67c5908b7267f5a8ad494458b40e8e529acb6a8fc9a258db041df910af6dfb4f",
+      "bytes": 230637
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it008_half2_model.star": {
+      "sha256": "52b9955350e4d278384f2f9227b06fa7f1db7007f4c7c627493fb7f8dfb82dc6",
+      "bytes": 64020
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it008_optimiser.star": {
+      "sha256": "f0a1f73f88ca3471cc03ac749b7d453059e4a8e3d7bd605aa4c0ed9ba5cc7a35",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it008_sampling.star": {
+      "sha256": "445c036eaa67e941d072c6f3f541327d4bce56bdd95f503b0988939658c8e4c4",
+      "bytes": 83875
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it009_data.star": {
+      "sha256": "e458a607ea9afe6ed78c4968e2fe360cdf94a6e68e990b40e586159e52821b9c",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it009_half1_class001.mrc": {
+      "sha256": "b388feb100c88cee332a12c587a9b944b7a78bf9d705193da86b0cafb12b17ef",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it009_half1_class001_angdist.bild": {
+      "sha256": "7ff6d4ea896dccaf3abb126c71df9814876e9ac163c974541d7215e2fadccd58",
+      "bytes": 223894
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it009_half1_model.star": {
+      "sha256": "2772a9e0405c945891fe8330e5cc0567dd6f75e610ec4931f0f5c03ef1c5f965",
+      "bytes": 65739
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it009_half2_class001.mrc": {
+      "sha256": "f959756718d971028d50e3963725ce8c73de5d84310cc978ff1d9cb98f155ee5",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it009_half2_class001_angdist.bild": {
+      "sha256": "be132ab33e459b993bedc1eee366894f93f4de9062cfd63e67ad6eb7047fa0a2",
+      "bytes": 223474
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it009_half2_model.star": {
+      "sha256": "5dcda9ad18412944687fb4153969a7fdccdb1ef805f45fa14035c2f61b0b3b4f",
+      "bytes": 64020
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it009_optimiser.star": {
+      "sha256": "ab29362781655806bbfc840f54b0dfdc2d960d855515ae9e35e2c297527bed94",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it009_sampling.star": {
+      "sha256": "8572fc21f875fe67490db3d4008a03a9a46e2cb027e7ad7ddd509ebb2812a84e",
+      "bytes": 83875
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it010_data.star": {
+      "sha256": "d5789c255e7ca318af83b8bd8e4cfa0243046c746d8a241cd6e09a8d0a4245ea",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it010_half1_class001.mrc": {
+      "sha256": "ee9da5d2a5e5d2953a035dad04e5710f6b847a7483c39ff8c44ad9d0d2945d7e",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it010_half1_class001_angdist.bild": {
+      "sha256": "5e4984f9b37ab5f7bf858b0afefa5bc8d019554c166c52fba72da5f0e15ba5e7",
+      "bytes": 221921
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it010_half1_model.star": {
+      "sha256": "2998d65b7969e51d35a0b0c0442ac6e60a1bcd83fd6d80e2a117884eb2bbb8eb",
+      "bytes": 65739
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it010_half2_class001.mrc": {
+      "sha256": "4ba1d78a16ac288254faf06b63864c9d8cd0e08945d579e09470d652ced704e7",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it010_half2_class001_angdist.bild": {
+      "sha256": "2dffa20666007be58b8d481717195d1a19faca9e93588f18b9fc8f04d5aab01c",
+      "bytes": 217193
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it010_half2_model.star": {
+      "sha256": "7954292275738de077ed3948bfc2c99c389889dcb672dd649c740a2c56386b64",
+      "bytes": 64020
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it010_optimiser.star": {
+      "sha256": "700b49b73f5956646e2ef26ac00b590aa2806f2bce0893391311b1c9057de04c",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it010_sampling.star": {
+      "sha256": "b3f8d9ea47b08a9e737074e2317359513f780a4f843de52e1a091bba74412441",
+      "bytes": 83875
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it011_data.star": {
+      "sha256": "c9e7f515c3fc01fedaccaf7ffa11bda177cba5b9bfd5e3ea0337fe51be28a840",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it011_half1_class001.mrc": {
+      "sha256": "2d5cf07d365326985b5c24def2cac530eb283a5d0ef6dca511fcc27bc19449d4",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it011_half1_class001_angdist.bild": {
+      "sha256": "1e7133875143e233524591d9c64819a44391fc9c8dc5a046a605f7fe949ae152",
+      "bytes": 219166
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it011_half1_model.star": {
+      "sha256": "874b0d6507cc03d9b5ca6b91c2cd634c933357713a8f9370cc8a4ada8f3f3d54",
+      "bytes": 65739
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it011_half2_class001.mrc": {
+      "sha256": "26174ad11b37376e92c77be513ede35ded10402f9d7ba20de9b96774c9780ac0",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it011_half2_class001_angdist.bild": {
+      "sha256": "ea8e64a1e9921cb419f0ea32f9a4c1cbf2cfddd3ad5365e35a5cb44f55c9c527",
+      "bytes": 218543
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it011_half2_model.star": {
+      "sha256": "a1306a174d6cf10762c05e26b776f60a1868770a98d031d0e76ac332ed6b122d",
+      "bytes": 64020
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it011_optimiser.star": {
+      "sha256": "1707fc720898659450ed39a65fb17b37cd90ba2733c07f7fc1037627533d030d",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it011_sampling.star": {
+      "sha256": "729bb07f14ee129db6ce237297cac58d9eedc7ed1007491bf342141ebba4632d",
+      "bytes": 83875
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it012_data.star": {
+      "sha256": "ad9d6907ab0a7a93da2905b308500f305c90e847beae0ce12baf6d42a018c003",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it012_half1_class001.mrc": {
+      "sha256": "68c2f661b7bdfa6a1bc9f336ec899f2cbc188893dc1ad9e1d119686219bfa26d",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it012_half1_class001_angdist.bild": {
+      "sha256": "ba5bc4b734532534dabe979a9fa2705a9559d64bb4cfe5103639aefd36619582",
+      "bytes": 599425
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it012_half1_model.star": {
+      "sha256": "a1e0375a0a11d75308ccdaf0f77835c8ab01e4c3aa4b97c89f81ef263a1bfbda",
+      "bytes": 194763
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it012_half2_class001.mrc": {
+      "sha256": "cb17cb4a094be94934e8983b981cd5344e6caecd668b17df1b71a49cd3cbea85",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it012_half2_class001_angdist.bild": {
+      "sha256": "86a6136a90e1fda07264fec4a602d38257fc6d2f101cf8f72e92d494afce5404",
+      "bytes": 596496
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it012_half2_model.star": {
+      "sha256": "a2fc508dc9e41216d171a566ca648c78be0b2c15e599bb01735322747b1472df",
+      "bytes": 193044
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it012_optimiser.star": {
+      "sha256": "a56f2d0ff93a5b36a42cb450f1014bf3481ee3c724723b7356b9ca650b31d8ad",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it012_sampling.star": {
+      "sha256": "c3d0dec21908e14b62d876e81c660f825a730839a54288cc2e8c22500709ad34",
+      "bytes": 332707
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it013_data.star": {
+      "sha256": "7faf0dc8627eb76d47e82c841590d7078ec5883b2424b737e003d6d06a05ebfb",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it013_half1_class001.mrc": {
+      "sha256": "85c7411a7204d56477400ffa154e60b3cf6373e0062a1a6e3a24cc648653af0e",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it013_half1_class001_angdist.bild": {
+      "sha256": "e953da749b09cae76295068cb02b51e027fa39d3806389e1cdd89bf696c5b33f",
+      "bytes": 539468
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it013_half1_model.star": {
+      "sha256": "24817025c49894379f93e6842b57f313a93af9686a774db8bcfbbc8026c105c6",
+      "bytes": 194763
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it013_half2_class001.mrc": {
+      "sha256": "d54af2661d60ac88cbb3dd4f1a7012593a69795074a3941ce3baa299ef186a17",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it013_half2_class001_angdist.bild": {
+      "sha256": "2ac819c5f9e82d021c5b5760d2b508f67bba5fd792f6698b84365f3dcf7f28a0",
+      "bytes": 536703
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it013_half2_model.star": {
+      "sha256": "886e7dd079a516ab257e2c5ca056795b2e512ce92e9bd6b34ce735559d615617",
+      "bytes": 193044
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it013_optimiser.star": {
+      "sha256": "a07f1880ae3a5d23cf51b39b418b5be0f60bc96b6ad9ee04da51fc4c7dc25bc4",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it013_sampling.star": {
+      "sha256": "42df4681dea6fabe1357aa2563b64eef612b87ad35665bf6c5bc7095fdc57f8c",
+      "bytes": 332707
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it014_data.star": {
+      "sha256": "578a02e59bdf7d119ed318b2cd4ab5ca2f92a8042e3e63303ba0c1525cf84abd",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it014_half1_class001.mrc": {
+      "sha256": "8a99212369ba30ab5d0cb9d2eb78e657def8bc9964c63a51f16935afda089ddb",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it014_half1_class001_angdist.bild": {
+      "sha256": "f71509825a0e4641ccbc9d8371cc9532d132b78ff41f3dd9332ff0a2668026b4",
+      "bytes": 1642046
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it014_half1_model.star": {
+      "sha256": "072cd42c710ec94f99781aca8f007f4c99a6a34da0681d93806366523ad08228",
+      "bytes": 710859
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it014_half2_class001.mrc": {
+      "sha256": "f2b72c3a104d52ee76050462e2c355323be337c59d8eeca1453dc14d095e8b03",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it014_half2_class001_angdist.bild": {
+      "sha256": "1f5344dbff35ddc3eaa9a7016b89ea79a1487976607ea26ea12bc4c5f34279cd",
+      "bytes": 1631030
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it014_half2_model.star": {
+      "sha256": "6cf92018355a401790e9570ce28fe7d79f209eac2bca946e6e876cbc605e4fb6",
+      "bytes": 709140
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it014_optimiser.star": {
+      "sha256": "2d51302e4e2eea7723069e5a3c4486bbd49d17686294572e304a356cba54c3f3",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it014_sampling.star": {
+      "sha256": "b722ba553ac94b80145715bdc895c850684c32393bf35ec34c80e7f4fb04dda0",
+      "bytes": 1328035
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it015_data.star": {
+      "sha256": "9933ef4b4d677c86a2475d6322bc187ec420c563be0626e0baa059998132fa31",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it015_half1_class001.mrc": {
+      "sha256": "c37d0ecc3a92ed7f63430a64eaacb165f728bb9171e3b2784c4cb9b8429176e0",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it015_half1_class001_angdist.bild": {
+      "sha256": "0f44a4a93229cf3558749b9b05a8102ebb4b4efee0ba75f0eb3da0dfc8307137",
+      "bytes": 1579654
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it015_half1_model.star": {
+      "sha256": "d924a45f6502ada41a89c8290da9145402389ff6f70854fca9abebe94b4b74dc",
+      "bytes": 710859
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it015_half2_class001.mrc": {
+      "sha256": "0305d6672d1fc9e6d591ee417e388d62aa051a6c27e7e065fcf1f9baac49d7ec",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it015_half2_class001_angdist.bild": {
+      "sha256": "ab90fb0817ddb483b03047e3f054aeb6771715dd62079d75daaea8f46cee471e",
+      "bytes": 1569652
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it015_half2_model.star": {
+      "sha256": "fc906d3f82dee134d796ae1f10fec22409f9dcd7f6fb9ed2a6b1d7950851c0f7",
+      "bytes": 709140
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it015_optimiser.star": {
+      "sha256": "4b72bbebba4a97a2f351ab3d9cee7147efde90ba06b8f93db1a97cf3dcd88849",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it015_sampling.star": {
+      "sha256": "f17da520a61f8df7aecbacfea7682c53c39fef5fd68cfa577f0060c931ed434b",
+      "bytes": 1328035
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it016_data.star": {
+      "sha256": "93d56695f20fc1c09210d1a2bc8b42c12ac497989d5b5ce9e8f9f44c4724e08c",
+      "bytes": 2472306
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it016_half1_class001.mrc": {
+      "sha256": "bba0c05d481ce87bcf4644b49afe2226a6ce8460d6d1d49e52d5c765bd1cdfb7",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it016_half1_class001_angdist.bild": {
+      "sha256": "66f1d7391e13fcf968b2285ba3729d5bdceffc34c305b504ab51f40fc6a6c494",
+      "bytes": 1584900
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it016_half1_model.star": {
+      "sha256": "b9de3a7917411e7b28e8bbfd28a990a71c21ca1b1ce7752aec8d88f7fea86e64",
+      "bytes": 710859
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it016_half2_class001.mrc": {
+      "sha256": "2d5fdfafe155e4409c3356fed27340715186866852c84c77bb845340bdc4f6d7",
+      "bytes": 67109888
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it016_half2_class001_angdist.bild": {
+      "sha256": "f1486b2e9d4a077ada7a719d41956bcf93683b47c139c3daafd4d564b869a4dd",
+      "bytes": 1565365
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it016_half2_model.star": {
+      "sha256": "0cb7f48a1aad04ab02504f0ac4f5ff7100aee4f05263c5551ea0dd3d8e63d180",
+      "bytes": 709140
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it016_optimiser.star": {
+      "sha256": "5de479806f7aa31586d230f73bf293d6567f634d708a333707bc5215420a40d5",
+      "bytes": 7983
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_it016_sampling.star": {
+      "sha256": "72df8e06524c547447166ee92bb95e5aae684e86ee52ab9edbc8b51a3162c90f",
+      "bytes": 1328035
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_model.star": {
+      "sha256": "d6c97dfa48401565d35a995e09c7e2499ad708ae8f80e009d8d6288b5d5a2292",
+      "bytes": 710847
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_optimiser.star": {
+      "sha256": "334c584d136198f31ae18a5dbe5c0396cba32ecbe8bf289060b48d40196ab962",
+      "bytes": 7767
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/run_sampling.star": {
+      "sha256": "068032b05d5fb9f1337a7402b48ac40ea8de64e46f1c0d8f3463b322aaadb2d9",
+      "bytes": 1328035
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/relion/slurm_walltime.json": {
+      "sha256": "8fae7d6df3500202e63980cfcfa512a32d5d5a80f467919dc3b44814fa3cb3e7",
+      "bytes": 115
+    },
+    "/tigress/CRYOEM/singerlab/mg6942/10076/test_new/downsampled/particles.256.star": {
+      "sha256": "41fad31778d12cd95ff6694d58bc8df7f6d03d19410dfc4162f42bbf9d71388a",
+      "bytes": 16713565
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/analysis/live_relion_schedule.json": {
+      "sha256": "f648a2222a13dddbdea63600e2527df4b19303abfd883d014a1368adb3ee72f5",
+      "bytes": 3585
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_live_schedule_ab_955bfe1f_20260717T064000Z/analysis/dynamic_schedule_trajectory.json": {
+      "sha256": "6623ef84a18f18403cad7697c7727f55e63cd22be8e22f333e9746ad32d1d470",
+      "bytes": 632505
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_fixture_integrity_20260907/outcome.json": {
+      "sha256": "a021b423eb191ddda4a6bdbaf102641df9bc6780f3068050d35d50adb45591b9",
+      "bytes": 980
+    },
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/hia_real10076_fixture_integrity_20260907/inventory.json": {
+      "sha256": "040e2eb595a409df59ce03d4ada71affe51a2aa6d3941928b85ffc63bfb434de",
+      "bytes": 85114
+    }
+  },
+  "observed_wall_fraction_change": 0.009008975479944281,
+  "wall_time_limitation": "Single instrumented pair with failed quality gates; cannot qualify a speed change.",
+  "orchestration_scripts": {
+    "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/structural_real10076_pair/particles.sbatch": "b7472f17bab6f2dac959d855a76798d52d1d8e24477d18e809325e86da45375a",
+    "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/structural_real10076_pair/run.sbatch": "9c14e4eea1b828f50eeb026dd5abcec8b3af78323d19cb65a4a75ab844e1dacd",
+    "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/structural_real10076_pair/audit.sbatch": "dcfa89ac8aa96cacfa8d7149737b3da900d8ee321e11e13dbcf9b0485bf695da"
+  }
+}
