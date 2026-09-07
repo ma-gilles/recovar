@@ -7587,19 +7587,24 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
             err = cudaGetLastError();
             if (err != cudaSuccess) goto cleanup;
         }
-        err = launch_relion_vdam_mstep_denominator_f32(
-            stream,
-            ctf,
-            minvsigma2,
-            posterior_over_weight_norm,
-            denominator_sum,
-            n_particles,
-            rotation_count,
-            translation_count,
-            pixel_count,
-            pixel_capacity,
-            runtime_current_size);
-        if (err != cudaSuccess) goto cleanup;
+        // Accumulator-only callers do not consume this separately computed
+        // denominator. All worker/scatter completion above is unchanged.
+        if (denominator_sum != nullptr)
+        {
+            err = launch_relion_vdam_mstep_denominator_f32(
+                stream,
+                ctf,
+                minvsigma2,
+                posterior_over_weight_norm,
+                denominator_sum,
+                n_particles,
+                rotation_count,
+                translation_count,
+                pixel_count,
+                pixel_capacity,
+                runtime_current_size);
+            if (err != cudaSuccess) goto cleanup;
+        }
         err = cudaStreamSynchronize(stream);
     }
 
@@ -12945,6 +12950,10 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfCommon(
     const auto rotation_replay_count_dims = rotation_replay_counts.dimensions();
     const auto particle_start_offset_dims = particle_start_offsets_ns.dimensions();
     const auto denominator_dims = denominator_sum->dimensions();
+    // An explicit empty rank-one F32 result requests accumulator-only work.
+    // Every nonempty result must retain the full legacy denominator topology.
+    const bool omit_denominator =
+        denominator_dims.size() == 1 && denominator_dims[0] == 0;
     const int64_t pixel_count = image_h * image_w;
     const bool valid_projector = capacity_projector
         ? (projector_dims.size() == 3 && projector_dims[0] >= 5 &&
@@ -12979,9 +12988,10 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfCommon(
         rotation_replay_count_dims[0] != image_dims[0] ||
         particle_start_offset_dims.size() != 1 ||
         particle_start_offset_dims[0] != image_dims[0] ||
-        denominator_dims.size() != 3 || denominator_dims[0] != image_dims[0] ||
-        denominator_dims[1] != posterior_dims[1] ||
-        denominator_dims[2] != pixel_capacity)
+        (!omit_denominator &&
+         (denominator_dims.size() != 3 || denominator_dims[0] != image_dims[0] ||
+          denominator_dims[1] != posterior_dims[1] ||
+          denominator_dims[2] != pixel_capacity)))
         return ffi::Error::InvalidArgument(
             "RelionVdamMstepFusedProjectorXHalf: inconsistent topology");
 
@@ -13028,7 +13038,7 @@ ffi::Error RelionVdamMstepFusedProjectorXHalfCommon(
         static_cast<float*>(data_real_volume_out->untyped_data()),
         static_cast<float*>(data_imag_volume_out->untyped_data()),
         static_cast<float*>(weight_volume_out->untyped_data()),
-        static_cast<float*>(denominator_sum->untyped_data()),
+        omit_denominator ? nullptr : static_cast<float*>(denominator_sum->untyped_data()),
         projector_dims[0], image_dims[0], posterior_dims[1], posterior_dims[2],
         pixel_count, pixel_capacity, image_h, image_w, N0, N1, N2,
         upsampling, max_r2_x4,

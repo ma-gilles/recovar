@@ -2347,7 +2347,7 @@ def _run_vdam_external_host_replay_callback(
 
 @functools.partial(
     jax.jit,
-    static_argnums=(10, 11, 12, 13, 14, 21, 22, 23, 24, 25, 26, 27, 28),
+    static_argnums=(10, 11, 12, 13, 14, 21, 22, 23, 24, 25, 26, 27, 28, 32),
 )
 def relion_vdam_mstep_fused_projector_x_half(
     data_volume: jax.Array,
@@ -2382,7 +2382,8 @@ def relion_vdam_mstep_fused_projector_x_half(
     stable_dense_positions: jax.Array | None = None,
     logical_current_size: jax.Array | int | None = None,
     runtime_projector_radius: jax.Array | None = None,
-) -> tuple[jax.Array, jax.Array, jax.Array]:
+    return_denominator: bool = True,
+) -> tuple[jax.Array, jax.Array, jax.Array | None]:
     """Project, form residuals, and scatter VDAM rows in one native launch.
 
     Explicit ``runtime_projector_radius`` opts into fixed projector storage:
@@ -2398,8 +2399,19 @@ def relion_vdam_mstep_fused_projector_x_half(
     padded texture. It reads the radius with the existing particle metadata
     D2H synchronization, moved earlier only for this opt-in route. This changes
     preparation timing, not the subsequent particle/rotation/atomic program.
+
+    ``return_denominator=False`` returns ``None`` as the third result and
+    skips the separate terminal denominator kernel and its dense/compact
+    storage. The scatter arithmetic and final stream synchronization remain
+    unchanged. This requires a CUDA library supporting the empty-output ABI.
     """
 
+    if not isinstance(return_denominator, bool):
+        raise TypeError("return_denominator must be a Python bool")
+    if not return_denominator and os.environ.get(
+        _VDAM_EXTERNAL_HOST_REPLAY_LIBRARY_ENV, ""
+    ).strip():
+        raise ValueError("external host replay requires the denominator output")
     _validate_inputs(volume_shape, image_shape, 1, True, True, max_r=max_r)
     if int(volume_shape[2]) % 2 == 0:
         raise ValueError(
@@ -2627,7 +2639,8 @@ def relion_vdam_mstep_fused_projector_x_half(
     )
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, 1, True, True, max_r)
     denominator_type = jax.ShapeDtypeStruct(
-        (n_particles, n_rotations, pixel_capacity), jnp.float32
+        (n_particles, n_rotations, pixel_capacity) if return_denominator else (0,),
+        jnp.float32,
     )
     data_real_volume = jnp.asarray(data_volume.real, dtype=jnp.float32)
     data_imag_volume = jnp.asarray(data_volume.imag, dtype=jnp.float32)
@@ -2760,6 +2773,8 @@ def relion_vdam_mstep_fused_projector_x_half(
             candidate_trace_active=np.int64(candidate_trace_active),
         )
     fused_data = jax.lax.complex(fused_real, fused_imag)
+    if not return_denominator:
+        return fused_data, fused_weight, None
     if stable_capacity:
         compact_denominator = jnp.take(
             dense_denominator,
