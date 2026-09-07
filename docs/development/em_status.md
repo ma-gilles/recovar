@@ -7,6 +7,9 @@ code; migrate callers, tests and documentation together. Preserve non-EM APIs,
 saved formats, numerical behavior and scientific defaults. Present numerical
 repairs separately for a user decision.
 
+The [cleanup plan](cleanup_plan.md) tracks the remaining work and its smallest
+useful checks.
+
 ## Source and review
 
 The control is PR158 commit
@@ -51,6 +54,8 @@ source identities when incorporating evidence into a future PR.
 | Canonical EM helper and PPCA bridge imports | `6ebaf5fad`; 32 focused tests and non-GUI collection passed, Slurm13569139; controller computations unchanged |
 | Versioned K1 run archive | `02e5d79ec`; 84 fixture identities and 189 losslessly converted FSC curves; archive integrity and strict docs build passed |
 | Shared dense/local translation-prior center | `be1f2913e`; 7 existing caller tests, 48 exact value/dtype/error comparisons and non-GUI collection passed, Slurm13569721 |
+| Replay/state-swap diagnostic ownership | `db9576bd6`; 28 caller tests and 122 exact variant/snapshot/mutation/error comparisons passed, Slurm13572837; variant choices work without importing the controller |
+| Frozen scoring-state integrity ownership | `05976cdf4`; two function ASTs unchanged; 74 focused tests and 44 exact payload/hash/error checks passed, Slurm13572933; final import/style check includes 100 passing cases, Slurm13572973 |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance
@@ -153,7 +158,11 @@ All seven memory traces have no sampling errors or unrelated GPU processes.
 Candidate wall-time changes are +4.789%, +6.711% and +6.101%; sampled host-RSS
 changes are -10.676%, +4.723% and -0.996%. The unchanged-source calibration itself
 has +10.709% sampled host RSS despite -0.421% GNU-time process high-water RSS.
-These are distinct memory measurements; neither cancels the other. The failed
+These are distinct memory measurements; neither cancels the other. A further
+audit of 15 recorded state families finds first-iteration shell-statistic
+differences in both control and candidate repeats; maximum shell-sum differences
+are approximately 5e-10 to 1e-9. These precede the particle-level failure but do
+not establish its cause. The failed
 particle gate prevents a performance-qualified result. Stage timing remains
 enabled, and this single case does not qualify broader workloads.
 

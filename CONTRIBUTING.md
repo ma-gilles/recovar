@@ -84,6 +84,14 @@ empty or were warmed by a specified command.
 | Shared pipeline | Affected unit/integration tests | SPA, cryo-ET, outlier and downstream quality/performance under Slurm |
 | GUI or docs | Applicable scoped checks | Build and relevant user workflow checks |
 
+Use focused tests between edits. Group related changes into a frozen checkpoint
+for broader CPU and applicable GPU checks; full long suites are publication or
+milestone checks, not the default response to a small change. Reuse saved outputs
+for report-only audits. Repeat a scientific run when the source, workload or an
+unresolved failure requires it, and record that reason. The
+[cleanup plan](docs/development/cleanup_plan.md) tracks the current boundaries
+and qualification gaps.
+
 `pixi run test-fast` selects the repository's unit tier; do not assume every
 unit test is tiny or independent of external fixtures. Long and GPU tests run
 under Slurm. Record selected versus executed counts, skips and process exit

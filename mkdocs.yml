@@ -106,6 +106,7 @@ nav:
     - File Formats: reference/file-formats.md
     - Development:
       - Codebase Map: development/codebase.md
+      - Cleanup Plan: development/cleanup_plan.md
       - Della Setup: development/della.md
       - Benchmark Contract: development/benchmarks.md
       - Current EM Status: development/em_status.md

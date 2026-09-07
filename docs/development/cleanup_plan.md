@@ -1,0 +1,76 @@
+# Cleanup plan before new-engine development
+
+The milestone covers RECOVAR except the GUI/frontend, with EM first. The
+[codebase map](codebase.md) identifies the current owners; the
+[checkpoint record](em_status.md) identifies the source actually tested.
+This plan describes remaining engineering work, not acceptance of an untested
+refactor or permission to change the scientific contract.
+
+## Establish reliable comparisons
+
+| Work | Current evidence | Next bounded step |
+| --- | --- | --- |
+| Synthetic K1 repeatability | One of three no-capture candidate pairs fails support/Pmax checks; all final-map gates pass. One candidate repeat differs from its two repeats. | Use the first recorded boundary to select a fixed-state diagnostic with the same candidates, priors, noise and map inputs. Capture the competing probabilities for image 685 before classifying the support change. |
+| Real K1 repeatability | Two unchanged PR158 runs on the same H100 fail the direct-map gate from iteration 8. Support/Pmax first differ at iteration 2. | Diagnose the first transition on unchanged source. Keep autonomous convergence and fixed-state arithmetic as separate results. |
+| K-class execution and comparisons | The PR158 undefined-variable repair is held separately. Older repaired-control K2 passes; K8/K16 retain historical failures, and K16 has a class/pose flip without score margins. Exact K4 remains queued. | Resolve the repair separately; qualify the selected source against the explicitly repaired control for K2/K4/K8/K16 and preserve every failed seed/class. |
+| Shared SPA/ET metrics | Both existing tests pass 16 distinct required measurements. Ten historical aliases explain the first external inventory failure. | Complete the held strict-inventory proposal without dropping distinct metrics, widening tolerances or writing baselines. |
+| Performance measurements | Repeated K1 timings exist; sampled RSS warnings and quality failures remain. Shared stage timings are historical single-run comparisons. | Compare accepted workloads on the same physical GPU with repeated orders and independent caches. Retain sampled process-tree RSS and OS process high-water RSS as separate measurements. |
+
+The current captures locate divergence but do not contain every candidate score
+or accumulator. A tiny first-iteration shell-statistic difference is not proof
+of the later particle-level failure's cause. Do not replace a failed trajectory
+with a map-only pass or label it rounding noise without fixed-state evidence.
+
+The prepared validation patches, GPU-test markers and unused shared-`/tmp`
+removal remain separate from behavior-preserving source changes. Their concrete
+patches and decision records are in the Della review directory linked from the
+checkpoint record. No established baseline may be rewritten implicitly.
+
+## Make existing execution easier to read
+
+Prioritize ownership boundaries that can be checked independently. The existing
+controller still combines dispatch, half/class state, replay, iteration history,
+reconstruction and finalization. Moving code is useful when it establishes one
+owner and removes dependencies back into the controller; a forwarding wrapper
+or a new class that merely stores every local variable does not solve this.
+
+| Area | Existing owner | Refactor boundary and evidence needed |
+| --- | --- | --- |
+| Replay interventions | `helpers/state_swap_probe.py`, `helpers/state_swap_runtime.py`, `frozen_boundary.py` | Variant definitions, snapshot copying, restoration and integrity checks are separated from controller scheduling. Preserve shallow/deep-copy semantics and exact mutation order in subsequent changes. |
+| Half/class outputs | `HalfScoreResult`, `RelionHalfInputs`, controller and local-search dispatch | Document which arrays cover images, halfsets, classes and packed hypotheses before combining output unpacking. Test unequal half sizes and K greater than 1. |
+| Sparse scoring | `helpers/sparse_pass2_bucketed.py` | Separate candidate planning, kernel calls, sufficient-statistic reduction and capture/report handling one boundary at a time. Preserve packed shapes, reduction order, casts and ownership. |
+| Iteration configuration | Public refinement options and `iteration_loop.refine_single_volume` | Reuse existing option types; distinguish immutable configuration from evolving state and per-half values. EM API simplification must migrate callers and tests together. |
+| Shared pipeline orchestration | `commands/pipeline.py` and domain modules | Keep loading, covariance/PPCA, embedding and output ownership explicit. Preserve non-EM public APIs and serialized results. Validate the affected shared workflows at a source checkpoint. |
+| Historical experiment scripts | `scripts/`, shared JSON/hash and scorecard helpers | Retain independent numerical references. Remove or consolidate only after reviewing imports, CLI entry points, notebooks and serialized names; preserve recorded reproduction commands. |
+
+Do not combine these into a single executor rewrite. Each change should state
+its input/output ownership, preserve the relevant executable behavior, and
+carry focused caller checks. Move to larger scientific workloads after those
+checks pass and when a checkpoint needs qualification.
+
+## Keep development checks proportional
+
+A small helper or import change gets affected tests, import/CLI checks when
+relevant, and static or exact old/new comparisons for a pure refactor. Several
+related changes form a frozen checkpoint for broader CPU and applicable GPU
+checks. Synthetic/real/K-class pairs qualify scientific checkpoints, rather
+than every edit. Re-auditing saved outputs should not rerun their GPU workload.
+
+Before publication, follow the full shared-suite and rebase requirements in
+[CONTRIBUTING](../../CONTRIBUTING.md). A rebase creates a new candidate. Keep
+source snapshots for queued jobs immutable and continue independent work in the
+implementation checkout. Never claim a later commit passed an earlier commit's
+end-to-end test.
+
+## Conditions for this milestone to close
+
+- Applicable agent guides agree on scope, environment, ownership, validation
+  and delivery; historical run instructions are clearly separated.
+- Removed code has a documented caller review; consolidated code has canonical
+  owners and migrated consumers. New numerical behavior is reviewed separately.
+- Selected synthetic, real and K-class workloads have complete source/fixture
+  identities, preserved failures and reproducible accuracy/performance reports.
+- Shared SPA/ET, outlier and downstream qualification covers the actual selected
+  source, and all publication checks pass before a push or PR.
+- Remaining numerical and architectural issues have concrete owners, evidence
+  and next checks. The new engine remains a subsequent milestone.
