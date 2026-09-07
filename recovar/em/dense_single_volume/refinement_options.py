@@ -1,14 +1,12 @@
-"""Config dataclasses for ``refine_single_volume``.
+"""Grouped settings accepted by ``refine_single_volume(options=...)``.
 
-These typed structs group the ~60 kwargs of ``refine_single_volume`` by
-concern. Today they sit alongside the existing kwargs surface as
-documentation + reusable holders; future callers can populate one of these
-instead of memorising the kwarg name set. A follow-up migration step can
-switch ``refine_single_volume`` to accept these directly and drop the long
-kwarg list.
+Options override the corresponding individual keyword arguments, including
+values left at their dataclass defaults. Settings not represented here remain
+individual arguments on the refinement entry point.
 
-Each dataclass is ``frozen=True`` so it hashes by value and can be reused
-across iterations without copy-on-write surprises.
+Frozen dataclasses prevent field rebinding. Array and mapping payloads are
+still shared objects; freezing does not make them immutable or hashable.
+See ``docs/math/relion_refinement_algorithm.md`` for the execution map.
 """
 
 from __future__ import annotations
@@ -131,13 +129,11 @@ class RefinementBatching:
 
 @dataclass(frozen=True)
 class RefinementOptions:
-    """Top-level container for all configuration groups.
+    """Configuration groups consumed by ``refine_single_volume``.
 
-    Future shape of ``refine_single_volume(experiment_datasets, init_volume,
-    init_noise_variance, init_mean_variance, rotations, translations,
-    *, schedule, adaptive, parity, local_search, k_class, replay, debug,
-    batching, disc_type="linear_interp")``. Today this exists only as a
-    typed grouping; the public signature still uses individual kwargs.
+    Pass this container through the entry point's ``options`` argument.
+    Its group fields and ``disc_type`` replace their individual keyword
+    counterparts before the controller runs.
     """
 
     schedule: RefinementSchedule = field(default_factory=RefinementSchedule)

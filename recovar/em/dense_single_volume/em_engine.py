@@ -710,25 +710,29 @@ def run_em(
     relion_half_volume_mstep: bool = False,
     return_half_volume_accumulators: bool = False,
 ):
-    """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
+    """Score and accumulate one grid using blockwise posterior normalization.
 
-    Key properties:
-    - Never materializes full (n_images, n_rot, n_trans) tensor
-    - E-step scores computed twice (for normalization stats, then for M-step)
-    - All per-block operations are JIT-compiled
-    - Projections computed directly in half-spectrum layout via slice_volume(half_image=True)
-    - Half-spectrum GEMMs: N_half = H*(W//2+1) instead of N = H*W (~2x speedup)
-    - Hermitian weights absorbed into projections (precomputed once per rotation block)
-    - Optional Fourier windowing via current_size: restricts GEMMs to low-frequency
-      subset of the half-spectrum for further speedup at early iterations.
+    Image batches and rotation blocks bound the score tensor. The first sweep
+    collects normalization and best-pose statistics; the second recomputes
+    scores for M-step accumulation. Supported configurations use the fused
+    batch runner. ``score_only`` omits accumulation, while an external
+    normalizer can supply the joint class/pose evidence for K-class callers.
+
+    Projections use the half-image layout ``H * (W//2 + 1)``. Scoring weights
+    select the RELION half-sum or Hermitian inner-product convention. An
+    optional Fourier window further restricts the score operands; actual
+    speed and memory depend on the selected route and batch sizes.
+    See ``docs/math/relion_refinement_algorithm.md`` for the algorithm map.
 
     Parameters
     ----------
     current_size : int or None
         Diameter in pixels (like RELION's rlnCurrentImageSize).
-        When None, use full resolution (same as Phase 1 behavior).
-        When set, only frequencies with radius <= current_size // 2 are
-        included in the E-step and M-step GEMMs.
+        When None, use the full image size.
+        A smaller size restricts Fourier operands through ``FourierWindowSpec``.
+        Gaussian scoring follows ``square_window``; normalized-CC scoring
+        selects a rectangular score window with DC included. Reconstruction
+        keeps its own window indices.
     rotation_log_prior : np.ndarray or None
         Log-prior weights added to E-step scores before softmax. Supports
         either a shared vector of shape ``(n_rot,)`` or an image-specific
