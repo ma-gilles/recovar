@@ -1,0 +1,248 @@
+{
+  "schema": "recovar.shared_regression_archive.v1",
+  "commit": "6ebaf5fad115817a3ce074076b09d1bc20bcd446",
+  "cuda_sha256": "00cd5880d601c1f170e585722aabc8b94a8e3d83b143ae9e184992213bee8a05",
+  "lock_sha256": "66b4cd299d47df291ff06b853d3446dc8ef4edf4aaa8bc37c2e1f1ee8e3081ce",
+  "scope": "Existing SPA and cryo-ET 50k/128 regression tests against committed historical baselines. Generated seed42 fixtures; fresh process/cache; single candidate run per workload, not paired performance qualification.",
+  "runs": {
+    "spa": {
+      "execution": {
+        "job_id": "13569618",
+        "head": "6ebaf5fad115817a3ce074076b09d1bc20bcd446",
+        "scope": "Existing SPA and cryo-ET 50k/128 regression tests against committed historical baselines. Generated seed42 fixtures; fresh process/cache; single candidate run per workload, not paired performance qualification.",
+        "mode": "spa",
+        "status": "failed",
+        "steps": [
+          {
+            "name": "hardware",
+            "command": [
+              "nvidia-smi",
+              "--query-gpu=index,uuid,name,driver_version",
+              "--format=csv,noheader"
+            ],
+            "exit_code": 0,
+            "wall_seconds": 0.017170820996398106
+          },
+          {
+            "name": "provenance",
+            "command": [
+              "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_shared_20260907/.pixi/envs/default/bin/python",
+              "-c",
+              "from pathlib import Path\nimport json,os,recovar,jax,yaml\nfrom recovar import cuda_backproject as cb\nr=Path.cwd().resolve()\nassert Path(recovar.__file__).resolve().is_relative_to(r)\nassert Path(jax.__file__).resolve().is_relative_to(r/'.pixi/envs/default')\nassert len(jax.devices())==1 and jax.devices()[0].platform=='gpu'\nassert jax.devices('cpu')\ngpu=str(jax.devices()[0].device_kind)\nassert gpu=='NVIDIA H100 80GB HBM3',gpu\nassert cb.cuda_available(),cb.cuda_unavailable_error()\nassert Path(cb._loaded_lib_path).resolve()==Path(os.environ['RECOVAR_CUDA_LIB']).resolve()\nold=yaml.safe_load(Path('/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_hia_pr158_baseline_20260906/pixi.lock').read_text())\nnew=yaml.safe_load((r/'pixi.lock').read_text())\nassert old['environments']['default']==new['environments']['default']\nassert all(p in new['packages'] for p in old['packages'])\nfor name in ('spa','cryo_et'):\n    baseline=r/'tests/baselines/run_test_all_metrics/long_generated'/('perf_baseline_'+name+'.json')\n    assert gpu in json.loads(baseline.read_text())\n    assert not os.access(baseline,os.W_OK)\nprint(json.dumps({'recovar':recovar.__file__,'jax':jax.__file__,'jax_version':jax.__version__,'gpu':gpu,'cuda_library':str(cb._loaded_lib_path),'original_packages_unchanged':len(old['packages'])}))\n"
+            ],
+            "exit_code": 0,
+            "wall_seconds": 6.284451051003998
+          },
+          {
+            "name": "regression",
+            "command": [
+              "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_shared_20260907/.pixi/envs/default/bin/python",
+              "-m",
+              "pytest",
+              "-v",
+              "tests/integration/test_run_test_all_metrics_regression_long.py::test_run_test_all_metrics_regression_against_baseline",
+              "--long-test",
+              "--tb=short",
+              "--log-cli-level=INFO",
+              "--junitxml=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/spa/tests.xml",
+              "-o",
+              "cache_dir=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/spa/pytest_cache"
+            ],
+            "exit_code": 0,
+            "wall_seconds": 1006.9578254790104
+          }
+        ],
+        "ordinary_performance_qualified": false,
+        "slurm_visibility": "0",
+        "physical_gpu_uuid": "GPU-35bc7e90-cea1-2c58-9092-aa2a3e6bcbc0",
+        "environment": {
+          "XLA_PYTHON_CLIENT_MEM_FRACTION": ".90",
+          "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+          "CUDA_VISIBLE_DEVICES": "GPU-35bc7e90-cea1-2c58-9092-aa2a3e6bcbc0",
+          "JAX_PLATFORMS": "cuda,cpu",
+          "RECOVAR_CUDA_LIB": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/spa/library/libcuda_backproject.so",
+          "RECOVAR_ENABLE_CUSTOM_CUDA": "1",
+          "RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS": "1",
+          "TF_GPU_ALLOCATOR": "cuda_malloc_async",
+          "RECOVAR_JAX_CACHE_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/spa/jax_cache",
+          "JAX_COMPILATION_CACHE_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/spa/jax_cache",
+          "LONG_METRICS_OUTPUT_BASE": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/spa"
+        },
+        "error": "AssertionError({'missing': ['constrasts_10', 'constrasts_10_noreg', 'constrasts_4', 'constrasts_4_noreg', 'contrasts_10', 'contrasts_10_noreg', 'contrasts_4', 'contrasts_4_noreg', 'pcs_relative_variance_10', 'pcs_relative_variance_4'], 'invalid': []})",
+        "wall_seconds": 1014.5199675720069
+      },
+      "provenance_log": "recovar could not inspect the CUDA kernel targets (cuobjdump not found); if the next call fails with 'no kernel image', see https://github.com/ma-gilles/recovar/issues/131\n{\"recovar\": \"/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_shared_20260907/recovar/__init__.py\", \"jax\": \"/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_shared_20260907/.pixi/envs/default/lib/python3.11/site-packages/jax/__init__.py\", \"jax_version\": \"0.9.0.1\", \"gpu\": \"NVIDIA H100 80GB HBM3\", \"cuda_library\": \"/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/spa/library/libcuda_backproject.so\", \"original_packages_unchanged\": 496}\n",
+      "case": {
+        "output": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/spa",
+        "library": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/spa/library/libcuda_backproject.so",
+        "baseline": "tests/baselines/run_test_all_metrics/long_generated/all_scores.json",
+        "perf_baseline": "tests/baselines/run_test_all_metrics/long_generated/perf_baseline_spa.json",
+        "required_metrics": [
+          "constrasts_10",
+          "constrasts_10_noreg",
+          "constrasts_4",
+          "constrasts_4_noreg",
+          "contrast_abs_error_10",
+          "contrast_abs_error_10_noreg",
+          "contrast_abs_error_4",
+          "contrast_abs_error_4_noreg",
+          "contrasts_10",
+          "contrasts_10_noreg",
+          "contrasts_4",
+          "contrasts_4_noreg",
+          "embedding_squared_error_10",
+          "embedding_squared_error_4",
+          "mean_fsc",
+          "noise_correlation",
+          "noise_max_relative_error",
+          "noise_mean_relative_error",
+          "noise_median_relative_error",
+          "pcs_relative_variance_10",
+          "pcs_relative_variance_4",
+          "svd_relative_variance_10",
+          "svd_relative_variance_4",
+          "variance_fourier_fsc",
+          "variance_fsc",
+          "variance_spatial_fsc"
+        ],
+        "required_stages": [
+          "dataset_generation",
+          "pipeline",
+          "compute_state",
+          "metrics"
+        ],
+        "test": "tests/integration/test_run_test_all_metrics_regression_long.py::test_run_test_all_metrics_regression_against_baseline",
+        "scores_relative": "pytest_long_metrics/current/test_dataset/metrics_plot/all_scores.json"
+      }
+    },
+    "cryo_et": {
+      "execution": {
+        "job_id": "13569619",
+        "head": "6ebaf5fad115817a3ce074076b09d1bc20bcd446",
+        "scope": "Existing SPA and cryo-ET 50k/128 regression tests against committed historical baselines. Generated seed42 fixtures; fresh process/cache; single candidate run per workload, not paired performance qualification.",
+        "mode": "cryo_et",
+        "status": "failed",
+        "steps": [
+          {
+            "name": "hardware",
+            "command": [
+              "nvidia-smi",
+              "--query-gpu=index,uuid,name,driver_version",
+              "--format=csv,noheader"
+            ],
+            "exit_code": 0,
+            "wall_seconds": 0.016516300005605444
+          },
+          {
+            "name": "provenance",
+            "command": [
+              "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_shared_20260907/.pixi/envs/default/bin/python",
+              "-c",
+              "from pathlib import Path\nimport json,os,recovar,jax,yaml\nfrom recovar import cuda_backproject as cb\nr=Path.cwd().resolve()\nassert Path(recovar.__file__).resolve().is_relative_to(r)\nassert Path(jax.__file__).resolve().is_relative_to(r/'.pixi/envs/default')\nassert len(jax.devices())==1 and jax.devices()[0].platform=='gpu'\nassert jax.devices('cpu')\ngpu=str(jax.devices()[0].device_kind)\nassert gpu=='NVIDIA H100 80GB HBM3',gpu\nassert cb.cuda_available(),cb.cuda_unavailable_error()\nassert Path(cb._loaded_lib_path).resolve()==Path(os.environ['RECOVAR_CUDA_LIB']).resolve()\nold=yaml.safe_load(Path('/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_hia_pr158_baseline_20260906/pixi.lock').read_text())\nnew=yaml.safe_load((r/'pixi.lock').read_text())\nassert old['environments']['default']==new['environments']['default']\nassert all(p in new['packages'] for p in old['packages'])\nfor name in ('spa','cryo_et'):\n    baseline=r/'tests/baselines/run_test_all_metrics/long_generated'/('perf_baseline_'+name+'.json')\n    assert gpu in json.loads(baseline.read_text())\n    assert not os.access(baseline,os.W_OK)\nprint(json.dumps({'recovar':recovar.__file__,'jax':jax.__file__,'jax_version':jax.__version__,'gpu':gpu,'cuda_library':str(cb._loaded_lib_path),'original_packages_unchanged':len(old['packages'])}))\n"
+            ],
+            "exit_code": 0,
+            "wall_seconds": 6.37043243800872
+          },
+          {
+            "name": "regression",
+            "command": [
+              "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_shared_20260907/.pixi/envs/default/bin/python",
+              "-m",
+              "pytest",
+              "-v",
+              "tests/integration/test_run_test_all_metrics_regression_long.py::test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline",
+              "--long-test",
+              "--tb=short",
+              "--log-cli-level=INFO",
+              "--junitxml=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/cryo_et/tests.xml",
+              "-o",
+              "cache_dir=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/cryo_et/pytest_cache"
+            ],
+            "exit_code": 0,
+            "wall_seconds": 1320.090333967004
+          }
+        ],
+        "ordinary_performance_qualified": false,
+        "slurm_visibility": "0",
+        "physical_gpu_uuid": "GPU-49c1a223-be61-858b-49d8-d8b0347ac252",
+        "environment": {
+          "XLA_PYTHON_CLIENT_MEM_FRACTION": ".90",
+          "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+          "CUDA_VISIBLE_DEVICES": "GPU-49c1a223-be61-858b-49d8-d8b0347ac252",
+          "JAX_PLATFORMS": "cuda,cpu",
+          "RECOVAR_CUDA_LIB": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/cryo_et/library/libcuda_backproject.so",
+          "RECOVAR_ENABLE_CUSTOM_CUDA": "1",
+          "RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS": "1",
+          "TF_GPU_ALLOCATOR": "cuda_malloc_async",
+          "RECOVAR_JAX_CACHE_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/cryo_et/jax_cache",
+          "JAX_COMPILATION_CACHE_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/cryo_et/jax_cache",
+          "LONG_METRICS_OUTPUT_BASE": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/cryo_et"
+        },
+        "error": "AssertionError({'missing': ['constrasts_10', 'constrasts_10_noreg', 'constrasts_4', 'constrasts_4_noreg', 'contrasts_10', 'contrasts_10_noreg', 'contrasts_4', 'contrasts_4_noreg', 'pcs_relative_variance_10', 'pcs_relative_variance_4'], 'invalid': []})",
+        "wall_seconds": 1327.724407058995
+      },
+      "provenance_log": "recovar could not inspect the CUDA kernel targets (cuobjdump not found); if the next call fails with 'no kernel image', see https://github.com/ma-gilles/recovar/issues/131\n{\"recovar\": \"/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_shared_20260907/recovar/__init__.py\", \"jax\": \"/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_shared_20260907/.pixi/envs/default/lib/python3.11/site-packages/jax/__init__.py\", \"jax_version\": \"0.9.0.1\", \"gpu\": \"NVIDIA H100 80GB HBM3\", \"cuda_library\": \"/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/cryo_et/library/libcuda_backproject.so\", \"original_packages_unchanged\": 496}\n",
+      "case": {
+        "output": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/cryo_et",
+        "library": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/recovar_structural_shared_regression_20260907/cryo_et/library/libcuda_backproject.so",
+        "baseline": "tests/baselines/run_test_all_metrics/long_generated/all_scores_cryo_et.json",
+        "perf_baseline": "tests/baselines/run_test_all_metrics/long_generated/perf_baseline_cryo_et.json",
+        "required_metrics": [
+          "constrasts_10",
+          "constrasts_10_noreg",
+          "constrasts_4",
+          "constrasts_4_noreg",
+          "contrast_abs_error_10",
+          "contrast_abs_error_10_noreg",
+          "contrast_abs_error_4",
+          "contrast_abs_error_4_noreg",
+          "contrasts_10",
+          "contrasts_10_noreg",
+          "contrasts_4",
+          "contrasts_4_noreg",
+          "embedding_squared_error_10",
+          "embedding_squared_error_4",
+          "mean_fsc",
+          "noise_correlation",
+          "noise_max_relative_error",
+          "noise_mean_relative_error",
+          "noise_median_relative_error",
+          "pcs_relative_variance_10",
+          "pcs_relative_variance_4",
+          "svd_relative_variance_10",
+          "svd_relative_variance_4",
+          "variance_fourier_fsc",
+          "variance_fsc",
+          "variance_spatial_fsc"
+        ],
+        "required_stages": [
+          "dataset_generation",
+          "pipeline",
+          "compute_state",
+          "metrics"
+        ],
+        "test": "tests/integration/test_run_test_all_metrics_regression_long.py::test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline",
+        "scores_relative": "pytest_long_metrics/current_cryo_et/test_dataset/metrics_plot/all_scores.json"
+      }
+    }
+  },
+  "instrumentation": {
+    "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/structural_shared_regression/inputs.json": "3a4e0812fa7e2f557d4c9a26220bbe8fae7c7406aab0f9221286493e214d4e1b",
+    "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/structural_shared_regression/audit_existing.py": "3d0445b9d981df782ed91d2fecb9d0190754617e2c1655e3c2d7583d91d422d4",
+    "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/structural_shared_regression/legacy_alias_evidence.json": "7f00b7dd23df832c579ff9fed24da4c8be20a74d1d3a31ffce037af90e2d798e",
+    "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/structural_shared_regression/audit_saved_artifacts_v2.py": "00af68037bd197750a71698fa62fc806137ddddb61bf9bd55cf52d6742d02e3b",
+    "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/structural_shared_regression/saved_artifact_inputs_v2.json": "7c00aae29fdaec686246bbef9a0bd107f843aad8f619b008594f14bdef03545c",
+    "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/structural_shared_regression/saved_artifacts_v2.sbatch": "2e67c0d2b3876fc02d0f642718a6d6c758f26255df08ec083d2140b39c50b248"
+  },
+  "artifact_audit_revision": {
+    "cancelled_job_id": "13573499",
+    "reason": "Review identified that all eigenvector volumes consumed by the Fourier-variance calculation must be hashed before and after reading, in addition to means, variance and parameter files. Cancelled the first audit and preserved its original script, input record and output root.",
+    "replacement_script": "audit_saved_artifacts_v2.py",
+    "source_and_gpu_outputs_changed": false
+  },
+  "archived_files": {
+    "quality_and_performance.json": "7233888423f51718f9ea81e107777b7b985bcd47d7f0207ab3dc5fb5afc90270",
+    "comparison_tables.md": "1c60514a41ecbc9b01a86e263cbc07404137a70fdae4b54c157ebdf979e90ac3",
+    "fixtures_and_fsc.json": "022ece1ad4794697f7ad0bc495cf8da886c79494efad5cceb1e3fa0d1d563e29"
+  }
+}

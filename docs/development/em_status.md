@@ -56,6 +56,7 @@ source identities when incorporating evidence into a future PR.
 | Shared dense/local translation-prior center | `be1f2913e`; 7 existing caller tests, 48 exact value/dtype/error comparisons and non-GUI collection passed, Slurm13569721 |
 | Replay/state-swap diagnostic ownership | `db9576bd6`; 28 caller tests and 122 exact variant/snapshot/mutation/error comparisons passed, Slurm13572837; variant choices work without importing the controller |
 | Frozen scoring-state integrity ownership | `05976cdf4`; two function ASTs unchanged; 74 focused tests and 44 exact payload/hash/error checks passed, Slurm13572933; final import/style check includes 100 passing cases, Slurm13572973 |
+| Pipeline downsample/cache preparation | `2531c66b3`; 22 caller tests and 50 exact callback/mutation/error comparisons passed, Slurm13573180; public API and numerical stages unchanged |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance
@@ -177,7 +178,7 @@ at frozen source `6ebaf5fad`. The first external inventory audit fails because
 the committed baselines retain ten retired aliases for metrics now emitted
 under canonical names. Historical commits establish those aliases, and every
 alias equals its canonical baseline value. Audit-only job13570324 verifies all
-16 distinct required quality metrics pass in each workload, plus four finite
+16 canonical required metric keys pass in each workload, plus four finite
 local-resolution measurements without historical baselines. Source, library
 and baseline contents remain unchanged; no GPU workload was rerun for this audit.
 
@@ -185,8 +186,10 @@ Historical performance comparisons retain warnings over 10%, including dataset
 generation, metrics, cryo-ET state computation and recorded stage GPU memory.
 These stage memory values are the existing endpoint/cumulative measurements,
 not independently sampled process peaks. The runs do not establish paired
-performance qualification. Outlier/downstream and remaining shared checks are
-still outstanding.
+performance qualification. The [versioned shared archive](evidence/shared-spa-et-20260907/README.md) also
+preserves generated fixture identities and six complete FSC curves; their
+threshold-frequency summaries all saturate. Outlier/downstream and remaining
+shared checks are still outstanding.
 
 Complete these comparisons and classify failures before larger executor
 extraction. The K-class correctness, workflow and benchmark-validation proposals

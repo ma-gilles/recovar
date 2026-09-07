@@ -109,3 +109,8 @@ The [K1 case25 archive from 7 September 2026](evidence/k1-case25-20260907/README
 preserves a measured control/candidate pair, commands, fixture identities and
 all shellwise FSC curves. It is a scoped historical run record, not an expected
 baseline or qualification of the current checkout.
+
+The [shared SPA/ET checkpoint](evidence/shared-spa-et-20260907/README.md) preserves
+historical quality/performance comparisons, generated fixture identities and
+six shellwise FSC curves recovered from saved outputs. Its threshold-frequency
+summaries saturate; use the archived curves when reviewing map-quality changes.
