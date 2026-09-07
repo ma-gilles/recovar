@@ -4,6 +4,22 @@ from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+
+
+def _stats_array(value, dtype, host_arrays):
+    """Keep host-published fields on the host with JAX's dtype policy."""
+    if type(host_arrays) is not bool:
+        raise TypeError("host_arrays must be a bool")
+    if not host_arrays:
+        return jnp.asarray(value, dtype=dtype)
+    value_dtype = value.dtype if hasattr(value, "dtype") else np.asarray(value).dtype
+    dtype = jax.dtypes.canonicalize_dtype(value_dtype if dtype is None else dtype)
+    if isinstance(value, jax.Array) and value.dtype != dtype:
+        # Device casts can flush subnormals differently from NumPy. Keep the
+        # established conversion semantics before publishing the result.
+        value = jnp.asarray(value, dtype=dtype)
+    return np.asarray(value, dtype=dtype)
 
 
 class MeanStats(NamedTuple):
@@ -26,7 +42,8 @@ class RelionStats(NamedTuple):
 
     These fields are not additive like :class:`MeanStats`; they are emitted
     per iteration so convergence and current-size logic can reuse the exact
-    normalization already computed inside ``run_em``.
+    normalization already computed inside ``run_em``. Fields may be NumPy
+    arrays when explicitly published for a host consumer.
 
     Attributes:
         log_evidence_per_image: Log normalizer ``log_Z`` for each image.
@@ -37,10 +54,10 @@ class RelionStats(NamedTuple):
             be collapsed to RELION-style ``pdf_direction`` updates.
     """
 
-    log_evidence_per_image: jax.Array
-    best_log_score_per_image: jax.Array
-    max_posterior_per_image: jax.Array
-    rotation_posterior_sums: jax.Array
+    log_evidence_per_image: jax.Array | np.ndarray
+    best_log_score_per_image: jax.Array | np.ndarray
+    max_posterior_per_image: jax.Array | np.ndarray
+    rotation_posterior_sums: jax.Array | np.ndarray
 
 
 class NoiseStats(NamedTuple):
@@ -80,15 +97,15 @@ class NoiseStats(NamedTuple):
             RELION's group scale update.
     """
 
-    wsum_sigma2_noise: jax.Array
-    wsum_img_power: jax.Array
+    wsum_sigma2_noise: jax.Array | np.ndarray
+    wsum_img_power: jax.Array | np.ndarray
     wsum_sigma2_offset: float
     sumw: float
-    wsum_noise_a2: jax.Array | None = None
-    wsum_noise_xa: jax.Array | None = None
-    wsum_norm_correction: jax.Array | None = None
-    wsum_scale_correction_xa: jax.Array | None = None
-    wsum_scale_correction_aa: jax.Array | None = None
+    wsum_noise_a2: jax.Array | np.ndarray | None = None
+    wsum_noise_xa: jax.Array | np.ndarray | None = None
+    wsum_norm_correction: jax.Array | np.ndarray | None = None
+    wsum_scale_correction_xa: jax.Array | np.ndarray | None = None
+    wsum_scale_correction_aa: jax.Array | np.ndarray | None = None
 
 
 def make_relion_stats(
@@ -99,14 +116,15 @@ def make_relion_stats(
     rotation_posterior_sums,
     image_dtype=None,
     rotation_dtype=jnp.float32,
+    host_arrays: bool = False,
 ) -> RelionStats:
     """Build a ``RelionStats`` object with consistent array conversion."""
 
     return RelionStats(
-        log_evidence_per_image=jnp.asarray(log_evidence_per_image, dtype=image_dtype),
-        best_log_score_per_image=jnp.asarray(best_log_score_per_image, dtype=image_dtype),
-        max_posterior_per_image=jnp.asarray(max_posterior_per_image, dtype=image_dtype),
-        rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=rotation_dtype),
+        log_evidence_per_image=_stats_array(log_evidence_per_image, image_dtype, host_arrays),
+        best_log_score_per_image=_stats_array(best_log_score_per_image, image_dtype, host_arrays),
+        max_posterior_per_image=_stats_array(max_posterior_per_image, image_dtype, host_arrays),
+        rotation_posterior_sums=_stats_array(rotation_posterior_sums, rotation_dtype, host_arrays),
     )
 
 
@@ -122,25 +140,26 @@ def make_noise_stats(
     wsum_scale_correction_xa=None,
     wsum_scale_correction_aa=None,
     array_dtype=jnp.float32,
+    host_arrays: bool = False,
 ) -> NoiseStats:
     """Build a ``NoiseStats`` object with consistent array and scalar coercion."""
 
     return NoiseStats(
-        wsum_sigma2_noise=jnp.asarray(wsum_sigma2_noise, dtype=array_dtype),
-        wsum_img_power=jnp.asarray(wsum_img_power, dtype=array_dtype),
+        wsum_sigma2_noise=_stats_array(wsum_sigma2_noise, array_dtype, host_arrays),
+        wsum_img_power=_stats_array(wsum_img_power, array_dtype, host_arrays),
         wsum_sigma2_offset=float(wsum_sigma2_offset),
         sumw=float(sumw),
-        wsum_noise_a2=None if wsum_noise_a2 is None else jnp.asarray(wsum_noise_a2, dtype=array_dtype),
-        wsum_noise_xa=None if wsum_noise_xa is None else jnp.asarray(wsum_noise_xa, dtype=array_dtype),
+        wsum_noise_a2=None if wsum_noise_a2 is None else _stats_array(wsum_noise_a2, array_dtype, host_arrays),
+        wsum_noise_xa=None if wsum_noise_xa is None else _stats_array(wsum_noise_xa, array_dtype, host_arrays),
         wsum_norm_correction=None
         if wsum_norm_correction is None
-        else jnp.asarray(wsum_norm_correction, dtype=array_dtype),
+        else _stats_array(wsum_norm_correction, array_dtype, host_arrays),
         wsum_scale_correction_xa=None
         if wsum_scale_correction_xa is None
-        else jnp.asarray(wsum_scale_correction_xa, dtype=array_dtype),
+        else _stats_array(wsum_scale_correction_xa, array_dtype, host_arrays),
         wsum_scale_correction_aa=None
         if wsum_scale_correction_aa is None
-        else jnp.asarray(wsum_scale_correction_aa, dtype=array_dtype),
+        else _stats_array(wsum_scale_correction_aa, array_dtype, host_arrays),
     )
 
 

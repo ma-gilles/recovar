@@ -4545,6 +4545,7 @@ def run_local_em_exact(
     mstep_subtract_ctf_projection: bool = False,
     mstep_relion_x_half: bool = False,
     host_accumulator_finalize: bool = False,
+    host_stats_publication: bool = False,
     return_half_volume_accumulators: bool = False,
     return_profile: bool = False,
     disable_adjoint_y: bool = False,
@@ -4626,6 +4627,10 @@ def run_local_em_exact(
     if host_plan_cuda_enabled and not host_plan_pack_enabled:
         raise ValueError("CUDA host-plan packing requires host-plan packing")
     host_publication_enabled = _local_host_publication_requested()
+    if type(host_stats_publication) is not bool:
+        raise TypeError("host_stats_publication must be a bool")
+    if host_stats_publication and not host_accumulator_finalize:
+        raise ValueError("host statistics publication requires host accumulator finalization")
     skip_deferred_zero_norm = _local_skip_deferred_zero_norm_requested()
     if host_publication_enabled and not defer_packed_vdam_enabled:
         raise ValueError("host publication requires deferred packed VDAM execution")
@@ -10009,6 +10014,7 @@ def run_local_em_exact(
         best_log_score_per_image=best_log_score_per_image,
         max_posterior_per_image=max_posterior_per_image,
         rotation_posterior_sums=rotation_posterior_sums,
+        host_arrays=host_stats_publication,
     )
     noise_stats = None
     if accumulate_noise:
@@ -10016,6 +10022,10 @@ def run_local_em_exact(
         noise_sigma2_offset_value = float(np.asarray(noise_sigma2_offset, dtype=np.float64))
         noise_sumw_value = float(np.asarray(noise_sumw, dtype=np.float64))
         transfer_profile["final_noise_to_host_s"] += time.time() - transfer_t0
+        if host_stats_publication:
+            # Publish the physical carry before taking the logical host prefix;
+            # do not compile a fresh device slice for every subset length.
+            noise_norm_correction = np.asarray(noise_norm_correction)
         noise_stats = make_noise_stats(
             wsum_sigma2_noise=noise_wsum,
             wsum_img_power=noise_img_power,
@@ -10030,6 +10040,7 @@ def run_local_em_exact(
             ),
             wsum_scale_correction_xa=noise_scale_xa,
             wsum_scale_correction_aa=noise_scale_aa,
+            host_arrays=host_stats_publication,
         )
     timing.stats_finalize_s += time.time() - stats_finalize_t0
 

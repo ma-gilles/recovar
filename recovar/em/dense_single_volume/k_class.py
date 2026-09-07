@@ -33,6 +33,14 @@ _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_
 _RELION_X_HALF_BP_FUSED_ATOMICS_ENV = "RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS"
 _DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES_ENV = "RECOVAR_DIAGNOSTIC_FIRSTITER_CLASS_OVERRIDES"
 _K1_POSE_PUBLISH_DIRECT_ENV = "RECOVAR_K1_POSE_PUBLISH_DIRECT"
+_LOCAL_HOST_RESULT_PUBLICATION_ENV = "RECOVAR_EXACT_LOCAL_HOST_RESULT_PUBLICATION"
+
+
+def _local_host_result_publication_requested():
+    token = os.environ.get(_LOCAL_HOST_RESULT_PUBLICATION_ENV, "0")
+    if token not in {"0", "1"}:
+        raise ValueError(f"{_LOCAL_HOST_RESULT_PUBLICATION_ENV} must be 0 or 1")
+    return token == "1"
 
 
 class KClassEMResult(NamedTuple):
@@ -1367,9 +1375,19 @@ def _run_sparse_k_class_adaptive_pass2(
     )
 
 
-def _sum_noise_stats(noise_stats: tuple[NoiseStats, ...] | None) -> NoiseStats | None:
+def _sum_noise_stats(noise_stats: tuple[NoiseStats, ...] | None, *, host_arrays=False) -> NoiseStats | None:
     if not noise_stats:
         return None
+    if host_arrays:
+        if len(noise_stats) != 1:
+            raise ValueError("host noise publication requires exactly one class")
+        # A one-element class-axis reduction has no additions. Preserve the
+        # already published bytes rather than recreating device arrays.
+        fields = noise_stats[0]._asdict()
+        # Preserve Python sum's initial-zero semantics, including signed zero.
+        fields["wsum_sigma2_offset"] = sum(float(stats.wsum_sigma2_offset) for stats in noise_stats)
+        fields["sumw"] = sum(float(stats.sumw) for stats in noise_stats)
+        return make_noise_stats(**fields, host_arrays=True)
 
     def _sum_field(name: str):
         values = [getattr(stats, name) for stats in noise_stats]
@@ -1407,6 +1425,8 @@ def _stack_accumulators(values, *, host: bool):
 def _sum_k_class_noise_stats(
     noise_stats: tuple[NoiseStats, ...] | None,
     class_posterior_sums: np.ndarray,
+    *,
+    host_arrays=False,
 ) -> NoiseStats | None:
     """Aggregate Class3D noise stats with RELION's single global sum_weight.
 
@@ -1419,7 +1439,7 @@ def _sum_k_class_noise_stats(
     rescaling.
     """
 
-    aggregate = _sum_noise_stats(noise_stats)
+    aggregate = _sum_noise_stats(noise_stats, host_arrays=host_arrays)
     if aggregate is None:
         return None
     responsibilities = np.asarray(class_posterior_sums, dtype=np.float64).reshape(-1)
@@ -1438,7 +1458,7 @@ def _sum_k_class_noise_stats(
                 continue
             image_power += np.asarray(stats.wsum_img_power, dtype=np.float64) * (responsibility / class_sumw)
     return aggregate._replace(
-        wsum_img_power=jnp.asarray(image_power, dtype=aggregate.wsum_img_power.dtype), sumw=relion_sumw
+        wsum_img_power=(np.asarray if host_arrays else jnp.asarray)(image_power, dtype=aggregate.wsum_img_power.dtype), sumw=relion_sumw
     )
 
 
@@ -1491,9 +1511,14 @@ def _assemble_result(
     class_posterior_sums_override=None,
     firstiter_winner_take_all: bool = False,
     host_accumulators: bool = False,
+    host_stats_publication: bool = False,
     mstep_full_half_axis: int | None = None,
     mstep_accumulator_shape: tuple[int, int, int] | None = None,
 ) -> KClassEMResult:
+    if type(host_stats_publication) is not bool:
+        raise TypeError("host_stats_publication must be a bool")
+    if host_stats_publication and (len(per_class_stats) != 1 or not host_accumulators):
+        raise ValueError("host statistics publication requires one class with host accumulators")
     global_log_evidence = _logsumexp_np(class_log_evidence, axis=0).astype(np.float64)
     # Guard against -inf - (-inf) = NaN when an entire (image, class) had all
     # poses masked out (e.g., RELION firstiter_cc_pass2_only_best_coarse where
@@ -1548,16 +1573,20 @@ def _assemble_result(
     # Pmax is a probability; clip tiny numerical overshoots or inconsistent
     # synthetic fixtures while preserving all valid joint posterior values.
     joint_pmax = np.clip(joint_pmax, 0.0, 1.0)
-    rotation_posterior_sums = jnp.sum(
-        jnp.stack([jnp.asarray(stats.rotation_posterior_sums) for stats in per_class_stats], axis=0),
-        axis=0,
-    )
+    if host_stats_publication:
+        rotation_posterior_sums = np.asarray(per_class_stats[0].rotation_posterior_sums)
+    else:
+        rotation_posterior_sums = jnp.sum(
+            jnp.stack([jnp.asarray(stats.rotation_posterior_sums) for stats in per_class_stats], axis=0),
+            axis=0,
+        )
     stats = make_relion_stats(
         log_evidence_per_image=global_log_evidence,
         best_log_score_per_image=global_best_scores,
         max_posterior_per_image=joint_pmax,
         rotation_posterior_sums=rotation_posterior_sums,
         image_dtype=jnp.float32,
+        host_arrays=host_stats_publication,
     )
     direct_single_class = _k1_pose_publish_direct_requested()
     best_pose_rotations = _selected_by_class(
@@ -1576,7 +1605,9 @@ def _assemble_result(
     else:
         stacked_new_means = jnp.stack([jnp.asarray(mean) for mean in new_means], axis=0)
 
-    aggregate_noise_stats = _sum_k_class_noise_stats(noise_stats, class_mstep_posterior_sums)
+    aggregate_noise_stats = _sum_k_class_noise_stats(
+        noise_stats, class_mstep_posterior_sums, host_arrays=host_stats_publication
+    )
     profile_summary_out = None
     if profile_summary is not None:
         profile_summary_out = dict(profile_summary)
@@ -1594,15 +1625,16 @@ def _assemble_result(
         )
         profile_summary_out["class_posterior_sums_used_override"] = class_posterior_sums_override is not None
 
+    result_array = np.asarray if host_stats_publication else jnp.asarray
     return KClassEMResult(
         new_means=stacked_new_means,
         Ft_y=_stack_accumulators(Ft_y, host=host_accumulators),
         Ft_ctf=_stack_accumulators(Ft_ctf, host=host_accumulators),
-        per_class_hard_assignments=jnp.asarray(per_class_hard_assignments, dtype=jnp.int32),
-        class_assignments=jnp.asarray(class_assignments, dtype=jnp.int32),
-        pose_assignments=jnp.asarray(pose_assignments, dtype=jnp.int32),
-        class_responsibilities=jnp.asarray(class_responsibilities, dtype=jnp.float32),
-        class_posterior_sums=jnp.asarray(class_posterior_sums, dtype=jnp.float32),
+        per_class_hard_assignments=result_array(per_class_hard_assignments, dtype=jnp.int32),
+        class_assignments=result_array(class_assignments, dtype=jnp.int32),
+        pose_assignments=result_array(pose_assignments, dtype=jnp.int32),
+        class_responsibilities=result_array(class_responsibilities, dtype=jnp.float32),
+        class_posterior_sums=result_array(class_posterior_sums, dtype=jnp.float32),
         stats=stats,
         per_class_stats=per_class_stats,
         noise_stats=noise_stats,
@@ -1620,7 +1652,7 @@ def _assemble_result(
         best_pose_translations=best_pose_translations,
         best_pose_rotation_ids=best_pose_rotation_ids,
         profile_summary=profile_summary_out,
-        class_mstep_posterior_sums=jnp.asarray(class_mstep_posterior_sums, dtype=jnp.float32),
+        class_mstep_posterior_sums=result_array(class_mstep_posterior_sums, dtype=jnp.float32),
         mstep_full_half_axis=mstep_full_half_axis,
         mstep_accumulator_shape=mstep_accumulator_shape,
     )
@@ -2596,6 +2628,13 @@ def run_local_k_class_em(
     n_images = _dataset_image_count(experiment_dataset, fallback=fallback_n_images)
     log_priors = _class_log_priors(n_classes, class_log_priors)
     base_engine_kwargs = dict(engine_kwargs)
+    publish_host_result = (
+        _local_host_result_publication_requested()
+        and n_classes == 1
+        and bool(base_engine_kwargs.get("host_accumulator_finalize", False))
+    )
+    if publish_host_result:
+        base_engine_kwargs["host_stats_publication"] = True
     return_profile = bool(base_engine_kwargs.pop("return_profile", False))
     class_local_rotation_log_prior = base_engine_kwargs.pop("class_local_rotation_log_prior", None)
 
@@ -2690,6 +2729,8 @@ def run_local_k_class_em(
                 per_class_best_pose_translations=None if best_pose_translations is None else [best_pose_translations],
                 per_class_best_pose_rotation_ids=None if best_pose_rotation_ids is None else [best_pose_rotation_ids],
                 profile_summary=profile_summary,
+                host_accumulators=publish_host_result,
+                host_stats_publication=publish_host_result,
                 class_posterior_sums_override=_class_posterior_sums_override(
                     None if noise is None else (noise,),
                 ),
@@ -2845,6 +2886,8 @@ def run_local_k_class_em(
         per_class_best_pose_translations=per_class_best_pose_translations,
         per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
         profile_summary=profile_summary,
+        host_accumulators=publish_host_result,
+        host_stats_publication=publish_host_result,
         class_posterior_sums_override=_class_posterior_sums_override(
             None if per_class_noise is None else tuple(per_class_noise),
         ),
