@@ -102,3 +102,10 @@ hardware, dirty mixed revisions, cached-only runs or one historical sample.
 
 Bulky disposable outputs belong in scratch with a `SAFE_TO_DELETE` marker.
 Keep enough small evidence to reproduce and audit a result after scratch cleanup.
+
+## Recorded source comparisons
+
+The [K1 case25 archive from 7 September 2026](evidence/k1-case25-20260907/README.md)
+preserves a measured control/candidate pair, commands, fixture identities and
+all shellwise FSC curves. It is a scoped historical run record, not an expected
+baseline or qualification of the current checkout.

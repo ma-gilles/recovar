@@ -1,0 +1,494 @@
+{
+  "scope": "Frozen structural source159059131 versus unchanged PR158: one paired cold K1case25 trajectory on one allocated A10080, independent empty compilation caches and full intermediate capture. Current-source scoped synthetic accuracy check; ordinary and repeated performance remain unqualified.",
+  "job_id": "13567540",
+  "status": "scoped_quality_passed",
+  "runs": [
+    {
+      "name": "00_cold_control",
+      "role": "control",
+      "phase": "cold",
+      "pair": 0,
+      "quality_pass": true,
+      "fsc_audit_exit_code": 0,
+      "fsc_failures": [],
+      "topology_failures": [],
+      "final_cross_relion_auc": 0.9981923166455461,
+      "final_gt_delta": 0.009182079981781166,
+      "process_wall_seconds": 548.2233883589997,
+      "process_tree_gpu_peak_bytes": 34881929216,
+      "process_tree_rss_peak_bytes": 9275678720,
+      "sampling_rows": 527,
+      "sampling_errors": 0,
+      "outsider_rows": 0,
+      "memory_admissible": true,
+      "cache_before": {
+        "file_count": 0,
+        "bytes": 0
+      },
+      "timing_summary": {
+        "n_rows": 8,
+        "stage_cumulative_by_relion_iter": {
+          "1": {
+            "convergence": 72.25905203819275,
+            "e_step": 48.75428581237793,
+            "fsc": 69.96330308914185,
+            "recon": 67.43338084220886
+          },
+          "2": {
+            "convergence": 73.70227718353271,
+            "e_step": 60.56892204284668,
+            "fsc": 73.10929536819458,
+            "noise_update": 73.6984806060791,
+            "recon": 73.00792479515076
+          },
+          "3": {
+            "convergence": 66.52800130844116,
+            "e_step": 51.148237466812134,
+            "fsc": 66.3307433128357,
+            "noise_update": 66.52321600914001,
+            "recon": 64.73512172698975
+          },
+          "4": {
+            "convergence": 64.05770444869995,
+            "e_step": 49.72471380233765,
+            "fsc": 63.84331226348877,
+            "noise_update": 64.05380320549011,
+            "recon": 62.23377704620361
+          },
+          "5": {
+            "convergence": 24.2579665184021,
+            "e_step": 14.65447998046875,
+            "fsc": 24.04520058631897,
+            "noise_update": 24.254024982452393,
+            "recon": 23.93168067932129
+          },
+          "6": {
+            "convergence": 67.35860657691956,
+            "e_step": 57.759583711624146,
+            "fsc": 67.16833758354187,
+            "noise_update": 67.35455417633057,
+            "recon": 67.0474157333374
+          },
+          "7": {
+            "convergence": 57.897900342941284,
+            "e_step": 47.14549374580383,
+            "fsc": 57.69674730300903,
+            "noise_update": 57.89245891571045,
+            "recon": 57.567859411239624
+          },
+          "8": {
+            "convergence": 29.676437616348267,
+            "e_step": 18.899200201034546,
+            "fsc": 29.49707317352295,
+            "noise_update": 29.671994924545288,
+            "recon": 29.357108116149902
+          }
+        },
+        "stage_delta_by_relion_iter": {
+          "1": {
+            "convergence": 2.2957489490509033,
+            "e_step": 48.75428581237793,
+            "fsc": 2.5299222469329834,
+            "recon": 18.679095029830933
+          },
+          "2": {
+            "convergence": 0.0037965774536132812,
+            "e_step": 60.56892204284668,
+            "fsc": 0.10137057304382324,
+            "noise_update": 0.5891852378845215,
+            "recon": 12.439002752304077
+          },
+          "3": {
+            "convergence": 0.004785299301147461,
+            "e_step": 51.148237466812134,
+            "fsc": 1.5956215858459473,
+            "noise_update": 0.1924726963043213,
+            "recon": 13.586884260177612
+          },
+          "4": {
+            "convergence": 0.003901243209838867,
+            "e_step": 49.72471380233765,
+            "fsc": 1.6095352172851562,
+            "noise_update": 0.21049094200134277,
+            "recon": 12.509063243865967
+          },
+          "5": {
+            "convergence": 0.003941535949707031,
+            "e_step": 14.65447998046875,
+            "fsc": 0.11351990699768066,
+            "noise_update": 0.20882439613342285,
+            "recon": 9.277200698852539
+          },
+          "6": {
+            "convergence": 0.004052400588989258,
+            "e_step": 57.759583711624146,
+            "fsc": 0.12092185020446777,
+            "noise_update": 0.1862165927886963,
+            "recon": 9.287832021713257
+          },
+          "7": {
+            "convergence": 0.005441427230834961,
+            "e_step": 47.14549374580383,
+            "fsc": 0.12888789176940918,
+            "noise_update": 0.19571161270141602,
+            "recon": 10.422365665435791
+          },
+          "8": {
+            "convergence": 0.004442691802978516,
+            "e_step": 18.899200201034546,
+            "fsc": 0.13996505737304688,
+            "noise_update": 0.17492175102233887,
+            "recon": 10.457907915115356
+          }
+        },
+        "sum_stage_delta_s": {
+          "convergence": 2.3261101245880127,
+          "e_step": 348.65491676330566,
+          "fsc": 6.339744329452515,
+          "noise_update": 1.7578232288360596,
+          "recon": 96.65935158729553
+        },
+        "sum_wall_time_s": 455.7385718822479
+      },
+      "setup_phase_cumulative_seconds": {
+        "before_iterations": 0.15362334251403809,
+        "direction_prior": 0.13471269607543945,
+        "initial_arrays": 0.13455462455749512,
+        "mask_and_image_cache": 0.0007102489471435547,
+        "noise_radial_init": 0.15331172943115234,
+        "sampling_grid": 0.009317636489868164,
+        "state_init": 0.0007855892181396484
+      }
+    },
+    {
+      "name": "01_cold_candidate",
+      "role": "candidate",
+      "phase": "cold",
+      "pair": 0,
+      "quality_pass": true,
+      "fsc_audit_exit_code": 0,
+      "fsc_failures": [],
+      "topology_failures": [],
+      "final_cross_relion_auc": 0.9981923399135688,
+      "final_gt_delta": 0.009182069157835593,
+      "process_wall_seconds": 548.6691410870008,
+      "process_tree_gpu_peak_bytes": 34881929216,
+      "process_tree_rss_peak_bytes": 9420484608,
+      "sampling_rows": 527,
+      "sampling_errors": 0,
+      "outsider_rows": 0,
+      "memory_admissible": true,
+      "cache_before": {
+        "file_count": 0,
+        "bytes": 0
+      },
+      "timing_summary": {
+        "n_rows": 8,
+        "stage_cumulative_by_relion_iter": {
+          "1": {
+            "convergence": 72.45105195045471,
+            "e_step": 49.334662199020386,
+            "fsc": 70.0725736618042,
+            "recon": 67.57029628753662
+          },
+          "2": {
+            "convergence": 73.83403968811035,
+            "e_step": 61.16041302680969,
+            "fsc": 73.27200818061829,
+            "noise_update": 73.8296959400177,
+            "recon": 73.16609525680542
+          },
+          "3": {
+            "convergence": 66.75090861320496,
+            "e_step": 51.75724959373474,
+            "fsc": 66.53736400604248,
+            "noise_update": 66.7469527721405,
+            "recon": 64.9249951839447
+          },
+          "4": {
+            "convergence": 64.18217444419861,
+            "e_step": 50.273552656173706,
+            "fsc": 63.99713587760925,
+            "noise_update": 64.17818474769592,
+            "recon": 62.37720561027527
+          },
+          "5": {
+            "convergence": 23.878267526626587,
+            "e_step": 14.689459562301636,
+            "fsc": 23.689852952957153,
+            "noise_update": 23.874454975128174,
+            "recon": 23.556713581085205
+          },
+          "6": {
+            "convergence": 67.80701971054077,
+            "e_step": 58.57967233657837,
+            "fsc": 67.62593960762024,
+            "noise_update": 67.80324959754944,
+            "recon": 67.48607897758484
+          },
+          "7": {
+            "convergence": 57.89620900154114,
+            "e_step": 47.64223670959473,
+            "fsc": 57.70437049865723,
+            "noise_update": 57.89176869392395,
+            "recon": 57.57152462005615
+          },
+          "8": {
+            "convergence": 29.438385486602783,
+            "e_step": 19.200109481811523,
+            "fsc": 29.250484466552734,
+            "noise_update": 29.434242725372314,
+            "recon": 29.129297256469727
+          }
+        },
+        "stage_delta_by_relion_iter": {
+          "1": {
+            "convergence": 2.3784782886505127,
+            "e_step": 49.334662199020386,
+            "fsc": 2.502277374267578,
+            "recon": 18.235634088516235
+          },
+          "2": {
+            "convergence": 0.004343748092651367,
+            "e_step": 61.16041302680969,
+            "fsc": 0.10591292381286621,
+            "noise_update": 0.5576877593994141,
+            "recon": 12.005682229995728
+          },
+          "3": {
+            "convergence": 0.003955841064453125,
+            "e_step": 51.75724959373474,
+            "fsc": 1.6123688220977783,
+            "noise_update": 0.20958876609802246,
+            "recon": 13.167745590209961
+          },
+          "4": {
+            "convergence": 0.003989696502685547,
+            "e_step": 50.273552656173706,
+            "fsc": 1.6199302673339844,
+            "noise_update": 0.18104887008666992,
+            "recon": 12.103652954101562
+          },
+          "5": {
+            "convergence": 0.003812551498413086,
+            "e_step": 14.689459562301636,
+            "fsc": 0.13313937187194824,
+            "noise_update": 0.1846020221710205,
+            "recon": 8.86725401878357
+          },
+          "6": {
+            "convergence": 0.003770112991333008,
+            "e_step": 58.57967233657837,
+            "fsc": 0.1398606300354004,
+            "noise_update": 0.17730998992919922,
+            "recon": 8.90640664100647
+          },
+          "7": {
+            "convergence": 0.0044403076171875,
+            "e_step": 47.64223670959473,
+            "fsc": 0.13284587860107422,
+            "noise_update": 0.18739819526672363,
+            "recon": 9.929287910461426
+          },
+          "8": {
+            "convergence": 0.00414276123046875,
+            "e_step": 19.200109481811523,
+            "fsc": 0.12118721008300781,
+            "noise_update": 0.18375825881958008,
+            "recon": 9.929187774658203
+          }
+        },
+        "sum_stage_delta_s": {
+          "convergence": 2.406933307647705,
+          "e_step": 352.6373555660248,
+          "fsc": 6.367522478103638,
+          "noise_update": 1.6813938617706299,
+          "recon": 93.14485120773315
+        },
+        "sum_wall_time_s": 456.23861265182495
+      },
+      "setup_phase_cumulative_seconds": {
+        "before_iterations": 0.15537238121032715,
+        "direction_prior": 0.13603758811950684,
+        "initial_arrays": 0.13589859008789062,
+        "mask_and_image_cache": 0.0007014274597167969,
+        "noise_radial_init": 0.15511155128479004,
+        "sampling_grid": 0.009703397750854492,
+        "state_init": 0.0007383823394775391
+      }
+    }
+  ],
+  "pairs": [
+    {
+      "pair": 0,
+      "phase": "cold",
+      "discrete_state_equal": {
+        "n_iterations": true,
+        "current_sizes": true,
+        "healpix_order_trajectory": true,
+        "convergence_iteration": true,
+        "convergence_has_converged": true,
+        "final_all_data_ran": true,
+        "half1_indices": true,
+        "half2_indices": true
+      },
+      "map_metrics": [
+        {
+          "product": "it000_half1",
+          "fsc_auc": 0.9999999999998788,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it000_half2",
+          "fsc_auc": 0.9999999999999264,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it000_merged",
+          "fsc_auc": 0.9999999999999509,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it001_half1",
+          "fsc_auc": 0.999999999985334,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it001_half2",
+          "fsc_auc": 0.9999999999856044,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it001_merged",
+          "fsc_auc": 0.9999999999926218,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it002_half1",
+          "fsc_auc": 0.9999999999870118,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it002_half2",
+          "fsc_auc": 0.9999999999865824,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it002_merged",
+          "fsc_auc": 0.9999999999933287,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it003_half1",
+          "fsc_auc": 0.9999999999865854,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it003_half2",
+          "fsc_auc": 0.999999999986022,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it003_merged",
+          "fsc_auc": 0.9999999999929325,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it004_half1",
+          "fsc_auc": 0.9999999999857911,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it004_half2",
+          "fsc_auc": 0.9999999999859712,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it004_merged",
+          "fsc_auc": 0.999999999992726,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it005_half1",
+          "fsc_auc": 0.9999999999857883,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it005_half2",
+          "fsc_auc": 0.9999999999862422,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it005_merged",
+          "fsc_auc": 0.9999999999929325,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it006_half1",
+          "fsc_auc": 0.999999999985859,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it006_half2",
+          "fsc_auc": 0.9999999999855728,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it006_merged",
+          "fsc_auc": 0.9999999999925506,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it007_half1",
+          "fsc_auc": 0.9999999999860439,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it007_half2",
+          "fsc_auc": 0.9999999999848929,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "it007_merged",
+          "fsc_auc": 0.999999999992373,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "final_half1",
+          "fsc_auc": 0.9999999996456344,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "final_half2",
+          "fsc_auc": 0.9999999995794616,
+          "passes_existing_fsc_floor": true
+        },
+        {
+          "product": "final_merged",
+          "fsc_auc": 0.9999999982027457,
+          "passes_existing_fsc_floor": true
+        }
+      ],
+      "quality_precondition": true,
+      "process_wall_fraction_change": 0.0008130859380794941,
+      "process_wall_regressed": false,
+      "memory_admissible": true,
+      "gpu_peak_fraction_change": 0.0,
+      "rss_peak_fraction_change": 0.015611352265551437
+    }
+  ],
+  "performance_qualified_for_ordinary_execution": false,
+  "full_particle_trajectory_qualified": false,
+  "gpu_job_id": "13567539",
+  "physical_gpu_uuid": "GPU-417804ab-9a47-49c5-7937-2e65c4c1466a",
+  "instrumented_runtime_comparable": true,
+  "limitations": [
+    "one1000particle128gridcase",
+    "fullintermediatecaptureenabled",
+    "each process uses an independent empty compilation cache",
+    "no new RELION timing",
+    "one cold run per checkout; repeated performance not qualified",
+    "full particle/state parity not established by these checks"
+  ],
+  "audit_wall_seconds": 106.93633751524612
+}
