@@ -68,6 +68,12 @@ and dense K-class hypothesis budgets belong to `firstiter_cc`; the fine-grid
 precomputation limit belongs to `local_search_iteration`. Their values and
 environment overrides are unchanged.
 
+The PPCA schedule bridge and its dense/local wrappers are imported from
+[`ppca_bridge`](../../recovar/em/dense_single_volume/ppca_bridge.py).
+Their unused controller re-exports have been retired. Helper-only callers also
+import sign alignment and combined noise statistics from `mean_helpers`, rotation
+metadata from `relion_metadata`, and replay iteration mapping from `relion_replay`.
+
 For an extraction, identify the actual boundary first: array layout, casts,
 reduction order, JIT scope, device placement, buffer ownership and returned
 statistics. Preserve those contracts during structural cleanup. The

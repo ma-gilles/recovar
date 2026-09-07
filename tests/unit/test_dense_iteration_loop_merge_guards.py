@@ -16,6 +16,7 @@ import pytest
 
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop
 import recovar.em.dense_single_volume.local_search_iteration as local_search_iteration
+from recovar.em.dense_single_volume import mean_helpers, ppca_bridge, relion_replay
 from recovar.em.initial_model.iteration_loop import run_vdam_iterations
 
 pytestmark = pytest.mark.unit
@@ -739,10 +740,7 @@ def test_native_final_perturbation_uses_active_local_order_but_preserves_global_
 
 def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
     required_iteration_loop_symbols = [
-        "_align_fourier_volume_sign_to_reference",
-        "_combined_noise_stats",
         "_maybe_dump_noise_update_debug",
-        "_replay_control_model_iteration",
         "_save_iteration_intermediates",
         "advance_relion_perturbation",
         "apply_relion_rotation_perturbation",
@@ -753,20 +751,23 @@ def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
         "get_relion_rotation_grid",
         "get_relion_rotation_grid_eulers",
         "get_translation_grid",
-        "PPCAKClassScheduleBridge",
         "read_relion_direction_prior",
         "read_relion_direction_priors",
         "read_relion_model_metadata",
         "read_relion_optimiser_metadata",
         "read_relion_sampling_metadata",
-        "run_dense_ppca_refinement_with_kclass_schedule",
-        "run_local_ppca_refinement_with_kclass_schedule",
     ]
 
     missing = [name for name in required_iteration_loop_symbols if not hasattr(iteration_loop, name)]
     assert missing == []
     assert callable(local_search_iteration.run_local_em_exact)
     assert callable(local_search_iteration.run_local_k_class_em)
+    assert callable(mean_helpers._align_fourier_volume_sign_to_reference)
+    assert callable(mean_helpers._combined_noise_stats)
+    assert callable(relion_replay._replay_control_model_iteration)
+    assert callable(ppca_bridge.PPCAKClassScheduleBridge)
+    assert callable(ppca_bridge.run_dense_ppca_refinement_with_kclass_schedule)
+    assert callable(ppca_bridge.run_local_ppca_refinement_with_kclass_schedule)
     assert callable(run_vdam_iterations)
 
 

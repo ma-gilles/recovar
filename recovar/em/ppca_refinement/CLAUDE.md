@@ -28,7 +28,7 @@ Near-term scope:
    backprojection into augmented `[mu, W]` normal equations.
 5. Dense PPCA refinement-loop code advances `current_size` only through the
    PPCA halfset gate plus the K-class schedule bridge in
-   `recovar/em/dense_single_volume/iteration_loop.py`.
+   `recovar/em/dense_single_volume/ppca_bridge.py`.
 6. Exact-local PPCA consumes `LocalHypothesisLayout`; local pruning must remain
    support-only and must not change the PPCA score expression.
 7. The bridge updates production `RefinementState`; callers should switch to

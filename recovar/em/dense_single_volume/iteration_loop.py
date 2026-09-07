@@ -98,9 +98,6 @@ from recovar.em.dense_single_volume.local_search_iteration import (
     _precompute_exact_local_fine_grid_enabled,
     _run_local_search_iteration,
 )
-from recovar.em.dense_single_volume.mean_helpers import (  # noqa: F401  -- imported by tests
-    _align_fourier_volume_sign_to_reference as _align_fourier_volume_sign_to_reference,
-)
 from recovar.em.dense_single_volume.mean_helpers import (
     _class_weights_from_posterior,
     _combined_class_direction_prior_from_halves,
@@ -117,14 +114,10 @@ from recovar.em.dense_single_volume.mean_helpers import (
     update_posterior_noise_variance,
     update_relion_norm_scale_corrections,
 )
-from recovar.em.dense_single_volume.mean_helpers import (
-    _combined_noise_stats as _combined_noise_stats,
-)
 from recovar.em.dense_single_volume.relion_metadata import (
     _radial_profile_from_noise_variance,
     _relion_metadata_translations,
     _relion_rotation_grid_float32,
-    _rotation_eulers_for_canonical_or_custom_grid,  # noqa: F401 -- test-compatible re-export
 )
 from recovar.em.dense_single_volume.relion_replay import (
     RelionProjectorReplayState,
@@ -134,9 +127,6 @@ from recovar.em.dense_single_volume.relion_replay import (
     _mean_sigma_offset_per_half,
     _normalize_sigma_offset_per_half,
     apply_iter_replay_overrides,
-)
-from recovar.em.dense_single_volume.relion_replay import (  # noqa: F401
-    _replay_control_model_iteration as _replay_control_model_iteration,
 )
 from recovar.em.dense_single_volume.relion_worker_scale import (
     make_relion_follower_scale_state,
@@ -1394,11 +1384,6 @@ def _k1_skip_significance_pruning_enabled() -> bool:
 from recovar.em.dense_single_volume.debug_dumps import (  # noqa: F401
     _maybe_dump_noise_update_debug,
     _save_iteration_intermediates,
-)
-from recovar.em.dense_single_volume.ppca_bridge import (  # noqa: F401
-    PPCAKClassScheduleBridge,
-    run_dense_ppca_refinement_with_kclass_schedule,
-    run_local_ppca_refinement_with_kclass_schedule,
 )
 
 # RELION stores windowFourierTransform(in, out, current_size) as a rectangular

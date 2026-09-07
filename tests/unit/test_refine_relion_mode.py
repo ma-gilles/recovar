@@ -79,19 +79,23 @@ from recovar.em.dense_single_volume.helpers.significance import (
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.iteration_loop import (
-    _align_fourier_volume_sign_to_reference,
     _combined_class_direction_prior_from_halves,
-    _combined_noise_stats,
     _estimate_relion_em_batch_sizes,
     _exhaustive_grid_order_for_state,
     _relion_expectation_coarse_size_order,
     _relion_local_pass1_current_size,
     _normalize_noise_variance_per_half,
-    _replay_control_model_iteration,
-    _rotation_eulers_for_canonical_or_custom_grid,
     refine_single_volume,
     update_relion_norm_scale_corrections,
 )
+from recovar.em.dense_single_volume.mean_helpers import (
+    _align_fourier_volume_sign_to_reference,
+    _combined_noise_stats,
+)
+from recovar.em.dense_single_volume.relion_metadata import (
+    _rotation_eulers_for_canonical_or_custom_grid,
+)
+from recovar.em.dense_single_volume.relion_replay import _replay_control_model_iteration
 from recovar.em.dense_single_volume.k_class import (
     KClassEMResult,
     _resolve_class_mstep_posterior_sums,
