@@ -562,6 +562,7 @@ _TARGET_RELION_MAKE_SCORING_ROTATIONS_F32 = "cuda_relion_make_scoring_rotations_
 _TARGET_RELION_TRANSLATE_SCORE_F32 = "cuda_relion_translate_score_f32"
 _TARGET_RELION_TRANSLATE_BPREF_F32 = "cuda_relion_translate_bpref_f32"
 _TARGET_RELION_BPREF_OPERANDS_F32 = "cuda_relion_bpref_operands_f32"
+_TARGET_BPREF_PARTICLE_PACK = "cuda_bpref_particle_pack"
 _TARGET_RELION_VDAM_MSTEP_SUMS_F32 = "cuda_relion_vdam_mstep_sums_f32"
 _TARGET_RELION_VDAM_MSTEP_DENOMINATOR_F32 = (
     "cuda_relion_vdam_mstep_denominator_f32"
@@ -1991,6 +1992,80 @@ def relion_vdam_mstep_sums_f32(
         image_h=np.int64(image_h),
         image_half_width=np.int64(image_w // 2 + 1),
     )
+
+
+_bpref_particle_pack_ffi_registered = False
+
+
+def _ensure_bpref_particle_pack_ffi():
+    """Register only when requested, preserving compatibility with older builds."""
+    global _bpref_particle_pack_ffi_registered
+    _ensure_ffi()
+    if _bpref_particle_pack_ffi_registered:
+        return
+    with _ffi_lock:
+        if _bpref_particle_pack_ffi_registered:
+            return
+        symbol = getattr(_get_lib(), "BprefParticlePack", None)
+        if symbol is None:
+            raise RuntimeError("CUDA BPref packing requires an explicit build with BprefParticlePack")
+        jax.ffi.register_ffi_target(
+            _TARGET_BPREF_PARTICLE_PACK, jax.ffi.pycapsule(symbol), platform="CUDA",
+        )
+        _bpref_particle_pack_ffi_registered = True
+
+
+def _bpref_particle_pack_shapes(columns, capacity):
+    """Validate the six-column BPref copy ABI without inspecting array values."""
+    if type(capacity) is not int or not 1 <= capacity <= 256:
+        raise ValueError("BPref packing capacity must be an integer from 1 to 256")
+    if len(columns) != 6 or not 1 <= len(columns[0]) <= 256:
+        raise ValueError("BPref packing requires six nonempty columns")
+    count = len(columns[0])
+    if any(len(column) != count for column in columns):
+        raise ValueError("BPref packing bucket counts differ")
+    dtypes = (jnp.complex64, jnp.float32, jnp.float32, jnp.float32, jnp.float32, jnp.int32)
+    ranks = (2, 2, 2, 3, 4, 1)
+    for column, dtype, rank in zip(columns, dtypes, ranks, strict=True):
+        for value in column:
+            if value.dtype != dtype:
+                raise TypeError("BPref packing field dtype differs")
+            if value.ndim != rank or any(n <= 0 for n in value.shape):
+                raise ValueError("BPref packing field shape differs")
+            if value.shape[1:] != column[0].shape[1:]:
+                raise ValueError("BPref packing non-particle shapes differ")
+    counts = tuple(value.shape[0] for value in columns[0])
+    if sum(counts) > capacity:
+        raise ValueError("BPref packing capacity cannot truncate active particles")
+    for column in columns:
+        if tuple(value.shape[0] for value in column) != counts:
+            raise ValueError("BPref packing particle axes differ")
+    if columns[1][0].shape != columns[0][0].shape or columns[2][0].shape != columns[0][0].shape:
+        raise ValueError("BPref packing image, CTF and inverse-noise shapes differ")
+    if columns[4][0].shape[1:] != (columns[3][0].shape[1], 3, 3):
+        raise ValueError("BPref packing rotation matrices must match posterior rotations")
+    return (
+        *(jax.ShapeDtypeStruct((capacity, *column[0].shape[1:]), dtype)
+          for column, dtype in zip(columns, dtypes, strict=True)),
+        jax.ShapeDtypeStruct((capacity,), jnp.int32),
+        jax.ShapeDtypeStruct((capacity,), jnp.int32),
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(1,))
+def pack_bpref_particle_fields(columns, capacity):
+    """Copy bounded BPref inputs, preserving original per-bucket worker IDs.
+
+    No floating-point arithmetic, support selection, or host device-array reads.
+    Group tails are -1; other tails are positive zero. Inputs remain untouched.
+    """
+    outputs = _bpref_particle_pack_shapes(columns, capacity)
+    if jax.default_backend() != "gpu" or not custom_cuda_requested():
+        raise RuntimeError("CUDA BPref packing requires an enabled JAX GPU backend")
+    _ensure_bpref_particle_pack_ffi()
+    return tuple(jax.ffi.ffi_call(
+        _TARGET_BPREF_PARTICLE_PACK, outputs, vmap_method="sequential",
+    )(*(value for column in columns for value in column)))
 
 
 @jax.jit

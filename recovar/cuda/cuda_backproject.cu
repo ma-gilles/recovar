@@ -12656,6 +12656,140 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
+// At most 256 nonempty buckets fit the queue's 256-particle capacity.
+// One column's launch arguments stay below the pre-Volta 4 KiB parameter limit.
+struct BprefPackColumn {
+    const uint32_t* inputs[256];
+    int32_t ends[256];
+};
+static_assert(sizeof(BprefPackColumn) + 64 < 4096);
+
+__device__ int bpref_pack_bucket(const BprefPackColumn& column, int buckets, int particle)
+{
+    int lo = 0, hi = buckets;
+    while (lo < hi) {
+        const int mid = (lo + hi) / 2;
+        if (particle < column.ends[mid]) hi = mid;
+        else lo = mid + 1;
+    }
+    return lo;
+}
+
+__global__ void bpref_pack_column_kernel(
+    BprefPackColumn column, int buckets, int capacity, int64_t row_words,
+    uint32_t tail_bits, uint32_t* output)
+{
+    const int64_t index = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index >= static_cast<int64_t>(capacity) * row_words) return;
+    const int particle = static_cast<int>(index / row_words);
+    if (particle >= column.ends[buckets - 1]) {
+        output[index] = tail_bits;
+        return;
+    }
+    const int bucket = bpref_pack_bucket(column, buckets, particle);
+    const int begin = bucket == 0 ? 0 : column.ends[bucket - 1];
+    output[index] = column.inputs[bucket][
+        static_cast<int64_t>(particle - begin) * row_words + index % row_words];
+}
+
+__global__ void bpref_pack_ids_kernel(
+    BprefPackColumn column, int buckets, int capacity, int32_t* workers, int32_t* traces)
+{
+    const int particle = blockIdx.x * blockDim.x + threadIdx.x;
+    if (particle >= capacity) return;
+    int local = 0;
+    if (particle < column.ends[buckets - 1]) {
+        const int bucket = bpref_pack_bucket(column, buckets, particle);
+        local = particle - (bucket == 0 ? 0 : column.ends[bucket - 1]);
+    }
+    workers[particle] = local % 8;
+    traces[particle] = local;
+}
+
+ffi::Error BprefParticlePackImpl(
+    cudaStream_t stream, ffi::RemainingArgs args, ffi::RemainingRets rets)
+{
+    const auto invalid = [](const char* message) {
+        return ffi::Error::InvalidArgument(std::string("BprefParticlePack: ") + message);
+    };
+    if (args.size() == 0 || args.size() % 6 != 0 || args.size() / 6 > 256 || rets.size() != 8)
+        return invalid("requires six columns and eight results");
+    const int buckets = static_cast<int>(args.size() / 6);
+    const ffi::DataType types[6] = {ffi::DataType::C64, ffi::DataType::F32,
+        ffi::DataType::F32, ffi::DataType::F32, ffi::DataType::F32, ffi::DataType::S32};
+    const int ranks[6] = {2, 2, 2, 3, 4, 1};
+    BprefPackColumn columns[6] = {};
+    void* outputs[8] = {};
+    int64_t row_words[6] = {};
+    std::vector<int64_t> shapes[6];
+    int capacity = 0;
+    // Validate the whole ABI before launching any device work.
+    for (int field = 0; field < 8; ++field) {
+        auto result = rets.get<ffi::AnyBuffer>(field);
+        if (!result) return result.error();
+        const auto output = **result;
+        const auto dims = output.dimensions();
+        const int rank = field < 6 ? ranks[field] : 1;
+        const auto type = field < 6 ? types[field] : ffi::DataType::S32;
+        if (dims.size() != rank || output.element_type() != type ||
+            dims[0] <= 0 || dims[0] > 256)
+            return invalid("result shape/dtype differs");
+        if (field == 0) capacity = static_cast<int>(dims[0]);
+        if (dims[0] != capacity) return invalid("result capacities differ");
+        outputs[field] = output.untyped_data();
+        if (field >= 6) continue;
+        shapes[field] = std::vector<int64_t>(dims.begin(), dims.end());
+        int64_t words = field == 0 ? 2 : 1;
+        for (int axis = 1; axis < rank; ++axis) {
+            if (dims[axis] <= 0 ||
+                words > std::numeric_limits<int64_t>::max() / capacity / dims[axis])
+                return invalid("invalid or overflowing row size");
+            words *= dims[axis];
+        }
+        row_words[field] = words;
+        if ((words * capacity - 1) / 256 + 1 > std::numeric_limits<int32_t>::max())
+            return invalid("copy grid too large");
+        int total = 0;
+        for (int bucket = 0; bucket < buckets; ++bucket) {
+            auto input = args.get<ffi::AnyBuffer>(field * buckets + bucket);
+            if (!input) return input.error();
+            const auto in_dims = input->dimensions();
+            if (input->element_type() != type || in_dims.size() != rank ||
+                in_dims[0] <= 0 || in_dims[0] > capacity - total)
+                return invalid("input shape/dtype or particle capacity differs");
+            for (int axis = 1; axis < rank; ++axis)
+                if (in_dims[axis] != dims[axis]) return invalid("input row shape differs");
+            total += static_cast<int>(in_dims[0]);
+            if (field != 0 && total != columns[0].ends[bucket])
+                return invalid("input particle axes differ");
+            columns[field].ends[bucket] = total;
+            columns[field].inputs[bucket] = static_cast<const uint32_t*>(input->untyped_data());
+        }
+    }
+    if (shapes[1] != shapes[0] || shapes[2] != shapes[0] ||
+        shapes[4][1] != shapes[3][1] || shapes[4][2] != 3 || shapes[4][3] != 3)
+        return invalid("image/CTF or rotation/posterior geometry differs");
+    for (int field = 0; field < 6; ++field) {
+        bpref_pack_column_kernel<<<
+            static_cast<unsigned int>((row_words[field] * capacity - 1) / 256 + 1),
+            256, 0, stream>>>(columns[field], buckets, capacity, row_words[field],
+                field == 5 ? 0xffffffffu : 0u, static_cast<uint32_t*>(outputs[field]));
+        const auto error = cudaGetLastError();
+        if (error != cudaSuccess) return ffi::Error::Internal(cudaGetErrorString(error));
+    }
+    bpref_pack_ids_kernel<<<1, 256, 0, stream>>>(
+        columns[0], buckets, capacity, static_cast<int32_t*>(outputs[6]),
+        static_cast<int32_t*>(outputs[7]));
+    const auto error = cudaGetLastError();
+    if (error != cudaSuccess) return ffi::Error::Internal(cudaGetErrorString(error));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    BprefParticlePack, BprefParticlePackImpl,
+    ffi::Ffi::Bind().Ctx<ffi::PlatformStream<cudaStream_t>>().RemainingArgs().RemainingRets()
+);
+
 ffi::Error RelionVdamMstepDenominatorF32Impl(
     cudaStream_t stream,
     ffi::AnyBuffer ctf,

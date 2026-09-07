@@ -397,6 +397,7 @@ EXACT_LOCAL_HOST_PLAN_PACK_ENV = "RECOVAR_EXACT_LOCAL_HOST_PLAN_PACK"
 EXACT_LOCAL_HOST_PUBLICATION_ENV = "RECOVAR_EXACT_LOCAL_HOST_PUBLICATION"
 EXACT_LOCAL_BPREF_TRANSACTION_ENV = "RECOVAR_EXACT_LOCAL_BPREF_TRANSACTION"
 EXACT_LOCAL_BPREF_PARTICLE_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_BPREF_PARTICLE_CAPACITY"
+EXACT_LOCAL_BPREF_CUDA_PACKING_ENV = "RECOVAR_EXACT_LOCAL_BPREF_CUDA_PACKING"
 EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV = "RECOVAR_EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS = 64_000_000
@@ -2127,6 +2128,13 @@ def _local_bpref_particle_capacity_requested() -> bool:
     token = os.environ.get(EXACT_LOCAL_BPREF_PARTICLE_CAPACITY_ENV, "0").strip()
     if token not in {"0", "1"}:
         raise ValueError(f"{EXACT_LOCAL_BPREF_PARTICLE_CAPACITY_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_bpref_cuda_packing_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_BPREF_CUDA_PACKING_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_BPREF_CUDA_PACKING_ENV} must be 0 or 1")
     return token == "1"
 
 
@@ -4586,6 +4594,9 @@ def run_local_em_exact(
     packed_final_noise_enabled = bool(_packed_final_noise_enabled)
     bpref_transaction_enabled = _local_bpref_transaction_requested()
     bpref_particle_capacity_enabled = _local_bpref_particle_capacity_requested()
+    bpref_cuda_packing_enabled = _local_bpref_cuda_packing_requested()
+    if bpref_cuda_packing_enabled and not bpref_particle_capacity_enabled:
+        raise ValueError("CUDA BPref packing requires stable particle capacity")
     if bpref_particle_capacity_enabled and (
         not bpref_transaction_enabled or bpref_projector_capacity_enabled
     ):
@@ -5675,6 +5686,7 @@ def run_local_em_exact(
 
         bpref_transaction_queue = BprefTransactionQueue(
             stable_particle_capacity=bpref_particle_capacity_enabled,
+            cuda_packing=bpref_cuda_packing_enabled,
         )
     if fixed_capacity_enabled and not use_big_jit_buckets:
         raise ValueError(

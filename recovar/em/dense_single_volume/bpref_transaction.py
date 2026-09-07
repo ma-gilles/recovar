@@ -92,14 +92,19 @@ class BprefTransactionQueue:
     and trace IDs count toward the physical byte limit. CUDA masks the suffix.
     """
 
-    def __init__(self, *, max_images=256, max_input_bytes=128 * 1024**2, stable_particle_capacity=False):
+    def __init__(self, *, max_images=256, max_input_bytes=128 * 1024**2, stable_particle_capacity=False, cuda_packing=False):
         if type(max_images) is not int or type(max_input_bytes) is not int or min(max_images, max_input_bytes) <= 0:
             raise ValueError("BPref queue bounds must be positive integers")
         if type(stable_particle_capacity) is not bool:
             raise TypeError("stable_particle_capacity must be a Python bool")
+        if type(cuda_packing) is not bool:
+            raise TypeError("cuda_packing must be a Python bool")
+        if cuda_packing and (not stable_particle_capacity or max_images > 256):
+            raise ValueError("CUDA BPref packing requires stable capacity of at most 256 images")
         self.max_images = max_images
         self.max_input_bytes = max_input_bytes
         self.stable_particle_capacity = stable_particle_capacity
+        self.cuda_packing = cuda_packing
         self._capacity = 0
         self._pending = []
         self._anchor = None
@@ -214,7 +219,14 @@ class BprefTransactionQueue:
             # IDs must keep that assignment without enabling parallel replay.
             names.extend(("worker_lane_ids", "particle_trace_ids"))
             if self.stable_particle_capacity:
-                packed = _pad_particle_fields(tuple(columns), self._capacity, names.index("reconstruction_group_ids"))
+                if self.cuda_packing:
+                    from recovar.cuda_backproject import pack_bpref_particle_fields
+
+                    if tuple(names) != _PARTICLE:
+                        raise ValueError("CUDA BPref packing requires all six particle fields")
+                    packed = pack_bpref_particle_fields(tuple(columns), self._capacity)
+                else:
+                    packed = _pad_particle_fields(tuple(columns), self._capacity, names.index("reconstruction_group_ids"))
                 merged["particle_tail_mask"] = True
             else:
                 packed = _concatenate_fields(tuple(columns))

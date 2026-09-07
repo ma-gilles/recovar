@@ -8,6 +8,37 @@ from recovar.em.dense_single_volume.bpref_transaction import BprefTransactionQue
 pytestmark = pytest.mark.unit
 
 
+def test_cuda_packing_queue_dispatch_preserves_bucket_boundaries(monkeypatch):
+    from recovar import cuda_backproject
+    from recovar.em.dense_single_volume.bpref_transaction import _pad_particle_fields
+
+    packed_calls = []
+
+    def observed(columns, capacity):
+        packed_calls.append((columns, capacity))
+        # The existing JAX implementation is the CPU semantic reference.
+        return _pad_particle_fields(columns, capacity, 5)
+
+    monkeypatch.setattr(cuda_backproject, "pack_bpref_particle_fields", observed)
+    common, calls, callback = setup()
+    queue = BprefTransactionQueue(stable_particle_capacity=True, cuda_packing=True)
+    data = np.zeros((2, 1), np.complex64)
+    weight = np.zeros((2, 1), np.float32)
+    offset = 0
+    for n in (42, 42, 42, 42, 32):
+        args, options = operands(n, offset, common, data, weight)
+        data, weight, _ = queue.accumulate(callback, *args, **options)
+        offset += n
+    queue.flush(data, weight)
+    assert len(packed_calls) == len(calls) == 1
+    columns, capacity = packed_calls[0]
+    assert capacity == 256 and len(columns) == 6
+    assert all(tuple(a.shape[0] for a in column) == (42, 42, 42, 42, 32) for column in columns)
+    assert calls[0]["particle_tail_mask"] is True
+    np.testing.assert_array_equal(np.asarray(calls[0]["reconstruction_group_ids"])[200:], -1)
+    assert calls[0]["projector_full"] is common["projector"]
+
+
 def test_deferred_scorer_donation_cannot_replace_pending_accumulators():
     from functools import partial
     import jax
