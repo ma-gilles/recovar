@@ -72,6 +72,7 @@ source identities when incorporating evidence into the draft or later results.
 | Restart/replay policy ownership | `30163cdcd`; four moved function ASTs unchanged; 67 tests passed, Slurm13585434; controller and sampling bindings verified |
 | Replay sampling dependencies | `cbfbcdc8c`; 12 tests and 90 exact K1/K2/K4/K8/K16 grid/value/dtype/error comparisons passed, Slurm13585641; shared grid policy now belongs to sampling |
 | Metadata sampling dependencies and dead Euler-grid helper | `1bb616533`; 17 tests passed, Slurm13586745; retained numerical AST unchanged; 53 implementation helper modules have no direct controller imports |
+| Dense/local output interfaces | `03aa2dde2`; 133 tests passed, Slurm13587342, plus 120 exact K1/K2/K4/K8/K16 two-half mutation/return/error comparisons; list identities and normalized controller AST unchanged |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance
@@ -93,6 +94,11 @@ planner and kernels directly; its tests patch those call-site bindings.
 the controller's adaptive parent-layout construction. The batch planner imports
 the shared memory-query utilities directly, avoiding a reverse dependency on
 the controller. No scoring, batching formula or output layout changed.
+Replay and rotation metadata also use sampling dependencies directly. Dense and
+local scoring receive the existing `PerHalfOutputs` container, preserving its
+list identities and the order of per-half updates. Their separate output-list
+arguments have been removed; common payload storage and K-class summaries
+retain their existing owners.
 
 Report scripts now share `recovar.utils.json_utils.to_jsonable`. Conversion
 preserves the old NumPy/path/nested-container behavior. It does not establish
