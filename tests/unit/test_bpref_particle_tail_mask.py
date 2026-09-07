@@ -150,7 +150,7 @@ def test_gpu_invalid_prefix_and_legacy_negative_groups_fail(groups, mask):
     assert jax.default_backend() == "gpu"
     _, values = padded_arguments(True)
     values.update(reconstruction_group_ids=np.asarray(groups, np.int32), particle_tail_mask=mask)
-    with pytest.raises(RuntimeError, match="invalid argument"):
+    with pytest.raises((ValueError, RuntimeError), match="INTERNAL: CUDA: invalid argument"):
         jax.block_until_ready(cb.relion_vdam_mstep_fused_projector_x_half(**device(values)))
 
 
