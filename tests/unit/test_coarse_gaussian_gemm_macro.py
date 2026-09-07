@@ -1676,7 +1676,10 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         logical_full_pixel_count,
         capture_selected_diff2: bool,
         full_dense_diff2_fn,
+        device_transaction: bool,
+        real_cross: bool,
     ):
+        assert device_transaction is False and real_cross is False
         batch_size = int(shifted_corrected.shape[0])
         static_overflow_requests.append(force_static_dense_after_overflow)
         operand_inputs.append(
@@ -1785,6 +1788,10 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
                 else "fused_projector"
                 if full_dense_diff2_fn is not None
                 else "rectangular"
+            ),
+            full_dense_kernel=(
+                None if use_selected else "fused_projector"
+                if full_dense_diff2_fn is not None else "rectangular"
             ),
         )
         return result
@@ -2038,6 +2045,15 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     np.testing.assert_array_equal(result[2], np.full(3, 11, dtype=np.int32))
     np.testing.assert_array_equal(result[3], np.zeros(3, dtype=np.int32))
     hybrid_stats = result[5]["coarse_gaussian_gemm_hybrid"]
+    expected_kernel = "fused_projector" if fused_fallback else "rectangular"
+    assert hybrid_stats["full_dense_kernel_calls"] == (
+        {expected_kernel: hybrid_stats["full_dense_batch_count"]}
+        if force_fallback else {}
+    )
+    assert hybrid_stats["full_dense_kernel_images"] == (
+        {expected_kernel: hybrid_stats["full_dense_image_count"]}
+        if force_fallback else {}
+    )
     assert hybrid_stats["compact_posterior_enabled"] is compact_posterior
     assert hybrid_stats["compact_posterior_default_enabled"] is False
     assert hybrid_stats["selected_score_layout"] == (

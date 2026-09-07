@@ -935,6 +935,15 @@ def _coarse_gaussian_gemm_device_transaction_enabled() -> bool:
     return token == "1"
 
 
+def _coarse_shared_pretranslated_enabled() -> bool:
+    """Opt into shared staging only for full runtime-prefix coarse scoring."""
+    name = "RECOVAR_COARSE_SHARED_PRETRANSLATED"
+    token = os.environ.get(name, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"Unsupported {name}={token!r}")
+    return token == "1"
+
+
 def _coarse_gaussian_gemm_real_cross_enabled() -> bool:
     """Use FP64 real-component GEMM only in the coarse certificate."""
     name = "RECOVAR_COARSE_GAUSSIAN_GEMM_REAL_CROSS"
@@ -1684,6 +1693,7 @@ class CoarseGaussianGemmHybridBatchResult(NamedTuple):
     full_dense_backend: str | None = None
     selected_block_count: int | None = None
     max_selected_blocks: int | None = None
+    full_dense_kernel: str | None = None
 
 
 def _select_coarse_gaussian_gemm_score_representation(
@@ -1745,6 +1755,7 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
     )
 
     validate_coarse_gemm_certificate_topology(topology)
+    shared_pretranslated = _coarse_shared_pretranslated_enabled()
     cache = jnp.asarray(projection_cache)
     shifted = jnp.asarray(shifted_corrected)
     weight = jnp.asarray(pixel_weight)
@@ -1990,6 +2001,7 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
     if full_dense_diff2_fn is not None:
         full_diff2 = jnp.asarray(full_dense_diff2_fn())
         full_dense_backend = "fused_projector"
+        full_dense_kernel = "fused_projector"
     else:
         full_operands = (
             cache[0],
@@ -2002,10 +2014,19 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
             full_diff2 = cuda_backproject.relion_coarse_diff2_rectangular_f32(
                 *full_operands,
             )
+            full_dense_kernel = "rectangular"
         else:
-            full_diff2 = cuda_backproject.relion_coarse_diff2_rectangular_runtime_f32(
+            scorer = (
+                cuda_backproject.relion_coarse_diff2_shared_pretranslated_runtime_f32
+                if shared_pretranslated
+                else cuda_backproject.relion_coarse_diff2_rectangular_runtime_f32
+            )
+            full_diff2 = scorer(
                 *full_operands,
                 jnp.asarray(logical_full_pixel_count, dtype=jnp.int32),
+            )
+            full_dense_kernel = (
+                "shared_pretranslated" if shared_pretranslated else "rectangular_runtime"
             )
         full_dense_backend = "rectangular"
     expected_full_shape = (batch_size, n_rotations, n_translations)
@@ -2030,6 +2051,7 @@ def _compute_coarse_gaussian_gemm_hybrid_batch(
         score_representation=score_representation,
         diagnostic_selected_diff2=None,
         full_dense_backend=full_dense_backend,
+        full_dense_kernel=full_dense_kernel,
     )
 
 
@@ -6627,6 +6649,8 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_gemm_hybrid_fused_full_image_count = 0
     coarse_gaussian_gemm_hybrid_rectangular_full_batch_count = 0
     coarse_gaussian_gemm_hybrid_rectangular_full_image_count = 0
+    coarse_full_kernel_calls = {}
+    coarse_full_kernel_images = {}
     coarse_gaussian_gemm_hybrid_selected_block_count = 0
     coarse_gaussian_gemm_hybrid_max_blocks_per_image = 0
     coarse_gaussian_gemm_hybrid_selected_table_capacity_candidates = 0
@@ -7311,6 +7335,21 @@ def _compute_k_class_significance_batched(
             else:
                 full_dense_backend = (
                     coarse_gaussian_gemm_hybrid_batch_result.full_dense_backend
+                )
+                kernel = coarse_gaussian_gemm_hybrid_batch_result.full_dense_kernel
+                expected_family = {
+                    "rectangular": "rectangular",
+                    "rectangular_runtime": "rectangular",
+                    "shared_pretranslated": "rectangular",
+                    "fused_projector": "fused_projector",
+                }.get(kernel)
+                if expected_family != full_dense_backend or expected_family is None:
+                    raise RuntimeError("full-dense kernel disagrees with executed backend")
+                coarse_full_kernel_calls[kernel] = (
+                    coarse_full_kernel_calls.get(kernel, 0) + 1
+                )
+                coarse_full_kernel_images[kernel] = (
+                    coarse_full_kernel_images.get(kernel, 0) + actual_batch_size
                 )
                 if full_dense_backend == "fused_projector":
                     coarse_gaussian_gemm_hybrid_fused_full_batch_count += 1
@@ -8807,6 +8846,8 @@ def _compute_k_class_significance_batched(
                     == coarse_gaussian_gemm_hybrid_full_dense_batch_count
                 )
             ),
+            "full_dense_kernel_calls": dict(coarse_full_kernel_calls),
+            "full_dense_kernel_images": dict(coarse_full_kernel_images),
             "full_dense_batch_count": int(
                 coarse_gaussian_gemm_hybrid_full_dense_batch_count,
             ),

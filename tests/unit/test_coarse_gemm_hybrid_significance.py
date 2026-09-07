@@ -27,7 +27,8 @@ def test_direct_and_hybrid_share_disk_masked_compact_projection_operands():
     cache_stop = source.index("\n    def _project_coarse_gemm_block_once(", cache_start)
     cache = source[cache_start:cache_stop]
 
-    assert "mask_current_image_disk=True" in helper
+    assert "mask_current_image_disk=not coarse_rotated_radius" in helper
+    assert "if coarse_rotated_radius else None" in helper
     assert "mask_current_image_disk=False" not in helper
     assert "_project_relion_compact_score_rows(" in direct
     assert "_project_relion_compact_score_rows(" in cache
@@ -375,7 +376,9 @@ def _selected_diff2_from_ids(
     return jnp.asarray(output)
 
 
-def test_hybrid_publishes_only_selected_exact_source16_scores(monkeypatch):
+@pytest.mark.parametrize("shared", [False, True])
+def test_hybrid_publishes_only_selected_exact_source16_scores(monkeypatch, shared):
+    monkeypatch.setenv("RECOVAR_COARSE_SHARED_PRETRANSLATED", str(int(shared)))
     cache, shifted, weight, initial, topology = _hybrid_operands()
     full_callback_calls = 0
     monkeypatch.setattr(
@@ -441,11 +444,14 @@ def test_hybrid_publishes_only_selected_exact_source16_scores(monkeypatch):
         ("invalid_selected", "invalid_selected_exact_output"),
     ],
 )
+@pytest.mark.parametrize("shared", [False, True])
 def test_every_hybrid_full_dense_exit_uses_lazy_callback(
     monkeypatch,
+    shared,
     fallback_case,
     expected_reason,
 ):
+    monkeypatch.setenv("RECOVAR_COARSE_SHARED_PRETRANSLATED", str(int(shared)))
     cache, shifted, weight, initial, topology = _hybrid_operands()
     callback_calls = 0
 
@@ -926,3 +932,63 @@ def test_omitting_certified_zero_weight_blocks_preserves_f64_logsumexp_bits(
     selected_maximum, selected_total = reduce_blocks(selected)
     np.testing.assert_array_equal(selected_maximum.view(np.uint32), full_maximum.view(np.uint32))
     np.testing.assert_array_equal(selected_total.view(np.uint64), full_total.view(np.uint64))
+
+
+def test_shared_pretranslated_dispatch_flag_is_strict_and_default_off(monkeypatch):
+    name = "RECOVAR_COARSE_SHARED_PRETRANSLATED"
+    monkeypatch.delenv(name, raising=False)
+    assert not significance._coarse_shared_pretranslated_enabled()
+    monkeypatch.setenv(name, "1")
+    assert significance._coarse_shared_pretranslated_enabled()
+    monkeypatch.setenv(name, "automatic")
+    with pytest.raises(ValueError, match=name):
+        significance._coarse_shared_pretranslated_enabled()
+
+
+@pytest.mark.parametrize("shared", [False, True])
+@pytest.mark.parametrize("runtime", [False, True])
+@pytest.mark.parametrize("route", ["static", "overflow", "latched"])
+def test_full_scoring_dispatch_preserves_operands_and_reports_kernel(
+    monkeypatch, shared, runtime, route,
+):
+    monkeypatch.setenv("RECOVAR_COARSE_SHARED_PRETRANSLATED", str(int(shared)))
+    cache, shifted, weight, initial, topology = _hybrid_operands()
+    calls = []
+    expected_kernel = (
+        "shared_pretranslated" if shared and runtime
+        else "rectangular_runtime" if runtime else "rectangular"
+    )
+    expected = np.arange(2 * 32 * 3, dtype=np.float32).reshape(2, 32, 3)
+
+    def scorer(kernel):
+        def call(*operands):
+            assert kernel == expected_kernel
+            for actual, wanted in zip(operands[:5], (cache[0], shifted, weight, initial, topology.full_to_compact)):
+                np.testing.assert_array_equal(np.asarray(actual), wanted)
+            assert len(operands) == (6 if runtime else 5)
+            if runtime:
+                assert np.asarray(operands[5]).dtype == np.int32
+                assert int(operands[5]) == 4
+            calls.append(kernel)
+            return jnp.asarray(expected)
+        return call
+
+    for kernel, name in (
+        ("rectangular", "relion_coarse_diff2_rectangular_f32"),
+        ("rectangular_runtime", "relion_coarse_diff2_rectangular_runtime_f32"),
+        ("shared_pretranslated", "relion_coarse_diff2_shared_pretranslated_runtime_f32"),
+    ):
+        monkeypatch.setattr(cuda_backproject, name, scorer(kernel))
+    result = significance._compute_coarse_gaussian_gemm_hybrid_batch(
+        jnp.asarray(cache), jnp.asarray(shifted), jnp.asarray(weight), jnp.asarray(initial),
+        topology=topology, actual_image_count=2, class_log_prior=0.0,
+        certificate_chunk_rows=16, compact_posterior=True,
+        block_capacity=2 if route == "static" else 1,
+        force_static_dense_after_overflow=route == "latched",
+        logical_full_pixel_count=jnp.int32(4) if runtime else None,
+    )
+    assert calls == [expected_kernel]
+    assert result.full_dense_backend == "rectangular"
+    assert result.full_dense_kernel == expected_kernel
+    assert not result.used_selected_rescore and not result.scores_include_priors
+    np.testing.assert_array_equal(result.scores, -expected)
