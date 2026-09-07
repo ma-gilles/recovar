@@ -77,4 +77,3 @@ Single candidate measurement against a historical hardware baseline; this is not
 | metrics/peak_gpu_memory_gb | 0.076 | 1.074 | +1313.158% | REGRESSED |
 
 Single candidate measurement against a historical hardware baseline; this is not paired performance qualification.
-
