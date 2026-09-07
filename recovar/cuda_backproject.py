@@ -3156,8 +3156,7 @@ def _pack_runtime_logical_prefix_rows(
     return packed.reshape(values.shape)
 
 
-@jax.jit
-def relion_coarse_diff2_rectangular_runtime_f32(
+def _validate_coarse_rectangular_runtime_inputs(
     reference: jax.Array,
     shifted_image: jax.Array,
     weight: jax.Array,
@@ -3165,12 +3164,7 @@ def relion_coarse_diff2_rectangular_runtime_f32(
     full_to_compact: jax.Array,
     logical_full_pixel_count: jax.Array,
 ) -> jax.Array:
-    """Evaluate a stable-capacity coarse table over its logical pixel prefix.
-
-    The array shapes and lookup capacity remain static while the scalar logical
-    count limits the CUDA traversal.  This preserves the exact RELION lane
-    assignment and avoids executing zero-weight capacity rows.
-    """
+    """Shared operand contract for packed and physical-stride coarse scoring."""
 
     logical_full_pixel_count = jnp.asarray(
         logical_full_pixel_count,
@@ -3210,6 +3204,28 @@ def relion_coarse_diff2_rectangular_runtime_f32(
             f"shapes or more than 128 translations: {reference.shape}, "
             f"{shifted_image.shape}, {weight.shape}"
         )
+    return logical_full_pixel_count
+
+
+@jax.jit
+def relion_coarse_diff2_rectangular_runtime_f32(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    initial_diff2: jax.Array,
+    full_to_compact: jax.Array,
+    logical_full_pixel_count: jax.Array,
+) -> jax.Array:
+    """Evaluate a stable-capacity coarse table over its logical pixel prefix.
+
+    The array shapes and lookup capacity remain static while the scalar logical
+    count limits the CUDA traversal. This preserves the RELION lane assignment
+    and avoids executing zero-weight capacity rows.
+    """
+    logical_full_pixel_count = _validate_coarse_rectangular_runtime_inputs(
+        reference, shifted_image, weight, initial_diff2,
+        full_to_compact, logical_full_pixel_count,
+    )
     out_type = jax.ShapeDtypeStruct(
         (shifted_image.shape[0], reference.shape[0], shifted_image.shape[1]),
         jnp.float32,
@@ -3237,6 +3253,61 @@ def relion_coarse_diff2_rectangular_runtime_f32(
         initial_diff2,
         full_to_compact,
         logical_full_pixel_count,
+    )
+
+
+_TARGET_RELION_COARSE_SHARED_PRETRANSLATED_RUNTIME_F32 = (
+    "cuda_relion_coarse_diff2_shared_pretranslated_runtime_f32"
+)
+_coarse_shared_pretranslated_registered = False
+
+
+def _ensure_coarse_shared_pretranslated_ffi():
+    global _coarse_shared_pretranslated_registered
+    _ensure_ffi()
+    with _ffi_lock:
+        if not _coarse_shared_pretranslated_registered:
+            symbol = getattr(
+                _get_lib(), "RelionCoarseDiff2SharedPretranslatedRuntimeF32",
+            )
+            jax.ffi.register_ffi_target(
+                _TARGET_RELION_COARSE_SHARED_PRETRANSLATED_RUNTIME_F32,
+                jax.ffi.pycapsule(symbol), platform="CUDA",
+            )
+            _coarse_shared_pretranslated_registered = True
+
+
+@jax.jit
+def relion_coarse_diff2_shared_pretranslated_runtime_f32(
+    reference: jax.Array,
+    shifted_image: jax.Array,
+    weight: jax.Array,
+    initial_diff2: jax.Array,
+    full_to_compact: jax.Array,
+    logical_full_pixel_count: jax.Array,
+) -> jax.Array:
+    """Reuse projection tiles while scoring existing translated image batches.
+
+    Arrays retain their physical row strides; the device scalar limits logical
+    traversal without prefix-packing copies. CUDA preserves the source-16,
+    128-thread lane order and atomic accumulation. This optional entry point
+    does not change production dispatch.
+    """
+    logical_full_pixel_count = _validate_coarse_rectangular_runtime_inputs(
+        reference, shifted_image, weight, initial_diff2,
+        full_to_compact, logical_full_pixel_count,
+    )
+    _ensure_coarse_shared_pretranslated_ffi()
+    out_type = jax.ShapeDtypeStruct(
+        (shifted_image.shape[0], reference.shape[0], shifted_image.shape[1]),
+        jnp.float32,
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_COARSE_SHARED_PRETRANSLATED_RUNTIME_F32,
+        out_type, vmap_method="sequential",
+    )(
+        reference, shifted_image, weight, initial_diff2,
+        full_to_compact, logical_full_pixel_count,
     )
 
 

@@ -56,7 +56,7 @@ def _assert_in_exact_atomic_envelope(
     assert shifted.shape[0] == 1
     translation_count = shifted.shape[1]
     active_lanes = 128 // translation_count
-    assert active_lanes in {4, 5}
+    assert 1 <= active_lanes <= 5
     lane_sums = np.zeros(
         (active_lanes, reference.shape[0], translation_count),
         dtype=np.float32,
@@ -120,11 +120,11 @@ def _posterior_on_host(scores, gpu_device):
     return tuple(np.asarray(value) for value in result)
 
 
-def _make_operands(seed, physical_count, translation_count):
+def _make_operands(seed, physical_count, translation_count, rotation_count=16):
     rng = np.random.default_rng(seed)
     reference = (
-        rng.normal(0.0, 0.02, (16, physical_count))
-        + 1j * rng.normal(0.0, 0.02, (16, physical_count))
+        rng.normal(0.0, 0.02, (rotation_count, physical_count))
+        + 1j * rng.normal(0.0, 0.02, (rotation_count, physical_count))
     ).astype(np.complex64)
     shifted = (
         rng.normal(0.0, 0.02, (1, translation_count, physical_count))
@@ -274,3 +274,69 @@ def test_stable_coarse_runtime_prefix_source16_stays_in_atomic_envelope(
     )
     _assert_in_exact_atomic_envelope(direct, *compact_operands)
     _assert_in_exact_atomic_envelope(stable, *compact_operands)
+
+
+@pytest.mark.parametrize("translation_count", [25, 29, 37, 49, 128])
+def test_shared_pretranslated_coarse_preserves_native_atomic_set(
+    monkeypatch, custom_cuda_lib, gpu_device, translation_count,
+):
+    """Shared staging preserves exact lane arithmetic with poisoned padding."""
+    cuda_backproject = _configure_cuda(monkeypatch, custom_cuda_lib)
+    logical_count, logical_layout, stable_layout = _layouts()
+    reference, shifted, weight, initial = _make_operands(
+        20260907, stable_layout.physical_square_count, translation_count,
+        rotation_count=17,
+    )
+    reference[:, logical_count:] = np.nan
+    shifted[:, :, logical_count:] = np.nan
+    weight[:, logical_count:] = np.nan
+    lookup = np.array(stable_layout.full_to_compact_np, copy=True)
+    lookup[3] = -1
+    direct_lookup = np.array(logical_layout.full_to_compact_np, copy=True)
+    direct_lookup[3] = -1
+    with jax.default_device(gpu_device):
+        operands = tuple(jnp.asarray(v) for v in (
+            reference, shifted, weight, initial, lookup,
+            np.int32(logical_count),
+        ))
+        score = cuda_backproject.relion_coarse_diff2_shared_pretranslated_runtime_f32
+        shared = np.asarray(score(*operands))
+        direct = np.asarray(cuda_backproject.relion_coarse_diff2_rectangular_f32(
+            jnp.asarray(reference[:, :logical_count]),
+            jnp.asarray(shifted[:, :, :logical_count]),
+            jnp.asarray(weight[:, :logical_count]),
+            jnp.asarray(initial), jnp.asarray(direct_lookup),
+        ))
+        hlo = score.lower(*operands).compiler_ir(dialect="hlo").as_hlo_text()
+    compact = (
+        reference[:, :logical_count], shifted[:, :, :logical_count],
+        weight[:, :logical_count], initial, direct_lookup,
+    )
+    _assert_in_exact_atomic_envelope(shared, *compact)
+    _assert_in_exact_atomic_envelope(direct, *compact)
+    for a, b in zip(_posterior_on_host(shared, gpu_device),
+                    _posterior_on_host(direct, gpu_device)):
+        np.testing.assert_array_equal(a, b)
+    assert "cuda_relion_coarse_diff2_shared_pretranslated_runtime_f32" in hlo
+    assert "gather(" not in hlo
+    assert "_pack_runtime_logical_prefix_rows" not in hlo
+
+
+@pytest.mark.parametrize("logical_count", [0, -1, 65])
+def test_shared_pretranslated_coarse_empty_and_invalid_logical_counts(
+    monkeypatch, custom_cuda_lib, gpu_device, logical_count,
+):
+    cuda_backproject = _configure_cuda(monkeypatch, custom_cuda_lib)
+    reference, shifted, weight, initial = _make_operands(20260908, 64, 37, 17)
+    with jax.default_device(gpu_device):
+        result = np.asarray(
+            cuda_backproject.relion_coarse_diff2_shared_pretranslated_runtime_f32(
+                jnp.asarray(reference), jnp.asarray(shifted), jnp.asarray(weight),
+                jnp.asarray(initial), jnp.arange(64, dtype=jnp.int32),
+                jnp.int32(logical_count),
+            ),
+        )
+    if logical_count == 0:
+        np.testing.assert_array_equal(result, np.full((1, 17, 37), initial[0]))
+    else:
+        assert np.isnan(result).all()

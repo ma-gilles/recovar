@@ -8425,6 +8425,7 @@ void relion_coarse_diff2_rotation_blocks_runtime_f32_kernel(
         full_pixel_count);
 }
 
+template <bool FUSED_TRANSLATION>
 __global__ __launch_bounds__(kRelionCoarseDiff2BlockSize)
 void relion_coarse_diff2_fused_translate_rectangular_f32_kernel(
     const float2* reference,
@@ -8437,8 +8438,9 @@ void relion_coarse_diff2_fused_translate_rectangular_f32_kernel(
     int64_t rotation_count,
     int64_t translation_count,
     int64_t compact_pixel_count,
-    int64_t full_pixel_count,
-    int current_size)
+    int64_t full_pixel_capacity,
+    int current_size,
+    const int32_t* runtime_full_pixel_count)
 {
     const int64_t rotation_blocks =
         (rotation_count + kRelionCoarseEulersPerBlock - 1) /
@@ -8448,6 +8450,22 @@ void relion_coarse_diff2_fused_translate_rectangular_f32_kernel(
     const int64_t rotation_start =
         (flat_block - batch * rotation_blocks) * kRelionCoarseEulersPerBlock;
     if (batch >= batch_size) return;
+
+    const int64_t full_pixel_count = runtime_full_pixel_count == nullptr
+        ? full_pixel_capacity
+        : static_cast<int64_t>(runtime_full_pixel_count[0]);
+    if (full_pixel_count < 0 || full_pixel_count > full_pixel_capacity) {
+        if (threadIdx.x < translation_count) {
+            for (int offset = 0; offset < kRelionCoarseEulersPerBlock; ++offset) {
+                const int64_t rotation = rotation_start + offset;
+                if (rotation < rotation_count)
+                    output[(batch * rotation_count + rotation) *
+                               translation_count + threadIdx.x] =
+                        __int_as_float(0x7fc00000);
+            }
+        }
+        return;
+    }
 
     constexpr int pixels_per_chunk =
         kRelionCoarseDiff2BlockSize / kRelionCoarsePrefetchFraction;
@@ -8460,8 +8478,12 @@ void relion_coarse_diff2_fused_translate_rectangular_f32_kernel(
     const int translation = thread % translation_count;
     const int lane = thread / translation_count;
     const int active_lanes = kRelionCoarseDiff2BlockSize / translation_count;
-    const float tx = translation_angles[2 * translation];
-    const float ty = translation_angles[2 * translation + 1];
+    float tx = 0.0f;
+    float ty = 0.0f;
+    if constexpr (FUSED_TRANSLATION) {
+        tx = translation_angles[2 * translation];
+        ty = translation_angles[2 * translation + 1];
+    }
     const int current_half_width = current_size / 2 + 1;
     float lane_sums[kRelionCoarseEulersPerBlock] = {0.0f};
 
@@ -8506,8 +8528,9 @@ void relion_coarse_diff2_fused_translate_rectangular_f32_kernel(
             float weight_value = 0.0f;
             if (image_compact_pixel >= 0 &&
                 image_compact_pixel < compact_pixel_count) {
-                image_value = image[
-                    batch * compact_pixel_count + image_compact_pixel];
+                if constexpr (FUSED_TRANSLATION)
+                    image_value = image[
+                        batch * compact_pixel_count + image_compact_pixel];
                 weight_value = weight[
                     batch * compact_pixel_count + image_compact_pixel];
             }
@@ -8526,14 +8549,22 @@ void relion_coarse_diff2_fused_translate_rectangular_f32_kernel(
                 const int32_t compact_pixel = full_to_compact[full_pixel];
                 if (compact_pixel < 0 || compact_pixel >= compact_pixel_count)
                     continue;
-                const int x = static_cast<int>(full_pixel % current_half_width);
-                int y = static_cast<int>(full_pixel / current_half_width);
-                if (y > current_size / 2) y -= current_size;
                 const int shared_pixel =
                     pixel_in_chunk + static_cast<int>(chunk_start %
                                                       kRelionCoarseDiff2BlockSize);
-                const float2 shifted = relion_coarse_score_translate_f32(
-                    shared_image[shared_pixel], x, y, tx, ty);
+                float2 shifted;
+                if constexpr (FUSED_TRANSLATION) {
+                    const int x = static_cast<int>(full_pixel % current_half_width);
+                    int y = static_cast<int>(full_pixel / current_half_width);
+                    if (y > current_size / 2) y -= current_size;
+                    shifted = relion_coarse_score_translate_f32(
+                        shared_image[shared_pixel], x, y, tx, ty);
+                } else {
+                    // Preserve physical row strides: logical-prefix packing
+                    // copies are unnecessary when only traversal is bounded.
+                    shifted = image[(batch * translation_count + translation) *
+                                        compact_pixel_count + compact_pixel];
+                }
                 const float pixel_weight = shared_weight[shared_pixel];
                 #pragma unroll
                 for (int rotation_offset = 0;
@@ -9604,6 +9635,7 @@ cudaError_t launch_relion_coarse_diff2_rotation_blocks_f32(
     return cudaGetLastError();
 }
 
+template <bool FUSED_TRANSLATION = true>
 cudaError_t launch_relion_coarse_diff2_fused_translate_rectangular_f32(
     cudaStream_t stream,
     const float2* reference,
@@ -9618,7 +9650,8 @@ cudaError_t launch_relion_coarse_diff2_fused_translate_rectangular_f32(
     int64_t translation_count,
     int64_t compact_pixel_count,
     int64_t full_pixel_count,
-    int current_size)
+    int current_size,
+    const int32_t* runtime_full_pixel_count = nullptr)
 {
     const int64_t output_count =
         batch_size * rotation_count * translation_count;
@@ -9642,7 +9675,7 @@ cudaError_t launch_relion_coarse_diff2_fused_translate_rectangular_f32(
         (rotation_count + kRelionCoarseEulersPerBlock - 1) /
         kRelionCoarseEulersPerBlock;
     const int64_t block_count = batch_size * rotation_blocks;
-    relion_coarse_diff2_fused_translate_rectangular_f32_kernel<<<
+    relion_coarse_diff2_fused_translate_rectangular_f32_kernel<FUSED_TRANSLATION><<<
         static_cast<unsigned int>(block_count),
         kRelionCoarseDiff2BlockSize,
         0,
@@ -9658,7 +9691,8 @@ cudaError_t launch_relion_coarse_diff2_fused_translate_rectangular_f32(
             translation_count,
             compact_pixel_count,
             full_pixel_count,
-            current_size);
+            current_size,
+            runtime_full_pixel_count);
     return cudaGetLastError();
 }
 
@@ -13683,7 +13717,8 @@ ffi::Error RelionCoarseDiff2RectangularF32Common(
     ffi::AnyBuffer weight,
     ffi::AnyBuffer initial_diff2,
     ffi::AnyBuffer full_to_compact,
-    ffi::Result<ffi::AnyBuffer> output)
+    ffi::Result<ffi::AnyBuffer> output,
+    bool shared_pretranslated = false)
 {
     if (reference.element_type() != ffi::DataType::C64 ||
         shifted_image.element_type() != ffi::DataType::C64)
@@ -13731,23 +13766,40 @@ ffi::Error RelionCoarseDiff2RectangularF32Common(
     if (block_count > static_cast<int64_t>(std::numeric_limits<int>::max()))
         return ffi::Error::InvalidArgument(
             "RelionCoarseDiff2RectangularF32: block count exceeds CUDA grid");
-    cudaError_t err = launch_relion_coarse_diff2_rectangular_f32(
-        stream,
-        reinterpret_cast<const float2*>(reference.untyped_data()),
-        reinterpret_cast<const float2*>(shifted_image.untyped_data()),
-        static_cast<const float*>(weight.untyped_data()),
-        static_cast<const float*>(initial_diff2.untyped_data()),
-        static_cast<const int32_t*>(full_to_compact.untyped_data()),
-        static_cast<float*>(output->untyped_data()),
-        image_dims[0],
-        reference_dims[0],
-        image_dims[1],
-        reference_dims[1],
-        lookup_dims[0],
-        runtime_full_pixel_count == nullptr
-            ? nullptr
-            : static_cast<const int32_t*>(
-                  runtime_full_pixel_count->untyped_data()));
+    cudaError_t err;
+    if (shared_pretranslated) {
+        err = launch_relion_coarse_diff2_fused_translate_rectangular_f32<false>(
+            stream,
+            reinterpret_cast<const float2*>(reference.untyped_data()),
+            reinterpret_cast<const float2*>(shifted_image.untyped_data()),
+            nullptr,
+            static_cast<const float*>(weight.untyped_data()),
+            static_cast<const float*>(initial_diff2.untyped_data()),
+            static_cast<const int32_t*>(full_to_compact.untyped_data()),
+            static_cast<float*>(output->untyped_data()),
+            image_dims[0], reference_dims[0], image_dims[1],
+            reference_dims[1], lookup_dims[0], 0,
+            static_cast<const int32_t*>(
+                runtime_full_pixel_count->untyped_data()));
+    } else {
+        err = launch_relion_coarse_diff2_rectangular_f32(
+            stream,
+            reinterpret_cast<const float2*>(reference.untyped_data()),
+            reinterpret_cast<const float2*>(shifted_image.untyped_data()),
+            static_cast<const float*>(weight.untyped_data()),
+            static_cast<const float*>(initial_diff2.untyped_data()),
+            static_cast<const int32_t*>(full_to_compact.untyped_data()),
+            static_cast<float*>(output->untyped_data()),
+            image_dims[0],
+            reference_dims[0],
+            image_dims[1],
+            reference_dims[1],
+            lookup_dims[0],
+            runtime_full_pixel_count == nullptr
+                ? nullptr
+                : static_cast<const int32_t*>(
+                      runtime_full_pixel_count->untyped_data()));
+    }
     if (err != cudaSuccess)
         return ffi::Error::Internal(
             std::string("CUDA: ") + cudaGetErrorString(err));
@@ -13794,6 +13846,35 @@ ffi::Error RelionCoarseDiff2RectangularRuntimeF32Impl(
         full_to_compact,
         output);
 }
+
+ffi::Error RelionCoarseDiff2SharedPretranslatedRuntimeF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer reference,
+    ffi::AnyBuffer shifted_image,
+    ffi::AnyBuffer weight,
+    ffi::AnyBuffer initial_diff2,
+    ffi::AnyBuffer full_to_compact,
+    ffi::AnyBuffer logical_full_pixel_count,
+    ffi::Result<ffi::AnyBuffer> output)
+{
+    return RelionCoarseDiff2RectangularF32Common(
+        stream, &logical_full_pixel_count, reference, shifted_image,
+        weight, initial_diff2, full_to_compact, output, true);
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionCoarseDiff2SharedPretranslatedRuntimeF32,
+    RelionCoarseDiff2SharedPretranslatedRuntimeF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     RelionCoarseDiff2RectangularF32, RelionCoarseDiff2RectangularF32Impl,
