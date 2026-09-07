@@ -30,50 +30,6 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _fma_f32(left: np.float32, right: np.float32, addend: np.float32) -> np.float32:
-    """Correctly round a float32 fused multiply-add using an exact float64 intermediate."""
-    return np.float32(np.float64(left) * np.float64(right) + np.float64(addend))
-
-
-def _lane_partials(operands) -> np.ndarray:
-    block_size = int(operands.header[37])
-    prefetch_fraction = int(operands.header[38])
-    translation_count = int(operands.header[14])
-    pixel_count = int(operands.header[13])
-    lane_count = block_size // translation_count
-    pixels_per_chunk = block_size // prefetch_fraction
-    if (block_size, prefetch_fraction, translation_count, lane_count) != (128, 4, 29, 4):
-        raise ValueError("this audit is pinned to RELION's block128/prefetch4/translation29 kernel")
-
-    correction_half = np.asarray(operands.correction, dtype=np.float32) * np.float32(0.5)
-    partials = np.zeros(
-        (operands.rotation_keys.size, translation_count, lane_count),
-        dtype=np.float32,
-    )
-    for rotation in range(operands.rotation_keys.size):
-        for translation in range(translation_count):
-            for lane in range(lane_count):
-                lane_sum = np.float32(0.0)
-                for chunk_start in range(0, pixel_count, pixels_per_chunk):
-                    for pixel_in_chunk in range(lane, pixels_per_chunk, lane_count):
-                        pixel = chunk_start + pixel_in_chunk
-                        if pixel >= pixel_count:
-                            break
-                        diff_real = np.float32(
-                            operands.reference_real[rotation, pixel]
-                            - operands.shifted_real[translation, pixel]
-                        )
-                        diff_imag = np.float32(
-                            operands.reference_imag[rotation, pixel]
-                            - operands.shifted_imag[translation, pixel]
-                        )
-                        imag_square = np.float32(diff_imag * diff_imag)
-                        square_sum = _fma_f32(diff_real, diff_real, imag_square)
-                        lane_sum = _fma_f32(square_sum, correction_half[pixel], lane_sum)
-                partials[rotation, translation, lane] = lane_sum
-    return partials
-
-
 def _captured_lane_partials(lanes) -> np.ndarray:
     """Reshape native thread partials into rotation/translation/lane-group order."""
 

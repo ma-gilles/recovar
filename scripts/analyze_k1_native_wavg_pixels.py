@@ -30,7 +30,6 @@ else:
 
 
 _WDIFF_RE = re.compile(r"img(?P<img>\d+)_part(?P<part>\d+)_storeWavg_wdiff2_pixels\.bin")
-_PREPROCESS_RE = re.compile(r"part(?P<part>\d+)_stack(?P<stack>\d+)\.preprocess-v1\.bin")
 
 
 def _particle_row_for_stack(particles, stack_index_one_based: int):
@@ -308,17 +307,6 @@ def _complex_comparison(
         "real": _comparison(native_complex.real, recovar_complex.real, np.ones(valid.sum(), bool)),
         "imag": _comparison(native_complex.imag, recovar_complex.imag, np.ones(valid.sum(), bool)),
     }
-
-
-def _source_by_part(preprocess_dir: Path) -> dict[int, int]:
-    result: dict[int, int] = {}
-    for path in preprocess_dir.glob("*.preprocess-v1.bin"):
-        match = _PREPROCESS_RE.fullmatch(path.name)
-        if match:
-            result[int(match.group("part"))] = int(match.group("stack")) - 1
-    if not result:
-        raise ValueError(f"no native preprocess identity files in {preprocess_dir}")
-    return result
 
 
 def _exact_ppref_projections(
