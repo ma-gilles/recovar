@@ -396,6 +396,7 @@ EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_NOISE_PIXEL_CAPACITY
 EXACT_LOCAL_HOST_PLAN_PACK_ENV = "RECOVAR_EXACT_LOCAL_HOST_PLAN_PACK"
 EXACT_LOCAL_HOST_PUBLICATION_ENV = "RECOVAR_EXACT_LOCAL_HOST_PUBLICATION"
 EXACT_LOCAL_BPREF_TRANSACTION_ENV = "RECOVAR_EXACT_LOCAL_BPREF_TRANSACTION"
+EXACT_LOCAL_BPREF_PARTICLE_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_BPREF_PARTICLE_CAPACITY"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS = 64_000_000
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS_ENV = (
@@ -2118,6 +2119,13 @@ def _local_bpref_transaction_requested() -> bool:
     token = os.environ.get(EXACT_LOCAL_BPREF_TRANSACTION_ENV, "0").strip()
     if token not in {"0", "1"}:
         raise ValueError(f"{EXACT_LOCAL_BPREF_TRANSACTION_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_bpref_particle_capacity_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_BPREF_PARTICLE_CAPACITY_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_BPREF_PARTICLE_CAPACITY_ENV} must be 0 or 1")
     return token == "1"
 
 
@@ -4569,6 +4577,11 @@ def run_local_em_exact(
         raise ValueError("BPref projector capacity requires the shared local projector capacity")
     packed_final_noise_enabled = bool(_packed_final_noise_enabled)
     bpref_transaction_enabled = _local_bpref_transaction_requested()
+    bpref_particle_capacity_enabled = _local_bpref_particle_capacity_requested()
+    if bpref_particle_capacity_enabled and (
+        not bpref_transaction_enabled or bpref_projector_capacity_enabled
+    ):
+        raise ValueError("BPref particle capacity requires transactions and no BPref projector capacity")
     if bpref_transaction_enabled and not (
         defer_packed_vdam_enabled and packed_final_noise_enabled
     ):
@@ -5651,7 +5664,9 @@ def run_local_em_exact(
             )
         from recovar.em.dense_single_volume.bpref_transaction import BprefTransactionQueue
 
-        bpref_transaction_queue = BprefTransactionQueue()
+        bpref_transaction_queue = BprefTransactionQueue(
+            stable_particle_capacity=bpref_particle_capacity_enabled,
+        )
     if fixed_capacity_enabled and not use_big_jit_buckets:
         raise ValueError(
             "fixed-capacity score-only execution requires the mature local big-JIT bucket path",

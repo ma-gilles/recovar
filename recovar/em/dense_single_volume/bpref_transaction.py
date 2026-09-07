@@ -1,5 +1,7 @@
 """Bound consecutive compatible BPref calls without changing particle order."""
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 
@@ -49,6 +51,7 @@ _FALSE_REPLAY = (
     "native_trace_shape_replay",
     "candidate_trace_active",
     "parallel_worker_replay",
+    "particle_tail_mask",
 )
 
 
@@ -63,6 +66,19 @@ def _concatenate_fields(columns):
     )
 
 
+@partial(jax.jit, static_argnums=(1, 2))
+def _pad_particle_fields(columns, capacity, group_column):
+    fields = _concatenate_fields(columns)
+    padding = capacity - fields[0].shape[0]
+    if padding < 0:
+        raise ValueError("BPref physical capacity cannot truncate active particles")
+    return tuple(
+        jnp.pad(value, ((0, padding),) + ((0, 0),) * (value.ndim - 1),
+                constant_values=-1 if i == group_column else 0)
+        for i, value in enumerate(fields)
+    )
+
+
 class BprefTransactionQueue:
     """Combine only consecutive calls with identical shared operand objects.
 
@@ -70,13 +86,21 @@ class BprefTransactionQueue:
     for concatenation, not total HBM. A single oversized or diagnostic call
     flushes previous work and executes unchanged. The caller must pass each
     returned accumulator to the next call and flush before using final state.
+
+    ``stable_particle_capacity`` pads compatible grouped calls to a capacity
+    determined only by non-particle shapes and these bounds. Generated worker
+    and trace IDs count toward the physical byte limit. CUDA masks the suffix.
     """
 
-    def __init__(self, *, max_images=256, max_input_bytes=128 * 1024**2):
+    def __init__(self, *, max_images=256, max_input_bytes=128 * 1024**2, stable_particle_capacity=False):
         if type(max_images) is not int or type(max_input_bytes) is not int or min(max_images, max_input_bytes) <= 0:
             raise ValueError("BPref queue bounds must be positive integers")
+        if type(stable_particle_capacity) is not bool:
+            raise TypeError("stable_particle_capacity must be a Python bool")
         self.max_images = max_images
         self.max_input_bytes = max_input_bytes
+        self.stable_particle_capacity = stable_particle_capacity
+        self._capacity = 0
         self._pending = []
         self._anchor = None
         self._callback = None
@@ -148,12 +172,20 @@ class BprefTransactionQueue:
         byte_count = sum(
             values[name].size * values[name].dtype.itemsize for name in _PARTICLE if values.get(name) is not None
         )
-        oversized = n > self.max_images or byte_count > self.max_input_bytes
+        capacity = self.max_images
+        if self.stable_particle_capacity and key is not None:
+            if values.get("reconstruction_group_ids") is None or data.ndim != 2 or data.shape[0] <= 1:
+                raise ValueError("BPref particle capacity requires explicit multiple accumulator groups")
+            # Compatible inputs have no explicit worker/trace IDs. Include the
+            # two generated S32 fields in the physical compact-input bound.
+            row_bytes = byte_count // n + 2 * 4
+            capacity = min(self.max_images, self.max_input_bytes // row_bytes)
+        oversized = n > capacity or byte_count > self.max_input_bytes
         if self._pending and (
             key is None
             or key != self._key
             or callback is not self._callback
-            or self._images + n > self.max_images
+            or self._images + n > capacity
             or self._bytes + byte_count > self.max_input_bytes
         ):
             data, weight, _ = self.flush(data, weight)
@@ -164,6 +196,7 @@ class BprefTransactionQueue:
             self._anchor = (data, weight)
             self._callback = callback
             self._key = key
+            self._capacity = capacity
         self._pending.append(values)
         self._images += n
         self._bytes += byte_count
@@ -174,13 +207,18 @@ class BprefTransactionQueue:
         if not self._pending:
             return data, weight, None
         merged = dict(self._pending[0])
-        if len(self._pending) > 1:
+        if len(self._pending) > 1 or self.stable_particle_capacity:
             names = [name for name in _PARTICLE if merged.get(name) is not None]
             columns = [tuple(call[name] for call in self._pending) for name in names]
             # The old CUDA wrapper restarts arange(B) for each bucket. Explicit
             # IDs must keep that assignment without enabling parallel replay.
             names.extend(("worker_lane_ids", "particle_trace_ids"))
-            merged.update(zip(names, _concatenate_fields(tuple(columns)), strict=True))
+            if self.stable_particle_capacity:
+                packed = _pad_particle_fields(tuple(columns), self._capacity, names.index("reconstruction_group_ids"))
+                merged["particle_tail_mask"] = True
+            else:
+                packed = _concatenate_fields(tuple(columns))
+            merged.update(zip(names, packed, strict=True))
             merged["parallel_worker_replay"] = False
         merged.update(data_volume=data, weight_volume=weight, return_denominator=False)
         result = self._callback(**merged)
@@ -189,4 +227,5 @@ class BprefTransactionQueue:
         self._pending.clear()
         self._anchor = self._callback = self._key = None
         self._images = self._bytes = 0
+        self._capacity = 0
         return result
