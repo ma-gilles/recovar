@@ -122,11 +122,13 @@ def test_norm_residual_input_capture_preserves_exact_target_arrays(
         assert capture["raw_translated_wavg"].shape == (0, 0)
 
 
-def test_deterministic_norm_reduction_uses_float64_sum(monkeypatch):
+@pytest.mark.parametrize("input_dtype", [np.complex64, np.complex128])
+def test_deterministic_norm_reduction_uses_float64_sum(monkeypatch, input_dtype):
     monkeypatch.setenv("RECOVAR_K1_RELION_DETERMINISTIC_NORM_REDUCTION", "1")
+    monkeypatch.delenv("RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM", raising=False)
     processed = np.asarray(
-        [[10000 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j]],
-        dtype=np.complex64,
+        [[10000 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j, 1 + 0j]],
+        dtype=input_dtype,
     )
     shells = np.zeros(processed.shape[1], dtype=np.int32)
 
@@ -137,9 +139,32 @@ def test_deterministic_norm_reduction_uses_float64_sum(monkeypatch):
         shell_count=1,
     )
 
-    expected = np.float32(np.sum(np.abs(processed[0]) ** 2, dtype=np.float64))
-    assert np.asarray(per_image).dtype == np.float32
-    assert np.float32(per_image[0]) == expected
+    expected = np.sum(np.abs(processed[0]) ** 2, dtype=np.float64)
+    assert np.asarray(per_image).dtype == np.float64
+    assert float(per_image[0]) == expected == 100000007.0
+    # This opt-in diagnostic must retain the reduction's low bits on return.
+    assert float(per_image[0]) != float(np.float32(expected))
+
+
+@pytest.mark.parametrize(
+    ("input_dtype", "output_dtype"),
+    [(np.complex64, np.float32), (np.complex128, np.float64)],
+)
+def test_default_norm_reduction_preserves_input_precision(monkeypatch, input_dtype, output_dtype):
+    monkeypatch.delenv("RECOVAR_K1_RELION_DETERMINISTIC_NORM_REDUCTION", raising=False)
+    monkeypatch.delenv("RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM", raising=False)
+
+    shells, per_image = sparse._weighted_image_power_shells_and_per_image(
+        jnp.asarray([[3 + 0j, 4 + 0j]], dtype=input_dtype),
+        jnp.asarray([0, 1], dtype=jnp.int32),
+        jnp.ones(1, dtype=jnp.float32),
+        shell_count=2,
+    )
+
+    assert np.asarray(shells).dtype == output_dtype
+    assert np.asarray(per_image).dtype == output_dtype
+    np.testing.assert_array_equal(shells, np.asarray([9.0, 16.0], dtype=output_dtype))
+    np.testing.assert_array_equal(per_image, np.asarray([25.0], dtype=output_dtype))
 
 
 def test_powerclass_spectrum_norm_preserves_float64_per_image(monkeypatch):

@@ -86,9 +86,20 @@ controller import removed. The two grid-precision cases and eight local-search
 cases pass after migrating dtype stubs and removing a redundant patch that
 overwrote the replay fixture with the real reader. Scientific assertions are
 unchanged. Direct grid comparisons preserve both precisions at orders 0–3;
-calling the helper leaves the controller unloaded. The next focused check
-updates the explicit diagnostic norm-reduction contract established by PR180
-`a91bce65a`, with separate default-float32 coverage and no runtime change.
+calling the helper leaves the controller unloaded. The explicit diagnostic norm-reduction test now matches the contract
+established by PR180 `a91bce65a`: float64 output retains low bits that a final
+float32 cast loses. Both input precisions are covered, and a separate default
+case verifies float32 output for complex64 inputs. All nine norm/capture cases
+and two existing scoring/M-step default-precision guards pass. Runtime code and
+tolerances are unchanged. Evidence for both migrations is under
+`pr180_sampling_contracts_20260908/` in the review root.
+
+All 11 newly failing CPU cases have now been addressed in focused checks.
+The frozen 25-failure result remains unchanged; the 14 inherited failures are
+not resolved by these migrations. The next environment check will execute the
+eight tiny GPU-dependent cases on the same frozen source with the previously
+qualified native library. GPU/tool failures and the small float32 arithmetic
+failure retain their original CPU status; this is not a full-suite rerun.
 
 The float32 K1 captured-state replay at frozen `42a3d6184` completed in
 Slurm13624326 (5,000 particles, 128 pixels, iteration 3 to 4, H100 80 GB).
