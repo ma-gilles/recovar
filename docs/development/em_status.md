@@ -72,21 +72,20 @@ shared-`/tmp` exclusions. The raw-ID comparison matches the reviewed inventory
 checkpoint, 14 failures remain, the K-class undefined-variable case now passes,
 and 11 cases change from passing to failing. Eight are local-search test stubs
 rejecting PR180's `dtype` keyword; one is the stale controller metadata guard
-fixed below. The other two are a sampling-grid fixture/ownership mismatch and
-a norm-reduction dtype expectation, still requiring focused review. Existing
-GPU/tool-availability and float32 arithmetic failures remain unqualified.
+fixed below. The other two were a sampling-grid fixture/ownership mismatch and
+a norm-reduction dtype expectation. Focused follow-ups for all 25 failures are
+recorded below; the original CPU result is preserved.
 
 Exact results and the raw comparison are in
 `pr180_integration_20260908/cpu_checkpoint/` under the output root, with sealed
 commands and source manifest at the corresponding path in the review root.
-The next CPU work is to resolve these focused contract checks, not rerun the
-whole suite for each test migration.
 The sampling helper now uses its direct sampling dependency, with the
 controller import removed. The two grid-precision cases and eight local-search
 cases pass after migrating dtype stubs and removing a redundant patch that
 overwrote the replay fixture with the real reader. Scientific assertions are
 unchanged. Direct grid comparisons preserve both precisions at orders 0–3;
-calling the helper leaves the controller unloaded. The explicit diagnostic norm-reduction test now matches the contract
+calling the helper leaves the controller unloaded. The explicit diagnostic
+norm-reduction test now matches the contract
 established by PR180 `a91bce65a`: float64 output retains low bits that a final
 float32 cast loses. Both input precisions are covered, and a separate default
 case verifies float32 output for complex64 inputs. All nine norm/capture cases
@@ -95,11 +94,22 @@ tolerances are unchanged. Evidence for both migrations is under
 `pr180_sampling_contracts_20260908/` in the review root.
 
 All 11 newly failing CPU cases have now been addressed in focused checks.
-The frozen 25-failure result remains unchanged; the 14 inherited failures are
-not resolved by these migrations. The next environment check will execute the
-eight tiny GPU-dependent cases on the same frozen source with the previously
-qualified native library. GPU/tool failures and the small float32 arithmetic
-failure retain their original CPU status; this is not a full-suite rerun.
+The 14 inherited failures were checked separately on the same frozen source.
+The eight tiny GPU-dependent cases pass on frozen `42a3d6184` in
+Slurm13625819 (H100 80 GB, `della-h20g2`, 15 seconds), with no skips and source
+and native-library identities unchanged. Their original CPU failures remain
+recorded. The five dry-run tool checks and the float32 comparison also pass on the
+same H100 in Slurm13625952, with the pinned real RELION executable supplied
+explicitly. The binary is only resolved/hashed by the dry-run checks; no RELION
+benchmark is launched. Source and native-library identities remain unchanged.
+
+The [versioned CPU-failure reconciliation](evidence/pr180-unit-checkpoint-20260908/README.md)
+matches all 25 original failures to these focused checks: 24 retain their case
+IDs, and the diagnostic norm case has two explicitly recorded precision
+replacements. The original CPU run remains failed. The float32 CPU-versus-NumPy
+assertion is still a CPU failure; its GPU pass does not classify the K1 Pmax
+residual. These follow-ups span recorded revisions, so neither a fresh full-suite
+pass nor current-source trajectory/performance qualification is claimed.
 
 The float32 K1 captured-state replay at frozen `42a3d6184` completed in
 Slurm13624326 (5,000 particles, 128 pixels, iteration 3 to 4, H100 80 GB).

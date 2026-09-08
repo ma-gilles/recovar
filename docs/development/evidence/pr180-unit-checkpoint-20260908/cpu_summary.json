@@ -1,0 +1,217 @@
+{
+  "job": "13623235",
+  "head": "42a3d6184c6d05a9f4f97bd00120e62d0081f1d3",
+  "counts": {
+    "skipped": 340,
+    "passed": 6452,
+    "failure": 25
+  },
+  "source_unchanged": true,
+  "wall_seconds": 3188.56844232,
+  "inventory_matches_review": true,
+  "changed_statuses": {
+    "tests.unit.test_dense_iteration_loop_merge_guards::test_iteration_dependencies_and_ppca_vdam_entry_points_are_available": {
+      "previous": "passed",
+      "current": "failure"
+    },
+    "tests.unit.test_em_sampling_relion_mstep::test_relion_global_grid_preserves_source_euler_precision_until_matrix_cast": {
+      "previous": "passed",
+      "current": "failure"
+    },
+    "tests.unit.test_k1_norm_residual_input_capture::test_deterministic_norm_reduction_uses_float64_sum": {
+      "previous": "passed",
+      "current": "failure"
+    },
+    "tests.unit.test_refine_relion_mode::test_local_search_applies_perturbation_to_generated_fine_rotation_grid": {
+      "previous": "passed",
+      "current": "failure"
+    },
+    "tests.unit.test_refine_relion_mode::test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_when_available": {
+      "previous": "passed",
+      "current": "failure"
+    },
+    "tests.unit.test_refine_relion_mode::test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid": {
+      "previous": "passed",
+      "current": "failure"
+    },
+    "tests.unit.test_refine_relion_mode::test_local_search_decodes_hard_assignments_on_fine_grid": {
+      "previous": "passed",
+      "current": "failure"
+    },
+    "tests.unit.test_refine_relion_mode::test_local_search_exact_path_uses_safe_multi_image_batches": {
+      "previous": "passed",
+      "current": "failure"
+    },
+    "tests.unit.test_refine_relion_mode::test_local_search_os0_keeps_full_local_support_for_mstep": {
+      "previous": "passed",
+      "current": "failure"
+    },
+    "tests.unit.test_refine_relion_mode::test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversampling_is_enabled": {
+      "previous": "passed",
+      "current": "failure"
+    },
+    "tests.unit.test_refine_relion_mode::test_local_search_uses_negative_previous_offsets_for_translation_prior": {
+      "previous": "passed",
+      "current": "failure"
+    },
+    "tests.unit.test_sparse_pass2_bucketed_perf::test_fused_sparse_k_class_pass2_matches_existing_two_pass_path": {
+      "previous": "failure",
+      "current": "passed"
+    }
+  },
+  "failures": [
+    {
+      "class": "tests.unit.initial_model.test_vdam_abinitio_merge_guard",
+      "name": "test_merge_guard_dry_run_writes_reproducibility_ledger",
+      "status": "failure",
+      "detail": "FileNotFoundError: [Errno 2] No such file or directory: 'nvidia-smi'"
+    },
+    {
+      "class": "tests.unit.test_compare_k4_relion_recovar_bpref_factors",
+      "name": "test_relion_cuda_processed_reconstruction_replays_captured_native_lane",
+      "status": "failure",
+      "detail": "RuntimeError: RELION jax_gpu Fourier preprocessing requires a JAX GPU backend"
+    },
+    {
+      "class": "tests.unit.test_compare_k4_relion_recovar_fine_operands",
+      "name": "test_fine_operand_relion_cuda_counterfactual_routes_reduction_tree[relion_cuda-False]",
+      "status": "failure",
+      "detail": "RuntimeError: RELION jax_gpu Fourier preprocessing requires a JAX GPU backend"
+    },
+    {
+      "class": "tests.unit.test_compare_k4_relion_recovar_fine_operands",
+      "name": "test_fine_operand_relion_cuda_counterfactual_routes_reduction_tree[relion_cuda_native_lane-True]",
+      "status": "failure",
+      "detail": "RuntimeError: RELION jax_gpu Fourier preprocessing requires a JAX GPU backend"
+    },
+    {
+      "class": "tests.unit.test_compare_k4_relion_recovar_fine_operands",
+      "name": "test_fine_operand_dataset_native_counterfactual_accepts_relion_capture",
+      "status": "failure",
+      "detail": "RuntimeError: RELION jax_gpu Fourier preprocessing requires a JAX GPU backend"
+    },
+    {
+      "class": "tests.unit.test_compare_k4_relion_recovar_fine_operands",
+      "name": "test_fine_operand_replays_captured_native_lane_mode",
+      "status": "failure",
+      "detail": "RuntimeError: RELION jax_gpu Fourier preprocessing requires a JAX GPU backend"
+    },
+    {
+      "class": "tests.unit.test_dense_iteration_loop_merge_guards",
+      "name": "test_iteration_dependencies_and_ppca_vdam_entry_points_are_available",
+      "status": "failure",
+      "detail": "AssertionError: assert ['read_relion_model_metadata'] == []\n  \n  Left contains one more item: 'read_relion_model_metadata'\n  \n  Full diff:\n  - []\n  + [\n  +     'read_relion_model_metadata',\n  + ]"
+    },
+    {
+      "class": "tests.unit.test_em_sampling_relion_mstep",
+      "name": "test_relion_global_grid_preserves_source_euler_precision_until_matrix_cast",
+      "status": "failure",
+      "detail": "AssertionError: \nArrays are not equal\n\n(shapes (36864, 3, 3), (2, 3, 3) mismatch)\n ACTUAL: array([[[ 5.892557e-02,  5.892557e-02, -9.965217e-01],\n        [-7.071068e-01,  7.071068e-01,  6.938894e-18],\n        [ 7.046472e-01,  7.046472e-01,  8.333334e-02]],...\n DESIRED: array([[[ 0.841033,  0.412695, -0.349781],\n        [ 0.451772, -0.891468,  0.03445 ],\n        [-0.297601, -0.186995, -0.936198]],..."
+    },
+    {
+      "class": "tests.unit.test_image_backends",
+      "name": "test_particle_image_dataset_routes_native_lane_softmask_diagnostic",
+      "status": "failure",
+      "detail": "RuntimeError: RELION jax_gpu Fourier preprocessing requires a JAX GPU backend"
+    },
+    {
+      "class": "tests.unit.test_k1_norm_residual_input_capture",
+      "name": "test_deterministic_norm_reduction_uses_float64_sum",
+      "status": "failure",
+      "detail": "AssertionError: assert dtype('float64') == <class 'numpy.float32'>\n +  where dtype('float64') = array([1.00000008e+08]).dtype\n +    where array([1.00000008e+08]) = <built-in function asarray>(Array([1.00000008e+08], dtype=float64))\n +      where <built-in function asarray> = np.asarray\n +  and   <class 'numpy.float32'> = np.float32"
+    },
+    {
+      "class": "tests.unit.test_ppca",
+      "name": "test_E_M_step_batch_half_shapes",
+      "status": "failure",
+      "detail": "RuntimeError: RECOVAR's preferred custom CUDA backproject/project extension is unavailable. Last error: Command '['make', '-C', '/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908/recovar/cuda', 'PYTHON=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908/.pixi/envs/default/bin/python', 'LIB=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/cpu_checkpoint/cache/recovar/cuda/libcuda_backproject.so']' returned non-zero exit status 2.. RECOVAR tries to use these kernels by default on GPU because they are substantially faster. Fix your CUDA compiler setup (`NVCC`, `CUDACXX`, `PATH`, `LOCAL_CUDA_PATH`, `CUDA_HOME`, or `CUDA_PATH`) or run `recovar build_custom_cuda` to build the shared library manually. If you need to bypass this temporarily, set `RECOVAR_DISABLE_CUDA=1` to force the slower JAX GPU path; that workaround is supported but not preferred. Searched: /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/cpu_checkpoint/cache/recovar/cuda/libcuda_backproject.so, /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908/recovar/cuda/libcuda_backproject.so\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these."
+    },
+    {
+      "class": "tests.unit.test_ppca",
+      "name": "test_E_M_step_batch_half_contrast_rhs_uses_basis_adjoint",
+      "status": "failure",
+      "detail": "RuntimeError: RECOVAR's preferred custom CUDA backproject/project extension is unavailable. Last error: Command '['make', '-C', '/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908/recovar/cuda', 'PYTHON=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908/.pixi/envs/default/bin/python', 'LIB=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/cpu_checkpoint/cache/recovar/cuda/libcuda_backproject.so']' returned non-zero exit status 2.. RECOVAR tries to use these kernels by default on GPU because they are substantially faster. Fix your CUDA compiler setup (`NVCC`, `CUDACXX`, `PATH`, `LOCAL_CUDA_PATH`, `CUDA_HOME`, or `CUDA_PATH`) or run `recovar build_custom_cuda` to build the shared library manually. If you need to bypass this temporarily, set `RECOVAR_DISABLE_CUDA=1` to force the slower JAX GPU path; that workaround is supported but not preferred. Searched: /scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/cpu_checkpoint/cache/recovar/cuda/libcuda_backproject.so, /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908/recovar/cuda/libcuda_backproject.so\n--------------------\nFor simplicity, JAX has removed its internal frames from the traceback of the following exception. Set JAX_TRACEBACK_FILTERING=off to include these."
+    },
+    {
+      "class": "tests.unit.test_refine_relion_mode",
+      "name": "test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversampling_is_enabled",
+      "status": "failure",
+      "detail": "TypeError: test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversampling_is_enabled.<locals>.<lambda>() got an unexpected keyword argument 'dtype'"
+    },
+    {
+      "class": "tests.unit.test_refine_relion_mode",
+      "name": "test_local_search_applies_perturbation_to_generated_fine_rotation_grid",
+      "status": "failure",
+      "detail": "TypeError: test_local_search_applies_perturbation_to_generated_fine_rotation_grid.<locals>.<lambda>() got an unexpected keyword argument 'dtype'"
+    },
+    {
+      "class": "tests.unit.test_refine_relion_mode",
+      "name": "test_local_search_uses_negative_previous_offsets_for_translation_prior",
+      "status": "failure",
+      "detail": "TypeError: test_local_search_uses_negative_previous_offsets_for_translation_prior.<locals>.<lambda>() got an unexpected keyword argument 'dtype'"
+    },
+    {
+      "class": "tests.unit.test_refine_relion_mode",
+      "name": "test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid",
+      "status": "failure",
+      "detail": "TypeError: test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid.<locals>.<lambda>() got an unexpected keyword argument 'dtype'"
+    },
+    {
+      "class": "tests.unit.test_refine_relion_mode",
+      "name": "test_local_search_os0_keeps_full_local_support_for_mstep",
+      "status": "failure",
+      "detail": "TypeError: test_local_search_os0_keeps_full_local_support_for_mstep.<locals>.<lambda>() got an unexpected keyword argument 'dtype'"
+    },
+    {
+      "class": "tests.unit.test_refine_relion_mode",
+      "name": "test_local_search_exact_path_uses_safe_multi_image_batches",
+      "status": "failure",
+      "detail": "TypeError: _run_refine_with_stubbed_exact_local_batch_sizes.<locals>.<lambda>() got an unexpected keyword argument 'dtype'"
+    },
+    {
+      "class": "tests.unit.test_refine_relion_mode",
+      "name": "test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_when_available",
+      "status": "failure",
+      "detail": "TypeError: test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_when_available.<locals>.<lambda>() got an unexpected keyword argument 'dtype'"
+    },
+    {
+      "class": "tests.unit.test_refine_relion_mode",
+      "name": "test_local_search_decodes_hard_assignments_on_fine_grid",
+      "status": "failure",
+      "detail": "TypeError: test_local_search_decodes_hard_assignments_on_fine_grid.<locals>.<lambda>() got an unexpected keyword argument 'dtype'"
+    },
+    {
+      "class": "tests.unit.test_relion_f32_coarse_significance",
+      "name": "test_relion_cuda_f32_coarse_posterior_matches_numpy_reference",
+      "status": "failure",
+      "detail": "AssertionError: \nNot equal to tolerance rtol=1.19209e-07, atol=0\n\nMismatched elements: 1 / 12 (8.33%)\nMax absolute difference among violations: 7.450581e-09\nMax relative difference among violations: 1.293805e-07\n ACTUAL: array([[0.441921, 0.268039, 0.268039, 0.      , 0.      , 0.022002],\n       [0.42551 , 0.331388, 0.156537, 0.057587, 0.021185, 0.007793]],\n      dtype=float32)\n DESIRED: array([[0.441921, 0.268039, 0.268039, 0.      , 0.      , 0.022002],\n       [0.42551 , 0.331388, 0.156537, 0.057587, 0.021185, 0.007793]],\n      dtype=float32)"
+    },
+    {
+      "class": "tests.unit.test_run_em_completion_bench_slurm",
+      "name": "test_completion_k1_relion_replay_mode_is_explicit",
+      "status": "failure",
+      "detail": "AssertionError: ERROR: cannot resolve relion_refine_mpi from module relion/5.0.1/gcc-11.5.0-gpu at submission time\n  \nassert 2 == 0\n +  where 2 = CompletedProcess(args=['bash', '/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908/scripts/run_em_completion_bench_slurm.sh', '--dry-run', '--k1-only'], returncode=2, stdout='ERROR: cannot resolve relion_refine_mpi from module relion/5.0.1/gcc-11.5.0-gpu at submission time\\n').returncode"
+    },
+    {
+      "class": "tests.unit.test_run_em_completion_bench_slurm",
+      "name": "test_completion_k1_intermediates_can_be_disabled",
+      "status": "failure",
+      "detail": "AssertionError: ERROR: cannot resolve relion_refine_mpi from module relion/5.0.1/gcc-11.5.0-gpu at submission time\n  \nassert 2 == 0\n +  where 2 = CompletedProcess(args=['bash', '/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908/scripts/run_em_completion_bench_slurm.sh', '--dry-run', '--k1-only'], returncode=2, stdout='ERROR: cannot resolve relion_refine_mpi from module relion/5.0.1/gcc-11.5.0-gpu at submission time\\n').returncode"
+    },
+    {
+      "class": "tests.unit.test_run_em_completion_bench_slurm",
+      "name": "test_completion_k4_resource_overrides_are_written",
+      "status": "failure",
+      "detail": "AssertionError: ERROR: cannot resolve relion_refine_mpi from module relion/5.0.1/gcc-11.5.0-gpu at submission time\n  \nassert 2 == 0\n +  where 2 = CompletedProcess(args=['bash', '/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908/scripts/run_em_completion_bench_slurm.sh', '--dry-run', '--k4-only'], returncode=2, stdout='ERROR: cannot resolve relion_refine_mpi from module relion/5.0.1/gcc-11.5.0-gpu at submission time\\n').returncode"
+    },
+    {
+      "class": "tests.unit.test_run_em_completion_bench_slurm",
+      "name": "test_completion_setup_defaults_to_cpu_partition",
+      "status": "failure",
+      "detail": "AssertionError: ERROR: cannot resolve relion_refine_mpi from module relion/5.0.1/gcc-11.5.0-gpu at submission time\n  \nassert 2 == 0\n +  where 2 = CompletedProcess(args=['bash', '/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908/scripts/run_em_completion_bench_slurm.sh', '--dry-run', '--k4-only'], returncode=2, stdout='ERROR: cannot resolve relion_refine_mpi from module relion/5.0.1/gcc-11.5.0-gpu at submission time\\n').returncode"
+    }
+  ],
+  "raw_result_sha256": "8b5603b217e92f16a4940af3b465b7c71a2037bee3b13ffeea4ed0dba5d6c28e",
+  "junit_sha256": "6eefbd8f0f127d76d0b40372ef82e2d77bacbf39b413be9f99566eec14e2e6a8",
+  "current_status": "failed; preserve all raw statuses; active d50 fixes only the demonstrated stale metadata availability guard so far"
+}

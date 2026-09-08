@@ -1,0 +1,216 @@
+{
+  "frozen_cpu_source": "42a3d6184c6d05a9f4f97bd00120e62d0081f1d3",
+  "frozen_cpu_job": "13623235",
+  "frozen_cpu_counts": {
+    "passed": 6452,
+    "skipped": 340,
+    "failure": 25,
+    "error": 0
+  },
+  "failed_cases_accounted_for": 25,
+  "unchanged_case_ids": 24,
+  "explicit_case_replacements": 1,
+  "current_full_suite_qualified": false,
+  "trajectory_or_performance_qualified": false,
+  "limitations": "Original CPU failures remain failures. These follow-ups use multiple recorded source revisions. No fresh full-suite pass; float32 CPU-versus-NumPy residual remains on CPU. K1 six-particle discrepancies are separate and unresolved.",
+  "rows": [
+    {
+      "frozen_failed_case": "tests.unit.initial_model.test_vdam_abinitio_merge_guard::test_merge_guard_dry_run_writes_reproducibility_ledger",
+      "followup": "inherited_tool_and_float32_cases",
+      "same_case_id": true,
+      "test_body_identical": true
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_compare_k4_relion_recovar_bpref_factors::test_relion_cuda_processed_reconstruction_replays_captured_native_lane",
+      "followup": "inherited_gpu_cases",
+      "same_case_id": true,
+      "test_body_identical": true
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_compare_k4_relion_recovar_fine_operands::test_fine_operand_dataset_native_counterfactual_accepts_relion_capture",
+      "followup": "inherited_gpu_cases",
+      "same_case_id": true,
+      "test_body_identical": true
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_compare_k4_relion_recovar_fine_operands::test_fine_operand_relion_cuda_counterfactual_routes_reduction_tree[relion_cuda-False]",
+      "followup": "inherited_gpu_cases",
+      "same_case_id": true,
+      "test_body_identical": true
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_compare_k4_relion_recovar_fine_operands::test_fine_operand_relion_cuda_counterfactual_routes_reduction_tree[relion_cuda_native_lane-True]",
+      "followup": "inherited_gpu_cases",
+      "same_case_id": true,
+      "test_body_identical": true
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_compare_k4_relion_recovar_fine_operands::test_fine_operand_replays_captured_native_lane_mode",
+      "followup": "inherited_gpu_cases",
+      "same_case_id": true,
+      "test_body_identical": true
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_dense_iteration_loop_merge_guards::test_iteration_dependencies_and_ppca_vdam_entry_points_are_available",
+      "followup": "follower_corrections_02",
+      "same_case_id": true,
+      "test_body_identical": false
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_em_sampling_relion_mstep::test_relion_global_grid_preserves_source_euler_precision_until_matrix_cast",
+      "followup": "sampling_contracts_02",
+      "same_case_id": true,
+      "test_body_identical": false
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_image_backends::test_particle_image_dataset_routes_native_lane_softmask_diagnostic",
+      "followup": "inherited_gpu_cases",
+      "same_case_id": true,
+      "test_body_identical": true
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_k1_norm_residual_input_capture::test_deterministic_norm_reduction_uses_float64_sum",
+      "followup": "norm_contracts_03",
+      "replacement_cases": [
+        "tests.unit.test_k1_norm_residual_input_capture::test_deterministic_norm_reduction_uses_float64_sum[complex64]",
+        "tests.unit.test_k1_norm_residual_input_capture::test_deterministic_norm_reduction_uses_float64_sum[complex128]"
+      ],
+      "change": "Explicit opt-in diagnostic contract from PR180 a91bce65a retains float64; replacement cases test both input precisions with exact low-bit preservation. Separate default cases retain float32."
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_ppca::test_E_M_step_batch_half_contrast_rhs_uses_basis_adjoint",
+      "followup": "inherited_gpu_cases",
+      "same_case_id": true,
+      "test_body_identical": true
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_ppca::test_E_M_step_batch_half_shapes",
+      "followup": "inherited_gpu_cases",
+      "same_case_id": true,
+      "test_body_identical": true
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_refine_relion_mode::test_local_search_applies_perturbation_to_generated_fine_rotation_grid",
+      "followup": "sampling_contracts_02",
+      "same_case_id": true,
+      "test_body_identical": false
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_refine_relion_mode::test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_when_available",
+      "followup": "sampling_contracts_02",
+      "same_case_id": true,
+      "test_body_identical": false
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_refine_relion_mode::test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid",
+      "followup": "sampling_contracts_02",
+      "same_case_id": true,
+      "test_body_identical": false
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_refine_relion_mode::test_local_search_decodes_hard_assignments_on_fine_grid",
+      "followup": "sampling_contracts_02",
+      "same_case_id": true,
+      "test_body_identical": false
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_refine_relion_mode::test_local_search_exact_path_uses_safe_multi_image_batches",
+      "followup": "sampling_contracts_02",
+      "same_case_id": true,
+      "test_body_identical": false
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_refine_relion_mode::test_local_search_os0_keeps_full_local_support_for_mstep",
+      "followup": "sampling_contracts_02",
+      "same_case_id": true,
+      "test_body_identical": false
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_refine_relion_mode::test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversampling_is_enabled",
+      "followup": "sampling_contracts_02",
+      "same_case_id": true,
+      "test_body_identical": false
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_refine_relion_mode::test_local_search_uses_negative_previous_offsets_for_translation_prior",
+      "followup": "sampling_contracts_02",
+      "same_case_id": true,
+      "test_body_identical": false
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_relion_f32_coarse_significance::test_relion_cuda_f32_coarse_posterior_matches_numpy_reference",
+      "followup": "inherited_tool_and_float32_cases",
+      "same_case_id": true,
+      "test_body_identical": true
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_run_em_completion_bench_slurm::test_completion_k1_intermediates_can_be_disabled",
+      "followup": "inherited_tool_and_float32_cases",
+      "same_case_id": true,
+      "test_body_identical": true
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_run_em_completion_bench_slurm::test_completion_k1_relion_replay_mode_is_explicit",
+      "followup": "inherited_tool_and_float32_cases",
+      "same_case_id": true,
+      "test_body_identical": true
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_run_em_completion_bench_slurm::test_completion_k4_resource_overrides_are_written",
+      "followup": "inherited_tool_and_float32_cases",
+      "same_case_id": true,
+      "test_body_identical": true
+    },
+    {
+      "frozen_failed_case": "tests.unit.test_run_em_completion_bench_slurm::test_completion_setup_defaults_to_cpu_partition",
+      "followup": "inherited_tool_and_float32_cases",
+      "same_case_id": true,
+      "test_body_identical": true
+    }
+  ],
+  "records": {
+    "inherited_gpu_cases": {
+      "head": "42a3d6184c6d05a9f4f97bd00120e62d0081f1d3",
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "job_id": "13625819",
+      "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/inherited_gpu_cases"
+    },
+    "inherited_tool_and_float32_cases": {
+      "head": "42a3d6184c6d05a9f4f97bd00120e62d0081f1d3",
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "job_id": "13625952",
+      "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/inherited_tool_and_float32_cases"
+    },
+    "sampling_contracts_02": {
+      "head": "961e9e78fe5bd2da67425611262caa3af9e73cbb",
+      "diff_sha256": "53b30741527d1ebec775ac9ffa98f867f96882707d4a716a8541ee517ec7e134",
+      "job_id": null,
+      "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/sampling_contracts_02"
+    },
+    "follower_corrections_02": {
+      "head": "7bf3354d7d4da17a34705e9ed2618eced612083f",
+      "diff_sha256": "0a63cb7d19fb997a74029f2d686130eb7f71386c2eb3bb9451c6c097f71f16bd",
+      "job_id": null,
+      "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/follower_corrections_02"
+    },
+    "norm_contracts_03": {
+      "head": "506c8e64926a71732aef31d05e1218901ff4db53",
+      "diff_sha256": "b80e82f3a22ea5bf151a359d9d7f1417e864117de08ff96c017368deef934810",
+      "job_id": null,
+      "root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/norm_contracts_03"
+    }
+  },
+  "artifact_sha256": {
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/cpu_checkpoint/unit-tests.xml": "6eefbd8f0f127d76d0b40372ef82e2d77bacbf39b413be9f99566eec14e2e6a8",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/inherited_gpu_cases/outcome.json": "a8a60f0358291a4a578dca2dd6777b66cbb5c28662e3643253bd15578523d865",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/inherited_gpu_cases/tests.xml": "0a2c593d4d37b90f9149b7bf5e50a8036338c946615d337a505c480bdb09fbe0",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/inherited_tool_and_float32_cases/outcome.json": "0297cbc684a4e4ef1b9af29c323c236b051bf4b07c1ab46cb7a0921c9e6664b9",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/inherited_tool_and_float32_cases/tests.xml": "91c739ded205839b8dcdf0970275a182ab2add2e64346589adf37f0cc083d5c5",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/sampling_contracts_02/outcome.json": "7660688af35e0a0fe5ced7a29fa1e34e472bdb3f14f0a197f59becb30cabc25b",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/sampling_contracts_02/tests.xml": "d01cae8ca5cb34a5acf090eb92825895900ba1415182af6fc1458ba9713f5428",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/follower_corrections_02/outcome.json": "71c16ca355905f09824fb80cc26ee44136abdb414e7c792582a94676546c91c7",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/follower_corrections_02/tests.xml": "22566b922948fffc7f7170311a263d3c412dc02f36a46b3a7d1136f73cebd249",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/norm_contracts_03/outcome.json": "47a67d93cb3cd436b19ed9264e1840cc1025d0d7db8c7ca52b362f85810a56cc",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/norm_contracts_03/tests.xml": "81917ef5aa8eead9a06a93781e8c1d953845d5b2b64507f3d7d5580cafb89f50"
+  }
+}
