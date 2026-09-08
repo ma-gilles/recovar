@@ -4258,8 +4258,10 @@ def _run_relion_iteration_loop(
             # Pass 2: oversampled E+M at full current_size for significant
             #         orientations only.
 
-            # Compute coarse image size from angular step
-            effective_step_deg = healpix_angular_step(current_healpix_order)
+            # RELION sizes pass 1 before updating angular sampling. Keep the
+            # incoming order for Fourier sizing; the updated order still
+            # controls effective_rotations and the oversampled candidate grid.
+            effective_step_deg = healpix_angular_step(coarse_size_healpix_order)
             pixel_size = cryo.voxel_size if cryo.voxel_size > 0 else 1.0
             coarse_size = compute_coarse_image_size(
                 effective_step_deg,
