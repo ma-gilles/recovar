@@ -62,6 +62,8 @@
 
 namespace ffi = xla::ffi;
 
+#include "noise_residual.cuh"
+
 constexpr char kRelionVdamExactNativePtxEnv[] =
     "RECOVAR_VDAM_EXACT_NATIVE_PTX";
 constexpr char kRelionVdamExactWavgPredecessorEnv[] =
