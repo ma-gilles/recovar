@@ -2042,6 +2042,10 @@ def run_local_em_exact(
         disc_type=disc_type,
         process_fn=experiment_dataset.process_images,
     )
+    # BigJIT preprocesses raw images itself and never calls process_fn. Exclude
+    # that dataset-bound method from its static cache key so equivalent dataset
+    # wrappers share an executable. Keep the full config for the split path.
+    big_jit_config = config.replace(process_fn=None)
     if return_half_volume_accumulators and mstep_relion_x_half:
         raise ValueError("return_half_volume_accumulators only supports native half-volume accumulators")
 
@@ -3088,7 +3092,7 @@ def run_local_em_exact(
                 normalization_log_z_arg,
                 normalization_log_evidence_arg,
                 reconstruction_probability_threshold_arg,
-                config,
+                big_jit_config,
                 mask_mode=big_jit_mask_mode,
                 score_with_masked_images=score_with_masked_images,
                 apply_integer_pre_shift=apply_integer_pre_shift,

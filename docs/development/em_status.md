@@ -1,5 +1,120 @@
 # Current EM development scope
 
+## Shared PR179 integration workflow — September 8
+
+The user authorized one integration workflow for `em_clean`, `em`, and `vdam`.
+`em_clean` is the sole publisher of `origin/codex/recovar-structural-cleanup`
+(PR179). Private branches hand off commits for review; do not force-push or
+edit another session's worktree. The live coordination board is
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/README.md`.
+Read its `status/em_clean.json`, `status/em.json`, `status/vdam.json` and exact
+path ownership before edits. Each session owns its status record; updates use
+an atomic rename. The board records the immutable published integration HEAD.
+
+The completed cleanup anchor is `0b52c995ab1a01e04ac0642149f0b929d43ee1d2`.
+It separates BPref diagnostic state and capture writers from sparse scoring,
+removes duplicate hashing, and preserves named results and numerical defaults.
+The shared checkpoint also retains VDAM's published BigJIT cache fix and notes
+through `e727d9c9814f9bce823d47be9cd6d1c16e2f0e12`. No new tests or GPU jobs
+were launched for this coordination/publication request; existing evidence
+qualifies only its recorded source, and the combined checkpoint is unqualified.
+
+After publication, VDAM owns reconciliation of its 24 explicitly requested
+paths in its private integration checkout. `em_clean` holds further overlapping
+cleanup, including the proposed K-class package-import migration, and retains
+shared status documentation and publication ownership. EM remains paused and
+its evidence worktree and running jobs stay untouched. VDAM must preserve the
+separate global pass-one window correction `a0a86f19e9` during reconciliation;
+its full K1 FSC acceptance remains pending. The hashed patch and handoff are
+recorded on the board. The unresolved VDAM catch-up merge is not part of this
+published cleanup checkpoint.
+
+## Shared VDAM performance transfer — September 8
+
+The user authorized transferring applicable VDAM performance fixes onto PR179
+while preserving its API and ownership cleanup. The first bounded hypothesis
+is that equivalent dataset wrappers should reuse the shared local BigJIT
+executable: its preprocessing does not call the dataset-bound `process_fn`,
+which currently adds an irrelevant identity to the static compilation key.
+The transfer keeps the full configuration on consumers that use preprocessing.
+The port follows PR179 through `6ee49dc5c` and uses its named `LocalEMResult`
+fields. Validation covers full local reconstruction/noise and score-only calls;
+the prior static-key behavior is replayed at the same numeric boundary.
+All scientific result fields agree exactly, including dtype. Both cache tests
+failed before the fix (two compilations rather than one).
+
+| Transfer validation | Result |
+| --- | --- |
+| Cache reuse, exact old-key replay, existing BigJIT/split comparisons | 4 passed in 27.77 s |
+| CPU EM fast guard, including helper import boundary | 38 passed in 47.93 s |
+| Named-result and K-class caller contracts | 22 passed |
+| VDAM sparse adapter class/pseudo-halfset routing | 2 passed in 3.38 s with the matching RELION binding |
+
+The first caller attempt had two missing-binding failures. Reusing the
+source-matched PR180 binding (SHA256
+`2c56e67c08df885fad762e0f70707f8dc6b89f6ee04033b3d4822f22db8c6a21`)
+resolved them; no test was skipped or weakened. These CPU checks qualify the
+bounded port, not GPU trajectories, map quality, or end-to-end ordinary EM speed.
+
+### Active integration and next quality check
+
+The transfer is published as `0b24aeb3c`. Active VDAM integration work now uses
+`codex/pr179-shared-bigjit-20260908`, tracking
+`origin/codex/recovar-structural-cleanup`, at
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr179_shared_bigjit_20260908`.
+Fetch and reconcile the current PR head before publication. Preserve the
+separate running VDAM source and its results. Rechecking dense/global EM found
+that its BigJIT already takes explicit arrays and scalar options without the
+dataset configuration, so the same cache-key edit is not applicable there.
+
+The completed historical VDAM noise audit (`13628018`, metadata `13628114`,
+maps `13628020`; source `8ab1a44be1`) localizes the first discrete disagreement
+to iteration 32, selected row 68 / particle ID 1367. Candidate repeat 2 chooses
+rotation ID 163798; both controls and candidate repeat 1 choose 111738.
+Selected particle identities agree. Competing-score margins are unavailable;
+this is not yet an adjudicated numerical tie. Continuous-state gates already
+fail at iteration 2, including control repeats.
+
+Candidate/control cross-FSC gates first fail at iterations 80 and 71, with
+120 and 130 failing checkpoints respectively. Control-repeat cross-FSC also
+fails at 120 checkpoints from iteration 80. RELION-repeat map checks pass all
+201 checkpoints. No GT-AUC delta gate fails, but that cannot override failed
+state/cross-FSC checks. These results do not qualify PR179's source.
+
+The next bounded quality hypothesis is that particle 1367's pose disagreement
+depends on incoming trajectory state rather than the same-state noise toggle.
+Capture the complete iteration-31 state during uninterrupted replay and hold
+iteration-32 candidates fixed across off/on and same-path repeats. Compare
+scores and posterior margins before interpreting the pose decision; move
+earlier if fixed-state arithmetic agrees. Existing map/model/data STAR files
+alone have not been proven to preserve the complete momentum/adaptive state.
+The read-only locator and input hashes are in `quality_triage.py` and
+`quality_triage.json` under the transfer evidence root below. No new GPU replay
+has been launched while local GPUs 1–3 remain occupied by the 100k panel.
+
+The VDAM experiment source remains separately frozen at `8ab1a44be1` while
+100k/256 timing pairs and a compilation profile run on local A100 GPUs 1–3.
+The user now accepts approximately 1.5× RELION runtime as a threshold for
+prioritizing VDAM quality parity. This changes work priority, not scientific
+tolerances, the definition of equal speed, or completion requirements. The
+completed 3k/128 native-noise experiment measured 1.452–1.460× RELION but failed
+metadata equivalence; it cannot qualify representative speed or quality.
+
+The reusable design lessons are to exclude unused Python identities from JIT
+keys, keep logical counts separate from physical capacities, and preserve
+device residency across substantial stages. Existing translation and
+intermediate-shape variants still need measured treatment. Padding, different
+reduction orders, and new CUDA posterior/noise routes remain separate
+experiments until both numerical equivalence and runtime benefit are shown.
+Do not import the VDAM development branch wholesale over the structural work.
+
+PR179 carries a marked status block for these transfers. Refresh it from the
+current remote body and preserve concurrent cleanup updates. Local transfer
+evidence is under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em2_recovery_20260905T2044Z/pr179_sync_20260908/`.
+
+## Cleanup scope
+
 The milestone is behavior-preserving cleanup and development setup across
 RECOVAR, with EM first. GUI/frontend and the new HIA engine are excluded.
 Remove demonstrated dead/duplicate code, clarify ownership and APIs, maintain
