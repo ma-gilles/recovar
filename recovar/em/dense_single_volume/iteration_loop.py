@@ -7918,7 +7918,6 @@ def _run_relion_iteration_loop(
         final_current_size,
         n_classes,
     )
-    final_means_for_output = means
     final_unfiltered_means_for_output = None
     if k_class_enabled:
         final_class_means = jnp.stack(
@@ -7963,8 +7962,8 @@ def _run_relion_iteration_loop(
         ).reshape(-1)
         final_means_for_output = [
             _reconstruct_volume_eager(
-                final_Ft_ctf_0,
-                final_Ft_y_0,
+                half_ctf,
+                half_y,
                 volume_shape,
                 PADDING_FACTOR,
                 tau=final_mean_variance,
@@ -7974,20 +7973,11 @@ def _run_relion_iteration_loop(
                 minres_map=RELION_MINRES_MAP,
                 current_size=final_current_size,
                 accumulator_volume_shape=final_mstep_accumulator_shape,
-            ).reshape(-1),
-            _reconstruct_volume_eager(
-                final_Ft_ctf_1,
-                final_Ft_y_1,
-                volume_shape,
-                PADDING_FACTOR,
-                tau=final_mean_variance,
-                tau2_fudge=tau2_fudge,
-                projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                grid_correct=final_grid_correct,
-                minres_map=RELION_MINRES_MAP,
-                current_size=final_current_size,
-                accumulator_volume_shape=final_mstep_accumulator_shape,
-            ).reshape(-1),
+            ).reshape(-1)
+            for half_ctf, half_y in (
+                (final_Ft_ctf_0, final_Ft_y_0),
+                (final_Ft_ctf_1, final_Ft_y_1),
+            )
         ]
         # RELION writes run_half{1,2}_class001_unfil.mrc from each final
         # BackProjector with do_map=false.  Keep this separate from the
@@ -7999,8 +7989,8 @@ def _run_relion_iteration_loop(
         # windowToOridimRealSpace; do_map=false only omits the tau2 prior.
         final_unfiltered_means_for_output = [
             _reconstruct_volume_eager(
-                final_unfiltered_Ft_ctf_0,
-                final_unfiltered_Ft_y_0,
+                half_ctf,
+                half_y,
                 volume_shape,
                 PADDING_FACTOR,
                 tau=None,
@@ -8011,21 +8001,11 @@ def _run_relion_iteration_loop(
                 minres_map=RELION_MINRES_MAP,
                 current_size=final_current_size,
                 accumulator_volume_shape=final_mstep_accumulator_shape,
-            ).reshape(-1),
-            _reconstruct_volume_eager(
-                final_unfiltered_Ft_ctf_1,
-                final_unfiltered_Ft_y_1,
-                volume_shape,
-                PADDING_FACTOR,
-                tau=None,
-                tau2_fudge=tau2_fudge,
-                projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                use_spherical_mask=True,
-                grid_correct=True,
-                minres_map=RELION_MINRES_MAP,
-                current_size=final_current_size,
-                accumulator_volume_shape=final_mstep_accumulator_shape,
-            ).reshape(-1),
+            ).reshape(-1)
+            for half_ctf, half_y in (
+                (final_unfiltered_Ft_ctf_0, final_unfiltered_Ft_y_0),
+                (final_unfiltered_Ft_ctf_1, final_unfiltered_Ft_y_1),
+            )
         ]
     logger.info(
         "RELION final all-data reconstruction done: wall=%.1fs",

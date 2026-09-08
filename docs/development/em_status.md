@@ -66,6 +66,7 @@ Recent work after PR180 integration:
 | Explicit diagnostic norm dtype and production-default tests | 9 norm/capture cases plus 2 existing precision-default guards; runtime and tolerances unchanged |
 | Replay-completion validation at its owner; unreachable duplicate statistics guard removed | 65 focused cases, 38 CPU fast-guard cases; 56 exact result/error/log comparisons and all 4 guard combinations |
 | Norm/scale arithmetic and seven formula tests moved to `relion_normalization.py` | 72 focused cases, 38 CPU fast-guard cases; 576 exact output and 17 exact error comparisons; all 380 collected cases retained through seven explicit ID migrations |
+| Duplicate final half-map reconstruction calls consolidated; overwritten initialization removed | 31 affected cases, 38 CPU fast-guard cases and 3 K-class checks; 56 exact call/output/error scenarios across K1/K2/K4; the existing K1 convergence test now checks all five saved reconstruction products |
 
 The replay-completion change preserves all three controller return paths, output keys,
 validation exceptions and log messages. Detailed evidence is in
@@ -127,12 +128,12 @@ strict-parity target needs separate scientific qualification.
 
 ## Checkpoint results and next checks
 
-1. Continue reviewing finalization boundaries after the completed norm/scale
-   extraction. The arithmetic and seven formula tests now have a dedicated
-   owner; controller orchestration, temporary lifetimes and all collected cases
-   are preserved. Exact outputs/errors and affected callers pass. Evidence is
-   under `pr180_normalization_owner_20260908/` in the review root. Select and
-   record the next measurable structural hypothesis before editing.
+1. Review the remaining local-engine tuple return boundary and its callers
+   before selecting the next structural hypothesis. Final half-map call
+   consolidation is complete: call ordering, arguments, output aliasing and
+   errors match in 56 scenarios. The K-class predivision guard now inspects the
+   active controller; wrapper-only and divided-operand mutations fail. Evidence
+   is in `pr180_final_half_reconstruction_20260908/` under the review root.
 2. For K1, use the reproduced six-particle case to compare matched score
    operands, priors and candidate geometry, starting with row 901. Preserve
    the measured dump-versus-production difference and the unknown generating

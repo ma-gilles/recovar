@@ -623,11 +623,11 @@ def test_final_all_data_iteration_stays_on_shared_dense_scoring_path():
     assert final_block.count("_score_half_dense_in_bpref_scope(") == 1
     assert "bpref_device_signature_active=False" in final_block
     assert "cs_for_engine=final_current_size" in final_block
-    # Four regularized final reconstructions (K-class, merged K=1, two K=1
-    # halves) plus two K=1 do_map=false products matching RELION *_unfil.mrc.
-    assert final_reconstruct_block.count("current_size=final_current_size") == 6
-    assert final_reconstruct_block.count("tau=None") == 2
-    assert final_reconstruct_block.count("use_spherical_mask=True") == 2
+    # Four call sites: K-class, merged K1, regularized half pair and unfiltered
+    # half pair. The convergence smoke test checks the five executed K1 calls.
+    assert final_reconstruct_block.count("current_size=final_current_size") == 4
+    assert final_reconstruct_block.count("tau=None") == 1
+    assert final_reconstruct_block.count("use_spherical_mask=True") == 1
     assert "do_map=false only omits the tau2 prior" in final_reconstruct_block
     solvent_fsc_marker = "Computed iter-%d solvent-corrected true FSC"
     solvent_fsc_block = source[: source.index(solvent_fsc_marker)]

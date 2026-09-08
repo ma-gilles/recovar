@@ -631,10 +631,17 @@ def test_k1_skip_significance_pruning_env_defaults_to_disabled(monkeypatch):
 
 
 def test_kclass_final_reconstruction_does_not_predivide_class_accumulators():
-    source = inspect.getsource(iteration_loop_module.refine_single_volume)
+    source = inspect.getsource(iteration_loop_module._run_relion_iteration_loop)
+    final_start = source.index("RELION final all-data reconstruction start")
+    final_source = source[final_start:]
 
-    assert "final_ft_ctf[class_idx] /" not in source
-    assert "final_ft_y[class_idx] /" not in source
+    # Require the active class reconstruction, so a wrapper or a moved block
+    # cannot pass merely because neither forbidden expression exists there.
+    assert "final_class_means = jnp.stack(" in final_source
+    assert "final_ft_ctf[class_idx]," in final_source
+    assert "final_ft_y[class_idx]," in final_source
+    assert "final_ft_ctf[class_idx] /" not in final_source
+    assert "final_ft_y[class_idx] /" not in final_source
 
 
 @pytest.mark.parametrize(
@@ -9564,7 +9571,9 @@ class TestRelionModeSmokeTest:
         """The final joined reconstruction still scores each half against its own map."""
         original_update = iteration_loop_module.update_refinement_state
         original_run_em = iteration_loop_module.run_em
+        original_reconstruct = iteration_loop_module._reconstruct_volume_eager
         run_em_mean_ids = []
+        reconstruction_calls = []
         expected_accuracy_current_sizes = []
 
         def force_convergence_after_first_iter(*args, **kwargs):
@@ -9576,6 +9585,11 @@ class TestRelionModeSmokeTest:
             _ = dataset
             run_em_mean_ids.append(id(mean))
             return original_run_em(dataset, mean, *args, **kwargs)
+
+        def spy_reconstruct(*args, **kwargs):
+            volume = original_reconstruct(*args, **kwargs)
+            reconstruction_calls.append((kwargs, volume))
+            return volume
 
         def fake_expected_accuracy(**kwargs):
             expected_accuracy_current_sizes.append(int(kwargs["current_image_size"]))
@@ -9597,6 +9611,7 @@ class TestRelionModeSmokeTest:
             force_convergence_after_first_iter,
         )
         monkeypatch.setattr(iteration_loop_module, "run_em", spy_run_em)
+        monkeypatch.setattr(iteration_loop_module, "_reconstruct_volume_eager", spy_reconstruct)
         monkeypatch.setattr(
             iteration_loop_module,
             "relion_half1_trial_order",
@@ -9634,6 +9649,19 @@ class TestRelionModeSmokeTest:
         assert expected_accuracy_current_sizes == [IMAGE_SHAPE[0]]
         assert result["final_all_data_expected_accuracy_status"] == "ok"
         assert result["final_all_data_acc_rot"] == pytest.approx(1.25)
+
+        # Final reconstruction produces a merged map, two regularized halves,
+        # then two unfiltered halves, all at Nyquist. Check executed calls so
+        # grouping half pairs cannot silently omit or reorder a saved product.
+        final_calls = reconstruction_calls[-5:]
+        assert len(final_calls) == 5
+        assert [call[0]["tau"] is None for call in final_calls] == [False, False, False, True, True]
+        assert all(call[0]["current_size"] == IMAGE_SHAPE[0] for call in final_calls)
+        assert all(call[0]["use_spherical_mask"] is True for call in final_calls[-2:])
+        assert all(call[0]["grid_correct"] is True for call in final_calls[-2:])
+        products = [result["mean"], *result["means"], *result["unfiltered_means"]]
+        for product, (_, reconstructed) in zip(products, final_calls, strict=True):
+            np.testing.assert_array_equal(np.asarray(product), np.asarray(reconstructed).reshape(-1))
 
     def test_relion_final_iteration_tau2_uses_half_accumulators(
         self,
