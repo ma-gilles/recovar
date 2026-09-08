@@ -5351,6 +5351,10 @@ def _compute_k_class_significance_batched(
     )
     coarse_gaussian_gemm_real_cross_requested = _coarse_gaussian_gemm_real_cross_enabled()
     coarse_max_posterior_physical_batch = _coarse_max_posterior_physical_batch_enabled()
+    partition_token = os.environ.get("RECOVAR_COARSE_ROW_PARTITION", "0")
+    if partition_token not in {"0", "1"}:
+        raise ValueError("RECOVAR_COARSE_ROW_PARTITION must be 0 or 1")
+    coarse_row_partition_requested = partition_token == "1"
     if coarse_gaussian_gemm_real_cross_requested and (
         not coarse_gaussian_gemm_hybrid_requested or coarse_gaussian_gemm_device_transaction_requested
     ):
@@ -5523,6 +5527,24 @@ def _compute_k_class_significance_batched(
             relion_f32_coarse_support_enabled=relion_f32_coarse_support_enabled,
             collect_significance=collect_significance,
             any_diagnostic_requested=coarse_gaussian_gemm_any_diagnostic,
+        )
+    if coarse_row_partition_requested and not (
+        coarse_gaussian_gemm_hybrid_requested
+        and coarse_gaussian_gemm_compact_posterior_requested
+        and relion_f32_coarse_support_enabled
+        and coarse_gaussian_ffi_enabled
+        and n_classes == 1
+        and collect_significance
+        and not return_class_best
+        and not return_class_second
+        and not coarse_gaussian_gemm_device_transaction_requested
+        and not coarse_gaussian_fused_full_fallback_armed
+        and not coarse_gaussian_gemm_any_diagnostic
+        and coarse_runtime_prefix_dump_dir is None
+    ):
+        raise ValueError(
+            "RECOVAR_COARSE_ROW_PARTITION requires the K=1 compact host hybrid "
+            "with ordinary full scoring, float32 posterior, and no score dumps/class diagnostics"
         )
     exact_compact_preprocess_requested = (
         _k1_relion_exact_compact_preprocess_enabled()
@@ -6639,6 +6661,9 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_gemm_stream_paths = []
     coarse_gaussian_gemm_stream_original_indices = []
     coarse_gaussian_gemm_hybrid_batch_count = 0
+    coarse_partition_mixed_batch_count = 0
+    coarse_partition_actual_group_sizes = []
+    coarse_partition_physical_group_sizes = []
     coarse_gaussian_gemm_hybrid_selected_batch_count = 0
     coarse_gaussian_gemm_hybrid_static_dense_batch_count = 0
     coarse_gaussian_gemm_hybrid_fallback_batch_count = 0
@@ -7235,16 +7260,19 @@ def _compute_k_class_significance_batched(
             force_static_dense_after_overflow = bool(
                 coarse_gaussian_gemm_hybrid_overflow_latched
             )
-            full_dense_diff2_fn = None
-            if coarse_gaussian_fused_full_fallback_armed:
-                full_dense_diff2_fn = partial(
-                    _score_coarse_fused_full_diff2,
-                    0,
-                    rotations,
-                    actual_image_count=actual_batch_size,
-                )
-            coarse_gaussian_gemm_hybrid_batch_result = (
-                _compute_coarse_gaussian_gemm_hybrid_batch(
+            coarse_partition_plan = None
+            coarse_partition_groups = None
+            if (
+                coarse_row_partition_requested
+                and not force_static_dense_after_overflow
+                and n_rot > coarse_gaussian_gemm_hybrid_capacity * SOURCE_ROTATION_BLOCK_SIZE
+            ):
+                from recovar.em.dense_single_volume.helpers.coarse_partition import compute_partitioned_coarse_batch
+
+                partition_translation_prior = batch_translation_log_prior
+                if partition_translation_prior is not None and partition_translation_prior.ndim == 1:
+                    partition_translation_prior = jnp.broadcast_to(partition_translation_prior, (batch_size, n_trans))
+                coarse_partition_plan, coarse_partition_groups = compute_partitioned_coarse_batch(
                     coarse_gaussian_gemm_projection_cache,
                     jnp.asarray(coarse_gaussian_shifted_corrected, dtype=jnp.complex64),
                     jnp.asarray(coarse_gaussian_pixel_weight, dtype=jnp.float32),
@@ -7252,146 +7280,220 @@ def _compute_k_class_significance_batched(
                     topology=coarse_gaussian_gemm_certificate_topology,
                     actual_image_count=actual_batch_size,
                     class_log_prior=class_log_priors_np[0],
-                    rotation_log_prior=(
-                        None
-                        if rotation_log_prior_padded is None
-                        else rotation_log_prior_padded[0, :n_rot]
-                    ),
-                    translation_log_prior=batch_translation_log_prior,
-                    certificate_chunk_rows=(
-                        coarse_gaussian_gemm_projection_cache_plan.chunk_rows
-                    ),
+                    rotation_log_prior=(None if rotation_log_prior_padded is None else rotation_log_prior_padded[0, :n_rot]),
+                    translation_log_prior=partition_translation_prior,
+                    certificate_chunk_rows=coarse_gaussian_gemm_projection_cache_plan.chunk_rows,
                     block_capacity=coarse_gaussian_gemm_hybrid_capacity,
-                    compact_posterior=(
-                        coarse_gaussian_gemm_compact_posterior_requested
-                    ),
-                    force_static_dense_after_overflow=(
-                        force_static_dense_after_overflow
-                    ),
-                    logical_full_pixel_count=(
-                        coarse_gaussian_square_layout.logical_square_count
-                        if stable_fourier_window_shapes
-                        else None
-                    ),
-                    capture_selected_diff2=bool(
-                        coarse_runtime_prefix_dump_positions.size
-                    ),
-                    full_dense_diff2_fn=full_dense_diff2_fn,
-                    device_transaction=coarse_gaussian_gemm_device_transaction_requested,
+                    logical_full_pixel_count=(coarse_gaussian_square_layout.logical_square_count if stable_fourier_window_shapes else None),
                     real_cross=coarse_gaussian_gemm_real_cross_requested,
                 )
-            )
-            coarse_gaussian_gemm_hybrid_batch_count += 1
-            if force_static_dense_after_overflow:
-                coarse_gaussian_gemm_hybrid_overflow_latch_static_dense_batch_count += 1
-                coarse_gaussian_gemm_hybrid_overflow_latch_static_dense_image_count += (
-                    actual_batch_size
-                )
-            score_representation = str(
-                coarse_gaussian_gemm_hybrid_batch_result.score_representation,
-            )
-            coarse_gaussian_gemm_hybrid_score_representation_batch_counts[
-                score_representation
-            ] = (
-                coarse_gaussian_gemm_hybrid_score_representation_batch_counts.get(
-                    score_representation,
-                    0,
-                )
-                + 1
-            )
-            if coarse_gaussian_gemm_hybrid_batch_result.used_selected_rescore:
-                if (
-                    coarse_gaussian_gemm_hybrid_batch_result.full_dense_backend
-                    is not None
-                ):
-                    raise RuntimeError(
-                        "selected hybrid batch unexpectedly reports a full-dense backend",
-                    )
-                coarse_gaussian_gemm_hybrid_selected_batch_count += 1
-                coarse_gaussian_gemm_hybrid_selected_image_count += actual_batch_size
-                selected_count = coarse_gaussian_gemm_hybrid_batch_result.selected_block_count
-                max_selected = coarse_gaussian_gemm_hybrid_batch_result.max_selected_blocks
-                if selected_count is None or max_selected is None:
-                    selected_counts = np.asarray(
-                        coarse_gaussian_gemm_hybrid_batch_result.selection.block_count,
-                        dtype=np.int32,
-                    )[:actual_batch_size]
-                    selected_count = int(np.sum(selected_counts, dtype=np.int64))
-                    max_selected = int(np.max(selected_counts))
-                coarse_gaussian_gemm_hybrid_selected_block_count += selected_count
-                coarse_gaussian_gemm_hybrid_max_blocks_per_image = max(
-                    coarse_gaussian_gemm_hybrid_max_blocks_per_image,
-                    max_selected,
-                )
-                coarse_gaussian_gemm_hybrid_selected_table_capacity_candidates += (
-                    batch_size
-                    * coarse_gaussian_gemm_hybrid_capacity
-                    * SOURCE_ROTATION_BLOCK_SIZE
-                    * n_trans
-                )
-                coarse_gaussian_gemm_hybrid_dense_table_capacity_candidates += (
-                    batch_size * n_rot * n_trans
-                )
             else:
-                full_dense_backend = (
-                    coarse_gaussian_gemm_hybrid_batch_result.full_dense_backend
-                )
-                kernel = coarse_gaussian_gemm_hybrid_batch_result.full_dense_kernel
-                expected_family = {
-                    "rectangular": "rectangular",
-                    "rectangular_runtime": "rectangular",
-                    "shared_pretranslated": "rectangular",
-                    "fused_projector": "fused_projector",
-                }.get(kernel)
-                if expected_family != full_dense_backend or expected_family is None:
-                    raise RuntimeError("full-dense kernel disagrees with executed backend")
-                coarse_full_kernel_calls[kernel] = (
-                    coarse_full_kernel_calls.get(kernel, 0) + 1
-                )
-                coarse_full_kernel_images[kernel] = (
-                    coarse_full_kernel_images.get(kernel, 0) + actual_batch_size
-                )
-                if full_dense_backend == "fused_projector":
-                    coarse_gaussian_gemm_hybrid_fused_full_batch_count += 1
-                    coarse_gaussian_gemm_hybrid_fused_full_image_count += (
-                        actual_batch_size
+                full_dense_diff2_fn = None
+                if coarse_gaussian_fused_full_fallback_armed:
+                    full_dense_diff2_fn = partial(
+                        _score_coarse_fused_full_diff2,
+                        0,
+                        rotations,
+                        actual_image_count=actual_batch_size,
                     )
-                elif full_dense_backend == "rectangular":
-                    coarse_gaussian_gemm_hybrid_rectangular_full_batch_count += 1
-                    coarse_gaussian_gemm_hybrid_rectangular_full_image_count += (
-                        actual_batch_size
+                coarse_gaussian_gemm_hybrid_batch_result = (
+                    _compute_coarse_gaussian_gemm_hybrid_batch(
+                        coarse_gaussian_gemm_projection_cache,
+                        jnp.asarray(coarse_gaussian_shifted_corrected, dtype=jnp.complex64),
+                        jnp.asarray(coarse_gaussian_pixel_weight, dtype=jnp.float32),
+                        jnp.asarray(coarse_gaussian_initial_diff2, dtype=jnp.float32),
+                        topology=coarse_gaussian_gemm_certificate_topology,
+                        actual_image_count=actual_batch_size,
+                        class_log_prior=class_log_priors_np[0],
+                        rotation_log_prior=(
+                            None
+                            if rotation_log_prior_padded is None
+                            else rotation_log_prior_padded[0, :n_rot]
+                        ),
+                        translation_log_prior=batch_translation_log_prior,
+                        certificate_chunk_rows=(
+                            coarse_gaussian_gemm_projection_cache_plan.chunk_rows
+                        ),
+                        block_capacity=coarse_gaussian_gemm_hybrid_capacity,
+                        compact_posterior=(
+                            coarse_gaussian_gemm_compact_posterior_requested
+                        ),
+                        force_static_dense_after_overflow=(
+                            force_static_dense_after_overflow
+                        ),
+                        logical_full_pixel_count=(
+                            coarse_gaussian_square_layout.logical_square_count
+                            if stable_fourier_window_shapes
+                            else None
+                        ),
+                        capture_selected_diff2=bool(
+                            coarse_runtime_prefix_dump_positions.size
+                        ),
+                        full_dense_diff2_fn=full_dense_diff2_fn,
+                        device_transaction=coarse_gaussian_gemm_device_transaction_requested,
+                        real_cross=coarse_gaussian_gemm_real_cross_requested,
                     )
-                else:
-                    raise RuntimeError(
-                        "full-dense hybrid batch is missing its executed backend",
+                )
+            coarse_gaussian_gemm_hybrid_batch_count += 1
+            group_results = (
+                [(group.result, len(group.image_indices), len(group.result.raw_score_max)) for group in coarse_partition_groups]
+                if coarse_partition_groups is not None
+                else [(coarse_gaussian_gemm_hybrid_batch_result, actual_batch_size, batch_size)]
+            )
+            for coarse_gaussian_gemm_hybrid_batch_result, group_actual_size, group_physical_size in group_results:
+                if force_static_dense_after_overflow:
+                    coarse_gaussian_gemm_hybrid_overflow_latch_static_dense_batch_count += 1
+                    coarse_gaussian_gemm_hybrid_overflow_latch_static_dense_image_count += (
+                        group_actual_size
                     )
-            if (
-                not coarse_gaussian_gemm_hybrid_batch_result.used_selected_rescore
-                and score_representation == "dense_full_direct_static_capacity"
-            ):
-                coarse_gaussian_gemm_hybrid_static_dense_batch_count += 1
-                coarse_gaussian_gemm_hybrid_static_dense_image_count += (
-                    actual_batch_size
+                score_representation = str(
+                    coarse_gaussian_gemm_hybrid_batch_result.score_representation,
                 )
-            elif not coarse_gaussian_gemm_hybrid_batch_result.used_selected_rescore:
-                coarse_gaussian_gemm_hybrid_fallback_batch_count += 1
-                coarse_gaussian_gemm_hybrid_fallback_image_count += actual_batch_size
-                fallback_reason = str(
-                    coarse_gaussian_gemm_hybrid_batch_result.fallback_reason,
-                )
-                coarse_gaussian_gemm_hybrid_fallback_reasons[fallback_reason] = (
-                    coarse_gaussian_gemm_hybrid_fallback_reasons.get(
-                        fallback_reason,
+                coarse_gaussian_gemm_hybrid_score_representation_batch_counts[
+                    score_representation
+                ] = (
+                    coarse_gaussian_gemm_hybrid_score_representation_batch_counts.get(
+                        score_representation,
                         0,
                     )
                     + 1
                 )
+                if coarse_gaussian_gemm_hybrid_batch_result.used_selected_rescore:
+                    if (
+                        coarse_gaussian_gemm_hybrid_batch_result.full_dense_backend
+                        is not None
+                    ):
+                        raise RuntimeError(
+                            "selected hybrid batch unexpectedly reports a full-dense backend",
+                        )
+                    coarse_gaussian_gemm_hybrid_selected_batch_count += 1
+                    coarse_gaussian_gemm_hybrid_selected_image_count += group_actual_size
+                    selected_count = coarse_gaussian_gemm_hybrid_batch_result.selected_block_count
+                    max_selected = coarse_gaussian_gemm_hybrid_batch_result.max_selected_blocks
+                    if selected_count is None or max_selected is None:
+                        selected_counts = np.asarray(
+                            coarse_gaussian_gemm_hybrid_batch_result.selection.block_count,
+                            dtype=np.int32,
+                        )[:group_actual_size]
+                        selected_count = int(np.sum(selected_counts, dtype=np.int64))
+                        max_selected = int(np.max(selected_counts))
+                    coarse_gaussian_gemm_hybrid_selected_block_count += selected_count
+                    coarse_gaussian_gemm_hybrid_max_blocks_per_image = max(
+                        coarse_gaussian_gemm_hybrid_max_blocks_per_image,
+                        max_selected,
+                    )
+                    coarse_gaussian_gemm_hybrid_selected_table_capacity_candidates += (
+                        group_physical_size
+                        * coarse_gaussian_gemm_hybrid_capacity
+                        * SOURCE_ROTATION_BLOCK_SIZE
+                        * n_trans
+                    )
+                    coarse_gaussian_gemm_hybrid_dense_table_capacity_candidates += (
+                        group_physical_size * n_rot * n_trans
+                    )
+                else:
+                    full_dense_backend = (
+                        coarse_gaussian_gemm_hybrid_batch_result.full_dense_backend
+                    )
+                    kernel = coarse_gaussian_gemm_hybrid_batch_result.full_dense_kernel
+                    expected_family = {
+                        "rectangular": "rectangular",
+                        "rectangular_runtime": "rectangular",
+                        "shared_pretranslated": "rectangular",
+                        "fused_projector": "fused_projector",
+                    }.get(kernel)
+                    if expected_family != full_dense_backend or expected_family is None:
+                        raise RuntimeError("full-dense kernel disagrees with executed backend")
+                    coarse_full_kernel_calls[kernel] = (
+                        coarse_full_kernel_calls.get(kernel, 0) + 1
+                    )
+                    coarse_full_kernel_images[kernel] = (
+                        coarse_full_kernel_images.get(kernel, 0) + group_actual_size
+                    )
+                    if full_dense_backend == "fused_projector":
+                        coarse_gaussian_gemm_hybrid_fused_full_batch_count += 1
+                        coarse_gaussian_gemm_hybrid_fused_full_image_count += (
+                            group_actual_size
+                        )
+                    elif full_dense_backend == "rectangular":
+                        coarse_gaussian_gemm_hybrid_rectangular_full_batch_count += 1
+                        coarse_gaussian_gemm_hybrid_rectangular_full_image_count += (
+                            group_actual_size
+                        )
+                    else:
+                        raise RuntimeError(
+                            "full-dense hybrid batch is missing its executed backend",
+                        )
                 if (
-                    fallback_reason == "block_capacity_overflow"
-                    and not coarse_gaussian_gemm_hybrid_overflow_latched
+                    not coarse_gaussian_gemm_hybrid_batch_result.used_selected_rescore
+                    and score_representation == "dense_full_direct_static_capacity"
                 ):
+                    coarse_gaussian_gemm_hybrid_static_dense_batch_count += 1
+                    coarse_gaussian_gemm_hybrid_static_dense_image_count += (
+                        group_actual_size
+                    )
+                elif not coarse_gaussian_gemm_hybrid_batch_result.used_selected_rescore:
+                    coarse_gaussian_gemm_hybrid_fallback_batch_count += 1
+                    coarse_gaussian_gemm_hybrid_fallback_image_count += group_actual_size
+                    fallback_reason = str(
+                        coarse_gaussian_gemm_hybrid_batch_result.fallback_reason,
+                    )
+                    coarse_gaussian_gemm_hybrid_fallback_reasons[fallback_reason] = (
+                        coarse_gaussian_gemm_hybrid_fallback_reasons.get(
+                            fallback_reason,
+                            0,
+                        )
+                        + 1
+                    )
+                    if (
+                        fallback_reason == "block_capacity_overflow"
+                        and not coarse_gaussian_gemm_hybrid_overflow_latched
+                    ):
+                        coarse_gaussian_gemm_hybrid_overflow_latched = True
+                        coarse_gaussian_gemm_hybrid_overflow_latch_activation_count += 1
+
+            if coarse_partition_groups is not None:
+                from recovar.em.dense_single_volume.helpers.coarse_publication import publish_coarse_rows
+
+                coarse_partition_mixed_batch_count += int(coarse_partition_plan.partitioned)
+                coarse_partition_actual_group_sizes.extend(len(group.image_indices) for group in coarse_partition_groups)
+                coarse_partition_physical_group_sizes.extend(len(group.result.raw_score_max) for group in coarse_partition_groups)
+                # Preserve the ordinary latch only when every actual image
+                # exceeded capacity. One outlier must not promote later batches.
+                if not coarse_partition_plan.partitioned and coarse_partition_plan.fallback_reason == "block_capacity_overflow":
                     coarse_gaussian_gemm_hybrid_overflow_latched = True
                     coarse_gaussian_gemm_hybrid_overflow_latch_activation_count += 1
+                published = publish_coarse_rows(
+                    coarse_partition_groups,
+                    actual_image_count=actual_batch_size,
+                    n_rotations=n_rot,
+                    n_translations=n_trans,
+                    class_log_prior=class_log_priors_np[0],
+                    rotation_log_prior=(None if rotation_log_prior_padded is None else rotation_log_prior_padded[0, :n_rot]),
+                    rotation_chunk_rows=rotation_block_size,
+                    adaptive_fraction=adaptive_fraction,
+                    max_significants=max_significants,
+                    tie_score_ulps=relion_f32_coarse_tie_ulps,
+                )
+                target = slice(start_idx, end_idx)
+                hard_assignment[target] = published["best_pose"]
+                class_assignment[target] = 0
+                normalization_log_z[target] = published["global_log_z"]
+                normalization_log_evidence[target] = published["global_log_z"]
+                log_evidence[target] = published["global_log_z"].astype(np.float32)
+                best_log_score[target] = published["best_score"].astype(np.float32)
+                max_posterior[target] = published["pmax"]
+                class_log_evidence[0, target] = published["global_log_z"]
+                relion_f32_sum_weight[target] = published["sum_weight"]
+                n_sig_all[target] = published["n_significant"]
+                cutoff_count_all[target] = published["cutoff_count"]
+                for local, image in enumerate(indices):
+                    begin, stop = published["support_offsets"][local : local + 2]
+                    pose_ids = published["support_ids"][begin:stop].copy()
+                    significant_sample_indices[0][int(image)] = pose_ids
+                    sig_rot_any[0, pose_ids // n_trans] = True
+                start_idx = end_idx
+                continue
 
         compact_hybrid_scores = (
             None
@@ -8818,7 +8920,7 @@ def _compute_k_class_significance_batched(
                 else "exact_relion_source16_or_full_rectangular"
             ),
             "expanded_gemm_scores_published": False,
-            "whole_batch_fail_closed_fallback": True,
+            "whole_batch_fail_closed_fallback": not coarse_row_partition_requested,
             "full_fallback_backend_requested": (
                 "fused_projector"
                 if coarse_fused_projector_requested
@@ -9047,6 +9149,18 @@ def _compute_k_class_significance_batched(
                 include_ids=_coarse_significance_support_audit_ids_enabled(),
             )
         )
+    if coarse_row_partition_requested:
+        full_stats["coarse_gaussian_gemm_hybrid"]["row_partition"] = {
+            "requested": True,
+            "default_enabled": False,
+            "mixed_input_batch_count": coarse_partition_mixed_batch_count,
+            "transaction_actual_group_sizes": coarse_partition_actual_group_sizes,
+            "transaction_physical_group_sizes": coarse_partition_physical_group_sizes,
+            "input_batch_count": coarse_gaussian_gemm_hybrid_batch_count,
+            "execution_group_count": coarse_gaussian_gemm_hybrid_selected_batch_count + coarse_gaussian_gemm_hybrid_full_dense_batch_count,
+            "invalid_certificate_whole_batch_fallback": True,
+            "overflow_latch_policy": "all_actual_rows_overflow",
+        }
     if relion_f32_sum_weight is not None:
         # RELION's oversampling-zero second pass deliberately reuses this
         # coarse, maximum-shifted float32 denominator numerically.  It is not
