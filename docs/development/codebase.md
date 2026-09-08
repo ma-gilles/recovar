@@ -50,6 +50,15 @@ with named accumulators, pose fields, statistics and optional class summaries.
 The controller reads those fields directly. The local kernel still has its
 existing tuple contract; the wrapper decodes it once.
 
+The kernel's optional pose, noise, profile and significant-count flags produce
+sixteen layouts, with four to ten tuple fields. Both the local-search wrapper
+and K-class orchestration decode that contract. The wrapper's K-class adapter
+must include optional fields only when requested; otherwise disabled pose
+details shift statistics into the wrong slot. The regression in
+`tests/unit/test_local_search_result_contract.py` covers K2 and exactly K4,
+both pose/noise settings and optional class summaries. Migrating this boundary
+requires both decoders and positional callers to move together.
+
 The dense single-class kernel is
 [`em_engine.run_em`](../../recovar/em/dense_single_volume/em_engine.py).
 It returns `DenseEMResult` from

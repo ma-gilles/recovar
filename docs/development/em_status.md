@@ -67,6 +67,7 @@ Recent work after PR180 integration:
 | Replay-completion validation at its owner; unreachable duplicate statistics guard removed | 65 focused cases, 38 CPU fast-guard cases; 56 exact result/error/log comparisons and all 4 guard combinations |
 | Norm/scale arithmetic and seven formula tests moved to `relion_normalization.py` | 72 focused cases, 38 CPU fast-guard cases; 576 exact output and 17 exact error comparisons; all 380 collected cases retained through seven explicit ID migrations |
 | Duplicate final half-map reconstruction calls consolidated; overwritten initialization removed | 31 affected cases, 38 CPU fast-guard cases and 3 K-class checks; 56 exact call/output/error scenarios across K1/K2/K4; the existing K1 convergence test now checks all five saved reconstruction products |
+| Separately authorized K-class optional-field routing correction | New wrapper regression: 8 failed/8 passed before, all 16 passed after; 29 affected cases and 38 CPU fast-guard cases pass. The mismatch is inherited from PR158 and PR180; the tracked production controller's pose-enabled K-class call is unchanged |
 
 The replay-completion change preserves all three controller return paths, output keys,
 validation exceptions and log messages. Detailed evidence is in
@@ -128,12 +129,15 @@ strict-parity target needs separate scientific qualification.
 
 ## Checkpoint results and next checks
 
-1. Review the remaining local-engine tuple return boundary and its callers
-   before selecting the next structural hypothesis. Final half-map call
-   consolidation is complete: call ordering, arguments, output aliasing and
-   errors match in 56 scenarios. The K-class predivision guard now inspects the
-   active controller; wrapper-only and divided-operand mutations fail. Evidence
-   is in `pr180_final_half_reconstruction_20260908/` under the review root.
+1. Migrate the local engine's variable-length result with both decoders, the
+   full caller inventory and all sixteen return-flag combinations covered.
+   The inherited K-class routing correction was separately authorized after
+   the concrete proposal was presented and the user directed us to choose the
+   best long-term course. Its regression and affected checks now pass. This
+   correction does not explain the benchmark failures: the production K-class
+   wrapper call enables pose details. Evidence and the 495-case pre-migration
+   inventory are under `pr180_local_result_contract_20260908/` in the review root;
+   the new sixteen-case routing test is additional coverage.
 2. For K1, use the reproduced six-particle case to compare matched score
    operands, priors and candidate geometry, starting with row 901. Preserve
    the measured dump-versus-production difference and the unknown generating

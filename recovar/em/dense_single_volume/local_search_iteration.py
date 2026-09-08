@@ -398,16 +398,21 @@ def _run_local_search_iteration(
             np.asarray(class_mstep_posterior_sums, dtype=np.float64),
             np.asarray(k_class_result.class_posterior_sums, dtype=np.float64),
         )
-        engine_outputs = (
+        engine_outputs = [
             k_class_result.Ft_y,
             k_class_result.Ft_ctf,
             np.asarray(k_class_result.pose_assignments, dtype=np.int32),
-            k_class_result.best_pose_rotations,
-            k_class_result.best_pose_translations,
-            k_class_result.best_pose_rotation_ids,
-            k_class_result.stats,
-            k_class_result.aggregate_noise_stats,
-        )
+        ]
+        if return_best_pose_details:
+            engine_outputs.extend([
+                k_class_result.best_pose_rotations,
+                k_class_result.best_pose_translations,
+                k_class_result.best_pose_rotation_ids,
+            ])
+        engine_outputs.append(k_class_result.stats)
+        if accumulate_noise:
+            engine_outputs.append(k_class_result.aggregate_noise_stats)
+        engine_outputs = tuple(engine_outputs)
     else:
         class_details = None
         engine_outputs = run_local_em_exact(
