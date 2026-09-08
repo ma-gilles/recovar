@@ -2718,7 +2718,7 @@ def _score_half_local(
             score_only=True,
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         )
-        parent_profile = parent_outputs[-1]
+        parent_profile = parent_outputs.profile_summary
         significant_sample_indices = parent_profile["reconstruction_sample_indices_by_image"]
         pruned_parent_significant_sample_indices = significant_sample_indices
         # RELION's rlnNrOfSignificantSamples records the number of retained
@@ -2933,7 +2933,7 @@ def _score_half_local(
             )
         finally:
             os.environ.update(saved_local_debug_env)
-        denominator_stats = denominator_outputs[3]
+        denominator_stats = denominator_outputs.relion_stats
         local_normalization_log_evidence = np.asarray(
             denominator_stats.log_evidence_per_image,
             dtype=np.float64,
@@ -3031,23 +3031,16 @@ def _score_half_local(
         rotation_grid_mstep_rotations=local_search_mstep_rotations,
         generate_relion_mstep_rotations=True,
     )
-    _local_cursor = 0
-    Ft_y_k, Ft_ctf_k, ha_k = local_outputs[_local_cursor : _local_cursor + 3]
-    _local_cursor += 3
-    best_rots_k, best_trans_k, _best_rot_ids_k = local_outputs[_local_cursor : _local_cursor + 3]
-    _local_cursor += 3
-    em_stats_k = local_outputs[_local_cursor]
-    _local_cursor += 1
-    if local_accumulate_noise:
-        noise_stats_k = local_outputs[_local_cursor]
-        _local_cursor += 1
-    else:
-        noise_stats_k = None
-    _local_tail = local_outputs[_local_cursor:]
-    _tail_idx = 0
+    Ft_y_k = local_outputs.Ft_y
+    Ft_ctf_k = local_outputs.Ft_ctf
+    ha_k = local_outputs.hard_assignment
+    best_rots_k = local_outputs.best_pose_rotations
+    best_trans_k = local_outputs.best_pose_translations
+    _best_rot_ids_k = local_outputs.best_pose_rotation_ids
+    em_stats_k = local_outputs.relion_stats
+    noise_stats_k = local_outputs.noise_stats
     if collect_local_search_profile:
-        local_profile_k = _local_tail[_tail_idx]
-        _tail_idx += 1
+        local_profile_k = local_outputs.profile_summary
         profile_row = dict(local_profile_k)
         profile_row["iteration"] = np.int32(iteration)
         profile_row["half_index"] = np.int32(k)
@@ -3064,13 +3057,9 @@ def _score_half_local(
                 **local_profile_k,
             )
     if k_class_enabled:
-        class_assignments_k, class_posterior_sums_k = _local_tail[_tail_idx : _tail_idx + 2]
-        _tail_idx += 2
-        if len(_local_tail) > _tail_idx:
-            class_full_posterior_sums_k = _local_tail[_tail_idx]
-            _tail_idx += 1
-        else:
-            class_full_posterior_sums_k = class_posterior_sums_k
+        class_assignments_k = local_outputs.class_assignments
+        class_posterior_sums_k = local_outputs.class_posterior_sums
+        class_full_posterior_sums_k = local_outputs.class_full_posterior_sums
         outputs.class_assignments[k] = np.asarray(class_assignments_k, dtype=np.int32)
         outputs.class_posterior[k] = np.asarray(class_posterior_sums_k, dtype=np.float64)
         if outputs.class_full_posterior is not None:

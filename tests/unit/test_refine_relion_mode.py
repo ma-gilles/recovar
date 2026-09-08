@@ -23,6 +23,7 @@ import recovar.core.fourier_transform_utils as ftu
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume import score_outputs
 import recovar.em.dense_single_volume.local_layout as local_layout_module
+from recovar.em.dense_single_volume.local_search_iteration import _LocalSearchIterationResult
 import recovar.em.dense_single_volume.relion_metadata as relion_metadata_module
 import recovar.em.dense_single_volume.relion_replay as relion_replay_module
 import recovar.em.sampling as sampling_module
@@ -1230,7 +1231,7 @@ def test_last_numbered_state_does_not_trigger_post_cap_final_all_data(
     assert result["final_all_data_ran"] is False
 
 
-def _pack_fake_local_search_outputs(
+def _mock_local_search_result(
     base_outputs,
     relion_stats,
     noise_stats,
@@ -1238,14 +1239,22 @@ def _pack_fake_local_search_outputs(
     n_units,
     best_pose_details=(),
 ):
-    outputs = list(base_outputs)
-    outputs.extend(best_pose_details)
-    outputs.append(relion_stats)
-    if kwargs.get("accumulate_noise", False):
-        outputs.append(noise_stats)
-    if kwargs.get("return_profile", False):
-        outputs.append({"reconstruction_sample_indices_by_image": [None] * int(n_units)})
-    return tuple(outputs)
+    best_rotations, best_translations, best_rotation_ids = best_pose_details or (None, None, None)
+    return _LocalSearchIterationResult(
+        Ft_y=base_outputs[0],
+        Ft_ctf=base_outputs[1],
+        hard_assignment=base_outputs[2],
+        best_pose_rotations=best_rotations,
+        best_pose_translations=best_translations,
+        best_pose_rotation_ids=best_rotation_ids,
+        relion_stats=relion_stats,
+        noise_stats=noise_stats if kwargs.get("accumulate_noise", False) else None,
+        profile_summary=(
+            {"reconstruction_sample_indices_by_image": [None] * int(n_units)}
+            if kwargs.get("return_profile", False) else None
+        ),
+    )
+
 
 
 def _mock_dense_em_result(
@@ -4665,8 +4674,17 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
         reference_translations,
         atol=1e-6,
     )
-    assert len(outputs) == 6
-    np.testing.assert_array_equal(outputs[-1], np.full(mock_dataset.n_units, 7, dtype=np.int32))
+    assert isinstance(outputs, _LocalSearchIterationResult)
+    assert outputs.noise_stats is not None
+    assert outputs.significant_counts is not None
+    assert outputs.profile_summary is None
+    assert outputs.best_pose_rotations is None
+    assert outputs.best_pose_translations is None
+    assert outputs.best_pose_rotation_ids is None
+    assert outputs.class_assignments is None
+    assert outputs.class_posterior_sums is None
+    assert outputs.class_full_posterior_sums is None
+    np.testing.assert_array_equal(outputs.significant_counts, np.full(mock_dataset.n_units, 7, dtype=np.int32))
 
 
 @pytest.mark.parametrize("k_class_enabled", [False, True])
@@ -4825,7 +4843,16 @@ def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
 
     assert captured["image_batch_size"] < 250
     assert captured["rotation_block_size"] == 1024
-    assert len(outputs) == 4
+    assert isinstance(outputs, _LocalSearchIterationResult)
+    assert outputs.noise_stats is None
+    assert outputs.profile_summary is None
+    assert outputs.significant_counts is None
+    assert outputs.best_pose_rotations is None
+    assert outputs.best_pose_translations is None
+    assert outputs.best_pose_rotation_ids is None
+    assert outputs.class_assignments is None
+    assert outputs.class_posterior_sums is None
+    assert outputs.class_full_posterior_sums is None
 
 
 def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_default(monkeypatch):
@@ -5010,13 +5037,13 @@ def test_run_local_search_iteration_plumbs_score_only_to_exact_engine(monkeypatc
     assert captured["disable_adjoint_y"] is True
     assert captured["disable_adjoint_ctf"] is True
     assert captured["accumulate_noise"] is False
-    assert outputs[-1]["score_only"] is True
+    assert outputs.profile_summary["score_only"] is True
 
 
 def test_local_adaptive_parent_support_probe_is_score_only():
     source = Path(iteration_loop_module.__file__).read_text()
     start = source.index("parent_outputs = _run_local_search_iteration(")
-    end = source.index("parent_profile = parent_outputs[-1]", start)
+    end = source.index("parent_profile = parent_outputs.profile_summary", start)
     parent_call = source[start:end]
 
     assert "disable_adjoint_y=True" in parent_call
@@ -5086,7 +5113,16 @@ def test_run_local_search_iteration_plumbs_normalization_log_evidence(monkeypatc
     )
 
     np.testing.assert_allclose(captured["normalization_log_evidence"], normalization_log_evidence)
-    assert len(outputs) == 4
+    assert isinstance(outputs, _LocalSearchIterationResult)
+    assert outputs.noise_stats is None
+    assert outputs.profile_summary is None
+    assert outputs.significant_counts is None
+    assert outputs.best_pose_rotations is None
+    assert outputs.best_pose_translations is None
+    assert outputs.best_pose_rotation_ids is None
+    assert outputs.class_assignments is None
+    assert outputs.class_posterior_sums is None
+    assert outputs.class_full_posterior_sums is None
 
 
 def test_run_local_search_iteration_plumbs_stats_use_reconstruction_probs(monkeypatch, rng):
@@ -5150,7 +5186,16 @@ def test_run_local_search_iteration_plumbs_stats_use_reconstruction_probs(monkey
     )
 
     assert captured["stats_use_reconstruction_probs"] is True
-    assert len(outputs) == 4
+    assert isinstance(outputs, _LocalSearchIterationResult)
+    assert outputs.noise_stats is None
+    assert outputs.profile_summary is None
+    assert outputs.significant_counts is None
+    assert outputs.best_pose_rotations is None
+    assert outputs.best_pose_translations is None
+    assert outputs.best_pose_rotation_ids is None
+    assert outputs.class_assignments is None
+    assert outputs.class_posterior_sums is None
+    assert outputs.class_full_posterior_sums is None
 
 
 def test_run_local_search_iteration_rejects_k_class_score_only(rng):
@@ -5331,7 +5376,16 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
     assert captured["rotation_grid_random_perturbation"] == 0.0
     assert captured["rotation_grid_angular_sampling_deg"] is None
     np.testing.assert_allclose(captured["scored_rotations"], perturbed_rotations)
-    assert len(outputs) == 5
+    assert isinstance(outputs, _LocalSearchIterationResult)
+    assert outputs.noise_stats is not None
+    assert outputs.profile_summary is None
+    assert outputs.significant_counts is None
+    assert outputs.best_pose_rotations is None
+    assert outputs.best_pose_translations is None
+    assert outputs.best_pose_rotation_ids is None
+    assert outputs.class_assignments is None
+    assert outputs.class_posterior_sums is None
+    assert outputs.class_full_posterior_sums is None
 
 
 def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng):
@@ -6569,19 +6623,17 @@ def test_local_search_iteration_k_class_returns_class_details(rng):
         return_class_details=True,
     )
 
-    (
-        Ft_y,
-        Ft_ctf,
-        hard_assignment,
-        best_rotations,
-        best_translations,
-        best_rotation_ids,
-        stats,
-        noise_stats,
-        class_assignments_out,
-        class_posterior_sums,
-        class_full_posterior_sums,
-    ) = outputs
+    Ft_y = outputs.Ft_y
+    Ft_ctf = outputs.Ft_ctf
+    hard_assignment = outputs.hard_assignment
+    best_rotations = outputs.best_pose_rotations
+    best_translations = outputs.best_pose_translations
+    best_rotation_ids = outputs.best_pose_rotation_ids
+    stats = outputs.relion_stats
+    noise_stats = outputs.noise_stats
+    class_assignments_out = outputs.class_assignments
+    class_posterior_sums = outputs.class_posterior_sums
+    class_full_posterior_sums = outputs.class_full_posterior_sums
     assert np.asarray(Ft_y).shape == (2, VOLUME_SIZE)
     assert np.asarray(Ft_ctf).shape == (2, VOLUME_SIZE)
     assert np.asarray(hard_assignment).shape == (2,)
@@ -6685,8 +6737,8 @@ def test_local_search_iteration_k_class_keeps_mstep_and_full_class_mass_separate
     )
 
     assert captured["class_posterior_sums_from_noise"] is True
-    np.testing.assert_allclose(np.asarray(outputs[-2]), [1.2, 0.8], rtol=1e-6, atol=1e-6)
-    np.testing.assert_allclose(np.asarray(outputs[-1]), [1.7, 0.3], rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(outputs.class_posterior_sums), [1.2, 0.8], rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(outputs.class_full_posterior_sums), [1.7, 0.3], rtol=1e-6, atol=1e-6)
 
 
 def test_native_half_preprocess_requires_mask_for_masked_score(rng):
@@ -10211,7 +10263,7 @@ class TestRelionModeSmokeTest:
                 wsum_sigma2_offset=1.0,
                 sumw=float(experiment_dataset.n_units),
             )
-            return _pack_fake_local_search_outputs(
+            return _mock_local_search_result(
                 base_outputs,
                 relion_stats,
                 noise_stats,
@@ -13930,18 +13982,16 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
             wsum_sigma2_offset=0.0,
             sumw=float(experiment_dataset.n_units),
         )
-        outputs = list(base_outputs)
+        best_pose_details = ()
         if kwargs.get("return_best_pose_details"):
             best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
             best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
             best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
-            outputs.extend([best_rots, best_trans, best_ids])
-        outputs.append(relion_stats)
-        if kwargs.get("accumulate_noise", False):
-            outputs.append(noise_stats)
-        if kwargs.get("return_profile", False):
-            outputs.append({"reconstruction_sample_indices_by_image": [None] * experiment_dataset.n_units})
-        return tuple(outputs)
+            best_pose_details = (best_rots, best_trans, best_ids)
+        return _mock_local_search_result(
+            base_outputs, relion_stats, noise_stats, kwargs,
+            experiment_dataset.n_units, best_pose_details,
+        )
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
@@ -14144,7 +14194,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
             best_trans = np.zeros((half_datasets[0].n_units, 2), dtype=np.float32)
             best_ids = np.zeros(half_datasets[0].n_units, dtype=np.int32)
             best_pose_details = (best_rots, best_trans, best_ids)
-        return _pack_fake_local_search_outputs(
+        return _mock_local_search_result(
             base_outputs,
             relion_stats,
             noise_stats,
@@ -14339,7 +14389,7 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
             best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
             best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
             best_pose_details = (best_rots, best_trans, best_ids)
-        return _pack_fake_local_search_outputs(
+        return _mock_local_search_result(
             base_outputs,
             relion_stats,
             noise_stats,
@@ -14508,18 +14558,16 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
             wsum_sigma2_offset=0.0,
             sumw=float(experiment_dataset.n_units),
         )
-        outputs = list(base_outputs)
+        best_pose_details = ()
         if kwargs.get("return_best_pose_details"):
             best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
             best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
             best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
-            outputs.extend([best_rots, best_trans, best_ids])
-        outputs.append(relion_stats)
-        if kwargs.get("accumulate_noise", False):
-            outputs.append(noise_stats)
-        if kwargs.get("return_profile", False):
-            outputs.append({"reconstruction_sample_indices_by_image": [None] * experiment_dataset.n_units})
-        return tuple(outputs)
+            best_pose_details = (best_rots, best_trans, best_ids)
+        return _mock_local_search_result(
+            base_outputs, relion_stats, noise_stats, kwargs,
+            experiment_dataset.n_units, best_pose_details,
+        )
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
@@ -14610,20 +14658,20 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
         reconstruct_flags.append(kwargs["reconstruct_significant_only"])
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            np.tile(np.eye(3, dtype=np.float32)[None, :, :], (experiment_dataset.n_units, 1, 1)),
-            np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
-            np.zeros(experiment_dataset.n_units, dtype=np.int64),
-            RelionStats(
+        return _LocalSearchIterationResult(
+            Ft_y=jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+            Ft_ctf=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+            hard_assignment=np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            best_pose_rotations=np.tile(np.eye(3, dtype=np.float32)[None, :, :], (experiment_dataset.n_units, 1, 1)),
+            best_pose_translations=np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
+            best_pose_rotation_ids=np.zeros(experiment_dataset.n_units, dtype=np.int64),
+            relion_stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.ones(order_sizes[4], dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -14707,20 +14755,20 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
         image_batch_sizes.append(int(kwargs["image_batch_size"]))
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            np.tile(np.eye(3, dtype=np.float32)[None, :, :], (experiment_dataset.n_units, 1, 1)),
-            np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
-            np.zeros(experiment_dataset.n_units, dtype=np.int64),
-            RelionStats(
+        return _LocalSearchIterationResult(
+            Ft_y=jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+            Ft_ctf=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+            hard_assignment=np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            best_pose_rotations=np.tile(np.eye(3, dtype=np.float32)[None, :, :], (experiment_dataset.n_units, 1, 1)),
+            best_pose_translations=np.zeros((experiment_dataset.n_units, 2), dtype=np.float32),
+            best_pose_rotation_ids=np.zeros(experiment_dataset.n_units, dtype=np.int64),
+            relion_stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.ones(order_sizes[4], dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -14896,18 +14944,16 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
             wsum_sigma2_offset=0.0,
             sumw=float(experiment_dataset.n_units),
         )
-        outputs = list(base_outputs)
+        best_pose_details = ()
         if kwargs.get("return_best_pose_details"):
             best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
             best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
             best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
-            outputs.extend([best_rots, best_trans, best_ids])
-        outputs.append(relion_stats)
-        if kwargs.get("accumulate_noise", False):
-            outputs.append(noise_stats)
-        if kwargs.get("return_profile", False):
-            outputs.append({"reconstruction_sample_indices_by_image": [None] * experiment_dataset.n_units})
-        return tuple(outputs)
+            best_pose_details = (best_rots, best_trans, best_ids)
+        return _mock_local_search_result(
+            base_outputs, relion_stats, noise_stats, kwargs,
+            experiment_dataset.n_units, best_pose_details,
+        )
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(
@@ -15090,7 +15136,7 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
             best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
             best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
             best_pose_details = (best_rots, best_trans, best_ids)
-        return _pack_fake_local_search_outputs(
+        return _mock_local_search_result(
             base_outputs,
             relion_stats,
             noise_stats,
@@ -15250,7 +15296,7 @@ def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
             best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
             best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
             best_pose_details = (best_rots, best_trans, best_ids)
-        return _pack_fake_local_search_outputs(
+        return _mock_local_search_result(
             base_outputs,
             relion_stats,
             noise_stats,
@@ -15843,7 +15889,7 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
             )
             best_ids = np.full(experiment_dataset.n_units, fine_idx, dtype=np.int32)
             best_pose_details = (best_rots, best_trans, best_ids)
-        return _pack_fake_local_search_outputs(
+        return _mock_local_search_result(
             base_outputs,
             relion_stats,
             noise_stats,

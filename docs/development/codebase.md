@@ -45,7 +45,10 @@ finalization. Its exact local-search stage is implemented in
 [`local_search_iteration`](../../recovar/em/dense_single_volume/local_search_iteration.py).
 That module builds local pose neighborhoods, asks
 [`batch_planning`](../../recovar/em/dense_single_volume/batch_planning.py) for
-batch sizes, calls the selected kernel and packs statistics for the controller.
+batch sizes, calls the selected kernel and returns `_LocalSearchIterationResult`
+with named accumulators, pose fields, statistics and optional class summaries.
+The controller reads those fields directly. The local kernel still has its
+existing tuple contract; the wrapper decodes it once.
 
 The dense single-class kernel is
 [`em_engine.run_em`](../../recovar/em/dense_single_volume/em_engine.py).

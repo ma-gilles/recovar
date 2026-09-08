@@ -17,6 +17,7 @@ import pytest
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop
 from recovar.em.dense_single_volume import score_outputs
 import recovar.em.dense_single_volume.local_search_iteration as local_search_iteration
+from recovar.em.dense_single_volume.local_search_iteration import _LocalSearchIterationResult
 from recovar.em.dense_single_volume import mean_helpers, ppca_bridge, relion_replay
 from recovar.em.initial_model.iteration_loop import run_vdam_iterations
 
@@ -225,7 +226,7 @@ def test_k1_local_parent_probe_applies_relion_max_significants_cap():
     score_source = inspect.getsource(iteration_loop._score_half_local)
     parent_call = score_source[
         score_source.index("parent_outputs = _run_local_search_iteration") : score_source.index(
-            "parent_profile = parent_outputs[-1]"
+            "parent_profile = parent_outputs.profile_summary"
         )
     ]
     assert "max_significants=max_significants" in parent_call
@@ -293,18 +294,18 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
         )
         captured.update(kwargs)
         current_size_shape = (19, 19, 19)
-        outputs = (
-            np.zeros(int(np.prod(current_size_shape)), dtype=np.complex64),
-            np.zeros(int(np.prod(current_size_shape)), dtype=np.float32),
-            np.array([0], dtype=np.int32),
-            best_rotation[None, :, :],
-            np.zeros((1, 2), dtype=np.float32),
-            np.array([0], dtype=np.int32),
-            _Stats(),
-            "noise",
+        outputs = _LocalSearchIterationResult(
+            Ft_y=np.zeros(int(np.prod(current_size_shape)), dtype=np.complex64),
+            Ft_ctf=np.zeros(int(np.prod(current_size_shape)), dtype=np.float32),
+            hard_assignment=np.array([0], dtype=np.int32),
+            best_pose_rotations=best_rotation[None, :, :],
+            best_pose_translations=np.zeros((1, 2), dtype=np.float32),
+            best_pose_rotation_ids=np.array([0], dtype=np.int32),
+            relion_stats=_Stats(),
+            noise_stats="noise",
         )
         if kwargs.get("return_significant_counts"):
-            outputs += (np.array([7], dtype=np.int32),)
+            outputs.significant_counts = np.array([7], dtype=np.int32)
         return outputs
 
     monkeypatch.delenv("RECOVAR_K1_RELION_X_HALF_MSTEP", raising=False)
@@ -397,27 +398,27 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
     def fake_run_local_search_iteration(*_args, **kwargs):
         calls.append(dict(kwargs))
         if kwargs["score_only"]:
-            return (
-                "parent_ft_y",
-                "parent_ft_ctf",
-                np.zeros(2, dtype=np.int32),
-                _Stats(),
-                {
+            return _LocalSearchIterationResult(
+                Ft_y="parent_ft_y",
+                Ft_ctf="parent_ft_ctf",
+                hard_assignment=np.zeros(2, dtype=np.int32),
+                relion_stats=_Stats(),
+                profile_summary={
                     "reconstruction_sample_indices_by_image": (
                         np.array([0, 1], dtype=np.int64),
                         np.array([0, 1, 2], dtype=np.int64),
                     ),
                 },
             )
-        return (
-            "fine_ft_y",
-            "fine_ft_ctf",
-            np.array([4, 5], dtype=np.int32),
-            np.broadcast_to(best_rotation, (2, 3, 3)).copy(),
-            np.zeros((2, 2), dtype=np.float32),
-            np.array([0, 1], dtype=np.int32),
-            _Stats(),
-            "fine_noise",
+        return _LocalSearchIterationResult(
+            Ft_y="fine_ft_y",
+            Ft_ctf="fine_ft_ctf",
+            hard_assignment=np.array([4, 5], dtype=np.int32),
+            best_pose_rotations=np.broadcast_to(best_rotation, (2, 3, 3)).copy(),
+            best_pose_translations=np.zeros((2, 2), dtype=np.float32),
+            best_pose_rotation_ids=np.array([0, 1], dtype=np.int32),
+            relion_stats=_Stats(),
+            noise_stats="fine_noise",
         )
 
     monkeypatch.setattr(iteration_loop, "build_local_search_grid_metadata", lambda _order: {})
@@ -514,18 +515,18 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
         )
         captured.update(kwargs)
         current_size_shape = (19, 19, 19)
-        return (
-            np.zeros((2, int(np.prod(current_size_shape))), dtype=np.complex64),
-            np.zeros((2, int(np.prod(current_size_shape))), dtype=np.float32),
-            np.array([0], dtype=np.int32),
-            best_rotation[None, :, :],
-            np.zeros((1, 2), dtype=np.float32),
-            np.array([0], dtype=np.int32),
-            _Stats(),
-            "noise",
-            np.array([1], dtype=np.int32),
-            np.array([0.25, 0.75], dtype=np.float64),
-            np.array([0.2, 0.8], dtype=np.float64),
+        return _LocalSearchIterationResult(
+            Ft_y=np.zeros((2, int(np.prod(current_size_shape))), dtype=np.complex64),
+            Ft_ctf=np.zeros((2, int(np.prod(current_size_shape))), dtype=np.float32),
+            hard_assignment=np.array([0], dtype=np.int32),
+            best_pose_rotations=best_rotation[None, :, :],
+            best_pose_translations=np.zeros((1, 2), dtype=np.float32),
+            best_pose_rotation_ids=np.array([0], dtype=np.int32),
+            relion_stats=_Stats(),
+            noise_stats="noise",
+            class_assignments=np.array([1], dtype=np.int32),
+            class_posterior_sums=np.array([0.25, 0.75], dtype=np.float64),
+            class_full_posterior_sums=np.array([0.2, 0.8], dtype=np.float64),
         )
 
     monkeypatch.setattr(iteration_loop, "_k_class_relion_x_half_mstep_enabled", lambda: True)

@@ -1,7 +1,7 @@
 """Build and execute one exact local-search iteration.
 
 Construct image-specific pose neighborhoods, apply the batch memory budget,
-dispatch the single-class or K-class kernel, and pack its statistics for the
+dispatch the single-class or K-class kernel, and return named statistics to the
 refinement controller. Dependencies are imported from their owning modules.
 """
 
@@ -104,48 +104,6 @@ def _unpack_local_search_engine_outputs(
     )
 
 
-def _pack_local_search_iteration_result(
-    result: _LocalSearchIterationResult,
-    *,
-    accumulate_noise: bool,
-    return_profile: bool,
-    return_best_pose_details: bool,
-    return_significant_counts: bool,
-    return_class_details: bool,
-):
-    output = [result.Ft_y, result.Ft_ctf, result.hard_assignment]
-    if return_best_pose_details:
-        output.extend(
-            [
-                result.best_pose_rotations,
-                result.best_pose_translations,
-                result.best_pose_rotation_ids,
-            ],
-        )
-    output.append(result.relion_stats)
-    if accumulate_noise:
-        output.append(result.noise_stats)
-    if return_profile:
-        output.append(result.profile_summary)
-    if return_significant_counts:
-        output.append(result.significant_counts)
-    if return_class_details:
-        if (
-            result.class_assignments is None
-            or result.class_posterior_sums is None
-            or result.class_full_posterior_sums is None
-        ):
-            raise ValueError("return_class_details=True requires class_log_priors")
-        output.extend(
-            [
-                result.class_assignments,
-                result.class_posterior_sums,
-                result.class_full_posterior_sums,
-            ],
-        )
-    return tuple(output)
-
-
 def _run_local_search_iteration(
     experiment_dataset,
     mean,
@@ -217,8 +175,13 @@ def _run_local_search_iteration(
     source_faithful_spectrum_norm=False,
     rotation_grid_mstep_rotations=None,
     generate_relion_mstep_rotations=False,
-):
-    """Run exact local search over image-specific rotation neighborhoods."""
+) -> _LocalSearchIterationResult:
+    """Run exact local search and return named halfset statistics and pose fields.
+
+    Optional fields are None when their corresponding return flags are disabled.
+    Arrays retain the engine's layouts and identities; profile metadata is copied
+    and augmented with this wrapper's timings.
+    """
     requested_image_batch_size = int(image_batch_size)
     requested_rotation_block_size = int(rotation_block_size)
     rotation_block_size = _local_search_engine_rotation_block_size(rotation_block_size)
@@ -507,11 +470,15 @@ def _run_local_search_iteration(
         result.profile_summary["selector_time_s"] = np.float64(selector_time)
         result.profile_summary["translation_prior_time_s"] = np.float64(0.0)
 
-    return _pack_local_search_iteration_result(
-        result,
-        accumulate_noise=accumulate_noise,
-        return_profile=return_profile,
-        return_best_pose_details=return_best_pose_details,
-        return_significant_counts=return_significant_counts,
-        return_class_details=return_class_details,
-    )
+    if return_class_details:
+        if (
+            result.class_assignments is None
+            or result.class_posterior_sums is None
+            or result.class_full_posterior_sums is None
+        ):
+            raise ValueError("return_class_details=True requires class_log_priors")
+    else:
+        result.class_assignments = None
+        result.class_posterior_sums = None
+        result.class_full_posterior_sums = None
+    return result
