@@ -12,6 +12,8 @@ Tests cover:
 - get_rotation_grid_at_order from sampling.py
 """
 
+import logging
+
 import numpy as np
 import pytest
 
@@ -26,6 +28,7 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
     MAX_NR_ITER_WO_RESOL_GAIN,
     RefinementState,
+    _exhaustive_grid_order_for_state,
     check_convergence,
     compute_assignment_changes,
     compute_ave_Pmax,
@@ -44,6 +47,10 @@ from recovar.em.sampling import (
     get_rotation_grid,
     get_rotation_grid_at_order,
 )
+
+# Use the same logger supplied by the refinement controller without importing it.
+_REFINEMENT_LOGGER = logging.getLogger("recovar.em.dense_single_volume.iteration_loop")
+
 
 # =========================================================================
 # RefinementState construction
@@ -1334,3 +1341,200 @@ class TestMultiIterationWorkflow:
             new_resolution=10.0,
         )
         assert state3.has_converged is True
+
+
+class TestRefinementPolicy:
+    """Local-search transitions and optional convergence guards."""
+
+    def test_refinement_state_uses_configured_auto_local_healpix_order(self):
+        default_state = RefinementState(healpix_order=3)
+        assert not default_state.should_do_local_search
+        assert not default_state.do_local_search
+
+        local_state = RefinementState(healpix_order=3, auto_local_healpix_order=3)
+        assert local_state.should_do_local_search
+        assert local_state.do_local_search
+
+    def test_refine_angular_sampling_uses_configured_auto_local_healpix_order(self):
+        state = RefinementState(
+            healpix_order=2,
+            adaptive_oversampling=1,
+            translation_range=10.0,
+            translation_step=2.0,
+            max_healpix_order=7,
+            auto_local_healpix_order=3,
+        )
+
+        refined = refine_angular_sampling(state)
+
+        assert refined.healpix_order == 3
+        assert refined.auto_local_healpix_order == 3
+        assert refined.do_local_search
+        assert refined.sigma_rot > 0.0
+        assert refined.sigma_psi > 0.0
+
+    def test_low_pmax_refinement_guard_is_opt_in(self, monkeypatch):
+        state = RefinementState(
+            healpix_order=4,
+            max_healpix_order=7,
+            auto_local_healpix_order=4,
+            current_resolution=36.0,
+            previous_resolution=36.0,
+            nr_iter_wo_resol_gain=4,
+            nr_iter_wo_large_hidden_variable_changes=1,
+            smallest_changes_optimal_orientations=2.0,
+            smallest_changes_optimal_offsets_angstrom=0.5,
+            smallest_changes_optimal_classes=0,
+            ave_Pmax=0.10,
+            acc_rot=float("inf"),
+        )
+
+        monkeypatch.delenv("RECOVAR_EM_LOW_PMAX_REFINE_GUARD", raising=False)
+        assert should_refine_angular_sampling(state)
+
+        monkeypatch.setenv("RECOVAR_EM_LOW_PMAX_REFINE_GUARD", "1")
+        assert not should_refine_angular_sampling(state)
+
+        confident = RefinementState(
+            healpix_order=4,
+            max_healpix_order=7,
+            auto_local_healpix_order=4,
+            current_resolution=36.0,
+            previous_resolution=36.0,
+            nr_iter_wo_resol_gain=4,
+            nr_iter_wo_large_hidden_variable_changes=1,
+            smallest_changes_optimal_orientations=2.0,
+            smallest_changes_optimal_offsets_angstrom=0.5,
+            smallest_changes_optimal_classes=0,
+            ave_Pmax=0.30,
+            acc_rot=float("inf"),
+        )
+        assert should_refine_angular_sampling(confident)
+
+    def test_low_pmax_refinement_guard_can_cover_prelocal_transition(self, monkeypatch):
+        state = RefinementState(
+            healpix_order=3,
+            max_healpix_order=7,
+            auto_local_healpix_order=4,
+            current_resolution=36.0,
+            previous_resolution=36.0,
+            nr_iter_wo_resol_gain=4,
+            nr_iter_wo_large_hidden_variable_changes=1,
+            smallest_changes_optimal_orientations=2.0,
+            smallest_changes_optimal_offsets_angstrom=0.5,
+            smallest_changes_optimal_classes=0,
+            ave_Pmax=0.10,
+            acc_rot=float("inf"),
+        )
+        assert not state.do_local_search
+
+        monkeypatch.setenv("RECOVAR_EM_LOW_PMAX_REFINE_GUARD", "1")
+        monkeypatch.delenv("RECOVAR_EM_LOW_PMAX_REFINE_REQUIRE_LOCAL", raising=False)
+        assert should_refine_angular_sampling(state)
+
+        monkeypatch.setenv("RECOVAR_EM_LOW_PMAX_REFINE_REQUIRE_LOCAL", "0")
+        assert not should_refine_angular_sampling(state)
+
+    def test_local_search_keeps_exhaustive_grid_at_last_prelocal_order(self):
+        state = RefinementState(healpix_order=4, auto_local_healpix_order=4)
+
+        assert state.do_local_search
+        assert _exhaustive_grid_order_for_state(state) == 3
+
+        nonlocal_state = RefinementState(healpix_order=4, auto_local_healpix_order=5)
+        assert not nonlocal_state.do_local_search
+        assert _exhaustive_grid_order_for_state(nonlocal_state) == 4
+
+    def test_approx_acc_rot_convergence_policy_guards_confident_prelocal_runs(self, monkeypatch):
+        from recovar.em.dense_single_volume.helpers import convergence as convergence_helpers
+        from recovar.em.dense_single_volume.helpers.convergence import RefinementState
+
+        for name in (
+            "RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE",
+            "RECOVAR_EM_DISABLE_APPROX_ACC_ROT_FOR_CONVERGENCE",
+            "RECOVAR_EM_APPROX_ACC_ROT_MAX_AVE_PMAX",
+            "RECOVAR_EM_APPROX_ACC_ROT_MIN_ITER",
+        ):
+            monkeypatch.delenv(name, raising=False)
+
+        state = RefinementState(
+            healpix_order=3,
+            auto_local_healpix_order=4,
+            current_resolution=23.65,
+            particle_diameter_angstrom=200.0,
+        )
+
+        allow, reason = convergence_helpers._approx_acc_rot_policy_for_convergence(
+            logger=_REFINEMENT_LOGGER,
+            state=state,
+            iteration_number=5,
+            ave_pmax=0.96,
+            new_resolution_angstrom=23.65,
+        )
+
+        assert not allow
+        assert "high-pmax" in reason
+
+    def test_approx_acc_rot_convergence_policy_is_diagnostic_by_default(self, monkeypatch):
+        from recovar.em.dense_single_volume.helpers import convergence as convergence_helpers
+        from recovar.em.dense_single_volume.helpers.convergence import RefinementState
+
+        for name in (
+            "RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE",
+            "RECOVAR_EM_DISABLE_APPROX_ACC_ROT_FOR_CONVERGENCE",
+            "RECOVAR_EM_APPROX_ACC_ROT_MAX_AVE_PMAX",
+            "RECOVAR_EM_APPROX_ACC_ROT_MIN_ITER",
+        ):
+            monkeypatch.delenv(name, raising=False)
+
+        state = RefinementState(
+            healpix_order=3,
+            auto_local_healpix_order=4,
+            current_resolution=36.27,
+            particle_diameter_angstrom=200.0,
+        )
+
+        allow, reason = convergence_helpers._approx_acc_rot_policy_for_convergence(
+            logger=_REFINEMENT_LOGGER,
+            state=state,
+            iteration_number=5,
+            ave_pmax=0.77,
+            new_resolution_angstrom=36.27,
+        )
+
+        assert not allow
+        assert reason == "diagnostic-only-default"
+
+    def test_approx_acc_rot_convergence_policy_env_overrides(self, monkeypatch):
+        from recovar.em.dense_single_volume.helpers import convergence as convergence_helpers
+        from recovar.em.dense_single_volume.helpers.convergence import RefinementState
+
+        state = RefinementState(
+            healpix_order=3,
+            auto_local_healpix_order=4,
+            current_resolution=20.0,
+        )
+
+        monkeypatch.setenv("RECOVAR_EM_DISABLE_APPROX_ACC_ROT_FOR_CONVERGENCE", "1")
+        monkeypatch.delenv("RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE", raising=False)
+        allow, reason = convergence_helpers._approx_acc_rot_policy_for_convergence(
+            logger=_REFINEMENT_LOGGER,
+            state=state,
+            iteration_number=5,
+            ave_pmax=0.5,
+            new_resolution_angstrom=20.0,
+        )
+        assert not allow
+        assert reason == "disabled-by-env"
+
+        monkeypatch.setenv("RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE", "1")
+        monkeypatch.delenv("RECOVAR_EM_DISABLE_APPROX_ACC_ROT_FOR_CONVERGENCE", raising=False)
+        allow, reason = convergence_helpers._approx_acc_rot_policy_for_convergence(
+            logger=_REFINEMENT_LOGGER,
+            state=state,
+            iteration_number=1,
+            ave_pmax=1.0,
+            new_resolution_angstrom=10.0,
+        )
+        assert allow
+        assert reason == "forced-by-env"

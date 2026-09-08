@@ -117,6 +117,10 @@ significance paths. This reference keeps separate orchestration but shares
 production preprocessing/scoring kernels; it does not independently validate
 those kernels. Production significance belongs to `helpers/significance.py`.
 
+Pure convergence-policy cases live in `tests/unit/test_convergence.py`; collecting
+this module does not import the iteration controller. Full iteration smoke tests
+remain in `test_refine_relion_mode.py`.
+
 Angular-grid order policies belong to `helpers/convergence.py`: exhaustive-grid
 capping, final parent/fine orders, perturbation order and direction-prior order.
 The controller supplies the active state and captured final-sampling metadata;
