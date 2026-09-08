@@ -120,12 +120,17 @@ def test_sdist_and_wheel_include_cuda_build_files(built_package_artifacts):
     with zipfile.ZipFile(wheel) as zf:
         wheel_names = set(zf.namelist())
 
-    assert any(name.endswith("/recovar/cuda/Makefile") for name in sdist_names)
-    assert any(name.endswith("/recovar/cuda/cuda_backproject.cu") for name in sdist_names)
+    cuda_dir = REPO_ROOT / "recovar" / "cuda"
+    required_cuda_files = {"recovar/cuda/Makefile", "recovar/cuda/cuda_backproject.cu"}
+    required_cuda_files.update(
+        path.relative_to(REPO_ROOT).as_posix()
+        for path in cuda_dir.rglob("*")
+        if path.is_file() and path.suffix in {".cu", ".cuh", ".inc"}
+    )
+    for filename in sorted(required_cuda_files):
+        assert any(name.endswith(f"/{filename}") for name in sdist_names), filename
+        assert filename in wheel_names, filename
     assert any(name.endswith("/setup_helpers.py") for name in sdist_names)
-
-    assert "recovar/cuda/Makefile" in wheel_names
-    assert "recovar/cuda/cuda_backproject.cu" in wheel_names
 
 
 def test_wheel_excludes_legacy_root_fast_marching_entries(built_package_artifacts):
