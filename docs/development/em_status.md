@@ -7,6 +7,15 @@ code; migrate callers, tests and documentation together. Preserve non-EM APIs,
 saved formats, numerical behavior and scientific defaults. Present numerical
 repairs separately for a user decision.
 
+The user clarified on 2026-09-08 that production EM remains float32. Double
+precision is a diagnostic reference for separating numerical roundoff from
+implementation bugs; it is not a proposed production solution. The mandatory
+[precision policy](../../recovar/em/AGENTS.md)
+requires final quality and performance qualification in float32, including K1
+and exactly K4. A discrepancy shrinking in double alone does not establish
+that it is numerical noise. PR180's double-precision evidence is interpreted
+under this rule.
+
 On 2026-09-08 the user requested integration of
 [PR180](https://github.com/ma-gilles/recovar/pull/180), including its cleanup.
 The full PR is integrated locally at

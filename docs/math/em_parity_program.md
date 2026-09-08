@@ -17,6 +17,13 @@ as the next product milestone rather than mixing it into the first closure.
 
 ## Mode Contract
 
+- **Production precision (user decision 2026-09-08):** float32 remains the
+  intended EM execution path. Double precision is diagnostic only, used to
+  distinguish roundoff from implementation bugs with matched inputs and state.
+  It is not a substitute for a corrected and qualified float32 implementation.
+  Final K1/K4 quality and performance evidence must use the production path;
+  preserve deliberate higher-precision host/metadata operations. See the
+  [mandatory precision policy](../../recovar/em/AGENTS.md).
 - **Strict oracle:** the default during parity closure; pinned RELION GUI
   behavior and full iteration trajectory, including `firstiter_cc` hard-winner
   semantics.

@@ -49,6 +49,16 @@ qualify instrumentation effects before interpreting interventions or timings.
 
 ## Numerical contract
 
+Production EM qualification uses float32. Double-precision EM runs are
+diagnostic references for identifying arithmetic or implementation errors;
+they cannot replace the final K1/K4 quality and performance evidence. Record
+effective scoring, projection and accumulator precision in every run. Match
+the input state and candidates before comparing precisions, and do not infer
+numerical noise merely because a discrepancy shrinks in double. Preserve
+intentional higher-precision host/metadata operations; this is not a blanket
+array-narrowing policy. See the mandatory
+[EM precision rule](../../recovar/em/AGENTS.md).
+
 Retain the existing metric directions, tolerances and quantitative EM gates.
 Map quality uses FSC curves, FSC-AUC and established FSC summaries against GT
 and RELION. Map correlation is diagnostic and cannot override those gates.

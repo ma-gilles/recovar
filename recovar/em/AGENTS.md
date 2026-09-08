@@ -28,6 +28,30 @@ helper imports must not initialize iteration scheduling. The CPU fast guard
 checks this import boundary, captured replay, angular schedules and resolution
 rules.
 
+## Production precision — mandatory
+
+User decision, 2026-09-08: the intended production EM path remains float32.
+Double-precision EM execution is a diagnostic reference to distinguish
+roundoff from implementation bugs. It is not the intended final implementation
+or a way to pass quality gates by changing the production precision.
+
+- Do not enable double scoring, projection or M-step modes by default, propose
+  switching production to double as the resolution of a parity gap, or claim
+  completion from double-only results. Changing this policy requires an
+  explicit user decision.
+- Match inputs, state and candidates when comparing precisions. A discrepancy
+  shrinking in double precision is insufficient to classify it as numerical
+  noise: check serialized input precision, unintended casts, algorithmic
+  semantics and the float32 error bounds. For discrete choices, inspect the
+  competing scores and winning margin under the tie-aware contract below.
+- Carry confirmed implementation fixes into the float32 production path and
+  validate that path. Final K1 and exactly-K4 quality and performance evidence
+  must use production float32 execution. Double runs are labeled diagnostic,
+  with effective scoring, projection and accumulation settings recorded.
+- Preserve existing deliberate higher-precision metadata, host calculations
+  and mathematically necessary operations. This policy does not authorize
+  blanket narrowing or changes to non-EM numerical contracts.
+
 ## North Star
 
 Achieve near-perfect RELION quality parity for K=1 auto-refine and K=4 3D
