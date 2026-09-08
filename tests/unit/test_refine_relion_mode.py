@@ -2825,8 +2825,10 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
     assert captured["rotation_log_prior"] is None
 
 
-@pytest.mark.parametrize("k_class_enabled", [False, True])
-def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch, rng, k_class_enabled):
+@pytest.mark.parametrize("n_classes", [1, 2, 4], ids=["K1", "K2", "K4"])
+def test_score_half_local_forwards_mstep_grid_for_each_class_count(monkeypatch, rng, n_classes):
+    """Forward the mean/prior class axes and M-step grids to local scoring."""
+    k_class_enabled = n_classes > 1
     dataset = MockDataset(1, rng)
     score_grid = np.repeat(np.eye(3, dtype=np.float32)[None], 2, axis=0)
     mstep_grid = np.repeat((5.0 * np.eye(3, dtype=np.float32))[None], 2, axis=0)
@@ -2836,7 +2838,7 @@ def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch,
         pass
 
     def fake_run_local_search_iteration(*args, **kwargs):
-        _ = args
+        captured["mean_shape"] = args[1].shape
         captured.update(kwargs)
         raise DispatchCaptured
 
@@ -2848,7 +2850,11 @@ def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch,
         iteration_loop_module._score_half_local(
             k=0,
             experiment_dataset=dataset,
-            means_k=(jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64) if not k_class_enabled else jnp.zeros((2, VOLUME_SIZE), dtype=jnp.complex64)),
+            means_k=(
+                jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64)
+                if not k_class_enabled
+                else jnp.zeros((n_classes, VOLUME_SIZE), dtype=jnp.complex64)
+            ),
             mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
             noise_variance_k=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             previous_best_rotation_eulers_k=np.zeros((dataset.n_units, 3), dtype=np.float32),
@@ -2881,7 +2887,7 @@ def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch,
             diagnostic_score_only=False,
             local_search_translation_prior_mode="current",
             replay_prior_translations=None,
-            class_log_priors=np.zeros(2, dtype=np.float32) if k_class_enabled else None,
+            class_log_priors=np.zeros(n_classes, dtype=np.float32) if k_class_enabled else None,
             k_class_enabled=k_class_enabled,
             collect_local_search_profile=False,
             safe_batch_sizes=lambda *args, **kwargs: (1, 16),
@@ -2889,6 +2895,10 @@ def test_score_half_local_forwards_mstep_grid_to_k1_and_k4_dispatch(monkeypatch,
             local_profile_history=[],
         )
 
+    expected_mean_shape = (VOLUME_SIZE,) if n_classes == 1 else (n_classes, VOLUME_SIZE)
+    assert captured["mean_shape"] == expected_mean_shape
+    if k_class_enabled:
+        assert captured["class_log_priors"].shape == (n_classes,)
     np.testing.assert_array_equal(captured["rotation_grid_mstep_rotations"], mstep_grid)
     assert captured["generate_relion_mstep_rotations"] is True
     assert (captured["class_log_priors"] is not None) is k_class_enabled
