@@ -77,10 +77,12 @@ source identities when incorporating evidence into the draft or later results.
 | Scoring result module | `4ccd65f78`; 142 tests passed, Slurm13589209, plus 120 exact K1/K2/K4/K8/K16 two-half comparisons; six moved declarations and retained controller AST unchanged; all source hashes stable |
 | Materialized dense posterior test reference | `f35712af9`; 42 adaptive-oversampling tests passed, Slurm13589912; 12 exact weight/assignment comparisons; moved function and retained engine executable AST unchanged |
 | Local-engine cache/timing imports | `8b51711f4`; 13 tests passed, Slurm13590097; 13 unused aliases removed and three test constant imports migrated; active owner bindings and executable engine/test AST unchanged |
-
 | Dead local-cache memory wrapper | `f8ceeea2a`; whole-repository caller search found only the definition; retained module AST unchanged; five existing cache-limit tests and strict docs passed |
 | Named dense-engine result | `c4713c5a0`; 352 selected tests passed, Slurm13590978; all eight optional-flag combinations matched the old engine numerically on a tiny CPU fixture; script imports, CLI and strict docs passed; historical fixture cases were collected only |
 | Shared controller test setup | `eabc7ee66`; 12 tests and 36 exact original/extracted fixture comparisons passed, Slurm13591659; remaining test setup and assertion AST unchanged; 105 net duplicate lines removed |
+| Named local-search wrapper result | `3d38f0db9`; 150 tests, 160 exact optional-field identity cases and 32 matching errors passed, Slurm13592280; kernel dispatch unchanged; controller no longer repacks/decodes this result |
+| Nine unused private numerical/provenance helpers | `4280e0cdc`; 166 CPU tests passed, Slurm13592709, with 11 GPU-marked cases explicitly deselected; 213 lines removed; retained executable AST identical in all eight modules |
+| Unused historical script helpers | `540fdf005`; 44 report/table tests and four CLI checks passed, Slurm13592996; 84 lines removed; retained executable AST and report acceptance/formatting unchanged |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance
@@ -149,6 +151,16 @@ fixture identities, measurements and shellwise curves. An additional audit of
 37 explicitly image-ordered fields found exact recorded pose/support decisions;
 maximum Pmax difference was 0.000155002 and the largest per-field p95 difference
 was 0.0000503063. This still does not compare all candidate scores or accumulators.
+
+A later broad CPU checkpoint at frozen `f8ceeea2a` finished in Slurm13590326
+with **6,361 passed, 337 skipped and 15 failed**. All 6,713 collected cases were
+accounted for, and source/native-library hashes stayed unchanged. The 15 failure
+IDs match the earlier run below; no common case changed status. Eight added
+accumulator-dump cases passed. Two removed tests covered retired helpers; the
+translation-prior case has the same inputs, expected arrays and tolerances in
+the retained shared-helper test. This remains a failing suite, and it predates
+the named dense/local result changes. The inventory and failure comparison are
+recorded under `structural_cpu_checkpoint/` in the Della review directory.
 
 The broad CPU inventory at `159059131` finished in Slurm13567313 with 6,355
 passed, 337 skipped and 15 failed. It excludes three deferred GUI files and one
