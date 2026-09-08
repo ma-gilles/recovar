@@ -130,8 +130,16 @@ strict-parity target needs separate scientific qualification.
 
 ## Checkpoint results and next checks
 
-1. Freeze the completed local-result migration for the next broader validation
-   checkpoint before further engine changes. Engine numerical statements and
+1. The completed local-result migration is frozen at
+   `6ee49dc5c8255a35d16930dd948341a9fad515eb` in
+   `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_api_checkpoint_20260908/`.
+   CPU job `13630086` and GPU job `13630096` cover the same 566 cases in ten
+   affected EM test modules. CPU expects five explicitly GPU-marked skips;
+   GPU must execute every case. Results are pending, not qualification.
+   The driver, source/library hashes and case inventory are under
+   `em_api_checkpoint_20260908/` in the review root; logs use the same directory
+   name under `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/`.
+   Review these results before further engine changes. Engine numerical statements and
    K-class computation are unchanged; the named result removes both positional
    decoders. It also fixes the related capture-routing ambiguity where an
    implicit profile could be returned as significant counts when hidden by the
