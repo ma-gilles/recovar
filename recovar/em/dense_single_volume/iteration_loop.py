@@ -4476,12 +4476,12 @@ def _run_relion_iteration_loop(
             else:
                 seeded_cs = None
             if seeded_cs is not None:
-                cs = int(seeded_cs)
+                current_size = int(seeded_cs)
                 data_vs_prior_iter = None
                 logger.info(
                     "RELION init bootstrap: seeding iter-1 current_size from ini_high=%.2f A -> %d",
                     float(relion_firstiter_ini_high_angstrom),
-                    cs,
+                    current_size,
                 )
             elif init_fsc is not None:
                 prev_cs = int(init_current_size)
@@ -4512,9 +4512,9 @@ def _run_relion_iteration_loop(
                     has_high_fsc_at_limit=relion_has_high_fsc_at_limit,
                     incr_size=relion_incr_size,
                 )
-                cs = quantize_current_size(raw_cs, ori_size=grid_size)
+                current_size = quantize_current_size(raw_cs, ori_size=grid_size)
             else:
-                cs = _bootstrap_current_size_relion(init_current_size, grid_size)
+                current_size = _bootstrap_current_size_relion(init_current_size, grid_size)
                 data_vs_prior_iter = None
         else:
             prev_cs = current_sizes[-1]
@@ -4579,7 +4579,7 @@ def _run_relion_iteration_loop(
                         raw_current_size=np.int32(raw_cs),
                         quantized_current_size=np.int32(computed_cs),
                     )
-                cs = computed_cs
+                current_size = computed_cs
             else:
                 fsc_prev_raw = np.asarray(fsc_history[-1], dtype=np.float32).copy()
                 fsc_prev_for_growth = _truncate_fsc_for_current_size_growth(
@@ -4629,9 +4629,9 @@ def _run_relion_iteration_loop(
                     has_high_fsc_at_limit=relion_has_high_fsc_at_limit,
                     incr_size=relion_incr_size,
                 )
-                cs = quantize_current_size(raw_cs, ori_size=grid_size)
+                current_size = quantize_current_size(raw_cs, ori_size=grid_size)
 
-        cs = quantize_current_size(cs, ori_size=grid_size)
+        current_size = quantize_current_size(current_size, ori_size=grid_size)
         if iteration > 0:
             logger.info(
                 "RELION current-size decision: iter=%d prev=%d res_shell=%d "
@@ -4643,7 +4643,7 @@ def _run_relion_iteration_loop(
                 bool(relion_has_high_fsc_at_limit),
                 float(state.ave_Pmax),
                 int(raw_cs),
-                int(cs),
+                int(current_size),
             )
         if relion_current_sizes is not None:
             if iteration < len(relion_current_sizes):
@@ -4652,11 +4652,11 @@ def _run_relion_iteration_loop(
                 oracle_cs = int(relion_current_sizes[-1])
             if oracle_cs <= 0:
                 oracle_cs = int(init_current_size)
-            cs = quantize_current_size(oracle_cs, ori_size=grid_size)
+            current_size = quantize_current_size(oracle_cs, ori_size=grid_size)
             logger.info(
                 "Current-size oracle: iteration %d using current_size=%d",
                 iteration + 1,
-                cs,
+                current_size,
             )
 
         # RELION updates image_coarse_size before updateAngularSampling at the
@@ -4682,7 +4682,7 @@ def _run_relion_iteration_loop(
         if state_swap_target_this_iteration:
             recovar_state_swap_snapshot = _snapshot_state_swap_inputs(
                 state=state,
-                cs=cs,
+                cs=current_size,
                 means=means,
                 mean_variance=mean_variance,
                 noise_variance_per_half=noise_variance_per_half,
@@ -4705,7 +4705,7 @@ def _run_relion_iteration_loop(
             init_relion_iteration=init_relion_iteration,
             iteration=iteration,
             state=state,
-            cs=cs,
+            cs=current_size,
             cryo=cryo,
             k_class_enabled=k_class_enabled,
             n_classes=n_classes,
@@ -4724,7 +4724,7 @@ def _run_relion_iteration_loop(
             preserve_existing_direction_prior=preserve_initial_direction_prior,
             sealed_sampling_state=sealed_sampling_state,
         )
-        cs = replay_result.cs
+        current_size = replay_result.cs
         _replay_prior_translations = replay_result.prior_translations
         _replay_meta = replay_result.replay_meta
         previous_best_rotations = replay_result.previous_best_rotations
@@ -4781,7 +4781,7 @@ def _run_relion_iteration_loop(
         )
 
         (
-            cs,
+            current_size,
             means,
             mean_variance,
             noise_variance_per_half,
@@ -4800,7 +4800,7 @@ def _run_relion_iteration_loop(
             iteration=iteration,
             recovar_snapshot=recovar_state_swap_snapshot,
             state=state,
-            cs=cs,
+            cs=current_size,
             volume_shape=volume_shape,
             means=means,
             mean_variance=mean_variance,
@@ -4887,7 +4887,7 @@ def _run_relion_iteration_loop(
                         sigma2_noise_native=previous_noise_radial_per_half[0],
                         dataset=experiment_datasets[0],
                         trial_order_local=expected_accuracy_trial_order,
-                        current_image_size=int(cs),
+                        current_image_size=int(current_size),
                         padding_factor=PROJECTION_PADDING_FACTOR,
                         sigma2_fudge=float(tau2_fudge),
                         random_seed=int(effective_optimizer_random_seed),
@@ -4960,15 +4960,15 @@ def _run_relion_iteration_loop(
 
         sigma_offset_used_trajectory.append(float(current_sigma_offset_angstrom))
         sigma_offset_used_per_half_trajectory.append(_copy_optional_float_pair(current_sigma_offset_angstrom_per_half))
-        current_sizes.append(cs)
+        current_sizes.append(current_size)
         healpix_order_trajectory.append(state.healpix_order)
-        current_size = int(cs)
+        scoring_current_size = int(current_size)
 
         logger.info(
             "=== RELION Iteration %d/%d: current_size=%d, healpix_order=%d, local_search=%s ===",
             iteration + 1,
             max_iter,
-            current_size,
+            scoring_current_size,
             state.healpix_order,
             state.do_local_search,
         )
@@ -5180,12 +5180,12 @@ def _run_relion_iteration_loop(
         local_search_rotation_eulers = None
         local_search_mstep_rotations = None
         model_current_size_for_engine = (
-            current_size if current_size < cryo.image_shape[0] else None
+            scoring_current_size if scoring_current_size < cryo.image_shape[0] else None
         )
-        image_current_size = int(current_size)
+        image_current_size = int(scoring_current_size)
         if optics_image_sizes is not None:
             remapped_image_sizes = relion_optics_image_current_sizes(
-                current_size,
+                scoring_current_size,
                 model_ori_size=grid_size,
                 model_pixel_size=model_pixel_size,
                 optics_image_sizes=optics_image_sizes,
@@ -5199,17 +5199,17 @@ def _run_relion_iteration_loop(
                 )
             image_current_size = int(unique_remapped_sizes[0])
         cs_for_engine = image_current_size if image_current_size < cryo.image_shape[0] else None
-        if image_current_size != int(current_size) and model_current_size_for_engine is None:
+        if image_current_size != int(scoring_current_size) and model_current_size_for_engine is None:
             # ``None`` normally means full-box support, but the EM engines also
             # interpret it as "reuse the particle-image score cutoff". Keep
             # the full model size explicit when optics remapping makes those
             # two cutoffs differ.
-            model_current_size_for_engine = int(current_size)
-        if image_current_size != int(current_size):
+            model_current_size_for_engine = int(scoring_current_size)
+        if image_current_size != int(scoring_current_size):
             logger.info(
                 "RELION optics current-size remap: model_current_size=%d "
                 "image_current_size=%d model_pixel_size=%.9g",
-                int(current_size),
+                int(scoring_current_size),
                 image_current_size,
                 model_pixel_size,
             )
@@ -5433,10 +5433,10 @@ def _run_relion_iteration_loop(
             )
             if sealed_sampling_state is not None:
                 coarse_size = int(sealed_sampling_state["coarse_size"])
-                if coarse_size > int(cs):
+                if coarse_size > int(current_size):
                     raise ValueError(
                         "sealed sampling coarse_size exceeds active current_size: "
-                        f"coarse={coarse_size} current={cs}"
+                        f"coarse={coarse_size} current={current_size}"
                     )
                 logger.info(
                     "Frozen-boundary v3 directly owns adaptive pass-1 coarse_size=%d",
@@ -6229,7 +6229,7 @@ def _run_relion_iteration_loop(
                 _bpref_prejoin_dir,
                 stage="prejoin",
                 iteration=iteration,
-                current_size=cs,
+                current_size=current_size,
                 padding_factor=PADDING_FACTOR,
                 grid_size=grid_size,
                 voxel_size=cryo.voxel_size,
@@ -6384,7 +6384,7 @@ def _run_relion_iteration_loop(
                     iteration + 1,
                     class_idx + 1,
                     n_classes,
-                    int(cs),
+                    int(current_size),
                     kclass_tau2_source,
                 )
                 if replay_class_tau2 is not None and replay_tau2_enabled:
@@ -6410,7 +6410,7 @@ def _run_relion_iteration_loop(
                             previous_means[0][class_idx],
                             volume_shape,
                             padding_factor=PADDING_FACTOR,
-                            current_size=cs,
+                            current_size=current_size,
                             return_details=True,
                         )
                     )
@@ -6430,7 +6430,7 @@ def _run_relion_iteration_loop(
                     Ft_ctf_combined[class_idx],
                     volume_shape,
                     padding_factor=PADDING_FACTOR,
-                    r_max=cs // 2,
+                    r_max=current_size // 2,
                     shell_rounding="round",
                     full_half_axis=mstep_full_half_axis,
                     accumulator_volume_shape=mstep_accumulator_shape,
@@ -6439,7 +6439,7 @@ def _run_relion_iteration_loop(
                     Ft_ctf_combined[class_idx],
                     volume_shape,
                     padding_factor=PADDING_FACTOR,
-                    r_max=cs // 2,
+                    r_max=current_size // 2,
                     shell_rounding="floor",
                     full_half_axis=mstep_full_half_axis,
                     accumulator_volume_shape=mstep_accumulator_shape,
@@ -6450,7 +6450,7 @@ def _run_relion_iteration_loop(
                     volume_shape,
                     padding_factor=PADDING_FACTOR,
                     tau2_fudge=tau2_fudge,
-                    current_size=cs,
+                    current_size=current_size,
                     full_half_axis=mstep_full_half_axis,
                     accumulator_volume_shape=mstep_accumulator_shape,
                 )
@@ -6488,7 +6488,7 @@ def _run_relion_iteration_loop(
                         / f"recovar_kclass_mstep_it{iteration + 1:03d}_c{class_idx + 1:02d}.npz",
                         iteration=np.int32(iteration + 1),
                         class_index=np.int32(class_idx + 1),
-                        current_size=np.int32(cs),
+                        current_size=np.int32(current_size),
                         padding_factor=np.int32(PADDING_FACTOR),
                         grid_size=np.int32(grid_size),
                         mstep_accumulator_shape=np.asarray(mstep_accumulator_shape, dtype=np.int32),
@@ -6596,7 +6596,7 @@ def _run_relion_iteration_loop(
                     _bpref_accum_dir,
                     stage="accum",
                     iteration=iteration,
-                    current_size=cs,
+                    current_size=current_size,
                     padding_factor=PADDING_FACTOR,
                     grid_size=grid_size,
                     voxel_size=cryo.voxel_size,
@@ -6614,7 +6614,7 @@ def _run_relion_iteration_loop(
                 Ft_ctf_1,
                 volume_shape,
                 padding_factor=PADDING_FACTOR,
-                r_max=cs // 2,
+                r_max=current_size // 2,
                 accumulator_volume_shape=mstep_accumulator_shape,
             )
             logger.info(
@@ -6643,7 +6643,7 @@ def _run_relion_iteration_loop(
                         # windowToOridimRealSpace.
                         use_spherical_mask=True,
                         minres_map=RELION_MINRES_MAP,
-                        current_size=int(cs),
+                        current_size=int(current_size),
                         return_real_space=True,
                         accumulator_volume_shape=mstep_accumulator_shape,
                     )
@@ -6667,7 +6667,7 @@ def _run_relion_iteration_loop(
                     unfiltered_half_maps[0],
                     unfiltered_half_maps[1],
                     solvent_mask,
-                    current_size=int(cs),
+                    current_size=int(current_size),
                     rng_seed=int(1775735620 + iteration),
                     return_details=True,
                 )
@@ -6710,7 +6710,7 @@ def _run_relion_iteration_loop(
                     volume_shape,
                     tau2_fudge=tau2_fudge,
                     padding_factor=PADDING_FACTOR,
-                    r_max=cs // 2,
+                    r_max=current_size // 2,
                     return_details=True,
                     full_half_axis=-1 if full_half_axis is None else int(full_half_axis),
                     accumulator_volume_shape=mstep_accumulator_shape,
@@ -6757,7 +6757,7 @@ def _run_relion_iteration_loop(
             mean_signal_variance_per_half=mean_signal_variance_per_half if not k_class_enabled else None,
             n_classes=n_classes,
             k_class_enabled=k_class_enabled,
-            cs=cs,
+            cs=current_size,
             iteration=iteration,
             grid_size=grid_size,
             cryo=cryo,
@@ -6965,7 +6965,7 @@ def _run_relion_iteration_loop(
                 current_translations=current_translations,
                 use_local=use_local,
                 local_search_order=local_search_order,
-                cs=cs,
+                cs=current_size,
                 state=state,
                 n_classes=n_classes,
                 k_class_enabled=k_class_enabled,
@@ -7047,7 +7047,7 @@ def _run_relion_iteration_loop(
         if k_class_enabled:
             dvp_iter = _truncate_data_vs_prior_for_current_size(
                 data_vs_prior_trajectory[-1],
-                current_size=cs,
+                current_size=current_size,
                 grid_size=grid_size,
             )
             dvp_res_shell = max(
@@ -7064,7 +7064,7 @@ def _run_relion_iteration_loop(
                 )
             dvp_iter = _truncate_data_vs_prior_for_current_size(
                 dvp_iter,
-                current_size=cs,
+                current_size=current_size,
                 grid_size=grid_size,
             )
             dvp_res_shell = resolution_from_data_vs_prior(
@@ -7096,7 +7096,7 @@ def _run_relion_iteration_loop(
             _tau2_dump = {
                 "iteration": np.int32(iteration + 1),
                 "relion_iteration": np.int32(iteration + 1),
-                "current_size": np.int32(cs),
+                "current_size": np.int32(current_size),
                 "grid_size": np.int32(grid_size),
                 "voxel_size": np.float64(cryo.voxel_size),
                 "pixel_res": np.float64(pixel_res),
@@ -7259,7 +7259,7 @@ def _run_relion_iteration_loop(
             k_class_enabled=k_class_enabled,
             relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
             iteration=iteration,
-            cs=cs,
+            cs=current_size,
             maybe_dump_noise_update_debug=_maybe_dump_noise_update_debug,
         )
         noise_from_res = noise_update.noise_from_res
@@ -7666,7 +7666,7 @@ def _run_relion_iteration_loop(
                 _parity_dump.dump_iteration(
                     iteration=iteration,
                     init_relion_iteration=int(init_relion_iteration),
-                    current_size=int(cs),
+                    current_size=int(current_size),
                     sigma_offset=float(current_sigma_offset_angstrom),
                     translation_step=float(state.translation_step),
                     translation_range=float(state.translation_range),
@@ -7721,7 +7721,7 @@ def _run_relion_iteration_loop(
             "res=%.2f A, ave_Pmax=%.4f, healpix_order=%d, "
             "converged=%s, time=%.1fs",
             iteration + 1,
-            cs,
+            current_size,
             pixel_res,
             res_angstrom,
             ave_pmax,
