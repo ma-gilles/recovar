@@ -78,6 +78,10 @@ source identities when incorporating evidence into the draft or later results.
 | Materialized dense posterior test reference | `f35712af9`; 42 adaptive-oversampling tests passed, Slurm13589912; 12 exact weight/assignment comparisons; moved function and retained engine executable AST unchanged |
 | Local-engine cache/timing imports | `8b51711f4`; 13 tests passed, Slurm13590097; 13 unused aliases removed and three test constant imports migrated; active owner bindings and executable engine/test AST unchanged |
 
+| Dead local-cache memory wrapper | `f8ceeea2a`; whole-repository caller search found only the definition; retained module AST unchanged; five existing cache-limit tests and strict docs passed |
+| Named dense-engine result | `c4713c5a0`; 352 selected tests passed, Slurm13590978; all eight optional-flag combinations matched the old engine numerically on a tiny CPU fixture; script imports, CLI and strict docs passed; historical fixture cases were collected only |
+| Shared controller test setup | `eabc7ee66`; 12 tests and 36 exact original/extracted fixture comparisons passed, Slurm13591659; remaining test setup and assertion AST unchanged; 105 net duplicate lines removed |
+
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance
 or established baseline was changed.

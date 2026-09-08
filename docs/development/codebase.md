@@ -49,6 +49,12 @@ batch sizes, calls the selected kernel and packs statistics for the controller.
 
 The dense single-class kernel is
 [`em_engine.run_em`](../../recovar/em/dense_single_volume/em_engine.py).
+It returns `DenseEMResult` from
+[`helpers.types`](../../recovar/em/dense_single_volume/helpers/types.py), with
+named `mean`, `hard_assignments`, `Ft_y`, `Ft_ctf`, `stats`, `noise_stats` and
+`profile` fields. Optional outputs are `None` when their existing flags are
+disabled; changing flags no longer changes tuple positions. The container does
+not copy arrays. Controller and K-class callers read these fields directly.
 The local single-class kernel is
 [`local_em_engine.run_local_em_exact`](../../recovar/em/dense_single_volume/local_em_engine.py).
 [`k_class`](../../recovar/em/dense_single_volume/k_class.py) supplies dense,
