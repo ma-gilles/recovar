@@ -834,36 +834,6 @@ def _reject_kwargs(kwargs: dict, names: tuple[str, ...], caller: str) -> None:
         raise ValueError(f"{caller} controls these arguments directly: {', '.join(present)}")
 
 
-def _local_outputs(output, *, accumulate_noise: bool, return_best_pose_details: bool, return_profile: bool = False):
-    Ft_y, Ft_ctf, hard_assignment = output[:3]
-    next_index = 3
-    best_pose_rotations = None
-    best_pose_translations = None
-    best_pose_rotation_ids = None
-    if return_best_pose_details:
-        best_pose_rotations = output[next_index]
-        best_pose_translations = output[next_index + 1]
-        best_pose_rotation_ids = output[next_index + 2]
-        next_index += 3
-    stats = output[next_index]
-    next_index += 1
-    noise_stats = output[next_index] if accumulate_noise else None
-    if accumulate_noise:
-        next_index += 1
-    profile_summary = output[next_index] if return_profile else None
-    return (
-        Ft_y,
-        Ft_ctf,
-        hard_assignment,
-        best_pose_rotations,
-        best_pose_translations,
-        best_pose_rotation_ids,
-        stats,
-        noise_stats,
-        profile_summary,
-    )
-
-
 def _stack_or_none(values):
     if not values:
         return None
@@ -2676,22 +2646,15 @@ def run_local_k_class_em(
                     stats_use_reconstruction_probs=stats_use_reconstruction_probs,
                     **class_engine_kwargs,
                 )
-            (
-                class_Ft_y,
-                class_Ft_ctf,
-                hard_assignment,
-                best_pose_rotations,
-                best_pose_translations,
-                best_pose_rotation_ids,
-                stats,
-                noise,
-                profile_summary,
-            ) = _local_outputs(
-                output,
-                accumulate_noise=accumulate_noise,
-                return_best_pose_details=return_best_pose_details,
-                return_profile=return_profile,
-            )
+            class_Ft_y = output.Ft_y
+            class_Ft_ctf = output.Ft_ctf
+            hard_assignment = output.hard_assignments
+            best_pose_rotations = output.best_pose_rotations
+            best_pose_translations = output.best_pose_translations
+            best_pose_rotation_ids = output.best_pose_rotation_ids
+            stats = output.stats
+            noise = output.noise_stats
+            profile_summary = output.profile if return_profile else None
             return _assemble_result(
                 class_log_evidence=np.asarray(stats.log_evidence_per_image, dtype=np.float64)[None, :],
                 new_means=None,
@@ -2741,9 +2704,9 @@ def run_local_k_class_em(
                     return_reconstruction_probability_values=collect_global_reconstruction_threshold,
                     **class_engine_kwargs,
                 )
-            class_log_evidence.append(np.asarray(probe[3].log_evidence_per_image, dtype=np.float64))
+            class_log_evidence.append(np.asarray(probe.stats.log_evidence_per_image, dtype=np.float64))
             if support_values_by_class is not None:
-                profile = probe[-1]
+                profile = probe.profile
                 support_values_by_class.append(tuple(profile["reconstruction_probability_values_by_image"]))
         class_log_evidence_np = np.stack(class_log_evidence, axis=0)
         normalization_log_evidence_np = _logsumexp_np(class_log_evidence_np, axis=0)
@@ -2800,22 +2763,15 @@ def run_local_k_class_em(
                 stats_use_reconstruction_probs=stats_use_reconstruction_probs,
                 **class_engine_kwargs,
             )
-        (
-            class_Ft_y,
-            class_Ft_ctf,
-            hard_assignment,
-            best_pose_rotations,
-            best_pose_translations,
-            best_pose_rotation_ids,
-            stats,
-            noise,
-            profile_summary,
-        ) = _local_outputs(
-            output,
-            accumulate_noise=accumulate_noise,
-            return_best_pose_details=return_best_pose_details,
-            return_profile=return_profile,
-        )
+        class_Ft_y = output.Ft_y
+        class_Ft_ctf = output.Ft_ctf
+        hard_assignment = output.hard_assignments
+        best_pose_rotations = output.best_pose_rotations
+        best_pose_translations = output.best_pose_translations
+        best_pose_rotation_ids = output.best_pose_rotation_ids
+        stats = output.stats
+        noise = output.noise_stats
+        profile_summary = output.profile if return_profile else None
         Ft_y.append(class_Ft_y)
         Ft_ctf.append(class_Ft_ctf)
         hard_assignments.append(np.asarray(hard_assignment, dtype=np.int32))

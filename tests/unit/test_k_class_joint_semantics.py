@@ -7,7 +7,7 @@ pytest.importorskip("jax")
 import jax.numpy as jnp
 
 import recovar.em.dense_single_volume.k_class as k_class_module
-from recovar.em.dense_single_volume.helpers.types import DenseEMResult
+from recovar.em.dense_single_volume.helpers.types import DenseEMResult, LocalEMResult
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
     class_weights_from_direction_prior,
     normalize_class_direction_prior_per_half,
@@ -1905,14 +1905,14 @@ def test_local_k_class_single_class_skips_score_probe(monkeypatch):
             max_posterior_per_image=np.asarray([0.5, 0.8], dtype=np.float32),
             rotation_posterior_sums=np.asarray([1.0, 2.0], dtype=np.float32),
         )
-        return (
-            jnp.ones_like(mean),
-            jnp.ones_like(mean) * 2,
-            np.asarray([1, 0], dtype=np.int32),
-            np.repeat(np.eye(3, dtype=np.float32)[None], 2, axis=0),
-            np.zeros((2, 2), dtype=np.float32),
-            np.asarray([1, 0], dtype=np.int32),
-            stats,
+        return LocalEMResult(
+            Ft_y=jnp.ones_like(mean),
+            Ft_ctf=jnp.ones_like(mean) * 2,
+            hard_assignments=np.asarray([1, 0], dtype=np.int32),
+            best_pose_rotations=np.repeat(np.eye(3, dtype=np.float32)[None], 2, axis=0),
+            best_pose_translations=np.zeros((2, 2), dtype=np.float32),
+            best_pose_rotation_ids=np.asarray([1, 0], dtype=np.int32),
+            stats=stats,
         )
 
     monkeypatch.setattr(k_class_module, "run_local_em_exact", fake_run_local_em_exact)
@@ -1977,11 +1977,11 @@ def test_local_k_class_accepts_per_class_layouts_and_external_evidence(monkeypat
             max_posterior_per_image=np.full(2, 0.25, dtype=np.float32),
             rotation_posterior_sums=np.zeros(2, dtype=np.float32),
         )
-        return (
-            jnp.zeros_like(mean),
-            jnp.zeros_like(mean),
-            np.zeros(2, dtype=np.int32),
-            stats,
+        return LocalEMResult(
+            Ft_y=jnp.zeros_like(mean),
+            Ft_ctf=jnp.zeros_like(mean),
+            hard_assignments=np.zeros(2, dtype=np.int32),
+            stats=stats,
         )
 
     monkeypatch.setattr(k_class_module, "run_local_em_exact", fake_run_local_em_exact)

@@ -195,6 +195,28 @@ class EMProfileStats(NamedTuple):
 
 
 @dataclass(frozen=True)
+class LocalEMResult:
+    """Exact-local engine outputs with a fixed field layout.
+
+    Accumulators retain their dtype, device and requested Fourier layout.
+    Image fields follow the selected dataset order. Optional pose, noise,
+    profile and significant-count fields are ``None`` when not requested.
+    Construction stores references without copying or synchronizing arrays.
+    """
+
+    Ft_y: jax.Array | np.ndarray
+    Ft_ctf: jax.Array | np.ndarray
+    hard_assignments: np.ndarray
+    stats: RelionStats
+    best_pose_rotations: jax.Array | np.ndarray | None = None
+    best_pose_translations: jax.Array | np.ndarray | None = None
+    best_pose_rotation_ids: np.ndarray | None = None
+    noise_stats: NoiseStats | None = None
+    profile: dict | None = None
+    significant_counts: np.ndarray | None = None
+
+
+@dataclass(frozen=True)
 class DenseEMResult:
     """Result of ``em_engine.run_em`` with stable, named fields.
 

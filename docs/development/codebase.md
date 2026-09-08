@@ -47,17 +47,24 @@ That module builds local pose neighborhoods, asks
 [`batch_planning`](../../recovar/em/dense_single_volume/batch_planning.py) for
 batch sizes, calls the selected kernel and returns `_LocalSearchIterationResult`
 with named accumulators, pose fields, statistics and optional class summaries.
-The controller reads those fields directly. The local kernel still has its
-existing tuple contract; the wrapper decodes it once.
+The controller reads those fields directly.
 
-The kernel's optional pose, noise, profile and significant-count flags produce
-sixteen layouts, with four to ten tuple fields. Both the local-search wrapper
-and K-class orchestration decode that contract. The wrapper's K-class adapter
-must include optional fields only when requested; otherwise disabled pose
-details shift statistics into the wrong slot. The regression in
-`tests/unit/test_local_search_result_contract.py` covers K2 and exactly K4,
-both pose/noise settings and optional class summaries. Migrating this boundary
-requires both decoders and positional callers to move together.
+The local kernel returns `LocalEMResult` from
+[`helpers.types`](../../recovar/em/dense_single_volume/helpers/types.py):
+`Ft_y`, `Ft_ctf`, `hard_assignments`, `stats`, optional best-pose fields,
+`noise_stats`, `profile` and `significant_counts`. All sixteen return-flag
+combinations have the same field layout; disabled fields are `None`. The
+local-search wrapper and K-class orchestration read these fields directly;
+the positional packer and both decoders are removed. The result stores array
+references without copying or synchronizing them.
+
+Requesting reconstruction probabilities or sample IDs enables the engine's
+profile that carries those captures. The wrapper still exposes a profile only
+when requested, and copies its dictionary before adding wrapper timings.
+Significant counts retain their own field even when that internal profile is
+hidden. `tests/unit/test_local_search_result_contract.py` covers this routing,
+plus K2/exact-K4 pose, noise and class-summary settings. Returned arrays retain
+their layouts, dtypes and identities; saved refinement field names are unchanged.
 
 The dense single-class kernel is
 [`em_engine.run_em`](../../recovar/em/dense_single_volume/em_engine.py).

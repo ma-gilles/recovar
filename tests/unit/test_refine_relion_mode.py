@@ -32,7 +32,7 @@ import recovar.reconstruction.regularization as regularization_module
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.dense_single_volume.helpers import dtype_policy as dtype_policy_module
-from recovar.em.dense_single_volume.helpers.types import DenseEMResult
+from recovar.em.dense_single_volume.helpers.types import DenseEMResult, LocalEMResult
 from recovar.em.dense_single_volume.em_engine import _batch_parameter_rows, run_em
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch as _fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.convergence import (
@@ -4643,17 +4643,17 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
         captured["relion_exact_score_translation"] = kwargs.get(
             "relion_exact_score_translation"
         )
-        output = (
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            np.zeros(mock_dataset.n_units, dtype=np.int32),
-            RelionStats(
+        output = LocalEMResult(
+            Ft_y=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            Ft_ctf=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            hard_assignments=np.zeros(mock_dataset.n_units, dtype=np.int32),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(mock_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.zeros(1, dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.zeros(mock_dataset.image_shape[0] // 2 + 1, dtype=jnp.float32),
                 wsum_img_power=jnp.zeros(mock_dataset.image_shape[0] // 2 + 1, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -4661,7 +4661,7 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
             ),
         )
         if kwargs.get("return_significant_counts"):
-            output += (np.full(mock_dataset.n_units, 7, dtype=np.int32),)
+            output = replace(output, significant_counts=np.full(mock_dataset.n_units, 7, dtype=np.int32))
         return output
 
     monkeypatch.setattr(local_iteration_module, "build_local_hypothesis_layout", fake_build_local_hypothesis_layout)
@@ -4841,11 +4841,11 @@ def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
         _ = args
         captured["image_batch_size"] = int(kwargs["image_batch_size"])
         captured["rotation_block_size"] = int(kwargs["rotation_block_size"])
-        return (
-            jnp.zeros(1, dtype=jnp.complex64),
-            jnp.zeros(1, dtype=jnp.complex64),
-            np.zeros(2, dtype=np.int32),
-            RelionStats(
+        return LocalEMResult(
+            Ft_y=jnp.zeros(1, dtype=jnp.complex64),
+            Ft_ctf=jnp.zeros(1, dtype=jnp.complex64),
+            hard_assignments=np.zeros(2, dtype=np.int32),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(2, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(2, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(2, dtype=jnp.float32),
@@ -4930,11 +4930,11 @@ def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_de
         _ = args
         captured["image_batch_size"] = int(kwargs["image_batch_size"])
         captured["rotation_block_size"] = int(kwargs["rotation_block_size"])
-        return (
-            jnp.zeros(1, dtype=jnp.complex64),
-            jnp.zeros(1, dtype=jnp.complex64),
-            np.zeros(2, dtype=np.int32),
-            RelionStats(
+        return LocalEMResult(
+            Ft_y=jnp.zeros(1, dtype=jnp.complex64),
+            Ft_ctf=jnp.zeros(1, dtype=jnp.complex64),
+            hard_assignments=np.zeros(2, dtype=np.int32),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(2, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(2, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(2, dtype=jnp.float32),
@@ -5030,17 +5030,17 @@ def test_run_local_search_iteration_plumbs_score_only_to_exact_engine(monkeypatc
     def fake_run_local_em_exact(*args, **kwargs):
         _ = args
         captured.update(kwargs)
-        return (
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            np.zeros(mock_dataset.n_units, dtype=np.int32),
-            RelionStats(
+        return LocalEMResult(
+            Ft_y=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            Ft_ctf=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            hard_assignments=np.zeros(mock_dataset.n_units, dtype=np.int32),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(mock_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.zeros(3, dtype=jnp.float32),
             ),
-            {"score_only": kwargs["score_only"]},
+            profile={"score_only": kwargs["score_only"]},
         )
 
     monkeypatch.setattr(local_iteration_module, "run_local_em_exact", fake_run_local_em_exact)
@@ -5113,11 +5113,11 @@ def test_run_local_search_iteration_plumbs_normalization_log_evidence(monkeypatc
     def fake_run_local_em_exact(*args, **kwargs):
         _ = args
         captured.update(kwargs)
-        return (
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            np.zeros(mock_dataset.n_units, dtype=np.int32),
-            RelionStats(
+        return LocalEMResult(
+            Ft_y=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            Ft_ctf=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            hard_assignments=np.zeros(mock_dataset.n_units, dtype=np.int32),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(mock_dataset.n_units, dtype=jnp.float32),
@@ -5185,11 +5185,11 @@ def test_run_local_search_iteration_plumbs_stats_use_reconstruction_probs(monkey
     def fake_run_local_em_exact(*args, **kwargs):
         _ = args
         captured["stats_use_reconstruction_probs"] = kwargs["stats_use_reconstruction_probs"]
-        return (
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            np.zeros(mock_dataset.n_units, dtype=np.int32),
-            RelionStats(
+        return LocalEMResult(
+            Ft_y=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            Ft_ctf=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            hard_assignments=np.zeros(mock_dataset.n_units, dtype=np.int32),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(mock_dataset.n_units, dtype=jnp.float32),
@@ -5342,17 +5342,17 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
         captured["max_significants"] = kwargs.get("max_significants")
         captured["use_float64_scoring"] = kwargs.get("use_float64_scoring")
         captured["use_float64_normalization"] = kwargs.get("use_float64_normalization")
-        return (
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            np.zeros(mock_dataset.n_units, dtype=np.int32),
-            RelionStats(
+        return LocalEMResult(
+            Ft_y=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            Ft_ctf=jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            hard_assignments=np.zeros(mock_dataset.n_units, dtype=np.int32),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(mock_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.zeros(rotation_grid_size(1), dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.zeros(mock_dataset.image_shape[0] // 2 + 1, dtype=jnp.float32),
                 wsum_img_power=jnp.zeros(mock_dataset.image_shape[0] // 2 + 1, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -5491,7 +5491,11 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     noise_dense = em_result.noise_stats
     del em_result
 
-    Ft_y_exact, Ft_ctf_exact, ha_exact, stats_exact, noise_exact = exact_outputs
+    Ft_y_exact = exact_outputs.Ft_y
+    Ft_ctf_exact = exact_outputs.Ft_ctf
+    ha_exact = exact_outputs.hard_assignments
+    stats_exact = exact_outputs.stats
+    noise_exact = exact_outputs.noise_stats
     assert np.asarray(Ft_y_exact).size == VOLUME_SIZE
     assert np.asarray(Ft_ctf_exact).size == VOLUME_SIZE
     config = ForwardModelConfig.from_dataset(dataset, disc_type="linear_interp", process_fn=dataset.process_images)
@@ -5682,19 +5686,19 @@ def test_run_local_em_exact_can_return_half_volume_accumulators(rng, monkeypatch
     )
 
     half_shape = ftu.volume_shape_to_half_volume_shape(dataset.volume_shape)
-    assert np.asarray(half[0]).size == int(np.prod(half_shape))
-    assert np.asarray(half[1]).size == int(np.prod(half_shape))
+    assert np.asarray(half.Ft_y).size == int(np.prod(half_shape))
+    assert np.asarray(half.Ft_ctf).size == int(np.prod(half_shape))
     Ft_y_half_full, Ft_ctf_half_full = half_volume_accumulators_to_full(
-        half[0],
-        half[1],
+        half.Ft_y,
+        half.Ft_ctf,
         dataset.volume_shape,
     )
-    np.testing.assert_allclose(np.asarray(Ft_y_half_full), np.asarray(full[0]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(np.asarray(Ft_ctf_half_full), np.asarray(full[1]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_array_equal(np.asarray(half[2]), np.asarray(full[2]))
+    np.testing.assert_allclose(np.asarray(Ft_y_half_full), np.asarray(full.Ft_y), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(Ft_ctf_half_full), np.asarray(full.Ft_ctf), rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(np.asarray(half.hard_assignments), np.asarray(full.hard_assignments))
     np.testing.assert_allclose(
-        np.asarray(half[3].log_evidence_per_image),
-        np.asarray(full[3].log_evidence_per_image),
+        np.asarray(half.stats.log_evidence_per_image),
+        np.asarray(full.stats.log_evidence_per_image),
         rtol=1e-5,
         atol=1e-5,
     )
@@ -5834,7 +5838,7 @@ def test_run_local_em_exact_class_log_prior_shifts_evidence_only(rng):
         translation_log_priors=np.zeros((1, 1), dtype=np.float32),
     )
 
-    Ft_y_base, Ft_ctf_base, ha_base, stats_base = run_local_em_exact(
+    local_result = run_local_em_exact(
         dataset,
         mean,
         mean_variance,
@@ -5846,7 +5850,12 @@ def test_run_local_em_exact_class_log_prior_shifts_evidence_only(rng):
         current_size=None,
         reconstruct_significant_only=False,
     )
-    Ft_y_prior, Ft_ctf_prior, ha_prior, stats_prior = run_local_em_exact(
+    Ft_y_base = local_result.Ft_y
+    Ft_ctf_base = local_result.Ft_ctf
+    ha_base = local_result.hard_assignments
+    stats_base = local_result.stats
+    del local_result
+    local_result = run_local_em_exact(
         dataset,
         mean,
         mean_variance,
@@ -5859,6 +5868,11 @@ def test_run_local_em_exact_class_log_prior_shifts_evidence_only(rng):
         reconstruct_significant_only=False,
         class_log_prior=class_log_prior,
     )
+    Ft_y_prior = local_result.Ft_y
+    Ft_ctf_prior = local_result.Ft_ctf
+    ha_prior = local_result.hard_assignments
+    stats_prior = local_result.stats
+    del local_result
 
     np.testing.assert_array_equal(ha_prior, ha_base)
     np.testing.assert_allclose(np.asarray(Ft_y_prior), np.asarray(Ft_y_base), rtol=1e-5, atol=1e-5)
@@ -5899,7 +5913,7 @@ def test_run_local_em_exact_external_log_evidence_scales_posterior(rng, monkeypa
         translation_log_priors=np.zeros((1, 1), dtype=np.float32),
     )
 
-    Ft_y_base, Ft_ctf_base, ha_base, stats_base = run_local_em_exact(
+    local_result = run_local_em_exact(
         dataset,
         mean,
         mean_variance,
@@ -5911,8 +5925,13 @@ def test_run_local_em_exact_external_log_evidence_scales_posterior(rng, monkeypa
         current_size=None,
         reconstruct_significant_only=False,
     )
+    Ft_y_base = local_result.Ft_y
+    Ft_ctf_base = local_result.Ft_ctf
+    ha_base = local_result.hard_assignments
+    stats_base = local_result.stats
+    del local_result
     external_log_evidence = np.asarray(stats_base.log_evidence_per_image, dtype=np.float64) + np.log(2.0)
-    Ft_y_scaled, Ft_ctf_scaled, ha_scaled, stats_scaled = run_local_em_exact(
+    local_result = run_local_em_exact(
         dataset,
         mean,
         mean_variance,
@@ -5925,7 +5944,12 @@ def test_run_local_em_exact_external_log_evidence_scales_posterior(rng, monkeypa
         reconstruct_significant_only=False,
         normalization_log_evidence=external_log_evidence,
     )
-    Ft_y_fallback, Ft_ctf_fallback, ha_fallback, stats_fallback = run_local_em_exact(
+    Ft_y_scaled = local_result.Ft_y
+    Ft_ctf_scaled = local_result.Ft_ctf
+    ha_scaled = local_result.hard_assignments
+    stats_scaled = local_result.stats
+    del local_result
+    local_result = run_local_em_exact(
         dataset,
         mean,
         mean_variance,
@@ -5939,6 +5963,11 @@ def test_run_local_em_exact_external_log_evidence_scales_posterior(rng, monkeypa
         normalization_log_evidence=external_log_evidence,
         reconstruction_probability_threshold=np.zeros(dataset.n_units, dtype=np.float64),
     )
+    Ft_y_fallback = local_result.Ft_y
+    Ft_ctf_fallback = local_result.Ft_ctf
+    ha_fallback = local_result.hard_assignments
+    stats_fallback = local_result.stats
+    del local_result
 
     np.testing.assert_array_equal(ha_scaled, ha_base)
     np.testing.assert_array_equal(ha_scaled, ha_fallback)
@@ -5988,7 +6017,7 @@ def test_run_local_em_exact_deferred_packed_mstep_matches_fused(rng, monkeypatch
         translation_log_priors=np.zeros((2, 2), dtype=np.float32),
     )
 
-    Ft_y_base, Ft_ctf_base, ha_base, stats_base = run_local_em_exact(
+    local_result = run_local_em_exact(
         dataset,
         mean,
         mean_variance,
@@ -6000,8 +6029,13 @@ def test_run_local_em_exact_deferred_packed_mstep_matches_fused(rng, monkeypatch
         current_size=None,
         reconstruct_significant_only=True,
     )
+    Ft_y_base = local_result.Ft_y
+    Ft_ctf_base = local_result.Ft_ctf
+    ha_base = local_result.hard_assignments
+    stats_base = local_result.stats
+    del local_result
     monkeypatch.setenv("RECOVAR_EXACT_LOCAL_DEFER_PACKED_MSTEP", "1")
-    Ft_y_deferred, Ft_ctf_deferred, ha_deferred, stats_deferred = run_local_em_exact(
+    local_result = run_local_em_exact(
         dataset,
         mean,
         mean_variance,
@@ -6013,6 +6047,11 @@ def test_run_local_em_exact_deferred_packed_mstep_matches_fused(rng, monkeypatch
         current_size=None,
         reconstruct_significant_only=True,
     )
+    Ft_y_deferred = local_result.Ft_y
+    Ft_ctf_deferred = local_result.Ft_ctf
+    ha_deferred = local_result.hard_assignments
+    stats_deferred = local_result.stats
+    del local_result
 
     np.testing.assert_array_equal(ha_deferred, ha_base)
     np.testing.assert_allclose(np.asarray(Ft_y_deferred), np.asarray(Ft_y_base), rtol=1e-5, atol=1e-6)
@@ -6120,7 +6159,7 @@ def test_local_k_class_identical_means_split_global_posterior(rng):
         translation_log_priors=np.zeros((2, 1), dtype=np.float32),
     )
 
-    Ft_y_base, Ft_ctf_base, ha_base, stats_base = run_local_em_exact(
+    local_result = run_local_em_exact(
         dataset,
         mean,
         mean_variance,
@@ -6132,6 +6171,11 @@ def test_local_k_class_identical_means_split_global_posterior(rng):
         current_size=None,
         reconstruct_significant_only=False,
     )
+    Ft_y_base = local_result.Ft_y
+    Ft_ctf_base = local_result.Ft_ctf
+    ha_base = local_result.hard_assignments
+    stats_base = local_result.stats
+    del local_result
     result = run_local_k_class_em(
         dataset,
         means,
@@ -6195,7 +6239,7 @@ def test_local_k_class_norm_correction_counts_shared_high_shell_once(rng):
         reconstruct_significant_only=False,
     )
 
-    *_, single_noise = run_local_em_exact(
+    local_result = run_local_em_exact(
         dataset,
         mean,
         mean_variance,
@@ -6204,7 +6248,9 @@ def test_local_k_class_norm_correction_counts_shared_high_shell_once(rng):
         "linear_interp",
         **engine_kwargs,
     )
-    *_, single_without_shared_high = run_local_em_exact(
+    single_noise = local_result.noise_stats
+    del local_result
+    local_result = run_local_em_exact(
         dataset,
         mean,
         mean_variance,
@@ -6214,6 +6260,8 @@ def test_local_k_class_norm_correction_counts_shared_high_shell_once(rng):
         include_unweighted_norm_high_shell=False,
         **engine_kwargs,
     )
+    single_without_shared_high = local_result.noise_stats
+    del local_result
     result = run_local_k_class_em(
         dataset,
         means,
@@ -6301,10 +6349,10 @@ def test_run_local_em_exact_can_report_significant_support_rotation_stats(rng):
         return_significant_counts=True,
     )
 
-    stats_base = base[3]
-    stats_support = support_stats[3]
-    noise_support = support_stats[4]
-    significant_counts = support_stats[5]
+    stats_base = base.stats
+    stats_support = support_stats.stats
+    noise_support = support_stats.noise_stats
+    significant_counts = support_stats.significant_counts
     np.testing.assert_allclose(
         np.sum(np.asarray(stats_base.rotation_posterior_sums)),
         dataset.n_images,
@@ -6357,7 +6405,7 @@ def test_run_local_em_exact_collects_unpruned_probability_values_for_global_thre
         return_reconstruction_probability_values=True,
     )
 
-    values = outputs[-1]["reconstruction_probability_values_by_image"][0]
+    values = outputs.profile["reconstruction_probability_values_by_image"][0]
     assert values.size == 3
     np.testing.assert_allclose(np.sum(values), 1.0, rtol=5e-3, atol=1e-5)
 
@@ -6398,7 +6446,7 @@ def test_run_local_em_exact_collects_global_reconstruction_sample_ids(rng):
         return_reconstruction_sample_indices=True,
     )
 
-    sample_ids = outputs[-1]["reconstruction_sample_indices_by_image"][0]
+    sample_ids = outputs.profile["reconstruction_sample_indices_by_image"][0]
     np.testing.assert_array_equal(sample_ids, np.array([7], dtype=np.int32))
 
 
@@ -6439,9 +6487,9 @@ def test_run_local_em_exact_collapses_fine_children_to_parent_posterior_ids(rng)
         return_reconstruction_sample_indices=True,
     )
 
-    hard_assignment = np.asarray(outputs[2])
-    stats = outputs[3]
-    sample_ids = outputs[-1]["reconstruction_sample_indices_by_image"][0]
+    hard_assignment = np.asarray(outputs.hard_assignments)
+    stats = outputs.stats
+    sample_ids = outputs.profile["reconstruction_sample_indices_by_image"][0]
     np.testing.assert_array_equal(hard_assignment, np.array([7], dtype=np.int32))
     np.testing.assert_array_equal(sample_ids, np.array([1], dtype=np.int64))
     posterior_sums = np.asarray(stats.rotation_posterior_sums)
@@ -6476,17 +6524,17 @@ def test_local_k_class_can_report_noise_support_class_sums(monkeypatch):
     def fake_run_local_em_exact(*args, **kwargs):
         class_index = len(calls)
         calls.append(kwargs)
-        return (
-            jnp.full(4, class_index + 1, dtype=jnp.complex64),
-            jnp.full(4, class_index + 1, dtype=jnp.float32),
-            jnp.zeros(2, dtype=jnp.int32),
-            RelionStats(
+        return LocalEMResult(
+            Ft_y=jnp.full(4, class_index + 1, dtype=jnp.complex64),
+            Ft_ctf=jnp.full(4, class_index + 1, dtype=jnp.float32),
+            hard_assignments=jnp.zeros(2, dtype=jnp.int32),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.asarray(class_log_evidence[class_index], dtype=jnp.float32),
                 best_log_score_per_image=jnp.full(2, class_index, dtype=jnp.float32),
                 max_posterior_per_image=jnp.full(2, 0.5, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.asarray([support_sumw[class_index]], dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.ones(1, dtype=jnp.float32),
                 wsum_img_power=jnp.ones(1, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -6583,14 +6631,14 @@ def test_local_k_class_uses_global_reconstruction_threshold(monkeypatch):
             max_posterior_per_image=jnp.ones(1, dtype=jnp.float32),
             rotation_posterior_sums=jnp.ones(1, dtype=jnp.float32),
         )
-        base = (
-            jnp.full(4, class_index + 1, dtype=jnp.complex64),
-            jnp.full(4, class_index + 1, dtype=jnp.float32),
-            jnp.zeros(1, dtype=jnp.int32),
-            stats,
+        base = LocalEMResult(
+            Ft_y=jnp.full(4, class_index + 1, dtype=jnp.complex64),
+            Ft_ctf=jnp.full(4, class_index + 1, dtype=jnp.float32),
+            hard_assignments=jnp.zeros(1, dtype=jnp.int32),
+            stats=stats,
         )
         if kwargs.get("return_profile"):
-            return base + ({"reconstruction_probability_values_by_image": support_values[class_index]},)
+            return replace(base, profile={"reconstruction_probability_values_by_image": support_values[class_index]})
         return base
 
     monkeypatch.setattr(k_class_module, "run_local_em_exact", fake_run_local_em_exact)
@@ -6891,7 +6939,10 @@ def test_run_local_em_exact_windowed_path_computes_reconstruction_abs2_without_f
         return_profile=False,
     )
 
-    Ft_y_exact, Ft_ctf_exact, ha_exact, stats_exact = outputs
+    Ft_y_exact = outputs.Ft_y
+    Ft_ctf_exact = outputs.Ft_ctf
+    ha_exact = outputs.hard_assignments
+    stats_exact = outputs.stats
     assert Ft_y_exact.shape == (VOLUME_SIZE,)
     assert Ft_ctf_exact.shape == (VOLUME_SIZE,)
     assert ha_exact.shape == (1,)
@@ -6979,7 +7030,11 @@ def test_run_local_em_exact_windowed_with_pre_shifts_matches_dense_engine(rng):
     noise_dense = em_result.noise_stats
     del em_result
 
-    Ft_y_exact, Ft_ctf_exact, ha_exact, stats_exact, noise_exact = exact_outputs
+    Ft_y_exact = exact_outputs.Ft_y
+    Ft_ctf_exact = exact_outputs.Ft_ctf
+    ha_exact = exact_outputs.hard_assignments
+    stats_exact = exact_outputs.stats
+    noise_exact = exact_outputs.noise_stats
     np.testing.assert_array_equal(ha_exact, ha_dense)
     assert np.asarray(Ft_y_exact).shape == np.asarray(Ft_y_dense).shape
     assert np.asarray(Ft_ctf_exact).shape == np.asarray(Ft_ctf_dense).shape
@@ -7080,8 +7135,18 @@ def test_run_local_em_exact_batched_matches_single_image_chunks(rng):
         image_pre_shifts=np.array([[1.0, -1.0], [-1.0, 1.0], [0.0, 0.0]], dtype=np.float32),
     )
 
-    Ft_y_b, Ft_ctf_b, ha_b, stats_b, noise_b, profile_b = batched
-    Ft_y_s, Ft_ctf_s, ha_s, stats_s, noise_s, profile_s = single
+    Ft_y_b = batched.Ft_y
+    Ft_ctf_b = batched.Ft_ctf
+    ha_b = batched.hard_assignments
+    stats_b = batched.stats
+    noise_b = batched.noise_stats
+    profile_b = batched.profile
+    Ft_y_s = single.Ft_y
+    Ft_ctf_s = single.Ft_ctf
+    ha_s = single.hard_assignments
+    stats_s = single.stats
+    noise_s = single.noise_stats
+    profile_s = single.profile
     assert int(profile_b["n_chunks"]) < int(profile_s["n_chunks"])
     np.testing.assert_array_equal(ha_b, ha_s)
     np.testing.assert_allclose(np.asarray(Ft_y_b), np.asarray(Ft_y_s), atol=1e-5, rtol=1e-5)
@@ -7210,8 +7275,18 @@ def test_run_local_em_exact_default_path_matches_debug_split_path(monkeypatch, r
         **common_kwargs,
     )
 
-    Ft_y_default, Ft_ctf_default, hard_default, stats_default, noise_default, profile_default = default
-    Ft_y_split, Ft_ctf_split, hard_split, stats_split, noise_split, profile_split = split
+    Ft_y_default = default.Ft_y
+    Ft_ctf_default = default.Ft_ctf
+    hard_default = default.hard_assignments
+    stats_default = default.stats
+    noise_default = default.noise_stats
+    profile_default = default.profile
+    Ft_y_split = split.Ft_y
+    Ft_ctf_split = split.Ft_ctf
+    hard_split = split.hard_assignments
+    stats_split = split.stats
+    noise_split = split.noise_stats
+    profile_split = split.profile
     assert int(profile_default["big_jit_bucket_count"]) > 0
     assert int(profile_split["big_jit_bucket_count"]) == 0
     assert bool(profile_default["fused_score_mstep_enabled"]) is True
@@ -7346,8 +7421,18 @@ def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng,
         **common_kwargs,
     )
 
-    Ft_y_big, Ft_ctf_big, hard_big, stats_big, noise_big, profile_big = big
-    Ft_y_split, Ft_ctf_split, hard_split, stats_split, noise_split, profile_split = split
+    Ft_y_big = big.Ft_y
+    Ft_ctf_big = big.Ft_ctf
+    hard_big = big.hard_assignments
+    stats_big = big.stats
+    noise_big = big.noise_stats
+    profile_big = big.profile
+    Ft_y_split = split.Ft_y
+    Ft_ctf_split = split.Ft_ctf
+    hard_split = split.hard_assignments
+    stats_split = split.stats
+    noise_split = split.noise_stats
+    profile_split = split.profile
     assert int(profile_big["big_jit_bucket_count"]) == 1
     assert int(profile_split["big_jit_bucket_count"]) == 0
     np.testing.assert_array_equal(hard_big, hard_split)
@@ -7465,8 +7550,16 @@ def test_run_local_em_exact_score_only_big_jit_matches_debug_split(monkeypatch, 
         **common_kwargs,
     )
 
-    Ft_y_big, Ft_ctf_big, hard_big, stats_big, profile_big = big
-    Ft_y_split, Ft_ctf_split, hard_split, stats_split, profile_split = split
+    Ft_y_big = big.Ft_y
+    Ft_ctf_big = big.Ft_ctf
+    hard_big = big.hard_assignments
+    stats_big = big.stats
+    profile_big = big.profile
+    Ft_y_split = split.Ft_y
+    Ft_ctf_split = split.Ft_ctf
+    hard_split = split.hard_assignments
+    stats_split = split.stats
+    profile_split = split.profile
     assert int(profile_big["big_jit_bucket_count"]) == 1
     assert int(profile_split["big_jit_bucket_count"]) == 0
     assert bool(profile_big["score_only"]) is True
@@ -7560,7 +7653,11 @@ def test_local_score_debug_dump_defaults_to_big_jit(monkeypatch, rng, tmp_path):
         score_only=True,
     )
 
-    _, _, _, _, profile = result
+    _ = result.Ft_y
+    _ = result.Ft_ctf
+    _ = result.hard_assignments
+    _ = result.stats
+    profile = result.profile
     assert int(profile["big_jit_bucket_count"]) == 1
     assert int(profile["big_jit_debug_bucket_count"]) == 1
     score_dumps = sorted(score_dump_dir.glob("local_score_it*_image_0*.npz"))
@@ -7664,8 +7761,8 @@ def test_local_score_debug_dump_operands_stay_on_big_jit(monkeypatch, rng, tmp_p
         **common_kwargs,
     )
 
-    profile_big = big[-1]
-    profile_split = split[-1]
+    profile_big = big.profile
+    profile_split = split.profile
     assert int(profile_big["big_jit_bucket_count"]) == 1
     assert int(profile_big["big_jit_debug_bucket_count"]) == 1
     assert int(profile_split["big_jit_bucket_count"]) == 0
@@ -7787,8 +7884,12 @@ def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
         **common_kwargs,
     )
 
-    _, _, hard_assignment, stats, profile = result
-    np.testing.assert_array_equal(hard_assignment, baseline[2])
+    _ = result.Ft_y
+    _ = result.Ft_ctf
+    hard_assignment = result.hard_assignments
+    stats = result.stats
+    profile = result.profile
+    np.testing.assert_array_equal(hard_assignment, baseline.hard_assignments)
     for field in (
         "log_evidence_per_image",
         "max_posterior_per_image",
@@ -7796,7 +7897,7 @@ def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
     ):
         np.testing.assert_allclose(
             np.asarray(getattr(stats, field)),
-            np.asarray(getattr(baseline[3], field)),
+            np.asarray(getattr(baseline.stats, field)),
             atol=1e-6,
             rtol=1e-6,
         )
@@ -7827,7 +7928,7 @@ def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
         **common_kwargs,
     )
 
-    target_only_profile = target_only_result[-1]
+    target_only_profile = target_only_result.profile
     assert int(target_only_profile["n_chunks"]) == 1
     assert int(target_only_profile["big_jit_bucket_count"]) == 1
     assert int(target_only_profile["big_jit_debug_bucket_count"]) == 1
@@ -7902,7 +8003,11 @@ def test_local_score_debug_force_split_only_splits_target_bucket(monkeypatch, rn
         score_only=True,
     )
 
-    _, _, _, _, profile = result
+    _ = result.Ft_y
+    _ = result.Ft_ctf
+    _ = result.hard_assignments
+    _ = result.stats
+    profile = result.profile
     assert int(profile["n_chunks"]) > 1
     assert int(profile["big_jit_bucket_count"]) == int(profile["n_chunks"]) - 1
     assert int(profile["big_jit_debug_bucket_count"]) == 0
@@ -8070,8 +8175,18 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
         **common_kwargs,
     )
 
-    Ft_y_big, Ft_ctf_big, hard_big, stats_big, noise_big, profile_big = big
-    Ft_y_split, Ft_ctf_split, hard_split, stats_split, noise_split, profile_split = split
+    Ft_y_big = big.Ft_y
+    Ft_ctf_big = big.Ft_ctf
+    hard_big = big.hard_assignments
+    stats_big = big.stats
+    noise_big = big.noise_stats
+    profile_big = big.profile
+    Ft_y_split = split.Ft_y
+    Ft_ctf_split = split.Ft_ctf
+    hard_split = split.hard_assignments
+    stats_split = split.stats
+    noise_split = split.noise_stats
+    profile_split = split.profile
     assert int(profile_big["big_jit_bucket_count"]) == 1
     assert int(profile_split["big_jit_bucket_count"]) == 0
     assert profile_big["projection_mode"].item() == "relion_projector"
@@ -8154,8 +8269,16 @@ def test_run_local_em_exact_relion_projection_cache_matches_uncached_big_jit(mon
         **common_kwargs,
     )
 
-    Ft_y_cached, Ft_ctf_cached, hard_cached, stats_cached, profile_cached = cached
-    Ft_y_uncached, Ft_ctf_uncached, hard_uncached, stats_uncached, profile_uncached = uncached
+    Ft_y_cached = cached.Ft_y
+    Ft_ctf_cached = cached.Ft_ctf
+    hard_cached = cached.hard_assignments
+    stats_cached = cached.stats
+    profile_cached = cached.profile
+    Ft_y_uncached = uncached.Ft_y
+    Ft_ctf_uncached = uncached.Ft_ctf
+    hard_uncached = uncached.hard_assignments
+    stats_uncached = uncached.stats
+    profile_uncached = uncached.profile
     assert int(profile_cached["big_jit_bucket_count"]) == 1
     assert bool(profile_cached["relion_projection_cache_enabled"])
     assert int(profile_cached["relion_projection_cache_rows"]) == all_rotations.shape[0]
@@ -8329,8 +8452,16 @@ def test_local_mstep_rotation_override_changes_only_adjoint_outputs(monkeypatch,
         **kwargs,
     )
 
-    Ft_y_baseline, Ft_ctf_baseline, hard_baseline, stats_baseline, profile_baseline = baseline
-    Ft_y_overridden, Ft_ctf_overridden, hard_overridden, stats_overridden, profile_overridden = overridden
+    Ft_y_baseline = baseline.Ft_y
+    Ft_ctf_baseline = baseline.Ft_ctf
+    hard_baseline = baseline.hard_assignments
+    stats_baseline = baseline.stats
+    profile_baseline = baseline.profile
+    Ft_y_overridden = overridden.Ft_y
+    Ft_ctf_overridden = overridden.Ft_ctf
+    hard_overridden = overridden.hard_assignments
+    stats_overridden = overridden.stats
+    profile_overridden = overridden.profile
     if route == "split":
         assert int(profile_baseline["big_jit_bucket_count"]) == 0
         assert int(profile_overridden["big_jit_bucket_count"]) == 0
@@ -8366,7 +8497,7 @@ def test_run_local_em_exact_significant_support_uses_sparse_big_jit_packed_backp
         max_significants=-1,
     )
 
-    profile = outputs[-1]
+    profile = outputs.profile
     assert int(profile["big_jit_bucket_count"]) > 0
     assert int(profile["sparse_big_jit_bucket_count"]) > 0
     assert int(profile["sum_reconstruction_rows"]) < int(profile["sum_padded_rows"])
@@ -8411,14 +8542,14 @@ def test_run_local_em_exact_over_cap_significant_support_defaults_to_deferred_bi
         **kwargs,
     )
 
-    profile = deferred[-1]
+    profile = deferred.profile
     assert int(profile["big_jit_bucket_count"]) > 0
     assert int(profile["sparse_big_jit_bucket_count"]) > 0
-    np.testing.assert_array_equal(deferred[2], sparse[2])
-    np.testing.assert_allclose(np.asarray(deferred[0]), np.asarray(sparse[0]), rtol=1e-5, atol=1e-6)
-    np.testing.assert_allclose(np.asarray(deferred[1]), np.asarray(sparse[1]), rtol=1e-5, atol=1e-6)
-    _assert_relion_stats_allclose(deferred[3], sparse[3])
-    _assert_noise_stats_allclose(deferred[4], sparse[4])
+    np.testing.assert_array_equal(deferred.hard_assignments, sparse.hard_assignments)
+    np.testing.assert_allclose(np.asarray(deferred.Ft_y), np.asarray(sparse.Ft_y), rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(deferred.Ft_ctf), np.asarray(sparse.Ft_ctf), rtol=1e-5, atol=1e-6)
+    _assert_relion_stats_allclose(deferred.stats, sparse.stats)
+    _assert_noise_stats_allclose(deferred.noise_stats, sparse.noise_stats)
 
 
 def test_run_local_em_exact_deferred_big_jit_no_noise_matches_sparse_big_jit(monkeypatch, rng):
@@ -8460,18 +8591,18 @@ def test_run_local_em_exact_deferred_big_jit_no_noise_matches_sparse_big_jit(mon
         **kwargs,
     )
 
-    sparse_profile = sparse[-1]
-    deferred_profile = deferred[-1]
+    sparse_profile = sparse.profile
+    deferred_profile = deferred.profile
     assert int(sparse_profile["big_jit_bucket_count"]) > 0
     assert int(deferred_profile["big_jit_bucket_count"]) > 0
     assert int(sparse_profile["sparse_big_jit_bucket_count"]) > 0
     assert int(deferred_profile["sparse_big_jit_bucket_count"]) > 0
-    assert len(sparse) == 5
-    assert len(deferred) == 5
-    np.testing.assert_array_equal(deferred[2], sparse[2])
-    np.testing.assert_allclose(np.asarray(deferred[0]), np.asarray(sparse[0]), rtol=1e-5, atol=1e-6)
-    np.testing.assert_allclose(np.asarray(deferred[1]), np.asarray(sparse[1]), rtol=1e-5, atol=1e-6)
-    _assert_relion_stats_allclose(deferred[3], sparse[3])
+    assert sparse.noise_stats is None
+    assert deferred.noise_stats is None
+    np.testing.assert_array_equal(deferred.hard_assignments, sparse.hard_assignments)
+    np.testing.assert_allclose(np.asarray(deferred.Ft_y), np.asarray(sparse.Ft_y), rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(deferred.Ft_ctf), np.asarray(sparse.Ft_ctf), rtol=1e-5, atol=1e-6)
+    _assert_relion_stats_allclose(deferred.stats, sparse.stats)
 
 
 def test_run_local_em_exact_processed_half_cache_matches_uncached_split(monkeypatch, rng):
@@ -8540,8 +8671,18 @@ def test_run_local_em_exact_processed_half_cache_matches_uncached_split(monkeypa
         **common_kwargs,
     )
 
-    Ft_y_uncached, Ft_ctf_uncached, hard_uncached, stats_uncached, noise_uncached, profile_uncached = uncached
-    Ft_y_cached, Ft_ctf_cached, hard_cached, stats_cached, noise_cached, profile_cached = cached
+    Ft_y_uncached = uncached.Ft_y
+    Ft_ctf_uncached = uncached.Ft_ctf
+    hard_uncached = uncached.hard_assignments
+    stats_uncached = uncached.stats
+    noise_uncached = uncached.noise_stats
+    profile_uncached = uncached.profile
+    Ft_y_cached = cached.Ft_y
+    Ft_ctf_cached = cached.Ft_ctf
+    hard_cached = cached.hard_assignments
+    stats_cached = cached.stats
+    noise_cached = cached.noise_stats
+    profile_cached = cached.profile
     assert bool(profile_uncached["processed_half_cache_enabled"]) is False
     assert bool(profile_cached["processed_half_cache_enabled"]) is True
     np.testing.assert_array_equal(hard_uncached, hard_cached)

@@ -102,7 +102,7 @@ from recovar.em.dense_single_volume.helpers.translation_prior import (
     translation_sqdist_angstrom,
     validate_translation_prior_centers,
 )
-from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
+from recovar.em.dense_single_volume.helpers.types import LocalEMResult, make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_ctf_sums_from_probs_sum_t,
@@ -812,42 +812,6 @@ def _adjoint_slice_volume_maybe_windowed_row_chunks(
         )
         n_chunks += 1
     return updated, n_chunks
-
-
-def _local_em_return_tuple(
-    Ft_y,
-    Ft_ctf,
-    hard_assignment,
-    relion_stats,
-    *,
-    accumulate_noise: bool,
-    return_profile: bool,
-    return_best_pose_details: bool,
-    return_significant_counts: bool = False,
-    best_pose_rotations=None,
-    best_pose_translations=None,
-    best_pose_rotation_ids=None,
-    noise_stats=None,
-    profile_summary=None,
-    significant_counts=None,
-):
-    result = [Ft_y, Ft_ctf, hard_assignment]
-    if return_best_pose_details:
-        result.extend(
-            [
-                best_pose_rotations,
-                best_pose_translations,
-                best_pose_rotation_ids,
-            ]
-        )
-    result.append(relion_stats)
-    if accumulate_noise:
-        result.append(noise_stats)
-    if return_profile:
-        result.append(profile_summary)
-    if return_significant_counts:
-        result.append(significant_counts)
-    return tuple(result)
 
 
 def _project_local_bucket(
@@ -1920,7 +1884,7 @@ def run_local_em_exact(
     return_reconstruction_sample_indices: bool = False,
     return_significant_counts: bool = False,
     score_only: bool = False,
-):
+) -> LocalEMResult:
     """Run exact local EM over per-image local hypothesis sets.
 
     ``debug_pass_label`` is diagnostic-only: it is appended verbatim to
@@ -1930,6 +1894,11 @@ def run_local_em_exact(
     debug_iteration (e.g. local search's pass-1 "parent" probe followed by
     its pass-2 fine call) must pass distinct labels, or the later call's
     dump silently overwrites the earlier one at the same path.
+
+    Returns named accumulators, assignments and statistics. Optional pose,
+    noise, profile and significant-count fields are None when disabled.
+    Requesting reconstruction probabilities or sample IDs also enables the
+    profile that carries those captures, as with explicit ``return_profile``.
     """
 
     score_only = bool(score_only)
@@ -5090,20 +5059,16 @@ def run_local_em_exact(
         )
 
     if not return_profile:
-        return _local_em_return_tuple(
-            Ft_y,
-            Ft_ctf,
-            hard_assignment,
-            relion_stats,
-            accumulate_noise=accumulate_noise,
-            return_profile=False,
-            return_best_pose_details=return_best_pose_details,
-            return_significant_counts=return_significant_counts,
-            best_pose_rotations=best_pose_rotations,
-            best_pose_translations=best_pose_translations,
-            best_pose_rotation_ids=best_pose_rotation_ids,
-            noise_stats=noise_stats,
-            significant_counts=significant_counts,
+        return LocalEMResult(
+            Ft_y=Ft_y,
+            Ft_ctf=Ft_ctf,
+            hard_assignments=hard_assignment,
+            stats=relion_stats,
+            best_pose_rotations=best_pose_rotations if return_best_pose_details else None,
+            best_pose_translations=best_pose_translations if return_best_pose_details else None,
+            best_pose_rotation_ids=best_pose_rotation_ids if return_best_pose_details else None,
+            noise_stats=noise_stats if accumulate_noise else None,
+            significant_counts=significant_counts if return_significant_counts else None,
         )
 
     _block_until_ready(Ft_y, Ft_ctf)
@@ -5192,19 +5157,15 @@ def run_local_em_exact(
         )
     if reconstruction_sample_indices_by_image is not None:
         profile_summary["reconstruction_sample_indices_by_image"] = tuple(reconstruction_sample_indices_by_image)
-    return _local_em_return_tuple(
-        Ft_y,
-        Ft_ctf,
-        hard_assignment,
-        relion_stats,
-        accumulate_noise=accumulate_noise,
-        return_profile=True,
-        return_best_pose_details=return_best_pose_details,
-        return_significant_counts=return_significant_counts,
-        best_pose_rotations=best_pose_rotations,
-        best_pose_translations=best_pose_translations,
-        best_pose_rotation_ids=best_pose_rotation_ids,
-        noise_stats=noise_stats,
-        profile_summary=profile_summary,
-        significant_counts=significant_counts,
+    return LocalEMResult(
+        Ft_y=Ft_y,
+        Ft_ctf=Ft_ctf,
+        hard_assignments=hard_assignment,
+        stats=relion_stats,
+        best_pose_rotations=best_pose_rotations if return_best_pose_details else None,
+        best_pose_translations=best_pose_translations if return_best_pose_details else None,
+        best_pose_rotation_ids=best_pose_rotation_ids if return_best_pose_details else None,
+        noise_stats=noise_stats if accumulate_noise else None,
+        significant_counts=significant_counts if return_significant_counts else None,
+        profile=profile_summary,
     )

@@ -18,7 +18,7 @@ from recovar.em.dense_single_volume.batch_planning import _estimate_relion_em_ba
 from recovar.em.dense_single_volume.helpers.local_search import (
     _local_search_engine_rotation_block_size,
 )
-from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
+from recovar.em.dense_single_volume.helpers.types import LocalEMResult, NoiseStats, RelionStats
 from recovar.em.dense_single_volume.k_class import run_local_k_class_em
 from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
 from recovar.em.dense_single_volume.local_layout import build_local_hypothesis_layout
@@ -54,54 +54,6 @@ class _LocalSearchIterationResult:
     class_assignments: np.ndarray | None = None
     class_posterior_sums: np.ndarray | None = None
     class_full_posterior_sums: np.ndarray | None = None
-
-
-def _unpack_local_search_engine_outputs(
-    engine_outputs,
-    *,
-    accumulate_noise: bool,
-    return_profile: bool,
-    return_best_pose_details: bool,
-    return_significant_counts: bool,
-    class_details=None,
-) -> _LocalSearchIterationResult:
-    cursor = 0
-    Ft_y, Ft_ctf, hard_assignment = engine_outputs[cursor : cursor + 3]
-    cursor += 3
-    best_pose_rotations = best_pose_translations = best_pose_rotation_ids = None
-    if return_best_pose_details:
-        best_pose_rotations, best_pose_translations, best_pose_rotation_ids = engine_outputs[cursor : cursor + 3]
-        cursor += 3
-    relion_stats = engine_outputs[cursor]
-    cursor += 1
-    noise_stats = engine_outputs[cursor] if accumulate_noise else None
-    cursor += int(accumulate_noise)
-    profile_summary = engine_outputs[cursor] if return_profile else None
-    cursor += int(return_profile)
-    significant_counts = engine_outputs[cursor] if return_significant_counts else None
-    if class_details is None:
-        class_assignments = class_posterior_sums = class_full_posterior_sums = None
-    else:
-        if len(class_details) == 2:
-            class_assignments, class_posterior_sums = class_details
-            class_full_posterior_sums = class_posterior_sums
-        else:
-            class_assignments, class_posterior_sums, class_full_posterior_sums = class_details
-    return _LocalSearchIterationResult(
-        Ft_y=Ft_y,
-        Ft_ctf=Ft_ctf,
-        hard_assignment=hard_assignment,
-        relion_stats=relion_stats,
-        noise_stats=noise_stats,
-        profile_summary=profile_summary,
-        significant_counts=significant_counts,
-        best_pose_rotations=best_pose_rotations,
-        best_pose_translations=best_pose_translations,
-        best_pose_rotation_ids=best_pose_rotation_ids,
-        class_assignments=class_assignments,
-        class_posterior_sums=class_posterior_sums,
-        class_full_posterior_sums=class_full_posterior_sums,
-    )
 
 
 def _run_local_search_iteration(
@@ -398,21 +350,16 @@ def _run_local_search_iteration(
             np.asarray(class_mstep_posterior_sums, dtype=np.float64),
             np.asarray(k_class_result.class_posterior_sums, dtype=np.float64),
         )
-        engine_outputs = [
-            k_class_result.Ft_y,
-            k_class_result.Ft_ctf,
-            np.asarray(k_class_result.pose_assignments, dtype=np.int32),
-        ]
-        if return_best_pose_details:
-            engine_outputs.extend([
-                k_class_result.best_pose_rotations,
-                k_class_result.best_pose_translations,
-                k_class_result.best_pose_rotation_ids,
-            ])
-        engine_outputs.append(k_class_result.stats)
-        if accumulate_noise:
-            engine_outputs.append(k_class_result.aggregate_noise_stats)
-        engine_outputs = tuple(engine_outputs)
+        engine_outputs = LocalEMResult(
+            Ft_y=k_class_result.Ft_y,
+            Ft_ctf=k_class_result.Ft_ctf,
+            hard_assignments=np.asarray(k_class_result.pose_assignments, dtype=np.int32),
+            stats=k_class_result.stats,
+            best_pose_rotations=k_class_result.best_pose_rotations if return_best_pose_details else None,
+            best_pose_translations=k_class_result.best_pose_translations if return_best_pose_details else None,
+            best_pose_rotation_ids=k_class_result.best_pose_rotation_ids if return_best_pose_details else None,
+            noise_stats=k_class_result.aggregate_noise_stats if accumulate_noise else None,
+        )
     else:
         class_details = None
         engine_outputs = run_local_em_exact(
@@ -477,13 +424,24 @@ def _run_local_search_iteration(
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         )
 
-    result = _unpack_local_search_engine_outputs(
-        engine_outputs,
-        accumulate_noise=accumulate_noise,
-        return_profile=return_profile,
-        return_best_pose_details=return_best_pose_details,
-        return_significant_counts=return_significant_counts,
-        class_details=class_details,
+    if class_details is None:
+        class_assignments = class_posterior_sums = class_full_posterior_sums = None
+    else:
+        class_assignments, class_posterior_sums, class_full_posterior_sums = class_details
+    result = _LocalSearchIterationResult(
+        Ft_y=engine_outputs.Ft_y,
+        Ft_ctf=engine_outputs.Ft_ctf,
+        hard_assignment=engine_outputs.hard_assignments,
+        relion_stats=engine_outputs.stats,
+        noise_stats=engine_outputs.noise_stats,
+        profile_summary=engine_outputs.profile if return_profile else None,
+        significant_counts=engine_outputs.significant_counts,
+        best_pose_rotations=engine_outputs.best_pose_rotations,
+        best_pose_translations=engine_outputs.best_pose_translations,
+        best_pose_rotation_ids=engine_outputs.best_pose_rotation_ids,
+        class_assignments=class_assignments,
+        class_posterior_sums=class_posterior_sums,
+        class_full_posterior_sums=class_full_posterior_sums,
     )
 
     if return_profile and result.profile_summary is not None:
