@@ -64,10 +64,23 @@ This is kernel evidence; it does not establish K1/K4 trajectory quality or
 performance. Exact commands and results are under
 `pr180_integration_20260908/gpu_kernels/` in the review root.
 
-Broad CPU job Slurm13623235 is running on the same frozen commit. Its 6,817-case
-selection retains the previous GUI and shared-`/tmp` exclusions. PR180's added
-precision tests, changed API contracts and moved test IDs are recorded
-explicitly; any inherited failure remains a failure.
+Broad CPU job Slurm13623235 completed on frozen `42a3d6184` in 53 minutes
+(`della-h14n4`): 6,452 passed, 340 skipped and 25 failed. Source identities
+remained unchanged. The 6,817-case selection retains the previous GUI and
+shared-`/tmp` exclusions. The raw-ID comparison matches the reviewed inventory
+(123 added, 19 removed); no failure is waived. Relative to the prior CPU
+checkpoint, 14 failures remain, the K-class undefined-variable case now passes,
+and 11 cases change from passing to failing. Eight are local-search test stubs
+rejecting PR180's `dtype` keyword; one is the stale controller metadata guard
+fixed below. The other two are a sampling-grid fixture/ownership mismatch and
+a norm-reduction dtype expectation, still requiring focused review. Existing
+GPU/tool-availability and float32 arithmetic failures remain unqualified.
+
+Exact results and the raw comparison are in
+`pr180_integration_20260908/cpu_checkpoint/` under the output root, with sealed
+commands and source manifest at the corresponding path in the review root.
+The next CPU work is to resolve these focused contract checks, not rerun the
+whole suite for each test migration.
 
 The float32 K1 captured-state replay at frozen `42a3d6184` completed in
 Slurm13624326 (5,000 particles, 128 pixels, iteration 3 to 4, H100 80 GB).
@@ -113,7 +126,7 @@ numbered replay and final dispatch. Mutations and telemetry match; normalized
 function bodies and the retained controller/worker/test bodies are unchanged.
 The scale owner imports without loading the controller. Evidence is under
 `pr180_follower_owner_20260908/` in the review root. This structural change does
-not modify the frozen PR180 source used by the running CPU job.
+not modify the frozen PR180 source used by CPU job Slurm13623235.
 
 Follower scale/image-correction updates now share the scale owner as well.
 The controller supplies the existing setup, norm/scale statistics, precision
