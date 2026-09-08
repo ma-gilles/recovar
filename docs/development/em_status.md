@@ -98,6 +98,8 @@ source identities when incorporating evidence into the draft or later results.
 | Broader CPU fast guard | `5cc4724a7`; all 38 cases pass, retaining the previous 28 cases and adding the ten resolution contracts. Helper imports remain independent of the controller. |
 | Unread private controller parameters | `bbf1d6901`; three unused inputs and forwarding keywords removed. Private loop body and public signature are unchanged; 24 CPU tests, 27 exact dispatch comparisons and five matching errors passed. Public legacy no-op inputs are documented accurately. |
 | Approximate-accuracy convergence ownership | `7e7d92695`; policy and six constants moved to convergence helpers; two boolean wrappers removed. All 86 CPU cases, 532 exact policy values, two matching errors, 534 warning comparisons and 1,068 state-mutation checks pass; the original caller logger is preserved. |
+| Angular-grid policy ownership | `966bd0c64`; four unchanged helpers and the exhaustive-grid cap moved to convergence. All 119 CPU cases, 530 exact values, 288 matching errors and 1,636 input-mutation checks pass, including global/local and K-class finalization callers. |
+| Independent convergence policy tests | `3dd2cb107`; eight pure cases moved into `test_convergence.py`; all 90 convergence cases pass without importing the controller. All 414 case identities, fixtures and markers across the two affected modules are preserved. |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance
@@ -178,6 +180,15 @@ fixture identities, measurements and shellwise curves. An additional audit of
 37 explicitly image-ordered fields found exact recorded pose/support decisions;
 maximum Pmax difference was 0.000155002 and the largest per-field p95 difference
 was 0.0000503063. This still does not compare all candidate scores or accumulators.
+
+A new broad CPU checkpoint at frozen `966bd0c64` is submitted in
+Slurm13620809. It uses the same declared non-GUI CPU selection as the previous
+checkpoint, including its one shared-`/tmp` exclusion. Its separate pixi
+environment has the same lockfile and all 317 Python package versions. The
+automatic audit accounts for the twenty previously moved replay/resolution
+cases and compares every common case status; matching old failures remain
+failures. At this checkpoint the job is pending; it does not qualify later
+source changes.
 
 A later broad CPU checkpoint at frozen `f8ceeea2a` finished in Slurm13590326
 with **6,361 passed, 337 skipped and 15 failed**. All 6,713 collected cases were
