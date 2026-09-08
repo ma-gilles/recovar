@@ -86,6 +86,13 @@ source identities when incorporating evidence into the draft or later results.
 | Remaining scoring-output helpers | `3bdda606b`; 73 tests passed, Slurm13593442; 70 exact value/identity/mutation cases and 14 matching errors; four moved declarations and retained controller/output-module AST unchanged |
 | Paired historical scorecard validation | `db4aab19a`; 12 tests passed, Slurm13614908; 86 exact values, 2,286 matching errors and 40 standalone CLI checks; all four pinned Markdown reports unchanged |
 | Captured sampling grid ownership | `6fb793698`; 104 local CPU tests passed; 108 exact outputs and 22 matching errors; three moved function ASTs and retained controller/replay AST unchanged; strict docs passed; Slurm13616833 was cancelled before execution |
+| Explicit sampling schedule ownership | `1331659e7`; 84 local CPU tests passed; 36 exact schedules, 87 matching errors and 36 state-transition comparisons; moved functions and retained numerical AST unchanged |
+| RELION projector preparation ownership | `9cf18fb34`; 24 focused CPU tests passed; 24 reference/cache/dump comparisons, six captured-array identity cases and 18 matching errors; retained numerical AST unchanged; strict docs passed |
+| Captured replay test organization | `3535f1a4d`; 10 moved cases passed; the 352-case original module inventory equals 342 remaining plus 10 moved cases, with parameter IDs and assertions preserved. The initial independent-import check exposed the package dependency fixed below. |
+| Helper/controller import boundary | `433ed8761`; 12 focused tests and the then-16-case CPU guard passed; seven fresh helper imports leave the controller unloaded; all 20 retained exports preserve object identities. All 6,714 non-GUI unit cases collected; collection alone is not execution. |
+| Fast guard replay and sampling contracts | `517daf1c7`; 28 CPU cases passed in 47.70 seconds; all 16 previous cases retained, plus 12 existing replay/schedule cases. Fresh-process import boundary, ancestry, mirrored guides and strict docs passed. |
+| Controller box-size names | `13318f807`; 17 focused FSC/current-size CPU tests passed; bijective local-name normalization preserves the entire controller AST, casts, keyword arguments and stored fields |
+| Standalone diagnostic hashing | `f0612975f`; 387 CPU tests passed; 518 exact hashes and 222 matching errors across 74 scripts. All 74 module CLIs and 50 direct CLIs pass; 24 direct-entry failures reproduce on the unchanged parent. Strict docs pass; 14 lint diagnostics and 66 formatting requests remain inherited. |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance
