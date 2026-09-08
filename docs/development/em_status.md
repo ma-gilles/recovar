@@ -1,5 +1,55 @@
 # Current EM development scope
 
+## Shared VDAM performance transfer — September 8
+
+The user authorized transferring applicable VDAM performance fixes onto PR179
+while preserving its API and ownership cleanup. The first bounded hypothesis
+is that equivalent dataset wrappers should reuse the shared local BigJIT
+executable: its preprocessing does not call the dataset-bound `process_fn`,
+which currently adds an irrelevant identity to the static compilation key.
+The transfer keeps the full configuration on consumers that use preprocessing.
+The port follows PR179 through `6ee49dc5c` and uses its named `LocalEMResult`
+fields. Validation covers full local reconstruction/noise and score-only calls;
+the prior static-key behavior is replayed at the same numeric boundary.
+All scientific result fields agree exactly, including dtype. Both cache tests
+failed before the fix (two compilations rather than one).
+
+| Transfer validation | Result |
+| --- | --- |
+| Cache reuse, exact old-key replay, existing BigJIT/split comparisons | 4 passed in 27.77 s |
+| CPU EM fast guard, including helper import boundary | 38 passed in 47.93 s |
+| Named-result and K-class caller contracts | 22 passed |
+| VDAM sparse adapter class/pseudo-halfset routing | 2 passed in 3.38 s with the matching RELION binding |
+
+The first caller attempt had two missing-binding failures. Reusing the
+source-matched PR180 binding (SHA256
+`2c56e67c08df885fad762e0f70707f8dc6b89f6ee04033b3d4822f22db8c6a21`)
+resolved them; no test was skipped or weakened. These CPU checks qualify the
+bounded port, not GPU trajectories, map quality, or end-to-end ordinary EM speed.
+
+The VDAM experiment source remains separately frozen at `8ab1a44be1` while
+100k/256 timing pairs and a compilation profile run on local A100 GPUs 1–3.
+The user now accepts approximately 1.5× RELION runtime as a threshold for
+prioritizing VDAM quality parity. This changes work priority, not scientific
+tolerances, the definition of equal speed, or completion requirements. The
+completed 3k/128 native-noise experiment measured 1.452–1.460× RELION but failed
+metadata equivalence; it cannot qualify representative speed or quality.
+
+The reusable design lessons are to exclude unused Python identities from JIT
+keys, keep logical counts separate from physical capacities, and preserve
+device residency across substantial stages. Existing translation and
+intermediate-shape variants still need measured treatment. Padding, different
+reduction orders, and new CUDA posterior/noise routes remain separate
+experiments until both numerical equivalence and runtime benefit are shown.
+Do not import the VDAM development branch wholesale over the structural work.
+
+PR179 carries a marked status block for these transfers. Refresh it from the
+current remote body and preserve concurrent cleanup updates. Local transfer
+evidence is under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em2_recovery_20260905T2044Z/pr179_sync_20260908/`.
+
+## Cleanup scope
+
 The milestone is behavior-preserving cleanup and development setup across
 RECOVAR, with EM first. GUI/frontend and the new HIA engine are excluded.
 Remove demonstrated dead/duplicate code, clarify ownership and APIs, maintain
