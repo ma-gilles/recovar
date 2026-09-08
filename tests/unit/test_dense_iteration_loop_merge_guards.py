@@ -18,6 +18,7 @@ import recovar.em.dense_single_volume.iteration_loop as iteration_loop
 from recovar.em.dense_single_volume import score_outputs
 import recovar.em.dense_single_volume.local_search_iteration as local_search_iteration
 from recovar.em.dense_single_volume.local_search_iteration import _LocalSearchIterationResult
+from recovar.em.dense_single_volume.helpers.convergence import _native_final_perturbation_healpix_order
 from recovar.em.dense_single_volume import mean_helpers, ppca_bridge, relion_replay
 from recovar.em.initial_model.iteration_loop import run_vdam_iterations
 
@@ -712,8 +713,8 @@ def test_native_final_perturbation_uses_active_local_order_but_preserves_global_
     local_state = SimpleNamespace(do_local_search=True, healpix_order=4)
     global_state = SimpleNamespace(do_local_search=False, healpix_order=4)
 
-    assert iteration_loop._native_final_perturbation_healpix_order(local_state, 3) == 4
-    assert iteration_loop._native_final_perturbation_healpix_order(global_state, 3) == 3
+    assert _native_final_perturbation_healpix_order(local_state, 3) == 4
+    assert _native_final_perturbation_healpix_order(global_state, 3) == 3
 
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
     assert "final_perturbation_healpix_order = _native_final_perturbation_healpix_order(" in source

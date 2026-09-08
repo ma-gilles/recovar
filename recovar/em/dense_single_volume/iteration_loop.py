@@ -37,6 +37,10 @@ from recovar.em.dense_single_volume.frozen_boundary import (
 )
 from recovar.em.dense_single_volume.firstiter_cc import _build_firstiter_cc_pass2_grids
 from recovar.em.dense_single_volume.helpers.convergence import (
+    _exhaustive_grid_order_for_state,
+    _final_local_sampling_orders,
+    _native_final_perturbation_healpix_order,
+    _direction_prior_healpix_order_for_scoring,
     _approx_acc_rot_policy_for_convergence,
     LOCAL_SEARCH_HEALPIX_ORDER,
     RefinementState,
@@ -329,7 +333,6 @@ logger = logging.getLogger(__name__)
 # cutoff when posterior weights are accumulated in float64.
 RELION_ADAPTIVE_FRACTION = float(np.float32("0.999"))
 
-RELION_MAX_FULL_GRID_ORDER = 4
 _FINAL_ALL_DATA_USE_MERGED_REFERENCE_ENV = "RECOVAR_FINAL_ALL_DATA_USE_MERGED_REFERENCE"
 _FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE_ENV = "RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE"
 _FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE_ENV = "RECOVAR_FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE"
@@ -776,22 +779,6 @@ def _concatenate_pose_stacks_or_none(stacks, *, trailing_shape, label):
     return np.concatenate(arrays, axis=0)
 
 
-def _exhaustive_grid_order_for_state(state: RefinementState) -> int:
-    """Return the global exhaustive HEALPix order for the current state.
-
-    Once RELION enables local angular searches, it no longer scores the full
-    HEALPix grid for that order. Keep the global base at the last exhaustive
-    order and let the local-search path build image-specific neighborhoods.
-    """
-    if state.do_local_search:
-        return min(
-            state.healpix_order,
-            max(0, state.auto_local_healpix_order - 1),
-            RELION_MAX_FULL_GRID_ORDER,
-        )
-    return min(state.healpix_order, RELION_MAX_FULL_GRID_ORDER)
-
-
 def _relion_local_pass1_current_size(
     *,
     pre_update_healpix_order: int,
@@ -904,68 +891,6 @@ def _remap_relion_follower_runtime_inputs(
             )
         )
     return stats_group_ids_per_half
-
-
-def _final_local_sampling_orders(
-    *,
-    state_healpix_order: int,
-    adaptive_oversampling: int,
-    final_sampling_healpix_order: int | None,
-) -> tuple[int, int]:
-    """Return RELION's final local parent and fine HEALPix orders.
-
-    The unnumbered final ``run_sampling.star`` may advance the parent order
-    beyond the last numbered optimiser state.  When that authoritative final
-    metadata exists, its order must replace the stale state order before
-    applying adaptive oversampling.  Runs without a final sampling STAR keep
-    the historical state-derived fallback.
-    """
-
-    parent_order = (
-        int(state_healpix_order)
-        if final_sampling_healpix_order is None
-        else int(final_sampling_healpix_order)
-    )
-    return parent_order, parent_order + int(adaptive_oversampling)
-
-
-def _native_final_perturbation_healpix_order(state, final_current_healpix_order: int) -> int:
-    """Return the angular-step order for native final sampling perturbation.
-
-    Local search deliberately caps the exhaustive trial grid below the active
-    sampling order. RELION nevertheless scales SamplingPerturbation by the
-    active local-search order recorded in ``sampling.star``, not by that capped
-    global-grid order. Global search keeps the historical exhaustive-grid
-    behavior.
-    """
-
-    if state.do_local_search:
-        return int(state.healpix_order)
-    return int(final_current_healpix_order)
-
-
-def _direction_prior_healpix_order_for_scoring(
-    *,
-    use_local: bool,
-    current_healpix_order: int,
-    state_healpix_order: int,
-    adaptive_oversampling: int,
-    local_search_order: int | None,
-) -> int:
-    """Return the grid order whose global rotations receive ``pdf_direction`` priors.
-
-    RELION's local-search branch scores the explicit local direction/psi
-    priors instead of ``mymodel.pdf_direction``. Callers must only use this
-    for exhaustive/global scoring.
-    """
-
-    if not use_local:
-        return int(current_healpix_order)
-    if int(adaptive_oversampling) > 0:
-        return int(state_healpix_order)
-    if local_search_order is None:
-        raise ValueError("local_search_order is required when local search is active")
-    return int(local_search_order)
 
 
 def _local_adaptive_pass2_full_parent_enabled() -> bool:

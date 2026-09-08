@@ -117,6 +117,11 @@ significance paths. This reference keeps separate orchestration but shares
 production preprocessing/scoring kernels; it does not independently validate
 those kernels. Production significance belongs to `helpers/significance.py`.
 
+Angular-grid order policies belong to `helpers/convergence.py`: exhaustive-grid
+capping, final parent/fine orders, perturbation order and direction-prior order.
+The controller supplies the active state and captured final-sampling metadata;
+the helpers preserve their distinct order choices.
+
 For an extraction, identify the actual boundary first: array layout, casts,
 reduction order, JIT scope, device placement, buffer ownership and returned
 statistics. Preserve those contracts during structural cleanup. The

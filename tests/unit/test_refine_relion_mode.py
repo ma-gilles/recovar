@@ -35,6 +35,8 @@ from recovar.em.dense_single_volume.helpers.types import DenseEMResult
 from recovar.em.dense_single_volume.em_engine import _batch_parameter_rows, run_em
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch as _fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.convergence import (
+    _exhaustive_grid_order_for_state,
+    _final_local_sampling_orders,
     RefinementState,
     healpix_angular_step,
     refine_angular_sampling,
@@ -86,7 +88,6 @@ from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.iteration_loop import (
     _combined_class_direction_prior_from_halves,
     _estimate_relion_em_batch_sizes,
-    _exhaustive_grid_order_for_state,
     _relion_expectation_coarse_size_order,
     _relion_local_pass1_current_size,
     _normalize_noise_variance_per_half,
@@ -375,7 +376,7 @@ def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
 def test_final_local_sampling_orders_use_advanced_final_star_parent():
     """100k replay advances final parent hp6->hp7, so os1 must score fine hp8."""
 
-    parent_order, fine_order = iteration_loop_module._final_local_sampling_orders(
+    parent_order, fine_order = _final_local_sampling_orders(
         state_healpix_order=6,
         adaptive_oversampling=1,
         final_sampling_healpix_order=7,
@@ -388,12 +389,12 @@ def test_final_local_sampling_orders_use_advanced_final_star_parent():
 def test_final_local_sampling_orders_preserve_equal_order_and_state_fallback():
     """10k replay stays at hp6, and missing final metadata retains state hp6."""
 
-    assert iteration_loop_module._final_local_sampling_orders(
+    assert _final_local_sampling_orders(
         state_healpix_order=6,
         adaptive_oversampling=1,
         final_sampling_healpix_order=6,
     ) == (6, 7)
-    assert iteration_loop_module._final_local_sampling_orders(
+    assert _final_local_sampling_orders(
         state_healpix_order=6,
         adaptive_oversampling=1,
         final_sampling_healpix_order=None,
