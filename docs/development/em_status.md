@@ -27,6 +27,42 @@ source-matched PR180 binding (SHA256
 resolved them; no test was skipped or weakened. These CPU checks qualify the
 bounded port, not GPU trajectories, map quality, or end-to-end ordinary EM speed.
 
+### Active integration and next quality check
+
+The transfer is published as `0b24aeb3c`. Active VDAM integration work now uses
+`codex/pr179-shared-bigjit-20260908`, tracking
+`origin/codex/recovar-structural-cleanup`, at
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr179_shared_bigjit_20260908`.
+Fetch and reconcile the current PR head before publication. Preserve the
+separate running VDAM source and its results. Rechecking dense/global EM found
+that its BigJIT already takes explicit arrays and scalar options without the
+dataset configuration, so the same cache-key edit is not applicable there.
+
+The completed historical VDAM noise audit (`13628018`, metadata `13628114`,
+maps `13628020`; source `8ab1a44be1`) localizes the first discrete disagreement
+to iteration 32, selected row 68 / particle ID 1367. Candidate repeat 2 chooses
+rotation ID 163798; both controls and candidate repeat 1 choose 111738.
+Selected particle identities agree. Competing-score margins are unavailable;
+this is not yet an adjudicated numerical tie. Continuous-state gates already
+fail at iteration 2, including control repeats.
+
+Candidate/control cross-FSC gates first fail at iterations 80 and 71, with
+120 and 130 failing checkpoints respectively. Control-repeat cross-FSC also
+fails at 120 checkpoints from iteration 80. RELION-repeat map checks pass all
+201 checkpoints. No GT-AUC delta gate fails, but that cannot override failed
+state/cross-FSC checks. These results do not qualify PR179's source.
+
+The next bounded quality hypothesis is that particle 1367's pose disagreement
+depends on incoming trajectory state rather than the same-state noise toggle.
+Capture the complete iteration-31 state during uninterrupted replay and hold
+iteration-32 candidates fixed across off/on and same-path repeats. Compare
+scores and posterior margins before interpreting the pose decision; move
+earlier if fixed-state arithmetic agrees. Existing map/model/data STAR files
+alone have not been proven to preserve the complete momentum/adaptive state.
+The read-only locator and input hashes are in `quality_triage.py` and
+`quality_triage.json` under the transfer evidence root below. No new GPU replay
+has been launched while local GPUs 1–3 remain occupied by the 100k panel.
+
 The VDAM experiment source remains separately frozen at `8ab1a44be1` while
 100k/256 timing pairs and a compilation profile run on local A100 GPUs 1–3.
 The user now accepts approximately 1.5× RELION runtime as a threshold for
