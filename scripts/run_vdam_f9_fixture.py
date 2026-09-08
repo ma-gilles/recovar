@@ -127,7 +127,7 @@ def main():
             half_spectrum_scoring=True,
             return_stats=True,
         )
-        new_mean = np.asarray(result[0]).reshape(ori, ori, ori)
+        new_mean = np.asarray(result.mean).reshape(ori, ori, ori)
         new_vol = np.asarray(ftu.get_idft3(jnp.asarray(new_mean))).real
         step = compute_stepsize(iter=it, phase_lengths=phases, is_3d_model=True, ref_dim=3)
         # Use VDAM schedule step for amplitude but clamp blend into

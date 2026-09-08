@@ -7,6 +7,7 @@ pytest.importorskip("jax")
 import jax.numpy as jnp
 
 import recovar.em.dense_single_volume.k_class as k_class_module
+from recovar.em.dense_single_volume.helpers.types import DenseEMResult
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
     class_weights_from_direction_prior,
     normalize_class_direction_prior_per_half,
@@ -559,12 +560,12 @@ def test_dense_k_class_selects_class_rotation_log_prior(monkeypatch):
             max_posterior_per_image=np.full(n_images, 0.5, dtype=np.float32),
             rotation_posterior_sums=np.zeros(rotations.shape[0], dtype=np.float32),
         )
-        return (
-            jnp.zeros_like(mean),
-            np.zeros(n_images, dtype=np.int32),
-            jnp.zeros_like(mean),
-            jnp.zeros_like(mean),
-            stats,
+        return DenseEMResult(
+            mean=jnp.zeros_like(mean),
+            hard_assignments=np.zeros(n_images, dtype=np.int32),
+            Ft_y=jnp.zeros_like(mean),
+            Ft_ctf=jnp.zeros_like(mean),
+            stats=stats,
         )
 
     monkeypatch.setattr(k_class_module, "run_em", fake_run_em)
@@ -631,12 +632,12 @@ def test_dense_k_class_decodes_best_pose_details(monkeypatch):
             max_posterior_per_image=np.ones(n_images, dtype=np.float32),
             rotation_posterior_sums=np.zeros(rotations_arg.shape[0], dtype=np.float32),
         )
-        return (
-            jnp.zeros_like(mean),
-            hard_assignment,
-            jnp.zeros_like(mean),
-            jnp.zeros_like(mean),
-            stats,
+        return DenseEMResult(
+            mean=jnp.zeros_like(mean),
+            hard_assignments=hard_assignment,
+            Ft_y=jnp.zeros_like(mean),
+            Ft_ctf=jnp.zeros_like(mean),
+            stats=stats,
         )
 
     monkeypatch.setattr(k_class_module, "run_em", fake_run_em)
@@ -682,12 +683,12 @@ def test_dense_k_class_single_class_skips_score_probe(monkeypatch):
             max_posterior_per_image=np.asarray([0.25, 0.75], dtype=np.float32),
             rotation_posterior_sums=np.arange(rotations_arg.shape[0], dtype=np.float32),
         )
-        return (
-            jnp.zeros_like(mean),
-            hard_assignment,
-            jnp.ones_like(mean),
-            jnp.ones_like(mean) * 2,
-            stats,
+        return DenseEMResult(
+            mean=jnp.zeros_like(mean),
+            hard_assignments=hard_assignment,
+            Ft_y=jnp.ones_like(mean),
+            Ft_ctf=jnp.ones_like(mean) * 2,
+            stats=stats,
         )
 
     monkeypatch.setattr(k_class_module, "run_em", fake_run_em)
@@ -759,12 +760,12 @@ def test_adaptive_k_class_firstiter_override_redecodes_best_pose_details(monkeyp
             max_posterior_per_image=np.ones(n_images, dtype=np.float32),
             rotation_posterior_sums=np.zeros(n_rot, dtype=np.float32),
         )
-        return (
-            jnp.zeros_like(mean),
-            hard,
-            jnp.zeros_like(mean),
-            jnp.zeros_like(mean),
-            stats,
+        return DenseEMResult(
+            mean=jnp.zeros_like(mean),
+            hard_assignments=hard,
+            Ft_y=jnp.zeros_like(mean),
+            Ft_ctf=jnp.zeros_like(mean),
+            stats=stats,
         )
 
     def fake_run_dense_k_class_em(
@@ -948,12 +949,12 @@ def test_adaptive_k_class_firstiter_uses_coarse_current_size_for_probe(monkeypat
             max_posterior_per_image=np.ones(n_images, dtype=np.float32),
             rotation_posterior_sums=np.zeros(n_rot, dtype=np.float32),
         )
-        return (
-            jnp.zeros_like(mean),
-            np.zeros(n_images, dtype=np.int32),
-            jnp.zeros_like(mean),
-            jnp.zeros_like(mean),
-            stats,
+        return DenseEMResult(
+            mean=jnp.zeros_like(mean),
+            hard_assignments=np.zeros(n_images, dtype=np.int32),
+            Ft_y=jnp.zeros_like(mean),
+            Ft_ctf=jnp.zeros_like(mean),
+            stats=stats,
         )
 
     def fake_run_dense_k_class_em(
@@ -1081,12 +1082,12 @@ def test_adaptive_k_class_firstiter_fine_pass_uses_global_winner_subsets(monkeyp
             max_posterior_per_image=np.ones(n_images, dtype=np.float32),
             rotation_posterior_sums=np.zeros(int(np.asarray(rotations).shape[0]), dtype=np.float32),
         )
-        return (
-            jnp.zeros_like(mean),
-            hard,
-            jnp.ones_like(mean) * (class_index + 1),
-            jnp.ones_like(jnp.real(mean)) * (class_index + 2),
-            stats,
+        return DenseEMResult(
+            mean=jnp.zeros_like(mean),
+            hard_assignments=hard,
+            Ft_y=jnp.ones_like(mean) * (class_index + 1),
+            Ft_ctf=jnp.ones_like(jnp.real(mean)) * (class_index + 2),
+            stats=stats,
         )
 
     monkeypatch.setattr(k_class_module, "run_em", fake_run_em)
@@ -1206,12 +1207,12 @@ def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(
             max_posterior_per_image=np.ones(n_images, dtype=np.float32),
             rotation_posterior_sums=np.zeros(int(np.asarray(rotations).shape[0]), dtype=np.float32),
         )
-        return (
-            jnp.zeros_like(mean),
-            hard,
-            jnp.zeros_like(mean),
-            jnp.zeros_like(jnp.real(mean)),
-            stats,
+        return DenseEMResult(
+            mean=jnp.zeros_like(mean),
+            hard_assignments=hard,
+            Ft_y=jnp.zeros_like(mean),
+            Ft_ctf=jnp.zeros_like(jnp.real(mean)),
+            stats=stats,
         )
 
     def fake_compute_pass2_stats_sparse(

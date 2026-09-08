@@ -29,6 +29,7 @@ import recovar.em.sampling as sampling_module
 import recovar.reconstruction.regularization as regularization_module
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
+from recovar.em.dense_single_volume.helpers.types import DenseEMResult
 from recovar.em.dense_single_volume.em_engine import _batch_parameter_rows, run_em
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch as _fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.convergence import (
@@ -5335,7 +5336,7 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         reconstruct_significant_only=False,
         return_profile=False,
     )
-    _, ha_dense, Ft_y_dense, Ft_ctf_dense, stats_dense, noise_dense = run_em(
+    em_result = run_em(
         dataset,
         mean,
         mean_variance,
@@ -5353,6 +5354,13 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         accumulate_noise=True,
         sparse_pass2=False,
     )
+    _ = em_result.mean
+    ha_dense = em_result.hard_assignments
+    Ft_y_dense = em_result.Ft_y
+    Ft_ctf_dense = em_result.Ft_ctf
+    stats_dense = em_result.stats
+    noise_dense = em_result.noise_stats
+    del em_result
 
     Ft_y_exact, Ft_ctf_exact, ha_exact, stats_exact, noise_exact = exact_outputs
     assert np.asarray(Ft_y_exact).size == VOLUME_SIZE
@@ -5653,23 +5661,23 @@ def test_run_em_dense_can_return_half_volume_accumulators(rng, monkeypatch):
     )
 
     half_shape = ftu.volume_shape_to_half_volume_shape(dataset.volume_shape)
-    assert full[0] is None
-    assert half[0] is None
-    assert np.asarray(full[2]).size == VOLUME_SIZE
-    assert np.asarray(full[3]).size == VOLUME_SIZE
-    assert np.asarray(half[2]).size == int(np.prod(half_shape))
-    assert np.asarray(half[3]).size == int(np.prod(half_shape))
+    assert full.mean is None
+    assert half.mean is None
+    assert np.asarray(full.Ft_y).size == VOLUME_SIZE
+    assert np.asarray(full.Ft_ctf).size == VOLUME_SIZE
+    assert np.asarray(half.Ft_y).size == int(np.prod(half_shape))
+    assert np.asarray(half.Ft_ctf).size == int(np.prod(half_shape))
     Ft_y_half_full, Ft_ctf_half_full = half_volume_accumulators_to_full(
-        half[2],
-        half[3],
+        half.Ft_y,
+        half.Ft_ctf,
         dataset.volume_shape,
     )
-    np.testing.assert_allclose(np.asarray(Ft_y_half_full), np.asarray(full[2]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(np.asarray(Ft_ctf_half_full), np.asarray(full[3]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_array_equal(np.asarray(half[1]), np.asarray(full[1]))
+    np.testing.assert_allclose(np.asarray(Ft_y_half_full), np.asarray(full.Ft_y), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(Ft_ctf_half_full), np.asarray(full.Ft_ctf), rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(np.asarray(half.hard_assignments), np.asarray(full.hard_assignments))
     np.testing.assert_allclose(
-        np.asarray(half[4].log_evidence_per_image),
-        np.asarray(full[4].log_evidence_per_image),
+        np.asarray(half.stats.log_evidence_per_image),
+        np.asarray(full.stats.log_evidence_per_image),
         rtol=1e-5,
         atol=1e-5,
     )
@@ -5903,7 +5911,7 @@ def test_dense_k_class_identical_means_split_global_posterior(rng):
     rotations = _make_rotations(2, seed=149)
     translations = np.zeros((1, 2), dtype=np.float32)
 
-    _, ha_base, Ft_y_base, Ft_ctf_base, stats_base = run_em(
+    em_result = run_em(
         dataset,
         mean,
         mean_variance,
@@ -5918,6 +5926,12 @@ def test_dense_k_class_identical_means_split_global_posterior(rng):
         return_stats=True,
         sparse_pass2=False,
     )
+    _ = em_result.mean
+    ha_base = em_result.hard_assignments
+    Ft_y_base = em_result.Ft_y
+    Ft_ctf_base = em_result.Ft_ctf
+    stats_base = em_result.stats
+    del em_result
     result = run_dense_k_class_em(
         dataset,
         means,
@@ -6799,7 +6813,7 @@ def test_run_local_em_exact_windowed_with_pre_shifts_matches_dense_engine(rng):
         image_pre_shifts=np.array([[0.5, -1.0]], dtype=np.float32),
     )
 
-    _, ha_dense, Ft_y_dense, Ft_ctf_dense, stats_dense, noise_dense = run_em(
+    em_result = run_em(
         dataset,
         mean,
         mean_variance,
@@ -6822,6 +6836,13 @@ def test_run_local_em_exact_windowed_with_pre_shifts_matches_dense_engine(rng):
         image_pre_shifts=np.array([[0.5, -1.0]], dtype=np.float32),
         current_size=6,
     )
+    _ = em_result.mean
+    ha_dense = em_result.hard_assignments
+    Ft_y_dense = em_result.Ft_y
+    Ft_ctf_dense = em_result.Ft_ctf
+    stats_dense = em_result.stats
+    noise_dense = em_result.noise_stats
+    del em_result
 
     Ft_y_exact, Ft_ctf_exact, ha_exact, stats_exact, noise_exact = exact_outputs
     np.testing.assert_array_equal(ha_exact, ha_dense)
@@ -9729,18 +9750,18 @@ class TestRelionModeSmokeTest:
             n_shells = experiment_dataset.image_shape[0] // 2 + 1
             recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
             ctf_value = ctf_values[idx]
-            return (
-                None,
-                np.zeros(n_images, dtype=np.int32),
-                jnp.ones(recon_vol_size, dtype=jnp.complex64),
-                jnp.full(recon_vol_size, ctf_value, dtype=jnp.complex64),
-                RelionStats(
+            return DenseEMResult(
+                mean=None,
+                hard_assignments=np.zeros(n_images, dtype=np.int32),
+                Ft_y=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+                Ft_ctf=jnp.full(recon_vol_size, ctf_value, dtype=jnp.complex64),
+                stats=RelionStats(
                     log_evidence_per_image=jnp.zeros(n_images, dtype=jnp.float32),
                     best_log_score_per_image=jnp.zeros(n_images, dtype=jnp.float32),
                     max_posterior_per_image=jnp.ones(n_images, dtype=jnp.float32),
                     rotation_posterior_sums=jnp.ones(np.asarray(rotations_arg).shape[0], dtype=jnp.float32),
                 ),
-                NoiseStats(
+                noise_stats=NoiseStats(
                     wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                     wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                     wsum_sigma2_offset=0.0,
@@ -10651,7 +10672,7 @@ class TestRelionModeSmokeTest:
         expected_per_half = []
         expected_mass_per_half = []
         for dataset in half_datasets:
-            _, _, _, _, stats, noise_stats = run_em(
+            em_result = run_em(
                 dataset,
                 init_volume,
                 init_tau,
@@ -10671,6 +10692,13 @@ class TestRelionModeSmokeTest:
                 return_stats=True,
                 accumulate_noise=True,
             )
+            _ = em_result.mean
+            _ = em_result.hard_assignments
+            _ = em_result.Ft_y
+            _ = em_result.Ft_ctf
+            stats = em_result.stats
+            noise_stats = em_result.noise_stats
+            del em_result
             expected_per_half.append(np.asarray(stats.max_posterior_per_image))
             expected_mass_per_half.append(float(np.asarray(noise_stats.sumw)))
         expected_ave_pmax = float(np.sum(expected_per_half[0], dtype=np.float64) / expected_mass_per_half[0])
@@ -10982,7 +11010,7 @@ class TestRelionModeSmokeTest:
             image_batch_size=N_IMAGES,
             rotation_block_size=1,
             return_stats=True,
-        )[4]
+        ).stats
         biased_prior = np.log(np.array([100.0, 1.0, 1.0], dtype=np.float32))
         biased_stats = run_em(
             half_datasets[0],
@@ -10996,7 +11024,7 @@ class TestRelionModeSmokeTest:
             rotation_block_size=1,
             translation_log_prior=biased_prior,
             return_stats=True,
-        )[4]
+        ).stats
         assert np.allclose(
             np.asarray(uniform_stats.max_posterior_per_image),
             1.0 / 3.0,
@@ -11253,7 +11281,7 @@ class TestRelionModeSmokeTest:
         image_pre_shifts = np.array([[1.5, -0.5], [-1.0, 1.25]], dtype=np.float32)
         current_size = 6
 
-        _, expected_ha, _, _ = run_em(
+        em_result = run_em(
             dataset,
             init_volume,
             init_tau,
@@ -11272,6 +11300,11 @@ class TestRelionModeSmokeTest:
             projection_padding_factor=2,
             use_float64_scoring=True,
         )
+        _ = em_result.mean
+        expected_ha = em_result.hard_assignments
+        _ = em_result.Ft_y
+        _ = em_result.Ft_ctf
+        del em_result
 
         monkeypatch.setenv("RECOVAR_SIGNIFICANCE_SCORE_CACHE", "off")
         _, _, actual_ha, _, _, _ = _compute_k_class_significance_batched(
@@ -11571,8 +11604,8 @@ class TestRelionModeSmokeTest:
                 relion_firstiter_winner_take_all=True,
                 **common_kwargs,
             )
-            expected_hard.append(np.asarray(result[1], dtype=np.int32))
-            expected_best.append(np.asarray(result[4].best_log_score_per_image, dtype=np.float32))
+            expected_hard.append(np.asarray(result.hard_assignments, dtype=np.int32))
+            expected_best.append(np.asarray(result.stats.best_log_score_per_image, dtype=np.float32))
 
         *_, full_stats = _compute_k_class_significance_batched(
             dataset,
@@ -11900,8 +11933,8 @@ class TestRelionModeSmokeTest:
                 rotation_log_prior=rotation_log_prior[class_index],
                 **common_kwargs,
             )
-            expected_hard.append(np.asarray(result[1], dtype=np.int32))
-            expected_best.append(np.asarray(result[4].best_log_score_per_image, dtype=np.float32))
+            expected_hard.append(np.asarray(result.hard_assignments, dtype=np.int32))
+            expected_best.append(np.asarray(result.stats.best_log_score_per_image, dtype=np.float32))
 
         *_, full_stats = _compute_k_class_significance_batched(
             dataset,
@@ -12917,18 +12950,18 @@ class TestRelionModeSmokeTest:
             n_images = experiment_dataset.n_units
             n_shells = experiment_dataset.image_shape[0] // 2 + 1
             recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-            return (
-                None,
-                np.zeros(n_images, dtype=np.int32),
-                jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-                jnp.ones(recon_vol_size, dtype=jnp.complex64),
-                RelionStats(
+            return DenseEMResult(
+                mean=None,
+                hard_assignments=np.zeros(n_images, dtype=np.int32),
+                Ft_y=jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+                Ft_ctf=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+                stats=RelionStats(
                     log_evidence_per_image=jnp.zeros(n_images, dtype=jnp.float32),
                     best_log_score_per_image=jnp.zeros(n_images, dtype=jnp.float32),
                     max_posterior_per_image=jnp.ones(n_images, dtype=jnp.float32),
                     rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
                 ),
-                NoiseStats(
+                noise_stats=NoiseStats(
                     wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                     wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                     wsum_sigma2_offset=offset_wsum,
@@ -12994,18 +13027,18 @@ class TestRelionModeSmokeTest:
             n_images = experiment_dataset.n_units
             n_shells = experiment_dataset.image_shape[0] // 2 + 1
             recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-            return (
-                None,
-                np.zeros(n_images, dtype=np.int32),
-                jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-                jnp.ones(recon_vol_size, dtype=jnp.complex64),
-                RelionStats(
+            return DenseEMResult(
+                mean=None,
+                hard_assignments=np.zeros(n_images, dtype=np.int32),
+                Ft_y=jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+                Ft_ctf=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+                stats=RelionStats(
                     log_evidence_per_image=jnp.zeros(n_images, dtype=jnp.float32),
                     best_log_score_per_image=jnp.zeros(n_images, dtype=jnp.float32),
                     max_posterior_per_image=jnp.ones(n_images, dtype=jnp.float32),
                     rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
                 ),
-                NoiseStats(
+                noise_stats=NoiseStats(
                     wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                     wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                     wsum_sigma2_offset=0.0,
@@ -14231,18 +14264,18 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
         _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
+        return DenseEMResult(
+            mean=None,
+            hard_assignments=np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            Ft_y=jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+            Ft_ctf=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -14415,18 +14448,18 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
         _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
+        return DenseEMResult(
+            mean=None,
+            hard_assignments=np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            Ft_y=jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+            Ft_ctf=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -14587,18 +14620,18 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
         _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
+        return DenseEMResult(
+            mean=None,
+            hard_assignments=np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            Ft_y=jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+            Ft_ctf=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -14696,18 +14729,18 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
         _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
+        return DenseEMResult(
+            mean=None,
+            hard_assignments=np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            Ft_y=jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+            Ft_ctf=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -14839,18 +14872,18 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
         _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
+        return DenseEMResult(
+            mean=None,
+            hard_assignments=np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            Ft_y=jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+            Ft_ctf=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -15039,18 +15072,18 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
         dense_calls.append(int(np.asarray(rotations).shape[0]))
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
+        return DenseEMResult(
+            mean=None,
+            hard_assignments=np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            Ft_y=jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+            Ft_ctf=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -15211,18 +15244,18 @@ def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
         dense_calls.append(int(np.asarray(rotations).shape[0]))
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
+        return DenseEMResult(
+            mean=None,
+            hard_assignments=np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            Ft_y=jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+            Ft_ctf=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -15379,18 +15412,18 @@ def test_relion_mode_writes_absolute_translations_from_previous_offset(
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         hard_assignment = np.full(experiment_dataset.n_units, 1, dtype=np.int32)
-        return (
-            None,
-            hard_assignment,
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
+        return DenseEMResult(
+            mean=None,
+            hard_assignments=hard_assignment,
+            Ft_y=jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+            Ft_ctf=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,
@@ -15819,18 +15852,18 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         _ = (mean, mean_variance, noise_variance, rotations, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            RelionStats(
+        return DenseEMResult(
+            mean=None,
+            hard_assignments=np.zeros(experiment_dataset.n_units, dtype=np.int32),
+            Ft_y=jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+            Ft_ctf=jnp.ones(recon_vol_size, dtype=jnp.complex64),
+            stats=RelionStats(
                 log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
                 max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
                 rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
             ),
-            NoiseStats(
+            noise_stats=NoiseStats(
                 wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
                 wsum_sigma2_offset=0.0,

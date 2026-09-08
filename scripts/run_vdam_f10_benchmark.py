@@ -102,7 +102,7 @@ def main():
             half_spectrum_scoring=True,
             return_stats=True,
         )
-        jax.block_until_ready(result[0])
+        jax.block_until_ready(result.mean)
         wall = time.time() - t0
         wall_times.append(wall)
         label = "  [JIT+first]" if it == 0 else ""

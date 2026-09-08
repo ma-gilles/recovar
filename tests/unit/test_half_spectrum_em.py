@@ -760,7 +760,7 @@ class TestFullIterationHalfMatches:
         translations = np.array(s["translations"])
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
-        new_mean1, ha1, Ft_y1, Ft_ctf1 = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -771,8 +771,13 @@ class TestFullIterationHalfMatches:
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
         )
+        new_mean1 = em_result.mean
+        ha1 = em_result.hard_assignments
+        Ft_y1 = em_result.Ft_y
+        Ft_ctf1 = em_result.Ft_ctf
+        del em_result
 
-        new_mean2, ha2, Ft_y2, Ft_ctf2 = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -783,6 +788,11 @@ class TestFullIterationHalfMatches:
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
         )
+        new_mean2 = em_result.mean
+        ha2 = em_result.hard_assignments
+        Ft_y2 = em_result.Ft_y
+        Ft_ctf2 = em_result.Ft_ctf
+        del em_result
 
         np.testing.assert_allclose(np.array(new_mean1), np.array(new_mean2), atol=1e-6)
         np.testing.assert_array_equal(ha1, ha2)
@@ -799,7 +809,7 @@ class TestFullIterationHalfMatches:
         translations = np.array(s["translations"])
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
-        _, ha, _, _ = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -810,6 +820,11 @@ class TestFullIterationHalfMatches:
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
         )
+        _ = em_result.mean
+        ha = em_result.hard_assignments
+        _ = em_result.Ft_y
+        _ = em_result.Ft_ctf
+        del em_result
 
         assert ha.shape == (N_IMAGES,)
         assert np.all(ha >= 0)
@@ -825,7 +840,7 @@ class TestFullIterationHalfMatches:
         translations = np.array(s["translations"])
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
-        new_mean, ha, Ft_y, Ft_ctf = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -836,6 +851,11 @@ class TestFullIterationHalfMatches:
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
         )
+        new_mean = em_result.mean
+        ha = em_result.hard_assignments
+        Ft_y = em_result.Ft_y
+        Ft_ctf = em_result.Ft_ctf
+        del em_result
 
         assert np.all(np.isfinite(np.array(new_mean)))
         assert np.all(np.isfinite(np.array(Ft_y)))
@@ -851,7 +871,7 @@ class TestFullIterationHalfMatches:
         translations = np.array(s["translations"])
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
-        _, hard_assignments, _, _, stats = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -863,6 +883,12 @@ class TestFullIterationHalfMatches:
             rotation_block_size=N_ROTATIONS,
             return_stats=True,
         )
+        _ = em_result.mean
+        hard_assignments = em_result.hard_assignments
+        _ = em_result.Ft_y
+        _ = em_result.Ft_ctf
+        stats = em_result.stats
+        del em_result
 
         batch_data, _, _, ctf_params, _, _, _ = next(
             ds.iter_batches(N_IMAGES, indices=np.arange(N_IMAGES), by_image=False)
@@ -951,7 +977,7 @@ class TestFullIterationHalfMatches:
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
         class_log_prior = float(np.log(0.25))
 
-        _, ha_base, Ft_y_base, Ft_ctf_base, stats_base, _ = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -965,7 +991,14 @@ class TestFullIterationHalfMatches:
             accumulate_noise=True,
             sparse_pass2=False,
         )
-        _, ha_prior, Ft_y_prior, Ft_ctf_prior, stats_prior = run_em(
+        _ = em_result.mean
+        ha_base = em_result.hard_assignments
+        Ft_y_base = em_result.Ft_y
+        Ft_ctf_base = em_result.Ft_ctf
+        stats_base = em_result.stats
+        _ = em_result.noise_stats
+        del em_result
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -979,6 +1012,12 @@ class TestFullIterationHalfMatches:
             return_stats=True,
             sparse_pass2=False,
         )
+        _ = em_result.mean
+        ha_prior = em_result.hard_assignments
+        Ft_y_prior = em_result.Ft_y
+        Ft_ctf_prior = em_result.Ft_ctf
+        stats_prior = em_result.stats
+        del em_result
 
         np.testing.assert_array_equal(ha_prior, ha_base)
         np.testing.assert_allclose(np.asarray(Ft_y_prior), np.asarray(Ft_y_base), rtol=1e-5, atol=1e-5)
@@ -1012,7 +1051,7 @@ class TestFullIterationHalfMatches:
         translations = np.array(s["translations"])
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
-        _, ha_base, Ft_y_base, Ft_ctf_base, stats_base, _ = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1026,6 +1065,13 @@ class TestFullIterationHalfMatches:
             accumulate_noise=True,
             sparse_pass2=False,
         )
+        _ = em_result.mean
+        ha_base = em_result.hard_assignments
+        Ft_y_base = em_result.Ft_y
+        Ft_ctf_base = em_result.Ft_ctf
+        stats_base = em_result.stats
+        _ = em_result.noise_stats
+        del em_result
         batch_data, _, _, ctf_params, _, _, _ = next(
             ds.iter_batches(N_IMAGES, indices=np.arange(N_IMAGES), by_image=False)
         )
@@ -1069,7 +1115,7 @@ class TestFullIterationHalfMatches:
         )
         log_score_offset = -0.5 * np.asarray(batch_norm).reshape(N_IMAGES)
         external_log_evidence = direct_log_z + log_score_offset + np.log(2.0)
-        _, ha_scaled, Ft_y_scaled, Ft_ctf_scaled, stats_scaled, _ = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1084,6 +1130,13 @@ class TestFullIterationHalfMatches:
             accumulate_noise=True,
             sparse_pass2=False,
         )
+        _ = em_result.mean
+        ha_scaled = em_result.hard_assignments
+        Ft_y_scaled = em_result.Ft_y
+        Ft_ctf_scaled = em_result.Ft_ctf
+        stats_scaled = em_result.stats
+        _ = em_result.noise_stats
+        del em_result
 
         np.testing.assert_array_equal(ha_scaled, ha_base)
         np.testing.assert_allclose(np.asarray(Ft_y_scaled), 0.5 * np.asarray(Ft_y_base), rtol=1e-5, atol=1e-5)
@@ -1112,7 +1165,7 @@ class TestFullIterationHalfMatches:
         translations = np.array(s["translations"])
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
-        _, _, _, _, stats = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1124,6 +1177,12 @@ class TestFullIterationHalfMatches:
             rotation_block_size=N_ROTATIONS,
             return_stats=True,
         )
+        _ = em_result.mean
+        _ = em_result.hard_assignments
+        _ = em_result.Ft_y
+        _ = em_result.Ft_ctf
+        stats = em_result.stats
+        del em_result
 
         batch_data, _, _, ctf_params, _, _, _ = next(
             ds.iter_batches(N_IMAGES, indices=np.arange(N_IMAGES), by_image=False)
@@ -1192,7 +1251,7 @@ class TestFullIterationHalfMatches:
         rotations = np.asarray(_make_rotations(2, seed=9))
         translations = np.array([[0.0, 0.0]], dtype=np.float32)
 
-        _, _, Ft_y, _, stats = run_em(
+        em_result = run_em(
             ds,
             mean,
             mean_variance,
@@ -1205,6 +1264,12 @@ class TestFullIterationHalfMatches:
             score_with_masked_images=True,
             return_stats=True,
         )
+        _ = em_result.mean
+        _ = em_result.hard_assignments
+        Ft_y = em_result.Ft_y
+        _ = em_result.Ft_ctf
+        stats = em_result.stats
+        del em_result
 
         np.testing.assert_allclose(
             np.asarray(stats.max_posterior_per_image),
@@ -1267,7 +1332,7 @@ class TestFullIterationHalfMatches:
 
         ds_subset = _SubsetDataset(ds, subset)
 
-        mean_subset, ha_subset, Ft_y_subset, Ft_ctf_subset = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1279,8 +1344,13 @@ class TestFullIterationHalfMatches:
             rotation_block_size=2,
             image_indices=subset,
         )
+        mean_subset = em_result.mean
+        ha_subset = em_result.hard_assignments
+        Ft_y_subset = em_result.Ft_y
+        Ft_ctf_subset = em_result.Ft_ctf
+        del em_result
 
-        mean_restricted, ha_restricted, Ft_y_restricted, Ft_ctf_restricted = run_em(
+        em_result = run_em(
             ds_subset,
             volume,
             mean_variance,
@@ -1291,6 +1361,11 @@ class TestFullIterationHalfMatches:
             image_batch_size=2,
             rotation_block_size=2,
         )
+        mean_restricted = em_result.mean
+        ha_restricted = em_result.hard_assignments
+        Ft_y_restricted = em_result.Ft_y
+        Ft_ctf_restricted = em_result.Ft_ctf
+        del em_result
 
         np.testing.assert_allclose(np.array(mean_subset), np.array(mean_restricted), atol=1e-5)
         np.testing.assert_array_equal(ha_subset, ha_restricted)
@@ -1310,7 +1385,7 @@ class TestFullIterationHalfMatches:
             dtype=np.float32,
         )
 
-        _, hard_assignments, _, _, stats = run_em(
+        em_result = run_em(
             s["dataset"],
             s["volume"],
             np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0,
@@ -1323,6 +1398,12 @@ class TestFullIterationHalfMatches:
             rotation_log_prior=log_prior,
             return_stats=True,
         )
+        _ = em_result.mean
+        hard_assignments = em_result.hard_assignments
+        _ = em_result.Ft_y
+        _ = em_result.Ft_ctf
+        stats = em_result.stats
+        del em_result
 
         np.testing.assert_array_equal(
             hard_assignments,
@@ -1341,7 +1422,7 @@ class TestFullIterationHalfMatches:
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
         # All rotations in one block
-        new_mean_1, ha_1, Ft_y_1, Ft_ctf_1 = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1352,9 +1433,14 @@ class TestFullIterationHalfMatches:
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
         )
+        new_mean_1 = em_result.mean
+        ha_1 = em_result.hard_assignments
+        Ft_y_1 = em_result.Ft_y
+        Ft_ctf_1 = em_result.Ft_ctf
+        del em_result
 
         # Rotations split into blocks of 2 (5 rots -> 3 blocks: 2+2+1, padded to 2+2+2)
-        new_mean_2, ha_2, Ft_y_2, Ft_ctf_2 = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1365,6 +1451,11 @@ class TestFullIterationHalfMatches:
             image_batch_size=N_IMAGES,
             rotation_block_size=2,
         )
+        new_mean_2 = em_result.mean
+        ha_2 = em_result.hard_assignments
+        Ft_y_2 = em_result.Ft_y
+        Ft_ctf_2 = em_result.Ft_ctf
+        del em_result
 
         np.testing.assert_allclose(
             np.array(new_mean_1),
@@ -1401,7 +1492,7 @@ class TestFullIterationHalfMatches:
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
         # All images in one batch
-        new_mean_1, ha_1, Ft_y_1, Ft_ctf_1 = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1412,9 +1503,14 @@ class TestFullIterationHalfMatches:
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
         )
+        new_mean_1 = em_result.mean
+        ha_1 = em_result.hard_assignments
+        Ft_y_1 = em_result.Ft_y
+        Ft_ctf_1 = em_result.Ft_ctf
+        del em_result
 
         # Images in batches of 1
-        new_mean_2, ha_2, Ft_y_2, Ft_ctf_2 = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1425,6 +1521,11 @@ class TestFullIterationHalfMatches:
             image_batch_size=1,
             rotation_block_size=N_ROTATIONS,
         )
+        new_mean_2 = em_result.mean
+        ha_2 = em_result.hard_assignments
+        Ft_y_2 = em_result.Ft_y
+        Ft_ctf_2 = em_result.Ft_ctf
+        del em_result
 
         np.testing.assert_allclose(
             np.array(new_mean_1),
@@ -1445,7 +1546,7 @@ class TestFullIterationHalfMatches:
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
         rotation_log_prior = np.array([0.0, 0.0, -1e6, -1e6, -1e6], dtype=np.float32)
 
-        dense_mean, dense_hard, dense_ft_y, dense_ft_ctf = run_em(
+        em_result = run_em(
             s["dataset"],
             s["volume"],
             mean_variance,
@@ -1458,9 +1559,14 @@ class TestFullIterationHalfMatches:
             rotation_log_prior=rotation_log_prior,
             sparse_pass2=False,
         )
+        dense_mean = em_result.mean
+        dense_hard = em_result.hard_assignments
+        dense_ft_y = em_result.Ft_y
+        dense_ft_ctf = em_result.Ft_ctf
+        del em_result
 
         with caplog.at_level(logging.INFO):
-            sparse_mean, sparse_hard, sparse_ft_y, sparse_ft_ctf = run_em(
+            em_result = run_em(
                 s["dataset"],
                 s["volume"],
                 mean_variance,
@@ -1473,6 +1579,11 @@ class TestFullIterationHalfMatches:
                 rotation_log_prior=rotation_log_prior,
                 sparse_pass2=True,
             )
+            sparse_mean = em_result.mean
+            sparse_hard = em_result.hard_assignments
+            sparse_ft_y = em_result.Ft_y
+            sparse_ft_ctf = em_result.Ft_ctf
+            del em_result
 
         np.testing.assert_allclose(np.asarray(sparse_mean), np.asarray(dense_mean), atol=1e-6, rtol=1e-6)
         np.testing.assert_array_equal(sparse_hard, dense_hard)
@@ -1490,7 +1601,7 @@ class TestFullIterationHalfMatches:
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
         rotation_log_prior = np.array([0.0, 0.0, -1e6, -1e6, -1e6], dtype=np.float32)
 
-        _, _, _, _, em_profile = run_em(
+        em_result = run_em(
             s["dataset"],
             s["volume"],
             mean_variance,
@@ -1504,6 +1615,12 @@ class TestFullIterationHalfMatches:
             sparse_pass2=True,
             return_profile=True,
         )
+        _ = em_result.mean
+        _ = em_result.hard_assignments
+        _ = em_result.Ft_y
+        _ = em_result.Ft_ctf
+        em_profile = em_result.profile
+        del em_result
 
         stage_sum = (
             em_profile.batch_fetch_s
@@ -1552,7 +1669,7 @@ class TestFullIterationHalfMatches:
             sparse_pass2=False,
         )
 
-        _, _, base_ft_y, base_ft_ctf = run_em(
+        em_result = run_em(
             s["dataset"],
             s["volume"],
             mean_variance,
@@ -1562,7 +1679,12 @@ class TestFullIterationHalfMatches:
             "linear_interp",
             **common_kwargs,
         )
-        _, _, no_y_ft_y, no_y_ft_ctf = run_em(
+        _ = em_result.mean
+        _ = em_result.hard_assignments
+        base_ft_y = em_result.Ft_y
+        base_ft_ctf = em_result.Ft_ctf
+        del em_result
+        em_result = run_em(
             s["dataset"],
             s["volume"],
             mean_variance,
@@ -1573,7 +1695,12 @@ class TestFullIterationHalfMatches:
             disable_adjoint_y=True,
             **common_kwargs,
         )
-        _, _, no_ctf_ft_y, no_ctf_ft_ctf = run_em(
+        _ = em_result.mean
+        _ = em_result.hard_assignments
+        no_y_ft_y = em_result.Ft_y
+        no_y_ft_ctf = em_result.Ft_ctf
+        del em_result
+        em_result = run_em(
             s["dataset"],
             s["volume"],
             mean_variance,
@@ -1584,6 +1711,11 @@ class TestFullIterationHalfMatches:
             disable_adjoint_ctf=True,
             **common_kwargs,
         )
+        _ = em_result.mean
+        _ = em_result.hard_assignments
+        no_ctf_ft_y = em_result.Ft_y
+        no_ctf_ft_ctf = em_result.Ft_ctf
+        del em_result
 
         assert np.linalg.norm(np.asarray(base_ft_y)) > 0.0
         assert np.linalg.norm(np.asarray(base_ft_ctf)) > 0.0
@@ -1630,13 +1762,13 @@ class TestFullIterationHalfMatches:
             **common_kwargs,
         )
 
-        assert probe[0] is None
-        np.testing.assert_array_equal(np.asarray(probe[1]), np.asarray(full[1]))
-        np.testing.assert_allclose(np.asarray(probe[2]), 0.0, atol=1e-7, rtol=1e-7)
-        np.testing.assert_allclose(np.asarray(probe[3]), 0.0, atol=1e-7, rtol=1e-7)
-        np.testing.assert_allclose(probe[4].log_evidence_per_image, full[4].log_evidence_per_image)
-        np.testing.assert_allclose(probe[4].best_log_score_per_image, full[4].best_log_score_per_image)
-        np.testing.assert_allclose(probe[4].max_posterior_per_image, full[4].max_posterior_per_image)
+        assert probe.mean is None
+        np.testing.assert_array_equal(np.asarray(probe.hard_assignments), np.asarray(full.hard_assignments))
+        np.testing.assert_allclose(np.asarray(probe.Ft_y), 0.0, atol=1e-7, rtol=1e-7)
+        np.testing.assert_allclose(np.asarray(probe.Ft_ctf), 0.0, atol=1e-7, rtol=1e-7)
+        np.testing.assert_allclose(probe.stats.log_evidence_per_image, full.stats.log_evidence_per_image)
+        np.testing.assert_allclose(probe.stats.best_log_score_per_image, full.stats.best_log_score_per_image)
+        np.testing.assert_allclose(probe.stats.max_posterior_per_image, full.stats.max_posterior_per_image)
 
     def test_score_only_skips_reconstruction_preprocess(self, seeded_inputs, monkeypatch):
         s = seeded_inputs
@@ -1670,7 +1802,7 @@ class TestFullIterationHalfMatches:
             score_only=True,
         )
 
-        assert result[0] is None
+        assert result.mean is None
 
     def test_score_only_requires_disabled_adjoints(self, seeded_inputs):
         s = seeded_inputs

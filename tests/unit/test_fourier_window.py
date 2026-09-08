@@ -996,7 +996,7 @@ class TestIterationAtEachCurrentSize:
         translations = np.array(s["translations"])
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
-        new_mean, ha, Ft_y, Ft_ctf = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1008,6 +1008,11 @@ class TestIterationAtEachCurrentSize:
             rotation_block_size=N_ROTATIONS,
             current_size=current_size,
         )
+        new_mean = em_result.mean
+        ha = em_result.hard_assignments
+        Ft_y = em_result.Ft_y
+        Ft_ctf = em_result.Ft_ctf
+        del em_result
 
         # All outputs should be finite
         assert np.all(np.isfinite(np.array(new_mean))), f"new_mean not finite at cs={current_size}"
@@ -1030,7 +1035,7 @@ class TestIterationAtEachCurrentSize:
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
         # No windowing
-        new_mean_none, ha_none, Ft_y_none, _ = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1042,9 +1047,14 @@ class TestIterationAtEachCurrentSize:
             rotation_block_size=N_ROTATIONS,
             current_size=None,
         )
+        new_mean_none = em_result.mean
+        ha_none = em_result.hard_assignments
+        Ft_y_none = em_result.Ft_y
+        _ = em_result.Ft_ctf
+        del em_result
 
         # current_size = 8 (full resolution for 8x8)
-        new_mean_8, ha_8, Ft_y_8, _ = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1056,6 +1066,11 @@ class TestIterationAtEachCurrentSize:
             rotation_block_size=N_ROTATIONS,
             current_size=8,
         )
+        new_mean_8 = em_result.mean
+        ha_8 = em_result.hard_assignments
+        Ft_y_8 = em_result.Ft_y
+        _ = em_result.Ft_ctf
+        del em_result
 
         # current_size=8 for 8x8 images is NOT windowed (use_window is False
         # when current_size >= image_shape[0]), so these should be identical
@@ -1159,7 +1174,7 @@ class TestWindowedMultipleBlocks:
         current_size = 4
 
         # All rotations in one block
-        new_mean_1, ha_1, Ft_y_1, _ = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1171,9 +1186,14 @@ class TestWindowedMultipleBlocks:
             rotation_block_size=N_ROTATIONS,
             current_size=current_size,
         )
+        new_mean_1 = em_result.mean
+        ha_1 = em_result.hard_assignments
+        Ft_y_1 = em_result.Ft_y
+        _ = em_result.Ft_ctf
+        del em_result
 
         # Split into blocks of 2
-        new_mean_2, ha_2, Ft_y_2, _ = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1185,6 +1205,11 @@ class TestWindowedMultipleBlocks:
             rotation_block_size=2,
             current_size=current_size,
         )
+        new_mean_2 = em_result.mean
+        ha_2 = em_result.hard_assignments
+        Ft_y_2 = em_result.Ft_y
+        _ = em_result.Ft_ctf
+        del em_result
 
         np.testing.assert_allclose(
             np.array(new_mean_1),

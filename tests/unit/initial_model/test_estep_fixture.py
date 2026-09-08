@@ -221,19 +221,8 @@ def test_estep_pmax_matches_relion_iter1():
         half_spectrum_scoring=True,
         return_stats=True,
     )
-    # run_em returns (Ft_y, Ft_ctf, relion_stats) or similar when return_stats=True
-    # Inspect result tuple
-    if isinstance(result, tuple):
-        for x in result:
-            if hasattr(x, "max_posterior_per_image"):
-                stats = x
-                break
-        else:
-            raise RuntimeError(
-                f"RelionStats not found in run_em result; got types {[type(x).__name__ for x in result]}"
-            )
-    else:
-        raise RuntimeError(f"unexpected run_em result type {type(result)}")
+    stats = result.stats
+    assert stats is not None
 
     ours_pmax = np.asarray(stats.max_posterior_per_image)
     ours_mean = float(ours_pmax.mean())

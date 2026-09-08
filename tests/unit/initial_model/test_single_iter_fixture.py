@@ -113,7 +113,7 @@ def test_single_iter_plain_em():
     )
 
     # Unpack: (new_mean, hard_assignment, Ft_y, Ft_ctf, relion_stats)
-    new_mean = np.asarray(result[0])
+    new_mean = np.asarray(result.mean)
     assert new_mean.shape == (ori_size**3,), f"unexpected new_mean shape {new_mean.shape}"
 
     # Convert back to real space

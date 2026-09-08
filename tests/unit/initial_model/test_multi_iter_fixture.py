@@ -125,7 +125,7 @@ def test_ten_iter_vdam_smoke():
             half_spectrum_scoring=True,
             return_stats=True,
         )
-        new_mean = np.asarray(result[0]).reshape(ori_size, ori_size, ori_size)
+        new_mean = np.asarray(result.mean).reshape(ori_size, ori_size, ori_size)
         new_vol = np.asarray(ftu.get_idft3(jnp.asarray(new_mean))).real
 
         # VDAM blend: step=0.5 from F8 sweep

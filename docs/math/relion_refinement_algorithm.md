@@ -155,6 +155,14 @@ class against a joint class/pose distribution. `score_only` skips accumulation;
 other options can skip negligible second-sweep blocks or use fused execution.
 The complete image × rotation × translation score tensor is not required.
 
+`run_em` returns `DenseEMResult`, defined in
+[`helpers/types.py`](../../recovar/em/dense_single_volume/helpers/types.py).
+Read `mean`, `hard_assignments`, `Ft_y` and `Ft_ctf` by name. Optional `stats`,
+`noise_stats` and `profile` fields are `None` when disabled; the corresponding
+flags still control the same computations. The result container stores existing
+array references. Callers no longer decode a different tuple layout for each
+flag combination.
+
 **Adaptive coarse-to-fine search.**
 [`k_class.py`](../../recovar/em/dense_single_volume/k_class.py) owns
 `run_dense_k_class_em` and `run_dense_k_class_em_adaptive`.

@@ -153,8 +153,8 @@ def main() -> None:
         relion_firstiter_score_mode="gaussian",
         score_with_masked_images=True,
     )
-    Ft_y = np.asarray(result[2])
-    Ft_ctf = np.asarray(result[3])
+    Ft_y = np.asarray(result.Ft_y)
+    Ft_ctf = np.asarray(result.Ft_ctf)
 
     N = ori
     hp = r_max + 1

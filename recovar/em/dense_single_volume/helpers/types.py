@@ -1,9 +1,11 @@
 """Typed containers for the dense single-volume EM path."""
 
+from dataclasses import dataclass
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 
 class MeanStats(NamedTuple):
@@ -186,3 +188,26 @@ class EMProfileStats(NamedTuple):
     sparse_pass2_omitted_mass_upper_mean: float
     sparse_pass2_omitted_mass_upper_max: float
     sparse_pass2_omitted_mass_upper_sum: float
+
+
+@dataclass(frozen=True)
+class DenseEMResult:
+    """Result of ``em_engine.run_em`` with stable, named fields.
+
+    ``hard_assignments`` follows the selected dataset image order and encodes
+    ``rotation_index * n_translations + translation_index``. Fourier accumulators
+    keep the engine's dtype, device and requested full/packed-half layout.
+    ``mean`` is absent when the call does not reconstruct a volume.
+
+    ``stats``, ``noise_stats`` and ``profile`` are ``None`` when their respective
+    return/accumulation flags are disabled. This container only stores references;
+    it does not copy arrays, synchronize devices or alter buffer lifetime itself.
+    """
+
+    mean: jax.Array | np.ndarray | None
+    hard_assignments: np.ndarray
+    Ft_y: jax.Array | np.ndarray
+    Ft_ctf: jax.Array | np.ndarray
+    stats: RelionStats | None = None
+    noise_stats: NoiseStats | None = None
+    profile: EMProfileStats | None = None

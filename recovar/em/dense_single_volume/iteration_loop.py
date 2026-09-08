@@ -2364,7 +2364,7 @@ def _score_half_dense(
     # branch is the single dense pass used when adaptive oversampling is off.
     direct_em_kwargs.pop("relion_exact_fine_gaussian", None)
     direct_em_kwargs.pop("reconstruction_current_size", None)
-    _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
+    em_result = run_em(
         experiment_dataset,
         means_k,
         mean_variance,
@@ -2379,11 +2379,11 @@ def _score_half_dense(
         **direct_em_kwargs,
     )
     return HalfScoreResult(
-        ha=ha_k,
-        Ft_y=Ft_y_k,
-        Ft_ctf=Ft_ctf_k,
-        em_stats=em_stats_k,
-        noise_stats=noise_stats_k,
+        ha=em_result.hard_assignments,
+        Ft_y=em_result.Ft_y,
+        Ft_ctf=em_result.Ft_ctf,
+        em_stats=em_result.stats,
+        noise_stats=em_result.noise_stats,
         mstep_accumulator_shape=None,
     )
 

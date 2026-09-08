@@ -142,8 +142,8 @@ def main() -> None:
         return_stats=True,
         relion_firstiter_score_mode="gaussian",  # matches RELION dump (do_firstiter_cc=0)
     )
-    Ft_y = np.asarray(result[2])
-    Ft_ctf = np.asarray(result[3])
+    Ft_y = np.asarray(result.Ft_y)
+    Ft_ctf = np.asarray(result.Ft_ctf)
 
     # BPref layout (RELION frame): -transpose((2, 0, 1)) of centered slab
     N = ori

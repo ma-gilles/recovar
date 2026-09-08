@@ -84,7 +84,7 @@ from .helpers.translation_prior import (
     translation_sqdist_angstrom,
     validate_translation_prior_centers,
 )
-from .helpers.types import EMProfileStats, make_noise_stats, make_relion_stats
+from .helpers.types import DenseEMResult, EMProfileStats, make_noise_stats, make_relion_stats
 from .local_debug import (
     dense_score_dump_label_suffix,
     maybe_write_dense_per_pose_score_dump,
@@ -243,29 +243,6 @@ class _SparsePass2Profile:
             "sparse_pass2_omitted_mass_upper_max": float(self.omitted_mass_upper_max),
             "sparse_pass2_omitted_mass_upper_sum": float(self.omitted_mass_upper_sum),
         }
-
-
-def _dense_em_return_tuple(
-    new_mean,
-    hard_assignment,
-    Ft_y,
-    Ft_ctf,
-    *,
-    return_stats: bool,
-    accumulate_noise: bool,
-    return_profile: bool,
-    relion_stats=None,
-    noise_stats=None,
-    em_profile=None,
-):
-    result = [new_mean, hard_assignment, Ft_y, Ft_ctf]
-    if return_stats:
-        result.append(relion_stats)
-    if accumulate_noise:
-        result.append(noise_stats)
-    if return_profile:
-        result.append(em_profile)
-    return tuple(result)
 
 
 @dataclass(frozen=True)
@@ -684,7 +661,7 @@ def run_em(
     score_only: bool = False,
     relion_half_volume_mstep: bool = False,
     return_half_volume_accumulators: bool = False,
-):
+) -> DenseEMResult:
     """Score and accumulate one grid using blockwise posterior normalization.
 
     Image batches and rotation blocks bound the score tensor. The first sweep
@@ -697,6 +674,7 @@ def run_em(
     select the RELION half-sum or Hermitian inner-product convention. An
     optional Fourier window further restricts the score operands; actual
     speed and memory depend on the selected route and batch sizes.
+    Returns a ``DenseEMResult``; optional fields are ``None`` when disabled.
     See ``docs/math/relion_refinement_algorithm.md`` for the algorithm map.
 
     Parameters
@@ -740,7 +718,8 @@ def run_em(
         When True, compute E-step scores from masked images but keep the
         M-step reconstruction on unmasked images.
     return_stats : bool
-        When True, also return a :class:`RelionStats` container with the
+        When True, populate ``result.stats`` with a :class:`RelionStats` container
+        containing the
         per-image log normalizer, best score, maximum posterior
         probability, and additive posterior mass per rotation computed
         during the E-step.
@@ -767,8 +746,8 @@ def run_em(
         shifts use half-spectrum Fourier phases.  The candidate translations
         from the grid are then relative to this centered position.
     return_profile : bool
-        When True, append an :class:`EMProfileStats` timing summary to the
-        return tuple.  This is diagnostic only.
+        When True, populate ``result.profile`` with an :class:`EMProfileStats`
+        timing summary. This is diagnostic only.
     sparse_pass2 : bool
         When True, use pass-1 block maxima to skip pass-2 rotation blocks
         whose posterior mass is negligible for every image in the batch.
@@ -2221,15 +2200,12 @@ def run_em(
     else:
         em_profile = None
 
-    return _dense_em_return_tuple(
-        new_mean,
-        hard_assignment,
-        Ft_y,
-        Ft_ctf,
-        return_stats=return_stats,
-        accumulate_noise=accumulate_noise,
-        return_profile=return_profile,
-        relion_stats=relion_stats,
-        noise_stats=noise_stats,
-        em_profile=em_profile,
+    return DenseEMResult(
+        mean=new_mean,
+        hard_assignments=hard_assignment,
+        Ft_y=Ft_y,
+        Ft_ctf=Ft_ctf,
+        stats=relion_stats if return_stats else None,
+        noise_stats=noise_stats if accumulate_noise else None,
+        profile=em_profile if return_profile else None,
     )

@@ -19,6 +19,7 @@ import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
 from helpers.dense_posterior_reference import compute_e_step_weights
+from recovar.em.dense_single_volume.helpers.types import DenseEMResult
 from recovar.em.dense_single_volume.em_engine import run_em
 from recovar.em.dense_single_volume.helpers.oversampling import (
     _find_significant_mask_full_sort,
@@ -1160,7 +1161,7 @@ class TestRefineWithAdaptive:
         mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
 
         # Standard path
-        new_mean_std, ha_std, Ft_y_std, Ft_ctf_std = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1171,6 +1172,11 @@ class TestRefineWithAdaptive:
             image_batch_size=n_images,
             rotation_block_size=n_rot,
         )
+        new_mean_std = em_result.mean
+        ha_std = em_result.hard_assignments
+        Ft_y_std = em_result.Ft_y
+        Ft_ctf_std = em_result.Ft_ctf
+        del em_result
 
         # Weights path
         weights, ha_w = compute_e_step_weights(
@@ -1374,7 +1380,7 @@ class TestMaskedCartesianGrid:
         expected_argmax = int(masked_weights.reshape(-1).argmax())
         expected_pmax = float(masked_weights.max())
 
-        _, masked_ha, _, _, masked_stats = run_em(
+        em_result = run_em(
             ds,
             volume,
             mean_variance,
@@ -1387,6 +1393,12 @@ class TestMaskedCartesianGrid:
             rotation_translation_mask=valid_mask,
             return_stats=True,
         )
+        _ = em_result.mean
+        masked_ha = em_result.hard_assignments
+        _ = em_result.Ft_y
+        _ = em_result.Ft_ctf
+        masked_stats = em_result.stats
+        del em_result
 
         assert int(masked_ha[0]) == expected_argmax
         np.testing.assert_allclose(
@@ -1534,7 +1546,7 @@ class TestUnionCap:
             ha = np.zeros(n_images, dtype=np.int32)
             Ft_y = jnp.zeros(ds.volume_size, dtype=ds.dtype)
             Ft_ctf = jnp.zeros(ds.volume_size, dtype=ds.dtype)
-            return jnp.zeros(ds.volume_size, dtype=ds.dtype), ha, Ft_y, Ft_ctf
+            return DenseEMResult(mean=jnp.zeros(ds.volume_size, dtype=ds.dtype), hard_assignments=ha, Ft_y=Ft_y, Ft_ctf=Ft_ctf)
 
         monkeypatch.setattr(engine_mod, "run_em", fake_run_em)
 

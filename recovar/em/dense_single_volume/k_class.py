@@ -741,12 +741,6 @@ def _reject_kwargs(kwargs: dict, names: tuple[str, ...], caller: str) -> None:
         raise ValueError(f"{caller} controls these arguments directly: {', '.join(present)}")
 
 
-def _dense_outputs(output, *, accumulate_noise: bool):
-    new_mean, hard_assignment, Ft_y, Ft_ctf, stats = output[:5]
-    noise_stats = output[5] if accumulate_noise else None
-    return new_mean, hard_assignment, Ft_y, Ft_ctf, stats, noise_stats
-
-
 def _local_outputs(output, *, accumulate_noise: bool, return_best_pose_details: bool, return_profile: bool = False):
     Ft_y, Ft_ctf, hard_assignment = output[:3]
     next_index = 3
@@ -1540,8 +1534,8 @@ def _run_dense_k_class_score_probe(
                 score_only=True,
                 **class_engine_kwargs,
             )
-        hard_assignments.append(np.asarray(probe[1], dtype=np.int32))
-        stats = probe[4]
+        hard_assignments.append(np.asarray(probe.hard_assignments, dtype=np.int32))
+        stats = probe.stats
         per_class_stats.append(stats)
         class_log_evidence.append(np.asarray(stats.log_evidence_per_image, dtype=np.float64))
 
@@ -1922,10 +1916,12 @@ def _run_firstiter_global_winner_subset_pass2(
                 class_log_prior=float(log_priors[class_index]),
                 **class_kwargs,
             )
-        _new_mean, hard_subset, class_Ft_y, class_Ft_ctf, stats_subset, noise = _dense_outputs(
-            output,
-            accumulate_noise=accumulate_noise,
-        )
+        _new_mean = output.mean
+        hard_subset = output.hard_assignments
+        class_Ft_y = output.Ft_y
+        class_Ft_ctf = output.Ft_ctf
+        stats_subset = output.stats
+        noise = output.noise_stats
         hard_full = np.zeros(n_images, dtype=np.int32)
         hard_full[image_indices] = np.asarray(hard_subset, dtype=np.int32)
         Ft_y.append(class_Ft_y)
@@ -2275,10 +2271,12 @@ def run_dense_k_class_em(
             class_log_prior=float(log_priors[0]),
             **class_engine_kwargs,
         )
-        new_mean, hard_assignment, class_Ft_y, class_Ft_ctf, stats, noise = _dense_outputs(
-            output,
-            accumulate_noise=accumulate_noise,
-        )
+        new_mean = output.mean
+        hard_assignment = output.hard_assignments
+        class_Ft_y = output.Ft_y
+        class_Ft_ctf = output.Ft_ctf
+        stats = output.stats
+        noise = output.noise_stats
         best_pose_rotations = None
         best_pose_translations = None
         best_pose_rotation_ids = None
@@ -2360,10 +2358,12 @@ def run_dense_k_class_em(
                 normalization_log_evidence=global_log_evidence,
                 **class_engine_kwargs,
             )
-        new_mean, hard_assignment, class_Ft_y, class_Ft_ctf, stats, noise = _dense_outputs(
-            output,
-            accumulate_noise=accumulate_noise,
-        )
+        new_mean = output.mean
+        hard_assignment = output.hard_assignments
+        class_Ft_y = output.Ft_y
+        class_Ft_ctf = output.Ft_ctf
+        stats = output.stats
+        noise = output.noise_stats
         new_means.append(new_mean)
         Ft_y.append(class_Ft_y)
         Ft_ctf.append(class_Ft_ctf)

@@ -23,6 +23,7 @@ from .helpers.oversampling import (
 from .helpers.resolution import (
     fsc_to_current_size as fsc_to_current_size,
 )
+from .helpers.types import DenseEMResult as DenseEMResult
 from .helpers.types import MeanStats as MeanStats
 from .iteration_loop import (
     refine_single_volume as refine_single_volume,

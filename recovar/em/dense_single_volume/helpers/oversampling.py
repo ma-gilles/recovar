@@ -672,17 +672,11 @@ def compute_pass2_stats(
         square_window=square_window,
     )
 
-    # Unpack: run_em returns (mean, ha, Ft_y, Ft_ctf, [relion_stats], [noise_stats])
-    # depending on return_stats and accumulate_noise flags.
-    noise_stats = None
-    if return_stats and accumulate_noise:
-        _, ha, Ft_y, Ft_ctf, relion_stats, noise_stats = run_em_outputs
-    elif return_stats:
-        _, ha, Ft_y, Ft_ctf, relion_stats = run_em_outputs
-    elif accumulate_noise:
-        _, ha, Ft_y, Ft_ctf, noise_stats = run_em_outputs
-    else:
-        _, ha, Ft_y, Ft_ctf = run_em_outputs
+    ha = run_em_outputs.hard_assignments
+    Ft_y = run_em_outputs.Ft_y
+    Ft_ctf = run_em_outputs.Ft_ctf
+    relion_stats = run_em_outputs.stats
+    noise_stats = run_em_outputs.noise_stats
 
     if return_stats:
         coarse_rotation_sums = np.zeros(n_coarse_rot, dtype=np.float64)
@@ -1199,16 +1193,11 @@ def _compute_pass2_stats_sparse_perimage_reference(
             relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
         )
 
-        # Unpack return based on flags
-        noise_stats_i = None
-        if return_stats and accumulate_noise:
-            _, ha_i, Ft_y_i, Ft_ctf_i, stats_i, noise_stats_i = run_em_outputs
-        elif return_stats:
-            _, ha_i, Ft_y_i, Ft_ctf_i, stats_i = run_em_outputs
-        elif accumulate_noise:
-            _, ha_i, Ft_y_i, Ft_ctf_i, noise_stats_i = run_em_outputs
-        else:
-            _, ha_i, Ft_y_i, Ft_ctf_i = run_em_outputs
+        ha_i = run_em_outputs.hard_assignments
+        Ft_y_i = run_em_outputs.Ft_y
+        Ft_ctf_i = run_em_outputs.Ft_ctf
+        stats_i = run_em_outputs.stats
+        noise_stats_i = run_em_outputs.noise_stats
 
         if return_stats:
             log_evidence[image_idx] = float(np.asarray(stats_i.log_evidence_per_image)[0])
