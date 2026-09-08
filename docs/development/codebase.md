@@ -179,3 +179,9 @@ grids, canonical coarse rotation IDs and direction log priors directly from
 sealed sampling metadata. They preserve the recorded direction/psi order and
 convert translations from Angstroms to pixels using the supplied voxel size.
 The controller selects when to use these grids.
+
+`helpers/convergence.py` owns angular-refinement state transitions, including
+validation and application of explicit HEALPix schedules used for oracle runs.
+The controller selects the iteration's requested order; the convergence helper
+advances through the existing angular and translation updates without coarsening
+an active state.

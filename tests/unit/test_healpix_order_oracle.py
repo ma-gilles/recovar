@@ -1,7 +1,7 @@
 import pytest
 
-from recovar.em.dense_single_volume.helpers.convergence import RefinementState
-from recovar.em.dense_single_volume.iteration_loop import (
+from recovar.em.dense_single_volume.helpers.convergence import (
+    RefinementState,
     _apply_relion_healpix_order_oracle,
     _validate_relion_healpix_orders,
 )

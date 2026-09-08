@@ -43,7 +43,8 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     calculate_expected_angular_errors,
     check_convergence,
     healpix_angular_step,
-    refine_angular_sampling,
+    _validate_relion_healpix_orders,
+    _apply_relion_healpix_order_oracle,
     update_angular_sampling,
     update_refinement_state,
 )
@@ -3063,43 +3064,6 @@ def _sigma_offset_for_half(current_sigma_offset_angstrom, current_sigma_offset_a
     if current_sigma_offset_angstrom_per_half is None:
         return float(current_sigma_offset_angstrom)
     return float(current_sigma_offset_angstrom_per_half[int(half_index)])
-
-
-def _validate_relion_healpix_orders(orders, *, max_iter, init_healpix_order, max_healpix_order):
-    if orders is None:
-        return None
-    orders = tuple(int(order) for order in orders)
-    if len(orders) < int(max_iter):
-        raise ValueError(
-            "relion_healpix_orders must provide at least max_iter entries "
-            f"({len(orders)} < {int(max_iter)})"
-        )
-    if any(right < left for left, right in zip(orders, orders[1:])):
-        raise ValueError("relion_healpix_orders must be monotone nondecreasing")
-    if orders[0] < int(init_healpix_order):
-        raise ValueError(
-            "relion_healpix_orders cannot coarsen below init_healpix_order "
-            f"({orders[0]} < {int(init_healpix_order)})"
-        )
-    if orders[-1] > int(max_healpix_order):
-        raise ValueError(
-            "relion_healpix_orders exceeds max_healpix_order "
-            f"({orders[-1]} > {int(max_healpix_order)})"
-        )
-    return orders
-
-
-def _apply_relion_healpix_order_oracle(state, target_order, *, iteration_number):
-    target_order = int(target_order)
-    if target_order < int(state.healpix_order):
-        raise ValueError(
-            "relion_healpix_orders cannot coarsen the active state: "
-            f"iteration={int(iteration_number)} target={target_order} "
-            f"active={int(state.healpix_order)}"
-        )
-    while int(state.healpix_order) < target_order:
-        state = refine_angular_sampling(state)
-    return state
 
 
 def _mean_variance_for_scoring_half(mean_variance_per_half, half_index):
