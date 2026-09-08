@@ -83,6 +83,9 @@ source identities when incorporating evidence into the draft or later results.
 | Named local-search wrapper result | `3d38f0db9`; 150 tests, 160 exact optional-field identity cases and 32 matching errors passed, Slurm13592280; kernel dispatch unchanged; controller no longer repacks/decodes this result |
 | Nine unused private numerical/provenance helpers | `4280e0cdc`; 166 CPU tests passed, Slurm13592709, with 11 GPU-marked cases explicitly deselected; 213 lines removed; retained executable AST identical in all eight modules |
 | Unused historical script helpers | `540fdf005`; 44 report/table tests and four CLI checks passed, Slurm13592996; 84 lines removed; retained executable AST and report acceptance/formatting unchanged |
+| Remaining scoring-output helpers | `3bdda606b`; 73 tests passed, Slurm13593442; 70 exact value/identity/mutation cases and 14 matching errors; four moved declarations and retained controller/output-module AST unchanged |
+| Paired historical scorecard validation | `db4aab19a`; 12 tests passed, Slurm13614908; 86 exact values, 2,286 matching errors and 40 standalone CLI checks; all four pinned Markdown reports unchanged |
+| Captured sampling grid ownership | `6fb793698`; 104 local CPU tests passed; 108 exact outputs and 22 matching errors; three moved function ASTs and retained controller/replay AST unchanged; strict docs passed; Slurm13616833 was cancelled before execution |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance
@@ -129,6 +132,18 @@ PR158's K-class path has a separately identified undefined-variable bug. Its
 prepared one-line policy repair is held outside this structural series pending
 its separate correctness decision. Label any baseline containing that repair
 as a repaired control, never as the unchanged PR158 source.
+
+The local-search output review also identifies an inherited K-class wrapper
+bug when `return_best_pose_details=False`: the wrapper packs pose fields that
+its positional decoder then reads as statistics. The tuple construction and
+decoder are unchanged from PR158. A controlled-kernel wrapper diagnostic covers
+16 combinations of K2/K4, pose, noise and class-detail flags: the eight with
+pose details enabled route correctly; the eight with them disabled do not.
+An unapplied patch routes all 16 correctly. The controller's K-class scoring
+call explicitly enables pose details, so this diagnostic does not explain the
+trajectory failures. The patch and reproduction script are in
+`structural_cleanup/local_kernel_contract_review/` under the review root.
+Keep this repair separate from a behavior-preserving output-interface migration.
 
 ## Checkpoint results and next checks
 
@@ -246,7 +261,8 @@ The older mixed K16 comparison13561074 fails its historical RELION gate. Its
 legacy direct-comparison report passes aggregate thresholds, but one particle
 changes class and pose at iteration 5. Competing score margins were not
 captured, so strict equivalence is not established. The older K4 pair remains
-queued; neither old result qualifies the selected structural revision.
+running in Slurm13560202 on an A100 80GB since September 8; its dependent audit
+is Slurm13560356. Neither old result qualifies the selected structural revision.
 
 Shared SPA and cryo-ET 50k/128 regression tests pass in jobs13569618/13569619
 at frozen source `6ebaf5fad`. The first external inventory audit fails because

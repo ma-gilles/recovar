@@ -142,6 +142,10 @@ Common transport and command mechanics have narrow owners:
   handling for compatible historical scorecards. Each renderer retains its own
   fixed case inventory, validator and Markdown format. These CLIs remain usable
   without importing the scientific environment.
+- [`scorecard_validation`](../../scripts/scorecard_validation.py) validates the
+  paired baseline/treatment cases shared by four historical EM scorecards.
+  Their fixed inventories, Markdown rendering and refusal to overwrite an
+  existing report remain in the individual scripts.
 
 Use `python -m scripts.<name>` from the checkout for diagnostics that import
 other script modules. Some older direct-file entry points still fail their
