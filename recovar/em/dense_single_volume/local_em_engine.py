@@ -291,12 +291,18 @@ EXACT_LOCAL_BIG_JIT_MIN_SIGNIFICANT_ROW_FRACTION = 0.25
 
 
 def _local_mstep_rotations(bucket: LocalBucketSpec) -> np.ndarray:
-    """Return the adjoint-only rotations, falling back to scoring rotations."""
+    """Return the adjoint-only rotations, falling back to scoring rotations.
+
+    Preserves the source array's own dtype rather than forcing float32:
+    ``bucket.local_mstep_rotations``/``local_rotations`` are already built by
+    ``bucket_local_hypothesis_layout`` at whatever precision the caller's
+    ``LocalHypothesisLayout`` chose (float64 under double-precision scoring).
+    """
 
     rotations = bucket.local_mstep_rotations
     if rotations is None:
         rotations = bucket.local_rotations
-    return np.asarray(rotations, dtype=np.float32)
+    return np.asarray(rotations)
 
 
 def _bucket_contains_debug_target(experiment_dataset, image_indices, pending_targets: set[int] | None) -> bool:
@@ -645,6 +651,7 @@ def _build_exact_local_relion_projection_cache_for_buckets(
     projection_padding_factor: int,
     projection_relion_texture_interp: bool | None,
     projection_pixel_indices,
+    projection_relion_acc_double_floorf_quirk: bool = False,
     projector_output_size: int,
     cache_row_capacity: int,
     max_global_rotation_id: int,
@@ -712,6 +719,7 @@ def _build_exact_local_relion_projection_cache_for_buckets(
             centered_rows=True,
             dense_scale=True,
             relion_texture_interp=projection_relion_texture_interp,
+            relion_acc_double_floorf_quirk=projection_relion_acc_double_floorf_quirk,
             projector_output_size=int(projector_output_size) if int(projector_output_size) > 0 else None,
             pixel_indices=projection_pixel_indices,
         )
@@ -884,6 +892,7 @@ def _project_local_bucket(
                 f"got {relion_projector_half.shape}",
             )
         relion_texture_interp = projection_kwargs.get("relion_texture_interp")
+        relion_acc_double_floorf_quirk = bool(projection_kwargs.get("relion_acc_double_floorf_quirk", False))
         projector_kwargs = {}
         if window_spec.use_window and window_spec.max_r is not None:
             projector_kwargs["projector_output_size"] = int(2 * window_spec.max_r)
@@ -904,6 +913,7 @@ def _project_local_bucket(
             centered_rows=True,
             dense_scale=True,
             relion_texture_interp=relion_texture_interp,
+            relion_acc_double_floorf_quirk=relion_acc_double_floorf_quirk,
             **projector_kwargs,
         )
         if window_spec.use_window:
@@ -1051,6 +1061,7 @@ def _project_packed_noise_rows(
                 f"got {relion_projector_half.shape}",
             )
         relion_texture_interp = projection_kwargs.get("relion_texture_interp")
+        relion_acc_double_floorf_quirk = bool(projection_kwargs.get("relion_acc_double_floorf_quirk", False))
         projector_kwargs = {}
         if window_spec.use_window and window_spec.max_r is not None:
             projector_kwargs["projector_output_size"] = int(2 * window_spec.max_r)
@@ -1071,6 +1082,7 @@ def _project_packed_noise_rows(
             centered_rows=True,
             dense_scale=True,
             relion_texture_interp=relion_texture_interp,
+            relion_acc_double_floorf_quirk=relion_acc_double_floorf_quirk,
             **projector_kwargs,
         )
         flat_proj_for_noise = proj_relion_flat
@@ -1176,13 +1188,18 @@ def _postprocess_local_bucket(
     buffers.hard_assignment[image_indices_np] = (best_rotation_ids * n_trans + best_trans_idx).astype(np.int32)
 
     transfer_t0 = time.time()
+    # log_score_offset is deliberately computed at float64; do not narrow it
+    # or log_Z/best_log_score/max_posterior back to float32 here -- the
+    # destination buffers.* arrays carry the caller's own precision-policy
+    # dtype (see buffer allocation below), so a bare np.asarray preserves
+    # whatever precision the JIT scoring kernel actually produced.
     log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
-    log_z_np = np.asarray(log_Z, dtype=np.float32)
-    best_log_score_np = np.asarray(best_log_score, dtype=np.float32)
-    max_posterior_np = np.asarray(max_posterior, dtype=np.float32)
+    log_z_np = np.asarray(log_Z)
+    best_log_score_np = np.asarray(best_log_score)
+    max_posterior_np = np.asarray(max_posterior)
     buffers.transfer_profile["postprocess_scores_to_host_s"] += time.time() - transfer_t0
-    buffers.log_evidence_per_image[image_indices_np] = log_z_np + log_score_offset.astype(np.float32)
-    buffers.best_log_score_per_image[image_indices_np] = best_log_score_np + log_score_offset.astype(np.float32)
+    buffers.log_evidence_per_image[image_indices_np] = log_z_np + log_score_offset
+    buffers.best_log_score_per_image[image_indices_np] = best_log_score_np + log_score_offset
     buffers.max_posterior_per_image[image_indices_np] = max_posterior_np
 
     transfer_t0 = time.time()
@@ -1232,13 +1249,11 @@ def _postprocess_local_bucket(
 
     if buffers.best_pose_rotations is not None:
         buffers.best_pose_rotations[image_indices_np] = np.take_along_axis(
-            np.asarray(local_rotations, dtype=np.float32),
+            np.asarray(local_rotations),
             best_rot_idx[:, None, None, None],
             axis=1,
         ).reshape(-1, 3, 3)
-        buffers.best_pose_translations[image_indices_np] = np.asarray(translation_grid, dtype=np.float32)[
-            best_trans_idx
-        ]
+        buffers.best_pose_translations[image_indices_np] = np.asarray(translation_grid)[best_trans_idx]
         buffers.best_pose_rotation_ids[image_indices_np] = best_rotation_ids.astype(np.int32, copy=False)
 
     return significant_sample_count, int(reconstruction_row_count)
@@ -1252,15 +1267,20 @@ def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_param
     if actual_batch_size == padded_batch_size:
         return bucket, batch_data, ctf_params, np.ones(actual_batch_size, dtype=bool), actual_batch_size
 
-    padded_rotations = pad_axis(bucket.local_rotations, 0, padded_batch_size, value=0).astype(np.float32)
-    padded_rotations[actual_batch_size:] = np.eye(3, dtype=np.float32)
+    # pad_axis (np.pad) preserves the source array's own dtype -- do not
+    # force float32 here, or every field of an already-correctly-built
+    # (possibly float64) bucket gets silently truncated back to float32 on
+    # this hot per-bucket padding path, same class of bug as
+    # local_layout.py:bucket_local_hypothesis_layout.
+    padded_rotations = pad_axis(bucket.local_rotations, 0, padded_batch_size, value=0)
+    padded_rotations[actual_batch_size:] = np.eye(3, dtype=padded_rotations.dtype)
     padded_mstep_rotations = pad_axis(
         _local_mstep_rotations(bucket),
         0,
         padded_batch_size,
         value=0,
-    ).astype(np.float32)
-    padded_mstep_rotations[actual_batch_size:] = np.eye(3, dtype=np.float32)
+    )
+    padded_mstep_rotations[actual_batch_size:] = np.eye(3, dtype=padded_mstep_rotations.dtype)
     padded_bucket = LocalBucketSpec(
         image_indices=np.asarray(bucket.image_indices, dtype=np.int32),
         bucket_image_count=padded_batch_size,
@@ -1274,9 +1294,9 @@ def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_param
             0,
             padded_batch_size,
             value=-1e30,
-        ).astype(np.float32),
+        ),
         local_rotation_mask=pad_axis(bucket.local_rotation_mask, 0, padded_batch_size, value=False).astype(bool),
-        translation_log_prior=pad_axis(bucket.translation_log_prior, 0, padded_batch_size, value=0).astype(np.float32),
+        translation_log_prior=pad_axis(bucket.translation_log_prior, 0, padded_batch_size, value=0),
         local_rotation_posterior_ids=(
             None
             if bucket.local_rotation_posterior_ids is None
@@ -1564,11 +1584,14 @@ def _reorder_bucket_to_indices(bucket: LocalBucketSpec, returned_indices: np.nda
         bucket_rotation_count=int(bucket.bucket_rotation_count),
         actual_rotation_counts=np.asarray(bucket.actual_rotation_counts[order], dtype=np.int32),
         local_rotation_ids=np.asarray(bucket.local_rotation_ids[order], dtype=np.int32),
-        local_rotations=np.asarray(bucket.local_rotations[order], dtype=np.float32),
-        local_mstep_rotations=np.asarray(_local_mstep_rotations(bucket)[order], dtype=np.float32),
-        local_rotation_log_prior=np.asarray(bucket.local_rotation_log_prior[order], dtype=np.float32),
+        # Reorder only -- preserve each field's own dtype (see
+        # bucket_local_hypothesis_layout's docstring for why forcing float32
+        # here would be wrong under double-precision scoring).
+        local_rotations=np.asarray(bucket.local_rotations)[order],
+        local_mstep_rotations=_local_mstep_rotations(bucket)[order],
+        local_rotation_log_prior=np.asarray(bucket.local_rotation_log_prior)[order],
         local_rotation_mask=np.asarray(bucket.local_rotation_mask[order], dtype=bool),
-        translation_log_prior=np.asarray(bucket.translation_log_prior[order], dtype=np.float32),
+        translation_log_prior=np.asarray(bucket.translation_log_prior)[order],
         local_rotation_posterior_ids=(
             None
             if bucket.local_rotation_posterior_ids is None
@@ -1642,7 +1665,12 @@ def _prepare_local_exact_bucket(
         )
 
     ctf_t0 = time.time()
-    ctf_half = config.compute_ctf_half(ctf_params)
+    ctf_eval_params = (
+        jnp.asarray(ctf_params, dtype=score_real_dtype)
+        if score_real_dtype is not None
+        else ctf_params
+    )
+    ctf_half = config.compute_ctf_half(ctf_eval_params)
     ctf2_over_nv_ctf = ctf_half.astype(score_real_dtype) if score_real_dtype is not None else ctf_half
     ctf2_over_nv_noise = (
         noise_variance_half.astype(score_real_dtype) if score_real_dtype is not None else noise_variance_half
@@ -1679,12 +1707,25 @@ def _prepare_local_exact_bucket(
     if relion_score_translation_angles is not None:
         from recovar import cuda_backproject
 
-        shifted_score_half = cuda_backproject.relion_translate_score_f32(
-            jnp.asarray(score_weighted_half, dtype=jnp.complex64),
-            jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
-            jnp.arange(score_weighted_half.shape[1], dtype=jnp.int32),
-            config.image_shape,
-        )
+        translation_dtype = jnp.asarray(relion_score_translation_angles).dtype
+
+        def _cuda_translate(weighted_half):
+            pixel_indices = jnp.arange(weighted_half.shape[1], dtype=jnp.int32)
+            if translation_dtype == jnp.dtype(jnp.float64):
+                return cuda_backproject.relion_translate_score_f64(
+                    jnp.asarray(weighted_half, dtype=jnp.complex128),
+                    jnp.asarray(relion_score_translation_angles, dtype=jnp.float64),
+                    pixel_indices,
+                    config.image_shape,
+                )
+            return cuda_backproject.relion_translate_score_f32(
+                jnp.asarray(weighted_half, dtype=jnp.complex64),
+                jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+                pixel_indices,
+                config.image_shape,
+            )
+
+        shifted_score_half = _cuda_translate(score_weighted_half)
     else:
         shifted_score_half = _apply_half_translation_phases(score_weighted_half, shift_phases_half)
     if synchronize_profile:
@@ -1737,13 +1778,16 @@ def _prepare_local_exact_bucket(
             score_real_dtype=score_real_dtype,
         )
         recon_weighted_half = shift_processed_recon_half * shift_ctf_half / shift_noise_half
-        shifted_recon_half = _apply_half_translation_phases(recon_weighted_half, shift_phases_half)
+        if relion_score_translation_angles is not None and translation_dtype == jnp.dtype(jnp.float64):
+            shifted_recon_half = _cuda_translate(recon_weighted_half)
+        else:
+            shifted_recon_half = _apply_half_translation_phases(recon_weighted_half, shift_phases_half)
         if synchronize_profile:
             _block_until_ready(shifted_recon_half)
         if timer is not None:
             timer["tile_shift_recon_s"] += time.time() - shift_recon_t0
     else:
-        if relion_score_translation_angles is None:
+        if relion_score_translation_angles is None or translation_dtype == jnp.dtype(jnp.float64):
             shifted_recon_half = shifted_score_half
         else:
             # Exact RELION arithmetic applies only to score translation.
@@ -1838,6 +1882,7 @@ def run_local_em_exact(
     use_float64_normalization: bool = True,
     use_float64_projections: bool = False,
     projection_relion_texture_interp: bool = False,
+    projection_relion_acc_double_floorf_quirk: bool = False,
     projection_force_jax: bool = False,
     relion_projector_half=None,
     relion_projector_r_max: int | None = None,
@@ -1860,6 +1905,7 @@ def run_local_em_exact(
     adaptive_fraction: float = 0.999,
     max_significants: int = -1,
     debug_iteration: int | None = None,
+    debug_pass_label: str | None = None,
     return_best_pose_details: bool = False,
     normalization_log_z: np.ndarray | None = None,
     class_log_prior: float = 0.0,
@@ -1875,7 +1921,16 @@ def run_local_em_exact(
     return_significant_counts: bool = False,
     score_only: bool = False,
 ):
-    """Run exact local EM over per-image local hypothesis sets."""
+    """Run exact local EM over per-image local hypothesis sets.
+
+    ``debug_pass_label`` is diagnostic-only: it is appended verbatim to
+    ``RECOVAR_LOCAL_SCORE_DUMP_*`` filenames (see
+    ``local_debug.maybe_write_debug_score_dump``). Callers that invoke this
+    function more than once per iteration for the *same* image/current_size/
+    debug_iteration (e.g. local search's pass-1 "parent" probe followed by
+    its pass-2 fine call) must pass distinct labels, or the later call's
+    dump silently overwrites the earlier one at the same path.
+    """
 
     score_only = bool(score_only)
     include_unweighted_norm_high_shell = bool(include_unweighted_norm_high_shell)
@@ -1883,8 +1938,6 @@ def run_local_em_exact(
     relion_exact_score_translation = bool(relion_exact_score_translation)
     if relion_exact_score_translation and not half_spectrum_scoring:
         raise ValueError("exact RELION score translation requires half_spectrum_scoring=True")
-    if relion_exact_score_translation and use_float64_scoring:
-        raise ValueError("exact RELION score translation is a float32 scoring path")
     if score_only:
         if not (disable_adjoint_y and disable_adjoint_ctf):
             raise ValueError("score_only exact-local EM requires both adjoints disabled")
@@ -2091,6 +2144,7 @@ def run_local_em_exact(
     n_windowed = window_spec.n_score
     projection_kwargs = window_spec.projection_kwargs()
     projection_kwargs["relion_texture_interp"] = projection_relion_texture_interp
+    projection_kwargs["relion_acc_double_floorf_quirk"] = projection_relion_acc_double_floorf_quirk
     projection_kwargs["force_jax"] = bool(projection_force_jax)
     projection_mode = _local_projection_mode(window_spec, projection_kwargs, relion_projector_half)
 
@@ -2109,14 +2163,16 @@ def run_local_em_exact(
     Ft_y = jnp.zeros(score_only_accumulator_size, dtype=recon_y_accum_dtype)
     Ft_ctf = jnp.zeros(score_only_accumulator_size, dtype=recon_ctf_accum_dtype)
     hard_assignment = np.empty(n_images, dtype=np.int32)
-    log_evidence_per_image = np.empty(n_images, dtype=np.float32)
-    best_log_score_per_image = np.empty(n_images, dtype=np.float32)
-    max_posterior_per_image = np.empty(n_images, dtype=np.float32)
+    log_evidence_per_image = np.empty(n_images, dtype=precision_policy.score_real_dtype)
+    best_log_score_per_image = np.empty(n_images, dtype=precision_policy.score_real_dtype)
+    max_posterior_per_image = np.empty(n_images, dtype=precision_policy.score_real_dtype)
     significant_counts = np.empty(n_images, dtype=np.int32) if return_significant_counts else None
     rotation_posterior_sums = np.zeros(int(local_layout.n_global_rotations), dtype=np.float64)
-    best_pose_rotations = np.empty((n_images, 3, 3), dtype=np.float32) if return_best_pose_details else None
+    best_pose_rotations = (
+        np.empty((n_images, 3, 3), dtype=precision_policy.score_real_dtype) if return_best_pose_details else None
+    )
     best_pose_translations = (
-        np.empty((n_images, local_layout.translation_grid.shape[1]), dtype=np.float32)
+        np.empty((n_images, local_layout.translation_grid.shape[1]), dtype=precision_policy.score_real_dtype)
         if return_best_pose_details
         else None
     )
@@ -2129,8 +2185,8 @@ def run_local_em_exact(
     noise_xa = None
     noise_scale_xa = None
     noise_scale_aa = None
-    noise_sigma2_offset = jnp.asarray(0.0, dtype=jnp.float32)
-    noise_sumw = jnp.asarray(0.0, dtype=jnp.float32)
+    noise_sigma2_offset = jnp.asarray(0.0, dtype=precision_policy.score_real_dtype)
+    noise_sumw = jnp.asarray(0.0, dtype=precision_policy.score_real_dtype)
     return_noise_split = noise_split_diagnostics_requested()
     require_materialized_recon_projection = bool(
         mstep_subtract_ctf_projection
@@ -2169,17 +2225,21 @@ def run_local_em_exact(
             shell_indices_noise,
             n_shells=n_shells,
         )
-        noise_wsum = jnp.zeros(n_shells, dtype=jnp.float32)
-        noise_img_power = jnp.zeros(n_shells, dtype=jnp.float32)
+        noise_wsum = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
+        noise_img_power = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
         noise_norm_correction = jnp.zeros(
             n_images,
-            dtype=jnp.float64 if source_faithful_spectrum_norm else jnp.float32,
+            dtype=(
+                jnp.float64
+                if source_faithful_spectrum_norm
+                else precision_policy.score_real_dtype
+            ),
         )
-        noise_a2 = jnp.zeros(n_shells, dtype=jnp.float32)
-        noise_xa = jnp.zeros(n_shells, dtype=jnp.float32)
+        noise_a2 = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
+        noise_xa = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
         if group_ids_np is not None:
-            noise_scale_xa = jnp.zeros(n_scale_groups, dtype=jnp.float32)
-            noise_scale_aa = jnp.zeros(n_scale_groups, dtype=jnp.float32)
+            noise_scale_xa = jnp.zeros(n_scale_groups, dtype=precision_policy.score_real_dtype)
+            noise_scale_aa = jnp.zeros(n_scale_groups, dtype=precision_policy.score_real_dtype)
 
     default_fused_score_mstep = max_significants is None or int(max_significants) <= 0
     fused_score_mstep_enabled = default_fused_score_mstep
@@ -2250,7 +2310,9 @@ def run_local_em_exact(
         if reconstruction_probability_values_by_image is None:
             return
         image_indices_np = np.asarray(image_indices, dtype=np.int32)
-        probs_np = np.asarray(posterior_probs, dtype=np.float32).reshape(len(image_indices_np), -1)
+        probs_np = np.asarray(posterior_probs, dtype=precision_policy.score_real_dtype).reshape(
+            len(image_indices_np), -1
+        )
         for row, image_index in enumerate(image_indices_np):
             values = probs_np[row]
             values = values[values > 0.0]
@@ -2489,12 +2551,14 @@ def run_local_em_exact(
     translation_phases_half = _half_translation_phase_table(
         local_layout.translation_grid,
         image_shape,
+        dtype=precision_policy.score_real_dtype,
     )
     relion_score_translation_angles = (
         _sparse_pass2_diagnostics._relion_cuda_score_translation_angles_if_available(
             local_layout.translation_grid,
             image_shape,
             enabled=relion_exact_score_translation,
+            dtype=np.float64 if use_float64_scoring else np.float32,
         )
     )
     if return_profile:
@@ -2515,11 +2579,11 @@ def run_local_em_exact(
     big_jit_mstep_recon_window_indices_arg = (
         mstep_recon_window_indices if mstep_relion_x_half else big_jit_recon_window_indices_arg
     )
-    disabled_noise_wsum = jnp.zeros(1, dtype=jnp.float32)
-    disabled_noise_img_power = jnp.zeros(1, dtype=jnp.float32)
-    disabled_noise_a2 = jnp.zeros(1, dtype=jnp.float32)
-    disabled_noise_xa = jnp.zeros(1, dtype=jnp.float32)
-    disabled_noise_scale = jnp.zeros(1, dtype=jnp.float32)
+    disabled_noise_wsum = jnp.zeros(1, dtype=precision_policy.score_real_dtype)
+    disabled_noise_img_power = jnp.zeros(1, dtype=precision_policy.score_real_dtype)
+    disabled_noise_a2 = jnp.zeros(1, dtype=precision_policy.score_real_dtype)
+    disabled_noise_xa = jnp.zeros(1, dtype=precision_policy.score_real_dtype)
+    disabled_noise_scale = jnp.zeros(1, dtype=precision_policy.score_real_dtype)
     disabled_group_ids = jnp.zeros(1, dtype=jnp.int32)
     disabled_noise_shell_indices = jnp.zeros(n_half, dtype=jnp.int32)
 
@@ -2694,6 +2758,7 @@ def run_local_em_exact(
                 relion_projector_r_max=int(relion_projector_r_max_big_jit),
                 projection_padding_factor=int(projection_padding_factor),
                 projection_relion_texture_interp=projection_relion_texture_interp,
+                projection_relion_acc_double_floorf_quirk=projection_relion_acc_double_floorf_quirk,
                 projection_pixel_indices=jnp.asarray(window_spec.projection_indices, dtype=jnp.int32),
                 projector_output_size=int(big_jit_relion_projector_output_size),
                 cache_row_capacity=int(relion_projection_cache_capacity_rows),
@@ -2855,61 +2920,63 @@ def run_local_em_exact(
                     pad_axis(integer_pre_shifts, 0, batch_size, value=0),
                     dtype=jnp.int32,
                 )
-                fourier_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=jnp.float32)
+                fourier_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=precision_policy.score_real_dtype)
                 apply_fourier_pre_shift = False
             elif image_pre_shifts is not None:
                 integer_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=jnp.int32)
                 fourier_pre_shifts_arg = jnp.asarray(
                     pad_axis(
-                        np.asarray(image_pre_shifts, dtype=np.float32)[bucket_image_indices],
+                        np.asarray(image_pre_shifts)[bucket_image_indices],
                         0,
                         batch_size,
                         value=0,
                     ),
-                    dtype=jnp.float32,
+                    dtype=precision_policy.score_real_dtype,
                 )
                 apply_fourier_pre_shift = True
             else:
                 integer_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=jnp.int32)
-                fourier_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=jnp.float32)
+                fourier_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=precision_policy.score_real_dtype)
                 apply_fourier_pre_shift = False
 
             image_corrections_arg = (
                 jnp.asarray(
                     pad_axis(
-                        np.asarray(image_corrections, dtype=np.float32)[bucket_image_indices],
+                        np.asarray(image_corrections)[bucket_image_indices],
                         0,
                         batch_size,
                         value=1,
                     ),
+                    dtype=precision_policy.score_real_dtype,
                 )
                 if image_corrections is not None
-                else jnp.ones(batch_size, dtype=jnp.float32)
+                else jnp.ones(batch_size, dtype=precision_policy.score_real_dtype)
             )
             scale_corrections_arg = (
                 jnp.asarray(
                     pad_axis(
-                        np.asarray(scale_corrections, dtype=np.float32)[bucket_image_indices],
+                        np.asarray(scale_corrections)[bucket_image_indices],
                         0,
                         batch_size,
                         value=1,
                     ),
+                    dtype=precision_policy.score_real_dtype,
                 )
                 if scale_corrections is not None
-                else jnp.ones(batch_size, dtype=jnp.float32)
+                else jnp.ones(batch_size, dtype=precision_policy.score_real_dtype)
             )
             image_only_corrections_arg = (
                 image_corrections_arg / scale_corrections_arg
                 if image_corrections is not None
-                else jnp.ones(batch_size, dtype=jnp.float32)
+                else jnp.ones(batch_size, dtype=precision_policy.score_real_dtype)
             )
             translation_sqdist_arg = (
                 jnp.asarray(
                     pad_axis(translation_sqdist_ang, 0, batch_size, value=0),
-                    dtype=jnp.float32,
+                    dtype=precision_policy.score_real_dtype,
                 )
                 if translation_sqdist_ang is not None
-                else jnp.zeros((batch_size, n_trans), dtype=jnp.float32)
+                else jnp.zeros((batch_size, n_trans), dtype=precision_policy.score_real_dtype)
             )
             sample_mask_arg = (
                 None
@@ -2922,7 +2989,7 @@ def run_local_em_exact(
                     dtype=(jnp.float64 if use_float64_normalization else jnp.float32),
                 )
                 if normalization_log_z_np is not None
-                else jnp.zeros(batch_size, dtype=jnp.float32)
+                else jnp.zeros(batch_size, dtype=(jnp.float64 if use_float64_normalization else jnp.float32))
             )
             normalization_log_evidence_arg = (
                 jnp.asarray(
@@ -2930,7 +2997,7 @@ def run_local_em_exact(
                     dtype=(jnp.float64 if use_float64_normalization else jnp.float32),
                 )
                 if normalization_log_evidence_np is not None
-                else jnp.zeros(batch_size, dtype=jnp.float32)
+                else jnp.zeros(batch_size, dtype=(jnp.float64 if use_float64_normalization else jnp.float32))
             )
             local_rotation_log_prior_arg = jnp.asarray(bucket.local_rotation_log_prior)
             if class_log_prior != 0.0:
@@ -2972,7 +3039,7 @@ def run_local_em_exact(
                 scale_correction_pixel_mask_arg = jnp.zeros(n_half, dtype=bool)
                 n_shells_arg = 1
             if reconstruction_probability_threshold_np is None:
-                reconstruction_probability_threshold_arg = jnp.zeros((batch_size,), dtype=jnp.float32)
+                reconstruction_probability_threshold_arg = jnp.zeros((batch_size,), dtype=jnp.float64)
                 has_reconstruction_probability_threshold = False
             else:
                 threshold_values = reconstruction_probability_threshold_np[bucket_image_indices]
@@ -3249,7 +3316,7 @@ def run_local_em_exact(
                 )
             if accumulate_noise:
                 noise_norm_correction = noise_norm_correction.at[jnp.asarray(bucket_image_indices, dtype=jnp.int32)].add(
-                    bucket_norm_correction[:unpadded_batch_size],
+                    bucket_norm_correction[:unpadded_batch_size].astype(noise_norm_correction.dtype),
                 )
             timing.big_jit_bucket_s += time.time() - big_jit_t0
             big_jit_bucket_count += 1
@@ -3307,6 +3374,7 @@ def run_local_em_exact(
                         n_significant_samples=n_significant_samples_unpadded,
                         current_size=current_size,
                         debug_iteration=debug_iteration,
+                        debug_pass_label=debug_pass_label,
                         shifted_score_split=debug_shifted_score_split,
                         shifted_recon_split=debug_shifted_recon_split,
                         ctf2_over_nv_score=debug_ctf2_over_nv_score,
@@ -3355,7 +3423,7 @@ def run_local_em_exact(
                 reconstruction_take_indices_jnp = jnp.asarray(reconstruction_take_indices, dtype=jnp.int32)
                 reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
                 packed_rotations_np = np.take_along_axis(
-                    np.asarray(bucket.local_rotations[:unpadded_batch_size], dtype=np.float32),
+                    np.asarray(bucket.local_rotations[:unpadded_batch_size]),
                     reconstruction_take_indices[:, :, None, None],
                     axis=1,
                 )
@@ -3403,7 +3471,7 @@ def run_local_em_exact(
                 reconstruction_take_indices_jnp = jnp.asarray(reconstruction_take_indices, dtype=jnp.int32)
                 reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
                 packed_rotations_np = np.take_along_axis(
-                    np.asarray(bucket.local_rotations[:unpadded_batch_size], dtype=np.float32),
+                    np.asarray(bucket.local_rotations[:unpadded_batch_size]),
                     reconstruction_take_indices[:, :, None, None],
                     axis=1,
                 )
@@ -3570,11 +3638,13 @@ def run_local_em_exact(
                 noise_t0 = time.time()
                 reconstruction_probs_unpadded = reconstruction_probs[:unpadded_batch_size]
                 support_mass = jnp.sum(reconstruction_probs_unpadded.reshape(unpadded_batch_size, -1), axis=1).astype(
-                    jnp.float32
+                    precision_policy.score_real_dtype
                 )
-                translation_posterior = jnp.sum(reconstruction_probs_unpadded, axis=1).astype(jnp.float32)
+                translation_posterior = jnp.sum(reconstruction_probs_unpadded, axis=1).astype(
+                    precision_policy.score_real_dtype
+                )
                 noise_sumw_offset = jnp.sum(
-                    translation_posterior * translation_sqdist_arg[:unpadded_batch_size].astype(jnp.float32),
+                    translation_posterior * translation_sqdist_arg[:unpadded_batch_size],
                 )
                 processed_noise_power_half = processed_score_half[:unpadded_batch_size]
                 processed_noise_power_half = (
@@ -3583,7 +3653,7 @@ def run_local_em_exact(
                 batch_img_power = jnp.sum(
                     (jnp.abs(processed_noise_power_half) ** 2) * support_mass[:, None],
                     axis=0,
-                ).astype(jnp.float32)
+                ).astype(precision_policy.score_real_dtype)
                 batch_img_power_per_image = _norm_correction_image_power_per_image(
                     processed_noise_power_half,
                     support_mass,
@@ -3619,10 +3689,10 @@ def run_local_em_exact(
                         unpadded_batch_size,
                     )
                     logged_deferred_noise_projection_chunking = True
-                block_noise_shells = jnp.zeros(n_shells, dtype=jnp.float32)
-                block_a2_shells = jnp.zeros(n_shells, dtype=jnp.float32)
-                block_xa_shells = jnp.zeros(n_shells, dtype=jnp.float32)
-                block_norm_residual = jnp.zeros(unpadded_batch_size, dtype=jnp.float32)
+                block_noise_shells = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
+                block_a2_shells = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
+                block_xa_shells = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
+                block_norm_residual = jnp.zeros(unpadded_batch_size, dtype=precision_policy.score_real_dtype)
                 bucket_group_ids = (
                     group_ids_arg[:unpadded_batch_size] if group_ids_np is not None else None
                 )
@@ -3687,8 +3757,8 @@ def run_local_em_exact(
                             batch_scale_unpadded,
                             scale_correction_pixel_mask,
                         )
-                        noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(scale_xa_per_image)
-                        noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(scale_aa_per_image)
+                        noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(scale_xa_per_image.astype(noise_scale_xa.dtype))
+                        noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(scale_aa_per_image.astype(noise_scale_aa.dtype))
                 if return_profile:
                     _block_until_ready(block_noise_shells, block_norm_residual)
                 noise_wsum = noise_wsum + block_noise_shells
@@ -3696,7 +3766,7 @@ def run_local_em_exact(
                     noise_a2 = noise_a2 + block_a2_shells
                     noise_xa = noise_xa + block_xa_shells
                 noise_norm_correction = noise_norm_correction.at[jnp.asarray(bucket_image_indices, dtype=jnp.int32)].add(
-                    batch_img_power_per_image + block_norm_residual,
+                    (batch_img_power_per_image + block_norm_residual).astype(noise_norm_correction.dtype),
                 )
                 noise_sigma2_offset = noise_sigma2_offset + noise_sumw_offset
                 timing.noise_s += time.time() - noise_t0
@@ -3807,7 +3877,9 @@ def run_local_em_exact(
 
         if image_pre_shifts is not None and not real_space_pre_shift_applied:
             batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(bucket.image_indices)])
-            phase_expanded = tiled_half_image_phase_factors(image_shape, batch_shifts, n_trans)
+            phase_expanded = tiled_half_image_phase_factors(
+                image_shape, batch_shifts, n_trans, dtype=batch_shifts.dtype
+            )
             shifted_half = shifted_half * phase_expanded
             shifted_recon_half = shifted_recon_half * phase_expanded
         shifted_half_with_dc = shifted_half
@@ -4292,6 +4364,7 @@ def run_local_em_exact(
                 n_significant_samples=n_significant_samples,
                 current_size=current_size,
                 debug_iteration=debug_iteration,
+                debug_pass_label=debug_pass_label,
                 shifted_score_split=shifted_score.reshape(batch_size, n_trans, -1),
                 shifted_recon_split=shifted_recon_split,
                 ctf2_over_nv_score=ctf2_over_nv_score,
@@ -4431,7 +4504,7 @@ def run_local_em_exact(
         reconstruction_take_indices_jnp = jnp.asarray(reconstruction_take_indices, dtype=jnp.int32)
         reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
         packed_rotations_np = np.take_along_axis(
-            np.asarray(bucket.local_rotations, dtype=np.float32),
+            np.asarray(bucket.local_rotations),
             reconstruction_take_indices[:, :, None, None],
             axis=1,
         )
@@ -4609,21 +4682,23 @@ def run_local_em_exact(
 
         if accumulate_noise:
             noise_t0 = time.time()
-            support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), axis=1).astype(jnp.float32)
+            support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), axis=1).astype(
+                precision_policy.score_real_dtype
+            )
             if translation_sqdist_ang is not None:
-                translation_posterior = jnp.sum(reconstruction_probs, axis=1).astype(jnp.float32)
+                translation_posterior = jnp.sum(reconstruction_probs, axis=1).astype(precision_policy.score_real_dtype)
                 noise_sumw_offset = jnp.sum(
-                    translation_posterior * jnp.asarray(translation_sqdist_ang, dtype=jnp.float32),
+                    translation_posterior * jnp.asarray(translation_sqdist_ang, dtype=precision_policy.score_real_dtype),
                 )
             else:
-                noise_sumw_offset = jnp.asarray(0.0, dtype=jnp.float32)
+                noise_sumw_offset = jnp.asarray(0.0, dtype=precision_policy.score_real_dtype)
             processed_noise_power_half = processed_score_half
             if image_only_corr is not None:
                 processed_noise_power_half = processed_noise_power_half * image_only_corr[:, None]
             batch_img_power = jnp.sum(
                 (jnp.abs(processed_noise_power_half) ** 2) * support_mass[:, None],
                 axis=0,
-            ).astype(jnp.float32)
+            ).astype(precision_policy.score_real_dtype)
             batch_img_power_per_image = _norm_correction_image_power_per_image(
                 processed_noise_power_half,
                 support_mass,
@@ -4708,10 +4783,10 @@ def run_local_em_exact(
                     packed_summed_masked_noise,
                     0.0,
                 )
-            block_noise_shells = jnp.zeros(n_shells, dtype=jnp.float32)
-            block_a2_shells = jnp.zeros(n_shells, dtype=jnp.float32)
-            block_xa_shells = jnp.zeros(n_shells, dtype=jnp.float32)
-            block_norm_residual = jnp.zeros(batch_size, dtype=jnp.float32)
+            block_noise_shells = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
+            block_a2_shells = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
+            block_xa_shells = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
+            block_norm_residual = jnp.zeros(batch_size, dtype=precision_policy.score_real_dtype)
             if proj_for_noise is None:
                 packed_rotation_count = int(packed_rotations_np.shape[1])
                 n_recon_pixels = window_spec.n_recon if window_spec.use_window else int(n_half)
@@ -4790,8 +4865,8 @@ def run_local_em_exact(
                             batch_scale,
                             scale_correction_pixel_mask,
                         )
-                        noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(scale_xa_per_image)
-                        noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(scale_aa_per_image)
+                        noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(scale_xa_per_image.astype(noise_scale_xa.dtype))
+                        noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(scale_aa_per_image.astype(noise_scale_aa.dtype))
             else:
                 packed_rotation_count = int(reconstruction_take_indices_jnp.shape[1])
                 noise_projection_pixels = int(proj_for_noise.shape[-1])
@@ -4862,8 +4937,8 @@ def run_local_em_exact(
                             batch_scale,
                             scale_correction_pixel_mask,
                         )
-                        noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(scale_xa_per_image)
-                        noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(scale_aa_per_image)
+                        noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(scale_xa_per_image.astype(noise_scale_xa.dtype))
+                        noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(scale_aa_per_image.astype(noise_scale_aa.dtype))
             if return_profile:
                 _block_until_ready(block_noise_shells, block_norm_residual)
             noise_wsum = noise_wsum + block_noise_shells
@@ -4871,7 +4946,7 @@ def run_local_em_exact(
                 noise_a2 = noise_a2 + block_a2_shells
                 noise_xa = noise_xa + block_xa_shells
             noise_norm_correction = noise_norm_correction.at[jnp.asarray(bucket.image_indices, dtype=jnp.int32)].add(
-                batch_img_power_per_image + block_norm_residual,
+                (batch_img_power_per_image + block_norm_residual).astype(noise_norm_correction.dtype),
             )
             noise_sigma2_offset = noise_sigma2_offset + noise_sumw_offset
             timing.noise_s += time.time() - noise_t0
@@ -5110,7 +5185,9 @@ def run_local_em_exact(
     }
     if reconstruction_probability_values_by_image is not None:
         profile_summary["reconstruction_probability_values_by_image"] = tuple(
-            np.concatenate(values).astype(np.float32, copy=False) if values else np.zeros(0, dtype=np.float32)
+            np.concatenate(values).astype(precision_policy.score_real_dtype, copy=False)
+            if values
+            else np.zeros(0, dtype=precision_policy.score_real_dtype)
             for values in reconstruction_probability_values_by_image
         )
     if reconstruction_sample_indices_by_image is not None:

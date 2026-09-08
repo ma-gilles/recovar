@@ -551,10 +551,11 @@ def run_dense_bucket_big_jit(
     block_argmax = jnp.argmax(scores.reshape(batch_size, -1), axis=1)
     max_posterior = jnp.zeros(batch_size, dtype=scores.real.dtype)
     probs_sum_t = jnp.zeros((batch_size, rot_block_size), dtype=scores.real.dtype)
-    noise_wsum = jnp.zeros(n_shells, dtype=jnp.float32)
-    noise_a2 = jnp.zeros(n_shells, dtype=jnp.float32)
-    noise_xa = jnp.zeros(n_shells, dtype=jnp.float32)
-    noise_sigma2_offset = jnp.asarray(0.0, dtype=jnp.float32)
+    stats_dtype = scores.real.dtype
+    noise_wsum = jnp.zeros(n_shells, dtype=stats_dtype)
+    noise_a2 = jnp.zeros(n_shells, dtype=stats_dtype)
+    noise_xa = jnp.zeros(n_shells, dtype=stats_dtype)
+    noise_sigma2_offset = jnp.asarray(0.0, dtype=stats_dtype)
 
     if run_mstep:
         if winner_take_all:

@@ -125,6 +125,31 @@ def test_per_half_update_from_half_score_result_updates_only_score_payload():
     assert outs.mstep_accumulator_shape == [None, (17, 17, 17)]
 
 
+def test_per_half_update_preserves_double_posterior_state_in_double_mode(monkeypatch):
+    class _Stats:
+        max_posterior_per_image = np.array([0.123456789012345], dtype=np.float64)
+        rotation_posterior_sums = np.array([0.987654321098765], dtype=np.float64)
+
+    monkeypatch.setitem(iteration_loop._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", True)
+    outs = iteration_loop.PerHalfOutputs.empty()
+    outs.update_from(
+        0,
+        iteration_loop.HalfScoreResult(
+            ha=np.array([0], dtype=np.int32),
+            Ft_y=None,
+            Ft_ctf=None,
+            em_stats=_Stats(),
+            noise_stats=None,
+        ),
+        dtype=iteration_loop._dense_global_scoring_dtype(),
+    )
+
+    assert outs.max_posterior[0].dtype == np.float64
+    assert outs.rotation_posterior[0].dtype == np.float64
+    assert outs.max_posterior[0][0] == _Stats.max_posterior_per_image[0]
+    assert outs.rotation_posterior[0][0] == _Stats.rotation_posterior_sums[0]
+
+
 def test_mstep_full_half_axis_resolver_keeps_common_axis_or_default():
     assert score_outputs._resolve_mstep_full_half_axis([None, None]) == -1
     assert score_outputs._resolve_mstep_full_half_axis([None, 0]) == 0
@@ -168,7 +193,7 @@ def test_empty_k1_local_or_adaptive_half_keeps_relion_x_half_shape_contract():
 def test_relion_norm_scale_updates_are_not_disabled_for_k_class():
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
     update_start = source.index("can_update_norm_scale = (")
-    update_source = source[update_start : source.index("noise_radial_trajectory.append", update_start)]
+    update_source = source[update_start : source.index("history.record_noise_and_tau2(", update_start)]
 
     assert "not k_class_enabled" not in update_source
     assert "update_relion_norm_scale_corrections(" in update_source

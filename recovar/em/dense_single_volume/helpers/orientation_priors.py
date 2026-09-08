@@ -12,11 +12,17 @@ import numpy as np
 from recovar.em.sampling import rotation_grid_n_in_planes, rotation_grid_size
 
 
-def relion_round_away_from_zero(values):
-    """Vectorized RELION ``ROUND`` macro: nearest integer, ties away from zero."""
+def relion_round_away_from_zero(values, *, dtype: np.dtype = np.float32):
+    """Vectorized RELION ``ROUND`` macro: nearest integer, ties away from zero.
+
+    ``dtype`` controls only the returned cast; the round itself is always
+    computed at float64. RELION's own ``ROUND`` macro operates on RFLOAT
+    (double under ``DoublePrec_CPU``/``DoublePrec_ACC``) throughout -- pass
+    ``np.float64`` to match a genuine double-precision comparison.
+    """
     arr = np.asarray(values, dtype=np.float64)
     rounded = np.where(arr >= 0.0, np.floor(arr + 0.5), -np.floor(-arr + 0.5))
-    return rounded.astype(np.float32, copy=False)
+    return rounded.astype(dtype, copy=False)
 
 
 def make_relion_translation_log_prior(
@@ -26,6 +32,7 @@ def make_relion_translation_log_prior(
     prior_centers=None,
     *,
     offset_range_pixels=None,
+    dtype: np.dtype = np.float32,
 ):
     """Return RELION's offset prior scores over a translation grid.
 
@@ -35,8 +42,12 @@ def make_relion_translation_log_prior(
     ``my_pixel_size**2`` factor.  RECOVAR translation grids are in projection
     pixels, so explicit prior centers intentionally use the source-equivalent
     ``pixel_size**4 / sigma_offset_A**2`` scale.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+    callers running a genuine double-precision comparison should pass
+    ``np.float64`` explicitly.
     """
-    translations = np.asarray(translations, dtype=np.float32)
+    translations = np.asarray(translations, dtype=dtype)
     if translations.ndim != 2:
         raise ValueError(
             f"translations must have shape (n_trans, dim), got {translations.shape}",
@@ -52,34 +63,36 @@ def make_relion_translation_log_prior(
     n_trans = translations.shape[0]
 
     if prior_centers is None:
-        return np.zeros(n_trans, dtype=np.float32)
+        return np.zeros(n_trans, dtype=dtype)
 
-    prior_centers = np.asarray(prior_centers, dtype=np.float32)
+    prior_centers = np.asarray(prior_centers, dtype=dtype)
     shared = prior_centers.ndim == 1
     centers = prior_centers.reshape(-1, translations.shape[1])
 
     if sigma2_offset <= 0.0:
-        zeros = np.zeros((centers.shape[0], n_trans), dtype=np.float32)
+        zeros = np.zeros((centers.shape[0], n_trans), dtype=dtype)
         return zeros[0] if shared else zeros
 
     diffs_px = translations[None, :, :] - centers[:, None, :]
     sqdist_px = np.sum(diffs_px**2, axis=-1)
     log_prior = -0.5 * sqdist_px * (voxel_size**4) / sigma2_offset
-    log_prior = log_prior.astype(np.float32)
+    log_prior = log_prior.astype(dtype)
     return log_prior[0] if shared else log_prior
 
 
-def relion_translation_search_base(previous_best_translations):
+def relion_translation_search_base(previous_best_translations, *, dtype: np.dtype = np.float32):
     """Return RELION's integer-pixel pre-shift for stored absolute offsets."""
     if previous_best_translations is None:
         return None
     previous_best_translations = np.asarray(previous_best_translations, dtype=np.float64)
     if previous_best_translations.size == 0:
-        return previous_best_translations.reshape(0, 2)
-    return relion_round_away_from_zero(previous_best_translations)
+        return previous_best_translations.reshape(0, 2).astype(dtype, copy=False)
+    return relion_round_away_from_zero(previous_best_translations, dtype=dtype)
 
 
-def relion_translation_prior_center(previous_best_translations, voxel_size, prior_offsets=None):
+def relion_translation_prior_center(
+    previous_best_translations, voxel_size, prior_offsets=None, *, dtype: np.dtype = np.float32
+):
     """Return dense/local score-prior centers in RECOVAR search-grid pixels.
 
     RELION's accelerated path builds ``pdf_offset`` from
@@ -92,19 +105,24 @@ def relion_translation_prior_center(previous_best_translations, voxel_size, prio
     Dense and local scoring use this same center calculation. Sigma-offset
     sufficient statistics use ``relion_sigma_offset_prior_center`` instead;
     that center remains in pixels without the division by pixel size.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+    callers running a genuine double-precision comparison should pass
+    ``np.float64`` explicitly. RELION itself never narrows this computation
+    (RFLOAT/XFLOAT are both double under double-precision builds).
     """
-    old_offset = relion_translation_search_base(previous_best_translations)
+    old_offset = relion_translation_search_base(previous_best_translations, dtype=dtype)
     if old_offset is None:
         return None
     voxel_size = float(voxel_size if voxel_size > 0 else 1.0)
     if prior_offsets is None:
-        prior = np.zeros_like(old_offset, dtype=np.float32)
+        prior = np.zeros_like(old_offset, dtype=dtype)
     else:
-        prior = np.asarray(prior_offsets, dtype=np.float32).reshape(old_offset.shape)
-    return ((prior - old_offset) / voxel_size).astype(np.float32)
+        prior = np.asarray(prior_offsets, dtype=dtype).reshape(old_offset.shape)
+    return ((prior - old_offset) / voxel_size).astype(dtype)
 
 
-def relion_sigma_offset_prior_center(previous_best_translations, prior_offsets=None):
+def relion_sigma_offset_prior_center(previous_best_translations, prior_offsets=None, *, dtype: np.dtype = np.float32):
     """Return RELION's sigma-offset sufficient-statistic center in pixels.
 
     RELION's ``pdf_offset`` scoring path evaluates the coarse Angstrom
@@ -114,19 +132,29 @@ def relion_sigma_offset_prior_center(previous_best_translations, prior_offsets=N
     engines use pixel-space translation grids and convert squared distances to
     Angstroms themselves, so this center intentionally does not divide by
     pixel size.
+
+    ``dtype`` -- see :func:`relion_translation_prior_center`.
     """
-    old_offset = relion_translation_search_base(previous_best_translations)
+    old_offset = relion_translation_search_base(previous_best_translations, dtype=dtype)
     if old_offset is None:
         return None
     if prior_offsets is None:
-        prior = np.zeros_like(old_offset, dtype=np.float32)
+        prior = np.zeros_like(old_offset, dtype=dtype)
     else:
-        prior = np.asarray(prior_offsets, dtype=np.float32).reshape(old_offset.shape)
-    return (prior - old_offset).astype(np.float32)
+        prior = np.asarray(prior_offsets, dtype=dtype).reshape(old_offset.shape)
+    return (prior - old_offset).astype(dtype)
 
 
-def collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, healpix_order):
-    """Collapse per-rotation posterior mass onto RELION's HEALPix directions."""
+def collapse_rotation_posterior_to_direction_prior(
+    rotation_posterior_sums, healpix_order, *, dtype: np.dtype = np.float32
+):
+    """Collapse per-rotation posterior mass onto RELION's HEALPix directions.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+    callers running double-precision scoring should pass ``np.float64``.
+    RELION's ``pdf_direction`` is ``std::vector<MultidimArray<RFLOAT>>``
+    (RELION ``src/ml_model.h``), never narrowed to float.
+    """
     rotation_posterior_sums = np.asarray(rotation_posterior_sums, dtype=np.float64).reshape(-1)
     n_rot = rotation_grid_size(healpix_order)
     if rotation_posterior_sums.shape[0] != n_rot:
@@ -142,7 +170,7 @@ def collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, heal
         direction_weights.fill(1.0 / max(n_pixels, 1))
     else:
         direction_weights /= total
-    return direction_weights.astype(np.float32)
+    return direction_weights.astype(dtype)
 
 
 def infer_direction_prior_healpix_order(direction_prior):
@@ -156,40 +184,48 @@ def infer_direction_prior_healpix_order(direction_prior):
     return order
 
 
-def normalize_direction_prior_per_half(direction_prior):
+def normalize_direction_prior_per_half(direction_prior, *, dtype: np.dtype = np.float32):
     """Return a two-element list of RELION ``pdf_direction`` arrays.
 
     RELION auto-refine stores separate learned orientation distributions for
     the two half-models.  Replay callers should pass ``[half1, half2]``.  A
     single 1D vector remains accepted for older unit tests and non-auto-refine
     callers, and is shared across both halves.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+    callers running double-precision scoring should pass ``np.float64`` --
+    RELION's ``pdf_direction`` is never narrowed (see
+    ``collapse_rotation_posterior_to_direction_prior``).
     """
     if direction_prior is None:
         return [None, None]
 
     if isinstance(direction_prior, (list, tuple)) and len(direction_prior) == 2:
         return [
-            None if direction_prior[0] is None else np.asarray(direction_prior[0], dtype=np.float32).reshape(-1),
-            None if direction_prior[1] is None else np.asarray(direction_prior[1], dtype=np.float32).reshape(-1),
+            None if direction_prior[0] is None else np.asarray(direction_prior[0], dtype=dtype).reshape(-1),
+            None if direction_prior[1] is None else np.asarray(direction_prior[1], dtype=dtype).reshape(-1),
         ]
 
-    arr = np.asarray(direction_prior, dtype=np.float32)
+    arr = np.asarray(direction_prior, dtype=dtype)
     if arr.ndim == 2 and arr.shape[0] == 2:
         return [arr[0].reshape(-1), arr[1].reshape(-1)]
     arr = arr.reshape(-1)
     return [arr.copy(), arr.copy()]
 
 
-def normalize_class_direction_prior(direction_prior, n_classes):
+def normalize_class_direction_prior(direction_prior, n_classes, *, dtype: np.dtype = np.float32):
     """Return per-class conditional RELION direction priors.
 
     RELION's ``pdf_direction[class]`` rows are joint class-direction masses in
     the no-orientation-prior branch, so row sums may equal ``pdf_class`` rather
     than one.  RECOVAR keeps ``class_log_priors`` separate, so K-class callers
     use row-normalized conditionals here and pass the class prior explicitly.
+
+    ``dtype`` defaults to float32; double-precision callers should pass
+    ``np.float64`` -- see ``normalize_direction_prior_per_half``.
     """
 
-    arr = np.asarray(direction_prior, dtype=np.float32)
+    arr = np.asarray(direction_prior, dtype=dtype)
     if arr.ndim == 1:
         arr = np.broadcast_to(arr[None, :], (int(n_classes), arr.shape[0])).copy()
     elif arr.ndim == 2 and arr.shape[0] == int(n_classes):
@@ -205,10 +241,10 @@ def normalize_class_direction_prior(direction_prior, n_classes):
     row_sums = arr.sum(axis=1, keepdims=True)
     if np.any(row_sums <= 0.0):
         raise ValueError("each class direction prior row must have positive mass")
-    return (arr / row_sums).astype(np.float32)
+    return (arr / row_sums).astype(dtype)
 
 
-def normalize_class_direction_prior_per_half(direction_prior, n_classes):
+def normalize_class_direction_prior_per_half(direction_prior, n_classes, *, dtype: np.dtype = np.float32):
     """Return two per-half arrays with shape ``(n_classes, n_dirs)``."""
 
     n_classes = int(n_classes)
@@ -221,25 +257,25 @@ def normalize_class_direction_prior_per_half(direction_prior, n_classes):
         return [
             None
             if direction_prior[0] is None
-            else normalize_class_direction_prior(direction_prior[0], n_classes),
+            else normalize_class_direction_prior(direction_prior[0], n_classes, dtype=dtype),
             None
             if direction_prior[1] is None
-            else normalize_class_direction_prior(direction_prior[1], n_classes),
+            else normalize_class_direction_prior(direction_prior[1], n_classes, dtype=dtype),
         ]
 
-    arr = np.asarray(direction_prior, dtype=np.float32)
+    arr = np.asarray(direction_prior, dtype=dtype)
     if arr.ndim == 3 and arr.shape[0] == 2 and arr.shape[1] == n_classes:
         return [
-            normalize_class_direction_prior(arr[0], n_classes),
-            normalize_class_direction_prior(arr[1], n_classes),
+            normalize_class_direction_prior(arr[0], n_classes, dtype=dtype),
+            normalize_class_direction_prior(arr[1], n_classes, dtype=dtype),
         ]
     if arr.ndim == 2 and n_classes == 1 and arr.shape[0] == 2:
         return [
-            normalize_class_direction_prior(arr[0], n_classes),
-            normalize_class_direction_prior(arr[1], n_classes),
+            normalize_class_direction_prior(arr[0], n_classes, dtype=dtype),
+            normalize_class_direction_prior(arr[1], n_classes, dtype=dtype),
         ]
 
-    shared = normalize_class_direction_prior(arr, n_classes)
+    shared = normalize_class_direction_prior(arr, n_classes, dtype=dtype)
     return [shared.copy(), shared.copy()]
 
 
@@ -266,8 +302,12 @@ def class_weights_from_direction_prior(direction_prior, n_classes):
     return None
 
 
-def remap_direction_prior_to_healpix_order(direction_prior, src_order, dst_order):
-    """Remap a RELION direction prior between HEALPix orders."""
+def remap_direction_prior_to_healpix_order(direction_prior, src_order, dst_order, *, dtype: np.dtype = np.float32):
+    """Remap a RELION direction prior between HEALPix orders.
+
+    ``dtype`` defaults to float32; double-precision callers should pass
+    ``np.float64`` -- see ``normalize_direction_prior_per_half``.
+    """
     direction_prior = np.asarray(direction_prior, dtype=np.float64).reshape(-1)
     if src_order == dst_order:
         out = direction_prior.copy()
@@ -285,10 +325,10 @@ def remap_direction_prior_to_healpix_order(direction_prior, src_order, dst_order
         out.fill(1.0 / max(out.shape[0], 1))
     else:
         out /= total
-    return out.astype(np.float32)
+    return out.astype(dtype)
 
 
-def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=None):
+def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=None, *, dtype: np.dtype = np.float32):
     """Expand RELION's learned ``pdf_direction`` onto a rotation grid.
 
     When ``rotations`` is omitted, the prior is expanded onto RELION's
@@ -298,8 +338,14 @@ def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=No
     actual trial orientations. The optional ``rotations`` mode is therefore a
     geometry-based expansion helper for diagnostics only, not the RELION-parity
     path used in refinement.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+    callers running a genuine double-precision comparison should pass
+    ``np.float64`` explicitly. RELION's own ``pdf_direction``/log-prior
+    arithmetic never narrows below RFLOAT/XFLOAT (both double under
+    double-precision builds).
     """
-    direction_prior = np.asarray(direction_prior, dtype=np.float32).reshape(-1)
+    direction_prior = np.asarray(direction_prior, dtype=dtype).reshape(-1)
     n_rot = rotation_grid_size(healpix_order)
     n_pixels = n_rot // rotation_grid_n_in_planes(healpix_order)
     if direction_prior.shape[0] != n_pixels:
@@ -310,7 +356,7 @@ def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=No
     if rotations is None:
         pixel_idx = np.arange(n_rot, dtype=np.int64) % n_pixels
     else:
-        rotations = np.asarray(rotations, dtype=np.float32).reshape(-1, 3, 3)
+        rotations = np.asarray(rotations, dtype=dtype).reshape(-1, 3, 3)
         if rotations.shape[0] != n_rot:
             raise ValueError(
                 f"rotations must have shape ({n_rot}, 3, 3), got {rotations.shape}",
@@ -327,7 +373,7 @@ def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=No
         )
 
     prior_for_rotations = direction_prior[pixel_idx]
-    log_prior = np.full(prior_for_rotations.shape, -np.inf, dtype=np.float32)
+    log_prior = np.full(prior_for_rotations.shape, -np.inf, dtype=dtype)
     positive = prior_for_rotations > 0.0
-    log_prior[positive] = np.log(prior_for_rotations[positive]).astype(np.float32)
+    log_prior[positive] = np.log(prior_for_rotations[positive]).astype(dtype)
     return log_prior

@@ -40,6 +40,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import jax.numpy as jnp
 
 import recovar.em.dense_single_volume.helpers.oversampling as oversampling_mod
 import recovar.em.dense_single_volume.helpers.score_constraints as score_constraints_mod
@@ -181,8 +182,8 @@ def test_kclass_scatter_uses_mstep_class_mass_for_relion_priors():
         Ft_ctf="ft_ctf",
         stats="stats",
         aggregate_noise_stats="aggregate_noise",
-        best_pose_rotations=None,
-        best_pose_translations=None,
+        best_pose_rotations=np.repeat(np.eye(3, dtype=np.float64)[None], 3, axis=0),
+        best_pose_translations=np.asarray([[0.1, -0.2], [0.3, -0.4], [0.5, -0.6]], dtype=np.float64),
     )
     outputs = score_outputs.PerHalfOutputs.empty()
 
@@ -193,19 +194,28 @@ def test_kclass_scatter_uses_mstep_class_mass_for_relion_priors():
         rot_pmap_for_collapse=None,
         adaptive_os_local=0,
         outputs=outputs,
-        require_best_pose_details=False,
+        require_best_pose_details=True,
+        pose_dtype=np.float64,
     )
 
     np.testing.assert_allclose(outputs.class_posterior[0], [1.2, 1.8])
     np.testing.assert_allclose(outputs.class_full_posterior[0], [1.7, 1.3])
+    assert outputs.best_pose_rotations[0].dtype == np.float64
+    assert outputs.best_pose_rotation_eulers[0].dtype == np.float64
+    assert outputs.best_pose_translations[0].dtype == np.float64
 
 
 def test_kclass_weight_trajectories_record_mstep_and_full_posterior_provenance():
     """Full-chain NPZ output must expose the class-mass split used in parity debugging."""
 
+    from recovar.em.dense_single_volume.helpers import iteration_history
+
+    history_source = inspect.getsource(iteration_history.RefinementHistory.record_class_weights)
+    assert "self.class_mstep_weight_trajectory.append(mstep_weights)" in history_source
+    assert "self.class_full_posterior_weight_trajectory.append(posterior_weights)" in history_source
+
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
-    assert "class_mstep_weight_trajectory.append(class_weights.copy())" in source
-    assert "class_full_posterior_weight_trajectory.append(" in source
+    assert "history.record_class_weights(" in source
 
     import scripts.run_full_refinement as run_full_refinement
 
@@ -1125,7 +1135,8 @@ def test_sparse_pass2_dump_can_retain_only_selected_rotation_rows(monkeypatch, t
     n_trans = 3
     n_pix = 5
     experiment_dataset = SimpleNamespace(dataset_indices=np.array([42], dtype=np.int64))
-    rotations = np.arange(n_rot * 9, dtype=np.float32).reshape(n_rot, 3, 3)
+    rotations = np.arange(n_rot * 9, dtype=np.float64).reshape(n_rot, 3, 3)
+    fine_translations = np.zeros((n_trans, 2), dtype=np.float64)
     per_image_inputs = {
         "oversampled_rots": [rotations],
         "oversampled_rot_indices": [np.arange(10, 10 + n_rot, dtype=np.int64)],
@@ -1149,7 +1160,7 @@ def test_sparse_pass2_dump_can_retain_only_selected_rotation_rows(monkeypatch, t
         per_image_inputs=per_image_inputs,
         current_size=14,
         n_fine_trans=n_trans,
-        fine_translations=np.zeros((n_trans, 2), dtype=np.float32),
+        fine_translations=fine_translations,
         scores=scores,
         probs=probs,
         rotation_log_prior=np.zeros((1, n_rot), dtype=np.float64),
@@ -1179,6 +1190,8 @@ def test_sparse_pass2_dump_can_retain_only_selected_rotation_rows(monkeypatch, t
         np.testing.assert_array_equal(payload["rotation_rows_global"], np.asarray([1, 3]))
         np.testing.assert_array_equal(payload["scores_with_prior"], scores[0, [1, 3]])
         np.testing.assert_array_equal(payload["rotations"], rotations[[1, 3]])
+        assert payload["rotations"].dtype == np.float64
+        assert payload["fine_translations"].dtype == np.float64
         assert int(payload["candidate_rotation_count"]) == n_rot
         assert int(payload["candidate_mask_total_count"]) == n_rot * n_trans
         assert float(payload["score_max"]) == float(np.max(scores))
@@ -1617,6 +1630,33 @@ def test_kclass_pass2_dump_preserves_effective_raw_operands(monkeypatch, tmp_pat
     )
 
 
+def test_kclass_pass2_raw_operand_capture_preserves_double_precision():
+    raw_diff2 = np.asarray([[1.0, 2.0]], dtype=np.float64)
+    shifted_corrected = np.asarray([[[1.0 + 2.0j]]], dtype=np.complex128)
+    corr_img_score = np.asarray([[3.0]], dtype=np.float64)
+    proj_half = np.asarray([[[4.0 + 5.0j]]], dtype=np.complex128)
+    half_weights = np.asarray([6.0], dtype=np.float64)
+
+    captured = sparse_pass2_mod._capture_k_class_pass2_raw_operands(
+        raw_diff2=raw_diff2,
+        target_rows=np.asarray([0], dtype=np.int64),
+        actual_counts=np.asarray([1], dtype=np.int64),
+        shifted_corrected=shifted_corrected,
+        corr_img_score=corr_img_score,
+        proj_half=proj_half,
+        half_weights=half_weights,
+        relion_full_to_compact=None,
+        highres_xi2_half=np.asarray([7.0], dtype=np.float64),
+    )[0]
+
+    assert captured["raw_diff2"].dtype == np.float64
+    assert captured["shifted_corrected"].dtype == np.complex128
+    assert captured["corr_img_score"].dtype == np.float64
+    assert captured["proj_half"].dtype == np.complex128
+    assert captured["half_weights"].dtype == np.float64
+    assert captured["highres_xi2_half"].dtype == np.float64
+
+
 def test_pass2_dump_target_rows_use_original_index_mapping(monkeypatch, tmp_path):
     experiment_dataset = SimpleNamespace(
         original_image_indices_from_local=lambda indices: np.asarray(
@@ -1721,11 +1761,82 @@ def test_normalized_cc_firstiter_ignores_log_priors():
     assert "scores_with_prior" in dense_source
 
 
+def test_k_class_pass1_priors_follow_scoring_precision():
+    """Pass-1 must not narrow RFLOAT priors before double-mode scoring."""
+
+    dense_source = inspect.getsource(sig_mod._compute_k_class_significance_batched)
+    assert "prior = np.asarray(rotation_log_prior, dtype=score_real_dtype)" in dense_source
+    assert "translation_log_prior = np.asarray(translation_log_prior, dtype=score_real_dtype)" in dense_source
+
+    # K1 adaptive scoring uses this same K-class significance path.
+
+
+def test_stats_constructors_preserve_double_precision_by_default():
+    from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
+
+    posterior = jnp.asarray([1.0 + 2.0**-40], dtype=jnp.float64)
+    relion_stats = make_relion_stats(
+        log_evidence_per_image=posterior,
+        best_log_score_per_image=posterior,
+        max_posterior_per_image=posterior,
+        rotation_posterior_sums=posterior,
+    )
+    noise_stats = make_noise_stats(
+        wsum_sigma2_noise=posterior,
+        wsum_img_power=posterior,
+        wsum_sigma2_offset=0.0,
+        sumw=1.0,
+    )
+
+    assert relion_stats.rotation_posterior_sums.dtype == jnp.float64
+    assert noise_stats.wsum_sigma2_noise.dtype == jnp.float64
+    assert float(relion_stats.rotation_posterior_sums[0]) == 1.0 + 2.0**-40
+    assert float(noise_stats.wsum_sigma2_noise[0]) == 1.0 + 2.0**-40
+
+
+def test_kclass_subset_helpers_preserve_double_precision():
+    from recovar.em.dense_single_volume.helpers.types import make_relion_stats
+
+    delta = 2.0**-40
+    subset = make_relion_stats(
+        log_evidence_per_image=np.asarray([1.0 + delta], dtype=np.float64),
+        best_log_score_per_image=np.asarray([2.0 + delta], dtype=np.float64),
+        max_posterior_per_image=np.asarray([0.5 + delta], dtype=np.float64),
+        rotation_posterior_sums=np.asarray([3.0 + delta], dtype=np.float64),
+    )
+    full = k_class_mod._full_stats_from_subset(
+        subset,
+        np.asarray([1]),
+        3,
+        class_log_evidence=np.asarray([4.0 + delta, 5.0 + delta, 6.0 + delta], dtype=np.float64),
+    )
+    noise = k_class_mod._zero_subset_noise_stats(
+        np.asarray([7.0 + delta], dtype=np.float64),
+        n_images=3,
+        full_group_count=2,
+    )
+
+    assert full.best_log_score_per_image.dtype == jnp.float64
+    assert full.max_posterior_per_image.dtype == jnp.float64
+    assert full.log_evidence_per_image.dtype == jnp.float64
+    assert float(full.best_log_score_per_image[1]) == 2.0 + delta
+    assert noise.wsum_sigma2_noise.dtype == jnp.float64
+    assert noise.wsum_norm_correction.dtype == jnp.float64
+    assert noise.wsum_scale_correction_xa.dtype == jnp.float64
+
+
 def test_adaptive_significance_forwards_firstiter_score_mode():
     """No-shortcut firstiter diagnostics must still use normalized-CC pass-1 scoring."""
 
     source = inspect.getsource(k_class_mod.run_dense_k_class_em_adaptive)
     assert 'score_mode=engine_kwargs.get("relion_firstiter_score_mode", "gaussian")' in source
+
+
+def test_k1_firstiter_sparse_pass2_uses_exact_relion_cc_scorer():
+    """The exact scorer must be wired into the production fine pass, not only its probe."""
+
+    source = inspect.getsource(k_class_mod._run_sparse_firstiter_global_winner_subset_pass2)
+    assert 'relion_exact_fine_normalized_cc=n_classes == 1' in source
 
 
 # ----------------------------------------------------------------------

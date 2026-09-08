@@ -98,6 +98,50 @@ def _numpy_cuda_powerclass_highres_half(centered_image, current_size):
     return np.float32(total * np.float32(0.5))
 
 
+def _numpy_cuda_powerclass_highres_half_double(centered_image, current_size):
+    centered_image = np.asarray(centered_image, dtype=np.complex128)
+    batch, height, half_width = centered_image.shape
+    relion_image = np.roll(centered_image, -(height // 2), axis=1)
+    relion_image = np.complex128(relion_image / np.float64(height * height))
+    lanes = np.zeros(
+        (
+            batch,
+            (height * half_width + _RELION_CUDA_POWERCLASS_BLOCK_SIZE - 1)
+            // _RELION_CUDA_POWERCLASS_BLOCK_SIZE,
+            _RELION_CUDA_POWERCLASS_BLOCK_SIZE,
+        ),
+        dtype=np.float64,
+    )
+    for voxel in range(height * half_width):
+        x = voxel % half_width
+        row = voxel // half_width
+        y = row if row < half_width else row - height
+        shell = int(np.rint(np.sqrt(np.float64(x * x + y * y))))
+        if shell <= 0 or shell >= half_width or (x == 0 and y < 0):
+            continue
+        if shell >= current_size // 2 + 1:
+            value = relion_image.reshape(batch, -1)[:, voxel]
+            power = np.float64(
+                np.float64(value.real * value.real)
+                + np.float64(value.imag * value.imag)
+            )
+            lanes[
+                :,
+                voxel // _RELION_CUDA_POWERCLASS_BLOCK_SIZE,
+                voxel % _RELION_CUDA_POWERCLASS_BLOCK_SIZE,
+            ] = power
+    width = _RELION_CUDA_POWERCLASS_BLOCK_SIZE // 2
+    while width:
+        lanes[..., :width] = np.float64(
+            lanes[..., :width] + lanes[..., width : 2 * width]
+        )
+        width //= 2
+    total = np.zeros((batch,), dtype=np.float64)
+    for block_sum in lanes[..., 0].T:
+        total = np.float64(total + block_sum)
+    return np.float64(total * np.float64(0.5))
+
+
 def test_relion_cuda_fine_tree_matches_256_lane_pass_and_tree_bitwise():
     # Alternating scales make sequential per-lane accumulation distinguishable
     # from a flat reduction while retaining deterministic float32 operands.
@@ -116,7 +160,7 @@ def test_relion_cuda_fine_tree_matches_256_lane_pass_and_tree_bitwise():
     assert actual.dtype == np.float32
 
 
-def test_relion_cuda_fine_diff2_casts_complex128_operands_to_xfloat():
+def test_relion_cuda_fine_diff2_preserves_acc_double_precision_operands():
     rng = np.random.default_rng(365)
     reference64 = (
         rng.normal(size=(2, 259)) + 1j * rng.normal(size=(2, 259))
@@ -141,23 +185,23 @@ def test_relion_cuda_fine_diff2_casts_complex128_operands_to_xfloat():
         )
     )
 
-    np.testing.assert_array_equal(actual, expected)
-    assert actual.dtype == np.float32
+    assert actual.dtype == np.float64
+    np.testing.assert_allclose(actual, expected.astype(np.float64), rtol=2e-7, atol=1e-7)
 
 
-def test_relion_cuda_fine_pixel_weight_casts_operands_before_multiply():
+def test_relion_cuda_fine_pixel_weight_preserves_acc_double_precision():
     corr = np.asarray([75351.31086994553], dtype=np.float64)
     half_weight = np.asarray([53814.33132654639], dtype=np.float64)
-    expected = np.float32(corr) * np.float32(half_weight)
-    wrong_float64_first = np.float32(corr * half_weight)
+    expected = corr * half_weight
+    narrowed = np.float32(corr) * np.float32(half_weight)
 
     actual = np.asarray(
         _relion_cuda_fine_pixel_weights(jnp.asarray(corr), jnp.asarray(half_weight))
     )
 
     np.testing.assert_array_equal(actual, expected)
-    assert actual.dtype == np.float32
-    assert not np.array_equal(actual, wrong_float64_first)
+    assert actual.dtype == np.float64
+    assert not np.array_equal(actual, narrowed)
 
 
 def test_relion_cuda_powerclass_highres_matches_128_lane_block_trees_bitwise():
@@ -179,6 +223,29 @@ def test_relion_cuda_powerclass_highres_matches_128_lane_block_trees_bitwise():
 
     np.testing.assert_array_equal(actual, expected)
     assert actual.dtype == np.float32
+
+
+def test_relion_cuda_powerclass_highres_preserves_acc_double_precision():
+    rng = np.random.default_rng(2298)
+    height = 32
+    centered = (
+        rng.normal(size=(2, height, height // 2 + 1))
+        + 1j * rng.normal(size=(2, height, height // 2 + 1))
+    ).astype(np.complex128) * np.float64(height * height)
+    centered += np.complex128(2.0**-35 + 1j * 2.0**-36)
+    current_size = 14
+    expected = _numpy_cuda_powerclass_highres_half_double(centered, current_size)
+    actual = np.asarray(
+        _relion_cuda_powerclass_highres_xi2_half(
+            jnp.asarray(centered.reshape(2, -1)),
+            image_shape=(height, height),
+            current_size=current_size,
+        )
+    )
+
+    np.testing.assert_array_equal(actual, expected)
+    assert actual.dtype == np.float64
+    assert not np.array_equal(actual, expected.astype(np.float32).astype(np.float64))
 
 
 def test_relion_cuda_powerclass_norm_units_preserve_divide_before_square():

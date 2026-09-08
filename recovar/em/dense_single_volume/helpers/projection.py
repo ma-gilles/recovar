@@ -18,13 +18,14 @@ DEFAULT_PROJECTION_MAX_R = object()
 _RELION_PROJECTOR_TEXTURE_ENV = "RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP"
 
 
-@partial(jax.jit, static_argnums=(2, 3, 4))
+@partial(jax.jit, static_argnums=(2, 3, 4, 5))
 def project_relion_projector_half_spectrum(
     volume_relion_half,
     rotations_block,
     image_shape,
     r_max: int,
     padding_factor: int = 1,
+    relion_acc_double_floorf_quirk: bool = False,
 ):
     """Forward-project RELION Projector storage into full half-image layout.
 
@@ -32,6 +33,10 @@ def project_relion_projector_half_spectrum(
     recovar's centered full Fourier volume. This path is used by InitialModel
     parity code where RELION's pass-1/pass-2 scores must consume the exact
     ``PPref`` representation.
+
+    ``relion_acc_double_floorf_quirk`` reproduces RELION's GPU-accelerated
+    projector's float32-narrowing floor (see ``recovar.core.relion_project``
+    module docstring); it is off by default.
     """
 
     from recovar.core.relion_project import relion_project_half
@@ -43,13 +48,14 @@ def project_relion_projector_half_spectrum(
         image_size,
         int(r_max),
         int(padding_factor),
+        relion_acc_double_floorf_quirk,
     )
     proj_fftw = jax.vmap(project_one)(rotations_block)
 
     return proj_fftw.reshape((rotations_block.shape[0], -1))
 
 
-@partial(jax.jit, static_argnums=(2, 3, 4, 5))
+@partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
 def project_relion_projector_half_spectrum_centered_rows(
     volume_relion_half,
     rotations_block,
@@ -57,6 +63,7 @@ def project_relion_projector_half_spectrum_centered_rows(
     r_max: int,
     padding_factor: int = 1,
     projector_output_size: int | None = None,
+    relion_acc_double_floorf_quirk: bool = False,
 ) -> jnp.ndarray:
     """Project RELION ``PPref`` data and return recovar-centered row order.
 
@@ -79,6 +86,7 @@ def project_relion_projector_half_spectrum_centered_rows(
         (projector_image_size, projector_image_size),
         int(r_max),
         int(padding_factor),
+        relion_acc_double_floorf_quirk,
     ).reshape((rotations_block.shape[0], projector_image_size, projector_image_size // 2 + 1))
     if projector_image_size == image_size:
         row_order = jnp.fft.fftshift(jnp.arange(image_size, dtype=jnp.int32))
@@ -100,7 +108,7 @@ def project_relion_projector_half_spectrum_centered_rows(
     return proj_full.at[:, full_indices].set(proj_fftw.reshape((rotations_block.shape[0], -1)))
 
 
-@partial(jax.jit, static_argnums=(2, 3, 4, 5))
+@partial(jax.jit, static_argnums=(2, 3, 4, 5, 7))
 def project_relion_projector_half_spectrum_centered_rows_at_indices(
     volume_relion_half,
     rotations_block,
@@ -109,6 +117,7 @@ def project_relion_projector_half_spectrum_centered_rows_at_indices(
     padding_factor: int = 1,
     projector_output_size: int | None = None,
     pixel_indices=None,
+    relion_acc_double_floorf_quirk: bool = False,
 ) -> jnp.ndarray:
     """Project RELION ``PPref`` data and gather centered-row half-image pixels.
 
@@ -129,6 +138,7 @@ def project_relion_projector_half_spectrum_centered_rows_at_indices(
         (projector_image_size, projector_image_size),
         int(r_max),
         int(padding_factor),
+        relion_acc_double_floorf_quirk,
     ).reshape((rotations_block.shape[0], projector_image_size, projector_image_size // 2 + 1))
 
     indices = jnp.asarray(pixel_indices, dtype=jnp.int32)
@@ -340,6 +350,7 @@ def compute_relion_projector_projections_block(
     projector_output_size: int | None = None,
     pixel_indices=None,
     relion_texture_interp: bool | None = None,
+    relion_acc_double_floorf_quirk: bool = False,
 ):
     """Project precomputed RELION ``PPref`` data for one rotation block.
 
@@ -347,6 +358,10 @@ def compute_relion_projector_projections_block(
     custom CUDA projector is available.  Set
     ``RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP=0`` to force the manual/JAX
     diagnostic fallback.
+
+    ``relion_acc_double_floorf_quirk`` only applies to that manual/JAX
+    fallback (the texture path is float32-only hardware interpolation, unrelated
+    to this quirk); see ``recovar.core.relion_project`` module docstring.
     """
 
     image_size = int(image_shape[0])
@@ -406,6 +421,7 @@ def compute_relion_projector_projections_block(
             int(padding_factor),
             projector_output_size,
             pixel_indices,
+            relion_acc_double_floorf_quirk,
         )
     elif centered_rows:
         proj_half = project_relion_projector_half_spectrum_centered_rows(
@@ -415,6 +431,7 @@ def compute_relion_projector_projections_block(
             int(r_max),
             int(padding_factor),
             projector_output_size,
+            relion_acc_double_floorf_quirk,
         )
     else:
         proj_half = project_relion_projector_half_spectrum(
@@ -423,6 +440,7 @@ def compute_relion_projector_projections_block(
             image_shape,
             int(r_max),
             int(padding_factor),
+            relion_acc_double_floorf_quirk,
         )
     if dense_scale:
         token = (os.environ.get("RECOVAR_DENSE_MEANS_SCALE") or "-N2").strip()
@@ -530,12 +548,19 @@ def compute_projections_block(
     return_abs2: bool = True,
     relion_texture_interp: bool = True,
     force_jax: bool = False,
+    relion_acc_double_floorf_quirk: bool = False,  # noqa: ARG001 - accepted, not applicable here
 ):
     """Forward-slice one rotation block and optionally compute ``|proj|^2``.
 
     Dense scoring and noise accumulation need ``|proj|^2`` repeatedly enough to
     materialize it. Exact-local paths can pass ``return_abs2=False`` and compute
     norms on demand when that saves memory.
+
+    ``relion_acc_double_floorf_quirk`` is accepted only so callers can pass a
+    shared ``projection_kwargs`` dict without filtering; this path slices
+    recovar's own centered-grid volume (not RELION ``Projector::data``), so
+    the RELION GPU floorf-narrowing quirk (``recovar.core.relion_project``)
+    does not apply here and this flag has no effect.
     """
     proj_half = project_half_spectrum(
         volume,
@@ -574,6 +599,18 @@ def compute_noise_block(
     block, binned to resolution shells. Inputs are un-Hermitian-weighted packed
     half spectra because RELION's noise update bins over its FFTW half-plane
     convention directly.
+
+    The returned per-shell blocks keep whatever real dtype ``a2``/``xa``
+    naturally promote to from the inputs (float32 if all inputs are float32,
+    float64 if any is float64) -- no explicit cast is applied. Callers
+    accumulate many of these blocks (one per rotation block/microbatch,
+    across every particle) into a single running sigma2_noise sum; an
+    unconditional float32 cast here used to truncate every block before that
+    accumulation, compounding error across the whole reduction, unlike
+    RELION's own ``wsum_model.sigma2_noise``, which stays RFLOAT (double
+    under double-precision builds) through the entire per-particle
+    accumulation. Pass float64 inputs (matching ``use_float64_scoring``/
+    ``use_float64_projections``) to get float64 accumulation here too.
     """
     ctf_has_mass = ctf_probs != 0.0
     ctf_probs_raw = jnp.where(ctf_has_mass, ctf_probs * noise_variance_half, 0.0)
@@ -585,12 +622,12 @@ def compute_noise_block(
     xa = jnp.where(cross.real != 0.0, noise_variance_half * cross.real, 0.0)
     block_noise = a2 - 2.0 * xa
 
-    noise_shells = bin_shell_values_jax(block_noise.astype(jnp.float32), shell_indices, shell_count)
+    noise_shells = bin_shell_values_jax(block_noise, shell_indices, shell_count)
     if not return_split:
-        zeros = jnp.zeros(shell_count, dtype=jnp.float32)
+        zeros = jnp.zeros(shell_count, dtype=block_noise.dtype)
         return noise_shells, zeros, zeros
-    a2_shells = bin_shell_values_jax(a2.astype(jnp.float32), shell_indices, shell_count)
-    xa_shells = bin_shell_values_jax(xa.astype(jnp.float32), shell_indices, shell_count)
+    a2_shells = bin_shell_values_jax(a2, shell_indices, shell_count)
+    xa_shells = bin_shell_values_jax(xa, shell_indices, shell_count)
     return noise_shells, a2_shells, xa_shells
 
 
@@ -607,6 +644,11 @@ def compute_norm_residual_per_image(
     This is the same ``A2 - 2*XA`` contribution as :func:`compute_noise_block`,
     but summed per image instead of binned over shells.  The caller adds the
     image-power term once per image.
+
+    Like ``compute_noise_block``, keeps whatever real dtype the inputs
+    naturally promote to -- no explicit float32 cast, which used to
+    truncate this per-image residual before the caller's own accumulation
+    even when the inputs were already float64 (double-precision scoring).
     """
 
     ctf_has_mass = ctf_probs != 0.0
@@ -617,7 +659,7 @@ def compute_norm_residual_per_image(
     cross_terms = jnp.where(summed_masked != 0.0, proj_half * jnp.conj(summed_masked), 0.0)
     xa_terms = noise_variance_half[None, None, :] * cross_terms.real
     xa_per_image = jnp.sum(xa_terms, axis=(1, 2))
-    return (a2_per_image - 2.0 * xa_per_image).astype(jnp.float32)
+    return a2_per_image - 2.0 * xa_per_image
 
 
 @jax.jit
@@ -636,6 +678,9 @@ def compute_scale_correction_terms_per_image(
     ``compute_norm_residual_per_image``.  The current E-step tensors already
     include the old group scale in ``XA`` and ``AA``; RELION's scale update
     accumulators divide those factors back out before summing by group.
+
+    Like ``compute_noise_block``/``compute_norm_residual_per_image``, keeps
+    the inputs' own natural real dtype -- no explicit float32 cast.
     """
 
     safe_scale = jnp.maximum(jnp.asarray(old_scale, dtype=proj_abs2_half.real.dtype), 1e-30)
@@ -654,7 +699,7 @@ def compute_scale_correction_terms_per_image(
     cross_terms = jnp.where(cross_has_mass, proj_half * jnp.conj(summed_masked), 0.0)
     xa_terms = noise_variance_half[None, None, :] * cross_terms.real
     xa_per_image = jnp.sum(xa_terms, axis=(1, 2)) / safe_scale
-    return xa_per_image.astype(jnp.float32), aa_per_image.astype(jnp.float32)
+    return xa_per_image, aa_per_image
 
 
 def relion_scale_correction_pixel_mask(data_vs_prior, shell_indices, *, n_shells=None):

@@ -31,6 +31,7 @@ from recovar.em.dense_single_volume.mean_helpers import (
     _mean_noise_variance,
     _normalize_noise_variance_per_half,
 )
+from recovar.em.dense_single_volume.refinement_options import RefinementOptions
 from recovar.em.dense_single_volume.relion_metadata import (
     _radial_profile_from_noise_variance,
 )
@@ -136,43 +137,7 @@ def _perturbation_restart_state_iteration(
     return max(candidates) if candidates else None
 
 
-def _validate_coupled_relion_restart_state(
-    perturb_restart_state_iterations,
-    follower_replay_by_iteration,
-    follower_replay_source_artifacts,
-) -> None:
-    """Fail closed when a strict Class3D continuation restores partial state."""
-    restart_numbered_iterations = {
-        int(saved_state_iteration) + 1
-        for saved_state_iteration in perturb_restart_state_iterations
-    }
-    follower_replay_numbered_iterations = {
-        int(relion_iteration) for relion_iteration in follower_replay_by_iteration
-    }
-    missing_follower_restarts = sorted(
-        restart_numbered_iterations - follower_replay_numbered_iterations
-    )
-    if missing_follower_restarts:
-        raise ValueError(
-            "RELION perturbation restart boundaries require matching follower-scale "
-            "replay at numbered_pre_score; missing numbered iterations "
-            f"{missing_follower_restarts}"
-        )
 
-    model_source_restart_iterations = set()
-    for source_path in follower_replay_source_artifacts:
-        match = re.fullmatch(r"run_it(\d+)_model\.star", os.path.basename(str(source_path)))
-        if match is not None:
-            model_source_restart_iterations.add(int(match.group(1)) + 1)
-    unmatched_model_restarts = sorted(
-        model_source_restart_iterations - restart_numbered_iterations
-    )
-    if unmatched_model_restarts:
-        raise ValueError(
-            "RELION follower-scale replay loaded from continuation model state requires "
-            "a matching perturbation restart boundary; unmatched numbered iterations "
-            f"{unmatched_model_restarts}"
-        )
 
 
 @dataclass(frozen=True)
@@ -344,13 +309,18 @@ def _replay_control_model_iteration(init_relion_iteration: int, loop_iteration: 
     return int(init_relion_iteration) + int(loop_iteration) + 1
 
 
-def _optional_float32_half_pair(values):
-    """Return optional per-half arrays normalized to float32."""
+def _optional_float32_half_pair(values, *, dtype=None):
+    """Return optional per-half arrays, preserving precision by default.
+
+    The historical name is retained for import compatibility. Sealed float32
+    sources remain float32, while higher-precision replay state is not
+    silently narrowed.
+    """
     if values is None:
         return [None, None]
     return [
-        np.asarray(values[0], dtype=np.float32) if values[0] is not None else None,
-        np.asarray(values[1], dtype=np.float32) if values[1] is not None else None,
+        np.asarray(values[0], dtype=dtype) if values[0] is not None else None,
+        np.asarray(values[1], dtype=dtype) if values[1] is not None else None,
     ]
 
 
@@ -503,9 +473,16 @@ def _apply_replay_correction_overrides(*, relion_half_inputs, replay_override) -
             # those exact arrays instead of rescaling against resident state.
             serialized_scale_value = legacy_scale_value
 
-    replay_images = _optional_float32_half_pair(replay_image_value)
-    serialized_scales = _optional_float32_half_pair(serialized_scale_value)
-    scoring_scales = _optional_float32_half_pair(scoring_scale_value)
+    resident_dtypes = [
+        np.asarray(value).dtype
+        for values in (relion_half_inputs.image_corrections, relion_half_inputs.scale_corrections)
+        for value in values
+        if value is not None
+    ]
+    correction_dtype = np.result_type(*resident_dtypes) if resident_dtypes else None
+    replay_images = _optional_float32_half_pair(replay_image_value, dtype=correction_dtype)
+    serialized_scales = _optional_float32_half_pair(serialized_scale_value, dtype=correction_dtype)
+    scoring_scales = _optional_float32_half_pair(scoring_scale_value, dtype=correction_dtype)
 
     for half_idx in range(2):
         resident_image = relion_half_inputs.image_corrections[half_idx]
@@ -533,15 +510,15 @@ def _apply_replay_correction_overrides(*, relion_half_inputs, replay_override) -
         )
 
         if target_scale is not None:
-            target_scale = np.asarray(target_scale, dtype=np.float32)
+            target_scale = np.asarray(target_scale, dtype=correction_dtype)
             if not np.all(np.isfinite(target_scale)) or np.any(target_scale <= 0.0):
                 raise ValueError("scoring scale corrections must be finite and positive")
         if base_scale is not None:
-            base_scale = np.asarray(base_scale, dtype=np.float32)
+            base_scale = np.asarray(base_scale, dtype=correction_dtype)
             if not np.all(np.isfinite(base_scale)) or np.any(base_scale <= 0.0):
                 raise ValueError("source scale corrections must be finite and positive")
         if base_image is not None:
-            base_image = np.asarray(base_image, dtype=np.float32)
+            base_image = np.asarray(base_image, dtype=correction_dtype)
             if target_scale is not None and base_scale is None:
                 raise ValueError("Cannot preserve image_corrections/scale without a source scale")
             if target_scale is not None and base_scale is not None:
@@ -589,8 +566,14 @@ class ReplayOverrideResult:
     relion_projector_state: RelionProjectorReplayState | None = None
 
 
-def _sealed_sampling_base_grids(sealed_sampling_state, *, voxel_size_angstrom):
-    """Construct scorer grids directly from a schema-v3 captured sampling state."""
+def _sealed_sampling_base_grids(sealed_sampling_state, *, voxel_size_angstrom, dtype: np.dtype = np.float32):
+    """Construct scorer grids directly from a schema-v3 captured sampling state.
+
+    ``dtype`` controls the returned rotation matrices, working Euler grid, and
+    translations, matching ``_relion_rotation_grid_float32``'s policy: pass ``np.float64`` under
+    float64 scoring/projections so a restart from a sealed boundary keeps the
+    same coarse-grid precision as a fresh (non-restarted) run.
+    """
 
     state = sealed_sampling_state
     directions = np.asarray(state["directions_ipix"], dtype=np.int64)
@@ -611,8 +594,8 @@ def _sealed_sampling_base_grids(sealed_sampling_state, *, voxel_size_angstrom):
     )
     from recovar.em.sampling import _relion_mstep_rotations_from_eulers
 
-    rotations = _relion_mstep_rotations_from_eulers(source_eulers)
-    eulers = source_eulers.astype(np.float32)
+    rotations = _relion_mstep_rotations_from_eulers(source_eulers, dtype=dtype)
+    eulers = source_eulers.astype(dtype)
     voxel_size = float(voxel_size_angstrom)
     if not np.isfinite(voxel_size) or voxel_size <= 0.0:
         raise ValueError("sealed sampling requires a finite positive voxel size")
@@ -620,8 +603,8 @@ def _sealed_sampling_base_grids(sealed_sampling_state, *, voxel_size_angstrom):
     ty = np.asarray(state["translations_y_angstrom"], dtype=np.float64)
     if tx.shape != ty.shape or tx.ndim != 1 or tx.size < 1:
         raise ValueError("sealed sampling translation component shapes are inconsistent")
-    translations = np.stack([tx / voxel_size, ty / voxel_size], axis=1).astype(np.float32)
-    return rotations, eulers, jnp.asarray(translations, dtype=jnp.float32)
+    translations = np.stack([tx / voxel_size, ty / voxel_size], axis=1).astype(dtype)
+    return rotations, eulers, jnp.asarray(translations, dtype=dtype)
 
 
 def _sealed_sampling_rotation_ids(sealed_sampling_state):
@@ -636,18 +619,74 @@ def _sealed_sampling_rotation_ids(sealed_sampling_state):
     ).astype(np.int64, copy=False)
 
 
-def _sealed_direction_log_prior(direction_prior, sealed_sampling_state):
+def _sealed_direction_log_prior(direction_prior, sealed_sampling_state, *, dtype: np.dtype = np.float32):
     """Expand a full direction prior onto the exact captured direction rows."""
 
-    prior = np.asarray(direction_prior, dtype=np.float32).reshape(-1)
+    prior = np.asarray(direction_prior, dtype=dtype).reshape(-1)
     direction_ids = np.asarray(sealed_sampling_state["directions_ipix"], dtype=np.int64)
     n_psi = int(np.asarray(sealed_sampling_state["psi_angles_deg"]).size)
     selected = np.tile(prior[direction_ids], n_psi)
-    result = np.full(selected.shape, -np.inf, dtype=np.float32)
+    result = np.full(selected.shape, -np.inf, dtype=dtype)
     positive = selected > 0.0
-    result[positive] = np.log(selected[positive]).astype(np.float32)
+    result[positive] = np.log(selected[positive]).astype(dtype)
     return result
 
+def _restore_convergence_state_from_replay_restart(state, options: RefinementOptions) -> None:
+    """Restore convergence counters from a RELION optimiser/model STAR at a
+    perturbation-replay restart iteration.
+
+    RELION's convergence counters are not initialized against an infinite
+    previous resolution -- a replay restart resumes them from the previous
+    optimiser/model STAR instead of the fresh-run FSC/ini_high state. This is
+    the loop-boundary counterpart to ``apply_iter_replay_overrides`` below,
+    which handles the same ``perturb_replay_relion_dir`` source per mid-loop
+    iteration.
+    """
+    parity, schedule = options.parity, options.schedule
+    init_relion_iteration = int(schedule.init_relion_iteration)
+    init_opt_star = os.path.join(
+        parity.perturb_replay_relion_dir,
+        f"{parity.perturb_replay_relion_prefix}_it{init_relion_iteration:03d}_optimiser.star",
+    )
+    init_model_star = os.path.join(
+        parity.perturb_replay_relion_dir,
+        f"{parity.perturb_replay_relion_prefix}_it{init_relion_iteration:03d}_half1_model.star",
+    )
+    if os.path.exists(init_model_star):
+        model_meta = read_relion_model_metadata(init_model_star)
+        resolution_angstrom = float(model_meta["current_resolution"])
+        if np.isfinite(resolution_angstrom) and resolution_angstrom > 0.0:
+            state.current_resolution = resolution_angstrom
+            state.previous_resolution = resolution_angstrom
+    if os.path.exists(init_opt_star):
+        opt_meta = read_relion_optimiser_metadata(init_opt_star)
+        state.nr_iter_wo_resol_gain = int(opt_meta.get("number_iter_without_resolution_gain") or 0)
+        hidden_variable_changes = int(opt_meta.get("number_iter_without_changing_assignments") or 0)
+        state.nr_iter_wo_large_hidden_variable_changes = hidden_variable_changes
+        state.nr_iter_wo_assignment_changes = hidden_variable_changes
+        if opt_meta.get("overall_accuracy_rotations") is not None:
+            state.acc_rot = float(opt_meta["overall_accuracy_rotations"])
+        if opt_meta.get("overall_accuracy_translations_angst") is not None:
+            state.acc_trans = float(opt_meta["overall_accuracy_translations_angst"])
+        if opt_meta.get("smallest_changes_orientations") is not None:
+            state.smallest_changes_optimal_orientations = float(opt_meta["smallest_changes_orientations"])
+        if opt_meta.get("smallest_changes_offsets") is not None:
+            state.smallest_changes_optimal_offsets_angstrom = float(opt_meta["smallest_changes_offsets"])
+        if opt_meta.get("smallest_changes_classes") is not None:
+            state.smallest_changes_optimal_classes = float(opt_meta["smallest_changes_classes"])
+        if opt_meta.get("has_converged") is not None:
+            state.has_converged = bool(int(opt_meta["has_converged"]))
+    logger.info(
+        "Replay convergence init from RELION iter %03d: res=%.2f A, "
+        "stalls=(res=%d,hvc=%d), smallest=(rot=%.3f deg, trans=%.3f A, class=%.3f)",
+        init_relion_iteration,
+        state.current_resolution,
+        state.nr_iter_wo_resol_gain,
+        state.nr_iter_wo_large_hidden_variable_changes,
+        state.smallest_changes_optimal_orientations,
+        state.smallest_changes_optimal_offsets_angstrom,
+        state.smallest_changes_optimal_classes,
+    )
 
 
 def apply_iter_replay_overrides(
@@ -676,6 +715,7 @@ def apply_iter_replay_overrides(
     global_direction_prior_order_per_half: list,
     preserve_existing_direction_prior: bool = False,
     sealed_sampling_state: dict | None = None,
+    dtype: np.dtype = np.float32,
 ) -> ReplayOverrideResult:
     """Apply per-iteration replay overrides to the in-flight iteration state.
 
@@ -696,6 +736,8 @@ def apply_iter_replay_overrides(
        corrections, noise variance, direction priors, and a sealed exact
        per-half RELION projector state.
     """
+
+    runtime_dtype = dtype
 
     _replay_prior_translations = None
     _model_star = None
@@ -728,8 +770,8 @@ def apply_iter_replay_overrides(
         sealed_x = np.asarray(sealed_sampling_state["translations_x_angstrom"], dtype=np.float64)
         sealed_y = np.asarray(sealed_sampling_state["translations_y_angstrom"], dtype=np.float64)
         _replay_prior_translations = jnp.asarray(
-            np.stack([sealed_x / _px, sealed_y / _px], axis=1).astype(np.float32),
-            dtype=jnp.float32,
+            np.stack([sealed_x / _px, sealed_y / _px], axis=1),
+            dtype=runtime_dtype,
         )
         cs = int(sealed_sampling_state["current_size"])
         _replay_meta = {
@@ -767,12 +809,12 @@ def apply_iter_replay_overrides(
             _relion_offset_range,
             _relion_offset_step,
             n_classes=n_classes,
-        ).astype(np.float32)
+        ).astype(runtime_dtype)
         _state_prior_translations = _translation_grid_for_class_count(
             float(state.translation_range),
             float(state.translation_step),
             n_classes=n_classes,
-        ).astype(np.float32)
+        ).astype(runtime_dtype)
         _translation_grid_differs = _state_prior_translations.shape != _replay_prior_translations_np.shape
         if not _translation_grid_differs:
             _translation_grid_differs = not np.allclose(
@@ -946,9 +988,9 @@ def apply_iter_replay_overrides(
                         if not os.path.exists(_prior_star):
                             continue
                     _relion_direction_prior = (
-                        read_relion_direction_priors(_prior_star, n_classes)
+                        read_relion_direction_priors(_prior_star, n_classes, dtype=runtime_dtype)
                         if k_class_enabled
-                        else read_relion_direction_prior(_prior_star)
+                        else read_relion_direction_prior(_prior_star, dtype=runtime_dtype)
                     )
                     if k_class_enabled:
                         inferred_weights = class_weights_from_direction_prior(_relion_direction_prior, n_classes)
@@ -1052,7 +1094,9 @@ def apply_iter_replay_overrides(
             )
         _replay_prev_trans = iter_replay_override.get("previous_best_translations")
         if _replay_prev_trans is not None:
-            relion_half_inputs.previous_best_translations = _optional_float32_half_pair(_replay_prev_trans)
+            relion_half_inputs.previous_best_translations = _optional_float32_half_pair(
+                _replay_prev_trans, dtype=runtime_dtype
+            )
             logger.info(
                 "Replay override: previous_best_translations <- half1=%s half2=%s",
                 "set" if relion_half_inputs.previous_best_translations[0] is not None else "none",
@@ -1060,7 +1104,7 @@ def apply_iter_replay_overrides(
             )
         _replay_prev_rots = iter_replay_override.get("previous_best_rotations")
         if _replay_prev_rots is not None:
-            previous_best_rotations = _optional_float32_half_pair(_replay_prev_rots)
+            previous_best_rotations = _optional_float32_half_pair(_replay_prev_rots, dtype=runtime_dtype)
             logger.info(
                 "Replay override: previous_best_rotations <- half1=%s half2=%s",
                 "set" if previous_best_rotations[0] is not None else "none",
@@ -1087,7 +1131,7 @@ def apply_iter_replay_overrides(
             ]
             previous_noise_radial = jnp.asarray(
                 np.mean(np.stack(previous_noise_radial_per_half, axis=0), axis=0),
-                dtype=jnp.float32,
+                dtype=runtime_dtype,
             )
             logger.info("Replay override: sigma2_noise <- per-half model.star arrays")
         _replay_dir_prior = iter_replay_override.get("direction_prior")
@@ -1097,13 +1141,15 @@ def apply_iter_replay_overrides(
                 if inferred_weights is not None:
                     _replay_class_weights = inferred_weights
             if k_class_enabled:
-                replay_priors = normalize_class_direction_prior_per_half(_replay_dir_prior, n_classes)
+                replay_priors = normalize_class_direction_prior_per_half(
+                    _replay_dir_prior, n_classes, dtype=runtime_dtype
+                )
             else:
-                replay_priors = normalize_direction_prior_per_half(_replay_dir_prior)
+                replay_priors = normalize_direction_prior_per_half(_replay_dir_prior, dtype=runtime_dtype)
             for _half_idx in range(2):
                 if replay_priors[_half_idx] is None:
                     continue
-                prior_k = np.asarray(replay_priors[_half_idx], dtype=np.float32)
+                prior_k = np.asarray(replay_priors[_half_idx], dtype=runtime_dtype)
                 prior_order_k = infer_direction_prior_healpix_order(prior_k[0] if k_class_enabled else prior_k)
                 if prior_order_k != state.healpix_order:
                     logger.info(
@@ -1119,6 +1165,7 @@ def apply_iter_replay_overrides(
                                     prior_k[class_idx],
                                     prior_order_k,
                                     state.healpix_order,
+                                    dtype=runtime_dtype,
                                 )
                                 for class_idx in range(n_classes)
                             ],
@@ -1129,10 +1176,13 @@ def apply_iter_replay_overrides(
                             prior_k,
                             prior_order_k,
                             state.healpix_order,
+                            dtype=runtime_dtype,
                         )
                     prior_order_k = state.healpix_order
                 if k_class_enabled:
-                    class_direction_prior_per_half[_half_idx] = normalize_class_direction_prior(prior_k, n_classes)
+                    class_direction_prior_per_half[_half_idx] = normalize_class_direction_prior(
+                        prior_k, n_classes, dtype=runtime_dtype
+                    )
                     class_direction_prior_order_per_half[_half_idx] = prior_order_k
                     logger.info(
                         "Replay override: class direction prior half-%d <- provided override (%d classes, %d directions)",

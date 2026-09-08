@@ -52,6 +52,36 @@ def test_particle_image_dataset_process_images_half_uses_native_rfft(monkeypatch
     np.testing.assert_array_equal(processed_half, expected_half)
 
 
+def test_particle_image_dataset_complex128_computes_fft_before_output_cast(monkeypatch):
+    monkeypatch.setattr(
+        image_backends.ImageLoader,
+        "from_file",
+        lambda *args, **kwargs: _DummySource(n=4, D=8),
+    )
+    ds = image_backends.ParticleImageDataset(
+        "dummy.mrcs",
+        lazy=True,
+        invert_data=False,
+        dtype=np.complex128,
+    )
+
+    imgs, _p_idx, _t_idx = ds[2]
+    full = ds.process_images(imgs, apply_image_mask=False)
+    half = ds.process_images_half(imgs, apply_image_mask=False)
+
+    assert ds.real_dtype == np.dtype(np.float64)
+    assert full.dtype == np.complex128
+    assert half.dtype == np.complex128
+    np.testing.assert_array_equal(
+        np.asarray(full),
+        np.asarray(fourier_transform_utils.get_dft2(imgs.astype(np.float64))).reshape(1, -1),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(half),
+        np.asarray(fourier_transform_utils.get_dft2_real(imgs.astype(np.float64))).reshape(1, -1),
+    )
+
+
 def test_particle_image_dataset_relion_background_fill_mask_mode(monkeypatch):
     monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
     ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
@@ -83,6 +113,34 @@ def test_particle_image_dataset_relion_half_preprocess_defaults_to_numpy(monkeyp
 
     assert ds.relion_fourier_backend == "host_numpy"
     np.testing.assert_array_equal(ds.process_images_half(imgs, apply_image_mask=True), expected)
+
+
+def test_particle_image_dataset_relion_numpy_preprocess_preserves_complex128(monkeypatch):
+    monkeypatch.setattr(
+        image_backends.ImageLoader,
+        "from_file",
+        lambda *args, **kwargs: _DummySource(n=4, D=8),
+    )
+    ds = image_backends.ParticleImageDataset(
+        "dummy.mrcs", lazy=True, invert_data=False, dtype=np.complex128
+    )
+    imgs, _p_idx, _t_idx = ds[2]
+    ds.set_relion_image_mask(
+        pixel_size=1.0,
+        particle_diameter_ang=6.0,
+        width_mask_edge_px=2.0,
+    )
+
+    images64 = imgs.astype(np.float64)
+    masked64 = image_backends._apply_relion_soft_image_mask_numpy(
+        images64,
+        ds.image_mask,
+    )
+    expected = image_backends._centered_rfft2_numpy(masked64).reshape((1, -1))
+    actual = ds.process_images_half(imgs, apply_image_mask=True)
+
+    assert actual.dtype == np.complex128
+    np.testing.assert_array_equal(actual, expected)
 
 
 @pytest.mark.gpu

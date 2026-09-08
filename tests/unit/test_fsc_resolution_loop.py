@@ -17,6 +17,12 @@ from recovar.em.dense_single_volume.iteration_loop import (
     refine_single_volume,
 )
 from recovar.em.dense_single_volume import iteration_loop as iteration_loop_module
+from recovar.em.dense_single_volume.refinement_options import (
+    AdaptiveOptions,
+    RefinementBatching,
+    RefinementOptions,
+    RefinementSchedule,
+)
 from recovar.em.dense_single_volume.helpers.resolution import fsc_to_current_size
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     quantize_current_size,
@@ -218,7 +224,8 @@ def translations():
 def generated_relion_rotation_grid(monkeypatch):
     """Keep loop tests independent of the optional compiled RELION binding."""
 
-    def fake_relion_rotation_grid_float32(order):
+    def fake_relion_rotation_grid_float32(order, dtype=None):
+        del dtype
         n_rotations = iteration_loop_module.rotation_grid_size(order)
         rotations = np.repeat(np.eye(3, dtype=np.float32)[None], n_rotations, axis=0)
         eulers = np.zeros((n_rotations, 3), dtype=np.float32)
@@ -301,11 +308,12 @@ class TestOracleMode:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=3,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            relion_current_sizes=oracle_sizes,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=3),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(relion_current_sizes=oracle_sizes),
+            ),
         )
 
         # On the tiny 8px mock dataset these values all saturate at full resolution.
@@ -322,12 +330,12 @@ class TestOracleMode:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=3,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            relion_current_sizes=oracle_sizes,
-            init_current_size=32,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=3, init_current_size=32),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(relion_current_sizes=oracle_sizes),
+            ),
         )
 
         # On the tiny 8px mock dataset all oracle/full-resolution requests clamp to 8.
@@ -346,11 +354,12 @@ class TestOracleMode:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            relion_current_sizes=oracle_sizes,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(relion_current_sizes=oracle_sizes),
+            ),
         )
 
         # Final mean should be finite
@@ -379,11 +388,11 @@ class TestResolutionProgression:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=3,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=32,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=3, init_current_size=32),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            ),
         )
 
         sizes = result["current_sizes"]
@@ -401,11 +410,11 @@ class TestResolutionProgression:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=3,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=32,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=3, init_current_size=32),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            ),
         )
 
         assert len(result["fsc_history"]) == 3
@@ -425,11 +434,11 @@ class TestResolutionProgression:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=2,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            init_current_size=32,
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=2, init_current_size=32),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+            ),
         )
 
         for t in result["wall_times"]:
@@ -454,11 +463,12 @@ class TestOneIterationWithWindowing:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            relion_current_sizes=[4],
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=1),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(relion_current_sizes=[4]),
+            ),
         )
 
         assert np.all(np.isfinite(np.array(result["mean"])))
@@ -474,11 +484,12 @@ class TestOneIterationWithWindowing:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            relion_current_sizes=[128],
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=1),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(relion_current_sizes=[128]),
+            ),
         )
 
         assert np.all(np.isfinite(np.array(result["mean"])))
@@ -494,11 +505,12 @@ class TestOneIterationWithWindowing:
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
             rotations,
             translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            relion_current_sizes=[32],
+            options=RefinementOptions(
+                disc_type="linear_interp",
+                schedule=RefinementSchedule(max_iter=1),
+                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                adaptive=AdaptiveOptions(relion_current_sizes=[32]),
+            ),
         )
 
         _assert_relion_hard_assignments_in_range(result, translations.shape[0])

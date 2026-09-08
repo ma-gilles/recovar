@@ -221,6 +221,7 @@ def _k1_data_vs_prior_for_scheduling(
     current_size,
     grid_size,
     tau2_fudge,
+    dtype=np.float32,
 ):
     """Return the K=1 DVP curve RELION uses for current-resolution updates.
 
@@ -233,31 +234,33 @@ def _k1_data_vs_prior_for_scheduling(
             corrected_data_vs_prior,
             current_size=current_size,
             grid_size=grid_size,
+            dtype=dtype,
         )
 
-    fsc_prev = np.asarray(raw_fsc, dtype=np.float32).copy()
+    runtime_dtype = dtype
+    fsc_prev = np.asarray(raw_fsc, dtype=runtime_dtype).copy()
     if int(current_size) < int(grid_size):
         fsc_prev[min(len(fsc_prev), int(current_size) // 2 + 1) :] = 0.0
-    return np.asarray(fsc_to_relion_ssnr(fsc_prev, tau2_fudge=tau2_fudge), dtype=np.float32)
+    return np.asarray(fsc_to_relion_ssnr(fsc_prev, tau2_fudge=tau2_fudge), dtype=runtime_dtype)
 
 
-def _truncate_data_vs_prior_for_current_size(data_vs_prior, *, current_size, grid_size):
+def _truncate_data_vs_prior_for_current_size(data_vs_prior, *, current_size, grid_size, dtype=np.float32):
     """Zero DVP shells beyond RELION's inclusive current-size boundary."""
-    truncated = np.asarray(data_vs_prior, dtype=np.float32).copy()
+    truncated = np.asarray(data_vs_prior, dtype=dtype).copy()
     if int(current_size) < int(grid_size):
         first_unavailable_shell = min(truncated.shape[-1], int(current_size) // 2 + 1)
         truncated[..., first_unavailable_shell:] = 0.0
     return truncated
 
 
-def _truncate_fsc_for_current_size_growth(fsc, *, current_size, grid_size):
+def _truncate_fsc_for_current_size_growth(fsc, *, current_size, grid_size, dtype=np.float32):
     """Zero FSC shells beyond RELION's inclusive current-size boundary.
 
     BackProjector includes radii ``R <= current_size / 2``.  The boundary
     shell therefore remains part of RELION's full-array FSC threshold scan;
     only shells starting at ``current_size // 2 + 1`` are unavailable.
     """
-    truncated = np.asarray(fsc, dtype=np.float32).copy()
+    truncated = np.asarray(fsc, dtype=dtype).copy()
     if int(current_size) < int(grid_size):
         first_unavailable_shell = min(len(truncated), int(current_size) // 2 + 1)
         truncated[first_unavailable_shell:] = 0.0

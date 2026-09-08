@@ -203,6 +203,18 @@ sealed sampling metadata. They preserve the recorded direction/psi order and
 convert translations from Angstroms to pixels using the supplied voxel size.
 The controller selects when to use these grids.
 
+Refinement now receives one `RefinementOptions` container. Its groups own
+scheduling, adaptive search, parity behavior, local search, class setup, replay,
+diagnostics and batching. `helpers/iteration_history.py` owns the per-iteration
+history lists and their established result-dictionary keys. The controller
+still chooses when each snapshot is recorded.
+
+Precision is explicit at extracted boundaries: replay grids, resolution
+curves and scoring-output adapters receive the caller's dtype. These helpers
+do not import the controller to discover runtime settings. PR180's numerical
+changes and their qualification state are tracked on the
+[EM status page](em_status.md).
+
 `helpers/convergence.py` owns angular-refinement state transitions, including
 validation and application of explicit HEALPix schedules used for oracle runs.
 The controller selects the iteration's requested order; the convergence helper

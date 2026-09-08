@@ -557,7 +557,11 @@ def _relion_matrix_to_euler_angles(A: np.ndarray) -> np.ndarray:
     return out
 
 
-def _relion_mstep_rotations_from_eulers(eulers_deg: np.ndarray) -> np.ndarray:
+def _relion_mstep_rotations_from_eulers(
+    eulers_deg: np.ndarray,
+    *,
+    dtype: np.dtype = np.float32,
+) -> np.ndarray:
     """Return RECOVAR-frame host-inverse rotations from RELION Euler rows.
 
     RELION's accelerated scorer and M-step both use host
@@ -571,8 +575,36 @@ def _relion_mstep_rotations_from_eulers(eulers_deg: np.ndarray) -> np.ndarray:
     The RELION inverse matrix is transposed once on return because RECOVAR's
     projection/backprojection rotation convention is the transpose of
     RELION's row-major Euler matrix convention.
+
+    ``dtype`` controls only the final cast (default float32, matching
+    RELION's single-precision ACC build, where this host-computed RFLOAT
+    matrix is cast to XFLOAT before use on the device). When the native
+    RELION binding is available, it performs both Euler construction and the
+    inverse so host-libm rounding also matches RELION. The NumPy formula below
+    remains the portable fallback. Under ``ACC_DOUBLE_PRECISION`` the final
+    cast is a no-op -- pass ``np.float64`` to match.
     """
-    matrix = _relion_euler_angles_to_matrix(eulers_deg)
+    eulers = np.asarray(eulers_deg, dtype=np.float64).reshape(-1, 3)
+    try:
+        from recovar.relion_bind import _relion_bind_core as relion_bind
+
+        native_inverse = getattr(relion_bind, "euler_angles_to_inverse_matrices", None)
+    except (ImportError, OSError):
+        native_inverse = None
+    if native_inverse is not None:
+        # RELION constructs and numerically inverts these matrices on the CPU.
+        # Keeping that work in its C++ implementation also preserves libm trig
+        # rounding, which can decide the strict radius predicate on an exact
+        # outer-shell pixel in an ACC double-precision run.
+        inverse = np.asarray(native_inverse(eulers), dtype=np.float64)
+        if inverse.shape != (eulers.shape[0], 3, 3):
+            raise RuntimeError(
+                "RELION Euler inverse binding returned an invalid shape: "
+                f"{inverse.shape}"
+            )
+        return np.swapaxes(inverse, 1, 2).astype(dtype)
+
+    matrix = _relion_euler_angles_to_matrix(eulers)
     inverse = np.empty_like(matrix)
 
     inverse[:, 0, 0] = matrix[:, 2, 2] * matrix[:, 1, 1] - matrix[:, 2, 1] * matrix[:, 1, 2]
@@ -589,7 +621,7 @@ def _relion_mstep_rotations_from_eulers(eulers_deg: np.ndarray) -> np.ndarray:
         matrix[:, 0, 0] * inverse[:, 0, 0] + matrix[:, 1, 0] * inverse[:, 0, 1] + matrix[:, 2, 0] * inverse[:, 0, 2]
     )
     inverse /= determinant[:, None, None]
-    return np.swapaxes(inverse, 1, 2).astype(np.float32)
+    return np.swapaxes(inverse, 1, 2).astype(dtype)
 
 
 def _relion_device_scoring_rotations_f32(
@@ -631,26 +663,88 @@ def _relion_device_scoring_rotations_f32(
     return np.asarray(jax.device_get(rotations), dtype=np.float32)
 
 
-def _relion_adaptive_pass1_rotations_f32(
+def _relion_device_scoring_rotations_f64(
+    eulers_deg: np.ndarray,
+    right_matrix: np.ndarray | None = None,
+) -> np.ndarray:
+    """Reproduce RELION's ``ACC_DOUBLE_PRECISION`` ``make_eulers_3D`` arithmetic.
+
+    Under ``ACC_DOUBLE_PRECISION``, ``AccProjectorPlan::setup`` builds these
+    coarse-scorer matrices with ``XFLOAT=double`` throughout
+    (``acc_projector_plan_impl.h``: the ``RFLOAT`` euler angles from
+    ``getOrientations`` are copied straight into the ``AccPtr<XFLOAT>``
+    workspace with no float32 cast, and ``acc_make_eulers_3D`` runs its
+    ``sincos``/matrix-construction arithmetic in that same ``XFLOAT``). On a
+    GPU this must execute in CUDA: device ``sincos`` and multiply/add ordering
+    can differ by the last bits from NumPy/libm and BLAS on the host. CPU-only
+    callers retain the NumPy equivalent as a portability fallback.
+    """
+
+    eulers_f64 = np.asarray(eulers_deg, dtype=np.float64).reshape(-1, 3)
+    do_right = right_matrix is not None
+    if right_matrix is None:
+        right_f64 = np.eye(3, dtype=np.float64)
+    else:
+        right_f64 = np.asarray(right_matrix, dtype=np.float64)
+        if right_f64.shape != (3, 3):
+            raise ValueError(f"right_matrix must have shape (3, 3), got {right_f64.shape}")
+
+    if jax.default_backend() == "gpu":
+        from recovar import cuda_backproject
+
+        rotations = cuda_backproject.relion_make_scoring_rotations_f64(
+            jnp.asarray(eulers_f64),
+            jnp.asarray(right_f64),
+            do_right=do_right,
+        )
+        return np.asarray(jax.device_get(rotations), dtype=np.float64)
+
+    a = _relion_euler_angles_to_matrix(eulers_f64)
+    return a @ right_f64 if do_right else a
+
+
+def _relion_adaptive_pass1_rotations(
     source_eulers_deg: np.ndarray,
     random_perturbation: float,
     angular_sampling_deg: float,
+    *,
+    use_float64: bool = False,
 ) -> np.ndarray | None:
-    """Build exact RELION CUDA matrices for adaptive coarse scoring only.
+    """Build exact RELION matrices for adaptive coarse scoring only.
 
-    ``AccProjectorPlan::setup`` sends the unperturbed float32 Euler rows and,
-    when active, a host-generated right perturbation matrix to
-    ``acc_make_eulers_3D``. This differs by a few float32 ulps from the host
-    inverse matrices used by RELION's fine and weighted-sum paths. On CPU,
-    return ``None`` so callers retain the existing host implementation.
+    ``AccProjectorPlan::setup`` sends the unperturbed Euler rows and, when
+    active, a host-generated right perturbation matrix to
+    ``acc_make_eulers_3D``. Under RELION's default single-precision ACC
+    build this is ``XFLOAT=float`` and differs by a few float32 ulps from the
+    host inverse matrices used by RELION's fine and weighted-sum paths;
+    ``use_float64=True`` instead reproduces ``ACC_DOUBLE_PRECISION``, where
+    this construction stays double throughout (see
+    :func:`_relion_device_scoring_rotations_f64`). On CPU, the float32 path
+    returns ``None`` so callers retain the existing host implementation; the
+    float64 path runs the corresponding CUDA specialization on GPU and uses
+    an equivalent NumPy fallback only for CPU callers.
     """
 
     right_matrix = None
     if abs(float(random_perturbation)) >= 1e-12:
         perturbation_deg = float(random_perturbation) * float(angular_sampling_deg)
-        right_matrix = _relion_euler_angles_to_matrix(
-            np.asarray([[perturbation_deg, perturbation_deg, perturbation_deg]], dtype=np.float64)
-        )[0]
+        try:
+            from recovar.relion_bind import _relion_bind_core as relion_bind
+
+            native_euler_matrix = getattr(relion_bind, "euler_angles_to_matrix", None)
+        except (ImportError, OSError):
+            native_euler_matrix = None
+        if native_euler_matrix is not None:
+            right_matrix = np.asarray(
+                native_euler_matrix(perturbation_deg, perturbation_deg, perturbation_deg),
+                dtype=np.float64,
+            )
+        else:
+            right_matrix = _relion_euler_angles_to_matrix(
+                np.asarray([[perturbation_deg, perturbation_deg, perturbation_deg]], dtype=np.float64)
+            )[0]
+    if use_float64:
+        return _relion_device_scoring_rotations_f64(source_eulers_deg, right_matrix)
     return _relion_device_scoring_rotations_f32(source_eulers_deg, right_matrix)
 
 
@@ -660,6 +754,7 @@ def apply_relion_rotation_perturbation_to_eulers(
     angular_sampling_deg,
     *,
     return_mstep_rotations=False,
+    dtype: np.dtype = np.float32,
 ):
     """Apply RELION's SamplingPerturbation and return eulers plus matrices.
 
@@ -667,8 +762,14 @@ def apply_relion_rotation_perturbation_to_eulers(
     Its fine-score and weighted-sum paths then call host
     ``generateEulerMatrices(..., inverse=true)`` and cast those matrices to
     XFLOAT before copying them to the device. Use the same host-double
-    reconstruction here. Adaptive coarse scoring has a distinct CUDA matrix
-    path exposed by :func:`_relion_adaptive_pass1_rotations_f32`.
+    reconstruction here. Adaptive coarse scoring has a distinct matrix
+    path exposed by :func:`_relion_adaptive_pass1_rotations`.
+
+    ``dtype`` controls the returned rotation-matrix and Euler precision (default
+    float32, matching RELION's single-precision ACC build's XFLOAT cast).
+    Pass ``np.float64`` to match ``ACC_DOUBLE_PRECISION``, where that cast is
+    a no-op. RELION stores these working Euler angles as RFLOAT, so retaining
+    float64 here is also required for a double-precision build.
 
     When ``return_mstep_rotations`` is true, a third array contains the
     RECOVAR-frame matrices produced by RELION's separate host-side inverse
@@ -677,24 +778,24 @@ def apply_relion_rotation_perturbation_to_eulers(
     """
     eulers = np.asarray(eulers_deg, dtype=np.float64).reshape(-1, 3)
     if abs(float(random_perturbation)) < 1e-12:
-        rotations = _relion_mstep_rotations_from_eulers(eulers)
+        rotations = _relion_mstep_rotations_from_eulers(eulers, dtype=dtype)
         if return_mstep_rotations:
-            return rotations, eulers.astype(np.float32), rotations
-        return rotations, eulers.astype(np.float32)
+            return rotations, eulers.astype(dtype), rotations
+        return rotations, eulers.astype(dtype)
 
     myperturb = float(random_perturbation) * float(angular_sampling_deg)
     A = _relion_euler_angles_to_matrix(eulers)
     R_perturb = _relion_euler_angles_to_matrix(np.array([[myperturb, myperturb, myperturb]], dtype=np.float64))[0]
     perturbed_A = np.einsum("nij,jk->nik", A, R_perturb)
     perturbed_eulers = _relion_matrix_to_euler_angles(perturbed_A)
-    perturbed_rotations = _relion_mstep_rotations_from_eulers(perturbed_eulers)
+    perturbed_rotations = _relion_mstep_rotations_from_eulers(perturbed_eulers, dtype=dtype)
     if return_mstep_rotations:
         return (
             perturbed_rotations,
-            perturbed_eulers.astype(np.float32),
+            perturbed_eulers.astype(dtype),
             perturbed_rotations,
         )
-    return perturbed_rotations, perturbed_eulers.astype(np.float32)
+    return perturbed_rotations, perturbed_eulers.astype(dtype)
 
 
 def apply_relion_rotation_perturbation(rotations, random_perturbation, angular_sampling_deg):
@@ -854,7 +955,7 @@ def read_relion_optimiser_metadata(optimiser_star_path):
     )
 
 
-def read_relion_direction_prior(model_star_path):
+def read_relion_direction_prior(model_star_path, *, dtype=np.float32):
     """Read RELION's saved orientation distribution from ``model.star``."""
     import numpy as np
     import starfile
@@ -865,10 +966,10 @@ def read_relion_direction_prior(model_star_path):
     df = data["model_pdf_orient_class_1"]
     if "rlnOrientationDistribution" not in df.columns:
         raise ValueError(f"Missing rlnOrientationDistribution in {model_star_path}")
-    return np.asarray(df["rlnOrientationDistribution"], dtype=np.float32)
+    return np.asarray(df["rlnOrientationDistribution"], dtype=dtype)
 
 
-def read_relion_direction_priors(model_star_path, n_classes=None):
+def read_relion_direction_priors(model_star_path, n_classes=None, *, dtype=np.float32):
     """Read all RELION per-class orientation distributions from ``model.star``."""
     import re
 
@@ -899,7 +1000,7 @@ def read_relion_direction_priors(model_star_path, n_classes=None):
         df = data[key]
         if "rlnOrientationDistribution" not in df.columns:
             raise ValueError(f"Missing rlnOrientationDistribution in {key} of {model_star_path}")
-        priors.append(np.asarray(df["rlnOrientationDistribution"], dtype=np.float32))
+        priors.append(np.asarray(df["rlnOrientationDistribution"], dtype=dtype))
     return np.stack(priors, axis=0)
 
 
@@ -1015,6 +1116,7 @@ def get_oversampled_rotation_grid_from_samples(
     return_rotation_indices=False,
     return_mstep_rotations=False,
     rotation_index_order: str = "recovar",
+    dtype: np.dtype = np.float32,
 ):
     """Generate oversampled child orientations from coarse sample indices.
 
@@ -1056,10 +1158,14 @@ def get_oversampled_rotation_grid_from_samples(
         truncation. Only returned when ``return_mstep_rotations=True``. When
         both optional returns are requested, this is the fourth result after
         ``child_rotation_indices``.
+    dtype : rotation-matrix precision for both ``matrices`` and
+        ``mstep_rotations`` (default float32, matching RELION's
+        single-precision ACC build). Pass ``np.float64`` to match
+        ``ACC_DOUBLE_PRECISION``.
     """
     parent_rotation_indices = np.asarray(parent_rotation_indices, dtype=np.int64)
     if parent_rotation_indices.size == 0:
-        empty_rot = np.empty((0, 3, 3), dtype=np.float32)
+        empty_rot = np.empty((0, 3, 3), dtype=dtype)
         empty_map = np.empty((0,), dtype=np.int64)
         outputs = [empty_rot, empty_map]
         if return_rotation_indices:
@@ -1122,30 +1228,62 @@ def get_oversampled_rotation_grid_from_samples(
     else:
         child_rotation_indices = child_pixels * fine_n_in_planes + nearest_child_psi.reshape(-1)
 
-    euler_angles = np.stack(
-        [
-            np.repeat(phi, psi_factor),
-            np.repeat(theta, psi_factor),
-            psi_child_angles.reshape(-1),
-        ],
-        axis=-1,
-    )
-    euler_angles = euler_angles / (2 * np.pi) * 360
-    if abs(float(random_perturbation)) > 1e-12:
+    native_euler_angles = None
+    try:
+        from recovar.relion_bind import _relion_bind_core as relion_bind
+
+        native_oversampling = getattr(relion_bind, "get_oversampled_orientations_batch", None)
+    except (ImportError, OSError):
+        native_oversampling = None
+    if native_oversampling is not None:
+        native_euler_angles = np.asarray(
+            native_oversampling(
+                int(parent_nside_level),
+                int(oversampling_order),
+                np.asarray(parent_pixels, dtype=np.int64),
+                np.asarray(parent_psi, dtype=np.int64),
+                float(random_perturbation),
+            ),
+            dtype=np.float64,
+        )
+        expected_rows = int(parent_rotation_indices.size) * int(8**oversampling_order)
+        if native_euler_angles.shape != (expected_rows, 3):
+            raise RuntimeError(
+                "RELION oversampled-orientation binding returned an invalid shape: "
+                f"{native_euler_angles.shape}, expected {(expected_rows, 3)}"
+            )
+
+    if native_euler_angles is not None:
+        euler_angles = native_euler_angles
+        matrices = _relion_mstep_rotations_from_eulers(euler_angles, dtype=dtype)
+        mstep_rotations = matrices if return_mstep_rotations else None
+    else:
+        euler_angles = np.stack(
+            [
+                np.repeat(phi, psi_factor),
+                np.repeat(theta, psi_factor),
+                psi_child_angles.reshape(-1),
+            ],
+            axis=-1,
+        )
+        euler_angles = euler_angles / (2 * np.pi) * 360
+    if native_euler_angles is None and abs(float(random_perturbation)) > 1e-12:
         perturbed = apply_relion_rotation_perturbation_to_eulers(
             euler_angles,
             random_perturbation,
             relion_angular_sampling_deg(parent_nside_level, adaptive_oversampling=0),
             return_mstep_rotations=return_mstep_rotations,
+            dtype=dtype,
         )
         matrices = perturbed[0]
         mstep_rotations = perturbed[2] if return_mstep_rotations else None
-    else:
+    elif native_euler_angles is None:
         unperturbed = apply_relion_rotation_perturbation_to_eulers(
             euler_angles,
             0.0,
             0.0,
             return_mstep_rotations=return_mstep_rotations,
+            dtype=dtype,
         )
         matrices = unperturbed[0]
         mstep_rotations = unperturbed[2] if return_mstep_rotations else None

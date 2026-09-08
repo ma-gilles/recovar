@@ -16,6 +16,7 @@ import numpy as np
 
 from recovar.core import fourier_transform_utils, mask
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
+    class_weights_from_direction_prior,
     collapse_rotation_posterior_to_direction_prior,
 )
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats
@@ -83,6 +84,20 @@ def _normalize_class_log_priors(n_classes: int, class_log_priors=None) -> np.nda
     return log_priors - log_norm
 
 
+def _initialize_class_log_priors(n_classes: int, init_class_log_priors=None, init_direction_prior=None) -> tuple[np.ndarray, np.ndarray]:
+    """Return normalized log priors for the class axis and class weights, defaulting to uniform."""
+    class_log_priors = _normalize_class_log_priors(n_classes, init_class_log_priors)
+    class_weights = np.exp(class_log_priors)
+    if n_classes > 1 and init_class_log_priors is None and init_direction_prior is not None:
+        inferred_class_weights = class_weights_from_direction_prior(init_direction_prior, n_classes)
+        if inferred_class_weights is not None:
+            if np.any(inferred_class_weights <= 0.0):
+                raise ValueError("RELION direction-prior row sums imply a zero-probability class")
+            class_weights = inferred_class_weights
+            class_log_priors = np.log(class_weights)
+    return class_log_priors, class_weights
+
+
 def _normalize_initial_means(init_volume, n_classes: int):
     """Normalize initial references to the refine loop's half/class layout."""
 
@@ -140,7 +155,7 @@ def _relion_optimizer_average_pmax(max_posterior_per_half, normalization_mass_pe
     for per-particle diagnostics.
     """
 
-    per_half = [np.asarray(pmax, dtype=np.float32).reshape(-1) for pmax in max_posterior_per_half]
+    per_half = [np.asarray(pmax).reshape(-1) for pmax in max_posterior_per_half]
     if not per_half:
         raise ValueError("RELION average Pmax requires at least one half-set")
     combined = np.concatenate(per_half, axis=0)
@@ -202,7 +217,9 @@ def _combined_noise_stats(noise_stats_per_half):
     )
 
 
-def _combined_class_direction_prior_from_halves(class_rotation_posterior_per_half, n_classes: int, healpix_order: int):
+def _combined_class_direction_prior_from_halves(
+    class_rotation_posterior_per_half, n_classes: int, healpix_order: int, *, dtype: np.dtype = np.float32
+):
     """Collapse Class3D rotation posterior sums after undoing RECOVAR's half split.
 
     RELION Class3D has a single ``mymodel.pdf_direction[class]`` updated from
@@ -222,7 +239,9 @@ def _combined_class_direction_prior_from_halves(class_rotation_posterior_per_hal
             combined = per_class if combined is None else combined + per_class
         if combined is None:
             return None
-        combined_priors.append(collapse_rotation_posterior_to_direction_prior(combined, healpix_order))
+        combined_priors.append(
+            collapse_rotation_posterior_to_direction_prior(combined, healpix_order, dtype=dtype)
+        )
     return np.stack(combined_priors, axis=0)
 
 
@@ -524,6 +543,7 @@ def _reconstruct_and_postprocess_means(
                 radius=flatten_radius,
                 radius_p=flatten_radius + relion_width_mask_edge,
                 offset=jnp.zeros(3),
+                dtype=(means[k].real.dtype if not k_class_enabled else means[k][0].real.dtype),
             )
             if k_class_enabled:
                 flattened_classes = []
@@ -881,8 +901,15 @@ def update_relion_norm_scale_corrections(
     do_scale_correction: bool = True,
     scale_relaxation_mu: float = 0.0,
     eps: float = 1e-30,
+    dtype: np.dtype = np.float32,
 ) -> NormScaleCorrectionUpdateResult:
     """Update RELION-style per-image norm and per-group scale corrections.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+    callers running double-precision scoring should pass ``np.float64``.
+    Every quantity here is computed in float64 internally; only the returned
+    arrays were being floored to float32 unconditionally, discarding that
+    precision before it ever reaches the next E-step's CTF/scale weighting.
 
     The existing scoring paths consume two per-image arrays:
     ``image_corrections = (avg_norm / normcorr) * scale[group_id]`` and
@@ -1088,11 +1115,11 @@ def update_relion_norm_scale_corrections(
         scale_per_image_new = scale_new[group_ids]
         image_corr_new = image_norm_factor * scale_per_image_new
 
-        out_norm.append(jnp.asarray(normcorr_new, dtype=jnp.float32))
+        out_norm.append(jnp.asarray(normcorr_new, dtype=dtype))
         out_avg_norm.append(avg_norm_new)
-        out_group_scale.append(jnp.asarray(scale_new, dtype=jnp.float32))
-        out_scale_corr.append(jnp.asarray(scale_per_image_new, dtype=jnp.float32))
-        out_image_corr.append(jnp.asarray(image_corr_new, dtype=jnp.float32))
+        out_group_scale.append(jnp.asarray(scale_new, dtype=dtype))
+        out_scale_corr.append(jnp.asarray(scale_per_image_new, dtype=dtype))
+        out_image_corr.append(jnp.asarray(image_corr_new, dtype=dtype))
         out_zero_norm_counts.append(zero_norm_count)
 
     return NormScaleCorrectionUpdateResult(
@@ -1231,7 +1258,7 @@ def update_posterior_noise_variance(
             noise_from_res=noise_from_res,
         )
 
-    new_previous_noise_radial = jnp.asarray(noise_from_res, dtype=jnp.float32)
+    new_previous_noise_radial = jnp.asarray(noise_from_res)
     noise_variance = _mean_noise_variance(noise_variance_per_half)
     return NoiseUpdateResult(
         noise_from_res=noise_from_res,

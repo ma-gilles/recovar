@@ -7,6 +7,40 @@ code; migrate callers, tests and documentation together. Preserve non-EM APIs,
 saved formats, numerical behavior and scientific defaults. Present numerical
 repairs separately for a user decision.
 
+On 2026-09-08 the user requested integration of
+[PR180](https://github.com/ma-gilles/recovar/pull/180), including its cleanup.
+The full PR is being integrated on `codex/integrate-pr180`, with its numerical
+changes tracked separately from the structural series. The preserved cleanup
+branch ends at `681c2e6ed03c9b63b94f07bc47a4a8367b1b4de3`; the pinned incoming
+head is `1e2f229b3e0e8edaec029d2b604937f692148578`. Both descend from the PR158
+control below. Earlier unrelated runtime/validation repair proposals remain
+separate. Frozen benchmark checkouts and their results are unchanged.
+
+PR180 introduces grouped refinement options, iteration history, precision
+propagation through shared data/CTF and EM paths, CUDA arithmetic changes, and
+replay-cutoff ownership changes. The integrated source therefore needs fresh
+scientific qualification; historical structural-equivalence evidence does not
+qualify these numerical changes. Integration details and failed/retried checks
+are recorded under `pr180_integration_20260908/` in the review root below.
+
+The integration has passed 180 focused helper/controller cases, 208 shared
+precision/API/K-class cases, and the 38-case CPU fast guard. A separate
+controller selection initially passed 44 of 45 cases; removing a stale unused
+local-scoring keyword fixes the remaining finalization case, which passes
+alongside the three explicit K1/K2/K4 dispatch cases. Counts overlap. Eleven
+helper-body comparisons and the normalized main-loop comparison preserve
+PR180's computations across the retained cleanup interfaces. The separate CPU
+reference binding supplies PR180's added orientation interface; the historical
+benchmark binding is unchanged. These checks do not establish GPU or
+end-to-end quality/performance qualification.
+
+The additional precision-interface check passes 116 cases and skips 17
+GPU-only cases. All 6,818 non-GUI unit cases collect; collection is not
+execution. The previously failing
+`test_fused_sparse_k_class_pass2_matches_existing_two_pass_path` passes on the
+integration candidate: PR180 supplies the missing spectrum-normalization
+setting on that path. The earlier frozen CPU result below remains unchanged.
+
 The [cleanup plan](cleanup_plan.md) tracks the remaining work and its smallest
 useful checks.
 
@@ -100,6 +134,9 @@ source identities when incorporating evidence into the draft or later results.
 | Approximate-accuracy convergence ownership | `7e7d92695`; policy and six constants moved to convergence helpers; two boolean wrappers removed. All 86 CPU cases, 532 exact policy values, two matching errors, 534 warning comparisons and 1,068 state-mutation checks pass; the original caller logger is preserved. |
 | Angular-grid policy ownership | `966bd0c64`; four unchanged helpers and the exhaustive-grid cap moved to convergence. All 119 CPU cases, 530 exact values, 288 matching errors and 1,636 input-mutation checks pass, including global/local and K-class finalization callers. |
 | Independent convergence policy tests | `3dd2cb107`; eight pure cases moved into `test_convergence.py`; all 90 convergence cases pass without importing the controller. All 414 case identities, fixtures and markers across the two affected modules are preserved. |
+| First-iteration adaptive dispatch ownership | `df6fc04bc`; dispatcher moved to `firstiter_cc.py` with the caller's logger. All 58 CPU cases, 2,400 exact dispatch comparisons and 24 matching errors pass. The initial final whitespace check failed; a recorded AST-identical whitespace correction passes. |
+| Precision selection ownership | `9d25ee5d7`; two selectors moved to dtype policy helpers with the original static settings supplied explicitly. All 12 CPU cases, 491 exact values, 805 matching errors and 1,296 configuration-read-order comparisons pass. |
+| Explicit K1/K2/K4 local dispatch coverage | `681c2e6ed`; the former K4-labeled fixture actually constructed two classes. Its K1/K2 cases are retained and a genuine K4 case now checks four mean/prior entries. All three pass; all 324 previous case contracts are preserved, with one added case. This is dispatch coverage, not K4 quality qualification. |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance
@@ -181,14 +218,15 @@ fixture identities, measurements and shellwise curves. An additional audit of
 maximum Pmax difference was 0.000155002 and the largest per-field p95 difference
 was 0.0000503063. This still does not compare all candidate scores or accumulators.
 
-A new broad CPU checkpoint at frozen `966bd0c64` is submitted in
-Slurm13620809. It uses the same declared non-GUI CPU selection as the previous
+A new broad CPU checkpoint at frozen `966bd0c64` finished in
+Slurm13620809 with **6,361 passed, 337 skipped and 15 failed** in 57 minutes
+45 seconds. It uses the same declared non-GUI CPU selection as the previous
 checkpoint, including its one shared-`/tmp` exclusion. Its separate pixi
 environment has the same lockfile and all 317 Python package versions. The
-automatic audit accounts for the twenty previously moved replay/resolution
-cases and compares every common case status; matching old failures remain
-failures. At this checkpoint the job is pending; it does not qualify later
-source changes.
+automatic audit accounts for twenty previously moved replay/resolution cases:
+all 6,713 common case statuses are unchanged, with no added or removed cases.
+Source hashes stayed unchanged. The same fifteen failures remain failures;
+this result does not qualify later source changes or the PR180 integration.
 
 A later broad CPU checkpoint at frozen `f8ceeea2a` finished in Slurm13590326
 with **6,361 passed, 337 skipped and 15 failed**. All 6,713 collected cases were

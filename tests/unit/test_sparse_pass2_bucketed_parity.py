@@ -509,6 +509,59 @@ def test_sparse_pass2_mstep_rotations_follow_score_selection_padding_and_reorder
     assert aliased_arrays["mstep_rotations"] is aliased_arrays["rotations"]
 
 
+def test_sparse_pass2_prepare_per_image_inputs_honors_explicit_float64_dtype():
+    """``fine_rotations_override``/``fine_mstep_rotations_override`` must stay at
+    whatever real dtype the caller requests (RELION's own RFLOAT fine-search
+    rotations never narrow to float in a double-precision build) instead of
+    always collapsing to float32.
+    """
+    score_rotations = np.stack([_z_rotation(angle) for angle in (0.1, 0.2, 0.3, 0.4)]).astype(np.float64)
+    mstep_rotations = np.stack([_z_rotation(angle) for angle in (1.1, 1.2, 1.3, 1.4)]).astype(np.float64)
+    parent_map = np.asarray([0, 0, 1, 1], dtype=np.int32)
+    significant_samples = [np.asarray([0, 1], dtype=np.int32)]
+
+    kwargs = dict(
+        significant_sample_indices=significant_samples,
+        n_coarse_rot=12,
+        n_coarse_trans=1,
+        nside_level=0,
+        oversampling_order=0,
+        n_fine_trans=1,
+        fine_translation_parent=np.asarray([0], dtype=np.int32),
+        rotation_log_prior=np.full(12, 1.0 + 2.0**-40, dtype=np.float64),
+        random_perturbation=0.0,
+        fine_rotations_override=score_rotations,
+        fine_mstep_rotations_override=mstep_rotations,
+        fine_rotation_parent_override=parent_map,
+    )
+
+    default_out = _prepare_per_image_pass2_inputs(**kwargs)
+    assert default_out["oversampled_rots"][0].dtype == np.float32
+    assert default_out["oversampled_mstep_rots"][0].dtype == np.float32
+
+    f64_out = _prepare_per_image_pass2_inputs(**kwargs, dtype=np.float64)
+    assert f64_out["oversampled_rots"][0].dtype == np.float64
+    assert f64_out["oversampled_mstep_rots"][0].dtype == np.float64
+    assert f64_out["log_prior"][0].dtype == np.float64
+    assert f64_out["log_prior"][0][0] == 1.0 + 2.0**-40
+    np.testing.assert_allclose(f64_out["oversampled_rots"][0], score_rotations, atol=1e-12)
+    np.testing.assert_allclose(f64_out["oversampled_mstep_rots"][0], mstep_rotations, atol=1e-12)
+    bucket = _build_bucket_arrays(
+        {"bucket_size": 6, "image_indices": np.asarray([0], dtype=np.int64)},
+        f64_out,
+        n_fine_trans=1,
+    )
+    assert bucket["rotations"].dtype == np.float64
+    assert bucket["mstep_rotations"].dtype == np.float64
+    assert bucket["log_prior"].dtype == np.float64
+    np.testing.assert_array_equal(bucket["rotations"][0, :4], score_rotations)
+    np.testing.assert_array_equal(bucket["mstep_rotations"][0, :4], mstep_rotations)
+    assert bucket["log_prior"][0, 0] == 1.0 + 2.0**-40
+    np.testing.assert_allclose(
+        f64_out["oversampled_rots"][0], default_out["oversampled_rots"][0], atol=1e-6
+    )
+
+
 def test_sparse_pass2_distinct_mstep_rotations_do_not_change_score_path(monkeypatch):
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
     score_rotations = np.stack([_z_rotation(angle) for angle in (0.1, 0.2, 0.3, 0.4)])
@@ -794,10 +847,10 @@ class TestSparsePass2Bucketed:
                 relion_exact_fine_gaussian=True,
             )
 
-    def test_float64_and_explicit_feature_bypass_preserve_algebraic_route(self, monkeypatch):
+    def test_explicit_feature_disable_preserves_algebraic_route(self, monkeypatch):
         def fail_exact_raw(*args, **kwargs):
             del args, kwargs
-            raise AssertionError("exact float32 RELION scorer must be bypassed")
+            raise AssertionError("exact RELION scorer must be bypassed")
 
         monkeypatch.setattr(
             sparse_pass2_module,
@@ -805,17 +858,6 @@ class TestSparsePass2Bucketed:
             fail_exact_raw,
         )
         sig_indices = [np.asarray([0, 1], dtype=np.int32)] * 2
-        out_ref, out_bucket = self._run_both(
-            sig_indices,
-            current_size=6,
-            half_spectrum_scoring=False,
-            use_float64_scoring=True,
-            relion_exact_fine_gaussian=True,
-        )
-        # Bucketed accumulation order differs slightly from the per-image
-        # reference even though both score in float64.
-        _compare_outputs(out_ref, out_bucket, atol=1e-6, rtol=1e-6)
-
         out_ref, out_bucket = self._run_both(
             sig_indices,
             current_size=6,

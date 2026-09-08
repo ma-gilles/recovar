@@ -35,8 +35,10 @@ from scripts.run_multi_iter_parity import (
     particle_half_indices,
     read_relion_model_pixel_size,
     read_relion_optics_image_geometry,
+    parity_runtime_real_dtype,
     relion_final_gt_series,
     replay_control_relion_iteration,
+    replay_override_is_before_cutoff,
     replay_override_iteration_pairs,
     replay_previous_relion_iteration,
     resolve_firstiter_cc_mode,
@@ -811,6 +813,33 @@ def test_select_final_replay_override_rejects_unknown_or_missing_state():
         select_final_replay_override([None], "poses")
     with pytest.raises(ValueError, match="missing selected fields"):
         select_final_replay_override([{}], "noise")
+
+
+@pytest.mark.parametrize(
+    ("slot", "cutoff", "expected"),
+    [
+        (1, None, True),
+        (1, 0, False),
+        (1, 1, False),
+        (1, 2, True),
+        (2, 2, False),
+    ],
+)
+def test_replay_override_cutoff_does_not_inject_boundary_state(slot, cutoff, expected):
+    assert replay_override_is_before_cutoff(slot, cutoff) is expected
+
+
+@pytest.mark.parametrize(
+    ("environ", "expected"),
+    [
+        ({}, np.float32),
+        ({"RECOVAR_USE_FLOAT64_SCORING": "1"}, np.float64),
+        ({"RECOVAR_USE_FLOAT64_PROJECTIONS": "true"}, np.float64),
+        ({"RECOVAR_USE_FLOAT64_SCORING": "off", "RECOVAR_USE_FLOAT64_PROJECTIONS": "0"}, np.float32),
+    ],
+)
+def test_parity_runtime_real_dtype_matches_dense_precision_switches(environ, expected):
+    assert parity_runtime_real_dtype(environ) is expected
 
 
 def test_parse_relion_optimiser_cli_flags_reads_ini_high_and_firstiter_cc():

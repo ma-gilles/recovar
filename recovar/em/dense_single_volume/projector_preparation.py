@@ -128,6 +128,7 @@ def _relion_projector_half_maps_for_scoring(
         np.savez_compressed(
             os.path.join(dump_dir, f"{safe_label}_relion_projector_half.npz"),
             projector_half=np.asarray(projector_half),
+            reference_real=np.asarray(refs_real),
             projector_r_max=np.int64(projector_r_max),
             current_size=np.int64(resolved_current_size),
             padding_factor=np.int64(padding_factor),

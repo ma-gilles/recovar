@@ -135,6 +135,7 @@ def _run_local_search_iteration(
     half_spectrum_scoring=False,
     relion_exact_score_translation=False,
     projection_relion_texture_interp=False,
+    projection_relion_acc_double_floorf_quirk=False,
     projection_force_jax=False,
     relion_projector_half=None,
     relion_projector_r_max=None,
@@ -156,6 +157,7 @@ def _run_local_search_iteration(
     reconstruct_significant_only=True,
     translation_prior_reference_translations=None,
     debug_iteration=None,
+    debug_pass_label=None,
     pass2_layout=None,
     return_best_pose_details=False,
     normalization_log_z=None,
@@ -178,6 +180,14 @@ def _run_local_search_iteration(
 ) -> _LocalSearchIterationResult:
     """Run exact local search and return named halfset statistics and pose fields.
 
+    ``debug_pass_label`` is diagnostic-only and forwarded verbatim to
+    ``run_local_em_exact``: pass a distinct label per call site whenever a
+    caller invokes this function more than once for the same image at the
+    same ``current_size``/``debug_iteration`` (e.g. local search's pass-1
+    "parent" probe vs. its pass-2 fine call), or the later call's
+    ``RECOVAR_LOCAL_SCORE_DUMP_*`` output silently overwrites the earlier
+    one at the same path.
+
     Optional fields are None when their corresponding return flags are disabled.
     Arrays retain the engine's layouts and identities; profile metadata is copied
     and augmented with this wrapper's timings.
@@ -185,7 +195,11 @@ def _run_local_search_iteration(
     requested_image_batch_size = int(image_batch_size)
     requested_rotation_block_size = int(rotation_block_size)
     rotation_block_size = _local_search_engine_rotation_block_size(rotation_block_size)
-    prior_rotations = np.asarray(prior_rotations, dtype=np.float32)
+    # Keep the local-search hypothesis grid (rotations/translations/priors)
+    # genuinely double precision end to end when either flag requests it;
+    # default stays float32 to match RELION's accelerated-GPU precision.
+    local_layout_dtype = np.float64 if (use_float64_scoring or use_float64_projections) else np.float32
+    prior_rotations = np.asarray(prior_rotations, dtype=local_layout_dtype)
     if prior_rotations.ndim == 3:
         n_prior = prior_rotations.shape[0]
     elif prior_rotations.ndim == 2 and prior_rotations.shape[1] == 3:
@@ -195,10 +209,10 @@ def _run_local_search_iteration(
     if prior_translations is None:
         prior_translations = np.zeros(
             (n_prior, np.asarray(translations).shape[1]),
-            dtype=np.float32,
+            dtype=local_layout_dtype,
         )
     else:
-        prior_translations = np.asarray(prior_translations, dtype=np.float32).reshape(
+        prior_translations = np.asarray(prior_translations, dtype=local_layout_dtype).reshape(
             -1,
             np.asarray(translations).shape[1],
         )
@@ -236,6 +250,7 @@ def _run_local_search_iteration(
             rotation_log_prior=rotation_log_prior,
             rotation_grid_random_perturbation=rotation_grid_random_perturbation,
             rotation_grid_angular_sampling_deg=rotation_grid_angular_sampling_deg,
+            dtype=local_layout_dtype,
             **layout_kwargs,
         )
         selector_time = time.time() - layout_t0
@@ -413,6 +428,7 @@ def _run_local_search_iteration(
             half_spectrum_scoring=half_spectrum_scoring,
             relion_exact_score_translation=relion_exact_score_translation,
             projection_relion_texture_interp=projection_relion_texture_interp,
+            projection_relion_acc_double_floorf_quirk=projection_relion_acc_double_floorf_quirk,
             projection_force_jax=projection_force_jax,
             relion_projector_half=relion_projector_half,
             relion_projector_r_max=relion_projector_r_max,
@@ -444,6 +460,7 @@ def _run_local_search_iteration(
             # governed by adaptive_fraction only; do not reapply the cap there.
             max_significants=max_significants if apply_max_significants_to_support else -1,
             debug_iteration=debug_iteration,
+            debug_pass_label=debug_pass_label,
             return_best_pose_details=return_best_pose_details,
             normalization_log_z=normalization_log_z,
             normalization_log_evidence=normalization_log_evidence,

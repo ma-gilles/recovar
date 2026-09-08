@@ -76,6 +76,7 @@ def _dense_batch_half_inputs(
     config,
     apply_image_mask: bool,
     *,
+    ctf_real_dtype=None,
     relion_preprocess_kwargs=None,
 ):
     processed_half = process_half_image(
@@ -84,6 +85,8 @@ def _dense_batch_half_inputs(
         apply_image_mask,
         relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
+    if ctf_real_dtype is not None:
+        ctf_params = jnp.asarray(ctf_params, dtype=ctf_real_dtype)
     ctf_half = config.compute_ctf_half(ctf_params)
     noise_variance_half = jnp.asarray(noise_variance)
     translation_phases_half = half_translation_phase_table(translations, config.image_shape)
@@ -115,6 +118,7 @@ def preprocess_batch(
         translations,
         config,
         score_with_masked_images,
+        ctf_real_dtype=score_real_dtype,
         relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
     shift_processed_half, shift_ctf_half, shift_noise_half, shift_phases_half = _cast_shift_inputs(
@@ -169,6 +173,7 @@ def prepare_reconstruction_batch(
         translations,
         config,
         False,
+        ctf_real_dtype=score_real_dtype,
         relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
     shift_processed_half, shift_ctf_half, shift_noise_half, shift_phases_half = _cast_shift_inputs(
@@ -220,6 +225,7 @@ def preprocess_batch_firstiter_cc(
         translations,
         config,
         score_with_masked_images,
+        ctf_real_dtype=score_real_dtype,
         relion_preprocess_kwargs=relion_preprocess_kwargs,
     )
     # RELION ml_optimiser.cpp:8758-8774 (do_firstiter_cc CC branch) iterates
@@ -268,19 +274,28 @@ def preprocess_batch_firstiter_cc(
     return result
 
 
-def half_translation_phase_table(translations, image_shape):
+def half_translation_phase_table(translations, image_shape, dtype=jnp.float32):
+    """Return the complex phase-shift table for a translation grid.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision, and
+    RECOVAR's own historical default here). Pass ``jnp.float64`` to compute
+    genuinely double-precision phase factors; ``jax.lax.Precision.HIGHEST``
+    alone does not upcast float32 inputs, so the input dtype must change too.
+    """
     lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
         image_shape,
         voxel_size=1,
         scaled=True,
     )
+    real_dtype = jnp.float64 if jnp.dtype(dtype) == jnp.dtype(jnp.float64) else jnp.float32
+    complex_dtype = jnp.complex128 if real_dtype == jnp.float64 else jnp.complex64
     phase_arg = jnp.einsum(
         "td,pd->tp",
-        jnp.asarray(translations, dtype=jnp.float32),
-        lattice_half,
+        jnp.asarray(translations, dtype=real_dtype),
+        jnp.asarray(lattice_half, dtype=real_dtype),
         precision=jax.lax.Precision.HIGHEST,
     )
-    return jnp.exp(-2j * jnp.pi * phase_arg)
+    return jnp.exp(jnp.asarray(-2j * jnp.pi, dtype=complex_dtype) * phase_arg)
 
 
 def image_preprocess_backend(experiment_dataset):
@@ -296,8 +311,19 @@ def prepare_batch_preprocess_operands(
     image_corrections=None,
     scale_corrections=None,
     image_pre_shifts=None,
+    dtype: np.dtype = np.float32,
 ):
-    """Select typed per-image operands for host or strict CUDA preprocessing."""
+    """Select typed per-image operands for host or strict CUDA preprocessing.
+
+    ``dtype`` defaults to float32 (RELION's accelerated-GPU precision);
+    callers running double-precision scoring should pass ``np.float64`` --
+    these are RELION's per-image group-scale/normalization correction
+    factors (RFLOAT, never narrowed), multiplied directly into the
+    CTF^2/noise weighting used by both pass-1 and pass-2 scoring. The
+    ``relion_cuda``-backend branch below is unaffected: it's a real CUDA
+    FFI kernel input, hardware-locked to float32 independent of this
+    ``dtype``.
+    """
 
     from .image_shifts import integer_pre_shifts_or_none
 
@@ -312,12 +338,12 @@ def prepare_batch_preprocess_operands(
         integer_pre_shifts = np.zeros((batch_size, 2), dtype=np.int32)
 
     batch_scale_np = (
-        np.asarray(scale_corrections)[image_indices_np].astype(np.float32, copy=False)
+        np.asarray(scale_corrections)[image_indices_np].astype(dtype, copy=False)
         if scale_corrections is not None
-        else np.ones(batch_size, dtype=np.float32)
+        else np.ones(batch_size, dtype=dtype)
     )
     batch_corr_np = (
-        np.asarray(image_corrections)[image_indices_np].astype(np.float32, copy=False)
+        np.asarray(image_corrections)[image_indices_np].astype(dtype, copy=False)
         if image_corrections is not None
         else None
     )

@@ -113,7 +113,7 @@ class PerHalfOutputs:
             mstep_accumulator_shape=[None, None],
         )
 
-    def update_from(self, half_index: int, score_result: HalfScoreResult) -> None:
+    def update_from(self, half_index: int, score_result: HalfScoreResult, *, dtype=np.float32) -> None:
         """Store one half's payload, retaining arrays except for posterior casts.
 
         Missing optional pose fields leave existing slot values intact. Layout
@@ -126,11 +126,11 @@ class PerHalfOutputs:
         self.noise_stats[half_index] = score_result.noise_stats
         self.max_posterior[half_index] = np.asarray(
             score_result.em_stats.max_posterior_per_image,
-            dtype=np.float32,
+            dtype=dtype,
         )
         self.rotation_posterior[half_index] = np.asarray(
             score_result.em_stats.rotation_posterior_sums,
-            dtype=np.float32,
+            dtype=dtype,
         )
         if score_result.best_pose_rotations is not None:
             self.best_pose_rotations[half_index] = score_result.best_pose_rotations
@@ -157,6 +157,7 @@ def _scatter_dense_k_class_result(
     adaptive_os_local: int,
     outputs: "PerHalfOutputs",
     require_best_pose_details: bool = True,
+    pose_dtype: np.dtype = np.float32,
 ):
     """Scatter ``run_dense_k_class_em*`` result into per-half output lists.
 
@@ -200,10 +201,10 @@ def _scatter_dense_k_class_result(
     if require_best_pose_details:
         if k_class_result.best_pose_rotations is None or k_class_result.best_pose_translations is None:
             raise RuntimeError("Dense K-class path did not return best pose details")
-        best_rots = np.asarray(k_class_result.best_pose_rotations, dtype=np.float32)
+        best_rots = np.asarray(k_class_result.best_pose_rotations, dtype=pose_dtype)
         outputs.best_pose_rotations[k] = best_rots
-        outputs.best_pose_rotation_eulers[k] = utils.R_to_relion(best_rots, degrees=True).astype(np.float32)
-        outputs.best_pose_translations[k] = np.asarray(k_class_result.best_pose_translations, dtype=np.float32)
+        outputs.best_pose_rotation_eulers[k] = utils.R_to_relion(best_rots, degrees=True).astype(pose_dtype)
+        outputs.best_pose_translations[k] = np.asarray(k_class_result.best_pose_translations, dtype=pose_dtype)
     return (
         ha_k,
         k_class_result.Ft_y,
@@ -236,7 +237,7 @@ def _select_single_class_accumulator(value, *, label: str):
     return value[0]
 
 
-def _collapse_single_class_stats_to_coarse(stats, *, rot_parent_map, n_rot_coarse: int):
+def _collapse_single_class_stats_to_coarse(stats, *, rot_parent_map, n_rot_coarse: int, dtype=np.float32):
     rot_post = np.asarray(stats.rotation_posterior_sums, dtype=np.float64)
     n_rot_coarse = int(n_rot_coarse)
     if rot_post.shape == (n_rot_coarse,):
@@ -253,11 +254,12 @@ def _collapse_single_class_stats_to_coarse(stats, *, rot_parent_map, n_rot_coars
         )
     coarse_post = np.zeros(n_rot_coarse, dtype=np.float64)
     np.add.at(coarse_post, rot_parent, rot_post)
+    runtime_dtype = dtype
     return make_relion_stats(
-        log_evidence_per_image=np.asarray(stats.log_evidence_per_image, dtype=np.float32),
-        best_log_score_per_image=np.asarray(stats.best_log_score_per_image, dtype=np.float32),
-        max_posterior_per_image=np.asarray(stats.max_posterior_per_image, dtype=np.float32),
-        rotation_posterior_sums=coarse_post.astype(np.float32),
+        log_evidence_per_image=np.asarray(stats.log_evidence_per_image, dtype=runtime_dtype),
+        best_log_score_per_image=np.asarray(stats.best_log_score_per_image, dtype=runtime_dtype),
+        max_posterior_per_image=np.asarray(stats.max_posterior_per_image, dtype=runtime_dtype),
+        rotation_posterior_sums=coarse_post.astype(runtime_dtype),
     )
 
 

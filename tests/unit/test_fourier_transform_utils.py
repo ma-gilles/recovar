@@ -38,6 +38,27 @@ def test_get_1d_frequency_grid_even_odd_and_scaled():
     )
 
 
+def test_frequency_grid_float64_is_constructed_directly_in_float64():
+    voxel_size = np.float64("1.234567890123")
+    grid64 = fourier_transform_utils.get_1d_frequency_grid(
+        8,
+        voxel_size=voxel_size,
+        scaled=True,
+        dtype=np.float64,
+    )
+    grid32 = fourier_transform_utils.get_1d_frequency_grid(
+        8,
+        voxel_size=voxel_size,
+        scaled=True,
+        dtype=np.float32,
+    )
+    expected = np.arange(-4, 4, dtype=np.float64) / (np.float64(8) * voxel_size)
+
+    assert grid64.dtype == np.float64
+    np.testing.assert_array_equal(np.asarray(grid64), expected)
+    assert np.any(np.asarray(grid64) != np.asarray(grid32, dtype=np.float64))
+
+
 def test_get_1d_frequency_grid_singleton():
     grid = fourier_transform_utils.get_1d_frequency_grid(1, scaled=False)
     np.testing.assert_array_equal(grid, np.array([0.0], dtype=np.float32))

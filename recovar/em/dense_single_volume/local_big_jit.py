@@ -780,11 +780,14 @@ def run_local_bucket_big_jit(
         batch = _apply_integer_pre_shifts(batch, integer_pre_shifts)
 
     precision_policy = DensePrecisionPolicy(use_float64_scoring=use_float64_scoring)
-    ctf_half = config.compute_ctf_half(ctf_params).astype(precision_policy.score_real_dtype)
+    ctf_params = jnp.asarray(ctf_params, dtype=precision_policy.score_real_dtype)
+    ctf_half = config.compute_ctf_half(ctf_params)
     noise_variance_half = noise_variance_half.astype(precision_policy.score_real_dtype)
     translation_phases_half = translation_phases_half.astype(precision_policy.score_complex_dtype)
     if relion_score_translation_angles is not None:
-        relion_score_translation_angles = relion_score_translation_angles.astype(jnp.float32)
+        relion_score_translation_angles = relion_score_translation_angles.astype(
+            precision_policy.score_real_dtype
+        )
     ctf2_over_nv_half = ctf_half**2 / noise_variance_half
 
     processed_score_half = _preprocess_half(
@@ -815,6 +818,13 @@ def run_local_bucket_big_jit(
         if relion_score_translation_angles is not None:
             from recovar import cuda_backproject
 
+            if use_float64_scoring:
+                return cuda_backproject.relion_translate_score_f64(
+                    jnp.asarray(weighted_half, dtype=jnp.complex128),
+                    relion_score_translation_angles,
+                    jnp.asarray(pixel_indices, dtype=jnp.int32),
+                    image_shape,
+                )
             return cuda_backproject.relion_translate_score_f32(
                 jnp.asarray(weighted_half, dtype=jnp.complex64),
                 relion_score_translation_angles,
@@ -833,6 +843,8 @@ def run_local_bucket_big_jit(
             * ctf_half[:, pixel_indices]
             / noise_variance_half[pixel_indices]
         )
+        if relion_score_translation_angles is not None and use_float64_scoring:
+            return _translate_score_weighted_half(weighted_half, pixel_indices)
         translation_phases = translation_phases_half[:, pixel_indices]
         return (weighted_half[:, None, :] * translation_phases[None, :, :]).reshape(
             batch_size * n_trans,
@@ -863,10 +875,15 @@ def run_local_bucket_big_jit(
         )
         if not score_only:
             recon_weighted_half = processed_recon_half * ctf_half / noise_variance_half
-            shifted_recon_half = (recon_weighted_half[:, None, :] * translation_phases_half[None, :, :]).reshape(
-                batch_size * n_trans,
-                processed_recon_half.shape[1],
-            )
+            if relion_score_translation_angles is not None and use_float64_scoring:
+                shifted_recon_half = _translate_score_weighted_half(
+                    recon_weighted_half,
+                    jnp.arange(processed_recon_half.shape[1], dtype=jnp.int32),
+                )
+            else:
+                shifted_recon_half = (
+                    recon_weighted_half[:, None, :] * translation_phases_half[None, :, :]
+                ).reshape(batch_size * n_trans, processed_recon_half.shape[1])
     batch_norm = jnp.sum(
         (jnp.abs(processed_score_half) ** 2 / noise_variance_half) * norm_half_weights[None, :],
         axis=-1,
@@ -896,8 +913,13 @@ def run_local_bucket_big_jit(
             ctf2_over_nv_recon = ctf2_over_nv_recon * (batch_scale**2)[:, None]
 
     if apply_fourier_pre_shift:
+        # fourier_pre_shifts already carries precision_policy.score_real_dtype
+        # (set by its caller); pass it through instead of letting these
+        # helpers silently narrow it back to their own float32 default.
         if use_window:
-            pre_shift_phases = half_image_phase_factors(image_shape, fourier_pre_shifts)
+            pre_shift_phases = half_image_phase_factors(
+                image_shape, fourier_pre_shifts, dtype=fourier_pre_shifts.dtype
+            )
             score_phase_expanded = jnp.repeat(pre_shift_phases[:, window_indices], n_trans, axis=0)
             shifted_score = shifted_score * score_phase_expanded
             if not score_only:
@@ -906,7 +928,9 @@ def run_local_bucket_big_jit(
                 if materialize_shifted_noise:
                     shifted_noise = shifted_noise * recon_phase_expanded
         else:
-            phase_expanded = tiled_half_image_phase_factors(image_shape, fourier_pre_shifts, n_trans)
+            phase_expanded = tiled_half_image_phase_factors(
+                image_shape, fourier_pre_shifts, n_trans, dtype=fourier_pre_shifts.dtype
+            )
             shifted_half = shifted_half * phase_expanded
             if not score_only:
                 shifted_recon_half = shifted_recon_half * phase_expanded
@@ -1309,13 +1333,14 @@ def run_local_bucket_big_jit(
         relion_x_half_mstep=mstep_relion_x_half,
     )
 
-    norm_correction_dtype = jnp.float64 if source_faithful_spectrum_norm else jnp.float32
+    stats_dtype = reconstruction_probs.real.dtype
+    norm_correction_dtype = jnp.float64 if source_faithful_spectrum_norm else stats_dtype
     bucket_norm_correction = jnp.zeros((batch_size,), dtype=norm_correction_dtype)
     if accumulate_noise:
-        support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), axis=1).astype(jnp.float32)
+        support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), axis=1).astype(stats_dtype)
         support_mass = jnp.where(valid_image_mask, support_mass, 0.0)
-        translation_posterior = jnp.sum(reconstruction_probs, axis=1).astype(jnp.float32)
-        noise_sumw_offset = jnp.sum(translation_posterior * translation_sqdist_ang.astype(jnp.float32))
+        translation_posterior = jnp.sum(reconstruction_probs, axis=1).astype(stats_dtype)
+        noise_sumw_offset = jnp.sum(translation_posterior * translation_sqdist_ang.astype(stats_dtype))
         processed_noise_power_half = processed_score_half * image_only_corr[:, None]
         batch_img_power_per_image = _norm_correction_image_power_per_image(
             processed_noise_power_half,
@@ -1332,7 +1357,7 @@ def run_local_bucket_big_jit(
         batch_img_power = jnp.sum(
             (jnp.abs(processed_noise_power_half) ** 2) * support_mass[:, None],
             axis=0,
-        ).astype(jnp.float32)
+        ).astype(stats_dtype)
         batch_img_power_shells = bin_shell_values_jax(batch_img_power, shell_indices_half, n_shells)
         noise_img_power = noise_img_power + batch_img_power_shells
         noise_sumw = noise_sumw + jnp.sum(support_mass)
@@ -1376,8 +1401,8 @@ def run_local_bucket_big_jit(
             )
             scale_xa_per_image = jnp.where(valid_image_mask, scale_xa_per_image, 0.0)
             scale_aa_per_image = jnp.where(valid_image_mask, scale_aa_per_image, 0.0)
-            noise_scale_xa = noise_scale_xa.at[group_ids].add(scale_xa_per_image)
-            noise_scale_aa = noise_scale_aa.at[group_ids].add(scale_aa_per_image)
+            noise_scale_xa = noise_scale_xa.at[group_ids].add(scale_xa_per_image.astype(noise_scale_xa.dtype))
+            noise_scale_aa = noise_scale_aa.at[group_ids].add(scale_aa_per_image.astype(noise_scale_aa.dtype))
         noise_sigma2_offset = noise_sigma2_offset + noise_sumw_offset
         bucket_norm_correction = batch_img_power_per_image + _compute_norm_residual_per_image(
             proj_for_noise,
@@ -1386,9 +1411,9 @@ def run_local_bucket_big_jit(
             ctf_probs,
             noise_variance_for_noise,
         )
-        bucket_norm_correction = jnp.where(valid_image_mask, bucket_norm_correction, 0.0).astype(
-            norm_correction_dtype
-        )
+    bucket_norm_correction = jnp.where(valid_image_mask, bucket_norm_correction, 0.0).astype(
+        norm_correction_dtype
+    )
 
     reconstruction_row_count = jnp.sum(reconstruction_rotation_mask & rotation_mask).astype(jnp.int32)
     if return_mstep_tensors:

@@ -12333,3 +12333,2046 @@ parked and the frozen K=1 score remains `28/34` strict, `32/34` topology, and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0117_native_preprocess_retry1_it2_1a6ce905_20260813T2005ET`,
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0117_fused_ffi_live_it2_1a6ce905_20260813T2030ET`, and
   `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_case22_stack0117_fused_ffi_nativepre_it2_1a6ce905_20260813T2030ET`.
+## 2026-08-24 ET — coarse/local rotation-matrix float32 forcing is real but not the igg_1d iter-10-12 `pdf_orient` gap cause
+
+- Fixture: igg_1d/snr0.01, `relion_em_test_double_seeded` (RELION-GPU-double
+  oracle), `--iter 10 --max_iter 2` replay via
+  `scripts/run_multi_iter_parity.py --continuous-relion-noise-state`. This
+  thread's target is the reproducible `pdf_orient` (`_rlnOrientationDistribution`,
+  `data_pdf_orientation_class_1`) gap first seen at iterations 11-12:
+  `relative_L1` in the `9e-3`-`1e-2` range against RELION for both halves,
+  well above the `1e-3` arithmetic-parity band in this file's numeric contract.
+- Two unconditional `.astype(np.float32)` casts on scorer/M-step rotation
+  *matrices* were found and fixed: `recovar/em/sampling.py`'s
+  `_relion_mstep_rotations_from_eulers` (feeds local search's pass-2
+  hypothesis construction via `local_layout.py`) and
+  `recovar/em/dense_single_volume/relion_metadata.py`'s
+  `_relion_rotation_grid_float32` (feeds the coarse pass-1 grid at setup,
+  mid-run angular-step refinement, the schema-v3 sealed-boundary restart
+  path, and finalization). Neither has a float32-forcing counterpart in
+  RELION's own `ACC_DOUBLE_PRECISION` C++ build (confirmed by reading
+  `AccProjectorPlan::setup`/`acc_projector_plan_impl.h`: the host `RFLOAT`
+  Euler/matrix values are copied straight into the `XFLOAT` workspace with no
+  narrowing cast when `XFLOAT=double`). Both were threaded with a `dtype`
+  parameter (default float32, unchanged) driven by the existing
+  `use_float64_scoring`/`use_float64_projections` switches; see
+  `tests/unit/test_em_sampling_relion_mstep.py` and
+  `tests/unit/test_refine_relion_mode.py` for the added regressions
+  (`_dense_global_scoring_dtype` -- renamed from `_coarse_rotation_grid_dtype`,
+  see the next entry -- `_relion_rotation_grid_float32`,
+  `_sealed_sampling_base_grids`, `_relion_device_scoring_rotations_f64`).
+- Both fixes are real correctness improvements and are kept, but neither
+  moves this gap. Rerunning the identical `RECOVAR_USE_FLOAT64_SCORING=1
+  RECOVAR_USE_FLOAT64_PROJECTIONS=1 RECOVAR_RELION_X_HALF_MSTEP_DOUBLE=1`
+  config before vs. after the fix gives essentially the same `pdf_orient`
+  `relative_L1`: iteration 11 half1 `9.031e-03` in both the pre-fix output
+  (`/home/ry295/palmer_scratch/tmp/recovar_em_pose_iter10_mstep_double`,
+  re-diffed against RELION on the current tree) and the post-fix rerun
+  (`/home/ry295/palmer_scratch/tmp/recovar_em_pose_iter10_rotation_dtype_fix`,
+  Slurm job `60296928`); half2 moves from `8.956e-03` to `9.014e-03`, inside
+  run-to-run noise. Final map corr vs. RELION stays `1.000000` for both
+  halves and merged (weak diagnostic only, not a quality gate on its own).
+- Conclusion: the coarse-grid and local-search-pass-2 rotation-matrix dtype
+  is not on the causal path for this specific gap in this replay scenario —
+  most likely because local search's per-particle candidate construction
+  dominates the affected iterations and does not route through
+  `_relion_rotation_grid_float32`'s coarse array for anything but a
+  bootstrap/fallback. Do not re-attempt a rotation-matrix-precision fix for
+  this gap without new dump evidence pointing back at rotations specifically.
+
+## 2026-08-24 ET — dense/global (use_local=False) prior helpers also forced float32; also a null result for this gap
+
+- Separately from the rotation-matrix fixes above, found the same bug class
+  in `recovar/em/dense_single_volume/helpers/orientation_priors.py`'s
+  offset/orientation log-prior helpers, used only on the `use_local=False`
+  dense/global path (`iteration_loop.py`'s `if use_local: continue` /
+  `if not use_local:` gates, both in the main loop and at finalization):
+  `relion_round_away_from_zero`, `relion_translation_search_base`,
+  `relion_translation_prior_center`, `relion_local_translation_prior_center`,
+  `relion_sigma_offset_prior_center`, `make_relion_direction_log_prior`,
+  `_sealed_direction_log_prior` all hardcoded float32 with no `dtype`
+  parameter (`make_relion_translation_log_prior` already had one but its
+  call sites never passed it). Confirmed via source that RELION forces
+  float32 nowhere in this computation either: CPU `RFLOAT pdf_orientation`/
+  `pdf_offset` (`ml_optimiser.cpp`), GPU `AccPtr<XFLOAT> pdf_orientation`/
+  `pdf_offset` (`acc_ml_optimiser_impl.h`) — both double under
+  double-precision builds. Fixed with the same `dtype` parameter convention,
+  driven by a `_dense_global_scoring_dtype()` helper (renamed from
+  `_coarse_rotation_grid_dtype`, which it now also serves — same
+  no-per-iteration-diagnostic-override semantics as the rotation grid).
+  Regression: `test_dense_global_prior_helpers_honor_explicit_float64_dtype`
+  in `tests/unit/test_refine_relion_mode.py`. Fast guard (16 passed) and the
+  full targeted sweep (457 passed, same 3 pre-existing failures) both clean.
+- Also confirmed, while investigating why a separate RELION-side diagnostic
+  dump (`RECOVAR_PASS1_DUMP_DIR`, added to `~/project/relion`'s
+  `recovar_em_patch_pass1_dump` branch) never fired under `--gpu`, that
+  RELION's pre-existing `RECOVAR_DEBUG_DUMP_DIR`/`RECOVAR_DEBUG_ESTEP_DIR`/
+  `RELION_DUMP_DIR` dump families in `ml_optimiser.cpp` are only reliable for
+  CPU-only RELION runs: dumps inside `precalculateShiftedImagesCtfsAndInvSigma2s`
+  and the M-step functions (`maximization`, `maximizationGradientParameters`,
+  `calculateSumOfPowerSpectraAndAverageImage`,
+  `setSigmaNoiseEstimatesAndSetAverageImage`) fire under `--gpu` too (no ACC
+  override exists for any of them), but every E-step scoring dump inside
+  `expectationOneParticle`/`getAllSquaredDifferences`/
+  `convertAllSquaredDifferencesToWeights` does not: `--gpu` runs
+  `accDoExpectationOneParticle` (`src/acc/acc_ml_optimiser_impl.h:3673`)
+  instead, a fully separate implementation. Confirmed CPU-double and
+  GPU-double are not interchangeable for the coarse significance decision
+  either: for the same 6 particles, RELION-CPU's
+  `my_nr_significant_coarse_samples` differs from the RELION-GPU oracle's
+  `_rlnNrOfSignificantSamples` by far more (up to +11) than recovar's own
+  ±1 gap vs that oracle, most likely GPU device-texture interpolation
+  rounding (matches the already-known `ACC_DOUBLE_FLOORF_QUIRK`). Getting a
+  true apples-to-apples RELION-GPU pass-1 comparison would require
+  instrumenting `acc_ml_optimiser_impl.h` directly (unverified `AccPtr`
+  device-copy code) — not attempted.
+- Re-ran the canonical `--iter 10 --max_iter 2` replay
+  (`RECOVAR_USE_FLOAT64_SCORING=1 RECOVAR_USE_FLOAT64_PROJECTIONS=1
+  RECOVAR_RELION_X_HALF_MSTEP_DOUBLE=1`) with this fix on top of the
+  rotation-matrix fixes (Slurm job `60298067`, after node `r816u35n07`
+  produced spurious `CUDA_ERROR_UNKNOWN`/OOM failures on three earlier
+  attempts — exclude that node for `gpu`/`gpu_devel` jobs on this cluster
+  for now). Expected null result confirmed: iteration 11 `pdf_orient`
+  `relative_L1` is bit-identical to the pre-fix run, `9.031e-03`/`9.014e-03`
+  for h1/h2 — this trajectory is `local_search=True` throughout, so the
+  `use_local=False`-gated code this fix touches is never exercised here.
+  Final map corr vs RELION stays `1.000000` (no regression).
+- Next step is the paused particle-orientation-scoring-operand investigation
+  (CTF²/`sigma2_noise` inputs and related score operands feeding the pass-1
+  coarse decision), not further rotation-matrix precision changes.
+
+## 2026-08-24 ET (cont'd) — `--iter 0` cold-start replay validates the STAR-file
+## precision-trim hypothesis; M-step tau2/sigma2_noise gap survives four
+## independent float32-forcing fixes, all null
+
+- **STAR-file precision-trim hypothesis confirmed from RELION source.**
+  `MlOptimiserMpi::iterate()` (`ml_optimiser_mpi.cpp:3849-4258`) is
+  `expectation() -> maximization() -> write() -> loop`, entirely on
+  in-memory `mymodel`/`sampling` C++ objects; there is no `read()` call
+  between iterations anywhere in the loop, so RELION's own multi-iteration
+  trajectory never round-trips through its own written STAR files.
+  `metadata_table.cpp:252-278` confirms scalar columns serialize at only
+  `%12.6f`/`%12.6e`/`%12.5e` (~6-7 significant figures) regardless of the
+  true double-precision internal value. This means `run_multi_iter_parity.py`
+  replaying from any iteration `N>0` compares recovar against a
+  precision-degraded target: the user's own `--iter 0` cold-start test
+  confirms this directly, dropping first-iteration `pdf_orient` error to
+  `~1e-8` (see below) instead of the `~1e-2` seen replaying from a
+  STAR-trimmed later iteration.
+- **`--replay-override-max-iter` flag added** to
+  `scripts/run_multi_iter_parity.py` so multi-iteration runs (`--max_iter >
+  1`) can stop re-seeding from RELION's STAR files after a chosen iteration
+  and let recovar carry its own state forward instead (previously every
+  iteration up to `--max_iter` was unconditionally re-seeded, which
+  re-introduces the STAR-trim artifact at every step and defeats testing
+  iteration 2+). Gates the existing `replay_override_iteration_pairs`
+  population loop; the EM loop's replay-override consumers already handled
+  `None` gracefully, so no core loop changes were needed. Not yet exercised
+  with `--max_iter > 1` in a live run — next step if multi-iteration
+  trajectories need testing.
+- **M-step tau2/sigma2_noise gap:** at `--iter 0 --max_iter 1`
+  (`RECOVAR_USE_FLOAT64_SCORING=1 RECOVAR_USE_FLOAT64_PROJECTIONS=1
+  RECOVAR_RELION_X_HALF_MSTEP_DOUBLE=1`, `relion_em_test_double_seeded`
+  oracle), `pdf_orient` agrees to `~4.2e-8` relative (machine-precision-class,
+  confirming pass-1/pass-2 scoring itself is clean), but the per-shell
+  `tau2`/`sigma2_noise` model-STAR fields show a real, reproducible gap
+  concentrated at the lowest shells: shell 1 `tau2_R=1.0431e+08` vs
+  `tau2_V=1.0436e+08` (~4.8e-4 relative), shrinking to ~0 by shell 3-4 and
+  beyond. Traced the K=1 adaptive path
+  (`k_class.py::run_dense_k_class_em_adaptive` ->
+  `_run_sparse_k_class_adaptive_pass2` -> `compute_pass2_stats_sparse` ->
+  `compute_pass2_stats_sparse_bucketed`, since `_use_fused_sparse_k_class_pass2`
+  defaults `False` for `n_classes==1` — the fused path is a K>1-only default)
+  and found/fixed four independent float32-forcing points along the noise
+  path, confirmed via env-gated diagnostic logging
+  (`RECOVAR_NOISE_DTYPE_DEBUG`) that the actual branch exercised is the
+  "unchunked" bucket path (~`sparse_pass2_bucketed.py:13779`, not the
+  chunked path near `:12356` — the projection cache is skipped for this
+  fixture, "estimated transient 10.30 GiB exceeds cap 3.20 GiB", so the
+  cache-population code path is also inert here):
+  1. `compute_noise_block` (`helpers/projection.py`) — removed unconditional
+     `.astype(jnp.float32)` on `bin_shell_values_jax` outputs; now preserves
+     natural promotion from its inputs.
+  2. `normalize_wsum_to_sigma2_noise` (`reconstruction/noise.py`) — removed
+     the final `dtype=np.float32` cast before the divide.
+  3. `mean_helpers.py`'s `update_posterior_noise_variance` — removed a
+     `dtype=jnp.float32` cast on the carried-forward noise radial.
+  4. `_prepare_per_image_pass2_inputs` (`sparse_pass2_bucketed.py`) — the
+     RELION-supplied fine-rotation override
+     (`fine_rotations_override`/`fine_mstep_rotations_override`) was
+     hardcoded `np.asarray(..., dtype=np.float32)` with no way to request
+     float64, unconditionally, regardless of `use_float64_scoring`. Added a
+     `dtype` param (default `np.float32` preserved) and threaded
+     `precision_policy.score_real_dtype` from both call sites
+     (`compute_pass2_stats_sparse_bucketed` and
+     `compute_k_class_pass2_stats_sparse_fused`); also fixed the sibling
+     `jnp.asarray(fine_rotations_override, dtype=jnp.float32)` casts feeding
+     the (for this fixture, inert) projection-cache builder in both
+     functions, same pattern, same fix. New regression:
+     `test_sparse_pass2_prepare_per_image_inputs_honors_explicit_float64_dtype`
+     in `tests/unit/test_sparse_pass2_bucketed_parity.py` (24/24 passed in
+     that file after the change).
+  - **All four fixes are individually correct** (each validated by a
+    focused unit test, each closing a genuine "recovar narrows to float32
+    where RELION's RFLOAT/double never does" gap matching this session's
+    established bug pattern) **but produced a bit-for-bit-identical
+    `tau2_V`/`sig2_V` before and after**, both for fixes 1-3 (Slurm job
+    `60298383`, prior round) and for fix 4 on top of 1-3 (Slurm job
+    `60298428`: shell 1 still `tau2_V=1.0436e+08`, `sig2_V=104461.0469`,
+    unchanged to every printed digit). The `RECOVAR_NOISE_DTYPE_DEBUG`
+    diagnostic (job `60298420`) confirms the entire live chain is already
+    float64/complex128 end to end at the point fixes 1-3 apply
+    (`proj_for_noise=complex128`, `proj_abs2_for_noise=float64`,
+    `summed_masked_noise=complex128`, `ctf_probs=float64`,
+    `noise_variance_for_noise=float64`, `block_noise_shells=float64`), and
+    `noise_wsum_total` is independently confirmed
+    `np.zeros(n_shells, dtype=np.float64)` at initialization.
+  - **Conclusion: this specific gap is not a float32-forcing bug.** Four
+    independent, verified fixes along the entire traced noise-accumulation
+    chain (arithmetic, final divide, carry-forward, and the fine-rotation
+    input feeding the projections that produce `proj_for_noise`) each
+    changed nothing. The remaining ~4.8e-4 relative gap, concentrated at the
+    lowest shells (fewest voxels per shell, most sensitive to any residual
+    difference) and vanishing by shell 3-4, sits below the
+    `recovar/em/CLAUDE.md` escalation threshold ("~1e-4 is normally
+    arithmetic-level parity... escalate reproducible gaps at 1e-3") and does
+    not grow with shell index the way a systematic precision bug would.
+    Candidate remaining explanations, none yet tested: (a) a genuine
+    algorithmic difference in how the lowest shells' CTF²/scale-correction
+    or windowing is handled between recovar and RELION (not a precision
+    issue at all); (b) some other RELION-side computation that itself stays
+    single precision even in a `RECOVAR_RELION_X_HALF_MSTEP_DOUBLE=1` +
+    GPU-double oracle run (that flag only controls the `Ft_y`/`Ft_ctf`
+    BPref accumulator dtype in `half_volume_mstep.py`, not every RELION-side
+    quantity); (c) ordinary GPU-vs-GPU arithmetic-level parity that this
+    project's contract already treats as acceptable at this magnitude. Per
+    the Validation Ladder in `recovar/em/CLAUDE.md`, the next rung is a
+    RELION CPU/double dump comparison of the raw per-shell accumulators
+    (`wsum_model.sigma2_noise`/`sumw_group` before the final divide) rather
+    than more recovar-side dtype changes.
+
+## 2026-08-25 ET — the two >1° pose mismatches at `--iter 0` are ordinary
+## pass-2 GPU arithmetic-parity near-ties, not a coarse (pass-1) or
+## implementational gap
+
+- Same `--iter 0 --max_iter 1` fixture as above. `pose_comparison_iter000.npz`
+  (`n=1000`) has exactly 2 particles with `angular_error_deg > 1°`: original
+  star rows 441 (4.96°, both half-2) and 585 (3.75°, half-2) — matching the
+  `full_angle_°`/`view_dir_°`/`in_plane_°` `max` values in the user's pose
+  refinement summary (mean/median/p90/p95/p99 are all ≈0, i.e. every other
+  particle matches to sub-degree precision).
+- **Traced the real coarse (pass-1) scoring path.** Both particles were
+  presumed to hit `compute_pass2_stats_sparse_bucketed`'s generic
+  adaptive-fraction significance pruning; they don't. `--iter 0` uses
+  RELION's GUI-default `--firstiter_cc` (`run_dense_k_class_em_adaptive`'s
+  `firstiter_cc_pass2_only_best_coarse=True` branch, `k_class.py:3060`),
+  which routes coarse scoring through
+  `_run_dense_k_class_joint_firstiter_score_probe` instead — a hard,
+  winner-take-all hard argmax over normalized-CC scores
+  (`_compute_k_class_significance_batched(..., score_mode="normalized_cc",
+  max_significants=1)`), confirmed by both particles' `sig_counts=1` in
+  `refinement_results.npz`.
+- **New diagnostic tooling** (both env-gated, off by default, unit-tested in
+  `tests/unit/test_pass1_pass2_top2_debug.py`):
+  - `k_class._log_pass1_top2_debug` /
+    `RECOVAR_PASS1_TOP2_DEBUG_INDICES=<within-half image indices>`: logs the
+    pass-1 coarse winner-take-all top-2 candidate CC score margin (using the
+    `offset_free` scores — the `absolute` ones lose exactly this margin to a
+    float32 cast after a large common offset add, per `significance.py`'s
+    own comment) and pose ids, optionally dumping the winner/runner-up
+    rotation matrices via `RECOVAR_PASS1_TOP2_DEBUG_DUMP_PATH`.
+  - `sparse_pass2_bucketed._log_pass2_top2_debug` /
+    `RECOVAR_PASS2_TOP2_DEBUG_INDICES=<original dataset image indices>`:
+    same idea for pass-2's fine/oversampled per-particle candidate scores
+    (`(B, R, T)` normalized-CC array), decoding the flat winner/runner-up
+    ids into `(rot, trans)`.
+- **Pass-1 (coarse) result: recovar picked the *correct* coarse cell for
+  both particles**, with a clean, well-resolved top-2 margin — not a
+  near-tie:
+
+  | | particle 441 | particle 585 |
+  |---|---|---|
+  | pass-1 top-2 CC margin | 0.00285 (0.5197 vs 0.5169) | 0.00215 (0.5982 vs 0.5960) |
+  | angle(RELION final, recovar's pass-1 winner) | **2.48°** | **3.51°** |
+  | angle(RELION final, recovar's pass-1 runner-up) | 10.73° | 5.82° |
+  | angle(recovar final, recovar's pass-1 winner) | 2.48° | 3.25° |
+
+  (Angles computed via `_angular_error_deg_from_rotations`'s trace formula,
+  reusing `run_multi_iter_parity.py`'s already-validated
+  `utils.R_from_relion` frame conversion for RELION's reported eulers —
+  same frame `run_multi_iter_parity.py` uses for the headline
+  `angular_error_deg` metric.) RELION's true final pose sits only 2.5-3.5°
+  from recovar's own pass-1 coarse pick — 4-5x closer than to recovar's
+  runner-up, and about the same distance recovar's own final answer ends up
+  from that same coarse pick. Both systems converged on the *same* healpix
+  cell (order 3, ~7.5° pixels); the ~0.002-0.003 margin (~0.4-0.5%
+  relative, ~4 orders of magnitude above float32 rounding) reflects a
+  clean, correct decision, not a coin-flip.
+- **Pass-2 (fine) result: this is where the actual divergence happens, and
+  it is a genuine near-tie.** Top-2 margins among the fine/oversampled
+  children of that shared coarse cell:
+
+  | | particle 441 | particle 585 |
+  |---|---|---|
+  | pass-2 top-2 CC margin | **2.49e-05** (0.52413278 vs 0.52410786) | **2.99e-05** (0.60363556 vs 0.60360570) |
+
+  Two orders of magnitude smaller than the pass-1 margins, and below
+  `recovar/em/CLAUDE.md`'s "~1e-4 is normally arithmetic-level parity"
+  reference scale for RELION-accelerated-GPU score differences. Given the
+  normalized-CC score is a sum over thousands of Fourier pixels, accumulated
+  float32-scale rounding differences between recovar's and RELION's GPU
+  kernels landing at this magnitude is exactly the expected/accepted regime,
+  not a resolvable implementational gap.
+- **Conclusion:** both flagged wrong-argmax particles are explained end to
+  end: pass-1 correctly narrows to RELION's true coarse cell with a
+  well-separated margin; pass-2's fine search inside that cell then flips
+  on an ordinary sub-1e-4 GPU arithmetic-parity near-tie. No code change
+  indicated by this investigation — it closes the "is this a small or a big
+  gap" question the per-shell/pose-refinement summary table raised. The two
+  new debug hooks (`RECOVAR_PASS1_TOP2_DEBUG_INDICES`,
+  `RECOVAR_PASS2_TOP2_DEBUG_INDICES`) are left in place, matching this
+  file's established pattern of permanent, off-by-default diagnostic
+  instrumentation, for any future particle-level pose-mismatch
+  investigation.
+
+## 2026-08-25 ET (cont'd) — forcing particles 441/585 to RELION's actual
+## pose confirms the M-step is otherwise sound; found and fixed a
+## half-scoping bug in the (now-reverted) validation tool along the way
+
+- **Validation request**: temporarily force pass-2's winner-take-all
+  decision for particles 441 and 585 to their own runner-up candidate (the
+  ~2.5-3.0e-5-margin near-tie identified above) for iteration 1 only, rerun
+  `run_multi_iter_parity.py`, and check whether the rest of the M-step
+  (tau2/sigma2_noise, FSC, map correlation) is otherwise sound once these
+  two known-wrong poses are corrected.
+- Added a temporary override (`RECOVAR_TEMP_FORCE_SECOND_CANDIDATE_INDICES`
+  in `sparse_pass2_bucketed.py`, right before the `winner_take_all` block
+  that consumes `best_argmax`/`best_log_score_bucket`) that overwrites
+  those two arrays at the target row(s) with the row's second-best fine
+  candidate before `_winner_take_all_bucket_probs` and pose recording
+  (`best_rotations[image_idx] = ...`) both consume them -- a single,
+  correct intervention point that transparently propagates to both pose
+  reporting and the M-step's posterior-weighted backprojection.
+- **Found and fixed a real bug while wiring this up** (also affects the
+  `RECOVAR_PASS1_TOP2_DEBUG_INDICES`/`RECOVAR_PASS2_TOP2_DEBUG_INDICES`
+  read-only diagnostics from the entry above): `image_indices` inside the
+  per-half scoring functions is *local* (within-half, 0..499) index space,
+  but the target-index env vars were being matched directly against it as
+  if they were *original* (combined, pre-half-split, 0..999) indices.
+  Since `--replay-override-max-iter`-style within-half positions 220 and
+  292 are shared by *two different real particles* -- 441 in half-2 (the
+  intended target) and 440 in half-1 (an innocent bystander), and likewise
+  585/584 -- the first forcing run (job 60313172, A100) silently *also*
+  force-flipped half-1's particles 440 and 584, which had been matching
+  RELION perfectly. This was first mistaken for GPU run-to-run
+  nondeterminism (the forcing job happened to land on an A100 while the
+  earlier read-only-diagnostic comparison ran on a V100), but reproduced
+  identically pinned to the same V100-SXM2-32GB model (job 60313202),
+  ruling that out and pointing at the half-scoping bug instead. Fixed with
+  a new shared helper, `_resolve_local_target_indices(experiment_dataset,
+  original_targets)` (uses `experiment_dataset.local_image_indices_from_
+  original(..., allow_missing=True)`, the same resolver
+  `recovar/em/global_winner_summary.py` already uses for this exact
+  local/original distinction), applied at all four target-index call sites
+  in `k_class.py` and `sparse_pass2_bucketed.py`. The two permanent debug
+  hooks now correctly take *original* dataset indices as documented;
+  previously they silently matched local positions instead. Regression:
+  `tests/unit/test_pass1_pass2_top2_debug.py` still 11/11 (the resolver is
+  exercised end-to-end by the GPU runs below, not unit-tested in isolation
+  -- would require a synthetic `experiment_dataset` double).
+- **Clean result (job 60313311, V100-SXM2-32GB, half-scoping bug fixed,
+  targets 441/585 only)**: both particles now match RELION to machine
+  precision (`angular_error_deg` ~6.6e-6°/4.4e-6°, down from 4.96°/3.75°),
+  confirming the pass-2 runner-up genuinely was RELION's true pick.
+  `pose_comparison_iter000.npz` now has **zero** particles with
+  `angular_error_deg > 1°` (was 2/1000).
+  - **Final merged map vs RELION improves, as expected**: `corr` 0.999999
+    -> 1.000000, `FSC-AUC` 0.999935 -> 0.999991 (both already
+    near-perfect; small, consistent, correctly-signed improvement).
+  - **Per-shell tau2/sigma2_noise: no consistent improvement.** Comparing
+    `sig2_V` vs `sig2_R` gaps, baseline vs forced, shells 1-9: shell 1
+    45.9->44.8 (better), shell 2 42.2->46.9 (worse), shell 3 73.1->74.6
+    (worse), shell 4 21.5->10.7 (better), shell 5 158.2->159.6 (worse),
+    shell 6 13.7->18.7 (worse), shell 7 3.4->10.8 (worse), shell 8
+    1.2->7.6 (worse), shell 9 5.8->2.8 (better) -- a mixed, redistributive
+    pattern with the same overall magnitude (tens of units out of
+    ~1e5-4e5), not a directional improvement.
+- **Conclusion**: the M-step accumulation machinery is sound and not
+  hiding a bug that these two particles' pose errors happened to mask --
+  correcting them measurably helps the actual reconstructed volume (as it
+  should, mechanically) but leaves the residual per-shell tau2/sigma2_noise
+  gap unchanged in overall magnitude, just shell-to-shell redistributed.
+  This is consistent with, and reinforces, the earlier conclusion in this
+  file: that residual gap is not concentrated in a handful of identifiable
+  wrong-pose particles, and is most likely either a genuine algorithmic
+  difference in low-shell handling or diffuse GPU-arithmetic-level noise
+  spread across the full ~1000-particle set -- both already flagged as
+  below this project's escalation threshold. No code change indicated.
+  The temporary forcing override has been reverted (removed from
+  `sparse_pass2_bucketed.py`); only the half-scoping bug fix to the
+  permanent debug hooks was kept.
+
+## 2026-08-26 — "sig2" in the parity diff table is `_rlnReferenceSigma2`
+## (BackProjector weight-derived map noise), not `_rlnSigma2Noise`; gap
+## confirmed real at full double precision; backprojection kernel audited
+## for float/double logic and cleared
+
+- **Quantity correction (user-flagged).** Earlier sessions traced
+  `wsum_model.sigma2_noise` / `storeWeightedSums`'s per-image `wdiff2`
+  accumulation as if that were the diff script's `sig2_R`/`sig2_V`. That
+  is wrong. `scripts/diff_relion_recovar_per_iter.py` reads
+  `_rlnReferenceSigma2` from `model_class_1` (RELION's
+  `EMDL_MLMODEL_SIGMA2_REF`, `metadata_label.h:1076`, "Spherical average
+  of the estimated power in the noise of a reference"), i.e.
+  `mymodel.sigma2_class[iclass]`. That field is computed by
+  `BackProjector::updateSSNRarrays()` (`backprojector.cpp:1041`, called
+  from `MlOptimiser::maximization()`, `ml_optimiser.cpp:5508`) directly
+  from the 3-D `BackProjector` weight accumulator
+  (`wsum_model.BPref[iclass].weight`), **not** from the per-image noise
+  residual. Recovar's matching quantity is `sigma2_shells` inside
+  `compute_relion_tau2_from_weights` / `_compute_relion_weight_shell_stats`
+  (`recovar/reconstruction/regularization.py:705,953,1056`), called once
+  per half with that half's own `Ft_ctf` in
+  `iteration_loop.py:7466` (`Ft_ctf_0=Ft_ctf_1=Ft_ctf_half`, the
+  "same array twice" trick so `weight_combination="average"` degenerates
+  to `(X+X)/2=X`, matching RELION's per-half-independent
+  `updateSSNRarrays` calls). Formula match confirmed directly: recovar's
+  `sigma2_shells = 1/(padding_factor**3 * bottom_avg)` (where
+  `bottom_avg` sums the real part of `Ft_ctf`) is algebraically identical
+  to RELION's `sigma2[i] = counter[i] / sigma2[i]` after
+  `sigma2[ires] += oversampling_correction * weight` (`backprojector.cpp
+  :1064-1090`), and reproduces RELION's own `sig2_V`-comparable value
+  exactly when fed RELION's own saved `Ft_ctf` arrays.
+- **Unit-convention discovery.** RELION's raw `_rlnReferenceSigma2` (and
+  a direct C++ dump of `updateSSNRarrays`'s internal `sigma2` array) is
+  in a different scale than the diff table's printed `sig2_R`/`sig2_V`:
+  `sigma2_final × grid_size⁴ (128⁴ = 268,435,456) ≈ sig2_R` (matches to
+  4-5 significant figures). This matches the existing unit-convention
+  warning in `recovar/reconstruction/noise.py`'s
+  `estimate_initial_noise_spectrum_from_unaligned_images` docstring
+  about not rescaling by `(H*W)²` to "RELION units" — not a bug, just a
+  reporting-scale fact to keep in mind when comparing raw RELION dumps
+  against the diff script's printed columns.
+- **New RELION-side instrumentation** (kept in the RELION source tree,
+  not in this repo): env-gated raw-array dump
+  (`__recovar_ssnr_dump_real`, gated on `RECOVAR_SSNR_DUMP_DIR`, zero
+  cost when unset) inserted into `BackProjector::updateSSNRarrays` in
+  `~/project/relion/src/backprojector.cpp` on branch
+  `recovar_em_patch_pass1_dump` (commit `0c87ada1` base), dumping
+  `sigma2_raw` (pre-divide accumulator), `counter` (shell voxel counts),
+  and `sigma2_final` (post-divide) as raw `RFLOAT` binaries. Rebuilt
+  `build-gpu-double` (Slurm job `60315035`) and reran the standard
+  oracle command (same seed/flags as `relion_em_test_double_seeded`) with
+  the dump active, fresh output prefix `relion_em_test_double_seeded_ssnrdump`
+  (Slurm job `60315080`).
+  - **`counter` matches exactly** between recovar and RELION at every
+    shell -- this is a purely geometric quantity (voxel count per radius
+    bin, independent of any backprojected data), so an exact match rules
+    out shell-binning/grid-size mismatches but says nothing about the
+    actual scattered values.
+  - **`sigma2` (i.e. `Ft_ctf`-derived weight) still shows the same
+    ~0.04-0.05% relative gap at low shells at full double precision**,
+    ruling out 6-significant-figure STAR-file text rounding as the
+    cause. By elimination (shell binning confirmed identical, formula
+    confirmed identical, STAR rounding ruled out), the gap is localized
+    to the raw `Ft_ctf`/`Fweight` **values** themselves, i.e. somewhere
+    in the backprojection/adjoint kernel's numerical output.
+- **User sanity check, answered by reasoning (no tool calls needed):**
+  "could `sqrt(N particles) * 1e-16` explain this via double-precision
+  rounding noise?" No -- that bound applies to i.i.d. rounding drift
+  within one self-consistent summation order, not to a systematic,
+  structural difference between two separately-implemented kernels. The
+  observed ~4.8e-4 relative gap is roughly 11 orders of magnitude larger
+  than `sqrt(1000)*1e-16 ~= 3e-15`, so it cannot be pure rounding noise
+  under any reasonable particle count; it has to be a real algorithmic
+  or precision-*logic* (not precision-noise) difference.
+- **Backprojection kernel double/float logic audit (this entry's main
+  task).** Traced the live call chain for this fixture
+  (`RECOVAR_RELION_X_HALF_MSTEP_DOUBLE=1`, `relion_x_half=True`, GPU
+  path mandatory -- the non-CUDA JAX fallback raises `NotImplementedError`
+  for `relion_x_half=True`) end to end:
+  `sparse_pass2_bucketed.py::_accumulate_adjoint_block_chunked` (the
+  live "unchunked" bucket path, `Ft_ctf_total` update at
+  `sparse_pass2_bucketed.py:13895`) -> `helpers/adjoint.py
+  ::adjoint_slice_volume_windowed` (thin JIT wrapper, no dtype logic) ->
+  `core/slicing.py::adjoint_slice_volume_indexed` -> CUDA FFI
+  `recovar.cuda_backproject.backproject_indexed` -> templated CUDA
+  kernel `backproject_indexed_kernel<T,...>` / `scatter_trilinear<T,...>`
+  in `recovar/cuda/cuda_backproject.cu`.
+  - **Accumulator dtype confirmed float64 throughout.** `Ft_ctf_total`
+    is initialized via `jnp.zeros(recon_volume_size,
+    dtype=recon_ctf_accum_dtype)` where `recon_ctf_accum_dtype` comes
+    from `relion_x_half_mstep_accumulator_dtypes` (`helpers
+    /half_volume_mstep.py:44`), which returns `(complex128, float64)`
+    under `RECOVAR_RELION_X_HALF_MSTEP_DOUBLE=1`. This dtype is
+    preserved through every intermediate call (`_accumulate_adjoint
+    _block_chunked` does no casting; `backproject_indexed`'s FFI
+    `out_type = ShapeDtypeStruct(volume.shape, volume.dtype)`
+    preserves it).
+  - **Input (`slices`) dtype confirmed float64.** `flat_ctf_probs`
+    (`= flatten_bucket_rows(ctf_probs)`) was already confirmed float64
+    end to end by the prior session's `RECOVAR_NOISE_DTYPE_DEBUG`
+    diagnostic (`ctf_probs=float64`, job `60298420`).
+  - **Resolved the one live suspect from the prior trace.**
+    `core/slicing.py::adjoint_slice_volume_indexed` has:
+    `out_dtype = volume.dtype if relion_x_half else
+    jnp.result_type(slices, volume)`. When `relion_x_half=True` this
+    picks `volume`'s dtype alone rather than promoting against
+    `slices` -- a real asymmetry that *would* silently downcast `slices`
+    if `volume` were ever lower precision. For this fixture it is a
+    no-op: both operands are independently confirmed float64 above, so
+    it does not explain the observed gap. Still worth fixing
+    defensively (use `jnp.result_type(slices, volume)`
+    unconditionally) since it is a latent correctness footgun for any
+    future caller that runs `relion_x_half=True` without
+    `RECOVAR_RELION_X_HALF_MSTEP_DOUBLE=1`. Not changed yet -- no
+    evidence it affects any currently-measured result.
+  - **Rotation-matrix precision confirmed double.** `_rot_to_compact`
+    and `_relion_x_half_backproject_rotation_to_kernel`
+    (`recovar/cuda_backproject.py:864-911`) both branch on
+    `_volume_real_dtype(volume)`; for a float64 `volume` this takes the
+    `jnp.linalg.inv(rotation_matrices.astype(jnp.float64))` branch (not
+    the float32 "RELION single-precision ACC build" branch), so
+    rotation matrices reaching the kernel are genuinely float64 here.
+  - **RELION's own GPU kernel confirmed genuinely double for this
+    oracle build.** `XFLOAT` is `#define`d `double` when
+    `ACC_DOUBLE_PRECISION` is set (`src/acc/settings.h`), which the
+    build does set (`CMakeCache.txt`: `DoublePrec_ACC:BOOL=ON`,
+    `DoublePrec_CPU:BOOL=ON`). RELION's `cuda_kernel_backproject3D`
+    (`src/acc/cuda/cuda_kernels/BP.cuh:175-406`) is entirely
+    `XFLOAT`-typed with no hardcoded `float` escape hatches, and its
+    double-precision atomic add
+    (`cuda_atomic_add(double*,double)`, `cuda_device_utils.cuh:8-19`)
+    is a correct lossless `atomicCAS` loop, not a precision-losing
+    shortcut. RELION is not secretly running this oracle in single
+    precision anywhere in the accelerated backprojection path.
+  - **Trilinear interpolation formula compared line-for-line and found
+    equivalent.** RELION's inline `dd000..dd111 = mfz/fz * mfy/fy *
+    mfx/fx` weights (`BP.cuh:339-395`) and recovar's `scatter_trilinear`
+    loop-based `w0/w1/w2` weights (`cuda_backproject.cu:262-386`)
+    compute the identical 8-neighbor trilinear formula. Recovar's
+    kernel already carries extensive inline citations of prior
+    ULP-level parity work against this exact RELION kernel (FMA
+    contraction order for `rk0/rk1/rk2`, the post-rotation radius
+    re-check redundancy, the Nyquist self-conjugate case, the `x=0`
+    negative-row duplicate skip) -- this pass did not surface anything
+    beyond what that earlier work already documented and handled.
+  - **`winner_take_all` (hard MAP-pose vs. soft posterior-weighted
+    M-step) ruled out for this iteration.** It is wired to
+    `relion_firstiter_winner_take_all`, defaulting `False`
+    (`sparse_pass2_bucketed.py:10493,10576`), i.e. only active for
+    RELION's `--firstiter_cc` iteration-0 special case. The iter-3 gap
+    under investigation runs with `winner_take_all=False`, so recovar
+    is doing the same soft, posterior-weighted multi-orientation
+    accumulation as RELION's `storeWeightedSums`/`cuda_kernel
+    _backproject3D`'s per-block-per-rotation atomic scatter, not an
+    accidental hard-classify shortcut.
+- **Conclusion: no float32/double precision-logic bug found in the
+  backprojection kernel path for this (fully double-forced) test
+  configuration.** Every dtype checkpoint from the M-step accumulator
+  through the CUDA kernel's atomic-add, on both recovar and RELION, is
+  confirmed genuinely double precision, and the interpolation formulas
+  match. This is a negative/null result for the specific hypothesis in
+  the user's last instruction. Per the Investigation Loop
+  (`recovar/em/CLAUDE.md`), the next rung is not another recovar-side
+  dtype change but either (a) a direct single-particle scatter-value
+  dump comparison (recovar's `RECOVAR_BPREF_ACCUM_DUMP_DIR` /
+  `RECOVAR_MSTEP_DUMP_DIR` vs. a targeted RELION-side per-particle dump)
+  to catch a genuine algorithmic difference upstream of the kernel (how
+  `ctf_probs`/`summed` -- the per-(particle, significant-orientation)
+  values being scattered -- are built), or (b) accepting this as
+  GPU-arithmetic-level parity per the numeric contract, given the gap is
+  small, does not grow with shell index, and vanishes by shell 3-4.
+
+## 2026-08-26 (continued) — the sig2/tau2 gap is localized to RELION's
+## `--firstiter_cc` iteration-0 M-step, not the general backprojection path;
+## iteration 3->4 agrees to ~1e-5-6e-5 relative
+
+- **RELION CPU-double vs GPU-double self-consistency check.** Compared
+  `_rlnReferenceSigma2` at iteration 3 (shells 1-9) between the
+  already-on-disk `relion_em_test_double_cpu_seeded` (CPU-only,
+  `build-debug`: `CUDA:BOOL=OFF, DoublePrec_CPU:BOOL=ON`, so
+  `BackProjector::backproject2Dto3D` runs the plain host C++ path, no
+  `XFLOAT`/GPU kernel involved at all) and the established
+  `relion_em_test_double_seeded` GPU-double oracle. Both are the *same*
+  seed (`1783599264`) and fixture. Relative agreement is ~1e-6 to 5e-6 at
+  every one of shells 1-9 -- RELION's CPU and GPU double-precision paths
+  are mutually self-consistent to essentially machine precision. This
+  independently confirms (without touching recovar at all) that RELION's
+  GPU-accelerated backprojection is not silently degrading precision
+  anywhere relative to its own CPU path.
+- **Recovar end-to-end iter3->4 vs RELION-GPU-double: near machine
+  precision, no gap.** Ran the actual production replay (not a
+  formula-only check on RELION's saved arrays) with
+  `RECOVAR_USE_FLOAT64_SCORING=1 RECOVAR_USE_FLOAT64_PROJECTIONS=1
+  RECOVAR_RELION_X_HALF_MSTEP_DOUBLE=1
+  scripts/run_multi_iter_parity.py --iter 3 --max_iter 1
+  --continuous-relion-noise-state` against `relion_em_test_double_seeded`
+  (Slurm job `60328573`, `gpu_devel`, exit 0). At "RELION iter 4 (recovar
+  idx 0)" -- the first M-step recovar actually computes itself, replayed
+  from RELION's own saved iteration-3 state -- `sig2_R`/`sig2_V` agree to
+  ~1e-7 to 6e-5 relative at shells 0-9 (e.g. shell 3: `120828.2211` vs
+  `120828.2031`, 1.5e-7 relative; shell 0: `24327.2316` vs `24325.7051`,
+  6.3e-5 relative). This is solidly within this project's "~1e-4 is
+  normally arithmetic-level parity" contract band, with no growth
+  pattern across shells -- i.e. **no gap** at this iteration, contrary to
+  what iteration 0 shows (next bullet).
+- **Recovar end-to-end iter0->1 vs RELION-GPU-double: reproduces the
+  documented ~2e-4 to 4.4e-4 gap exactly.** Same command/flags, `--iter 0
+  --max_iter 1` (Slurm job `60328578`, exit 0). At "RELION iter 1
+  (recovar idx 0)": shell 1 `tau2_R=1.0431e+08` / `tau2_V=1.0436e+08`
+  (`sig2_R=104415.1915` / `sig2_V=104461.0469`, relative diff
+  `4.39e-4`) -- reproducing, bit-for-bit against the printed digits, the
+  gap first documented in the 2026-07-25-dated entry above from a wholly
+  independent run. Shells 0/2/3/4/5 relative diffs this run: `1.9e-5`,
+  `2.18e-4`, `-2.04e-4`, `5.06e-5`, `-4.27e-4` -- an order of magnitude
+  (or more) larger than every iter3->4 shell, and not monotonically
+  decreasing with shell the way the iter3->4 residual noise is.
+- **Conclusion: the gap is specific to RELION's `--firstiter_cc`
+  iteration-0 hard-winner M-step path, not a general backprojection or
+  precision-logic defect.** This reframes the entire previous
+  investigation (both this session's backprojection-kernel dtype/formula
+  audit above, and the prior session's exhaustive
+  `RECOVAR_NOISE_DTYPE_DEBUG` float32-forcing hunt): both correctly found
+  nothing wrong with the *general* M-step/backprojection machinery,
+  because the machinery *is* clean -- the defect (if it is one, rather
+  than a legitimate documented difference in `--firstiter_cc` handling)
+  lives specifically in how recovar's iteration-0 hard-classify path
+  (`winner_take_all=True`, wired to `relion_firstiter_winner_take_all`,
+  `sparse_pass2_bucketed.py:10493,10576`) builds its CTF²/weight
+  contribution relative to RELION's `--firstiter_cc` M-step, not in the
+  ordinary soft-EM path exercised at iteration >=1 (and not in the
+  8-neighbor trilinear scatter kernel itself, which iteration 3->4 shows
+  is correct). Next step is to compare the two hard-classify M-step
+  *formulas* directly (RELION's `storeWeightedSums` under
+  `do_firstiter_cc`/`ctf_premultiplied` bookkeeping vs recovar's
+  `winner_take_all` branch construction of `ctf_probs`/`summed` in
+  `sparse_pass2_bucketed.py`), not the kernel arithmetic again.
+
+## 2026-08-26 (continued) — two real float32-narrowing bugs found and fixed
+## in the pass-2 fine-scoring path; the iter-0 near-tie ranking flip for
+## particles 882/171 persists after both fixes -- root cause still open
+
+- **Corrected the previous entry's next-step framing.** Following it
+  ("compare the two hard-classify M-step formulas") led to the actual E-step
+  *scoring* path instead, which is where the iter-0-only gap actually lives
+  (`Fweight`'s formula itself was already re-verified clean in the entry
+  above). Traced with `RECOVAR_PASS1_TOP2_DEBUG_INDICES`/
+  `RECOVAR_PASS2_TOP2_DEBUG_INDICES=882,171` (the two particles with
+  `angular_error_deg > 0.001°` in a fresh `pose_comparison_iter000.npz` from
+  job `60328578` -- confirmed as the *only* two outliers among 1000
+  particles, `count ang>0.001deg: 2`; everything else is ~1e-5° floating-
+  point noise). Pass-1 (coarse) margins are well-resolved (0.011, 0.0058 --
+  the coarse cell is not in question). Pass-2 (fine) margins are small but
+  not floating-point-noise scale: particle 882 best=0.57657254
+  (rot=4,trans=85) vs second=0.57550376 (rot=0,trans=84), margin=0.00107
+  (~0.19% relative); particle 171 best=0.51711415 (rot=1,trans=85) vs
+  second=0.51401250 (rot=1,trans=87), margin=0.00310 (~0.6% relative). Per
+  the earlier temp-force result, RELION's true winner in both cases is
+  recovar's own *second*-best candidate -- i.e. recovar's own scoring
+  formula, not a numerical tie, ranks the wrong candidate first by a small
+  but real margin, only in `--firstiter_cc`'s CC-scoring mode (never
+  observed at iter>=1's Gaussian scoring).
+- **Correction to a subagent's reconnaissance report (see prior entry's
+  method): `relion_exact_fine_normalized_cc` is `False` in the actual
+  production K=1 EM iteration path, not `True`.** The subagent (asked to
+  audit the CC-scoring formula) reasoned from `k_class.py:1012`'s
+  `relion_exact_fine_normalized_cc=n_classes==1`, but that line sets the
+  parameter only for `_run_dense_k_class_joint_firstiter_score_probe`'s own
+  *coarse-probe* significance call, not for the fine/pass-2 scorer used by
+  the real EM loop. All four call sites of `compute_pass2_stats_sparse`
+  inside `k_class.py` (lines 1157/1219/1245/2197) never override
+  `relion_exact_fine_normalized_cc`, so it stays at its default `False`
+  throughout `compute_pass2_stats_sparse_bucketed`/`_prepare_bucket_io`, for
+  every K. Verified directly at runtime with a one-off dispatch print
+  (temporary, removed): `CC_DISPATCH_DEBUG: relion_exact_fine_normalized_cc=
+  False proj_half.dtype=complex128 ...` for both particles. This means the
+  "folded" scorer (`_score_pass2_bucket_normalized_cc`/
+  `..._single_cached`/`_score_pass2_pairs_normalized_cc`) -- the subagent's
+  originally-flagged prime suspect, which they then dismissed as dead code
+  for K=1 -- is in fact the *only* live pass-2 CC scorer in production, and
+  the bit-exact `_relion_cuda_fine_normalized_cc_score` path is unreachable
+  from the standard EM loop (it is reachable only from the coarse-probe's
+  own significance computation, a different, earlier stage).
+- **Fix 1 (real, committed): pass-2's standard fine/oversampled rotation
+  grid was unconditionally float32.**
+  `_prepare_per_image_pass2_inputs` (`sparse_pass2_bucketed.py`) accepts a
+  `dtype` parameter threaded from `precision_policy.score_real_dtype` by its
+  one caller, but only honored it for the RELION-injected-rotation
+  diagnostic override branches. The standard branch (no override -- the one
+  every ordinary iteration takes) called
+  `get_oversampled_rotation_grid_from_samples(...)` with no `dtype=` and
+  then `np.asarray(oversampled_rots, dtype=np.float32)` unconditionally, in
+  both the `use_full_rotation_support` cache branch and the per-image
+  branch. `get_oversampled_rotation_grid_from_samples`
+  (`recovar/em/sampling.py:1070`) already supports `dtype=np.float64`; nothing
+  upstream was passing it through. Since `oversampled_mstep_rots` (fed to
+  the M-step backprojection) equals `oversampled_rots` whenever no explicit
+  mstep override is supplied, this bug affected both scoring *and*
+  backprojection rotation matrices for the standard path. Fixed by threading
+  `dtype=dtype` into both `get_oversampled_rotation_grid_from_samples` calls
+  and using `dtype=dtype` instead of the hardcoded `np.float32` casts.
+- **Fix 2 (real, committed, confirmed live via a before/after score change):
+  the live "folded" CC scorer forced its cross-term (numerator) sum to
+  float32 while its denominator used natural/`Precision.HIGHEST` promotion.**
+  `_score_pass2_bucket_normalized_cc`, `..._single_cached`, and
+  `_score_pass2_pairs_normalized_cc` all had
+  `jnp.asarray(half_weights, dtype=jnp.float32)` and
+  `jnp.sum(cross_products, axis=-1, dtype=jnp.float32)` for the CC numerator,
+  while the reference-power denominator (`norms`, via `jnp.einsum(...,
+  precision=jax.lax.Precision.HIGHEST)`) was left at the operands' natural
+  precision (`complex128`/`float64` under `RECOVAR_USE_FLOAT64_SCORING=1`,
+  confirmed via the same dispatch print). A numerator forced to float32
+  against a float64 denominator is exactly the kind of
+  precision-*asymmetry* bug this project's contract warns about. Fixed by
+  removing the forced casts (`half_weights` now cast to
+  `proj_half.real.dtype`/`proj_pair.real.dtype`; `jnp.sum` now uses natural
+  promotion, no `dtype=` kwarg). Rerunning the identical iter-0 probe after
+  this fix changed the actual printed score
+  (particle 882: `second_score` `0.57550376` -> `0.57550373`,
+  margin `0.001068783` -> `0.001068814`) -- proof the fix is live and
+  reachable, not dead code -- but the change is ~3e-8 in absolute terms,
+  ~30,000x smaller than the 0.00107 margin itself, so float32 summation
+  noise was never the dominant contributor and the ranking did not flip.
+- **Also fixed defensively (same float32-narrowing pattern, not yet proven
+  live for this run but consistent with the established contract): the
+  bit-exact `_relion_cuda_fine_normalized_cc_score`/
+  `_relion_cuda_fine_reduce_lanes` pair (reachable from the coarse-probe
+  path and from any future caller that does pass
+  `relion_exact_fine_normalized_cc=True`) unconditionally cast every operand
+  to `complex64`/`float32` regardless of the caller's actual precision. Its
+  own docstring already explained this was meant to bit-match RELION's
+  *default* single-precision `XFLOAT` CUDA kernel, but our oracle build sets
+  `ACC_DOUBLE_PRECISION` (`XFLOAT=double`), so hardcoding float32 there is
+  wrong for this specific oracle even though it happened not to matter for
+  today's actual code path. Now follows the caller's promoted dtype
+  (floored at float32) instead.**
+- **Ruled out, this pass:** a Xi2-window-vs-scorer-window pixel-set
+  mismatch (`window_indices` is threaded as a single shared value into
+  `_prepare_bucket_io`, consistently reaching both the `batch_norm`
+  computation and the returned score operands -- no separate/stale window
+  found); a half_weights doubling/masking asymmetry between the numerator
+  and denominator (`make_scoring_half_image_weights(...,
+  exclude_relion_redundant_x0=relion_firstiter_score_mode != "normalized_cc")`
+  evaluates to `exclude_relion_redundant_x0=False` for CC mode, i.e. all
+  weights are uniformly `1.0`, confirmed by direct code read of
+  `half_spectrum.py`).
+- **Status: root cause of the near-tie ranking flip is still open.** Both
+  fixes above are real, independently-justified corrections to the
+  established "recovar narrows to float32 where RELION's RFLOAT/XFLOAT
+  never does" bug pattern in this codebase, verified via the full targeted
+  test tier (`test_sparse_pass2_bucketed_parity.py` +
+  `test_pass1_pass2_top2_debug.py`, 35/35) and `pixi run test-em-fast-guard`
+  (16/16), and fix 2 is confirmed to touch the live code path. Neither
+  closes the ~0.1-0.6%-relative pass-2 CC score margin for particles
+  882/171, so the iter-0 `sig2`/`tau2` gap (shell 1: `sig2_R=104415.19` vs
+  `sig2_V=104461.05`, ~4.4e-4 relative) is unchanged. The remaining
+  candidate area, not yet checked: whether `sparse_score_input_half`'s
+  "folded" pre-multiplication by `ctf_half` (`_prepare_bucket_io`, ``if
+  folded_normalized_cc_operands: processed_score_half_raw * ctf_half``) uses
+  exactly the same per-pixel CTF values, at exactly the same current-size
+  window, as the `proj_half`/`ctf2_over_nv_score` operands the scorer
+  combines it with -- i.e. a genuine algorithmic (not precision) mismatch in
+  how the "folded" operand-construction shortcut assembles `Frefctf`
+  relative to RELION's literal per-pixel formula, rather than in the
+  arithmetic reduction itself (both reductions were independently confirmed
+  algebraically equivalent to RELION's formula, and both are now precision-
+  clean). Per `recovar/em/CLAUDE.md`'s Investigation Loop, next session
+  should dump `sparse_score_input_half`/`proj_half`/`ctf2_over_nv_score` for
+  particles 882/171's two candidates directly and hand-recompute RELION's
+  formula from those exact values, rather than more source-reading.
+
+## 2026-08-26 (continued 2) — the near-tie ranking hypothesis is ruled out
+## for the low-shell gap: `--low_resol_join_halves 40` forces half1=half2
+## by construction at exactly the shells being compared
+
+- **User-directed check**: compare the aggregated (summed over all
+  particles) backprojection tensors directly, not derived `sigma2`;
+  isolate to one particle if aggregates disagree.
+- **Aggregate check, radial-binned `Ft_ctf_0`/`Ft_ctf_1`** (post-fix
+  recovar output, `/home/ry295/palmer_scratch/tmp/recovar_em_iter0_after_fix2/intermediates/it000_Ft_ctf_{0,1}.npy`):
+  per-voxel correlation between the two halves is only 0.75 (expected --
+  different particles land at different voxels), but the *radially binned
+  shell sums* are bit-identical between half1 and half2 at every shell 1-11
+  (`rel_diff = 0.0000e+00`). Cross-checked against RELION's own
+  `_rlnReferenceSigma2`: `run_it000/it001/.../it004_half1_model.star` vs
+  `..._half2_model.star` are identical to every printed digit at every
+  shell and every iteration checked (once a header-line-count parsing
+  artifact in the naive `awk` comparison was corrected -- confirmed via
+  exact `data_model_class_1` line offsets, all identical at 47, and direct
+  shell-indexed reads).
+- **First (wrong) explanation tried and ruled out**: hypothesized a shared
+  CTF across all particles (isometry argument: a 2D pixel at Fourier-radius
+  r always lands at 3D-radius r under any rotation, so a hard-classified
+  particle's contribution to a spherical shell is rotation-independent).
+  Checked directly: `defocusU` has std 3077 across 1000 unique values --
+  CTF genuinely varies per particle. Not the explanation for h1=h2 by
+  itself (though the *rotation-independence* half of the argument, which
+  does not require shared CTF, still holds per-particle -- see below).
+- **Real explanation, confirmed from RELION's own log and source**: this
+  fixture runs with `--low_resol_join_halves 40` (present in the pinned
+  oracle command). RELION's log prints, every iteration: `Expectation
+  iteration N` -> `Averaging half-reconstructions up to 40 Angstrom
+  resolution to prevent diverging orientations ...` -> `Maximization...`
+  -- i.e. `MlOptimiserMpi::iterate()` calls `joinTwoHalvesAtLowResolution()`
+  (`ml_optimiser_mpi.cpp:4000`, confirmed via source read: `lowres_data +=
+  lowres_data_half2; lowres_data /= 2.` and the same for `lowres_weight`,
+  a plain average, sent back into both halves via
+  `BPref.setLowResDataAndWeight`) **before** `maximization()` runs
+  `updateSSNRarrays()` for that iteration. So `_rlnReferenceSigma2` at low
+  shells is computed from the *already-averaged* per-half weight, by
+  design, in both RELION and recovar (recovar's matching
+  `regularization.join_halves_at_low_resolution`, called from
+  `iteration_loop.py` before `compute_relion_tau2_from_weights`, already
+  existed with a docstring citing this exact RELION function/line range).
+  With `ori_size=128`, `pixel_size=3.0`, `low_resol_join_halves=40`:
+  `myres = max(40, current_resolution=29.5385) = 40`,
+  `lowres_r_max = ceil(128*3/40) = ceil(9.6) = 10` -- shells 0-10ish, i.e.
+  exactly the shells this entire investigation has been comparing in the
+  diff table's "first 10 shells" printout.
+- **Consequence for the near-tie-ranking hypothesis: it is ruled out for
+  this gap.** The rotation-independence argument (a hard-classified
+  particle's own contribution to shell R depends only on r=R and that
+  particle's own CTF(r), not on which rotation wins) holds per-particle
+  regardless of whether CTF is shared across particles. Combined with the
+  low-res join forcing half1=half2 by construction, particles 882/171
+  picking a different (but still valid, still-hard-classified) rotation
+  cannot move the low-shell aggregate at all -- forcing their pose to
+  RELION's pick, per the earlier temp-force result, correctly fixes their
+  own pose but was never going to move this specific gap, which is fully
+  consistent with the earlier "no consistent improvement... mixed
+  redistributive pattern" observation from forcing 441/585 in a prior run.
+- **Reframed remaining hypothesis**: since `sigma2_noise` already matches
+  RELION exactly (confirmed this session, 0.0000% at every checked shell)
+  and the join arithmetic is a plain average in both engines, the gap must
+  be in one of: (a) the join *radius* itself (`lowres_r_max`/
+  `lowres_r2_max`) computed slightly differently between engines --
+  untested this session; (b) the *pre-join* raw per-half `Ft_ctf`/CTF²
+  values that get averaged together, i.e. a genuine per-shell CTF²
+  computation difference (not a rotation/ranking issue) -- untested this
+  session, would require a RELION-side dump inserted *before*
+  `joinTwoHalvesAtLowResolution()`, since `updateSSNRarrays`'s own dump
+  (already built) fires *after* the join and cannot see the pre-join
+  state; or (c) a particle-count mismatch between engines for this
+  iteration. Not yet distinguished. A single-particle RELION `Fctf`/
+  `Minvsigma2` dump was captured this session (job `60330316`,
+  `/home/ry295/palmer_scratch/tmp/relion_singleparticle_ctf_dump/`) but
+  turned out to be from a converged (~iteration 14) run, not iteration 1,
+  because `--iter 1` does not cap `--auto_refine` (auto-refine has its own
+  convergence-based stopping criterion, ignoring `--iter`). CTF itself is
+  iteration-invariant so the dump is still valid for a pure CTF-formula
+  check, but was not cross-compared against recovar's own CTF for the same
+  particle before this entry was written -- next session should either
+  finish that comparison or, more directly, add a pre-join dump point
+  right before the `ml_optimiser_mpi.cpp:4000` call.
+
+## 2026-08-26 (continued 3) -- full-codebase float32/complex64-forcing audit
+## of the live E-step/M-step path: RELION ground truth established, 9 files
+## fixed (cross-iteration pose state, direction/translation priors,
+## DenseScoreConstraints, local-search bucket packing, norm/scale
+## corrections), ~120 further sites catalogued as a prioritized backlog
+
+- **User request**: systematically find and fix places in `recovar/em/`
+  that hardcode `float32`/`complex64` even though double precision is
+  requested (`RECOVAR_USE_FLOAT64_SCORING`/`RECOVAR_USE_FLOAT64_PROJECTIONS`),
+  distinguishing genuine bugs from places RELION's own double-precision
+  build also narrows to float. Scope agreed with the user: the live
+  E-step/M-step iteration path only (excludes diagnostic/replay/capture
+  tooling, `ppca_refinement/`, `initial_model/`). Rigor agreed: verify each
+  fix against actual RELION source, not just pattern-match.
+- **RELION oracle source became available this session** at
+  `/gpfs/gibbs/project/lederman/ry295/relion` (branch `recovar_em_patch`,
+  builds `build-gpu-double`/`build-gpu-double-pass1dump` with
+  `ACC_DOUBLE_PRECISION` on) -- distinct from the Princeton
+  `/scratch/gpfs/GILLES/mg6942/relion/build_patched/` build referenced
+  elsewhere in this file; both are `ACC_DOUBLE_PRECISION` ACC builds and
+  should agree on all findings below, but future sessions should note which
+  checkout produced a given claim if the two ever diverge.
+- **RELION ground truth established directly from source (not inferred)**,
+  the single most load-bearing fact for this whole audit:
+  - `src/macros.h`: `RFLOAT` is `double` **by default** and only becomes
+    `float` if `RELION_SINGLE_PRECISION` is defined at build time -- i.e.
+    RELION's host-side numerics are double even in RELION's *default*
+    build, independent of any GPU flag. Confirmed this build does not
+    define `RELION_SINGLE_PRECISION` (`grep` of `CMakeCache.txt` found
+    only `//Accelerated Code use double-precision`, no single-precision
+    line).
+  - `src/acc/settings.h`: `XFLOAT` (the accelerated/GPU kernel type) is
+    `float` unless `ACC_DOUBLE_PRECISION` is defined, in which case it's
+    `double`. Confirmed `ACC_DOUBLE_PRECISION` is compiled into
+    `build-gpu-double` (`flags.make` greps hit it repeatedly).
+  - Net effect for our oracle build: **there is no place in RELION's own
+    execution path, host or GPU, where a genuine physical quantity is
+    computed or stored in float32** -- both RFLOAT and XFLOAT are double.
+    Any recovar hardcoded-`float32` site claiming to reproduce this build's
+    RELION behavior is therefore wrong *unless* the float32-ness comes from
+    something outside the RFLOAT/XFLOAT macro system entirely (a CLI
+    text-parsing artifact, a hardware/CUDA-texture format constraint, an
+    on-disk MRC/STAR field format). Two such genuine exceptions were found
+    and are catalogued below so they are not "fixed" incorrectly.
+  - `exp_metadata` (`src/ml_optimiser.h:703`) is
+    `MultidimArray<RFLOAT>` (double); `EMDL_ORIENT_ROT`/`EMDL_ORIENT_TILT`/
+    `EMDL_ORIENT_PSI`/`EMDL_ORIENT_ORIGIN_X/Y/Z_ANGSTROM` are all registered
+    `EMDL_DOUBLE` (`src/metadata_label.h`), backed by `std::vector<double>
+    doubles` in `MetaDataContainer` (`src/metadata_container.h:46`).
+    RELION's per-particle pose/offset state -- read at
+    `getMetaAndImageDataSubset` and written at `MlOptimiser::
+    setMetaDataSubset` (`src/ml_optimiser.cpp:11113`) -- is never narrowed
+    to float at any point in this round-trip.
+  - `pdf_direction` (`src/ml_model.h:156`) is
+    `std::vector<MultidimArray<RFLOAT>>` (double) -- never narrowed.
+  - HEALPix sampling grid angles (`src/healpix_sampling.h:92`,
+    `rot_angles`/`tilt_angles`) are `std::vector<RFLOAT>` (double) -- this
+    **contradicts** an existing in-code claim (see "open question" below).
+  - Genuine exception #1 (real, confirmed, already relied on elsewhere in
+    this codebase): `adaptive_fraction` (RELION's `--adaptive_fraction`,
+    default 0.999) is parsed via `textToFloat` (`src/strings.cpp:220`,
+    returns C `float`) even though the field it's assigned into is RFLOAT
+    -- the *value itself* permanently carries a float32-rounding artifact
+    regardless of storage width, independent of `ACC_DOUBLE_PRECISION`.
+    `_relion_cuda_f32_tail_target` in `oversampling.py` already documents
+    and correctly implements this; confirmed correct, not touched.
+  - Genuine exception #2 (documented, off-by-default, not touched):
+    `RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK` (`iteration_loop.py:1476`)
+    reproduces RELION's GPU-accelerated projector/backprojector narrowing
+    coordinates to float32 before `floorf`, unconditionally, even under
+    `ACC_DOUBLE_PRECISION` -- a real CUDA-texture-path quirk, not an
+    RFLOAT/XFLOAT question.
+  - Genuine exception #3 (real, confirmed by reading
+    `src/acc/cuda/cuda_kernels/diff2.cuh:341`): CUDA kernels that are
+    *hardware-ABI-locked* to float32/complex64 by an actual CUDA FFI
+    kernel with no double-precision counterpart (e.g.
+    `cuda_backproject.relion_translate_score_f32`,
+    `relion_wavg_rotation_atomic_triplet_add_f32` --  named `_f32`,
+    literally `raise TypeError`/`ValueError` on non-float32 input) are a
+    real hardware constraint on *recovar's own* CUDA kernel, not a
+    precision-logic bug -- but see the backlog note below: these need a
+    genuine `_f64` kernel counterpart to ever support this oracle's actual
+    (double) XFLOAT, which none of them currently have.
+  - **Disproven claim** (same bug class already fixed once in this file by
+    commit `8fc84499` for the fine-pass CC scorer, now shown to recur):
+    several functions' docstrings assert "RELION's accelerated kernel uses
+    float32/XFLOAT" as a flat, unconditional fact with no
+    `ACC_DOUBLE_PRECISION` hedge. Confirmed wrong for our oracle build by
+    reading the actual CUDA source
+    (`cuda_kernel_diff2_CC_coarse`, `src/acc/cuda/cuda_kernels/diff2.cuh:
+    341-362`: every accumulator (`s_weight`, `s_norm`) is declared
+    `XFLOAT`, i.e. double under `ACC_DOUBLE_PRECISION`). This directly
+    falsifies `scoring.py`'s `_relion_coarse_128lane_float32_reduce`/
+    `_relion_coarse_cc_atomic_score_from_components` and
+    `oversampling.py`'s `relion_cuda_f32_coarse_posterior` (its docstring:
+    *"RELION's accelerated coarse pass stores log weights in XFLOAT
+    (float32 in the deployed build)"* -- false for this oracle). These are
+    catalogued in the backlog below (not yet fixed this session), but
+    should be treated with the same confidence as the already-fixed
+    fine-pass sibling, not as merely "worth checking."
+  - **Open question, deliberately not resolved this session** (flagged,
+    not fixed, to avoid overreaching into a separately-committed decision
+    without full context): `relion_metadata.py`'s existing
+    `_relion_rotation_grid_float32` docstring asserts "the returned eulers
+    stay float32 regardless -- they are RELION's public per-particle
+    metadata angles ... and RELION always serializes them as float." Per
+    the `EMDL_DOUBLE`/`std::vector<double>` and `rot_angles`/`tilt_angles`
+    `RFLOAT` findings above, this claim looks unsupported by the source as
+    read this session -- but it may rest on a different, unwritten
+    rationale (e.g. STAR-file text round-trip width) not yet found. This
+    session therefore left every Euler-angle-specific cast (as opposed to
+    rotation-matrix/translation casts) at float32 throughout the fixes
+    below, reasoning that degree-valued float32 (~1e-6 deg ULP) is many
+    orders below any HEALPix grid spacing used in practice regardless of
+    the metadata-serialization question. **Next session should either find
+    the missing justification or correct the docstring and re-open the
+    Euler-angle sites below as fixable.**
+
+### Fixed this session (9 source files; `test-em-fast-guard` 16/16, four
+### directly-relevant unit-test files, and the 356-test
+### `test_refine_relion_mode.py` all confirmed to produce a byte-identical
+### failure set to unmodified HEAD after fixing one stale test mock -- see
+### Testing below)
+
+1. **Cross-iteration pose/translation state recurrence** (highest-impact
+   category: compounds every iteration, confirmed via `exp_metadata`/
+   `EMDL_DOUBLE` above):
+   - `relion_metadata.py:_relion_metadata_translations` -- added `dtype`
+     param (was fully hardcoded float32, no override possible at all).
+   - `iteration_loop.py` state-recurrence block (~7924-7975, all three
+     branches: `best_pose_rotations[k] is not None` / `use_local` /
+     dense-global) -- `best_rots`/`best_trans` now follow
+     `_dense_global_scoring_dtype()`; `best_eulers` intentionally left
+     float32 per the open question above.
+   - `iteration_loop.py` "final all-data" analogous call site (~9515).
+   - `iteration_loop.py:_scatter_dense_k_class_result` -- added
+     `pose_dtype` param (was hardcoded), threaded from its one call site.
+   - `iteration_loop.py` two `relion_translation_search_base(...)` calls
+     (~6334, ~9335) that were missing `dtype=` while their sibling
+     `relion_translation_prior_center`/`relion_sigma_offset_prior_center`
+     calls in the same scope already had it.
+   - `k_class.py:_decode_dense_best_pose_details` -- removed the internal
+     forced float32 cast entirely; now preserves whatever dtype its
+     `rotations`/`translations` inputs already carry (a pure select/index
+     step, no new arithmetic, so there is no reason to re-derive a dtype
+     rather than just not discarding the caller's).
+2. **Direction-prior upstream narrowing** (confirmed via `pdf_direction`/
+   `RFLOAT` above; these feed the already-fixed `make_relion_direction_log_
+   prior`, so leaving them hardcoded made that earlier fix a no-op):
+   `orientation_priors.py`'s `collapse_rotation_posterior_to_direction_
+   prior`, `normalize_direction_prior_per_half`, `normalize_class_
+   direction_prior`, `normalize_class_direction_prior_per_half`,
+   `remap_direction_prior_to_healpix_order` all gained a `dtype` param;
+   `mean_helpers.py:_combined_class_direction_prior_from_halves` gained
+   one and threads it through; all call sites in `iteration_loop.py`
+   (~5035, ~5049, ~7622, ~7645, ~8766-8800) now pass
+   `dtype=_dense_global_scoring_dtype()`.
+3. **`translation_prior.py`** (`validate_translation_prior_centers`,
+   `translation_prior_centers_for_images`, `translation_sqdist_angstrom`)
+   -- removed the hardcoded float32 casts entirely (pure select/reshape
+   steps); now preserve the caller's own dtype, same reasoning as
+   `_decode_dense_best_pose_details` above.
+4. **`score_constraints.py:DenseScoreConstraints`** -- `from_inputs` gained
+   a `dtype` param (rotation/translation log-priors were forced float32
+   immediately next to correctly-`precision_policy`-threaded code at their
+   one call site, `em_engine.py:957`); `block_inputs`'s two zero-prior
+   fallback constructions now read the resolved dtype off a new
+   `prior_dtype` dataclass field instead of hardcoding `jnp.float32`.
+5. **`local_layout.py:bucket_local_hypothesis_layout`** -- the single
+   highest-value finding reported by the recon sweep of this file: this
+   function unconditionally re-cast every field of an already-correctly-
+   built (possibly float64) `LocalHypothesisLayout` back to float32 with
+   no `dtype` parameter at all, on the hot per-bucket path of the
+   *default* exact-local engine (`local_em_engine.py:2357`), silently
+   defeating all upstream local-search double-precision threading. Fixed
+   to derive every padding-container dtype from the corresponding source
+   array's own dtype (`layout.rotations_flat`, `mstep_rotations_flat`,
+   `layout.rotation_log_priors_flat`, `layout.translation_log_priors`)
+   instead of hardcoding `np.float32`/`jnp.float32`.
+6. **`mean_helpers.py:update_relion_norm_scale_corrections`** -- gained a
+   `dtype` param; every returned array (`normcorr_new`, `scale_new`,
+   `scale_per_image_new`, `image_corr_new` -- RELION's per-image/per-group
+   scale and normalization corrections, feeding every subsequent
+   iteration's CTF²/noise weighting) was computed entirely in float64
+   internally but force-cast to float32 only at the return boundary. Its
+   one call site (`iteration_loop.py:8083`) now passes
+   `dtype=_dense_global_scoring_dtype()`.
+7. **`em_engine.py`** -- threaded `dtype=precision_policy.score_real_dtype`
+   into its one `DenseScoreConstraints.from_inputs` call (item 4). Note
+   `em_engine.py`/`run_dense_k_class_em` are confirmed **not** on the
+   default K=1/K=4 live path (only reached via an explicit
+   `--adaptive_oversampling 0` override, or from `initial_model/`) --
+   fixed anyway for consistency since it was a two-line addition, but
+   correctly lower-priority than everything else in this list.
+
+### Testing this session
+
+- `pixi run test-em-fast-guard`: **16/16 passed** (CPU, provenance-gate
+  confirmed: `recovar.__file__`/`jax.__file__` both resolve inside this
+  worktree's pixi env).
+- `tests/unit/test_dense_iteration_loop_merge_guards.py`: 25/25 passed.
+- `tests/unit/test_k_class_joint_semantics.py`: 44/44 passed.
+- `tests/unit/test_relion_worker_scale.py`: 31/32 passed; the one failure
+  (`test_class3d_shuffle_is_always_original_seed_plus_one`) is a
+  pre-existing, unrelated environment gap -- `ImportError: libfftw3.so.3:
+  cannot open shared object file`, reproduced identically on a `git
+  stash`-clean HEAD before this session's changes (see below), from
+  `recovar.relion_bind`'s optional native-extension loader, nothing to do
+  with dtype logic.
+- `tests/unit/test_refine_relion_mode.py` (356 tests, the file most
+  directly exercising the pose-state/rotation-grid fixes, e.g.
+  `test_relion_mode_writes_absolute_translations_from_previous_offset`):
+  full-file run with this session's changes: **65 failed, 290 passed, 1
+  skipped**. `git stash`-clean-HEAD baseline (same file, unmodified code):
+  **64 failed, 291 passed, 1 skipped**. Diffing the two `FAILED` line sets
+  isolated exactly one genuine difference:
+  `TestRelionModeSmokeTest::test_relion_final_iteration_uses_learned_k1_direction_prior`,
+  which passed on baseline but failed with this session's changes --
+  `TypeError: fake_collapse_rotation_posterior_to_direction_prior() got an
+  unexpected keyword argument 'dtype'`. Root cause: the test's own
+  `monkeypatch.setattr(iteration_loop_module,
+  "collapse_rotation_posterior_to_direction_prior", ...)` stub had a
+  signature frozen to the pre-fix function and did not accept the new
+  `dtype` kwarg this session added. **Fixed**: updated the test's
+  `fake_collapse_rotation_posterior_to_direction_prior` in
+  `tests/unit/test_refine_relion_mode.py` to accept and apply `dtype`
+  (mirroring the file's own existing
+  `fake_make_relion_direction_log_prior(..., dtype=np.float32)` stub
+  pattern a few lines below it). Grepped the whole `tests/` tree for any
+  other `monkeypatch.setattr`/`fake_*` stub of every function touched this
+  session (`normalize_direction_prior_per_half`,
+  `normalize_class_direction_prior(_per_half)`,
+  `remap_direction_prior_to_healpix_order`,
+  `relion_translation_search_base`, `_decode_dense_best_pose_details`,
+  `_scatter_dense_k_class_result`, `_relion_metadata_translations`,
+  `bucket_local_hypothesis_layout`,
+  `update_relion_norm_scale_corrections`, `DenseScoreConstraints`,
+  `validate_translation_prior_centers`, `translation_sqdist_angstrom`,
+  `translation_prior_centers_for_images`,
+  `_combined_class_direction_prior_from_halves`) -- zero other hits, so
+  this was the only stale mock. **Full-file re-run after the test fix:
+  64 failed, 291 passed, 1 skipped -- byte-identical `FAILED` line set to
+  the baseline** (confirmed via `diff` of the sorted line lists, zero
+  output). The 64 shared failures all reach `_relion_rotation_grid_float32`
+  -> `_get_relion_rotation_grid_eulers_float64` ->
+  `recovar.relion_bind._relion_bind_core.get_coarse_orientations`, which
+  fails with `ImportError: libfftw3.so.3: cannot open shared object file`
+  -- a pre-existing, unrelated environment gap (this session's environment
+  is missing that shared library system-wide), confirmed identical on
+  unmodified HEAD. **Net conclusion: zero test regressions from this
+  session's 9-file fix batch**, one test-only fixture update required and
+  applied.
+- Deliberately not run this session (per the EM validation ladder,
+  reserved for pre-PR / milestone use, and per this session's own
+  "prioritize + backlog" scope decision from the user): GPU parity tests
+  (`test-em-parity-fast`), any 5k+/128 end-to-end smoke, and
+  `scripts/run_multi_iter_parity.py`. **No claim is made that this
+  session's fixes improve or preserve the accepted K=1 `28/34` frozen
+  score or any FSC/quality gate** -- that requires the GPU parity tier,
+  which is the next session's first job before any further fixing.
+
+### Backlog: further hardcoded-float32/complex64 sites found but not yet
+### fixed this session, from a 13-agent parallel recon sweep of every file
+### on the live E-step/M-step path. Organized by priority. Every site was
+### independently reachability-checked by its recon agent; re-verify line
+### numbers before editing since this file continues to change.
+
+**P0 -- confirmed live default path, high physical impact, same
+"hardcoded despite `precision_policy`/`dtype` already in scope" pattern as
+the fixes above:**
+
+- `local_em_engine.py` (the default exact-local engine, `run_local_em_
+  exact`, 5164 lines) -- extensive: noise sigma2/tau2 accumulator inits
+  and per-block reductions (~2165-2166, 2205-2212, 3604-3656, 4644-4745,
+  5001-5002) never use the `precision_policy` constructed at its own line
+  2072; M-step rotation matrices (`_local_mstep_rotations` line 310, no
+  `dtype` param at all; `_pad_local_big_jit_image_axis` 1285-1309;
+  `_reorder_bucket_to_indices` 1597-1601; main M-step packing 3390, 3438,
+  4465-4466); image/scale corrections and translation-sqdist
+  (2890-2944, right next to correctly-threaded `normalization_log_z_arg`/
+  `normalization_log_evidence_arg` at 2954/2962 in the same function);
+  score/posterior/evidence output buffers (`_postprocess_local_bucket`
+  1209-1215, main buffer alloc 2145-2152). This is the single largest
+  remaining item -- same file, same function, dozens of sites, all
+  reachable from the default per-iteration path. Recommend a dedicated
+  session.
+- `sparse_pass2_bucketed.py`'s **"RELION-GPU exact `diff2` (Gaussian)
+  scoring pipeline"** -- an entire unfixed sibling family to the already-
+  fixed CC scorer (commit `8fc84499`), all hardcoding `complex64`/
+  `float32` unconditionally with docstrings making the same "RELION's
+  accelerated build uses float32" claim already disproven above:
+  `_relion_cuda_fine_diff2_sum` (~5970-6089), `_relion_cuda_fine_pixel_
+  weights` (~6199-6230), `_relion_cuda_corr_img_from_rfloat_ctf`/
+  `_relion_cuda_pixel_correction_from_rfloat_ctf` (~6207-6246),
+  `_relion_cuda_powerclass_highres_xi2_half`/`_relion_powerclass_highres_
+  xi2_half_to_norm_units` (~6247-6341), `_relion_cuda_fine_diff2_min*`/
+  `_relion_cuda_fine_global_diff2_min`/`_relion_cuda_fine_log_evidence_
+  offset` (~6438-6490), `_relion_cuda_fine_diff2_to_scores` (~6493-6563),
+  and their callers `_score_pass2_bucket_relion_gpu_diff2*`/`_score_pass2_
+  pairs_relion_gpu_diff2*` (~6613-6900). Reached whenever
+  `relion_exact_fine_gaussian=True` (the *default*) and
+  `relion_firstiter_score_mode == "gaussian"` and `not use_float64_
+  scoring` -- i.e. **only exercised when `use_float64_scoring=False`**, so
+  today this family cannot itself corrupt a double-precision run (the
+  branch is skipped), but it means **enabling double precision currently
+  falls back to the historically-less-validated `_score_pass2_bucket_
+  gaussian_algebraic` path instead of getting a float64 version of
+  RELION's actual bit-exact-shaped diff2 formula** -- worth a deliberate
+  decision (extend this family to follow caller dtype like the CC-scorer
+  fix did, vs. accept the algebraic-diagnostic path as the double-
+  precision default) rather than silent inconsistency.
+- `sparse_pass2_bucketed.py` translation-grid/translation-prior chain,
+  **unconditionally reached regardless of scoring mode** (not gated behind
+  `use_exact_relion_gaussian`): both `compute_pass2_stats_sparse_bucketed`
+  (K=1, ~10709-10764, ~10988, ~10995, ~11476-11543, ~13005, ~13150) and
+  `compute_k_class_pass2_stats_sparse_fused` (K>1, ~14598-14639,
+  ~15124-15129, ~15760-15782) hardcode `fine_translations`/`translation_
+  log_prior_np`/`best_rotations`/`max_posterior`/`bucket_scale_for_
+  stats`/`bucket_translation_prior` to float32 despite constructing
+  `precision_policy = DensePrecisionPolicy(use_float64_scoring=...)` in
+  the same function. `best_rotations`/`max_posterior` are especially
+  notable: they discard the already-fixed (commit `8fc84499`) float64
+  oversampled-rotation-grid precision right at the output-buffer write.
+- `local_layout.py` remaining functions (only `bucket_local_hypothesis_
+  layout` was fixed this session): `_resolve_prior_rotations` (147, no
+  `dtype` param), `_build_factorized_local_entries` (243-279, no `dtype`
+  param at all -- the common non-oversampled local-search prior branch;
+  its caller `build_local_hypothesis_layout` threads a correct `dtype` to
+  every *other* branch but not this one), `_infer_translation_step` (894),
+  `_pass2_translation_log_prior` (980-993), `build_pass2_hypothesis_
+  layout` (1021-1125, no `dtype` param; used by `ppca_refinement/` and
+  `initial_model/`, both out of this session's scope, but worth fixing
+  for the same reason as its sibling).
+- `preprocessing.py:prepare_batch_preprocess_operands` (~318-337, no
+  `dtype` param at all) -- RELION per-image scale/normalization
+  correction factors, called unconditionally from both the live pass-1
+  (`significance.py`) and pass-2 (`sparse_pass2_bucketed.py`) drivers,
+  multiplied directly into `ctf2_over_nv_half`/`shifted_half` even under
+  `use_float64_scoring=True`.
+- `image_shifts.py`: `integer_pre_shifts_or_none` (28, no `dtype` param --
+  narrows before an `np.allclose(..., atol=1e-6)` integer-shift
+  classification check, which can flip which of two different scoring
+  code paths is taken) and `half_image_phase_factors`/`tiled_half_image_
+  phase_factors` (87, no `dtype` param -- applied whenever pre-shifts are
+  non-integral, i.e. most ordinary iterations; the sibling
+  `preprocessing.py:half_translation_phase_table` already threads
+  `dtype`, this one doesn't).
+- `projection.py`: `compute_norm_residual_per_image` (607) and
+  `compute_scale_correction_terms_per_image` (644) -- both have no
+  `dtype` param; both are the per-image twins of `compute_noise_block`,
+  which was already fixed with a docstring explaining exactly why an
+  unconditional float32 cast here is wrong. Called from `local_big_jit.py`
+  and `local_em_engine.py` (the live local-search path) and
+  `sparse_pass2_bucketed.py`.
+- `k_class.py:_assemble_result` (~1477-1533) -- `make_relion_stats(...,
+  image_dtype=jnp.float32)`, `class_responsibilities`, `class_posterior_
+  sums`, `class_mstep_posterior_sums` all force float32 after being
+  computed in float64 two lines above; this is the universal per-image
+  score/evidence/posterior aggregator for both K=1 and K>1.
+  `_sum_noise_stats`/`make_noise_stats` (via `helpers/types.py:124`'s
+  `array_dtype=jnp.float32` default, never overridden at this call site)
+  is the equivalent for the noise sigma2 accumulator.
+- `significance.py` (`_compute_k_class_significance_batched`, the live
+  pass-1 entry point): `prior`/`translation_log_prior` casts (2121, 2140,
+  2704-2725 in the `RECOVAR_PASS1_FUSED=1` branch), and the per-image
+  `log_evidence`/`best_log_score`/`max_posterior` output buffers
+  (2334-2352, 3047-3049) plus `_capture_offset_free_and_absolute_
+  float32_scores` (244-251, name itself asserts float32, no `dtype`
+  param) -- exactly the same "computed correctly upstream, floored to
+  float32 at the output boundary" pattern as `k_class.py:_assemble_
+  result` above; these two functions likely want the same fix.
+- `iteration_loop.py` (from the two-agent sweep of the parts not touched
+  by this session's edits -- re-verify line numbers, this file changed
+  during the session):
+  - `_score_half_dense`'s K=1-adaptive/`firstiter_cc` branch and
+    `_score_half_local` both still hardcode `best_pose_rotations[k]`/
+    `best_pose_translations[k]` to float32 (the *sibling* dense-K-class
+    branch, `_scatter_dense_k_class_result`, was fixed this session --
+    these two were not).
+  - The per-iteration **scoring translation grid itself**,
+    `current_translations` (initial construction ~4837-4846, grid-order-
+    change regen ~5829-5847, `SamplingPerturbation` application ~5974,
+    and the "final all-data" analogs ~8903-9139) is hardcoded float32
+    while its sibling `current_rotations` in the same blocks already uses
+    `_dense_global_scoring_dtype()`. This is arguably higher-impact than
+    most items above since it's the grid used for scoring *every*
+    ordinary iteration, not just a bookkeeping snapshot -- should be
+    near the top of next session's list. A comment at ~4850-4853 in the
+    file offers a possible intentional rationale ("keep RELION's host-
+    RFLOAT translation grid separate from the float32 score/pose grid");
+    this needs adjudication, not a blind fix, before touching it.
+  - `_relion_rotation_grid_float32(local_search_order)` called without
+    `dtype=` at line ~6033 (local-search fine-grid eulers/rotations),
+    unlike its "final all-data" analog which correctly derives dtype from
+    `_local_search_precision_flags`.
+  - `_remap_relion_follower_runtime_inputs` (~1124-1129) and a second,
+    separate call site (~8109-8121) both force `scale_corrections`/
+    `image_corrections` to float32 right after deliberately upcasting to
+    float64 to compute a precise ratio -- written directly into
+    `relion_half_inputs.scale_corrections`/`image_corrections`, i.e.
+    cross-iteration state.
+  - `_sealed_sampling_base_grids` (~4471-4481) threads its own `dtype`
+    param correctly to `rotations` but not to `translations` in the same
+    function -- an internal inconsistency, not a missing-parameter issue.
+  - Data-vs-prior/SSNR scheduling state (`previous_data_vs_prior_for_
+    scheduling`, ~5344, ~7328-7332, ~7824-8023) and FSC-derived scheduling
+    reads (~5404, ~898-920) -- lower confidence than the pose-state items
+    above (drives only `current_size`/resolution scheduling, not scoring
+    arithmetic directly), but repeats the same hardcode pattern.
+
+**P1 -- confirmed live, but gated behind an explicit non-default flag or
+env var (real feature, not a debug dump, but not exercised by a plain
+default run) -- same bug pattern, lower urgency:**
+
+- `sparse_pass2_bucketed.py`'s RELION Wavg atomic-triplet family
+  (`_relion_wavg_atomic_triplet_terms`, `_relion_wavg_rectangle_triplet_
+  terms`, `_translated_wavg_low_shell_power_pixels`, `_replace_
+  untranslated_low_shell_norm_power`, `_replace_low_shell_noise_with_
+  relion_wavg_direct_residual`, ~4627-4924) gated behind
+  `RECOVAR_RELION_WAVG_ATOMIC_SCALE_AA`/`RECOVAR_RELION_TRANSLATED_WAVG_
+  NORM`, default off. These feed a real CUDA FFI kernel
+  (`relion_wavg_rotation_atomic_triplet_add_f32`) with **no float64
+  counterpart** -- fixing the Python-side dtype threading here would
+  require a new CUDA kernel variant, out of scope for a Python-only pass.
+- `oversampling.py:relion_cuda_f32_coarse_posterior`/`_relion_cuda_f32_
+  tail_target`'s sibling accumulator arithmetic (56-138) and
+  `scoring.py`'s `_relion_coarse_128lane_float32_reduce`/`_relion_coarse_
+  cc_atomic_score_from_components`/`_relion_coarse_normalized_cc_rescore`
+  (12-87) -- gated behind the coarse-CC-support diagnostic flag
+  (`relion_f32_coarse_support_enabled`), default off, but per the
+  "Disproven claim" ground-truth finding above these should be fixed with
+  the same confidence as commit `8fc84499`'s fine-pass fix, not treated as
+  merely diagnostic.
+- `sparse_pass2_bucketed.py:_relion_translation_angles_f32`/`_relion_
+  cuda_score_translation_angles_if_available` (~1968-2010) -- same
+  disproven-claim pattern, reached whenever `use_exact_relion_gaussian or
+  relion_exact_bpref_operands`.
+- `relion_worker_scale.py:setup_relion_follower_scale_state` (~1392) --
+  one follower-scale-continuation call site truncates to float32 right
+  after `select_relion_follower_scales` returns float64 natively; feeds
+  iteration-1 scoring only (not re-hit every iteration, unlike the other
+  two call sites of the same helper).
+
+**P2 -- lower confidence or lower impact, listed for completeness:**
+
+- `sampling.py`: `_normalized_log_weights`, `relion_psi_from_rotation_
+  matrices`, `build_local_search_grid_metadata`'s custom-grid branches
+  (inconsistent with its own `grid_eulers is None` branch, which is
+  already float64-correct), `rotation_indices_to_relion_eulers`,
+  `read_relion_direction_prior(s)`, and especially `get_local_rotation_
+  grid_fast` (a "narrow-then-widen" bug: its caller in `local_layout.py`
+  widens the *result* to a caller-supplied dtype, but the log-prior
+  arithmetic already happened at float32 inside this function, so the
+  widening cannot recover precision -- same class as the already-fixed
+  `8fc84499` pattern).
+- `half_spectrum.py:make_half_image_weights`/`make_scoring_half_image_
+  weights` -- reachable from the live path but the values are exactly
+  1.0/2.0, exactly representable in any float dtype; essentially cosmetic.
+- `dense_big_jit.py` noise-accumulator zero-inits (~554-557) -- `em_
+  engine.py`'s own kernel, confirmed non-default path; overwritten when
+  `accumulate_noise=True` so likely latent rather than live-truncating.
+- Exact-zero/exact-constant fills flagged throughout every recon report
+  (`-1e30` sentinel masks, `0.0`/`1.0` placeholder fills) -- provably no
+  precision loss regardless of dtype; not worth fixing for numerical
+  reasons, only for internal consistency/cleanliness if ever touched for
+  another reason.
+
+### Next steps for a follow-up session
+
+1. Resolve the open Euler-angle question above (find the missing
+   justification for `_relion_rotation_grid_float32`'s "eulers stay
+   float32" claim, or correct it and re-open those sites).
+2. Work the P0 backlog, file by file, in the order listed (start with
+   `local_em_engine.py` -- largest single win -- then the sparse pass-2
+   translation/prior chain, then `current_translations`).
+3. Before any further fixing, run the GPU fast parity tier
+   (`pixi run test-em-parity-fast`) once, per the validation ladder, to
+   confirm this session's 9-file fix batch is not just non-regressing on
+   CPU unit tests but is neutral-or-positive on an actual RELION-compared
+   run; only then proceed to more fixes.
+4. Decide (with the user) the "P0 -- RELION-GPU exact diff2" family
+   question above: extend it to follow caller dtype, or explicitly accept
+   the algebraic path as the double-precision default and document that
+   choice.
+
+## 2026-08-27 double-precision float32-forcing audit, round 2: local_em_engine.py
+## (the P0 backlog's largest item) plus more of significance.py/k_class.py/
+## preprocessing.py/image_shifts.py/projection.py -- one genuine scatter-dtype
+## bug found and fixed via CPU regression testing; GPU/RELION parity check
+## blocked by cluster resource limits this session, not attempted to completion
+
+Continuation of the 2026-08-26 "(continued 3)" entry's P0 backlog, same
+"prioritize + backlog" scope. 8 more source files fixed this round:
+
+- **`local_em_engine.py`** (the P0 backlog's largest single item, the
+  default exact-local per-iteration engine): noise sigma2/tau2 accumulator
+  inits now derive from `precision_policy.score_real_dtype` instead of
+  hardcoding float32 (noise_sigma2_offset/sumw, noise_wsum/img_power/
+  norm_correction/a2/xa/scale_xa/scale_aa, disabled_noise_* placeholders,
+  per-block chunked accumulators in both the big-JIT-deferred and plain
+  noise branches); `_local_mstep_rotations`/`_reorder_bucket_to_indices`
+  now preserve source dtype instead of forcing float32 (pure select/reorder
+  steps, same reasoning as the already-fixed `_decode_dense_best_pose_
+  details`); `_pad_local_big_jit_image_axis` now derives each padded
+  container's dtype from the corresponding source array (`pad_axis`/
+  `np.pad` already preserves dtype -- only the subsequent `.astype(np.
+  float32)` calls were forcing it back down); the big-JIT arg-prep block
+  (image/scale corrections, fourier pre-shifts, translation-sqdist) now
+  uses `precision_policy.score_real_dtype`, matching the sibling
+  `normalization_log_z_arg`/`normalization_log_evidence_arg` right next to
+  it; `_postprocess_local_bucket`'s score/posterior/best-pose output no
+  longer force-narrows before scatter into the (now correctly-typed) output
+  buffers.
+- **`k_class.py`**: `_assemble_result` (the universal per-image score/
+  evidence/posterior/class-responsibility aggregator for both K=1 and K>1)
+  now derives its output dtype from `per_class_stats[0].best_log_score_
+  per_image`'s own dtype instead of hardcoding float32 -- threading an
+  explicit parameter through this function's several under-instrumented
+  callers would have been invasive, and the inputs already carry the
+  correct precision once their own producers are fixed; also fixed
+  `make_relion_stats`'s `rotation_dtype` argument at this call site (that
+  helper's own default is `jnp.float32`, silently overriding an otherwise-
+  correct `rotation_posterior_sums`). `_sum_noise_stats` now derives
+  `array_dtype` from the summed `wsum_sigma2_noise` field instead of
+  relying on `make_noise_stats`'s hardcoded float32 default.
+  `_local_layout_for_class` and `_rotation_prior_with_class_log_prior`
+  (K=1/K>1 default local-search and sparse-pass2 prior paths) fixed the
+  same way.
+- **`significance.py`**: `_compute_k_class_significance_batched` (the live
+  pass-1 entry point) gained a local `score_real_dtype` derived from its
+  own `use_float64_scoring` parameter, applied to the rotation/translation
+  log-prior padding, the per-image score/evidence/Pmax/class-best-score
+  output buffers (previously hardcoded float32 despite a comment two lines
+  above claiming they were "kept in float64 like dense run_em"), the
+  fused-pass1 (`RECOVAR_PASS1_FUSED=1`) branch's prior blocks, and the
+  final write site (removed a redundant `.astype(np.float32)` now that the
+  destination buffers are correctly typed -- the write already
+  auto-narrows/widens to whatever the buffer's own dtype is).
+- **`preprocessing.py:prepare_batch_preprocess_operands`**: added a `dtype`
+  param for `batch_scale_np`/`batch_corr_np` (RELION per-image scale/
+  normalization correction factors); threaded through its one live call
+  site inside `sparse_pass2_bucketed.py:_prepare_bucket_io` (`np.float64
+  if use_float64_scoring else np.float32`) and the live
+  `_compute_k_class_significance_batched` call site (`score_real_dtype`).
+  The `relion_cuda`-backend branch is untouched -- a real CUDA FFI kernel
+  input, hardware-locked to float32 independent of this switch.
+- **`image_shifts.py`**: `integer_pre_shifts_or_none` now preserves the
+  input's own dtype (a pure validation/comparison step; forcing float32
+  before the `np.allclose(atol=1e-6)` integral check risked flipping the
+  classification for a caller holding float64 shifts).
+  `half_image_phase_factors`/`tiled_half_image_phase_factors` gained a
+  `dtype` param (previously hardcoded `jnp.float32`, defeating the
+  `Precision.HIGHEST` matmul inside); threaded `dtype=<shifts>.dtype`
+  through all four live call sites (`local_big_jit.py` x2,
+  `local_em_engine.py`, `significance.py` x2,
+  `sparse_pass2_bucketed.py:_prepare_bucket_io`).
+- **`projection.py`**: `compute_norm_residual_per_image`/
+  `compute_scale_correction_terms_per_image` no longer force-cast their
+  return value to float32 -- the exact same "keep whatever real dtype the
+  inputs naturally promote to" fix already applied to their sibling
+  `compute_noise_block` (whose own docstring explains why forcing float32
+  here compounds error across the M-step's running accumulation), just not
+  previously applied to these two per-image twins.
+
+### A real bug found and fixed via CPU regression testing: JAX scatter-add
+### dtype mismatch
+
+Removing `compute_norm_residual_per_image`'s forced float32 cast (above)
+let its return value flow through at whatever dtype its inputs naturally
+promote to. `pixi run test-em-fast-guard` still passed (16/16) but produced
+two new `FutureWarning`s: `test_run_local_em_exact_default_path_matches_
+debug_split_path` and `test_run_local_em_exact_big_jit_bucket_matches_
+debug_split` -- *"scatter inputs have incompatible types: cannot safely
+cast value from dtype=float64 to dtype=float32 ... In future JAX releases
+this will result in an error."* Root cause: several `array.at[idx].add(
+value)` scatter-add call sites in `local_em_engine.py`/`local_big_jit.py`/
+`sparse_pass2_bucketed.py` combine a noise/norm-correction/scale-correction
+per-image value with a target array -- and unlike plain `+`/assignment
+(which promote/cast automatically), JAX's `.at[].add()` requires an *exact*
+dtype match between the scatter target and the value, even in *default*
+(non-double-precision) mode, because one of the natural-promotion inputs
+feeding these functions is apparently float64 by default already (not
+because of `precision_policy`, for some independent reason not yet
+identified). Fixed at every such site by explicitly casting the added
+value to the destination array's own dtype
+(`value.astype(target.dtype)`) -- the correct fix is for the *destination*
+(governed by `precision_policy`/the array's own construction) to decide the
+final precision, not for the scatter machinery to reject a value with
+higher natural precision. Sites fixed:
+`local_em_engine.py`'s three `noise_norm_correction.at[...].add(...)` and
+six `noise_scale_xa`/`noise_scale_aa.at[...].add(...)` calls,
+`local_big_jit.py`'s two `noise_scale_xa`/`noise_scale_aa.at[...].add(...)`
+calls, and `sparse_pass2_bucketed.py`'s three
+`_compute_noise_block_and_norm_residual_from_flat_rows(_residual_terms)`/
+`_compute_norm_residual_per_image_from_flat_rows` zero-init-then-scatter
+patterns (now sized from `residual_per_row.dtype` instead of hardcoded
+`jnp.float32`). Verified via `pytest ... -W error::FutureWarning` on the
+two originally-warning tests (now pass cleanly) and confirmed a `noise_
+total`/`norm_total` sibling pair using plain `+` accumulation (not `.at[]
+.add()`) at `sparse_pass2_bucketed.py` lines ~4461/7765 does **not** need
+the same fix (plain addition promotes safely; only `.at[].add()`'s
+strict-match requirement is the hazard). This is exactly the kind of latent
+bug this audit's "full rigor" mandate exists to catch -- worth remembering
+as a checklist item for any future dtype-threading fix in this codebase:
+after loosening a hardcoded cast, grep the consumer chain for `.at[...]
+.add(`/`.at[...].set(` and verify the destination's dtype won't now
+mismatch.
+
+### Testing this round
+
+- `pixi run test-em-fast-guard`: 16/16 passed (before and after the scatter
+  fix; the scatter bug only surfaced as `FutureWarning`s, not failures,
+  until deliberately promoted to errors for verification).
+- `tests/unit/test_run_local_em_exact_default_path_matches_debug_split_path`
+  and `..._big_jit_bucket_matches_debug_split`, run with
+  `-W error::FutureWarning`: both pass cleanly after the scatter-dtype fix
+  (both would fail/warn before it).
+- `tests/unit/test_refine_relion_mode.py` (356 tests), full run compared
+  against a `git stash`-clean baseline of just this round's 8 files, run
+  twice independently: **64 failed, 291 passed, 1 skipped in both runs,
+  byte-identical `FAILED` line sets** (confirmed via `diff` of the sorted
+  lists, zero output both times). All 64 shared failures are the same
+  pre-existing `libfftw3.so.3` environment gap documented in the prior
+  entry, unrelated to this round's changes. **Zero regressions.**
+
+### GPU/RELION parity check: attempted, not completed this session --
+### environment/resource limitation, not a code concern
+
+Per this file's own prior entry and `recovar/em/CLAUDE.md`'s validation
+ladder, an actual RELION-compared run is the mandatory next rung before
+further trusting these fixes. Attempted using the locally-available
+`relion_em_test_double_seeded/` RELION oracle (a pinned igg_1d K=1
+`--firstiter_cc` run at healpix_order=3, `--random_seed 1783599264`,
+version `5.1.0-commit-1126dd`, input `/home/ry295/pi_data/igg_1d/images/
+snr0.01/downsample_L128/snr0.01.star`) via
+`scripts/run_multi_iter_parity.py --iter 0 --max_iter 1` -- this
+environment has no local GPU (`nvidia-smi`: "No devices were found"), and
+this specific fixture/oracle pairing is **not** the Princeton
+`/scratch/gpfs/GILLES/...` fixture the script's own docstring and root
+`CLAUDE.md`'s canonical example assume; that filesystem is not mounted
+here. Four attempts on CPU-only Slurm allocations (`day` partition, then
+`bigmem`, then a memory-budget-capped wrapper via `recovar.utils.helpers.
+set_gpu_memory_limit()`) all hit `OUT_OF_MEMORY` at the identical point
+(right after "Sparse pass-2 bucket group start") regardless of how much
+memory was requested (64G, 300G, 48G-with-a-24G-planner-cap, 180G) --
+`MaxRSS` scaled roughly proportional to whatever was requested each time,
+strongly suggesting this cluster's cgroups do not virtualize `/proc/
+meminfo` for `psutil`, so `recovar.utils.helpers.get_gpu_memory_total`'s
+CPU-mode "half of available RAM" auto-detection reads the physical node's
+full RAM regardless of the Slurm allocation, and *something* downstream
+of that estimate (not just the batch planner, since the explicit cap
+didn't fully prevent it) still scales with it. Notably, the double-
+precision and float32-control runs died identically both times they were
+compared side-by-side, confirming this is a general CPU-batching memory
+issue, **not** specific to double precision or to this round's code
+changes. A GPU job was submitted (`gpu_devel` partition) but stayed
+`PENDING` on `QOSMaxCpuPerUserLimit` -- this account already has several
+other running Slurm jobs (an `interact` session, several `pi_lederman`
+jobs, an OOD desktop, a VS Code tunnel) consuming the account's CPU quota;
+cancelling any of them to free capacity was out of scope for this session
+(they may be the user's own active work) and cancelling my own queued job
+was the correct action. **Recommendation for next session**: either
+request GPU access at a time this account's other jobs have quota
+headroom, or investigate/report the CPU-batching memory-detection issue
+above as a separate, real (if unrelated to precision) infrastructure bug
+worth its own fix (`recovar.utils.helpers.get_gpu_memory_total`'s
+`psutil.virtual_memory().available`-based CPU fallback appears unsafe on
+cgroup-limited shared nodes). Until a GPU/RELION-compared run succeeds,
+**no claim is made that this session's fixes improve or preserve FSC/
+quality against RELION** -- only that they introduce zero CPU-testable
+regressions and are individually justified against RELION source, per the
+Numeric And Quality Contract's own standard that "not measured" is not
+"same."
+
+## 2026-08-27 double-precision float32-forcing audit, round 3: the reference
+## volume actually being projected -- two narrow-then-widen bugs found and
+## fixed, both verified against RELION source; first GPU/RELION-oracle
+## comparison this session (Slurm `gpu` partition, commit `423b8d32`),
+## resolving round 2's open "not attempted to completion" item
+
+User-reported starting point (verbatim): "it seems that the actual volume
+reference to be projected is still complex64 instead of complex128. As far
+as I understand things are still limited by the initial float32 real space
+mrc file read. But I'm guessing at some point after reading it - relion
+casts it to double precision." This hypothesis was correct on both counts,
+confirmed via RELION source read (`ml_model.cpp:MlModel::readImages`,
+`ml_model.h`'s `Iref` as `std::vector<MultidimArray<RFLOAT>>`,
+`projector.h`'s `Projector::data` as `MultidimArray<Complex>` where
+`Complex = tComplex<RFLOAT>` in `complex.h`; `RFLOAT` is `double` unless the
+`RELION_SINGLE_PRECISION` build flag is set, which our oracle build does
+not set -- this is independent of `ACC_DOUBLE_PRECISION`, which instead
+controls the GPU-kernel-side `XFLOAT`). RELION widens the on-disk float32
+MRC to double as part of `Image<RFLOAT>::read()` itself, and everything
+downstream -- including the FFT that builds `Projector::data` -- runs at
+that same double precision.
+
+### Bug #1: `scripts/run_full_refinement.py` initial volume loading
+
+The initial reference MRC (always float32 on disk, per `recovar/CLAUDE.md`'s
+FFT/MRC convention notes) was cast to `np.float32`/`np.complex64`
+immediately after `load_mrc`/`get_dft3`, in all three volume-loading
+branches (frozen-boundary K-per-half merge, K=1, K-class). This produced
+`init_vol_ft`, which seeds `init_volume=jnp.asarray(init_vol_ft)` --
+the array that becomes the refinement engine's initial model state for
+*every* subsequent iteration. No matter how carefully every later cast in
+the codebase is fixed (rounds 1-2, plus `DensePrecisionPolicy.
+cast_projection_volume` gated on the same `RECOVAR_USE_FLOAT64_PROJECTIONS`
+flag), a narrow-then-widen bug at the source can never be recovered
+downstream -- `cast_projection_volume` widening a complex64 array to
+complex128 just zero-pads the lost mantissa bits, it does not reconstruct
+them.
+
+Fix: introduced `_init_volume_dtype`/`_init_volume_complex_dtype`, gated on
+`RECOVAR_USE_FLOAT64_PROJECTIONS` (checked directly via `os.environ`, same
+truthy-string parsing convention used elsewhere in this file), and used
+them at all six narrowing sites (frozen-boundary merge x2, K=1 x2 including
+the post-lowpass-filter branch, K-class per-class x2, K-class representative
+volume x1). Deliberately gated on `_PROJECTIONS` alone, not
+`_dense_global_scoring_dtype`'s `_SCORING OR _PROJECTIONS` -- this matches
+`projection_complex_dtype`'s own condition in `dtype_policy.py` exactly,
+so a caller requesting float64 scoring without float64 projections doesn't
+pay an unrequested memory/precision cost on the projection path.
+
+One pre-existing variable, `init_reference_real_for_projector` (the
+`--firstiter_cc`-specific RELION-exact real-reference handoff, consumed at
+`refine_single_volume(..., init_reference_real=init_reference_real_for_
+projector)`), was already unconditionally `np.float64` before this round --
+confirmed via code read, left untouched. This matters for interpreting the
+GPU validation below: in `--firstiter_cc` mode, RELION iteration 1's
+scoring projector is built from this already-correct handoff, not from
+`init_vol_ft`. **A one-iteration parity run does not exercise bug #1's fix
+at all** -- `init_vol_ft`'s dtype only becomes the volume actually
+projected starting at iteration 2 (once the model state derived from
+`init_volume=jnp.asarray(init_vol_ft)` is what the next iteration's
+projector is built from). This was caught before over-claiming validation
+coverage; see the GPU results below, which use `--max_iter 2` specifically
+for this reason.
+
+### Bug #2: `recovar/reconstruction/relion_functions.py:
+### _pad_volume_for_projection_host`
+
+More architecturally significant than bug #1: this is the host-side FFT
+fallback that `pad_volume_for_projection` (the dispatcher) takes whenever
+the padded grid is too large for the cuFFT workspace budget
+(`_RELION_PROJECTION_PAD_HOST_FFT_MIN_VOXELS = 200_000_000`, i.e. roughly
+`N >= 293` at the RELION-matching `padding_factor=2`), and it ran
+*unconditionally* on both its input and output cast to `np.complex64` --
+completely independent of any caller-supplied dtype, `RECOVAR_USE_FLOAT64_
+PROJECTIONS`, or bug #1's fix. Since `pad_volume_for_projection` is called
+every iteration whenever `projection_padding_factor > 1` (the RELION-
+matching default), this would have silently discarded bug #1's fix -- and
+any future fix at any other site -- for every realistically large box size
+(256^3+ classes, high-resolution refinements), regardless of how carefully
+upstream precision was arranged. This is exactly the "narrow-then-widen"
+pattern this file has repeatedly flagged as the highest-value bug class to
+find in this audit.
+
+Fix: preserve `vol_ft_flat`'s own dtype throughout -- `real_dtype` derived
+from whether the input is complex128 vs complex64, the final
+`vol_ft_padded` cast to `vol_ft_flat.dtype` instead of hardcoded
+`np.complex64`, and the sphere-mask coordinate array's dtype matched to
+`real_dtype` (this one doesn't affect precision either way since its
+values are exact half-integers, but keeping it consistent avoids an
+unnecessary float32/float64 mixed-dtype op). One implementation snag:
+an initial attempt also cast the IFFT output (`vol_real`) to `real_dtype`
+before padding, which triggered `ComplexWarning: Casting complex values to
+real discards the imaginary part` (the array is nominally real but stays
+complex-typed, matching the original code's behavior) -- removed that
+extra cast; `vol_real` stays complex throughout exactly as it did before
+this fix, only the *width* changed.
+
+The separate in-JAX branch of `pad_volume_for_projection` (taken for
+smaller grids, using `jnp`-based `get_idft3`/`get_dft3`) was checked and
+already correctly preserves dtype with no forced cast -- no fix needed
+there. Its sphere-mask `coords = jnp.arange(pN, dtype=jnp.float32)` was
+deliberately left alone for the same exact-value reason as above.
+
+Also examined and explicitly left alone (out of the live E/M-step scope):
+`relion_reconstruct()`/`relion_style_triangular_kernel`'s
+`noise_variance.astype(np.float32)` around line 1417 -- a different,
+non-EM-iteration reconstruction pipeline, not the volume-being-projected
+concern this round targeted.
+
+### Testing this round
+
+- `test_pad_volume_for_projection_host_preserves_double_precision` added
+  directly after the existing `test_projection_padding_host_path_matches_
+  device_path` in `tests/unit/test_relion_functions.py`, reusing that
+  test's `monkeypatch.setattr(rf, "_RELION_PROJECTION_PAD_HOST_FFT_MIN_
+  VOXELS", 1)` pattern to force the host path on a small (8,8,8) test
+  volume. Asserts dtype preservation (complex128 in -> complex128 out,
+  complex64 in -> complex64 out, with and without gridding correction) and
+  numerical accuracy against an independently-computed float64 reference:
+  double-precision path max abs error `0 <  1e-9`, more accurate than the
+  float32 path's `8.034e-06` by construction. Full file:
+  `40 passed, 9 skipped` (pre-existing `libfftw3.so.3` gaps, unrelated).
+- `python3 -m py_compile` clean on all three touched files.
+- Related `tests/unit/test_run_full_refinement_*.py` files: `137 passed,
+  5 skipped, 1 pre-existing-and-confirmed-unrelated failure`.
+
+### GPU/RELION parity check: completed this session on the `gpu` Slurm
+### partition, resolving round 2's open item
+
+Per the user's explicit instruction, ran on Slurm's plain `gpu` partition
+(not `gpu_devel`, which round 2 found stuck `PENDING` on
+`QOSMaxCpuPerUserLimit` -- `sacctmgr show qos` confirms `part_gpu` caps
+only `gres/gpu=24` with no CPU limit, unlike `part_gpu_devel`'s `cpu=10`),
+loading GPU support via the exact `.vscode/load_env.sh` module sequence
+(`CMake`, `OpenMPI`, `FFTW`, `libdeflate`, `RELION/5.0.0-foss-2022b-
+CUDA-12.1.1`, then `module unload CUDA`).
+
+**First attempt (job 60344312) landed on a broken node**: `nvidia-smi`
+succeeded (A100-SXM4-80GB visible) but `jax.devices()` silently fell back
+to `[CpuDevice(id=0)]`, with `E... platform_util.cc:250] Failed to create
+stream executor for device CUDA:0: CUDA error: : CUDA_ERROR_UNKNOWN:
+unknown error` in stderr. This triggered `recovar.utils.helpers.get_gpu_
+memory_total`'s known CPU-RAM-autodetection bug (round 2's documented
+"Recommendation for next session" item) -- batch sizing assumed 469 GB
+(half the physical node's 938 GB RAM) was available, and the double-
+precision run (float64 arrays are 2x the memory of float32) crashed with
+`jax.errors.JaxRuntimeError: ... Out of memory allocating 1966558150656
+bytes` (~1.8 TB) partway through pass-2 M-step.
+
+**Root-caused via a dedicated diagnostic job** (`diag_gpu_visibility.
+sbatch`, 4 variants: no modules at all via `env -i`, current-shell-minus-
+contaminants, the full `.vscode/load_env.sh` sequence, and that sequence
+with `LD_LIBRARY_PATH` forcibly cleared) run twice: once landing again on
+the same bad node (`r816u35n07`) where even the *cleanest possible*
+environment (zero modules, `env -i` with only `PATH`/`HOME`/`USER`) still
+failed identically with `CUDA_ERROR_UNKNOWN` -- proving conclusively this
+is a node-level driver/hardware fault, **not** caused by the `.vscode/
+load_env.sh` module sequence or any RELION/CUDA module interaction. A
+second run of the same diagnostic, excluding that node, landed on
+`r908u24n02` (Tesla V100-PCIE-16GB) and passed all four variants cleanly
+(`devices: [CudaDevice(id=0)]` every time, including with the full module
+sequence loaded) -- confirming the `.vscode/load_env.sh` modules are safe
+to use for GPU jax work and do not need to be avoided or reordered.
+
+**Fix applied for future jobs**: added `#SBATCH --exclude=r816u35n07` and a
+fail-fast `assert jax.devices()[0].platform == "gpu"` right after the
+provenance print (so a future bad-node draw aborts in seconds instead of
+burning 45 minutes of CPU-fallback runtime and OOMing). Recorded here so a
+future session doesn't have to re-diagnose `r816u35n07` from scratch --
+this is a cluster infrastructure fault worth reporting/excluding at the
+Slurm config level if it recurs, not a code issue.
+
+**Successful runs**, both against the `relion_em_test_double_seeded`
+oracle (igg_1d K=1 `--firstiter_cc`, `--random_seed 1783599264`,
+`--healpix_order 3`), on node `r907u32n01` (V100):
+
+- `--max_iter 1` (job 60344370, `devices: [CudaDevice(id=0)]` confirmed,
+  6m22s total for both double+control runs): double-precision half1/half2/
+  merged `corr=0.999999/0.999999/0.999999`, FSC-AUC `0.999935`; float32
+  control `corr=1.000000/0.999999/0.999999`, FSC-AUC `0.999940`. As noted
+  above, this run does **not** differentially exercise bug #1's fix
+  (`--firstiter_cc` iteration 1 uses the pre-existing correct handoff) nor
+  bug #2's fix (128^3 test volume, well under the ~293^3 host-path
+  threshold) -- it only confirms the double-precision path runs correctly
+  end-to-end on real GPU hardware without regressing quality.
+- `--max_iter 2` (job 60344461, 5m15s total): double-precision
+  `corr=0.999999/0.999997/0.999999`, FSC-AUC `0.999591`; float32 control
+  `corr=0.999999/0.999997/0.999999`, FSC-AUC `0.999592`. This run **does**
+  exercise bug #1's fix (iteration 2's scoring projector is built from the
+  `init_vol_ft`-seeded, then M-step-reconstructed, model state). Both
+  precision modes comfortably clear the project's `>=0.999` parity-gate
+  criterion (per `CLAUDE.md`'s "Pre-PR parity smoke" section) with
+  negligible difference between them at this small (128^3, 500+500
+  particle) fixture size -- consistent with expectations, since float32
+  vs float64 differences are expected to matter more at larger box sizes/
+  more iterations than at a 2-iteration, 128^3 smoke check. Bug #2's fix
+  (the >=293^3 host-path threshold) is still **not** exercised by this
+  fixture size; no larger-box GPU run was performed this session due to
+  scope/time -- `test_pad_volume_for_projection_host_preserves_double_
+  precision`'s direct unit-level verification is the only evidence for
+  bug #2's numerical correctness so far. A future session wanting to
+  empirically exercise bug #2 on GPU should use a >=293^3 (or override
+  `_RELION_PROJECTION_PAD_HOST_FFT_MIN_VOXELS` to force the host path at
+  smaller sizes, as the unit test does) fixture with
+  `projection_padding_factor > 1`.
+
+Committed as `423b8d32` on `double_parity` (3 files: `scripts/run_full_
+refinement.py`, `recovar/reconstruction/relion_functions.py`, `tests/unit/
+test_relion_functions.py`).
+
+### Still open
+
+- The P0/P1/P2 backlog from round 1's 150+-site audit (see the "Backlog"
+  section above) remains unfixed -- not addressed this round, which was
+  scoped entirely to the user's specific volume-precision report.
+- `recovar.utils.helpers.get_gpu_memory_total`'s CPU-RAM-autodetection bug
+  (reads physical node RAM via `psutil.virtual_memory().available` rather
+  than the cgroup-limited Slurm allocation) is still unfixed and caused
+  the first GPU-job attempt's crash once GPU fell back to CPU. It is
+  unrelated to double-precision correctness (round 2 already established
+  this) but is a real, reproducible infrastructure bug worth its own fix
+  in a future session.
+- Bug #2's fix has no GPU-scale empirical validation yet (only the CPU
+  unit test) -- see above.
+
+## 2026-08-28 correction: round 3's GPU validation never exercised the fix it
+## claimed to -- run_multi_iter_parity.py builds its own init_volume
+## independently of run_full_refinement.py; fixed and re-validated
+
+User feedback after round 3: "You previously modified the run_full_
+refinement script to handle double precision of the mean volume, but I
+instead want to handle it in run_relion_iteration_loop func." Investigating
+that request surfaced a real gap in round 3's own claims, not just a design
+preference: `_run_relion_iteration_loop` receives `init_volume` **already
+in Fourier space** -- `ftu.get_dft3` has already run in the caller by the
+time the iteration loop sees it. `jnp.fft` computes at whatever dtype the
+*real-space* array had going in (confirmed by reading `get_dft3`'s
+implementation: a bare `jnp.fft.fftn`, no forced dtype), so casting the
+already-computed complex array to complex128 *inside* the iteration loop
+would be a no-op recast -- exactly the same narrow-then-widen pattern this
+whole audit exists to catch, just relocated one level deeper. Centralizing
+the fix inside `_run_relion_iteration_loop` (as literally requested) would
+not have fixed anything.
+
+Worse: `scripts/run_multi_iter_parity.py` and `scripts/run_comparison.py`
+both call `refine_single_volume` directly with their own independently-
+built `init_volume`, **bypassing `run_full_refinement.py` entirely**.
+`run_multi_iter_parity.py` is the script this session's own GPU/RELION
+parity validation runs (jobs 60344370, 60344461) used -- meaning round 3's
+"validated end-to-end on GPU" claim for the `run_full_refinement.py` fix
+was not actually exercising that fix at all; those jobs' `vol_ft_h1`/
+`vol_ft_h2` came from `helpers.load_relion_volume(...)` (float32, no
+widening) followed by `ftu.get_dft3` at float32, entirely independent of
+commit `423b8d32`'s changes. The GPU results reported in round 3 (corr
+0.999999, FSC-AUC 0.999591-0.999592 for both "double-precision" and
+"control" runs) are real and not wrong, but they demonstrate no regression
+from `423b8d32`'s code, not that `423b8d32`'s fix does anything on GPU --
+those two numbers being nearly identical is consistent with both runs
+genuinely being float32 internally that whole time.
+
+Presented this precision constraint plus the multi-caller gap to the user
+via `AskUserQuestion` with three concrete options (change `init_volume`'s
+contract to real-space and FFT inside the iteration loop; cast-only inside
+the iteration loop, matching the literal request but a numerical no-op;
+apply the same real-space-before-FFT fix directly in each caller). User
+chose the third: keep `run_full_refinement.py`'s fix as-is, and replicate
+the identical pattern in `run_multi_iter_parity.py` (not asked to also fix
+`run_comparison.py` this round -- that script independently builds
+`init_volume` the same unfixed way and remains an open gap).
+
+### Fix: `scripts/run_multi_iter_parity.py`
+
+Added the same `_init_volume_dtype` (gated on
+`RECOVAR_USE_FLOAT64_PROJECTIONS`) pattern as `423b8d32`, applied to
+`vol_h1`/`vol_h2` before `ftu.get_dft3`, in both the `--initial-half1-mrc`
+diagnostic-override branch and the default `helpers.load_relion_volume`
+branch (the one every non-diagnostic run, including this session's own
+validation jobs, actually takes). The `--initial-half1-ft-npz` branch
+(`load_initial_fourier_volume`) is untouched -- it faithfully replays a
+previously-captured Fourier array's own dtype by design (a "sealed exact
+state" diagnostic path per its own docstring), and forcing a dtype there
+would fight that contract, not fix a bug.
+
+Verified the fix is real, not another no-op, via a direct standalone check
+against `relion_em_test_double_seeded`'s own half1 MRC: flag off ->
+`helpers.load_relion_volume` gives float32, widened-and-FFT'd gives
+`complex64`; flag on -> widened real dtype float64, FFT dtype
+`complex128`. `tests/unit/test_run_multi_iter_parity.py`: 46 passed, no
+regression (this file has no test harness for `main()`'s inline
+volume-loading block itself -- it is not factored into an independently
+testable helper, unlike `_pad_volume_for_projection_host` -- so this round
+relied on the standalone dtype check plus the full GPU re-run below rather
+than a new unit test).
+
+### Unrelated environment gap this surfaced: nvcc disappears after
+### `.vscode/load_env.sh`'s `module unload CUDA`, breaking the custom CUDA
+### extension's lazy build
+
+Re-running the GPU validation with this fix live hit a new failure: the
+double-precision run crashed mid-iteration-2 with `RECOVAR's preferred
+custom CUDA backproject/project extension is unavailable ... Command
+['make', '-B', '-C', '.../recovar/cuda', ...] returned non-zero exit
+status 2`, while the float32 control run in the same job succeeded. Root
+cause, confirmed via a dedicated diagnostic job (60357508): `.vscode/
+load_env.sh`'s `module unload CUDA` step -- necessary for jax's own GPU
+device init to succeed, per round 3's node-diagnosis section above --
+removes `nvcc` from `PATH` entirely (not just a dependent-module warning;
+`which nvcc` genuinely fails afterward). `recovar/cuda/libcuda_
+backproject.so` lazily (re)builds via `make` on first use per GPU-worker
+process when not already cached to disk, and that build needs `nvcc`.
+Round 3's earlier GPU jobs happened not to hit this (the `.so` was already
+cached from some earlier invocation); this round's fresh cache state
+exposed it. Not a code bug in this audit's scope -- fixed operationally by
+building the extension explicitly once, with `CUDA/12.1.1` still loaded
+(job 60357511, `PYTHON="$PIXI_PY" make -C recovar/cuda clean all`, exit 0),
+before any runtime job's `module unload CUDA`. The precompiled `.so` is
+then cached to disk (`recovar/cuda/libcuda_backproject.so` and/or `~/
+.cache/recovar/cuda/libcuda_backproject.so`) and runtime jobs work without
+`nvcc` from then on. **Worth remembering for future GPU/Slurm sessions in
+this repo**: if the custom CUDA extension's cache is ever cleared (`rm
+recovar/cuda/*.so ~/.cache/recovar/cuda/*.so`, a fresh clone, etc.), it
+must be rebuilt with a CUDA-toolkit module loaded (nvcc on `PATH`) *before*
+any `.vscode/load_env.sh`-style runtime job that unloads it.
+
+### Re-validation, this time genuinely exercising the fix
+
+`--max_iter 2` against `relion_em_test_double_seeded`, Slurm `gpu`
+partition, job 60357525 (node `r818u09n09`, both runs succeeded,
+`devices: [CudaDevice(id=0)]` confirmed): double-precision half1/half2/
+merged `corr=0.999999/0.999997/0.999999`, FSC-AUC `0.999591`; float32
+control **identical** (`corr=0.999999/0.999997/0.999999`, FSC-AUC
+`0.999591`). Both clear the `>=0.999` parity gate, no regression. The two
+runs' numbers converging to bit-for-bit-identical FSC-AUC (round 3's
+earlier, not-actually-exercising-the-fix numbers differed by ~1e-6 between
+"double" and "control"; this round's genuinely-different-internally runs
+differ by even less) is unsurprising at this fixture's small scale (128^3,
+2 iterations, `--firstiter_cc`) -- consistent with the expectation
+documented in round 3 that float32-vs-float64 differences should matter
+more at larger box sizes / more iterations, not less, so seeing no visible
+separation here is not itself informative about whether the fix works;
+the standalone dtype check above is the actual evidence that it does.
+
+Committed as `bada1a2e` on `double_parity`.
+
+### Still open
+
+- `scripts/run_comparison.py` independently builds `init_volume` the same
+  way `run_multi_iter_parity.py` did before this fix -- not touched this
+  round (not requested), remains a real gap for any future double-
+  precision comparison run through that script specifically.
+- Everything listed as "Still open" in round 3's entry above is unchanged.
+
+## 2026-08-31 double-precision pass-1 translation-prior boundary
+
+The live K-class pass-1 entry point still narrowed `translation_log_prior`
+to `float32` before shape validation, even though the same function had
+already resolved `score_real_dtype` from `use_float64_scoring` and used it
+for rotation priors and downstream scoring.  The boundary now casts to
+`score_real_dtype`, preserving float64 in double-scoring mode and retaining
+float32 in the default mode.  The explicit conversion remains necessary so
+array-like inputs continue to support the existing `.ndim`/`.shape`
+validation.  A source-level merge guard covers both rotation and translation
+prior casts.  CPU validation:
+`pixi run python -m pytest tests/unit/test_em_kclass_merge_guards.py -q`
+(`51 passed`).
+
+## 2026-08-31 full `dense_single_volume` precision audit
+
+Three read-only subsystem sweeps covered every Python file under
+`recovar/em/dense_single_volume`: shared helpers; dense/local engines; and
+iteration/K-class/sparse-pass orchestration. Diagnostic/capture schemas,
+exact constants, and explicit CUDA `_f32` ABI calls were classified separately
+from live computation. The integrated fixes remove live narrowing at these
+boundaries:
+
+- shared `RelionStats`/`NoiseStats` constructors preserve producer dtype;
+- single- and K-class pass-1 priors/statistics follow scoring precision;
+- dense corrections and non-integral pre-shifts follow score precision, while
+  RELION CUDA preprocessing remains float32 only at its ABI;
+- dense/local big-JIT noise, norm, posterior-mass, and offset accumulators
+  derive dtype from live scores/posteriors;
+- sparse pass-2 translation grids, priors, corrections, pose/Pmax outputs, and
+  per-image prior packing follow the precision policy for K=1 and K-class;
+- K-class fallback grids/priors follow pass-2 scoring/projection flags;
+- global, sealed, and replay translations plus replay poses, corrections,
+  noise, and direction priors retain double precision in double mode;
+- local reconstruction probabilities used for global support thresholds retain
+  scoring precision; and legacy oversampling no longer narrow-then-widens.
+
+Deliberately unchanged: frozen/capture/parity-dump formats; hardware-bound
+CUDA `*_f32` kernels; metadata Euler serialization; exactly representable
+half-spectrum weights/constants; explicit float32 backprojector/capture modes;
+and diagnostic float32 reduction replays.
+
+Remaining policy/kernel work: exact RELION-GPU Gaussian diff2 and opt-in Wavg
+atomic families have no `_f64` CUDA counterparts; dormant public
+`build_pass2_hypothesis_layout` remains float32-only; batch memory estimates
+mix conservative complex128 tiles with complex64 assumptions; and some sparse
+XA/AA reductions retain RELION-f32 ordering pending a dedicated comparison.
+
+CPU validation: focused merge/K-class/budget tests `107 passed`; fast guard
+`16 passed`; focused sealed/replay and sparse dtype tests `4 passed`. A broader
+batch had `92 passed`, five known missing-FFTW binding failures, and one newly
+exposed bucket-vs-reference complex64 M-step accumulation-order difference
+(maximum `4.99e-6`) after both paths genuinely used float64 geometry; its
+tolerance was not widened. GPU job `60368517` failed before testing on the
+known bad node plus a missing harness variable. Corrected `gpu` job `60368743`
+ran successfully on an idle A100 and confirmed JAX GPU visibility, but all
+seven fast-parity cases skipped because their `/scratch/gpfs/GILLES/mg6942`
+fixtures are unavailable on this cluster. It is environment evidence only,
+not a GPU quality qualification for this patch batch.
+
+### Clean replay after the cast audit
+
+Slurm `gpu` job `60374001` ran the requested three-iteration replay
+sequentially with the double scoring, projection, and x-half M-step switches.
+The authoritative output is
+`/home/ry295/palmer_scratch/tmp/recovar_em_test_dtypefix_60374001`; logs are
+`/vast/palmer/scratch/lederman/ry295/slurmo/em-double-audit-60374001.{out,err}`.
+
+The dtype changes did not shrink the residual gap at displayed precision. At
+iteration 3, RELION/RECOVAR remained `ave_Pmax_optimizer=0.9322/0.9317` and
+`sigma_offsets_mean_A=1.4769/1.4772`; direction-prior relative L1 remained
+`3.733e-4` (half 1) and `4.138e-4` (half 2). This makes an env-gated routing or
+algorithmic difference the next hypothesis, rather than another ordinary
+host-side float32 cast.
+
+## 2026-08-31 implementation-gap localization after the dtype audit
+
+Controlled GPU ablations rejected the ACC-double `floorf` coordinate quirk
+(job `60374288`) and fine-rotation execution order (job `60374344`). Replaying
+only RELION's iteration-2 maps as iteration-3 references (job `60374396`)
+moved RECOVAR `ave_Pmax` from `0.93170411` to `0.93214603` versus RELION's
+displayed `0.9322`, establishing that the dominant parameter residual is
+inherited through the maps. Iteration-2 post-mask map relative L2 is
+`1.283e-3/2.701e-3`; replaying RELION iteration-1 references (job `60374590`)
+reduces it to `9.937e-4/1.244e-3`, localizing a substantial component to the
+first-iteration transition.
+
+The exact float32 fine-Gaussian route (job `60374528`) and newly wired literal
+K=1 first-iteration fine normalized-CC route (job `60374655`) were both null
+attributions. The latter remains a source-faithful production routing fix.
+
+One additional live dtype bug was found in sparse M-step statistics:
+support-weighted image power and per-image norm results narrowed to float32
+before shell/host-float64 accumulation. These reductions and their chunked
+noise/norm accumulator initializers now preserve input-derived precision.
+Focused CPU tests pass. GPU job `60374777` proves the change is live in the
+noise trajectory (`noise_radial_iter_001` relative L2 `4.14e-8`) but negligible
+for the open gap (`ave_Pmax` change `1.1e-16`; final-map relative L2 `<6e-15`).
+
+### Direct first-iteration pre-join BPref comparison
+
+Built an isolated, env-gated double-precision RELION diagnostic binary and
+dumped `BPref.data`/`weight` immediately before the low-resolution half join.
+The rerun's iteration-1 maps are byte-identical to the established oracle.
+Against RECOVAR job `60374928`, support topology matches exactly, but the raw
+pre-join accumulators already differ. After the repository's established
+frame/downsampling transform, numerator/denominator relative L2 is
+`8.97e-3/2.55e-3` for half 1 and `4.53e-2/1.64e-2` for half 2. Radial
+denominator shell-sum differences through shell 10 are much smaller
+(`~1e-6` to `4e-4`). This proves the join is downstream of the first
+divergence and points to per-particle image/CTF operand construction or pose
+scatter; identical support rules out missing particles or pixels.
+
+The remaining perturbation casts in `_run_relion_iteration_loop` were also
+corrected: perturbed matrices, working Eulers, and translations now follow
+the active scoring dtype, including final-all-data. RELION stores these as
+RFLOAT, so float32 was not justified for the double oracle. Tests pass 42/42.
+Nevertheless, pre-join job `60375148` changed the tensors only at `~1e-15`,
+and full job `60375147` left all reported metrics unchanged. The existing
+separate float64 M-step-rotation construction explains this null result.
+
+That null conclusion applied only to the first, downstream-cast patch. A
+follow-up audit found an earlier narrow-then-widen boundary: the canonical
+Euler grid itself remained float32 in `_relion_rotation_grid_float32`, sealed
+sampling, and the final-all-data setup. These are working RFLOAT values used
+as inputs to perturbation and subsequent matrix construction, not just output
+metadata. Preserving their source precision is strongly causal: job
+`60375338` changed half-2 pre-join numerator/denominator relative L2 from
+`4.53e-2/1.64e-2` to `5.66e-3/2.34e-3`; half 1 changed from
+`8.97e-3/2.55e-3` to `7.18e-3/2.55e-3`. Support stayed exact.
+
+Full job `60375361` produced iteration-3 RELION/RECOVAR optimizer Pmax
+`0.9322/0.9320` (previous RECOVAR `0.9317`), sigma-offset mean
+`1.4769/1.4768` (previous `1.4772`), and direction-prior relative L1
+`2.23e-4/4.01e-4` (previous `3.73e-4/4.14e-4`). The half-2 first-iteration
+improvement is consistent with the known near-tie particles selecting the
+RELION winners once the pre-perturbation Eulers retain double precision.
+
+The ordinary matched-particle preprocessed Fourier operand is not the next
+large gap: RECOVAR-vs-RELION relative L2 is `3.45e-8`, while merely rounding
+RELION's complex128 operand to complex64 gives `2.56e-8`.
+
+The concurrently fixed `reference_to_relion_projector_half_maps` path no
+longer narrows the binding's `Projector::data` from complex128 to complex64.
+Combined-tree job `60382385` is stable at the improved metrics above, and
+fresh pre-join job `60382549` gives `7.18e-3/2.55e-3` (half 1) and
+`5.66e-3/2.34e-3` (half 2) numerator/denominator relative L2. At this boundary
+iteration-1 Pmax and significant-support arrays are exactly equal for all
+1000 particles; maximum pose and translation errors are only `1.52e-5`
+degrees and `2.42e-6` angstrom. The next oracle should therefore capture one
+matched hypothesis's projected reference, CTF product, posterior-weighted
+numerator, and denominator immediately before scatter in both engines.
+
+### Double-XFLOAT fused backprojection localization
+
+The strict fused RELION x-half diagnostic previously accepted only
+complex64/float32 rows and accumulators. Its CUDA scatter and FFI dispatch now
+also instantiate and route complex128/float64, and the sequential translation
+reduction now follows the incoming RELION `XFLOAT` precision instead of always
+narrowing to complex64/float32. Explicit live-noise replay also takes
+precedence over the six-decimal iteration-0 model-STAR spectrum; this removes a
+known input-rounding confound, although it changes aggregate BPref errors only
+slightly.
+
+GPU job `60382755` demonstrated that the double fused path closes the interior
+scatter arithmetic: per-shell numerator/denominator relative L2 is about
+`3e-7/1e-7` at shell 15 and rises smoothly to `9e-7/3e-7` at shell 21. Nearly
+the entire aggregate residual is confined to shells 22 and 23. An audit then
+found one remaining `const float` radius-squared temporary inside the templated
+fused kernel and changed it to the template type, matching RELION's `XFLOAT`
+cutoff. Job `60382765` confirmed that the outer-shell residual is not explained
+by that cast alone.
+
+Sparse pass-2 supplies matrices already generated through the RELION host
+`generateEulerMatrices(..., inverse=true)` emulation. The fused wrapper no
+longer numerically inverts these a second time in float64; it only performs the
+required packed-axis permutation. Job `60382778` gives aggregate
+numerator/denominator relative L2 `9.21e-3/2.53e-3` (half 1) and
+`6.55e-3/2.25e-3` (half 2). Shells 15--21 remain at the `1e-7`--`1e-6` level,
+while shell 23 remains `5.58e-2/1.54e-2` and `3.95e-2/1.40e-2`, respectively.
+The next oracle should capture RELION's exact per-winner `g_eulers` matrix at
+the backprojector launch: exact-radius source pixels are hypersensitive to even
+ulp-scale matrix differences, whereas the interior result strongly rejects a
+general interpolation or atomic-accumulation mismatch.
