@@ -94,6 +94,13 @@ No baseline or tolerance has been widened, and no failed run is waived.
   1300, 1414, 3694 and 4568**. Candidate margins are absent, and the producing
   RELION build is unknown. The [paired evidence](evidence/pr180-k1-noise-state-20260908/README.md)
   preserves both failed audits (`13624326`, `13624629`).
+  The [six-particle follow-up](evidence/pr180-k1-targeted-capture-20260908/README.md)
+  in `13627156` exactly reproduces all six production Pmax values and saved
+  poses. The existing score dump disables big-JIT and changes Pmax by at most
+  `3.05e-5`. For row 901, float64 normalization of its captured float32 scores
+  changes Pmax by only `5.01e-10`; the gap to RELION remains `0.00168`.
+  Final normalization does not close this captured gap; its score operands,
+  priors and correspondence to RELION still need comparison.
 - Historical synthetic K1 and real10076 repeatability failures remain open.
   Fixed-input production scatter replays differ even with identical captured
   operands; this does not establish the cause of later support, pose or
@@ -119,9 +126,12 @@ strict-parity target needs separate scientific qualification.
 1. Continue normalization and finalization ownership cleanup without changing
    scheduling, reduction order, casts or object lifetimes. Review callers and
    retained computations, then use affected tests and exact comparisons.
-2. For K1, capture the same state and candidate scores for the six remaining
-   rows. Identify the first divergent operand or state boundary before calling
-   the residual numerical noise or proposing a repair.
+2. For K1, use the reproduced six-particle case to compare matched score
+   operands, priors and candidate geometry, starting with row 901. Preserve
+   the measured dump-versus-production difference and the unknown generating
+   oracle build. Captured-score normalization is not the explanation; a
+   matched RELION surface is needed before attributing the residual to noise
+   or proposing a production repair.
 3. Poll the existing K4 pair and audit; preserve its source and outputs.
    Complete the source/fixture requirements before new scientific checkpoint
    runs. Qualify K1, real particles and exact K4 on the selected source.

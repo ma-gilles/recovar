@@ -14376,3 +14376,32 @@ The next oracle should capture RELION's exact per-winner `g_eulers` matrix at
 the backprojector launch: exact-radius source pixels are hypersensitive to even
 ulp-scale matrix differences, whereas the interior result strongly rejects a
 general interpolation or atomic-accumulation mismatch.
+
+## 2026-09-08 — PR180 six-particle replay and dense score-dump check
+
+Slurm13627156 (92 s, H100 80 GB on della-h20g2) uses clean frozen
+`42a3d6184c6d05a9f4f97bd00120e62d0081f1d3` with production float32 execution.
+Selecting rows 901, 1257, 1300, 1414, 3694 and 4568 exactly preserves all six
+Pmax values and saved poses/translations from the 5,000-particle replay with
+continuous per-half noise. The subsequent existing score dump runs on the same
+physical GPU; it disables dense big-JIT and changes Pmax by at most
+`3.0517578125e-5`, with saved poses unchanged. Do not treat this capture as an
+identical execution or use its row-1300 threshold crossing to waive the
+original production failure.
+
+For row 901, 38 post-prior blocks cover 36,864 rotations by 29 translations;
+all finite scores are exactly float32-representable, and padded candidates are
+masked. The winner/runner-up margin is `1.7069549560546875`. Diagnostic float64
+normalization gives Pmax `0.8464409107915538`, only `-5.01476e-10` from the
+capture-path value, leaving a `0.0016799107915538292` gap to saved RELION Pmax.
+Higher-precision final normalization does not close the captured discrepancy.
+Matched live operands, priors and RELION candidate scores remain necessary;
+the historical oracle's generating build is still unknown. No runtime repair,
+precision-default change or quality/performance acceptance follows from this.
+
+The [versioned evidence](../development/evidence/pr180-k1-targeted-capture-20260908/README.md)
+contains exact values, commands, source/library identities, audits, score
+inventory, hardware and artifact hashes. Bulky results are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/k1_targeted_capture/`
+with `SAFE_TO_DELETE`. The corresponding preparation is in
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_targeted_capture/`.
