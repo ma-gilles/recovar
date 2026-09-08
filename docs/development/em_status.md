@@ -29,6 +29,29 @@ its full K1 FSC acceptance remains pending. The hashed patch and handoff are
 recorded on the board. The unresolved VDAM catch-up merge is not part of this
 published cleanup checkpoint.
 
+### Integration review: callers outside Git conflicts
+
+A static review of the incoming VDAM source `8ab1a44be1` and its unresolved
+merge index found a named-result migration gap outside the 24 conflicted files.
+`test_local_host_result_publication.py` still supplies a tuple-returning mock,
+indexes the result positionally, and compares only tuple structures recursively.
+Migrate these to `LocalEMResult` fields while retaining exact byte/dtype checks.
+
+The incoming dense adapter needs separate owners for BPref context and its
+live sparse-backend selector. A new accumulator-analysis test also imports a
+BPref helper from its former sparse owner. Port the incoming semicolon selector
+and optional capture fields to `helpers/bpref_diagnostics.py`; preserve the
+current first-iteration topology parameter and decisions, image-index helper,
+and capture precision. The incoming writer's explicit float32 translation cast
+must not silently replace the current dtype-preserving capture.
+
+Exact paths, source/index hashes, the three differing moved definitions and
+review actions are in `handoffs/em_clean_integration_review_actions_20260908.json`
+under the coordination root. VDAM's assigned scope now includes 28 paths,
+including the companion global-window test and these additional migrations.
+This is static review evidence, not a combined-source test pass. The index was
+unchanged during review; no source in VDAM's checkout or frozen runs was edited.
+
 ## Shared VDAM performance transfer — September 8
 
 The user authorized transferring applicable VDAM performance fixes onto PR179
