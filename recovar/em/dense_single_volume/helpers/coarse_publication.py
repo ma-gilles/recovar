@@ -12,6 +12,107 @@ from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
 from recovar.em.dense_single_volume.helpers.oversampling import relion_cuda_f32_coarse_posterior
 
 
+def _packed_support_prefix(support, count):
+    """Copy a bounded prefix; bucket lengths avoid one slice executable per count.
+
+    The count is already on the host. The transfer includes at most twice the
+    live support, capped by the full output capacity. It never truncates ties.
+    Count synchronization and any slice compilation belong in publication timing.
+    """
+    if not 0 <= count <= support.size:
+        raise ValueError("Packed coarse support count exceeds capacity")
+    if count == 0:
+        return np.empty(0, np.int32)
+    capacity = min(support.size, 1 << (count - 1).bit_length())
+    return np.asarray(jax.device_get(support[:capacity]))[:count]
+
+
+def _cuda_posterior_host(values, raw_max, compact, actual, *, adaptive_fraction, max_significants):
+    """Publish the explicit CUDA primitive without a full posterior mask transfer."""
+    from recovar import cuda_backproject
+
+    statistics, indices, support, count = cuda_backproject.relion_coarse_posterior_transaction_f32(
+        values,
+        raw_max,
+        jnp.asarray(actual, jnp.int32),
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
+    )
+    blocks = None if compact is None else compact.source_block_ids
+    block_count = None if compact is None else compact.block_count
+    statistics, indices, count, blocks, block_count = jax.device_get((statistics, indices, count, blocks, block_count))
+    physical, width = values.shape
+    if (
+        statistics.shape != (physical, 4)
+        or statistics.dtype != np.float32
+        or indices.shape != (physical, 4)
+        or indices.dtype != np.int32
+        or np.shape(count) != ()
+        or np.asarray(count).dtype != np.int32
+        or support.shape != (physical * width,)
+        or support.dtype != np.int32
+    ):
+        raise ValueError("Invalid packed coarse posterior output contract")
+    count = int(count)
+    counts = indices[:, 2]
+    if (
+        np.any(counts < 0)
+        or np.any(counts > width)
+        or np.any(counts[actual:] != 0)
+        or int(counts.sum(dtype=np.int64)) != count
+    ):
+        raise ValueError("Packed coarse support count disagrees with row counts")
+    positions = _packed_support_prefix(support, count).astype(np.int64)
+    if (
+        np.any(positions < 0)
+        or np.any(positions >= actual * width)
+        or np.any(np.diff(positions) <= 0)
+        or not np.array_equal(np.bincount(positions // width, minlength=physical), counts)
+    ):
+        raise ValueError("Packed coarse support must be ordered and match actual rows")
+    if blocks is not None:
+        if (
+            blocks.ndim != 2
+            or blocks.shape[0] != physical
+            or blocks.dtype != np.int32
+            or blocks.shape[1] <= 0
+            or width % (16 * blocks.shape[1])
+            or block_count.shape != (physical,)
+            or block_count.dtype != np.int32
+        ):
+            raise ValueError("Invalid compact coarse source block geometry")
+        for row, n in enumerate(block_count):
+            if (
+                not 0 <= n <= blocks.shape[1]
+                or np.any(blocks[row, :n] < 0)
+                or np.any(np.diff(blocks[row, :n]) <= 0)
+                or np.any(blocks[row, n:] != -1)
+            ):
+                raise ValueError("Compact coarse source blocks must be canonical ordered prefixes")
+
+    def global_pose(rows, local):
+        if np.any(local < 0) or np.any(local >= width):
+            raise ValueError("Packed coarse pose index is outside the score table")
+        if blocks is None:
+            return local
+        per_slot = width // blocks.shape[1]
+        slots = local // per_slot
+        if np.any(slots >= block_count[rows]):
+            raise ValueError("Packed coarse pose selects an inactive compact slot")
+        return blocks[rows, slots].astype(np.int64) * per_slot + local % per_slot
+
+    rows = np.arange(actual)
+    index_dtype = np.int64 if jax.config.x64_enabled else np.int32
+    host = {key: statistics[:, col] for col, key in enumerate(("best_score", "pmax", "sum_weight", "threshold"))}
+    for col, key in enumerate(("best_pose", "winner")):
+        host[key] = global_pose(rows, indices[:actual, col].astype(np.int64)).astype(index_dtype)
+    host["n_significant"] = counts
+    host["cutoff_count"] = indices[:, 3]
+    ids = global_pose(positions // width, positions % width)
+    poses = np.split(ids, np.cumsum(counts[:actual], dtype=np.int64)[:-1])
+    return host, poses
+
+
 @jax.jit
 def _dense_prior_scores(raw, class_prior, rotation_prior, translation_prior, actual):
     scores = raw + jnp.asarray(class_prior, jnp.float32)
@@ -69,6 +170,7 @@ def publish_coarse_rows(
     adaptive_fraction,
     max_significants,
     tie_score_ulps,
+    posterior_backend="jax",
 ):
     """Publish complete coarse statistics without expanding compact score tables.
 
@@ -79,6 +181,10 @@ def publish_coarse_rows(
     """
     from recovar.em.dense_single_volume.helpers.significance import _update_logsumexp
 
+    if posterior_backend not in ("jax", "cuda"):
+        raise ValueError("Unknown coarse posterior backend")
+    if posterior_backend == "cuda" and tie_score_ulps != 0:
+        raise ValueError("CUDA coarse posterior requires exact ties (tie_score_ulps=0)")
     if actual_image_count <= 0 or n_rotations <= 0 or n_translations <= 0 or rotation_chunk_rows <= 0:
         raise ValueError("Positive image, candidate and chunk counts are required")
     indices = [np.asarray(group.image_indices) for group in groups]
@@ -114,22 +220,33 @@ def publish_coarse_rows(
         width = values.shape[1] if compact is not None else rotation_chunk_rows * n_translations
         for start in range(0, values.shape[1], width):
             maximum, total = _update_logsumexp(maximum, total, values[:, start : start + width])
-        device = _posterior_statistics(
-            values,
-            result.raw_score_max,
-            blocks,
-            adaptive_fraction=float(adaptive_fraction),
-            max_significants=max_significants,
-            tie_score_ulps=int(tie_score_ulps),
-        )
-        device["global_log_z"] = maximum + jnp.log(total)
-        device["raw_max"] = result.raw_score_max
-        host = jax.device_get(device)
-        mask = np.asarray(host.pop("mask"), dtype=bool)
-        if compact is not None:
-            poses = map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids(compact, mask)
+        if posterior_backend == "cuda":
+            host, poses = _cuda_posterior_host(
+                values,
+                result.raw_score_max,
+                compact,
+                actual,
+                adaptive_fraction=float(adaptive_fraction),
+                max_significants=max_significants,
+            )
+            host.update(jax.device_get(dict(global_log_z=maximum + jnp.log(total), raw_max=result.raw_score_max)))
         else:
-            poses = [np.flatnonzero(row).astype(np.int64) for row in mask[:actual]]
+            device = _posterior_statistics(
+                values,
+                result.raw_score_max,
+                blocks,
+                adaptive_fraction=float(adaptive_fraction),
+                max_significants=max_significants,
+                tie_score_ulps=int(tie_score_ulps),
+            )
+            device["global_log_z"] = maximum + jnp.log(total)
+            device["raw_max"] = result.raw_score_max
+            host = jax.device_get(device)
+            mask = np.asarray(host.pop("mask"), dtype=bool)
+            if compact is not None:
+                poses = map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids(compact, mask)
+            else:
+                poses = [np.flatnonzero(row).astype(np.int64) for row in mask[:actual]]
         for key, value in host.items():
             if not np.isfinite(value[:actual]).all():
                 raise ValueError(f"Nonfinite actual coarse statistic: {key}")

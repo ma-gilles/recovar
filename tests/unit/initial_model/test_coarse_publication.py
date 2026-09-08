@@ -127,6 +127,111 @@ def test_nonfinite_actual_statistics_are_not_silently_published(one_winner):
         publish((selected, full))
 
 
+@pytest.fixture
+def packed_one_winner(monkeypatch, one_winner):
+    """Mock only CUDA arithmetic; exercise the real packing/publication boundary."""
+    import jax
+    from recovar import cuda_backproject
+
+    def transaction(values, raw_max, actual, **policy):
+        reference = jax.device_get(pub._posterior_statistics(values, raw_max, None, tie_score_ulps=0, **policy))
+        statistics = np.stack([reference[k] for k in ("best_score", "pmax", "sum_weight", "threshold")], axis=1)
+        indices = np.stack(
+            [reference[k] for k in ("best_pose", "winner", "n_significant", "cutoff_count")], axis=1
+        ).astype(np.int32)
+        positions = np.flatnonzero(reference["mask"].ravel()).astype(np.int32)
+        support = np.full(values.size, -1, np.int32)
+        support[: len(positions)] = positions
+        return statistics, indices, support, np.asarray(len(positions), np.int32)
+
+    monkeypatch.setattr(cuda_backproject, "relion_coarse_posterior_transaction_f32", transaction)
+    return transaction
+
+
+def test_cuda_publication_restores_all_fields_and_dtypes(packed_one_winner):
+    expected = publish(mixed_groups())
+    actual = publish(mixed_groups(), posterior_backend="cuda")
+    assert actual.keys() == expected.keys()
+    for key in expected:
+        assert actual[key].dtype == expected[key].dtype, key
+        np.testing.assert_array_equal(actual[key], expected[key], err_msg=key)
+
+
+@pytest.mark.parametrize("count,capacity", [(0, 0), (1, 1), (3, 4), (17, 32), (33, 40), (40, 40)])
+def test_packed_transfer_uses_bounded_capacity(monkeypatch, count, capacity):
+    transfers = []
+
+    def transfer(value):
+        transfers.append(value.size)
+        return value
+
+    monkeypatch.setattr(pub.jax, "device_get", transfer)
+    np.testing.assert_array_equal(pub._packed_support_prefix(np.arange(40, dtype=np.int32), count), np.arange(count))
+    assert transfers == ([] if count == 0 else [capacity])
+
+
+@pytest.mark.parametrize("corruption", ["total", "row_count", "padding", "unordered", "duplicate", "inactive_slot"])
+def test_corrupt_packed_support_fails_closed(monkeypatch, packed_one_winner, corruption):
+    from recovar import cuda_backproject
+
+    def corrupt(*args, **kwargs):
+        stats, indices, support, count = packed_one_winner(*args, **kwargs)
+        if corruption == "total":
+            count = count + np.int32(1)
+        elif corruption == "row_count":
+            indices[0, 2] -= 1
+            indices[1, 2] += 1
+        elif corruption == "padding":
+            support[1] = 2 * args[0].shape[1]
+        elif corruption == "unordered":
+            support[:2] = support[:2][::-1]
+        elif corruption == "duplicate":
+            support[1] = support[0]
+        elif corruption == "inactive_slot":
+            indices[0, 0] = args[0].shape[1]
+        return stats, indices, support, count
+
+    monkeypatch.setattr(cuda_backproject, "relion_coarse_posterior_transaction_f32", corrupt)
+    with pytest.raises(ValueError, match="Packed coarse"):
+        publish(mixed_groups(), posterior_backend="cuda")
+
+
+def test_cuda_publication_rejects_unsupported_tie_policy(packed_one_winner):
+    with pytest.raises(ValueError, match="requires exact ties"):
+        publish(mixed_groups(), posterior_backend="cuda", tie_score_ulps=1)
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("ties", [False, True])
+def test_complete_cuda_publication_matches_existing_gpu_path(monkeypatch, ties):
+    import jax
+
+    assert jax.default_backend() == "gpu"
+    monkeypatch.setenv("RECOVAR_RELION_BATCHED_POSTERIOR_PRIMITIVES", "1")
+    groups = mixed_groups()
+    if ties:
+        selected, full = groups
+        compact = selected.result.compact_scores
+        values = compact.posterior_scores_flat.at[:2].set(0)
+        selected = selected._replace(
+            result=selected.result._replace(compact_scores=compact._replace(posterior_scores_flat=values))
+        )
+        raw = np.asarray(full.result.scores).copy()
+        raw[0] = 0
+        groups = (selected, full._replace(result=full.result._replace(scores=raw)))
+    reference = publish(groups, max_significants=3)
+    candidate = publish(groups, max_significants=3, posterior_backend="cuda")
+    assert candidate.keys() == reference.keys()
+    for key, want in reference.items():
+        got = candidate[key]
+        assert got.dtype == want.dtype, key
+        np.testing.assert_array_equal(got, want, err_msg=key)
+        if want.dtype.kind == "f":
+            np.testing.assert_array_equal(got.view(np.uint8), want.view(np.uint8), err_msg=key)
+    if ties:
+        np.testing.assert_array_equal(np.diff(candidate["support_offsets"]), [32, 64, 32])
+
+
 @pytest.mark.parametrize("first_group", ["mixed", "all_overflow", "invalid_certificate"])
 def test_actual_significance_engine_publishes_identical_complete_state(monkeypatch, one_winner, first_group):
     """Exercise the engine boundary on fixed scores, including all host outputs."""
