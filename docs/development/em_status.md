@@ -136,8 +136,15 @@ The [versioned noise-state comparison](evidence/pr180-k1-noise-state-20260908/RE
 contains both failures, full FSC curves, identities, exact commands and the
 half-1 negative control. The next quality diagnostic should capture matched
 state/candidate scores for the remaining rows before attributing the residual
-to arithmetic. Continue independent structural cleanup at the controller's
-correction-update boundary; frozen `42a3d6184` remains unchanged.
+to arithmetic. Follower replay-completion validation now resides with its
+owner, preserving all three return paths, logs and failures. The duplicate
+missing-statistics branch was unreachable after the strict preceding guard
+and is removed. All 65 focused cases, 38 CPU fast-guard cases and 56 exact
+original/new comparisons pass; all four guard truth-table cases agree.
+Evidence is under `pr180_follower_completion_20260908/` in the review root.
+Frozen `42a3d6184` remains unchanged. Next, make the active status concise while
+preserving the detailed dated evidence; then continue normalization ownership
+and the matched-candidate diagnostic for the six unresolved K1 rows.
 
 The legacy fast-tier tests use map correlation and
 write ledgers under `tests/baselines`; running them unchanged cannot establish

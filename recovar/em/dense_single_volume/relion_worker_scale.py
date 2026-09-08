@@ -551,6 +551,33 @@ def validate_relion_follower_scale_replay_application(
     )
 
 
+def _finalize_relion_follower_scale_replay_telemetry(
+    replay: RelionFollowerScaleReplay | None,
+    *,
+    applied_iterations,
+    logger,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Validate replay accounting before a result is returned, then log success.
+
+    Disabled replay yields two absent telemetry fields. Incomplete or repeated
+    applications raise before logging; successful arrays are independent copies.
+    The controller supplies its logger and the history of applied iterations.
+    """
+    if replay is None:
+        return None, None
+    requested, applied = validate_relion_follower_scale_replay_application(
+        replay,
+        applied_iterations=applied_iterations,
+    )
+    logger.info(
+        "Diagnostic RELION follower-scale replay complete: source=%s requested=%s applied=%s",
+        replay.source,
+        requested.tolist(),
+        applied.tolist(),
+    )
+    return requested, applied
+
+
 def load_relion_follower_scale_replay(path: str | Path) -> RelionFollowerScaleReplay:
     """Load selected complete follower-scale states from a diagnostic NPZ."""
 

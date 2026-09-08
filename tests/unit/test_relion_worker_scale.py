@@ -1,5 +1,6 @@
 import inspect
 import json
+import logging
 import shutil
 import sys
 
@@ -18,6 +19,7 @@ from recovar.em.dense_single_volume.relion_replay import (
 from recovar.em.dense_single_volume.relion_worker_scale import (
     _dispatch_relion_follower_scale_for_final_all_data,
     _dispatch_relion_follower_scale_for_numbered_iteration,
+    _finalize_relion_follower_scale_replay_telemetry,
     _update_relion_follower_corrections,
     _remap_relion_follower_runtime_inputs,
     _require_relion_follower_owners,
@@ -1043,11 +1045,65 @@ def test_strict_restart_requires_coupled_perturbation_and_model_scale_state():
 def test_sparse_follower_scale_replay_accounting_guards_every_result_return():
     source = inspect.getsource(_run_relion_iteration_loop)
 
-    # One helper definition plus one call immediately before each of the three
-    # result-return paths (local diagnostic, no-final, and final-all-data).
-    assert source.count("_finalize_relion_follower_scale_replay_telemetry()") == 4
+    # One call immediately before each of the three result-return paths
+    # (local diagnostic, no-final, and final-all-data). Validation belongs to
+    # the replay owner, with applied iterations supplied by the controller.
+    assert source.count("_finalize_relion_follower_scale_replay_telemetry(") == 3
+    assert source.count(
+        "applied_iterations=history.relion_follower_scale_replay_applied_iterations"
+    ) == 3
     assert source.count('"relion_follower_scale_replay_requested_iterations"') == 3
     assert source.count('"relion_follower_scale_replay_applied_iterations"') == 3
+
+
+def test_disabled_follower_replay_completion_does_not_consume_history_or_log():
+    assert _finalize_relion_follower_scale_replay_telemetry(
+        None, applied_iterations=object(), logger=None,
+    ) == (None, None)
+
+
+def test_follower_replay_completion_returns_copies_and_logs_after_validation(caplog):
+    replay = RelionFollowerScaleReplay(
+        relion_iterations=np.asarray([2, 4], dtype=np.int64),
+        follower_scales=np.ones((2, 2, 3), dtype=np.float64),
+        **_REPLAY_KWARGS,
+        source="completion accounting",
+    )
+    observed = np.asarray([2, 4], dtype=np.int64)
+    completion_logger = logging.getLogger("recovar.test.follower_completion")
+    caplog.set_level(logging.INFO, logger=completion_logger.name)
+
+    requested, applied = _finalize_relion_follower_scale_replay_telemetry(
+        replay, applied_iterations=observed, logger=completion_logger,
+    )
+
+    np.testing.assert_array_equal(requested, [2, 4])
+    np.testing.assert_array_equal(applied, [2, 4])
+    assert requested.dtype == applied.dtype == np.dtype(np.int64)
+    assert not np.shares_memory(requested, replay.relion_iterations)
+    assert not np.shares_memory(applied, observed)
+    assert caplog.messages == [
+        "Diagnostic RELION follower-scale replay complete: "
+        "source=completion accounting requested=[2, 4] applied=[2, 4]"
+    ]
+
+
+def test_follower_replay_completion_never_logs_success_for_invalid_accounting(caplog):
+    replay = RelionFollowerScaleReplay(
+        relion_iterations=np.asarray([2, 4], dtype=np.int64),
+        follower_scales=np.ones((2, 2, 3), dtype=np.float64),
+        **_REPLAY_KWARGS,
+        source="incomplete accounting",
+    )
+    completion_logger = logging.getLogger("recovar.test.follower_completion")
+    caplog.set_level(logging.INFO, logger=completion_logger.name)
+
+    for observed in ([], [2], [4, 2], [2, 2, 4], [2, 3, 4], [2.0, 4.0]):
+        with np.testing.assert_raises(RuntimeError):
+            _finalize_relion_follower_scale_replay_telemetry(
+                replay, applied_iterations=observed, logger=completion_logger,
+            )
+    assert caplog.messages == []
 
 
 def test_only_optics_prefix_scale_stats_are_combined_between_followers():

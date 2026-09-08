@@ -180,7 +180,7 @@ from recovar.em.dense_single_volume.relion_worker_scale import (
     _format_relion_correction_range,
     _update_relion_follower_corrections,
     setup_relion_follower_scale_state,
-    validate_relion_follower_scale_replay_application,
+    _finalize_relion_follower_scale_replay_telemetry,
 )
 from recovar.em.sampling import (
     _get_relion_rotation_grid_eulers_float64,
@@ -3142,21 +3142,6 @@ def _run_relion_iteration_loop(
     relion_scale_stats_group_ids_per_half = follower_setup.scale_stats_group_ids_per_half
     relion_scale_stats_group_count_per_half = follower_setup.scale_stats_group_count_per_half
 
-    def _finalize_relion_follower_scale_replay_telemetry():
-        if replay.relion_follower_scale_replay is None:
-            return None, None
-        requested, applied = validate_relion_follower_scale_replay_application(
-            replay.relion_follower_scale_replay,
-            applied_iterations=history.relion_follower_scale_replay_applied_iterations,
-        )
-        logger.info(
-            "Diagnostic RELION follower-scale replay complete: source=%s requested=%s applied=%s",
-            replay.relion_follower_scale_replay.source,
-            requested.tolist(),
-            applied.tolist(),
-        )
-        return requested, applied
-
     # --- RELION SamplingPerturbation state (healpix_sampling.cpp:167-174) ---
     # RELION applies a random rigid rotation of the entire SO(3) trial grid at
     # each iteration: A -> A @ R_perturb with R_perturb = R_from_relion([m,m,m])
@@ -4994,7 +4979,11 @@ def _run_relion_iteration_loop(
             (
                 replay_requested_iterations,
                 replay_applied_iterations,
-            ) = _finalize_relion_follower_scale_replay_telemetry()
+            ) = _finalize_relion_follower_scale_replay_telemetry(
+                replay.relion_follower_scale_replay,
+                applied_iterations=history.relion_follower_scale_replay_applied_iterations,
+                logger=logger,
+            )
             return {
                 "profile_only": True,
                 "mean": merged_mean,
@@ -6197,11 +6186,6 @@ def _run_relion_iteration_loop(
                 _format_relion_correction_range(norm_scale_update.scale_corrections_per_half[0]),
                 _format_relion_correction_range(norm_scale_update.scale_corrections_per_half[1]),
             )
-        elif relion_follower_scale_state is not None:
-            raise RuntimeError(
-                "Strict RELION follower-scale mode requires normalization statistics "
-                "for every numbered iteration"
-            )
         if relion_follower_scale_state is not None:
             history.record_follower_scale_post_mstep(
                 np.asarray(relion_follower_scale_state.scales, dtype=np.float64).copy()
@@ -6613,7 +6597,11 @@ def _run_relion_iteration_loop(
         (
             replay_requested_iterations,
             replay_applied_iterations,
-        ) = _finalize_relion_follower_scale_replay_telemetry()
+        ) = _finalize_relion_follower_scale_replay_telemetry(
+            replay.relion_follower_scale_replay,
+            applied_iterations=history.relion_follower_scale_replay_applied_iterations,
+            logger=logger,
+        )
         return {
             "mean": merged_mean,
             "means": means,
@@ -8054,7 +8042,11 @@ def _run_relion_iteration_loop(
     (
         replay_requested_iterations,
         replay_applied_iterations,
-    ) = _finalize_relion_follower_scale_replay_telemetry()
+    ) = _finalize_relion_follower_scale_replay_telemetry(
+        replay.relion_follower_scale_replay,
+        applied_iterations=history.relion_follower_scale_replay_applied_iterations,
+        logger=logger,
+    )
 
     return {
         "mean": merged_mean,
