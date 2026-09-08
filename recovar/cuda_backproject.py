@@ -22,6 +22,8 @@ import contextvars
 import ctypes
 import functools
 import logging
+import math
+import operator
 import os
 import pathlib
 import shutil
@@ -3259,6 +3261,68 @@ def relion_coarse_diff2_rectangular_runtime_f32(
 _TARGET_RELION_COARSE_SHARED_PRETRANSLATED_RUNTIME_F32 = (
     "cuda_relion_coarse_diff2_shared_pretranslated_runtime_f32"
 )
+
+_TARGET_RELION_COARSE_POSTERIOR_TRANSACTION_F32 = "cuda_relion_coarse_posterior_transaction_f32"
+_coarse_posterior_transaction_registered = False
+
+
+def _validate_coarse_posterior_transaction(scores, raw_max, actual_count, adaptive_fraction, max_significants):
+    if scores.dtype != jnp.float32 or scores.ndim != 2:
+        raise TypeError("posterior scores must be a float32 matrix")
+    if min(scores.shape) < 1 or math.prod(scores.shape) > np.iinfo(np.int32).max:
+        raise ValueError("posterior score capacity must be nonempty and fit int32 support positions")
+    if raw_max.dtype != jnp.float32 or raw_max.shape != scores.shape[:1]:
+        raise TypeError("raw maxima must be float32 with one value per score row")
+    if actual_count.dtype != jnp.int32 or actual_count.ndim != 0:
+        raise TypeError("actual row count must be an int32 device scalar")
+    fraction = float(adaptive_fraction)
+    if not np.isfinite(fraction) or not 0 < fraction <= 1 or np.float32(fraction) <= 0:
+        raise ValueError("adaptive_fraction must be finite in (0, 1]")
+    maximum = 0 if max_significants is None else operator.index(max_significants)
+    if maximum < 0 or maximum > np.iinfo(np.int32).max:
+        raise ValueError("max_significants must be None or a nonnegative int32")
+    return np.float32(fraction), np.int64(maximum)
+
+
+@functools.partial(jax.jit, static_argnames=("adaptive_fraction", "max_significants"))
+def relion_coarse_posterior_transaction_f32(
+    scores, raw_max, actual_count, *, adaptive_fraction=0.999, max_significants=500,
+):
+    """Unused exact-threshold posterior/support transaction for dense or compact rows.
+
+    Inputs already include priors. Outputs are float32 [B,4] statistics
+    (best score, Pmax, sum weight, threshold), int32 [B,4] indices/counts
+    (best local pose, winning local pose, significant count, cutoff count),
+    flat row-major support positions with capacity B*N, and an int32 count.
+    Only the first count support entries are populated; remaining entries are
+    -1. No max-significant truncation is applied to threshold ties. Source-block
+    mapping and unchanged float64 logZ are the caller's responsibility.
+    """
+    fraction, maximum = _validate_coarse_posterior_transaction(
+        scores, raw_max, actual_count, adaptive_fraction, max_significants,
+    )
+    if jax.default_backend() != "gpu" or not custom_cuda_requested():
+        raise RuntimeError("Coarse posterior transaction requires explicit custom CUDA on GPU")
+    global _coarse_posterior_transaction_registered
+    _ensure_ffi()
+    with _ffi_lock:
+        if not _coarse_posterior_transaction_registered:
+            symbol = getattr(_get_lib(), "RelionCoarsePosteriorTransactionF32")
+            jax.ffi.register_ffi_target(
+                _TARGET_RELION_COARSE_POSTERIOR_TRANSACTION_F32,
+                jax.ffi.pycapsule(symbol), platform="CUDA",
+            )
+            _coarse_posterior_transaction_registered = True
+    batch = scores.shape[0]
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_COARSE_POSTERIOR_TRANSACTION_F32,
+        (jax.ShapeDtypeStruct((batch, 4), jnp.float32),
+         jax.ShapeDtypeStruct((batch, 4), jnp.int32),
+         jax.ShapeDtypeStruct((math.prod(scores.shape),), jnp.int32),
+         jax.ShapeDtypeStruct((), jnp.int32)),
+    )(scores, raw_max, actual_count, fraction=fraction, maxsig=maximum)
+
+
 _coarse_shared_pretranslated_registered = False
 
 
