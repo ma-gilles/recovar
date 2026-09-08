@@ -259,3 +259,69 @@ def _collapse_single_class_stats_to_coarse(stats, *, rot_parent_map, n_rot_coars
         max_posterior_per_image=np.asarray(stats.max_posterior_per_image, dtype=np.float32),
         rotation_posterior_sums=coarse_post.astype(np.float32),
     )
+
+
+def _record_score_profile(
+    profile_history: list,
+    score_result,
+    *,
+    phase: str,
+    iteration: int,
+    relion_iteration: int,
+    half_index: int,
+    current_size: int | None,
+    healpix_order: int | None,
+    k_class_enabled: bool,
+) -> None:
+    profile = getattr(score_result, "profile_summary", None)
+    if not profile:
+        return
+    row = dict(profile)
+    row.update(
+        {
+            "phase": str(phase),
+            "iteration": np.int32(iteration),
+            "relion_iteration": np.int32(relion_iteration),
+            "half_index": np.int32(half_index),
+            "current_size": np.int32(-1 if current_size is None else int(current_size)),
+            "healpix_order": np.int32(-1 if healpix_order is None else int(healpix_order)),
+            "k_class_enabled": bool(k_class_enabled),
+        }
+    )
+    profile_history.append(row)
+
+
+def _combine_optional_half_accumulators(left, right, *, label: str):
+    """Combine half accumulators, treating an empty Class3D half as absent."""
+
+    if left is None:
+        if right is None:
+            raise RuntimeError(f"{label} accumulators are missing for both halves")
+        return right
+    if right is None:
+        return left
+    return left + right
+
+
+def _resolve_mstep_accumulator_shape(per_half_shapes, default_shape):
+    """Return the common M-step accumulator shape for this iteration."""
+
+    present = [tuple(int(v) for v in shape) for shape in per_half_shapes if shape is not None]
+    if not present:
+        return tuple(int(v) for v in default_shape)
+    first = present[0]
+    if any(shape != first for shape in present[1:]):
+        raise RuntimeError(f"Per-half M-step accumulator shapes disagree: {present}")
+    return first
+
+
+def _resolve_mstep_full_half_axis(per_half_axes, default_axis=-1):
+    """Return the common RELION half-complex axis for shell statistics."""
+
+    present = [int(axis) for axis in per_half_axes if axis is not None]
+    if not present:
+        return int(default_axis)
+    first = present[0]
+    if any(axis != first for axis in present[1:]):
+        raise RuntimeError(f"Per-half M-step full-half axes disagree: {present}")
+    return first

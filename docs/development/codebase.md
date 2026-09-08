@@ -66,7 +66,9 @@ must be handled at the K-class level, not inferred from independently normalized
 single-class probabilities.
 
 [`score_outputs`](../../recovar/em/dense_single_volume/score_outputs.py) owns
-the scoring containers and class/coarse-grid result adapters.
+the scoring containers and class/coarse-grid result adapters. It also owns
+optional half-accumulator combination, shape/axis resolution and profile-row
+recording. The controller retains scheduling and device-buffer offloading.
 `HalfScoreResult` carries one halfset's common scoring output.
 `PerHalfOutputs` owns separate two-slot lists for a scoring phase; slot 0/1
 always selects the halfset, including for class-related fields. Image arrays

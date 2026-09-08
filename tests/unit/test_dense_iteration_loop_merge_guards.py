@@ -125,12 +125,12 @@ def test_per_half_update_from_half_score_result_updates_only_score_payload():
 
 
 def test_mstep_full_half_axis_resolver_keeps_common_axis_or_default():
-    assert iteration_loop._resolve_mstep_full_half_axis([None, None]) == -1
-    assert iteration_loop._resolve_mstep_full_half_axis([None, 0]) == 0
-    assert iteration_loop._resolve_mstep_full_half_axis([0, 0]) == 0
+    assert score_outputs._resolve_mstep_full_half_axis([None, None]) == -1
+    assert score_outputs._resolve_mstep_full_half_axis([None, 0]) == 0
+    assert score_outputs._resolve_mstep_full_half_axis([0, 0]) == 0
 
     with pytest.raises(RuntimeError, match="full-half axes disagree"):
-        iteration_loop._resolve_mstep_full_half_axis([0, -1])
+        score_outputs._resolve_mstep_full_half_axis([0, -1])
 
 
 def test_local_search_keeps_relion_x_half_mstep_contract():

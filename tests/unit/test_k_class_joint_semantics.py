@@ -33,9 +33,9 @@ from recovar.em.dense_single_volume.k_class import (
 )
 from recovar.em.dense_single_volume.iteration_loop import (
     _build_firstiter_cc_pass2_grids,
-    _combine_optional_half_accumulators,
 )
 from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
+from recovar.em.dense_single_volume.score_outputs import _combine_optional_half_accumulators
 from recovar.em.dense_single_volume.mean_helpers import update_c1_sigma_offset_from_posterior
 from recovar.em.sampling import read_relion_direction_priors
 
