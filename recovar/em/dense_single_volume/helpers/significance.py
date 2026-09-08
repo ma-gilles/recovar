@@ -7489,7 +7489,7 @@ def _compute_k_class_significance_batched(
                 cutoff_count_all[target] = published["cutoff_count"]
                 for local, image in enumerate(indices):
                     begin, stop = published["support_offsets"][local : local + 2]
-                    pose_ids = published["support_ids"][begin:stop].copy()
+                    pose_ids = published["support_ids"][begin:stop].astype(np.int32)
                     significant_sample_indices[0][int(image)] = pose_ids
                     sig_rot_any[0, pose_ids // n_trans] = True
                 start_idx = end_idx

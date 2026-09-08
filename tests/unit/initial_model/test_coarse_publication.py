@@ -266,12 +266,15 @@ def test_actual_significance_engine_publishes_identical_complete_state(monkeypat
     candidate = run()
     assert len(partition_calls) == (1 if first_group == "all_overflow" else 2)
     for i in range(4):
+        assert candidate[i].dtype == control[i].dtype
         np.testing.assert_array_equal(candidate[i], control[i])
     for actual, expected in zip(candidate[4][0], control[4][0], strict=True):
+        assert actual.dtype == expected.dtype == np.int32
         np.testing.assert_array_equal(actual, expected)
     fields = [key for key, value in control[5].items() if isinstance(value, np.ndarray)]
     assert "relion_f32_sum_weight" in fields and "normalization_log_z" in fields
     for key in fields:
+        assert candidate[5][key].dtype == control[5][key].dtype
         np.testing.assert_array_equal(candidate[5][key], control[5][key])
     audit = candidate[5]["coarse_gaussian_gemm_hybrid"]
     assert audit["row_partition"]["mixed_input_batch_count"] == int(first_group == "mixed")
