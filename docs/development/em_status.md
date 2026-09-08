@@ -93,6 +93,11 @@ source identities when incorporating evidence into the draft or later results.
 | Fast guard replay and sampling contracts | `517daf1c7`; 28 CPU cases passed in 47.70 seconds; all 16 previous cases retained, plus 12 existing replay/schedule cases. Fresh-process import boundary, ancestry, mirrored guides and strict docs passed. |
 | Controller box-size names | `13318f807`; 17 focused FSC/current-size CPU tests passed; bijective local-name normalization preserves the entire controller AST, casts, keyword arguments and stored fields |
 | Standalone diagnostic hashing | `f0612975f`; 387 CPU tests passed; 518 exact hashes and 222 matching errors across 74 scripts. All 74 module CLIs and 50 direct CLIs pass; 24 direct-entry failures reproduce on the unchanged parent. Strict docs pass; 14 lint diagnostics and 66 formatting requests remain inherited. |
+| Resolution scheduling ownership | `ddb26a78b`; six unchanged helpers moved out of the controller; 16 CPU tests, 509 exact values, 36 matching errors, 545 warning comparisons and 806 input-mutation checks passed. |
+| Independent resolution scheduling tests | `f85cdbdf6`; ten existing cases moved into `test_resolution_scheduling.py`; all pass without importing the controller. The 342-case original inventory equals 332 retained plus ten moved cases, including fixtures and markers. |
+| Broader CPU fast guard | `5cc4724a7`; all 38 cases pass, retaining the previous 28 cases and adding the ten resolution contracts. Helper imports remain independent of the controller. |
+| Unread private controller parameters | `bbf1d6901`; three unused inputs and forwarding keywords removed. Private loop body and public signature are unchanged; 24 CPU tests, 27 exact dispatch comparisons and five matching errors passed. Public legacy no-op inputs are documented accurately. |
+| Approximate-accuracy convergence ownership | `7e7d92695`; policy and six constants moved to convergence helpers; two boolean wrappers removed. All 86 CPU cases, 532 exact policy values, two matching errors, 534 warning comparisons and 1,068 state-mutation checks pass; the original caller logger is preserved. |
 
 These are focused checks, not full quality or performance qualification.
 Counts describe each validation job and may overlap. No scientific tolerance
