@@ -391,6 +391,7 @@ EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB = 0.0
 EXACT_LOCAL_PROJECTOR_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_PROJECTOR_CAPACITY"
 EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY"
 EXACT_LOCAL_NOISE_STABLE_CORE_ENV = "RECOVAR_EXACT_LOCAL_NOISE_STABLE_CORE"
+EXACT_LOCAL_NOISE_NATIVE_RESIDUAL_ENV = "RECOVAR_EXACT_LOCAL_NOISE_NATIVE_RESIDUAL"
 EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_NOISE_NORM_CAPACITY"
 EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_NOISE_PIXEL_CAPACITY"
 EXACT_LOCAL_HOST_PLAN_PACK_ENV = "RECOVAR_EXACT_LOCAL_HOST_PLAN_PACK"
@@ -2085,6 +2086,13 @@ def _local_noise_stable_core_requested() -> bool:
     token = os.environ.get(EXACT_LOCAL_NOISE_STABLE_CORE_ENV, "0").strip()
     if token not in {"0", "1"}:
         raise ValueError(f"{EXACT_LOCAL_NOISE_STABLE_CORE_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_noise_native_residual_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_NOISE_NATIVE_RESIDUAL_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_NOISE_NATIVE_RESIDUAL_ENV} must be 0 or 1")
     return token == "1"
 
 
@@ -4639,6 +4647,14 @@ def run_local_em_exact(
     ):
         raise ValueError("host-plan packing requires deferred packed final-noise execution")
     noise_stable_core_enabled = _local_noise_stable_core_requested()
+    noise_native_residual_enabled = _local_noise_native_residual_requested()
+    if noise_native_residual_enabled and not (
+        stable_fourier_window_shapes
+        and defer_packed_vdam_enabled
+        and packed_final_noise_enabled
+        and accumulate_noise
+    ):
+        raise ValueError("native noise residual requires stable deferred packed final-noise accumulation")
     if noise_stable_core_enabled and not (
         stable_fourier_window_shapes and packed_final_noise_enabled
     ):
@@ -8041,6 +8057,8 @@ def run_local_em_exact(
             )
             if noise_stable_core_enabled and not use_packed_final_noise:
                 raise ValueError("separate noise core requires a deferred VDAM noise bucket")
+            if noise_native_residual_enabled and not use_packed_final_noise:
+                raise ValueError("native noise residual requires a deferred VDAM noise bucket")
             if use_packed_final_noise:
                 if packed_reconstruction_probs is None:
                     raise RuntimeError(
@@ -8175,6 +8193,7 @@ def run_local_em_exact(
                     ),
                     relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
                     prepared_core=prepared_noise_core,
+                    native_residual_statistics=noise_native_residual_enabled,
                 )
                 if noise_scale_xa is not None:
                     noise_scale_xa = packed_noise_scale_xa

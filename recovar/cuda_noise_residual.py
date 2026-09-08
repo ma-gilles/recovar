@@ -1,4 +1,4 @@
-"""Unused native EM residual-statistics prototype; no engine selects this path."""
+"""Native EM residual statistics, selected only by an explicit diagnostic option."""
 import functools
 
 import jax
