@@ -9,8 +9,10 @@ repairs separately for a user decision.
 
 On 2026-09-08 the user requested integration of
 [PR180](https://github.com/ma-gilles/recovar/pull/180), including its cleanup.
-The full PR is being integrated on `codex/integrate-pr180`, with its numerical
-changes tracked separately from the structural series. The preserved cleanup
+The full PR is integrated locally at
+`42a3d6184c6d05a9f4f97bd00120e62d0081f1d3` on `codex/integrate-pr180`, with its
+numerical changes tracked separately from the structural series. It has not
+been pushed. The preserved cleanup
 branch ends at `681c2e6ed03c9b63b94f07bc47a4a8367b1b4de3`; the pinned incoming
 head is `1e2f229b3e0e8edaec029d2b604937f692148578`. Both descend from the PR158
 control below. Earlier unrelated runtime/validation repair proposals remain
@@ -41,6 +43,27 @@ execution. The previously failing
 integration candidate: PR180 supplies the missing spectrum-normalization
 setting on that path. The earlier frozen CPU result below remains unchanged.
 
+The merged source now passes all 16 selected GPU kernel cases without skips
+on an H100 80 GB (Slurm13623670, `della-h20g2`). These cover native scoring,
+translation, rotation and backprojection, including double-precision scoring
+and translation. The run compiled an exclusive CUDA 12.8 library against the
+frozen checkout's JAX headers, then loaded a read-only copy and verified its
+path and SHA-256 in the test process before and after execution. The package
+inventory matched the frozen environment before execution; source,
+reference-library and CUDA-library identities remained unchanged afterward.
+This is kernel evidence; it does not establish K1/K4 trajectory quality or
+performance. Exact commands and results are under
+`pr180_integration_20260908/gpu_kernels/` in the review root.
+
+Broad CPU job Slurm13623235 is running on the same frozen commit. Its 6,817-case
+selection retains the previous GUI and shared-`/tmp` exclusions. PR180's added
+precision tests, changed API contracts and moved test IDs are recorded
+explicitly; any inherited failure remains a failure. The next quality check is
+the small K1 captured-state replay, with shellwise FSC/FSC-AUC and particle
+state assessed separately. The legacy fast-tier tests use map correlation and
+write ledgers under `tests/baselines`; running them unchanged cannot establish
+the FSC-based quality contract or authorize writes to established baselines.
+
 The [cleanup plan](cleanup_plan.md) tracks the remaining work and its smallest
 useful checks.
 
@@ -48,7 +71,9 @@ useful checks.
 
 The control is PR158 commit
 `44d770de3f9336ab2f3f6a34203394bae8d1aeed`. The implementation branch is
-`codex/recovar-structural-cleanup`, created directly from that control.
+`codex/recovar-structural-cleanup`, created directly from that control and
+preserved at the pre-PR180 checkpoint above. Active work continues on
+`codex/integrate-pr180`.
 An earlier preparation branch mixes structural changes, runtime repairs and
 GUI work; its commits and benchmark results do not qualify this selected series.
 
