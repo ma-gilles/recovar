@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+from recovar.em.dense_single_volume.helpers import bpref_diagnostics, sparse_pass2_bucketed
 
 
 def test_k1_bpref_membership_dump_preserves_identity_padding_and_weights(
@@ -14,7 +14,7 @@ def test_k1_bpref_membership_dump_preserves_identity_padding_and_weights(
     monkeypatch.setenv("RECOVAR_BPREF_MEMBERSHIP_DUMP_ITERATION", "2")
     monkeypatch.setenv("RECOVAR_BPREF_MEMBERSHIP_DUMP_HALF", "1")
     monkeypatch.setattr(sparse_pass2_bucketed, "_bpref_membership_dump_counter", 0)
-    sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=2, half=1)
+    bpref_diagnostics.set_bpref_contribution_dump_context(iteration=2, half=1)
 
     dataset = SimpleNamespace(dataset_indices=np.asarray([41, 73], dtype=np.int64))
     posterior = np.asarray(
@@ -47,7 +47,7 @@ def test_k1_bpref_membership_dump_preserves_identity_padding_and_weights(
             reconstruction_threshold=np.asarray([0.2, 0.2], dtype=np.float32),
         )
     finally:
-        sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+        bpref_diagnostics.clear_bpref_contribution_dump_context()
 
     paths = sorted(dump_dir.glob("*.npz"))
     assert len(paths) == 1
@@ -83,7 +83,7 @@ def test_k1_bpref_membership_dump_respects_physical_context(monkeypatch, tmp_pat
     monkeypatch.setenv("RECOVAR_BPREF_MEMBERSHIP_DUMP_DIR", str(tmp_path))
     monkeypatch.setenv("RECOVAR_BPREF_MEMBERSHIP_DUMP_ITERATION", "2")
     monkeypatch.setenv("RECOVAR_BPREF_MEMBERSHIP_DUMP_HALF", "1")
-    sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=1, half=1)
+    bpref_diagnostics.set_bpref_contribution_dump_context(iteration=1, half=1)
     try:
         sparse_pass2_bucketed._maybe_dump_k1_bpref_membership(
             experiment_dataset=SimpleNamespace(dataset_indices=np.asarray([0])),
@@ -101,5 +101,5 @@ def test_k1_bpref_membership_dump_respects_physical_context(monkeypatch, tmp_pat
             reconstruction_threshold=np.zeros((1,), dtype=np.float32),
         )
     finally:
-        sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+        bpref_diagnostics.clear_bpref_contribution_dump_context()
     assert not list(tmp_path.glob("*.npz"))

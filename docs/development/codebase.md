@@ -99,6 +99,21 @@ The controller still has its own active `build_local_hypothesis_layout` binding
 for adaptive parent-layout construction. Patch the call site exercised by the
 test; do not add reverse imports merely to preserve an old monkeypatch location.
 
+[`helpers.bpref_diagnostics`](../../recovar/em/dense_single_volume/helpers/bpref_diagnostics.py)
+owns the numbered-half capture context, contribution counters, device-panel
+state, capture validation and artifact writers shared by sparse and exact-local
+EM. The controller and replay scripts set and clear that context through this
+owner. Sparse scoring retains candidate planning, numerical kernels and live
+accumulation; it asks the diagnostic owner for scoped capture decisions. The
+diagnostic module has no direct import of sparse scoring or the iteration
+controller. The package initializer still eagerly exports K-class execution,
+which loads sparse scoring even for a standalone helper import; that package
+boundary remains to be cleaned up.
+Tests replace capture functions and state at this owner, including optional
+native signature panels. Dump schemas, precision, counter order and error
+behavior remain unchanged. The boolean parser is shared through
+`helpers.env_flags.parse_env_flag`; file identities use `utils.file_hash`.
+
 Unused constant copies in `iteration_loop` have also been retired. Batch and
 raw-image-cache limits, first-iteration reconstruction caps, dense K-class
 hypothesis budgets and adaptive pass plans belong to `batch_planning`.

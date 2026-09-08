@@ -97,7 +97,6 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _candidate_mask_count,
     _compact_k_class_pair_plan_stats_from_counts,
     _compute_active_noise_rows_chunked,
-    _rectangular_active_weighted_image_sums_or_none,
     _rectangular_active_weighted_sums_or_none,
     _compute_noise_block_and_norm_residual_chunked,
     _compute_noise_block_chunked,
@@ -2241,26 +2240,26 @@ def test_sparse_pass2_adjoint_block_chunking_accumulates_all_rows(monkeypatch):
 
 
 def test_relion_x_half_bp_per_particle_launch_is_off_by_default(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 
     monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", raising=False)
-    assert bucketed_mod.relion_x_half_bp_per_particle_launch_enabled() is False
+    assert bpref_diagnostics.relion_x_half_bp_per_particle_launch_enabled() is False
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", "1")
-    assert bucketed_mod.relion_x_half_bp_per_particle_launch_enabled() is True
+    assert bpref_diagnostics.relion_x_half_bp_per_particle_launch_enabled() is True
 
 
 def test_scoped_bpref_ownership_gate_ignores_unrelated_bucket_order():
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 
     image_indices = np.asarray([20, 5, 13], dtype=np.int64)
     target_rows = np.asarray([0, 2], dtype=np.int64)
 
-    scoped = bucketed_mod._bpref_diagnostic_ownership_indices(
+    scoped = bpref_diagnostics._bpref_diagnostic_ownership_indices(
         image_indices,
         target_rows,
         device_signature_requested=True,
     )
-    unscoped = bucketed_mod._bpref_diagnostic_ownership_indices(
+    unscoped = bpref_diagnostics._bpref_diagnostic_ownership_indices(
         image_indices,
         target_rows,
         device_signature_requested=False,
@@ -2271,29 +2270,29 @@ def test_scoped_bpref_ownership_gate_ignores_unrelated_bucket_order():
     assert np.unique(scoped).size == scoped.size
     assert not np.all(np.diff(scoped) > 0)
     assert not np.all(np.diff(unscoped) > 0)
-    bucketed_mod._validate_bpref_diagnostic_ownership(
+    bpref_diagnostics._validate_bpref_diagnostic_ownership(
         scoped,
         device_signature_requested=True,
     )
     with pytest.raises(RuntimeError, match="unique particle ownership"):
-        bucketed_mod._validate_bpref_diagnostic_ownership(
+        bpref_diagnostics._validate_bpref_diagnostic_ownership(
             np.asarray([20, 20], dtype=np.int64),
             device_signature_requested=True,
         )
     with pytest.raises(RuntimeError, match="strictly increasing particle ownership order"):
-        bucketed_mod._validate_bpref_diagnostic_ownership(
+        bpref_diagnostics._validate_bpref_diagnostic_ownership(
             unscoped,
             device_signature_requested=False,
         )
 
 
 def test_relion_x_half_bp_fused_atomics_is_off_by_default(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 
     monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS", raising=False)
-    assert bucketed_mod.relion_x_half_bp_fused_atomics_enabled() is False
+    assert bpref_diagnostics.relion_x_half_bp_fused_atomics_enabled() is False
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS", "1")
-    assert bucketed_mod.relion_x_half_bp_fused_atomics_enabled() is True
+    assert bpref_diagnostics.relion_x_half_bp_fused_atomics_enabled() is True
 
 
 def test_relion_x_half_bp_per_particle_launch_preserves_ownership_and_order(monkeypatch):
@@ -7085,6 +7084,7 @@ def test_fused_other_class_log_z_matches_two_pass_normalization(monkeypatch):
 def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
     monkeypatch, tmp_path, fine_prune, winner_take_all
 ):
+    from recovar.em.dense_single_volume.helpers import bpref_diagnostics
     from recovar.em.dense_single_volume.helpers import compact_candidate_capture as capture_mod
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
@@ -7169,15 +7169,15 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
     monkeypatch.setenv(capture_mod.CAPTURE_DIR_ENV, str(tmp_path))
     monkeypatch.setenv(capture_mod.CAPTURE_ITERATION_ENV, "3")
     try:
-        bucketed_mod.set_bpref_contribution_dump_context(iteration=3, half=1)
+        bpref_diagnostics.set_bpref_contribution_dump_context(iteration=3, half=1)
         monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", str(1024**3))
         unchunked = compute_pass2_stats_sparse(**common)
         ds.dataset_indices = np.arange(n_images, dtype=np.int64) + n_images
-        bucketed_mod.set_bpref_contribution_dump_context(iteration=3, half=2)
+        bpref_diagnostics.set_bpref_contribution_dump_context(iteration=3, half=2)
         monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", "512")
         chunked = compute_pass2_stats_sparse(**common)
     finally:
-        bucketed_mod.clear_bpref_contribution_dump_context()
+        bpref_diagnostics.clear_bpref_contribution_dump_context()
 
     marker = capture_mod.finalize_raw_capture_directory(
         tmp_path,
@@ -7505,6 +7505,7 @@ def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonm
     f32_fine_posterior,
     shadow_only,
 ):
+    from recovar.em.dense_single_volume.helpers import bpref_diagnostics
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
@@ -7531,7 +7532,7 @@ def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonm
         contribution_calls.append(kwargs)
 
     monkeypatch.setattr(
-        bucketed_mod,
+        bpref_diagnostics,
         "_maybe_dump_bpref_contribution_rows",
         capture_contribution,
     )
@@ -7546,7 +7547,7 @@ def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonm
             }
 
         monkeypatch.setattr(
-            bucketed_mod,
+            bpref_diagnostics,
             "_resolve_bpref_bucket_diagnostic_modes",
             resolve_shadow_modes,
         )
@@ -8653,7 +8654,7 @@ def test_fused_sparse_k_class_capture_requires_companion_contribution_dump(monke
 def test_bpref_contribution_stop_requires_completed_target_files(monkeypatch, tmp_path):
     """The diagnostic sentinel fires only after requested files exist."""
 
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 
     contribution_path = tmp_path / "contribution.npz"
     device_path = tmp_path / "contribution.device.npz"
@@ -8661,14 +8662,14 @@ def test_bpref_contribution_stop_requires_completed_target_files(monkeypatch, tm
     monkeypatch.delenv("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", raising=False)
 
     with pytest.raises(RuntimeError, match="missing its contribution file"):
-        bucketed_mod._maybe_stop_after_bpref_contribution_dump(
+        bpref_diagnostics._maybe_stop_after_bpref_contribution_dump(
             contribution_path=contribution_path,
             device_signature_path=None,
         )
 
     contribution_path.write_bytes(b"contribution")
-    with pytest.raises(bucketed_mod.BPrefContributionDumpComplete) as exc_info:
-        bucketed_mod._maybe_stop_after_bpref_contribution_dump(
+    with pytest.raises(bpref_diagnostics.BPrefContributionDumpComplete) as exc_info:
+        bpref_diagnostics._maybe_stop_after_bpref_contribution_dump(
             contribution_path=contribution_path,
             device_signature_path=None,
         )
@@ -8677,14 +8678,14 @@ def test_bpref_contribution_stop_requires_completed_target_files(monkeypatch, tm
 
     monkeypatch.setenv("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", str(tmp_path))
     with pytest.raises(RuntimeError, match="missing its requested device-signature file"):
-        bucketed_mod._maybe_stop_after_bpref_contribution_dump(
+        bpref_diagnostics._maybe_stop_after_bpref_contribution_dump(
             contribution_path=contribution_path,
             device_signature_path=device_path,
         )
 
     device_path.write_bytes(b"device")
-    with pytest.raises(bucketed_mod.BPrefContributionDumpComplete) as exc_info:
-        bucketed_mod._maybe_stop_after_bpref_contribution_dump(
+    with pytest.raises(bpref_diagnostics.BPrefContributionDumpComplete) as exc_info:
+        bpref_diagnostics._maybe_stop_after_bpref_contribution_dump(
             contribution_path=contribution_path,
             device_signature_path=device_path,
         )
@@ -8695,6 +8696,7 @@ def test_bpref_contribution_stop_requires_completed_target_files(monkeypatch, tm
 def test_fused_sparse_k_class_capture_is_observational(monkeypatch, tmp_path):
     """Selected fused-K capture rows must not change authoritative accumulators."""
 
+    from recovar.em.dense_single_volume.helpers import bpref_diagnostics
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
     from recovar.em.sampling import rotation_grid_size
 
@@ -8710,7 +8712,7 @@ def test_fused_sparse_k_class_capture_is_observational(monkeypatch, tmp_path):
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", "1")
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_FUSED_ATOMICS", "1")
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY", "1")
-    monkeypatch.setattr(bucketed_mod, "_require_bpref_device_soft_particle_arm", lambda **_kwargs: None)
+    monkeypatch.setattr(bpref_diagnostics, "_require_bpref_device_soft_particle_arm", lambda **_kwargs: None)
     monkeypatch.setattr(
         bucketed_mod,
         "_accumulate_adjoint_block_chunked",
@@ -8722,7 +8724,7 @@ def test_fused_sparse_k_class_capture_is_observational(monkeypatch, tmp_path):
     def capture_rows(**kwargs):
         captures.append(kwargs)
 
-    monkeypatch.setattr(bucketed_mod, "_maybe_dump_bpref_contribution_rows", capture_rows)
+    monkeypatch.setattr(bpref_diagnostics, "_maybe_dump_bpref_contribution_rows", capture_rows)
 
     n_images = 2
     n_classes = 2

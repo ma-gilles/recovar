@@ -20,6 +20,7 @@ import numpy as np
 
 from recovar.core import fourier_transform_utils as ftu
 from recovar.data_io.cryoem_dataset import load_dataset
+from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     make_fourier_window_spec,
@@ -705,7 +706,7 @@ def main() -> None:
     os.environ["RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS"] = "1"
     os.environ["RECOVAR_K1_RELION_EXACT_CTF_STAR"] = str(data_star.resolve())
 
-    sparse_pass2_bucketed.set_bpref_contribution_dump_context(
+    bpref_diagnostics.set_bpref_contribution_dump_context(
         iteration=args.consumer_iteration,
         half=args.half,
     )
@@ -768,7 +769,7 @@ def main() -> None:
         sparse_pass2_bucketed._relion_cuda_pixel_correction_from_rfloat_ctf = (
             original_pixel_correction
         )
-        sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+        bpref_diagnostics.clear_bpref_contribution_dump_context()
 
     dump_path = args.output_dir / (f"pass2_orig{args.source_index:06d}_cs{args.current_size:03d}.npz")
     _require(dump_path.is_file() and dump_path.stat().st_size > 0, "focused pass-2 dump missing")

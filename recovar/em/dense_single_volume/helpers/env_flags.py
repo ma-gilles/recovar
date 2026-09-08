@@ -57,3 +57,11 @@ def parse_env_nonnegative_int(name: str) -> int | None:
     if value < 0:
         raise ValueError(f"{name} must be a non-negative integer, got {raw!r}")
     return value
+
+
+def parse_env_flag(name: str, *, default: bool = False) -> bool:
+    """Read a boolean override; unset or blank values use the caller default."""
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return bool(default)
+    return raw.strip().lower() not in {"0", "false", "no", "off"}

@@ -31,7 +31,7 @@ from recovar.em.dense_single_volume.batch_planning import (
     _safe_dense_k_class_rotation_block_size,
     _safe_firstiter_cc_image_batch_size,
 )
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as _sparse_pass2_diagnostics
+from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 from recovar.em.dense_single_volume.em_engine import run_em
 from recovar.em.dense_single_volume.frozen_boundary import (
     _assert_frozen_scoring_state_unchanged,
@@ -4373,7 +4373,7 @@ def _run_relion_iteration_loop(
             experiment_datasets=experiment_datasets,
         )
         for k in diagnostic_half_indices:
-            _sparse_pass2_diagnostics.set_bpref_contribution_dump_context(
+            bpref_diagnostics.set_bpref_contribution_dump_context(
                 iteration=iteration + 1,
                 half=k + 1,
             )
@@ -4920,7 +4920,7 @@ def _run_relion_iteration_loop(
                     or int(_device_signature_target_half) == k + 1
                 )
             ):
-                _sparse_pass2_diagnostics.flush_bpref_device_panel_accumulator(
+                bpref_diagnostics.flush_bpref_device_panel_accumulator(
                     iteration=iteration + 1,
                     half=k + 1,
                 )
@@ -6567,7 +6567,7 @@ def _run_relion_iteration_loop(
 
     # Numbered contribution/native dump identities must never leak into the
     # return path or RELION's unnumbered final all-data pass.
-    _sparse_pass2_diagnostics.clear_bpref_contribution_dump_context()
+    bpref_diagnostics.clear_bpref_contribution_dump_context()
 
     # RELION can enter final all-data only when checkConvergence() ran at the
     # top of a permitted loop iteration.  If the last numbered iteration
@@ -7360,7 +7360,7 @@ def _run_relion_iteration_loop(
     )
     final_outs = PerHalfOutputs.empty()
     for k in range(2):
-        _sparse_pass2_diagnostics.clear_bpref_contribution_dump_context()
+        bpref_diagnostics.clear_bpref_contribution_dump_context()
         final_half_t0 = time.time()
         logger.info(
             "BPREF_DEVICE_SIGNATURE_ACTIVATION iteration=%d half=%d "

@@ -15,7 +15,8 @@ import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as _sparse_pass2_diagnostics
+from recovar.em.dense_single_volume.helpers import bpref_diagnostics
+from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_maybe_windowed as _adjoint_slice_volume_maybe_windowed,
 )
@@ -170,7 +171,7 @@ def _maybe_dump_exact_local_bpref_contribution_rows(**kwargs) -> None:
         raise RuntimeError(
             "Exact-local BPref contribution capture does not yet support device signatures"
         )
-    _sparse_pass2_diagnostics._maybe_dump_bpref_contribution_rows(**kwargs)
+    bpref_diagnostics._maybe_dump_bpref_contribution_rows(**kwargs)
 
 
 def _exact_local_bpref_contribution_capture_active(
@@ -180,7 +181,7 @@ def _exact_local_bpref_contribution_capture_active(
 
     if not os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "").strip():
         return False
-    context = _sparse_pass2_diagnostics._bpref_contribution_context
+    context = bpref_diagnostics._bpref_contribution_context
     context_iteration = int(context["iteration"])
     context_half = int(context["half"])
     target_iteration = os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION", "").strip()
@@ -2523,7 +2524,7 @@ def run_local_em_exact(
         dtype=precision_policy.score_real_dtype,
     )
     relion_score_translation_angles = (
-        _sparse_pass2_diagnostics._relion_cuda_score_translation_angles_if_available(
+        sparse_pass2_bucketed._relion_cuda_score_translation_angles_if_available(
             local_layout.translation_grid,
             image_shape,
             enabled=relion_exact_score_translation,

@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse
 
 
@@ -28,8 +29,8 @@ def test_norm_residual_input_capture_preserves_exact_target_arrays(
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_CURRENT_SIZE", "56")
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ITERATION", "1")
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS", "1")
-    monkeypatch.setitem(sparse._bpref_contribution_context, "iteration", 1)
-    monkeypatch.setitem(sparse._bpref_contribution_context, "half", 2)
+    monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "iteration", 1)
+    monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "half", 2)
     proj = jnp.asarray([[[1 + 2j, 3 + 4j]]], dtype=jnp.complex64)
     proj_abs2 = jnp.abs(proj) ** 2
     summed = jnp.asarray([[[5 + 6j, 7 + 8j]]], dtype=jnp.complex64)
@@ -192,8 +193,8 @@ def test_norm_capture_slices_and_reshapes_raw_translation_rows(tmp_path, monkeyp
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_CURRENT_SIZE", "56")
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ITERATION", "1")
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS", "1")
-    monkeypatch.setitem(sparse._bpref_contribution_context, "iteration", 1)
-    monkeypatch.setitem(sparse._bpref_contribution_context, "half", 2)
+    monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "iteration", 1)
+    monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "half", 2)
 
     def fake_translate(images, angles, pixel_indices, image_shape):
         assert angles.shape == (2, 2)

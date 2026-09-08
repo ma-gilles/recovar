@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse
 from scripts.analyze_k1_scale_aa_boundary import analyze
 
@@ -70,8 +71,8 @@ def test_scale_aa_boundary_replays_operands_and_matches_native_shells(tmp_path: 
 
 
 def test_chunked_scale_aa_writer_preserves_float32_chunk_order(tmp_path: Path, monkeypatch):
-    monkeypatch.setitem(sparse._bpref_contribution_context, "iteration", 2)
-    monkeypatch.setitem(sparse._bpref_contribution_context, "half", 1)
+    monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "iteration", 2)
+    monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "half", 1)
     aa_chunks = [
         np.asarray([[1.0, 2.0]], dtype=np.float32),
         np.asarray([[3.0, 4.0]], dtype=np.float32),

@@ -45,6 +45,7 @@ import jax.numpy as jnp
 import recovar.em.dense_single_volume.helpers.oversampling as oversampling_mod
 import recovar.em.dense_single_volume.helpers.score_constraints as score_constraints_mod
 import recovar.em.dense_single_volume.helpers.significance as sig_mod
+from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 import recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed as sparse_pass2_mod
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop
 from recovar.em.dense_single_volume import score_outputs
@@ -1047,8 +1048,8 @@ def test_sparse_pass2_dump_writes_score_and_recon_operand_arrays(monkeypatch, tm
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ITERATION", "2")
-    monkeypatch.setitem(sparse_pass2_mod._bpref_contribution_context, "iteration", 2)
-    monkeypatch.setitem(sparse_pass2_mod._bpref_contribution_context, "half", 1)
+    monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "iteration", 2)
+    monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "half", 1)
     sparse_pass2_mod._maybe_dump_pass2_bucket(
         experiment_dataset=experiment_dataset,
         image_indices=np.asarray([0], dtype=np.int64),
@@ -1690,20 +1691,20 @@ def test_pass2_dump_target_rows_require_requested_iteration(monkeypatch, tmp_pat
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ITERATION", "2")
 
     try:
-        sparse_pass2_mod.set_bpref_contribution_dump_context(iteration=1, half=1)
+        bpref_diagnostics.set_bpref_contribution_dump_context(iteration=1, half=1)
         before_target = sparse_pass2_mod._pass2_dump_target_rows(
             experiment_dataset=experiment_dataset,
             image_indices=np.asarray([7, 8, 9], dtype=np.int64),
             current_size=14,
         )
-        sparse_pass2_mod.set_bpref_contribution_dump_context(iteration=2, half=1)
+        bpref_diagnostics.set_bpref_contribution_dump_context(iteration=2, half=1)
         at_target = sparse_pass2_mod._pass2_dump_target_rows(
             experiment_dataset=experiment_dataset,
             image_indices=np.asarray([7, 8, 9], dtype=np.int64),
             current_size=14,
         )
     finally:
-        sparse_pass2_mod.clear_bpref_contribution_dump_context()
+        bpref_diagnostics.clear_bpref_contribution_dump_context()
 
     np.testing.assert_array_equal(before_target, np.empty((0,), dtype=np.int64))
     np.testing.assert_array_equal(at_target, np.asarray([1, 2], dtype=np.int64))

@@ -69,6 +69,7 @@ Recent work after PR180 integration:
 | Duplicate final half-map reconstruction calls consolidated; overwritten initialization removed | 31 affected cases, 38 CPU fast-guard cases and 3 K-class checks; 56 exact call/output/error scenarios across K1/K2/K4; the existing K1 convergence test now checks all five saved reconstruction products |
 | Separately authorized K-class optional-field routing correction | New wrapper regression: 8 failed/8 passed before, all 16 passed after; 29 affected cases and 38 CPU fast-guard cases pass. The mismatch is inherited from PR158 and PR180; the tracked production controller's pose-enabled K-class call is unchanged |
 | Local engine returns `LocalEMResult`; positional packer and both decoders removed | 188 focused cases and 38 CPU fast-guard cases pass; all 511 existing case IDs retained plus 4 new capture-routing cases; 16 engine flag combinations and both consumer mappings preserve object identity; 1,218 existing assertions/numerical checks preserved through explicit field mapping |
+| BPref capture context, validation and writers have a direct diagnostic owner | 50 baseline cases pass; 55 affected/hash cases and 38 CPU guard cases pass after migration. Exact source comparison preserves moved definitions and executable caller bodies through explicit owner mappings. One source-inspection assertion was migrated to the qualified call name |
 
 The replay-completion change preserves all three controller return paths, output keys,
 validation exceptions and log messages. Detailed evidence is in
@@ -134,12 +135,17 @@ strict-parity target needs separate scientific qualification.
    `6ee49dc5c8255a35d16930dd948341a9fad515eb` in
    `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_em_api_checkpoint_20260908/`.
    CPU job `13630086` and GPU job `13630096` cover the same 566 cases in ten
-   affected EM test modules. CPU expects five explicitly GPU-marked skips;
-   GPU must execute every case. Results are pending, not qualification.
+   affected EM test modules. GPU passes all 566 cases with no skips; CPU has
+   561 passed and the five expected GPU-marked skips. The CPU job itself failed
+   because its outer reporter converted a test class name into a file path.
+   `audit_saved_results.py` verifies all 566 saved JUnit identities and exactly
+   the expected skip set on both backends without rerunning tests or rewriting
+   that failed outcome. Source and native-library identities stayed unchanged.
    The driver, source/library hashes and case inventory are under
    `em_api_checkpoint_20260908/` in the review root; logs use the same directory
    name under `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/`.
-   Review these results before further engine changes. Engine numerical statements and
+   This qualifies the declared API/ownership test inventory, not an autonomous
+   trajectory, performance or later source changes. Engine numerical statements and
    K-class computation are unchanged; the named result removes both positional
    decoders. It also fixes the related capture-routing ambiguity where an
    implicit profile could be returned as significant counts when hidden by the
@@ -148,6 +154,15 @@ strict-parity target needs separate scientific qualification.
    under the review root. The earlier separately authorized K-class routing fix
    remains recorded under `pr180_local_result_contract_20260908/`. Neither
    routing correction explains or waives existing benchmark failures.
+   The next implementation checkpoint separates BPref diagnostics from sparse
+   scoring. Its exact source comparisons, before/after cases and import-boundary
+   checks are under `bpref_diagnostic_owner_20260908/` in the review root.
+   Continue from its final focused results and caller inventory; preserve the
+   diagnostic state lifetime, saved schema and production execution decisions.
+   Its standalone import probe found that `dense_single_volume.__init__` still
+   eagerly loads K-class execution and sparse scoring. Review and migrate the
+   remaining K-class package re-exports next; the controller-import guard passes,
+   but it does not prove that helper imports avoid every execution module.
 2. For K1, use the reproduced six-particle case to compare matched score
    operands, priors and candidate geometry, starting with row 901. Preserve
    the measured dump-versus-production difference and the unknown generating
