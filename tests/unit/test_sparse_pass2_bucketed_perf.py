@@ -2579,6 +2579,7 @@ def test_fresh_k1_firstiter_cc_casts_rows_to_bpref_accumulator_dtype(monkeypatch
         max_r=2.0,
         log_label_prefix="float32-accumulator",
         winner_take_all=True,
+        strict_particle_order=True,
     )
 
     assert observed == {

@@ -144,7 +144,7 @@ class LocalSearchOptions:
                 "local_search_profile_mode must be "
                 "'auto', 'on', or 'off', "
                 f"got {self.local_search_profile_mode!r}"
-            )    
+            )
 
 
 @dataclass(frozen=True)
