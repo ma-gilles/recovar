@@ -12926,7 +12926,7 @@ class TestRelionModeSmokeTest:
         )
 
     def test_approx_acc_rot_convergence_policy_guards_confident_prelocal_runs(self, monkeypatch):
-        import recovar.em.dense_single_volume.iteration_loop as refine_mod
+        from recovar.em.dense_single_volume.helpers import convergence as convergence_helpers
         from recovar.em.dense_single_volume.helpers.convergence import RefinementState
 
         for name in (
@@ -12944,7 +12944,8 @@ class TestRelionModeSmokeTest:
             particle_diameter_angstrom=200.0,
         )
 
-        allow, reason = refine_mod._approx_acc_rot_policy_for_convergence(
+        allow, reason = convergence_helpers._approx_acc_rot_policy_for_convergence(
+            logger=iteration_loop_module.logger,
             state=state,
             iteration_number=5,
             ave_pmax=0.96,
@@ -12955,7 +12956,7 @@ class TestRelionModeSmokeTest:
         assert "high-pmax" in reason
 
     def test_approx_acc_rot_convergence_policy_is_diagnostic_by_default(self, monkeypatch):
-        import recovar.em.dense_single_volume.iteration_loop as refine_mod
+        from recovar.em.dense_single_volume.helpers import convergence as convergence_helpers
         from recovar.em.dense_single_volume.helpers.convergence import RefinementState
 
         for name in (
@@ -12973,7 +12974,8 @@ class TestRelionModeSmokeTest:
             particle_diameter_angstrom=200.0,
         )
 
-        allow, reason = refine_mod._approx_acc_rot_policy_for_convergence(
+        allow, reason = convergence_helpers._approx_acc_rot_policy_for_convergence(
+            logger=iteration_loop_module.logger,
             state=state,
             iteration_number=5,
             ave_pmax=0.77,
@@ -12984,7 +12986,7 @@ class TestRelionModeSmokeTest:
         assert reason == "diagnostic-only-default"
 
     def test_approx_acc_rot_convergence_policy_env_overrides(self, monkeypatch):
-        import recovar.em.dense_single_volume.iteration_loop as refine_mod
+        from recovar.em.dense_single_volume.helpers import convergence as convergence_helpers
         from recovar.em.dense_single_volume.helpers.convergence import RefinementState
 
         state = RefinementState(
@@ -12995,7 +12997,8 @@ class TestRelionModeSmokeTest:
 
         monkeypatch.setenv("RECOVAR_EM_DISABLE_APPROX_ACC_ROT_FOR_CONVERGENCE", "1")
         monkeypatch.delenv("RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE", raising=False)
-        allow, reason = refine_mod._approx_acc_rot_policy_for_convergence(
+        allow, reason = convergence_helpers._approx_acc_rot_policy_for_convergence(
+            logger=iteration_loop_module.logger,
             state=state,
             iteration_number=5,
             ave_pmax=0.5,
@@ -13006,7 +13009,8 @@ class TestRelionModeSmokeTest:
 
         monkeypatch.setenv("RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE", "1")
         monkeypatch.delenv("RECOVAR_EM_DISABLE_APPROX_ACC_ROT_FOR_CONVERGENCE", raising=False)
-        allow, reason = refine_mod._approx_acc_rot_policy_for_convergence(
+        allow, reason = convergence_helpers._approx_acc_rot_policy_for_convergence(
+            logger=iteration_loop_module.logger,
             state=state,
             iteration_number=1,
             ave_pmax=1.0,

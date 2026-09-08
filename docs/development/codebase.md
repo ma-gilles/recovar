@@ -189,6 +189,9 @@ validation and application of explicit HEALPix schedules used for oracle runs.
 The controller selects the iteration's requested order; the convergence helper
 advances through the existing angular and translation updates without coarsening
 an active state.
+It also owns the approximate-accuracy convergence gate and its environment
+overrides. The controller supplies its logger so malformed-override warnings
+keep their existing routing.
 
 `helpers/resolution.py` owns current-size growth inputs and first-iteration
 resolution rules: the inclusive FSC/data-vs-prior boundary, raw versus corrected

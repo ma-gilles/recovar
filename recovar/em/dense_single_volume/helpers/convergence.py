@@ -46,6 +46,13 @@ _LOW_PMAX_REFINE_DEFAULT_MIN_RES_STALL = 3
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 _FALSE_ENV_VALUES = {"0", "false", "no", "off"}
 
+_APPROX_ACC_ROT_CONVERGENCE_ENV = "RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE"
+_APPROX_ACC_ROT_CONVERGENCE_DISABLE_ENV = "RECOVAR_EM_DISABLE_APPROX_ACC_ROT_FOR_CONVERGENCE"
+_APPROX_ACC_ROT_MAX_AVE_PMAX_ENV = "RECOVAR_EM_APPROX_ACC_ROT_MAX_AVE_PMAX"
+_APPROX_ACC_ROT_MIN_ITER_ENV = "RECOVAR_EM_APPROX_ACC_ROT_MIN_ITER"
+_APPROX_ACC_ROT_DEFAULT_MAX_AVE_PMAX = 0.85
+_APPROX_ACC_ROT_DEFAULT_MIN_ITER = 5
+
 # RELION's "smallest changes thus far" sentinel values (ml_optimiser.cpp:1042-1044)
 SMALLEST_CHANGES_INIT_ORIENTATIONS = 999.0  # degrees
 SMALLEST_CHANGES_INIT_OFFSETS = 999.0  # angstroms
@@ -877,6 +884,52 @@ def _env_bool(name: str, default: bool) -> bool:
         return False
     logger.warning("Ignoring invalid %s=%r; using %s", name, value, default)
     return default
+
+
+def _approx_acc_rot_policy_for_convergence(
+    *,
+    logger: logging.Logger,
+    state,
+    iteration_number: int,
+    ave_pmax: float,
+    new_resolution_angstrom: float,
+) -> tuple[bool, str]:
+    """Return whether native support-width acc_rot may gate convergence.
+
+    The support-width estimate is much cheaper than RELION's map-perturbation
+    accuracy calculation, but it overstates certainty when posterior support
+    collapses to a few samples.  Keep it diagnostic-only by default; callers
+    can opt into the historical convergence gate with
+    RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE=1.
+    """
+    if _env_flag_enabled(_APPROX_ACC_ROT_CONVERGENCE_ENV):
+        return True, "forced-by-env"
+    if _env_flag_enabled(_APPROX_ACC_ROT_CONVERGENCE_DISABLE_ENV):
+        return False, "disabled-by-env"
+    if state.do_local_search:
+        return False, "diagnostic-only-local-search"
+    if state.healpix_order + 1 < state.auto_local_healpix_order:
+        return False, "diagnostic-only-not-prelocal"
+
+    min_iter = max(
+        1,
+        parse_env_int_or_default(
+            _APPROX_ACC_ROT_MIN_ITER_ENV, _APPROX_ACC_ROT_DEFAULT_MIN_ITER, logger=logger,
+        ),
+    )
+    if int(iteration_number) < min_iter:
+        return False, f"diagnostic-only-before-iter-{min_iter}"
+
+    max_ave_pmax = parse_env_float_or_default(
+        _APPROX_ACC_ROT_MAX_AVE_PMAX_ENV, _APPROX_ACC_ROT_DEFAULT_MAX_AVE_PMAX, logger=logger,
+    )
+    if np.isfinite(ave_pmax) and float(ave_pmax) > max_ave_pmax:
+        return False, f"diagnostic-only-high-pmax>{max_ave_pmax:.2f}"
+
+    if np.isfinite(new_resolution_angstrom) and new_resolution_angstrom < state.current_resolution:
+        return False, "diagnostic-only-resolution-improving"
+
+    return False, "diagnostic-only-default"
 
 
 def _low_pmax_refinement_guard_blocks(state: RefinementState) -> bool:

@@ -37,6 +37,7 @@ from recovar.em.dense_single_volume.frozen_boundary import (
 )
 from recovar.em.dense_single_volume.firstiter_cc import _build_firstiter_cc_pass2_grids
 from recovar.em.dense_single_volume.helpers.convergence import (
+    _approx_acc_rot_policy_for_convergence,
     LOCAL_SEARCH_HEALPIX_ORDER,
     RefinementState,
     calculate_expected_angular_errors,
@@ -46,10 +47,6 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     _apply_relion_healpix_order_oracle,
     update_angular_sampling,
     update_refinement_state,
-)
-from recovar.em.dense_single_volume.helpers.env_flags import (
-    parse_env_float_or_default,
-    parse_env_int_or_default,
 )
 from recovar.em.dense_single_volume.helpers.expected_accuracy import (
     estimate_relion_expected_accuracy,
@@ -333,10 +330,6 @@ logger = logging.getLogger(__name__)
 RELION_ADAPTIVE_FRACTION = float(np.float32("0.999"))
 
 RELION_MAX_FULL_GRID_ORDER = 4
-_APPROX_ACC_ROT_CONVERGENCE_ENV = "RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE"
-_APPROX_ACC_ROT_CONVERGENCE_DISABLE_ENV = "RECOVAR_EM_DISABLE_APPROX_ACC_ROT_FOR_CONVERGENCE"
-_APPROX_ACC_ROT_MAX_AVE_PMAX_ENV = "RECOVAR_EM_APPROX_ACC_ROT_MAX_AVE_PMAX"
-_APPROX_ACC_ROT_MIN_ITER_ENV = "RECOVAR_EM_APPROX_ACC_ROT_MIN_ITER"
 _FINAL_ALL_DATA_USE_MERGED_REFERENCE_ENV = "RECOVAR_FINAL_ALL_DATA_USE_MERGED_REFERENCE"
 _FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE_ENV = "RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE"
 _FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE_ENV = "RECOVAR_FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE"
@@ -355,20 +348,8 @@ _K_CLASS_FULL_VOLUME_MSTEP_ENV = "RECOVAR_K_CLASS_FULL_VOLUME_MSTEP"
 _K_CLASS_HALF_VOLUME_MSTEP_ENV = "RECOVAR_K_CLASS_HALF_VOLUME_MSTEP"
 _KCLASS_REPLAY_TAU2_ENV = "RECOVAR_KCLASS_REPLAY_TAU2"
 _KCLASS_REPLAY_TAU2_SAME_ITER_ENV = "RECOVAR_KCLASS_REPLAY_TAU2_SAME_ITER"
-_APPROX_ACC_ROT_DEFAULT_MAX_AVE_PMAX = 0.85
-_APPROX_ACC_ROT_DEFAULT_MIN_ITER = 5
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 _FALSE_ENV_VALUES = {"0", "false", "no", "off"}
-
-
-def _use_approx_acc_rot_for_convergence() -> bool:
-    """Return whether the cheap support-width acc_rot is force-enabled."""
-    return os.environ.get(_APPROX_ACC_ROT_CONVERGENCE_ENV, "").strip().lower() in _TRUE_ENV_VALUES
-
-
-def _disable_approx_acc_rot_for_convergence() -> bool:
-    """Return whether all native support-width convergence gating is disabled."""
-    return os.environ.get(_APPROX_ACC_ROT_CONVERGENCE_DISABLE_ENV, "").strip().lower() in _TRUE_ENV_VALUES
 
 
 def _debug_replay_relion_references_enabled(iteration_number: int) -> bool:
@@ -770,51 +751,6 @@ def _kclass_replay_tau2_same_iter_enabled() -> bool:
         return True
     logger.warning("Ignoring invalid %s=%r; using default false", _KCLASS_REPLAY_TAU2_SAME_ITER_ENV, value)
     return False
-
-
-def _approx_acc_rot_policy_for_convergence(
-    *,
-    state,
-    iteration_number: int,
-    ave_pmax: float,
-    new_resolution_angstrom: float,
-) -> tuple[bool, str]:
-    """Return whether native support-width acc_rot may gate convergence.
-
-    The support-width estimate is much cheaper than RELION's map-perturbation
-    accuracy calculation, but it overstates certainty when posterior support
-    collapses to a few samples.  Keep it diagnostic-only by default; callers
-    can opt into the historical convergence gate with
-    RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE=1.
-    """
-    if _use_approx_acc_rot_for_convergence():
-        return True, "forced-by-env"
-    if _disable_approx_acc_rot_for_convergence():
-        return False, "disabled-by-env"
-    if state.do_local_search:
-        return False, "diagnostic-only-local-search"
-    if state.healpix_order + 1 < state.auto_local_healpix_order:
-        return False, "diagnostic-only-not-prelocal"
-
-    min_iter = max(
-        1,
-        parse_env_int_or_default(
-            _APPROX_ACC_ROT_MIN_ITER_ENV, _APPROX_ACC_ROT_DEFAULT_MIN_ITER, logger=logger,
-        ),
-    )
-    if int(iteration_number) < min_iter:
-        return False, f"diagnostic-only-before-iter-{min_iter}"
-
-    max_ave_pmax = parse_env_float_or_default(
-        _APPROX_ACC_ROT_MAX_AVE_PMAX_ENV, _APPROX_ACC_ROT_DEFAULT_MAX_AVE_PMAX, logger=logger,
-    )
-    if np.isfinite(ave_pmax) and float(ave_pmax) > max_ave_pmax:
-        return False, f"diagnostic-only-high-pmax>{max_ave_pmax:.2f}"
-
-    if np.isfinite(new_resolution_angstrom) and new_resolution_angstrom < state.current_resolution:
-        return False, "diagnostic-only-resolution-improving"
-
-    return False, "diagnostic-only-default"
 
 
 def _concatenate_pose_stacks_or_none(stacks, *, trailing_shape, label):
@@ -7336,6 +7272,7 @@ def _run_relion_iteration_loop(
                 n_translations=n_trans_current,
             )
             approx_for_convergence, approx_convergence_reason = _approx_acc_rot_policy_for_convergence(
+                logger=logger,
                 state=state,
                 iteration_number=iteration + 1,
                 ave_pmax=ave_pmax,
