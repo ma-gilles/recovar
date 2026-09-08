@@ -65,6 +65,11 @@ finish in under about 60 seconds without the 5k parity dataset. To run it on a
 local GPU, check `nvidia-smi` first and then use
 `EM_FAST_GUARD_BACKEND=gpu pixi run test-em-fast-guard`.
 
+The same command checks the helper/controller import boundary, captured replay
+state and explicit HEALPix schedules. These cases use small in-memory fixtures;
+they require no external RELION capture or GPU allocation on the default CPU
+path. Keep their case inventory intact when reorganizing tests.
+
 ## Baseline Management
 
 ```

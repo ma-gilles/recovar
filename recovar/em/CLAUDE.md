@@ -22,6 +22,11 @@ and documentation together; remove obsolete forwarding wrappers when unused.
 Preserve scientific defaults, numerical behavior and saved-data compatibility
 during structural cleanup. Propose numerical repairs separately.
 
+Keep `dense_single_volume/__init__.py` free of controller imports. Import
+`refine_single_volume` explicitly from `dense_single_volume.iteration_loop`;
+helper imports must not initialize iteration scheduling. The CPU fast guard
+checks this import boundary and the captured-replay and sampling contracts.
+
 ## North Star
 
 Achieve near-perfect RELION quality parity for K=1 auto-refine and K=4 3D

@@ -32,6 +32,8 @@ fi
 
 "$PYTHON_BIN" - <<'PY'
 import pathlib
+import importlib
+import sys
 
 import jax
 import recovar
@@ -42,11 +44,20 @@ jax_file = pathlib.Path(jax.__file__).resolve()
 pixi_env = (repo / ".pixi" / "envs" / "default").resolve()
 assert str(recovar_file).startswith(str(repo) + "/"), recovar_file
 assert str(jax_file).startswith(str(pixi_env) + "/"), (jax_file, pixi_env)
+for helper in ("relion_replay", "projector_preparation", "score_outputs"):
+    importlib.import_module(f"recovar.em.dense_single_volume.{helper}")
+assert "recovar.em.dense_single_volume.iteration_loop" not in sys.modules, (
+    "EM helper imports must not load the refinement controller; "
+    "import refine_single_volume explicitly from iteration_loop"
+)
 print(f"provenance_ok recovar={recovar_file} jax={jax_file}")
+print("helper_import_boundary_ok")
 PY
 
 tests=(
   tests/unit/test_em_fast_guardrail.py
+  tests/unit/test_relion_replay_state.py
+  tests/unit/test_healpix_order_oracle.py
   tests/unit/test_dense_big_jit.py::test_dense_big_jit_pass1_matches_dense_primitives_for_modes
   tests/unit/test_dense_big_jit.py::test_dense_big_jit_mstep_matches_dense_primitives_and_adjoint
   tests/unit/test_dense_big_jit.py::test_dense_big_jit_masks_padded_image_rows
