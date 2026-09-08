@@ -191,3 +191,10 @@ for the controller's scoring calls. It owns native reference conversion, cache
 keys and files, optional dumps, and validation of captured projector geometry.
 `relion_replay.py` retains the captured-state type and parser; the controller
 selects the native or captured path and passes the resulting slabs to scoring.
+
+Captured sampling and projector-state tests live in
+`tests/unit/test_relion_replay_state.py`. They exercise the replay and projector
+owners directly, including immutable copied arrays and suppression of external
+metadata reads. End-to-end controller behavior remains in
+`test_refine_relion_mode.py`; capture-file parsing remains in
+`test_relion_projector_capture.py`.
