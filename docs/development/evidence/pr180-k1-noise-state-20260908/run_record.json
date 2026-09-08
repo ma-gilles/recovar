@@ -1,0 +1,467 @@
+{
+  "source_head": "42a3d6184c6d05a9f4f97bd00120e62d0081f1d3",
+  "fixture_files_sha256": {
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/ctf.pkl": "0adec5176666b57409221fcd6da31c5af7a27d9b1cb5972cca29d64e30926462",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/particles.128.mrcs": "013ae6098a555afce25c35ee25a97f8cfa40634945862e9896bd0a136c5363ec",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/particles.star": "18ea0947252ed5ab6510b1a51076b52b5b39d264da6f6fad6a7ddaf68a7495a8",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/particles_with_halfsets.star": "4cbb3bc4a76cb525dfc9ef4ef86ab165ca36f7e2cea6b1ac6dc58d493c0a860f",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/poses.pkl": "4c286463c5d1c4226c3bb871f93f0513e5a94ce14123966e41b946e7affc750d",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/reference_gt.mrc": "34f94c63757141c331e58860e322ed0046898a65adb762db677e8c42a4e099f0",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/reference_gt_relion.mrc": "49fea95c13dace5c44cee27df2bab886bfda325723f05c3c1accc9d757a6c255",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/reference_init.mrc": "a8b5d63ff4ec2c7934581e146e85b6982a67bef8f41fe28fdcdb95a09800fe1d",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/reference_init_relion.mrc": "255fe356e84fc906b76d27b51a9a759f07a11ef53b84ad67a9f11c2b36b88665",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_class001.mrc": "e9ab77ab795b474f87e07aef65e59d3f230c48433d50ee1b7cba165455579400",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_class001_angdist.bild": "e01c9dfbcbf342563ecc28bdae9d76410d3e688fc843cf9b1c234abbf0e26777",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_data.star": "1f99a8e21cccca132b480dd6c81f69d5607f4eef0fcf6225e831ae69dd0419c5",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_half1_class001_unfil.mrc": "73d864645a7cb3c484311e045f52e7969899055e07416f100eeb340680136182",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_half2_class001_unfil.mrc": "9d96bcb00d8cc5cf7d9272988f44b151d4646501f0b4caa57de4cbc07c9c3518",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it000_data.star": "8270c113efb8a83f576d45d6f0924d9fe39e3b13eb06c6e0272e1ba20ec96fac",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it000_half1_class001.mrc": "38de1d39e29b7948dc3813f45d9f8a198cbaa30b9e0f0fd715ffe5915c93e845",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it000_half1_class001_angdist.bild": "8fa1dd2fe1a81fab043efaaaf4e8c5d3e760e03c416b049062a7baebee6fe077",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it000_half1_model.star": "85bf96377a2fa8f6fd30c73c58aee631d285051758136b0daeb7b92823fa6153",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it000_half2_class001.mrc": "38de1d39e29b7948dc3813f45d9f8a198cbaa30b9e0f0fd715ffe5915c93e845",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it000_half2_class001_angdist.bild": "8fa1dd2fe1a81fab043efaaaf4e8c5d3e760e03c416b049062a7baebee6fe077",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it000_half2_model.star": "d4e2b762204fa068b3d6f790051ceafa29e96234496feb3c29f62ff9c3b60072",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it000_optimiser.star": "277dc397cfcf05ea7107395b77b660472eb8acbebc3a3202a496a1084135f4e9",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it000_sampling.star": "2a92a5088b17c359011ea3740fb7fc954ae4ad83ec1aaa3dbd2a0e9f0b63e70d",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it001_data.star": "4cbb3bc4a76cb525dfc9ef4ef86ab165ca36f7e2cea6b1ac6dc58d493c0a860f",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it001_half1_class001.mrc": "e28de4a8f275f26ce24d1d18faaca0393449cc059cd3669a4c9dff693074805b",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it001_half1_class001_angdist.bild": "67b8928839ad955130a1fe0b773aef3575c0412b6e69be1b3dfbd4ec57ddfb3d",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it001_half1_model.star": "f9b6f5c06a8332c11d1f760ab8b9887a30890e2b363bea189315377392e29c03",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it001_half2_class001.mrc": "6a55a11cacba5e66e42311dd3351e392af0c03e3e77df381ef0fd29194b7f55d",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it001_half2_class001_angdist.bild": "0e0bbcb6b73322ec8d05f3bbe6559e70abbc075c2a287b8b0dbfbcafe7141577",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it001_half2_model.star": "624b0ac6c9a899b643bdaae0e272cd98947b434fa7582d12695f2e27c5df47cb",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it001_optimiser.star": "0bd47cfb2df118811b234d1e1beeedda59d059c5badb7ce5a53416030b995671",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it001_sampling.star": "2304219d0edcf5364645509ebef90a038634774ef2b53e3824dbe262ae37aafb",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it002_data.star": "d2bb0d4c7d25fbb49b61d994ff9b4f56a20d31f81f0a99155b6867c359ed1553",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it002_half1_class001.mrc": "a055f7078b4c8f7b4b4f0e5d4f2c24f21c853f53ce42ff03babb4fcf7a6eac95",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it002_half1_class001_angdist.bild": "ffcbdc35db1d7e177e7ec743eccb5fee277cea31913cecafcc035103498d5394",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it002_half1_model.star": "828b6f738d79b166133caeef191ea634342bf5090e5de2a81ef9ec9ad6513204",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it002_half2_class001.mrc": "3753c414ad1f7fbe238c800f3d2a3d4bbe70b9ac66aad2e996703b8ec79ecc1b",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it002_half2_class001_angdist.bild": "45a9df9719dfbde7adeaba4ac659e5bcd321a1fbdb6185ee04c7c89dd4980baa",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it002_half2_model.star": "aa167dc35cb33175fec09eaa3ff06c48a4a9440e8473ffa7c73d540c76b1a9cf",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it002_optimiser.star": "4bbd50ec5a2b37fe6badda1418ab0f5fab93c6c2f7688d8de3e42b169d2fa0e1",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it002_sampling.star": "db95cd9460b16dc02c212673233e9a0ac3eb8f409cd49350411a7e54dae060bd",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it003_data.star": "b435346a9f23bf62bb5941475fdf2dc662a49f41eaa1d03d570fc8d08b7ba1ba",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it003_half1_class001.mrc": "6f8c9cd7ffb621c73c8d5d36f25941f8f4eeeb2fb9b69ee979c1253214f2e805",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it003_half1_class001_angdist.bild": "6ebd1780d2a187165d4e40b1ef7ec685aae7495e81ebc92d53f5f45a79628f12",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it003_half1_model.star": "eed0702905dc2ae70592a59ecbf0baf3010474c7c7ca1f71111e0e7aae2bf916",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it003_half2_class001.mrc": "9c4fa49259534eb790349450c284b370d79464ccec175929d28f41b7377354a5",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it003_half2_class001_angdist.bild": "00796e5d75d73e9d5fb4fa23665874e8f59bc11f314f4a145b5fd1ba54a935a0",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it003_half2_model.star": "92fdb91770b2eb83692e34c9f0cee0d230485cdcfc555bbbc21b7823d76cecf6",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it003_optimiser.star": "99f85bf4d501f1b4a3818a434c2bb81e7b511a5566aebf60bccd8b7a059ce80d",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it003_sampling.star": "0697c6e304665fdec28f1445c86c27a444f11dd1396c4173a86851e8ba08d5db",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it004_data.star": "9dca140ee40ee83feaa64da72213480d76cd03a88ab82c506f6636d4c1a900ae",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it004_half1_class001.mrc": "e4e07ed39b2cf38181fb48994db4d7015abdf70be714b5062858cb36a863aef1",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it004_half1_class001_angdist.bild": "18a9a7d885cc8baea4fd5ee72442a2c5d21eb72f99ea9fa2e092f4e0c6ca13b8",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it004_half1_model.star": "39831f8243d3abd38a9e95db7271a4504c91c0a3e4317e394e435aa278e73acc",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it004_half2_class001.mrc": "f8e436da57744f36b581590a62af9d103924c7bef3331bfef82db9a3f7f387bd",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it004_half2_class001_angdist.bild": "0c5ed738719e15c16d878aed6242f87894de54875f8e6cc52f3d323a3586c6ac",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it004_half2_model.star": "9a9eeb677ffcc1faf95f450bbb3c06a319b2393cf9179614b3b1b10536f94e38",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it004_optimiser.star": "03881b839a6ad0ded321a4958fb8fd41f97397f704dd8c856af1bcea103b405a",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it004_sampling.star": "7d0ff2be9370eeafc7a302fa9300ecd0f435c5e391edc3e4bcc3c8d9ffb27cf2",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it005_data.star": "76e9a94ac189ec915dca34c308b510a6bb02b983ae21f0339e778268428eb38d",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it005_half1_class001.mrc": "5d2b9522e2d10eac6c78ed996b86324dd6fa2ee5e929550db3803db12039e5a5",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it005_half1_class001_angdist.bild": "c60b0ebb9648021980dca3e8b58355f2c653ad57e07079ba4a998f8d78292f16",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it005_half1_model.star": "3d636c60982f23f3cf493acedc5eee0852ebde4a9a372e03b5a9df8a352a76bd",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it005_half2_class001.mrc": "dec02192cba8b45b0caaf3e47359538a8e59aba74824a6769afa5051a0fecfd7",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it005_half2_class001_angdist.bild": "2cb2bf8f32f95db60315dd66ea31bcab470485599b13e586c83b79d002cdb799",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it005_half2_model.star": "ce65fcf4dd85c12c2931980abc2c7f505695fe6fd47e0fec49a22c7ee6ef1785",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it005_optimiser.star": "cf65771f3de4e6aac7d8012cb2dd2e1d355ccaee151f60c49d4408ca7f06f0c1",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it005_sampling.star": "e255aef1ae2008be9d5fac7b36c8c062a3856835a5b4699b9a66c378982346cd",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it006_data.star": "a82e93d4be576a4c5bd9ab30d987bfef646bb502afe2f516ffde26b701d3b9ef",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it006_half1_class001.mrc": "1196d5858e58b7317d8897c66e15f38eee001835f1414221259f825ea6053169",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it006_half1_class001_angdist.bild": "1e338572e0f6fc28f5a0dc0bc4b431f85c2b1d073057864ef2d08a5149cd9395",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it006_half1_model.star": "727ea7473a707de68a2e69414e61fe6e510c4304c635ce514c5bc336e8a2221c",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it006_half2_class001.mrc": "9e7a9a7d3656f4c56520f9503c7db21b7c0bc2719dbda3246377ab48f600f23c",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it006_half2_class001_angdist.bild": "be9eb77f4a56d5ca18557d2dd059bc994f1f190b0d4e6b837a5b36b5366dab33",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it006_half2_model.star": "5a3c8cdd68a8c77aaa979779477b1597a94cf7f1cfb81dbcc596e2fec45e4d3a",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it006_optimiser.star": "a83e995f41c61ea089eb73ec9e1ee168028ce1cfb3d2e10a3b80fac7b0c14f72",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it006_sampling.star": "4f585ca3819480c234946fe4d5d968aee01f1af270f84f6a59c2a78948d6ccfe",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it007_data.star": "7f3d65dd7d52a061e254d6a28f46d6b147739fedec18786c5a33a40791671aa4",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it007_half1_class001.mrc": "06a382be4630262ed590ad36cd29a9b65e5e4af30d38dacabca6389b49a38f6b",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it007_half1_class001_angdist.bild": "6ed61f350fdf52cb3330936786b3ed8a259ace976e37909f28a92c4b4778c047",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it007_half1_model.star": "b4abfce0ad3db2238a1687c8ff0ecceee0bda95f43c1f7427ebabc982f368119",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it007_half2_class001.mrc": "659f100501ddadb5b59ac8120ee07a5c83d6163d4b05fa0e57c666e16430b3c5",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it007_half2_class001_angdist.bild": "72c21f2c7610f49fc3ddd007807526de20fc7117043547230d1e886f7ce3124d",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it007_half2_model.star": "c4bc8d0862dd7c9efe1f0886205de568f39628c68df68bf604b9f3d42ceccd34",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it007_optimiser.star": "d721dd438782fc52d802046f46b6fae8e8a36bf694f5b79291ce5f2a16a135a7",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it007_sampling.star": "bdb9256426dd3913fe59ffde7bae4c6408c46a04f491ec861c213a1977930b14",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it008_data.star": "94327a7cb865838d0df802b7ec34f517e0d3ecb31574e0576179a1a47a60c39f",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it008_half1_class001.mrc": "6d67c4bebd7c64dff71efb7379ccd329f3569eb994b414b1077e8aa8850ed6d7",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it008_half1_class001_angdist.bild": "f621747735e7b277eb9c363e5a7512b30d225e38d3148edbe64f436304cd8d22",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it008_half1_model.star": "80d94daee243398ff4c1a8bd8cb743418a6c150c63bf8a4582b54d450f31226b",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it008_half2_class001.mrc": "ab646d1f9fa2d4ccda3c5df395619dd6344f5e0a7b5da0545cd1bc3e2dfb8a92",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it008_half2_class001_angdist.bild": "198b6d18dd56e543d536ac954618f45744f605fc7fa3bcd63f6ba8ea28d5a5c3",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it008_half2_model.star": "5c09afb921f163ab756627afc329470eefaa0ed90a3eefe2c49cf697faa9e615",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it008_optimiser.star": "bb9c1fdb4d5418e3310bc3ede3b338242927d6f38ec1268da95f0537033bddd0",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it008_sampling.star": "677d073cea50e5a4472a3872ef1185dfb3371424ed6ab4257b4248653a016d56",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it009_data.star": "389b57a7ab526cc1f99b67e0e020c137726da5be3763286c7dbc2e1960179d94",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it009_half1_class001.mrc": "9994c2c05b6fe5f14b38c7b329d42cf3c92e76f2581db85246530f8edecb183b",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it009_half1_class001_angdist.bild": "adcc62f566451294eb49b492225e0a67db14d38ae4a7ec3276628d8e93cdeee7",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it009_half1_model.star": "befea0b0593ad82e06b02a37da67c007aef7d6460db85fffd99342f15c389ba4",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it009_half2_class001.mrc": "870b245d5a4d4fe167a026d773b8ad709b4858b41ed03182787db289e7177710",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it009_half2_class001_angdist.bild": "7f43482c98b21b193a4160cfa2701b967e7e75a87ee0d1883ffa6a14f38d3f28",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it009_half2_model.star": "5c48ee156cc0e900a886ff34064c533a9bfb97db3beaee90f27fa153c1182cb6",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it009_optimiser.star": "611eb3da6424297c0b7bcb189e7f01ce369167c018888d77192f0621d9ec9557",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it009_sampling.star": "4cf045369c828bcdeed063d42266fa6147f37d8f047609366c289d6c33a62e7a",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it010_data.star": "6148f7fe222d3f6bc343b530f9e50f1672d67b595c17974d83a4084b489bbcec",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it010_half1_class001.mrc": "ab60fb65f6a4458f936886658b9a98549fcdd3f078ad64e03a45cd7571276dd0",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it010_half1_class001_angdist.bild": "e10453e0156447e8d6538b152a9051f90c76e5b6e758ef2d230e007799ffbb7a",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it010_half1_model.star": "f90dd07d3db9c2aa47078d13fb012ee0cd7575c6d6eac5be08bd0aa9399da682",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it010_half2_class001.mrc": "c80c7822306afa24f752861c62fc55130121e1580152868084859909fc0f6f2e",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it010_half2_class001_angdist.bild": "ad641eeb54e32e1ed491f0093a11142253409bc2ad8bb6a8b504abd033131921",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it010_half2_model.star": "b4747173b714589d1bc62c7e581c5e86013e84c15b9cc0c70d1dcce51a07ccdc",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it010_optimiser.star": "bd92f2cd6168bc5f9f735e6f3ec1c6d770d9331d5280c6d77d613a977b3296ec",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it010_sampling.star": "3fa17e70e60c330132cc6bcd275b8f4d5bbebe33bd68756cfd2ebe585f962cfe",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it011_data.star": "bfacfedc34038ec479160b025cb0475af5f8450fb92a3094becbb1be610fb150",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it011_half1_class001.mrc": "d3b6095f790b514b22a0c09a6cd67e67f28cb88315f969f4dae5e0e856ebeccd",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it011_half1_class001_angdist.bild": "add300bbcec230fa8f96ae258d6484a935c627f30f0458c659e7274e76b5d489",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it011_half1_model.star": "21f047daa229bc20e2358115e3c326cde92cfb7d3e17c80d56805728ac5845c0",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it011_half2_class001.mrc": "5dba347678634a29a4a7333a4bf89cae9a9da26b30f0db34703e03d729b0c99f",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it011_half2_class001_angdist.bild": "7eb9d297741c174b331bb8339a5009039f35945f32735692ace193d17b274ea3",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it011_half2_model.star": "09d27aa3ae8b1ff812a8a18d54cc9f371493b693e8d1d2c130e4b3909d82851d",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it011_optimiser.star": "c50580d62508d7dc50707299600e0f7b4160d39f74f0a2ac02b1eb254b277dce",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it011_sampling.star": "80d2b1f819f442411c6fd5a3380b79316d54344549ac6ea0342201a2fbabca2a",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it012_data.star": "21efadb15c63e63cea2022df72430a6e7a7007bc5e509142c4d443365935f774",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it012_half1_class001.mrc": "d8f829ae72a6d8cf06734e96d47229e17d255a2f9220e7ee1fc53dbcdf909384",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it012_half1_class001_angdist.bild": "25449a5824be83125b1bf7e457058c94b5184eef6be12c34b524ceea627b0818",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it012_half1_model.star": "04e92dc96da8a18c3d74c7f2b00c9dcbae54f136d57f86c9d595cca2678fcace",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it012_half2_class001.mrc": "d9a2410d2725f314d403fab0f8b22c292dec9678985f0ac429e8e49492cdb84c",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it012_half2_class001_angdist.bild": "450edc4e297722e38f8895574f0ef6ef1cfb704223354a941e190cfc78da488d",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it012_half2_model.star": "7131bb0472900e5d97252d46df4ffbafdc56fc0aa7f2b918a2af77944c42fd7f",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it012_optimiser.star": "cbda383da26026ce8afb8d3d43894df04cdcea145a4c29b5e799ad5d53d15240",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it012_sampling.star": "49966b7c168f7682d2b30107f801c52fcff0b609767c59f2e16982331eca2c5f",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it013_data.star": "f0d9279960375ba016b68577df8060c150e5f9706bbdf3808635e7468fb18ac9",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it013_half1_class001.mrc": "525973bc4184e49c04a08209ffdf1dd253b86aeca25dd93cea7b21699a8a8d87",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it013_half1_class001_angdist.bild": "994fb8d6d45d15729f75fae9504be92769b582c9945f073251f77c678b98e0a2",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it013_half1_model.star": "7f7b37e530baad03fb2f007cd95a972544733089e4430df662ec69f0639a3c40",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it013_half2_class001.mrc": "962f67be8f26e593db62cc1c95aaec54cb981fd50773d04c527ba9c51e32c828",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it013_half2_class001_angdist.bild": "68d6e7aa9dedc9c074c7395c56c82e36531dfe51e12b580bd824a72531efd084",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it013_half2_model.star": "aed4a7454fa80948d121448a1930e077a7a030cbb573a2b03ea0ee7d2ea7f9c8",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it013_optimiser.star": "353e8c35cfae805c755371816f840b9e3f3adca938a7cd219d04dd19ff0bc935",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it013_sampling.star": "4332c426fd622a8e40578364eaf7b52d15c9aa0dee829023347e579002ca8469",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it014_data.star": "98c4365a1caa0965f49b424eb484ae60f9f2228b62171db573ab6d404b046a5c",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it014_half1_class001.mrc": "0b030595330659d71d67d4b3a6829176d58b375a63bc8f11eaac1315c3f78600",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it014_half1_class001_angdist.bild": "7989134ef889daa81aff1c9f5c065f7f497894f068150a204ebb1e11a55724fe",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it014_half1_model.star": "f4cf83a78b5436e56b44644a9e8c0bb4d0c78f30ff523f6710e85acaa0821208",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it014_half2_class001.mrc": "3034b6deebc538d8c99ff184a8e7c9636d4c6ad955752f20ad8c31c244c6fe46",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it014_half2_class001_angdist.bild": "979326b149c00d79f0efa1b1bca5448dc9b07d821892370b48b076fecbc5a245",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it014_half2_model.star": "90723dc45feba436996b7ccbc1d73c14712a27801b3024164fa026fede780239",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it014_optimiser.star": "380f2f5bc6fdfa6674f3055558cd8cefaad29d7734f6658fbbc6bc06910c5517",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_it014_sampling.star": "3ecd8e0de1f0991c9df329cea01915102f27273bd414c7841307d6995b722fbd",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_model.star": "771aa23b2ebfd678292b78ebd2311fd5c098efed926a62938c15761612b6cf21",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_optimiser.star": "899bc9b007c7d03b4ac218aa9c1e1592b16eab53e2b0b10840b1fb4b2d2ed692",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/run_sampling.star": "7c3040233a7acb59c59ff056148d6145262a5417acfe2e89a8b4578dc0081f8f",
+    "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/simulation_info.pkl": "ae283a59809ff100fac08dd03ee2a6a7c360f13133a67d074f02c4553fc50b11"
+  },
+  "runs": [
+    {
+      "repo": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908",
+      "head": "42a3d6184c6d05a9f4f97bd00120e62d0081f1d3",
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scope": "diagnostic: production-float32 K1 captured-state iteration3-to4 compatibility/FSC replay; not autonomous or completion evidence",
+      "command_args": [
+        "--relion_dir",
+        "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0",
+        "--data_star",
+        "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/particles.star",
+        "--iter",
+        "3",
+        "--max_iter",
+        "1",
+        "--skip_final_iteration",
+        "--gt_volume",
+        "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/reference_gt.mrc",
+        "--output_dir",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/k1_float32_replay/result"
+      ],
+      "precision_environment": {
+        "RECOVAR_USE_FLOAT64_SCORING": "0",
+        "RECOVAR_USE_FLOAT64_PROJECTIONS": "0",
+        "RECOVAR_RELION_X_HALF_MSTEP_DOUBLE": "0"
+      },
+      "fixture_root": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized",
+      "oracle_provenance": {
+        "source_commit": null,
+        "build_identity": null,
+        "reason": "Historical curated fixture has no run log or pinned oracle build record found; artifact contents are pinned, not its generating binary.",
+        "semantics": "serialized it003 state to matched it004 reference; no RELION restart executed"
+      },
+      "qualified_cuda": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/gpu_kernels/library/libcuda_backproject.so",
+        "sha256": "405f027530dbdcb725eaeffde993b0e852f9bace5cb3fc31f8bc8b16ae1f87b2"
+      },
+      "library": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/native_reference/build/_relion_bind_core.cpython-311-x86_64-linux-gnu.so",
+        "sha256": "2c56e67c08df885fad762e0f70707f8dc6b89f6ee04033b3d4822f22db8c6a21"
+      },
+      "preparation": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_replay",
+      "output": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/k1_float32_replay",
+      "safe_to_delete": true,
+      "submission": {
+        "time_utc": "2026-09-08T19:58:05.038816+00:00",
+        "command": [
+          "sbatch",
+          "--parsable",
+          "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_replay/run.sbatch"
+        ],
+        "exit_code": 0,
+        "stdout": "13624326\n",
+        "stderr": "",
+        "head": "42a3d6184c6d05a9f4f97bd00120e62d0081f1d3",
+        "precision": "production float32",
+        "inputs_sha256": "69989166d7cc6b1e4e0e0416dc5b95fa39b389c1598db9b8cbd001de149cea95",
+        "job_id": "13624326"
+      },
+      "outcome": {
+        "head": "42a3d6184c6d05a9f4f97bd00120e62d0081f1d3",
+        "scope": "diagnostic: production-float32 K1 captured-state iteration3-to4 compatibility/FSC replay; not autonomous or completion evidence",
+        "job_id": "13624326",
+        "node": "della-h20g2",
+        "inputs_sha256": "69989166d7cc6b1e4e0e0416dc5b95fa39b389c1598db9b8cbd001de149cea95",
+        "steps": [
+          {
+            "name": "hardware",
+            "command": [
+              "nvidia-smi",
+              "--query-gpu=index,uuid,name,driver_version",
+              "--format=csv,noheader"
+            ],
+            "exit_code": 0,
+            "wall_seconds": 0.016826227016281337
+          },
+          {
+            "name": "packages",
+            "command": [
+              "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908/.pixi/envs/default/bin/python",
+              "-m",
+              "pip",
+              "list",
+              "--format=json"
+            ],
+            "exit_code": 0,
+            "wall_seconds": 0.25139231502544135
+          },
+          {
+            "name": "replay",
+            "command": [
+              "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908/.pixi/envs/default/bin/python",
+              "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_replay/run_replay.py"
+            ],
+            "exit_code": 0,
+            "wall_seconds": 67.74860669003101
+          },
+          {
+            "name": "audit",
+            "command": [
+              "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908/.pixi/envs/default/bin/python",
+              "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_replay/audit.py"
+            ],
+            "exit_code": 1,
+            "wall_seconds": 3.6591926559922285
+          }
+        ],
+        "status": "replay_completed_audit_failed",
+        "scheduler_gpu_visibility": "0",
+        "environment": {
+          "PYTHONNOUSERSITE": "1",
+          "XLA_PYTHON_CLIENT_MEM_FRACTION": ".50",
+          "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+          "CUDA_VISIBLE_DEVICES": "0",
+          "RECOVAR_RELION_BIND_BUILD_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/native_reference/build",
+          "RECOVAR_JAX_CACHE_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/k1_float32_replay/jax_cache",
+          "JAX_COMPILATION_CACHE_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/k1_float32_replay/jax_cache",
+          "RECOVAR_CUDA_CACHE_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/k1_float32_replay/cuda_cache",
+          "RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "precision_environment": {
+          "RECOVAR_USE_FLOAT64_SCORING": "0",
+          "RECOVAR_USE_FLOAT64_PROJECTIONS": "0",
+          "RECOVAR_RELION_X_HALF_MSTEP_DOUBLE": "0"
+        },
+        "oracle_provenance": {
+          "source_commit": null,
+          "build_identity": null,
+          "reason": "Historical curated fixture has no run log or pinned oracle build record found; artifact contents are pinned, not its generating binary.",
+          "semantics": "serialized it003 state to matched it004 reference; no RELION restart executed"
+        },
+        "cuda_library": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/gpu_kernels/library/libcuda_backproject.so",
+          "sha256": "405f027530dbdcb725eaeffde993b0e852f9bace5cb3fc31f8bc8b16ae1f87b2"
+        },
+        "source_fixture_and_library_unchanged": true,
+        "autonomous_quality_qualified": false,
+        "performance_qualified": false,
+        "wall_seconds": 76.39274651499
+      },
+      "source_manifest": {
+        "tracked_file_count": 1794,
+        "inputs_json_path": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_replay/inputs.json",
+        "inputs_json_sha256": "69989166d7cc6b1e4e0e0416dc5b95fa39b389c1598db9b8cbd001de149cea95",
+        "untracked_files": []
+      },
+      "instrumentation_sha256": {
+        "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_replay/run.py": "fcfe2513f0750ee82d7daac32dfa921eedb900ed9a4556f71f8fc93a44b0fdbd",
+        "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_replay/run_replay.py": "618ca258976d0e5b3a1b3981a7598b374d57d5911b16c39b3d5f4ad4ed029084",
+        "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_replay/inspect_boundary.py": "b417d82ac45a1db64393c25745d7b2179bb75a69f2bce237aa579cf0c9a973c4",
+        "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_replay/run.sbatch": "a1f56240dd60aa4244d87d60ba6a46a64bc2601e6d277e4d5c7dcb089a488ed7",
+        "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_replay/audit.py": "a296a3b8c1fb6979a20085dc0f2f5b24492db49c940888890873094305f1e55c"
+      }
+    },
+    {
+      "repo": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908",
+      "head": "42a3d6184c6d05a9f4f97bd00120e62d0081f1d3",
+      "diff_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "scope": "diagnostic: same-source production-float32 K1 iteration3-to4 replay; only scientific change is preserving half-specific numbered noise instead of restart broadcast",
+      "command_args": [
+        "--relion_dir",
+        "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0",
+        "--data_star",
+        "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/particles.star",
+        "--iter",
+        "3",
+        "--max_iter",
+        "1",
+        "--skip_final_iteration",
+        "--gt_volume",
+        "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/reference_gt.mrc",
+        "--output_dir",
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/k1_float32_continuous_noise/result",
+        "--continuous-relion-noise-state"
+      ],
+      "precision_environment": {
+        "RECOVAR_USE_FLOAT64_SCORING": "0",
+        "RECOVAR_USE_FLOAT64_PROJECTIONS": "0",
+        "RECOVAR_RELION_X_HALF_MSTEP_DOUBLE": "0"
+      },
+      "fixture_root": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized",
+      "oracle_provenance": {
+        "source_commit": null,
+        "build_identity": null,
+        "reason": "Historical curated fixture has no run log or pinned oracle build record found; artifact contents are pinned, not its generating binary.",
+        "semantics": "serialized half-specific it003 noise/state to saved it004 output; no RELION process/restart executed; uninterrupted generating trajectory not independently established"
+      },
+      "qualified_cuda": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/gpu_kernels/library/libcuda_backproject.so",
+        "sha256": "405f027530dbdcb725eaeffde993b0e852f9bace5cb3fc31f8bc8b16ae1f87b2"
+      },
+      "library": {
+        "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/native_reference/build/_relion_bind_core.cpython-311-x86_64-linux-gnu.so",
+        "sha256": "2c56e67c08df885fad762e0f70707f8dc6b89f6ee04033b3d4822f22db8c6a21"
+      },
+      "preparation": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_continuous_noise",
+      "output": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/k1_float32_continuous_noise",
+      "safe_to_delete": true,
+      "submission": {
+        "command": [
+          "sbatch",
+          "--parsable",
+          "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_continuous_noise/run.sbatch"
+        ],
+        "returncode": 0,
+        "stdout": "13624629\n",
+        "stderr": "",
+        "submitted_utc": "2026-09-08T20:07:05.135904+00:00"
+      },
+      "outcome": {
+        "head": "42a3d6184c6d05a9f4f97bd00120e62d0081f1d3",
+        "scope": "diagnostic: same-source production-float32 K1 iteration3-to4 replay; only scientific change is preserving half-specific numbered noise instead of restart broadcast",
+        "job_id": "13624629",
+        "node": "della-h20g2",
+        "inputs_sha256": "3bfce43edea3063dbb6babc5971053174d3569f54538d357f1898c12c022bc6c",
+        "steps": [
+          {
+            "name": "hardware",
+            "command": [
+              "nvidia-smi",
+              "--query-gpu=index,uuid,name,driver_version",
+              "--format=csv,noheader"
+            ],
+            "exit_code": 0,
+            "wall_seconds": 0.016844330995809287
+          },
+          {
+            "name": "packages",
+            "command": [
+              "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908/.pixi/envs/default/bin/python",
+              "-m",
+              "pip",
+              "list",
+              "--format=json"
+            ],
+            "exit_code": 0,
+            "wall_seconds": 0.2445047529763542
+          },
+          {
+            "name": "replay",
+            "command": [
+              "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908/.pixi/envs/default/bin/python",
+              "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_continuous_noise/run_replay.py"
+            ],
+            "exit_code": 0,
+            "wall_seconds": 65.4552266249666
+          },
+          {
+            "name": "audit",
+            "command": [
+              "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr180_cpu_checkpoint_20260908/.pixi/envs/default/bin/python",
+              "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_continuous_noise/audit.py"
+            ],
+            "exit_code": 1,
+            "wall_seconds": 3.69487378600752
+          }
+        ],
+        "status": "replay_completed_audit_failed",
+        "scheduler_gpu_visibility": "0",
+        "environment": {
+          "PYTHONNOUSERSITE": "1",
+          "XLA_PYTHON_CLIENT_MEM_FRACTION": ".50",
+          "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+          "CUDA_VISIBLE_DEVICES": "0",
+          "RECOVAR_RELION_BIND_BUILD_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/native_reference/build",
+          "RECOVAR_JAX_CACHE_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/k1_float32_continuous_noise/jax_cache",
+          "JAX_COMPILATION_CACHE_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/k1_float32_continuous_noise/jax_cache",
+          "RECOVAR_CUDA_CACHE_DIR": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/k1_float32_continuous_noise/cuda_cache",
+          "RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS": "1",
+          "PYTHONDONTWRITEBYTECODE": "1"
+        },
+        "precision_environment": {
+          "RECOVAR_USE_FLOAT64_SCORING": "0",
+          "RECOVAR_USE_FLOAT64_PROJECTIONS": "0",
+          "RECOVAR_RELION_X_HALF_MSTEP_DOUBLE": "0"
+        },
+        "oracle_provenance": {
+          "source_commit": null,
+          "build_identity": null,
+          "reason": "Historical curated fixture has no run log or pinned oracle build record found; artifact contents are pinned, not its generating binary.",
+          "semantics": "serialized half-specific it003 noise/state to saved it004 output; no RELION process/restart executed; uninterrupted generating trajectory not independently established"
+        },
+        "cuda_library": {
+          "path": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/gpu_kernels/library/libcuda_backproject.so",
+          "sha256": "405f027530dbdcb725eaeffde993b0e852f9bace5cb3fc31f8bc8b16ae1f87b2"
+        },
+        "source_fixture_and_library_unchanged": true,
+        "autonomous_quality_qualified": false,
+        "performance_qualified": false,
+        "wall_seconds": 72.14105798496166
+      },
+      "source_manifest": {
+        "tracked_file_count": 1794,
+        "inputs_json_path": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_continuous_noise/inputs.json",
+        "inputs_json_sha256": "3bfce43edea3063dbb6babc5971053174d3569f54538d357f1898c12c022bc6c",
+        "untracked_files": []
+      },
+      "instrumentation_sha256": {
+        "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_continuous_noise/compare_replays.py": "b6ba26cd8eab4ab5e63d6a1287cfa181cc0aa8745e69b9392a77d25cbf75aa37",
+        "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_continuous_noise/run.py": "fcfe2513f0750ee82d7daac32dfa921eedb900ed9a4556f71f8fc93a44b0fdbd",
+        "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_continuous_noise/run_replay.py": "618ca258976d0e5b3a1b3981a7598b374d57d5911b16c39b3d5f4ad4ed029084",
+        "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_continuous_noise/inspect_boundary.py": "b417d82ac45a1db64393c25745d7b2179bb75a69f2bce237aa579cf0c9a973c4",
+        "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_continuous_noise/run.sbatch": "da4f9cfed731e2885933f7d10bc2d5ea2f386f829b4d045faef76e15df8190dc",
+        "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_float32_continuous_noise/audit.py": "a296a3b8c1fb6979a20085dc0f2f5b24492db49c940888890873094305f1e55c"
+      }
+    }
+  ],
+  "notes": "No RELION execution, production change, precision switch or baseline/tolerance update. Full source manifest remains in each sealed inputs.json."
+}

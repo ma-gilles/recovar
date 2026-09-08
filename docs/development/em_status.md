@@ -67,9 +67,37 @@ performance. Exact commands and results are under
 Broad CPU job Slurm13623235 is running on the same frozen commit. Its 6,817-case
 selection retains the previous GUI and shared-`/tmp` exclusions. PR180's added
 precision tests, changed API contracts and moved test IDs are recorded
-explicitly; any inherited failure remains a failure. The next quality check is
-the small K1 captured-state replay, with shellwise FSC/FSC-AUC and particle
-state assessed separately. The legacy fast-tier tests use map correlation and
+explicitly; any inherited failure remains a failure.
+
+The float32 K1 captured-state replay at frozen `42a3d6184` completed in
+Slurm13624326 (5,000 particles, 128 pixels, iteration 3 to 4, H100 80 GB).
+Its audit fails both particle gates: Pmax absolute-gap p95 is `0.00164212`,
+maximum `0.0325985`, and 292 particles exceed `1e-3`. Merged cross FSC-AUC
+is `0.995594079`; merged GT FSC-AUC delta is `+0.000254144`. Both map gates
+pass, but these do not override the particle failures. The maximum angular
+difference is 7.500004 degrees and competing candidate margins were not saved.
+Source, fixtures and native libraries remained unchanged. The oracle artifacts
+are hashed, but their generating RELION commit/build is unknown. This is not
+quality, convergence or performance qualification.
+
+The paired diagnostic in Slurm13624629 uses the existing
+`--continuous-relion-noise-state` option on the same source and physical H100.
+Particle/half alignment is verified; only the initial noise policy changes.
+Half-1 Pmax stays exactly unchanged. Half-2 particles exceeding `1e-3` fall
+from 289 to 3, and its 7.5-degree angular difference disappears. Six particles
+still exceed the Pmax limit overall: p95 `0.000172648`, maximum `0.001695766`.
+Both map gates pass again; both particle gates still fail. The remaining
+zero-based particle rows are 901, 1257, 1300, 1414, 3694 and 4568. Their cause
+is unresolved; neither double execution nor a wider tolerance was used.
+
+The [versioned noise-state comparison](evidence/pr180-k1-noise-state-20260908/README.md)
+contains both failures, full FSC curves, identities, exact commands and the
+half-1 negative control. The next quality diagnostic should capture matched
+state/candidate scores for the remaining rows before attributing the residual
+to arithmetic. Continue independent structural cleanup at the controller's
+correction-update boundary; frozen `42a3d6184` remains unchanged.
+
+The legacy fast-tier tests use map correlation and
 write ledgers under `tests/baselines`; running them unchanged cannot establish
 the FSC-based quality contract or authorize writes to established baselines.
 
