@@ -67,6 +67,17 @@ the FSC-based quality contract or authorize writes to established baselines.
 The [cleanup plan](cleanup_plan.md) tracks the remaining work and its smallest
 useful checks.
 
+Follower dispatch and input remapping now belong to `relion_worker_scale.py`.
+The controller supplies its selected precision, numbered iteration and logger;
+scheduling stays in the controller. All 95 affected CPU tests pass. Independent
+comparison to the pre-change functions matches 360 scenarios (138 successful
+updates and 222 errors), including both precisions, unequal/empty halves,
+numbered replay and final dispatch. Mutations and telemetry match; normalized
+function bodies and the retained controller/worker/test bodies are unchanged.
+The scale owner imports without loading the controller. Evidence is under
+`pr180_follower_owner_20260908/` in the review root. This structural change does
+not modify the frozen PR180 source used by the running CPU job.
+
 ## Source and review
 
 The control is PR158 commit

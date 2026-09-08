@@ -8,10 +8,6 @@ import numpy as np
 
 from recovar.em.dense_single_volume.helpers.types import NoiseStats
 from recovar.em.dense_single_volume.iteration_loop import (
-    _dispatch_relion_follower_scale_for_final_all_data,
-    _dispatch_relion_follower_scale_for_numbered_iteration,
-    _remap_relion_follower_runtime_inputs,
-    _require_relion_follower_owners,
     _run_relion_iteration_loop,
 )
 from recovar.em.dense_single_volume.mean_helpers import update_relion_norm_scale_corrections
@@ -20,6 +16,10 @@ from recovar.em.dense_single_volume.relion_replay import (
     _RelionHalfInputState,
 )
 from recovar.em.dense_single_volume.relion_worker_scale import (
+    _dispatch_relion_follower_scale_for_final_all_data,
+    _dispatch_relion_follower_scale_for_numbered_iteration,
+    _remap_relion_follower_runtime_inputs,
+    _require_relion_follower_owners,
     _validate_coupled_relion_restart_state,
     RelionDispatchSchedule,
     RelionFollowerScaleReplay,
@@ -950,6 +950,7 @@ def test_final_dispatch_remaps_scoring_scale_norm_ratio_and_xa_aa_group_ids():
             np.zeros(0, dtype=np.int64),
         ],
         physical_group_count=2,
+        dtype=np.float32,
     )
 
     np.testing.assert_allclose(half_inputs.scale_corrections[0], [0.8, 1.2])

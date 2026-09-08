@@ -1415,3 +1415,178 @@ def setup_relion_follower_scale_state(
         scale_stats_group_count_per_half=scale_stats_group_count_per_half,
         physical_group_count=physical_group_count,
     )
+
+
+def _require_relion_follower_owners(
+    owners_by_relion_iteration,
+    *,
+    relion_iteration: int,
+    stage: str,
+):
+    """Return an exact captured owner row, failing closed when it is absent."""
+
+    relion_iteration = int(relion_iteration)
+    try:
+        return owners_by_relion_iteration[relion_iteration]
+    except KeyError as exc:
+        raise RuntimeError(
+            "RELION dispatch schedule does not contain "
+            f"{stage} iteration {relion_iteration}; refusing to reuse stale follower owners"
+        ) from exc
+
+
+def _remap_relion_follower_runtime_inputs(
+    *,
+    state,
+    relion_half_inputs,
+    follower_owners_per_half,
+    physical_group_count: int,
+    dtype,
+):
+    """Remap live scoring scales and XA/AA group IDs to a new dispatch row."""
+
+    stats_group_ids_per_half = []
+    for half_idx in range(2):
+        physical_groups = np.asarray(relion_half_inputs.group_ids[half_idx], dtype=np.int64)
+        owners = np.asarray(follower_owners_per_half[half_idx], dtype=np.int64)
+        old_scales = relion_half_inputs.scale_corrections[half_idx]
+        old_image_corrections = relion_half_inputs.image_corrections[half_idx]
+        if old_scales is None or old_image_corrections is None:
+            raise RuntimeError(
+                "RELION follower dispatch remap requires resident image and scale corrections"
+            )
+        old_scales = np.asarray(old_scales, dtype=np.float64)
+        old_image_corrections = np.asarray(old_image_corrections, dtype=np.float64)
+        norm_factor = np.ones_like(old_scales, dtype=np.float64)
+        np.divide(
+            old_image_corrections,
+            old_scales,
+            out=norm_factor,
+            where=old_scales != 0.0,
+        )
+        selected_scales = select_relion_follower_scales(
+            state,
+            group_ids=physical_groups,
+            follower_owners=owners,
+        ).astype(dtype)
+        relion_half_inputs.scale_corrections[half_idx] = selected_scales
+        relion_half_inputs.image_corrections[half_idx] = np.asarray(
+            norm_factor * selected_scales,
+            dtype=dtype,
+        )
+        stats_group_ids_per_half.append(
+            relion_worker_group_ids(
+                physical_groups,
+                owners,
+                n_groups=physical_group_count,
+            )
+        )
+    return stats_group_ids_per_half
+
+
+def _dispatch_relion_follower_scale_for_numbered_iteration(
+    setup: RelionFollowerScaleSetup,
+    history: RefinementHistory,
+    *,
+    iteration: int,
+    numbered_relion_iteration: int,
+    relion_half_inputs,
+    relion_follower_scale_replay_source,
+    dtype,
+    logger,
+) -> None:
+    """Recompute this numbered iteration's follower dispatch, apply any
+    diagnostic replay override, remap group ids, and record pre-score
+    telemetry. Mutates ``setup.follower_owners_per_half``,
+    ``setup.follower_scale_state``, and ``setup.scale_stats_group_ids_per_half``
+    in place. Only called when ``setup.follower_scale_state is not None``.
+    """
+    setup.follower_owners_per_half = [
+        owners.copy()
+        for owners in _require_relion_follower_owners(
+            setup.follower_owners_by_iteration,
+            relion_iteration=numbered_relion_iteration,
+            stage="numbered",
+        )
+    ]
+    replayed_follower_scale_state = False
+    if numbered_relion_iteration in setup.follower_scale_replay_by_iteration:
+        if numbered_relion_iteration in history.relion_follower_scale_replay_applied_iterations:
+            raise RuntimeError(
+                "RELION follower-scale replay iteration was reached more than once: "
+                f"{numbered_relion_iteration}"
+            )
+        setup.follower_scale_state = type(setup.follower_scale_state)(
+            scales=setup.follower_scale_replay_by_iteration[numbered_relion_iteration].copy(),
+            group_counts=np.asarray(setup.follower_scale_state.group_counts, dtype=np.float64).copy(),
+            n_optics_groups=int(setup.follower_scale_state.n_optics_groups),
+        )
+        history.record_follower_replay_applied(numbered_relion_iteration)
+        replayed_follower_scale_state = True
+        logger.info(
+            "Diagnostic RELION follower-scale replay: numbered_iter=%d source=%s",
+            numbered_relion_iteration,
+            relion_follower_scale_replay_source.source,
+        )
+    if iteration > 0 or replayed_follower_scale_state:
+        setup.scale_stats_group_ids_per_half = _remap_relion_follower_runtime_inputs(
+            state=setup.follower_scale_state,
+            relion_half_inputs=relion_half_inputs,
+            follower_owners_per_half=setup.follower_owners_per_half,
+            physical_group_count=setup.physical_group_count,
+            dtype=dtype,
+        )
+    history.record_follower_scale_pre_score(
+        np.asarray(setup.follower_scale_state.scales, dtype=np.float64).copy(),
+        setup.follower_owners_per_half[0].copy(),
+    )
+    logger.info(
+        "Strict RELION dynamic dispatch: numbered_iter=%d rank_particle_counts=%s",
+        numbered_relion_iteration,
+        [
+            int(np.count_nonzero(setup.follower_owners_per_half[0] == follower))
+            for follower in range(setup.follower_count)
+        ],
+    )
+
+
+
+def _dispatch_relion_follower_scale_for_final_all_data(
+    setup: RelionFollowerScaleSetup,
+    *,
+    init_relion_iteration: int,
+    numbered_iteration_count: int,
+    relion_half_inputs,
+    dtype,
+    logger,
+) -> None:
+    """Recompute the final all-data dispatch row and remap group ids -- no
+    replay override, no telemetry (the final all-data pass is never replayed
+    and is not part of the numbered trajectory). Mutates
+    ``setup.follower_owners_per_half`` and ``setup.scale_stats_group_ids_per_half``
+    in place. Only called when ``setup.follower_scale_state is not None``.
+    """
+    final_dispatch_relion_iteration = init_relion_iteration + numbered_iteration_count + 1
+    setup.follower_owners_per_half = [
+        owners.copy()
+        for owners in _require_relion_follower_owners(
+            setup.follower_owners_by_iteration,
+            relion_iteration=final_dispatch_relion_iteration,
+            stage="final all-data",
+        )
+    ]
+    setup.scale_stats_group_ids_per_half = _remap_relion_follower_runtime_inputs(
+        state=setup.follower_scale_state,
+        relion_half_inputs=relion_half_inputs,
+        follower_owners_per_half=setup.follower_owners_per_half,
+        physical_group_count=setup.physical_group_count,
+        dtype=dtype,
+    )
+    logger.info(
+        "Strict RELION dynamic dispatch: final_all_data_iter=%d rank_particle_counts=%s",
+        final_dispatch_relion_iteration,
+        [
+            int(np.count_nonzero(setup.follower_owners_per_half[0] == follower))
+            for follower in range(setup.follower_count)
+        ],
+    )
