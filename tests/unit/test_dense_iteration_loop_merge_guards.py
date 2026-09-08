@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop
-from recovar.em.dense_single_volume import score_outputs
+from recovar.em.dense_single_volume import score_outputs, relion_worker_scale
 import recovar.em.dense_single_volume.local_search_iteration as local_search_iteration
 from recovar.em.dense_single_volume.local_search_iteration import _LocalSearchIterationResult
 from recovar.em.dense_single_volume.helpers.convergence import _native_final_perturbation_healpix_order
@@ -205,8 +205,8 @@ def test_relion_norm_scale_updates_are_not_disabled_for_k_class():
 
 
 def test_relion_correction_range_formatter_accepts_empty_halves():
-    assert iteration_loop._format_relion_correction_range(np.array([], dtype=np.float32)) == "empty"
-    assert iteration_loop._format_relion_correction_range(np.array([0.5, 2.0], dtype=np.float32)) == "[0.5, 2]"
+    assert relion_worker_scale._format_relion_correction_range(np.array([], dtype=np.float32)) == "empty"
+    assert relion_worker_scale._format_relion_correction_range(np.array([0.5, 2.0], dtype=np.float32)) == "[0.5, 2]"
 
 
 def test_k1_local_search_significant_reconstruction_uses_actual_local_oversampling():
@@ -754,13 +754,13 @@ def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
         "apply_relion_rotation_perturbation_to_eulers",
         "apply_relion_translation_perturbation",
         "build_local_hypothesis_layout",
-        "read_relion_model_metadata",
         "read_relion_optimiser_metadata",
         "read_relion_sampling_metadata",
     ]
 
     missing = [name for name in required_iteration_loop_symbols if not hasattr(iteration_loop, name)]
     assert missing == []
+    assert callable(relion_replay.read_relion_model_metadata)
     assert callable(local_search_iteration.run_local_em_exact)
     assert callable(local_search_iteration.run_local_k_class_em)
     assert callable(mean_helpers._align_fourier_volume_sign_to_reference)

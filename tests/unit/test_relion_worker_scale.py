@@ -18,6 +18,7 @@ from recovar.em.dense_single_volume.relion_replay import (
 from recovar.em.dense_single_volume.relion_worker_scale import (
     _dispatch_relion_follower_scale_for_final_all_data,
     _dispatch_relion_follower_scale_for_numbered_iteration,
+    _update_relion_follower_corrections,
     _remap_relion_follower_runtime_inputs,
     _require_relion_follower_owners,
     _validate_coupled_relion_restart_state,
@@ -975,12 +976,15 @@ def test_numbered_scale_telemetry_brackets_scoring_and_mstep_boundaries():
     source = inspect.getsource(_run_relion_iteration_loop)
     dispatch_call = source.index("_dispatch_relion_follower_scale_for_numbered_iteration(")
     replay_apply = source.index("replay_result = apply_iter_replay_overrides(")
-    scale_update = source.index("relion_follower_scale_state = update_relion_follower_scales(")
+    scale_update = source.index("_update_relion_follower_corrections(")
     post_mstep_append = source.index("history.record_follower_scale_post_mstep(")
     convergence_update = source.index("# --- Update convergence state ---")
 
     assert dispatch_call < replay_apply
     assert scale_update < post_mstep_append < convergence_update
+    update_source = inspect.getsource(_update_relion_follower_corrections)
+    assert "relion_follower_scale_state = update_relion_follower_scales(" in update_source
+    assert "follower_setup.follower_scale_state = relion_follower_scale_state" in update_source
     assert ".copy()" in source[post_mstep_append:convergence_update]
     # Both surviving result-dict sites source the follower-scale trajectory
     # keys (including the two "numbered_*_trajectory" ones) from one shared

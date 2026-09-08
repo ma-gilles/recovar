@@ -177,10 +177,9 @@ from recovar.em.dense_single_volume.score_outputs import (
 from recovar.em.dense_single_volume.relion_worker_scale import (
     _dispatch_relion_follower_scale_for_final_all_data,
     _dispatch_relion_follower_scale_for_numbered_iteration,
-    relion_rank1_serialized_scales,
-    select_relion_follower_scales,
+    _format_relion_correction_range,
+    _update_relion_follower_corrections,
     setup_relion_follower_scale_state,
-    update_relion_follower_scales,
     validate_relion_follower_scale_replay_application,
 )
 from recovar.em.sampling import (
@@ -2423,13 +2422,6 @@ def _score_half_local_in_bpref_scope(
         )
     with _cuda_backproject_diagnostics.bpref_device_signature_scope(False):
         return _score_half_local(**kwargs)
-
-
-def _format_relion_correction_range(values):
-    arr = np.asarray(values, dtype=np.float64).reshape(-1)
-    if arr.size == 0:
-        return "empty"
-    return f"[{float(np.min(arr)):.6g}, {float(np.max(arr)):.6g}]"
 
 
 def _sigma_offset_for_half(current_sigma_offset_angstrom, current_sigma_offset_angstrom_per_half, half_index):
@@ -6174,47 +6166,16 @@ def _run_relion_iteration_loop(
                 relion_half_inputs.scale_corrections = norm_scale_update.scale_corrections_per_half
                 group_scale_corrections_for_dump = norm_scale_update.group_scale_corrections_per_half
             else:
-                scale_xa = noise_stats_per_half[0].wsum_scale_correction_xa
-                scale_aa = noise_stats_per_half[0].wsum_scale_correction_aa
-                if not relion_firstiter_cc_this_iter and (scale_xa is None or scale_aa is None):
-                    raise RuntimeError("Follower-local scale update requires expanded XA/AA statistics")
-                relion_follower_scale_state = update_relion_follower_scales(
-                    relion_follower_scale_state,
-                    wsum_signal_product=scale_xa,
-                    wsum_reference_power=scale_aa,
-                    relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
-                )
-                follower_setup.follower_scale_state = relion_follower_scale_state
-                for half_idx in range(2):
-                    physical_groups = np.asarray(relion_half_inputs.group_ids[half_idx], dtype=np.int64)
-                    selected_scales = select_relion_follower_scales(
-                        relion_follower_scale_state,
-                        group_ids=physical_groups,
-                        follower_owners=relion_follower_owners_per_half[half_idx],
-                    ).astype(_dense_global_scoring_dtype(), copy=False)
-                    normcorr = np.asarray(
-                        norm_scale_update.norm_corrections_per_half[half_idx],
-                        dtype=np.float64,
-                    )
-                    avg_norm = float(norm_scale_update.avg_norm_correction_per_half[half_idx])
-                    norm_factor = np.ones_like(normcorr, dtype=np.float64)
-                    np.divide(avg_norm, normcorr, out=norm_factor, where=normcorr > 0.0)
-                    relion_half_inputs.scale_corrections[half_idx] = selected_scales
-                    relion_half_inputs.image_corrections[half_idx] = np.asarray(
-                        norm_factor * selected_scales,
+                relion_follower_scale_state, group_scale_corrections_for_dump = (
+                    _update_relion_follower_corrections(
+                        follower_setup,
+                        noise_stats_per_half=noise_stats_per_half,
+                        norm_scale_update=norm_scale_update,
+                        relion_half_inputs=relion_half_inputs,
+                        relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
                         dtype=_dense_global_scoring_dtype(),
+                        logger=logger,
                     )
-                group_scale_corrections_for_dump = [
-                    relion_rank1_serialized_scales(relion_follower_scale_state),
-                    None,
-                ]
-                logger.info(
-                    "Strict RELION follower-scale update: rank1=%s rank2=%s; "
-                    "rank1 model-STAR diagnostic retained separately",
-                    _format_relion_correction_range(relion_follower_scale_state.scales[0]),
-                    _format_relion_correction_range(relion_follower_scale_state.scales[1])
-                    if relion_follower_scale_state.n_followers > 1
-                    else "none",
                 )
             norm_corrections_for_dump = norm_scale_update.norm_corrections_per_half
             avg_norm_corrections_for_dump = norm_scale_update.avg_norm_correction_per_half

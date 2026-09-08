@@ -115,6 +115,22 @@ The scale owner imports without loading the controller. Evidence is under
 `pr180_follower_owner_20260908/` in the review root. This structural change does
 not modify the frozen PR180 source used by the running CPU job.
 
+Follower scale/image-correction updates now share the scale owner as well.
+The controller supplies the existing setup, norm/scale statistics, precision
+and logger, and retains scheduling and history recording. All 122 focused
+cases and the 38-case CPU fast guard pass. Direct comparison to the original
+block matches 432 cases (240 updates and 192 errors), including both precisions,
+1/2/4 followers, empty halves, first-iteration CC, zero normalization and
+malformed inputs. Dtypes, mutations, errors, list identities and logs match;
+normalized computation and retained-controller syntax trees match. Evidence
+is under `pr180_follower_corrections_20260908/` in the review root. This does
+not establish GPU memory or end-to-end quality/performance equivalence.
+
+The first focused run passed 121 cases and exposed a stale dependency guard
+that also fails on frozen `42a3d6184`: model-metadata loading moved from the
+controller to replay in PR180. The guard now checks availability on the replay
+consumer. No numerical tolerance, baseline or runtime behavior was changed.
+
 ## Source and review
 
 The control is PR158 commit

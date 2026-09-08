@@ -1590,3 +1590,74 @@ def _dispatch_relion_follower_scale_for_final_all_data(
             for follower in range(setup.follower_count)
         ],
     )
+
+
+def _format_relion_correction_range(values):
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    if arr.size == 0:
+        return "empty"
+    return f"[{float(np.min(arr)):.6g}, {float(np.max(arr)):.6g}]"
+
+
+def _update_relion_follower_corrections(
+    follower_setup: RelionFollowerScaleSetup,
+    *,
+    noise_stats_per_half,
+    norm_scale_update,
+    relion_half_inputs,
+    relion_firstiter_cc_this_iter: bool,
+    dtype,
+    logger,
+):
+    """Install follower scales and image corrections after a numbered M-step.
+
+    Mutates the setup's scale state and both halves' runtime correction arrays.
+    Returns that state and the rank-1 model-STAR diagnostic, whose second half
+    remains absent. The controller owns scheduling and history recording and
+    supplies its selected precision and logger.
+    """
+    relion_follower_scale_state = follower_setup.follower_scale_state
+    relion_follower_owners_per_half = follower_setup.follower_owners_per_half
+    scale_xa = noise_stats_per_half[0].wsum_scale_correction_xa
+    scale_aa = noise_stats_per_half[0].wsum_scale_correction_aa
+    if not relion_firstiter_cc_this_iter and (scale_xa is None or scale_aa is None):
+        raise RuntimeError("Follower-local scale update requires expanded XA/AA statistics")
+    relion_follower_scale_state = update_relion_follower_scales(
+        relion_follower_scale_state,
+        wsum_signal_product=scale_xa,
+        wsum_reference_power=scale_aa,
+        relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
+    )
+    follower_setup.follower_scale_state = relion_follower_scale_state
+    for half_idx in range(2):
+        physical_groups = np.asarray(relion_half_inputs.group_ids[half_idx], dtype=np.int64)
+        selected_scales = select_relion_follower_scales(
+            relion_follower_scale_state,
+            group_ids=physical_groups,
+            follower_owners=relion_follower_owners_per_half[half_idx],
+        ).astype(dtype, copy=False)
+        normcorr = np.asarray(
+            norm_scale_update.norm_corrections_per_half[half_idx],
+            dtype=np.float64,
+        )
+        avg_norm = float(norm_scale_update.avg_norm_correction_per_half[half_idx])
+        norm_factor = np.ones_like(normcorr, dtype=np.float64)
+        np.divide(avg_norm, normcorr, out=norm_factor, where=normcorr > 0.0)
+        relion_half_inputs.scale_corrections[half_idx] = selected_scales
+        relion_half_inputs.image_corrections[half_idx] = np.asarray(
+            norm_factor * selected_scales,
+            dtype=dtype,
+        )
+    group_scale_corrections_for_dump = [
+        relion_rank1_serialized_scales(relion_follower_scale_state),
+        None,
+    ]
+    logger.info(
+        "Strict RELION follower-scale update: rank1=%s rank2=%s; "
+        "rank1 model-STAR diagnostic retained separately",
+        _format_relion_correction_range(relion_follower_scale_state.scales[0]),
+        _format_relion_correction_range(relion_follower_scale_state.scales[1])
+        if relion_follower_scale_state.n_followers > 1
+        else "none",
+    )
+    return relion_follower_scale_state, group_scale_corrections_for_dump
