@@ -198,3 +198,13 @@ owners directly, including immutable copied arrays and suppression of external
 metadata reads. End-to-end controller behavior remains in
 `test_refine_relion_mode.py`; capture-file parsing remains in
 `test_relion_projector_capture.py`.
+
+Import the controller explicitly when refinement is needed:
+
+```python
+from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
+```
+
+The package initializer does not re-export this entry point. This keeps helper
+imports from implicitly loading the controller and avoids a dependency back into
+iteration scheduling. Other existing package exports retain their owners.
