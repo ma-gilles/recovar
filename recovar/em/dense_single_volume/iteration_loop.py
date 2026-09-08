@@ -2984,7 +2984,7 @@ def refine_single_volume(
         Starting current_size for the first iteration (when no FSC is
         available yet).  Ignored if relion_current_sizes is provided.
     fsc_threshold : float
-        FSC threshold for resolution estimation.
+        Legacy compatibility value; does not affect the RELION scheduling rules.
     adaptive_oversampling : int
         Number of HEALPix subdivision levels for pass 2 (0=disabled,
         1=2x finer = 4 children, 2=4x finer = 16 children).
@@ -2996,8 +2996,10 @@ def refine_single_volume(
         Compatibility keyword for older callers. RELION mode derives the
         coarse rotation grid from ``init_healpix_order``.
     translation_pixel_offset : float or None
-        Step size between coarse translation grid points (pixels).
-        Required when adaptive_oversampling > 0.
+        Legacy compatibility value; the current loop does not read it.
+        Translation sampling uses ``init_translation_step`` and the active grid.
+    init_relion_particle_ids, init_relion_optics_group_ids : array-like or None
+        Legacy compatibility inputs; the current loop does not read them.
     init_healpix_order : int
         Starting HEALPix order for RELION mode (default 2, ~14.7 deg).
     max_healpix_order : int
@@ -3141,7 +3143,6 @@ def refine_single_volume(
         image_batch_size=image_batch_size,
         rotation_block_size=rotation_block_size,
         init_current_size=init_current_size,
-        fsc_threshold=fsc_threshold,
         adaptive_oversampling=adaptive_oversampling,
         max_significants=max_significants,
         relion_current_sizes=relion_current_sizes,
@@ -3188,8 +3189,6 @@ def refine_single_volume(
         relion_scale_follower_count=relion_scale_follower_count,
         relion_scale_follower_owners_by_iteration=relion_scale_follower_owners_by_iteration,
         relion_follower_scale_replay=relion_follower_scale_replay,
-        init_relion_particle_ids=init_relion_particle_ids,
-        init_relion_optics_group_ids=init_relion_optics_group_ids,
         init_relion_optics_group_count=init_relion_optics_group_count,
         init_direction_prior=init_direction_prior,
         init_previous_best_translations=init_previous_best_translations,
@@ -3250,7 +3249,6 @@ def _run_relion_iteration_loop(
     image_batch_size,
     rotation_block_size,
     init_current_size,
-    fsc_threshold,
     adaptive_oversampling,
     max_significants,
     relion_current_sizes,
@@ -3297,8 +3295,6 @@ def _run_relion_iteration_loop(
     relion_scale_follower_count=0,
     relion_scale_follower_owners_by_iteration=None,
     relion_follower_scale_replay=None,
-    init_relion_particle_ids=None,
-    init_relion_optics_group_ids=None,
     init_relion_optics_group_count=None,
     init_direction_prior=None,
     init_previous_best_translations=None,
