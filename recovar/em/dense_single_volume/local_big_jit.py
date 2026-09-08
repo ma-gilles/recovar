@@ -580,6 +580,44 @@ def run_deferred_local_exact_noise_core_jit(
     )
 
 
+def _compute_native_noise_residual(
+    projection, projection_abs2, summed_masked, ctf_probs, variance,
+    shells, shell_count, old_scale, scale_pixel_mask, *, return_split,
+    compute_scale,
+):
+    """Finish compact CUDA statistics with the existing JAX shell/cast policy."""
+    from recovar.cuda_noise_residual import residual_statistics
+
+    mask = (
+        jnp.ones(projection.shape[-1], dtype=bool)
+        if scale_pixel_mask is None
+        else jnp.asarray(scale_pixel_mask, dtype=bool).reshape(-1)
+    )
+    pixel_a2, pixel_cross, image_a2, image_xa, scale_a2, scale_xa = (
+        residual_statistics(
+            projection, projection_abs2, summed_masked, ctf_probs, variance,
+            mask, compute_scale=compute_scale,
+        )
+    )
+    xa = jnp.where(pixel_cross.real != 0.0, variance * pixel_cross.real, 0.0)
+    noise_shells = bin_shell_values_jax(
+        (pixel_a2 - 2.0 * xa).astype(jnp.float32), shells, shell_count
+    )
+    if return_split:
+        a2_shells = bin_shell_values_jax(pixel_a2.astype(jnp.float32), shells, shell_count)
+        xa_shells = bin_shell_values_jax(xa.astype(jnp.float32), shells, shell_count)
+    else:
+        a2_shells = xa_shells = jnp.zeros(shell_count, dtype=jnp.float32)
+    norm = (image_a2 - 2.0 * image_xa).astype(jnp.float32)
+    if compute_scale:
+        safe_scale = jnp.maximum(
+            jnp.asarray(old_scale, dtype=projection_abs2.real.dtype), 1e-30
+        )
+        scale_xa = (scale_xa / safe_scale).astype(jnp.float32)
+        scale_a2 = (scale_a2 / (safe_scale**2)).astype(jnp.float32)
+    return noise_shells, a2_shells, xa_shells, norm, scale_xa, scale_a2
+
+
 def compute_local_exact_noise(
     noise_wsum,
     noise_img_power,
@@ -628,6 +666,7 @@ def compute_local_exact_noise(
     relion_wavg_sequential_cuda: bool | None,
     return_debug_wavg_cutoff_triplet: bool = False,
     prepared_core: _LocalExactNoiseCore | None = None,
+    native_residual_statistics: bool = False,
 ):
     """Compose the exact-local noise reduction without a JIT boundary.
 
@@ -635,8 +674,12 @@ def compute_local_exact_noise(
     tree. Pixel-heavy operands may use the smaller final-support layout while
     retaining its established row order. Ordinary EM traces this helper inside
     its existing big JIT; VDAM puts one outer JIT around the deferred call.
+    The experimental native residual path requires float64 variance and an
+    explicit compatible CUDA build; it never silently casts unsupported inputs.
     """
 
+    if type(native_residual_statistics) is not bool:
+        raise TypeError("native_residual_statistics must be a static Python bool")
     norm_dtype = jnp.float64 if source_faithful_spectrum_norm else jnp.float32
     if prepared_core is None:
         prepared_core = compute_local_exact_noise_core(
@@ -684,16 +727,27 @@ def compute_local_exact_noise(
     )
     flat_proj_for_noise = pixel_proj_for_noise.reshape(-1, pixel_proj_for_noise.shape[-1])
     proj_abs2_for_norm = jnp.abs(pixel_proj_for_noise) ** 2
-    block_noise_shells, block_a2_shells, block_xa_shells = _compute_noise_block(
-        flat_proj_for_noise,
-        (jnp.abs(flat_proj_for_noise) ** 2),
-        summed_masked_noise.reshape(-1, summed_masked_noise.shape[-1]),
-        pixel_ctf_probs.reshape(-1, pixel_ctf_probs.shape[-1]),
-        noise_variance_for_noise,
-        shell_indices_noise,
-        shell_count,
-        return_noise_split,
-    )
+    if native_residual_statistics:
+        (
+            block_noise_shells, block_a2_shells, block_xa_shells,
+            norm_residual, scale_xa_per_image, scale_aa_per_image,
+        ) = _compute_native_noise_residual(
+            pixel_proj_for_noise, proj_abs2_for_norm, summed_masked_noise,
+            pixel_ctf_probs, noise_variance_for_noise, shell_indices_noise,
+            shell_count, batch_scale[:pixel_batch_size], scale_correction_pixel_mask,
+            return_split=return_noise_split, compute_scale=accumulate_scale_correction,
+        )
+    else:
+        block_noise_shells, block_a2_shells, block_xa_shells = _compute_noise_block(
+            flat_proj_for_noise,
+            (jnp.abs(flat_proj_for_noise) ** 2),
+            summed_masked_noise.reshape(-1, summed_masked_noise.shape[-1]),
+            pixel_ctf_probs.reshape(-1, pixel_ctf_probs.shape[-1]),
+            noise_variance_for_noise,
+            shell_indices_noise,
+            shell_count,
+            return_noise_split,
+        )
 
     debug_wavg_cutoff_triplet = jnp.zeros((1, 3), dtype=jnp.float64)
     if use_relion_wavg_cutoff:
@@ -739,7 +793,7 @@ def compute_local_exact_noise(
     if return_noise_split:
         noise_a2 = noise_a2 + block_a2_shells
         noise_xa = noise_xa + block_xa_shells
-    if accumulate_scale_correction:
+    if accumulate_scale_correction and not native_residual_statistics:
         scale_xa_per_image, scale_aa_per_image = (
             _compute_scale_correction_terms_per_image(
                 pixel_proj_for_noise,
@@ -751,6 +805,7 @@ def compute_local_exact_noise(
                 scale_correction_pixel_mask,
             )
         )
+    if accumulate_scale_correction:
         scale_xa_per_image = jnp.where(
             pixel_valid_image_mask, scale_xa_per_image, 0.0
         )
@@ -761,16 +816,15 @@ def compute_local_exact_noise(
         noise_scale_xa = noise_scale_xa.at[pixel_group_ids].add(scale_xa_per_image)
         noise_scale_aa = noise_scale_aa.at[pixel_group_ids].add(scale_aa_per_image)
     noise_sigma2_offset = noise_sigma2_offset + noise_sumw_offset
-    bucket_norm_correction = (
-        batch_img_power_per_image[:pixel_batch_size]
-        + _compute_norm_residual_per_image(
+    if not native_residual_statistics:
+        norm_residual = _compute_norm_residual_per_image(
             pixel_proj_for_noise,
             proj_abs2_for_norm,
             summed_masked_noise,
             pixel_ctf_probs,
             noise_variance_for_noise,
         )
-    )
+    bucket_norm_correction = batch_img_power_per_image[:pixel_batch_size] + norm_residual
     bucket_norm_correction = jnp.where(
         pixel_valid_image_mask, bucket_norm_correction, 0.0
     ).astype(norm_dtype)
@@ -802,6 +856,7 @@ def compute_local_exact_noise(
         "return_noise_split",
         "use_relion_wavg_cutoff",
         "relion_wavg_sequential_cuda",
+        "native_residual_statistics",
     ),
 )
 def run_deferred_local_exact_noise_jit(
@@ -850,6 +905,7 @@ def run_deferred_local_exact_noise_jit(
     use_relion_wavg_cutoff: bool,
     relion_wavg_sequential_cuda: bool | None,
     prepared_core: _LocalExactNoiseCore | None = None,
+    native_residual_statistics: bool = False,
 ):
     """Run one deferred VDAM exact-noise bucket through one outer JIT."""
 
@@ -919,6 +975,7 @@ def run_deferred_local_exact_noise_jit(
         use_relion_wavg_cutoff=use_relion_wavg_cutoff,
         relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
         prepared_core=prepared_core,
+        native_residual_statistics=native_residual_statistics,
     )
     noise_norm_correction = noise_norm_correction.at[
         jnp.asarray(bucket_image_indices, dtype=jnp.int32)

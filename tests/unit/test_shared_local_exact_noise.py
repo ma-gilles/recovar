@@ -199,6 +199,7 @@ def _call_shared(
     accumulate_scale_correction,
     use_relion_wavg_cutoff=False,
     return_debug_wavg_cutoff_triplet=False,
+    native_residual_statistics=False,
 ):
     return local_big_jit.compute_local_exact_noise(
         *(
@@ -250,6 +251,7 @@ def _call_shared(
         return_noise_split=return_noise_split,
         use_relion_wavg_cutoff=use_relion_wavg_cutoff,
         relion_wavg_sequential_cuda=True,
+        native_residual_statistics=native_residual_statistics,
         return_debug_wavg_cutoff_triplet=(
             return_debug_wavg_cutoff_triplet
         ),
@@ -499,3 +501,41 @@ def test_deferred_exact_noise_wrapper_has_one_boundary_and_b42_b32_cache_keys():
         assert "name=compute_local_exact_noise" not in wrapper_jaxpr
     finally:
         function.clear_cache()
+
+
+@pytest.mark.parametrize("return_split", (False, True))
+@pytest.mark.parametrize("compute_scale", (False, True))
+@pytest.mark.parametrize("mask_missing", (False, True))
+def test_native_noise_composition_preserves_all_carries(
+    monkeypatch, return_split, compute_scale, mask_missing,
+):
+    """Isolate JAX composition from the separately qualified native reduction."""
+    from recovar import cuda_noise_residual as native
+
+    inputs = _make_noise_inputs(32)
+    inputs["noise_variance_for_noise"] = inputs["noise_variance_for_noise"].astype(jnp.float64)
+    # The old scale must be cast to projection precision before division.
+    inputs["batch_scale"] = inputs["batch_scale"].astype(jnp.float64) + 1e-9
+    if mask_missing:
+        inputs["scale_correction_pixel_mask"] = None
+    calls = []
+
+    def reference(*args, **kwargs):
+        calls.append(kwargs["compute_scale"])
+        native._output_shapes(*args)
+        return native.reference_statistics(*args, **kwargs)
+
+    monkeypatch.setattr(native, "residual_statistics", reference)
+    # This checks composition, not differing nested-XLA fusion boundaries.
+    # Compiled native arithmetic is qualified separately on saved GPU operands.
+    with jax.disable_jit():
+        expected = _call_shared(inputs, return_noise_split=return_split,
+                                accumulate_scale_correction=compute_scale)
+        assert calls == []  # Default branch must not request the optional CUDA helper.
+        actual = _call_shared(inputs, return_noise_split=return_split,
+                              accumulate_scale_correction=compute_scale,
+                              native_residual_statistics=True)
+    assert calls == [compute_scale]
+    for a, b in zip(actual, expected, strict=True):
+        assert a.shape == b.shape and a.dtype == b.dtype
+        np.testing.assert_array_equal(a, b)
