@@ -47,10 +47,35 @@ must not silently replace the current dtype-preserving capture.
 
 Exact paths, source/index hashes, the three differing moved definitions and
 review actions are in `handoffs/em_clean_integration_review_actions_20260908.json`
-under the coordination root. VDAM's assigned scope now includes 28 paths,
-including the companion global-window test and these additional migrations.
+under the coordination root. The board's current assignment includes the
+companion global-window test and these additional migrations; read its exact
+path list before editing rather than relying on a historical path count.
 This is static review evidence, not a combined-source test pass. The index was
 unchanged during review; no source in VDAM's checkout or frozen runs was edited.
+
+### Shared behavior and packaging review
+
+The VDAM catch-up also changes shared image loading/prefetch, STAR export,
+GPU detection, project registration and the process-wide compilation-cache
+threshold. The translation/halfset export fix is a correctness repair, and
+the cache threshold and buffer changes affect performance. Describe them
+explicitly; an EM guard pass cannot qualify their shared callers.
+`handoffs/em_clean_shared_validation_scope_20260909.json` on the coordination
+board records 13 review areas, immutable source blobs and applicable checks.
+Run affected checks first and broader shared workflows at the resolved frozen
+checkpoint, preserving the existing source and hardware requirements.
+
+Packaging fix `1014ca3b2` includes CUDA headers and source fragments in source
+and wheel distributions. On isolated incoming source `8ab1a44be1`, the stronger
+archive test fails before the fix because `noise_residual.cuh` is absent, then
+passes after it. The check uses the current pixi environment's no-build-isolation
+workflow without setuptools-scm; standard isolated PEP517 discovery is not
+measured, and the resulting version-0.0.0 archives are test artifacts. No CUDA
+kernel is compiled or scientifically qualified by this packaging check.
+Exact commands, archives, logs and member hashes are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_packaging_review_20260909/`.
+The original failed test remains recorded. The integrator owns the packaging
+change independently of VDAM's source reconciliation.
 
 ## Shared VDAM performance transfer — September 8
 
