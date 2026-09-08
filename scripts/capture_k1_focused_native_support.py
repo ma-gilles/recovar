@@ -27,7 +27,7 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
 from recovar.em.dense_single_volume.helpers.oversampling import (
     compute_pass2_stats_sparse,
 )
-from recovar.em.dense_single_volume.iteration_loop import (
+from recovar.em.dense_single_volume.projector_preparation import (
     _relion_projector_half_maps_for_scoring,
 )
 from recovar.em.dense_single_volume.relion_metadata import (

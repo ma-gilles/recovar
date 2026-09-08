@@ -25,6 +25,7 @@ from recovar.em.dense_single_volume import score_outputs
 import recovar.em.dense_single_volume.local_layout as local_layout_module
 from recovar.em.dense_single_volume.local_search_iteration import _LocalSearchIterationResult
 import recovar.em.dense_single_volume.relion_metadata as relion_metadata_module
+import recovar.em.dense_single_volume.projector_preparation as projector_preparation
 import recovar.em.dense_single_volume.relion_replay as relion_replay_module
 import recovar.em.sampling as sampling_module
 import recovar.reconstruction.regularization as regularization_module
@@ -781,7 +782,7 @@ def test_captured_relion_projector_replay_state_is_atomic_and_copied():
     assert state.projector_r_max_by_half == (4, 4)
     assert state.projector_half_by_half[0][0, 2, 3, 1] == np.complex64(1.25 - 0.5j)
     assert state.projector_half_by_half[0].flags.writeable is False
-    resolved, r_max = iteration_loop_module._validate_captured_relion_projector_for_iteration(
+    resolved, r_max = projector_preparation._validate_captured_relion_projector_for_iteration(
         state,
         current_size=8,
         volume_shape=(8, 8, 8),
@@ -835,7 +836,7 @@ def test_captured_relion_projector_replay_state_rejects_live_geometry_mismatch()
         n_classes=1,
     )
     with pytest.raises(ValueError, match="current_size captured=8 replay=10"):
-        iteration_loop_module._validate_captured_relion_projector_for_iteration(
+        projector_preparation._validate_captured_relion_projector_for_iteration(
             state,
             current_size=10,
             volume_shape=(8, 8, 8),
@@ -4308,14 +4309,14 @@ def test_relion_projector_cache_reuses_cached_projector_data(monkeypatch, tmp_pa
 
     mean_ft = np.zeros((4, 4, 4), dtype=np.complex64)
     mean_ft[0, 0, 0] = 1.0
-    first = iteration_loop_module._relion_projector_half_maps_for_scoring(
+    first = projector_preparation._relion_projector_half_maps_for_scoring(
         mean_ft.reshape(-1),
         volume_shape=(4, 4, 4),
         current_size=4,
         padding_factor=2,
         n_classes=1,
     )
-    second = iteration_loop_module._relion_projector_half_maps_for_scoring(
+    second = projector_preparation._relion_projector_half_maps_for_scoring(
         mean_ft.reshape(-1),
         volume_shape=(4, 4, 4),
         current_size=4,
@@ -4349,7 +4350,7 @@ def test_relion_projector_direct_real_reference_bypasses_fourier_roundtrip(monke
     mean_ft[0, 0, 0] = 7.0 + 3.0j
     exact_real = np.arange(64, dtype=np.float64).reshape(1, 4, 4, 4) / 17.0
 
-    iteration_loop_module._relion_projector_half_maps_for_scoring(
+    projector_preparation._relion_projector_half_maps_for_scoring(
         mean_ft.reshape(-1),
         volume_shape=(4, 4, 4),
         current_size=4,

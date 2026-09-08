@@ -185,3 +185,9 @@ validation and application of explicit HEALPix schedules used for oracle runs.
 The controller selects the iteration's requested order; the convergence helper
 advances through the existing angular and translation updates without coarsening
 an active state.
+
+`dense_single_volume/projector_preparation.py` prepares RELION reference slabs
+for the controller's scoring calls. It owns native reference conversion, cache
+keys and files, optional dumps, and validation of captured projector geometry.
+`relion_replay.py` retains the captured-state type and parser; the controller
+selects the native or captured path and passes the resulting slabs to scoring.

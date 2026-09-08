@@ -8,7 +8,6 @@ See ``docs/math/relion_refinement_algorithm.md`` for the algorithm map.
 """
 
 import gc
-import hashlib
 import logging
 import os
 import time
@@ -128,11 +127,14 @@ from recovar.em.dense_single_volume.relion_metadata import (
     _relion_metadata_translations,
     _relion_rotation_grid_float32,
 )
+from recovar.em.dense_single_volume.projector_preparation import (
+    _relion_projector_half_maps_for_scoring,
+    _validate_captured_relion_projector_for_iteration,
+)
 from recovar.em.dense_single_volume.relion_replay import (
     _sealed_sampling_base_grids,
     _sealed_sampling_rotation_ids,
     _sealed_direction_log_prior,
-    RelionProjectorReplayState,
     _perturbation_restart_state_iteration,
     _resolve_replay_random_perturbation,
     _validate_coupled_relion_restart_state,
@@ -1569,163 +1571,6 @@ def _score_kclass_firstiter_cc_pass2(
         **firstiter_em_kwargs,
     )
     return k_class_result, rot_pmap, trans_pmap, int(fine_trans.shape[0]), adaptive_os_local
-
-
-def _relion_projector_half_maps_for_scoring(
-    means_k,
-    *,
-    volume_shape,
-    current_size: int | None,
-    padding_factor: int,
-    n_classes: int,
-    real_references=None,
-    dump_label: str | None = None,
-) -> tuple[np.ndarray, int]:
-    """Build RELION ``Projector::data`` slabs from current Fourier references."""
-
-    from recovar.core import fourier_transform_utils as ftu
-    from recovar.em.initial_model.dense_adapter import reference_to_relion_projector_half_maps
-
-    refs_ft = np.asarray(means_k)
-    if int(n_classes) == 1 and refs_ft.ndim == 1:
-        refs_ft = refs_ft[None, :]
-    if refs_ft.ndim != 2 or int(refs_ft.shape[0]) != int(n_classes):
-        raise ValueError(
-            "means_k must be a flat reference or a per-class reference array; "
-            f"got shape {refs_ft.shape} for n_classes={n_classes}",
-        )
-    refs_real_override = None
-    if real_references is not None:
-        refs_real_override = np.asarray(real_references, dtype=np.float64)
-        expected_shape = (int(n_classes),) + tuple(int(value) for value in volume_shape)
-        if refs_real_override.shape != expected_shape:
-            raise ValueError(
-                "real_references must have one real-space volume per class; "
-                f"got {refs_real_override.shape}, expected {expected_shape}",
-            )
-    resolved_current_size = int(current_size) if current_size is not None else int(volume_shape[0])
-    cache_dir = os.environ.get("RECOVAR_RELION_PROJECTOR_CACHE_DIR", "").strip()
-    cache_path = None
-    if cache_dir:
-        refs_for_hash = np.ascontiguousarray(
-            refs_ft if refs_real_override is None else refs_real_override
-        )
-        hasher = hashlib.sha256()
-        hasher.update(b"recovar-relion-projector-cache-v1")
-        hasher.update(b"fourier-reference" if refs_real_override is None else b"real-reference")
-        hasher.update(str(refs_for_hash.dtype).encode("utf-8"))
-        hasher.update(np.asarray(refs_for_hash.shape, dtype=np.int64).tobytes())
-        hasher.update(np.asarray(volume_shape, dtype=np.int64).tobytes())
-        cache_params = np.asarray(
-            [resolved_current_size, int(padding_factor), int(n_classes)],
-            dtype=np.int64,
-        )
-        hasher.update(cache_params.tobytes())
-        hasher.update(refs_for_hash.view(np.uint8))
-        cache_path = os.path.join(cache_dir, f"projector_{hasher.hexdigest()[:24]}.npz")
-        if os.path.exists(cache_path):
-            try:
-                with np.load(cache_path, allow_pickle=False) as cached:
-                    projector_half = np.asarray(cached["projector_half"])
-                    projector_r_max = int(np.asarray(cached["projector_r_max"]))
-                    if (
-                        int(np.asarray(cached["current_size"])) != resolved_current_size
-                        or int(np.asarray(cached["padding_factor"])) != int(padding_factor)
-                        or int(np.asarray(cached["n_classes"])) != int(n_classes)
-                        or tuple(np.asarray(cached["volume_shape"], dtype=np.int64).tolist()) != tuple(volume_shape)
-                    ):
-                        raise ValueError("metadata mismatch")
-                logger.info("RELION mode: loaded cached Projector::data from %s", cache_path)
-                return projector_half, projector_r_max
-            except Exception as exc:
-                logger.warning("Ignoring unreadable RELION projector cache %s: %s", cache_path, exc)
-    if refs_real_override is None:
-        refs_real = []
-        for class_index in range(int(n_classes)):
-            ref_ft = jnp.asarray(refs_ft[class_index]).reshape(volume_shape)
-            refs_real.append(np.asarray(ftu.get_idft3(ref_ft)).real)
-        refs_real = np.asarray(refs_real, dtype=np.float64)
-    else:
-        refs_real = refs_real_override
-    projector_half, projector_r_max = reference_to_relion_projector_half_maps(
-        refs_real,
-        current_size=resolved_current_size,
-        padding_factor=int(padding_factor),
-    )
-    if cache_path is not None:
-        os.makedirs(cache_dir, exist_ok=True)
-        try:
-            with open(os.path.join(cache_dir, "SAFE_TO_DELETE"), "a", encoding="utf-8"):
-                pass
-            tmp_path = f"{cache_path}.{os.getpid()}.tmp.npz"
-            np.savez(
-                tmp_path,
-                projector_half=np.asarray(projector_half),
-                projector_r_max=np.int64(projector_r_max),
-                current_size=np.int64(resolved_current_size),
-                padding_factor=np.int64(padding_factor),
-                volume_shape=np.asarray(volume_shape, dtype=np.int64),
-                n_classes=np.int64(n_classes),
-            )
-            os.replace(tmp_path, cache_path)
-            logger.info("RELION mode: saved Projector::data cache to %s", cache_path)
-        except Exception as exc:
-            logger.warning("Could not write RELION projector cache %s: %s", cache_path, exc)
-    dump_dir = os.environ.get("RECOVAR_RELION_PROJECTOR_DUMP_DIR")
-    if dump_dir:
-        label = dump_label or "projector"
-        safe_label = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in str(label))
-        os.makedirs(dump_dir, exist_ok=True)
-        np.savez_compressed(
-            os.path.join(dump_dir, f"{safe_label}_relion_projector_half.npz"),
-            projector_half=np.asarray(projector_half),
-            projector_r_max=np.int64(projector_r_max),
-            current_size=np.int64(resolved_current_size),
-            padding_factor=np.int64(padding_factor),
-            volume_shape=np.asarray(volume_shape, dtype=np.int64),
-            n_classes=np.int64(n_classes),
-        )
-    return projector_half, projector_r_max
-
-
-def _validate_captured_relion_projector_for_iteration(
-    replay_state: RelionProjectorReplayState,
-    *,
-    current_size: int | None,
-    volume_shape,
-    padding_factor: int,
-    n_classes: int,
-) -> tuple[list[np.ndarray], list[int]]:
-    """Bind a captured projector state to one exact live replay geometry."""
-
-    resolved_current_size = int(current_size) if current_size is not None else int(volume_shape[0])
-    expected_volume_shape = tuple(int(value) for value in volume_shape)
-    mismatches = []
-    if replay_state.current_size != resolved_current_size:
-        mismatches.append(
-            f"current_size captured={replay_state.current_size} replay={resolved_current_size}"
-        )
-    if replay_state.padding_factor != int(padding_factor):
-        mismatches.append(
-            f"padding_factor captured={replay_state.padding_factor} replay={int(padding_factor)}"
-        )
-    if replay_state.volume_shape != expected_volume_shape:
-        mismatches.append(
-            f"volume_shape captured={replay_state.volume_shape} replay={expected_volume_shape}"
-        )
-    if replay_state.n_classes != int(n_classes):
-        mismatches.append(
-            f"n_classes captured={replay_state.n_classes} replay={int(n_classes)}"
-        )
-    if mismatches:
-        raise ValueError(
-            "captured RELION Projector::data does not match the live replay boundary: "
-            + "; ".join(mismatches)
-        )
-    return (
-        list(replay_state.projector_half_by_half),
-        [int(value) for value in replay_state.projector_r_max_by_half],
-    )
 
 
 def _score_half_dense(
