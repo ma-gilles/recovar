@@ -193,7 +193,9 @@ an active state.
 `helpers/resolution.py` owns current-size growth inputs and first-iteration
 resolution rules: the inclusive FSC/data-vs-prior boundary, raw versus corrected
 K1 scheduling, the initial high-resolution cutoff, and the tau2 reporting taper.
-The controller retains their timing within the refinement loop.
+The controller retains their timing within the refinement loop. The pure
+scheduling cases live in `tests/unit/test_resolution_scheduling.py`; the
+reconstruction/taper ordering check remains with the controller tests.
 
 `dense_single_volume/projector_preparation.py` prepares RELION reference slabs
 for the controller's scoring calls. It owns native reference conversion, cache
