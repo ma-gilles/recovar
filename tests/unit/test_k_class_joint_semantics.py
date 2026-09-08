@@ -31,7 +31,7 @@ from recovar.em.dense_single_volume.k_class import (
     run_dense_k_class_em_adaptive,
     run_local_k_class_em,
 )
-from recovar.em.dense_single_volume.iteration_loop import (
+from recovar.em.dense_single_volume.firstiter_cc import (
     _build_firstiter_cc_pass2_grids,
 )
 from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume import batch_planning, iteration_loop, k_class
+from recovar.em.dense_single_volume import batch_planning, firstiter_cc, iteration_loop, k_class
 from recovar.em.dense_single_volume import score_outputs
 from recovar.em.dense_single_volume.batch_planning import (
     _estimate_relion_em_batch_sizes,
@@ -122,8 +122,8 @@ def test_firstiter_cc_adaptive_dispatch_clamps_against_fine_translation_grid(mon
         captured.update(kwargs)
         return "result"
 
-    monkeypatch.setattr(iteration_loop, "_build_firstiter_cc_pass2_grids", fake_grids)
-    monkeypatch.setattr(iteration_loop, "run_dense_k_class_em_adaptive", fake_adaptive)
+    monkeypatch.setattr(firstiter_cc, "_build_firstiter_cc_pass2_grids", fake_grids)
+    monkeypatch.setattr(firstiter_cc, "run_dense_k_class_em_adaptive", fake_adaptive)
 
     def fake_safe_batch_sizes(n_rot, n_trans, *, classes=None, image_shape_for_batch=None, current_size_for_batch=None):
         assert classes == 2
@@ -134,7 +134,8 @@ def test_firstiter_cc_adaptive_dispatch_clamps_against_fine_translation_grid(mon
             return 120, 700
         raise AssertionError((n_rot, n_trans, current_size_for_batch))
 
-    result, _rot_parent, _trans_parent, n_trans_fine, _adaptive_os = iteration_loop._score_kclass_firstiter_cc_pass2(
+    result, _rot_parent, _trans_parent, n_trans_fine, _adaptive_os = firstiter_cc._score_kclass_firstiter_cc_pass2(
+        logger=iteration_loop.logger,
         experiment_dataset=object(),
         mean=np.zeros((2, 4), dtype=np.complex64),
         mean_variance=None,
@@ -255,8 +256,8 @@ def test_k1_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch
             best_pose_rotation_ids=jnp.zeros(n_images, dtype=jnp.int32),
         )
 
-    monkeypatch.setattr(iteration_loop, "_build_firstiter_cc_pass2_grids", fake_grids)
-    monkeypatch.setattr(iteration_loop, "run_dense_k_class_em_adaptive", fake_adaptive)
+    monkeypatch.setattr(firstiter_cc, "_build_firstiter_cc_pass2_grids", fake_grids)
+    monkeypatch.setattr(firstiter_cc, "run_dense_k_class_em_adaptive", fake_adaptive)
 
     result = iteration_loop._score_half_dense(
         k=0,
