@@ -232,8 +232,11 @@ def test_complete_cuda_publication_matches_existing_gpu_path(monkeypatch, ties):
         np.testing.assert_array_equal(np.diff(candidate["support_offsets"]), [32, 64, 32])
 
 
-@pytest.mark.parametrize("first_group", ["mixed", "all_overflow", "invalid_certificate"])
-def test_actual_significance_engine_publishes_identical_complete_state(monkeypatch, one_winner, first_group):
+@pytest.mark.parametrize("first_group", ["mixed", "all_overflow", "invalid_certificate", "small_grid"])
+@pytest.mark.parametrize("cuda_posterior", [False, True])
+def test_actual_significance_engine_publishes_identical_complete_state(
+    monkeypatch, packed_one_winner, first_group, cuda_posterior
+):
     """Exercise the engine boundary on fixed scores, including all host outputs."""
     from recovar import cuda_backproject
     from recovar.em.dense_single_volume.helpers import coarse_partition, oversampling, projection, significance
@@ -251,7 +254,7 @@ def test_actual_significance_engine_publishes_identical_complete_state(monkeypat
         "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE": "1",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID": "1",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR": "1",
-        "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY": "1",
+        "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID_BLOCK_CAPACITY": "2" if first_group == "small_grid" else "1",
         "RECOVAR_K1_COARSE_GAUSSIAN_FFI": "1",
         "RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF": "1",
         "RECOVAR_K1_COARSE_FUSED_PROJECTOR": "0",
@@ -263,6 +266,7 @@ def test_actual_significance_engine_publishes_identical_complete_state(monkeypat
         "RECOVAR_K1_RELION_EXACT_COARSE_OPERANDS": "1",
         "RECOVAR_K1_RELION_F32_COARSE_SUPPORT": "1",
         "RECOVAR_COARSE_ROW_PARTITION": "0",
+        "RECOVAR_COARSE_POSTERIOR_TRANSACTION": "0",
     }.items():
         monkeypatch.setenv(name, value)
     monkeypatch.setattr(significance.jax, "default_backend", lambda: "gpu")
@@ -368,8 +372,9 @@ def test_actual_significance_engine_publishes_identical_complete_state(monkeypat
     control = run()
     assert not partition_calls
     monkeypatch.setenv("RECOVAR_COARSE_ROW_PARTITION", "1")
+    monkeypatch.setenv("RECOVAR_COARSE_POSTERIOR_TRANSACTION", str(int(cuda_posterior)))
     candidate = run()
-    assert len(partition_calls) == (1 if first_group == "all_overflow" else 2)
+    assert len(partition_calls) == (0 if first_group == "small_grid" else 1 if first_group == "all_overflow" else 2)
     for i in range(4):
         assert candidate[i].dtype == control[i].dtype
         np.testing.assert_array_equal(candidate[i], control[i])
@@ -386,7 +391,22 @@ def test_actual_significance_engine_publishes_identical_complete_state(monkeypat
     assert audit["row_partition"]["input_batch_count"] == 2
     assert audit["row_partition"]["execution_group_count"] == (3 if first_group == "mixed" else 2)
     assert (
-        audit["selected_rescore_image_count"] == {"mixed": 5, "all_overflow": 0, "invalid_certificate": 3}[first_group]
+        audit["selected_rescore_image_count"]
+        == {"mixed": 5, "all_overflow": 0, "invalid_certificate": 3, "small_grid": 0}[first_group]
     )
-    assert audit["full_dense_image_count"] == {"mixed": 1, "all_overflow": 6, "invalid_certificate": 3}[first_group]
+    assert (
+        audit["full_dense_image_count"]
+        == {"mixed": 1, "all_overflow": 6, "invalid_certificate": 3, "small_grid": 6}[first_group]
+    )
     assert audit["overflow_latch_activation_count"] == int(first_group == "all_overflow")
+    if cuda_posterior:
+        assert audit["posterior_transaction"] == dict(
+            requested=True,
+            default_enabled=False,
+            backend="cuda",
+            input_batch_count=2,
+            execution_group_count=3 if first_group == "mixed" else 2,
+            actual_image_count=6,
+        )
+    else:
+        assert "posterior_transaction" not in audit

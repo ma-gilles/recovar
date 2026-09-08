@@ -5355,6 +5355,14 @@ def _compute_k_class_significance_batched(
     if partition_token not in {"0", "1"}:
         raise ValueError("RECOVAR_COARSE_ROW_PARTITION must be 0 or 1")
     coarse_row_partition_requested = partition_token == "1"
+    posterior_token = os.environ.get("RECOVAR_COARSE_POSTERIOR_TRANSACTION", "0")
+    if posterior_token not in {"0", "1"}:
+        raise ValueError("RECOVAR_COARSE_POSTERIOR_TRANSACTION must be 0 or 1")
+    coarse_cuda_posterior_requested = posterior_token == "1"
+    if coarse_cuda_posterior_requested and (
+        not coarse_row_partition_requested or relion_f32_coarse_tie_ulps != 0
+    ):
+        raise ValueError("CUDA coarse posterior requires row partition and exact ties")
     if coarse_gaussian_gemm_real_cross_requested and (
         not coarse_gaussian_gemm_hybrid_requested or coarse_gaussian_gemm_device_transaction_requested
     ):
@@ -6662,6 +6670,9 @@ def _compute_k_class_significance_batched(
     coarse_gaussian_gemm_stream_original_indices = []
     coarse_gaussian_gemm_hybrid_batch_count = 0
     coarse_partition_mixed_batch_count = 0
+    coarse_cuda_posterior_batch_count = 0
+    coarse_cuda_posterior_group_count = 0
+    coarse_cuda_posterior_image_count = 0
     coarse_partition_actual_group_sizes = []
     coarse_partition_physical_group_sizes = []
     coarse_gaussian_gemm_hybrid_selected_batch_count = 0
@@ -7453,8 +7464,6 @@ def _compute_k_class_significance_batched(
                         coarse_gaussian_gemm_hybrid_overflow_latch_activation_count += 1
 
             if coarse_partition_groups is not None:
-                from recovar.em.dense_single_volume.helpers.coarse_publication import publish_coarse_rows
-
                 coarse_partition_mixed_batch_count += int(coarse_partition_plan.partitioned)
                 coarse_partition_actual_group_sizes.extend(len(group.image_indices) for group in coarse_partition_groups)
                 coarse_partition_physical_group_sizes.extend(len(group.result.raw_score_max) for group in coarse_partition_groups)
@@ -7463,8 +7472,23 @@ def _compute_k_class_significance_batched(
                 if not coarse_partition_plan.partitioned and coarse_partition_plan.fallback_reason == "block_capacity_overflow":
                     coarse_gaussian_gemm_hybrid_overflow_latched = True
                     coarse_gaussian_gemm_hybrid_overflow_latch_activation_count += 1
+            if coarse_partition_groups is not None or coarse_cuda_posterior_requested:
+                from recovar.em.dense_single_volume.helpers.coarse_publication import publish_coarse_rows
+
+                publication_groups = coarse_partition_groups
+                if publication_groups is None:
+                    from recovar.em.dense_single_volume.helpers.coarse_partition import CoarseRowResult
+
+                    publication_prior = batch_translation_log_prior
+                    if publication_prior is not None and publication_prior.ndim == 1:
+                        publication_prior = jnp.broadcast_to(publication_prior, (batch_size, n_trans))
+                    publication_groups = (CoarseRowResult(
+                        np.arange(actual_batch_size, dtype=np.int32),
+                        coarse_gaussian_gemm_hybrid_batch_result,
+                        publication_prior,
+                    ),)
                 published = publish_coarse_rows(
-                    coarse_partition_groups,
+                    publication_groups,
                     actual_image_count=actual_batch_size,
                     n_rotations=n_rot,
                     n_translations=n_trans,
@@ -7474,7 +7498,12 @@ def _compute_k_class_significance_batched(
                     adaptive_fraction=adaptive_fraction,
                     max_significants=max_significants,
                     tie_score_ulps=relion_f32_coarse_tie_ulps,
+                    posterior_backend="cuda" if coarse_cuda_posterior_requested else "jax",
                 )
+                if coarse_cuda_posterior_requested:
+                    coarse_cuda_posterior_batch_count += 1
+                    coarse_cuda_posterior_group_count += len(publication_groups)
+                    coarse_cuda_posterior_image_count += actual_batch_size
                 target = slice(start_idx, end_idx)
                 hard_assignment[target] = published["best_pose"]
                 class_assignment[target] = 0
@@ -9160,6 +9189,15 @@ def _compute_k_class_significance_batched(
             "execution_group_count": coarse_gaussian_gemm_hybrid_selected_batch_count + coarse_gaussian_gemm_hybrid_full_dense_batch_count,
             "invalid_certificate_whole_batch_fallback": True,
             "overflow_latch_policy": "all_actual_rows_overflow",
+        }
+    if coarse_cuda_posterior_requested:
+        full_stats["coarse_gaussian_gemm_hybrid"]["posterior_transaction"] = {
+            "requested": True,
+            "default_enabled": False,
+            "backend": "cuda",
+            "input_batch_count": coarse_cuda_posterior_batch_count,
+            "execution_group_count": coarse_cuda_posterior_group_count,
+            "actual_image_count": coarse_cuda_posterior_image_count,
         }
     if relion_f32_sum_weight is not None:
         # RELION's oversampling-zero second pass deliberately reuses this
