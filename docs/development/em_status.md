@@ -26,19 +26,22 @@ can change the [mandatory precision policy](../../recovar/em/AGENTS.md).
 | PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
 | Preserved structural branch | `codex/recovar-structural-cleanup` at `681c2e6ed03c9b63b94f07bc47a4a8367b1b4de3` |
 | Local PR180 integration | `42a3d6184c6d05a9f4f97bd00120e62d0081f1d3`, incorporating PR180 head `1e2f229b3e0e8edaec029d2b604937f692148578` |
-| Active implementation branch | `codex/integrate-pr180`; latest runtime cleanup recorded here is `fa690f9a1` |
+| Active implementation branch | `codex/integrate-pr180`; includes follower-completion and normalization-owner cleanup |
 
 The active checkout is
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`.
 Read its actual `git rev-parse HEAD`, dirty diff hash and untracked manifest
-before validation. The integration and subsequent local work are not pushed.
-Frozen benchmark checkouts remain immutable.
+before validation. Frozen benchmark checkouts remain immutable.
 
 [Draft PR179](https://github.com/ma-gilles/recovar/pull/179) is stacked on
 [PR158](https://github.com/ma-gilles/recovar/pull/158) for review of the structural
-series. Local [PR180](https://github.com/ma-gilles/recovar/pull/180) integration
+series and the integrated [PR180](https://github.com/ma-gilles/recovar/pull/180)
+checkpoint. Local PR180 integration
 does not mean the GitHub PR is merged or that later commits passed old runs.
-Publication and merge remain gated by the applicable qualification.
+On September 8 the user explicitly authorized pushing the current state to the
+review branch with incomplete validation. This publication exception does not
+waive scientific gates or authorize merging; PR179 remains a draft. Check its
+actual remote HEAD to identify the latest published snapshot.
 
 The original review covered 1,654 text files and 89 other assets. Its inventory,
 decision records, exact commands and job records live under the **review root**:
@@ -62,8 +65,9 @@ Recent work after PR180 integration:
 | Sampling helper uses its direct dependency without importing the controller | 10 affected cases and overlapping 19-case sampling selection; 8 exact grids at orders 0–3 in both precisions |
 | Explicit diagnostic norm dtype and production-default tests | 9 norm/capture cases plus 2 existing precision-default guards; runtime and tolerances unchanged |
 | Replay-completion validation at its owner; unreachable duplicate statistics guard removed | 65 focused cases, 38 CPU fast-guard cases; 56 exact result/error/log comparisons and all 4 guard combinations |
+| Norm/scale arithmetic and seven formula tests moved to `relion_normalization.py` | 72 focused cases, 38 CPU fast-guard cases; 576 exact output and 17 exact error comparisons; all 380 collected cases retained through seven explicit ID migrations |
 
-The last change preserves all three controller return paths, output keys,
+The replay-completion change preserves all three controller return paths, output keys,
 validation exceptions and log messages. Detailed evidence is in
 `pr180_follower_completion_20260908/` under the review root. These checks do
 not establish GPU memory or end-to-end quality/performance equivalence.
@@ -123,9 +127,12 @@ strict-parity target needs separate scientific qualification.
 
 ## Checkpoint results and next checks
 
-1. Continue normalization and finalization ownership cleanup without changing
-   scheduling, reduction order, casts or object lifetimes. Review callers and
-   retained computations, then use affected tests and exact comparisons.
+1. Continue reviewing finalization boundaries after the completed norm/scale
+   extraction. The arithmetic and seven formula tests now have a dedicated
+   owner; controller orchestration, temporary lifetimes and all collected cases
+   are preserved. Exact outputs/errors and affected callers pass. Evidence is
+   under `pr180_normalization_owner_20260908/` in the review root. Select and
+   record the next measurable structural hypothesis before editing.
 2. For K1, use the reproduced six-particle case to compare matched score
    operands, priors and candidate geometry, starting with row 901. Preserve
    the measured dump-versus-production difference and the unknown generating

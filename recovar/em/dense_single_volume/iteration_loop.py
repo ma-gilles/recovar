@@ -136,9 +136,9 @@ from recovar.em.dense_single_volume.mean_helpers import (
     compute_unregularized_halfmaps_and_align_signs,
     update_c1_sigma_offset_from_posterior,
     update_posterior_noise_variance,
-    update_relion_norm_scale_corrections,
 )
 from recovar.em.dense_single_volume.refinement_options import RefinementOptions
+from recovar.em.dense_single_volume.relion_normalization import update_relion_norm_scale_corrections
 from recovar.em.dense_single_volume.relion_metadata import (
     _radial_profile_from_noise_variance,
     _relion_metadata_translations,

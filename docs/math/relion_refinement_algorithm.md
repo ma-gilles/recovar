@@ -232,11 +232,19 @@ shape: padding and current-size backprojector grids change their dimensions.
 [`mean_helpers.py`](../../recovar/em/dense_single_volume/mean_helpers.py) owns
 `compute_unregularized_halfmaps_and_align_signs`,
 `_reconstruct_and_postprocess_means`, `update_posterior_noise_variance`,
-`update_relion_norm_scale_corrections` and `update_c1_sigma_offset_from_posterior`.
+and `update_c1_sigma_offset_from_posterior`.
 These updates consume posterior-weighted residual and moment statistics as
 well as accumulators. The input noise representation can be a per-pixel array
 or separate half-set inputs; radial statistics and group corrections have
 explicit conversion/update paths.
+
+[`relion_normalization.py`](../../recovar/em/dense_single_volume/relion_normalization.py)
+owns `update_relion_norm_scale_corrections` and its result type. It computes
+per-image normalization and per-group scales from M-step statistics, using
+retained posterior mass for the average normalization. The controller installs
+the returned corrections; follower-specific installation remains in
+`relion_worker_scale.py`. Host arithmetic stays float64 and returned arrays
+use the caller's selected dtype, float32 by default.
 
 [`regularization.py`](../../recovar/reconstruction/regularization.py) owns FSC,
 tau2 and data/prior helpers. `compute_data_vs_prior` uses shell-average weight

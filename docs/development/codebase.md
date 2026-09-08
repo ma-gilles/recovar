@@ -96,6 +96,14 @@ Their unused controller re-exports have been retired. Helper-only callers also
 import sign alignment and combined noise statistics from `mean_helpers`, rotation
 metadata from `relion_metadata`, and replay iteration mapping from `relion_replay`.
 
+[`relion_normalization`](../../recovar/em/dense_single_volume/relion_normalization.py)
+owns per-image norm and per-group scale formulas and their result type. It
+depends on NumPy/JAX, not the controller, mean reconstruction or follower
+dispatch. The controller retains state installation and temporary lifetimes;
+`relion_worker_scale` handles follower-specific corrections. The seven formula
+tests live in `tests/unit/test_relion_normalization.py` and import this owner
+directly. The old `mean_helpers` normalization exports are removed.
+
 Dense and local scoring share `orientation_priors.relion_translation_prior_center`;
 the duplicate `relion_local_translation_prior_center` entry point has been removed.
 Both use `(prior - rounded_old_offset) / pixel_size`, as before. The separate

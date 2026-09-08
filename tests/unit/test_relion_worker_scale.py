@@ -11,7 +11,7 @@ from recovar.em.dense_single_volume.helpers.types import NoiseStats
 from recovar.em.dense_single_volume.iteration_loop import (
     _run_relion_iteration_loop,
 )
-from recovar.em.dense_single_volume.mean_helpers import update_relion_norm_scale_corrections
+from recovar.em.dense_single_volume.relion_normalization import update_relion_norm_scale_corrections
 from recovar.em.dense_single_volume.relion_replay import (
     _apply_replay_correction_overrides,
     _RelionHalfInputState,

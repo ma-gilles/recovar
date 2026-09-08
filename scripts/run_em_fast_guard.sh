@@ -44,7 +44,7 @@ jax_file = pathlib.Path(jax.__file__).resolve()
 pixi_env = (repo / ".pixi" / "envs" / "default").resolve()
 assert str(recovar_file).startswith(str(repo) + "/"), recovar_file
 assert str(jax_file).startswith(str(pixi_env) + "/"), (jax_file, pixi_env)
-for helper in ("relion_replay", "projector_preparation", "score_outputs", "helpers.resolution"):
+for helper in ("relion_replay", "relion_normalization", "projector_preparation", "score_outputs", "helpers.resolution"):
     importlib.import_module(f"recovar.em.dense_single_volume.{helper}")
 assert "recovar.em.dense_single_volume.iteration_loop" not in sys.modules, (
     "EM helper imports must not load the refinement controller; "
