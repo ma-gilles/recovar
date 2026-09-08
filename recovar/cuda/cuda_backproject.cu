@@ -11998,6 +11998,10 @@ ffi::Error RelionCubSortScanBatchedF32Impl(
 // Explicit, unused score-to-support transaction. Keep the exact existing CUB
 // sort and Ampere scan, but compile the surrounding row algebra once in CUDA.
 // Support capacity is B*N: threshold ties are never truncated to maxsig.
+struct CoarsePosteriorFiniteMax {
+    __device__ float operator()(float a, float b) const { return fmaxf(a, b); }
+};
+
 __global__ void coarse_posterior_row_max_f32(
     const float* scores, const float* raw_max, const int32_t* actual,
     float* maxima, int rows, int count)
@@ -12012,7 +12016,7 @@ __global__ void coarse_posterior_row_max_f32(
     }
     using Reduce = cub::BlockReduce<float, 256>;
     __shared__ typename Reduce::TempStorage temp;
-    const float result = Reduce(temp).Reduce(best, cub::Max());
+    const float result = Reduce(temp).Reduce(best, CoarsePosteriorFiniteMax());
     if (threadIdx.x == 0) maxima[row] = result;
 }
 
