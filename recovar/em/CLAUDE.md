@@ -25,7 +25,8 @@ during structural cleanup. Propose numerical repairs separately.
 Keep `dense_single_volume/__init__.py` free of controller imports. Import
 `refine_single_volume` explicitly from `dense_single_volume.iteration_loop`;
 helper imports must not initialize iteration scheduling. The CPU fast guard
-checks this import boundary and the captured-replay and sampling contracts.
+checks this import boundary, captured replay, angular schedules and resolution
+rules.
 
 ## North Star
 

@@ -66,7 +66,8 @@ local GPU, check `nvidia-smi` first and then use
 `EM_FAST_GUARD_BACKEND=gpu pixi run test-em-fast-guard`.
 
 The same command checks the helper/controller import boundary, captured replay
-state and explicit HEALPix schedules. These cases use small in-memory fixtures;
+state, explicit HEALPix schedules, and the current-size/first-iteration
+resolution rules. These cases use small in-memory fixtures;
 they require no external RELION capture or GPU allocation on the default CPU
 path. Keep their case inventory intact when reorganizing tests.
 
