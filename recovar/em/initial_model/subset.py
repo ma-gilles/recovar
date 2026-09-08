@@ -38,14 +38,6 @@ def randomise_particles_order(nr_particles: int, rnd_unif: RndUnifFn) -> np.ndar
     return order
 
 
-def _stable_sort_by_optics_group(particle_ids: np.ndarray, optics_group_by_particle: Sequence[int]) -> np.ndarray:
-    """Stable-sort by optics-group; matches C++ ``std::stable_sort`` on integer keys."""
-    if particle_ids.size == 0:
-        return particle_ids
-    keys = np.asarray([optics_group_by_particle[int(p)] for p in particle_ids], dtype=np.int64)
-    return particle_ids[np.argsort(keys, kind="stable")]
-
-
 def pseudo_halfsets_active(gradient_refine: bool, do_split_random_halves: bool) -> bool:
     """ml_optimiser.cpp:1920 ``grad_pseudo_halfsets = do_grad && !do_split_random_halves`` (always True for GUI InitialModel)."""
     return gradient_refine and not do_split_random_halves

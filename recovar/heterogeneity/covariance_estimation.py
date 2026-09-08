@@ -983,30 +983,6 @@ def preprocess_covariance_batch(
     return images, ctf_on_grid, plane_coords, image_mask, tilt_labels
 
 
-def _batched_stack_transfer(H, B, H_out, B_out, freq_offset, volume_size, n_items):
-    """Stack JAX arrays in GPU batches and transfer to pre-allocated CPU arrays.
-
-    Avoids OOM from stacking all columns at once and minimizes the number
-    of individual DtoH transfers.
-    """
-    batch_size = 50
-    element_bytes = volume_size * 8  # complex64
-    gpu_mem_total = utils.get_gpu_memory_total()
-    if 2 * batch_size * element_bytes > 0.10 * gpu_mem_total * 1e9:
-        gpu_mem_bytes = gpu_mem_total * 1e9
-        batch_size = max(1, int(0.10 * gpu_mem_bytes / (2 * element_bytes)))
-
-    for batch_start in range(0, n_items, batch_size):
-        batch_end = min(batch_start + batch_size, n_items)
-        H_batch_jax = jnp.stack(H[batch_start:batch_end], axis=1)
-        B_batch_jax = jnp.stack(B[batch_start:batch_end], axis=1)
-        col_start = freq_offset + batch_start
-        col_end = freq_offset + batch_end
-        H_out[:, col_start:col_end] = _to_cpu(H_batch_jax)
-        B_out[:, col_start:col_end] = _to_cpu(B_batch_jax)
-        del H_batch_jax, B_batch_jax
-
-
 def _iter_column_batch_ranges(n_cols, batch_size):
     """Yield ``(start, end)`` pairs covering ``range(n_cols)``."""
     for start in range(0, n_cols, batch_size):

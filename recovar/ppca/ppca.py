@@ -48,29 +48,6 @@ def _iter_processed_batches(experiment_dataset, batch_size):
         )
 
 
-def _forward_model_from_map(
-    volume,
-    ctf_params,
-    rotation_matrices,
-    image_shape,
-    volume_shape,
-    voxel_size,
-    ctf_evaluator,
-    disc_type,
-    skip_ctf=False,
-):
-    slices = core.slice_volume(
-        volume,
-        rotation_matrices,
-        image_shape,
-        volume_shape,
-        disc_type,
-    )
-    if not skip_ctf:
-        slices = slices * ctf_evaluator(ctf_params, image_shape, voxel_size)
-    return slices
-
-
 def _prepare_mean_estimate_for_slicing(mean_estimate, mean_estimate_raw, volume_shape, disc_type_mean):
     """Return the mean representation expected by ``slice_volume``.
 

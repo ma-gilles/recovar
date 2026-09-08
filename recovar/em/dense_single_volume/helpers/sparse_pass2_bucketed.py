@@ -5173,31 +5173,6 @@ def _replace_untranslated_low_shell_norm_power(
     )
 
 
-@partial(jax.jit, static_argnames=("batch_size",))
-def _compute_norm_residual_per_image_from_flat_rows(
-    proj_half,
-    proj_abs2_half,
-    summed_masked,
-    ctf_probs,
-    noise_variance_half,
-    flat_image_indices,
-    *,
-    batch_size: int,
-):
-    """Return norm-correction residuals per image from flattened active rows."""
-
-    ctf_has_mass = ctf_probs != 0.0
-    ctf_probs_raw = jnp.where(ctf_has_mass, ctf_probs * noise_variance_half[None, :], 0.0)
-    a2_terms = jnp.where(ctf_has_mass, proj_abs2_half * ctf_probs_raw, 0.0)
-    a2_per_row = jnp.sum(a2_terms, axis=1)
-
-    cross_terms = jnp.where(summed_masked != 0.0, proj_half * jnp.conj(summed_masked), 0.0)
-    xa_terms = noise_variance_half[None, :] * cross_terms.real
-    xa_per_row = jnp.sum(xa_terms, axis=1)
-    residual_per_row = (a2_per_row - 2.0 * xa_per_row).astype(jnp.float32)
-    return jnp.zeros(int(batch_size), dtype=jnp.float32).at[flat_image_indices].add(residual_per_row)
-
-
 def _flat_block_row_bytes(flat_block) -> int:
     if flat_block is None or len(flat_block.shape) == 0:
         return 1

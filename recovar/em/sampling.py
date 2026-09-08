@@ -226,19 +226,6 @@ def _split_rotation_indices(indices, healpix_order, *, rotation_index_order: str
     return pixel_idx, psi_idx
 
 
-def _combine_rotation_indices(pixel_idx, psi_idx, healpix_order, *, rotation_index_order: str = "recovar"):
-    """Combine HEALPix pixel and psi components into full-grid indices."""
-    pixel_idx = np.asarray(pixel_idx, dtype=np.int64).reshape(-1)
-    psi_idx = np.asarray(psi_idx, dtype=np.int64).reshape(-1)
-    n_pixels = hp.nside2npix(2**healpix_order)
-    if rotation_index_order == "recovar":
-        return psi_idx * n_pixels + pixel_idx
-    if rotation_index_order == "relion":
-        n_psi = rotation_grid_n_in_planes(healpix_order)
-        return pixel_idx * n_psi + psi_idx
-    raise ValueError(f"rotation_index_order must be 'recovar' or 'relion', got {rotation_index_order!r}")
-
-
 def get_rotation_grid(nside_level, n_in_planes=None, matrices=False):
 
     #  * order	Npix	Theta-sampling
@@ -373,22 +360,6 @@ def _wrap_relion_perturbation(value, perturbation_factor):
     while wrapped < -pf:
         wrapped += 2 * pf
     return float(wrapped)
-
-
-def _relion_rnd_unif_first_draw(seed):
-    """Return RELION ``rnd_unif()`` immediately after ``init_random_generator(seed)``."""
-    try:
-        from recovar.relion_bind import _relion_bind_core as bind
-
-        return float(np.asarray(bind.vdam_rnd_unif_sequence(int(seed), 1), dtype=np.float64)[0])
-    except Exception:
-        import ctypes
-
-        libc = ctypes.CDLL(None)
-        libc.srand(ctypes.c_uint(int(seed)))
-        # RELION declares rnd_unif as float even in double-precision CPU
-        # builds. Preserve that cast when the optional binding is unavailable.
-        return float(np.float32(float(libc.rand()) / float((2**31) - 1)))
 
 
 def _relion_rnd_unif_scaled_first_draw(seed, low, high):
