@@ -81,6 +81,14 @@ Exact results and the raw comparison are in
 commands and source manifest at the corresponding path in the review root.
 The next CPU work is to resolve these focused contract checks, not rerun the
 whole suite for each test migration.
+The sampling helper now uses its direct sampling dependency, with the
+controller import removed. The two grid-precision cases and eight local-search
+cases pass after migrating dtype stubs and removing a redundant patch that
+overwrote the replay fixture with the real reader. Scientific assertions are
+unchanged. Direct grid comparisons preserve both precisions at orders 0–3;
+calling the helper leaves the controller unloaded. The next focused check
+updates the explicit diagnostic norm-reduction contract established by PR180
+`a91bce65a`, with separate default-float32 coverage and no runtime change.
 
 The float32 K1 captured-state replay at frozen `42a3d6184` completed in
 Slurm13624326 (5,000 particles, 128 pixels, iteration 3 to 4, H100 80 GB).

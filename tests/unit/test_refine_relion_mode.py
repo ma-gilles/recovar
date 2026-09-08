@@ -335,7 +335,7 @@ def test_relion_rotation_grid_float32_honors_explicit_float64_dtype(monkeypatch)
         [[13.123456789, 47.987654321, 91.234567891]], dtype=np.float64
     )
     monkeypatch.setattr(
-        iteration_loop_module,
+        relion_metadata_module,
         "_get_relion_rotation_grid_eulers_float64",
         lambda _order: source_eulers,
     )
@@ -13654,7 +13654,10 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
     monkeypatch.setattr(
         refine_mod,
         "_relion_rotation_grid_float32",
-        lambda order: (fake_get_grid(order), fake_get_grid_eulers(order)),
+        lambda order, *, dtype=np.float32: (
+            fake_get_grid(order).astype(dtype),
+            fake_get_grid_eulers(order).astype(dtype),
+        ),
     )
     monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
@@ -13862,7 +13865,10 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
     monkeypatch.setattr(
         refine_mod,
         "_relion_rotation_grid_float32",
-        lambda order: (fake_get_grid(order), fake_get_grid_eulers(order)),
+        lambda order, *, dtype=np.float32: (
+            fake_get_grid(order).astype(dtype),
+            fake_get_grid_eulers(order).astype(dtype),
+        ),
     )
     monkeypatch.setattr(
         refine_mod,
@@ -14054,7 +14060,10 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
     monkeypatch.setattr(
         refine_mod,
         "_relion_rotation_grid_float32",
-        lambda order: (fake_get_grid(order), fake_get_grid_eulers(order)),
+        lambda order, *, dtype=np.float32: (
+            fake_get_grid(order).astype(dtype),
+            fake_get_grid_eulers(order).astype(dtype),
+        ),
     )
     monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
     monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
@@ -14224,7 +14233,10 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
     monkeypatch.setattr(
         refine_mod,
         "_relion_rotation_grid_float32",
-        lambda order: (fake_get_grid(order), fake_get_grid_eulers(order)),
+        lambda order, *, dtype=np.float32: (
+            fake_get_grid(order).astype(dtype),
+            fake_get_grid_eulers(order).astype(dtype),
+        ),
     )
     monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
     monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
@@ -14331,7 +14343,10 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
     monkeypatch.setattr(
         refine_mod,
         "_relion_rotation_grid_float32",
-        lambda order: (fake_get_grid(order), fake_get_grid_eulers(order)),
+        lambda order, *, dtype=np.float32: (
+            fake_get_grid(order).astype(dtype),
+            fake_get_grid_eulers(order).astype(dtype),
+        ),
     )
     monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
     monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_local_search)
@@ -14425,7 +14440,10 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
     monkeypatch.setattr(
         refine_mod,
         "_relion_rotation_grid_float32",
-        lambda order: (fake_get_grid(order), fake_get_grid_eulers(order)),
+        lambda order, *, dtype=np.float32: (
+            fake_get_grid(order).astype(dtype),
+            fake_get_grid_eulers(order).astype(dtype),
+        ),
     )
     monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
     monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_local_search)
@@ -14601,7 +14619,10 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
     monkeypatch.setattr(
         refine_mod,
         "_relion_rotation_grid_float32",
-        lambda order: (fake_get_grid(order), fake_get_grid_eulers(order)),
+        lambda order, *, dtype=np.float32: (
+            fake_get_grid(order).astype(dtype),
+            fake_get_grid_eulers(order).astype(dtype),
+        ),
     )
     monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
     monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
@@ -14625,9 +14646,6 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
             "offset_range": replay_offset_range,
             "offset_step": replay_offset_step,
         },
-    )
-    monkeypatch.setattr(
-        relion_replay_module, "read_relion_sampling_metadata", refine_mod.read_relion_sampling_metadata,
     )
     monkeypatch.setattr(refine_mod.os.path, "exists", lambda _path: False)
 
@@ -15571,7 +15589,10 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
     monkeypatch.setattr(
         refine_mod,
         "_relion_rotation_grid_float32",
-        lambda order: (fake_get_grid(order), fake_get_grid_eulers(order)),
+        lambda order, *, dtype=np.float32: (
+            fake_get_grid(order).astype(dtype),
+            fake_get_grid_eulers(order).astype(dtype),
+        ),
     )
     monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
     monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)

@@ -69,13 +69,8 @@ def _relion_rotation_grid_float32(healpix_order: int, *, dtype: np.dtype = np.fl
     converted back to matrices, so they are working RFLOAT values rather than
     merely serialized metadata.
     """
-    # Indirection through iteration_loop module so test monkeypatches on
-    # ``iteration_loop.get_relion_rotation_grid`` / ``get_relion_rotation_grid_eulers``
-    # win at the call site.
-    from recovar.em.dense_single_volume import iteration_loop as _il
-
     order = int(healpix_order)
-    source_eulers = _il._get_relion_rotation_grid_eulers_float64(order)
+    source_eulers = _get_relion_rotation_grid_eulers_float64(order)
     eulers = source_eulers.astype(dtype)
     # RELION's accelerated expectation path constructs inverse projector
     # matrices on the host in RFLOAT precision, casts to XFLOAT, then copies
