@@ -8,6 +8,20 @@ import json
 import re
 from pathlib import Path
 
+# Support both direct script execution and imports through the scripts package.
+if __name__ == "__main__" and not __package__:
+    from scorecard_validation import (
+        require as _require,
+        paired_transition as _transition,
+        validate_paired_cases as _validate_cases,
+    )
+else:
+    from scripts.scorecard_validation import (
+        require as _require,
+        paired_transition as _transition,
+        validate_paired_cases as _validate_cases,
+    )
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SCORECARD = REPO_ROOT / "docs" / "math" / "em_k1_sampling_perturbation_scorecard_v1.json"
 DEFAULT_MARKDOWN = REPO_ROOT / "docs" / "math" / "em_k1_sampling_perturbation_scorecard.md"
@@ -51,56 +65,6 @@ EXPECTED_EVIDENCE_SHA256 = {
     "stock_map": "1268660a21693fb664f3e8f56f8cca55ae464bbf6dca06c7025fd1e7f617481d",
     "treatment_map": "96362f26457a154c515f25730ad97b8db9eeb12914e3cf2f4df97ea56432e6b3",
 }
-
-
-def _require(condition: bool, message: str) -> None:
-    if not condition:
-        raise ValueError(message)
-
-
-def _transition(baseline: str, treatment: str) -> str:
-    if baseline == "fail" and treatment == "pass":
-        return "improved"
-    if baseline == "pass" and treatment == "pass":
-        return "retained"
-    if baseline == "pass" and treatment == "fail":
-        return "regressed"
-    return "unchanged-fail"
-
-
-def _validate_cases(
-    cases: object,
-    expected_ids: tuple[str, ...],
-    expected_pairs: tuple[tuple[str, str], ...],
-) -> tuple[dict[str, int], dict[str, int]]:
-    _require(isinstance(cases, list) and len(cases) == len(expected_ids), "case denominator changed")
-    _require(tuple(case.get("id") for case in cases) == expected_ids, "case identity/order changed")
-    baseline_pass = 0
-    treatment_pass = 0
-    transitions = {name: 0 for name in ("improved", "retained", "regressed", "unchanged-fail")}
-    for case, expected_pair in zip(cases, expected_pairs, strict=True):
-        pair = (case.get("baseline_result"), case.get("treatment_result"))
-        _require(pair == expected_pair, f"{case.get('id')}: fixed result pair changed")
-        _require(case.get("result") == pair[1], f"{case.get('id')}: result is not treatment result")
-        _require(case.get("checked") is (pair[1] == "pass"), f"{case.get('id')}: checkmark changed")
-        transition = _transition(*pair)
-        _require(case.get("transition") == transition, f"{case.get('id')}: transition changed")
-        _require(isinstance(case.get("name"), str) and case["name"], f"{case.get('id')}: missing name")
-        _require(
-            isinstance(case.get("observed"), str) and case["observed"],
-            f"{case.get('id')}: missing observation",
-        )
-        baseline_pass += pair[0] == "pass"
-        treatment_pass += pair[1] == "pass"
-        transitions[transition] += 1
-    summary = {
-        "baseline_pass": baseline_pass,
-        "treatment_pass": treatment_pass,
-        "evaluated": len(expected_ids),
-        "denominator": len(expected_ids),
-        "paired_gain": treatment_pass - baseline_pass,
-    }
-    return summary, transitions
 
 
 def load_and_validate(path: Path) -> dict:
