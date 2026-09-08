@@ -138,6 +138,10 @@ Common transport and command mechanics have narrow owners:
 - [`json_utils.to_jsonable`](../../recovar/utils/json_utils.py) converts NumPy
   values, paths and nested containers. Finite-value and report acceptance rules
   remain the caller's responsibility.
+- [`scripts.file_hash.sha256_file`](../../scripts/file_hash.py) supplies the same
+  8 MiB hashing contract to standalone diagnostics without importing RECOVAR or
+  JAX. Keep the runtime helper in the installed package and this script helper
+  usable through both direct entry points and package imports.
 - [`scorecard_cli`](../../scripts/scorecard_cli.py) supplies print/write/check
   handling for compatible historical scorecards. Each renderer retains its own
   fixed case inventory, validator and Markdown format. These CLIs remain usable

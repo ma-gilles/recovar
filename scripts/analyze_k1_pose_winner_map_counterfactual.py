@@ -13,7 +13,6 @@ Map acceptance uses signed shellwise FSC/FSC-AUC.  Correlation is not used.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -35,12 +34,11 @@ from scripts.analyze_k1_single_translation_map_counterfactual import (
 SCHEMA = "recovar.em.k1_pose_winner_map_counterfactual.v1"
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+# Support direct execution, sibling imports, and the scripts package.
+if not __package__:
+    from file_hash import sha256_file as _sha256
+else:
+    from scripts.file_hash import sha256_file as _sha256
 
 
 def _rotation_distances_deg(matrices: np.ndarray, target: np.ndarray) -> np.ndarray:
