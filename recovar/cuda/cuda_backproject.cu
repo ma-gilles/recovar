@@ -38,6 +38,8 @@
 
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <math_constants.h>
+#include <thrust/iterator/counting_iterator.h>
 #include <cub/cub.cuh>
 #include <cerrno>
 #include <chrono>
@@ -12151,7 +12153,7 @@ ffi::Error RelionCoarsePosteriorTransactionF32Impl(
     uint8_t* mask = reinterpret_cast<uint8_t*>(maxima+rows);
     auto* out_support = static_cast<int32_t*>(support->untyped_data());
     auto* out_count = static_cast<int32_t*>(support_count->untyped_data());
-    cub::CountingInputIterator<int32_t> positions(0);
+    thrust::counting_iterator<int32_t> positions(0);
     size_t sort_bytes=0, scan_bytes=0, select_bytes=0;
     error = cub::DeviceRadixSort::SortKeys(nullptr, sort_bytes, weights, sorted, count, 0, 32, stream);
     if (error == cudaSuccess) error = relion_ampere_inclusive_sum_f32(nullptr, scan_bytes, sorted, cumulative, count, stream);
