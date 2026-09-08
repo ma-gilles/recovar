@@ -56,15 +56,6 @@ def _read_relion_3d_complex_dump(path: Path) -> np.ndarray:
         return np.fromfile(f, dtype=np.complex128, count=zdim * ydim * xdim).reshape(zdim, ydim, xdim)
 
 
-def _read_relion_2d_dump(path: Path, *, complex_values: bool) -> np.ndarray:
-    """Read RELION debug dumps written as ``int32 ydim, int32 xdim, data``."""
-
-    with open(path, "rb") as f:
-        ydim, xdim = struct.unpack("ii", f.read(8))
-        dtype = np.complex128 if complex_values else np.float64
-        return np.fromfile(f, dtype=dtype, count=ydim * xdim).reshape(ydim, xdim)
-
-
 def _read_raw_scalar(path: Path) -> float | None:
     if not path.exists():
         return None

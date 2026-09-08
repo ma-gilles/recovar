@@ -24,14 +24,6 @@ def _pct_change(baseline, current):
     return (current - baseline) / abs(baseline) * 100
 
 
-def _fmt_change(pct, higher_is_better=True):
-    if abs(pct) < 0.01:
-        return "0.0%"
-    arrow = "↑" if pct > 0 else "↓"
-    good = (pct > 0 and higher_is_better) or (pct < 0 and not higher_is_better)
-    return f"{pct:+.2f}% {arrow}"
-
-
 def quality_table(current_scores_path, baseline_scores_path, label):
     """Generate quality comparison table."""
     if not os.path.exists(current_scores_path) or not os.path.exists(baseline_scores_path):

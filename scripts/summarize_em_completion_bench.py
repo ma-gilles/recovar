@@ -1299,10 +1299,6 @@ def _parse_run_log_telemetry(log_path: Path | None) -> dict[str, Any]:
     return telemetry
 
 
-def _parse_batch_sizing(log_path: Path | None) -> list[dict[str, Any]]:
-    return list(_parse_run_log_telemetry(log_path).get("batch_sizing_events") or [])
-
-
 def _sparse_pass2_aggregate(
     events: list[dict[str, Any]],
     iteration_rows: list[dict[str, Any]],
@@ -2155,32 +2151,6 @@ def _check_bool_default(
     values[key] = observed
     if observed is not bool(expected):
         failures.append(f"{key}={observed}, expected {bool(expected)}")
-
-
-def _check_log_contains(
-    *,
-    recovar_dir: Path,
-    log_name: str,
-    pattern: str,
-    label: str,
-    values: dict[str, Any],
-    failures: list[str],
-    missing_fields: list[str],
-) -> None:
-    path = recovar_dir / log_name
-    values[label] = False
-    if not path.exists():
-        missing_fields.append(log_name)
-        failures.append(f"missing {log_name}")
-        return
-    try:
-        found = pattern in path.read_text(errors="replace")
-    except Exception as exc:
-        failures.append(f"failed to read {log_name}: {exc}")
-        return
-    values[label] = bool(found)
-    if not found:
-        failures.append(f"{label}=False, expected log line containing {pattern!r}")
 
 
 def _check_log_line_match(
