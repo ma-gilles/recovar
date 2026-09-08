@@ -55,6 +55,10 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     update_angular_sampling,
     update_refinement_state,
 )
+from recovar.em.dense_single_volume.helpers.dtype_policy import (
+    _diagnostic_float64_pass2_matches,
+    _local_search_precision_flags,
+)
 from recovar.em.dense_single_volume.helpers.expected_accuracy import (
     estimate_relion_expected_accuracy,
     relion_half1_trial_order,
@@ -1053,43 +1057,6 @@ _DENSE_EM_STATIC_KWARGS: dict = {
 }
 
 
-def _diagnostic_float64_pass2_matches(debug_iteration: int | None) -> bool:
-    """Select genuine-f64 pass 2 without perturbing an earlier f32 boundary."""
-
-    raw = os.environ.get("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "")
-    if debug_iteration is None or not raw.strip():
-        return False
-    try:
-        requested = {int(token.strip()) for token in raw.split(",") if token.strip()}
-    except ValueError as exc:
-        raise ValueError(
-            "RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS must be comma-separated integers"
-        ) from exc
-    return int(debug_iteration) in requested
-
-
-def _local_search_precision_flags(
-    debug_iteration: int | None,
-    *,
-    pass_index: int,
-) -> tuple[bool, bool]:
-    """Resolve local-search precision without changing production defaults.
-
-    The global float64 switches apply to both local passes.  The targeted
-    diagnostic selector upgrades only pass 2 so it remains useful for
-    classifying the fine-score/posterior boundary independently of pass 1.
-    """
-
-    if int(pass_index) not in (1, 2):
-        raise ValueError(f"local-search pass_index must be 1 or 2, got {pass_index}")
-    use_float64_scoring = bool(_DENSE_EM_STATIC_KWARGS["use_float64_scoring"])
-    use_float64_projections = bool(_DENSE_EM_STATIC_KWARGS["use_float64_projections"])
-    if int(pass_index) == 2 and _diagnostic_float64_pass2_matches(debug_iteration):
-        use_float64_scoring = True
-        use_float64_projections = True
-    return use_float64_scoring, use_float64_projections
-
-
 def _host_offload_array(value):
     """Copy a retained accumulator to host memory and release its device buffer."""
 
@@ -1890,10 +1857,12 @@ def _score_half_local(
     parent_use_float64_scoring, parent_use_float64_projections = _local_search_precision_flags(
         local_debug_iteration,
         pass_index=1,
+        static_em_kwargs=_DENSE_EM_STATIC_KWARGS,
     )
     fine_use_float64_scoring, fine_use_float64_projections = _local_search_precision_flags(
         local_debug_iteration,
         pass_index=2,
+        static_em_kwargs=_DENSE_EM_STATIC_KWARGS,
     )
     if fine_use_float64_scoring or fine_use_float64_projections:
         logger.info(
@@ -8193,6 +8162,7 @@ def _run_relion_iteration_loop(
     final_use_float64_scoring, final_use_float64_projections = _local_search_precision_flags(
         final_sampling_relion_iteration,
         pass_index=2,
+        static_em_kwargs=_DENSE_EM_STATIC_KWARGS,
     )
     final_outs = PerHalfOutputs.empty()
     for k in range(2):

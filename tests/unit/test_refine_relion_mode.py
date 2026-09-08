@@ -31,6 +31,7 @@ import recovar.em.sampling as sampling_module
 import recovar.reconstruction.regularization as regularization_module
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
+from recovar.em.dense_single_volume.helpers import dtype_policy as dtype_policy_module
 from recovar.em.dense_single_volume.helpers.types import DenseEMResult
 from recovar.em.dense_single_volume.em_engine import _batch_parameter_rows, run_em
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch as _fetch_indexed_batch
@@ -209,14 +210,14 @@ def test_relion_optimizer_average_pmax_uses_k1_mstep_mass():
 
 def test_diagnostic_float64_pass2_iteration_selector(monkeypatch):
     monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
-    assert iteration_loop_module._diagnostic_float64_pass2_matches(4) is False
+    assert dtype_policy_module._diagnostic_float64_pass2_matches(4) is False
     monkeypatch.setenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "4, 7")
-    assert iteration_loop_module._diagnostic_float64_pass2_matches(3) is False
-    assert iteration_loop_module._diagnostic_float64_pass2_matches(4) is True
-    assert iteration_loop_module._diagnostic_float64_pass2_matches(7) is True
+    assert dtype_policy_module._diagnostic_float64_pass2_matches(3) is False
+    assert dtype_policy_module._diagnostic_float64_pass2_matches(4) is True
+    assert dtype_policy_module._diagnostic_float64_pass2_matches(7) is True
     monkeypatch.setenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "4,bad")
     with pytest.raises(ValueError, match="comma-separated integers"):
-        iteration_loop_module._diagnostic_float64_pass2_matches(4)
+        dtype_policy_module._diagnostic_float64_pass2_matches(4)
 
 
 def test_local_search_precision_defaults_to_production_float32(monkeypatch):
@@ -224,8 +225,16 @@ def test_local_search_precision_defaults_to_production_float32(monkeypatch):
     monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_projections", False)
     monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
 
-    assert iteration_loop_module._local_search_precision_flags(12, pass_index=1) == (False, False)
-    assert iteration_loop_module._local_search_precision_flags(12, pass_index=2) == (False, False)
+    assert dtype_policy_module._local_search_precision_flags(
+        12,
+        static_em_kwargs=iteration_loop_module._DENSE_EM_STATIC_KWARGS,
+        pass_index=1,
+    ) == (False, False)
+    assert dtype_policy_module._local_search_precision_flags(
+        12,
+        static_em_kwargs=iteration_loop_module._DENSE_EM_STATIC_KWARGS,
+        pass_index=2,
+    ) == (False, False)
 
 
 def test_local_search_precision_targeted_diagnostic_upgrades_only_pass2(monkeypatch):
@@ -233,9 +242,21 @@ def test_local_search_precision_targeted_diagnostic_upgrades_only_pass2(monkeypa
     monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_projections", False)
     monkeypatch.setenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", "12")
 
-    assert iteration_loop_module._local_search_precision_flags(12, pass_index=1) == (False, False)
-    assert iteration_loop_module._local_search_precision_flags(12, pass_index=2) == (True, True)
-    assert iteration_loop_module._local_search_precision_flags(11, pass_index=2) == (False, False)
+    assert dtype_policy_module._local_search_precision_flags(
+        12,
+        static_em_kwargs=iteration_loop_module._DENSE_EM_STATIC_KWARGS,
+        pass_index=1,
+    ) == (False, False)
+    assert dtype_policy_module._local_search_precision_flags(
+        12,
+        static_em_kwargs=iteration_loop_module._DENSE_EM_STATIC_KWARGS,
+        pass_index=2,
+    ) == (True, True)
+    assert dtype_policy_module._local_search_precision_flags(
+        11,
+        static_em_kwargs=iteration_loop_module._DENSE_EM_STATIC_KWARGS,
+        pass_index=2,
+    ) == (False, False)
 
 
 def test_local_search_precision_global_switches_upgrade_both_passes(monkeypatch):
@@ -243,14 +264,26 @@ def test_local_search_precision_global_switches_upgrade_both_passes(monkeypatch)
     monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_projections", True)
     monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
 
-    assert iteration_loop_module._local_search_precision_flags(12, pass_index=1) == (True, True)
-    assert iteration_loop_module._local_search_precision_flags(12, pass_index=2) == (True, True)
+    assert dtype_policy_module._local_search_precision_flags(
+        12,
+        static_em_kwargs=iteration_loop_module._DENSE_EM_STATIC_KWARGS,
+        pass_index=1,
+    ) == (True, True)
+    assert dtype_policy_module._local_search_precision_flags(
+        12,
+        static_em_kwargs=iteration_loop_module._DENSE_EM_STATIC_KWARGS,
+        pass_index=2,
+    ) == (True, True)
 
 
 def test_local_search_precision_rejects_unknown_pass(monkeypatch):
     monkeypatch.delenv("RECOVAR_DIAGNOSTIC_FLOAT64_PASS2_ITERATIONS", raising=False)
     with pytest.raises(ValueError, match="pass_index"):
-        iteration_loop_module._local_search_precision_flags(12, pass_index=3)
+        dtype_policy_module._local_search_precision_flags(
+            12,
+            static_em_kwargs=iteration_loop_module._DENSE_EM_STATIC_KWARGS,
+            pass_index=3,
+        )
 
 # ---------------------------------------------------------------------------
 # Test constants -- 8x8 images for fast unit tests
