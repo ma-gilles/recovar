@@ -128,6 +128,9 @@ from recovar.em.dense_single_volume.relion_metadata import (
     _relion_rotation_grid_float32,
 )
 from recovar.em.dense_single_volume.relion_replay import (
+    _sealed_sampling_base_grids,
+    _sealed_sampling_rotation_ids,
+    _sealed_direction_log_prior,
     RelionProjectorReplayState,
     _perturbation_restart_state_iteration,
     _resolve_replay_random_perturbation,
@@ -3097,66 +3100,6 @@ def _apply_relion_healpix_order_oracle(state, target_order, *, iteration_number)
     while int(state.healpix_order) < target_order:
         state = refine_angular_sampling(state)
     return state
-
-
-def _sealed_sampling_base_grids(sealed_sampling_state, *, voxel_size_angstrom):
-    """Construct scorer grids directly from a schema-v3 captured sampling state."""
-
-    state = sealed_sampling_state
-    directions = np.asarray(state["directions_ipix"], dtype=np.int64)
-    rot = np.asarray(state["rot_angles_deg"], dtype=np.float64)
-    tilt = np.asarray(state["tilt_angles_deg"], dtype=np.float64)
-    psi = np.asarray(state["psi_angles_deg"], dtype=np.float64)
-    if directions.ndim != 1 or directions.size < 1:
-        raise ValueError("sealed sampling directions must be a nonempty vector")
-    if rot.shape != directions.shape or tilt.shape != directions.shape or psi.ndim != 1 or psi.size < 1:
-        raise ValueError("sealed sampling Euler component shapes are inconsistent")
-    source_eulers = np.stack(
-        [
-            np.tile(rot, psi.size),
-            np.tile(tilt, psi.size),
-            np.repeat(psi, directions.size),
-        ],
-        axis=1,
-    )
-    from recovar.em.sampling import _relion_mstep_rotations_from_eulers
-
-    rotations = _relion_mstep_rotations_from_eulers(source_eulers)
-    eulers = source_eulers.astype(np.float32)
-    voxel_size = float(voxel_size_angstrom)
-    if not np.isfinite(voxel_size) or voxel_size <= 0.0:
-        raise ValueError("sealed sampling requires a finite positive voxel size")
-    tx = np.asarray(state["translations_x_angstrom"], dtype=np.float64)
-    ty = np.asarray(state["translations_y_angstrom"], dtype=np.float64)
-    if tx.shape != ty.shape or tx.ndim != 1 or tx.size < 1:
-        raise ValueError("sealed sampling translation component shapes are inconsistent")
-    translations = np.stack([tx / voxel_size, ty / voxel_size], axis=1).astype(np.float32)
-    return rotations, eulers, jnp.asarray(translations, dtype=jnp.float32)
-
-
-def _sealed_sampling_rotation_ids(sealed_sampling_state):
-    """Map captured direction/psi rows to canonical coarse rotation IDs."""
-
-    direction_ids = np.asarray(sealed_sampling_state["directions_ipix"], dtype=np.int64)
-    n_psi = int(np.asarray(sealed_sampling_state["psi_angles_deg"]).size)
-    order = int(sealed_sampling_state["healpix_order_original"])
-    n_pixels = 12 * (4**order)
-    return np.concatenate(
-        [direction_ids + psi_index * n_pixels for psi_index in range(n_psi)]
-    ).astype(np.int64, copy=False)
-
-
-def _sealed_direction_log_prior(direction_prior, sealed_sampling_state):
-    """Expand a full direction prior onto the exact captured direction rows."""
-
-    prior = np.asarray(direction_prior, dtype=np.float32).reshape(-1)
-    direction_ids = np.asarray(sealed_sampling_state["directions_ipix"], dtype=np.int64)
-    n_psi = int(np.asarray(sealed_sampling_state["psi_angles_deg"]).size)
-    selected = np.tile(prior[direction_ids], n_psi)
-    result = np.full(selected.shape, -np.inf, dtype=np.float32)
-    positive = selected > 0.0
-    result[positive] = np.log(selected[positive]).astype(np.float32)
-    return result
 
 
 def _mean_variance_for_scoring_half(mean_variance_per_half, half_index):

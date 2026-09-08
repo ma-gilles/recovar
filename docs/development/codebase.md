@@ -168,3 +168,10 @@ ownership, the ordered return tuple or the restoration sequence requires its
 own behavior review. The in-memory scoring-state inventory and overwrite guard are owned by
 `dense_single_volume/frozen_boundary.py`, alongside the sealed-boundary loader.
 The controller takes and checks those snapshots at the existing boundaries.
+
+Captured sampling grids belong to `dense_single_volume/relion_replay.py`, which
+also applies replay state overrides. Its helpers construct Euler/translation
+grids, canonical coarse rotation IDs and direction log priors directly from
+sealed sampling metadata. They preserve the recorded direction/psi order and
+convert translations from Angstroms to pixels using the supplied voxel size.
+The controller selects when to use these grids.

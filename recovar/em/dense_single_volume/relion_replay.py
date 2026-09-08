@@ -1,12 +1,8 @@
-"""RELION parity-replay helpers.
+"""RELION replay state, captured sampling grids and iteration overrides.
 
-Extracted from ``iteration_loop.py``: replay-iteration index mapping,
-per-half float32 normalizers, the ``_RelionHalfInputState`` dataclass
-carrying per-half image corrections / scale corrections / direction priors
-through the iteration loop, and ``apply_iter_replay_overrides`` which
-applies the per-iteration replay state overrides (read from RELION
-sampling/model/direction-prior dumps and/or an explicit
-``iter_replay_override`` dict) onto the in-flight iteration state.
+Translate recorded sampling/model metadata into the grids, priors and per-half
+corrections consumed by refinement. The controller owns when replay overrides
+are applied; these helpers preserve the captured ordering, units and dtypes.
 """
 
 from __future__ import annotations
@@ -591,6 +587,67 @@ class ReplayOverrideResult:
     current_sigma_offset_angstrom_per_half: list[float] | None = None
     class_weights: np.ndarray | None = None
     relion_projector_state: RelionProjectorReplayState | None = None
+
+
+def _sealed_sampling_base_grids(sealed_sampling_state, *, voxel_size_angstrom):
+    """Construct scorer grids directly from a schema-v3 captured sampling state."""
+
+    state = sealed_sampling_state
+    directions = np.asarray(state["directions_ipix"], dtype=np.int64)
+    rot = np.asarray(state["rot_angles_deg"], dtype=np.float64)
+    tilt = np.asarray(state["tilt_angles_deg"], dtype=np.float64)
+    psi = np.asarray(state["psi_angles_deg"], dtype=np.float64)
+    if directions.ndim != 1 or directions.size < 1:
+        raise ValueError("sealed sampling directions must be a nonempty vector")
+    if rot.shape != directions.shape or tilt.shape != directions.shape or psi.ndim != 1 or psi.size < 1:
+        raise ValueError("sealed sampling Euler component shapes are inconsistent")
+    source_eulers = np.stack(
+        [
+            np.tile(rot, psi.size),
+            np.tile(tilt, psi.size),
+            np.repeat(psi, directions.size),
+        ],
+        axis=1,
+    )
+    from recovar.em.sampling import _relion_mstep_rotations_from_eulers
+
+    rotations = _relion_mstep_rotations_from_eulers(source_eulers)
+    eulers = source_eulers.astype(np.float32)
+    voxel_size = float(voxel_size_angstrom)
+    if not np.isfinite(voxel_size) or voxel_size <= 0.0:
+        raise ValueError("sealed sampling requires a finite positive voxel size")
+    tx = np.asarray(state["translations_x_angstrom"], dtype=np.float64)
+    ty = np.asarray(state["translations_y_angstrom"], dtype=np.float64)
+    if tx.shape != ty.shape or tx.ndim != 1 or tx.size < 1:
+        raise ValueError("sealed sampling translation component shapes are inconsistent")
+    translations = np.stack([tx / voxel_size, ty / voxel_size], axis=1).astype(np.float32)
+    return rotations, eulers, jnp.asarray(translations, dtype=jnp.float32)
+
+
+def _sealed_sampling_rotation_ids(sealed_sampling_state):
+    """Map captured direction/psi rows to canonical coarse rotation IDs."""
+
+    direction_ids = np.asarray(sealed_sampling_state["directions_ipix"], dtype=np.int64)
+    n_psi = int(np.asarray(sealed_sampling_state["psi_angles_deg"]).size)
+    order = int(sealed_sampling_state["healpix_order_original"])
+    n_pixels = 12 * (4**order)
+    return np.concatenate(
+        [direction_ids + psi_index * n_pixels for psi_index in range(n_psi)]
+    ).astype(np.int64, copy=False)
+
+
+def _sealed_direction_log_prior(direction_prior, sealed_sampling_state):
+    """Expand a full direction prior onto the exact captured direction rows."""
+
+    prior = np.asarray(direction_prior, dtype=np.float32).reshape(-1)
+    direction_ids = np.asarray(sealed_sampling_state["directions_ipix"], dtype=np.int64)
+    n_psi = int(np.asarray(sealed_sampling_state["psi_angles_deg"]).size)
+    selected = np.tile(prior[direction_ids], n_psi)
+    result = np.full(selected.shape, -np.inf, dtype=np.float32)
+    positive = selected > 0.0
+    result[positive] = np.log(selected[positive]).astype(np.float32)
+    return result
+
 
 
 def apply_iter_replay_overrides(

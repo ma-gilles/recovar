@@ -580,7 +580,7 @@ def _sealed_sampling_fixture():
 def test_sealed_sampling_directly_materializes_restricted_eulers_and_translations():
     sampling = _sealed_sampling_fixture()
 
-    _, eulers, translations = iteration_loop_module._sealed_sampling_base_grids(
+    _, eulers, translations = relion_replay_module._sealed_sampling_base_grids(
         sampling,
         voxel_size_angstrom=2.0,
     )
@@ -604,7 +604,7 @@ def test_sealed_sampling_directly_materializes_restricted_eulers_and_translation
         np.asarray([[-1.0, 0.0], [0.0, 0.5], [1.0, 0.0]], dtype=np.float32),
     )
     np.testing.assert_array_equal(
-        iteration_loop_module._sealed_sampling_rotation_ids(sampling),
+        relion_replay_module._sealed_sampling_rotation_ids(sampling),
         np.asarray([7, 19, 503, 775, 787, 1271], dtype=np.int64),
     )
     direction_prior = np.linspace(1.0, 2.0, 768, dtype=np.float32)
@@ -612,7 +612,7 @@ def test_sealed_sampling_directly_materializes_restricted_eulers_and_translation
         np.tile(direction_prior[np.asarray([7, 19, 503])], 2)
     ).astype(np.float32)
     np.testing.assert_array_equal(
-        iteration_loop_module._sealed_direction_log_prior(direction_prior, sampling),
+        relion_replay_module._sealed_direction_log_prior(direction_prior, sampling),
         expected_prior,
     )
 
