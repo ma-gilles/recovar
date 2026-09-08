@@ -68,6 +68,7 @@ from recovar.em.dense_single_volume.helpers.projection import (
     compute_scale_correction_terms_per_image,
     relion_scale_correction_pixel_mask,
 )
+from recovar.em.dense_single_volume.helpers import resolution as resolution_helpers
 from recovar.em.dense_single_volume.helpers.resolution import (
     _bootstrap_current_size_relion,
     bootstrap_current_size_from_ini_high_relion,
@@ -8669,7 +8670,7 @@ class TestRelionModeSmokeTest:
         assert bootstrap_current_size_from_ini_high_relion(128, 4.25, 30.0) == 56
 
     def test_firstiter_cc_ini_high_tau2_taper_matches_relion_squared_cosine(self):
-        taper = iteration_loop_module._firstiter_cc_ini_high_tau2_taper(
+        taper = resolution_helpers._firstiter_cc_ini_high_tau2_taper(
             65,
             128,
             4.25,
@@ -12165,7 +12166,7 @@ class TestRelionModeSmokeTest:
         raw_fsc[0] = 1.0
         raw_fsc[28:] = 0.0
 
-        dvp = iteration_loop_module._k1_data_vs_prior_for_scheduling(
+        dvp = resolution_helpers._k1_data_vs_prior_for_scheduling(
             raw_fsc=raw_fsc,
             corrected_data_vs_prior=None,
             current_size=56,
@@ -12197,14 +12198,14 @@ class TestRelionModeSmokeTest:
         raw_fsc[boundary_shell] = 0.9
         corrected_dvp[boundary_shell] = 10.0
 
-        raw_dvp = iteration_loop_module._k1_data_vs_prior_for_scheduling(
+        raw_dvp = resolution_helpers._k1_data_vs_prior_for_scheduling(
             raw_fsc=raw_fsc,
             corrected_data_vs_prior=None,
             current_size=current_size,
             grid_size=256,
             tau2_fudge=1.0,
         )
-        corrected = iteration_loop_module._k1_data_vs_prior_for_scheduling(
+        corrected = resolution_helpers._k1_data_vs_prior_for_scheduling(
             raw_fsc=raw_fsc,
             corrected_data_vs_prior=corrected_dvp,
             current_size=current_size,
@@ -12233,7 +12234,7 @@ class TestRelionModeSmokeTest:
         data_vs_prior[:, : boundary_shell + 2] = 0.25
         data_vs_prior[:, boundary_shell] = 10.0
 
-        truncated = iteration_loop_module._truncate_data_vs_prior_for_current_size(
+        truncated = resolution_helpers._truncate_data_vs_prior_for_current_size(
             data_vs_prior,
             current_size=current_size,
             grid_size=128,
@@ -12274,7 +12275,7 @@ class TestRelionModeSmokeTest:
         fsc[0] = 1.0
         data_vs_prior = regularization_module.fsc_to_relion_ssnr(fsc, tau2_fudge=1.0)
 
-        truncated = iteration_loop_module._truncate_data_vs_prior_for_current_size(
+        truncated = resolution_helpers._truncate_data_vs_prior_for_current_size(
             data_vs_prior,
             current_size=current_size,
             grid_size=grid_size,
@@ -12302,7 +12303,7 @@ class TestRelionModeSmokeTest:
         fsc[33] = 0.184406
         fsc[34] = 0.159366
 
-        growth_fsc = iteration_loop_module._truncate_fsc_for_current_size_growth(
+        growth_fsc = resolution_helpers._truncate_fsc_for_current_size_growth(
             fsc,
             current_size=68,
             grid_size=128,
@@ -12331,7 +12332,7 @@ class TestRelionModeSmokeTest:
 
     def test_firstiter_cc_scheduling_uses_ini_high_shell(self):
         """RELION iter-1 firstiter_cc grows from ini_high, not DVP."""
-        shell = iteration_loop_module._firstiter_cc_ini_high_resolution_shell(256, 2.125, 30.0)
+        shell = resolution_helpers._firstiter_cc_ini_high_resolution_shell(256, 2.125, 30.0)
         current_size = regularization_module.compute_current_size_relion(
             shell,
             256,
@@ -12344,7 +12345,7 @@ class TestRelionModeSmokeTest:
         raw_fsc = np.ones(129, dtype=np.float32) * 0.9
         raw_fsc[0] = 1.0
         raw_fsc[28:] = 0.0
-        dvp = iteration_loop_module._k1_data_vs_prior_for_scheduling(
+        dvp = resolution_helpers._k1_data_vs_prior_for_scheduling(
             raw_fsc=raw_fsc,
             corrected_data_vs_prior=None,
             current_size=56,
@@ -12356,7 +12357,7 @@ class TestRelionModeSmokeTest:
 
     def test_firstiter_cc_scheduling_override_is_class_count_independent(self):
         """The ini_high rule also applies to Class3D/K-class iteration 1."""
-        shell = iteration_loop_module._firstiter_cc_scheduling_resolution_shell(
+        shell = resolution_helpers._firstiter_cc_scheduling_resolution_shell(
             10,
             emulate_relion_firstiter_cc=True,
             ini_high_angstrom=60.0,
@@ -12387,7 +12388,7 @@ class TestRelionModeSmokeTest:
             "voxel_size": 2.125,
         }
         assert (
-            iteration_loop_module._firstiter_cc_scheduling_resolution_shell(
+            resolution_helpers._firstiter_cc_scheduling_resolution_shell(
                 **common,
                 emulate_relion_firstiter_cc=True,
                 ini_high_angstrom=60.0,
@@ -12396,7 +12397,7 @@ class TestRelionModeSmokeTest:
             == 10
         )
         assert (
-            iteration_loop_module._firstiter_cc_scheduling_resolution_shell(
+            resolution_helpers._firstiter_cc_scheduling_resolution_shell(
                 **common,
                 emulate_relion_firstiter_cc=False,
                 ini_high_angstrom=60.0,
@@ -12405,7 +12406,7 @@ class TestRelionModeSmokeTest:
             == 10
         )
         assert (
-            iteration_loop_module._firstiter_cc_scheduling_resolution_shell(
+            resolution_helpers._firstiter_cc_scheduling_resolution_shell(
                 **common,
                 emulate_relion_firstiter_cc=True,
                 ini_high_angstrom=None,

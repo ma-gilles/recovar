@@ -190,6 +190,11 @@ The controller selects the iteration's requested order; the convergence helper
 advances through the existing angular and translation updates without coarsening
 an active state.
 
+`helpers/resolution.py` owns current-size growth inputs and first-iteration
+resolution rules: the inclusive FSC/data-vs-prior boundary, raw versus corrected
+K1 scheduling, the initial high-resolution cutoff, and the tau2 reporting taper.
+The controller retains their timing within the refinement loop.
+
 `dense_single_volume/projector_preparation.py` prepares RELION reference slabs
 for the controller's scoring calls. It owns native reference conversion, cache
 keys and files, optional dumps, and validation of captured projector geometry.

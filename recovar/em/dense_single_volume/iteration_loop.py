@@ -82,6 +82,11 @@ from recovar.em.dense_single_volume.helpers.state_swap_runtime import (
 )
 from recovar.em.dense_single_volume.helpers.resolution import (
     _bootstrap_current_size_relion,
+    _firstiter_cc_ini_high_tau2_taper,
+    _firstiter_cc_scheduling_resolution_shell,
+    _k1_data_vs_prior_for_scheduling,
+    _truncate_data_vs_prior_for_current_size,
+    _truncate_fsc_for_current_size_growth,
     bootstrap_current_size_from_ini_high_relion,
     clamp_relion_coarse_image_size,
     compute_coarse_image_size,
@@ -812,56 +817,6 @@ def _approx_acc_rot_policy_for_convergence(
     return False, "diagnostic-only-default"
 
 
-def _k1_data_vs_prior_for_scheduling(
-    *,
-    raw_fsc,
-    corrected_data_vs_prior,
-    current_size,
-    grid_size,
-    tau2_fudge,
-):
-    """Return the K=1 DVP curve RELION uses for current-resolution updates.
-
-    Auto-refine normally uses raw split-half FSC. If RELION's
-    ``--solvent_correct_fsc`` path is enabled, the corrected FSC-derived DVP
-    is passed here instead.
-    """
-    if corrected_data_vs_prior is not None:
-        return _truncate_data_vs_prior_for_current_size(
-            corrected_data_vs_prior,
-            current_size=current_size,
-            grid_size=grid_size,
-        )
-
-    fsc_prev = np.asarray(raw_fsc, dtype=np.float32).copy()
-    if int(current_size) < int(grid_size):
-        fsc_prev[min(len(fsc_prev), int(current_size) // 2 + 1) :] = 0.0
-    return np.asarray(fsc_to_relion_ssnr(fsc_prev, tau2_fudge=tau2_fudge), dtype=np.float32)
-
-
-def _truncate_data_vs_prior_for_current_size(data_vs_prior, *, current_size, grid_size):
-    """Zero DVP shells beyond RELION's inclusive current-size boundary."""
-    truncated = np.asarray(data_vs_prior, dtype=np.float32).copy()
-    if int(current_size) < int(grid_size):
-        first_unavailable_shell = min(truncated.shape[-1], int(current_size) // 2 + 1)
-        truncated[..., first_unavailable_shell:] = 0.0
-    return truncated
-
-
-def _truncate_fsc_for_current_size_growth(fsc, *, current_size, grid_size):
-    """Zero FSC shells beyond RELION's inclusive current-size boundary.
-
-    BackProjector includes radii ``R <= current_size / 2``.  The boundary
-    shell therefore remains part of RELION's full-array FSC threshold scan;
-    only shells starting at ``current_size // 2 + 1`` are unavailable.
-    """
-    truncated = np.asarray(fsc, dtype=np.float32).copy()
-    if int(current_size) < int(grid_size):
-        first_unavailable_shell = min(len(truncated), int(current_size) // 2 + 1)
-        truncated[first_unavailable_shell:] = 0.0
-    return truncated
-
-
 def _concatenate_pose_stacks_or_none(stacks, *, trailing_shape, label):
     """Concatenate per-half pose stacks, accepting empty replay stacks."""
     arrays = []
@@ -883,66 +838,6 @@ def _concatenate_pose_stacks_or_none(stacks, *, trailing_shape, label):
             return None
         arrays.append(arr)
     return np.concatenate(arrays, axis=0)
-
-
-def _firstiter_cc_ini_high_resolution_shell(grid_size, voxel_size, ini_high_angstrom):
-    """RELION's firstiter_cc current-resolution shell from ``--ini_high``."""
-    px = float(voxel_size if voxel_size > 0 else 1.0)
-    shell = int(np.floor(int(grid_size) * px / float(ini_high_angstrom) + 0.5))
-    return max(1, min(int(grid_size) // 2, shell))
-
-
-def _firstiter_cc_scheduling_resolution_shell(
-    resolution_shell,
-    *,
-    emulate_relion_firstiter_cc,
-    ini_high_angstrom,
-    relion_iteration,
-    grid_size,
-    voxel_size,
-):
-    """Apply RELION's iter-1 ``--firstiter_cc`` current-size rule.
-
-    ``MlOptimiser::updateCurrentResolution`` uses the ``--ini_high`` shell at
-    physical iteration 1 regardless of whether refinement has one or multiple
-    classes. Keep this override independent of the K=1/K-class data-vs-prior
-    calculation so both paths schedule iteration 2 identically.
-    """
-
-    if (
-        emulate_relion_firstiter_cc
-        and ini_high_angstrom is not None
-        and int(relion_iteration) == 1
-    ):
-        return _firstiter_cc_ini_high_resolution_shell(
-            grid_size,
-            voxel_size,
-            ini_high_angstrom,
-        )
-    return int(resolution_shell)
-
-
-def _firstiter_cc_ini_high_tau2_taper(
-    n_shells,
-    grid_size,
-    voxel_size,
-    ini_high_angstrom,
-    *,
-    filter_edgewidth,
-):
-    """RELION's squared post-firstiter ``ini_high`` taper for tau2 state."""
-
-    if ini_high_angstrom is None or float(ini_high_angstrom) <= 0.0:
-        return np.ones(int(n_shells), dtype=np.float64)
-    edge = float(filter_edgewidth)
-    radius = float(grid_size) * float(voxel_size) / float(ini_high_angstrom) - edge / 2.0
-    radius_p = radius + edge
-    shells = np.arange(int(n_shells), dtype=np.float64)
-    taper = np.ones(int(n_shells), dtype=np.float64)
-    taper[shells > radius_p] = 0.0
-    transition = (shells >= radius) & (shells <= radius_p)
-    taper[transition] = 0.5 - 0.5 * np.cos(np.pi * (radius_p - shells[transition]) / edge)
-    return taper * taper
 
 
 def _exhaustive_grid_order_for_state(state: RefinementState) -> int:
