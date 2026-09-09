@@ -108,19 +108,23 @@ from recovar.em.dense_single_volume.mean_helpers import (
     _combined_class_direction_prior_from_halves,
     _initialize_class_log_priors,
     _mean_noise_variance,
+    _mean_variance_for_scoring_half,
     _merged_mean_from_halves,
     _normalize_initial_means,
     _normalize_noise_variance_per_half,
     _reconstruct_and_postprocess_means,
     _reconstruct_volume_eager,
     _relion_optimizer_average_pmax,
+    _updated_mean_variance_per_half,
     compute_unregularized_halfmaps_and_align_signs,
+    prepare_initial_mean_variance,
     update_c1_sigma_offset_from_posterior,
     update_posterior_noise_variance,
 )
 from recovar.em.dense_single_volume.projector_preparation import (
     _relion_projector_half_maps_for_scoring,
     _validate_captured_relion_projector_for_iteration,
+    prepare_initial_real_references,
 )
 from recovar.em.dense_single_volume.refinement_options import RefinementOptions
 from recovar.em.dense_single_volume.relion_metadata import (
@@ -427,32 +431,6 @@ def _with_validated_relion_healpix_orders(options: RefinementOptions) -> Refinem
     return dataclasses.replace(
         options, adaptive=dataclasses.replace(adaptive, relion_healpix_orders=validated_orders)
     )
-
-
-def _mean_variance_for_scoring_half(mean_variance_per_half, half_index):
-    """Select the exact half-owned K=1 tau2 prior passed to the scorer."""
-
-    if len(mean_variance_per_half) != 2 or int(half_index) not in (0, 1):
-        raise ValueError("per-half scoring tau2 requires exactly two halves and index 0 or 1")
-    return mean_variance_per_half[int(half_index)]
-
-
-def _updated_mean_variance_per_half(
-    shared_mean_variance,
-    updated_mean_variance_per_half,
-    *,
-    use_per_half_mean_variance,
-):
-    """Keep historical K=1 scoring on shared tau2 unless explicitly enabled."""
-
-    if use_per_half_mean_variance:
-        if len(updated_mean_variance_per_half) != 2:
-            raise ValueError("per-half scoring tau2 update requires exactly two halves")
-        return [
-            jnp.asarray(updated_mean_variance_per_half[0]),
-            jnp.asarray(updated_mean_variance_per_half[1]),
-        ]
-    return [shared_mean_variance, shared_mean_variance]
 
 
 def _init_resolution_from_fsc(
@@ -893,76 +871,21 @@ def _run_relion_iteration_loop(
     # an explicit leading class axis; single-class callers keep the historical
     # flat per-half reference layout.
     means = _normalize_initial_means(init_volume, n_classes)
-    initial_real_references_by_half = [None, None]
-    if init_reference_real is not None:
-        expected_volume_shape = tuple(int(value) for value in volume_shape)
-
-        def _as_class_real_references(value):
-            array = np.asarray(value, dtype=np.float64)
-            if n_classes == 1 and array.shape == expected_volume_shape:
-                return array[None, ...]
-            expected_class_shape = (n_classes,) + expected_volume_shape
-            if array.shape == expected_class_shape:
-                return array
-            raise ValueError(
-                "init_reference_real must be a shared real volume, a per-class "
-                f"array, or a two-half collection; got {array.shape}, expected "
-                f"{expected_volume_shape} or {expected_class_shape}",
-            )
-
-        if isinstance(init_reference_real, (list, tuple)) and len(init_reference_real) == 2:
-            initial_real_references_by_half = [
-                _as_class_real_references(init_reference_real[0]),
-                _as_class_real_references(init_reference_real[1]),
-            ]
-        else:
-            real_array = np.asarray(init_reference_real)
-            per_half_shape = (2, n_classes) + expected_volume_shape
-            if n_classes == 1 and real_array.shape == (2,) + expected_volume_shape:
-                initial_real_references_by_half = [
-                    _as_class_real_references(real_array[0]),
-                    _as_class_real_references(real_array[1]),
-                ]
-            elif real_array.shape == per_half_shape:
-                initial_real_references_by_half = [
-                    _as_class_real_references(real_array[0]),
-                    _as_class_real_references(real_array[1]),
-                ]
-            else:
-                shared_real = _as_class_real_references(real_array)
-                initial_real_references_by_half = [shared_real, shared_real]
-        logger.info(
-            "RELION initial projector: preserving direct float64 real-reference handoff"
-        )
+    initial_real_references_by_half = prepare_initial_real_references(
+        init_reference_real, volume_shape=volume_shape, n_classes=n_classes, log=logger
+    )
     noise_variance_per_half = _normalize_noise_variance_per_half(
         init_noise_variance,
         n_halves=2,
     )
     noise_variance = _mean_noise_variance(noise_variance_per_half)
     initial_mean_variance = jnp.array(init_mean_variance)
-    if parity.use_per_half_mean_variance:
-        if k_class_enabled:
-            raise ValueError("per-half scoring tau2 is supported only for K=1")
-        if initial_mean_variance.ndim != 2 or initial_mean_variance.shape[0] != 2:
-            raise ValueError(
-                "per-half scoring tau2 requires init_mean_variance with leading half axis 2"
-            )
-        mean_variance_per_half = [
-            jnp.asarray(initial_mean_variance[0]),
-            jnp.asarray(initial_mean_variance[1]),
-        ]
-        mean_variance = jnp.asarray(
-            0.5
-            * (
-                mean_variance_per_half[0].astype(jnp.float64)
-                + mean_variance_per_half[1].astype(jnp.float64)
-            ),
-            dtype=_dense_global_scoring_dtype(),
-        )
-        logger.info("Initialized exact per-half K=1 tau2 priors")
-    else:
-        mean_variance = initial_mean_variance
-        mean_variance_per_half = [mean_variance, mean_variance]
+    mean_variance, mean_variance_per_half = prepare_initial_mean_variance(
+        initial_mean_variance,
+        use_per_half_mean_variance=parity.use_per_half_mean_variance,
+        k_class_enabled=k_class_enabled,
+        log=logger,
+    )
     _mark_setup_phase("initial_arrays")
 
     # History tracking: one RefinementHistory instance accumulates every

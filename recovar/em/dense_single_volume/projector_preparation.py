@@ -20,6 +20,56 @@ from recovar.em.dense_single_volume.relion_replay import RelionProjectorReplaySt
 logger = logging.getLogger(__name__)
 
 
+def prepare_initial_real_references(init_reference_real, *, volume_shape, n_classes, log):
+    """Normalize direct real references to half/class axes without Fourier conversion.
+
+    Preserve float64 source values, shared-half identity and per-half views.
+    A missing handoff stays [None, None] for the existing Fourier fallback.
+    """
+    initial_real_references_by_half = [None, None]
+    if init_reference_real is not None:
+        expected_volume_shape = tuple(int(value) for value in volume_shape)
+
+        def _as_class_real_references(value):
+            array = np.asarray(value, dtype=np.float64)
+            if n_classes == 1 and array.shape == expected_volume_shape:
+                return array[None, ...]
+            expected_class_shape = (n_classes,) + expected_volume_shape
+            if array.shape == expected_class_shape:
+                return array
+            raise ValueError(
+                "init_reference_real must be a shared real volume, a per-class "
+                f"array, or a two-half collection; got {array.shape}, expected "
+                f"{expected_volume_shape} or {expected_class_shape}",
+            )
+
+        if isinstance(init_reference_real, (list, tuple)) and len(init_reference_real) == 2:
+            initial_real_references_by_half = [
+                _as_class_real_references(init_reference_real[0]),
+                _as_class_real_references(init_reference_real[1]),
+            ]
+        else:
+            real_array = np.asarray(init_reference_real)
+            per_half_shape = (2, n_classes) + expected_volume_shape
+            if n_classes == 1 and real_array.shape == (2,) + expected_volume_shape:
+                initial_real_references_by_half = [
+                    _as_class_real_references(real_array[0]),
+                    _as_class_real_references(real_array[1]),
+                ]
+            elif real_array.shape == per_half_shape:
+                initial_real_references_by_half = [
+                    _as_class_real_references(real_array[0]),
+                    _as_class_real_references(real_array[1]),
+                ]
+            else:
+                shared_real = _as_class_real_references(real_array)
+                initial_real_references_by_half = [shared_real, shared_real]
+        log.info(
+            "RELION initial projector: preserving direct float64 real-reference handoff"
+        )
+    return initial_real_references_by_half
+
+
 def prepare_local_projector_slab(projector_half, *, path_label="local RELION projector path"):
     """Return one (z, y, x_half) slab, preserving the input's JAX dtype.
 

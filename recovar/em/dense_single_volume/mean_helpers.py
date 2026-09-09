@@ -20,8 +20,68 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     collapse_rotation_posterior_to_direction_prior,
 )
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats
+from recovar.em.dense_single_volume.scoring_policy import _dense_global_scoring_dtype
 
 logger = logging.getLogger(__name__)
+
+
+def prepare_initial_mean_variance(
+    initial_mean_variance, *, use_per_half_mean_variance, k_class_enabled, log
+):
+    """Initialize shared/per-half tau2 using the existing reduction and dtype policy.
+
+    The controller retains the original JAX array throughout refinement.
+    Shared priors alias one array; the opt-in half priors keep separate values.
+    """
+    if use_per_half_mean_variance:
+        if k_class_enabled:
+            raise ValueError("per-half scoring tau2 is supported only for K=1")
+        if initial_mean_variance.ndim != 2 or initial_mean_variance.shape[0] != 2:
+            raise ValueError(
+                "per-half scoring tau2 requires init_mean_variance with leading half axis 2"
+            )
+        mean_variance_per_half = [
+            jnp.asarray(initial_mean_variance[0]),
+            jnp.asarray(initial_mean_variance[1]),
+        ]
+        mean_variance = jnp.asarray(
+            0.5
+            * (
+                mean_variance_per_half[0].astype(jnp.float64)
+                + mean_variance_per_half[1].astype(jnp.float64)
+            ),
+            dtype=_dense_global_scoring_dtype(),
+        )
+        log.info("Initialized exact per-half K=1 tau2 priors")
+    else:
+        mean_variance = initial_mean_variance
+        mean_variance_per_half = [mean_variance, mean_variance]
+    return mean_variance, mean_variance_per_half
+
+
+def _mean_variance_for_scoring_half(mean_variance_per_half, half_index):
+    """Select the exact half-owned K=1 tau2 prior passed to the scorer."""
+
+    if len(mean_variance_per_half) != 2 or int(half_index) not in (0, 1):
+        raise ValueError("per-half scoring tau2 requires exactly two halves and index 0 or 1")
+    return mean_variance_per_half[int(half_index)]
+
+def _updated_mean_variance_per_half(
+    shared_mean_variance,
+    updated_mean_variance_per_half,
+    *,
+    use_per_half_mean_variance,
+):
+    """Keep historical K=1 scoring on shared tau2 unless explicitly enabled."""
+
+    if use_per_half_mean_variance:
+        if len(updated_mean_variance_per_half) != 2:
+            raise ValueError("per-half scoring tau2 update requires exactly two halves")
+        return [
+            jnp.asarray(updated_mean_variance_per_half[0]),
+            jnp.asarray(updated_mean_variance_per_half[1]),
+        ]
+    return [shared_mean_variance, shared_mean_variance]
 
 
 def _normalize_noise_variance_per_half(init_noise_variance, n_halves=2):

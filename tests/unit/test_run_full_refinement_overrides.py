@@ -24,7 +24,7 @@ from recovar.em.dense_single_volume.frozen_boundary import (
     _assert_frozen_scoring_state_unchanged,
     _frozen_scoring_state_arrays,
 )
-from recovar.em.dense_single_volume.iteration_loop import (
+from recovar.em.dense_single_volume.mean_helpers import (
     _mean_variance_for_scoring_half,
     _updated_mean_variance_per_half,
 )
