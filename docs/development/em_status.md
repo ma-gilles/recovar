@@ -1,12 +1,50 @@
 # Current EM development scope
 
+## Combined integration checkpoint — September 9
+
+Merge `7dba6abce728161b1cc491685962ec441c591a51` incorporates VDAM's
+reconciliation `c38fc62f0` and the separate global-window correction `0219caa35`.
+The production `recovar/` tree is identical to `0219caa35`. Named local results,
+the sampling and BPref owners, and dtype-preserving diagnostic capture survive
+the integration. The original global-window correction is `a0a86f19e9` from
+EM's separate object store; its full K1 FSC acceptance remains pending.
+
+VDAM's frozen selected CPU panel passes all 576 cases at clean `0219caa35`.
+The seven global-window cases also pass after the adapted fixture demonstrated
+three production failures before the fix. These checks include shared image
+loading, Fourier utilities and STAR array serialization; they do not qualify
+GPU execution or complete shared workflows. The combined merge independently
+passes all ten selected packaging/build-contract cases in 10.56 seconds.
+The manifest retains VDAM's complete explicit CUDA input list, including the
+required header. Packaging tests build a wheel from an isolated source archive
+and inspect both archives, so Git discovery cannot conceal omitted inputs.
+
+VDAM's saved A100-target CUDA build matches the integrated CUDA sources. It
+compiles only `sm_80`; neither GPU execution nor H100 qualification is implied.
+Existing 100k runs remain frozen at `8ab1a44be1`, which is a different source.
+Current-source real K1, exactly K4, full shared SPA/ET/downstream quality, speed
+and memory acceptance remain open. Production EM remains float32; double is
+diagnostic only. This is a draft integration checkpoint, not merge acceptance.
+
+Evidence and exact reproduction scripts:
+
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr179_vdam_reconcile_20260908/`
+  (`run_frozen_cpu.sh`, `frozen_cpu.xml`, global-window red/green records and
+  `cuda_build_result.json`).
+- `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/vdam_combined_packaging_20260909/`
+  (`tests.log`, `tests.xml`, `outcome.json`).
+- The coordination board below records the published HEAD, evidence admission
+  and current ownership. VDAM has frozen its reconciliation checkout for
+  integration; do not edit frozen benchmarks or infer a new source assignment.
+
 ## Shared PR179 integration workflow — September 8
 
 The user authorized one integration workflow for `em_clean`, `em`, and `vdam`.
 `em_clean` is the sole publisher of `origin/codex/recovar-structural-cleanup`
 (PR179). Private branches hand off commits for review; do not force-push or
-edit another session's worktree. The live coordination board is
-`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/README.md`.
+edit another session's worktree. The live
+[coordination board](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/README.md)
+is on the shared filesystem.
 Read its `status/em_clean.json`, `status/em.json`, `status/vdam.json` and exact
 path ownership before edits. Each session owns its status record; updates use
 an atomic rename. The board records the immutable published integration HEAD.
@@ -26,8 +64,8 @@ shared status documentation and publication ownership. EM remains paused and
 its evidence worktree and running jobs stay untouched. VDAM must preserve the
 separate global pass-one window correction `a0a86f19e9` during reconciliation;
 its full K1 FSC acceptance remains pending. The hashed patch and handoff are
-recorded on the board. The unresolved VDAM catch-up merge is not part of this
-published cleanup checkpoint.
+recorded on the board. That catch-up merge was absent from the September 8
+cleanup publication; the September 9 integration above now incorporates it.
 
 ### Integration review: callers outside Git conflicts
 
