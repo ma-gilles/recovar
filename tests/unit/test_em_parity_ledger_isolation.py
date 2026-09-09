@@ -65,7 +65,22 @@ def test_extract_tables_reads_nested_run_and_original_baseline(tmp_path, monkeyp
     root = tmp_path / "run"
     output = root / "job" / "case"
     output.mkdir(parents=True)
-    (output / f"em_parity_quality_{tier}_ledger_{case}.json").write_text(json.dumps({metric: 0.9}))
+    payloads = {
+        "fast": {
+            "k1_replay_half1_corr_vs_relion": 0.9,
+            "k1_replay_half2_corr_vs_relion": 0.9,
+            "k1_replay_pmax_abs_diff": 0.0001,
+            "k1_replay_walltime_s": 3.0,
+        },
+        "long": {
+            "k1_long_recovar_fsc05_resolution_A": 0.9,
+            "k1_long_relion_fsc05_resolution_A": 0.9,
+            "k1_long_fsc05_resolution_diff_A": 0.0,
+            "k1_long_pmax_diff_max_iter3plus": 0.0001,
+            "k1_long_walltime_s": 3.0,
+        },
+    }
+    (output / f"em_parity_quality_{tier}_ledger_{case}.json").write_text(json.dumps(payloads[tier]))
     monkeypatch.setattr("sys.argv", ["extract", "--tier", tier, "--ledger-root", str(root)])
     assert tables.main() == 0
     text = capsys.readouterr().out

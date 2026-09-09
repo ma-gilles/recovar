@@ -50,6 +50,16 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
+Parity reporting now covers all seven fast cases and all three long cases with an
+explicit finite summary-metric inventory, required launcher cases, and K2/K4
+per-class rows. It preserves the previous25 scalar rows and adds14 omitted rows;
+missing historical timings show as missing. Reporter failures now fail merge guards.
+82 combined CPU cases plus one mocked failure-propagation case pass. Same invalid
+partial/NaN ledgers previously returned success and now fail. No scientific gates,
+producer payloads or baselines changed; summary completeness is not proof of test
+execution, full state/stage inventory or quality acceptance.
+[Control proof, exact commands and limits](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/parity_report_inventory_20260909/result.json).
+
 EM parity result isolation: fast/long and InitialModel cases now write ledgers
 beside their temporary outputs. Slurm/merge-guard reporting reads the explicit
 run root; the extractor rejects duplicate or malformed current ledgers without

@@ -126,7 +126,7 @@ pixi run python -m pytest -v -s --run-slow --run-integration --run-gpu \\
   tests/integration/test_em_parity_fast.py::test_em_parity_fast_kclass_strict_oversample_coldstart
 
 find "${SCRATCH_DIR}/parity_results" -name refinement_results.npz -print | tee "${SCRATCH_DIR}/kclass_refinement_npz_paths.txt"
-pixi run python scripts/extract_em_parity_tables.py --tier fast --ledger-root "${SCRATCH_DIR}/parity_results" | tee "${SCRATCH_DIR}/fast_tables.md"
+pixi run python scripts/extract_em_parity_tables.py --tier fast --ledger-root "${SCRATCH_DIR}/parity_results" --require-case kclass_replay kclass_coldstart kclass_strict kclass_strict_os1 | tee "${SCRATCH_DIR}/fast_tables.md"
 EOF
 } > "${KCLASS_SCRIPT}"
 chmod +x "${KCLASS_SCRIPT}"
@@ -187,7 +187,7 @@ find "${SCRATCH_DIR}" -maxdepth 3 -type f | sort
 echo
 
 echo "=== EM fast parity tables ==="
-pixi run python scripts/extract_em_parity_tables.py --tier fast --ledger-root "${SCRATCH_DIR}/parity_results" || true
+pixi run python scripts/extract_em_parity_tables.py --tier fast --ledger-root "${SCRATCH_DIR}/parity_results" --require-case kclass_replay kclass_coldstart kclass_strict kclass_strict_os1 || failed=1
 
 exit "\${failed}"
 EOF

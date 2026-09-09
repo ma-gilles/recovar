@@ -165,9 +165,13 @@ def build_guard_commands(
         commands.append(
             GuardCommand(
                 "extract_em_parity_fast_tables",
-                (_python(), "scripts/extract_em_parity_tables.py", "--tier", "fast", "--ledger-root", str(ledger_root)),
+                (
+                    _python(), "scripts/extract_em_parity_tables.py", "--tier", "fast",
+                    "--ledger-root", str(ledger_root), "--require-case",
+                    "k1_replay", "kclass_replay", "k1_coldstart", "k1_perturbreplay",
+                    "kclass_coldstart", "kclass_strict", "kclass_strict_os1",
+                ),
                 backend="gpu",
-                required=False,
             )
         )
 

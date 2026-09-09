@@ -235,7 +235,8 @@ echo "=== EM-parity ledgers ==="
 find "${SCRATCH_DIR}/results" -name 'em_parity_quality_long_ledger_*.json' -print 2>/dev/null || true
 echo
 pixi run python scripts/extract_em_parity_tables.py --tier long \
-  --ledger-root "${SCRATCH_DIR}/results" || failed=1
+  --ledger-root "${SCRATCH_DIR}/results" \
+  --require-case k1_long k1_native_initialmodel kclass_long || failed=1
 
 for ledger in \
   em_parity_quality_long_ledger_k1_long.json \
