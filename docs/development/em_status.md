@@ -32,7 +32,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | `19073ab50`: 19 shared local-scoring arguments have one definition; half-scoring owner 1,422 lines, controller 6,123 lines |
+| Latest production cleanup | `5b42961e7`: support-count reporting moves to local diagnostics; half-scoring owner 1,370 lines, controller 6,123 lines |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -77,16 +77,27 @@ The partial metadata ledger contains support/pose differences within repeated
 policies as well as across policies. Their margins and convergence implications
 remain unresolved; completion does not establish trajectory parity.
 
-Prepared E/M job 13639984 failed in diagnostic callable serialization (1:0,
-25 s), before science E/M completion. VDAM's artifact-only v2 repair completed
-as H100 13640121 (0:0, 145 s), with four terminal arm receipts on frozen fe847.
-Scientific comparisons remain unreviewed here; completion is not acceptance.
-The next gate still compares
-pinned prepared inputs, compact-CTF and rectangle-power dispatch, then the actual
-M-step/state update. See `handoffs/em_clean_wavg_prepared_gate_20260909.json` and
-`handoffs/em_clean_vdam_composition_followup_20260909.json`. No duplicate GPU
-submission or additional production arithmetic change is justified. These runs
-also precede the latest half-scoring extraction and do not qualify that source.
+Prepared E/M job 13639984 failed in diagnostic callable serialization before
+science E/M completion; the failed evidence remains. VDAM's artifact-only v2
+repair completed as H100 13640121 (0:0, 145 s) on frozen fe847. Report review
+verified five artifact hashes and four completion receipts, without independently
+recomputing the numeric array comparisons. It reports exact incoming/compact-CTF
+operands and local decisions, but coarse scores vary up to 1.220703125e-4,
+including same-policy repeats. Accumulators and six post-state arrays vary;
+crossed maxima are not uniformly bounded by the two same-policy comparisons.
+Single-boundary cross-map FSC near one does not establish trajectory quality.
+
+The actual M-step includes float64/complex128 computation, so this is not a
+complete float32 M qualification. Warm prepared E is 268.953 → 284.035 ms,
+**1.056075× (+5.61%)** in this small preloaded-data panel; no full-runtime
+acceptance. Only rectangle power executes; full local score surfaces are absent.
+VDAM's next artifact-only check isolates the earlier coarse-score variation with
+both Wavg helpers fixed. Preserve fe847 and its original evidence; no shared
+precision adoption, new arithmetic change or duplicate GPU job. See
+`handoffs/em_clean_prepared_em_composition_review_20260909.json` and the producer
+`vdam_wavg_composition_v2_20260909/{RESULTS.md,result_summary.json}` under the
+scratch artifact root. These runs precede newer structural cleanup and do not
+qualify the current primary.
 Raw-prefetch source is unassigned. The RELION header lock is
 released: five diagnostic insertions remain, and shared benchmark binaries plus
 private native captures/builds stay frozen. No shared native writer/build is
@@ -106,16 +117,25 @@ the policy owner and rejects accidental half-scoring imports.
 
 Controller size falls **7,814 → 6,123 lines (−1,691)**. This is responsibility
 separation, not net source deletion: the three owner modules together add 73
-lines for explicit imports, module documentation and spacing. The dense routine still needs internal readability work. The subsequent local
-cleanup gives 19 identical operand/options keywords one definition across parent,
+lines for explicit imports, module documentation and spacing. The dense routine still needs internal readability work. The subsequent
+local cleanup gives 19 identical operand/options keywords one definition across parent,
 denominator and final scoring; pass-specific controls stay at each call. It
 removes another 31 production lines (half-scoring module 1,453 → 1,422), with no
 new layer or numerical expression. Expanded call arguments match the original
 module AST after normalizing keyword order; the callee has explicit parameters.
 Simple names/constants now bind once per half, and no input arrays are copied.
 
+Support-count reporting now belongs to the existing `local_debug.py` owner.
+Its masked/unmasked count calculation is shared by the two log paths. The scorer
+loses 52 lines (1,422 → 1,370); the two modules together have no net line change.
+Inlining both logging helpers and the shared count helper reproduces every
+original scorer statement except imports, including exact logger arguments.
+Only temporary host integer count arrays become helper-local; layouts, support
+selection, engine calls and scoring buffers remain unchanged.
+
 | Checkpoint | Executed evidence | Limit |
 | --- | --- | --- |
+| Support diagnostics `5b42961e7` | Control 32/32; candidate 39/39 (3.51 s), CPU guard 38/38 (44.88 s), no skips or Ruff findings | One static guard replaced by five exact-log cases, three denominator cases added; other 31 identities unchanged. Reporting ownership only, no GPU/trajectory/runtime claim |
 | Local-scoring arguments `19073ab50` | Control 42/42; candidate 47/47 (9.95 s), including six denominator/spectrum variants and existing exact-K4 dispatch; CPU guard 38/38 (44.30 s); no skips or Ruff findings | 41 original case IDs unchanged, one original case expanded to six; two source guards resolve the common kwargs; no GPU/trajectory or timing-gain claim |
 | Runner provenance `0954fdfd0` | Four missing/foreign scorer-source regressions fail before the fix; all 8 CPU unit/CLI-entry cases pass after (8.09 s), no skips | Two checked module names added; no scientific operation changed or GPU job launched |
 | Half-scoring ownership `650d71a43` | Same 189-case CPU inventory before/after; final unused-import follow-up 6/6; extended CPU guard 38/38; exact function/constant and test-assertion audits | Intermediate stale owner guard failed once and was migrated; logger namespaces follow owners; no GPU/trajectory claim |
@@ -132,6 +152,12 @@ were confirmed by failing tests before migration. This does not prove dynamic
 imports/registration or every runtime path. A tracked-reference scan found no
 further unreferenced, undecorated top-level private EM function candidates;
 do not remove code merely to reduce line counts.
+
+Support-reporting source/AST audits and exact commands are in
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/local_support_diagnostics_20260909/validation.json`;
+CPU logs/XML use `local_support_diagnostics_{control,after,guard}_20260909` under
+the CPU run root. Masked/unmasked/empty support and explicit empty/repeated-ID
+selections have exact log assertions. Final guard uses the final source.
 
 Local-scoring AST/case audits, test commands and source fingerprints are in
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/local_scoring_arguments_20260909/validation.json`;
