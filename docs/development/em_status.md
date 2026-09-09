@@ -53,9 +53,13 @@ assignment and reviewed H100 13638270 evidence are in
 six pairs each and six byte-exact operand/score fields. Its source preimages
 match the shared source.
 
-VDAM separately owns the private two-path full-float32-product proposal under
-`handoffs/em_clean_vdam_full_float32_scope_20260909.json`; no shared production
-adoption follows. Raw-prefetch source is unassigned. The RELION header lock is
+VDAM's separate two-path full-float32-product candidate `907b02ce` is now frozen
+and reviewed: exactly two `HIGHEST` contraction keywords differ in production;
+all 32 recorded H100 cases pass (13638400), after two expected-red cases
+(13638324). Native-cutoff candidate replay 13638431 is diagnostic only. See
+`handoffs/em_clean_vdam_full_float32_review_20260909.json`; full prepared-state,
+trajectory and speed-cost checks remain open, with no shared production adoption.
+Raw-prefetch source is unassigned. The RELION header lock is
 released: five diagnostic insertions remain, and shared benchmark binaries plus
 private native captures/builds stay frozen. No shared native writer/build is
 assigned. Local GPU 0 is always reserved; check GPUs 1–3 immediately before use
@@ -144,6 +148,19 @@ host `np.stack` was 3,709.627 s exclusive versus 69.060 s in the native CTF
 binding. The helper's 4,557.538 s cumulative overlaps its children. These costs
 are not guaranteed removable time; queue waiting is not proven disk I/O.
 No paired speed or current-source quality acceptance follows.
+
+The frozen 21-checkpoint cross-engine diagnostic reports final FSC-AUC
+**0.9924569** and minimum **0.9900306 at iteration 70**. Iteration 40 is the first
+saved checkpoint below 0.999, not the first divergence or an executed acceptance
+gate. Only iterations 0,10,…200 are available. Initial cross-FSC 1 does not imply
+bit-identical initial maps. Raw GT metrics are invalid for quality because
+registration is unverified; the later shared rotation/mirror check omitted
+translation search and did not establish adequate registration. Exact curves,
+commands and producer provenance are in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_speed_quality_inventory_20260909/refresh_030533/`;
+see board acknowledgment `em_clean_vdam_cross_fsc_ack_20260909.json` for limits.
+The 8.68 → 1.74 ms compact-CTF CPU allocation measurement is a microbenchmark,
+not an end-to-end runtime prediction.
 
 Native build **13636510** completed; bounded capture **13636553** obtained exact
 inputs/residual rows, then deliberately stopped. Wavg replay must use masked
