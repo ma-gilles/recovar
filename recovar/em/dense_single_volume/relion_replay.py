@@ -49,6 +49,12 @@ from recovar.em.sampling import (
 logger = logging.getLogger(__name__)
 
 
+_DEBUG_REPLAY_RELION_REFERENCES_ENV = "RECOVAR_DEBUG_REPLAY_RELION_REFERENCES"
+_DEBUG_REPLAY_RELION_REFERENCES_ITERATION_ENV = "RECOVAR_DEBUG_REPLAY_RELION_REFERENCES_ITERATION"
+# Reference replay rejects unknown tokens; the permissive diagnostic parser does not.
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
 def _has_numbered_replay_iteration_overrides(replay_iteration_overrides) -> bool:
     """Return whether replay contains state beyond the cold-start boundary.
 
@@ -122,6 +128,100 @@ def _validate_bpref_particle_order_scope(
         raise ValueError("RELION BPref particle-order preservation cannot be used in numbered replay")
     if sealed_sampling_state is not None or sealed_scoring_context is not None:
         raise ValueError("RELION BPref particle-order preservation cannot be applied to a sealed boundary")
+
+
+def _debug_replay_relion_references_enabled(iteration_number: int) -> bool:
+    """Return whether this scoring iteration should use RELION half-map references."""
+
+    if os.environ.get(_DEBUG_REPLAY_RELION_REFERENCES_ENV, "").strip().lower() not in _TRUE_ENV_VALUES:
+        return False
+    requested = os.environ.get(_DEBUG_REPLAY_RELION_REFERENCES_ITERATION_ENV)
+    if requested is None or requested.strip() == "":
+        return True
+    try:
+        requested_iterations = {int(token) for token in requested.replace(",", " ").replace(";", " ").split()}
+    except ValueError:
+        logger.warning(
+            "Ignoring invalid %s=%r; RELION reference replay disabled",
+            _DEBUG_REPLAY_RELION_REFERENCES_ITERATION_ENV,
+            requested,
+        )
+        return False
+    return int(iteration_number) in requested_iterations
+
+
+def _maybe_debug_replay_relion_references(
+    *,
+    means,
+    perturb_replay_relion_dir,
+    perturb_replay_relion_prefix: str = "run",
+    init_relion_iteration: int,
+    iteration: int,
+    volume_shape,
+    n_classes: int,
+    force: bool = False,
+):
+    """Debug hook: replace current scoring references with RELION maps."""
+
+    iteration_number = int(iteration) + 1
+    if not force and not _debug_replay_relion_references_enabled(iteration_number):
+        return means
+    if perturb_replay_relion_dir is None:
+        logger.warning(
+            "%s requested at iteration %d but perturb_replay_relion_dir is unset; keeping RECOVAR references",
+            _DEBUG_REPLAY_RELION_REFERENCES_ENV,
+            iteration_number,
+        )
+        return means
+    from pathlib import Path
+
+    from recovar.core import fourier_transform_utils
+    from recovar.utils.helpers import load_relion_volume as _load_relion_volume
+
+    relion_iter = int(init_relion_iteration) + int(iteration)
+    relion_dir = Path(perturb_replay_relion_dir)
+    replayed_means = []
+    for half_idx in range(2):
+        replayed_classes = []
+        for class_idx in range(int(n_classes)):
+            class_number = class_idx + 1
+            map_path = relion_dir / (
+                f"{perturb_replay_relion_prefix}_it{relion_iter:03d}_half{half_idx + 1}_"
+                f"class{class_number:03d}.mrc"
+            )
+            if not map_path.exists():
+                shared_path = relion_dir / (
+                    f"{perturb_replay_relion_prefix}_it{relion_iter:03d}_class{class_number:03d}.mrc"
+                )
+                if shared_path.exists():
+                    map_path = shared_path
+            if not map_path.exists():
+                raise FileNotFoundError(
+                    f"{_DEBUG_REPLAY_RELION_REFERENCES_ENV}=1 requested RELION reference "
+                    f"for scoring iteration {iteration_number}, half {half_idx + 1}, "
+                    f"class {class_number}, but {map_path} is missing"
+                )
+            real_volume = np.asarray(_load_relion_volume(str(map_path)), dtype=np.float32)
+            if tuple(real_volume.shape) != tuple(volume_shape):
+                raise ValueError(
+                    f"RELION replay reference {map_path} has shape {real_volume.shape}, "
+                    f"expected {tuple(volume_shape)}"
+                )
+            replayed_classes.append(
+                jnp.asarray(fourier_transform_utils.get_dft3(real_volume).reshape(-1))
+            )
+            logger.info(
+                "Debug RELION reference replay: scoring iter %d half %d class %d <- %s",
+                iteration_number,
+                half_idx + 1,
+                class_number,
+                map_path,
+            )
+        if int(n_classes) == 1:
+            replayed_means.append(replayed_classes[0])
+        else:
+            replayed_means.append(jnp.stack(replayed_classes, axis=0))
+    return replayed_means
 
 
 def _replay_perturbation_seed(
