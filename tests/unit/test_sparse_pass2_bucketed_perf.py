@@ -70,7 +70,6 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _active_row_grouping_for_canonical_matmul,
     _active_row_grouping_shape,
     _adjoint_block_chunk_rows,
-    _best_compact_pair_from_scores,
     _bucket_pass2_inputs,
     _bucket_sparse_k_class_compact_pair_counts,
     _bucket_sparse_k_class_pass2_inputs,
@@ -107,7 +106,6 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _exact_raw_diff2_cache_estimated_bytes,
     _exact_raw_diff2_cache_fits_budget,
     _exact_raw_diff2_cache_limit_bytes,
-    _flat_image_indices_for_rotation_rows,
     _fused_mstep_noise_enabled_for_pass,
     _half_translation_phase_table_for_indices,
     _hybrid_k_class_compact_pair_execution_buckets,
@@ -741,7 +739,7 @@ def test_flat_image_indices_follow_rotation_rows_not_pair_rows() -> None:
     active_mask = np.ones(active_indices.shape, dtype=np.float32)
 
     image_indices = _select_active_flat_values(
-        _flat_image_indices_for_rotation_rows(batch=2, n_rotation_rows=3)[..., None],
+        jnp.asarray([[0, 0, 0], [1, 1, 1]], dtype=jnp.int32)[..., None],
         active_indices,
         active_mask,
     )
@@ -5156,20 +5154,19 @@ def test_compact_pair_padding_cannot_be_selected_as_best():
     )
 
     scores = np.asarray([[5.0, 7.0, 1000.0, 2000.0]], dtype=np.float64)
-    best = _best_compact_pair_from_scores(
-        scores,
-        arrays["pair_mask"],
-        arrays["local_rotation_row"],
-        arrays["translation_idx"],
-        arrays["rotation_index"],
+    _, _, best_score, best_argmax, _ = _normalize_pass2_pairs_with_log_z(
+        jnp.asarray(scores),
+        jnp.asarray(arrays["pair_mask"]),
+        jnp.asarray([np.logaddexp(5.0, 7.0)]),
     )
+    pair_index = int(best_argmax[0])
 
-    assert bool(best["has_valid"][0])
-    assert int(best["pair_index"][0]) == 1
-    assert int(best["local_rotation_row"][0]) == 1
-    assert int(best["translation_idx"][0]) == 3
-    assert int(best["rotation_index"][0]) == 22
-    assert float(best["score"][0]) == pytest.approx(7.0)
+    assert bool(arrays["pair_mask"][0, pair_index])
+    assert pair_index == 1
+    assert int(arrays["local_rotation_row"][0, pair_index]) == 1
+    assert int(arrays["translation_idx"][0, pair_index]) == 3
+    assert int(arrays["rotation_index"][0, pair_index]) == 22
+    assert float(best_score[0]) == pytest.approx(7.0)
 
 
 def _make_late_iter_sparse_kclass_inputs(*, n_classes=4, n_images=8, n_rot=512, n_fine_trans=116):

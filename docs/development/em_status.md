@@ -29,7 +29,7 @@ speed goal. Full-production-F32, broad quality and completion remain unproved.
 | Item | Current identity or rule |
 | --- | --- |
 | Primary checkout | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907`, branch `codex/integrate-pr180` |
-| Latest production source | `f0a8804e2945ca36862491376db3820ada137df5`; the current archive/status change is docs-only. Actual HEAD/diff/untracked manifest takes precedence |
+| Source checkpoint | Published `5fd41da6f` contains production `f0a8804e2`; the local structural batch below is validated and awaiting batched publication. Actual HEAD/diff/untracked manifest takes precedence |
 | Publication | [Draft PR179](https://github.com/ma-gilles/recovar/pull/179), stacked on [PR158](https://github.com/ma-gilles/recovar/pull/158), pinned base `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; em_clean is sole integrator/publisher |
 | Coordination | [Compact handoff](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/CURRENT_TASK.md); [board and live scopes](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/README.md). EM paused; VDAM owns private evidence, em_clean shared source/docs/publication |
 | Frozen scientific source | `4f9a194923b084c649c7d9ce929eec7ae9f78902`, private `recovar_vdam_quality_prefix_integrated_20260909`; later cleanups are outside its run scope |
@@ -49,6 +49,13 @@ long-term savings remain unverified. No automatic model polling/wakeup promise.
 See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
+
+Local structural batch on `5fd41da6f`: remove two test-only candidate helpers and
+collapse two bucket-reporting adapters, **59 fewer production lines**. The padding
+test now checks the live joint-log-Z normalizer; image IDs use an explicit fixture.
+All expected values/tolerances and independent numerical references are preserved.
+Eight focused CPU cases and38 guard pass;36 bucket-report comparisons are exact,
+and the remaining computation AST is unchanged. [Receipt and commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/sparse_test_only_helpers_20260909/result.json).
 
 Latest structural batch `dd65b3563`/`f0a8804e2` simplifies candidate caches/class
 assembly, removes two unreachable error arms and two compact-pair adapters, and
@@ -113,9 +120,15 @@ separate scientific qualification.
 
 ## Frozen jobs and representative performance
 
-Real10076 10k/256 prefix20 **13654154 completed0:0** (sacct checked September9),
-on the same frozen4f9 source. Cross-FSC/state analysis remains peer-owned and
-pending review. Real GT is unavailable; no absolute-accuracy claim or duplicate job.
+Real10076 10k/256 prefix20 **13654154 completed0:0** on frozen4f9. The
+[reviewed peer report](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10076_prefix20_4f9a19492_20260909/RESULTS.md)
+passes all21 cross-FSC conditions, minimum0.9990900154943916 at20; GT unavailable.
+Six handoff pins match; peer independently recomputed all21 AUCs and the worst
+raw-map curve. Strict state remains open: count mismatch at3, two Pmax gaps>=.001
+at4, worst0.210868 with equal39 coarse counts and a one-pixel Y shift. Pixel-size
+narrowing1.6375→1.6375000476837158 is established; causality is not. VDAM owns the
+private scalar ablation and E4 capture design. These supervised prefixes provide
+no valid runtime ratio or final-real/absolute-accuracy acceptance.
 
 | Timing evidence | Result and limit |
 | --- | --- |
@@ -126,6 +139,6 @@ pending review. Real GT is unavailable; no absolute-accuracy claim or duplicate 
 See [archived timing boundaries](evidence/vdam-full200-4f9-20260909/README.md#state-precision-and-performance-limits)
 and the [earlier performance ledger](em_cleanup_history_20260909_f0a8804e2.md#frozen-jobs-and-representative-performance).
 Real10073 frozen-source evidence remains in the [real-data review](k1_real_window_review_20260909.md).
-Next: review the peer real10076 handoff when ready; continue bounded structural
+Next: await the peer real10076 causal evidence; continue bounded structural
 cleanup with proportional CPU checks and batched publication. No new GPU/build
 work or change to scientific defaults is implied by this status page.

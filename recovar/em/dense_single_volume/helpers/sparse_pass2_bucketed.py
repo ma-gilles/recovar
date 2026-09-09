@@ -716,48 +716,6 @@ def _bucket_sparse_k_class_compact_pair_counts(
     return buckets
 
 
-def _best_compact_pair_from_scores(
-    pair_scores,
-    pair_mask,
-    local_rotation_row,
-    translation_idx,
-    rotation_index,
-):
-    """Select best compact candidates without allowing padded pairs to win."""
-
-    scores = np.asarray(pair_scores, dtype=np.float64)
-    mask = np.asarray(pair_mask, dtype=bool)
-    if scores.shape != mask.shape:
-        raise ValueError(f"pair_scores and pair_mask shape mismatch: {scores.shape} vs {mask.shape}")
-    masked_scores = np.where(mask, scores, -np.inf)
-    has_valid = np.any(np.isfinite(masked_scores), axis=1)
-    best_pair = np.argmax(masked_scores, axis=1).astype(np.int32, copy=False)
-    safe_best_pair = np.where(has_valid, best_pair, 0)
-    row_index = np.arange(scores.shape[0])
-
-    best_score = masked_scores[row_index, safe_best_pair]
-    return {
-        "pair_index": np.where(has_valid, best_pair, -1).astype(np.int32, copy=False),
-        "local_rotation_row": np.where(
-            has_valid,
-            np.asarray(local_rotation_row, dtype=np.int32)[row_index, safe_best_pair],
-            -1,
-        ).astype(np.int32, copy=False),
-        "translation_idx": np.where(
-            has_valid,
-            np.asarray(translation_idx, dtype=np.int32)[row_index, safe_best_pair],
-            -1,
-        ).astype(np.int32, copy=False),
-        "rotation_index": np.where(
-            has_valid,
-            np.asarray(rotation_index, dtype=np.int64)[row_index, safe_best_pair],
-            -1,
-        ).astype(np.int64, copy=False),
-        "score": best_score,
-        "has_valid": has_valid,
-    }
-
-
 def _compact_k_class_pair_plan_stats(
     per_image_inputs_by_class,
     dense_buckets,
@@ -2240,11 +2198,7 @@ def _projection_call_max_bytes_for_pass(device_memory_bytes: int | None = None) 
     return max(1, int(float(device_memory_bytes) * _AUTO_PROJECTED_ROTATIONS_DEVICE_FRACTION))
 
 
-def _bucket_summary(buckets) -> str:
-    return _bucket_summary_by_key(buckets, "bucket_size")
-
-
-def _bucket_summary_by_key(buckets, size_key: str) -> str:
+def _bucket_summary(buckets, size_key: str = "bucket_size") -> str:
     if not buckets:
         return "empty"
     sizes = np.asarray([int(bucket[size_key]) for bucket in buckets], dtype=np.int64)
@@ -2259,11 +2213,7 @@ def _bucket_summary_by_key(buckets, size_key: str) -> str:
     )
 
 
-def _bucket_group_stats(buckets) -> dict[int, tuple[int, int]]:
-    return _bucket_group_stats_by_key(buckets, "bucket_size")
-
-
-def _bucket_group_stats_by_key(buckets, size_key: str) -> dict[int, tuple[int, int]]:
+def _bucket_group_stats(buckets, size_key: str = "bucket_size") -> dict[int, tuple[int, int]]:
     stats: dict[int, list[int]] = {}
     for bucket in buckets:
         bucket_size = int(bucket[size_key])
@@ -6671,15 +6621,6 @@ def _gather_active_flat_bucket_rows(values, active_indices):
     if values.ndim == 2:
         return values[active_indices]
     return flatten_bucket_rows(values)[active_indices]
-
-
-def _flat_image_indices_for_rotation_rows(batch: int, n_rotation_rows: int):
-    """Return image ids for flattened ``(batch, rotation_row)`` arrays."""
-
-    return jnp.broadcast_to(
-        jnp.arange(int(batch), dtype=jnp.int32)[:, None],
-        (int(batch), int(n_rotation_rows)),
-    )
 
 
 def _active_image_indices_for_rotation_rows(active_indices, active_mask, n_rotation_rows: int):
@@ -13079,7 +13020,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             0 if compact_pair_buckets is None else len(compact_pair_buckets),
             "empty"
             if not compact_pair_buckets
-            else _bucket_summary_by_key(compact_pair_buckets, "pair_bucket_size"),
+            else _bucket_summary(compact_pair_buckets, "pair_bucket_size"),
         )
         if compact_pair_min_bucket_size is not None:
             logger.info(
