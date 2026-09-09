@@ -603,9 +603,11 @@ def _relion_bpref_maps_from_sparse_support(
     from recovar.em.dense_single_volume.helpers.projection import (
         compute_projections_block as _compute_projections_block,
     )
+    from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
+        _build_bucket_arrays,
+    )
     from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
         _bucket_pass2_inputs,
-        _build_bucket_arrays,
         _normalize_pass2_bucket_with_log_z,
         _prepare_bucket_io,
         _prepare_per_image_pass2_inputs,

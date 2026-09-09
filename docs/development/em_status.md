@@ -74,12 +74,18 @@ index as a scientific comparison. No duplicate job is assigned.
 Raw-prefetch source is unassigned. The RELION header lock is released; shared
 benchmark binaries/private captures remain frozen.
 
-VDAM's frozen private integrated-prefix20 pair13652879 is now observed
-COMPLETED0:0. It uses source4f9a19492, the original200-iteration schedule and
-private read-only library copies. Its21-checkpoint map/state analysis remains
-VDAM-owned; later adaptive-grid/prior/candidate-owner changes are outside that
-run's source scope. No new quality or timing claim follows from process exit.
-Artifacts: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_integrated_prefix20_4f9a19492_20260909/`.
+VDAM's frozen integrated-prefix20 pair13652879 at4f9a19492 meets both map
+conditions at all21 checkpoints: minimum cross-FSC-AUC0.9999999995633239 and
+worst GT delta−8.33139925244e-8. Classes and available discrete schedules agree.
+One coarse count differs at14/image109 (58 versus57); its Pmax gap is1.79358e-6,
+while the overall selected Pmax maximum gap is1.1403436e-4. Fine support and
+competing margins are missing, so no tie/noise waiver follows. VDAM reports its
+independent105-AUC and worst raw-map curve checks; this update reads that report,
+not a new em_clean recomputation. Supervised native stopping prevents a timing
+ratio claim. Qualification covers only the tested3k/128 K1 prefix at4f9; later
+cleanups, full200/robustness/K4/current100k remain open. Its full200 follow-up
+13653485 is observed RUNNING on the same frozen source; no duplicate job.
+[Prefix report](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_integrated_prefix20_4f9a19492_20260909/RESULTS.md).
 
 Local GPU 0 remains reserved. Check GPUs 1–3 immediately before use and restrict
 by idle-device UUID; within Slurm preserve scheduler visibility. Avoid duplicate
@@ -152,6 +158,17 @@ Different physical H100, same class/driver: timing descriptive only. K4 audit
 iteration10,class2. No current100k speed or broad quality acceptance is claimed.
 
 ## Engineering work and recent evidence
+
+Rectangular and compact sparse bucket arrays now have one host assembly owner,
+`helpers.sparse_bucket_arrays`. Five exact function bodies move with direct
+engine/test/parity-script callers; scheduling and candidate selection stay in the
+engine. Existing12 CPU cases pass on current and archived builders, including
+padding, M-step rotation aliases, explicit F64 inputs and dense-reference score
+comparisons. The38-case guard passes and checks the new helper import boundary;
+parity CLI help passes. No assertions or numerical tolerances changed. Sparse
+scorer−241 lines, new owner246; net production+5. Local checkpoint for the next
+batch; no GPU/trajectory/runtime qualification.
+[Receipt and commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/sparse_bucket_arrays_owner_20260909/result.json).
 
 Host candidate masks, compact pair indices and flat fine-job plans now live in
 `helpers.compact_candidates`, independently of sparse numerical execution.

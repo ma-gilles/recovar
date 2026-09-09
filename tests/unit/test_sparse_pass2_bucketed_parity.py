@@ -28,8 +28,10 @@ from recovar.em.dense_single_volume.helpers.oversampling import (
     _compute_pass2_stats_sparse_perimage_reference,
     compute_pass2_stats_sparse,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
     _build_bucket_arrays,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _normalize_pass2_bucket,
     _normalize_pass2_bucket_with_log_z,
     _prepare_per_image_pass2_inputs,
