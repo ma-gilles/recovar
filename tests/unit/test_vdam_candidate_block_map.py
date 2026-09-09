@@ -3,12 +3,13 @@ from __future__ import annotations
 import numpy as np
 
 from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.dense_single_volume.helpers import vdam_replay
 from scripts.build_vdam_candidate_block_map import INVALID_ROW, load_map
 
 
 def test_candidate_block_map_writer_appends_exact_physical_rows(tmp_path, monkeypatch):
     output = tmp_path / "candidate-map.bin"
-    monkeypatch.setenv(local_em_engine.VDAM_CANDIDATE_BLOCK_TRACE_ENV, str(tmp_path / "trace.bin"))
+    monkeypatch.setenv(vdam_replay.VDAM_CANDIDATE_BLOCK_TRACE_ENV, str(tmp_path / "trace.bin"))
     monkeypatch.setenv(local_em_engine.VDAM_CANDIDATE_BLOCK_MAP_ENV, str(output))
     monkeypatch.setenv(local_em_engine.VDAM_CANDIDATE_BLOCK_MAP_ITER_ENV, "1")
     monkeypatch.setenv(local_em_engine.VDAM_CANDIDATE_BLOCK_MAP_CAPACITY_ENV, "16")
@@ -48,7 +49,7 @@ def test_candidate_block_map_writer_appends_exact_physical_rows(tmp_path, monkey
 
 def test_candidate_block_map_writer_ignores_non_target_iteration(tmp_path, monkeypatch):
     output = tmp_path / "candidate-map.bin"
-    monkeypatch.setenv(local_em_engine.VDAM_CANDIDATE_BLOCK_TRACE_ENV, str(tmp_path / "trace.bin"))
+    monkeypatch.setenv(vdam_replay.VDAM_CANDIDATE_BLOCK_TRACE_ENV, str(tmp_path / "trace.bin"))
     monkeypatch.setenv(local_em_engine.VDAM_CANDIDATE_BLOCK_MAP_ENV, str(output))
     monkeypatch.setenv(local_em_engine.VDAM_CANDIDATE_BLOCK_MAP_ITER_ENV, "2")
     local_em_engine._maybe_write_vdam_candidate_block_map(
@@ -65,7 +66,7 @@ def test_candidate_block_map_writer_ignores_non_target_iteration(tmp_path, monke
 
 def test_candidate_block_map_writer_keeps_only_launched_native_grid(tmp_path, monkeypatch):
     output = tmp_path / "candidate-map.bin"
-    monkeypatch.setenv(local_em_engine.VDAM_CANDIDATE_BLOCK_TRACE_ENV, str(tmp_path / "trace.bin"))
+    monkeypatch.setenv(vdam_replay.VDAM_CANDIDATE_BLOCK_TRACE_ENV, str(tmp_path / "trace.bin"))
     monkeypatch.setenv(local_em_engine.VDAM_CANDIDATE_BLOCK_MAP_ENV, str(output))
     monkeypatch.setenv(local_em_engine.VDAM_CANDIDATE_BLOCK_MAP_ITER_ENV, "1")
     monkeypatch.setenv(local_em_engine.VDAM_CANDIDATE_BLOCK_MAP_CAPACITY_ENV, "16")

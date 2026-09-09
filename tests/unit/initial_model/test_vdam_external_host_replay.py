@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[3]
 CUDA_SOURCE = ROOT / "recovar" / "cuda" / "cuda_backproject.cu"
 PYTHON_WRAPPER = ROOT / "recovar" / "cuda_backproject.py"
 LOCAL_ENGINE = ROOT / "recovar" / "em" / "dense_single_volume" / "local_em_engine.py"
+REPLAY_HELPER = ROOT / "recovar" / "em" / "dense_single_volume" / "helpers" / "vdam_replay.py"
 HELPER = ROOT / "scripts" / "run_vdam_exact_native_host_replay.py"
 
 
@@ -160,6 +161,7 @@ def test_wavg_bpref_host_gap_is_fail_closed_and_measures_from_wavg_return():
 def test_wavg_bpref_host_gap_trace_is_targeted_and_fail_closed():
     cuda_source = CUDA_SOURCE.read_text()
     local_engine = LOCAL_ENGINE.read_text()
+    replay_helper = REPLAY_HELPER.read_text()
 
     assert "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_TRACE" in cuda_source
     assert "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_TRACE_PARTICLE_ID" in cuda_source
@@ -172,13 +174,13 @@ def test_wavg_bpref_host_gap_trace_is_targeted_and_fail_closed():
     assert "callbacks do not contain the requested global particle ID" in cuda_source
     assert "std::ios::app" in cuda_source
     assert "if (trace.tellp() == 0)" in cuda_source
-    assert 'VDAM_WAVG_BPREF_HOST_GAP_TRACE_ENV = "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_TRACE"' in local_engine
+    assert 'VDAM_WAVG_BPREF_HOST_GAP_TRACE_ENV = "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_TRACE"' in replay_helper
     for diagnostic_gate in (
         "block_trace_active",
         "host_gap_trace_active",
         "host_replay_capture_active",
         "quiesced_prelaunch_capture_active",
     ):
-        assert diagnostic_gate in local_engine
-    assert "candidate_trace_active = _relion_vdam_candidate_trace_active(" in local_engine
+        assert diagnostic_gate in replay_helper
+    assert "candidate_trace_active = vdam_replay._relion_vdam_candidate_trace_active(" in local_engine
     assert "candidate_trace_active=candidate_trace_active," in local_engine

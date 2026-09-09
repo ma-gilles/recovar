@@ -4,28 +4,29 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.dense_single_volume.helpers import vdam_replay
 
 pytestmark = pytest.mark.unit
 
 
 def _clear_worker_replay(monkeypatch):
-    monkeypatch.delenv(local_em_engine.RELION_VDAM_WORKER_SCHEDULE_ENV, raising=False)
+    monkeypatch.delenv(vdam_replay.RELION_VDAM_WORKER_SCHEDULE_ENV, raising=False)
     monkeypatch.delenv(
-        local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        vdam_replay.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         raising=False,
     )
     monkeypatch.delenv(
-        local_em_engine.RELION_VDAM_WORKER_REPLAY_ITER_ENV,
+        vdam_replay.RELION_VDAM_WORKER_REPLAY_ITER_ENV,
         raising=False,
     )
     monkeypatch.delenv(
-        local_em_engine.RELION_VDAM_BLOCK_CHRONOLOGY_ENV,
+        vdam_replay.RELION_VDAM_BLOCK_CHRONOLOGY_ENV,
         raising=False,
     )
-    local_em_engine._load_relion_vdam_worker_schedule.cache_clear()
-    local_em_engine._load_relion_vdam_block_start_orders.cache_clear()
-    local_em_engine._load_relion_vdam_particle_issue_ranks.cache_clear()
-    local_em_engine._load_relion_vdam_particle_start_offsets_ns.cache_clear()
+    vdam_replay._load_relion_vdam_worker_schedule.cache_clear()
+    vdam_replay._load_relion_vdam_block_start_orders.cache_clear()
+    vdam_replay._load_relion_vdam_particle_issue_ranks.cache_clear()
+    vdam_replay._load_relion_vdam_particle_start_offsets_ns.cache_clear()
 
 
 class _IndexDataset:
@@ -95,15 +96,15 @@ def _enable_particle_issue_replay(
     topology="captured_particle_issue",
 ):
     monkeypatch.setenv(
-        local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        vdam_replay.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         topology,
     )
     monkeypatch.setenv(
-        local_em_engine.RELION_VDAM_WORKER_SCHEDULE_ENV,
+        vdam_replay.RELION_VDAM_WORKER_SCHEDULE_ENV,
         str(schedule_path),
     )
     monkeypatch.setenv(
-        local_em_engine.RELION_VDAM_BLOCK_CHRONOLOGY_ENV,
+        vdam_replay.RELION_VDAM_BLOCK_CHRONOLOGY_ENV,
         str(chronology_path),
     )
 
@@ -111,7 +112,7 @@ def _enable_particle_issue_replay(
 def test_default_vdam_worker_topology_keeps_single_controller(monkeypatch):
     _clear_worker_replay(monkeypatch)
 
-    owners = local_em_engine._relion_vdam_worker_lanes_for_images(
+    owners = vdam_replay._relion_vdam_worker_lanes_for_images(
         object(),
         np.arange(10, dtype=np.int64),
     )
@@ -122,11 +123,11 @@ def test_default_vdam_worker_topology_keeps_single_controller(monkeypatch):
 def test_round_robin_vdam_worker_topology_selects_eight_host_workers(monkeypatch):
     _clear_worker_replay(monkeypatch)
     monkeypatch.setenv(
-        local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        vdam_replay.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "round_robin",
     )
 
-    owners = local_em_engine._relion_vdam_worker_lanes_for_images(
+    owners = vdam_replay._relion_vdam_worker_lanes_for_images(
         object(),
         np.arange(10, dtype=np.int64),
     )
@@ -140,11 +141,11 @@ def test_round_robin_vdam_worker_topology_selects_eight_host_workers(monkeypatch
 def test_round_robin_vdam_worker_topology_preserves_bucket_shape(monkeypatch):
     _clear_worker_replay(monkeypatch)
     monkeypatch.setenv(
-        local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        vdam_replay.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "round_robin",
     )
 
-    owners = local_em_engine._relion_vdam_worker_lanes_for_images(
+    owners = vdam_replay._relion_vdam_worker_lanes_for_images(
         object(),
         np.arange(12, dtype=np.int64).reshape(3, 4),
     )
@@ -156,13 +157,13 @@ def test_round_robin_vdam_worker_topology_preserves_bucket_shape(monkeypatch):
 def test_round_robin_vdam_worker_topology_can_target_one_iteration(monkeypatch):
     _clear_worker_replay(monkeypatch)
     monkeypatch.setenv(
-        local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        vdam_replay.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "round_robin",
     )
-    monkeypatch.setenv(local_em_engine.RELION_VDAM_WORKER_REPLAY_ITER_ENV, "58")
+    monkeypatch.setenv(vdam_replay.RELION_VDAM_WORKER_REPLAY_ITER_ENV, "58")
 
     assert (
-        local_em_engine._relion_vdam_worker_lanes_for_images(
+        vdam_replay._relion_vdam_worker_lanes_for_images(
             object(),
             np.arange(8, dtype=np.int64),
             debug_iteration=57,
@@ -170,7 +171,7 @@ def test_round_robin_vdam_worker_topology_can_target_one_iteration(monkeypatch):
         is None
     )
     np.testing.assert_array_equal(
-        local_em_engine._relion_vdam_worker_lanes_for_images(
+        vdam_replay._relion_vdam_worker_lanes_for_images(
             object(),
             np.arange(8, dtype=np.int64),
             debug_iteration=58,
@@ -186,13 +187,13 @@ def test_round_robin_vdam_worker_topology_rejects_invalid_iteration(
 ):
     _clear_worker_replay(monkeypatch)
     monkeypatch.setenv(
-        local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        vdam_replay.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "round_robin",
     )
-    monkeypatch.setenv(local_em_engine.RELION_VDAM_WORKER_REPLAY_ITER_ENV, value)
+    monkeypatch.setenv(vdam_replay.RELION_VDAM_WORKER_REPLAY_ITER_ENV, value)
 
     with pytest.raises(ValueError, match="must be a positive integer"):
-        local_em_engine._relion_vdam_worker_lanes_for_images(
+        vdam_replay._relion_vdam_worker_lanes_for_images(
             object(),
             np.arange(8, dtype=np.int64),
             debug_iteration=58,
@@ -202,16 +203,16 @@ def test_round_robin_vdam_worker_topology_rejects_invalid_iteration(
 def test_round_robin_vdam_worker_topology_rejects_captured_schedule(monkeypatch):
     _clear_worker_replay(monkeypatch)
     monkeypatch.setenv(
-        local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        vdam_replay.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "round_robin",
     )
     monkeypatch.setenv(
-        local_em_engine.RELION_VDAM_WORKER_SCHEDULE_ENV,
+        vdam_replay.RELION_VDAM_WORKER_SCHEDULE_ENV,
         "/tmp/must-not-be-read.npz",
     )
 
     with pytest.raises(ValueError, match="cannot also use a captured schedule"):
-        local_em_engine._relion_vdam_worker_lanes_for_images(
+        vdam_replay._relion_vdam_worker_lanes_for_images(
             object(),
             np.arange(8, dtype=np.int64),
         )
@@ -220,17 +221,17 @@ def test_round_robin_vdam_worker_topology_rejects_captured_schedule(monkeypatch)
 def test_captured_vdam_worker_topology_can_skip_non_target_iteration(monkeypatch):
     _clear_worker_replay(monkeypatch)
     monkeypatch.setenv(
-        local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        vdam_replay.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured",
     )
-    monkeypatch.setenv(local_em_engine.RELION_VDAM_WORKER_REPLAY_ITER_ENV, "58")
+    monkeypatch.setenv(vdam_replay.RELION_VDAM_WORKER_REPLAY_ITER_ENV, "58")
     monkeypatch.setenv(
-        local_em_engine.RELION_VDAM_WORKER_SCHEDULE_ENV,
+        vdam_replay.RELION_VDAM_WORKER_SCHEDULE_ENV,
         "/tmp/must-not-be-read-before-target.npz",
     )
 
     assert (
-        local_em_engine._relion_vdam_worker_lanes_for_images(
+        vdam_replay._relion_vdam_worker_lanes_for_images(
             object(),
             np.arange(8, dtype=np.int64),
             debug_iteration=57,
@@ -248,12 +249,12 @@ def test_captured_particle_issue_replay_joins_stack_ids_and_orders_bucket(
     _enable_particle_issue_replay(monkeypatch, schedule_path, chronology_path)
     dataset = _IndexDataset([4, 1, 7])
 
-    order = local_em_engine._relion_vdam_particle_issue_order_for_images(
+    order = vdam_replay._relion_vdam_particle_issue_order_for_images(
         dataset,
         np.arange(3, dtype=np.int64),
         debug_iteration=58,
     )
-    owners = local_em_engine._relion_vdam_worker_lanes_for_images(
+    owners = vdam_replay._relion_vdam_worker_lanes_for_images(
         dataset,
         np.arange(3, dtype=np.int64),
         debug_iteration=58,
@@ -277,12 +278,12 @@ def test_captured_particle_timing_joins_native_offsets_and_issue_order(
     )
     dataset = _IndexDataset([4, 1, 7])
 
-    offsets = local_em_engine._relion_vdam_particle_start_offsets_for_images(
+    offsets = vdam_replay._relion_vdam_particle_start_offsets_for_images(
         dataset,
         np.arange(3, dtype=np.int64),
         debug_iteration=58,
     )
-    order = local_em_engine._relion_vdam_particle_issue_order_for_images(
+    order = vdam_replay._relion_vdam_particle_issue_order_for_images(
         dataset,
         np.arange(3, dtype=np.int64),
         debug_iteration=58,
@@ -291,7 +292,7 @@ def test_captured_particle_timing_joins_native_offsets_and_issue_order(
     np.testing.assert_array_equal(offsets, np.asarray([500, 0, 250], dtype=np.int32))
     np.testing.assert_array_equal(order, np.asarray([1, 2, 0], dtype=np.int32))
     assert (
-        local_em_engine._relion_vdam_particle_start_offsets_for_images(
+        vdam_replay._relion_vdam_particle_start_offsets_for_images(
             dataset,
             np.arange(3, dtype=np.int64),
             debug_iteration=57,
@@ -325,7 +326,7 @@ def test_captured_particle_timing_rejects_start_before_first_launch(
     )
 
     with pytest.raises(ValueError, match="precedes the first launch"):
-        local_em_engine._relion_vdam_particle_start_offsets_for_images(
+        vdam_replay._relion_vdam_particle_start_offsets_for_images(
             _IndexDataset([4, 1, 7]),
             np.arange(3, dtype=np.int64),
             debug_iteration=58,
@@ -367,14 +368,14 @@ def test_captured_particle_native_grid_composes_with_issue_and_timing(
     dataset = _IndexDataset([4, 1, 7])
     indices = np.arange(3, dtype=np.int64)
 
-    counts = local_em_engine._relion_vdam_native_grid_counts_for_images(
+    counts = vdam_replay._relion_vdam_native_grid_counts_for_images(
         dataset,
         indices,
         rotation_count=4,
         valid_rotation_counts=np.asarray([2, 2, 2]),
         debug_iteration=58,
     )
-    offsets = local_em_engine._relion_vdam_particle_start_offsets_for_images(
+    offsets = vdam_replay._relion_vdam_particle_start_offsets_for_images(
         dataset,
         indices,
         debug_iteration=58,
@@ -385,7 +386,7 @@ def test_captured_particle_native_grid_composes_with_issue_and_timing(
         assert offsets is None
     else:
         np.testing.assert_array_equal(offsets, expected_offsets)
-    assert local_em_engine._relion_vdam_identity_native_grid_replay() is identity_rows
+    assert vdam_replay._relion_vdam_identity_native_grid_replay() is identity_rows
 
 
 def test_captured_particle_issue_replay_only_targets_sealed_iteration(
@@ -398,7 +399,7 @@ def test_captured_particle_issue_replay_only_targets_sealed_iteration(
     dataset = _IndexDataset([4, 1, 7])
 
     assert (
-        local_em_engine._relion_vdam_particle_issue_order_for_images(
+        vdam_replay._relion_vdam_particle_issue_order_for_images(
             dataset,
             np.arange(3, dtype=np.int64),
             debug_iteration=57,
@@ -406,7 +407,7 @@ def test_captured_particle_issue_replay_only_targets_sealed_iteration(
         is None
     )
     assert (
-        local_em_engine._relion_vdam_worker_lanes_for_images(
+        vdam_replay._relion_vdam_worker_lanes_for_images(
             dataset,
             np.arange(3, dtype=np.int64),
             debug_iteration=57,
@@ -427,7 +428,7 @@ def test_captured_particle_issue_replay_rejects_nonbijective_launches(
     _enable_particle_issue_replay(monkeypatch, schedule_path, chronology_path)
 
     with pytest.raises(ValueError, match="launch sequences are not a bijection"):
-        local_em_engine._relion_vdam_particle_issue_order_for_images(
+        vdam_replay._relion_vdam_particle_issue_order_for_images(
             _IndexDataset([4, 1, 7]),
             np.arange(3, dtype=np.int64),
             debug_iteration=58,
@@ -443,7 +444,7 @@ def test_captured_particle_issue_replay_rejects_untraced_selected_particle(
     _enable_particle_issue_replay(monkeypatch, schedule_path, chronology_path)
 
     with pytest.raises(ValueError, match="missing selected stack indices"):
-        local_em_engine._relion_vdam_particle_issue_order_for_images(
+        vdam_replay._relion_vdam_particle_issue_order_for_images(
             _IndexDataset([4, 0, 7]),
             np.arange(3, dtype=np.int64),
             debug_iteration=58,

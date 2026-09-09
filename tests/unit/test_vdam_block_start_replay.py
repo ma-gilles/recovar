@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.dense_single_volume.helpers import vdam_replay
 from scripts.build_vdam_block_chronology import RECORD_DTYPE
 
 
@@ -49,17 +50,17 @@ def _configure(
     *,
     topology: str = "captured_block_start",
 ) -> None:
-    monkeypatch.setenv(local_em_engine.RELION_VDAM_WORKER_SCHEDULE_ENV, str(schedule))
+    monkeypatch.setenv(vdam_replay.RELION_VDAM_WORKER_SCHEDULE_ENV, str(schedule))
     monkeypatch.setenv(
-        local_em_engine.RELION_VDAM_BLOCK_CHRONOLOGY_ENV,
+        vdam_replay.RELION_VDAM_BLOCK_CHRONOLOGY_ENV,
         str(chronology),
     )
     monkeypatch.setenv(
-        local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        vdam_replay.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         topology,
     )
-    local_em_engine._load_relion_vdam_worker_schedule.cache_clear()
-    local_em_engine._load_relion_vdam_block_start_orders.cache_clear()
+    vdam_replay._load_relion_vdam_worker_schedule.cache_clear()
+    vdam_replay._load_relion_vdam_block_start_orders.cache_clear()
 
 
 def test_block_start_replay_joins_native_particle_ids_to_stack_indices(
@@ -68,7 +69,7 @@ def test_block_start_replay_joins_native_particle_ids_to_stack_indices(
     schedule, chronology = _write_inputs(tmp_path)
     _configure(monkeypatch, schedule, chronology)
 
-    orders = local_em_engine._relion_vdam_block_start_orders_for_images(
+    orders = vdam_replay._relion_vdam_block_start_orders_for_images(
         _Dataset(),
         np.asarray([1, 0], dtype=np.int64),
         rotation_count=3,
@@ -79,7 +80,7 @@ def test_block_start_replay_joins_native_particle_ids_to_stack_indices(
         orders,
         np.asarray([[0, 2, 1], [1, 2, 0]], dtype=np.int32),
     )
-    lanes = local_em_engine._relion_vdam_worker_lanes_for_images(
+    lanes = vdam_replay._relion_vdam_worker_lanes_for_images(
         _Dataset(),
         np.asarray([1, 0], dtype=np.int64),
         debug_iteration=1,
@@ -92,7 +93,7 @@ def test_block_start_replay_is_confined_to_the_traced_iteration(tmp_path, monkey
     _configure(monkeypatch, schedule, chronology)
 
     assert (
-        local_em_engine._relion_vdam_block_start_orders_for_images(
+        vdam_replay._relion_vdam_block_start_orders_for_images(
             _Dataset(),
             np.asarray([0, 1], dtype=np.int64),
             rotation_count=3,
@@ -111,7 +112,7 @@ def test_captured_block_grid_keeps_concurrent_launches(tmp_path, monkeypatch):
         chronology,
         topology="captured_block_grid",
     )
-    orders = local_em_engine._relion_vdam_block_start_orders_for_images(
+    orders = vdam_replay._relion_vdam_block_start_orders_for_images(
         _Dataset(),
         np.asarray([1, 0], dtype=np.int64),
         rotation_count=3,
@@ -122,20 +123,20 @@ def test_captured_block_grid_keeps_concurrent_launches(tmp_path, monkeypatch):
         orders,
         np.asarray([[0, 2, 1], [1, 2, 0]], dtype=np.int32),
     )
-    assert local_em_engine._relion_vdam_block_start_replay_active(debug_iteration=1)
-    assert not local_em_engine._relion_vdam_captured_block_serial_replay()
+    assert vdam_replay._relion_vdam_block_start_replay_active(debug_iteration=1)
+    assert not vdam_replay._relion_vdam_captured_block_serial_replay()
 
     monkeypatch.setenv(
-        local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        vdam_replay.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured_block_start",
     )
-    assert local_em_engine._relion_vdam_captured_block_serial_replay()
-    assert not local_em_engine._relion_vdam_block_start_replay_active(
+    assert vdam_replay._relion_vdam_captured_block_serial_replay()
+    assert not vdam_replay._relion_vdam_block_start_replay_active(
         debug_iteration=2
     )
-    assert local_em_engine._relion_vdam_block_start_replay_active(debug_iteration=1)
+    assert vdam_replay._relion_vdam_block_start_replay_active(debug_iteration=1)
     assert (
-        local_em_engine._relion_vdam_worker_lanes_for_images(
+        vdam_replay._relion_vdam_worker_lanes_for_images(
             _Dataset(),
             np.asarray([0, 1], dtype=np.int64),
             debug_iteration=2,
@@ -148,7 +149,7 @@ def test_captured_native_grid_returns_exact_per_particle_counts(tmp_path, monkey
     schedule, chronology = _write_inputs(tmp_path)
     _configure(monkeypatch, schedule, chronology, topology="captured_native_grid")
 
-    counts = local_em_engine._relion_vdam_native_grid_counts_for_images(
+    counts = vdam_replay._relion_vdam_native_grid_counts_for_images(
         _Dataset(),
         np.asarray([1, 0], dtype=np.int64),
         rotation_count=5,
@@ -156,8 +157,8 @@ def test_captured_native_grid_returns_exact_per_particle_counts(tmp_path, monkey
         debug_iteration=1,
     )
     np.testing.assert_array_equal(counts, np.asarray([3, 3], dtype=np.int32))
-    assert local_em_engine._relion_vdam_block_start_replay_active(debug_iteration=1)
-    assert not local_em_engine._relion_vdam_captured_block_serial_replay()
+    assert vdam_replay._relion_vdam_block_start_replay_active(debug_iteration=1)
+    assert not vdam_replay._relion_vdam_captured_block_serial_replay()
 
 
 def test_captured_native_count_uses_exact_counts_and_identity_rows(
@@ -166,7 +167,7 @@ def test_captured_native_count_uses_exact_counts_and_identity_rows(
     schedule, chronology = _write_inputs(tmp_path)
     _configure(monkeypatch, schedule, chronology, topology="captured_native_count")
 
-    counts = local_em_engine._relion_vdam_native_grid_counts_for_images(
+    counts = vdam_replay._relion_vdam_native_grid_counts_for_images(
         _Dataset(),
         np.asarray([1, 0], dtype=np.int64),
         rotation_count=5,
@@ -174,15 +175,15 @@ def test_captured_native_count_uses_exact_counts_and_identity_rows(
         debug_iteration=1,
     )
     np.testing.assert_array_equal(counts, np.asarray([3, 3], dtype=np.int32))
-    assert local_em_engine._relion_vdam_block_start_replay_active(debug_iteration=1)
-    assert local_em_engine._relion_vdam_identity_native_grid_replay()
-    assert not local_em_engine._relion_vdam_captured_block_serial_replay()
+    assert vdam_replay._relion_vdam_block_start_replay_active(debug_iteration=1)
+    assert vdam_replay._relion_vdam_identity_native_grid_replay()
+    assert not vdam_replay._relion_vdam_captured_block_serial_replay()
 
     monkeypatch.setenv(
-        local_em_engine.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        vdam_replay.RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
         "captured_native_grid",
     )
-    assert not local_em_engine._relion_vdam_identity_native_grid_replay()
+    assert not vdam_replay._relion_vdam_identity_native_grid_replay()
 
 
 def test_captured_native_trace_shape_keeps_identity_rows_and_trace_instructions(
@@ -196,7 +197,7 @@ def test_captured_native_trace_shape_keeps_identity_rows_and_trace_instructions(
         topology="captured_native_trace_shape",
     )
 
-    counts = local_em_engine._relion_vdam_native_grid_counts_for_images(
+    counts = vdam_replay._relion_vdam_native_grid_counts_for_images(
         _Dataset(),
         np.asarray([1, 0], dtype=np.int64),
         rotation_count=5,
@@ -204,9 +205,9 @@ def test_captured_native_trace_shape_keeps_identity_rows_and_trace_instructions(
         debug_iteration=1,
     )
     np.testing.assert_array_equal(counts, np.asarray([3, 3], dtype=np.int32))
-    assert local_em_engine._relion_vdam_identity_native_grid_replay()
-    assert local_em_engine._relion_vdam_native_trace_shape_replay(debug_iteration=1)
-    assert not local_em_engine._relion_vdam_native_trace_shape_replay(
+    assert vdam_replay._relion_vdam_identity_native_grid_replay()
+    assert vdam_replay._relion_vdam_native_trace_shape_replay(debug_iteration=1)
+    assert not vdam_replay._relion_vdam_native_trace_shape_replay(
         debug_iteration=2
     )
 
@@ -222,7 +223,7 @@ def test_captured_native_grid_trace_shape_keeps_captured_rows(
         topology="captured_native_grid_trace_shape",
     )
 
-    orders = local_em_engine._relion_vdam_block_start_orders_for_images(
+    orders = vdam_replay._relion_vdam_block_start_orders_for_images(
         _Dataset(),
         np.asarray([1, 0], dtype=np.int64),
         rotation_count=3,
@@ -233,8 +234,8 @@ def test_captured_native_grid_trace_shape_keeps_captured_rows(
         orders,
         np.asarray([[0, 2, 1], [1, 2, 0]], dtype=np.int32),
     )
-    assert not local_em_engine._relion_vdam_identity_native_grid_replay()
-    assert local_em_engine._relion_vdam_native_trace_shape_replay(
+    assert not vdam_replay._relion_vdam_identity_native_grid_replay()
+    assert vdam_replay._relion_vdam_native_trace_shape_replay(
         debug_iteration=1
     )
 
@@ -250,7 +251,7 @@ def test_materialized_native_grid_replay_gathers_rows_before_identity_launch(
         topology="materialized_native_grid_trace_shape",
     )
 
-    orders = local_em_engine._relion_vdam_block_start_orders_for_images(
+    orders = vdam_replay._relion_vdam_block_start_orders_for_images(
         _Dataset(),
         np.asarray([1, 0], dtype=np.int64),
         rotation_count=3,
@@ -263,21 +264,21 @@ def test_materialized_native_grid_replay_gathers_rows_before_identity_launch(
         np.broadcast_to(orders[..., None], values.shape),
         axis=1,
     )
-    actual = local_em_engine._materialize_relion_vdam_rotation_rows(
+    actual = vdam_replay._materialize_relion_vdam_rotation_rows(
         values,
         orders,
     )
     np.testing.assert_array_equal(np.asarray(actual), expected)
-    assert local_em_engine._relion_vdam_materialized_native_grid_replay(
+    assert vdam_replay._relion_vdam_materialized_native_grid_replay(
         debug_iteration=1
     )
-    assert not local_em_engine._relion_vdam_materialized_native_grid_replay(
+    assert not vdam_replay._relion_vdam_materialized_native_grid_replay(
         debug_iteration=2
     )
-    assert local_em_engine._relion_vdam_native_trace_shape_replay(
+    assert vdam_replay._relion_vdam_native_trace_shape_replay(
         debug_iteration=1
     )
-    assert not local_em_engine._relion_vdam_identity_native_grid_replay()
+    assert not vdam_replay._relion_vdam_identity_native_grid_replay()
 
 
 def test_native_trace_first_atomic_precedes_interpolation_registers():
@@ -311,7 +312,7 @@ def test_block_start_replay_rejects_a_different_rotation_bucket(tmp_path, monkey
     _configure(monkeypatch, schedule, chronology)
 
     with pytest.raises(ValueError, match="native rotation count exceeds"):
-        local_em_engine._relion_vdam_block_start_orders_for_images(
+        vdam_replay._relion_vdam_block_start_orders_for_images(
             _Dataset(),
             np.asarray([0], dtype=np.int64),
             rotation_count=2,
@@ -335,7 +336,7 @@ def test_block_start_replay_rejects_nonbijective_orientations(tmp_path, monkeypa
     _configure(monkeypatch, schedule, chronology)
 
     with pytest.raises(ValueError, match="orientation rows are not a bijection"):
-        local_em_engine._relion_vdam_block_start_orders_for_images(
+        vdam_replay._relion_vdam_block_start_orders_for_images(
             _Dataset(),
             np.asarray([0], dtype=np.int64),
             rotation_count=3,
@@ -378,7 +379,7 @@ def test_block_start_replay_appends_static_bucket_padding(tmp_path, monkeypatch)
     schedule, chronology = _write_inputs(tmp_path)
     _configure(monkeypatch, schedule, chronology)
 
-    orders = local_em_engine._relion_vdam_block_start_orders_for_images(
+    orders = vdam_replay._relion_vdam_block_start_orders_for_images(
         _Dataset(),
         np.asarray([0], dtype=np.int64),
         rotation_count=5,
@@ -396,7 +397,7 @@ def test_block_start_replay_rejects_a_nonprefix_local_grid(tmp_path, monkeypatch
     _configure(monkeypatch, schedule, chronology)
 
     with pytest.raises(ValueError, match="cannot prove a native-grid prefix"):
-        local_em_engine._relion_vdam_block_start_orders_for_images(
+        vdam_replay._relion_vdam_block_start_orders_for_images(
             _Dataset(),
             np.asarray([0], dtype=np.int64),
             rotation_count=16,
@@ -413,7 +414,7 @@ def test_candidate_block_trace_uses_stable_stack_indices(monkeypatch):
             return lookup[np.asarray(image_indices)]
 
     assert (
-        local_em_engine._relion_vdam_candidate_trace_ids_for_images(
+        vdam_replay._relion_vdam_candidate_trace_ids_for_images(
             Dataset(),
             np.asarray([0, 1], dtype=np.int64),
             debug_iteration=1,
@@ -421,22 +422,22 @@ def test_candidate_block_trace_uses_stable_stack_indices(monkeypatch):
         is None
     )
     monkeypatch.setenv(
-        local_em_engine.VDAM_CANDIDATE_BLOCK_TRACE_ENV,
+        vdam_replay.VDAM_CANDIDATE_BLOCK_TRACE_ENV,
         "/tmp/candidate-trace.bin",
     )
     monkeypatch.setenv(
-        local_em_engine.VDAM_CANDIDATE_BLOCK_TRACE_ITER_ENV,
+        vdam_replay.VDAM_CANDIDATE_BLOCK_TRACE_ITER_ENV,
         "58",
     )
     assert (
-        local_em_engine._relion_vdam_candidate_trace_ids_for_images(
+        vdam_replay._relion_vdam_candidate_trace_ids_for_images(
             Dataset(),
             np.asarray([2, 0], dtype=np.int64),
             debug_iteration=57,
         )
         is None
     )
-    trace_ids = local_em_engine._relion_vdam_candidate_trace_ids_for_images(
+    trace_ids = vdam_replay._relion_vdam_candidate_trace_ids_for_images(
         Dataset(),
         np.asarray([2, 0], dtype=np.int64),
         debug_iteration=58,
@@ -455,10 +456,10 @@ def test_external_host_replay_capture_uses_stable_stack_indices(
             return lookup[np.asarray(image_indices)]
 
     monkeypatch.setenv(
-        local_em_engine.VDAM_EXTERNAL_HOST_REPLAY_CAPTURE_DIR_ENV,
+        vdam_replay.VDAM_EXTERNAL_HOST_REPLAY_CAPTURE_DIR_ENV,
         str(tmp_path / "host-replay-inputs"),
     )
-    trace_ids = local_em_engine._relion_vdam_candidate_trace_ids_for_images(
+    trace_ids = vdam_replay._relion_vdam_candidate_trace_ids_for_images(
         Dataset(),
         np.asarray([1, 2], dtype=np.int64),
         debug_iteration=4,
@@ -477,10 +478,10 @@ def test_quiesced_prelaunch_capture_uses_stable_stack_indices(
             return lookup[np.asarray(image_indices)]
 
     monkeypatch.setenv(
-        local_em_engine.VDAM_QUIESCED_PRELAUNCH_CAPTURE_DIR_ENV,
+        vdam_replay.VDAM_QUIESCED_PRELAUNCH_CAPTURE_DIR_ENV,
         str(tmp_path / "quiesced-prelaunch"),
     )
-    trace_ids = local_em_engine._relion_vdam_candidate_trace_ids_for_images(
+    trace_ids = vdam_replay._relion_vdam_candidate_trace_ids_for_images(
         Dataset(),
         np.asarray([2, 0], dtype=np.int64),
         debug_iteration=1,
@@ -495,19 +496,19 @@ def test_candidate_block_trace_rejects_invalid_target_iteration(
     iteration,
 ):
     monkeypatch.setenv(
-        local_em_engine.VDAM_CANDIDATE_BLOCK_TRACE_ENV,
+        vdam_replay.VDAM_CANDIDATE_BLOCK_TRACE_ENV,
         str(tmp_path / "candidate-trace.bin"),
     )
     if iteration:
         monkeypatch.setenv(
-            local_em_engine.VDAM_CANDIDATE_BLOCK_TRACE_ITER_ENV,
+            vdam_replay.VDAM_CANDIDATE_BLOCK_TRACE_ITER_ENV,
             iteration,
         )
     else:
         monkeypatch.delenv(
-            local_em_engine.VDAM_CANDIDATE_BLOCK_TRACE_ITER_ENV,
+            vdam_replay.VDAM_CANDIDATE_BLOCK_TRACE_ITER_ENV,
             raising=False,
         )
 
     with pytest.raises(ValueError, match="candidate block trace"):
-        local_em_engine._relion_vdam_candidate_trace_active(debug_iteration=58)
+        vdam_replay._relion_vdam_candidate_trace_active(debug_iteration=58)
