@@ -6429,6 +6429,7 @@ def run_local_em_exact(
             if reconstruction_probability_threshold_np is None
             else jnp.asarray(reconstruction_probability_threshold_np[np.asarray(bucket.image_indices)], dtype=jnp.float64)
         )
+        used_fused_score_mstep = True
         if can_use_fused_score_mstep and score_only and not has_external_normalization:
             fused_t0 = time.time()
             (
@@ -6472,28 +6473,6 @@ def run_local_em_exact(
                     best_log_score,
                     max_posterior,
                 )
-            debug_fused_posterior_dump_targets = maybe_write_debug_fused_posterior_dump(
-                experiment_dataset=experiment_dataset,
-                local_layout=local_layout,
-                bucket=bucket,
-                image_pre_shifts=image_pre_shifts,
-                probs=probs,
-                log_Z=log_Z,
-                best_log_score=best_log_score,
-                best_argmax=best_argmax,
-                max_posterior=max_posterior,
-                reconstruction_sample_mask=reconstruction_sample_mask,
-                reconstruction_rotation_mask=reconstruction_rotation_mask,
-                n_significant_samples=n_significant_samples,
-                current_size=current_size,
-                debug_iteration=debug_iteration,
-                dump_dir=debug_fused_posterior_dump_dir,
-                pending_targets=debug_fused_posterior_dump_targets,
-                requested_current_sizes=debug_fused_posterior_dump_current_sizes,
-                requested_iterations=debug_fused_posterior_dump_iterations,
-            )
-            fused_elapsed = time.time() - fused_t0
-            timing.fused_score_mstep_s += fused_elapsed
         elif can_use_fused_score_mstep and not has_external_normalization and defer_packed_mstep_requested:
             fused_t0 = time.time()
             (
@@ -6539,28 +6518,6 @@ def run_local_em_exact(
                     best_log_score,
                     max_posterior,
                 )
-            debug_fused_posterior_dump_targets = maybe_write_debug_fused_posterior_dump(
-                experiment_dataset=experiment_dataset,
-                local_layout=local_layout,
-                bucket=bucket,
-                image_pre_shifts=image_pre_shifts,
-                probs=probs,
-                log_Z=log_Z,
-                best_log_score=best_log_score,
-                best_argmax=best_argmax,
-                max_posterior=max_posterior,
-                reconstruction_sample_mask=reconstruction_sample_mask,
-                reconstruction_rotation_mask=reconstruction_rotation_mask,
-                n_significant_samples=n_significant_samples,
-                current_size=current_size,
-                debug_iteration=debug_iteration,
-                dump_dir=debug_fused_posterior_dump_dir,
-                pending_targets=debug_fused_posterior_dump_targets,
-                requested_current_sizes=debug_fused_posterior_dump_current_sizes,
-                requested_iterations=debug_fused_posterior_dump_iterations,
-            )
-            fused_elapsed = time.time() - fused_t0
-            timing.fused_score_mstep_s += fused_elapsed
         elif can_use_fused_score_mstep and not has_external_normalization:
             fused_t0 = time.time()
             (
@@ -6616,28 +6573,6 @@ def run_local_em_exact(
                     best_log_score,
                     max_posterior,
                 )
-            debug_fused_posterior_dump_targets = maybe_write_debug_fused_posterior_dump(
-                experiment_dataset=experiment_dataset,
-                local_layout=local_layout,
-                bucket=bucket,
-                image_pre_shifts=image_pre_shifts,
-                probs=probs,
-                log_Z=log_Z,
-                best_log_score=best_log_score,
-                best_argmax=best_argmax,
-                max_posterior=max_posterior,
-                reconstruction_sample_mask=reconstruction_sample_mask,
-                reconstruction_rotation_mask=reconstruction_rotation_mask,
-                n_significant_samples=n_significant_samples,
-                current_size=current_size,
-                debug_iteration=debug_iteration,
-                dump_dir=debug_fused_posterior_dump_dir,
-                pending_targets=debug_fused_posterior_dump_targets,
-                requested_current_sizes=debug_fused_posterior_dump_current_sizes,
-                requested_iterations=debug_fused_posterior_dump_iterations,
-            )
-            fused_elapsed = time.time() - fused_t0
-            timing.fused_score_mstep_s += fused_elapsed
         elif can_use_fused_score_mstep and not score_only:
             fused_t0 = time.time()
             if normalization_log_evidence_np is None:
@@ -6697,29 +6632,8 @@ def run_local_em_exact(
                     best_log_score,
                     max_posterior,
                 )
-            debug_fused_posterior_dump_targets = maybe_write_debug_fused_posterior_dump(
-                experiment_dataset=experiment_dataset,
-                local_layout=local_layout,
-                bucket=bucket,
-                image_pre_shifts=image_pre_shifts,
-                probs=probs,
-                log_Z=log_Z,
-                best_log_score=best_log_score,
-                best_argmax=best_argmax,
-                max_posterior=max_posterior,
-                reconstruction_sample_mask=reconstruction_sample_mask,
-                reconstruction_rotation_mask=reconstruction_rotation_mask,
-                n_significant_samples=n_significant_samples,
-                current_size=current_size,
-                debug_iteration=debug_iteration,
-                dump_dir=debug_fused_posterior_dump_dir,
-                pending_targets=debug_fused_posterior_dump_targets,
-                requested_current_sizes=debug_fused_posterior_dump_current_sizes,
-                requested_iterations=debug_fused_posterior_dump_iterations,
-            )
-            fused_elapsed = time.time() - fused_t0
-            timing.fused_score_mstep_s += fused_elapsed
         else:
+            used_fused_score_mstep = False
             score_t0 = time.time()
             if half_spectrum_scoring:
                 scores = score_local_bucket_abs2_on_demand(
@@ -6978,6 +6892,30 @@ def run_local_em_exact(
                     reconstruction_group_ids=bucket_reconstruction_group_ids,
                 )
             scores = None
+
+        if used_fused_score_mstep:
+            debug_fused_posterior_dump_targets = maybe_write_debug_fused_posterior_dump(
+                experiment_dataset=experiment_dataset,
+                local_layout=local_layout,
+                bucket=bucket,
+                image_pre_shifts=image_pre_shifts,
+                probs=probs,
+                log_Z=log_Z,
+                best_log_score=best_log_score,
+                best_argmax=best_argmax,
+                max_posterior=max_posterior,
+                reconstruction_sample_mask=reconstruction_sample_mask,
+                reconstruction_rotation_mask=reconstruction_rotation_mask,
+                n_significant_samples=n_significant_samples,
+                current_size=current_size,
+                debug_iteration=debug_iteration,
+                dump_dir=debug_fused_posterior_dump_dir,
+                pending_targets=debug_fused_posterior_dump_targets,
+                requested_current_sizes=debug_fused_posterior_dump_current_sizes,
+                requested_iterations=debug_fused_posterior_dump_iterations,
+            )
+            fused_elapsed = time.time() - fused_t0
+            timing.fused_score_mstep_s += fused_elapsed
 
         if source_faithful_bpref and not score_only:
             # RELION carries one float32 numerator and denominator through the

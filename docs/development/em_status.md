@@ -126,6 +126,17 @@ iteration10,class2. No current100k speed or broad quality acceptance is claimed.
 
 ## Engineering work and recent evidence
 
+The local fused-score branches now join at one posterior-dump/timing tail,
+removing three identical copies. All kernel calls and profile synchronization
+remain in their original branches; distributing the common tail reproduces the
+whole original module AST. Local engine7,895→7,833 lines (−62). Twenty affected
+CPU cases pass; the score-only test now explicitly covers big-JIT on/off, both
+passing on current and archived original code with unchanged numerical assertions.
+Runtime line tracing reaches all four fused branches and the split route. The
+initial forced-mode backend-count failure is preserved in the
+[receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/fused_publication_tail_20260909/result.json).
+This is structural evidence, not timing or trajectory qualification.
+
 The validated controller batch moves post-update optimiser convergence replay to
 `relion_replay.apply_optimiser_convergence_replay`. The controller still applies
 accuracy before the native state update and replay counters afterward. Missing

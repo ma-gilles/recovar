@@ -8156,7 +8156,12 @@ def test_run_local_em_exact_big_jit_cache_ignores_bound_dataset_process_method(
         function.clear_cache()
 
 
-def test_run_local_em_exact_score_only_big_jit_matches_debug_split(monkeypatch, rng, tmp_path):
+@pytest.mark.parametrize("use_big_jit", [True, False])
+def test_run_local_em_exact_score_only_big_jit_matches_debug_split(monkeypatch, rng, tmp_path, use_big_jit):
+    if use_big_jit:
+        monkeypatch.delenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", raising=False)
+    else:
+        monkeypatch.setenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", "1")
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=561)
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
@@ -8237,7 +8242,7 @@ def test_run_local_em_exact_score_only_big_jit_matches_debug_split(monkeypatch, 
     hard_split = split.hard_assignments
     stats_split = split.stats
     profile_split = split.profile
-    assert int(profile_big["big_jit_bucket_count"]) == 1
+    assert int(profile_big["big_jit_bucket_count"]) == int(use_big_jit)
     assert int(profile_split["big_jit_bucket_count"]) == 0
     assert bool(profile_big["score_only"]) is True
     assert bool(profile_split["score_only"]) is True
