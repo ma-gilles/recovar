@@ -45,7 +45,9 @@ def _default_output_root() -> Path:
     return DEFAULT_OUTPUT_ROOT
 
 
-def build_guard_commands(tier: str = "cpu", *, quick: bool = False) -> list[GuardCommand]:
+def build_guard_commands(
+    tier: str = "cpu", *, quick: bool = False, ledger_root: Path = Path("parity_results"),
+) -> list[GuardCommand]:
     """Return the command plan for the requested merge-guard tier."""
     if tier not in {"cpu", "gpu", "all"}:
         raise ValueError(f"unknown tier {tier!r}")
@@ -153,6 +155,8 @@ def build_guard_commands(tier: str = "cpu", *, quick: bool = False) -> list[Guar
                     "--run-slow",
                     "--run-integration",
                     "--run-gpu",
+                    "--basetemp",
+                    str(ledger_root),
                     "tests/integration/test_em_parity_fast.py",
                 ),
                 backend="gpu",
@@ -161,7 +165,7 @@ def build_guard_commands(tier: str = "cpu", *, quick: bool = False) -> list[Guar
         commands.append(
             GuardCommand(
                 "extract_em_parity_fast_tables",
-                (_python(), "scripts/extract_em_parity_tables.py", "--tier", "fast"),
+                (_python(), "scripts/extract_em_parity_tables.py", "--tier", "fast", "--ledger-root", str(ledger_root)),
                 backend="gpu",
                 required=False,
             )
@@ -263,7 +267,7 @@ def run_guard(
     output_dir: Path,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    commands = build_guard_commands(tier, quick=quick)
+    commands = build_guard_commands(tier, quick=quick, ledger_root=output_dir / "parity_results")
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "SAFE_TO_DELETE").touch()
 

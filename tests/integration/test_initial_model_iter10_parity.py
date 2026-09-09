@@ -18,10 +18,10 @@ engine. This test is the load-bearing post-merge guard: any code change
 that drops iter-10 mean CC by >1 percentage point or balloons wall-time
 by >50 % fails CI before reaching ``dev``.
 
-Quality + perf baselines live in ``tests/baselines/initial_model_iter10_baseline.json``.
+Quality + perf baselines live inline in ``BASELINES`` below.
 The test compares against the baseline if present, and writes the current
-result to ``tests/baselines/initial_model_iter10_ledger.json`` for PR-time
-visibility (mirroring the em_parity_quality_fast_ledger_*.json pattern).
+result to ``initial_model_iter10_ledger.json`` under each case's temporary
+output directory. Baselines are never updated.
 
 Skips cleanly when:
 * the K=N data fixture is absent (so the file is portable to dev hosts),
@@ -48,13 +48,7 @@ logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RUN_AB_INITIO = REPO_ROOT / "scripts" / "run_ab_initio.py"
-# Ledgers are written next to this test (NOT under tests/baselines/, which is
-# protected ground-truth from the OLD recovar publication and must not be
-# touched). Quality + perf baselines live INLINE in BASELINES below so they
-# are tracked in git, reviewed at PR time, and never accidentally bumped by a
-# bootstrap run.
-LEDGER_DIR = REPO_ROOT / "tests" / "em_parity_long"
-LEDGER_FILE = LEDGER_DIR / "initial_model_iter10_ledger.json"
+# Baselines stay inline below; results live in each case's temporary output.
 
 FIXTURE_BASE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj")
 PDB_K2_DIR = FIXTURE_BASE / "data_pdb_k2_5k_128"
@@ -117,16 +111,17 @@ def _require_paths(*paths: Path) -> None:
         pytest.skip("Missing fixture(s) for InitialModel iter-10 parity:\n  " + "\n  ".join(missing))
 
 
-def _write_ledger(payload: dict) -> None:
-    LEDGER_DIR.mkdir(parents=True, exist_ok=True)
+def _write_ledger(payload: dict, *, output_dir: Path) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ledger_file = output_dir / "initial_model_iter10_ledger.json"
     existing = {}
-    if LEDGER_FILE.exists():
+    if ledger_file.exists():
         try:
-            existing = json.loads(LEDGER_FILE.read_text())
+            existing = json.loads(ledger_file.read_text())
         except json.JSONDecodeError:
             existing = {}
     existing[payload["case"]] = payload
-    LEDGER_FILE.write_text(json.dumps(existing, indent=2, sort_keys=True) + "\n")
+    ledger_file.write_text(json.dumps(existing, indent=2, sort_keys=True) + "\n")
 
 
 def _log_comparison(label: str, current: float, baseline: float | None, lower_is_better: bool = False) -> None:
@@ -298,7 +293,7 @@ def test_initialmodel_iter10_parity(tmp_path, K, data_dir, relion_subdir, baseli
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "git_head": os.environ.get("RECOVAR_GIT_HEAD", ""),
     }
-    _write_ledger(payload)
+    _write_ledger(payload, output_dir=output_dir)
 
     if baseline_cc is not None:
         floor = float(baseline_cc) - MEAN_CC_DROP_TOL

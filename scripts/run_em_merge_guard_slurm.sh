@@ -119,15 +119,14 @@ KCLASS_SCRIPT="${SCRATCH_DIR}/em_merge_guard_kclass_fast.sh"
   cat <<EOF
 
 pixi run python -m pytest -v -s --run-slow --run-integration --run-gpu \\
+  --basetemp "${SCRATCH_DIR}/parity_results/kclass_\${SLURM_JOB_ID}" \\
   tests/integration/test_em_parity_fast.py::test_em_parity_fast_kclass_replay \\
   tests/integration/test_em_parity_fast.py::test_em_parity_fast_kclass_coldstart \\
   tests/integration/test_em_parity_fast.py::test_em_parity_fast_kclass_strict_coldstart \\
   tests/integration/test_em_parity_fast.py::test_em_parity_fast_kclass_strict_oversample_coldstart
 
-find "\${TMPDIR}" -name refinement_results.npz -print | tee "${SCRATCH_DIR}/kclass_refinement_npz_paths.txt"
-mkdir -p "${SCRATCH_DIR}/ledgers"
-cp tests/baselines/em_parity_quality_fast_ledger_kclass*.json "${SCRATCH_DIR}/ledgers/" 2>/dev/null || true
-pixi run python scripts/extract_em_parity_tables.py --tier fast | tee "${SCRATCH_DIR}/fast_tables.md"
+find "${SCRATCH_DIR}/parity_results" -name refinement_results.npz -print | tee "${SCRATCH_DIR}/kclass_refinement_npz_paths.txt"
+pixi run python scripts/extract_em_parity_tables.py --tier fast --ledger-root "${SCRATCH_DIR}/parity_results" | tee "${SCRATCH_DIR}/fast_tables.md"
 EOF
 } > "${KCLASS_SCRIPT}"
 chmod +x "${KCLASS_SCRIPT}"
@@ -188,7 +187,7 @@ find "${SCRATCH_DIR}" -maxdepth 3 -type f | sort
 echo
 
 echo "=== EM fast parity tables ==="
-pixi run python scripts/extract_em_parity_tables.py --tier fast || true
+pixi run python scripts/extract_em_parity_tables.py --tier fast --ledger-root "${SCRATCH_DIR}/parity_results" || true
 
 exit "\${failed}"
 EOF

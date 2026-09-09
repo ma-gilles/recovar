@@ -7,12 +7,17 @@ The two extractors target different test scopes and are intentionally kept
 separate (see recovar/em/CLAUDE.md "Testing" section).
 
 Usage:
-  pixi run python scripts/extract_em_parity_tables.py [--tier fast|long|all]
+  pixi run python scripts/extract_em_parity_tables.py --ledger-root /path/to/fresh/pytest-run [--tier fast|long|all]
 
 Reads:
-  tests/baselines/em_parity_quality_{fast,long}_ledger_*.json
+  <ledger-root>/**/em_parity_quality_{fast,long}_ledger_*.json
   tests/baselines/em_parity_quality_{fast,long}_baseline.json   (optional)
   tests/baselines/em_parity_perf_{fast,long}_baseline.json      (optional)
+
+Without --ledger-root, read historical ledgers directly from tests/baselines.
+An explicit root never falls back to historical results. Duplicate ledger names
+are rejected; select a single run. Tables report recorded metrics, not scientific
+acceptance or proof that every required test executed.
 
 Writes:
   Markdown tables to stdout. Paste directly into PR description.
@@ -36,6 +41,21 @@ def _load_json(path: Path) -> dict | None:
         return json.loads(path.read_text())
     except json.JSONDecodeError:
         return None
+
+
+def _load_ledger(root: Path | None, name: str) -> dict | None:
+    if root is None:
+        return _load_json(BASELINES_DIR / name)
+    matches = sorted(root.rglob(name))
+    if len(matches) > 1:
+        raise ValueError(f"Ambiguous ledger {name}: {matches}")
+    if not matches:
+        return None
+    # Unlike optional historical baselines, corrupt current results are errors.
+    payload = json.loads(matches[0].read_text())
+    if not isinstance(payload, dict):
+        raise ValueError(f"Ledger must contain an object: {matches[0]}")
+    return payload
 
 
 def _delta_status(
@@ -111,13 +131,13 @@ def _emit_perf_rows(prefix: str, ledger: dict, baseline: dict) -> int:
     return rendered
 
 
-def emit_fast_tier() -> int:
+def emit_fast_tier(ledger_root: Path | None = None) -> int:
     """Emit the fast-tier table. Returns number of metrics rendered."""
-    k1_ledger = _load_json(BASELINES_DIR / "em_parity_quality_fast_ledger_k1_replay.json")
-    kclass_ledger = _load_json(BASELINES_DIR / "em_parity_quality_fast_ledger_kclass_replay.json")
-    kclass_coldstart_ledger = _load_json(BASELINES_DIR / "em_parity_quality_fast_ledger_kclass_coldstart.json")
-    kclass_strict_ledger = _load_json(BASELINES_DIR / "em_parity_quality_fast_ledger_kclass_strict.json")
-    kclass_strict_os1_ledger = _load_json(BASELINES_DIR / "em_parity_quality_fast_ledger_kclass_strict_os1.json")
+    k1_ledger = _load_ledger(ledger_root, "em_parity_quality_fast_ledger_k1_replay.json")
+    kclass_ledger = _load_ledger(ledger_root, "em_parity_quality_fast_ledger_kclass_replay.json")
+    kclass_coldstart_ledger = _load_ledger(ledger_root, "em_parity_quality_fast_ledger_kclass_coldstart.json")
+    kclass_strict_ledger = _load_ledger(ledger_root, "em_parity_quality_fast_ledger_kclass_strict.json")
+    kclass_strict_os1_ledger = _load_ledger(ledger_root, "em_parity_quality_fast_ledger_kclass_strict_os1.json")
     baseline = _load_json(BASELINES_DIR / "em_parity_quality_fast_baseline.json") or {}
     ledgers = [
         k1_ledger,
@@ -212,11 +232,11 @@ def emit_fast_tier() -> int:
     return rendered
 
 
-def emit_long_tier() -> int:
+def emit_long_tier(ledger_root: Path | None = None) -> int:
     """Emit the long-tier table. Returns number of metrics rendered."""
-    k1_ledger = _load_json(BASELINES_DIR / "em_parity_quality_long_ledger_k1_long.json")
-    k1_native_ledger = _load_json(BASELINES_DIR / "em_parity_quality_long_ledger_k1_native_initialmodel.json")
-    kclass_ledger = _load_json(BASELINES_DIR / "em_parity_quality_long_ledger_kclass_long.json")
+    k1_ledger = _load_ledger(ledger_root, "em_parity_quality_long_ledger_k1_long.json")
+    k1_native_ledger = _load_ledger(ledger_root, "em_parity_quality_long_ledger_k1_native_initialmodel.json")
+    kclass_ledger = _load_ledger(ledger_root, "em_parity_quality_long_ledger_kclass_long.json")
     baseline = _load_json(BASELINES_DIR / "em_parity_quality_long_baseline.json") or {}
 
     if not k1_ledger and not k1_native_ledger and not kclass_ledger:
@@ -320,16 +340,19 @@ def main() -> int:
         default="all",
         help="Which tier to emit. Default: all",
     )
+    parser.add_argument("--ledger-root", type=Path, help="One run directory, searched recursively for ledgers")
     args = parser.parse_args()
+    if args.ledger_root is not None and not args.ledger_root.is_dir():
+        parser.error(f"Ledger root is not a directory: {args.ledger_root}")
 
     n_fast = 0
     n_long = 0
     if args.tier in ("fast", "all"):
-        n_fast = emit_fast_tier()
+        n_fast = emit_fast_tier(args.ledger_root)
         if args.tier == "all":
             print()
     if args.tier in ("long", "all"):
-        n_long = emit_long_tier()
+        n_long = emit_long_tier(args.ledger_root)
 
     return 0 if (n_fast + n_long) > 0 else 1
 

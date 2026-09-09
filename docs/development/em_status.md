@@ -50,6 +50,18 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
+EM parity result isolation: fast/long and InitialModel cases now write ledgers
+beside their temporary outputs. Slurm/merge-guard reporting reads the explicit
+run root; the extractor rejects duplicate or malformed current ledgers without
+falling back to historical results. Baselines, metrics and assertions are unchanged.
+54 CPU cases pass; disposable summary checks reject missing/duplicate/corrupt
+results, and four generated shell scripts pass syntax checks. No jobs were submitted.
+Use a **fresh** pytest `--basetemp` directory (pytest clears that directory), then
+`python scripts/extract_em_parity_tables.py --ledger-root <run-root> --tier all`.
+Legacy correlation gates and incomplete metric coverage still need separate review;
+this change establishes output isolation, not scientific acceptance.
+[Checks, commands and limits](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/parity_ledger_isolation_20260909/result.json).
+
 The earlier power-class CPU negative-control failure is a demonstrated fixture
 defect:32x32 scales by an exact power of two, so normalization order need not
 produce different values. The randomized independent-reference assertion remains;

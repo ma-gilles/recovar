@@ -41,7 +41,6 @@ PARITY_SCRIPT = REPO_ROOT / "scripts" / "run_multi_iter_parity.py"
 KCLASS_SCRIPT = REPO_ROOT / "scripts" / "run_k_class_parity.py"
 REFINE_SCRIPT = REPO_ROOT / "scripts" / "run_full_refinement.py"
 ABINITIO_SCRIPT = REPO_ROOT / "scripts" / "run_ab_initio.py"
-BASELINES_DIR = REPO_ROOT / "tests" / "baselines"
 
 FIXTURE_BASE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj")
 
@@ -88,9 +87,9 @@ def _assert_parity_ancestors_or_skip() -> None:
         pytest.fail(str(exc))
 
 
-def _write_quality_ledger(name: str, payload: dict) -> Path:
-    BASELINES_DIR.mkdir(parents=True, exist_ok=True)
-    ledger_path = BASELINES_DIR / f"em_parity_quality_long_ledger_{name}.json"
+def _write_quality_ledger(name: str, payload: dict, *, output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ledger_path = output_dir / f"em_parity_quality_long_ledger_{name}.json"
     payload = dict(payload)
     payload.setdefault("timestamp", time.strftime("%Y-%m-%dT%H:%M:%S"))
     with ledger_path.open("w") as f:
@@ -350,7 +349,7 @@ def test_em_parity_long_k1_full(tmp_path):
         "k1_long_recovar_perf_ledger_path": str(perf_ledger_path),
         "k1_long_recovar_timing_dir": str(timing_dir),
     }
-    ledger = _write_quality_ledger("k1_long", payload)
+    ledger = _write_quality_ledger("k1_long", payload, output_dir=output_dir)
     logger.info("K=1 long ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)
@@ -520,7 +519,7 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
         "k1_native_initialmodel_vdam_vs_relion_it008_shell_0143": relion_map_similarity["shell_0143"],
         "k1_native_initialmodel_relion_iter_walltimes_s": _relion_iter_walltimes_s(K1_NATIVE_RELION_DIR),
     }
-    ledger = _write_quality_ledger("k1_native_initialmodel", payload)
+    ledger = _write_quality_ledger("k1_native_initialmodel", payload, output_dir=output_dir)
     logger.info("K=1 native InitialModel ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)
@@ -636,7 +635,7 @@ def test_em_parity_long_kclass_full(tmp_path):
         "kclass_long_walltime_s": elapsed,
         "kclass_long_target_iter": final_iter,
     }
-    ledger = _write_quality_ledger("kclass_long", payload)
+    ledger = _write_quality_ledger("kclass_long", payload, output_dir=output_dir)
     logger.info("K-class long ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)
