@@ -11,6 +11,8 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
+from recovar.em.dense_single_volume.helpers import relion_ctf
+
 pytestmark = pytest.mark.unit
 
 
@@ -1128,7 +1130,7 @@ def test_compact_projection_window_positions_map_full_indices_to_compact_rows():
 def test_exact_relion_ctf_source_defaults_to_dataset_star(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    from recovar.em.dense_single_volume.helpers.relion_ctf import (
         _relion_exact_ctf_source_star,
     )
 
@@ -1154,8 +1156,6 @@ def test_exact_relion_ctf_source_exposes_host_and_shared_device_boundaries(
     tmp_path,
 ):
     from types import SimpleNamespace
-
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
 
     class Rows:
         def __init__(self, rows):
@@ -1186,12 +1186,12 @@ def test_exact_relion_ctf_source_exposes_host_and_shared_device_boundaries(
         "rlnImagePixelSize": 1.5,
     }
     monkeypatch.setattr(
-        sparse_pass2_bucketed,
+        relion_ctf,
         "_relion_exact_ctf_source_star",
         lambda _dataset: source,
     )
     monkeypatch.setitem(
-        sparse_pass2_bucketed._RELION_EXACT_CTF_SOURCE_CACHE,
+        relion_ctf._RELION_EXACT_CTF_SOURCE_CACHE,
         cache_key,
         {
             "particles": Rows([particle]),
@@ -1205,18 +1205,18 @@ def test_exact_relion_ctf_source_exposes_host_and_shared_device_boundaries(
     )
 
     pixel_indices = np.asarray([11, 0, 4, 4], dtype=np.int32)
-    compact_result = sparse_pass2_bucketed._relion_exact_ctf_half_from_source_star_host(
+    compact_result = relion_ctf._relion_exact_ctf_half_from_source_star_host(
         dataset,
         np.asarray([0, 0], dtype=np.int32),
         (4, 4),
         pixel_indices=pixel_indices,
     )
-    host_result = sparse_pass2_bucketed._relion_exact_ctf_half_from_source_star_host(
+    host_result = relion_ctf._relion_exact_ctf_half_from_source_star_host(
         dataset,
         np.asarray([0], dtype=np.int32),
         (4, 4),
     )
-    device_result = sparse_pass2_bucketed._relion_exact_ctf_half_from_source_star(
+    device_result = relion_ctf._relion_exact_ctf_half_from_source_star(
         dataset,
         np.asarray([0], dtype=np.int32),
         (4, 4),
@@ -1237,7 +1237,7 @@ def test_exact_relion_ctf_source_exposes_host_and_shared_device_boundaries(
     # A compact result must not expose writable aliases of the cached full CTF.
     compact_result[:] = 99.0
     np.testing.assert_array_equal(
-        sparse_pass2_bucketed._relion_exact_ctf_half_from_source_star_host(
+        relion_ctf._relion_exact_ctf_half_from_source_star_host(
             dataset,
             np.asarray([0], dtype=np.int32),
             (4, 4),
@@ -3599,16 +3599,14 @@ def test_relion_powerclass_fails_closed_without_gpu(monkeypatch):
 def test_exact_ctf_compact_indices_reject_invalid_host_geometry(monkeypatch, tmp_path, bad_indices):
     from types import SimpleNamespace
 
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse
-
     source = (tmp_path / "particles.star").resolve()
-    monkeypatch.setattr(sparse, "_relion_exact_ctf_source_star", lambda _: source)
+    monkeypatch.setattr(relion_ctf, "_relion_exact_ctf_source_star", lambda _: source)
     monkeypatch.setitem(
-        sparse._RELION_EXACT_CTF_SOURCE_CACHE, (str(source), (4, 4)), {"images": {0: np.ones(12, dtype=np.float64)}}
+        relion_ctf._RELION_EXACT_CTF_SOURCE_CACHE, (str(source), (4, 4)), {"images": {0: np.ones(12, dtype=np.float64)}}
     )
     dataset = SimpleNamespace(original_image_indices_from_local=lambda indices: indices)
     with pytest.raises(ValueError):
-        sparse._relion_exact_ctf_half_from_source_star_host(
+        relion_ctf._relion_exact_ctf_half_from_source_star_host(
             dataset,
             np.asarray([0]),
             (4, 4),
@@ -3619,21 +3617,19 @@ def test_exact_ctf_compact_indices_reject_invalid_host_geometry(monkeypatch, tmp
 def test_exact_ctf_compact_indices_never_materialize_device_inputs(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse
-
     class DeviceOnly:
         def __array__(self, *args, **kwargs):
             raise AssertionError("Unexpected device-to-host materialization")
 
     source = (tmp_path / "particles.star").resolve()
-    monkeypatch.setattr(sparse, "_relion_exact_ctf_source_star", lambda _: source)
+    monkeypatch.setattr(relion_ctf, "_relion_exact_ctf_source_star", lambda _: source)
     monkeypatch.setitem(
-        sparse._RELION_EXACT_CTF_SOURCE_CACHE, (str(source), (4, 4)), {"images": {0: np.ones(12, dtype=np.float64)}}
+        relion_ctf._RELION_EXACT_CTF_SOURCE_CACHE, (str(source), (4, 4)), {"images": {0: np.ones(12, dtype=np.float64)}}
     )
     dataset = SimpleNamespace(original_image_indices_from_local=lambda indices: indices)
     for indices in (DeviceOnly(), jnp.asarray([0], dtype=jnp.int32)):
         with pytest.raises(TypeError, match="host NumPy array"):
-            sparse._relion_exact_ctf_half_from_source_star_host(
+            relion_ctf._relion_exact_ctf_half_from_source_star_host(
                 dataset,
                 np.asarray([0]),
                 (4, 4),

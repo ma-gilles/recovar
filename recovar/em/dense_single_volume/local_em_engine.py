@@ -17,6 +17,7 @@ import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
+from recovar.em.dense_single_volume.helpers import relion_ctf
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
 from recovar.em.dense_single_volume.deferred_noise_pack import pack_noise_pixel_capacity
@@ -4101,7 +4102,7 @@ def _prepare_local_exact_bucket(
     ctf_t0 = time.time()
     if relion_exact_bpref_operands:
         ctf_rfloat = np.asarray(
-            sparse_pass2_bucketed._relion_exact_ctf_half_from_source_star_host(
+            relion_ctf._relion_exact_ctf_half_from_source_star_host(
                 experiment_dataset,
                 image_indices,
                 config.image_shape,
@@ -6092,7 +6093,7 @@ def run_local_em_exact(
             bucket_image_indices = np.asarray(unpadded_bucket.image_indices, dtype=np.int32)
             if relion_exact_bpref_operands:
                 ctf_rfloat_unpadded = np.asarray(
-                    sparse_pass2_bucketed._relion_exact_ctf_half_from_source_star_host(
+                    relion_ctf._relion_exact_ctf_half_from_source_star_host(
                         experiment_dataset,
                         bucket_image_indices,
                         image_shape,

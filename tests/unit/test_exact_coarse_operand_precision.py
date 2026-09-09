@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume.helpers import significance, sparse_pass2_bucketed
+from recovar.em.dense_single_volume.helpers import relion_ctf, significance, sparse_pass2_bucketed
 
 pytestmark = pytest.mark.unit
 
@@ -34,7 +34,7 @@ def test_exact_coarse_assembly_precision_and_padding(
         active_mask[3] = False  # Repeated score position used as inactive padding.
     scale_operand = jnp.asarray(scales[:, None], dtype=real_dtype)
     monkeypatch.setattr(
-        sparse_pass2_bucketed,
+        relion_ctf,
         "_relion_exact_ctf_half_from_source_star_host",
         lambda *_args, pixel_indices: ctf[:, pixel_indices],
     )

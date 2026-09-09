@@ -2892,11 +2892,13 @@ def _assemble_relion_exact_coarse_gaussian_operands(
     """Assemble the single exact-source operand set without generic formulas."""
 
     from recovar import cuda_backproject
+    from recovar.em.dense_single_volume.helpers.relion_ctf import (
+        _relion_exact_ctf_half_from_source_star_host,
+    )
     from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
         _relion_cuda_corr_img_from_native_noise_variance,
         _relion_cuda_corr_img_from_rfloat_ctf,
         _relion_cuda_pixel_correction_from_rfloat_ctf,
-        _relion_exact_ctf_half_from_source_star_host,
         _relion_translation_angles_f32,
         _relion_translation_angles_f64,
     )
@@ -4882,11 +4884,13 @@ def _compute_k_class_significance_batched(
         from recovar.em.dense_single_volume.helpers.projection import (
             relion_projector_half_to_texture_full,
         )
+        from recovar.em.dense_single_volume.helpers.relion_ctf import (
+            _relion_exact_ctf_half_from_source_star,
+        )
         from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
             _relion_cuda_corr_img_from_rfloat_ctf,
             _relion_cuda_pixel_correction_from_rfloat_ctf,
             _relion_cuda_powerclass_highres_xi2_half,
-            _relion_exact_ctf_half_from_source_star,
             _relion_translation_angles_f32,
         )
 
@@ -5216,10 +5220,12 @@ def _compute_k_class_significance_batched(
         from recovar.em.dense_single_volume.helpers.projection import (
             relion_projector_half_to_texture_full,
         )
+        from recovar.em.dense_single_volume.helpers.relion_ctf import (
+            _relion_exact_ctf_half_from_source_star,
+        )
         from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
             _relion_cuda_corr_img_from_rfloat_ctf,
             _relion_cuda_pixel_correction_from_rfloat_ctf,
-            _relion_exact_ctf_half_from_source_star,
             _relion_translation_angles_f32,
         )
 

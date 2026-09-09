@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume.helpers import coarse_publication as pub
+from recovar.em.dense_single_volume.helpers import relion_ctf
 from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
     CoarseGemmHybridBlockSelection,
     assemble_coarse_gemm_hybrid_compact_scores_f32,
@@ -274,7 +275,7 @@ def test_actual_significance_engine_publishes_identical_complete_state(
     monkeypatch.setattr(oversampling, "relion_cuda_f32_coarse_posterior", pub.relion_cuda_f32_coarse_posterior)
     for name in ("_relion_exact_ctf_half_from_source_star", "_relion_exact_ctf_half_from_source_star_host"):
         monkeypatch.setattr(
-            sparse,
+            relion_ctf,
             name,
             lambda _dataset, indices, image_shape, *, pixel_indices=None: np.ones(
                 (len(indices), 12 if pixel_indices is None else len(pixel_indices)), np.float64

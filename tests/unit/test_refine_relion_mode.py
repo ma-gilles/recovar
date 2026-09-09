@@ -34,6 +34,7 @@ import recovar.reconstruction.regularization as regularization_module
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.dense_single_volume.helpers import dtype_policy as dtype_policy_module
+from recovar.em.dense_single_volume.helpers import relion_ctf
 from recovar.em.dense_single_volume.helpers.types import DenseEMResult, LocalEMResult
 from recovar.em.dense_single_volume.em_engine import _batch_parameter_rows, run_em
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch as _fetch_indexed_batch
@@ -5991,7 +5992,6 @@ def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(
 ):
     import recovar.cuda_backproject as cuda_backproject
     import recovar.em.dense_single_volume.local_em_engine as local_engine_module
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
 
     dataset = MockDataset(1, rng)
     config = ForwardModelConfig.from_dataset(
@@ -6008,7 +6008,7 @@ def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(
     noise_f64 = np.linspace(0.7, 2.3, n_half, dtype=np.float64)
 
     monkeypatch.setattr(
-        sparse_pass2_bucketed,
+        relion_ctf,
         "_relion_exact_ctf_half_from_source_star_host",
         lambda *_args, **_kwargs: ctf_rfloat,
     )
@@ -12818,7 +12818,6 @@ class TestRelionModeSmokeTest:
         import recovar.em.dense_single_volume.helpers.projection as projection_module
         import recovar.em.dense_single_volume.helpers.scoring as scoring_module
         import recovar.em.dense_single_volume.helpers.significance as significance_module
-        import recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed as sparse_module
 
         dataset = half_datasets[0]
         dataset.image_source.backend.relion_fourier_backend = "relion_cuda"
@@ -12837,7 +12836,7 @@ class TestRelionModeSmokeTest:
         monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: True)
         monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: True)
         monkeypatch.setattr(
-            sparse_module,
+            relion_ctf,
             "_relion_exact_ctf_half_from_source_star",
             lambda _dataset, indices, image_shape: jnp.ones(
                 (

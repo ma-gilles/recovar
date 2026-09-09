@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import scoring, significance
+from recovar.em.dense_single_volume.helpers import relion_ctf, scoring, significance
 from recovar.em.dense_single_volume.helpers.coarse_gemm_streaming import (
     COARSE_GEMM_STREAMING_SCHEMA,
 )
@@ -1288,7 +1288,7 @@ def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
     monkeypatch.setattr(significance.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: True)
     monkeypatch.setattr(
-        sparse_pass2_bucketed,
+        relion_ctf,
         "_relion_exact_ctf_half_from_source_star",
         lambda _dataset, indices, image_shape: jnp.ones(
             (
@@ -1299,7 +1299,7 @@ def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
         ),
     )
     monkeypatch.setattr(
-        sparse_pass2_bucketed,
+        relion_ctf,
         "_relion_exact_ctf_half_from_source_star_host",
         lambda _dataset, indices, image_shape, *, pixel_indices=None: np.ones(
             (
@@ -1559,7 +1559,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         fake_fused_projector,
     )
     monkeypatch.setattr(
-        sparse_pass2_bucketed,
+        relion_ctf,
         "_relion_exact_ctf_half_from_source_star",
         lambda _dataset, indices, image_shape: jnp.ones(
             (
@@ -1570,7 +1570,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         ),
     )
     monkeypatch.setattr(
-        sparse_pass2_bucketed,
+        relion_ctf,
         "_relion_exact_ctf_half_from_source_star_host",
         lambda _dataset, indices, image_shape, *, pixel_indices=None: np.ones(
             (
@@ -2327,7 +2327,7 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
     monkeypatch.setattr(significance.jax, "default_backend", lambda: "gpu")
     monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: True)
     monkeypatch.setattr(
-        sparse_pass2_bucketed,
+        relion_ctf,
         "_relion_exact_ctf_half_from_source_star",
         lambda _dataset, indices, image_shape: jnp.ones(
             (len(indices), int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)),
@@ -2335,7 +2335,7 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
         ),
     )
     monkeypatch.setattr(
-        sparse_pass2_bucketed,
+        relion_ctf,
         "_relion_exact_ctf_half_from_source_star_host",
         lambda _dataset, indices, image_shape, *, pixel_indices=None: np.ones(
             (
