@@ -1,7 +1,5 @@
 """Nonfinite-score guardrails for exact-local EM's big-JIT normalizer."""
 
-import inspect
-
 import numpy as np
 import pytest
 
@@ -245,16 +243,6 @@ def test_bpref_capture_rebuilds_relion_f32_mstep_probs_not_generic_debug_probs()
     assert np.asarray(captured).dtype == np.float32
     np.testing.assert_array_equal(np.asarray(captured), np.asarray(expected_probs))
     assert not np.array_equal(np.asarray(captured), np.asarray(generic_probs))
-
-
-def test_local_em_engine_normcorr_full_box_current_size_guard():
-    """Full-box local passes use current_size=None and must not divide it by two."""
-    source = inspect.getsource(local_em_engine.run_local_em_exact)
-
-    assert "norm_unweighted_shell_cutoff = image_shape[0] // 2 if current_size is None else int(current_size // 2)" in source
-    assert source.count("_noise_image_power_shells_and_per_image(") == 2
-    assert source.count("shell_count=n_shells") == 2
-    assert "jnp.asarray(shell_indices_half) > int(current_size // 2)" not in source
 
 
 def test_compute_noise_block_zero_weight_nonfinite_projection_is_zero():

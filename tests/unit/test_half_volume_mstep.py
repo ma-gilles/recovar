@@ -321,8 +321,8 @@ def test_enforce_half_volume_x0_can_force_host_path(monkeypatch):
     np.testing.assert_allclose(got_ctf, expected_ctf, rtol=1e-6, atol=1e-6)
 
 
-def test_relion_x_half_production_allocators_use_current_size_backprojector_shape():
-    from recovar.em.dense_single_volume import k_class, local_em_engine
+def test_relion_x_half_sparse_allocators_use_current_size_backprojector_shape():
+    from recovar.em.dense_single_volume import k_class
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
 
     def assert_uses_current_size_shape(fn):
@@ -348,7 +348,6 @@ def test_relion_x_half_production_allocators_use_current_size_backprojector_shap
             if "reconstruction_padding_factor" in call or 'common["reconstruction_padding_factor"]' in call:
                 assert uses_explicit_current_size(call)
 
-    assert_uses_current_size_shape(local_em_engine.run_local_em_exact)
     assert_uses_current_size_shape(sparse_pass2_bucketed.compute_pass2_stats_sparse_bucketed)
     assert_uses_current_size_shape(sparse_pass2_bucketed.compute_k_class_pass2_stats_sparse_fused)
     assert_uses_current_size_shape(k_class._run_sparse_k_class_adaptive_pass2)

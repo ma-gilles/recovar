@@ -46,7 +46,8 @@ def test_unsupported_route_rejected_before_dataset_access(monkeypatch):
         )
 
 
-def test_helper_masks_rows_before_queue_and_shares_actual_device_context(monkeypatch):
+@pytest.mark.parametrize("queued", [False, True], ids=["immediate", "queued"])
+def test_helper_masks_rows_before_projector_dispatch(monkeypatch, queued):
     signature = inspect.signature(cuda_backproject.relion_vdam_mstep_fused_projector_x_half)
     calls = []
 
@@ -55,7 +56,7 @@ def test_helper_masks_rows_before_queue_and_shares_actual_device_context(monkeyp
         bound.apply_defaults()
         values = dict(bound.arguments)
         calls.append(values)
-        assert values["return_denominator"] is False
+        assert values["return_denominator"] is (not queued)
         return (
             values["data_volume"] + jnp.sum(values["posterior_over_weight_norm"]),
             values["weight_volume"] + values["images"].shape[0],
@@ -63,7 +64,7 @@ def test_helper_masks_rows_before_queue_and_shares_actual_device_context(monkeyp
         )
 
     monkeypatch.setattr(cuda_backproject, "relion_vdam_mstep_fused_projector_x_half", callback)
-    queue = BprefTransactionQueue()
+    queue = BprefTransactionQueue() if queued else None
     data = jnp.zeros(1, jnp.complex64)
     weight = jnp.zeros(1, jnp.float32)
     shared = dict(
@@ -95,11 +96,27 @@ def test_helper_masks_rows_before_queue_and_shares_actual_device_context(monkeyp
             transaction_queue=queue,
             **shared,
         )
-    assert not calls
-    data, weight, _ = queue.flush(data, weight)
-    assert len(calls) == 1
+    if queued:
+        assert not calls
+        data, weight, _ = queue.flush(data, weight)
+        assert len(calls) == 1
+        np.testing.assert_array_equal(np.asarray(calls[0]["worker_lane_ids"]), [0, 1, 0, 1])
+        assert calls[0]["parallel_worker_replay"] is False
+    else:
+        assert len(calls) == 2
+        for call in calls:
+            assert call["worker_lane_ids"] is None
+            assert call["parallel_worker_replay"] is None
     expected = np.tile(np.asarray([[[1, 1], [0, 0]], [[1, 1], [1, 1]]], np.float32), (2, 1, 1))
-    assert np.asarray(calls[0]["posterior_over_weight_norm"]).tobytes() == expected.tobytes()
-    np.testing.assert_array_equal(np.asarray(calls[0]["worker_lane_ids"]), [0, 1, 0, 1])
-    assert calls[0]["parallel_worker_replay"] is False
+    actual = np.concatenate([np.asarray(call["posterior_over_weight_norm"]) for call in calls])
+    assert actual.tobytes() == expected.tobytes()
+    for call in calls:
+        assert call["image_shape"] == shared["image_shape"]
+        assert call["volume_shape"] == shared["volume_shape"]
+        assert call["max_r"] == shared["max_r"]
+        assert call["logical_current_size"] == shared["logical_current_size"]
+        assert call["projector_max_r"] == shared["projector_r_max"]
+        np.testing.assert_array_equal(call["projector_full"], shared["projector_full"])
+        np.testing.assert_array_equal(call["pixel_indices"], shared["pixel_indices"])
+        np.testing.assert_array_equal(call["stable_dense_positions"], shared["stable_dense_positions"])
     assert data[0] == 12 and weight[0] == 4

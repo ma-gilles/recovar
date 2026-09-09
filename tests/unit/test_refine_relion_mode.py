@@ -8816,11 +8816,6 @@ def test_local_big_jit_source_ordered_vdam_mstep_is_strictly_guarded():
         "packed_rotations_np, particle_start, particle_stop",
     ):
         assert route_guard in engine_src
-    accumulator_src = inspect.getsource(
-        local_em_engine._accumulate_relion_vdam_physical_particle_grid
-    )
-    assert "cuda_backproject.relion_vdam_mstep_fused_projector_x_half(" in accumulator_src
-
     source_capture_block = engine_src[
         engine_src.index("elif return_big_jit_mstep_tensors and return_source_vdam_operands:") :
         engine_src.index("elif return_big_jit_mstep_tensors:", engine_src.index("elif return_big_jit_mstep_tensors and return_source_vdam_operands:"))
@@ -9073,6 +9068,54 @@ def _sparse_big_jit_local_case(rng):
     return dataset, mean, mean_variance, noise_variance, local_layout
 
 
+@pytest.mark.parametrize(
+    "stable,current_size,reconstruction_size,expected_sizes,expected_shapes",
+    [
+        (False, None, None, (8, 8), (19, 19)),
+        (False, 6, None, (6, 6), (15, 15)),
+        (False, 6, 4, (4, 4), (11, 11)),
+        (True, 4, None, (4, 6), (11, 15)),
+        (True, 6, None, (6, 6), (15, 15)),
+        (True, None, None, (8, 8), (19, 19)),
+    ],
+)
+def test_local_bpref_plans_logical_and_physical_shapes(
+    monkeypatch, rng, stable, current_size, reconstruction_size, expected_sizes, expected_shapes,
+):
+    from recovar.em.dense_single_volume import local_em_engine as engine
+
+    case = _sparse_big_jit_local_case(rng)
+    original = engine.relion_backprojector_volume_shape
+    calls = []
+
+    class ShapesCaptured(Exception):
+        pass
+
+    def observe(volume_shape, padding_factor, *, current_size):
+        assert volume_shape == (8, 8, 8)
+        assert padding_factor == 2
+        shape = original(volume_shape, padding_factor, current_size=current_size)
+        calls.append((current_size, shape))
+        if len(calls) == 2:
+            # Stop at allocation planning, before any native scoring or scatter.
+            raise ShapesCaptured
+        return shape
+
+    monkeypatch.setattr(engine, "relion_backprojector_volume_shape", observe)
+    with pytest.raises(ShapesCaptured):
+        engine.run_local_em_exact(
+            *case, "linear_interp", image_batch_size=2, rotation_block_size=8,
+            current_size=current_size, reconstruction_current_size=reconstruction_size,
+            reconstruction_padding_factor=2, mstep_relion_x_half=True,
+            stable_fourier_window_shapes=stable,
+            relion_exact_fine_diff2=True, relion_exact_bpref_operands=True,
+            relion_wavg_sequential_cuda=True, accumulate_noise=True,
+            preserve_bpref_particle_order=True, half_spectrum_scoring=True,
+            relion_projector_half=jnp.zeros((5, 5, 3), dtype=jnp.complex64),
+        )
+    assert calls == [(size, (side,) * 3) for size, side in zip(expected_sizes, expected_shapes)]
+
+
 def _assert_significance_stats_allclose(actual, expected):
     """Compare every statistic, including the nonnumeric selector audit."""
     assert actual.keys() == expected.keys()
@@ -9315,6 +9358,40 @@ def test_run_local_em_exact_over_cap_significant_support_defaults_to_deferred_bi
     np.testing.assert_allclose(np.asarray(deferred.Ft_ctf), np.asarray(sparse.Ft_ctf), rtol=1e-5, atol=1e-6)
     _assert_relion_stats_allclose(deferred.stats, sparse.stats)
     _assert_noise_stats_allclose(deferred.noise_stats, sparse.noise_stats)
+
+
+@pytest.mark.parametrize("deferred", [False, True], ids=["ordinary", "deferred"])
+@pytest.mark.parametrize("current_size,expected_cutoff", [(None, 4), (6, 3)])
+def test_local_noise_calls_use_logical_cutoff(monkeypatch, rng, deferred, current_size, expected_cutoff):
+    from recovar.em.dense_single_volume import local_em_engine as engine
+
+    case = _sparse_big_jit_local_case(rng)
+    for key in ("RECOVAR_LOCAL_SCORE_DUMP_DIR", "RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES",
+                EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", "0" if deferred else "1")
+    monkeypatch.setenv(EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV, "0")
+    original = engine._noise_image_power_shells_and_per_image
+    calls = []
+
+    def observe(*args, **kwargs):
+        assert args[4] == expected_cutoff
+        assert kwargs["shell_count"] == 5
+        calls.append((args[0].shape[0], kwargs["current_size"]))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(engine, "_noise_image_power_shells_and_per_image", observe)
+    result = engine.run_local_em_exact(
+        *case, "linear_interp", image_batch_size=2, rotation_block_size=8,
+        current_size=current_size, accumulate_noise=True,
+        reconstruct_significant_only=True, return_profile=True,
+        score_with_masked_images=False, half_spectrum_scoring=False,
+        max_significants=-1,
+    )
+    assert calls == [(2, current_size), (1, current_size)]
+    assert int(result.profile["big_jit_bucket_count"]) == (2 if deferred else 0)
+    assert np.all(np.isfinite(result.noise_stats.wsum_norm_correction))
+    assert np.any(result.noise_stats.wsum_norm_correction > 0)
 
 
 @pytest.mark.parametrize("deferred", [False, True])
