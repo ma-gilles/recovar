@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from recovar.em import sampling
-from recovar.em.dense_single_volume import k_class, k_class_results
+from recovar.em.dense_single_volume import k_class, k_class_inputs, k_class_results
 from recovar.em.dense_single_volume import local_em_engine as engine
 from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
     _prepare_per_image_pass2_inputs,
@@ -39,10 +39,10 @@ def test_class_prior_override_preserves_source_eulers(dtype, with_source):
         translation_grid=np.zeros((1, 2), dtype), translation_log_priors=np.zeros((1, 1), dtype),
         source_eulers_flat=source,
     )
-    assert k_class._local_layout_for_class(layout, None, 0, 4) is layout
+    assert k_class_inputs._local_layout_for_class(layout, None, 0, 4) is layout
     priors = np.arange(4, dtype=dtype).reshape(4, 1)
     for class_id in range(4):
-        result = k_class._local_layout_for_class(layout, priors, class_id, 4)
+        result = k_class_inputs._local_layout_for_class(layout, priors, class_id, 4)
         assert result.source_eulers_flat is source
         assert result.rotations_flat is layout.rotations_flat
         np.testing.assert_array_equal(result.rotation_log_priors_flat, priors[class_id])

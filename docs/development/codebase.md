@@ -110,6 +110,9 @@ reporting imports the planning owner directly. Layout padding stays in
 including the all-device `nvidia-smi` query; it is not a visibility-aware probe.
 [`k_class`](../../recovar/em/dense_single_volume/k_class.py) supplies dense,
 adaptive and local K-class orchestration.
+[`k_class_inputs`](../../recovar/em/dense_single_volume/k_class_inputs.py) owns
+class-axis validation, shared/per-class array selection and local prior layouts.
+It imports no execution engines; engine-specific keyword filtering stays in `k_class`.
 [`k_class_results`](../../recovar/em/dense_single_volume/k_class_results.py) owns
 the shared result type, joint result assembly and host/device publication.
 Accumulator offloading and scheduling stay in the orchestrator.

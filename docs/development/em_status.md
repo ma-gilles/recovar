@@ -50,6 +50,17 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
+K-class input preparation now has an explicit `k_class_inputs.py` owner: eight
+unchanged validators/selectors leave scheduling; two unused projector lookups are
+removed. The scheduler loses124 lines; net production grows21 lines for the owner.
+Baseline and candidate each pass122 CPU cases with the same three missing-native
+binding skips;38 guard cases pass, including engine-free helper imports. Source
+Euler tests and all moved function bodies are unchanged after import migration.
+A separate probe confirms the existing class-prior layout path clears an optional
+M-step rotation override. Its intended semantics/production reachability need
+correctness review; this extraction preserves that behavior and source Euler metadata.
+[Checks, provenance and open finding](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k_class_input_owner_20260909/result.json).
+
 Parity reporting now covers all seven fast cases and all three long cases with an
 explicit finite summary-metric inventory, required launcher cases, and K2/K4
 per-class rows. It preserves the previous25 scalar rows and adds14 omitted rows;
