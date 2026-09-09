@@ -32,7 +32,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | `a392cd145`: K1 raw-operand schema shared by selected/full dumps; sparse scorer 17,780 lines, half scorer 1,358, controller 6,123 |
+| Latest production cleanup | `6ae78f029`: K-class capture staging moved to its diagnostic owners; sparse scorer 17,579 lines, half scorer 1,358, controller 6,123 |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -74,9 +74,10 @@ hashes were independently checked. No quality acceptance or source adoption.
 
 The full small-fixture old/new runtime ratio is 1.009965×; prepared E is 1.056075×.
 Neither measures current representative runtime. Preserve frozen fe847, its native
-libraries and all failed/superseded diagnostics. VDAM has no shared source writer;
-future numerical admission requires a separate review of the remaining state/tie
-and source/native gates. No duplicate peer GPU experiment is assigned.
+libraries and all failed/superseded diagnostics. VDAM's separate private assignment
+is opt-in rigid reporting only (below); future numerical admission requires review
+of the remaining state/tie and source/native gates. No duplicate peer GPU experiment
+is assigned.
 
 Raw-prefetch source is unassigned. The RELION header lock is
 released: five diagnostic insertions remain, and shared benchmark binaries plus
@@ -265,8 +266,30 @@ source-review root: `inputs.json`, `api_only.sbatch`, `terminal_review.json` and
 `parent_probe_owner_review.json`. Logs/XML are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr179_current_api_1b046647f_20260909/api/`.
 The isolated source tree and private libraries remain frozen.
-After this checkpoint, continue controller/state/kernel ownership and duplicate-code
-review with bounded changes and proportional tests. Parsers with different blank/unknown-
+K-class diagnostic ownership cleanup `6ae78f029` is complete. Effective raw-operand
+capture now lives beside pass-2 serialization, and fused capture-row materialization
+beside BPref signatures. The sparse scorer loses 201 lines (17,780 → 17,579);
+the three production modules together have zero net line change. Both moved
+function ASTs and all retained module ASTs are exact after owner substitution,
+including conversion/blocking order and call-site gates. All 312 assertions in
+the two migrated test modules are retained, with no forwarding wrappers.
+The same 97 CPU cases pass before/after with zero skips; the 38-case CPU guard
+also passes. After/guard source manifests match. Ruff retains one inherited
+sparse-module finding and adds none. No new GPU job or arithmetic change.
+Commands, source fingerprints, case inventories, AST and lint audits are in
+`hia_source_review_20260906/kclass_capture_owner_20260909/validation.json`.
+Logs/XML are under the CPU root in
+`kclass_capture_owner_{control,after,guard}_20260909/`.
+
+VDAM independently owns four rigid-reporting paths at base `724aa4ce9`:
+`recovar/em/initial_model/gt_metrics.py`, `tests/unit/initial_model/test_gt_metrics.py`,
+`scripts/evaluate_ab_initio_gt.py` and `tests/unit/initial_model/test_evaluate_ab_initio_gt.py`.
+The opt-in reporting assignment preserves existing APIs/default schemas, separates
+fitting from applying a common transform, and remains independent of precision907.
+Shared docs/publication stay with em_clean; no E/M or native source/build grant.
+See `handoffs/em_clean_rigid_reporting_assignment_20260909.json`.
+Continue controller/state/kernel ownership and duplicate-code review with bounded
+changes and proportional tests. Parsers with different blank/unknown-
 token semantics are not interchangeable. Keep production source frozen during
 its tests/jobs. Group changes into checkpoints for broader qualification; do
 not run completion workloads after each helper edit.

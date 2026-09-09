@@ -156,15 +156,17 @@ separate diagnostic owner below.
 
 [`helpers.pass2_diagnostics`](../../recovar/em/dense_single_volume/helpers/pass2_diagnostics.py)
 owns K1/K-class score dumps, norm-residual and chunked scale-AA writers, and
-target-row selection. It reads the shared numbered-half context from
-`bpref_diagnostics`; it does not import sparse scoring. The scorer retains dump
-scheduling and operand materialization, and calls the writers at the original
-numerical boundaries. Capture schemas, casts and reduction order are unchanged.
+target-row selection, including staging effective K-class raw operands after
+scoring. It reads the shared numbered-half context from `bpref_diagnostics`;
+it does not import sparse scoring. The scorer retains scheduling and numerical
+operand preparation, calling the capture helpers at their original boundaries. Capture schemas, casts and reduction order are unchanged.
 
 [`helpers.bpref_diagnostics`](../../recovar/em/dense_single_volume/helpers/bpref_diagnostics.py)
 owns the numbered-half capture context, contribution and membership counters,
 membership selectors/rotation-mass writers, device-panel state, capture validation
-and artifact writers shared by sparse and exact-local EM. The controller and replay scripts set and clear that context through this
+and artifact writers shared by sparse and exact-local EM. Fused K-class capture-row
+materialization lives here beside the signature/shadow consumer; compact-pair
+expansion, selected-row order and reconstruction-posterior fields are preserved. The controller and replay scripts set and clear that context through this
 owner. Sparse scoring retains candidate planning, numerical kernels and live
 accumulation; it asks the diagnostic owner for scoped capture decisions. The
 diagnostic module has no direct import of sparse scoring or the iteration
