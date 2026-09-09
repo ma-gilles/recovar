@@ -196,3 +196,73 @@ The new four-arm source-closed diagnostic 13642331 is terminal 0:0 on one H100;
 its quality analysis is separate, and its fe847 candidate still has the existing
 F64/C128 M-step. Earlier failed launcher 13642161 remains preserved. None of this
 adopts precision907 or establishes current-source quality/runtime acceptance.
+
+## Source-closed four-arm panel
+
+Job **13642331** completed all four 200-iteration arms on the same physical H100,
+using frozen `fe8472947` and the source-closed `6c54d2ac…` native build. The new
+analysis covers 804 maps at 201 checkpoints with one prespecified transform fitted
+to this panel's native 1 final map. These are different histories and a different
+native build from the six-history analysis above.
+
+Integrator CPU review independently reintegrates **2,814 full-shell FSC curves
+and 1,608 held-out curves**, exactly matching the saved AUC arrays and all 201
+streamed records. All four candidate/native comparisons, six raw-pair summaries,
+three repeat summaries and failure lists agree exactly. The all-shell calculation
+excludes DC and integrates over the canonical normalized shell axis; held-out
+shells remain descriptive, without an added acceptance threshold.
+
+| Registered GT comparison | Minimum AUC delta | Iteration | Final delta | Iterations below −0.002 |
+| --- | ---: | ---: | ---: | ---: |
+| Candidate 1 − native 1 | −0.000627249 | 91 | +0.001609063 | 0 |
+| Candidate 1 − native 2 | −0.000032548 | 53 | +0.000817972 | 0 |
+| Candidate 2 − native 1 | −0.001293697 | 155 | +0.002292598 | 0 |
+| Candidate 2 − native 2 | **−0.002423452** | **155** | +0.001501506 | **1** |
+
+All four cross-engine raw-FSC comparisons also have values below the existing
+0.999 condition: first failures are at 78 against native 1 and80 against native 2.
+Candidate 2/native minima reach 0.97076 and 0.97049. Better final registered-GT
+values do not override the transient GT failure or cross-engine FSC failures.
+Precision907 remains private and unaccepted.
+
+The independent review checks nine named artifact hashes before/after, including
+the saved arrays, summary, transform, streamed records and timing/completion
+receipts. It compares the producer's 8,712-file before/after manifests as records;
+it does **not** independently rehash those 8,712 inputs, reload the 804 MRCs, rerun
+FFT/FSC generation, refit GT, or rerun optimizer controls. Those calculations and
+source/dependency checks remain producer evidence. The producer's separate STAR
+audit reports sampling-accuracy divergence at 20, candidate 2 resolution divergence
+at 145 and current-size divergence at 146. Saved STARs permit partial state checks;
+raw score margins, native selected IDs and candidate momentum checkpoints are
+missing, so they cannot establish complete state or tie-aware parity.
+
+| Whole-child timing | Seconds |
+| --- | ---: |
+| Native1 | 305.405011 |
+| Candidate 1 | 448.153169 |
+| Candidate 2 | 449.220601 |
+| Native2 | 305.476140 |
+
+The independently recomputed geometric RECOVAR/native ratio is **1.468982×**
+(46.90% slower) on this 3k/128 K1 fixture. Times match the terminal panel receipt,
+which records one physical H100 UUID. They include cold compilation/JIT and
+output I/O; candidate processes additionally include their existing import,
+pin and output-hashing checks. Filesystem/page caches were not flushed. This
+is not representative 100k timing, peak-memory qualification or current-primary
+performance evidence. Candidate scoring/projector operands are F32/C64; the
+existing numerical M remains F64/C128.
+
+Reproduce the read-only CPU audit from the primary checkout:
+
+```bash
+CUDA_VISIBLE_DEVICES='' JAX_PLATFORMS=cpu PYTHONNOUSERSITE=1 \
+  .pixi/envs/default/bin/python \
+  /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/source_closed_saved_curve_review_20260909/review.py
+```
+
+Review scope/result: `source_closed_saved_curve_review_20260909/{scope,review}.json`
+under the source-review root. Producer artifacts:
+`vdam_source_closed_pair_analysis_20260909/results_v3/` under scratch;
+summary SHA-256 `ca6034718e379b7d9e48988a07820d03cdc2fb6d4b5e6aa70d14e3b21bc83e0b`.
+Board acknowledgement: `handoffs/em_clean_source_closed_saved_curve_review_20260909.json`.
+No new GPU job, source change, baseline update or tolerance change was made.

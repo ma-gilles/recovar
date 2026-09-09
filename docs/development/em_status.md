@@ -87,9 +87,12 @@ identity for new diagnostics (CPU build 13636510); em_clean verified 54 linked
 material hashes across its inventory and the reporting proposal. Historical
 `2d070d64…` closure remains missing: the later build cannot qualify that binary.
 Read the exact audit scope in `handoffs/em_clean_reporting_oracle_review_20260909.json`.
-Peer replacement job 13642331 completed 0:0, four full200 arms on one H100;
-Slurm terminal state is independently checked, scientific analysis remains peer
-work. Failed launcher 13642161 is preserved. No duplicate job or rebuild was launched.
+Peer replacement job 13642331 completed 0:0, four full 200-iteration arms on one H100;
+Slurm terminal state and the saved-curve analysis are independently checked.
+The registered-GT condition fails once at iteration 155; cross-engine FSC gaps remain.
+Whole-child RECOVAR/native time is 1.468982× on this 3k/128 fixture. See the
+[dated review](vdam_precision_review_20260909.md#source-closed-four-arm-panel).
+Failed launcher 13642161 is preserved. No duplicate job or rebuild was launched.
 The new run uses frozen fe847, including the existing double numerical M-step;
 it does not qualify the current primary or all-float32 execution.
 
@@ -398,13 +401,15 @@ Commands, source snapshots and controls:
 `hia_source_review_20260906/native_trace_guard_review_20260909/validation.json`;
 logs: `pr180_integration_20260908/native_trace_guard_20260909/`.
 
-The peer's newer source-closed analysis receipt for13642331 reports one registered
-GT failure: candidate2 minus native2 is−0.002423452 at155, below the unchanged
+Independent saved-array review of source-closed 13642331 reproduces all 2,814
+full-shell AUCs, 1,608 held-out AUCs, 201 streamed records and threshold summaries
+exactly. Candidate 2 minus native 2 is −0.002423452 at 155, below the unchanged
 −0.002 condition, although both candidate final GT values exceed both natives.
-This is a **producer result pending separate integrator array review**, not quality
-acceptance. The report also retains state/resolution and cross-engine FSC failures.
-Receipt: `handoffs/vdam_source_closed_GT_full201_20260909.json`. Preserve failed
-launcher13642161: its native1 completed201 maps before the parser failed, and
+This verifies the measurement, **not quality acceptance**. No MRC/FFT replay,
+GT refit, state or score-margin audit was performed by this review. State/resolution
+and cross-engine FSC failures remain; see the dated review for precise scope.
+Receipt: `handoffs/em_clean_source_closed_saved_curve_review_20260909.json`. Preserve failed
+launcher 13642161: its native 1 completed 201 maps before the parser failed, and
 RECOVAR never started. The v2 launcher repair and terminal four-arm run are separate
 records; no original-attempt reuse or retrospective qualification.
 
