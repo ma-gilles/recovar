@@ -22,11 +22,12 @@ and documentation together; remove obsolete forwarding wrappers when unused.
 Preserve scientific defaults, numerical behavior and saved-data compatibility
 during structural cleanup. Propose numerical repairs separately.
 
-Keep `dense_single_volume/__init__.py` free of controller imports. Import
-`refine_single_volume` explicitly from `dense_single_volume.iteration_loop`;
-helper imports must not initialize iteration scheduling. The CPU fast guard
-checks this import boundary, captured replay, angular schedules and resolution
-rules.
+Keep `dense_single_volume/__init__.py` free of execution imports. Import
+`refine_single_volume` from `dense_single_volume.iteration_loop`, and K-class
+results and entry points from `dense_single_volume.k_class`. Helper imports
+must not initialize scheduling, dense/local engines or sparse scoring. The CPU
+fast guard checks this boundary, captured replay, angular schedules and
+resolution rules.
 
 ## Production precision — mandatory
 

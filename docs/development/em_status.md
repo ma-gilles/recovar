@@ -1,5 +1,40 @@
 # Current EM development scope
 
+## Helper import boundary cleanup — September 9
+
+Following published integration `2b4596e99`, remove three unused package-level
+K-class exports. Repository callers already import `KClassEMResult`,
+`run_dense_k_class_em` and `run_local_k_class_em` from `k_class.py`. Definitions,
+numerical implementations and saved module identities remain unchanged. No
+lazy forwarding layer replaces the retired aliases.
+
+The strengthened CPU guard reproduces the prior problem: a helper import loads
+K-class orchestration, both engines, local BigJIT, significance and sparse
+pass-two execution. After removing the exports, all six remain unloaded and
+all 38 numerical fast-guard cases pass (47.02 s). The existing CLI subprocess
+provenance test also passes, checking both accepted and rejected checkout
+identities. Source and reference native-library hashes are unchanged during
+each validation run. Ruff and shell syntax checks pass.
+
+Exact commands use the existing evidence wrapper:
+
+```bash
+CHECKS=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/run_checks.sh
+bash "$CHECKS" kclass_import_boundary_green_20260909 --fast-guard
+bash "$CHECKS" kclass_import_boundary_cli_20260909 --run-integration -v tests/integration/test_em_runner_import_provenance_subprocess.py --tb=short
+```
+
+Recorded output roots are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/`:
+`kclass_import_boundary_red_20260909`,
+`kclass_import_boundary_green_20260909`, and
+`kclass_import_boundary_cli_20260909`. Each contains logs and `outcome.json`
+with source fingerprints and exact commands; green runs include JUnit XML.
+The wrapper refuses existing output directories: choose a new label to rerun.
+The coordination handoff records the zero-caller AST/text audit and current
+ownership. This structural change adds no scientific acceptance claim; the
+quality and shared workflow gaps below remain open.
+
 ## Combined integration checkpoint — September 9
 
 Merge `7dba6abce728161b1cc491685962ec441c591a51` incorporates VDAM's

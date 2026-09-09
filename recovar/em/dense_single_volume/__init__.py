@@ -1,9 +1,9 @@
 """RELION-style volume refinement with dense, adaptive and exact-local routes.
 
-Import the refinement controller explicitly from ``.iteration_loop``. This
-package exposes K-class entry points, grouped options and sampling/statistics
-helpers without loading the controller. See the algorithm and ownership map in
-``docs/math/relion_refinement_algorithm.md``.
+Import the refinement controller from ``.iteration_loop`` and K-class execution
+from ``.k_class``. This package exposes grouped options and sampling/statistics
+helpers without loading execution engines. See the algorithm and ownership map
+in ``docs/math/relion_refinement_algorithm.md``.
 """
 
 from .helpers.fourier_window import (
@@ -26,9 +26,6 @@ from .helpers.resolution import (
 )
 from .helpers.types import DenseEMResult as DenseEMResult
 from .helpers.types import MeanStats as MeanStats
-from .k_class import KClassEMResult as KClassEMResult
-from .k_class import run_dense_k_class_em as run_dense_k_class_em
-from .k_class import run_local_k_class_em as run_local_k_class_em
 from .refinement_options import AdaptiveOptions as AdaptiveOptions
 from .refinement_options import EngineDebugOptions as EngineDebugOptions
 from .refinement_options import ExpectedAccuracyOptions as ExpectedAccuracyOptions

@@ -49,10 +49,13 @@ for helper in (
     "score_outputs", "helpers.resolution", "helpers.bpref_diagnostics",
 ):
     importlib.import_module(f"recovar.em.dense_single_volume.{helper}")
-assert "recovar.em.dense_single_volume.iteration_loop" not in sys.modules, (
-    "EM helper imports must not load the refinement controller; "
-    "import refine_single_volume explicitly from iteration_loop"
+execution_modules = (
+    "iteration_loop", "k_class", "em_engine", "local_em_engine", "local_big_jit",
+    "helpers.significance", "helpers.sparse_pass2_bucketed",
 )
+loaded = [name for name in execution_modules
+          if f"recovar.em.dense_single_volume.{name}" in sys.modules]
+assert not loaded, f"EM helper imports must not load execution modules: {loaded}"
 print(f"provenance_ok recovar={recovar_file} jax={jax_file}")
 print("helper_import_boundary_ok")
 PY

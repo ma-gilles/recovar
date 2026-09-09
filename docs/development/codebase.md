@@ -106,9 +106,9 @@ EM. The controller and replay scripts set and clear that context through this
 owner. Sparse scoring retains candidate planning, numerical kernels and live
 accumulation; it asks the diagnostic owner for scoped capture decisions. The
 diagnostic module has no direct import of sparse scoring or the iteration
-controller. The package initializer still eagerly exports K-class execution,
-which loads sparse scoring even for a standalone helper import; that package
-boundary remains to be cleaned up.
+controller. The package initializer exposes options and sampling/statistics
+helpers; import K-class results and execution directly from `k_class.py`.
+Standalone helper imports do not load dense/local engines or sparse scoring.
 Tests replace capture functions and state at this owner, including optional
 native signature panels. Dump schemas, precision, counter order and error
 behavior remain unchanged. The boolean parser is shared through
@@ -283,12 +283,19 @@ metadata reads. End-to-end controller behavior remains in
 `test_refine_relion_mode.py`; capture-file parsing remains in
 `test_relion_projector_capture.py`.
 
-Import the controller explicitly when refinement is needed:
+Import execution entry points explicitly from their owners:
 
 ```python
 from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
+from recovar.em.dense_single_volume.k_class import (
+    KClassEMResult,
+    run_dense_k_class_em,
+    run_local_k_class_em,
+)
 ```
 
-The package initializer does not re-export this entry point. This keeps helper
-imports from implicitly loading the controller and avoids a dependency back into
-iteration scheduling. Other existing package exports retain their owners.
+The package initializer does not re-export these names. The CPU fast guard
+checks that importing replay, normalization, projector, result and diagnostic
+helpers leaves the controller, K-class orchestration, dense/local engines and
+sparse scoring unloaded. Existing callers already import from these owners;
+the definitions and their serialized module identities are unchanged.
