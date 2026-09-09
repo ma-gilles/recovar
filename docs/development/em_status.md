@@ -33,6 +33,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
 | Latest production cleanup | `b3b51f0c8`: diagnostic reference gating/map loading joins the replay validators in `relion_replay.py`; controller 7,814 lines |
+| Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest test repair | `44d414a6b`: stale InitialModel callers and native source guards repaired; production unchanged |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
 | Incorporated history | PR180 `1e2f229b3`; cleanup anchor `0b52c995a`; VDAM merge `c38fc62f0`; separate global-window correction `0219caa35` |
@@ -46,12 +47,14 @@ scientific gates are not waived. The combined branch includes behavioral
 integration changes as well as structural cleanup.
 
 em_clean owns shared docs/status and publication. EM remains paused with frozen
-source/jobs untouched. VDAM compact-CTF `b1d57608d` is a frozen private performance
-candidate, **not integrated or trajectory/runtime-qualified**. The six-path
-assignment and reviewed H100 13638270 evidence are in
-`handoffs/em_clean_compact_ctf_review_20260909.json`: four synthetic cases,
-six pairs each and six byte-exact operand/score fields. Its source preimages
-match the shared source.
+source/jobs untouched. User-authorized compact-CTF `b1d57608d` is incorporated by
+merge `5a39eab29`, preserving the separate performance commit. All six transferred
+files match the frozen candidate byte-for-byte. Combined-source CPU checks pass
+241 cases (23 GPU deselected) plus the 38-case guard. Reviewed H100 13638270
+compares four synthetic configurations, six pairs each, with all five operands
+and coarse scores byte-exact. This is **not trajectory/runtime qualification**.
+See `handoffs/em_clean_compact_ctf_integration_20260909.json`; the private
+candidate and its binaries remain frozen.
 
 VDAM's separate two-path full-float32-product candidate `907b02ce` is now frozen
 and reviewed: exactly two `HIGHEST` contraction keywords differ in production;
@@ -74,6 +77,7 @@ all other test statements and numeric assertions survive explicit owner mapping.
 
 | Checkpoint | Executed evidence | Limit |
 | --- | --- | --- |
+| Compact-CTF integration `5a39eab29` | 241 CPU passed/23 GPU deselected (31.13 s), 38-case guard; all peer cases retained and six transferred files exact; peer H100 13638270 byte-exact operands/scores | Full-image powerClass and source precision preserved; allocation microbenchmark only, no end-to-end or trajectory claim |
 | Reference-replay ownership `b3b51f0c8` | Same 39-case control/candidate inventory, including tiny K4 map loading and state-swap order; 38-case CPU guard. Exact function/retained-controller AST; no new Ruff findings | Controller −95 lines by relocation; logger namespace follows replay owner; no GPU or trajectory claim |
 | InitialModel test repair `44d414a6b` | Fourier-window control 49 passed/3 failed, then 52 passed (8.73 s); coarse-audit control 8 passed/4 failed, then 12 passed (2.75 s). Identical inventories; four in-memory native-contract mutations rejected; no new Ruff findings | CPU/test-source contracts, not compiled CUDA or trajectory qualification |
 | Replay-order ownership `4da8954ae` | Same 24-case control/candidate inventory, 493 deselections; 38-case CPU guard. Separate parser-caller repair `1895bc50e`: 28 passed | AST-exact relocation; controller −73 lines, not net deletion |
@@ -86,6 +90,11 @@ were confirmed by failing tests before migration. This does not prove dynamic
 imports/registration or every runtime path. A tracked-reference scan found no
 further unreferenced, undecorated top-level private EM function candidates;
 do not remove code merely to reduce line counts.
+
+Compact-CTF integration commands, fingerprints and case inventories are in
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/compact_ctf_integration_20260909/validation.json`.
+Its CPU logs use `compact_ctf_combined{,_guard}_20260909` under the same CPU run
+root below. No duplicate GPU job was launched.
 
 Reference-replay commands, fingerprints and AST/case inventories are in
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/reference_replay_owner_20260909/validation.json`.

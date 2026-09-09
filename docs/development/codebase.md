@@ -92,6 +92,17 @@ adaptive and local K-class orchestration. Class evidence and posterior mass
 must be handled at the K-class level, not inferred from independently normalized
 single-class probabilities.
 
+The exact coarse Gaussian path in
+[`helpers/significance.py`](../../recovar/em/dense_single_volume/helpers/significance.py)
+passes its existing host pixel indices to the source-precision CTF loader in
+[`helpers/sparse_pass2_bucketed.py`](../../recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py).
+That loader gathers each cached CTF row before stacking and device placement;
+index order and duplicates are preserved. Omitting pixel indices retains the
+full-grid contract and cache. Only scoring operands are compacted: full-image
+powerClass inputs, source precision, scale correction and padding semantics
+remain intact. The [current evidence](em_status.md) separates operand equivalence
+and the allocation microbenchmark from pending full-runtime/trajectory checks.
+
 The production fine-grid significance mask is lazy: `_ClassFineGridSignificanceMask`
 and `_PerClassFineGridSignificanceMask` generate only the requested image/rotation
 block. The materialized NumPy comparison lives in
