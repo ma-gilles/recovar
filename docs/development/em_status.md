@@ -1,5 +1,35 @@
 # Current EM development scope
 
+## Significance statistics test repair — September 9
+
+The cached/uncached comparison failed because it passed the nested
+`coarse_selector_audit` dictionary to NumPy's numeric comparison. The new
+test helper compares the complete statistic key set, checks that audit exactly,
+and retains the existing `rtol=atol=1e-6` checks for every numeric field. Three
+adjacent cache, tail-padding and fused-pass tests now use the same helper and
+check the audit they previously skipped. All other test statements are
+AST-identical; production code, tolerances and baselines are unchanged.
+The test module shrinks by 16 lines.
+
+The original failure reproduces on CPU (15.32 s). All four affected cases pass
+on CPU (17.57 s) and H100 (20.71 s, job **13635488**, `della-h20g4`). The GPU
+run verifies the exact four-case inventory and unchanged source, libraries and
+baselines. Six other original API failures remain: three normalization cases
+and three source-contract guards. The full API tier has not been rerun or
+accepted. Native rectangular-image coverage and trajectory quality remain open.
+
+CPU reproduction uses `pr180_integration_20260908/run_checks.sh` with labels
+`cache_stats_red_20260909` and `cache_stats_green_20260909`; exact commands,
+logs and XML are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/`.
+H100 reproduction is `sbatch api_only.sbatch` under
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr179_cache_stats_20260909/`.
+Its frozen input manifest and diff identify the tested source; outputs and the
+test-contract audit are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr179_cache_stats_20260909/`.
+Use fresh output roots for reruns. Next, review the source guards against the
+actual callback and logical/physical-window contracts before changing assertions.
+
 ## Compact projector routing repair — September 9
 
 Runtime repair `ecd75fdfb` fixes three failures from the frozen API panel.
@@ -111,6 +141,19 @@ are peer-reported, not independently audited by em_clean. Neither scheduler
 success nor this fixed-state result establishes trajectory acceptance or
 classifies all remaining differences as roundoff. Provenance and acknowledgment:
 `handoffs/em_clean_vdam_prepared_job_ack_20260909.json` on the coordination board.
+
+Iteration-32 replay job **13634428** also completed on H100 `della-h20g4`
+(1 minute 59 seconds, source `5056e760d`). VDAM reports exact per-image
+posterior/pose/support outputs for all 200 images across 15 comparisons at
+both boundaries, plus exact targeted score surfaces. Accumulator differences
+persist, including repeats. The current iteration-32 winning margin does not
+by itself adjudicate the historical pose flip. VDAM will extend only its two
+acknowledged diagnostic files to capture exact noise operands and isolate
+the contributing operations. Shared production ownership remains with em_clean.
+The 100k panel still lacks a completed timing ratio. See
+`handoffs/vdam_prepared_it32_result_20260909.json` and
+`handoffs/em_clean_vdam_noise_capture_scope_20260909.json`; no scientific or
+performance acceptance is added by this status update.
 
 ## Structural cleanup after VDAM integration — September 9
 
