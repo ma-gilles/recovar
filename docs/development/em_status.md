@@ -60,8 +60,20 @@ VDAM's separate two-path full-float32-product candidate `907b02ce` is now frozen
 and reviewed: exactly two `HIGHEST` contraction keywords differ in production;
 all 32 recorded H100 cases pass (13638400), after two expected-red cases
 (13638324). Native-cutoff candidate replay 13638431 is diagnostic only. See
-`handoffs/em_clean_vdam_full_float32_review_20260909.json`; full prepared-state,
-trajectory and speed-cost checks remain open, with no shared production adoption.
+`handoffs/em_clean_vdam_full_float32_review_20260909.json`. Prepared-state jobs
+13638710/13638814 on that private source now preserve complete incoming/candidate
+inputs and particle decisions/Pmax. Noise/BPref arrays vary even within a policy;
+the first panel's one-ULP support-sum policy association did not reproduce in the
+second. Only the rectangle-power helper executes in this replay; the atomic
+fallback has focused-test coverage only. These are not full-state equivalence,
+trajectory or runtime acceptance.
+
+VDAM owns the next private composition check at `cbff0b092` plus `907b02ce`:
+reuse the pinned prepared state, verify compact-CTF and rectangle-power dispatch,
+then follow the science call through its next M-step. Exact private paths,
+provenance, comparisons and stop conditions are assigned in
+`handoffs/em_clean_wavg_prepared_gate_20260909.json`. Existing candidates stay
+frozen; there is no shared precision adoption or duplicate GPU submission.
 Raw-prefetch source is unassigned. The RELION header lock is
 released: five diagnostic insertions remain, and shared benchmark binaries plus
 private native captures/builds stay frozen. No shared native writer/build is
@@ -144,10 +156,11 @@ gates remain in the [program archive](../math/em_parity_program.md);
 
 ## Frozen jobs and representative performance
 
-Slurm was checked on September 9 UTC: K4 pair **13560202** was running on
-`della-l08g4` (12:37:54 elapsed), audit **13560356** pending. K1 real-data window
-job **13610518** was running on `della-h20g1` (12:17:12), with **13610539** and
-**13629099** pending. Poll these exact jobs before using this status as current.
+Slurm was checked on September 9 UTC during the precision review: K4 pair
+**13560202** was running on `della-l08g4`, audit **13560356** pending. K1 real-data
+window **13610518** was running on `della-h20g1`, with **13610539** and
+**13629099** pending. The recorded poll is in
+`hia_source_review_20260906/precision_prepared_review_20260909/jobs.txt`. Poll these exact jobs before using this status as current.
 Preserve their frozen sources/outputs; they do not automatically qualify later
 commits. No new jobs were launched for this audit.
 
