@@ -106,6 +106,16 @@ adaptive and local K-class orchestration. Class evidence and posterior mass
 must be handled at the K-class level, not inferred from independently normalized
 single-class probabilities.
 
+Fixed-capacity call selection and validation belong to
+[`fixed_capacity_local.py`](../../recovar/em/dense_single_volume/fixed_capacity_local.py),
+with the sealed plan/operand/hypothesis binding types. The engine delegates those
+checks at the same pre-JIT boundaries. Callers use the general call-index API;
+the test-only call-0 wrappers are removed. Canonical byte/dtype checks, poisoned-tail
+rejection and authoritative dataset fetch order remain mandatory. Bucket geometry
+and the dtype-preserving adjoint rotation accessor belong to
+[`local_layout.py`](../../recovar/em/dense_single_volume/local_layout.py).
+Both owners import independently of execution modules.
+
 Sealed VDAM worker and block-chronology replay lives in
 [`helpers/vdam_replay.py`](../../recovar/em/dense_single_volume/helpers/vdam_replay.py).
 It owns NPZ schema validation, four cached loaders, stack-ID joins, worker/launch

@@ -35,7 +35,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | `dd28135ba`: sealed VDAM replay has one helper owner; local engine 9,374 lines, sparse scorer 17,424, half scorer 1,358, controller 6,123 |
+| Latest production cleanup | `a7b15a197`: fixed-capacity call validation lives beside its host binding; local engine 8,928 lines, sparse scorer 17,424, half scorer 1,358, controller 6,123 |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -407,6 +407,29 @@ Receipt: `handoffs/vdam_source_closed_GT_full201_20260909.json`. Preserve failed
 launcher13642161: its native1 completed201 maps before the parser failed, and
 RECOVAR never started. The v2 launcher repair and terminal four-arm run are separate
 records; no original-attempt reuse or retrospective qualification.
+
+Fixed-capacity host binding cleanup `a7b15a197` moves five call-selection,
+operand-validation and padding-validation functions into `fixed_capacity_local.py`,
+beside the sealed types they validate. The M-step rotation accessor moves to
+`local_layout.py`. The engine still selects, fetches and validates at the same
+positions before JIT execution. Three call-0 wrappers with only test callers are
+removed; tests call the general owner with an explicit zero call index where needed.
+No dataclass, numerical operation, validation message or saved format changes.
+
+All six moved function ASTs and the metadata constant are exact. Retained engine,
+binding, layout and test ASTs agree after import/caller mapping and wrapper expansion;
+all128 binding-test assertions remain. The same **200 CPU cases pass before/after**
+(8.03/8.50 s), including zero/nonzero calls, operand mutation, fetch order, metadata,
+poison exclusion and padding. The extended CPU/import guard passes **38/38** (43.29 s)
+with identical source/native manifests and no skips. No new Ruff findings; the
+engine's inherited import-order finding remains. No GPU or trajectory/runtime claim.
+
+Local engine:9,374→8,928 lines (**−446**); combined production files **−46 lines**.
+`fixed_capacity_local.py` is1,018 lines and `local_layout.py` is1,951. This reduces
+controller clutter and removes obsolete APIs; the large execution function still
+needs stage-level cleanup. Commands, immutable controls, AST/caller audit and logs:
+`hia_source_review_20260906/fixed_capacity_binding_owner_20260909/validation.json`;
+`pr180_integration_20260908/fixed_capacity_owner_{control,after,guard}_20260909/`.
 
 Continue controller/state/kernel ownership and duplicate-code review with bounded
 changes and proportional tests. Parsers with different blank/unknown-
