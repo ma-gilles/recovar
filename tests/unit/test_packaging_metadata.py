@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -87,26 +88,36 @@ def test_remove_stale_fast_marching_build_artifacts_only_removes_legacy_root_ent
 @pytest.fixture(scope="module")
 def built_package_artifacts(tmp_path_factory):
     dist_dir = tmp_path_factory.mktemp("package-dist")
+    source_dir = tmp_path_factory.mktemp("package-source")
+    # Build without Git discovery or a stale egg-info/SOURCES.txt manifest.
+    # Neither may hide missing source fragments in an archive-based install.
+    for filename in ("setup.py", "setup_helpers.py", "pyproject.toml", "MANIFEST.in", "README.md", "LICENSE"):
+        shutil.copy2(REPO_ROOT / filename, source_dir / filename)
+    shutil.copytree(
+        REPO_ROOT / "recovar",
+        source_dir / "recovar",
+        ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.so", "*.o"),
+    )
     env = dict(os.environ, PYTHONNOUSERSITE="1")
 
     subprocess.run(
         [sys.executable, "setup.py", "sdist", "--dist-dir", str(dist_dir)],
-        cwd=REPO_ROOT,
+        cwd=source_dir,
         env=env,
         check=True,
         capture_output=True,
         text=True,
     )
+    sdist = next(dist_dir.glob("*.tar.gz"))
     subprocess.run(
-        [sys.executable, "-m", "pip", "wheel", ".", "--no-deps", "--no-build-isolation", "-w", str(dist_dir)],
-        cwd=REPO_ROOT,
+        [sys.executable, "-m", "pip", "wheel", str(sdist), "--no-deps", "--no-build-isolation", "-w", str(dist_dir)],
+        cwd=source_dir,
         env=env,
         check=True,
         capture_output=True,
         text=True,
     )
 
-    sdist = next(dist_dir.glob("*.tar.gz"))
     wheel = next(dist_dir.glob("*.whl"))
     return sdist, wheel
 

@@ -68,14 +68,24 @@ checkpoint, preserving the existing source and hardware requirements.
 Packaging fix `1014ca3b2` includes CUDA headers and source fragments in source
 and wheel distributions. On isolated incoming source `8ab1a44be1`, the stronger
 archive test fails before the fix because `noise_residual.cuh` is absent, then
-passes after it. The check uses the current pixi environment's no-build-isolation
-workflow without setuptools-scm; standard isolated PEP517 discovery is not
-measured, and the resulting version-0.0.0 archives are test artifacts. No CUDA
-kernel is compiled or scientifically qualified by this packaging check.
+passes after it. Standard isolated PEP517 wheel builds with the declared build
+dependencies also omit the header before the fix and include it afterward when
+started from a source archive. These version-1.0.0b1 wheels and the earlier
+no-build-isolation version-0.0.0 archives are test artifacts. Live Git discovery
+is a separate case; it must not conceal a broken archive manifest. No CUDA
+kernel is compiled or scientifically qualified by these packaging checks.
 Exact commands, archives, logs and member hashes are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_packaging_review_20260909/`.
 The original failed test remains recorded. The integrator owns the packaging
 change independently of VDAM's source reconciliation.
+
+The permanent packaging fixture now copies source inputs into a private directory
+without Git, stale egg-info or compiled objects, builds the sdist there, then
+builds the wheel from that sdist. All nine packaging tests pass (7.26 s) with
+source/native identities unchanged. The revised fixture still fails for the
+original missing header and passes with the manifest fix on incoming source.
+The whole-module log and source fingerprint are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/packaging_archive_fixture_20260909/`.
 
 ## Shared VDAM performance transfer — September 8
 
