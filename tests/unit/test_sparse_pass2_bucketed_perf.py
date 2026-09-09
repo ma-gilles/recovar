@@ -8869,7 +8869,12 @@ def test_bpref_contribution_stop_requires_completed_target_files(monkeypatch, tm
     assert exc_info.value.device_signature_path == device_path
 
 
-def test_fused_sparse_k_class_capture_is_observational(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "translation_log_prior",
+    [None, np.array([-0.5], dtype=np.float32), np.array([[-0.25], [-0.75]], dtype=np.float32)],
+    ids=["no-prior", "shared-prior", "image-prior"],
+)
+def test_fused_sparse_k_class_capture_is_observational(monkeypatch, tmp_path, translation_log_prior):
     """Selected fused-K capture rows must not change authoritative accumulators."""
 
     from recovar.em.dense_single_volume.helpers import bpref_diagnostics
@@ -8927,6 +8932,7 @@ def test_fused_sparse_k_class_capture_is_observational(monkeypatch, tmp_path):
         translations=np.asarray([[0.0, 0.0]], dtype=np.float32),
         significant_sample_indices_by_class=significant_by_class,
         rotation_log_priors_by_class=[None] * n_classes,
+        translation_log_prior=translation_log_prior,
         nside_level=0,
         disc_type="linear_interp",
         oversampling_order=0,

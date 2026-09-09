@@ -127,6 +127,7 @@ from recovar.em.dense_single_volume.helpers.significance import (
     ComplementSignificantSampleIndices,
 )
 from recovar.em.dense_single_volume.helpers.translation_prior import (
+    expand_fine_translation_prior,
     translation_prior_centers_for_images,
     translation_sqdist_angstrom,
     validate_translation_prior_centers,
@@ -9535,19 +9536,13 @@ def compute_pass2_stats_sparse_bucketed(
         fine_translation_prior_2d = None
     else:
         translation_log_prior_np = np.asarray(translation_log_prior, dtype=precision_policy.score_real_dtype)
-        if translation_log_prior_np.ndim == 1:
-            fine_tp = translation_log_prior_np[fine_translation_parent]
-            fine_translation_prior_2d = np.broadcast_to(fine_tp, (n_images, n_fine_trans)).astype(
-                precision_policy.score_real_dtype, copy=False
-            )
-        elif translation_log_prior_np.ndim == 2:
-            fine_translation_prior_2d = translation_log_prior_np[:, fine_translation_parent].astype(
-                precision_policy.score_real_dtype, copy=False
-            )
-        else:
-            raise ValueError(
-                f"translation_log_prior must be 1D or 2D, got {translation_log_prior_np.ndim} dimensions",
-            )
+        fine_translation_prior_2d = expand_fine_translation_prior(
+            translation_log_prior_np,
+            fine_translation_parent,
+            n_images=n_images,
+            n_fine_trans=n_fine_trans,
+            dtype=precision_policy.score_real_dtype,
+        )
 
     # Per-image hypothesis prep
     prep_t0 = time.time()
@@ -13687,21 +13682,13 @@ def compute_k_class_pass2_stats_sparse_fused(
         fine_translation_prior_2d = None
     else:
         translation_log_prior_np = np.asarray(translation_log_prior, dtype=precision_policy.score_real_dtype)
-        if translation_log_prior_np.ndim == 1:
-            fine_tp = translation_log_prior_np[fine_translation_parent]
-            fine_translation_prior_2d = np.broadcast_to(fine_tp, (n_images, n_fine_trans)).astype(
-                precision_policy.score_real_dtype,
-                copy=False,
-            )
-        elif translation_log_prior_np.ndim == 2:
-            fine_translation_prior_2d = translation_log_prior_np[:, fine_translation_parent].astype(
-                precision_policy.score_real_dtype,
-                copy=False,
-            )
-        else:
-            raise ValueError(
-                f"translation_log_prior must be 1D or 2D, got {translation_log_prior_np.ndim} dimensions",
-            )
+        fine_translation_prior_2d = expand_fine_translation_prior(
+            translation_log_prior_np,
+            fine_translation_parent,
+            n_images=n_images,
+            n_fine_trans=n_fine_trans,
+            dtype=precision_policy.score_real_dtype,
+        )
 
     prep_t0 = time.time()
     per_image_inputs_by_class = [

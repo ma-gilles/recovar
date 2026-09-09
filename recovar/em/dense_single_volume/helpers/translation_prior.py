@@ -61,3 +61,30 @@ def translation_sqdist_angstrom(translations, centers, voxel_size: float):
         axis=-1,
         dtype=np.float64,
     )
+
+
+def expand_fine_translation_prior(
+    translation_log_prior_np, fine_translation_parent, *, n_images, n_fine_trans, dtype
+):
+    """Gather coarse priors into an image-by-fine-translation host array.
+
+    Callers retain the already converted coarse prior and its precision policy.
+    Shared (1D) priors broadcast over images; image-specific (2D) rows retain
+    their order. Parent IDs may repeat. Preserve NumPy's gather/copy semantics
+    and the read-only broadcast view for shared priors of the requested dtype.
+    """
+    if translation_log_prior_np.ndim == 1:
+        fine_tp = translation_log_prior_np[fine_translation_parent]
+        fine_translation_prior_2d = np.broadcast_to(fine_tp, (n_images, n_fine_trans)).astype(
+            dtype, copy=False
+        )
+    elif translation_log_prior_np.ndim == 2:
+        fine_translation_prior_2d = translation_log_prior_np[:, fine_translation_parent].astype(
+            dtype, copy=False
+        )
+    else:
+        raise ValueError(
+            f"translation_log_prior must be 1D or 2D, got {translation_log_prior_np.ndim} dimensions",
+        )
+
+    return fine_translation_prior_2d

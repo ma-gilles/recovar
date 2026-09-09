@@ -146,6 +146,17 @@ iteration10,class2. No current100k speed or broad quality acceptance is claimed.
 
 ## Engineering work and recent evidence
 
+Sparse K1 and fused K-class prior expansion now share
+`helpers.translation_prior.expand_fine_translation_prior`. Caller-owned casts,
+coarse buffers, NumPy gather/broadcast storage and error behavior are preserved;
+the two translation-grid constructions remain separate because their precision
+and validation differ. Fourteen CPU cases pass with current and archived callers,
+128 exact host-array/storage/error comparisons pass, and the38-case CPU guard
+passes. The fused caller test now covers no/shared/per-image priors with its
+original assertions unchanged. Sparse scorer−13 lines; total production+14 for
+one explicit owner. Local checkpoint for the next batch, no GPU/quality claim.
+[Receipt and commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/fine_translation_prior_owner_20260909/result.json).
+
 The shared adaptive pass-2 grid builder now belongs to
 `helpers.oversampling.build_adaptive_pass2_grids`, used directly by ordinary
 K1/K-class scoring and first-CC dispatch. The calculation body and six/seven-array
