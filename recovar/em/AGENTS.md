@@ -49,6 +49,11 @@ or a way to pass quality gates by changing the production precision.
   validate that path. Final K1 and exactly-K4 quality and performance evidence
   must use production float32 execution. Double runs are labeled diagnostic,
   with effective scoring, projection and accumulation settings recorded.
+- Report effective precision separately for scoring, projection, accumulation
+  and M-step execution. Float32 score operands or a float32-only patch do not
+  establish an all-float32 trajectory. Label existing higher-precision numerical
+  stages explicitly; do not describe them as metadata or silently narrow them
+  during cleanup. Their presence does not waive the production-float32 goal.
 - Preserve existing deliberate higher-precision metadata, host calculations
   and mathematically necessary operations. This policy does not authorize
   blanket narrowing or changes to non-EM numerical contracts.

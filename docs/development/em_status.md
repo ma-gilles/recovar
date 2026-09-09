@@ -101,8 +101,23 @@ including same-policy repeats. Accumulators and six post-state arrays vary;
 crossed maxima are not uniformly bounded by the two same-policy comparisons.
 Single-boundary cross-map FSC near one does not establish trajectory quality.
 
-The actual M-step includes float64/complex128 computation, so this is not a
-complete float32 M qualification. Warm prepared E is 268.953 → 284.035 ms,
+The reviewed runs use **float32 scoring with an existing double-precision
+M-step**. Effective precision is stage-specific:
+
+| Stage in the reviewed composition | Effective execution | Evidence/scope |
+| --- | --- | --- |
+| Captured coarse scoring/projector operands | float32/complex64 | Captured-path evidence, not a claim about every intermediate or route |
+| Candidate Wavg products | Two `HIGHEST` contraction keywords on float32 products | Same output dtypes; no M-step precision change |
+| JAX VDAM M-step | float64/complex128 numerical computation in both arms | Explicit device casts and host call in [relion_vdam_mstep.py](../../recovar/em/dense_single_volume/helpers/relion_vdam_mstep.py); actual M executed in 13640121 |
+
+The M helper is byte-identical in shared source and frozen fe847 (SHA-256
+`0ba75b68202380372e0ffbf777e23bf5b1a82145437723a519429b7507524f2c`).
+This is more than metadata precision and is not complete float32 M qualification.
+No existing arithmetic is changed or newly accepted by this reporting correction;
+the intended production-float32 goal remains. See board handoff
+`vdam_effective_precision_boundary_20260909.json` and review receipt
+`effective_precision_reporting_20260909/review.json` under the source-review root.
+Warm prepared E is 268.953 → 284.035 ms,
 **1.056075× (+5.61%)** in this small preloaded-data panel; no full-runtime
 acceptance. Only rectangle power executes; full local score surfaces are absent.
 VDAM continues artifact-only investigation of the first pose divergence at
