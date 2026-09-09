@@ -58,6 +58,21 @@ Local GPU 0 remains reserved. Check GPUs 1–3 immediately before use and restri
 by idle-device UUID; within Slurm preserve scheduler visibility. Avoid duplicate
 jobs and preserve source snapshots while their jobs run.
 
+## Agent efficiency package — September 9
+
+The user authorized Terra/medium for routine cleanup, Astra for difficult review,
+compact file handoffs and one publication per cohesive package. See
+[the workflow](agent_workflow.md). The coordination README/em_clean status now
+link full archives rather than repeating history. Scientific gates are unchanged.
+The prior routing/import cleanup is published at `732e2cf3`, not an unpublished
+seven-case patch; final focused coverage was11 plus guard38.
+
+Peer reports private class-prior repair `f91eed7d6` atop frozen `df9975ee`,
+red2fail/2pass then42 focused/38guard; review/adoption remains separate. Replacement
+full200 K1 job13648609 was observed RUNNING;13648479 failed pre-science UUID
+preflight. Different physical H100, same class/driver: timing descriptive only.
+K4 audit13560356 also remains live. No duplicate job or shared Euler adoption.
+
 ## Engineering work and recent evidence
 
 The latest batch removes a tautological projector eligibility condition, an
