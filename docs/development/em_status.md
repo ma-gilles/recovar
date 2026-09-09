@@ -377,8 +377,36 @@ source and the CPU reference binding remained byte-identical. Exact commands,
 case identities, failures and manifests:
 `hia_source_review_20260906/vdam_source_guard_review_20260909/validation.json`;
 CPU logs: `pr180_integration_20260908/vdam_stale_guard_{control,after,final}_20260909/`.
-No GPU run or native rebuild. Next: resolve the trace boundary against its intended
-diagnostic contract before changing either kernel instrumentation or its test.
+No GPU run or native rebuild.
+
+Follow-up `6ccc3a3fd` tightens the remaining trace guard without changing CUDA.
+The prior matcher selected zero initialization, so merely removing the old `int`
+token falsely passed current code. It now identifies the actual clock call and
+keeps the required pre-interpolation ordering. Eight source-only controls prove
+both false-pass cases, historical pre-warp success, and rejection of missing or
+late clock samples. Read-only historical RELION source `c77028723` confirms its
+clock at `BP.cuh:620`, before interpolation at622; `64db9df71` deliberately matched
+that boundary before `ecab47c05` moved it into the scatter macro.
+
+Affected replay/chronology CPU tests: **36 passed, one expected ordering failure,
+zero skips** (2.67 s). This replaces a missing-substring error with the demonstrated
+contract failure; it does not waive it. First-atomic rank/latency comparisons need
+the instrumentation boundary reconciled separately. Block-start replay uses the
+separate block-start field. No actual atomic chronology, binary equivalence or
+scientific effect was established. Production/native bytes are unchanged.
+Commands, source snapshots and controls:
+`hia_source_review_20260906/native_trace_guard_review_20260909/validation.json`;
+logs: `pr180_integration_20260908/native_trace_guard_20260909/`.
+
+The peer's newer source-closed analysis receipt for13642331 reports one registered
+GT failure: candidate2 minus native2 is−0.002423452 at155, below the unchanged
+−0.002 condition, although both candidate final GT values exceed both natives.
+This is a **producer result pending separate integrator array review**, not quality
+acceptance. The report also retains state/resolution and cross-engine FSC failures.
+Receipt: `handoffs/vdam_source_closed_GT_full201_20260909.json`. Preserve failed
+launcher13642161: its native1 completed201 maps before the parser failed, and
+RECOVAR never started. The v2 launcher repair and terminal four-arm run are separate
+records; no original-attempt reuse or retrospective qualification.
 
 Continue controller/state/kernel ownership and duplicate-code review with bounded
 changes and proportional tests. Parsers with different blank/unknown-
