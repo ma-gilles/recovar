@@ -7633,7 +7633,6 @@ def subtract_projected_reference_from_sparse_mstep_rotation_sums(
 def compute_pass2_stats_sparse_bucketed(
     experiment_dataset,
     volume,
-    mean_variance,
     noise_variance,
     translations,
     significant_sample_indices,
@@ -11814,7 +11813,6 @@ def _shared_k_class_noise_variance(noise_variance, n_classes: int):
 def compute_k_class_pass2_stats_sparse_fused(
     experiment_dataset,
     volumes,
-    mean_variance,
     noise_variance,
     translations,
     significant_sample_indices_by_class,

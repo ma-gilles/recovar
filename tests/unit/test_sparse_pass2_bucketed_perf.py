@@ -8815,7 +8815,6 @@ def test_fused_sparse_k_class_capture_requires_companion_contribution_dump(monke
             None,
             np.zeros((2, 1), dtype=np.complex64),
             np.ones(1, dtype=np.float32),
-            np.ones(1, dtype=np.float32),
             np.zeros((1, 2), dtype=np.float32),
             [[], []],
             rotation_log_priors_by_class=[None, None],
@@ -8927,7 +8926,6 @@ def test_fused_sparse_k_class_capture_is_observational(monkeypatch, tmp_path, tr
     common = dict(
         experiment_dataset=MockDataset(n_images=n_images, seed=2039),
         volumes=volumes,
-        mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0,
         noise_variance=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         translations=np.asarray([[0.0, 0.0]], dtype=np.float32),
         significant_sample_indices_by_class=significant_by_class,

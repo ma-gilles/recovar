@@ -1074,7 +1074,6 @@ def compute_pass2_stats_sparse(
         return compute_pass2_stats_sparse_bucketed(
             experiment_dataset,
             volume,
-            mean_variance,
             noise_variance,
             translations,
             significant_sample_indices,

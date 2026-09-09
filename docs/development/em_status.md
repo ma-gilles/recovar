@@ -29,7 +29,7 @@ speed goal. Full-production-F32, broad quality and completion remain unproved.
 | Item | Current identity or rule |
 | --- | --- |
 | Primary checkout | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907`, branch `codex/integrate-pr180` |
-| Source checkpoint | Canonical host-pixel correctness repair on published `5e6ea38a1`, separate from its structural series. Actual HEAD/diff/untracked manifest takes precedence |
+| Source checkpoint | Structural series on canonical host-pixel checkpoint `5ca9c8fff`; actual HEAD/diff/untracked manifest takes precedence |
 | Publication | [Draft PR179](https://github.com/ma-gilles/recovar/pull/179), stacked on [PR158](https://github.com/ma-gilles/recovar/pull/158), pinned base `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; em_clean is sole integrator/publisher |
 | Coordination | [Compact handoff](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/CURRENT_TASK.md); [board and live scopes](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/README.md). EM paused; VDAM owns private evidence, em_clean shared source/docs/publication |
 | Frozen scientific source | `4f9a194923b084c649c7d9ce929eec7ae9f78902`, private `recovar_vdam_quality_prefix_integrated_20260909`; later cleanups are outside its run scope |
@@ -58,8 +58,15 @@ builders. **144 lines leave the scorer; net production shrinks26 lines.** All231
 remaining function/class bodies match after only the unused-argument normalization;
 all test assertions remain exact. Original22 caller cases, final23 focused cases
 and38 CPU guard pass without skips. [Receipt, commands and source comparisons](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/compact_bucket_owner_20260909/result.json).
-This local structural successor does not change the published5ca9c8fff checkpoint
-assigned to VDAM's canonical-pixel qualification; freeze that exact commit.
+The following internal API migration removes unused mean_variance from the two
+bucketed scorers and unused class priors from two firstiter helpers. Dense reference
+reconstruction still receives mean_variance; caller prior validation and existing
+raw-score firstiter semantics remain. All120 caller cases pass on both source
+versions;38 guard cases pass on the combined source. Three whole-module ASTs match
+after only the four argument/caller migrations; all assertions remain exact.
+Combined structural production shrinks34 lines, scorer146 lines. [Combined source
+receipt and commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/sparse_scoring_contracts_20260909/result.json).
+VDAM's canonical-pixel qualification stays pinned to5ca9c8fff, not a moving tip.
 
 The canonical host-pixel repair resolves serialized STAR/pickle/CS geometry before
 computational casts and stores one Python-float `dataset.voxel_size`. Source STAR

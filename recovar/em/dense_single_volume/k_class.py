@@ -1243,7 +1243,6 @@ def _run_sparse_k_class_adaptive_pass2(
             fused = compute_k_class_pass2_stats_sparse_fused(
                 experiment_dataset,
                 means_array,
-                mean_variance,
                 noise_variance,
                 coarse_translations_np,
                 sig_sample_indices_by_class,
@@ -1818,7 +1817,6 @@ def _run_dense_k_class_score_probe(
             rotations,
             translations,
             disc_type,
-            class_log_priors=log_priors,
             engine_kwargs=base_engine_kwargs,
         )
 
@@ -1873,7 +1871,6 @@ def _run_dense_k_class_joint_firstiter_score_probe(
     translations,
     disc_type: str,
     *,
-    class_log_priors: np.ndarray,
     engine_kwargs: dict,
 ) -> _DenseKClassScoreProbeResult:
     """Score RELION firstiter-CC K-class coarse poses in one shared pass."""
@@ -2330,7 +2327,6 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
     n_fine_trans: int,
     healpix_order: int,
     oversampling_order: int,
-    class_log_priors,
     accumulate_noise: bool,
     return_best_pose_details: bool,
     pass2_kwargs: dict,
@@ -3601,7 +3597,6 @@ def run_dense_k_class_em_adaptive(
             n_fine_trans=n_trans_fine,
             healpix_order=_resolved_coarse_healpix_order(),
             oversampling_order=_resolved_oversampling_order(),
-            class_log_priors=class_log_priors,
             accumulate_noise=accumulate_noise,
             return_best_pose_details=return_best_pose_details,
             pass2_kwargs=pass2_kwargs,

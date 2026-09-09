@@ -1429,7 +1429,6 @@ def test_sparse_firstiter_k1_adapter_forwards_exact_cc_and_spectrum_norm(monkeyp
         n_fine_trans=1,
         healpix_order=0,
         oversampling_order=1,
-        class_log_priors=np.zeros(1, dtype=np.float64),
         accumulate_noise=False,
         return_best_pose_details=False,
         pass2_kwargs={"source_faithful_spectrum_norm": True},
