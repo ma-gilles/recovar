@@ -29,6 +29,12 @@ and necessary non-EM mathematics. Do not widen tolerances, change baselines,
 dismiss discrete/convergence mismatches without evidence, or use map correlation
 in place of FSC/FSC-AUC. Follow the [EM operating contract](../../recovar/em/AGENTS.md).
 
+Current VDAM priority is short-iteration parity, then final FSC/FSC-AUC quality;
+up to2× RELION runtime is provisionally acceptable. The
+[program board](../math/em_parity_program.md#current-vdam-quality-priority--september-9)
+records the user decision and its limits. Monitor speed without an optimization
+chase while quality remains open.
+
 ## Source and ownership
 
 | Item | Identity or rule |
@@ -72,6 +78,25 @@ Local GPU 0 remains reserved. Check GPUs 1–3 immediately before use and restri
 by idle-device UUID; within Slurm preserve scheduler visibility. Avoid duplicate
 jobs and preserve source snapshots while their jobs run.
 
+Fixed-native-input coarse posterior replay13650770 on frozen df9975ee reproduces
+all41 mask bits, retained count, final sum and cutoff exactly in four calls.
+Intermediate prefix scans differ; this is not full intermediate bitwise equality.
+Candidate normalization replay13650337 also preserves the saved candidate Pmax
+and mask. The extra42nd parent therefore requires an incoming score/state audit
+for this capture, not support pruning or a normalization change. See
+[VDAM's report](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_source_euler_metadata_20260909/PMAX24_RESULTS.md).
+
+Publication follow-up `974aa11cf` is integrated separately as `1624dd396`.
+It retains canonical source Euler metadata in `score_outputs` and `local_debug`,
+with the matrix-only fallback preserved. Fresh combined-source checks pass all
+17 focused and 38 CPU guard cases (zero skips), plus Ruff and import/provenance
+checks. The four pending cleanup/documentation files survived integration
+unchanged. Debug output intentionally gains an origin field and retains F64
+source angles; computation matrices and scientific precision policy are unchanged.
+See the [integration receipt](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/handoffs/em_clean_euler_publication_review_20260909.json).
+This commit is included in the following draft batch. Global-grid Euler handling,
+GPU/trajectory/K4 qualification and private907 remain outside this integration.
+
 ## Agent efficiency package — September 9
 
 The opt-in Astra/high lead and Terra/medium reader were runtime-verified. Reader
@@ -90,6 +115,21 @@ Different physical H100, same class/driver: timing descriptive only. K4 audit
 iteration10,class2. No current100k speed or broad quality acceptance is claimed.
 
 ## Engineering work and recent evidence
+
+The diagnostic batch separates reconstruction-window normalization and group-scale
+captures into `helpers.norm_scale_diagnostics`, with direct sparse-scorer/test
+callers and no forwarding wrappers. `pass2_diagnostics` retains score/raw-operand
+captures and shared target selection; its K1/K-class writers share the exact gate
+validation order. The score owner shrinks 1,614→943 lines; the new owner is638.
+Combined production is33 lines smaller, including formatting of the moved owner
+(51 lines); the extraction itself adds22 and gate consolidation removes4.
+All eight diagnostic function ASTs match before/after extraction, and243 sparse
+functions match after the two owner substitutions. Combined affected38/38 and
+CPU guard38/38 pass with zero skips. The new owner imports without execution
+modules. Ruff passes except the unchanged pre-existing sparse-scorer I001;
+legacy whole-file formatting findings are retained. New-owner formatting is AST
+identical to the tested source. See the
+[batch receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/norm_scale_capture_owner_20260909/result.json).
 
 The latest structural batch moves four unchanged host score-reporting
 functions from `helpers.scoring` to `helpers.coarse_score_diagnostics` and migrates

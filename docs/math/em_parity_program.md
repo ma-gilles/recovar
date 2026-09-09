@@ -15,6 +15,19 @@ auto-refine and K=4 3D classification. Then optimize to near RELION speed while
 holding the accepted quality checkpoint. Treat native InitialModel/VDAM parity
 as the next product milestone rather than mixing it into the first closure.
 
+## Current VDAM quality priority — September 9
+
+The user provisionally accepts up to **2× RELION runtime** while prioritizing
+quality: first establish short-iteration matched-input score/posterior/state
+parity, then evaluate final shellwise FSC/FSC-AUC against GT and RELION across
+the required scope, including Hungarian-matched K4 and robustness. Once their
+causes and numerical bounds are established, late discrete trajectory differences
+are diagnostic; unexplained mismatches are not excused as noise. Exact parity
+remains preferable. No numerical tolerance or baseline is changed, and the
+long-term speed objective remains. This allowance is not a measurement of
+current-source representative speed or a completed quality gate. See the
+[user-policy handoff](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/handoffs/vdam_quality_priority_20260909.json).
+
 ## VDAM active experiment — 2026-08-20
 
 ### 2026-09-01 fixed-capacity call-0 correctness gate

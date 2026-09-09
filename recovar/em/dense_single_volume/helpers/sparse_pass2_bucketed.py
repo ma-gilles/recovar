@@ -44,7 +44,7 @@ from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_co
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.dense_single_volume.helpers import relion_ctf
-from recovar.em.dense_single_volume.helpers import bpref_diagnostics, pass2_diagnostics
+from recovar.em.dense_single_volume.helpers import bpref_diagnostics, norm_scale_diagnostics, pass2_diagnostics
 from recovar.em.dense_single_volume.batch_planning import (
     _plan_consecutive_padded_batches,
 )
@@ -11947,7 +11947,7 @@ def compute_pass2_stats_sparse_bucketed(
                             "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS requires "
                             "RECOVAR_PASS2_DUMP_DIR"
                         )
-                    chunked_scale_aa_dump_count = pass2_diagnostics._write_chunked_scale_aa_dump(
+                    chunked_scale_aa_dump_count = norm_scale_diagnostics._write_chunked_scale_aa_dump(
                         dump_dir=dump_dir,
                         experiment_dataset=experiment_dataset,
                         image_indices=image_indices,
@@ -13015,7 +13015,7 @@ def compute_pass2_stats_sparse_bucketed(
                 ctf_probs,
                 noise_variance_for_noise,
             )
-            norm_residual_dump_count = pass2_diagnostics._maybe_dump_norm_residual_inputs(
+            norm_residual_dump_count = norm_scale_diagnostics._maybe_dump_norm_residual_inputs(
                 experiment_dataset=experiment_dataset,
                 image_indices=image_indices,
                 current_size=current_size,

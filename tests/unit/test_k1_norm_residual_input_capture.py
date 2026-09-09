@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import bpref_diagnostics, pass2_diagnostics
+from recovar.em.dense_single_volume.helpers import bpref_diagnostics, norm_scale_diagnostics
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse
 
 
@@ -43,7 +43,7 @@ def test_norm_residual_input_capture_preserves_exact_target_arrays(
     high_shell = jnp.asarray([19.0], dtype=jnp.float32)
     weighted_image_power = jnp.asarray([23.0], dtype=jnp.float32)
 
-    count = pass2_diagnostics._maybe_dump_norm_residual_inputs(
+    count = norm_scale_diagnostics._maybe_dump_norm_residual_inputs(
         experiment_dataset=object(),
         image_indices=np.asarray([66], dtype=np.int64),
         current_size=56,
@@ -203,7 +203,7 @@ def test_norm_capture_slices_and_reshapes_raw_translation_rows(tmp_path, monkeyp
         return values.reshape(2, images.shape[1])
 
     monkeypatch.setattr(cuda_backproject, "relion_translate_score_f32", fake_translate)
-    pass2_diagnostics._maybe_dump_norm_residual_inputs(
+    norm_scale_diagnostics._maybe_dump_norm_residual_inputs(
         experiment_dataset=object(),
         image_indices=np.asarray([66], dtype=np.int64),
         current_size=56,

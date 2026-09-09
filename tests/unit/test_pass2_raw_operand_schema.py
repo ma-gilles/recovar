@@ -1,5 +1,6 @@
 """Round-trip the effective K1 raw operands through both diagnostic schemas."""
 
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
@@ -89,3 +90,40 @@ def test_raw_operand_capture_preserves_rows_dtypes_and_padding(
         assert int(payload["local_index"]) == 1
         assert int(payload["iteration"]) == 3
         assert int(payload["half"]) == 2
+
+
+@pytest.mark.parametrize("writer", [
+    pass2_diagnostics._maybe_dump_pass2_bucket,
+    pass2_diagnostics._maybe_dump_k_class_pass2_bucket,
+])
+@pytest.mark.parametrize("overrides,current_size", [
+    ({"DIR": None, "ORIGINAL_INDICES": "invalid"}, 4),
+    ({"ORIGINAL_INDICES": None, "CURRENT_SIZE": "invalid"}, 4),
+    ({"CURRENT_SIZE": "5", "ITERATION": "invalid"}, 4),
+    ({"CURRENT_SIZE": "invalid"}, None),
+    ({"ITERATION": "4"}, 4),
+])
+def test_inactive_pass2_writer_preserves_validation_short_circuit(
+    monkeypatch, tmp_path, writer, overrides, current_size,
+):
+    # Every required data operand is unusable: an inactive writer must return
+    # before touching arrays, creating files or parsing later invalid controls.
+    for name in ("DIR", "ORIGINAL_INDICES", "CURRENT_SIZE", "ITERATION", "CLASS"):
+        monkeypatch.delenv("RECOVAR_PASS2_DUMP_" + name, raising=False)
+    monkeypatch.delenv("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES", raising=False)
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(tmp_path / "uncreated"))
+    monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
+    monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "iteration", 3)
+    monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "half", 2)
+    for name, value in overrides.items():
+        if value is None:
+            monkeypatch.delenv("RECOVAR_PASS2_DUMP_" + name, raising=False)
+        else:
+            monkeypatch.setenv("RECOVAR_PASS2_DUMP_" + name, value)
+    kwargs = {
+        name: None for name, parameter in inspect.signature(writer).parameters.items()
+        if parameter.default is inspect.Parameter.empty
+    }
+    kwargs["current_size"] = current_size
+    assert writer(**kwargs) == 0
+    assert not (tmp_path / "uncreated").exists()
