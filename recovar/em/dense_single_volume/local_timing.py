@@ -1,4 +1,4 @@
-"""Host-side timing accumulators for the exact-local EM engine.
+"""Host-side timing and bucket-progress reporting for the exact-local EM engine.
 
 Extracted from ``local_em_engine.py`` so the engine module stays focused
 on the bucket-driven EM body.
@@ -6,9 +6,92 @@ on the bucket-driven EM body.
 
 from __future__ import annotations
 
+import logging
+import time
+from typing import TYPE_CHECKING
+
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_nonnegative_int
 from recovar.em.dense_single_volume.helpers.timing import TimingAccumulator
+
+if TYPE_CHECKING:
+    from recovar.em.dense_single_volume.local_layout import LocalBucketSpec
+
+# Keep the established category for run collectors.
+logger = logging.getLogger("recovar.em.dense_single_volume.local_em_engine")
+
+EXACT_LOCAL_PROGRESS_CHUNKS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS"
+EXACT_LOCAL_PROGRESS_SECONDS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS"
+DEFAULT_EXACT_LOCAL_PROGRESS_CHUNKS = 1000
+DEFAULT_EXACT_LOCAL_PROGRESS_SECONDS = 300
+
+
+class LocalBucketProgress:
+    """Track completed local buckets and emit the established progress messages."""
+
+    def __init__(self, bucket_specs, *, total_local_rotations: int, n_trans: int):
+        progress_chunks_override = parse_env_nonnegative_int(EXACT_LOCAL_PROGRESS_CHUNKS_ENV)
+        progress_seconds_override = parse_env_nonnegative_int(EXACT_LOCAL_PROGRESS_SECONDS_ENV)
+        self.chunk_interval = (
+            DEFAULT_EXACT_LOCAL_PROGRESS_CHUNKS if progress_chunks_override is None else int(progress_chunks_override)
+        )
+        self.second_interval = (
+            DEFAULT_EXACT_LOCAL_PROGRESS_SECONDS
+            if progress_seconds_override is None
+            else int(progress_seconds_override)
+        )
+        self.total_chunks = len(bucket_specs)
+        self.total_images = int(sum((int(bucket.image_indices.shape[0]) for bucket in bucket_specs)))
+        self.completed_chunks = 0
+        self.completed_images = 0
+        self.started_at = time.time()
+        self.last_log_at = self.started_at
+        if self.total_chunks:
+            logger.info(
+                "Exact local bucket loop start: chunks=%d images=%d total_local_rot=%d n_trans=%d progress_chunks=%d progress_seconds=%d",
+                self.total_chunks,
+                self.total_images,
+                total_local_rotations,
+                n_trans,
+                self.chunk_interval,
+                self.second_interval,
+            )
+
+    def log(self, *, force: bool = False, done: bool = False) -> None:
+        if not self.total_chunks:
+            return
+        now = time.time()
+        chunk_due = (
+            self.chunk_interval > 0 and self.completed_chunks > 0 and (self.completed_chunks % self.chunk_interval == 0)
+        )
+        time_due = (
+            self.second_interval > 0
+            and self.last_log_at is not None
+            and (now - self.last_log_at >= float(self.second_interval))
+        )
+        if not (force or chunk_due or time_due):
+            return
+        elapsed = max(0.0, now - self.started_at)
+        images_per_second = float(self.completed_images) / elapsed if elapsed > 0.0 else 0.0
+        label = "done" if done else "progress"
+        logger.info(
+            "Exact local bucket loop %s: chunks=%d/%d images=%d/%d wall=%.1fs images/s=%.1f",
+            label,
+            self.completed_chunks,
+            self.total_chunks,
+            self.completed_images,
+            self.total_images,
+            elapsed,
+            images_per_second,
+        )
+        self.last_log_at = now
+
+    def mark_bucket_done(self, bucket: LocalBucketSpec) -> None:
+        self.completed_chunks += 1
+        self.completed_images += int(bucket.image_indices.shape[0])
+        self.log()
+
 
 _LOCAL_PREPROCESS_TIMER_KEYS = (
     "integer_shift_s",

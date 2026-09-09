@@ -199,6 +199,7 @@ from recovar.em.dense_single_volume.local_score_pass import (
     score_local_bucket_abs2_weighted_on_demand,
 )
 from recovar.em.dense_single_volume.local_timing import (  # noqa: F401
+    LocalBucketProgress,
     _LOCAL_ACCOUNTED_TIMING_FIELDS,
     _LOCAL_ACCOUNTED_TIMING_SETUP_FIELDS,
     _LOCAL_PREPROCESS_TIMER_KEYS,
@@ -416,8 +417,6 @@ LOCAL_SCORE_DUMP_FORCE_SPLIT_ENV = "RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT"
 LOCAL_SCORE_DUMP_OPERANDS_ENV = "RECOVAR_LOCAL_SCORE_DUMP_OPERANDS"
 LOCAL_SCORE_DUMP_TARGET_ONLY_ENV = "RECOVAR_LOCAL_SCORE_DUMP_TARGET_ONLY"
 EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS_ENV = "RECOVAR_EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS"
-EXACT_LOCAL_PROGRESS_CHUNKS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS"
-EXACT_LOCAL_PROGRESS_SECONDS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS"
 VDAM_CANDIDATE_BLOCK_MAP_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP"
 VDAM_CANDIDATE_BLOCK_MAP_ITER_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP_ITER"
 VDAM_CANDIDATE_BLOCK_MAP_CAPACITY_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP_CAPACITY"
@@ -456,8 +455,6 @@ if (
     or VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE.itemsize != 40
 ):
     raise RuntimeError("VDAM candidate block-map binary schema has an invalid item size")
-DEFAULT_EXACT_LOCAL_PROGRESS_CHUNKS = 1000
-DEFAULT_EXACT_LOCAL_PROGRESS_SECONDS = 300
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 _VISIBLE_GPU_MEMORY_BYTES_CACHE: int | None = None
 # Disabled by default: on the 50k/256 local-search target this cache made the
@@ -3810,73 +3807,9 @@ def run_local_em_exact(
             bool(score_only),
             bool(mstep_relion_x_half),
         )
-    progress_chunks_override = parse_env_nonnegative_int(EXACT_LOCAL_PROGRESS_CHUNKS_ENV)
-    progress_seconds_override = parse_env_nonnegative_int(EXACT_LOCAL_PROGRESS_SECONDS_ENV)
-    exact_local_progress_chunks = (
-        DEFAULT_EXACT_LOCAL_PROGRESS_CHUNKS
-        if progress_chunks_override is None
-        else int(progress_chunks_override)
+    local_progress = LocalBucketProgress(
+        bucket_specs, total_local_rotations=total_local_rotations, n_trans=n_trans,
     )
-    exact_local_progress_seconds = (
-        DEFAULT_EXACT_LOCAL_PROGRESS_SECONDS
-        if progress_seconds_override is None
-        else int(progress_seconds_override)
-    )
-    progress_total_chunks = len(bucket_specs)
-    progress_total_images = int(sum(int(bucket.image_indices.shape[0]) for bucket in bucket_specs))
-    progress_completed_chunks = 0
-    progress_completed_images = 0
-    progress_t0 = time.time()
-    progress_last_log_t = progress_t0
-    if progress_total_chunks:
-        logger.info(
-            "Exact local bucket loop start: chunks=%d images=%d total_local_rot=%d n_trans=%d "
-            "progress_chunks=%d progress_seconds=%d",
-            progress_total_chunks,
-            progress_total_images,
-            total_local_rotations,
-            n_trans,
-            exact_local_progress_chunks,
-            exact_local_progress_seconds,
-        )
-
-    def _log_exact_local_progress(*, force: bool = False, done: bool = False) -> None:
-        nonlocal progress_last_log_t
-        if not progress_total_chunks:
-            return
-        now = time.time()
-        chunk_due = (
-            exact_local_progress_chunks > 0
-            and progress_completed_chunks > 0
-            and progress_completed_chunks % exact_local_progress_chunks == 0
-        )
-        time_due = (
-            exact_local_progress_seconds > 0
-            and progress_last_log_t is not None
-            and now - progress_last_log_t >= float(exact_local_progress_seconds)
-        )
-        if not (force or chunk_due or time_due):
-            return
-        elapsed = max(0.0, now - progress_t0)
-        images_per_second = float(progress_completed_images) / elapsed if elapsed > 0.0 else 0.0
-        label = "done" if done else "progress"
-        logger.info(
-            "Exact local bucket loop %s: chunks=%d/%d images=%d/%d wall=%.1fs images/s=%.1f",
-            label,
-            progress_completed_chunks,
-            progress_total_chunks,
-            progress_completed_images,
-            progress_total_images,
-            elapsed,
-            images_per_second,
-        )
-        progress_last_log_t = now
-
-    def _mark_exact_local_bucket_done(bucket: LocalBucketSpec) -> None:
-        nonlocal progress_completed_chunks, progress_completed_images
-        progress_completed_chunks += 1
-        progress_completed_images += int(bucket.image_indices.shape[0])
-        _log_exact_local_progress()
 
     raw_batch_cache = None
     ctf_param_cache = None
@@ -4935,7 +4868,7 @@ def run_local_em_exact(
                 total_reconstruction_rows += added_reconstruction_rows
                 timing.postprocess_s += time.time() - postprocess_t0
                 for context in fixed_capacity_whole_call_contexts:
-                    _mark_exact_local_bucket_done(context.padded_bucket)
+                    local_progress.mark_bucket_done(context.padded_bucket)
                 continue
             if bpref_transaction_queue is not None:
                 big_jit_result = bpref_transaction_queue.run_deferred_scorer(
@@ -6931,7 +6864,7 @@ def run_local_em_exact(
                 int(np.sum(unpadded_bucket.actual_rotation_counts)),
             )
             timing.host_stats_s += time.time() - host_stats_t0
-            _mark_exact_local_bucket_done(bucket)
+            local_progress.mark_bucket_done(bucket)
             continue
 
         preprocess_t0 = time.time()
@@ -8193,7 +8126,7 @@ def run_local_em_exact(
             int(np.sum(bucket.actual_rotation_counts)),
         )
         timing.host_stats_s += time.time() - host_stats_t0
-        _mark_exact_local_bucket_done(bucket)
+        local_progress.mark_bucket_done(bucket)
         if debug_score_dump_force_split and debug_score_dump_bucket_matches:
             cleanup_t0 = time.time()
             shifted_half = None
@@ -8223,7 +8156,7 @@ def run_local_em_exact(
         if return_profile:
             _block_until_ready(Ft_y, Ft_ctf)
         timing.adjoint_y_s += time.time() - adjoint_t0
-    _log_exact_local_progress(force=True, done=True)
+    local_progress.log(force=True, done=True)
     final_accumulator_t0 = time.time()
     if not score_only:
         def _finalize_accumulator(data, weight, *, label):

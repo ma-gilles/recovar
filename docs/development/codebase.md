@@ -269,8 +269,11 @@ layout-ID storage, buffer construction, timing, group advancement and release. O
 valid rows may be consumed; unused capacity keeps its existing uninitialized
 padding. Cache consumers and tests import the owner directly, without engine
 re-exports. Importing it does not initialize execution controllers.
-Profile field definitions belong to
+Profile fields and `LocalBucketProgress` belong to
 [`local_timing.py`](../../recovar/em/dense_single_volume/local_timing.py).
+The reporter owns progress counters, environment cadence and log formatting;
+the engine marks completed buckets and forces the final message at the original
+execution sites. Importing this owner does not load execution modules.
 Their unused local-engine re-exports have been removed. Tests import cache
 limit names directly from their owner.
 

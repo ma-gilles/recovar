@@ -35,7 +35,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | Named projection-cache planning follows shared projector-slab preparation: local engine 8,558 lines, sparse scorer 17,383, half scorer 1,358, controller 6,123 |
+| Latest production cleanup | Bucket progress now belongs to the timing owner, following named cache planning: local engine 8,491 lines, sparse scorer 17,383, half scorer 1,358, controller 6,123 |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -260,6 +260,39 @@ use that owner directly. Function bodies and all retained scorer statements are
 AST-identical after namespace mapping. Counter sequencing, filter short-circuit
 order, NPZ schema, casts and error behavior remain unchanged. Sparse scoring
 loses 176 lines (19,460 → 19,284); the two modules together add one line.
+
+Local bucket progress now belongs to `local_timing.LocalBucketProgress`, replacing
+two nested engine closures and their counters. The engine retains all three
+bucket-completion calls and the final forced log at the original execution sites.
+The four environment/default constants move with the reporter; the existing
+source-hook test imports their owner. Log category, text, arguments, clock-call
+order, environment validation and padded-bucket counts are preserved. LogRecord
+source filename/line follows the new owner.
+
+The moved method ASTs and retained whole engine/owner ASTs match the sealed
+preimage under explicit field/hook mapping. Controlled old/new replay matches
+768 cases, including 336 matching errors, with exact counts, clock reads and
+log sequences. Three original CPU checks pass before/after, ten focused reporting
+cases pass (13 total), and the CPU/import guard passes 38/38; zero skips.
+The guard also imports the timing owner without execution modules. An initial
+artifact harness omitted the bucket annotation binding; its failure is preserved
+and the harness was repaired without changing production source or tests.
+
+The main routine loses 64 lines (5,729→5,665); the engine loses 67 (8,558→8,491).
+The existing timing owner gains 83, for 16 additional combined production lines.
+This separates reporting from execution; it is not dead-code removal or a
+performance claim. Scientific operations, defaults and array lifetimes stay
+unchanged. No GPU/native job was launched; existing quality/API gates remain.
+
+Reproduce with `mstep_dc_integration_20260909/run_checks.sh NEW_LABEL -v
+ tests/unit/test_local_progress.py tests/unit/test_refine_relion_mode.py -k
+ 'test_local_progress or exact_local_progress_env_and_hook or
+ windowed_relion_projector_big_jit_matches_split or relion_projection_cache_matches'`
+(on one shell line), then `--fast-guard` with another fresh label. The wrapper,
+sealed source, audit and receipts are under
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/`
+(`local_progress_owner_20260909/` for this review); logs/XML under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/local_progress_{control,after,guard}_20260909/`.
 
 Projection-cache planning is now one explicit stage: `plan_cache` returns a
 `ProjectionCachePlan` with ordered buckets, groups, budget and capacity metadata.
