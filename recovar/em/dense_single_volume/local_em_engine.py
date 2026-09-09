@@ -15,6 +15,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers.normalization_inputs import prepare_local_normalization_inputs
 from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_correction_groups
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
@@ -3479,52 +3480,17 @@ def run_local_em_exact(
     )
     if group_ids_np is None:
         n_scale_groups = 0
-    normalization_log_z_np = None
-    if normalization_log_z is not None:
-        normalization_log_z_np = np.asarray(normalization_log_z, dtype=np.float64)
-        if normalization_log_z_np.shape != (n_images,):
-            raise ValueError(
-                f"normalization_log_z must have shape ({n_images},), got {normalization_log_z_np.shape}",
-            )
-    normalization_log_evidence_np = None
-    if normalization_log_evidence is not None:
-        normalization_log_evidence_np = np.asarray(normalization_log_evidence, dtype=np.float64)
-        if normalization_log_evidence_np.shape != (n_images,):
-            raise ValueError(
-                f"normalization_log_evidence must have shape ({n_images},), got {normalization_log_evidence_np.shape}",
-            )
-    if normalization_log_z_np is not None and normalization_log_evidence_np is not None:
-        raise ValueError("Provide only one of normalization_log_z or normalization_log_evidence")
-    normalization_max_posterior_np = None
-    if normalization_max_posterior is not None:
-        normalization_max_posterior_np = np.asarray(normalization_max_posterior, dtype=np.float64)
-        if normalization_max_posterior_np.shape != (n_images,):
-            raise ValueError(
-                "normalization_max_posterior must have shape "
-                f"({n_images},), got {normalization_max_posterior_np.shape}",
-            )
-        if (
-            not np.all(np.isfinite(normalization_max_posterior_np))
-            or np.any(normalization_max_posterior_np <= 0.0)
-            or np.any(normalization_max_posterior_np > 1.0)
-        ):
-            raise ValueError("normalization_max_posterior must contain finite probabilities in (0, 1]")
-        if normalization_log_z_np is not None or normalization_log_evidence_np is not None:
-            raise ValueError(
-                "normalization_max_posterior is mutually exclusive with external log normalization",
-            )
-    reconstruction_probability_threshold_np = None
-    if reconstruction_probability_threshold is not None:
-        reconstruction_probability_threshold_np = np.asarray(reconstruction_probability_threshold, dtype=np.float64)
-        if reconstruction_probability_threshold_np.shape != (n_images,):
-            raise ValueError(
-                "reconstruction_probability_threshold must have shape "
-                f"({n_images},), got {reconstruction_probability_threshold_np.shape}",
-            )
-        if not np.all(np.isfinite(reconstruction_probability_threshold_np)):
-            raise ValueError("reconstruction_probability_threshold must be finite")
-        if np.any(reconstruction_probability_threshold_np < 0.0):
-            raise ValueError("reconstruction_probability_threshold must be non-negative")
+    normalization_inputs = prepare_local_normalization_inputs(
+        n_images=n_images,
+        normalization_log_z=normalization_log_z,
+        normalization_log_evidence=normalization_log_evidence,
+        normalization_max_posterior=normalization_max_posterior,
+        reconstruction_probability_threshold=reconstruction_probability_threshold,
+    )
+    normalization_log_z_np = normalization_inputs.log_z
+    normalization_log_evidence_np = normalization_inputs.log_evidence
+    normalization_max_posterior_np = normalization_inputs.max_posterior
+    reconstruction_probability_threshold_np = normalization_inputs.reconstruction_threshold
     translation_prior_centers_np = validate_translation_prior_centers(
         translation_prior_centers,
         n_images=n_images,

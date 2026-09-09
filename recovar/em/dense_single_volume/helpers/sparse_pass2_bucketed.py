@@ -38,6 +38,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers.normalization_inputs import optional_normalization_vector
 from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_correction_groups
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
@@ -9892,22 +9893,12 @@ def compute_pass2_stats_sparse_bucketed(
             n_shells=n_shells,
         )
 
-    normalization_log_z_np = None
-    if normalization_log_z is not None:
-        normalization_log_z_np = np.asarray(normalization_log_z, dtype=np.float64)
-        if normalization_log_z_np.shape != (n_images,):
-            raise ValueError(
-                "normalization_log_z must have shape "
-                f"({n_images},), got {normalization_log_z_np.shape}",
-            )
-    normalization_other_score_log_z_np = None
-    if normalization_other_score_log_z is not None:
-        normalization_other_score_log_z_np = np.asarray(normalization_other_score_log_z, dtype=np.float64)
-        if normalization_other_score_log_z_np.shape != (n_images,):
-            raise ValueError(
-                "normalization_other_score_log_z must have shape "
-                f"({n_images},), got {normalization_other_score_log_z_np.shape}",
-            )
+    normalization_log_z_np = optional_normalization_vector(
+        normalization_log_z, name="normalization_log_z", n_images=n_images,
+    )
+    normalization_other_score_log_z_np = optional_normalization_vector(
+        normalization_other_score_log_z, name="normalization_other_score_log_z", n_images=n_images,
+    )
     dump_pass2_operands = _pass2_dump_enabled()
 
     projection_cache = None

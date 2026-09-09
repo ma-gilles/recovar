@@ -13,6 +13,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers.normalization_inputs import optional_normalization_vector
 from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_correction_groups
 from recovar.utils.nvtx_shim import nvtx
 
@@ -2780,21 +2781,13 @@ def run_local_k_class_em(
             raise ValueError(
                 f"class_log_evidence must have shape ({n_classes}, {n_images}), got {class_log_evidence_np.shape}",
             )
-    normalization_log_evidence_np = None
-    if normalization_log_evidence is not None:
-        normalization_log_evidence_np = np.asarray(normalization_log_evidence, dtype=np.float64)
-        if normalization_log_evidence_np.shape != (n_images,):
-            raise ValueError(
-                f"normalization_log_evidence must have shape ({n_images},), got {normalization_log_evidence_np.shape}",
-            )
-    normalization_max_posterior_np = None
-    if normalization_max_posterior is not None:
-        normalization_max_posterior_np = np.asarray(normalization_max_posterior, dtype=np.float64)
-        if normalization_max_posterior_np.shape != (n_images,):
-            raise ValueError(
-                "normalization_max_posterior must have shape "
-                f"({n_images},), got {normalization_max_posterior_np.shape}",
-            )
+    normalization_log_evidence_np = optional_normalization_vector(
+        normalization_log_evidence, name="normalization_log_evidence", n_images=n_images,
+    )
+    normalization_max_posterior_np = optional_normalization_vector(
+        normalization_max_posterior, name="normalization_max_posterior", n_images=n_images,
+    )
+    if normalization_max_posterior_np is not None:
         if normalization_log_evidence_np is not None:
             raise ValueError(
                 "normalization_max_posterior and normalization_log_evidence are mutually exclusive",
