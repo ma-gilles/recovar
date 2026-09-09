@@ -21,6 +21,7 @@ import healpy as hp
 import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
+import recovar.em.dense_single_volume.helpers.expected_accuracy as expected_accuracy_module
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume import half_scoring, local_search_iteration, scoring_policy
 from recovar.em.dense_single_volume import score_outputs
@@ -10695,7 +10696,7 @@ class TestRelionModeSmokeTest:
         monkeypatch.setattr(half_scoring, "run_em", spy_run_em)
         monkeypatch.setattr(iteration_loop_module, "_reconstruct_volume_eager", spy_reconstruct)
         monkeypatch.setattr(
-            iteration_loop_module,
+            expected_accuracy_module,
             "relion_half1_trial_order",
             lambda n_particles, *_args, **_kwargs: np.arange(n_particles, dtype=np.int64),
         )

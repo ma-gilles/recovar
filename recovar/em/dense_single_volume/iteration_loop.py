@@ -59,7 +59,7 @@ from recovar.em.dense_single_volume.helpers.convergence import (
 from recovar.em.dense_single_volume.helpers.dtype_policy import _local_search_precision_flags
 from recovar.em.dense_single_volume.helpers.expected_accuracy import (
     estimate_relion_expected_accuracy,
-    relion_half1_trial_order,
+    prepare_relion_half1_trial_order,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import quantize_current_size
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
@@ -1099,54 +1099,16 @@ def _run_relion_iteration_loop(
     # Build that immutable local order once.  A missing/rebuilt-without-this-
     # helper binding is handled fail-closed below: acc_rot stays infinite and
     # cannot trigger convergence.
-    expected_accuracy_trial_order = None
     effective_optimizer_random_seed = (
         parity.perturb_seed if parity.optimizer_random_seed is None else parity.optimizer_random_seed
     )
-    if expected_accuracy.half1_trial_order_local is not None:
-        expected_accuracy_trial_order = np.asarray(
-            expected_accuracy.half1_trial_order_local,
-            dtype=np.int64,
-        ).reshape(-1)
-        expected_trial_count = int(experiment_datasets[0].n_units)
-        if expected_accuracy_trial_order.shape != (expected_trial_count,):
-            raise ValueError(
-                "expected_accuracy.half1_trial_order_local must have shape "
-                f"({expected_trial_count},), got {expected_accuracy_trial_order.shape}"
-            )
-        if not np.array_equal(
-            np.sort(expected_accuracy_trial_order),
-            np.arange(expected_trial_count, dtype=np.int64),
-        ):
-            raise ValueError(
-                "expected_accuracy.half1_trial_order_local must be a permutation "
-                "of half-1 local particle indices"
-            )
-        logger.info(
-            "RELION expected accuracy consumes an explicit physical trial order "
-            "(%d particles)",
-            expected_trial_count,
-        )
-    elif effective_optimizer_random_seed is not None and int(experiment_datasets[0].n_units) > 0:
-        try:
-            expected_accuracy_trial_order = relion_half1_trial_order(
-                int(experiment_datasets[0].n_units),
-                int(effective_optimizer_random_seed),
-                first_iteration=max(1, int(init_relion_iteration) + 1),
-                base_order_local=expected_accuracy.half1_base_order_local,
-                optics_group_ids=expected_accuracy.half1_optics_group_ids,
-            )
-            if (
-                expected_accuracy.half1_optics_group_ids is not None
-                and np.unique(np.asarray(expected_accuracy.half1_optics_group_ids)).size > 1
-            ):
-                raise NotImplementedError(
-                    "exact expected accuracy currently supports one RELION optics group; "
-                    "per-optics image size/noise/CTF scaling is not yet implemented",
-                )
-        except Exception as exc:
-            expected_accuracy_trial_order = None
-            logger.warning("RELION exact expected-accuracy particle order unavailable: %s", exc)
+    expected_accuracy_trial_order = prepare_relion_half1_trial_order(
+        expected_accuracy=expected_accuracy,
+        half1_dataset=experiment_datasets[0],
+        optimizer_random_seed=effective_optimizer_random_seed,
+        init_relion_iteration=init_relion_iteration,
+        log=logger,
+    )
 
     follower_setup = setup_relion_follower_scale_state(
         options,

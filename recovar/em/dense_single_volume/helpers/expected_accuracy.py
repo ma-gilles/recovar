@@ -267,6 +267,69 @@ def relion_half1_trial_order(
     return order
 
 
+def prepare_relion_half1_trial_order(
+    *,
+    expected_accuracy,
+    half1_dataset,
+    optimizer_random_seed,
+    init_relion_iteration,
+    log,
+) -> np.ndarray | None:
+    """Resolve the controller's half-1 expected-accuracy trial order.
+
+    Explicit metadata must be a full local permutation. Native setup failures
+    retain the existing warning/None fallback, so unavailable exact accuracy
+    cannot trigger convergence. The caller supplies its logging context.
+    """
+    expected_accuracy_trial_order = None
+    if expected_accuracy.half1_trial_order_local is not None:
+        expected_accuracy_trial_order = np.asarray(
+            expected_accuracy.half1_trial_order_local,
+            dtype=np.int64,
+        ).reshape(-1)
+        expected_trial_count = int(half1_dataset.n_units)
+        if expected_accuracy_trial_order.shape != (expected_trial_count,):
+            raise ValueError(
+                "expected_accuracy.half1_trial_order_local must have shape "
+                f"({expected_trial_count},), got {expected_accuracy_trial_order.shape}"
+            )
+        if not np.array_equal(
+            np.sort(expected_accuracy_trial_order),
+            np.arange(expected_trial_count, dtype=np.int64),
+        ):
+            raise ValueError(
+                "expected_accuracy.half1_trial_order_local must be a permutation "
+                "of half-1 local particle indices"
+            )
+        log.info(
+            "RELION expected accuracy consumes an explicit physical trial order "
+            "(%d particles)",
+            expected_trial_count,
+        )
+    elif optimizer_random_seed is not None and int(half1_dataset.n_units) > 0:
+        try:
+            expected_accuracy_trial_order = relion_half1_trial_order(
+                int(half1_dataset.n_units),
+                int(optimizer_random_seed),
+                first_iteration=max(1, int(init_relion_iteration) + 1),
+                base_order_local=expected_accuracy.half1_base_order_local,
+                optics_group_ids=expected_accuracy.half1_optics_group_ids,
+            )
+            if (
+                expected_accuracy.half1_optics_group_ids is not None
+                and np.unique(np.asarray(expected_accuracy.half1_optics_group_ids)).size > 1
+            ):
+                raise NotImplementedError(
+                    "exact expected accuracy currently supports one RELION optics group; "
+                    "per-optics image size/noise/CTF scaling is not yet implemented",
+                )
+        except Exception as exc:
+            expected_accuracy_trial_order = None
+            log.warning("RELION exact expected-accuracy particle order unavailable: %s", exc)
+
+    return expected_accuracy_trial_order
+
+
 def _constant_selected(values: np.ndarray, indices: np.ndarray, name: str) -> float:
     selected = np.asarray(values, dtype=np.float64).reshape(-1)[indices]
     if selected.size == 0:

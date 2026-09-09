@@ -47,7 +47,7 @@ assert str(jax_file).startswith(str(pixi_env) + "/"), (jax_file, pixi_env)
 for helper in (
     "relion_replay", "relion_normalization", "projector_preparation",
     "score_outputs", "local_batch_planning", "k_class_results", "k_class_inputs", "scoring_policy", "helpers.resolution", "helpers.bpref_diagnostics",
-    "helpers.significant_samples", "helpers.coarse_score_diagnostics", "helpers.sparse_bucket_arrays", "helpers.compact_candidates", "helpers.pass2_diagnostics", "helpers.norm_scale_diagnostics", "helpers.relion_ctf", "helpers.scale_groups", "helpers.normalization_inputs",
+    "helpers.expected_accuracy", "helpers.significant_samples", "helpers.coarse_score_diagnostics", "helpers.sparse_bucket_arrays", "helpers.compact_candidates", "helpers.pass2_diagnostics", "helpers.norm_scale_diagnostics", "helpers.relion_ctf", "helpers.scale_groups", "helpers.normalization_inputs",
     "helpers.vdam_replay", "fixed_capacity_local", "local_layout", "local_debug", "local_projection_cache", "local_timing",
 ):
     importlib.import_module(f"recovar.em.dense_single_volume.{helper}")

@@ -50,6 +50,17 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
+Half-1 expected-accuracy trial-order preparation now lives beside its native
+ordering helper in `helpers/expected_accuracy.py`. The controller retains seed
+selection and execution order; explicit permutation validation and warning/None
+fallback are unchanged. Controller length shrinks38 lines; net production grows25
+lines for the helper boundary. All432 old/new setup comparisons match, the full
+controller matches after inlining,17 focused cases and38 CPU guard cases pass.
+The affected controller smoke fails identically on baseline and candidate before
+trial-order setup because `_relion_bind_core` is missing. No native/trajectory
+qualification is claimed. No new Ruff findings; existing controller/test findings
+remain. [Checks and reproduction](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/expected_accuracy_order_owner_20260909/result.json).
+
 Diagnostic label cleanup removes three duplicated K-class context classes and a
 dense suffix forwarder. `local_debug.score_dump_label` owns scope restoration;
 label readers share sanitization while keeping their distinct fallback precedence.
