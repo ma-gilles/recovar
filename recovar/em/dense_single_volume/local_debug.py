@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -207,16 +208,46 @@ def parse_dense_per_pose_score_dump_request() -> DensePerPoseScoreDumpRequest:
     )
 
 
+@contextmanager
+def score_dump_label(label: str, *, local: bool = False):
+    """Append a phase/class label and restore the process environment on exit.
+
+    Local scores and fused posteriors retain their separate caller prefixes.
+    Call sites create a fresh scope for each engine invocation.
+    """
+    names = (
+        ("RECOVAR_LOCAL_SCORE_DUMP_LABEL", "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_LABEL")
+        if local else ("RECOVAR_DEBUG_PER_POSE_DUMP_LABEL",)
+    )
+    previous = {}
+    for name in names:
+        old = os.environ.get(name)
+        previous[name] = old
+        os.environ[name] = f"{old}_{label}" if old else label
+    try:
+        yield
+    finally:
+        for name, old in previous.items():
+            if old is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = old
+
+
+def _dump_label_suffix(label: str | None) -> str:
+    if not label:
+        return ""
+    label = re.sub(r"[^A-Za-z0-9_.-]+", "_", label.strip())
+    return f"_{label}" if label else ""
+
+
 def _local_debug_dump_label_suffix() -> str:
     """Return a sanitized optional label suffix for local score diagnostics."""
 
     label = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_LABEL") or os.environ.get(
         "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_LABEL",
     )
-    if not label:
-        return ""
-    label = re.sub(r"[^A-Za-z0-9_.-]+", "_", label.strip())
-    return f"_{label}" if label else ""
+    return _dump_label_suffix(label)
 
 
 def _pass_label_suffix(debug_pass_label: str | None) -> str:
@@ -233,8 +264,7 @@ def _pass_label_suffix(debug_pass_label: str | None) -> str:
 
     if not debug_pass_label:
         return ""
-    label = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(debug_pass_label).strip())
-    return f"_{label}" if label else ""
+    return _dump_label_suffix(str(debug_pass_label))
 
 
 def _local_fused_posterior_dump_label_suffix() -> str:
@@ -250,10 +280,7 @@ def _local_fused_posterior_dump_label_suffix() -> str:
     label = os.environ.get("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_LABEL") or os.environ.get(
         "RECOVAR_LOCAL_SCORE_DUMP_LABEL",
     )
-    if not label:
-        return ""
-    label = re.sub(r"[^A-Za-z0-9_.-]+", "_", label.strip())
-    return f"_{label}" if label else ""
+    return _dump_label_suffix(label)
 
 
 def _target_rows_to_numpy(array, target_rows: list[int], dtype):
@@ -274,21 +301,9 @@ def _debug_capture_dtype(array, *, complex_values: bool = False):
     return np.float64 if dtype.itemsize > np.dtype(np.float32).itemsize else np.float32
 
 
-def _dense_score_dump_label_suffix() -> str:
-    """Return a sanitized optional label suffix for dense score dumps."""
-
-    label = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_LABEL")
-    if not label:
-        return ""
-    label = re.sub(r"[^A-Za-z0-9_.-]+", "_", label.strip())
-    return f"_{label}" if label else ""
-
-
 def dense_score_dump_label_suffix() -> str:
-    """Return the optional label suffix shared by dense score diagnostics."""
-
-    return _dense_score_dump_label_suffix()
-
+    """Return the sanitized optional label suffix shared by dense score dumps."""
+    return _dump_label_suffix(os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_LABEL"))
 
 def maybe_write_dense_per_pose_score_dump(
     *,
@@ -312,7 +327,7 @@ def maybe_write_dense_per_pose_score_dump(
             return
         row = int(hits[0])
         suffix = "_preprior" if preprior else ""
-        label_suffix = _dense_score_dump_label_suffix()
+        label_suffix = dense_score_dump_label_suffix()
         scores_target = np.asarray(scores[row], dtype=np.float64)
         np.save(
             request.dump_dir / f"target{int(request.target):06d}{label_suffix}_block{int(block_index):04d}{suffix}.npy",

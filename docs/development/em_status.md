@@ -50,6 +50,16 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
+Diagnostic label cleanup removes three duplicated K-class context classes and a
+dense suffix forwarder. `local_debug.score_dump_label` owns scope restoration;
+label readers share sanitization while keeping their distinct fallback precedence.
+Net production shrinks61 lines. Baseline152/candidate180 CPU cases pass with the
+same three native-binding skips;38 guard cases pass. All128 old/new nested-context
+operation traces and filename suffixes match, including exceptional exits. A final
+32-case import/label panel passes after import sorting; Ruff is clean. Numerical
+bodies and dump formats remain unchanged; no GPU job or native build was launched.
+[Checks and reproduction](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/score_dump_labels_20260909/result.json).
+
 K-class input preparation now has an explicit `k_class_inputs.py` owner: eight
 unchanged validators/selectors leave scheduling; two unused projector lookups are
 removed. The scheduler loses124 lines; net production grows21 lines for the owner.
