@@ -35,7 +35,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | `2cc66f316`: scale-group validation has one shared owner; local engine 8,913 lines, sparse scorer 17,392, half scorer 1,358, controller 6,123 |
+| Latest production cleanup | `19544d3b6`: normalization inputs are prepared separately from local scoring; local engine 8,879 lines, sparse scorer 17,383, half scorer 1,358, controller 6,123 |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -96,6 +96,15 @@ Failed launcher 13642161 is preserved. No duplicate job or rebuild was launched.
 The new run uses frozen fe847, including the existing double numerical M-step;
 it does not qualify the current primary or all-float32 execution.
 
+The saved-spectrum resolution follow-up verifies the active rule over iterations
+139–156: candidate 2 SSNR at shell 27 falls below 1 at 145 and154, producing size 72
+instead of 74 at 146 and155. Integrator review independently checks 166 named hashes,
+72 serialized scans and 68 next-size links. This explains those branches from the
+incoming spectra; it does not establish the spectra's upstream cause or a causal
+link to the GT loss. The eight counter differences from a replay omitting sampling
+resets remain recorded; full convergence/finalization parity is not established.
+See the [resolution review](vdam_precision_review_20260909.md#saved-spectrum-resolution-boundary).
+
 Raw-prefetch source is unassigned. The RELION header lock is
 released: five diagnostic insertions remain, and shared benchmark binaries plus
 private native captures/builds stay frozen. No shared native writer/build is
@@ -103,6 +112,30 @@ assigned. Local GPU 0 is always reserved; check GPUs 1–3 immediately before us
 and restrict by idle-device UUID, or use Slurm visibility. Avoid duplicate jobs.
 
 ## Engineering work and recent evidence
+
+Normalization-input cleanup `19544d3b6` gives local scoring a separate preparation
+stage in `helpers/normalization_inputs.py`. Its named result contains log-Z,
+log-evidence, Pmax and reconstruction-threshold arrays. Local, sparse and K-class
+callers share eight formerly repeated optional-vector conversions while retaining
+their own domain/exclusivity rules. Existing F64 conversion, exact image-axis shape,
+error order/messages and array storage/lifetimes are preserved. This is not a new
+double-precision execution policy or a change to numerical normalization.
+
+Sealed-preimage comparison matches **14,641 local input combinations and 312
+individual conversions**, including dtype/shape/stride/bytes and exceptions. The
+retained three caller-module ASTs are exact after expanding the changed blocks.
+All **10 original end-to-end CPU cases** pass before/after, plus **21 new boundary
+cases** (31 total, zero skips); the extended CPU/import guard passes **38/38**.
+Focused/guard source manifests are identical and both preserve native hashes.
+Existing tests and thresholds are unchanged; no new Ruff findings.
+
+The local module loses 34 lines (8,913→8,879), including a 35-line reduction inside
+the execution function. Total production source grows 26 lines for the explicit
+owner, named result and shared validation contract; this is a clarity change,
+not net deletion. Commands and evidence:
+`hia_source_review_20260906/normalization_input_owner_20260909/{scope,audit,validation}.json`;
+logs/XML: `pr180_integration_20260908/normalization_inputs_{control,after,guard}_20260909/`.
+No GPU, trajectory or representative runtime qualification follows.
 
 Scale-group cleanup `2cc66f316` replaces four validation/inference copies in
 local EM, sparse K1, fused sparse K-class and K-class subset routing with

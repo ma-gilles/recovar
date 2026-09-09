@@ -266,3 +266,43 @@ under the source-review root. Producer artifacts:
 summary SHA-256 `ca6034718e379b7d9e48988a07820d03cdc2fb6d4b5e6aa70d14e3b21bc83e0b`.
 Board acknowledgement: `handoffs/em_clean_source_closed_saved_curve_review_20260909.json`.
 No new GPU job, source change, baseline update or tolerance change was made.
+
+## Saved-spectrum resolution boundary
+
+The follow-up on frozen fe847 examines the active, non-final K1 resolution rule
+around both candidate-2 departures. Both rules stop at the first shell with
+SSNR below 1, retain the preceding shell and enforce minimum shell 5. Equality
+at 1 passes. With the recorded increment 10 and no high-FSC expansion, next E-size
+is twice the sum of the selected shell and 10. The first event and the event next to the
+GT failure are distinct:
+
+| Post-M iteration | Candidate 2 SSNR, shell 27 | Native 2 SSNR, shell 27 | Next E iteration | Candidate 2/native2 size |
+| --- | ---: | ---: | ---: | --- |
+| 145 | 0.998513566527 | 1.007064 | 146 | 72 / 74 |
+| 154 | 0.998925307446 | 1.000503 | 155 | 72 / 74 |
+
+The formula here is `2 * (shell + 10)`, using shell 26 or 27. Native values are
+serialized with six decimals, candidate values with 12 significant digits; none
+of the decisive values is rounded to 1. At147 and156 the saved sizes agree again.
+Different spectra explain the branch choices with the same rule. This does not
+identify the spectra's earlier cause, establish a general convergence rule match,
+or prove that the smaller window caused the iteration-155 registered-GT loss.
+
+Integrator review independently verifies **166 named artifact/source hashes**,
+all **72 serialized SSNR scans** (four arms, 139–156), **68 following-size links**,
+and the recorded three probes immediately below/at/above 1. It does not rerun the
+native executable, E/M, or the producer's full source-manifest guard. Eight
+counter-prediction differences at 140/150 across all four arms remain in the
+receipt: the limited replay omits sampling resets. Both sources contain those
+resets, but the complete sampling update was not replayed. No counter mismatch
+was silently discarded or reclassified as roundoff.
+
+Artifact: `vdam_source_closed_pair_analysis_20260909/resolution_boundary145/`.
+Failed initial native/candidate STAR-schema attempts remain preserved there.
+Independent review and script:
+`normalization_input_owner_20260909/resolution_review.{json,py}` under the
+source-review root; run the script with the primary pixi Python and CPU visibility.
+Board receipt: `handoffs/em_clean_resolution_boundary_review_20260909.json`.
+Outcome SHA-256: `e1f6f668d67263b5dd4724a40bc398a1656860fec0b0bac8c761afca762635da`.
+The next scientific question is the upstream SSNR construction on matched state;
+no numerical change, new GPU job, precision907 or F32 M adoption follows.

@@ -125,6 +125,15 @@ Empty ID arrays retain the existing one-group convention. Engine callers check
 the flattened image axis; the router has no image-count constraint. The helper
 preserves existing casts and errors and imports independently of execution.
 
+External normalization inputs are prepared by
+[`helpers/normalization_inputs.py`](../../recovar/em/dense_single_volume/helpers/normalization_inputs.py).
+`prepare_local_normalization_inputs` returns named log-Z, log-evidence, Pmax and
+reconstruction-threshold arrays. It owns the local modes' validation order and
+exclusivity; sparse and K-class callers reuse only optional F64 image-vector
+conversion and retain their different semantic checks. This owner prepares inputs;
+posterior arithmetic and normalization kernels remain at their execution sites.
+It preserves input strides and avoids copying already suitable F64 arrays.
+
 Sealed VDAM worker and block-chronology replay lives in
 [`helpers/vdam_replay.py`](../../recovar/em/dense_single_volume/helpers/vdam_replay.py).
 It owns NPZ schema validation, four cached loaders, stack-ID joins, worker/launch
