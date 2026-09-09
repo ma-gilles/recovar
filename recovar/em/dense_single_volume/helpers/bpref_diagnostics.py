@@ -24,6 +24,13 @@ from recovar.em.dense_single_volume.local_backprojection import (
 )
 from recovar.utils.file_hash import sha256_file
 
+_BPREF_MEMBERSHIP_DUMP_DIR_ENV = "RECOVAR_BPREF_MEMBERSHIP_DUMP_DIR"
+_BPREF_MEMBERSHIP_DUMP_ITERATION_ENV = "RECOVAR_BPREF_MEMBERSHIP_DUMP_ITERATION"
+_BPREF_MEMBERSHIP_DUMP_HALF_ENV = "RECOVAR_BPREF_MEMBERSHIP_DUMP_HALF"
+
+_bpref_membership_dump_counter = 0
+
+
 _RELION_X_HALF_BP_PER_PARTICLE_LAUNCH_ENV = "RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH"
 
 
@@ -1271,3 +1278,173 @@ def _require_bpref_device_soft_particle_arm(*, use_relion_x_half_mstep: bool) ->
 
     if not cuda_backproject.relion_x_half_bp_block_topology_requested():
         raise RuntimeError("RECOVAR device signature requires RECOVAR_RELION_X_HALF_BP_BLOCK_TOPOLOGY=1")
+
+
+def _bpref_membership_dump_requested():
+    dump_dir = os.environ.get(_BPREF_MEMBERSHIP_DUMP_DIR_ENV, "").strip()
+    if not dump_dir:
+        return False
+    context_iteration = int(_bpref_contribution_context["iteration"])
+    context_half = int(_bpref_contribution_context["half"])
+    target_iteration = os.environ.get(_BPREF_MEMBERSHIP_DUMP_ITERATION_ENV)
+    if target_iteration and context_iteration != int(target_iteration):
+        return False
+    target_half = os.environ.get(_BPREF_MEMBERSHIP_DUMP_HALF_ENV)
+    if target_half:
+        if int(target_half) not in {1, 2}:
+            raise ValueError(f"{_BPREF_MEMBERSHIP_DUMP_HALF_ENV} must be 1 or 2")
+        if context_half != int(target_half):
+            return False
+    return True
+
+
+def _maybe_dump_k1_bpref_rotation_mass(
+    *,
+    experiment_dataset,
+    image_indices,
+    current_size,
+    actual_counts,
+    rotations,
+    rotation_indices,
+    candidate_translation_count,
+    posterior_rotation_mass,
+    reconstruction_rotation_mass,
+    significant_translation_count,
+    reconstruction_sum_weight,
+    reconstruction_threshold,
+):
+    """Dump the sufficient per-rotation inputs to the BPref denominator."""
+
+    if not _bpref_membership_dump_requested():
+        return
+    dump_dir = os.environ[_BPREF_MEMBERSHIP_DUMP_DIR_ENV].strip()
+    context_iteration = int(_bpref_contribution_context["iteration"])
+    context_half = int(_bpref_contribution_context["half"])
+
+    local_indices = np.asarray(image_indices, dtype=np.int64)
+    original_indices = original_image_indices(experiment_dataset, local_indices)
+    counts = np.asarray(actual_counts, dtype=np.int64)
+    rotations_np = np.asarray(rotations, dtype=np.float32)
+    rotation_indices_np = np.asarray(rotation_indices, dtype=np.int64)
+    candidate_count_np = np.asarray(candidate_translation_count, dtype=np.int32)
+    posterior_mass_np = np.asarray(posterior_rotation_mass)
+    reconstruction_mass_np = np.asarray(reconstruction_rotation_mass)
+    significant_count_np = np.asarray(significant_translation_count, dtype=np.int32)
+    sum_weight_np = np.asarray(reconstruction_sum_weight)
+    threshold_np = np.asarray(reconstruction_threshold)
+
+    batch = local_indices.size
+    topology = posterior_mass_np.shape
+    if counts.shape != (batch,) or len(topology) != 2 or topology[0] != batch:
+        raise ValueError("BPref rotation-mass topology mismatch")
+    if (
+        reconstruction_mass_np.shape != topology
+        or candidate_count_np.shape != topology
+        or significant_count_np.shape != topology
+    ):
+        raise ValueError("BPref rotation-mass arrays have inconsistent topology")
+    if rotations_np.shape != (*topology, 3, 3):
+        raise ValueError("BPref rotation-mass rotation topology mismatch")
+    if rotation_indices_np.ndim == 1:
+        rotation_indices_np = np.broadcast_to(rotation_indices_np[None, :], topology)
+    if rotation_indices_np.shape != topology:
+        raise ValueError("BPref rotation-mass index topology mismatch")
+    if np.any(counts < 0) or np.any(counts > topology[1]):
+        raise ValueError("BPref rotation counts are outside the padded rotation axis")
+    if np.any(candidate_count_np < 0) or np.any(significant_count_np < 0):
+        raise ValueError("BPref translation counts are negative")
+    if np.any(significant_count_np > candidate_count_np):
+        raise ValueError("BPref significant translations exceed candidate translations")
+    if np.any(posterior_mass_np < 0) or np.any(reconstruction_mass_np < 0):
+        raise ValueError("BPref rotation masses are negative")
+    if np.any(reconstruction_mass_np > posterior_mass_np + np.finfo(np.float32).eps):
+        raise ValueError("BPref reconstruction mass exceeds posterior mass")
+    padded = np.arange(topology[1])[None, :] >= counts[:, None]
+    if (
+        np.any(candidate_count_np[padded])
+        or np.any(significant_count_np[padded])
+        or np.any(posterior_mass_np[padded])
+        or np.any(reconstruction_mass_np[padded])
+    ):
+        raise ValueError("BPref padded rotations carry membership or mass")
+    if np.max(candidate_count_np, initial=0) > np.iinfo(np.uint16).max:
+        raise ValueError("BPref candidate translation count exceeds uint16")
+
+    global _bpref_membership_dump_counter
+    dump_index = _bpref_membership_dump_counter
+    _bpref_membership_dump_counter += 1
+    path = Path(dump_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    output = path / (
+        f"bpref_membership_it{context_iteration:03d}_h{context_half}"
+        f"_dump{dump_index:06d}_cs{int(current_size):03d}.npz"
+    )
+    np.savez(
+        output,
+        schema=np.asarray("recovar-bpref-rotation-mass-v2"),
+        iteration=np.int32(context_iteration),
+        half=np.int32(context_half),
+        current_size=np.int32(current_size),
+        local_indices=local_indices,
+        original_indices=original_indices,
+        stack_indices_1based=original_indices + 1,
+        actual_counts=counts,
+        rotations=rotations,
+        rotation_indices=rotation_indices_np,
+        candidate_translation_count=candidate_count_np.astype(np.uint16),
+        posterior_rotation_mass=posterior_mass_np,
+        reconstruction_rotation_mass=reconstruction_mass_np,
+        significant_translation_count=significant_count_np.astype(np.uint16),
+        reconstruction_sum_weight=sum_weight_np,
+        reconstruction_threshold=threshold_np,
+    )
+
+
+def _maybe_dump_k1_bpref_membership(
+    *,
+    experiment_dataset,
+    image_indices,
+    current_size,
+    actual_counts,
+    rotations,
+    rotation_indices,
+    fine_translations,
+    candidate_mask,
+    posterior_probs,
+    reconstruction_probs,
+    reconstruction_mask,
+    reconstruction_sum_weight,
+    reconstruction_threshold,
+):
+    """Collapse a rectangular fine posterior to sufficient rotation masses."""
+
+    if not _bpref_membership_dump_requested():
+        return
+    candidate_mask_np = np.asarray(candidate_mask, dtype=bool)
+    posterior_np = np.asarray(posterior_probs)
+    reconstruction_np = np.asarray(reconstruction_probs)
+    reconstruction_mask_np = np.asarray(reconstruction_mask, dtype=bool)
+    if posterior_np.ndim != 3:
+        raise ValueError("BPref membership posterior topology mismatch")
+    if reconstruction_np.shape != posterior_np.shape:
+        raise ValueError("BPref membership reconstruction-posterior shape mismatch")
+    if candidate_mask_np.shape != posterior_np.shape:
+        raise ValueError("BPref membership candidate-mask shape mismatch")
+    if reconstruction_mask_np.shape != posterior_np.shape:
+        raise ValueError("BPref membership reconstruction-mask shape mismatch")
+    if not np.array_equal(reconstruction_mask_np, reconstruction_np > 0):
+        raise ValueError("BPref membership mask does not equal positive reconstruction posterior")
+    _maybe_dump_k1_bpref_rotation_mass(
+        experiment_dataset=experiment_dataset,
+        image_indices=image_indices,
+        current_size=current_size,
+        actual_counts=actual_counts,
+        rotations=rotations,
+        rotation_indices=rotation_indices,
+        candidate_translation_count=np.sum(candidate_mask_np, axis=-1, dtype=np.int32),
+        posterior_rotation_mass=np.sum(posterior_np, axis=-1),
+        reconstruction_rotation_mass=np.sum(reconstruction_np, axis=-1),
+        significant_translation_count=np.sum(reconstruction_mask_np, axis=-1, dtype=np.int32),
+        reconstruction_sum_weight=reconstruction_sum_weight,
+        reconstruction_threshold=reconstruction_threshold,
+    )
