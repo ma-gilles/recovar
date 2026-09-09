@@ -17,15 +17,14 @@ import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
+from recovar.em.dense_single_volume import fixed_capacity_local
 from recovar.em.dense_single_volume.helpers import relion_ctf
 from recovar.em.dense_single_volume.helpers import vdam_replay
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
 from recovar.em.dense_single_volume.deferred_noise_pack import pack_noise_pixel_capacity
 from recovar.em.dense_single_volume.fixed_capacity_local import (
-    _FixedCapacityLocalCallView,
     _FixedCapacityLocalExecutionBundle,
-    _materialize_fixed_capacity_local_call_view,
 )
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_maybe_windowed as _adjoint_slice_volume_maybe_windowed,
@@ -174,6 +173,7 @@ from recovar.em.dense_single_volume.local_debug import (
 from recovar.em.dense_single_volume.local_layout import (
     LocalBucketSpec,
     LocalHypothesisLayout,
+    _local_mstep_rotations,
     _exact_bucket_rotation_size,
     _exact_local_large_bucket_quantum,
     _resolve_exact_local_bucket_radix,
@@ -469,21 +469,6 @@ _VISIBLE_GPU_MEMORY_BYTES_CACHE: int | None = None
 # hybrid path. This path still packs rows before backprojection; the cap only
 # guards the temporary fused summed/ctf tensor outputs.
 EXACT_LOCAL_BIG_JIT_MIN_SIGNIFICANT_ROW_FRACTION = 0.25
-
-
-def _local_mstep_rotations(bucket: LocalBucketSpec) -> np.ndarray:
-    """Return the adjoint-only rotations, falling back to scoring rotations.
-
-    Preserves the source array's own dtype rather than forcing float32:
-    ``bucket.local_mstep_rotations``/``local_rotations`` are already built by
-    ``bucket_local_hypothesis_layout`` at whatever precision the caller's
-    ``LocalHypothesisLayout`` chose (float64 under double-precision scoring).
-    """
-
-    rotations = bucket.local_mstep_rotations
-    if rotations is None:
-        rotations = bucket.local_rotations
-    return np.asarray(rotations)
 
 
 def _maybe_write_vdam_candidate_block_map(
@@ -2418,437 +2403,6 @@ def _build_local_fused_pair_fine_arguments(
         "valid_pair_count": int(np.sum(pair_arrays["pair_counts"], dtype=np.int64)),
         "dense_candidate_capacity": int(candidate_mask.size),
     }
-
-
-_FIXED_CAPACITY_IMAGE_PRE_SHIFTS_METADATA = "image_pre_shifts"
-
-
-def _fixed_capacity_call_arrays_match(field_name: str, actual, expected) -> None:
-    actual_array = np.asarray(actual)
-    expected_array = np.asarray(expected)
-    if (
-        actual_array.dtype != expected_array.dtype
-        or actual_array.shape != expected_array.shape
-        or actual_array.tobytes(order="C") != expected_array.tobytes(order="C")
-    ):
-        raise ValueError(f"fixed-capacity call {field_name} does not match the mature call")
-
-
-def _validate_fixed_capacity_call_matches_mature(
-    view: _FixedCapacityLocalCallView,
-    mature_bucket: LocalBucketSpec,
-    *,
-    image_pre_shifts,
-) -> None:
-    """Require one sealed call view to equal its authoritative mature call."""
-
-    if not isinstance(view, _FixedCapacityLocalCallView):
-        raise ValueError("fixed-capacity score-only selection requires a fixed-capacity call view")
-    if not isinstance(mature_bucket, LocalBucketSpec):
-        raise ValueError("fixed-capacity score-only selection requires a mature local bucket")
-    call_index = int(view.call_index)
-    if (
-        int(mature_bucket.bucket_image_count) != view.physical_image_capacity
-        or int(mature_bucket.bucket_rotation_count) != view.physical_rotation_capacity
-    ):
-        raise ValueError(
-            f"fixed-capacity call {call_index} physical B x R shape does not match the mature call"
-        )
-
-    fixed_bucket = view.bucket
-    pairs = (
-        ("image_indices", fixed_bucket.image_indices, mature_bucket.image_indices),
-        ("actual_rotation_counts", fixed_bucket.actual_rotation_counts, mature_bucket.actual_rotation_counts),
-        ("local_rotation_ids", fixed_bucket.local_rotation_ids, mature_bucket.local_rotation_ids),
-        ("local_rotations", fixed_bucket.local_rotations, mature_bucket.local_rotations),
-        ("local_mstep_rotations", fixed_bucket.local_mstep_rotations, _local_mstep_rotations(mature_bucket)),
-        ("local_rotation_log_prior", fixed_bucket.local_rotation_log_prior, mature_bucket.local_rotation_log_prior),
-        ("local_rotation_mask", fixed_bucket.local_rotation_mask, mature_bucket.local_rotation_mask),
-        ("translation_log_prior", fixed_bucket.translation_log_prior, mature_bucket.translation_log_prior),
-    )
-    for field_name, fixed_value, mature_value in pairs:
-        _fixed_capacity_call_arrays_match(field_name, fixed_value, mature_value)
-
-    for field_name in ("local_rotation_posterior_ids", "local_sample_mask"):
-        fixed_value = getattr(fixed_bucket, field_name)
-        mature_value = getattr(mature_bucket, field_name)
-        if (fixed_value is None) != (mature_value is None):
-            raise ValueError(
-                f"fixed-capacity call {call_index} {field_name} optional topology does not match the mature call"
-            )
-        if fixed_value is not None:
-            _fixed_capacity_call_arrays_match(field_name, fixed_value, mature_value)
-
-    if _FIXED_CAPACITY_IMAGE_PRE_SHIFTS_METADATA not in view.metadata_by_name:
-        raise ValueError(
-            f"fixed-capacity call {call_index} is missing required image_pre_shifts metadata",
-        )
-    source_pre_shifts = np.asarray(image_pre_shifts)
-    if source_pre_shifts.dtype != np.dtype(np.float32) or source_pre_shifts.ndim != 2 or source_pre_shifts.shape[1] != 2:
-        raise ValueError("fixed-capacity score-only image_pre_shifts must have canonical float32 shape (N, 2)")
-    image_indices = np.asarray(fixed_bucket.image_indices, dtype=np.int64)
-    if image_indices.size == 0 or np.any(image_indices < 0) or int(np.max(image_indices)) >= source_pre_shifts.shape[0]:
-        raise ValueError(
-            f"fixed-capacity call {call_index} image_pre_shifts do not cover its image IDs"
-        )
-    call_pre_shifts = np.asarray(view.metadata_by_name[_FIXED_CAPACITY_IMAGE_PRE_SHIFTS_METADATA])
-    if call_pre_shifts.flags.writeable:
-        raise ValueError(
-            f"fixed-capacity call {call_index} image_pre_shifts metadata must be read-only"
-        )
-    _fixed_capacity_call_arrays_match(
-        "image_pre_shifts metadata",
-        call_pre_shifts,
-        source_pre_shifts[image_indices],
-    )
-
-
-def _select_fixed_capacity_score_only_view(
-    bundle: _FixedCapacityLocalExecutionBundle,
-    mature_bucket: LocalBucketSpec,
-    *,
-    call_index: int,
-    n_classes,
-    class_log_prior: float,
-    image_pre_shifts,
-    image_corrections,
-    scale_corrections,
-    score_only: bool,
-    disable_adjoint_y: bool,
-    disable_adjoint_ctf: bool,
-    accumulate_noise: bool,
-    mstep_requested: bool,
-    unsupported_diagnostics: tuple[str, ...] = (),
-    enabled: bool = False,
-) -> _FixedCapacityLocalCallView | None:
-    """Select one sealed call view for the narrow K=1 score-only seam."""
-
-    if not enabled:
-        return None
-    if isinstance(n_classes, (bool, np.bool_)) or not isinstance(n_classes, (int, np.integer)):
-        raise ValueError("fixed-capacity score-only execution requires an explicit integer class count")
-    if int(n_classes) != 1:
-        raise ValueError("fixed-capacity score-only execution currently supports K=1 only")
-    if float(class_log_prior) != 0.0:
-        raise ValueError("fixed-capacity K=1 score-only execution requires a zero class log prior")
-    if not score_only:
-        raise ValueError("fixed-capacity local execution currently supports score-only execution")
-    if not (disable_adjoint_y and disable_adjoint_ctf):
-        raise ValueError("fixed-capacity score-only execution requires both adjoints disabled")
-    if accumulate_noise:
-        raise ValueError("fixed-capacity score-only execution does not support noise accumulation")
-    if mstep_requested:
-        raise ValueError("fixed-capacity score-only execution does not support an M-step")
-    if image_corrections is not None or scale_corrections is not None:
-        raise ValueError("fixed-capacity score-only execution does not yet support image or scale corrections")
-    if image_pre_shifts is None:
-        raise ValueError("fixed-capacity score-only execution requires explicit image_pre_shifts metadata")
-    unsupported_diagnostics = tuple(unsupported_diagnostics)
-    if unsupported_diagnostics:
-        raise ValueError(
-            "fixed-capacity score-only execution does not support diagnostics: "
-            + ", ".join(unsupported_diagnostics),
-        )
-
-    view = _materialize_fixed_capacity_local_call_view(bundle, call_index=call_index, enabled=True)
-    _validate_fixed_capacity_call_matches_mature(
-        view,
-        mature_bucket,
-        image_pre_shifts=image_pre_shifts,
-    )
-    return view
-
-
-def _select_fixed_capacity_call0_score_only_view(
-    bundle: _FixedCapacityLocalExecutionBundle,
-    mature_bucket: LocalBucketSpec,
-    **kwargs,
-) -> _FixedCapacityLocalCallView | None:
-    """Backward-compatible call-0 wrapper for focused seam tests."""
-
-    return _select_fixed_capacity_score_only_view(
-        bundle,
-        mature_bucket,
-        call_index=0,
-        **kwargs,
-    )
-
-
-def _fetch_and_validate_fixed_capacity_call_operands(
-    experiment_dataset,
-    view: _FixedCapacityLocalCallView,
-    mature_bucket: LocalBucketSpec,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Match sealed call operands to an authoritative current-dataset fetch."""
-
-    if not isinstance(view, _FixedCapacityLocalCallView):
-        raise ValueError("fixed-capacity current-dataset validation requires a sealed call view")
-    if not isinstance(mature_bucket, LocalBucketSpec):
-        raise ValueError("fixed-capacity current-dataset validation requires a mature call bucket")
-    call_index = int(view.call_index)
-    expected_indices = np.asarray(mature_bucket.image_indices)
-    _fixed_capacity_call_arrays_match(
-        "current-dataset fetch image order",
-        expected_indices,
-        view.bucket.image_indices,
-    )
-    mature_raw, mature_ctf, fetched_indices = fetch_indexed_batch(
-        experiment_dataset,
-        expected_indices,
-    )
-    fetched_indices = np.asarray(fetched_indices)
-    if (
-        fetched_indices.ndim != 1
-        or not np.issubdtype(fetched_indices.dtype, np.integer)
-        or fetched_indices.shape != expected_indices.shape
-        or not np.array_equal(fetched_indices, expected_indices)
-    ):
-        raise ValueError(
-            f"fixed-capacity call {call_index} current-dataset fetch did not preserve the authoritative image order",
-        )
-    _fixed_capacity_call_arrays_match(
-        "current-dataset raw_images",
-        mature_raw,
-        view.raw_images,
-    )
-    _fixed_capacity_call_arrays_match(
-        "current-dataset ctf_params",
-        mature_ctf,
-        view.ctf_params,
-    )
-    return view.raw_images, view.ctf_params, expected_indices
-
-
-def _fetch_and_validate_fixed_capacity_call0_operands(
-    experiment_dataset,
-    view: _FixedCapacityLocalCallView,
-    mature_bucket: LocalBucketSpec,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Backward-compatible call-0 wrapper for focused seam tests."""
-
-    if not isinstance(view, _FixedCapacityLocalCallView) or view.call_index != 0:
-        raise ValueError("fixed-capacity current-dataset validation requires the sealed call-0 view")
-    return _fetch_and_validate_fixed_capacity_call_operands(
-        experiment_dataset,
-        view,
-        mature_bucket,
-    )
-
-
-def _validate_fixed_capacity_padded_call(
-    view: _FixedCapacityLocalCallView,
-    padded_bucket: LocalBucketSpec,
-    padded_batch_data,
-    padded_ctf_params,
-    valid_image_mask,
-    padded_batch_size: int,
-) -> None:
-    """Fail if mature padding did not produce canonical fixed B x R inputs."""
-
-    if not isinstance(view, _FixedCapacityLocalCallView):
-        raise ValueError("fixed-capacity padded validation requires a sealed call view")
-    call_index = int(view.call_index)
-    B = int(view.physical_image_capacity)
-    R = int(view.physical_rotation_capacity)
-    b = int(view.valid_image_count)
-    if int(padded_batch_size) != B:
-        raise ValueError(
-            f"fixed-capacity call {call_index} common padding produced the wrong physical image size"
-        )
-    array_specs = (
-        ("actual_rotation_counts", padded_bucket.actual_rotation_counts, np.int32, (B,)),
-        ("local_rotation_ids", padded_bucket.local_rotation_ids, np.int32, (B, R)),
-        ("local_rotations", padded_bucket.local_rotations, np.float32, (B, R, 3, 3)),
-        ("local_mstep_rotations", padded_bucket.local_mstep_rotations, np.float32, (B, R, 3, 3)),
-        ("local_rotation_log_prior", padded_bucket.local_rotation_log_prior, np.float32, (B, R)),
-        ("local_rotation_mask", padded_bucket.local_rotation_mask, np.bool_, (B, R)),
-    )
-    for field_name, value, dtype, shape in array_specs:
-        array = np.asarray(value)
-        if array.dtype != np.dtype(dtype) or array.shape != shape:
-            raise ValueError(
-                f"fixed-capacity padded call {call_index} {field_name} has noncanonical dtype or shape",
-            )
-    fixed_bucket = view.bucket
-    if (
-        np.asarray(padded_bucket.image_indices).dtype != np.dtype(np.int32)
-        or np.asarray(padded_bucket.image_indices).shape != (b,)
-    ):
-        raise ValueError(
-            f"fixed-capacity padded call {call_index} image IDs have noncanonical dtype or shape"
-        )
-    prefix_pairs = (
-        ("image_indices", padded_bucket.image_indices, fixed_bucket.image_indices),
-        ("actual_rotation_counts", np.asarray(padded_bucket.actual_rotation_counts)[:b], fixed_bucket.actual_rotation_counts),
-        ("local_rotation_ids", np.asarray(padded_bucket.local_rotation_ids)[:b], fixed_bucket.local_rotation_ids),
-        ("local_rotations", np.asarray(padded_bucket.local_rotations)[:b], fixed_bucket.local_rotations),
-        (
-            "local_mstep_rotations",
-            np.asarray(padded_bucket.local_mstep_rotations)[:b],
-            fixed_bucket.local_mstep_rotations,
-        ),
-        (
-            "local_rotation_log_prior",
-            np.asarray(padded_bucket.local_rotation_log_prior)[:b],
-            fixed_bucket.local_rotation_log_prior,
-        ),
-        ("local_rotation_mask", np.asarray(padded_bucket.local_rotation_mask)[:b], fixed_bucket.local_rotation_mask),
-    )
-    for field_name, padded_value, fixed_value in prefix_pairs:
-        _fixed_capacity_call_arrays_match(f"padded {field_name} prefix", padded_value, fixed_value)
-    if np.any(np.asarray(padded_bucket.actual_rotation_counts)[b:] != 0):
-        raise ValueError(f"fixed-capacity padded call {call_index} row-count tail is not zero")
-    translation_prior = np.asarray(padded_bucket.translation_log_prior)
-    if (
-        translation_prior.dtype != np.dtype(np.float32)
-        or translation_prior.ndim != 2
-        or translation_prior.shape[0] != B
-    ):
-        raise ValueError(
-            f"fixed-capacity padded call {call_index} translation priors have noncanonical dtype or shape"
-        )
-    batch = np.asarray(padded_batch_data)
-    ctf = np.asarray(padded_ctf_params)
-    image_mask = np.asarray(valid_image_mask)
-    if batch.dtype != np.dtype(np.float32) or batch.ndim != 3 or batch.shape[0] != B:
-        raise ValueError(
-            f"fixed-capacity padded call {call_index} raw images have noncanonical dtype or shape"
-        )
-    if ctf.dtype != np.dtype(np.float32) or ctf.ndim != 2 or ctf.shape[0] != B:
-        raise ValueError(
-            f"fixed-capacity padded call {call_index} CTF parameters have noncanonical dtype or shape"
-        )
-    expected_image_mask = np.arange(B, dtype=np.int64) < b
-    if image_mask.dtype != np.bool_ or not np.array_equal(image_mask, expected_image_mask):
-        raise ValueError(
-            f"fixed-capacity padded call {call_index} has a noncanonical valid-image mask"
-        )
-    _fixed_capacity_call_arrays_match(
-        "padded translation-prior prefix",
-        translation_prior[:b],
-        fixed_bucket.translation_log_prior,
-    )
-    _fixed_capacity_call_arrays_match("padded raw-image prefix", batch[:b], view.raw_images)
-    _fixed_capacity_call_arrays_match("padded CTF prefix", ctf[:b], view.ctf_params)
-
-    expected_rotation_mask = np.arange(R, dtype=np.int64)[None, :] < np.asarray(
-        padded_bucket.actual_rotation_counts,
-        dtype=np.int64,
-    )[:, None]
-    if not np.array_equal(padded_bucket.local_rotation_mask, expected_rotation_mask):
-        raise ValueError(
-            f"fixed-capacity padded call {call_index} has a noncanonical rotation mask"
-        )
-    inactive = ~expected_rotation_mask
-    identity = np.eye(3, dtype=np.float32)
-    if np.any(np.asarray(padded_bucket.local_rotation_ids)[inactive] != -1):
-        raise ValueError(
-            f"fixed-capacity padded call {call_index} rotation-ID padding is not -1"
-        )
-    if not np.array_equal(
-        np.asarray(padded_bucket.local_rotations)[inactive],
-        np.broadcast_to(identity, np.asarray(padded_bucket.local_rotations)[inactive].shape),
-    ) or not np.array_equal(
-        np.asarray(padded_bucket.local_mstep_rotations)[inactive],
-        np.broadcast_to(identity, np.asarray(padded_bucket.local_mstep_rotations)[inactive].shape),
-    ):
-        raise ValueError(
-            f"fixed-capacity padded call {call_index} rotation padding is not identity"
-        )
-    if np.any(
-        np.asarray(padded_bucket.local_rotation_log_prior)[inactive]
-        != np.asarray(-1e30, dtype=np.float32)
-    ):
-        raise ValueError(
-            f"fixed-capacity padded call {call_index} rotation-prior padding is not -1e30"
-        )
-    if b < B:
-        if np.any(translation_prior[b:] != 0) or np.any(batch[b:] != 0):
-            raise ValueError(
-                f"fixed-capacity padded call {call_index} image-tail padding is not zero"
-            )
-        if not np.array_equal(ctf[b:], np.broadcast_to(ctf[0], ctf[b:].shape)):
-            raise ValueError(
-                f"fixed-capacity padded call {call_index} CTF tail does not repeat the first active row"
-            )
-    if (
-        not np.all(np.isfinite(np.asarray(padded_bucket.local_rotations)))
-        or not np.all(np.isfinite(np.asarray(padded_bucket.local_mstep_rotations)))
-        or np.any(np.isnan(padded_bucket.local_rotation_log_prior))
-        or np.any(np.isnan(translation_prior))
-        or not np.all(np.isfinite(batch))
-        or not np.all(np.isfinite(ctf))
-    ):
-        raise ValueError(f"fixed-capacity padded call {call_index} contains NaN poison")
-    if np.any(np.isneginf(np.asarray(padded_bucket.local_rotation_log_prior)[inactive])):
-        raise ValueError(
-            f"fixed-capacity padded call {call_index} contains whole-arena -inf padding"
-        )
-    if padded_bucket.local_rotation_posterior_ids is not None:
-        posterior_ids = np.asarray(padded_bucket.local_rotation_posterior_ids)
-        if posterior_ids.dtype != np.dtype(np.int32) or posterior_ids.shape != (B, R):
-            raise ValueError(
-                f"fixed-capacity padded call {call_index} posterior IDs have noncanonical dtype or shape"
-            )
-        if np.any(posterior_ids[inactive] != -1):
-            raise ValueError(
-                f"fixed-capacity padded call {call_index} posterior-ID padding is not -1"
-            )
-        if fixed_bucket.local_rotation_posterior_ids is None:
-            raise ValueError(
-                f"fixed-capacity padded call {call_index} posterior-ID topology changed during padding"
-            )
-        _fixed_capacity_call_arrays_match(
-            "padded posterior-ID prefix",
-            posterior_ids[:b],
-            fixed_bucket.local_rotation_posterior_ids,
-        )
-    elif fixed_bucket.local_rotation_posterior_ids is not None:
-        raise ValueError(f"fixed-capacity padded call {call_index} lost posterior IDs during padding")
-    if padded_bucket.local_sample_mask is not None:
-        sample_mask = np.asarray(padded_bucket.local_sample_mask)
-        expected_sample_shape = (B, R, translation_prior.shape[1])
-        if sample_mask.dtype != np.bool_ or sample_mask.shape != expected_sample_shape:
-            raise ValueError(
-                f"fixed-capacity padded call {call_index} sample mask has noncanonical dtype or shape"
-            )
-        if np.any(sample_mask[inactive]):
-            raise ValueError(
-                f"fixed-capacity padded call {call_index} sample-mask padding is not false"
-            )
-        if fixed_bucket.local_sample_mask is None:
-            raise ValueError(
-                f"fixed-capacity padded call {call_index} sample-mask topology changed during padding"
-            )
-        _fixed_capacity_call_arrays_match(
-            "padded sample-mask prefix",
-            sample_mask[:b],
-            fixed_bucket.local_sample_mask,
-        )
-    elif fixed_bucket.local_sample_mask is not None:
-        raise ValueError(f"fixed-capacity padded call {call_index} lost its sample mask during padding")
-
-
-def _validate_fixed_capacity_padded_call0(
-    view: _FixedCapacityLocalCallView,
-    padded_bucket: LocalBucketSpec,
-    padded_batch_data,
-    padded_ctf_params,
-    valid_image_mask,
-    padded_batch_size: int,
-) -> None:
-    """Backward-compatible call-0 wrapper for focused seam tests."""
-
-    if not isinstance(view, _FixedCapacityLocalCallView) or view.call_index != 0:
-        raise ValueError("fixed-capacity padded validation requires the sealed call-0 view")
-    _validate_fixed_capacity_padded_call(
-        view,
-        padded_bucket,
-        padded_batch_data,
-        padded_ctf_params,
-        valid_image_mask,
-        padded_batch_size,
-    )
 
 
 def _invoke_local_bucket_big_jit(*args, **kwargs):
@@ -5022,7 +4576,7 @@ def run_local_em_exact(
         fetch_t0 = time.time()
         fixed_capacity_call_view = None
         if fixed_capacity_enabled:
-            fixed_capacity_call_view = _select_fixed_capacity_score_only_view(
+            fixed_capacity_call_view = fixed_capacity_local._select_fixed_capacity_score_only_view(
                 _fixed_capacity_bundle,
                 bucket,
                 call_index=bucket_index,
@@ -5039,7 +4593,7 @@ def run_local_em_exact(
                 unsupported_diagnostics=fixed_capacity_unsupported_diagnostics,
                 enabled=True,
             )
-            batch_data, ctf_params, fetched_indices = _fetch_and_validate_fixed_capacity_call_operands(
+            batch_data, ctf_params, fetched_indices = fixed_capacity_local._fetch_and_validate_fixed_capacity_call_operands(
                 experiment_dataset,
                 fixed_capacity_call_view,
                 bucket,
@@ -5228,7 +4782,7 @@ def run_local_em_exact(
                 ctf_params,
             )
             if fixed_capacity_call_view is not None:
-                _validate_fixed_capacity_padded_call(
+                fixed_capacity_local._validate_fixed_capacity_padded_call(
                     fixed_capacity_call_view,
                     bucket,
                     batch_data,

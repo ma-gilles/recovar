@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_big_jit, local_em_engine
+from recovar.em.dense_single_volume import fixed_capacity_local, local_big_jit, local_em_engine
 from recovar.em.dense_single_volume.batch_planning import (
     _plan_fixed_capacity_whole_local,
     _seal_fixed_capacity_physical_order,
@@ -326,9 +326,10 @@ def _select_call0(bundle, mature_bucket, default_image_pre_shifts, **overrides):
         "enabled": True,
     }
     options.update(overrides)
-    return local_em_engine._select_fixed_capacity_call0_score_only_view(
+    return fixed_capacity_local._select_fixed_capacity_score_only_view(
         bundle,
         mature_bucket,
+        call_index=0,
         **options,
     )
 
@@ -459,7 +460,7 @@ def test_fixed_capacity_nonzero_call_uses_shared_selection_fetch_and_padding_pat
         image_capacity=1,
         include_optional=True,
     )
-    view = local_em_engine._select_fixed_capacity_score_only_view(
+    view = fixed_capacity_local._select_fixed_capacity_score_only_view(
         bundle,
         mature_bucket,
         call_index=1,
@@ -475,14 +476,14 @@ def test_fixed_capacity_nonzero_call_uses_shared_selection_fetch_and_padding_pat
         mstep_requested=False,
         enabled=True,
     )
-    raw, ctf, fetched_indices = local_em_engine._fetch_and_validate_fixed_capacity_call_operands(
+    raw, ctf, fetched_indices = fixed_capacity_local._fetch_and_validate_fixed_capacity_call_operands(
         _IndexedDataset(),
         view,
         mature_bucket,
     )
 
     padded = local_em_engine._pad_local_big_jit_image_axis(view.bucket, raw, ctf)
-    local_em_engine._validate_fixed_capacity_padded_call(view, *padded)
+    fixed_capacity_local._validate_fixed_capacity_padded_call(view, *padded)
 
     assert view.call_index == 1
     np.testing.assert_array_equal(fetched_indices, [1])
@@ -541,7 +542,7 @@ def test_fixed_and_mature_call0_use_identical_common_padding_inputs():
     mature_raw = dataset.images[mature_bucket.image_indices]
     mature_ctf = dataset.ctf_params[mature_bucket.image_indices]
     fixed_raw, fixed_ctf, fetched_indices = (
-        local_em_engine._fetch_and_validate_fixed_capacity_call0_operands(
+        fixed_capacity_local._fetch_and_validate_fixed_capacity_call_operands(
             dataset,
             view,
             mature_bucket,
@@ -564,7 +565,7 @@ def test_fixed_and_mature_call0_use_identical_common_padding_inputs():
     for fixed_value, mature_value in zip(fixed_padded[1:4], mature_padded[1:4], strict=True):
         np.testing.assert_array_equal(fixed_value, mature_value)
     assert fixed_padded[4] == mature_padded[4] == 4
-    local_em_engine._validate_fixed_capacity_padded_call0(view, *fixed_padded)
+    fixed_capacity_local._validate_fixed_capacity_padded_call(view, *fixed_padded)
     padded_bucket, padded_raw, padded_ctf, valid_image_mask, _ = fixed_padded
     np.testing.assert_array_equal(valid_image_mask, [True, True, False, False])
     assert np.all(padded_bucket.translation_log_prior[2:] == 0)
@@ -576,7 +577,7 @@ def test_fixed_capacity_call0_common_padding_accepts_full_physical_image_capacit
     _, _, _, bundle, mature_bucket, image_pre_shifts = _call0_fixture(call0_image_capacity=2)
     view = _select_call0(bundle, mature_bucket, image_pre_shifts)
     dataset = _IndexedDataset()
-    raw, ctf, fetched_indices = local_em_engine._fetch_and_validate_fixed_capacity_call0_operands(
+    raw, ctf, fetched_indices = fixed_capacity_local._fetch_and_validate_fixed_capacity_call_operands(
         dataset,
         view,
         mature_bucket,
@@ -590,14 +591,14 @@ def test_fixed_capacity_call0_common_padding_accepts_full_physical_image_capacit
     assert padded[2] is ctf
     np.testing.assert_array_equal(fetched_indices, view.bucket.image_indices)
     np.testing.assert_array_equal(padded[3], [True, True])
-    local_em_engine._validate_fixed_capacity_padded_call0(view, *padded)
+    fixed_capacity_local._validate_fixed_capacity_padded_call(view, *padded)
 
 
 def test_fixed_capacity_call0_common_padding_accepts_active_row_equal_to_radix():
     _, _, _, bundle, mature_bucket, image_pre_shifts = _call0_fixture(call0_row_counts=(4, 3))
     view = _select_call0(bundle, mature_bucket, image_pre_shifts)
     dataset = _IndexedDataset()
-    raw, ctf, _ = local_em_engine._fetch_and_validate_fixed_capacity_call0_operands(
+    raw, ctf, _ = fixed_capacity_local._fetch_and_validate_fixed_capacity_call_operands(
         dataset,
         view,
         mature_bucket,
@@ -607,14 +608,14 @@ def test_fixed_capacity_call0_common_padding_accepts_active_row_equal_to_radix()
 
     assert view.bucket.actual_rotation_counts[0] == view.physical_rotation_capacity == 4
     assert np.all(view.bucket.local_rotation_mask[0])
-    local_em_engine._validate_fixed_capacity_padded_call0(view, *padded)
+    fixed_capacity_local._validate_fixed_capacity_padded_call(view, *padded)
 
 
 def test_fixed_capacity_call0_common_padding_accepts_absent_optional_arrays():
     _, _, _, bundle, mature_bucket, image_pre_shifts = _call0_fixture(include_optional=False)
     view = _select_call0(bundle, mature_bucket, image_pre_shifts)
     dataset = _IndexedDataset()
-    raw, ctf, _ = local_em_engine._fetch_and_validate_fixed_capacity_call0_operands(
+    raw, ctf, _ = fixed_capacity_local._fetch_and_validate_fixed_capacity_call_operands(
         dataset,
         view,
         mature_bucket,
@@ -626,7 +627,7 @@ def test_fixed_capacity_call0_common_padding_accepts_absent_optional_arrays():
     assert view.bucket.local_sample_mask is None
     assert padded[0].local_rotation_posterior_ids is None
     assert padded[0].local_sample_mask is None
-    local_em_engine._validate_fixed_capacity_padded_call0(view, *padded)
+    fixed_capacity_local._validate_fixed_capacity_padded_call(view, *padded)
 
 
 @pytest.mark.parametrize("mutated_field", ("raw_images", "ctf_params"))
@@ -649,7 +650,7 @@ def test_fixed_capacity_call0_rejects_current_dataset_operand_mutation_before_ji
     )
 
     with pytest.raises(ValueError, match=f"current-dataset {mutated_field} does not match"):
-        local_em_engine._fetch_and_validate_fixed_capacity_call0_operands(
+        fixed_capacity_local._fetch_and_validate_fixed_capacity_call_operands(
             dataset,
             view,
             mature_bucket,
@@ -675,7 +676,7 @@ def test_fixed_capacity_call0_rejects_different_current_dataset_with_same_plan_g
     assert view.descriptor_fingerprint == plan.descriptor_fingerprint
     assert view.generation_token is plan.generation_token
     with pytest.raises(ValueError, match="current-dataset raw_images does not match"):
-        local_em_engine._fetch_and_validate_fixed_capacity_call0_operands(
+        fixed_capacity_local._fetch_and_validate_fixed_capacity_call_operands(
             different_dataset,
             view,
             mature_bucket,
@@ -711,7 +712,7 @@ def test_fixed_capacity_call0_rejects_current_dataset_fetch_order_before_jit(mon
     )
 
     with pytest.raises(ValueError, match="did not preserve the authoritative image order"):
-        local_em_engine._fetch_and_validate_fixed_capacity_call0_operands(
+        fixed_capacity_local._fetch_and_validate_fixed_capacity_call_operands(
             dataset,
             view,
             mature_bucket,
@@ -828,7 +829,7 @@ def test_fixed_capacity_call0_padded_validator_rejects_noncanonical_tail():
     padded[0] = replace(padded[0], translation_log_prior=corrupted_prior)
 
     with pytest.raises(ValueError, match="image-tail padding is not zero"):
-        local_em_engine._validate_fixed_capacity_padded_call0(view, *padded)
+        fixed_capacity_local._validate_fixed_capacity_padded_call(view, *padded)
 
 
 def test_local_big_jit_shared_invocation_forwards_one_call_without_numeric_changes(monkeypatch):
