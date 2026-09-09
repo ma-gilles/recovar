@@ -183,3 +183,16 @@ checkpoint against both native repeats; old1 first fails at155 and reaches
 source/native provenance, broader K1/K4 quality or representative runtime gates.
 No uniform policy win or adoption follows. The independent saved-curve audit
 and its exact scope remain recorded above; no new fit, FFT or GPU run was made.
+
+A later oracle inventory closes recorded source/build identity for private full
+non-MPI RELION executable `6c54d2ac…`, built in 13636510. It does not close the
+historical `2d070d64…` binary used above. Integrator review verified 54 material
+hashes across the inventory and reporting proposal, including the source archive
+file, build manifests/receipts and executable; it did not independently extract
+all 1507 archive members or rehash all 13034 external dependency entries.
+Allocation runtime dependencies and actual scientific outcomes remain separate.
+See `handoffs/em_clean_reporting_oracle_review_20260909.json` for the exact scope.
+The new four-arm source-closed diagnostic 13642331 is terminal 0:0 on one H100;
+its quality analysis is separate, and its fe847 candidate still has the existing
+F64/C128 M-step. Earlier failed launcher 13642161 remains preserved. None of this
+adopts precision907 or establishes current-source quality/runtime acceptance.

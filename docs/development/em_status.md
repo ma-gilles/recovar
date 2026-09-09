@@ -32,7 +32,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | `60d6a5596`: source-precision CTF evaluation/cache has one shared owner; sparse scorer 17,424 lines, half scorer 1,358, controller 6,123 |
+| Latest production cleanup | `dd28135ba`: sealed VDAM replay has one helper owner; local engine 9,374 lines, sparse scorer 17,424, half scorer 1,358, controller 6,123 |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -75,9 +75,20 @@ hashes were independently checked. No quality acceptance or source adoption.
 The full small-fixture old/new runtime ratio is 1.009965×; prepared E is 1.056075×.
 Neither measures current representative runtime. Preserve frozen fe847, its native
 libraries and all failed/superseded diagnostics. VDAM's separate private assignment
-is opt-in rigid reporting only (below); future numerical admission requires review
+was opt-in rigid reporting only, integrated separately below; future numerical admission requires review
 of the remaining state/tie and source/native gates. No duplicate peer GPU experiment
 is assigned.
+
+The later private full RELION executable `6c54d2ac…` has recorded source/build
+identity for new diagnostics (CPU build 13636510); em_clean verified 54 linked
+material hashes across its inventory and the reporting proposal. Historical
+`2d070d64…` closure remains missing: the later build cannot qualify that binary.
+Read the exact audit scope in `handoffs/em_clean_reporting_oracle_review_20260909.json`.
+Peer replacement job 13642331 completed 0:0, four full200 arms on one H100;
+Slurm terminal state is independently checked, scientific analysis remains peer
+work. Failed launcher 13642161 is preserved. No duplicate job or rebuild was launched.
+The new run uses frozen fe847, including the existing double numerical M-step;
+it does not qualify the current primary or all-float32 execution.
 
 Raw-prefetch source is unassigned. The RELION header lock is
 released: five diagnostic insertions remain, and shared benchmark binaries plus
@@ -281,17 +292,29 @@ Commands, source fingerprints, case inventories, AST and lint audits are in
 Logs/XML are under the CPU root in
 `kclass_capture_owner_{control,after,guard}_20260909/`.
 
-VDAM independently owns six rigid-reporting paths at base `724aa4ce9`:
-`recovar/em/initial_model/{gt_metrics,gt_registration}.py`,
-`tests/unit/initial_model/{test_gt_metrics,test_gt_rigid_alignment}.py`,
-`scripts/evaluate_ab_initio_gt.py` and `tests/unit/initial_model/test_evaluate_ab_initio_gt.py`.
-The preferred new fitter lives in `gt_registration.py`; preserve the legacy
-helper/result API and its size guard. The evaluator gets an explicit opt-in
-reporting mode, preserving existing defaults and output schemas. Fit and apply
-remain separate so one frozen transform can be shared across compared maps;
-independent per-map fits must be labeled. Shared docs/publication stay with
-em_clean; no E/M, precision907 or native source/build grant. See revision2
-`handoffs/em_clean_rigid_reporting_assignment_v2_20260909.json`.
+VDAM reporting commit `383772fa0` is preserved by separate merge `49efca34e`.
+All four incoming files are byte-identical to the frozen peer; the legacy
+`gt_metrics.py` and its seven-field result remain unchanged. New
+`gt_registration.py` provides the CPU rigid fitter and immutable, serializable
+transform; `evaluate_ab_initio_gt.py` explicitly selects independent fits,
+fit-once/apply-many, or saved-transform application. Defaults/output schemas and
+E/M behavior are preserved. [Usage and geometry](gt_reporting.md) describe the
+fixed frame, shape/voxel/GT checks, controls and limits. The new fitter uses
+float64 on CPU; this is reporting, not a change to production EM precision.
+
+Current-source validation: all 12 pre-existing cases pass before integration;
+all 78 combined helper/CLI cases pass afterward (56.27 s), with zero skips.
+Four direct opt-out comparisons to the pinned legacy evaluator preserve exact
+JSON and every raw 19/aligned 31 NPZ field's dtype, shape and bytes. The final
+CPU/import guard passes 38/38 (42.20 s); all three candidate manifests match.
+Ruff passes all four paths; source/native hashes stay unchanged during checks.
+Producer tuple/list and naive-NaN comparison failures remain preserved separately.
+Commands, provenance and inventories:
+`hia_source_review_20260906/rigid_reporting_integration_20260909/validation.json`;
+logs/XML use `rigid_reporting_{control,combined,legacy_payloads,guard}_20260909/`
+under the CPU root. No new GPU job, quality acceptance or precision907 adoption.
+The four source paths are released after integration; shared docs/publication
+remain em_clean-owned, and the original peer checkout stays frozen.
 
 Source-STAR CTF evaluation and its single process cache now live in
 `helpers/relion_ctf.py` (`60d6a5596`), called directly by coarse, local and sparse
@@ -314,6 +337,24 @@ case inventories and AST/lint audits:
 `hia_source_review_20260906/source_ctf_owner_20260909/validation.json`.
 Logs/XML use `source_ctf_owner_{control,after,final,guard}_20260909/` under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/`.
+
+Sealed VDAM worker/chronology replay now belongs to `helpers/vdam_replay.py`
+(`dd28135ba`). All21 function bodies, ten constants and four LRU decorators are
+AST-exact; retained engine statements and 123 test assertions match after owner
+mapping. Kernel execution and block-map publication stay in the local engine.
+It loses 854 lines (10,228→9,374); combined production grows 18 lines. No forwarding
+aliases, numerical changes, new tests or new Ruff findings.
+The expanded 116-case CPU panel matches exactly before/after: 111 passed, five
+existing source-guard failures, zero skips. The CPU/import guard passes 38/38.
+Original control had six failures; separate `1d2e24174` repairs the stale inline
+trace-selector assertion to check its bound value and forwarding. That repaired
+case passes before source moves and rejects both removal mutations. The remaining
+native first-atomic, first-state/M-step runner, tau2-owner and prior-owner source
+guards need separate review; none was weakened or classified as scientific drift.
+Exact commands, failure identities and audits:
+`hia_source_review_20260906/vdam_replay_owner_20260909/validation.json`.
+CPU logs use `vdam_replay_owner_{control,expanded_control,after,guard}_20260909/`
+and `vdam_trace_guard_repair_20260909/`. No new GPU job.
 
 Continue controller/state/kernel ownership and duplicate-code review with bounded
 changes and proportional tests. Parsers with different blank/unknown-

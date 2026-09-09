@@ -106,6 +106,14 @@ adaptive and local K-class orchestration. Class evidence and posterior mass
 must be handled at the K-class level, not inferred from independently normalized
 single-class probabilities.
 
+Sealed VDAM worker and block-chronology replay lives in
+[`helpers/vdam_replay.py`](../../recovar/em/dense_single_volume/helpers/vdam_replay.py).
+It owns NPZ schema validation, four cached loaders, stack-ID joins, worker/launch
+ordering, iteration selectors and physical-row gathers. The local engine calls
+this owner directly while retaining kernel execution and candidate block-map
+publication. Replay defaults, caches, stable ordering and error behavior are
+preserved; importing the helper does not initialize the execution engine.
+
 The exact coarse Gaussian path in
 [`helpers/significance.py`](../../recovar/em/dense_single_volume/helpers/significance.py)
 passes its existing host pixel indices to the shared source-precision CTF owner
@@ -371,3 +379,14 @@ checks that importing replay, normalization, projector, result and diagnostic
 helpers leaves the controller, K-class orchestration, dense/local engines and
 sparse scoring unloaded. Existing callers already import from these owners;
 the definitions and their serialized module identities are unchanged.
+
+## Ground-truth reporting
+
+[`initial_model/gt_registration.py`](../../recovar/em/initial_model/gt_registration.py)
+owns the optional CPU rigid fitter and immutable fit-once transform. The existing
+[`gt_metrics.py`](../../recovar/em/initial_model/gt_metrics.py) keeps its legacy
+rotation-only alignment API and result type. The reporting CLI
+[`evaluate_ab_initio_gt.py`](../../scripts/evaluate_ab_initio_gt.py) opts into the
+new fitter or applies a saved transform without fitting. [The reporting guide](gt_reporting.md)
+explains geometry, common-frame comparisons and limitations. These are diagnostic
+reporting tools; E/M execution, precision and quality gates are independent.
