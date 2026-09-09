@@ -154,6 +154,13 @@ completion/stop control. Selector errors and log messages are unchanged; their
 logger namespace follows `debug_dumps`. Capture state and counters belong to the
 separate diagnostic owner below.
 
+[`helpers.pass2_diagnostics`](../../recovar/em/dense_single_volume/helpers/pass2_diagnostics.py)
+owns K1/K-class score dumps, norm-residual and chunked scale-AA writers, and
+target-row selection. It reads the shared numbered-half context from
+`bpref_diagnostics`; it does not import sparse scoring. The scorer retains dump
+scheduling and operand materialization, and calls the writers at the original
+numerical boundaries. Capture schemas, casts and reduction order are unchanged.
+
 [`helpers.bpref_diagnostics`](../../recovar/em/dense_single_volume/helpers/bpref_diagnostics.py)
 owns the numbered-half capture context, contribution and membership counters,
 membership selectors/rotation-mass writers, device-panel state, capture validation

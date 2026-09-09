@@ -32,7 +32,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | `2b6cf430c`: BPref membership writers/context share one owner; sparse scorer 19,284 lines, half scorer 1,358, controller 6,123 |
+| Latest production cleanup | `f401cbb09`: pass-2 dump writers have a dedicated diagnostic owner; sparse scorer 17,780 lines, half scorer 1,358, controller 6,123 |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -205,6 +205,7 @@ loses 176 lines (19,460 → 19,284); the two modules together add one line.
 
 | Checkpoint | Executed evidence | Limit |
 | --- | --- | --- |
+| Pass-2 diagnostic owner `f401cbb09` | Identical 76-case CPU inventory before/after (6.84/6.76 s), extended import/CPU guard 38/38 (45.37 s), no skips | Five function/three constant ASTs exact; all retained scorer statements and 260 test assertions preserved under owner mapping. No new Ruff findings; no GPU/trajectory/runtime claim |
 | BPref membership owner `2b6cf430c` | Original 32/32 plus 11 new cases pass before source changes; candidate 43/43 (4.06 s), guard 38/38 (44.08 s), no skips | Every original case retained; 3 function/4 state ASTs exact. No new Ruff findings (existing sparse import I001 remains). Ownership only, no GPU/trajectory/runtime claim |
 | First-iteration arguments `3970ea71d` | Control 75/75; four K1/K4 × batch-update variants pass before source changes; candidate 78/78 (4.72 s), guard 38/38 (44.78 s), no skips/Ruff findings | 74 original IDs retained; one case expanded to four. Initial new K4 fixture incorrectly expected the K1 cap700, then corrected to existing K4 cap368 and rerun before source edits. No GPU/trajectory/runtime claim |
 | Support diagnostics `5b42961e7` | Control 32/32; candidate 39/39 (3.51 s), CPU guard 38/38 (44.88 s), no skips or Ruff findings | One static guard replaced by five exact-log cases, three denominator cases added; other 31 identities unchanged. Reporting ownership only, no GPU/trajectory/runtime claim |
@@ -224,6 +225,22 @@ were confirmed by failing tests before migration. This does not prove dynamic
 imports/registration or every runtime path. A tracked-reference scan found no
 further unreferenced, undecorated top-level private EM function candidates;
 do not remove code merely to reduce line counts.
+
+Pass-2 score, K-class, norm-residual and chunked scale-AA dump writers now live
+in `helpers/pass2_diagnostics.py`, with their target-row selector and three
+environment constants. Sparse scoring calls this owner at the same boundaries;
+scheduling, operand materialization, JIT kernels and production reductions stay
+in the scorer. Five function bodies and three constant definitions are AST-exact;
+all NPZ schemas, casts, diagnostic reductions and errors are preserved. The
+scorer loses 1,504 lines (19,284 → 17,780); combined modules add 20 lines of
+imports/documentation, so this is an ownership improvement, not net deletion.
+
+Pass-2 source/caller audit and exact reproduction commands:
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pass2_diagnostics_owner_20260909/validation.json`.
+CPU logs/XML are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/pass2_diagnostics_owner_{control,after,guard}_20260909/`.
+All panels preserve their source/native hashes. The private907 patch still
+apply-checks without applying; VDAM's frozen diagnostics remain untouched.
 
 Membership-owner source/caller audit, exact commands and test inventories:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/bpref_membership_owner_20260909/validation.json`.
