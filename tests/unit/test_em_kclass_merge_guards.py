@@ -33,6 +33,7 @@ behavioral coverage here — these are structural merge guards.
 
 from __future__ import annotations
 
+import ast
 import inspect
 import os
 import re
@@ -463,7 +464,28 @@ def test_kclass_significance_dump_threads_one_based_iteration():
     assert iteration_loop._numbered_relion_iteration(11, 2) == 14
     assert "numbered_relion_iteration = _numbered_relion_iteration(" in loop_source
     assert loop_source.count("debug_iteration=numbered_relion_iteration") >= 3
-    assert score_source.count("debug_iteration=debug_iteration") >= 3
+    score_tree = ast.parse(score_source)
+    firstiter_inputs = next(
+        node.value for node in ast.walk(score_tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "firstiter_kwargs" for target in node.targets)
+    )
+    shared_keywords = {key.value: value for key, value in zip(firstiter_inputs.keys, firstiter_inputs.values)}
+    scoring_calls = [
+        node for node in ast.walk(score_tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        and node.func.id in {"_score_kclass_firstiter_cc_pass2", "run_dense_k_class_em_adaptive"}
+    ]
+    assert len(scoring_calls) == 4
+    for call in scoring_calls:
+        keywords = {}
+        for keyword in call.keywords:
+            if keyword.arg is not None:
+                keywords[keyword.arg] = keyword.value
+            elif isinstance(keyword.value, ast.Name) and keyword.value.id == "firstiter_kwargs":
+                keywords.update(shared_keywords)
+        assert isinstance(keywords["debug_iteration"], ast.Name)
+        assert keywords["debug_iteration"].id == "debug_iteration"
     assert adaptive_source.count("debug_iteration=debug_iteration") >= 1
     assert "debug_iteration=debug_iteration" in significance_source
     firstiter_probe_source = inspect.getsource(

@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import jax.numpy as jnp
 import numpy as np
+import pytest
 
 from recovar.em.dense_single_volume import (
     batch_planning,
@@ -180,8 +181,16 @@ def test_firstiter_cc_adaptive_dispatch_clamps_against_fine_translation_grid(mon
     assert np.all(captured["fine_mstep_rotations_override"] == 0.25)
 
 
-def test_k1_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch):
+@pytest.mark.parametrize("n_classes", [1, 4], ids=["k1", "k4"])
+@pytest.mark.parametrize("update_batch", [False, True], ids=["keep-batch", "update-batch"])
+def test_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch, n_classes, update_batch):
     captured = {}
+    dispatch = {}
+    original_dispatch = half_scoring._score_kclass_firstiter_cc_pass2
+
+    def capture_dispatch(**kwargs):
+        dispatch.update(kwargs)
+        return original_dispatch(**kwargs)
     calls = []
 
     class TinyDataset:
@@ -212,7 +221,7 @@ def test_k1_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch
         if (int(n_rot), int(n_trans), classes, image_shape_for_batch, current_size_for_batch) == (
             4608,
             116,
-            1,
+            n_classes,
             (256, 256),
             90,
         ):
@@ -220,7 +229,7 @@ def test_k1_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch
         if (int(n_rot), int(n_trans), classes, image_shape_for_batch, current_size_for_batch) == (
             576,
             29,
-            1,
+            n_classes,
             (256, 256),
             40,
         ):
@@ -230,7 +239,6 @@ def test_k1_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch
     def fake_adaptive(*args, **kwargs):
         captured.update(kwargs)
         n_images = 3
-        n_classes = 1
         n_fine_rot = 4608
         stats = make_relion_stats(
             log_evidence_per_image=np.zeros(n_images, dtype=np.float32),
@@ -254,8 +262,8 @@ def test_k1_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch
             class_responsibilities=jnp.ones((n_classes, n_images), dtype=jnp.float32),
             class_posterior_sums=jnp.ones(n_classes, dtype=jnp.float32),
             stats=stats,
-            per_class_stats=(stats,),
-            noise_stats=(noise_stats,),
+            per_class_stats=(stats,) * n_classes,
+            noise_stats=(noise_stats,) * n_classes,
             aggregate_noise_stats=noise_stats,
             best_pose_rotations=jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (n_images, 3, 3)),
             best_pose_translations=jnp.zeros((n_images, 2), dtype=jnp.float32),
@@ -265,10 +273,14 @@ def test_k1_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch
     monkeypatch.setattr(firstiter_cc, "_build_firstiter_cc_pass2_grids", fake_grids)
     monkeypatch.setattr(firstiter_cc, "run_dense_k_class_em_adaptive", fake_adaptive)
 
+    monkeypatch.setattr(half_scoring, "_score_kclass_firstiter_cc_pass2", capture_dispatch)
+    means = jnp.zeros(4 if n_classes == 1 else (n_classes, 4), dtype=jnp.complex64)
+    coarse_ids = np.arange(576, dtype=np.int32)
+
     result = half_scoring._score_half_dense(
         k=0,
         experiment_dataset=TinyDataset(),
-        means_k=jnp.zeros(4, dtype=jnp.complex64),
+        means_k=means,
         mean_variance=jnp.ones(4, dtype=jnp.float32),
         noise_variance_k=jnp.ones(4, dtype=jnp.float32),
         effective_rotations=np.zeros((576, 3, 3), dtype=np.float32),
@@ -290,7 +302,7 @@ def test_k1_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch
         firstiter_winner_take_all_this_iter=True,
         cs_for_engine=90,
         class_log_priors=None,
-        k_class_enabled=False,
+        k_class_enabled=n_classes > 1,
         relion_firstiter_cc_this_iter=True,
         disable_adjoint_y=False,
         disable_adjoint_ctf=False,
@@ -301,22 +313,38 @@ def test_k1_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch
         firstiter_fine_current_size=90,
         bpref_device_signature_active=True,
         debug_iteration=7,
+        firstiter_updates_em_kwargs_ibs=update_batch,
+        firstiter_log_label="test K-class ",
+        coarse_rotation_ids=coarse_ids,
     )
 
     assert calls == [
         (576, 29, None, None, 90),
-        (4608, 116, 1, (256, 256), 90),
-        (576, 29, 1, (256, 256), 40),
+        (4608, 116, n_classes, (256, 256), 90),
+        (576, 29, n_classes, (256, 256), 40),
     ]
     assert captured["image_batch_size"] == _safe_firstiter_cc_image_batch_size(116, (256, 256))
     assert captured["significance_image_batch_size"] == 187
     assert captured["rotation_block_size"] == min(700, _safe_dense_k_class_rotation_block_size(116, captured["image_batch_size"]))
-    assert captured["significance_rotation_block_size"] == 700
+    # K-class applies the existing coarse score-tile cap; K=1 retains its batch.
+    assert captured["significance_rotation_block_size"] == (700 if n_classes == 1 else 368)
     assert captured["bpref_device_signature_active"] is True
     assert captured["debug_iteration"] == 7
     assert np.all(captured["fine_mstep_rotations_override"] == 0.25)
     assert result.ha.shape == (3,)
     assert result.coarse_ha.shape == (3,)
+
+    assert dispatch["mean"].shape == (n_classes, 4)
+    assert dispatch["log_label"] == ("K=1 " if n_classes == 1 else "test K-class ")
+    assert dispatch["update_em_kwargs_image_batch_size"] is update_batch
+    assert dispatch["em_kwargs"]["image_batch_size"] == (captured["image_batch_size"] if update_batch else 187)
+    if n_classes == 1:
+        assert "coarse_rotation_ids" not in dispatch
+        assert captured["coarse_rotation_ids"] is None
+    else:
+        assert dispatch["mean"] is means
+        assert dispatch["coarse_rotation_ids"] is coarse_ids
+        assert captured["coarse_rotation_ids"] is coarse_ids
 
 
 def test_kclass_nonfirstiter_adaptive_dispatch_sizes_actual_fine_grid(monkeypatch):

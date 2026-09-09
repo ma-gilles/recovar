@@ -236,6 +236,30 @@ def _score_half_dense(
         relion_projector_half is not None,
         int(state.adaptive_oversampling),
     )
+    if relion_firstiter_cc_this_iter:
+        # Shared first-iteration inputs; means, layouts and pose IDs remain route-specific.
+        firstiter_kwargs = {
+            "logger": logger,
+            "experiment_dataset": experiment_dataset,
+            "mean_variance": mean_variance,
+            "noise_variance_k": noise_variance_k,
+            "effective_rotations": effective_rotations,
+            "current_translations": current_translations,
+            "base_translations": base_translations,
+            "current_healpix_order": current_healpix_order,
+            "state": state,
+            "random_perturbation": random_perturbation,
+            "disc_type": disc_type,
+            "class_log_priors": class_log_priors,
+            "image_batch_size": image_batch_size,
+            "safe_batch_sizes": safe_batch_sizes,
+            "coarse_current_size": firstiter_coarse_current_size,
+            "fine_current_size": firstiter_fine_current_size,
+            "update_em_kwargs_image_batch_size": firstiter_updates_em_kwargs_ibs,
+            "bpref_device_signature_active": bpref_device_signature_active,
+            "debug_iteration": debug_iteration,
+        }
+
     if k_class_enabled:
         if disable_adjoint_y or disable_adjoint_ctf:
             raise NotImplementedError("K-class refine does not support adjoint ablation flags")
@@ -268,30 +292,12 @@ def _score_half_dense(
                 n_trans_fine_for_collapse,
                 adaptive_os_local,
             ) = _score_kclass_firstiter_cc_pass2(
-                logger=logger,
-                experiment_dataset=experiment_dataset,
                 mean=means_k,
-                mean_variance=mean_variance,
-                noise_variance_k=noise_variance_k,
-                effective_rotations=effective_rotations,
-                current_translations=current_translations,
-                base_translations=base_translations,
-                current_healpix_order=current_healpix_order,
-                state=state,
-                random_perturbation=random_perturbation,
-                disc_type=disc_type,
-                class_log_priors=class_log_priors,
-                image_batch_size=image_batch_size,
                 image_shape_k=experiment_dataset.image_shape,
                 em_kwargs=em_kwargs,
-                safe_batch_sizes=safe_batch_sizes,
-                coarse_current_size=firstiter_coarse_current_size,
-                fine_current_size=firstiter_fine_current_size,
                 log_label=firstiter_log_label,
-                update_em_kwargs_image_batch_size=firstiter_updates_em_kwargs_ibs,
-                bpref_device_signature_active=bpref_device_signature_active,
-                debug_iteration=debug_iteration,
                 coarse_rotation_ids=coarse_rotation_ids,
+                **firstiter_kwargs,
             )
             k_class_mstep_full_half_axis_this_score = k_class_result.mstep_full_half_axis
         elif firstiter_coarse_current_size is not None and int(state.adaptive_oversampling) > 0:
@@ -479,33 +485,15 @@ def _score_half_dense(
                 n_trans_fine_for_collapse,
                 adaptive_os_local,
             ) = _score_kclass_firstiter_cc_pass2(
-                logger=logger,
-                experiment_dataset=experiment_dataset,
                 mean=means_single,
-                mean_variance=mean_variance,
-                noise_variance_k=noise_variance_k,
-                effective_rotations=effective_rotations,
-                current_translations=current_translations,
-                base_translations=base_translations,
-                current_healpix_order=current_healpix_order,
-                state=state,
-                random_perturbation=random_perturbation,
-                disc_type=disc_type,
-                class_log_priors=class_log_priors,
-                image_batch_size=image_batch_size,
                 image_shape_k=experiment_dataset.image_shape,
                 em_kwargs=(
                     {**em_kwargs, "mstep_relion_x_half": True}
                     if k1_relion_x_half_mstep
                     else em_kwargs
                 ),
-                safe_batch_sizes=safe_batch_sizes,
-                coarse_current_size=firstiter_coarse_current_size,
-                fine_current_size=firstiter_fine_current_size,
                 log_label="K=1 ",
-                update_em_kwargs_image_batch_size=firstiter_updates_em_kwargs_ibs,
-                bpref_device_signature_active=bpref_device_signature_active,
-                debug_iteration=debug_iteration,
+                **firstiter_kwargs,
             )
         else:
             (
