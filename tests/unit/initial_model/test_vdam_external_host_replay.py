@@ -180,4 +180,5 @@ def test_wavg_bpref_host_gap_trace_is_targeted_and_fail_closed():
         "quiesced_prelaunch_capture_active",
     ):
         assert diagnostic_gate in local_engine
-    assert "candidate_trace_active=_relion_vdam_candidate_trace_active(" in local_engine
+    assert "candidate_trace_active = _relion_vdam_candidate_trace_active(" in local_engine
+    assert "candidate_trace_active=candidate_trace_active," in local_engine
