@@ -32,7 +32,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | `5b42961e7`: support-count reporting moves to local diagnostics; half-scoring owner 1,370 lines, controller 6,123 lines |
+| Latest production cleanup | `3970ea71d`: shared first-iteration arguments with explicit K1/K4 differences; half-scoring owner 1,358 lines, controller 6,123 lines |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -72,10 +72,24 @@ VDAM's private composition `fe8472947` carries the same `907b02ce` patch atop
 compact-CTF merge `5a39eab29`; only two documentation files separate that parent
 from the assigned `cbff0b092` base. The candidate applies cleanly to the current
 primary, but is **not adopted**. H100 13639506 completed four natural 200-iteration
-old/new/new/old trajectories (0:0, 1,819 s); scientific analysis remains pending.
-The partial metadata ledger contains support/pose differences within repeated
-policies as well as across policies. Their margins and convergence implications
-remain unresolved; completion does not establish trajectory parity.
+old/new/new/old trajectories (0:0, 1,819 s). Whole-process old times are
+449.269/454.861 s and new times 456.089/457.051 s: **1.009965×** by mean,
+a small-fixture diagnostic only. The completed 804-file/201-checkpoint metadata
+ledger is schema-valid but fails numeric comparison at 199 iterations (2–200).
+Old-policy repeats first differ in pose at 32 and resolution shell at 45;
+new-policy repeats first differ in pose at 52 and keep the same resolution shell.
+Their winning margins and convergence implications remain unresolved.
+
+The completed producer FSC review reports old-repeat minimum cross-FSC-AUC
+0.969668 at iteration 155, versus 0.998219 for new repeats at 86. The two paired
+old/new minima are 0.969722 and 0.998219. These are cross-map diagnostics;
+GT registration and historical native source-to-binary closure are missing.
+em_clean verified the review's seven artifact hashes, without independently
+recomputing its arrays. No full-state, trajectory or runtime acceptance follows.
+See `vdam_f32_full200_20260909/analysis_integrated_v2_review/result_summary.json`
+under the scratch artifact root; review receipt is
+`dense_firstiter_arguments_20260909/full200_peer_report_review.json` under the
+source-review root below.
 
 Prepared E/M job 13639984 failed in diagnostic callable serialization before
 science E/M completion; the failed evidence remains. VDAM's artifact-only v2
@@ -91,8 +105,8 @@ The actual M-step includes float64/complex128 computation, so this is not a
 complete float32 M qualification. Warm prepared E is 268.953 → 284.035 ms,
 **1.056075× (+5.61%)** in this small preloaded-data panel; no full-runtime
 acceptance. Only rectangle power executes; full local score surfaces are absent.
-VDAM's next artifact-only check isolates the earlier coarse-score variation with
-both Wavg helpers fixed. Preserve fe847 and its original evidence; no shared
+VDAM continues artifact-only investigation of the first pose divergence at
+iteration 32 and its competing scores/upstream state, keeping both Wavg helpers fixed. Preserve fe847 and its original evidence; no shared
 precision adoption, new arithmetic change or duplicate GPU job. See
 `handoffs/em_clean_prepared_em_composition_review_20260909.json` and the producer
 `vdam_wavg_composition_v2_20260909/{RESULTS.md,result_summary.json}` under the
@@ -133,8 +147,17 @@ original scorer statement except imports, including exact logger arguments.
 Only temporary host integer count arrays become helper-local; layouts, support
 selection, engine calls and scoring buffers remain unchanged.
 
+The K1 and K-class first-iteration dispatches now share 19 identical input
+bindings. Mean shape, accumulator options, logging label and rotation-ID
+handling stay explicit at the two call sites. The module loses 12 production
+lines (1,370 → 1,358); expanding the dictionary reproduces the original whole
+module AST after keyword-order normalization. The callee has explicit parameters.
+No arithmetic, casts or array buffers change; one host dictionary binds names
+and constants when first-iteration CC is selected.
+
 | Checkpoint | Executed evidence | Limit |
 | --- | --- | --- |
+| First-iteration arguments `3970ea71d` | Control 75/75; four K1/K4 × batch-update variants pass before source changes; candidate 78/78 (4.72 s), guard 38/38 (44.78 s), no skips/Ruff findings | 74 original IDs retained; one case expanded to four. Initial new K4 fixture incorrectly expected the K1 cap700, then corrected to existing K4 cap368 and rerun before source edits. No GPU/trajectory/runtime claim |
 | Support diagnostics `5b42961e7` | Control 32/32; candidate 39/39 (3.51 s), CPU guard 38/38 (44.88 s), no skips or Ruff findings | One static guard replaced by five exact-log cases, three denominator cases added; other 31 identities unchanged. Reporting ownership only, no GPU/trajectory/runtime claim |
 | Local-scoring arguments `19073ab50` | Control 42/42; candidate 47/47 (9.95 s), including six denominator/spectrum variants and existing exact-K4 dispatch; CPU guard 38/38 (44.30 s); no skips or Ruff findings | 41 original case IDs unchanged, one original case expanded to six; two source guards resolve the common kwargs; no GPU/trajectory or timing-gain claim |
 | Runner provenance `0954fdfd0` | Four missing/foreign scorer-source regressions fail before the fix; all 8 CPU unit/CLI-entry cases pass after (8.09 s), no skips | Two checked module names added; no scientific operation changed or GPU job launched |
@@ -154,6 +177,10 @@ further unreferenced, undecorated top-level private EM function candidates;
 do not remove code merely to reduce line counts.
 
 Support-reporting source/AST audits and exact commands are in
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/dense_firstiter_arguments_20260909/validation.json`
+records exact commands, test identities, failure history and fingerprints; logs/XML use
+`dense_firstiter_arguments_{control,expanded_control,expanded_control_v2,after,guard}_20260909`.
+The prior support-reporting audit is
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/local_support_diagnostics_20260909/validation.json`;
 CPU logs/XML use `local_support_diagnostics_{control,after,guard}_20260909` under
 the CPU run root. Masked/unmasked/empty support and explicit empty/repeated-ID
