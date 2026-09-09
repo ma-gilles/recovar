@@ -108,8 +108,10 @@ single-class probabilities.
 
 The exact coarse Gaussian path in
 [`helpers/significance.py`](../../recovar/em/dense_single_volume/helpers/significance.py)
-passes its existing host pixel indices to the source-precision CTF loader in
-[`helpers/sparse_pass2_bucketed.py`](../../recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py).
+passes its existing host pixel indices to the shared source-precision CTF owner
+[`helpers/relion_ctf.py`](../../recovar/em/dense_single_volume/helpers/relion_ctf.py).
+Coarse, local and sparse scoring call that owner directly; its single process
+cache and native binding remain independent of the execution engines.
 That loader gathers each cached CTF row before stacking and device placement;
 index order and duplicates are preserved. Omitting pixel indices retains the
 full-grid contract and cache. Only scoring operands are compacted: full-image

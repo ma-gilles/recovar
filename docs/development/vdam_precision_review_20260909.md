@@ -172,3 +172,14 @@ precision adoption, new arithmetic change or duplicate GPU job. See
 `vdam_wavg_composition_v2_20260909/{RESULTS.md,result_summary.json}` under the
 scratch artifact root. These runs precede newer structural cleanup and do not
 qualify the current primary.
+
+The separate907 correctness review now explicitly incorporates the completed
+registered-GT trajectory measurement through board addendum
+`handoffs/em_clean_precision907_registered_gt_review_20260909.json`.
+This closes the missing registered-GT measurement for the reviewed fixture:
+both candidates and old2 satisfy the unchanged all-shell delta condition at every
+checkpoint against both native repeats; old1 first fails at155 and reaches
+−0.004248842. It does not close strict cross-FSC, state/support/pose, convergence,
+source/native provenance, broader K1/K4 quality or representative runtime gates.
+No uniform policy win or adoption follows. The independent saved-curve audit
+and its exact scope remain recorded above; no new fit, FFT or GPU run was made.

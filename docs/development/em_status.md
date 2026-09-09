@@ -32,7 +32,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | `6ae78f029`: K-class capture staging moved to its diagnostic owners; sparse scorer 17,579 lines, half scorer 1,358, controller 6,123 |
+| Latest production cleanup | `60d6a5596`: source-precision CTF evaluation/cache has one shared owner; sparse scorer 17,424 lines, half scorer 1,358, controller 6,123 |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -281,13 +281,40 @@ Commands, source fingerprints, case inventories, AST and lint audits are in
 Logs/XML are under the CPU root in
 `kclass_capture_owner_{control,after,guard}_20260909/`.
 
-VDAM independently owns four rigid-reporting paths at base `724aa4ce9`:
-`recovar/em/initial_model/gt_metrics.py`, `tests/unit/initial_model/test_gt_metrics.py`,
+VDAM independently owns six rigid-reporting paths at base `724aa4ce9`:
+`recovar/em/initial_model/{gt_metrics,gt_registration}.py`,
+`tests/unit/initial_model/{test_gt_metrics,test_gt_rigid_alignment}.py`,
 `scripts/evaluate_ab_initio_gt.py` and `tests/unit/initial_model/test_evaluate_ab_initio_gt.py`.
-The opt-in reporting assignment preserves existing APIs/default schemas, separates
-fitting from applying a common transform, and remains independent of precision907.
-Shared docs/publication stay with em_clean; no E/M or native source/build grant.
-See `handoffs/em_clean_rigid_reporting_assignment_20260909.json`.
+The preferred new fitter lives in `gt_registration.py`; preserve the legacy
+helper/result API and its size guard. The evaluator gets an explicit opt-in
+reporting mode, preserving existing defaults and output schemas. Fit and apply
+remain separate so one frozen transform can be shared across compared maps;
+independent per-map fits must be labeled. Shared docs/publication stay with
+em_clean; no E/M, precision907 or native source/build grant. See revision2
+`handoffs/em_clean_rigid_reporting_assignment_v2_20260909.json`.
+
+Source-STAR CTF evaluation and its single process cache now live in
+`helpers/relion_ctf.py` (`60d6a5596`), called directly by coarse, local and sparse
+scoring. Four function bodies and the cache definition are AST-exact; all retained
+caller statements and 1,661 test assertions are preserved after owner mapping.
+Cache key/lifetime, native calls, compact pixel order/duplicates, casts and device
+placement are unchanged. Sparse scoring loses 155 lines (17,579 → 17,424); the
+four production modules together add 24 lines for the explicit owner boundary.
+There are no forwarding aliases, new tests, or new Ruff findings.
+
+The control, first candidate and final CPU panels each execute the same 181 cases:
+**179 passed, two failed**, with 23 GPU cases deselected and no skips. Both failures
+are the unchanged, unmarked local-operand cases that call a CUDA-only translation
+routine on CPU; their exception messages match exactly. They passed in the earlier
+H100 panel at `1b046647f`, which does not qualify this new source. Tests and their
+GPU requirements were not weakened. The final extended import/CPU guard passes
+38/38 (44.49 s). Final/guard manifests match, and all panels preserve source/native
+hashes. No new GPU job or trajectory/runtime claim. Exact commands, fingerprints,
+case inventories and AST/lint audits:
+`hia_source_review_20260906/source_ctf_owner_20260909/validation.json`.
+Logs/XML use `source_ctf_owner_{control,after,final,guard}_20260909/` under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/`.
+
 Continue controller/state/kernel ownership and duplicate-code review with bounded
 changes and proportional tests. Parsers with different blank/unknown-
 token semantics are not interchangeable. Keep production source frozen during
