@@ -20,11 +20,11 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _resolve_bpref_execution_bucket_policy,
     _resolve_bpref_processing_order,
 )
-from recovar.em.dense_single_volume.iteration_loop import (
-    _validate_bpref_particle_order_scope,
-)
 from recovar.em.dense_single_volume.k_class import (
     _apply_bpref_particle_order_policy,
+)
+from recovar.em.dense_single_volume.relion_replay import (
+    _validate_bpref_particle_order_scope,
 )
 
 

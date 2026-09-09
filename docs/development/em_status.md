@@ -1,5 +1,41 @@
 # Current EM development scope
 
+## Replay-boundary validation ownership — September 9
+
+`relion_replay.py` now owns the numbered-override predicate and BPref physical
+particle-order scope validator. The controller keeps both call sites and their
+execution order. It is **73 lines shorter (7,982 → 7,909)**; this is relocation,
+not net deletion. Both moved functions and all remaining module statements are
+AST-identical. Three test files import/call the new owner; their assertions,
+arguments and tolerances are unchanged. Ruff retains six inherited findings,
+with no new ones.
+
+The initial unchanged control exposed a stale test import of the removed sparse
+`_env_flag_enabled` alias. Separate test-only commit `1895bc50e` migrates that
+caller to `helpers.env_flags.parse_env_flag`; the old and shared parser bodies
+are AST-identical apart from name/docstring. All **28 cases** in the affected
+module pass (3.51 s). The original collection failure is retained as evidence.
+
+After that repair, the selected replay/order control and extracted candidate
+both pass **24 cases**, with identical inventories and **493 deselections**
+(4.05 s / 5.41 s). The complete CPU fast guard also passes **38 cases** on the
+same source diff. Source/native checks pass. No GPU jobs or numerical changes
+were made; existing bytewise GPU failures and trajectory/FSC gates remain open.
+Exact commands, fingerprints, AST/parser audits and original failure records are
+in `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/replay_order_validation_20260909/validation.json`.
+Run logs/XML are in `replay_order_{control,control_v2,after,guard}_20260909` and
+`bpref_execution_import_20260909` under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/`.
+Use fresh output roots when reproducing the recorded CPU commands.
+
+Compact-CTF `b1d57608d` is a separately frozen private performance proposal.
+Its six changed preimages match the current shared source; reviewed H100
+13638270 evidence covers four synthetic precision/scale cases, six pairs each,
+and six byte-exact operand/score fields. Representative real-state and paired
+runtime qualification remain open. VDAM separately owns the two private
+float32-product correction paths in the coordination board; neither proposal
+is part of this structural checkpoint. Raw-prefetch source remains unassigned.
+
 ## Completed representative timing and host profile — September 9
 
 Frozen source `8ab1a44be1b983acab4f056d12e49f9208902abe` completed RECOVAR2

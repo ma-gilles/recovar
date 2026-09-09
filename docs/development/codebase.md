@@ -49,6 +49,13 @@ batch sizes, calls the selected kernel and returns `_LocalSearchIterationResult`
 with named accumulators, pose fields, statistics and optional class summaries.
 The controller reads those fields directly.
 
+[`relion_replay`](../../recovar/em/dense_single_volume/relion_replay.py) validates
+whether overrides contain numbered trajectory state and whether physical BPref
+particle ordering is legal at a fresh, imported or sealed boundary. The controller
+calls these guards before refinement and when choosing final replay behavior;
+the replay module owns the rules and errors. Initial-only overrides remain
+separate from numbered trajectory replay.
+
 The local kernel returns `LocalEMResult` from
 [`helpers.types`](../../recovar/em/dense_single_volume/helpers/types.py):
 `Ft_y`, `Ft_ctf`, `hard_assignments`, `stats`, optional best-pose fields,

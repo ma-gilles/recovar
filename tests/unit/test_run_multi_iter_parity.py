@@ -12,6 +12,8 @@ from scripts import diff_relion_recovar_per_iter as parity_diff
 from scripts.postprocess_multi_iter_gt import resolve_intermediates_dir
 from recovar.em.dense_single_volume.iteration_loop import (
     _fresh_k1_spectrum_norm_default,
+)
+from recovar.em.dense_single_volume.relion_replay import (
     _validate_bpref_particle_order_scope,
 )
 from scripts.run_multi_iter_parity import (

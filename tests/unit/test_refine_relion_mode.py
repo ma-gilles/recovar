@@ -1147,7 +1147,7 @@ def test_final_all_data_replay_uses_shared_live_scale_correction_contract():
     ],
 )
 def test_final_all_data_replay_ignores_cold_start_only_overrides(overrides, expected):
-    assert iteration_loop_module._has_numbered_replay_iteration_overrides(overrides) is expected
+    assert relion_replay_module._has_numbered_replay_iteration_overrides(overrides) is expected
 
 
 def test_final_all_data_runs_with_cold_start_only_override(
