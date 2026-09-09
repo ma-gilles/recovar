@@ -496,8 +496,9 @@ of omitted runtime arrays. This review does not repeat the producer's full2306-p
 inventory or execute E/M, FFT, native code or GPU work.
 
 The earlier peer broader panel's three native-projector failures also reproduce
-on unchangedb179; they remain unresolved and are not part of the passing243-case
-inventory. Private H100 evidence matches the transferred route and named helpers,
+on unchangedb179 and were not part of the passing243-case inventory. Their
+separate test-contract reconciliation is recorded below; the original panel's
+failures remain preserved. Private H100 evidence matches the transferred route and named helpers,
 but primary has newer structural changes elsewhere, so it does not establish
 current-primary end-to-end acceptance. Full-200 job 13644924 is terminal 0:0 and
 independently reviewed in the
