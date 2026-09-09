@@ -562,8 +562,15 @@ the frozen older-source K4 pair **13560202 completed 0:0** on `della-l08g4`
 (16:19:39 elapsed). Its audit **13560356** is pending for priority; terminal process
 status alone is not scientific acceptance. K1 real-data window **13610518** is
 completed 0:0 on `della-h20g1` (18:13:36); follow-ups **13610539** and
-**13629099** completed 0:0 (69 and 3 seconds). Their scientific receipts still
-require review; terminal status is not current-primary qualification.
+**13629099** completed 0:0 (69 and 3 seconds). Their saved-result review now
+independently verifies 92 named hashes, 388 numeric fields and natural convergence
+at 20/final 21. Frozen a0a86 on 138,899 real 10073 particles at 380 improves masked AUC
+by +0.001742/+0.002335 versus the two modern RECOVAR repeats, while remaining
+−0.000768/−0.000605 below the two RELION repeats. The shells 81–128 deficit
+persists; recorded resolution 4.189009 Å is worse than RELION 4.124063 Å. This is
+final halfmap-FSC evidence for the older source, not current-primary acceptance.
+See the [full real-data review](k1_real_window_review_20260909.md) for unchanged
+bands, source/input limits and reproduction. No new job or numerical change.
 Recorded poll: `hia_source_review_20260906/mstep_dc_receipt_review_20260909/milestone_sacct.txt`.
 The queued audit script is `hia_source_review_20260906/k4_cleanup_pair/audit.sbatch`;
 outputs belong to `em_work/codex/hia_k4_cleanup_pair_20260907/quality/`.
