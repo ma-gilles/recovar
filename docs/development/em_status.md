@@ -32,7 +32,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | `650d71a43`: per-half dispatch and shared execution policies leave the iteration controller; controller 6,123 lines |
+| Latest production cleanup | `19073ab50`: 19 shared local-scoring arguments have one definition; half-scoring owner 1,422 lines, controller 6,123 lines |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -78,8 +78,10 @@ policies as well as across policies. Their margins and convergence implications
 remain unresolved; completion does not establish trajectory parity.
 
 Prepared E/M job 13639984 failed in diagnostic callable serialization (1:0,
-25 s), before science E/M completion. VDAM owns its separate v2 harness repair;
-the source and original evidence remain frozen. The next gate still compares
+25 s), before science E/M completion. VDAM's artifact-only v2 repair completed
+as H100 13640121 (0:0, 145 s), with four terminal arm receipts on frozen fe847.
+Scientific comparisons remain unreviewed here; completion is not acceptance.
+The next gate still compares
 pinned prepared inputs, compact-CTF and rectangle-power dispatch, then the actual
 M-step/state update. See `handoffs/em_clean_wavg_prepared_gate_20260909.json` and
 `handoffs/em_clean_vdam_composition_followup_20260909.json`. No duplicate GPU
@@ -104,11 +106,17 @@ the policy owner and rejects accidental half-scoring imports.
 
 Controller size falls **7,814 → 6,123 lines (−1,691)**. This is responsibility
 separation, not net source deletion: the three owner modules together add 73
-lines for explicit imports, module documentation and spacing. The two large
-scoring routines still need internal readability work after this ownership step.
+lines for explicit imports, module documentation and spacing. The dense routine still needs internal readability work. The subsequent local
+cleanup gives 19 identical operand/options keywords one definition across parent,
+denominator and final scoring; pass-specific controls stay at each call. It
+removes another 31 production lines (half-scoring module 1,453 → 1,422), with no
+new layer or numerical expression. Expanded call arguments match the original
+module AST after normalizing keyword order; the callee has explicit parameters.
+Simple names/constants now bind once per half, and no input arrays are copied.
 
 | Checkpoint | Executed evidence | Limit |
 | --- | --- | --- |
+| Local-scoring arguments `19073ab50` | Control 42/42; candidate 47/47 (9.95 s), including six denominator/spectrum variants and existing exact-K4 dispatch; CPU guard 38/38 (44.30 s); no skips or Ruff findings | 41 original case IDs unchanged, one original case expanded to six; two source guards resolve the common kwargs; no GPU/trajectory or timing-gain claim |
 | Runner provenance `0954fdfd0` | Four missing/foreign scorer-source regressions fail before the fix; all 8 CPU unit/CLI-entry cases pass after (8.09 s), no skips | Two checked module names added; no scientific operation changed or GPU job launched |
 | Half-scoring ownership `650d71a43` | Same 189-case CPU inventory before/after; final unused-import follow-up 6/6; extended CPU guard 38/38; exact function/constant and test-assertion audits | Intermediate stale owner guard failed once and was migrated; logger namespaces follow owners; no GPU/trajectory claim |
 | Compact-CTF integration `5a39eab29` | 241 CPU passed/23 GPU deselected (31.13 s), 38-case guard; all peer cases retained and six transferred files exact; peer H100 13638270 byte-exact operands/scores | Full-image powerClass and source precision preserved; allocation microbenchmark only, no end-to-end or trajectory claim |
@@ -124,6 +132,12 @@ were confirmed by failing tests before migration. This does not prove dynamic
 imports/registration or every runtime path. A tracked-reference scan found no
 further unreferenced, undecorated top-level private EM function candidates;
 do not remove code merely to reduce line counts.
+
+Local-scoring AST/case audits, test commands and source fingerprints are in
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/local_scoring_arguments_20260909/validation.json`;
+CPU logs/XML use `local_scoring_arguments_{control,after,guard}_20260909` under
+the CPU run root. Only the new test resolver's whitespace changed after checks;
+its complete module AST stayed identical. No new GPU jobs were launched.
 
 Runner provenance rejects a foreign or unlocated `half_scoring`/`scoring_policy`
 module even when the controller comes from the expected checkout. Evidence and
@@ -200,16 +214,33 @@ window **13610518** was running on `della-h20g1`, with **13610539** and
 Preserve their frozen sources/outputs; they do not automatically qualify later
 commits. No new jobs were launched for this audit.
 
-Frozen `8ab1a44be` completed RECOVAR2 in **14,399.809 s** versus native1
-**7,966.705 s**: **1.8075× unpaired**, on different physical A100s, launch order
-and shared-host conditions. Native2 was running at that report timestamp; its
-current state is not inferred here. The separate instrumented profile took
+Both individual timing pairs on frozen `8ab1a44be` are now terminal. Each pair
+used the same physical A100 for RECOVAR and RELION, in opposite execution orders:
+
+| Pair | RECOVAR whole process (s) | RELION whole process (s) | Ratio |
+| --- | ---: | ---: | ---: |
+| Forward | 13,125.865 | 7,966.705 | 1.647590× |
+| Reverse | 14,399.809 | 7,070.191 | 2.036693× |
+
+The geometric mean is **1.831839×**, with changing shared-host contention;
+it does not isolate an intrinsic speed factor. All four individual completion
+markers, return codes, matching per-pair GPU UUIDs and 16 receipt hashes were
+checked. The original forward five-arm controller lacks a final summary despite
+its two successful individual arms. These runs predate compact CTF and the
+precision proposal; no current-source speed or quality acceptance follows.
+Native CLI-only timing is unavailable, so both ratio terms use whole-process
+time. Exact commands, timestamps and limitations are in
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_speed_monitor_20260909/refresh_20260909T043656Z/report.json`;
+board review: `handoffs/em_clean_vdam_prepared_ack_and_paired_timing_20260909.json`.
+Large inputs and binaries were not rehashed for this timing review.
+
+The separate instrumented profile took
 14,764.576 s. Backend compilation was **195.662 s / 1.33%** of profiled exclusive
 time (excluding tracing/lowering). Prefetch queue waiting was 5,777.491 s; CTF
 host `np.stack` was 3,709.627 s exclusive versus 69.060 s in the native CTF
 binding. The helper's 4,557.538 s cumulative overlaps its children. These costs
 are not guaranteed removable time; queue waiting is not proven disk I/O.
-No paired speed or current-source quality acceptance follows.
+The profile does not isolate removable time or qualify current-source speed/quality.
 
 The frozen 21-checkpoint cross-engine diagnostic reports final FSC-AUC
 **0.9924569** and minimum **0.9900306 at iteration 70**. Iteration 40 is the first
