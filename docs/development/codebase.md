@@ -116,6 +116,15 @@ and the dtype-preserving adjoint rotation accessor belong to
 [`local_layout.py`](../../recovar/em/dense_single_volume/local_layout.py).
 Both owners import independently of execution modules.
 
+Scale-group ID validation and full-axis sizing have one host owner,
+[`helpers/scale_groups.py`](../../recovar/em/dense_single_volume/helpers/scale_groups.py).
+Local EM, both sparse scorers and the K-class subset router use it. Explicit
+counts retain groups absent from a class subset; missing IDs disable engine
+scale-statistics allocation, while routing still retains an explicit count.
+Empty ID arrays retain the existing one-group convention. Engine callers check
+the flattened image axis; the router has no image-count constraint. The helper
+preserves existing casts and errors and imports independently of execution.
+
 Sealed VDAM worker and block-chronology replay lives in
 [`helpers/vdam_replay.py`](../../recovar/em/dense_single_volume/helpers/vdam_replay.py).
 It owns NPZ schema validation, four cached loaders, stack-ID joins, worker/launch

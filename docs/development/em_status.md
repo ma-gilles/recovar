@@ -35,7 +35,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | `a7b15a197`: fixed-capacity call validation lives beside its host binding; local engine 8,928 lines, sparse scorer 17,424, half scorer 1,358, controller 6,123 |
+| Latest production cleanup | `2cc66f316`: scale-group validation has one shared owner; local engine 8,913 lines, sparse scorer 17,392, half scorer 1,358, controller 6,123 |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -103,6 +103,31 @@ assigned. Local GPU 0 is always reserved; check GPUs 1–3 immediately before us
 and restrict by idle-device UUID, or use Slurm visibility. Avoid duplicate jobs.
 
 ## Engineering work and recent evidence
+
+Scale-group cleanup `2cc66f316` replaces four validation/inference copies in
+local EM, sparse K1, fused sparse K-class and K-class subset routing with
+`helpers/scale_groups.py`. Explicit counts remain lower bounds, absent IDs
+retain routing information without allocating engine scale statistics, and empty
+IDs retain one group. Flattening, int64 conversion, validation order, exception
+types/messages and the original caller allocation shapes/dtypes are preserved.
+No arithmetic, reduction, JIT boundary or saved format changes.
+
+The retained three module ASTs agree after expanding the changed blocks. A
+sealed-preimage differential audit matches **768 engine-input cases and 195
+router cases**, including invalid counts/IDs and conflicting errors. The same
+seven end-to-end CPU cases pass before/after: local K-class details, default/split
+local scoring, sparse chunking and fused K-class scoring with explicit group
+counts. Eighteen new boundary cases also pass (**25 total**, zero skips), followed
+by the extended **38-case CPU/import guard**, zero skips. Each run preserves its
+source/native manifests. Only an import blank line changed between the focused
+panel and guard; its AST is exact. Existing tests and thresholds are unchanged.
+
+This removes **22 production lines net** across the four owner/caller modules;
+the new tests add coverage. It does not establish GPU, trajectory, exact-K4
+completion or runtime acceptance. Commands, sealed preimages and comparisons:
+`hia_source_review_20260906/scale_group_owner_20260909/{scope,audit,validation}.json`.
+Logs and XML: `pr180_integration_20260908/scale_groups_{control,after,guard}_20260909/`.
+No duplicate peer job, native build, numerical907 or private F32 M adoption.
 
 The controller now delegates dense/local half scoring to `half_scoring.py`;
 `scoring_policy.py` owns shared defaults and diagnostic selectors. Scheduling,
