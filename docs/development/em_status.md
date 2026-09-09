@@ -1,5 +1,52 @@
 # Current EM development scope
 
+## Normalization dtype migration and repeatability — September 9
+
+The normalization test arrived on a branch that did not preserve producer
+dtypes (`637e4e7b3`); integrated precision repair `330031102` does. The test now
+selects normalization precision explicitly and checks both modes, retaining the
+original default-mode coverage. Bucket dtype and public carry dtype are checked
+separately. All bytewise comparisons, remaining assertions and unrelated test
+AST are retained. Production code, precision defaults and tolerances are unchanged.
+
+The original CPU panel fails three dtype assertions and passes one case
+(24.78 s). The expanded panel passes all eight CPU cases (33.01 s). H100 job
+**13636581** passes four cases and fails four spectrum-normalization cases
+(39.61 s): the dtype checks pass, while retained bytewise checks reject varying
+normalization sums or reconstruction arrays. The GPU panel remains failed.
+
+Diagnostic H100 job **13636814** runs eight ABBAABBA arms for both ordinary and
+deferred execution. First-bucket prepared inputs are byte-identical across all
+28 pairs in each mode. Ordinary public outputs differ in 11/12 same-selector
+pairs and 14/16 crossed pairs. Normalization differences reach 0.00018310546875
+in either category; `Ft_y` also varies by up to 1.11e-16. This disproves assigning
+all variation solely to the zero-scatter toggle, but does not establish its full
+cause or scientific acceptability. Captured deferred outputs are exact in all
+28 pairs; synchronization from capture can change repeat behavior, so this does
+not erase the uninstrumented failures. All source/library/baseline checks pass.
+
+This replay uses float64 normalization and spectrum sums with float32 scoring
+and projection settings. Its observed reconstruction arrays are complex128 and
+float64 under the existing generic path. It is a diagnostic lane, not production
+float32 qualification. No precision or arithmetic change is proposed. An initial
+private serializer attempt (**13636765**) stopped before the numeric call; its
+failed output is preserved, and the repaired serializer passed an actual-bucket
+CPU preflight before the successful replay.
+
+CPU commands/logs are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/normalization_contract_{red,cpu}_20260909/`.
+Exact H100 manifests, source diffs and submission scripts are under the review
+root `hia_source_review_20260906/pr179_normalization_contract_20260909/` and
+`pr179_normalization_repeat_20260909_v2/`. GPU logs, XML, raw operands/results,
+comparison JSON and the assertion audit are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr179_normalization_contract_20260909/`
+and `pr179_normalization_repeat_20260909_v2/`. Reproduction requires fresh output
+roots; source fingerprints in those manifests identify the exact tested diff.
+
+Next, isolate same-input spectrum-power reduction and uninstrumented deferred
+repeat behavior. Keep the strict failed tests visible. Full API/native coverage,
+production float32 trajectory quality and performance acceptance remain open.
+
 ## Replace stale source guards with execution checks — September 9
 
 Three original API failures inspected retired source spellings rather than
@@ -222,6 +269,59 @@ Reported 100k RECOVAR arms are at 120/180, with no completed RECOVAR ratio;
 that panel uses separate frozen `8ab1a44be` source. This docs-only acknowledgment
 adds no production merge, test launch, quality acceptance or performance claim.
 Shared source/docs/publication ownership and the two-file VDAM scope remain.
+
+Product diagnostic **13635586** completed with exit 0 in 9 seconds on H100
+`della-h20g4`, at unchanged private `5656a7ef3`. VDAM reports that all 17 active
+rows match a separate-rounding model for JAX and an FMA model for CUDA before
+reduction. This supports product-level arithmetic attribution on the captured
+rows; it is not PTX proof, full-reduction equivalence or RELION-quality acceptance.
+Matching CUDA to JAX is not a justification for changing production arithmetic.
+em_clean verified the clean two-file scope and job accounting, but has not
+independently audited the numerical arrays.
+
+The next private-artifact experiment compares direct Wavg and decomposed noise
+on identical inputs across modeled shells. The peer reports that the helper
+already computes those shells while the caller retains only the cutoff shell.
+All scales/corrections are one in this capture; conclusions must retain that
+restriction. See `handoffs/vdam_noise_products_result_20260909.json` on the
+coordination board. Shared production ownership remains with em_clean.
+
+The historical `8ab1a44be` A100 monitor at 01:58 UTC reports checkpoint interval
+170→180 of **1581.151 s RECOVAR versus 797.007 s native (1.984×)**, with no new
+persistent cache files in that interval. Sampled utilization averages are
+9.93% versus 28.97%. Different physical A100s, wall-clock windows, host contention
+and potentially different intermediate adaptive states limit this comparison.
+Cache-file counts do not measure compilation time, and sampled utilization is
+not an exact GPU-busy fraction. Full profiles were still pending at the snapshot;
+no completed RECOVAR full-process ratio or stage attribution is available.
+Evidence: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_speed_monitor_20260909/ledger_015811/report.md`.
+This acknowledgment launches no tests/jobs and adds no quality or speed acceptance.
+
+Direct-noise job **13635797** completed on H100 at private `5656a7ef3`.
+The peer reports modeled differences near `3.75e-7`, with comparable variation
+from the core/JIT boundary; this does not justify a production replacement.
+A matched native-output oracle is the next private diagnostic requirement.
+
+VDAM now owns the five reviewed v2 diagnostic insertions in shared RELION
+`/scratch/gpfs/GILLES/mg6942/relion/src/acc/acc_ml_optimiser_impl.h`: an explicit
+residual offset, 17-digit residual output, the existing `sum_offset` argument,
+and exact host-filled `Fimgs` plus `ctf_premultiplied` dumps in the target block.
+The declared header/patch hashes match, and `git apply --check` passes. The
+existing dump gates and synchronized residual-buffer read are retained. Preserve
+all prior source edits; no competing registered source/build writer was found.
+Exact ownership and baseline manifests:
+`handoffs/em_clean_relion_residual_writer_v2_20260909.json` on the coordination board.
+
+Use the same source tree with private build/install outputs under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_native_residual_capture_plan_20260909/{build,install}`.
+The existing shared `build_patched` and `relion_patched_install` stay frozen:
+both 100k manifests pin the current `build_patched/bin/relion_refine` hash.
+Replacing that binary would invalidate their provenance. No new clone or
+shared dependency writes are assigned. The stale `proposal.json` build command
+targeting `build_patched` is superseded by this private-output assignment.
+VDAM must record the private build
+identity and explicitly release this bounded ownership. em_clean has not
+applied the patch or launched a build; RECOVAR production ownership is unchanged.
 
 ## Structural cleanup after VDAM integration — September 9
 
