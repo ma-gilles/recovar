@@ -421,3 +421,118 @@ def _assemble_result(
         mstep_full_half_axis=mstep_full_half_axis,
         mstep_accumulator_shape=mstep_accumulator_shape,
     )
+
+
+def _expand_subset_noise_stats(
+    noise: NoiseStats,
+    image_indices: np.ndarray,
+    n_images: int,
+    *,
+    full_group_count: int | None,
+) -> NoiseStats:
+    """Expand subset-only optional noise fields to the parent image/group axes."""
+
+    image_indices = np.asarray(image_indices, dtype=np.int64).reshape(-1)
+    n_images = int(n_images)
+    if image_indices.size:
+        if int(np.min(image_indices)) < 0 or int(np.max(image_indices)) >= n_images:
+            raise ValueError("subset image indices are out of bounds")
+
+    def _image_field(value, name: str):
+        if value is None:
+            return None
+        array = np.asarray(value)
+        flat = array.reshape(-1)
+        if flat.shape[0] == n_images:
+            return jnp.asarray(array)
+        if flat.shape[0] != image_indices.size:
+            raise ValueError(
+                f"{name} has shape {array.shape}; expected {image_indices.size} subset values "
+                f"or {n_images} full-image values",
+            )
+        out = np.zeros(n_images, dtype=flat.dtype)
+        out[image_indices] = flat
+        return jnp.asarray(out)
+
+    def _group_field(value, name: str):
+        if value is None:
+            return None
+        array = np.asarray(value)
+        flat = array.reshape(-1)
+        if full_group_count is None or flat.shape[0] == int(full_group_count):
+            return jnp.asarray(array)
+        if flat.shape[0] > int(full_group_count):
+            raise ValueError(
+                f"{name} has shape {array.shape}; expected no more than {full_group_count} groups",
+            )
+        out = np.zeros(int(full_group_count), dtype=flat.dtype)
+        out[: flat.shape[0]] = flat
+        return jnp.asarray(out)
+
+    return noise._replace(
+        wsum_norm_correction=_image_field(noise.wsum_norm_correction, "wsum_norm_correction"),
+        wsum_scale_correction_xa=_group_field(noise.wsum_scale_correction_xa, "wsum_scale_correction_xa"),
+        wsum_scale_correction_aa=_group_field(noise.wsum_scale_correction_aa, "wsum_scale_correction_aa"),
+    )
+
+
+
+def _zero_subset_noise_stats(
+    noise_variance,
+    *,
+    n_images: int,
+    full_group_count: int | None,
+) -> NoiseStats:
+    class_noise = np.asarray(noise_variance)
+    stats_dtype = class_noise.dtype
+    return make_noise_stats(
+        wsum_sigma2_noise=np.zeros_like(class_noise),
+        wsum_img_power=np.zeros_like(class_noise),
+        wsum_sigma2_offset=0.0,
+        sumw=0.0,
+        wsum_norm_correction=np.zeros(int(n_images), dtype=stats_dtype),
+        wsum_scale_correction_xa=(
+            None if full_group_count is None else np.zeros(int(full_group_count), dtype=stats_dtype)
+        ),
+        wsum_scale_correction_aa=(
+            None if full_group_count is None else np.zeros(int(full_group_count), dtype=stats_dtype)
+        ),
+    )
+
+
+
+def _full_stats_from_subset(
+    subset_stats: RelionStats,
+    image_indices: np.ndarray,
+    n_images: int,
+    *,
+    class_log_evidence: np.ndarray,
+) -> RelionStats:
+    image_indices = np.asarray(image_indices, dtype=np.int64)
+    stats_dtype = np.asarray(subset_stats.best_log_score_per_image).dtype
+    best = np.full(int(n_images), -np.inf, dtype=stats_dtype)
+    pmax = np.zeros(int(n_images), dtype=stats_dtype)
+    best[image_indices] = np.asarray(subset_stats.best_log_score_per_image, dtype=stats_dtype)
+    pmax[image_indices] = np.asarray(subset_stats.max_posterior_per_image, dtype=stats_dtype)
+    return make_relion_stats(
+        log_evidence_per_image=np.asarray(class_log_evidence, dtype=stats_dtype),
+        best_log_score_per_image=best,
+        max_posterior_per_image=pmax,
+        rotation_posterior_sums=subset_stats.rotation_posterior_sums,
+    )
+
+
+
+def _expand_subset_pose_details(best_rots, best_trans, best_rot_ids, image_indices, n_images):
+    """Scatter scored poses to parent image rows, leaving unvisited rows zero.
+
+    Preserve the rotation/translation dtypes and the int32 published pose IDs.
+    The caller retains the returned arrays in its per-class output slots.
+    """
+    best_rots_full = np.zeros((n_images, 3, 3), dtype=np.asarray(best_rots).dtype)
+    best_trans_full = np.zeros((n_images, 2), dtype=np.asarray(best_trans).dtype)
+    best_rot_ids_full = np.zeros(n_images, dtype=np.int32)
+    best_rots_full[image_indices] = best_rots
+    best_trans_full[image_indices] = best_trans
+    best_rot_ids_full[image_indices] = best_rot_ids
+    return best_rots_full, best_trans_full, best_rot_ids_full

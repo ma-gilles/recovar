@@ -22,16 +22,18 @@ from recovar.em.dense_single_volume.k_class import (
     _ClassFineGridSignificanceMask,
     _compact_sparse_pass2_preferred_over_dense,
     _dense_engine_kwargs_for_class,
-    _expand_subset_noise_stats,
     _run_sparse_firstiter_global_winner_subset_pass2,
     _run_sparse_k_class_adaptive_pass2,
     _strict_exact_fine_gaussian_requested,
-    _zero_subset_noise_stats,
     run_dense_k_class_em,
     run_dense_k_class_em_adaptive,
     run_local_k_class_em,
 )
-from recovar.em.dense_single_volume.k_class_results import _assemble_result
+from recovar.em.dense_single_volume.k_class_results import (
+    _assemble_result,
+    _expand_subset_noise_stats,
+    _zero_subset_noise_stats,
+)
 from recovar.em.dense_single_volume.helpers.oversampling import (
     build_adaptive_pass2_grids,
 )

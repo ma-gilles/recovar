@@ -50,18 +50,19 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
-The structural successor to430c0763d moves the shared K-class assembler, its result
-type and publication/noise helpers into `k_class_results.py`. Dense/local already
-shared that assembler; no duplicate deletion is claimed. **390 lines leave the
-scheduler; production grows33 lines for module documentation/imports/compatibility.**
-All70 original class/function ASTs are exact. The result type keeps its historical
-pickle GLOBAL name through the `k_class` alias; canonical imports avoid engines.
-Final243 CPU cases pass,3 native-binding cases skip, and38 guard cases pass with
-the new owner in its import-boundary check. The last test-import ordering change
-passes all48 joint cases. Numeric assertions stay; source-location guards follow
-the new owner. Mirrored instructions and the codebase map agree. [Receipt and
-exact checks](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k_class_results_owner_20260909/result.json).
-This remains local for batched publication; frozen5ca9 qualification is unchanged.
+The K-class result-owner series on430c0763d separates the shared assembler, result
+type, publication/noise helpers and subset-stat expansion into `k_class_results.py`.
+Dense and sparse firstiter paths now share their identical six-statement pose
+scatter. Accumulator offloading, list retention, dtype casts and operation order
+remain explicit and unchanged. **485 lines leave scheduling; net production grows53
+lines for the owner, documentation and compatibility.** This is an ownership gain,
+not a net deletion claim. Exact definition/inlined-body comparisons and unchanged
+numerical assertions cover the refactor. Historical result pickle GLOBAL/alias is
+preserved; canonical result imports load no scoring engines.
+Combined243 CPU cases pass,3 native-binding cases skip, and38 guard cases pass.
+Mirrored instructions/codebase links pass; prior fixture and inspection corrections
+remain recorded. [Combined receipt and exact checks](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k_class_subset_publication_20260909/result.json).
+Frozen5ca9 qualification stays separate from this structural successor.
 
 The next structural checkpoint on `5ca9c8fff` completes compact-pair host planning
 ownership in `helpers.sparse_bucket_arrays`: four live helpers move with direct
