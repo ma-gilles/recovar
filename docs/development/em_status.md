@@ -531,11 +531,15 @@ gates remain in the [program archive](../math/em_parity_program.md);
 
 ## Frozen jobs and representative performance
 
-Slurm was checked on September 9 UTC during the precision review: K4 pair
-**13560202** was running on `della-l08g4`, audit **13560356** pending. K1 real-data
-window **13610518** was running on `della-h20g1`, with **13610539** and
-**13629099** pending. The recorded poll is in
-`hia_source_review_20260906/precision_prepared_review_20260909/jobs.txt`. Poll these exact jobs before using this status as current.
+Slurm was checked on September 9 UTC after the normalization-input cleanup:
+the frozen older-source K4 pair **13560202 completed 0:0** on `della-l08g4`
+(16:19:39 elapsed). Its audit **13560356** is pending for priority; terminal process
+status alone is not scientific acceptance. K1 real-data window **13610518** is
+running on `della-h20g1`; **13610539** and **13629099** remain dependency-pending.
+Recorded poll: `hia_source_review_20260906/normalization_input_owner_20260909/milestone_sacct.txt`.
+The queued audit script is `hia_source_review_20260906/k4_cleanup_pair/audit.sbatch`;
+outputs belong to `em_work/codex/hia_k4_cleanup_pair_20260907/quality/`.
+Poll these exact jobs before using this status as current.
 Preserve their frozen sources/outputs; they do not automatically qualify later
 commits. No new jobs were launched for this audit.
 
