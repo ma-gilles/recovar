@@ -9073,6 +9073,20 @@ def _sparse_big_jit_local_case(rng):
     return dataset, mean, mean_variance, noise_variance, local_layout
 
 
+def _assert_significance_stats_allclose(actual, expected):
+    """Compare every statistic, including the nonnumeric selector audit."""
+    assert actual.keys() == expected.keys()
+    assert actual["coarse_selector_audit"] == expected["coarse_selector_audit"]
+    for key in actual.keys() - {"coarse_selector_audit"}:
+        np.testing.assert_allclose(
+            np.asarray(actual[key]),
+            np.asarray(expected[key]),
+            rtol=1e-6,
+            atol=1e-6,
+            err_msg=key,
+        )
+
+
 def _assert_relion_stats_allclose(actual, expected):
     np.testing.assert_allclose(
         np.asarray(actual.log_evidence_per_image),
@@ -12342,13 +12356,7 @@ class TestRelionModeSmokeTest:
                 assert cached_sig is uncached_sig
             else:
                 np.testing.assert_array_equal(cached_sig, uncached_sig)
-        for key, cached in cached_result[5].items():
-            np.testing.assert_allclose(
-                np.asarray(cached),
-                np.asarray(uncached_result[5][key]),
-                rtol=1e-6,
-                atol=1e-6,
-            )
+        _assert_significance_stats_allclose(cached_result[5], uncached_result[5])
 
     def test_k_class_significance_score_cache_matches_uncached_path(
         self,
@@ -12417,15 +12425,7 @@ class TestRelionModeSmokeTest:
                     assert cached_sig is uncached_sig
                 else:
                     np.testing.assert_array_equal(cached_sig, uncached_sig)
-        for key, cached in cached_result[5].items():
-            if key == "coarse_selector_audit":
-                continue
-            np.testing.assert_allclose(
-                np.asarray(cached),
-                np.asarray(uncached_result[5][key]),
-                rtol=1e-6,
-                atol=1e-6,
-            )
+        _assert_significance_stats_allclose(cached_result[5], uncached_result[5])
 
     def test_k_class_significance_tail_padding_preserves_outputs(
         self,
@@ -12478,15 +12478,7 @@ class TestRelionModeSmokeTest:
         for expected_by_class, actual_by_class in zip(unpadded[4], padded[4]):
             for expected, actual in zip(expected_by_class, actual_by_class):
                 np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
-        for key, expected in unpadded[5].items():
-            if key == "coarse_selector_audit":
-                continue
-            np.testing.assert_allclose(
-                np.asarray(padded[5][key]),
-                np.asarray(expected),
-                rtol=1e-6,
-                atol=1e-6,
-            )
+        _assert_significance_stats_allclose(padded[5], unpadded[5])
 
     def test_k_class_pass1_fused_matches_unfused_significance(
         self,
@@ -12558,15 +12550,7 @@ class TestRelionModeSmokeTest:
                     assert fused_sig is unfused_sig
                 else:
                     np.testing.assert_array_equal(fused_sig, unfused_sig)
-        for key, fused in fused_result[5].items():
-            if key == "coarse_selector_audit":
-                continue
-            np.testing.assert_allclose(
-                np.asarray(fused),
-                np.asarray(unfused_result[5][key]),
-                rtol=1e-6,
-                atol=1e-6,
-            )
+        _assert_significance_stats_allclose(fused_result[5], unfused_result[5])
 
     def test_k_class_firstiter_cc_significance_matches_per_class_run_em(
         self,
