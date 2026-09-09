@@ -1101,7 +1101,8 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     assembler_start = source.index("def _assemble_relion_exact_coarse_gaussian_operands(")
     assembler = source[assembler_start : source.index("\ndef ", assembler_start + 1)]
     assert "_relion_exact_ctf_half_from_source_star_host(" in assembler
-    assert "jnp.asarray(processed_direct, dtype=complex_dtype) * pixel_correction" in assembler
+    assert "processed_score * pixel_correction" in assembler
+    assert "pixel_indices=score_indices_np" in assembler
     assert "shifted_corrected = translate_fn(" in assembler
     assert "else cuda_backproject.relion_coarse_diff2_projector_f32" in source
     assert "return coarse_projector(" in source
@@ -1203,6 +1204,13 @@ def test_exact_relion_ctf_source_exposes_host_and_shared_device_boundaries(
         original_image_indices_from_local=lambda indices: np.asarray(indices),
     )
 
+    pixel_indices = np.asarray([11, 0, 4, 4], dtype=np.int32)
+    compact_result = sparse_pass2_bucketed._relion_exact_ctf_half_from_source_star_host(
+        dataset,
+        np.asarray([0, 0], dtype=np.int32),
+        (4, 4),
+        pixel_indices=pixel_indices,
+    )
     host_result = sparse_pass2_bucketed._relion_exact_ctf_half_from_source_star_host(
         dataset,
         np.asarray([0], dtype=np.int32),
@@ -1223,6 +1231,19 @@ def test_exact_relion_ctf_source_exposes_host_and_shared_device_boundaries(
         -np.fft.fftshift(np.arange(12, dtype=np.float64).reshape(4, 3), axes=0).reshape(-1),
     )
     np.testing.assert_array_equal(np.asarray(device_result), host_result)
+
+    assert compact_result.dtype == np.float64
+    np.testing.assert_array_equal(compact_result, host_result[[0, 0]][:, pixel_indices])
+    # A compact result must not expose writable aliases of the cached full CTF.
+    compact_result[:] = 99.0
+    np.testing.assert_array_equal(
+        sparse_pass2_bucketed._relion_exact_ctf_half_from_source_star_host(
+            dataset,
+            np.asarray([0], dtype=np.int32),
+            (4, 4),
+        ),
+        host_result,
+    )
 
 
 def test_coarse_gaussian_square_operands_reuse_weighted_score_inputs():
@@ -3563,3 +3584,58 @@ def test_relion_powerclass_fails_closed_without_gpu(monkeypatch):
             ydim=8,
             resolution_limit=3,
         )
+
+
+@pytest.mark.parametrize(
+    "bad_indices",
+    [
+        np.asarray([-1], dtype=np.int32),
+        np.asarray([12], dtype=np.int32),
+        np.asarray([1.5], dtype=np.float64),
+        np.asarray([[1]], dtype=np.int32),
+        np.asarray([True], dtype=bool),
+    ],
+)
+def test_exact_ctf_compact_indices_reject_invalid_host_geometry(monkeypatch, tmp_path, bad_indices):
+    from types import SimpleNamespace
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse
+
+    source = (tmp_path / "particles.star").resolve()
+    monkeypatch.setattr(sparse, "_relion_exact_ctf_source_star", lambda _: source)
+    monkeypatch.setitem(
+        sparse._RELION_EXACT_CTF_SOURCE_CACHE, (str(source), (4, 4)), {"images": {0: np.ones(12, dtype=np.float64)}}
+    )
+    dataset = SimpleNamespace(original_image_indices_from_local=lambda indices: indices)
+    with pytest.raises(ValueError):
+        sparse._relion_exact_ctf_half_from_source_star_host(
+            dataset,
+            np.asarray([0]),
+            (4, 4),
+            pixel_indices=bad_indices,
+        )
+
+
+def test_exact_ctf_compact_indices_never_materialize_device_inputs(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse
+
+    class DeviceOnly:
+        def __array__(self, *args, **kwargs):
+            raise AssertionError("Unexpected device-to-host materialization")
+
+    source = (tmp_path / "particles.star").resolve()
+    monkeypatch.setattr(sparse, "_relion_exact_ctf_source_star", lambda _: source)
+    monkeypatch.setitem(
+        sparse._RELION_EXACT_CTF_SOURCE_CACHE, (str(source), (4, 4)), {"images": {0: np.ones(12, dtype=np.float64)}}
+    )
+    dataset = SimpleNamespace(original_image_indices_from_local=lambda indices: indices)
+    for indices in (DeviceOnly(), jnp.asarray([0], dtype=jnp.int32)):
+        with pytest.raises(TypeError, match="host NumPy array"):
+            sparse._relion_exact_ctf_half_from_source_star_host(
+                dataset,
+                np.asarray([0]),
+                (4, 4),
+                pixel_indices=indices,
+            )

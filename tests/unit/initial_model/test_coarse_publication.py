@@ -274,7 +274,11 @@ def test_actual_significance_engine_publishes_identical_complete_state(
     monkeypatch.setattr(oversampling, "relion_cuda_f32_coarse_posterior", pub.relion_cuda_f32_coarse_posterior)
     for name in ("_relion_exact_ctf_half_from_source_star", "_relion_exact_ctf_half_from_source_star_host"):
         monkeypatch.setattr(
-            sparse, name, lambda _dataset, indices, image_shape: np.ones((len(indices), 12), np.float64)
+            sparse,
+            name,
+            lambda _dataset, indices, image_shape, *, pixel_indices=None: np.ones(
+                (len(indices), 12 if pixel_indices is None else len(pixel_indices)), np.float64
+            ),
         )
     monkeypatch.setattr(
         sparse,

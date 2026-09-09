@@ -1301,10 +1301,10 @@ def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
     monkeypatch.setattr(
         sparse_pass2_bucketed,
         "_relion_exact_ctf_half_from_source_star_host",
-        lambda _dataset, indices, image_shape: np.ones(
+        lambda _dataset, indices, image_shape, *, pixel_indices=None: np.ones(
             (
                 len(indices),
-                int(image_shape[0]) * (int(image_shape[1]) // 2 + 1),
+                (int(image_shape[0]) * (int(image_shape[1]) // 2 + 1) if pixel_indices is None else len(pixel_indices)),
             ),
             dtype=np.float64,
         ),
@@ -1572,10 +1572,10 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     monkeypatch.setattr(
         sparse_pass2_bucketed,
         "_relion_exact_ctf_half_from_source_star_host",
-        lambda _dataset, indices, image_shape: np.ones(
+        lambda _dataset, indices, image_shape, *, pixel_indices=None: np.ones(
             (
                 len(indices),
-                int(image_shape[0]) * (int(image_shape[1]) // 2 + 1),
+                (int(image_shape[0]) * (int(image_shape[1]) // 2 + 1) if pixel_indices is None else len(pixel_indices)),
             ),
             dtype=np.float64,
         ),
@@ -2337,8 +2337,11 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
     monkeypatch.setattr(
         sparse_pass2_bucketed,
         "_relion_exact_ctf_half_from_source_star_host",
-        lambda _dataset, indices, image_shape: np.ones(
-            (len(indices), int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)),
+        lambda _dataset, indices, image_shape, *, pixel_indices=None: np.ones(
+            (
+                len(indices),
+                (int(image_shape[0]) * (int(image_shape[1]) // 2 + 1) if pixel_indices is None else len(pixel_indices)),
+            ),
             dtype=np.float64,
         ),
     )
