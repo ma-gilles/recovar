@@ -1622,7 +1622,7 @@ def test_kclass_pass2_dump_preserves_effective_raw_operands(monkeypatch, tmp_pat
     pair_mask = np.asarray([[True, True, False, False]], dtype=bool)
     pair_rotation_row = np.asarray([[0, 1, 0, 0]], dtype=np.int32)
     pair_translation_idx = np.asarray([[1, 2, 0, 0]], dtype=np.int32)
-    raw_operands = sparse_pass2_mod._capture_k_class_pass2_raw_operands(
+    raw_operands = pass2_diagnostics._capture_k_class_pass2_raw_operands(
         raw_diff2=np.zeros((1, pair_mask.shape[1]), dtype=np.float32),
         target_rows=np.asarray([0], dtype=np.int64),
         actual_counts=np.asarray([n_rot], dtype=np.int64),
@@ -1702,7 +1702,7 @@ def test_kclass_pass2_raw_operand_capture_preserves_double_precision():
     proj_half = np.asarray([[[4.0 + 5.0j]]], dtype=np.complex128)
     half_weights = np.asarray([6.0], dtype=np.float64)
 
-    captured = sparse_pass2_mod._capture_k_class_pass2_raw_operands(
+    captured = pass2_diagnostics._capture_k_class_pass2_raw_operands(
         raw_diff2=raw_diff2,
         target_rows=np.asarray([0], dtype=np.int64),
         actual_counts=np.asarray([1], dtype=np.int64),

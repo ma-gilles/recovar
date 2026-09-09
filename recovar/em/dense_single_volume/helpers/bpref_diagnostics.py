@@ -466,6 +466,123 @@ def _maybe_dump_native_half_mstep(
     )
 
 
+def _materialize_k_class_capture_rows(
+    *,
+    image_indices,
+    target_particle_rows,
+    per_image_inputs,
+    class_bucket_arrays,
+    compact_pair_arrays,
+    scores,
+    probs,
+    reconstruction_mask,
+    reconstruction_probs,
+    bucket_translation_prior,
+    n_fine_trans: int,
+):
+    """Materialize only selected fused-K rows in rectangular diagnostic form."""
+
+    rows = np.asarray(target_particle_rows, dtype=np.int64)
+    if rows.ndim != 1 or rows.size == 0:
+        raise ValueError("fused K-class capture requires at least one target particle row")
+    image_indices_np = np.asarray(image_indices, dtype=np.int64)
+    if np.any(rows < 0) or np.any(rows >= image_indices_np.size):
+        raise ValueError("fused K-class capture target row is outside the bucket")
+
+    selected_image_indices = image_indices_np[rows]
+    n_selected = int(rows.size)
+    n_rot = int(class_bucket_arrays["bucket_size"])
+    n_trans = int(n_fine_trans)
+
+    def _selected(values):
+        return np.asarray(jnp.asarray(values)[jnp.asarray(rows, dtype=jnp.int32)])
+
+    selected_scores = _selected(scores)
+    selected_probs = _selected(probs)
+    selected_reconstruction_mask = (
+        None if reconstruction_mask is None else _selected(reconstruction_mask).astype(bool, copy=False)
+    )
+    selected_reconstruction_probs = (
+        None if reconstruction_probs is None else _selected(reconstruction_probs)
+    )
+
+    rotation_log_prior = np.zeros((n_selected, n_rot), dtype=np.float32)
+    for selected_row, image_index in enumerate(selected_image_indices.tolist()):
+        prior = np.asarray(per_image_inputs["log_prior"][int(image_index)], dtype=np.float32)
+        if prior.size > n_rot:
+            raise ValueError("fused K-class capture rotation prior exceeds its bucket")
+        rotation_log_prior[selected_row, : prior.size] = prior
+
+    if compact_pair_arrays is None:
+        candidate_mask = _selected(class_bucket_arrays["candidate_mask"]).astype(bool, copy=False)
+        dense_scores = selected_scores
+        dense_probs = selected_probs
+        dense_reconstruction_mask = selected_reconstruction_mask
+        dense_reconstruction_probs = selected_reconstruction_probs
+    else:
+        pair_rows = _selected(compact_pair_arrays["local_rotation_row"]).astype(np.int64, copy=False)
+        pair_translations = _selected(compact_pair_arrays["translation_idx"]).astype(np.int64, copy=False)
+        pair_mask = _selected(compact_pair_arrays["pair_mask"]).astype(bool, copy=False)
+        dense_scores = np.full((n_selected, n_rot, n_trans), -np.inf, dtype=selected_scores.dtype)
+        dense_probs = np.zeros((n_selected, n_rot, n_trans), dtype=selected_probs.dtype)
+        candidate_mask = np.zeros((n_selected, n_rot, n_trans), dtype=bool)
+        dense_reconstruction_mask = (
+            None
+            if selected_reconstruction_mask is None
+            else np.zeros((n_selected, n_rot, n_trans), dtype=bool)
+        )
+        dense_reconstruction_probs = (
+            None
+            if selected_reconstruction_probs is None
+            else np.zeros((n_selected, n_rot, n_trans), dtype=selected_reconstruction_probs.dtype)
+        )
+        for selected_row in range(n_selected):
+            valid = (
+                pair_mask[selected_row]
+                & (pair_rows[selected_row] >= 0)
+                & (pair_rows[selected_row] < n_rot)
+                & (pair_translations[selected_row] >= 0)
+                & (pair_translations[selected_row] < n_trans)
+            )
+            rr = pair_rows[selected_row, valid]
+            tt = pair_translations[selected_row, valid]
+            if np.unique(rr * n_trans + tt).size != rr.size:
+                raise RuntimeError("fused K-class capture encountered duplicate compact candidate pairs")
+            dense_scores[selected_row, rr, tt] = selected_scores[selected_row, valid]
+            dense_probs[selected_row, rr, tt] = selected_probs[selected_row, valid]
+            candidate_mask[selected_row, rr, tt] = True
+            if dense_reconstruction_mask is not None:
+                dense_reconstruction_mask[selected_row, rr, tt] = selected_reconstruction_mask[
+                    selected_row, valid
+                ]
+            if dense_reconstruction_probs is not None:
+                dense_reconstruction_probs[selected_row, rr, tt] = selected_reconstruction_probs[
+                    selected_row, valid
+                ]
+
+    if dense_reconstruction_probs is None:
+        mstep_probs = dense_probs
+    else:
+        mstep_probs = dense_reconstruction_probs
+    if dense_reconstruction_mask is None:
+        dense_reconstruction_mask = mstep_probs > 0
+
+    return {
+        "image_indices": selected_image_indices,
+        "batch_rows": rows,
+        "scores": dense_scores,
+        "probs": dense_probs,
+        "candidate_mask": candidate_mask,
+        "reconstruction_mask": dense_reconstruction_mask,
+        "reconstruction_probs": mstep_probs,
+        "rotation_log_prior": rotation_log_prior,
+        "translation_log_prior": _selected(bucket_translation_prior),
+        "rotations": _selected(class_bucket_arrays["mstep_rotations"]),
+        "rotation_indices": _selected(class_bucket_arrays["rotation_indices"]),
+        "actual_counts": _selected(class_bucket_arrays["actual_counts"]).astype(np.int64, copy=False),
+    }
+
+
 def _maybe_dump_bpref_contribution_rows(
     *,
     experiment_dataset,

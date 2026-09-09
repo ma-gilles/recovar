@@ -1262,6 +1262,90 @@ def _write_chunked_scale_aa_dump(
     return int(target_rows.size)
 
 
+def _capture_k_class_pass2_raw_operands(
+    *,
+    raw_diff2,
+    target_rows,
+    actual_counts,
+    shifted_corrected,
+    corr_img_score,
+    proj_half,
+    half_weights,
+    relion_full_to_compact,
+    highres_xi2_half,
+    pair_mask=None,
+    pair_rotation_row=None,
+    pair_translation_idx=None,
+):
+    """Stage the effective raw-diff2 operands after scoring completes."""
+
+    raw_diff2 = np.asarray(jax.block_until_ready(raw_diff2))
+    real_dtype = raw_diff2.dtype
+    complex_dtype = np.complex128 if real_dtype == np.dtype(np.float64) else np.complex64
+    target_rows = np.asarray(target_rows, dtype=np.int64)
+    actual_counts = np.asarray(actual_counts, dtype=np.int64)
+    shifted_corrected = np.asarray(shifted_corrected, dtype=complex_dtype)
+    corr_img_score = np.asarray(corr_img_score, dtype=real_dtype)
+    proj_half = np.asarray(proj_half, dtype=complex_dtype)
+    half_weights = np.asarray(half_weights, dtype=real_dtype)
+    if relion_full_to_compact is None:
+        relion_full_to_compact = np.arange(
+            proj_half.shape[-1],
+            dtype=np.int32,
+        )
+    else:
+        relion_full_to_compact = np.asarray(
+            relion_full_to_compact,
+            dtype=np.int32,
+        )
+    if highres_xi2_half is None:
+        highres_xi2_half = np.zeros(shifted_corrected.shape[0], dtype=real_dtype)
+    else:
+        highres_xi2_half = np.asarray(highres_xi2_half, dtype=real_dtype)
+    if pair_mask is None:
+        pair_mask = np.empty((shifted_corrected.shape[0], 0), dtype=bool)
+        pair_rotation_row = np.empty(
+            (shifted_corrected.shape[0], 0),
+            dtype=np.int32,
+        )
+        pair_translation_idx = np.empty(
+            (shifted_corrected.shape[0], 0),
+            dtype=np.int32,
+        )
+    else:
+        pair_mask = np.asarray(pair_mask, dtype=bool)
+        pair_rotation_row = np.asarray(pair_rotation_row, dtype=np.int32)
+        pair_translation_idx = np.asarray(pair_translation_idx, dtype=np.int32)
+
+    captured = {}
+    for row in target_rows:
+        row = int(row)
+        n_rot = int(actual_counts[row])
+        captured[row] = {
+            "actual_rotation_count": np.int64(n_rot),
+            "raw_diff2": np.array(raw_diff2[row], copy=True),
+            "shifted_corrected": np.array(
+                shifted_corrected[row],
+                copy=True,
+            ),
+            "corr_img_score": np.array(corr_img_score[row], copy=True),
+            "proj_half": np.array(proj_half[row], copy=True),
+            "half_weights": np.array(half_weights, copy=True),
+            "relion_full_to_compact": np.array(
+                relion_full_to_compact,
+                copy=True,
+            ),
+            "highres_xi2_half": np.asarray(highres_xi2_half[row], dtype=real_dtype)[()],
+            "pair_mask": np.array(pair_mask[row], copy=True),
+            "pair_rotation_row": np.array(pair_rotation_row[row], copy=True),
+            "pair_translation_idx": np.array(
+                pair_translation_idx[row],
+                copy=True,
+            ),
+        }
+    return captured
+
+
 def _maybe_dump_k_class_pass2_bucket(
     *,
     experiment_dataset,

@@ -910,7 +910,7 @@ def test_fused_kclass_compact_capture_materializes_only_target_rows():
         [[0.1, 0.2, 0.0], [0.3, 0.4, 0.5], [0.6, 0.0, 0.0]],
         dtype=np.float32,
     )
-    capture = sparse_pass2_bucketed._materialize_k_class_capture_rows(
+    capture = bpref_diagnostics._materialize_k_class_capture_rows(
         image_indices=image_indices,
         target_particle_rows=np.asarray([1], dtype=np.int64),
         per_image_inputs=per_image_inputs,
