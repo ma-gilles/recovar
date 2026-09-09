@@ -478,7 +478,11 @@ def _local_candidate_metadata(
     row: int,
     actual_count: int,
 ):
-    """Return local rotation/translation metadata for one debug row."""
+    """Return local metadata, retaining F64 source angles when available.
+
+    ``local_rotation_eulers_source`` distinguishes these from the legacy
+    F32 matrix-derived Euler fallback. Compute matrices remain unchanged.
+    """
 
     local_rotation_ids = np.asarray(bucket.local_rotation_ids[row, :actual_count], dtype=np.int32)
     local_rotation_parent_ids = (
@@ -488,10 +492,16 @@ def _local_candidate_metadata(
     )
     local_rotation_child_indices = _child_ordinals_from_parent_ids(local_rotation_parent_ids)
     local_rotation_matrices = np.asarray(bucket.local_rotations[row, :actual_count], dtype=np.float32)
-    local_rotation_eulers = np.asarray(
-        utils.R_to_relion(local_rotation_matrices, degrees=True),
-        dtype=np.float32,
-    )
+    source_eulers = getattr(bucket, "local_source_eulers", None)
+    if source_eulers is not None:
+        local_rotation_eulers = np.asarray(source_eulers[row, :actual_count], dtype=np.float64)
+        local_rotation_eulers_source = "source_eulers"
+    else:
+        local_rotation_eulers = np.asarray(
+            utils.R_to_relion(local_rotation_matrices, degrees=True),
+            dtype=np.float32,
+        )
+        local_rotation_eulers_source = "matrix_derived"
     rotation_mask = np.asarray(bucket.local_rotation_mask[row, :actual_count], dtype=bool)
     translation_grid = np.asarray(local_layout.translation_grid, dtype=np.float32)
     n_trans = int(translation_grid.shape[0])
@@ -517,6 +527,7 @@ def _local_candidate_metadata(
         "local_rotation_child_indices": local_rotation_child_indices,
         "local_rotation_matrices": local_rotation_matrices,
         "local_rotation_eulers": local_rotation_eulers,
+        "local_rotation_eulers_source": local_rotation_eulers_source,
         "rotation_mask": rotation_mask,
         "translation_grid": translation_grid,
         "translation_indices": translation_indices,
@@ -671,6 +682,7 @@ def maybe_write_debug_fused_posterior_dump(
                 metadata["local_rotation_ids"] // int(local_layout.n_pixels)
             ).astype(np.int64),
             local_rotation_eulers=metadata["local_rotation_eulers"],
+            local_rotation_eulers_source=np.array([metadata["local_rotation_eulers_source"]]),
             local_rotation_matrices=metadata["local_rotation_matrices"],
             rotation_candidate_mask=metadata["rotation_mask"][None, :],
             translations=metadata["translation_grid"],
@@ -997,6 +1009,7 @@ def maybe_write_debug_score_dump(
             "local_rotation_pixel_indices": (local_rotation_ids % int(local_layout.n_pixels)).astype(np.int64),
             "local_rotation_psi_indices": (local_rotation_ids // int(local_layout.n_pixels)).astype(np.int64),
             "local_rotation_eulers": local_rotation_eulers,
+            "local_rotation_eulers_source": np.array([metadata["local_rotation_eulers_source"]]),
             "local_rotation_matrices": local_rotation_matrices,
             "translations": np.asarray(local_layout.translation_grid, dtype=np.float32),
             "translation_parent_indices": translation_parent_indices,

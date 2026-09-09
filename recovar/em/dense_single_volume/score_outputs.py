@@ -203,7 +203,12 @@ def _scatter_dense_k_class_result(
             raise RuntimeError("Dense K-class path did not return best pose details")
         best_rots = np.asarray(k_class_result.best_pose_rotations, dtype=pose_dtype)
         outputs.best_pose_rotations[k] = best_rots
-        outputs.best_pose_rotation_eulers[k] = utils.R_to_relion(best_rots, degrees=True).astype(pose_dtype)
+        source_eulers = getattr(k_class_result, "best_pose_eulers_deg", None)
+        outputs.best_pose_rotation_eulers[k] = (
+            np.asarray(source_eulers, dtype=np.float64)
+            if source_eulers is not None
+            else utils.R_to_relion(best_rots, degrees=True).astype(pose_dtype)
+        )
         outputs.best_pose_translations[k] = np.asarray(k_class_result.best_pose_translations, dtype=pose_dtype)
     return (
         ha_k,
