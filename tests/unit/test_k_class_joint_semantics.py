@@ -31,8 +31,8 @@ from recovar.em.dense_single_volume.k_class import (
     run_dense_k_class_em_adaptive,
     run_local_k_class_em,
 )
-from recovar.em.dense_single_volume.firstiter_cc import (
-    _build_firstiter_cc_pass2_grids,
+from recovar.em.dense_single_volume.helpers.oversampling import (
+    build_adaptive_pass2_grids,
 )
 from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
 from recovar.em.dense_single_volume.score_outputs import _combine_optional_half_accumulators
@@ -1835,7 +1835,7 @@ def test_firstiter_adaptive_translation_perturbation_uses_coarse_step():
         fine_trans,
         _rot_parent_map,
         trans_parent_map,
-    ) = _build_firstiter_cc_pass2_grids(
+    ) = build_adaptive_pass2_grids(
         coarse_rot,
         coarse_trans,
         coarse_trans,
@@ -1870,7 +1870,7 @@ def test_firstiter_adaptive_translation_angle_preserves_relion_host_precision():
         dtype=np.float32,
     )
 
-    fine_trans = _build_firstiter_cc_pass2_grids(
+    fine_trans = build_adaptive_pass2_grids(
         coarse_rot,
         coarse_trans,
         base_trans,
@@ -1898,7 +1898,7 @@ def test_firstiter_adaptive_translation_angle_preserves_relion_host_precision():
 def test_firstiter_adaptive_grid_can_return_relion_host_mstep_rotations():
     coarse_rot = np.eye(3, dtype=np.float32)[None]
     coarse_trans = np.array([[0.0, 0.0]], dtype=np.float32)
-    legacy = _build_firstiter_cc_pass2_grids(
+    legacy = build_adaptive_pass2_grids(
         coarse_rot,
         coarse_trans,
         coarse_trans,
@@ -1907,7 +1907,7 @@ def test_firstiter_adaptive_grid_can_return_relion_host_mstep_rotations():
         translation_step_px=2.0,
         random_perturbation=-0.11648395657539368,
     )
-    extended = _build_firstiter_cc_pass2_grids(
+    extended = build_adaptive_pass2_grids(
         coarse_rot,
         coarse_trans,
         coarse_trans,

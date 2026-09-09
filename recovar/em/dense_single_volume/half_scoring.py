@@ -19,7 +19,6 @@ from recovar.em.dense_single_volume import parity_dump as _parity_dump
 from recovar.em.dense_single_volume.batch_planning import _plan_kclass_adaptive_grid_batch_sizes
 from recovar.em.dense_single_volume.em_engine import run_em
 from recovar.em.dense_single_volume.firstiter_cc import (
-    _build_firstiter_cc_pass2_grids,
     _score_kclass_firstiter_cc_pass2,
 )
 from recovar.em.dense_single_volume.helpers.dtype_policy import (
@@ -27,6 +26,7 @@ from recovar.em.dense_single_volume.helpers.dtype_policy import (
     _local_search_precision_flags,
 )
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import relion_backprojector_volume_shape
+from recovar.em.dense_single_volume.helpers.oversampling import build_adaptive_pass2_grids
 from recovar.em.dense_single_volume.k_class import run_dense_k_class_em, run_dense_k_class_em_adaptive
 from recovar.em.dense_single_volume.local_debug import (
     log_local_adaptive_support,
@@ -310,7 +310,7 @@ def _score_half_dense(
                 rot_pmap_for_collapse,
                 trans_pmap_for_collapse,
                 fine_mstep_rot,
-            ) = _build_firstiter_cc_pass2_grids(
+            ) = build_adaptive_pass2_grids(
                 effective_rotations,
                 current_translations,
                 base_translations,
@@ -504,7 +504,7 @@ def _score_half_dense(
                 rot_pmap_for_collapse,
                 trans_pmap_for_collapse,
                 fine_mstep_rot,
-            ) = _build_firstiter_cc_pass2_grids(
+            ) = build_adaptive_pass2_grids(
                 effective_rotations,
                 current_translations,
                 base_translations,
@@ -622,7 +622,7 @@ def _score_half_dense(
             )
             outputs.best_pose_translations[k] = np.asarray(k1_adaptive_result.best_pose_translations, dtype=pose_dtype)
         if fine_rotations_for_pose is None and rot_pmap_for_collapse is not None:
-            fine_rotations_for_pose = _build_firstiter_cc_pass2_grids(
+            fine_rotations_for_pose = build_adaptive_pass2_grids(
                 effective_rotations,
                 current_translations,
                 base_translations,

@@ -34,6 +34,108 @@ logger = logging.getLogger(__name__)
 _FAST_SIGNIFICANCE_TOPK = 64
 
 
+def build_adaptive_pass2_grids(
+    coarse_rotations,
+    coarse_translations,
+    base_translations,
+    coarse_healpix_order: int,
+    adaptive_oversampling: int,
+    translation_step_px: float,
+    random_perturbation: float,
+    *,
+    return_mstep_rotations: bool = False,
+    coarse_rotation_ids=None,
+):
+    """Build coarse/fine pose grids for ordinary and first-CC adaptive scoring.
+
+    Return coarse rotations/translations, fine rotations/translations, and the
+    two fine-to-coarse parent maps. ``return_mstep_rotations`` appends a seventh
+    array for reconstruction. Nonpositive oversampling keeps the coarse rotation
+    grid and identity parent maps; fine translations still receive perturbation.
+
+    Preserve host-double base translations through subdivision and perturbation.
+    Scoring translations and the separate translation-phase source are distinct
+    caller inputs. ``coarse_rotation_ids`` identifies a supplied rotation subset
+    in the full HEALPix grid when oversampling is enabled.
+    """
+    from recovar.em.sampling import (
+        apply_relion_translation_perturbation,
+        get_oversampled_rotation_grid_from_samples,
+        get_oversampled_translation_grid,
+    )
+    coarse_rot_np = np.asarray(coarse_rotations)
+    coarse_trans_np = np.asarray(coarse_translations)
+    base_translations_f64 = np.asarray(base_translations, dtype=np.float64)
+    if int(adaptive_oversampling) <= 0:
+        n_rot = int(coarse_rot_np.shape[0])
+        n_trans = int(coarse_trans_np.shape[0])
+        rot_parent_map = np.arange(n_rot, dtype=np.int64)
+        trans_parent_map = np.arange(n_trans, dtype=np.int64)
+        fine_translations = apply_relion_translation_perturbation(
+            base_translations_f64,
+            float(random_perturbation),
+            float(translation_step_px),
+        )
+        outputs = (
+            coarse_rot_np,
+            coarse_trans_np,
+            coarse_rot_np,
+            fine_translations,
+            rot_parent_map,
+            trans_parent_map,
+        )
+        if return_mstep_rotations:
+            return (*outputs, coarse_rot_np.copy())
+        return outputs
+
+    adaptive_os = int(adaptive_oversampling)
+    all_coarse_rot_indices = (
+        np.arange(int(coarse_rot_np.shape[0]), dtype=np.int64)
+        if coarse_rotation_ids is None
+        else np.asarray(coarse_rotation_ids, dtype=np.int64)
+    )
+    if all_coarse_rot_indices.shape != (int(coarse_rot_np.shape[0]),):
+        raise ValueError(
+            "coarse_rotation_ids must identify every supplied coarse rotation exactly once"
+        )
+    fine_rotation_outputs = get_oversampled_rotation_grid_from_samples(
+        all_coarse_rot_indices,
+        parent_nside_level=int(coarse_healpix_order),
+        oversampling_order=adaptive_os,
+        random_perturbation=float(random_perturbation),
+        return_mstep_rotations=return_mstep_rotations,
+        dtype=coarse_rotations.dtype,
+    )
+    fine_rotations, rot_parent_map = fine_rotation_outputs[:2]
+    fine_mstep_rotations = fine_rotation_outputs[2] if return_mstep_rotations else None
+    rot_parent_map = np.asarray(rot_parent_map, dtype=np.int64)
+
+    fine_base_translations, trans_parent_map = get_oversampled_translation_grid(
+        base_translations_f64,
+        float(translation_step_px),
+        oversampling_order=adaptive_os,
+    )
+    fine_translations = apply_relion_translation_perturbation(
+        fine_base_translations,
+        float(random_perturbation),
+        float(translation_step_px),
+    )
+    trans_parent_map = np.asarray(trans_parent_map, dtype=np.int64)
+
+    outputs = (
+        coarse_rot_np,
+        coarse_trans_np,
+        fine_rotations,
+        fine_translations,
+        rot_parent_map,
+        trans_parent_map,
+    )
+    if return_mstep_rotations:
+        return (*outputs, fine_mstep_rotations)
+    return outputs
+
+
+
 def _relion_cuda_f32_tail_target(sum_weight, adaptive_fraction: float):
     """Match RELION's parsed adaptive-fraction arithmetic at the CUDA cutoff.
 

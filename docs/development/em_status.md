@@ -96,6 +96,26 @@ supports auditing incoming reference/image state; it does not establish universa
 roundoff bounds, trajectory quality, or a kernel/cutoff repair. Terminal and
 independent-review receipts are linked from the report; no duplicate job is assigned.
 
+Reference-only replay13651920 on frozen df9975ee produces coarse counts
+41/42/42/41 and exactly the extra candidate242860 while other scorer operands
+stay fixed. VDAM's independent review reports a96.273% centered-RMS reduction;
+the remaining maximum centered residual0.00128174 is not dismissed. This
+localizes the observed support change to the prepared reference, without
+justifying a scoring-kernel or cutoff patch. The linked report now also records
+native CPU/FFTW construction from exact candidate Iref: its C64 upload matches
+candidate PPref bitwise. Original native internal Iref is unavailable; rounded
+native MRC and CPU/GPU construction remain explicit limitations. These are
+VDAM-reported checks, not a new em_clean array audit or trajectory acceptance.
+Incoming map history remains VDAM's diagnostic scope; no duplicate job is assigned.
+
+Frozen df9975ee short-prefix map conditions pass through5/10/20/24 on 3k/128
+K1 seed29: worst cross-FSC-AUC0.9999999987093361 and GT deficit1.09505193524e-7.
+Fresh diagnostic native diverges at19/particle1660 while candidate matches both
+completed native controls; competing raw margins are absent, so no numerical-noise
+classification follows. Current integrated-source20-prefix planning belongs to
+VDAM; no source/build/job change is implied. See the
+[short-prefix handoff](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/handoffs/vdam_short_prefix_quality_and_reference_boundary_20260909.json).
+
 Publication follow-up `974aa11cf` is integrated separately as `1624dd396`.
 It retains canonical source Euler metadata in `score_outputs` and `local_debug`,
 with the matrix-only fallback preserved. Fresh combined-source checks pass all
@@ -125,6 +145,19 @@ Different physical H100, same class/driver: timing descriptive only. K4 audit
 iteration10,class2. No current100k speed or broad quality acceptance is claimed.
 
 ## Engineering work and recent evidence
+
+The shared adaptive pass-2 grid builder now belongs to
+`helpers.oversampling.build_adaptive_pass2_grids`, used directly by ordinary
+K1/K-class scoring and first-CC dispatch. The calculation body and six/seven-array
+return contract are unchanged; sampling imports remain lazy in the helper owner.
+All caller/test bodies match under the symbol migration. Twenty-four archived/new
+cases match bitwise, including alias relationships, and malformed-ID errors match.
+Affected CPU25/25 and guard38/38 pass with a hash-verified existing RELION binding;
+the initial23-pass/two-missing-binding failure is preserved. Production Ruff passes;
+pre-existing test import-order and formatting findings remain. This ownership
+change adds6 net production lines; the three-commit batch with replay/fused-tail
+cleanup removes22 net production lines. No GPU/trajectory/runtime claim. See the
+[package receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/adaptive_grid_owner_20260909/result.json).
 
 The local fused-score branches now join at one posterior-dump/timing tail,
 removing three identical copies. All kernel calls and profile synchronization

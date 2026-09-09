@@ -13945,7 +13945,7 @@ class TestRelionModeSmokeTest:
                 significant_counts=jnp.asarray(counts, dtype=jnp.int32),
             )
 
-        monkeypatch.setattr(half_scoring, "_build_firstiter_cc_pass2_grids", fake_build_pass2_grids)
+        monkeypatch.setattr(half_scoring, "build_adaptive_pass2_grids", fake_build_pass2_grids)
         monkeypatch.setattr(half_scoring, "run_dense_k_class_em_adaptive", fake_adaptive_k1)
 
         result = refine_single_volume(
@@ -14143,7 +14143,7 @@ class TestRelionModeSmokeTest:
                 ),
             )
 
-        monkeypatch.setattr(half_scoring, "_build_firstiter_cc_pass2_grids", fake_build_pass2_grids)
+        monkeypatch.setattr(half_scoring, "build_adaptive_pass2_grids", fake_build_pass2_grids)
         monkeypatch.setattr(half_scoring, "run_dense_k_class_em_adaptive", fake_adaptive_k_class)
         monkeypatch.setattr(iteration_loop_module, "compute_coarse_image_size", lambda *_args, **_kwargs: 4)
         monkeypatch.setattr(iteration_loop_module, "clamp_relion_coarse_image_size", lambda coarse, *_args: int(coarse))

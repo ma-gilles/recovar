@@ -129,7 +129,7 @@ def test_firstiter_cc_adaptive_dispatch_clamps_against_fine_translation_grid(mon
         captured.update(kwargs)
         return "result"
 
-    monkeypatch.setattr(firstiter_cc, "_build_firstiter_cc_pass2_grids", fake_grids)
+    monkeypatch.setattr(firstiter_cc, "build_adaptive_pass2_grids", fake_grids)
     monkeypatch.setattr(firstiter_cc, "run_dense_k_class_em_adaptive", fake_adaptive)
 
     def fake_safe_batch_sizes(n_rot, n_trans, *, classes=None, image_shape_for_batch=None, current_size_for_batch=None):
@@ -270,7 +270,7 @@ def test_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch, n
             best_pose_rotation_ids=jnp.zeros(n_images, dtype=jnp.int32),
         )
 
-    monkeypatch.setattr(firstiter_cc, "_build_firstiter_cc_pass2_grids", fake_grids)
+    monkeypatch.setattr(firstiter_cc, "build_adaptive_pass2_grids", fake_grids)
     monkeypatch.setattr(firstiter_cc, "run_dense_k_class_em_adaptive", fake_adaptive)
 
     monkeypatch.setattr(half_scoring, "_score_kclass_firstiter_cc_pass2", capture_dispatch)
@@ -411,7 +411,7 @@ def test_kclass_nonfirstiter_adaptive_dispatch_sizes_actual_fine_grid(monkeypatc
             best_pose_rotation_ids=jnp.zeros(n_images, dtype=jnp.int32),
         )
 
-    monkeypatch.setattr(half_scoring, "_build_firstiter_cc_pass2_grids", fake_grids)
+    monkeypatch.setattr(half_scoring, "build_adaptive_pass2_grids", fake_grids)
     monkeypatch.setattr(half_scoring, "run_dense_k_class_em_adaptive", fake_adaptive)
 
     result = half_scoring._score_half_dense(
