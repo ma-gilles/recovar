@@ -29,7 +29,7 @@ speed goal. Full-production-F32, broad quality and completion remain unproved.
 | Item | Current identity or rule |
 | --- | --- |
 | Primary checkout | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907`, branch `codex/integrate-pr180` |
-| Source checkpoint | Structural series on published `5fd41da6f`: deletion checkpoint `a95050c95` plus host bucket-planning extraction below. Actual HEAD/diff/untracked manifest takes precedence |
+| Source checkpoint | Canonical host-pixel correctness repair on published `5e6ea38a1`, separate from its structural series. Actual HEAD/diff/untracked manifest takes precedence |
 | Publication | [Draft PR179](https://github.com/ma-gilles/recovar/pull/179), stacked on [PR158](https://github.com/ma-gilles/recovar/pull/158), pinned base `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; em_clean is sole integrator/publisher |
 | Coordination | [Compact handoff](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/CURRENT_TASK.md); [board and live scopes](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/README.md). EM paused; VDAM owns private evidence, em_clean shared source/docs/publication |
 | Frozen scientific source | `4f9a194923b084c649c7d9ce929eec7ae9f78902`, private `recovar_vdam_quality_prefix_integrated_20260909`; later cleanups are outside its run scope |
@@ -49,6 +49,23 @@ long-term savings remain unverified. No automatic model polling/wakeup promise.
 See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
+
+The canonical host-pixel repair resolves serialized STAR/pickle/CS geometry before
+computational casts and stores one Python-float `dataset.voxel_size`. Source STAR
+Angstrom origins use that same geometry; subsets preserve it. Legacy `StarFile.apix`
+and default public pickle-array behavior remain unchanged. Computational CTF/pose/
+image dtypes remain F32/C64 or explicitly selected F64/C128; no driver overrides.
+Source-aware pickle loading checks each selected row's physical grid instead of
+broadcasting row0. Missing metadata retains existing fallbacks, not invented precision.
+
+Validation: **188 shared loader tests +38 CPU guard pass**; broader EM callers
+**126 pass/3 fail**, all three missing-native-binding failures reproduced on exact
+unchanged base. New tests fail30/pass4 on original source with a valid fixture;
+36 new cases now pass within the shared panel. All10,000 real fixture STAR rows
+resolve1.6375 exactly before F32 computation casts. Four production lint findings
+are unchanged from base. [Exact commands, provenance and limitations](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/canonical_host_pixels_20260909/result.json).
+This correctness checkpoint needs VDAM's integrated-source short real-prefix gate;
+no GPU job/build was launched by em_clean.
 
 Structural batch `a95050c95` on `5fd41da6f`: remove two test-only candidate helpers and
 collapse two bucket-reporting adapters, **59 fewer production lines**. The padding
@@ -139,10 +156,15 @@ narrowing1.6375→1.6375000476837158 explains the initial-map discrepancy in the
 [matched CPU bootstrap](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10076_prefix20_4f9a19492_20260909/pixel_bootstrap/README.md):
 with the original1,000 images/seed29, changing only pixel size and derived ini_high
 reduces native relative-L2 residual8.65e-8→4.65e-19, leaving one voxel at3.47e-18.
-Rounded repeats are byte-identical; five evidence pins match. E4 causality remains
-unmeasured. VDAM owns the private prefix4 diagnostic; no shared loader API change
-is implied. These supervised prefixes provide
-no valid runtime ratio or final-real/absolute-accuracy acceptance.
+Rounded repeats are byte-identical; five evidence pins match. The separate
+[canonical scalar prefix4 causal gate](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10076_pixel_prefix4_20260909/RESULTS.md)
+(job13656403, original200 schedule/seed29, same H100) now makes map0 bitwise exact,
+reduces primary E4 Pmax gap0.210854→6.35e-6 and removes the one-pixel Y flip.
+All800 updated Pmax gaps are below1e-4; E4 cross-FSC-AUC is0.9999999777.
+Six handoff pins checked. One coarse-count difference at3 remains unclassified;
+secondary image89904 varies native-versus-native and is not credited to the fix.
+These scalar-intervention results do not qualify the integrated loader repair or
+provide a runtime ratio, final-real/absolute-accuracy or strict-state acceptance.
 
 | Timing evidence | Result and limit |
 | --- | --- |
@@ -153,6 +175,7 @@ no valid runtime ratio or final-real/absolute-accuracy acceptance.
 See [archived timing boundaries](evidence/vdam-full200-4f9-20260909/README.md#state-precision-and-performance-limits)
 and the [earlier performance ledger](em_cleanup_history_20260909_f0a8804e2.md#frozen-jobs-and-representative-performance).
 Real10073 frozen-source evidence remains in the [real-data review](k1_real_window_review_20260909.md).
-Next: await the peer real10076 causal evidence; continue bounded structural
-cleanup with proportional CPU checks and batched publication. No new GPU/build
-work or change to scientific defaults is implied by this status page.
+Next: VDAM qualifies a frozen copy of the integrated canonical host-pixel repair
+on the bounded real prefix. Keep prior controls and native builds frozen; do not
+duplicate the peer job. Further structural work remains separate from this
+metadata correction and its scientific acceptance.

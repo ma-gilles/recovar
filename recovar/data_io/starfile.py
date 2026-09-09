@@ -333,6 +333,27 @@ class StarFile:
             raise ValueError(f"Field {field} not found in .star file")
 
     @property
+    def source_pixel_sizes_angstrom(self) -> Optional[np.ndarray]:
+        """Per-particle source geometry in float64, without the legacy apix cast.
+
+        New STAR pixels are Angstroms; old detector pixels are micrometres.
+        Missing metadata returns None. Present geometry must be finite/positive.
+        This preserves serialized precision; it cannot recover prior rounding.
+        """
+        values = self.get_optics_values("_rlnImagePixelSize", dtype=np.float64)
+        if values is None:
+            det = self.get_optics_values("_rlnDetectorPixelSize", dtype=np.float64)
+            mag = self.get_optics_values("_rlnMagnification", dtype=np.float64)
+            if det is None or mag is None:
+                return None
+            if not np.all(np.isfinite(mag) & (mag > 0)):
+                raise ValueError("Source pixel size requires finite positive magnification")
+            values = det * 1e4 / mag
+        if not np.all(np.isfinite(values) & (values > 0)):
+            raise ValueError("Source pixel sizes must be finite and positive")
+        return values
+
+    @property
     def apix(self) -> Optional[np.ndarray]:
         """Pixel size (Angstroms/pixel) for each particle.
 

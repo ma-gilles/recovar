@@ -1016,7 +1016,7 @@ def _load_ctf_params(particles_file, ctf_file, D, ind, n_images):
     from recovar.data_io import load_utils
 
     if ctf_file is not None and ctf_file.endswith(".pkl"):
-        ctf_params_all = np.array(load_utils.load_ctf_params(D, ctf_file))
+        ctf_params_all = load_utils.load_ctf_params(D, ctf_file, preserve_source_geometry=True)
         dataset_indices = _normalize_dataset_indices(ind, n_total=ctf_params_all.shape[0])
         if dataset_indices is None and ctf_params_all.shape[0] != n_images:
             raise ValueError(
@@ -1218,9 +1218,10 @@ def load_dataset(
     - Pickle files (legacy cryoDRGN format) via *poses_file* / *ctf_file*
     - Auto-extracted from the particles STAR or CS file when those are None
 
-    ``dtype`` is the precision contract for the loaded dataset. ``complex64``
-    retains the established float32 metadata/image path; ``complex128`` keeps
-    source metadata in float64 and performs image preprocessing in float64.
+    ``dtype`` controls computational arrays: ``complex64`` uses float32
+    CTF/pose/image arrays; ``complex128`` uses float64. Physical ``voxel_size``
+    is a Python float resolved from source geometry at the loaded image grid,
+    before those casts. Subsets and EM consumers retain that single host scalar.
     """
     dtype = np.dtype(dtype)
     if dtype not in (np.dtype(np.complex64), np.dtype(np.complex128)):
@@ -1307,7 +1308,7 @@ def load_dataset(
     voxel_sizes = ctf_params[:, 0]
     if not np.all(np.isclose(voxel_sizes - voxel_sizes[0], 0)):
         raise ValueError("All voxel sizes must be the same")
-    voxel_size = real_dtype.type(voxel_sizes[0])
+    voxel_size = float(voxel_sizes[0])
 
     ctf_params = ctf_params.astype(real_dtype)
 
