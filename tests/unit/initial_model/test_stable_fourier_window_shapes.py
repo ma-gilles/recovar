@@ -123,22 +123,22 @@ def test_stable_window_size_rejects_invalid_shapes(current_size, image_size, qua
 
 
 def test_stable_window_runtime_quantum_is_diagnostic_and_fail_closed(monkeypatch):
-    from recovar.em.dense_single_volume.local_em_engine import (
+    from recovar.em.dense_single_volume.helpers.fourier_window import (
         DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM,
         STABLE_FOURIER_WINDOW_QUANTUM_ENV,
-        _stable_fourier_window_quantum,
+        stable_fourier_window_quantum,
     )
 
     monkeypatch.delenv(STABLE_FOURIER_WINDOW_QUANTUM_ENV, raising=False)
-    assert _stable_fourier_window_quantum() == DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM == 8
+    assert stable_fourier_window_quantum() == DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM == 8
 
     monkeypatch.setenv(STABLE_FOURIER_WINDOW_QUANTUM_ENV, "16")
-    assert _stable_fourier_window_quantum() == 16
+    assert stable_fourier_window_quantum() == 16
 
     for invalid in ("0", "3", "nope"):
         monkeypatch.setenv(STABLE_FOURIER_WINDOW_QUANTUM_ENV, invalid)
         with pytest.raises(ValueError, match=STABLE_FOURIER_WINDOW_QUANTUM_ENV):
-            _stable_fourier_window_quantum()
+            stable_fourier_window_quantum()
 
 
 def _active_coarse_score_indices(current_size: int) -> np.ndarray:
@@ -828,7 +828,16 @@ def test_stable_bpref_uses_capacity_stride_but_logical_native_issue_count():
     assert "minvsigma2 + particle * image_stride" in launcher
     assert "launch_relion_vdam_mstep_denominator_f32(" in launcher
     assert "pixel_count," in launcher
-    assert "pixel_capacity,\n            runtime_current_size);" in launcher
+    denominator_start = launcher.index("launch_relion_vdam_mstep_denominator_f32(")
+    denominator_call = launcher[
+        denominator_start + len("launch_relion_vdam_mstep_denominator_f32(") :
+        launcher.index(");", denominator_start)
+    ]
+    assert [argument.strip() for argument in denominator_call.split(",")] == [
+        "stream", "ctf", "minvsigma2", "posterior_over_weight_norm",
+        "denominator_sum", "n_particles", "rotation_count", "translation_count",
+        "pixel_count", "pixel_capacity", "runtime_current_size",
+    ]
 
     handler_start = source.rindex("ffi::Error RelionVdamMstepFusedProjectorXHalfCommon(")
     handler = source[
@@ -948,12 +957,13 @@ def test_runtime_bpref_ffi_abi_keeps_default_static_target_separate():
         "XLA_FFI_DEFINE_HANDLER_SYMBOL(\n"
         "    RelionVdamMstepFusedProjectorRuntimeXHalf,"
     )
-    static_binding = cuda_source[static_binding_start:runtime_binding_start]
+    # Scope each ABI assertion to its own macro; adjacent handlers may add
+    # independent operands without changing either of these two contracts.
+    static_binding = cuda_source[
+        static_binding_start : cuda_source.index(");", static_binding_start) + 2
+    ]
     runtime_binding = cuda_source[
-        runtime_binding_start : cuda_source.index(
-            "ffi::Error RelionCoarseDiff2RectangularF32Impl(",
-            runtime_binding_start,
-        )
+        runtime_binding_start : cuda_source.index(");", runtime_binding_start) + 2
     ]
     assert static_binding.count(".Arg<ffi::AnyBuffer>()") == 17
     assert runtime_binding.count(".Arg<ffi::AnyBuffer>()") == 18

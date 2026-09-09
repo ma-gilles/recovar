@@ -9,6 +9,7 @@ from typing import NamedTuple
 import numpy as np
 import pytest
 
+from recovar.em.dense_single_volume.k_class import _with_coarse_selector_audit
 from recovar.em.initial_model import dense_adapter
 
 pytestmark = pytest.mark.unit
@@ -59,7 +60,7 @@ def test_sparse_adapter_propagates_each_selector_topology(workers, atomic):
     result = _ProfileResult(profile_summary={"pass2_time_s": 1.25})
 
     validated = dense_adapter._coarse_selector_audit_from_full_stats({"coarse_selector_audit": audit})
-    sealed = dense_adapter._with_coarse_selector_audit(result, validated)
+    sealed = _with_coarse_selector_audit(result, validated)
     meta = dense_adapter._estep_meta({0: SimpleNamespace(profile_summary=sealed.profile_summary)})
 
     assert sealed.profile_summary["pass2_time_s"] == 1.25
