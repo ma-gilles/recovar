@@ -50,12 +50,15 @@ def test_shared_projector_matches_both_original_native_calls(
         half, _, _, _, radius, _, _ = bind.compute_fourier_transform_map(
             native, 16, padding, 1, current_size, True, 2
         )
-        expected_half.append(np.asarray(half, dtype=np.complex64))
+        # Preserve the native oracle's precision; narrowing here changes its values.
+        expected_half.append(np.asarray(half))
         expected_power.append(bind.vdam_projector_power_spectrum(
             native, 16, padding, 1, current_size, True, 2
         ))
         assert inputs[3] == radius
+    assert inputs[2].dtype == np.asarray(expected_half).dtype
     np.testing.assert_array_equal(inputs[2], np.asarray(expected_half))
+    assert power.dtype == np.asarray(expected_power).dtype
     np.testing.assert_array_equal(power, np.asarray(expected_power))
     old_inputs = adapter.prepare_relion_projector_class_inputs(state, padding_factor=padding)
     for actual, expected in zip(inputs, old_inputs):

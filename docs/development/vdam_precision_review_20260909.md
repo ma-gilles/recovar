@@ -532,3 +532,38 @@ Exact commands, import provenance and XML/logs are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/`
 in `mstep_route_{control,integrated,guard}_20260909/`. No source or library changed
 during either integrated check; frozen peer sources and jobs were not modified.
+
+## Native projector test-contract reconciliation
+
+Peer handoff `vdam_native_projector_test_contract_20260909.json` identifies an
+inherited expectation cast in `test_projector_lifecycle.py`. Native projector
+precision was deliberately preserved by `7e9e5c3c9`; the current combined
+projector/power helper still returns those native values unchanged. The test
+rounded its independent expected projector to C64. Integrator review verifies
+all five handoff hashes and byte-identical primary/private adapter and test
+preimages at `9c374e7ea`.
+
+Current-primary control reproduces exactly three failures and ten passes (3.335 s),
+with 153/1,038/8,935 mismatched entries in the original three geometries. The
+separate test-only repair removes that expected narrowing and checks projector
+and power dtypes against the native outputs. All eight existing exact-array
+comparisons and 13 original assertions remain unchanged; two dtype assertions
+are added. The same 13 cases pass in 2.988 s, zero skips. Source/native manifests
+stay unchanged within each run; no production code or tolerance is modified.
+
+Six in-memory production mutations are rejected: actual C64 output fails the
+new dtype assertion in every geometry, and C64-rounded output promoted back to
+C128 fails the existing exact-value assertion. This does not add higher precision
+to production or qualify an all-F32 projector. Historical failures remain recorded;
+this focused repair does not rerun or turn their original full panels green.
+The CPU-only mutation process logs CUDA plugin discovery with no visible device;
+its asserted CPU backend completes successfully without GPU work.
+
+Reproduce the focused module using
+`bash /scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/mstep_dc_integration_20260909/run_checks.sh NEW_LABEL -v tests/unit/initial_model/test_projector_lifecycle.py --tb=short`.
+The wrapper sets CPU visibility and the pinned VDAM native binding. Logs/XML:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/native_projector_contract_{control,after}_20260909/`.
+Sealed preimage, original handoff, source/AST assertion checks and mutation evidence:
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/native_projector_test_contract_20260909/`.
+No new Slurm job or native build. Full200 job13644924 is completed, not running;
+its separately reviewed strict-trajectory failures remain open.

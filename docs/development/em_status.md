@@ -134,6 +134,16 @@ F64 default is preserved; bootstrap, corrected E projector/tau2 preparation,
 normalization/noise, BPref export and M shell geometry retain higher-precision
 numerical work. This is not full-production-F32 closure.
 
+The three inherited native-projector lifecycle test failures are reconciled
+separately: their expected arrays were narrowed to C64 despite native precision
+being preserved since `7e9e5c3c9`. On current source, the original module produces
+3 failures/10 passes; removing only the expected cast and adding native dtype
+checks gives 13 passes, zero skips. All eight exact array comparisons and 13
+original assertions remain; six in-memory narrowing mutations are rejected.
+Production/native code and precision defaults are unchanged. This repairs a test
+contract, not a scientific gap; historical failed panels remain failed.
+See the [test review](vdam_precision_review_20260909.md#native-projector-test-contract-reconciliation).
+
 The same211 existing CPU cases pass before/after; integrated coverage is243/243
 including32 new route cases, plus guard38/38. H100 two-update13644423 passed on
 frozen privatebae959. Integrator receipt review verifies35 named hashes, exact
