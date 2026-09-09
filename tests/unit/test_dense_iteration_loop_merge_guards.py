@@ -7,6 +7,7 @@ re-running the expensive parity fixtures.
 
 from __future__ import annotations
 
+import ast
 import inspect
 from dataclasses import fields, is_dataclass
 from types import SimpleNamespace
@@ -30,6 +31,38 @@ from recovar.em.dense_single_volume.local_search_iteration import _LocalSearchIt
 from recovar.em.initial_model.iteration_loop import run_vdam_iterations
 
 pytestmark = pytest.mark.unit
+
+
+def _local_score_call_keywords():
+    """Resolve the local scorer's literal shared kwargs for source guards."""
+    function = ast.parse(inspect.getsource(half_scoring._score_half_local)).body[0]
+    dictionaries = {
+        node.targets[0].id: dict(zip((key.value for key in node.value.keys), node.value.values))
+        for node in function.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Dict)
+    }
+    calls = sorted(
+        (
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_run_local_search_iteration"
+        ),
+        key=lambda node: node.lineno,
+    )
+    resolved = []
+    for call in calls:
+        keywords = {}
+        for keyword in call.keywords:
+            items = dictionaries[keyword.value.id] if keyword.arg is None else {keyword.arg: keyword.value}
+            assert not keywords.keys() & items.keys(), "duplicate local keyword"
+            keywords.update(items)
+        resolved.append({key: ast.unparse(value) for key, value in keywords.items()})
+    return resolved
 
 
 def test_per_half_output_shape_stays_bundled_and_trimmed():
@@ -242,7 +275,9 @@ def test_fresh_k1_spectrum_norm_reaches_local_noise_update_only():
     loop_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
 
     assert "if source_faithful_spectrum_norm and k_class_enabled:" in score_source
-    assert score_source.count("source_faithful_spectrum_norm=source_faithful_spectrum_norm") == 3
+    calls = _local_score_call_keywords()
+    assert len(calls) == 3
+    assert all(call["source_faithful_spectrum_norm"] == "source_faithful_spectrum_norm" for call in calls)
     assert "if source_faithful_spectrum_norm:" in wrapper_source
     assert "fresh K=1-only" in wrapper_source
     assert "source_faithful_spectrum_norm=source_faithful_spectrum_norm" in wrapper_source
@@ -266,7 +301,7 @@ def test_k1_local_parent_probe_applies_relion_max_significants_cap():
             "parent_profile = parent_outputs.profile_summary"
         )
     ]
-    assert "max_significants=max_significants" in parent_call
+    assert _local_score_call_keywords()[0]["max_significants"] == "max_significants"
     assert "apply_max_significants_to_support=True" in parent_call
 
     wrapper_source = inspect.getsource(local_search_iteration._run_local_search_iteration)
@@ -404,7 +439,11 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
     assert result.mstep_accumulator_shape == (19, 19, 19)
 
 
-def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monkeypatch):
+@pytest.mark.parametrize("denominator_mode", [None, "full_parent", "rotation_only"])
+@pytest.mark.parametrize("spectrum_norm", [False, True])
+def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(
+    monkeypatch, denominator_mode, spectrum_norm
+):
     parent_counts = np.array([2, 3], dtype=np.int32)
     best_rotation = np.array(
         [
@@ -417,6 +456,7 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
     calls = []
 
     class _Stats:
+        log_evidence_per_image = np.array([-2.0, -3.0], dtype=np.float64)
         max_posterior_per_image = np.array([0.75, 0.5], dtype=np.float32)
         rotation_posterior_sums = np.array([1.0, 1.0], dtype=np.float32)
 
@@ -468,7 +508,7 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
     )
     monkeypatch.setattr(half_scoring, "_local_adaptive_pass2_full_parent_enabled", lambda: False)
     monkeypatch.setattr(half_scoring, "_local_adaptive_pass2_rotation_only_enabled", lambda: False)
-    monkeypatch.setattr(half_scoring, "_local_adaptive_pass2_denominator_support_mode", lambda: None)
+    monkeypatch.setattr(half_scoring, "_local_adaptive_pass2_denominator_support_mode", lambda: denominator_mode)
     monkeypatch.setattr(half_scoring, "_k1_relion_x_half_mstep_enabled", lambda: False)
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_run_local_search_iteration)
 
@@ -503,6 +543,7 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
         disable_adjoint_y=False,
         disable_adjoint_ctf=False,
         max_significants=23,
+        source_faithful_spectrum_norm=spectrum_norm,
         iteration=3,
         save_intermediates_dir=None,
         local_search_random_perturbation=0.0,
@@ -519,8 +560,22 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
         local_profile_history=[],
     )
 
-    assert len(calls) == 2
-    parent_call, fine_call = calls
+    assert len(calls) == (2 if denominator_mode is None else 3)
+    parent_call, fine_call = calls[0], calls[-1]
+    assert all(call["source_faithful_spectrum_norm"] is spectrum_norm for call in calls)
+    assert all(call["max_significants"] == 23 for call in calls)
+    if denominator_mode is None:
+        assert fine_call["normalization_log_evidence"] is None
+    else:
+        denominator_call = calls[1]
+        assert denominator_call["score_only"] is True
+        assert denominator_call["accumulate_noise"] is False
+        assert denominator_call["disable_adjoint_y"] is True
+        assert denominator_call["disable_adjoint_ctf"] is True
+        assert denominator_call["return_best_pose_details"] is False
+        np.testing.assert_array_equal(
+            fine_call["normalization_log_evidence"], _Stats.log_evidence_per_image
+        )
     assert parent_call["score_only"] is True
     assert parent_call.get("return_significant_counts", False) is False
     assert parent_call["apply_max_significants_to_support"] is True

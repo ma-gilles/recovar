@@ -937,6 +937,29 @@ def _score_half_local(
             int(current_translations.shape[0]),
             int(local_n_trans),
         )
+    # Shared operands and options for parent, denominator and final scoring.
+    # Pass-specific precision, support, reconstruction and profiling stay below.
+    common_local_kwargs = {
+        "projection_padding_factor": PROJECTION_PADDING_FACTOR,
+        "reconstruction_padding_factor": PADDING_FACTOR,
+        "relion_projector_half": relion_projector_half,
+        "relion_projector_r_max": relion_projector_r_max,
+        "do_gridding_correction": True,
+        "square_window": RELION_FOURIER_WINDOW_SQUARE,
+        "half_spectrum_scoring": True,
+        "image_corrections": image_corrections_k,
+        "scale_corrections": scale_corrections_k,
+        "group_ids": group_ids_k,
+        "scale_correction_group_count": group_count_k,
+        "scale_correction_data_vs_prior": scale_correction_data_vs_prior,
+        "image_pre_shifts": translation_search_base,
+        "score_with_masked_images": True,
+        "adaptive_fraction": RELION_ADAPTIVE_FRACTION,
+        "max_significants": max_significants,
+        "translation_prior_reference_translations": translation_prior_reference_translations,
+        "translation_prior_centers": trans_prior_center_for_engine,
+        "source_faithful_spectrum_norm": source_faithful_spectrum_norm,
+    }
     pass2_layout = None
     relion_significant_counts_k = None
     local_adaptive_pass2_parent_mode = "none"
@@ -1015,45 +1038,27 @@ def _score_half_local(
             rotation_block_size=parent_rbs,
             current_size=local_pass1_current_size,
             accumulate_noise=False,
-            projection_padding_factor=PROJECTION_PADDING_FACTOR,
-            reconstruction_padding_factor=PADDING_FACTOR,
-            relion_projector_half=relion_projector_half,
-            relion_projector_r_max=relion_projector_r_max,
             projection_relion_texture_interp=False,
             projection_relion_acc_double_floorf_quirk=RELION_ACC_DOUBLE_FLOORF_QUIRK,
             use_float64_scoring=parent_use_float64_scoring,
             use_float64_projections=parent_use_float64_projections,
-            do_gridding_correction=True,
-            square_window=RELION_FOURIER_WINDOW_SQUARE,
-            half_spectrum_scoring=True,
             relion_exact_score_translation=bool(
                 _DENSE_EM_STATIC_KWARGS["relion_exact_fine_gaussian"]
                 and not parent_use_float64_scoring
             ),
-            image_corrections=image_corrections_k,
-            scale_corrections=scale_corrections_k,
-            group_ids=group_ids_k,
-            scale_correction_group_count=group_count_k,
-            scale_correction_data_vs_prior=scale_correction_data_vs_prior,
-            image_pre_shifts=translation_search_base,
-            score_with_masked_images=True,
             return_profile=True,
             disable_adjoint_y=True,
             disable_adjoint_ctf=True,
-            adaptive_fraction=RELION_ADAPTIVE_FRACTION,
-            max_significants=max_significants,
             reconstruct_significant_only=True,
-            translation_prior_reference_translations=translation_prior_reference_translations,
             debug_iteration=local_debug_iteration,
             debug_pass_label="pass1_parent",
             pass2_layout=parent_layout,
             return_best_pose_details=False,
-            translation_prior_centers=trans_prior_center_for_engine,
             rotation_log_prior=relion_local_rotation_log_prior_k,
             return_reconstruction_sample_indices=True,
             apply_max_significants_to_support=True,
             score_only=True,
-            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+            **common_local_kwargs,
         )
         parent_profile = parent_outputs.profile_summary
         significant_sample_indices = parent_profile["reconstruction_sample_indices_by_image"]
@@ -1231,44 +1236,26 @@ def _score_half_local(
                 current_size=cs_for_engine,
                 reconstruction_current_size=reconstruction_current_size_for_engine,
                 accumulate_noise=False,
-                projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                reconstruction_padding_factor=PADDING_FACTOR,
-                relion_projector_half=relion_projector_half,
-                relion_projector_r_max=relion_projector_r_max,
                 use_float64_scoring=fine_use_float64_scoring,
                 use_float64_projections=fine_use_float64_projections,
-                do_gridding_correction=True,
-                square_window=RELION_FOURIER_WINDOW_SQUARE,
-                half_spectrum_scoring=True,
                 relion_exact_score_translation=bool(
                     _DENSE_EM_STATIC_KWARGS["relion_exact_fine_gaussian"]
                     and not fine_use_float64_scoring
                 ),
-                image_corrections=image_corrections_k,
-                scale_corrections=scale_corrections_k,
-                group_ids=group_ids_k,
-                scale_correction_group_count=group_count_k,
-                scale_correction_data_vs_prior=scale_correction_data_vs_prior,
-                image_pre_shifts=translation_search_base,
-                score_with_masked_images=True,
                 return_profile=False,
                 disable_adjoint_y=True,
                 disable_adjoint_ctf=True,
-                adaptive_fraction=RELION_ADAPTIVE_FRACTION,
-                max_significants=max_significants,
                 reconstruct_significant_only=False,
-                translation_prior_reference_translations=translation_prior_reference_translations,
                 debug_iteration=None,
                 pass2_layout=local_adaptive_pass2_denominator_layout,
                 return_best_pose_details=False,
-                translation_prior_centers=trans_prior_center_for_engine,
                 rotation_grid_random_perturbation=local_search_random_perturbation,
                 rotation_grid_angular_sampling_deg=relion_angular_sampling_deg(
                     local_search_order,
                     adaptive_oversampling=0,
                 ),
                 score_only=True,
-                source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                **common_local_kwargs,
             )
         finally:
             os.environ.update(saved_local_debug_env)
@@ -1318,10 +1305,6 @@ def _score_half_local(
         current_size=cs_for_engine,
         reconstruction_current_size=reconstruction_current_size_for_engine,
         accumulate_noise=local_accumulate_noise,
-        projection_padding_factor=PROJECTION_PADDING_FACTOR,
-        reconstruction_padding_factor=PADDING_FACTOR,
-        relion_projector_half=relion_projector_half,
-        relion_projector_r_max=relion_projector_r_max,
         # RELION's local adaptive path is intentionally hybrid: parent pass 1
         # uses the manual supplied-PPref projector above, while fine pass 2
         # follows the user-switchable texture default.
@@ -1329,35 +1312,21 @@ def _score_half_local(
         projection_relion_acc_double_floorf_quirk=RELION_ACC_DOUBLE_FLOORF_QUIRK,
         use_float64_scoring=fine_use_float64_scoring,
         use_float64_projections=fine_use_float64_projections,
-        do_gridding_correction=True,
-        square_window=RELION_FOURIER_WINDOW_SQUARE,
-        half_spectrum_scoring=True,
         relion_exact_score_translation=bool(
             _DENSE_EM_STATIC_KWARGS["relion_exact_fine_gaussian"]
             and not fine_use_float64_scoring
         ),
-        image_corrections=image_corrections_k,
-        scale_corrections=scale_corrections_k,
-        group_ids=group_ids_k,
-        scale_correction_group_count=group_count_k,
-        scale_correction_data_vs_prior=scale_correction_data_vs_prior,
-        image_pre_shifts=translation_search_base,
-        score_with_masked_images=True,
         mstep_relion_x_half=local_relion_x_half_mstep,
         return_profile=collect_local_search_profile,
         disable_adjoint_y=local_disable_adjoint_y,
         disable_adjoint_ctf=local_disable_adjoint_ctf,
-        adaptive_fraction=RELION_ADAPTIVE_FRACTION,
-        max_significants=max_significants,
         reconstruct_significant_only=local_reconstruct_significant_only,
         stats_use_reconstruction_probs=local_reconstruct_significant_only,
-        translation_prior_reference_translations=translation_prior_reference_translations,
         debug_iteration=local_debug_iteration,
         debug_pass_label="pass2_final",
         pass2_layout=pass2_layout,
         return_best_pose_details=True,
         normalization_log_evidence=local_normalization_log_evidence,
-        translation_prior_centers=trans_prior_center_for_engine,
         rotation_grid_random_perturbation=local_search_random_perturbation,
         rotation_grid_angular_sampling_deg=local_search_angular_sampling_deg,
         local_parent_oversampling_order=local_parent_oversampling_order,
@@ -1368,9 +1337,9 @@ def _score_half_local(
         # deliberately not exposed as RELION's coarse pass-1 metadata count.
         return_significant_counts=False,
         score_only=diagnostic_score_only,
-        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         rotation_grid_mstep_rotations=local_search_mstep_rotations,
         generate_relion_mstep_rotations=True,
+        **common_local_kwargs,
     )
     Ft_y_k = local_outputs.Ft_y
     Ft_ctf_k = local_outputs.Ft_ctf
