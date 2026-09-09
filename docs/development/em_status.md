@@ -50,6 +50,17 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
+The next structural checkpoint on `5ca9c8fff` completes compact-pair host planning
+ownership in `helpers.sparse_bucket_arrays`: four live helpers move with direct
+callers; one test-only count scanner and its vacuous spy are removed. Three unused
+tail-coalescer parameters disappear; actual hypothesis caps remain in the bucket
+builders. **144 lines leave the scorer; net production shrinks26 lines.** All231
+remaining function/class bodies match after only the unused-argument normalization;
+all test assertions remain exact. Original22 caller cases, final23 focused cases
+and38 CPU guard pass without skips. [Receipt, commands and source comparisons](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/compact_bucket_owner_20260909/result.json).
+This local structural successor does not change the published5ca9c8fff checkpoint
+assigned to VDAM's canonical-pixel qualification; freeze that exact commit.
+
 The canonical host-pixel repair resolves serialized STAR/pickle/CS geometry before
 computational casts and stores one Python-float `dataset.voxel_size`. Source STAR
 Angstrom origins use that same geometry; subsets preserve it. Legacy `StarFile.apix`

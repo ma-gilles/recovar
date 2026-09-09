@@ -126,12 +126,14 @@ from recovar.em.dense_single_volume.helpers.compact_candidates import (
     _candidate_mask_is_full,
 )
 from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
+    _compact_pair_counts_from_inputs,
+    _compact_pair_image_mask_for_threshold,
+    _bucket_sparse_k_class_compact_pair_counts,
     _DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH,
     _DEFAULT_TAIL_BUCKET_COALESCE_MAX_INFLATION,
     _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE,
     _bucket_pass2_inputs,
     _bucket_sparse_k_class_pass2_inputs,
-    _coalesce_tail_bucket_sizes,
     _prepare_per_image_compact_candidate_pairs,
     _prepare_per_image_pass2_inputs,
     _build_compact_pair_bucket_arrays,
@@ -568,152 +570,6 @@ def _relion_cuda_score_translation_angles_if_available(
         ),
         dtype=dtype,
     )
-
-
-def _compact_pair_counts_from_inputs(compact_inputs_by_class):
-    pair_counts_by_class = []
-    n_images = None
-    for compact_inputs in compact_inputs_by_class:
-        pair_counts = np.asarray(compact_inputs["pair_counts"], dtype=np.int64)
-        if n_images is None:
-            n_images = int(pair_counts.shape[0])
-        elif pair_counts.shape[0] != n_images:
-            raise ValueError("All classes must have the same image count for compact sparse pass-2")
-        pair_counts_by_class.append(pair_counts)
-    return tuple(pair_counts_by_class)
-
-
-def _compact_pair_counts_from_candidate_masks(per_image_inputs_by_class):
-    pair_counts_by_class = []
-    n_images = None
-    for per_image_inputs in per_image_inputs_by_class:
-        candidate_masks = per_image_inputs["candidate_mask"]
-        if n_images is None:
-            n_images = len(candidate_masks)
-        elif len(candidate_masks) != n_images:
-            raise ValueError("All classes must have the same image count for compact sparse pass-2")
-        pair_counts_by_class.append(
-            np.asarray(
-                [_candidate_mask_count(candidate_mask) for candidate_mask in candidate_masks],
-                dtype=np.int64,
-            ),
-        )
-    return tuple(pair_counts_by_class)
-
-
-def _compact_pair_fused_bucket_sizes(pair_counts_by_class, *, pair_block_size_for_quantization=5000):
-    if not pair_counts_by_class:
-        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
-    fused_pair_counts = np.max(np.stack(pair_counts_by_class, axis=0), axis=0)
-    pair_bucket_sizes = np.asarray(
-        [
-            _exact_bucket_rotation_size(int(count), pair_block_size_for_quantization)
-            for count in fused_pair_counts
-        ],
-        dtype=np.int64,
-    )
-    return fused_pair_counts, pair_bucket_sizes
-
-
-def _compact_pair_image_mask_for_threshold(
-    pair_counts_by_class,
-    min_pair_bucket_size: int | None,
-    *,
-    pair_block_size_for_quantization=5000,
-):
-    if min_pair_bucket_size is None:
-        return None
-    _, pair_bucket_sizes = _compact_pair_fused_bucket_sizes(
-        pair_counts_by_class,
-        pair_block_size_for_quantization=pair_block_size_for_quantization,
-    )
-    return pair_bucket_sizes >= int(min_pair_bucket_size)
-
-
-def _bucket_sparse_k_class_compact_pair_counts(
-    pair_counts_by_class,
-    *,
-    pair_block_size_for_quantization=5000,
-    max_pair_candidates_per_microbatch=_DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH,
-    max_images_per_microbatch=2048,
-    image_mask=None,
-    tail_bucket_coalesce_max_images=None,
-    tail_bucket_coalesce_max_inflation=None,
-    tail_bucket_coalesce_min_bucket_size=None,
-):
-    """Group images by padded valid-pair count for a compact K-class pass-2."""
-
-    n_classes = len(pair_counts_by_class)
-    if n_classes == 0:
-        return []
-    n_images = int(np.asarray(pair_counts_by_class[0]).shape[0])
-    if n_images == 0:
-        return []
-    if image_mask is not None:
-        image_mask = np.asarray(image_mask, dtype=bool)
-        if image_mask.shape != (n_images,):
-            raise ValueError(f"compact pair image mask shape mismatch: {image_mask.shape} vs {(n_images,)}")
-    normalized_counts_by_class = []
-    for pair_counts in pair_counts_by_class:
-        pair_counts = np.asarray(pair_counts, dtype=np.int64)
-        if pair_counts.shape[0] != n_images:
-            raise ValueError("All classes must have the same image count for compact sparse pass-2")
-        normalized_counts_by_class.append(pair_counts)
-
-    _, pair_bucket_sizes = _compact_pair_fused_bucket_sizes(
-        normalized_counts_by_class,
-        pair_block_size_for_quantization=pair_block_size_for_quantization,
-    )
-    if image_mask is not None:
-        masked_indices = np.nonzero(image_mask)[0]
-        if masked_indices.size:
-            pair_bucket_sizes = pair_bucket_sizes.copy()
-            pair_bucket_sizes[masked_indices] = _coalesce_tail_bucket_sizes(
-                pair_bucket_sizes[masked_indices],
-                max_images=tail_bucket_coalesce_max_images,
-                max_inflation=tail_bucket_coalesce_max_inflation,
-                min_bucket_size=tail_bucket_coalesce_min_bucket_size,
-                max_hypotheses_per_microbatch=max_pair_candidates_per_microbatch,
-                max_images_per_microbatch=max_images_per_microbatch,
-                n_fine_trans=1,
-                n_classes=n_classes,
-            )
-    else:
-        pair_bucket_sizes = _coalesce_tail_bucket_sizes(
-            pair_bucket_sizes,
-            max_images=tail_bucket_coalesce_max_images,
-            max_inflation=tail_bucket_coalesce_max_inflation,
-            min_bucket_size=tail_bucket_coalesce_min_bucket_size,
-            max_hypotheses_per_microbatch=max_pair_candidates_per_microbatch,
-            max_images_per_microbatch=max_images_per_microbatch,
-            n_fine_trans=1,
-            n_classes=n_classes,
-        )
-    processing_order = np.argsort(pair_bucket_sizes, kind="stable").astype(np.int64)
-    if image_mask is not None:
-        processing_order = processing_order[image_mask[processing_order]]
-    unique_bucket_sizes = np.unique(pair_bucket_sizes[processing_order])
-
-    buckets = []
-    for pair_bucket_size in unique_bucket_sizes:
-        pair_bucket_size = int(pair_bucket_size)
-        bucket_image_indices = processing_order[pair_bucket_sizes[processing_order] == pair_bucket_size]
-        cap_by_pairs = max(
-            1,
-            int(max_pair_candidates_per_microbatch) // max(1, int(n_classes) * pair_bucket_size),
-        )
-        max_per_chunk = max(1, min(int(max_images_per_microbatch), cap_by_pairs))
-        for start in range(0, bucket_image_indices.shape[0], max_per_chunk):
-            buckets.append(
-                {
-                    "pair_bucket_size": pair_bucket_size,
-                    "image_indices": np.asarray(
-                        bucket_image_indices[start : start + max_per_chunk],
-                        dtype=np.int64,
-                    ),
-                }
-            )
-    return buckets
 
 
 def _compact_k_class_pair_plan_stats(

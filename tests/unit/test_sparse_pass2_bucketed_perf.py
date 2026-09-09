@@ -58,11 +58,14 @@ from recovar.em.dense_single_volume.helpers.significant_samples import (
 )
 from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
     _bucket_pass2_inputs,
+    _bucket_sparse_k_class_compact_pair_counts,
     _bucket_sparse_k_class_pass2_inputs,
     _build_compact_pair_bucket_arrays,
     _build_compact_pair_bucket_arrays_from_per_image_inputs,
     _build_k_class_bucket_arrays,
     _coalesce_tail_bucket_sizes,
+    _compact_pair_counts_from_inputs,
+    _compact_pair_image_mask_for_threshold,
     _prepare_per_image_compact_candidate_pairs,
     _prepare_per_image_pass2_inputs,
 )
@@ -73,18 +76,14 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _active_row_grouping_for_canonical_matmul,
     _active_row_grouping_shape,
     _adjoint_block_chunk_rows,
-    _bucket_sparse_k_class_compact_pair_counts,
     _compact_k_class_pair_plan_stats,
     _compact_k_class_pair_plan_stats_from_counts,
     _compact_pair_buckets_for_execution_threshold,
-    _compact_pair_counts_from_candidate_masks,
-    _compact_pair_counts_from_inputs,
     _compact_pair_dense_mstep_max_bytes_for_pass,
     _compact_pair_dense_probs_and_reductions,
     _compact_pair_execution_enabled_for_pass,
     _compact_pair_execution_mask_excluding_full_support,
     _compact_pair_hybrid_threshold_reports,
-    _compact_pair_image_mask_for_threshold,
     _compact_pair_max_images_per_microbatch_for_pass,
     _compact_pair_min_bucket_size_for_pass,
     _compact_pair_mstep_mode_for_pass,
@@ -1145,10 +1144,7 @@ def test_sparse_pass2_tail_bucket_coalescing_merges_only_bounded_high_tail():
         max_images=8,
         max_inflation=2.0,
         min_bucket_size=4096,
-        max_hypotheses_per_microbatch=10**12,
         max_images_per_microbatch=1000,
-        n_fine_trans=116,
-        n_classes=4,
     )
 
     assert sorted(np.unique(coalesced).astype(int).tolist()) == [4096, 16384]
@@ -1164,10 +1160,7 @@ def test_sparse_pass2_tail_bucket_coalescing_respects_inflation_cap():
         max_images=3,
         max_inflation=1.2,
         min_bucket_size=4096,
-        max_hypotheses_per_microbatch=10**12,
         max_images_per_microbatch=1000,
-        n_fine_trans=116,
-        n_classes=4,
     )
 
     np.testing.assert_array_equal(coalesced, bucket_sizes)
@@ -1762,9 +1755,8 @@ def test_compact_pair_materialization_prefilter_skips_below_threshold_images():
         "oversampled_rot_indices": [np.arange(2048, dtype=np.int64) for _ in masks],
         "log_prior": [np.arange(2048, dtype=np.float32) for _ in masks],
     }
-    per_image_inputs_by_class = [per_image_inputs, per_image_inputs]
 
-    pair_counts_by_class = _compact_pair_counts_from_candidate_masks(per_image_inputs_by_class)
+    pair_counts_by_class = (np.asarray([2, 1024, 2048], dtype=np.int64),) * 2
     image_mask = _compact_pair_image_mask_for_threshold(pair_counts_by_class, 1024)
     compact_inputs = _prepare_per_image_compact_candidate_pairs(per_image_inputs, image_mask=image_mask)
 
@@ -1796,7 +1788,10 @@ def test_compact_pair_execution_filter_routes_full_support_rectangular():
         {"candidate_mask": [full, sparse, sparse]},
         {"candidate_mask": [sparse, sparse, full]},
     ]
-    pair_counts_by_class = _compact_pair_counts_from_candidate_masks(per_image_inputs_by_class)
+    pair_counts_by_class = (
+        np.asarray([full.count, sparse.count, sparse.count], dtype=np.int64),
+        np.asarray([sparse.count, sparse.count, full.count], dtype=np.int64),
+    )
     threshold_mask = _compact_pair_image_mask_for_threshold(pair_counts_by_class, 1)
 
     image_mask, excluded = _compact_pair_execution_mask_excluding_full_support(
@@ -1894,7 +1889,7 @@ def test_compact_pair_tail_coalescing_respects_execution_image_mask():
         "log_prior": [np.arange(max_count, dtype=np.float32) for _ in masks],
     }
     per_image_inputs_by_class = [per_image_inputs, per_image_inputs]
-    pair_counts_by_class = _compact_pair_counts_from_candidate_masks(per_image_inputs_by_class)
+    pair_counts_by_class = (np.asarray(counts, dtype=np.int64),) * 2
     image_mask = _compact_pair_image_mask_for_threshold(pair_counts_by_class, 8192)
     dense_buckets = [
         {"bucket_size": 4096, "image_indices": np.asarray([0], dtype=np.int64)},
@@ -9323,16 +9318,6 @@ def test_compact_pair_masked_scoring_reuses_noise_ctf_sums(monkeypatch):
     original_weighted_sums = bucketed_mod._compact_pair_weighted_rotation_sums
     original_image_sums = bucketed_mod._compact_pair_weighted_image_sums
     original_fused_sums = bucketed_mod._compact_pair_weighted_rotation_and_image_sums
-
-    def fail_duplicate_count_scan(*args, **kwargs):
-        del args, kwargs
-        raise AssertionError("compact-pair execution should reuse precomputed candidate counts")
-
-    monkeypatch.setattr(
-        bucketed_mod,
-        "_compact_pair_counts_from_candidate_masks",
-        fail_duplicate_count_scan,
-    )
 
     def run_with_reuse(enabled: bool):
         calls = {"weighted": 0, "image": 0, "fused": 0}
