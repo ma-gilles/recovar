@@ -5989,6 +5989,7 @@ def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(
 ):
     import recovar.cuda_backproject as cuda_backproject
     import recovar.em.dense_single_volume.local_em_engine as local_engine_module
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
 
     dataset = MockDataset(1, rng)
     config = ForwardModelConfig.from_dataset(
@@ -6005,7 +6006,7 @@ def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(
     noise_f64 = np.linspace(0.7, 2.3, n_half, dtype=np.float64)
 
     monkeypatch.setattr(
-        local_engine_module._sparse_pass2_diagnostics,
+        sparse_pass2_bucketed,
         "_relion_exact_ctf_half_from_source_star_host",
         lambda *_args, **_kwargs: ctf_rfloat,
     )
