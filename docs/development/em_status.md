@@ -46,13 +46,27 @@ draft publication with incomplete checks is user-authorized; merging and
 scientific gates are not waived. The branch includes behavioral integrations
 as well as structural cleanup.
 
-em_clean owns shared docs/status and publication. EM remains paused; its frozen
-sources/jobs stay untouched. VDAM's private source-Euler repair is based on
-`bae959dab`, on `codex/vdam-source-euler-metadata-20260909`; 12 EM Python owners and three tests are private scope only. Host metadata stays
-outside JIT/FFI; no shared source adoption or native build is assigned by that
-handoff. Precision proposal `907b02ce` remains private/unmerged. Raw-prefetch
-source is unassigned. The RELION header lock is released: five diagnostic
-insertions remain, and shared benchmark binaries/private captures stay frozen.
+em_clean owns shared docs/status and publication. EM remains paused; frozen
+sources/jobs stay untouched. Source-Euler repairs `df9975ee` and `f91eed7d6` are
+locally integrated as `479e888f9` and `db52d1bca`, with the unified local result
+caller migration. The combined source passes326 focused CPU cases,38 guard cases
+and the captured trial16 Euler-only replay. See the
+[combined receipt](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/handoffs/em_clean_source_euler_combined_20260909.json).
+Canonical sampler angles remain the source of truth; matrices are computation
+inputs, not a route for reconstructing known metadata. The engine agent is
+read-only auditing remaining conversions on the combined source; shared source
+changes await a bounded handoff.
+These source-Euler commits are included in this draft checkpoint. No additional private F32-M ancestry or
+precision907 policy is included. Combined GPU/trajectory/K4/current100k gates
+remain open. VDAM owns its private Pmax24 capture. Native job13649706 failed its schema
+validator, but its parent receipt verifies172 reusable native payload files; no
+native rerun is needed. Candidate continuation13649895 is now observed FAILED1:0
+on h19g1; its cause is not reviewed here. The native hook dumps a stale coarse
+threshold index0; VDAM reports exact reconstruction579862/rank41 from sorted
+weights, mask and STAR. Preserve that diagnostic erratum; do not use the stale
+index as a scientific comparison. No duplicate job is assigned.
+Raw-prefetch source is unassigned. The RELION header lock is released; shared
+benchmark binaries/private captures remain frozen.
 
 Local GPU 0 remains reserved. Check GPUs 1–3 immediately before use and restrict
 by idle-device UUID; within Slurm preserve scheduler visibility. Avoid duplicate
@@ -60,22 +74,30 @@ jobs and preserve source snapshots while their jobs run.
 
 ## Agent efficiency package — September 9
 
-The user authorized Terra/medium for routine cleanup, Astra for difficult review,
-compact file handoffs and one publication per cohesive package. See
-[the workflow](agent_workflow.md). The coordination README/em_clean status now
-link full archives rather than repeating history. Scientific gates are unchanged.
-The prior routing/import cleanup is published at `732e2cf3`, not an unpublished
-seven-case patch; final focused coverage was11 plus guard38.
+The opt-in Astra/high lead and Terra/medium reader were runtime-verified. Reader
+isolation failed (workspace-write inherited), and the smoke exposed no child-close
+tool. Delegation is disabled pending bounded requalification; direct Astra is the
+fallback. Worker execution and fresh read-only recovery remain untested. Compact
+handoffs and batched validation are in use; long-term savings are unmeasured.
+See [the workflow](agent_workflow.md) and its opt-in setup record. Global defaults
+and scientific gates are unchanged. The prior routing/import cleanup is published
+at `732e2cf3`, with11 focused and38 guard cases.
 
-Peer reports private class-prior repair `f91eed7d6` atop frozen `df9975ee`,
-red2fail/2pass then42 focused/38guard; review/adoption remains separate. Replacement
-full200 K1 job13648609 completed0:0 (8:33);13648479 failed pre-science UUID
-preflight. Different physical H100, same class/driver: timing descriptive only.
-K4 audit13560356 failed2:0: both control/candidate logs first miss RELION FSC-AUC
-0.995 at iteration10, class2. Full audit review remains open. No duplicate job
-or shared Euler adoption; job completion alone is not quality acceptance.
+Frozen df9975ee full200 job13648609 completed0:0: all201 registered-GT conditions
+pass both native references, but strict cross-FSC remains open (min0.9698486 at155).
+Different physical H100, same class/driver: timing descriptive only. K4 audit
+13560356 failed2:0; both control/candidate first miss RELION FSC-AUC0.995 at
+iteration10,class2. No current100k speed or broad quality acceptance is claimed.
 
 ## Engineering work and recent evidence
+
+The latest structural batch moves four unchanged host score-reporting
+functions from `helpers.scoring` to `helpers.coarse_score_diagnostics` and migrates
+`significance` and tests directly. Remaining kernel and moved-function ASTs are
+exact;58 affected CPU cases, import boundaries and Ruff pass. Scoring loses286
+lines; the new owner has293, with net production growth6 after an unused import
+is removed. This improves ownership, not net code size. See the
+[batch receipt](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/handoffs/em_clean_coarse_diagnostics_owner_20260909.json).
 
 The current package moves split bucket preparation into `local_preprocessing`,
 shares the duplicated exact BPref translation operation and gives profiled and

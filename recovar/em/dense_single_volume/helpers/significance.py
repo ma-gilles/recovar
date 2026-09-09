@@ -18,10 +18,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.batch_fetch import original_image_indices
-
-
 from recovar.em.dense_single_volume.helpers import projection_cache as projection_cache_helpers
+from recovar.em.dense_single_volume.helpers.batch_fetch import original_image_indices
 from recovar.em.dense_single_volume.helpers.coarse_device_selection import DeviceCoarseBlockSelection
 from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
     DEFAULT_ROTATION_BLOCK_CAPACITY,
@@ -44,11 +42,13 @@ from recovar.em.dense_single_volume.helpers.coarse_gemm_streaming import (
     update_coarse_gemm_streaming_state,
     write_coarse_gemm_streaming_summary,
 )
+from recovar.em.dense_single_volume.helpers.coarse_score_diagnostics import (
+    _coarse_gaussian_direct_macro_diagnostics,
+    _coarse_gaussian_qualification_decision,
+)
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_int_set
 from recovar.em.dense_single_volume.helpers.projection import compute_projections_block
 from recovar.em.dense_single_volume.helpers.scoring import (
-    _coarse_gaussian_direct_macro_diagnostics,
-    _coarse_gaussian_qualification_decision,
     _e_step_block_scores,
     _e_step_block_scores_windowed,
     _prepare_relion_coarse_gaussian_gemm_f64_image_batch,
@@ -4264,7 +4264,6 @@ def _compute_k_class_significance_batched(
         _e_step_block_scores_windowed,
         _e_step_block_scores_windowed_normalized_cc,
         _relion_coarse_normalized_cc_rescore,
-        _relion_coarse_normalized_cc_rescore_f64,
         _update_logsumexp,
     )
     from recovar.reconstruction import noise as noise_utils

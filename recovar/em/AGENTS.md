@@ -37,6 +37,11 @@ GUI excluded**, before new-engine development. Root instructions also apply.
   not prove roundoff: check serialization, casts, semantics and float32 bounds.
   Report effective precision for scoring, projection, accumulation and M-step
   separately; inherited F64/C128 stages are numerical work, not just metadata.
+- Preserve canonical source sampler Euler angles as metadata and derive matrices
+  for computation. Do not reconstruct known angles from rounded matrices during
+  cleanup. Carry their identity through selection, permutation and class-prior
+  layouts. Treat missing canonical metadata as an explicit API/design question;
+  keep legacy conversion fallbacks separate until reviewed, not silently removed.
 - Find the first divergent iteration/half/class/particle/pass/state field, then
   replay fixed state and candidates. Compare scores, posteriors, poses and
   accumulators. If fixed-state arithmetic agrees, move one state boundary earlier.

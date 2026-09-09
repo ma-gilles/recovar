@@ -32,8 +32,8 @@ Engineering priorities are correctness, GPU performance, then clarity.
 
 Use [the agent workflow](docs/development/agent_workflow.md): compact file handoffs,
 on-demand history, scripted evidence and one publication per cohesive batch.
-Use Terra/medium for routine cleanup and Astra for difficult numerical or
-architecture review. Cost control must not reduce the scientific goal or gates.
+Model selection and delegation are session choices, not scientific requirements.
+Cost control must not reduce the scientific goal or gates.
 
 ## Implement and review
 

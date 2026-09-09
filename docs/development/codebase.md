@@ -207,6 +207,12 @@ completion/stop control. Selector errors and log messages are unchanged; their
 logger namespace follows `debug_dumps`. Capture state and counters belong to the
 separate diagnostic owner below.
 
+[`helpers.coarse_score_diagnostics`](../../recovar/em/dense_single_volume/helpers/coarse_score_diagnostics.py)
+owns host NumPy summaries of direct/GEMM score deltas, ULPs, winner margins,
+support changes, repeated runs and scale panels, plus the qualification decision.
+`significance` calls this owner directly. JAX scoring/M-step kernels remain in
+`helpers.scoring`; diagnostic imports do not initialize those execution modules.
+
 [`helpers.pass2_diagnostics`](../../recovar/em/dense_single_volume/helpers/pass2_diagnostics.py)
 owns K1/K-class score dumps, norm-residual and chunked scale-AA writers, and
 target-row selection, including staging effective K-class raw operands after

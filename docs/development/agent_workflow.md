@@ -5,13 +5,11 @@ bookkeeping and publication overhead, not validation fidelity.
 
 ## Model and work package
 
-Use Terra at medium reasoning for structural cleanup, caller migrations and
-ordinary tests. Reserve Astra for architecture decisions, difficult numerical
-questions and milestone review. Compare accepted work and subsequent rework.
-The local Codex default was changed on September 9, 2026; named CLI profiles are
-`cleanup` and `numerical-review`. Existing sessions may retain their selected
-model. Select the model in the client or start a new session; config edits alone
-do not prove a running session switched. See [official configuration guidance](https://learn.chatgpt.com/docs/config-file/config-advanced).
+Model selection and delegation are opt-in session choices. The selected RECOVAR
+workstream has an [Astra-led delegation policy](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/delegated/POLICY.md)
+and [activation/recovery instructions](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/delegated/README.md).
+Scientific requirements apply equally to every model. Earlier global model
+settings are historical; this profile does not change them.
 
 Start a fresh thread for a cohesive package at a stable boundary. Its handoff
 should fit roughly one page: objective, checkout/HEAD/dirty identity, constraints,

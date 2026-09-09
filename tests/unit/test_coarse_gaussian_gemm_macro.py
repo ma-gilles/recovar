@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import relion_ctf, scoring, significance
+from recovar.em.dense_single_volume.helpers import coarse_score_diagnostics, relion_ctf, scoring, significance
 from recovar.em.dense_single_volume.helpers.coarse_gemm_streaming import (
     COARSE_GEMM_STREAMING_SCHEMA,
 )
@@ -649,7 +649,7 @@ def test_coarse_gemm_diagnostic_classifies_negative_implied_diff2_as_no_go(
 
 
 def test_coarse_gemm_qualification_allows_only_fully_qualified_stable_noise():
-    stable = scoring._coarse_gaussian_qualification_decision(
+    stable = coarse_score_diagnostics._coarse_gaussian_qualification_decision(
         exact_arithmetic_equivalent=True,
         repeat_stable=True,
         unbiased_non_directional=True,
@@ -668,7 +668,7 @@ def test_coarse_gemm_qualification_allows_only_fully_qualified_stable_noise():
     assert stable["requires_bitwise_score_identity"] is False
     assert stable["requires_exact_discrete_identity"] is True
 
-    unqualified = scoring._coarse_gaussian_qualification_decision(
+    unqualified = coarse_score_diagnostics._coarse_gaussian_qualification_decision(
         exact_arithmetic_equivalent=True,
         repeat_stable=None,
         unbiased_non_directional=None,
@@ -699,7 +699,7 @@ def test_coarse_gemm_qualification_allows_only_fully_qualified_stable_noise():
             exact_zero_cancellation_drift=False,
         )
         kwargs[bad_flag] = True
-        rejected = scoring._coarse_gaussian_qualification_decision(**kwargs)
+        rejected = coarse_score_diagnostics._coarse_gaussian_qualification_decision(**kwargs)
         assert rejected["status"] == "NO_GO"
 
 
@@ -716,7 +716,7 @@ def test_coarse_gaussian_gemm_scores_report_direct_objective_float32(record_prop
         )
     )
     expected = _direct_scores(operands[0], operands[2], operands[3], operands[4])
-    diagnostics = scoring._coarse_gaussian_direct_macro_diagnostics(
+    diagnostics = coarse_score_diagnostics._coarse_gaussian_direct_macro_diagnostics(
         expected[:, None, :, :],
         actual[:, None, :, :],
     )
@@ -757,7 +757,7 @@ def test_coarse_gaussian_gemm_scores_report_direct_objective_float64(record_prop
         )
     )
     expected = _direct_scores(operands[0], operands[2], operands[3], operands[4])
-    diagnostics = scoring._coarse_gaussian_direct_macro_diagnostics(
+    diagnostics = coarse_score_diagnostics._coarse_gaussian_direct_macro_diagnostics(
         expected[:, None, :, :],
         actual[:, None, :, :],
     )
@@ -819,7 +819,7 @@ def test_coarse_gaussian_gemm_direct_square_cancellation_stress_equal_operands(
             )
         )
         direct = _direct_scores(projected, shifted, unit_weight, initial)
-        diagnostics = scoring._coarse_gaussian_direct_macro_diagnostics(
+        diagnostics = coarse_score_diagnostics._coarse_gaussian_direct_macro_diagnostics(
             direct[:, None, :, :],
             macro[:, None, :, :],
         )
@@ -857,7 +857,7 @@ def test_coarse_gaussian_gemm_direct_square_cancellation_stress_equal_operands(
                 "negative_implied_diff2_count": int(np.count_nonzero(macro > 0.0)),
             }
         )
-    scale_panel = scoring._coarse_gaussian_scale_panel_diagnostics(
+    scale_panel = coarse_score_diagnostics._coarse_gaussian_scale_panel_diagnostics(
         [1.0, 100.0, 1.0e4],
         np.stack(score_deltas, axis=0),
         precision_bits=np.dtype(real_dtype).itemsize * 8,
@@ -927,7 +927,7 @@ def test_coarse_gaussian_gemm_direct_square_cancellation_stress_nearby_operands(
     )
     direct = _direct_scores(projected, shifted, weight, initial)
     delta = macro - direct
-    diagnostics = scoring._coarse_gaussian_direct_macro_diagnostics(
+    diagnostics = coarse_score_diagnostics._coarse_gaussian_direct_macro_diagnostics(
         direct[:, None, :, :],
         macro[:, None, :, :],
     )
@@ -970,7 +970,7 @@ def test_coarse_gaussian_direct_macro_diagnostics_preserve_layout_and_discretes(
     direct_support = np.array([[True, False, True, False], [False, True, True, False]])
     macro_support = direct_support.copy()
     macro_support[1, 2] = False
-    diagnostics = scoring._coarse_gaussian_direct_macro_diagnostics(
+    diagnostics = coarse_score_diagnostics._coarse_gaussian_direct_macro_diagnostics(
         direct,
         macro,
         direct_support=direct_support,
@@ -1006,7 +1006,7 @@ def test_coarse_gaussian_diagnostics_report_exact_ulp_and_repeat_spread():
         ],
         dtype=np.float32,
     ).reshape(1, 1, 1, 3)
-    diagnostics = scoring._coarse_gaussian_direct_macro_diagnostics(direct, macro)
+    diagnostics = coarse_score_diagnostics._coarse_gaussian_direct_macro_diagnostics(direct, macro)
     np.testing.assert_array_equal(diagnostics["ulp_score_delta"], 1)
 
     repeat_deltas = np.stack(
@@ -1017,7 +1017,7 @@ def test_coarse_gaussian_diagnostics_report_exact_ulp_and_repeat_spread():
         ],
         axis=0,
     )
-    repeat = scoring._coarse_gaussian_repeat_spread_diagnostics(repeat_deltas)
+    repeat = coarse_score_diagnostics._coarse_gaussian_repeat_spread_diagnostics(repeat_deltas)
     assert int(repeat["repeat_count"]) == 3
     np.testing.assert_array_equal(
         repeat["elementwise_delta_repeat_spread"],
