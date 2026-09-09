@@ -278,6 +278,8 @@ class NativeParticleState:
     best_pose_rotation_ids: np.ndarray | None = None
     best_pose_rotation_orders: np.ndarray | None = None
     visited: np.ndarray | None = None
+    best_pose_eulers_deg: np.ndarray | None = None
+    best_pose_eulers_valid: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -987,6 +989,7 @@ def _particle_state_from_star(
         missing = [name for name, column in zip(angle_names, angle_columns) if column is None]
         raise ValueError(f"STAR file must provide all Euler-angle columns; missing {', '.join(missing)}")
     best_pose_rotations = None
+    source_eulers = None
     if all(column is not None for column in angle_columns):
         eulers = np.stack(
             [np.asarray(column.astype(float).to_numpy(), dtype=np.float64) for column in angle_columns],
@@ -998,12 +1001,15 @@ def _particle_state_from_star(
         # gradient subset has been visited. Sampling-accuracy estimation uses
         # those orientations, then replaces rows as fresh E-step poses arrive.
         best_pose_rotations = np.asarray(R_from_relion(eulers, degrees=True), dtype=np.float32)
+        source_eulers = eulers.copy()
     return NativeParticleState(
         translation_offsets=_image_origin_offsets_pixels_from_star(main_star, dataset),
         class_assignments=class_assignments,
         max_posterior=max_posterior,
         pose_assignments=np.full(n_images, -1, dtype=np.int32),
         best_pose_rotations=best_pose_rotations,
+        best_pose_eulers_deg=source_eulers,
+        best_pose_eulers_valid=(None if source_eulers is None else np.ones(n_images, dtype=bool)),
         visited=visited,
     )
 
@@ -1298,26 +1304,47 @@ def _best_eulers_from_particle_state(
     *,
     rotation_grid_order: int,
 ) -> np.ndarray | None:
+    """Resolve exact source rows first, with explicit legacy fallback per row."""
     ids = np.asarray(particle_ids, dtype=np.int64).reshape(-1)
+    n_particles = len(particle_state.translation_offsets)
+    source = particle_state.best_pose_eulers_deg
+    valid = particle_state.best_pose_eulers_valid
+    if valid is not None:
+        valid = np.asarray(valid)
+        if valid.dtype != bool or valid.shape != (n_particles,):
+            raise ValueError("source Euler validity must match the particle table")
+    if source is not None:
+        source = np.asarray(source)
+        if (
+            source.dtype != np.float64
+            or source.shape != (n_particles, 3)
+            or valid is None
+            or not np.all(np.isfinite(source[valid]))
+        ):
+            raise ValueError("source Euler metadata must be finite float64 triples on valid particle rows")
+    elif valid is not None and np.any(valid):
+        raise ValueError("valid source Euler metadata requires an Euler array")
+    resolved = np.zeros(ids.size, dtype=bool) if valid is None else valid[ids].copy()
+    result = np.empty((ids.size, 3), dtype=np.float64)
+    if source is not None:
+        result[resolved] = source[ids[resolved]]
     rotations = particle_state.best_pose_rotations
-    if rotations is not None:
-        rotations_arr = np.asarray(rotations, dtype=np.float64)
-        expected_ndim = 3
-        if rotations_arr.ndim == expected_ndim and rotations_arr.shape[1:] == (3, 3):
-            selected = rotations_arr[ids]
-            if np.all(np.abs(selected.reshape(selected.shape[0], -1)).sum(axis=1) > 0.0):
-                return np.asarray(R_to_relion(selected, degrees=True), dtype=np.float64)
-
-    rotation_ids = particle_state.best_pose_rotation_ids
-    if rotation_ids is None:
-        return None
-    best_ids = np.asarray(rotation_ids, dtype=np.int64)[ids]
-    if np.any(best_ids < 0):
-        return None
-    eulers = sampling.get_relion_rotation_grid_eulers(int(rotation_grid_order), rotation_index_order="relion")
-    if np.max(best_ids) >= eulers.shape[0]:
-        return None
-    return np.asarray(eulers[best_ids], dtype=np.float64)
+    if rotations is not None and not np.all(resolved):
+        rotations = np.asarray(rotations)
+        if rotations.shape != (n_particles, 3, 3):
+            raise ValueError("pose matrices must match the particle table")
+        selected = rotations[ids]
+        matrix_rows = ~resolved & np.any(np.abs(selected.reshape(ids.size, 9)) > 0, axis=1)
+        if np.any(matrix_rows):
+            result[matrix_rows] = np.asarray(R_to_relion(selected[matrix_rows].astype(np.float64), degrees=True))
+            resolved[matrix_rows] = True
+    if not np.all(resolved) and particle_state.best_pose_rotation_ids is not None:
+        best_ids = np.asarray(particle_state.best_pose_rotation_ids, dtype=np.int64)[ids]
+        eulers = sampling.get_relion_rotation_grid_eulers(int(rotation_grid_order), rotation_index_order="relion")
+        grid_rows = ~resolved & (best_ids >= 0) & (best_ids < len(eulers))
+        result[grid_rows] = eulers[best_ids[grid_rows]]
+        resolved[grid_rows] = True
+    return result if np.all(resolved) else None
 
 
 def _estimate_native_sampling_accuracy(
@@ -1411,6 +1438,16 @@ def _estimate_native_sampling_accuracy(
             dump_path / f"iter{int(state.iter):03d}_expected_accuracy_inputs.npz",
             refs_relion=refs_relion,
             eulers=eulers,
+            source_eulers_valid=(
+                np.zeros(n_trials, dtype=bool)
+                if particle_state.best_pose_eulers_valid is None
+                else np.asarray(particle_state.best_pose_eulers_valid)[trial_particle_ids]
+            ),
+            source_eulers_deg=(
+                np.zeros((n_trials, 3), dtype=np.float64)
+                if particle_state.best_pose_eulers_deg is None
+                else np.asarray(particle_state.best_pose_eulers_deg)[trial_particle_ids]
+            ),
             trial_particle_ids=trial_particle_ids,
             class_ids=class_ids,
             pdf_class=np.asarray(state.pdf_class, dtype=np.float64),
@@ -2205,6 +2242,21 @@ def _update_particle_state_from_estep_meta(
         particle_state.best_pose_rotations = _ensure_field(particle_state.best_pose_rotations, (N, 3, 3), np.float32)
         particle_state.best_pose_rotations[ids] = np.asarray(rot, dtype=np.float32)
 
+    source_eulers = meta.get("best_pose_eulers_deg")
+    if rot is not None or source_eulers is not None:
+        particle_state.best_pose_eulers_valid = _ensure_field(particle_state.best_pose_eulers_valid, (N,), bool, False)
+        particle_state.best_pose_eulers_valid[ids] = False
+    if source_eulers is not None:
+        eulers = np.asarray(source_eulers)
+        if eulers.dtype != np.float64 or eulers.shape != (ids.size, 3) or not np.all(np.isfinite(eulers)):
+            raise ValueError("source Euler metadata must be finite float64 [selected_particles, 3]")
+        particle_state.best_pose_eulers_deg = _ensure_field(particle_state.best_pose_eulers_deg, (N, 3), np.float64)
+        particle_state.best_pose_eulers_deg[ids] = eulers
+        valid = np.asarray(meta.get("best_pose_eulers_valid", np.ones(ids.size, dtype=bool)))
+        if valid.dtype != bool or valid.shape != (ids.size,):
+            raise ValueError("source Euler validity must be boolean [selected_particles]")
+        particle_state.best_pose_eulers_valid[ids] = valid
+
     if (bt := meta.get("best_pose_translations")) is not None:
         particle_state.best_pose_translations = _ensure_field(particle_state.best_pose_translations, (N, 2), np.float32)
         particle_state.best_pose_translations[ids] = np.asarray(bt, dtype=np.float32)
@@ -2555,7 +2607,11 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
     _set_star_column(table, "_rlnRandomSubset", _initial_model_random_subsets(main_star))
     _set_star_column(table, "_rlnMaxValueProbDistribution", _format_float_column(particle_state.max_posterior))
 
-    has_rotations = particle_state.best_pose_rotation_ids is not None or particle_state.best_pose_rotations is not None
+    has_rotations = (
+        particle_state.best_pose_rotation_ids is not None
+        or particle_state.best_pose_rotations is not None
+        or particle_state.best_pose_eulers_deg is not None
+    )
     if has_rotations:
 
         def _angle(col):
@@ -2563,9 +2619,14 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
 
         angle_rot, angle_tilt, angle_psi = (_angle(c) for c in ("_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi"))
         remaining_rot = visited.copy()
+        if particle_state.best_pose_eulers_deg is not None and particle_state.best_pose_eulers_valid is not None:
+            source_valid = remaining_rot & np.asarray(particle_state.best_pose_eulers_valid, dtype=bool)
+            eulers = np.asarray(particle_state.best_pose_eulers_deg, dtype=np.float64)[source_valid]
+            angle_rot[source_valid], angle_tilt[source_valid], angle_psi[source_valid] = eulers.T
+            remaining_rot[source_valid] = False
         if particle_state.best_pose_rotations is not None:
             rotations = np.asarray(particle_state.best_pose_rotations, dtype=np.float64)
-            valid_matrix = visited & np.any(np.abs(rotations.reshape(n_images, -1)) > 0.0, axis=1)
+            valid_matrix = remaining_rot & np.any(np.abs(rotations.reshape(n_images, -1)) > 0.0, axis=1)
             if np.any(valid_matrix):
                 eulers = np.asarray(R_to_relion(rotations[valid_matrix], degrees=True), dtype=np.float64)
                 angle_rot[valid_matrix] = eulers[:, 0]

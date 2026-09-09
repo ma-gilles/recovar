@@ -787,6 +787,8 @@ def _sparse_pass2_estep_meta(
     """Meta merger for separate exact-local K-class pseudo-halfset passes."""
 
     meta = _estep_meta(halfset_results)
+    source_euler_rows = []
+    source_euler_valid = []
     selected_particle_ids: list[np.ndarray] = []
     max_posterior: list[np.ndarray] = []
     field_lists: dict[str, list[np.ndarray]] = {attr: [] for attr, _ in _SPARSE_PASS2_RESULT_FIELDS}
@@ -794,6 +796,13 @@ def _sparse_pass2_estep_meta(
     for halfset_idx, result in sorted(halfset_results.items()):
         image_ids = np.asarray(selected_particle_ids_by_halfset[int(halfset_idx)], dtype=np.int64)
         selected_particle_ids.append(image_ids)
+        source = getattr(result, "best_pose_eulers_deg", None)
+        if source is not None:
+            source = np.asarray(source)
+            if source.dtype != np.float64 or source.shape != (image_ids.size, 3) or not np.all(np.isfinite(source)):
+                raise ValueError("source Euler rows must match their pseudo-halfset particle IDs")
+        source_euler_rows.append(np.zeros((image_ids.size, 3), dtype=np.float64) if source is None else source)
+        source_euler_valid.append(np.full(image_ids.size, source is not None, dtype=bool))
         for attr, dtype in _SPARSE_PASS2_RESULT_FIELDS:
             value = getattr(result, attr, None)
             if value is not None:
@@ -809,6 +818,9 @@ def _sparse_pass2_estep_meta(
         if arrays:
             meta[key] = np.concatenate(arrays).astype(dtype, copy=False)
 
+    if any(np.any(valid) for valid in source_euler_valid):
+        meta["best_pose_eulers_deg"] = np.concatenate(source_euler_rows)
+        meta["best_pose_eulers_valid"] = np.concatenate(source_euler_valid)
     _merge(selected_particle_ids, "selected_particle_ids", np.int64)
     for attr, dtype in _SPARSE_PASS2_RESULT_FIELDS:
         _merge(field_lists[attr], attr, dtype)
@@ -934,6 +946,7 @@ def _restore_zero_oversampling_coarse_metadata(
     full_stats: dict[str, Any],
     coarse_rotations: np.ndarray,
     coarse_translations: np.ndarray,
+    coarse_source_eulers: np.ndarray | None = None,
 ):
     """Keep RELION's pass-1 argmax/Pmax metadata for an os0 pass-2 M-step."""
 
@@ -979,6 +992,10 @@ def _restore_zero_oversampling_coarse_metadata(
         best_pose_rotations=rotations,
         best_pose_translations=translations,
         best_pose_rotation_ids=rotation_ids.astype(np.int32),
+        best_pose_eulers_deg=(
+            None if coarse_source_eulers is None else np.asarray(coarse_source_eulers, dtype=np.float64)[rotation_ids]
+        ),
+        per_class_best_pose_eulers_deg=None,
     )
     if n_classes == 1:
         replace_kwargs.update(
@@ -1314,18 +1331,20 @@ def _run_sparse_pass2_initial_model_estep(
             raise ValueError("InitialModel compact sparse pass 2 does not yet support oversampling_order=0")
 
         local_layout = None
+        fine_source_eulers = None
         fine_rotations = None
         fine_rotation_parent = None
         fine_translations = None
         fine_translation_parent = None
         if use_compact_sparse_pass2:
-            fine_rotations, fine_rotation_parent, _fine_rotation_ids = (
+            fine_rotations, fine_rotation_parent, _fine_rotation_ids, fine_source_eulers = (
                 get_oversampled_rotation_grid_from_samples(
                     np.arange(n_coarse_rotations, dtype=np.int64),
                     healpix_order,
                     oversampling_order=oversampling_order,
                     random_perturbation=random_perturbation,
                     return_rotation_indices=True,
+                    return_source_eulers=True,
                     rotation_index_order="relion_hidden",
                 )
             )
@@ -1447,6 +1466,7 @@ def _run_sparse_pass2_initial_model_estep(
                             _full_stats["normalization_log_evidence"],
                             dtype=np.float64,
                         )
+                compact_engine_kwargs["fine_source_eulers_override"] = fine_source_eulers
                 result = _run_sparse_k_class_adaptive_pass2(
                     group_dataset,
                     means,
@@ -1610,6 +1630,14 @@ def _run_sparse_pass2_initial_model_estep(
                 hard_assignment=_hard_assignment,
                 class_assignment=_class_assignment,
                 full_stats=_full_stats,
+                coarse_source_eulers=get_oversampled_rotation_grid_from_samples(
+                    np.arange(n_coarse_rotations),
+                    healpix_order,
+                    oversampling_order=0,
+                    random_perturbation=random_perturbation,
+                    rotation_index_order="relion_hidden",
+                    return_source_eulers=True,
+                )[-1],
                 coarse_rotations=coarse_metadata_rotations,
                 coarse_translations=coarse_translations,
             )

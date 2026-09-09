@@ -4030,7 +4030,7 @@ def _run_relion_iteration_loop(
             if best_pose_rotations[k] is not None:
                 best_rots = np.asarray(best_pose_rotations[k], dtype=_pose_state_dtype)
                 best_eulers = (
-                    np.asarray(best_pose_rotation_eulers[k], dtype=_pose_state_dtype)
+                    np.asarray(best_pose_rotation_eulers[k], dtype=np.float64)
                     if best_pose_rotation_eulers[k] is not None
                     else utils.R_to_relion(best_rots, degrees=True).astype(_pose_state_dtype)
                 )

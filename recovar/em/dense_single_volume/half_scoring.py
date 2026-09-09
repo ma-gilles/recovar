@@ -615,7 +615,11 @@ def _score_half_dense(
             pose_dtype = _dense_global_scoring_dtype()
             best_rots = np.asarray(k1_adaptive_result.best_pose_rotations, dtype=pose_dtype)
             outputs.best_pose_rotations[k] = best_rots
-            outputs.best_pose_rotation_eulers[k] = utils.R_to_relion(best_rots, degrees=True).astype(pose_dtype)
+            outputs.best_pose_rotation_eulers[k] = (
+                np.asarray(k1_adaptive_result.best_pose_eulers_deg, dtype=np.float64)
+                if k1_adaptive_result.best_pose_eulers_deg is not None
+                else utils.R_to_relion(best_rots, degrees=True).astype(pose_dtype)
+            )
             outputs.best_pose_translations[k] = np.asarray(k1_adaptive_result.best_pose_translations, dtype=pose_dtype)
         if fine_rotations_for_pose is None and rot_pmap_for_collapse is not None:
             fine_rotations_for_pose = _build_firstiter_cc_pass2_grids(
@@ -1312,10 +1316,11 @@ def _score_half_local(
             outputs.class_full_posterior[k] = np.asarray(class_full_posterior_sums_k, dtype=np.float64)
     pose_dtype = _dense_global_scoring_dtype()
     outputs.best_pose_rotations[k] = np.asarray(best_rots_k, dtype=pose_dtype)
-    outputs.best_pose_rotation_eulers[k] = utils.R_to_relion(
-        np.asarray(best_rots_k),
-        degrees=True,
-    ).astype(pose_dtype)
+    outputs.best_pose_rotation_eulers[k] = (
+        np.asarray(local_outputs.best_pose_eulers_deg, dtype=np.float64)
+        if local_outputs.best_pose_eulers_deg is not None
+        else utils.R_to_relion(np.asarray(best_rots_k), degrees=True).astype(pose_dtype)
+    )
     outputs.best_pose_translations[k] = np.asarray(best_trans_k, dtype=pose_dtype)
     return HalfScoreResult(
         ha=ha_k,

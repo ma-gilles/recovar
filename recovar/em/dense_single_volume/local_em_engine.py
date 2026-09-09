@@ -435,6 +435,7 @@ class _LocalPostprocessBuffers:
     best_pose_translations: np.ndarray | None = None
     best_pose_rotation_ids: np.ndarray | None = None
     reconstruction_sample_indices_by_image: list[np.ndarray] | None = None
+    best_pose_eulers_deg: np.ndarray | None = None
 
 
 @dataclass(frozen=True)
@@ -1340,6 +1341,7 @@ def _postprocess_local_bucket(
     reconstruction_pack_mask,
     buffers: _LocalPostprocessBuffers,
     host_prefix: bool = False,
+    local_source_eulers=None,
 ):
     """Scatter one local bucket's host-side pose, posterior, and profile stats.
 
@@ -1440,6 +1442,15 @@ def _postprocess_local_bucket(
         buffers.best_pose_translations[image_indices_np] = np.asarray(translation_grid)[best_trans_idx]
         buffers.best_pose_rotation_ids[image_indices_np] = best_rotation_ids.astype(np.int32, copy=False)
 
+    if buffers.best_pose_eulers_deg is not None:
+        if local_source_eulers is None:
+            raise ValueError("source Euler metadata was lost before local winner publication")
+        buffers.best_pose_eulers_deg[image_indices_np] = np.take_along_axis(
+            np.asarray(local_source_eulers, dtype=np.float64),
+            best_rot_idx[:, None, None],
+            axis=1,
+        ).reshape(-1, 3)
+
     return significant_sample_count, int(reconstruction_row_count)
 
 
@@ -1526,6 +1537,9 @@ def _postprocess_fixed_capacity_whole_score_calls(
             local_rotation_ids=bucket.local_rotation_ids[:unpadded_batch_size],
             local_rotation_mask=bucket.local_rotation_mask[:unpadded_batch_size],
             local_rotations=bucket.local_rotations[:unpadded_batch_size],
+            local_source_eulers=(
+                None if bucket.local_source_eulers is None else bucket.local_source_eulers[:unpadded_batch_size]
+            ),
             local_rotation_posterior_ids=(
                 None
                 if bucket.local_rotation_posterior_ids is None
@@ -1540,9 +1554,7 @@ def _postprocess_fixed_capacity_whole_score_calls(
             max_posterior=max_posterior[:unpadded_batch_size],
             probs_sum_t=stats_probs_sum_t[:unpadded_batch_size],
             n_significant_samples=n_significant_samples[:unpadded_batch_size],
-            reconstruction_sample_mask=reconstruction_sample_mask[
-                :unpadded_batch_size
-            ],
+            reconstruction_sample_mask=reconstruction_sample_mask[:unpadded_batch_size],
             collect_profile_stats=collect_profile_stats,
             reconstruction_row_count=reconstruction_row_count,
             reconstruction_take_indices=reconstruction_take_indices,
@@ -1592,6 +1604,11 @@ def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_param
         local_rotation_ids=pad_axis(bucket.local_rotation_ids, 0, padded_batch_size, value=-1).astype(np.int32),
         local_rotations=padded_rotations,
         local_mstep_rotations=padded_mstep_rotations,
+        local_source_eulers=(
+            None
+            if bucket.local_source_eulers is None
+            else pad_axis(bucket.local_source_eulers, 0, padded_batch_size, value=0)
+        ),
         local_rotation_log_prior=pad_axis(
             bucket.local_rotation_log_prior,
             0,
@@ -2113,6 +2130,7 @@ def _reorder_bucket_to_indices(bucket: LocalBucketSpec, returned_indices: np.nda
         # here would be wrong under double-precision scoring).
         local_rotations=np.asarray(bucket.local_rotations)[order],
         local_mstep_rotations=_local_mstep_rotations(bucket)[order],
+        local_source_eulers=(None if bucket.local_source_eulers is None else bucket.local_source_eulers[order]),
         local_rotation_log_prior=np.asarray(bucket.local_rotation_log_prior)[order],
         local_rotation_mask=np.asarray(bucket.local_rotation_mask[order], dtype=bool),
         translation_log_prior=np.asarray(bucket.translation_log_prior)[order],
@@ -2806,6 +2824,11 @@ def run_local_em_exact(
         if return_best_pose_details
         else None
     )
+    best_pose_eulers_deg = (
+        np.empty((n_images, 3), dtype=np.float64)
+        if return_best_pose_details and local_layout.source_eulers_flat is not None
+        else None
+    )
     best_pose_rotation_ids = np.empty(n_images, dtype=np.int32) if return_best_pose_details else None
 
     noise_wsum = None
@@ -2992,6 +3015,7 @@ def run_local_em_exact(
         best_pose_rotations=best_pose_rotations,
         best_pose_translations=best_pose_translations,
         best_pose_rotation_ids=best_pose_rotation_ids,
+        best_pose_eulers_deg=best_pose_eulers_deg,
         reconstruction_sample_indices_by_image=reconstruction_sample_indices_by_image,
     )
     reconstruction_probability_values_by_image = (
@@ -6209,6 +6233,9 @@ def run_local_em_exact(
                 local_rotation_ids=bucket.local_rotation_ids[:unpadded_batch_size],
                 local_rotation_mask=bucket.local_rotation_mask[:unpadded_batch_size],
                 local_rotations=bucket.local_rotations[:unpadded_batch_size],
+                local_source_eulers=(
+                    None if bucket.local_source_eulers is None else bucket.local_source_eulers[:unpadded_batch_size]
+                ),
                 local_rotation_posterior_ids=(
                     None
                     if bucket.local_rotation_posterior_ids is None
@@ -6222,9 +6249,7 @@ def run_local_em_exact(
                 best_log_score=postprocess_rows(best_log_score),
                 max_posterior=postprocess_rows(max_posterior),
                 probs_sum_t=(
-                    postprocess_rows(stats_probs_sum_t)
-                    if stats_probs_sum_t_np is None
-                    else stats_probs_sum_t_np
+                    postprocess_rows(stats_probs_sum_t) if stats_probs_sum_t_np is None else stats_probs_sum_t_np
                 ),
                 n_significant_samples=postprocess_rows(n_significant_samples),
                 reconstruction_sample_mask=(
@@ -7484,6 +7509,7 @@ def run_local_em_exact(
             local_rotation_ids=bucket.local_rotation_ids,
             local_rotation_mask=bucket.local_rotation_mask,
             local_rotations=bucket.local_rotations,
+            local_source_eulers=bucket.local_source_eulers,
             local_rotation_posterior_ids=bucket.local_rotation_posterior_ids,
             translation_grid=local_layout.translation_grid,
             n_trans=n_trans,
@@ -7862,6 +7888,7 @@ def run_local_em_exact(
         best_pose_rotations=best_pose_rotations if return_best_pose_details else None,
         best_pose_translations=best_pose_translations if return_best_pose_details else None,
         best_pose_rotation_ids=best_pose_rotation_ids if return_best_pose_details else None,
+        best_pose_eulers_deg=best_pose_eulers_deg,
         noise_stats=noise_stats if accumulate_noise else None,
         significant_counts=significant_counts if return_significant_counts else None,
         profile=profile_summary,

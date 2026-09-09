@@ -233,6 +233,8 @@ class LocalEMResult:
     profile: dict | None = None
     significant_counts: np.ndarray | None = None
 
+    best_pose_eulers_deg: np.ndarray | None = None
+
 
 @dataclass(frozen=True)
 class DenseEMResult:

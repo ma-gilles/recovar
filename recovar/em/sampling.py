@@ -1135,6 +1135,7 @@ def get_oversampled_rotation_grid_from_samples(
     random_perturbation=0.0,
     return_rotation_indices=False,
     return_mstep_rotations=False,
+    return_source_eulers=False,
     rotation_index_order: str = "recovar",
     dtype: np.dtype = np.float32,
 ):
@@ -1144,6 +1145,10 @@ def get_oversampled_rotation_grid_from_samples(
     direction. For a single oversampling level in 3D, each coarse sample
     expands into 4 child directions and 2 child in-plane angles, yielding
     ``8`` child orientations per parent sample.
+
+    ``return_source_eulers=True`` appends the unmodified native RFLOAT Euler
+    rows (or ``None`` when native provenance is unavailable). Matrix outputs
+    and legacy tuple layouts are unchanged. These rows are host metadata only.
 
     Parameters
     ----------
@@ -1183,6 +1188,8 @@ def get_oversampled_rotation_grid_from_samples(
         single-precision ACC build). Pass ``np.float64`` to match
         ``ACC_DOUBLE_PRECISION``.
     """
+    # Source Euler metadata is host RFLOAT, independent of device matrix dtype.
+    # It must never be reconstructed from a rounded matrix or nearest-grid ID.
     parent_rotation_indices = np.asarray(parent_rotation_indices, dtype=np.int64)
     if parent_rotation_indices.size == 0:
         empty_rot = np.empty((0, 3, 3), dtype=dtype)
@@ -1192,6 +1199,8 @@ def get_oversampled_rotation_grid_from_samples(
             outputs.append(empty_map.copy())
         if return_mstep_rotations:
             outputs.append(empty_rot.copy())
+        if return_source_eulers:
+            outputs.append(np.empty((0, 3), dtype=np.float64))
         return tuple(outputs)
 
     if rotation_index_order == "relion_hidden":
@@ -1314,6 +1323,8 @@ def get_oversampled_rotation_grid_from_samples(
         outputs.append(child_rotation_indices.astype(np.int64))
     if return_mstep_rotations:
         outputs.append(mstep_rotations)
+    if return_source_eulers:
+        outputs.append(None if native_euler_angles is None else native_euler_angles.copy())
     return tuple(outputs)
 
 

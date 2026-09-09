@@ -72,6 +72,9 @@ class KClassEMResult(NamedTuple):
     mstep_full_half_axis: int | None = None
     mstep_accumulator_shape: tuple[int, int, int] | None = None
 
+    per_class_best_pose_eulers_deg: tuple[np.ndarray, ...] | None = None
+    best_pose_eulers_deg: np.ndarray | None = None
+
 
 class _DenseKClassScoreProbeResult(NamedTuple):
     """Score-only dense K-class probe output used before class-normalized M-steps."""
@@ -1154,6 +1157,9 @@ def _run_sparse_k_class_adaptive_pass2(
         else None
     )
 
+    common["return_source_eulers"] = bool(return_best_pose_details)
+    common["fine_source_eulers_override"] = base_engine_kwargs.get("fine_source_eulers_override")
+
     def _common_for_class(class_index: int) -> dict:
         class_common = dict(common)
         # RELION accumulates the unweighted power_img high-shell term once,
@@ -1272,6 +1278,7 @@ def _run_sparse_k_class_adaptive_pass2(
                 per_class_hard_assignments=fused.per_class_hard_assignments,
                 per_class_stats=fused.per_class_stats,
                 noise_stats=fused.noise_stats,
+                per_class_best_pose_eulers_deg=fused.per_class_best_pose_eulers_deg,
                 per_class_best_pose_rotations=fused.per_class_best_pose_rotations,
                 per_class_best_pose_translations=fused.per_class_best_pose_translations,
                 per_class_best_pose_rotation_ids=fused.per_class_best_pose_rotation_ids,
@@ -1345,6 +1352,7 @@ def _run_sparse_k_class_adaptive_pass2(
     hard_assignments = [None] * n_classes
     per_class_stats = [None] * n_classes
     per_class_noise = [None] * n_classes if accumulate_noise else None
+    per_class_best_pose_eulers_deg = [None] * n_classes if return_best_pose_details else None
     per_class_best_pose_rotations = [None] * n_classes if return_best_pose_details else None
     per_class_best_pose_translations = [None] * n_classes if return_best_pose_details else None
     per_class_best_pose_rotation_ids = [None] * n_classes if return_best_pose_details else None
@@ -1364,6 +1372,7 @@ def _run_sparse_k_class_adaptive_pass2(
         if per_class_noise is not None:
             per_class_noise[class_index] = noise
         if return_best_pose_details:
+            per_class_best_pose_eulers_deg[class_index] = output[-1]
             per_class_best_pose_rotations[class_index] = best_rots
             per_class_best_pose_translations[class_index] = best_trans
             per_class_best_pose_rotation_ids[class_index] = best_rot_ids
@@ -1437,6 +1446,7 @@ def _run_sparse_k_class_adaptive_pass2(
         per_class_hard_assignments=np.stack(hard_assignments, axis=0),
         per_class_stats=tuple(per_class_stats),
         noise_stats=None if per_class_noise is None else tuple(per_class_noise),
+        per_class_best_pose_eulers_deg=per_class_best_pose_eulers_deg,
         per_class_best_pose_rotations=per_class_best_pose_rotations,
         per_class_best_pose_translations=per_class_best_pose_translations,
         per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
@@ -1586,6 +1596,7 @@ def _assemble_result(
     per_class_hard_assignments,
     per_class_stats: tuple[RelionStats, ...],
     noise_stats: tuple[NoiseStats, ...] | None,
+    per_class_best_pose_eulers_deg=None,
     per_class_best_pose_rotations=None,
     per_class_best_pose_translations=None,
     per_class_best_pose_rotation_ids=None,
@@ -1695,6 +1706,15 @@ def _assemble_result(
     best_pose_rotation_ids = _selected_by_class(
         per_class_best_pose_rotation_ids, class_assignments, direct_single_class=direct_single_class
     )
+    best_pose_eulers_deg = None
+    if per_class_best_pose_eulers_deg is not None:
+        selected_classes = np.asarray(class_assignments)
+        active_classes = np.unique(selected_classes)
+        if all(per_class_best_pose_eulers_deg[int(k)] is not None for k in active_classes):
+            best_pose_eulers_deg = np.empty((selected_classes.size, 3), dtype=np.float64)
+            for k in active_classes:
+                rows = selected_classes == k
+                best_pose_eulers_deg[rows] = np.asarray(per_class_best_pose_eulers_deg[int(k)])[rows]
     if new_means is None or all(mean is None for mean in new_means):
         stacked_new_means = None
     elif any(mean is None for mean in new_means):
@@ -1745,6 +1765,10 @@ def _assemble_result(
         per_class_best_pose_rotation_ids=(
             None if per_class_best_pose_rotation_ids is None else tuple(per_class_best_pose_rotation_ids)
         ),
+        per_class_best_pose_eulers_deg=(
+            None if per_class_best_pose_eulers_deg is None else tuple(per_class_best_pose_eulers_deg)
+        ),
+        best_pose_eulers_deg=best_pose_eulers_deg,
         best_pose_rotations=best_pose_rotations,
         best_pose_translations=best_pose_translations,
         best_pose_rotation_ids=best_pose_rotation_ids,
@@ -2839,6 +2863,7 @@ def run_local_k_class_em(
                 per_class_hard_assignments=np.asarray(hard_assignment, dtype=np.int32)[None, :],
                 per_class_stats=(stats,),
                 noise_stats=None if noise is None else (noise,),
+                per_class_best_pose_eulers_deg=[output.best_pose_eulers_deg],
                 per_class_best_pose_rotations=None if best_pose_rotations is None else [best_pose_rotations],
                 per_class_best_pose_translations=None if best_pose_translations is None else [best_pose_translations],
                 per_class_best_pose_rotation_ids=None if best_pose_rotation_ids is None else [best_pose_rotation_ids],
@@ -2913,6 +2938,7 @@ def run_local_k_class_em(
     hard_assignments = []
     per_class_stats = []
     per_class_noise = [] if accumulate_noise else None
+    per_class_best_pose_eulers_deg = [] if return_best_pose_details else None
     per_class_best_pose_rotations = [] if return_best_pose_details else None
     per_class_best_pose_translations = [] if return_best_pose_details else None
     per_class_best_pose_rotation_ids = [] if return_best_pose_details else None
@@ -2962,6 +2988,7 @@ def run_local_k_class_em(
         if per_class_noise is not None:
             per_class_noise.append(noise)
         if return_best_pose_details:
+            per_class_best_pose_eulers_deg.append(output.best_pose_eulers_deg)
             per_class_best_pose_rotations.append(best_pose_rotations)
             per_class_best_pose_translations.append(best_pose_translations)
             per_class_best_pose_rotation_ids.append(best_pose_rotation_ids)
@@ -2989,6 +3016,7 @@ def run_local_k_class_em(
         per_class_hard_assignments=np.stack(hard_assignments, axis=0),
         per_class_stats=tuple(per_class_stats),
         noise_stats=None if per_class_noise is None else tuple(per_class_noise),
+        per_class_best_pose_eulers_deg=per_class_best_pose_eulers_deg,
         per_class_best_pose_rotations=per_class_best_pose_rotations,
         per_class_best_pose_translations=per_class_best_pose_translations,
         per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
@@ -3903,6 +3931,8 @@ def run_dense_k_class_em_adaptive(
                 best_pose_rotations=best_rots,
                 best_pose_translations=best_trans,
                 best_pose_rotation_ids=best_rot_ids,
+                best_pose_eulers_deg=None,
+                per_class_best_pose_eulers_deg=None,
             )
         result = result._replace(**replace_kwargs)
         logger.info(
@@ -3978,6 +4008,8 @@ def run_dense_k_class_em_adaptive(
                 best_pose_rotations=best_rots,
                 best_pose_translations=best_trans,
                 best_pose_rotation_ids=best_rot_ids,
+                best_pose_eulers_deg=None,
+                per_class_best_pose_eulers_deg=None,
             )
         result = result._replace(**replace_kwargs)
     logger.info(

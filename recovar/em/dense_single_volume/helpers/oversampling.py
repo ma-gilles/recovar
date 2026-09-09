@@ -851,6 +851,8 @@ def compute_pass2_stats_sparse(
     return_score_log_z_only=False,
     disable_adjoint_y=False,
     disable_adjoint_ctf=False,
+    fine_source_eulers_override=None,
+    return_source_eulers=False,
     fine_rotations_override=None,
     fine_mstep_rotations_override=None,
     fine_rotation_parent_override=None,
@@ -1007,6 +1009,8 @@ def compute_pass2_stats_sparse(
             return_score_log_z_only=return_score_log_z_only,
             disable_adjoint_y=disable_adjoint_y,
             disable_adjoint_ctf=disable_adjoint_ctf,
+            fine_source_eulers_override=fine_source_eulers_override,
+            return_source_eulers=return_source_eulers,
             fine_rotations_override=fine_rotations_override,
             fine_mstep_rotations_override=fine_mstep_rotations_override,
             fine_rotation_parent_override=fine_rotation_parent_override,
@@ -1039,7 +1043,7 @@ def compute_pass2_stats_sparse(
             "separate score/reconstruction current sizes require the bucketed sparse pass-2 path",
         )
 
-    return _compute_pass2_stats_sparse_perimage_reference(
+    legacy_result = _compute_pass2_stats_sparse_perimage_reference(
         experiment_dataset,
         volume,
         mean_variance,
@@ -1076,6 +1080,8 @@ def compute_pass2_stats_sparse(
         relion_firstiter_score_mode=relion_firstiter_score_mode,
         relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
     )
+
+    return legacy_result + (None,) if return_source_eulers else legacy_result
 
 
 def _compute_pass2_stats_sparse_perimage_reference(

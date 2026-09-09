@@ -709,7 +709,7 @@ def test_sampling_accuracy_uses_seeded_star_eulers_before_particles_are_visited(
     np.testing.assert_array_equal(captured["particle_ids"], np.asarray([2, 0], dtype=np.int64))
     np.testing.assert_array_equal(
         captured["eulers"],
-        driver.R_to_relion(particle_state.best_pose_rotations[[2, 0]], degrees=True),
+        main[["_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi"]].to_numpy(dtype=np.float64)[[2, 0]],
     )
     np.testing.assert_array_equal(particle_state.visited, np.zeros(3, dtype=bool))
 

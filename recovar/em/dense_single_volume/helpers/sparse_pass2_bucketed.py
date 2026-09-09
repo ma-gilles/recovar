@@ -394,6 +394,8 @@ class SparseKClassPass2FusedResult(NamedTuple):
     profile_summary: dict
     class_posterior_sums: np.ndarray | None = None
 
+    per_class_best_pose_eulers_deg: tuple[np.ndarray, ...] | None = None
+
 
 class SparseKClassCompactPairPlanStats(NamedTuple):
     """Host-side accounting for the compact K-class pass-2 planner."""
@@ -597,6 +599,7 @@ def _prepare_per_image_pass2_inputs(
     fine_translation_parent,
     rotation_log_prior,
     random_perturbation,
+    fine_source_eulers_override=None,
     fine_rotations_override=None,
     fine_mstep_rotations_override=None,
     fine_rotation_parent_override=None,
@@ -622,6 +625,7 @@ def _prepare_per_image_pass2_inputs(
     from recovar.em.sampling import get_oversampled_rotation_grid_from_samples
 
     n_images = len(significant_sample_indices)
+    per_image_source_eulers = []
     per_image_oversampled_rots = []
     per_image_oversampled_mstep_rots = []
     per_image_parent_map = []
@@ -670,9 +674,22 @@ def _prepare_per_image_pass2_inputs(
                 f"{fine_mstep_rotations_np.shape} vs {fine_rotations_np.shape}",
             )
 
-    def _reorder_children(rotations, parent_map, rotation_indices, parent_ids):
+    fine_source_eulers = None
+    if fine_source_eulers_override is not None:
+        fine_source_eulers = np.asarray(fine_source_eulers_override)
+        if (
+            fine_rotations_np is None
+            or fine_source_eulers.dtype != np.float64
+            or fine_source_eulers.shape != (len(fine_rotations_np), 3)
+            or not np.all(np.isfinite(fine_source_eulers))
+        ):
+            raise ValueError(
+                "fine source Euler metadata must match the supplied rotation rows as finite float64 triples"
+            )
+
+    def _reorder_children(rotations, parent_map, rotation_indices, source_eulers, parent_ids):
         if not relion_parent_execution_order:
-            return rotations, parent_map, rotation_indices
+            return rotations, parent_map, rotation_indices, source_eulers
         parent_ids = np.asarray(parent_ids, dtype=np.int64).reshape(-1)
         n_pixels = 12 * (2 ** int(nside_level)) ** 2
         n_psi = 6 * 2 ** int(nside_level)
@@ -689,6 +706,7 @@ def _prepare_per_image_pass2_inputs(
             np.asarray(rotations)[order],
             np.asarray(parent_map)[order],
             np.asarray(rotation_indices)[order],
+            None if source_eulers is None else source_eulers[order],
         )
 
     for image_idx, sig_samples in enumerate(significant_sample_indices):
@@ -732,24 +750,29 @@ def _prepare_per_image_pass2_inputs(
         if use_full_rotation_support:
             if full_support_rotation_cache is None:
                 if fine_rotations_override is None and fine_rotation_parent_override is None:
-                    full_rots, full_parent_map, full_rot_indices = get_oversampled_rotation_grid_from_samples(
-                        full_unique_rot,
-                        nside_level,
-                        oversampling_order=oversampling_order,
-                        random_perturbation=random_perturbation,
-                        return_rotation_indices=True,
-                        dtype=dtype,
+                    full_rots, full_parent_map, full_rot_indices, full_eulers = (
+                        get_oversampled_rotation_grid_from_samples(
+                            full_unique_rot,
+                            nside_level,
+                            oversampling_order=oversampling_order,
+                            random_perturbation=random_perturbation,
+                            return_rotation_indices=True,
+                            return_source_eulers=True,
+                            dtype=dtype,
+                        )
                     )
                     full_support_rotation_cache = (
                         np.asarray(full_rots, dtype=dtype),
                         np.asarray(full_parent_map, dtype=np.int32),
                         np.asarray(full_rot_indices, dtype=np.int64),
+                        full_eulers,
                     )
                 elif fine_rotations_np is not None and fine_parent_np is not None:
                     full_support_rotation_cache = (
                         fine_rotations_np,
                         fine_parent_np.astype(np.int32, copy=False),
                         np.arange(fine_rotations_np.shape[0], dtype=np.int64),
+                        fine_source_eulers,
                     )
                 else:
                     raise ValueError("fine_rotations_override and fine_rotation_parent_override must be provided together")
@@ -757,23 +780,27 @@ def _prepare_per_image_pass2_inputs(
                     *full_support_rotation_cache,
                     parent_ids=full_unique_rot[full_support_rotation_cache[1]],
                 )
-            oversampled_rots, parent_map, oversampled_rot_indices = full_support_rotation_cache
+            oversampled_rots, parent_map, oversampled_rot_indices, source_eulers = full_support_rotation_cache
         elif fine_rotations_override is None and fine_rotation_parent_override is None:
-            oversampled_rots, parent_map, oversampled_rot_indices = get_oversampled_rotation_grid_from_samples(
-                unique_rot,
-                nside_level,
-                oversampling_order=oversampling_order,
-                random_perturbation=random_perturbation,
-                return_rotation_indices=True,
-                dtype=dtype,
+            oversampled_rots, parent_map, oversampled_rot_indices, source_eulers = (
+                get_oversampled_rotation_grid_from_samples(
+                    unique_rot,
+                    nside_level,
+                    oversampling_order=oversampling_order,
+                    random_perturbation=random_perturbation,
+                    return_rotation_indices=True,
+                    return_source_eulers=True,
+                    dtype=dtype,
+                )
             )
             oversampled_rots = np.asarray(oversampled_rots, dtype=dtype)
             parent_map = np.asarray(parent_map, dtype=np.int32)
             oversampled_rot_indices = np.asarray(oversampled_rot_indices, dtype=np.int64)
-            oversampled_rots, parent_map, oversampled_rot_indices = _reorder_children(
+            oversampled_rots, parent_map, oversampled_rot_indices, source_eulers = _reorder_children(
                 oversampled_rots,
                 parent_map,
                 oversampled_rot_indices,
+                source_eulers,
                 unique_rot[parent_map],
             )
         elif fine_rotations_np is not None and fine_parent_np is not None:
@@ -783,10 +810,11 @@ def _prepare_per_image_pass2_inputs(
             oversampled_rot_indices = np.flatnonzero(child_mask).astype(np.int64)
             oversampled_rots = fine_rotations_np[oversampled_rot_indices]
             parent_map = np.searchsorted(unique_rot, fine_parent_np[oversampled_rot_indices]).astype(np.int32)
-            oversampled_rots, parent_map, oversampled_rot_indices = _reorder_children(
+            oversampled_rots, parent_map, oversampled_rot_indices, source_eulers = _reorder_children(
                 oversampled_rots,
                 parent_map,
                 oversampled_rot_indices,
+                None if fine_source_eulers is None else fine_source_eulers[oversampled_rot_indices],
                 fine_parent_np[oversampled_rot_indices],
             )
         else:
@@ -871,6 +899,7 @@ def _prepare_per_image_pass2_inputs(
                 count=int(translated_valid[parent_map].sum()),
             )
 
+        per_image_source_eulers.append(source_eulers)
         per_image_oversampled_rots.append(oversampled_rots)
         per_image_oversampled_mstep_rots.append(oversampled_mstep_rots)
         per_image_parent_map.append(parent_map)
@@ -881,6 +910,7 @@ def _prepare_per_image_pass2_inputs(
 
     assert len(per_image_oversampled_rots) == n_images
     return {
+        "source_eulers": per_image_source_eulers,
         "oversampled_rots": per_image_oversampled_rots,
         "oversampled_mstep_rots": per_image_oversampled_mstep_rots,
         "parent_map": per_image_parent_map,
@@ -9176,6 +9206,8 @@ def compute_pass2_stats_sparse_bucketed(
     disable_adjoint_y=False,
     disable_adjoint_ctf=False,
     rotation_block_size_for_quantization=5000,
+    fine_source_eulers_override=None,
+    return_source_eulers=False,
     fine_rotations_override=None,
     fine_mstep_rotations_override=None,
     fine_rotation_parent_override=None,
@@ -9529,6 +9561,7 @@ def compute_pass2_stats_sparse_bucketed(
         fine_translation_parent=fine_translation_parent,
         rotation_log_prior=rotation_log_prior,
         random_perturbation=random_perturbation,
+        fine_source_eulers_override=fine_source_eulers_override,
         fine_rotations_override=fine_rotations_override,
         fine_mstep_rotations_override=fine_mstep_rotations_override,
         fine_rotation_parent_override=fine_rotation_parent_override,
@@ -9744,6 +9777,12 @@ def compute_pass2_stats_sparse_bucketed(
         )
     if use_relion_fine_mstep_prune and not use_relion_x_half_mstep:
         logger.info("Sparse pass-2 M-step: applying RELION fine-pass significant-weight pruning")
+
+    best_eulers = (
+        np.empty((n_images, 3), dtype=np.float64)
+        if return_source_eulers and all(x is not None for x in per_image_inputs["source_eulers"])
+        else None
+    )
 
     # Output accumulators (volume_size matches what original returned: full N**3)
     if return_score_log_z_only:
@@ -11997,6 +12036,8 @@ def compute_pass2_stats_sparse_bucketed(
                 t = int(best_trans_idx[row])
                 hard_assignment[image_idx] = r * n_fine_trans + t
                 best_rotations[image_idx] = per_image_inputs["oversampled_rots"][image_idx][r]
+                if best_eulers is not None:
+                    best_eulers[image_idx] = per_image_inputs["source_eulers"][image_idx][r]
                 best_rotation_indices[image_idx] = per_image_inputs["oversampled_rot_indices"][image_idx][r]
 
             if return_stats:
@@ -13098,6 +13139,8 @@ def compute_pass2_stats_sparse_bucketed(
             t = int(best_trans_idx[row])
             hard_assignment[image_idx] = r * n_fine_trans + t
             best_rotations[image_idx] = per_image_inputs["oversampled_rots"][image_idx][r]
+            if best_eulers is not None:
+                best_eulers[image_idx] = per_image_inputs["source_eulers"][image_idx][r]
             best_rotation_indices[image_idx] = per_image_inputs["oversampled_rot_indices"][image_idx][r]
 
         if return_stats:
@@ -13283,7 +13326,7 @@ def compute_pass2_stats_sparse_bucketed(
             result = result + (score_log_z,)
         if accumulate_noise:
             result = result + (merged_noise_stats,)
-        return result
+        return result + (best_eulers,) if return_source_eulers else result
 
     result = (
         Ft_y_total,
@@ -13295,7 +13338,7 @@ def compute_pass2_stats_sparse_bucketed(
     )
     if accumulate_noise:
         result = result + (merged_noise_stats,)
-    return result
+    return result + (best_eulers,) if return_source_eulers else result
 
 
 def _shared_k_class_noise_variance(noise_variance, n_classes: int):
@@ -13343,6 +13386,8 @@ def compute_k_class_pass2_stats_sparse_fused(
     square_window=False,
     random_perturbation=0.0,
     rotation_block_size_for_quantization=5000,
+    fine_source_eulers_override=None,
+    return_source_eulers=False,
     fine_rotations_override=None,
     fine_mstep_rotations_override=None,
     fine_rotation_parent_override=None,
@@ -13670,6 +13715,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             fine_translation_parent=fine_translation_parent,
             rotation_log_prior=rotation_log_priors_by_class[class_index],
             random_perturbation=random_perturbation,
+            fine_source_eulers_override=fine_source_eulers_override,
             fine_rotations_override=fine_rotations_override,
             fine_mstep_rotations_override=fine_mstep_rotations_override,
             fine_rotation_parent_override=fine_rotation_parent_override,
@@ -14178,6 +14224,12 @@ def compute_k_class_pass2_stats_sparse_fused(
     best_rotations = [
         np.empty((n_images, 3, 3), dtype=precision_policy.score_real_dtype) for _ in range(n_classes)
     ]
+    best_eulers = (
+        [np.empty((n_images, 3), dtype=np.float64) for _ in range(n_classes)]
+        if return_source_eulers
+        and all(x is not None for inputs in per_image_inputs_by_class for x in inputs["source_eulers"])
+        else None
+    )
     best_rotation_indices = [np.empty(n_images, dtype=np.int64) for _ in range(n_classes)]
     class_log_evidence = np.empty((n_classes, n_images), dtype=np.float64)
     class_score_log_z = np.empty((n_classes, n_images), dtype=np.float64)
@@ -16891,6 +16943,10 @@ def compute_k_class_pass2_stats_sparse_fused(
                 best_rotations[class_index][image_idx] = per_image_inputs_by_class[class_index]["oversampled_rots"][
                     image_idx
                 ][r]
+                if best_eulers is not None:
+                    best_eulers[class_index][image_idx] = per_image_inputs_by_class[class_index]["source_eulers"][
+                        image_idx
+                    ][r]
                 best_rotation_indices[class_index][image_idx] = fine_rot_idx
                 if np.isfinite(class_log_z_np[row]):
                     class_log_evidence[class_index, image_idx] = float(class_log_z_np[row] + log_score_offset[row])
@@ -17375,6 +17431,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         per_class_hard_assignments=class_hard_assignments,
         per_class_stats=per_class_stats,
         noise_stats=noise_stats,
+        per_class_best_pose_eulers_deg=None if best_eulers is None else tuple(best_eulers),
         per_class_best_pose_rotations=tuple(best_rotations),
         per_class_best_pose_translations=best_translations,
         per_class_best_pose_rotation_ids=tuple(best_rotation_indices),
