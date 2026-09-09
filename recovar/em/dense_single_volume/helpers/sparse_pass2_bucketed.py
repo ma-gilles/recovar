@@ -38,6 +38,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_correction_groups
+
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.dense_single_volume.helpers import relion_ctf
@@ -9777,27 +9779,10 @@ def compute_pass2_stats_sparse_bucketed(
     noise_scale_correction_aa_total = None
     noise_sumw_total = 0.0
     noise_sigma2_offset_total = 0.0
-    group_ids_np = None
-    explicit_scale_group_count = 0
-    if scale_correction_group_count is not None:
-        explicit_scale_group_count = int(scale_correction_group_count)
-        if (
-            explicit_scale_group_count < 0
-            or not np.isfinite(float(scale_correction_group_count))
-            or float(scale_correction_group_count) != float(explicit_scale_group_count)
-        ):
-            raise ValueError(
-                "scale_correction_group_count must be a non-negative integer, "
-                f"got {scale_correction_group_count!r}"
-            )
+    group_ids_np, n_scale_groups = prepare_scale_correction_groups(
+        group_ids, scale_correction_group_count, n_images=n_images,
+    )
     if group_ids is not None:
-        group_ids_np = np.asarray(group_ids, dtype=np.int64).reshape(-1)
-        if group_ids_np.shape != (n_images,):
-            raise ValueError(f"group_ids must have shape ({n_images},), got {group_ids_np.shape}")
-        if group_ids_np.size and int(np.min(group_ids_np)) < 0:
-            raise ValueError("group_ids must be non-negative")
-        inferred_scale_group_count = int(np.max(group_ids_np)) + 1 if group_ids_np.size else 1
-        n_scale_groups = max(explicit_scale_group_count, inferred_scale_group_count)
         noise_scale_correction_xa_total = np.zeros(n_scale_groups, dtype=np.float64)
         noise_scale_correction_aa_total = np.zeros(n_scale_groups, dtype=np.float64)
     if accumulate_noise:
@@ -14217,29 +14202,12 @@ def compute_k_class_pass2_stats_sparse_fused(
     compact_pair_noise_image_sum_precomputes = 0
     compact_pair_noise_fused_active_gathers = 0
 
-    group_ids_np = None
     noise_scale_correction_xa_total = None
     noise_scale_correction_aa_total = None
-    explicit_scale_group_count = 0
-    if scale_correction_group_count is not None:
-        explicit_scale_group_count = int(scale_correction_group_count)
-        if (
-            explicit_scale_group_count < 0
-            or not np.isfinite(float(scale_correction_group_count))
-            or float(scale_correction_group_count) != float(explicit_scale_group_count)
-        ):
-            raise ValueError(
-                "scale_correction_group_count must be a non-negative integer, "
-                f"got {scale_correction_group_count!r}"
-            )
+    group_ids_np, n_scale_groups = prepare_scale_correction_groups(
+        group_ids, scale_correction_group_count, n_images=n_images,
+    )
     if group_ids is not None:
-        group_ids_np = np.asarray(group_ids, dtype=np.int64).reshape(-1)
-        if group_ids_np.shape != (n_images,):
-            raise ValueError(f"group_ids must have shape ({n_images},), got {group_ids_np.shape}")
-        if group_ids_np.size and int(np.min(group_ids_np)) < 0:
-            raise ValueError("group_ids must be non-negative")
-        inferred_scale_group_count = int(np.max(group_ids_np)) + 1 if group_ids_np.size else 1
-        n_scale_groups = max(explicit_scale_group_count, inferred_scale_group_count)
         noise_scale_correction_xa_total = np.zeros((n_classes, n_scale_groups), dtype=np.float64)
         noise_scale_correction_aa_total = np.zeros((n_classes, n_scale_groups), dtype=np.float64)
 

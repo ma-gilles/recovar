@@ -13,6 +13,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_correction_groups
 from recovar.utils.nvtx_shim import nvtx
 
 from .em_engine import run_em
@@ -1991,28 +1992,10 @@ def _subset_image_axis_engine_kwargs(kwargs: dict, image_indices: np.ndarray, n_
 
 
 def _full_group_count_from_kwargs(kwargs: dict) -> int | None:
-    explicit_count = kwargs.get("scale_correction_group_count")
-    if explicit_count is not None:
-        normalized_explicit_count = int(explicit_count)
-        if (
-            normalized_explicit_count < 0
-            or not np.isfinite(float(explicit_count))
-            or float(explicit_count) != float(normalized_explicit_count)
-        ):
-            raise ValueError(
-                "scale_correction_group_count must be a non-negative integer, "
-                f"got {explicit_count!r}"
-            )
-    else:
-        normalized_explicit_count = 0
-    group_ids = kwargs.get("group_ids")
-    if group_ids is None:
-        return normalized_explicit_count or None
-    group_ids_np = np.asarray(group_ids, dtype=np.int64).reshape(-1)
-    if group_ids_np.size and int(np.min(group_ids_np)) < 0:
-        raise ValueError("group_ids must be non-negative")
-    inferred_count = int(np.max(group_ids_np)) + 1 if group_ids_np.size else 1
-    return max(normalized_explicit_count, inferred_count)
+    _, group_count = prepare_scale_correction_groups(
+        kwargs.get("group_ids"), kwargs.get("scale_correction_group_count"),
+    )
+    return group_count or None
 
 
 def _expand_subset_noise_stats(

@@ -15,6 +15,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_correction_groups
+
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.dense_single_volume import fixed_capacity_local
@@ -3472,28 +3474,11 @@ def run_local_em_exact(
     n_trans = int(local_layout.translation_grid.shape[0])
     n_images = int(local_layout.n_images)
     class_log_prior = float(class_log_prior)
-    group_ids_np = None
-    n_scale_groups = 0
-    explicit_scale_group_count = 0
-    if scale_correction_group_count is not None:
-        explicit_scale_group_count = int(scale_correction_group_count)
-        if (
-            explicit_scale_group_count < 0
-            or not np.isfinite(float(scale_correction_group_count))
-            or float(scale_correction_group_count) != float(explicit_scale_group_count)
-        ):
-            raise ValueError(
-                "scale_correction_group_count must be a non-negative integer, "
-                f"got {scale_correction_group_count!r}"
-            )
-    if group_ids is not None:
-        group_ids_np = np.asarray(group_ids, dtype=np.int64).reshape(-1)
-        if group_ids_np.shape != (n_images,):
-            raise ValueError(f"group_ids must have shape ({n_images},), got {group_ids_np.shape}")
-        if group_ids_np.size and int(np.min(group_ids_np)) < 0:
-            raise ValueError("group_ids must be non-negative")
-        inferred_scale_group_count = int(np.max(group_ids_np)) + 1 if group_ids_np.size else 1
-        n_scale_groups = max(explicit_scale_group_count, inferred_scale_group_count)
+    group_ids_np, n_scale_groups = prepare_scale_correction_groups(
+        group_ids, scale_correction_group_count, n_images=n_images,
+    )
+    if group_ids_np is None:
+        n_scale_groups = 0
     normalization_log_z_np = None
     if normalization_log_z is not None:
         normalization_log_z_np = np.asarray(normalization_log_z, dtype=np.float64)
