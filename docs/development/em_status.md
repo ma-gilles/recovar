@@ -126,6 +126,30 @@ follows. The [durable audit archive](evidence/vdam-coarse-repeat-20260909/README
 metrics, hashes, the exact CPU audit script and its reproduction command. Original
 outputs are under `vdam_coarse_atomic_repeat_20260909` in scratch.
 
+Paired-history H100 job **13641091** completed two fresh old-policy prefixes on
+frozen fe847, through M31 and ordinary E32 plus three prepared repeats, stopping
+before M32. Both choose rotation111738 for particle1367; signed competing margins
+(best163798 minus best111738) are −0.0009765625 and −0.000244140625. Full target
+candidate geometry/order agrees (3,360 cells, 256 finite). Target debug payloads
+are exact within each history, and all 200 published decisions/Pmax agree across
+ordinary/clean/debug calls. Whole E outputs still vary in 17 accumulator/noise
+leaves. Incoming model, momentum, noise and priors differ before target preparation;
+the cross-history score gap0.00115966796875 is not a same-input arithmetic bound.
+Neither fresh history reproduces the original F200 pose flip, whose saved inputs
+are unavailable. Reconstructed raw scores are not an independent arithmetic trace.
+
+The bounded producer RNG audit found no scientific consumer of the differing
+Python/legacy NumPy globals under these options; target preparation/E32 preserves
+them within each history. Native RNG state and independent generators are outside
+those snapshots. No global-seeding patch or automatic tie classification follows.
+em_clean verified 11 report/manifest hashes, two terminal child receipts and
+summary margin arithmetic; it did not independently recompute snapshot arrays or
+repeat the full RNG reachability audit. See board handoff
+`vdam_paired_history_terminal_20260909.json` and review/reproduction script under
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/paired_history_review_20260909/`.
+VDAM's next step is an artifact-only CPU comparison of saved checkpoints0–31 to
+locate the first scientific-state divergence; quality and speed remain open.
+
 The reviewed runs use **float32 scoring with an existing double-precision
 M-step**. Effective precision is stage-specific:
 
@@ -145,8 +169,8 @@ the intended production-float32 goal remains. See board handoff
 Warm prepared E is 268.953 → 284.035 ms,
 **1.056075× (+5.61%)** in this small preloaded-data panel; no full-runtime
 acceptance. Only rectangle power executes; full local score surfaces are absent.
-VDAM continues artifact-only investigation of the first pose divergence at
-iteration 32 and its competing scores/upstream state, keeping both Wavg helpers fixed. Preserve fe847 and its original evidence; no shared
+VDAM continues the saved-checkpoint history audit described above, keeping both
+Wavg helpers fixed. Preserve fe847 and its original evidence; no shared
 precision adoption, new arithmetic change or duplicate GPU job. See
 `handoffs/em_clean_prepared_em_composition_review_20260909.json` and the producer
 `vdam_wavg_composition_v2_20260909/{RESULTS.md,result_summary.json}` under the
