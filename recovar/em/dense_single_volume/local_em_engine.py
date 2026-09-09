@@ -14,6 +14,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers import compact_candidates
 from recovar.em.dense_single_volume.helpers.normalization_inputs import prepare_local_normalization_inputs
 from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_correction_groups
 
@@ -1809,7 +1810,7 @@ def _build_local_fused_pair_fine_arguments(
     rotation_mask = np.asarray(bucket.local_rotation_mask, dtype=bool)
     candidate_mask = _local_fine_candidate_mask(bucket, valid_image_mask)
 
-    pair_arrays = sparse_pass2_bucketed.build_compact_pair_index_arrays(
+    pair_arrays = compact_candidates.build_compact_pair_index_arrays(
         candidate_mask,
     )
     pair_mask = np.asarray(pair_arrays["pair_mask"], dtype=bool)
@@ -1831,7 +1832,7 @@ def _build_local_fused_pair_fine_arguments(
         np.int32,
         copy=False,
     )
-    flat_jobs = sparse_pass2_bucketed.build_compact_fine_job_plan_from_pair_arrays(
+    flat_jobs = compact_candidates.build_compact_fine_job_plan_from_pair_arrays(
         pair_arrays,
         dense_to_flat,
         job_bucket_size=fine_job_bucket_size,

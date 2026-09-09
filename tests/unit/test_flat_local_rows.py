@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume import local_em_engine
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+from recovar.em.dense_single_volume.helpers import compact_candidates
 from recovar.em.dense_single_volume.helpers.flat_local_rows import (
     build_dense_to_flat_local_row_lookup,
     build_pool_flat_local_row_plan,
@@ -197,7 +197,7 @@ def test_local_fused_pairs_reuse_compact_source_order_and_map_flat_projection_ro
         encoded,
         np.asarray([True, True, False]),
     )
-    shared = sparse_pass2_bucketed.build_compact_pair_index_arrays(
+    shared = compact_candidates.build_compact_pair_index_arrays(
         sample_mask & rotation_mask[:, :, None],
     )
 

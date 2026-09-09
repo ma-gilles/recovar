@@ -37,6 +37,10 @@ from helpers.fine_grid_significance_reference import _build_fine_grid_significan
 import recovar.core as core
 import recovar.core.fourier_transform_utils as ftu
 from recovar.core.configs import ForwardModelConfig
+from recovar.em.dense_single_volume.helpers.compact_candidates import (
+    SparseCandidateMask,
+    _candidate_mask_count,
+)
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 from recovar.em.dense_single_volume.helpers.oversampling import (
     compute_pass2_stats_sparse,
@@ -53,7 +57,6 @@ from recovar.em.dense_single_volume.helpers.significance import (
     significant_sample_ids,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-    SparseCandidateMask,
     _accumulate_adjoint_block_chunked,
     _active_flat_row_indices_from_probs_sum_t,
     _active_image_indices_for_rotation_rows,
@@ -68,7 +71,6 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _build_compact_pair_bucket_arrays,
     _build_compact_pair_bucket_arrays_from_per_image_inputs,
     _build_k_class_bucket_arrays,
-    _candidate_mask_count,
     _coalesce_tail_bucket_sizes,
     _compact_k_class_pair_plan_stats,
     _compact_k_class_pair_plan_stats_from_counts,

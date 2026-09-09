@@ -74,6 +74,13 @@ index as a scientific comparison. No duplicate job is assigned.
 Raw-prefetch source is unassigned. The RELION header lock is released; shared
 benchmark binaries/private captures remain frozen.
 
+VDAM's frozen private integrated-prefix20 pair13652879 is now observed
+COMPLETED0:0. It uses source4f9a19492, the original200-iteration schedule and
+private read-only library copies. Its21-checkpoint map/state analysis remains
+VDAM-owned; later adaptive-grid/prior/candidate-owner changes are outside that
+run's source scope. No new quality or timing claim follows from process exit.
+Artifacts: `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_integrated_prefix20_4f9a19492_20260909/`.
+
 Local GPU 0 remains reserved. Check GPUs 1–3 immediately before use and restrict
 by idle-device UUID; within Slurm preserve scheduler visibility. Avoid duplicate
 jobs and preserve source snapshots while their jobs run.
@@ -145,6 +152,20 @@ Different physical H100, same class/driver: timing descriptive only. K4 audit
 iteration10,class2. No current100k speed or broad quality acceptance is claimed.
 
 ## Engineering work and recent evidence
+
+Host candidate masks, compact pair indices and flat fine-job plans now live in
+`helpers.compact_candidates`, independently of sparse numerical execution.
+The class and eight function bodies are preserved; local-engine, test and
+benchmark callers import the owner directly. The redundant private nonzero
+forwarder is removed. The legacy class import identity remains for stored data:
+eight protocol4/5 old/new pickle payloads are byte-exact and old payloads load.
+Current/archived37-case CPU panels pass (one GPU case deselected); final combined
+source passes37 candidate cases,14 prior-expansion cases and38 CPU guard cases.
+The guard now checks this owner without execution imports; benchmark CLI help
+passes. Existing style findings retained; new owner/tests are Ruff-clean. Sparse
+scorer−321 lines, new owner328; net production+8. This and the prior expansion
+form one batch; neither qualifies GPU trajectories or current100k/exactK4.
+[Receipt and commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/compact_candidate_owner_20260909/result.json).
 
 Sparse K1 and fused K-class prior expansion now share
 `helpers.translation_prior.expand_fine_translation_prior`. Caller-owned casts,

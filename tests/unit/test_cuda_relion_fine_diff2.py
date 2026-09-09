@@ -11,7 +11,7 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.helpers import relion_ctf
+from recovar.em.dense_single_volume.helpers import compact_candidates, relion_ctf
 
 pytestmark = pytest.mark.unit
 
@@ -2769,14 +2769,13 @@ def test_relion_fused_translate_pairs_preserve_source_order_posterior_and_ties(
     admitted[0, 2] = False
     pair_translation_ids[1, 5] = -1
     admitted[1, 5] = False
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
 
     candidate_mask = admitted.reshape(
         batch_size,
         rotation_count,
         translation_count,
     )
-    compact_pairs = sparse_pass2_bucketed.build_compact_pair_index_arrays(
+    compact_pairs = compact_candidates.build_compact_pair_index_arrays(
         candidate_mask
     )
     reference_lookup = np.arange(
@@ -2784,7 +2783,7 @@ def test_relion_fused_translate_pairs_preserve_source_order_posterior_and_ties(
         dtype=np.int32,
     ).reshape(batch_size, rotation_count)
     compact_jobs = (
-        sparse_pass2_bucketed.build_compact_fine_job_plan_from_pair_arrays(
+        compact_candidates.build_compact_fine_job_plan_from_pair_arrays(
             compact_pairs,
             reference_lookup,
         )
