@@ -31,6 +31,7 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.env_flags import (
+    parse_env_binary_flag,
     parse_env_nonnegative_int,
 )
 from recovar.em.dense_single_volume.helpers.flat_local_rows import (
@@ -2066,34 +2067,6 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
 
 
-def _local_projector_capacity_requested() -> bool:
-    token = os.environ.get(EXACT_LOCAL_PROJECTOR_CAPACITY_ENV, "0").strip()
-    if token not in {"0", "1"}:
-        raise ValueError(f"{EXACT_LOCAL_PROJECTOR_CAPACITY_ENV} must be 0 or 1")
-    return token == "1"
-
-
-def _local_noise_stable_core_requested() -> bool:
-    token = os.environ.get(EXACT_LOCAL_NOISE_STABLE_CORE_ENV, "0").strip()
-    if token not in {"0", "1"}:
-        raise ValueError(f"{EXACT_LOCAL_NOISE_STABLE_CORE_ENV} must be 0 or 1")
-    return token == "1"
-
-
-def _local_noise_native_residual_requested() -> bool:
-    token = os.environ.get(EXACT_LOCAL_NOISE_NATIVE_RESIDUAL_ENV, "0").strip()
-    if token not in {"0", "1"}:
-        raise ValueError(f"{EXACT_LOCAL_NOISE_NATIVE_RESIDUAL_ENV} must be 0 or 1")
-    return token == "1"
-
-
-def _local_noise_norm_capacity_requested() -> bool:
-    token = os.environ.get(EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV, "0").strip()
-    if token not in {"0", "1"}:
-        raise ValueError(f"{EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV} must be 0 or 1")
-    return token == "1"
-
-
 def _noise_norm_capacity(n_images: int, *, enabled: bool) -> int:
     """Keep the global norm carry from specializing each packed noise bucket.
 
@@ -2101,77 +2074,6 @@ def _noise_norm_capacity(n_images: int, *, enabled: bool) -> int:
     Logical indices remain unchanged; publication crops the unused zero tail.
     """
     return ((n_images + 1023) // 1024) * 1024 if enabled else n_images
-
-
-def _local_noise_pixel_capacity_requested() -> bool:
-    token = os.environ.get(EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV, "0").strip()
-    if token not in {"0", "1"}:
-        raise ValueError(f"{EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV} must be 0 or 1")
-    return token == "1"
-
-
-def _local_noise_pixel_cuda_requested() -> bool:
-    name = "RECOVAR_EXACT_LOCAL_NOISE_PIXEL_CUDA"
-    token = os.environ.get(name, "0").strip()
-    if token not in {"0", "1"}:
-        raise ValueError(f"{name} must be 0 or 1")
-    return token == "1"
-
-
-def _local_host_plan_pack_requested() -> bool:
-    token = os.environ.get(EXACT_LOCAL_HOST_PLAN_PACK_ENV, "0").strip()
-    if token not in {"0", "1"}:
-        raise ValueError(f"{EXACT_LOCAL_HOST_PLAN_PACK_ENV} must be 0 or 1")
-    return token == "1"
-
-
-def _local_host_plan_cuda_requested() -> bool:
-    token = os.environ.get(EXACT_LOCAL_HOST_PLAN_CUDA_ENV, "0").strip()
-    if token not in {"0", "1"}:
-        raise ValueError(f"{EXACT_LOCAL_HOST_PLAN_CUDA_ENV} must be 0 or 1")
-    return token == "1"
-
-
-def _local_bpref_transaction_requested() -> bool:
-    token = os.environ.get(EXACT_LOCAL_BPREF_TRANSACTION_ENV, "0").strip()
-    if token not in {"0", "1"}:
-        raise ValueError(f"{EXACT_LOCAL_BPREF_TRANSACTION_ENV} must be 0 or 1")
-    return token == "1"
-
-
-def _local_bpref_particle_capacity_requested() -> bool:
-    token = os.environ.get(EXACT_LOCAL_BPREF_PARTICLE_CAPACITY_ENV, "0").strip()
-    if token not in {"0", "1"}:
-        raise ValueError(f"{EXACT_LOCAL_BPREF_PARTICLE_CAPACITY_ENV} must be 0 or 1")
-    return token == "1"
-
-
-def _local_bpref_cuda_packing_requested() -> bool:
-    token = os.environ.get(EXACT_LOCAL_BPREF_CUDA_PACKING_ENV, "0").strip()
-    if token not in {"0", "1"}:
-        raise ValueError(f"{EXACT_LOCAL_BPREF_CUDA_PACKING_ENV} must be 0 or 1")
-    return token == "1"
-
-
-def _local_skip_deferred_zero_norm_requested() -> bool:
-    token = os.environ.get(EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, "0").strip()
-    if token not in {"0", "1"}:
-        raise ValueError(f"{EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV} must be 0 or 1")
-    return token == "1"
-
-
-def _local_host_publication_requested() -> bool:
-    token = os.environ.get(EXACT_LOCAL_HOST_PUBLICATION_ENV, "0").strip()
-    if token not in {"0", "1"}:
-        raise ValueError(f"{EXACT_LOCAL_HOST_PUBLICATION_ENV} must be 0 or 1")
-    return token == "1"
-
-
-def _local_bpref_projector_capacity_requested() -> bool:
-    token = os.environ.get(EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV, "0").strip()
-    if token not in {"0", "1"}:
-        raise ValueError(f"{EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV} must be 0 or 1")
-    return token == "1"
 
 
 def _optional_nonnegative_float_env(name: str, default: float) -> float:
@@ -4619,16 +4521,16 @@ def run_local_em_exact(
     fused_pair_fine_score_enabled = bool(fused_pair_fine_score)
     defer_packed_vdam_enabled = bool(_defer_packed_vdam_enabled)
     stable_fourier_window_shapes = bool(stable_fourier_window_shapes)
-    projector_capacity_enabled = _local_projector_capacity_requested()
+    projector_capacity_enabled = parse_env_binary_flag(EXACT_LOCAL_PROJECTOR_CAPACITY_ENV)
     if projector_capacity_enabled and not stable_fourier_window_shapes:
         raise ValueError("projector capacity requires stable exact-local VDAM Fourier windows")
-    bpref_projector_capacity_enabled = _local_bpref_projector_capacity_requested()
+    bpref_projector_capacity_enabled = parse_env_binary_flag(EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV)
     if bpref_projector_capacity_enabled and not projector_capacity_enabled:
         raise ValueError("BPref projector capacity requires the shared local projector capacity")
     packed_final_noise_enabled = bool(_packed_final_noise_enabled)
-    bpref_transaction_enabled = _local_bpref_transaction_requested()
-    bpref_particle_capacity_enabled = _local_bpref_particle_capacity_requested()
-    bpref_cuda_packing_enabled = _local_bpref_cuda_packing_requested()
+    bpref_transaction_enabled = parse_env_binary_flag(EXACT_LOCAL_BPREF_TRANSACTION_ENV)
+    bpref_particle_capacity_enabled = parse_env_binary_flag(EXACT_LOCAL_BPREF_PARTICLE_CAPACITY_ENV)
+    bpref_cuda_packing_enabled = parse_env_binary_flag(EXACT_LOCAL_BPREF_CUDA_PACKING_ENV)
     if bpref_cuda_packing_enabled and not bpref_particle_capacity_enabled:
         raise ValueError("CUDA BPref packing requires stable particle capacity")
     if bpref_particle_capacity_enabled and (
@@ -4639,24 +4541,24 @@ def run_local_em_exact(
         defer_packed_vdam_enabled and packed_final_noise_enabled
     ):
         raise ValueError("BPref transactions require deferred packed final-noise execution")
-    host_plan_pack_enabled = _local_host_plan_pack_requested()
-    host_plan_cuda_enabled = _local_host_plan_cuda_requested()
+    host_plan_pack_enabled = parse_env_binary_flag(EXACT_LOCAL_HOST_PLAN_PACK_ENV)
+    host_plan_cuda_enabled = parse_env_binary_flag(EXACT_LOCAL_HOST_PLAN_CUDA_ENV)
     if host_plan_cuda_enabled and not host_plan_pack_enabled:
         raise ValueError("CUDA host-plan packing requires host-plan packing")
-    host_publication_enabled = _local_host_publication_requested()
+    host_publication_enabled = parse_env_binary_flag(EXACT_LOCAL_HOST_PUBLICATION_ENV)
     if type(host_stats_publication) is not bool:
         raise TypeError("host_stats_publication must be a bool")
     if host_stats_publication and not host_accumulator_finalize:
         raise ValueError("host statistics publication requires host accumulator finalization")
-    skip_deferred_zero_norm = _local_skip_deferred_zero_norm_requested()
+    skip_deferred_zero_norm = parse_env_binary_flag(EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV)
     if host_publication_enabled and not defer_packed_vdam_enabled:
         raise ValueError("host publication requires deferred packed VDAM execution")
     if host_plan_pack_enabled and not (
         defer_packed_vdam_enabled and packed_final_noise_enabled
     ):
         raise ValueError("host-plan packing requires deferred packed final-noise execution")
-    noise_stable_core_enabled = _local_noise_stable_core_requested()
-    noise_native_residual_enabled = _local_noise_native_residual_requested()
+    noise_stable_core_enabled = parse_env_binary_flag(EXACT_LOCAL_NOISE_STABLE_CORE_ENV)
+    noise_native_residual_enabled = parse_env_binary_flag(EXACT_LOCAL_NOISE_NATIVE_RESIDUAL_ENV)
     if noise_native_residual_enabled and not (
         stable_fourier_window_shapes
         and defer_packed_vdam_enabled
@@ -4668,7 +4570,7 @@ def run_local_em_exact(
         stable_fourier_window_shapes and packed_final_noise_enabled
     ):
         raise ValueError("separate noise core requires stable packed final-noise execution")
-    noise_norm_capacity_enabled = _local_noise_norm_capacity_requested()
+    noise_norm_capacity_enabled = parse_env_binary_flag(EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV)
     if noise_norm_capacity_enabled and not (
         stable_fourier_window_shapes
         and defer_packed_vdam_enabled
@@ -4676,8 +4578,8 @@ def run_local_em_exact(
         and accumulate_noise
     ):
         raise ValueError("noise norm capacity requires stable deferred packed final-noise accumulation")
-    noise_pixel_capacity_enabled = _local_noise_pixel_capacity_requested()
-    noise_pixel_cuda_enabled = _local_noise_pixel_cuda_requested()
+    noise_pixel_capacity_enabled = parse_env_binary_flag(EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV)
+    noise_pixel_cuda_enabled = parse_env_binary_flag('RECOVAR_EXACT_LOCAL_NOISE_PIXEL_CUDA')
     if noise_pixel_cuda_enabled and not noise_pixel_capacity_enabled:
         raise ValueError("noise pixel CUDA packing requires noise pixel capacity")
     if noise_pixel_capacity_enabled and not noise_norm_capacity_enabled:

@@ -5,6 +5,7 @@ import itertools
 import pytest
 
 from recovar.em.dense_single_volume import local_em_engine as engine
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 
 pytestmark = pytest.mark.unit
 
@@ -14,14 +15,14 @@ def test_native_noise_selector(monkeypatch, token, expected):
     monkeypatch.delenv(engine.EXACT_LOCAL_NOISE_NATIVE_RESIDUAL_ENV, raising=False)
     if token is not None:
         monkeypatch.setenv(engine.EXACT_LOCAL_NOISE_NATIVE_RESIDUAL_ENV, token)
-    assert engine._local_noise_native_residual_requested() is expected
+    assert parse_env_binary_flag(engine.EXACT_LOCAL_NOISE_NATIVE_RESIDUAL_ENV) is expected
 
 
 @pytest.mark.parametrize("token", ["", "true", "2", "-1"])
 def test_native_noise_invalid_selector(monkeypatch, token):
     monkeypatch.setenv(engine.EXACT_LOCAL_NOISE_NATIVE_RESIDUAL_ENV, token)
     with pytest.raises(ValueError, match="must be 0 or 1"):
-        engine._local_noise_native_residual_requested()
+        parse_env_binary_flag(engine.EXACT_LOCAL_NOISE_NATIVE_RESIDUAL_ENV)
 
 
 @pytest.mark.parametrize(

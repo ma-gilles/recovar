@@ -10,6 +10,7 @@ from recovar.em.dense_single_volume.deferred_noise_pack import (
     _pad_noise_pixels,
     pack_noise_pixel_capacity,
 )
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 from test_shared_local_exact_noise import _call_deferred_wrapper, _make_noise_inputs
 
 pytestmark = pytest.mark.unit
@@ -21,14 +22,14 @@ def test_selector(monkeypatch, token, expected):
     monkeypatch.delenv(engine.EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV, raising=False)
     if token is not None:
         monkeypatch.setenv(engine.EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV, token)
-    assert engine._local_noise_pixel_capacity_requested() is expected
+    assert parse_env_binary_flag(engine.EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV) is expected
 
 
 @pytest.mark.parametrize("token", ["", "true", "false", "2", "-1"])
 def test_invalid_selector(monkeypatch, token):
     monkeypatch.setenv(engine.EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV, token)
     with pytest.raises(ValueError, match="must be 0 or 1"):
-        engine._local_noise_pixel_capacity_requested()
+        parse_env_binary_flag(engine.EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV)
 
 
 def test_requires_norm_capacity_before_dataset_access(monkeypatch):

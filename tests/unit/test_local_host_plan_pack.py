@@ -13,6 +13,7 @@ import pytest
 from recovar import cuda_backproject as cuda
 from recovar.em.dense_single_volume import local_em_engine as engine
 from recovar.em.dense_single_volume.helpers import deferred_vdam_host_pack as helper
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 
 pytestmark = pytest.mark.unit
 
@@ -22,14 +23,14 @@ def test_selector_default_and_explicit_values(monkeypatch, token, expected):
     monkeypatch.delenv(engine.EXACT_LOCAL_HOST_PLAN_PACK_ENV, raising=False)
     if token is not None:
         monkeypatch.setenv(engine.EXACT_LOCAL_HOST_PLAN_PACK_ENV, token)
-    assert engine._local_host_plan_pack_requested() is expected
+    assert parse_env_binary_flag(engine.EXACT_LOCAL_HOST_PLAN_PACK_ENV) is expected
 
 
 @pytest.mark.parametrize("token", ["", "true", "false", "yes", "2", "-1", "typo"])
 def test_selector_rejects_unknown_tokens(monkeypatch, token):
     monkeypatch.setenv(engine.EXACT_LOCAL_HOST_PLAN_PACK_ENV, token)
     with pytest.raises(ValueError, match="must be 0 or 1"):
-        engine._local_host_plan_pack_requested()
+        parse_env_binary_flag(engine.EXACT_LOCAL_HOST_PLAN_PACK_ENV)
 
 
 @pytest.mark.parametrize("deferred,noise", [(False, False), (False, True), (True, False)])

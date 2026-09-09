@@ -10,6 +10,7 @@ import pytest
 from recovar import cuda_backproject as cuda
 from recovar.em.dense_single_volume import local_em_engine as engine
 from recovar.em.dense_single_volume.helpers import deferred_vdam_host_pack as helper
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 
 pytestmark = pytest.mark.unit
 
@@ -108,9 +109,9 @@ def test_selector(monkeypatch, token, expected):
         monkeypatch.setenv(engine.EXACT_LOCAL_HOST_PLAN_CUDA_ENV, token)
     if expected is None:
         with pytest.raises(ValueError, match="must be 0 or 1"):
-            engine._local_host_plan_cuda_requested()
+            parse_env_binary_flag(engine.EXACT_LOCAL_HOST_PLAN_CUDA_ENV)
     else:
-        assert engine._local_host_plan_cuda_requested() is expected
+        assert parse_env_binary_flag(engine.EXACT_LOCAL_HOST_PLAN_CUDA_ENV) is expected
 
 
 def test_requires_host_plan_before_dataset_access(monkeypatch):

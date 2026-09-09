@@ -8,6 +8,7 @@ import pytest
 from recovar import cuda_backproject
 from recovar.em.dense_single_volume.bpref_transaction import BprefTransactionQueue
 from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 
 pytestmark = pytest.mark.unit
 
@@ -131,9 +132,9 @@ def test_cuda_packing_selector(monkeypatch, value, expected):
         monkeypatch.setenv(name, value)
     if expected is None:
         with pytest.raises(ValueError, match="must be 0 or 1"):
-            local_em_engine._local_bpref_cuda_packing_requested()
+            parse_env_binary_flag(local_em_engine.EXACT_LOCAL_BPREF_CUDA_PACKING_ENV)
     else:
-        assert local_em_engine._local_bpref_cuda_packing_requested() is expected
+        assert parse_env_binary_flag(local_em_engine.EXACT_LOCAL_BPREF_CUDA_PACKING_ENV) is expected
 
 
 @pytest.mark.gpu

@@ -40,6 +40,7 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     RefinementState,
     healpix_angular_step,
 )
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
     enforce_half_volume_x0,
@@ -9375,7 +9376,7 @@ def test_skip_deferred_zero_norm_selector(monkeypatch, token, expected):
     monkeypatch.delenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, raising=False)
     if token is not None:
         monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, token)
-    assert engine._local_skip_deferred_zero_norm_requested() is expected
+    assert parse_env_binary_flag(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV) is expected
 
 
 @pytest.mark.parametrize("token", ["", "2", "true", "false", "-1"])
@@ -9383,7 +9384,7 @@ def test_skip_deferred_zero_norm_rejects_invalid_selector(monkeypatch, token):
     from recovar.em.dense_single_volume import local_em_engine as engine
     monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, token)
     with pytest.raises(ValueError, match="RECOVAR_EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM"):
-        engine._local_skip_deferred_zero_norm_requested()
+        parse_env_binary_flag(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV)
 
 
 def test_run_local_em_exact_deferred_big_jit_no_noise_matches_sparse_big_jit(monkeypatch, rng):

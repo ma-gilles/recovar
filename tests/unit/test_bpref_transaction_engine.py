@@ -9,6 +9,7 @@ import pytest
 from recovar import cuda_backproject
 from recovar.em.dense_single_volume import local_em_engine as engine
 from recovar.em.dense_single_volume.bpref_transaction import BprefTransactionQueue
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 
 pytestmark = pytest.mark.unit
 
@@ -19,14 +20,14 @@ def test_transaction_selector(monkeypatch, token, expected):
         monkeypatch.delenv(engine.EXACT_LOCAL_BPREF_TRANSACTION_ENV, raising=False)
     else:
         monkeypatch.setenv(engine.EXACT_LOCAL_BPREF_TRANSACTION_ENV, token)
-    assert engine._local_bpref_transaction_requested() is expected
+    assert parse_env_binary_flag(engine.EXACT_LOCAL_BPREF_TRANSACTION_ENV) is expected
 
 
 @pytest.mark.parametrize("token", ["", "yes", "2", "-1"])
 def test_invalid_transaction_selector(monkeypatch, token):
     monkeypatch.setenv(engine.EXACT_LOCAL_BPREF_TRANSACTION_ENV, token)
     with pytest.raises(ValueError, match="must be 0 or 1"):
-        engine._local_bpref_transaction_requested()
+        parse_env_binary_flag(engine.EXACT_LOCAL_BPREF_TRANSACTION_ENV)
 
 
 def test_unsupported_route_rejected_before_dataset_access(monkeypatch):

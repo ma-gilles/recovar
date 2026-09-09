@@ -10,6 +10,7 @@ import pytest
 from recovar import cuda_backproject as cuda
 from recovar.em.dense_single_volume import local_em_engine as engine
 from recovar.em.dense_single_volume.deferred_noise_pack import _pad_noise_pixels, pack_noise_pixel_capacity
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 
 pytestmark = pytest.mark.unit
 
@@ -111,9 +112,9 @@ def test_selector(monkeypatch, token, expected):
         monkeypatch.setenv(name, token)
     if expected is None:
         with pytest.raises(ValueError, match="must be 0 or 1"):
-            engine._local_noise_pixel_cuda_requested()
+            parse_env_binary_flag('RECOVAR_EXACT_LOCAL_NOISE_PIXEL_CUDA')
     else:
-        assert engine._local_noise_pixel_cuda_requested() is expected
+        assert parse_env_binary_flag('RECOVAR_EXACT_LOCAL_NOISE_PIXEL_CUDA') is expected
 
 
 def test_requires_pixel_capacity_before_dataset_access(monkeypatch):

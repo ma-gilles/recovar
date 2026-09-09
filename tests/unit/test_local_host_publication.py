@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume import local_em_engine as engine
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 
 pytestmark = pytest.mark.unit
 DEVICE_FIELDS = (
@@ -143,14 +144,14 @@ def test_selector(monkeypatch, token, expected):
     monkeypatch.delenv(engine.EXACT_LOCAL_HOST_PUBLICATION_ENV, raising=False)
     if token is not None:
         monkeypatch.setenv(engine.EXACT_LOCAL_HOST_PUBLICATION_ENV, token)
-    assert engine._local_host_publication_requested() is expected
+    assert parse_env_binary_flag(engine.EXACT_LOCAL_HOST_PUBLICATION_ENV) is expected
 
 
 @pytest.mark.parametrize("token", ["", "true", "-1", "2", "typo"])
 def test_invalid_selector(monkeypatch, token):
     monkeypatch.setenv(engine.EXACT_LOCAL_HOST_PUBLICATION_ENV, token)
     with pytest.raises(ValueError, match="must be 0 or 1"):
-        engine._local_host_publication_requested()
+        parse_env_binary_flag(engine.EXACT_LOCAL_HOST_PUBLICATION_ENV)
 
 
 def test_unsupported_mode_rejected_before_dataset_access(monkeypatch):

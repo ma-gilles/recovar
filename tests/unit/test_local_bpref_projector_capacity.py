@@ -10,6 +10,7 @@ import pytest
 from recovar import cuda_backproject as cb
 from recovar.em.dense_single_volume import local_em_engine as engine
 from recovar.em.dense_single_volume.helpers import projection
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 
 pytestmark = pytest.mark.unit
 
@@ -19,14 +20,14 @@ def test_bpref_selector_is_strict_and_default_off(monkeypatch, token, expected):
     monkeypatch.delenv(engine.EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV, raising=False)
     if token is not None:
         monkeypatch.setenv(engine.EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV, token)
-    assert engine._local_bpref_projector_capacity_requested() is expected
+    assert parse_env_binary_flag(engine.EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV) is expected
 
 
 @pytest.mark.parametrize("token", ["", "true", "yes", "2", "-1", "typo"])
 def test_bpref_selector_rejects_unknown_values(monkeypatch, token):
     monkeypatch.setenv(engine.EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV, token)
     with pytest.raises(ValueError, match="must be 0 or 1"):
-        engine._local_bpref_projector_capacity_requested()
+        parse_env_binary_flag(engine.EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV)
 
 
 def test_optin_requires_shared_capacity_before_dataset_access(monkeypatch):

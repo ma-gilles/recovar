@@ -6,6 +6,14 @@ import logging
 import os
 
 
+def parse_env_binary_flag(name: str) -> bool:
+    """Read a strict 0/1 flag; unset is false, whitespace is stripped, blank is invalid."""
+    token = os.environ.get(name, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{name} must be 0 or 1")
+    return token == "1"
+
+
 def parse_env_float_or_default(name: str, default: float, *, logger: logging.Logger) -> float:
     """Read a float override, warning through the caller's logger if invalid."""
     value = os.environ.get(name)

@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume import local_em_engine as engine
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 
 pytestmark = pytest.mark.unit
 
@@ -18,14 +19,14 @@ def test_selector(monkeypatch, token, expected):
     monkeypatch.delenv(engine.EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV, raising=False)
     if token is not None:
         monkeypatch.setenv(engine.EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV, token)
-    assert engine._local_noise_norm_capacity_requested() is expected
+    assert parse_env_binary_flag(engine.EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV) is expected
 
 
 @pytest.mark.parametrize("token", ["", "true", "false", "2", "-1", "typo"])
 def test_invalid_selector(monkeypatch, token):
     monkeypatch.setenv(engine.EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV, token)
     with pytest.raises(ValueError, match="must be 0 or 1"):
-        engine._local_noise_norm_capacity_requested()
+        parse_env_binary_flag(engine.EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV)
 
 
 @pytest.mark.parametrize("stable,deferred,packed,noise", list(itertools.product((False, True), repeat=4))[:-1])
