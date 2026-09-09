@@ -9396,7 +9396,10 @@ def test_local_noise_calls_use_logical_cutoff(monkeypatch, rng, deferred, curren
 
 @pytest.mark.parametrize("deferred", [False, True])
 @pytest.mark.parametrize("spectrum_norm", [False, True])
-def test_skip_deferred_zero_norm_preserves_real_local_outputs(monkeypatch, rng, deferred, spectrum_norm):
+@pytest.mark.parametrize("normalization_float64", [False, True], ids=["norm32", "norm64"])
+def test_skip_deferred_zero_norm_preserves_real_local_outputs(
+    monkeypatch, rng, deferred, spectrum_norm, normalization_float64,
+):
     import jax
     from recovar.em.dense_single_volume import local_em_engine as engine
 
@@ -9414,7 +9417,8 @@ def test_skip_deferred_zero_norm_preserves_real_local_outputs(monkeypatch, rng, 
         assert kwargs["return_deferred_mstep_inputs"] is deferred
         assert kwargs["accumulate_noise"] is (not deferred)
         norm = np.asarray(result[8])
-        assert norm.dtype == np.dtype(np.float64 if spectrum_norm and not deferred else np.float32)
+        expected_dtype = np.float64 if (spectrum_norm or normalization_float64) and not deferred else np.float32
+        assert norm.dtype == np.dtype(expected_dtype)
         if deferred:
             assert norm.tobytes() == np.zeros_like(norm).tobytes()
         else:
@@ -9442,13 +9446,14 @@ def test_skip_deferred_zero_norm_preserves_real_local_outputs(monkeypatch, rng, 
             return_profile=True, score_with_masked_images=False,
             half_spectrum_scoring=False, max_significants=-1,
             source_faithful_spectrum_norm=spectrum_norm,
+            use_float64_normalization=normalization_float64,
         ))
     assert len(captured) == 4  # Two real buckets in each treatment.
     assert all(int(result.profile["big_jit_bucket_count"]) == 2 for result in results)
     assert np.any(np.asarray(results[0].noise_stats.wsum_norm_correction) != 0)
-    # Public NoiseStats casts to float32; compare the raw carry before that cast.
+    # Publication preserves the carry dtype, including the float64 spectrum sum.
     assert len(raw_norms) == 2 and raw_norms[0].tobytes() == raw_norms[1].tobytes()
-    assert results[0].noise_stats.wsum_norm_correction.dtype == np.dtype(np.float32)
+    assert results[0].noise_stats.wsum_norm_correction.dtype == np.dtype(np.float64 if spectrum_norm else np.float32)
     first, first_tree = jax.tree_util.tree_flatten(
         tuple(getattr(results[0], field.name) for field in fields(results[0]) if field.name != "profile")
     )
