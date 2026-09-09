@@ -35,7 +35,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | Bucket progress now belongs to the timing owner, following named cache planning: local engine 8,491 lines, sparse scorer 17,383, half scorer 1,358, controller 6,123 |
+| Latest production cleanup | Candidate block-map schema/writer now share the VDAM replay owner: local engine 8,256 lines, sparse scorer 17,383, half scorer 1,358, controller 6,123 |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -260,6 +260,46 @@ use that owner directly. Function bodies and all retained scorer statements are
 AST-identical after namespace mapping. Counter sequencing, filter short-circuit
 order, NPZ schema, casts and error behavior remain unchanged. Sparse scoring
 loses 176 lines (19,460 → 19,284); the two modules together add one line.
+
+Candidate block-map publication now belongs to `helpers/vdam_replay.py` together
+with its binary schema. The CLI reader imports the same magic, dtypes and flags;
+the duplicate declarations are removed. Existing script names and CLI help stay
+compatible, and the reader still accepts versions 1 and 2. The engine retains
+its single writer call at the original capture boundary; worker replay caches,
+scientific computation and device operands are unchanged.
+
+Moved writer/schema and retained engine, owner and reader ASTs match the sealed
+preimage under explicit namespace mapping. All three original writer tests keep
+their assertions. Four new independent `struct` cases check exact wire bytes,
+both reader versions and the existing header left behind on capacity failure.
+Sealed old/new writers match 760 cases with two append attempts each (713 first
+calls raise matching errors); 1,228 reader comparisons match records or errors.
+No test tolerance, schema, baseline, native code or numerical default changed.
+
+The original panel has **30 passes and one existing trace-order failure**; the
+final panel has **34 passes and the identical failure**, zero skips. Both CPU
+guards pass 38/38, including the existing replay-owner import boundary. Final
+panel and final guard have identical source/test manifests and dirty fingerprint;
+source/native hashes remain unchanged during every run. The trace-order failure
+is `test_native_trace_first_atomic_precedes_interpolation_registers`, also
+recorded below; this consolidation does not repair it or mark the panel green.
+
+Engine lines 8,491→8,256; replay owner 872→1,110; script 322→297: combined
+production/script reduction **22 lines**. The main routine remains 5,665 lines.
+This is ownership/schema consolidation, not measured runtime improvement.
+The reader now imports the existing replay owner through the installed package;
+no execution controller is loaded. Its help output matches the old script.
+
+Reproduce with `mstep_dc_integration_20260909/run_checks.sh NEW_LABEL -v`
+plus `tests/unit/test_vdam_candidate_block_map.py`,
+`tests/unit/test_vdam_block_start_replay.py` and
+`tests/unit/test_vdam_worker_trace_contract.py`; the known failure must remain
+visible. Use a separate label with `--fast-guard`. Sealed preimages, exact AST/
+binary audit, caller search, commands and results are under
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/vdam_block_map_owner_20260909/`;
+logs/XML are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/vdam_block_map_{control,after,guard,final,final_guard}_20260909/`.
+No new GPU/Slurm job or native build. Broader cleanup and qualification remain.
 
 Local bucket progress now belongs to `local_timing.LocalBucketProgress`, replacing
 two nested engine closures and their counters. The engine retains all three

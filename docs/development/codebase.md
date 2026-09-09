@@ -145,8 +145,10 @@ Sealed VDAM worker and block-chronology replay lives in
 [`helpers/vdam_replay.py`](../../recovar/em/dense_single_volume/helpers/vdam_replay.py).
 It owns NPZ schema validation, four cached loaders, stack-ID joins, worker/launch
 ordering, iteration selectors and physical-row gathers. The local engine calls
-this owner directly while retaining kernel execution and candidate block-map
-publication. Replay defaults, caches, stable ordering and error behavior are
+this owner directly while retaining kernel execution and the capture call site.
+Candidate block-map publication and its binary schema share this owner; the CLI
+reader imports the schema while retaining validation/sealing and versions 1/2
+compatibility. Replay defaults, caches, stable ordering and error behavior are
 preserved; importing the helper does not initialize the execution engine.
 
 The exact coarse Gaussian path in

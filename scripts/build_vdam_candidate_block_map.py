@@ -10,40 +10,15 @@ from pathlib import Path
 
 import numpy as np
 
-MAGIC = b"RECOVAR_VDAMBM1\0"
-HEADER_DTYPE = np.dtype(
-    [
-        ("magic", "S16"),
-        ("schema_version", "<u4"),
-        ("header_size", "<u4"),
-        ("record_size", "<u4"),
-        ("iteration", "<u4"),
-        ("record_count", "<u8"),
-        ("capacity", "<u8"),
-        ("reserved0", "<u8"),
-        ("reserved1", "<u8"),
-    ]
-)
-RECORD_DTYPE = np.dtype(
-    [
-        ("particle_id", "<i8"),
-        ("candidate_orientation_row", "<u4"),
-        ("native_orientation_row", "<u4"),
-        ("global_rotation_id", "<i4"),
-        ("class_id", "<i4"),
-        ("reconstruction_group_id", "<i4"),
-        ("iteration", "<u4"),
-        ("flags", "<u4"),
-        ("reserved", "<u4"),
-    ]
-)
-MAP_VALID = np.uint32(1 << 0)
-MAP_CONTRIBUTING = np.uint32(1 << 1)
-INVALID_ROW = np.iinfo(np.uint32).max
-BLOCK_NO_ATOMIC = np.uint32(1 << 3)
+from recovar.em.dense_single_volume.helpers import vdam_replay
 
-if HEADER_DTYPE.itemsize != 64 or RECORD_DTYPE.itemsize != 40:
-    raise RuntimeError("VDAM candidate block-map binary schema has an invalid item size")
+MAGIC = vdam_replay.VDAM_CANDIDATE_BLOCK_MAP_MAGIC
+HEADER_DTYPE = vdam_replay.VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE
+RECORD_DTYPE = vdam_replay.VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE
+MAP_VALID = vdam_replay.VDAM_CANDIDATE_BLOCK_MAP_VALID
+MAP_CONTRIBUTING = vdam_replay.VDAM_CANDIDATE_BLOCK_MAP_CONTRIBUTING
+INVALID_ROW = vdam_replay.VDAM_CANDIDATE_BLOCK_MAP_INVALID_ROW
+BLOCK_NO_ATOMIC = np.uint32(1 << 3)
 
 
 def _require(condition: bool, message: str) -> None:
