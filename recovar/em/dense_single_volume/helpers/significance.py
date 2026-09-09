@@ -2877,6 +2877,7 @@ def _assemble_relion_exact_coarse_gaussian_operands(
     actual_batch_size: int,
     batch_size: int,
     score_indices,
+    score_indices_np,
     score_active_mask,
     translations_source,
     image_shape,
@@ -2910,6 +2911,7 @@ def _assemble_relion_exact_coarse_gaussian_operands(
             experiment_dataset,
             indices,
             image_shape,
+            pixel_indices=score_indices_np,
         ),
         dtype=np.float64,
     )
@@ -2925,8 +2927,8 @@ def _assemble_relion_exact_coarse_gaussian_operands(
         ctf_half_rfloat,
         output_dtype=real_dtype,
     )
-    exact_unshifted_corrected = jnp.asarray(processed_direct, dtype=complex_dtype) * pixel_correction
-    exact_unshifted_corrected = exact_unshifted_corrected[:, score_indices]
+    processed_score = jnp.asarray(processed_direct, dtype=complex_dtype)[:, score_indices]
+    exact_unshifted_corrected = processed_score * pixel_correction
     exact_unshifted_corrected = jnp.where(
         score_active_mask[None, :],
         exact_unshifted_corrected,
@@ -2942,8 +2944,9 @@ def _assemble_relion_exact_coarse_gaussian_operands(
         score_indices,
         image_shape,
     ).reshape(batch_size, int(translation_angles.shape[0]), -1)
+    score_noise_variance = noise_variance_half[score_indices]
     if use_float64_scoring:
-        inverse_noise_half = jnp.reciprocal(jnp.asarray(noise_variance_half, dtype=jnp.float64))
+        inverse_noise_half = jnp.reciprocal(jnp.asarray(score_noise_variance, dtype=jnp.float64))
         exact_corr_img = _relion_cuda_corr_img_from_rfloat_ctf(
             inverse_noise_half[None, :], ctf_half_rfloat,
             batch_scale_exact[:, None] if scale_corrections_enabled else None,
@@ -2951,12 +2954,12 @@ def _assemble_relion_exact_coarse_gaussian_operands(
         )
     else:
         exact_corr_img = _relion_cuda_corr_img_from_native_noise_variance(
-            noise_variance_half[None, :],
+            score_noise_variance[None, :],
             ctf_half_rfloat,
             image_shape,
             batch_scale_exact[:, None] if scale_corrections_enabled else None,
         )
-    exact_square_corr_img = exact_corr_img[:, score_indices]
+    exact_square_corr_img = exact_corr_img
     exact_square_corr_img = jnp.where(
         score_active_mask[None, :],
         exact_square_corr_img,
@@ -6417,6 +6420,7 @@ def _compute_k_class_significance_batched(
                     actual_batch_size=actual_batch_size,
                     batch_size=batch_size,
                     score_indices=coarse_gaussian_score_indices,
+                    score_indices_np=coarse_gaussian_score_indices_np,
                     score_active_mask=coarse_gaussian_score_active_mask,
                     translations_source=translations_source,
                     image_shape=image_shape,
@@ -6430,9 +6434,7 @@ def _compute_k_class_significance_batched(
                         else current_size
                     ),
                     runtime_current_size=(
-                        jnp.asarray(score_size, dtype=jnp.int32)
-                        if stable_fourier_window_shapes
-                        else None
+                        jnp.asarray(score_size, dtype=jnp.int32) if stable_fourier_window_shapes else None
                     ),
                 )
                 coarse_gaussian_shifted_corrected = exact_operands.shifted_corrected

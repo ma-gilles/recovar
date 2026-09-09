@@ -10453,6 +10453,8 @@ def _relion_exact_ctf_half_from_source_star_host(
     experiment_dataset,
     image_indices,
     image_shape,
+    *,
+    pixel_indices=None,
 ):
     """Evaluate source-precision SPA CTFs into one host-native operand.
 
@@ -10460,7 +10462,9 @@ def _relion_exact_ctf_half_from_source_star_host(
     The source STAR is mandatory because the ordinary dataset metadata has
     already been rounded to float32 before pass 2.  RELION's binding and the
     source cache are host-native; callers that must pad on the image axis use
-    this helper so they place the final operand exactly once.
+    this helper so they place the final operand exactly once. Optional host
+    pixel indices gather the requested columns before stacking full CTF rows;
+    their order and duplicates are preserved without changing source precision.
     """
 
     source_path = _relion_exact_ctf_source_star(experiment_dataset)
@@ -10494,6 +10498,13 @@ def _relion_exact_ctf_half_from_source_star_host(
     image_h, image_w = (int(size) for size in image_shape)
     if image_h != image_w:
         raise ValueError("exact RELION CTF replay currently requires square images")
+    if pixel_indices is not None:
+        if not isinstance(pixel_indices, np.ndarray):
+            raise TypeError("CTF pixel indices must already be a host NumPy array")
+        if pixel_indices.ndim != 1 or pixel_indices.dtype.kind not in "iu":
+            raise ValueError("CTF pixel indices must be a one-dimensional integer array")
+        if np.any(pixel_indices < 0) or np.any(pixel_indices >= image_h * (image_w // 2 + 1)):
+            raise ValueError("CTF pixel indices are outside the full half-spectrum")
     ctf_rows = []
     for original_index in original_indices:
         original_index = int(original_index)
@@ -10539,7 +10550,7 @@ def _relion_exact_ctf_half_from_source_star_host(
             # sign from RECOVAR's forward-model convention.
             cached_image = (-np.fft.fftshift(native, axes=0)).reshape(-1)
             cache["images"][original_index] = cached_image
-        ctf_rows.append(cached_image)
+        ctf_rows.append(cached_image if pixel_indices is None else cached_image[pixel_indices])
     return np.asarray(np.stack(ctf_rows, axis=0), dtype=np.float64)
 
 
