@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import logging
+import multiprocessing
+import traceback
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -21,6 +24,154 @@ class ExpectedAccuracy:
     class_counts: np.ndarray
     trial_local_indices: np.ndarray
     trial_particle_ids: np.ndarray
+
+
+def estimate_relion_expected_accuracy_from_prepared_inputs(
+    *,
+    references_relion,
+    trial_eulers_deg,
+    trial_local_indices,
+    trial_class_ids,
+    class_weights,
+    sigma2_noise_relion,
+    defocus_u,
+    defocus_v,
+    defocus_angle,
+    phase_shift,
+    voltage: float,
+    spherical_aberration: float,
+    amplitude_contrast: float,
+    pixel_size: float,
+    ori_size: int,
+    current_image_size: int,
+    padding_factor: int,
+    sigma2_fudge: float,
+    random_seed: int,
+    do_ctf_correction: bool,
+    random_seed_particle_ids,
+) -> ExpectedAccuracy:
+    """Call RELION's expected-accuracy binding from prepared native inputs.
+
+    Supplied-map EM and InitialModel have different state containers and noise
+    conventions, but the native calculation itself must have one owner.
+    Callers prepare their layouts, then cross this shared binding boundary.
+    """
+    from recovar.relion_bind import _relion_bind_core as bind
+
+    trial_local = np.asarray(trial_local_indices, dtype=np.int64).reshape(-1)
+    trial_particles = np.asarray(random_seed_particle_ids, dtype=np.int64).reshape(-1)
+    eulers = np.asarray(trial_eulers_deg, dtype=np.float64)
+    classes = np.asarray(trial_class_ids, dtype=np.int32).reshape(-1)
+    if eulers.shape != (trial_local.size, 3):
+        raise ValueError(
+            "trial_eulers_deg must have shape "
+            f"({trial_local.size}, 3), got {eulers.shape}"
+        )
+    if classes.shape != trial_local.shape:
+        raise ValueError(
+            f"trial_class_ids must have shape {trial_local.shape}, got {classes.shape}"
+        )
+    if trial_particles.shape != trial_local.shape:
+        raise ValueError(
+            "random_seed_particle_ids must have shape "
+            f"{trial_local.shape}, got {trial_particles.shape}"
+        )
+
+    out = bind.vdam_expected_angular_errors(
+        np.ascontiguousarray(references_relion, dtype=np.float64),
+        np.ascontiguousarray(eulers),
+        np.ascontiguousarray(trial_local),
+        np.ascontiguousarray(classes),
+        np.ascontiguousarray(class_weights, dtype=np.float64),
+        np.ascontiguousarray(sigma2_noise_relion, dtype=np.float64),
+        np.ascontiguousarray(defocus_u, dtype=np.float64),
+        np.ascontiguousarray(defocus_v, dtype=np.float64),
+        np.ascontiguousarray(defocus_angle, dtype=np.float64),
+        np.ascontiguousarray(phase_shift, dtype=np.float64),
+        float(voltage),
+        float(spherical_aberration),
+        float(amplitude_contrast),
+        float(pixel_size),
+        int(ori_size),
+        int(current_image_size),
+        int(padding_factor),
+        1,
+        float(sigma2_fudge),
+        int(random_seed),
+        bool(do_ctf_correction),
+        False,
+        np.ascontiguousarray(trial_particles),
+    )
+    return ExpectedAccuracy(
+        acc_rot=float(out["acc_rot"]),
+        acc_trans_angstrom=float(out["acc_trans"]),
+        acc_rot_per_class=np.asarray(out["acc_rot_class"], dtype=np.float64),
+        acc_trans_per_class_angstrom=np.asarray(out["acc_trans_class"], dtype=np.float64),
+        class_counts=np.asarray(out["class_counts"], dtype=np.int64),
+        trial_local_indices=trial_local.copy(),
+        trial_particle_ids=trial_particles.copy(),
+    )
+
+
+def _estimate_relion_expected_accuracy_spawn_worker(
+    connection,
+    kwargs: dict[str, Any],
+) -> None:
+    """Run the authoritative binding behind an isolated spawn boundary."""
+    try:
+        result = estimate_relion_expected_accuracy_from_prepared_inputs(**kwargs)
+        connection.send(("ok", result))
+    except BaseException:  # pragma: no cover - exercised through the parent error
+        connection.send(("error", traceback.format_exc()))
+    finally:
+        connection.close()
+
+
+def estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs(
+    **kwargs,
+) -> ExpectedAccuracy:
+    """Evaluate expected accuracy without mutating the caller's process state.
+
+    The numerical owner remains
+    :func:`estimate_relion_expected_accuracy_from_prepared_inputs`.  This
+    wrapper exists for trajectory diagnostics where RELION's process-global
+    RNG, FFT, or allocator state must not leak from the temporary
+    expected-accuracy projectors into the production E/M-step process.
+    ``spawn`` is deliberate: forking a process after JAX has created worker
+    threads or a CUDA context is unsafe.
+    """
+    context = multiprocessing.get_context("spawn")
+    parent_connection, child_connection = context.Pipe(duplex=False)
+    process = context.Process(
+        target=_estimate_relion_expected_accuracy_spawn_worker,
+        args=(child_connection, kwargs),
+        name="recovar-relion-expected-accuracy",
+    )
+    process.start()
+    child_connection.close()
+    try:
+        status, payload = parent_connection.recv()
+    except EOFError as error:
+        process.join()
+        raise RuntimeError(
+            "isolated RELION expected-accuracy worker exited without a result "
+            f"(exit code {process.exitcode})"
+        ) from error
+    finally:
+        parent_connection.close()
+    process.join()
+    if process.exitcode != 0:
+        raise RuntimeError(
+            "isolated RELION expected-accuracy worker failed after returning "
+            f"a result (exit code {process.exitcode})"
+        )
+    if status != "ok":
+        raise RuntimeError(f"isolated RELION expected-accuracy worker failed:\n{payload}")
+    if not isinstance(payload, ExpectedAccuracy):
+        raise RuntimeError(
+            "isolated RELION expected-accuracy worker returned an invalid payload"
+        )
+    return payload
 
 
 def relion_auto_refine_half_orders(
@@ -151,7 +302,6 @@ def estimate_relion_expected_accuracy(
     variance is larger by ``ori_size**4``.
     """
     from recovar.core import fourier_transform_utils
-    from recovar.relion_bind import _relion_bind_core as bind
     from recovar.utils.helpers import recovar_volume_to_relion
 
     eulers = np.asarray(best_eulers_deg, dtype=np.float64)
@@ -210,37 +360,26 @@ def estimate_relion_expected_accuracy(
 
     ori_size = int(volume_shape[0])
     sigma2_noise_relion = np.asarray(sigma2_noise_native, dtype=np.float64).reshape(-1) / float(ori_size**4)
-    out = bind.vdam_expected_angular_errors(
-        references,
-        np.ascontiguousarray(eulers[trial_local]),
-        np.ascontiguousarray(trial_local, dtype=np.int64),
-        np.ascontiguousarray(classes[trial_local], dtype=np.int32),
-        np.ascontiguousarray(weights),
-        np.ascontiguousarray(sigma2_noise_relion),
-        np.ascontiguousarray(ctf[:, CTFParamIndex.DFU]),
-        np.ascontiguousarray(ctf[:, CTFParamIndex.DFV]),
-        np.ascontiguousarray(ctf[:, CTFParamIndex.DFANG]),
-        np.ascontiguousarray(ctf[:, CTFParamIndex.PHASE_SHIFT]),
-        voltage,
-        cs,
-        amplitude_contrast,
-        float(dataset.voxel_size),
-        ori_size,
-        int(current_image_size),
-        int(padding_factor),
-        1,
-        float(sigma2_fudge),
-        int(random_seed),
-        bool(do_ctf_correction),
-        False,
-        np.ascontiguousarray(trial_particle_ids, dtype=np.int64),
-    )
-    return ExpectedAccuracy(
-        acc_rot=float(out["acc_rot"]),
-        acc_trans_angstrom=float(out["acc_trans"]),
-        acc_rot_per_class=np.asarray(out["acc_rot_class"], dtype=np.float64),
-        acc_trans_per_class_angstrom=np.asarray(out["acc_trans_class"], dtype=np.float64),
-        class_counts=np.asarray(out["class_counts"], dtype=np.int64),
-        trial_local_indices=trial_local.copy(),
-        trial_particle_ids=trial_particle_ids.copy(),
+    return estimate_relion_expected_accuracy_from_prepared_inputs(
+        references_relion=references,
+        trial_eulers_deg=eulers[trial_local],
+        trial_local_indices=trial_local,
+        trial_class_ids=classes[trial_local],
+        class_weights=weights,
+        sigma2_noise_relion=sigma2_noise_relion,
+        defocus_u=ctf[:, CTFParamIndex.DFU],
+        defocus_v=ctf[:, CTFParamIndex.DFV],
+        defocus_angle=ctf[:, CTFParamIndex.DFANG],
+        phase_shift=ctf[:, CTFParamIndex.PHASE_SHIFT],
+        voltage=voltage,
+        spherical_aberration=cs,
+        amplitude_contrast=amplitude_contrast,
+        pixel_size=float(dataset.voxel_size),
+        ori_size=ori_size,
+        current_image_size=int(current_image_size),
+        padding_factor=int(padding_factor),
+        sigma2_fudge=float(sigma2_fudge),
+        random_seed=int(random_seed),
+        do_ctf_correction=bool(do_ctf_correction),
+        random_seed_particle_ids=trial_particle_ids,
     )

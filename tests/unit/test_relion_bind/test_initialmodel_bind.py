@@ -333,6 +333,55 @@ class TestRandomiseParticlesOrderBinding:
 
 
 class TestAutoRefineExpectedAccuracyBinding:
+    def test_spawned_expected_accuracy_matches_direct_result(self, bind):
+        from recovar.em.dense_single_volume.helpers.expected_accuracy import (
+            estimate_relion_expected_accuracy_from_prepared_inputs,
+            estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs,
+        )
+
+        rng = np.random.default_rng(9)
+        reference = rng.standard_normal((8, 8, 8)).astype(np.float64)
+        kwargs = {
+            "references_relion": np.stack([reference, reference], axis=0),
+            "trial_eulers_deg": np.asarray(
+                [[0.0, 35.0, 10.0], [75.0, 60.0, -20.0]], dtype=np.float64
+            ),
+            "trial_local_indices": np.arange(2, dtype=np.int64),
+            "trial_class_ids": np.asarray([0, 0], dtype=np.int32),
+            "class_weights": np.asarray([0.5, 0.5], dtype=np.float64),
+            "sigma2_noise_relion": np.ones(5, dtype=np.float64),
+            "defocus_u": np.zeros(2, dtype=np.float64),
+            "defocus_v": np.zeros(2, dtype=np.float64),
+            "defocus_angle": np.zeros(2, dtype=np.float64),
+            "phase_shift": np.zeros(2, dtype=np.float64),
+            "voltage": 300.0,
+            "spherical_aberration": 2.7,
+            "amplitude_contrast": 0.07,
+            "pixel_size": 1.0,
+            "ori_size": 8,
+            "current_image_size": 8,
+            "padding_factor": 1,
+            "sigma2_fudge": 1.0,
+            "random_seed": 17,
+            "do_ctf_correction": False,
+            "random_seed_particle_ids": np.asarray([101, 205], dtype=np.int64),
+        }
+        direct = estimate_relion_expected_accuracy_from_prepared_inputs(**kwargs)
+        isolated = estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs(
+            **kwargs
+        )
+
+        assert isolated.acc_rot == direct.acc_rot
+        assert isolated.acc_trans_angstrom == direct.acc_trans_angstrom
+        np.testing.assert_array_equal(isolated.acc_rot_per_class, direct.acc_rot_per_class)
+        np.testing.assert_array_equal(
+            isolated.acc_trans_per_class_angstrom,
+            direct.acc_trans_per_class_angstrom,
+        )
+        np.testing.assert_array_equal(isolated.class_counts, direct.class_counts)
+        np.testing.assert_array_equal(isolated.trial_local_indices, direct.trial_local_indices)
+        np.testing.assert_array_equal(isolated.trial_particle_ids, direct.trial_particle_ids)
+
     def test_split_half_random_shuffle_reference(self, bind):
         if not hasattr(bind, "auto_refine_randomise_half_order"):
             pytest.skip("relion_bind must be rebuilt with AutoRefine half ordering")

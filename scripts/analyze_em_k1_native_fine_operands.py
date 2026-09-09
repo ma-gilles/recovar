@@ -46,6 +46,29 @@ def _diff2(reference: np.ndarray, shifted: np.ndarray, weight: np.ndarray) -> np
     return _tree_sum(pixels)
 
 
+def _diff2_gpu_ffi(reference: np.ndarray, shifted: np.ndarray, weight: np.ndarray) -> np.ndarray:
+    """Replay candidate pairs with RECOVAR's RELION-exact CUDA kernel."""
+
+    import jax
+    import jax.numpy as jnp
+
+    from recovar import cuda_backproject
+
+    reference = np.asarray(reference, dtype=np.complex64)
+    shifted = np.asarray(shifted, dtype=np.complex64)
+    weight = np.asarray(weight, dtype=np.float32)
+    if reference.shape != shifted.shape or weight.shape != (reference.shape[-1],):
+        raise ValueError("GPU FFI diff2 operands have incompatible shapes")
+    lookup = np.arange(reference.shape[-1], dtype=np.int32)
+    result = cuda_backproject.relion_fine_diff2_pairs_f32(
+        jnp.asarray(reference[None]),
+        jnp.asarray(shifted[None]),
+        jnp.asarray(weight[None]),
+        jnp.asarray(lookup),
+    )
+    return np.asarray(jax.block_until_ready(result), dtype=np.float32)[0]
+
+
 def _center(values: np.ndarray) -> np.ndarray:
     values = np.asarray(values, dtype=np.float64)
     return values - np.mean(values)
@@ -65,6 +88,27 @@ def _stats(values: np.ndarray) -> dict[str, float | int]:
 def _relative_l2(left: np.ndarray, right: np.ndarray) -> float:
     denominator = float(np.linalg.norm(np.asarray(left).reshape(-1)))
     return float(np.linalg.norm((np.asarray(left) - np.asarray(right)).reshape(-1)) / denominator)
+
+
+def _alternate_projected_reference(rec: dict, alternate: dict) -> np.ndarray:
+    """Load either an analyzer adapter or a raw local-score operand dump."""
+
+    if "proj_half" in alternate:
+        for name in ("rotations", "candidate_mask", "window_indices"):
+            if not np.array_equal(rec[name], alternate[name]):
+                raise ValueError(f"alternate reference has different {name}")
+        return np.asarray(alternate["proj_half"])
+    if "debug_proj_weighted" in alternate:
+        rotations = np.asarray(alternate["local_rotation_matrices"])
+        candidate_mask = np.isfinite(np.asarray(alternate["pass2_scores_raw"])[0])
+        if not np.array_equal(rec["rotations"], rotations):
+            raise ValueError("alternate local-score dump has different rotations")
+        if not np.array_equal(rec["candidate_mask"], candidate_mask):
+            raise ValueError("alternate local-score dump has different candidate_mask")
+        return np.asarray(alternate["debug_proj_weighted"]) / np.asarray(
+            rec["half_weights"],
+        )[None, :]
+    raise ValueError("alternate reference dump has neither proj_half nor debug_proj_weighted")
 
 
 def _infer_float32_common_addend(base: np.ndarray, target: np.ndarray) -> tuple[np.float32, int]:
@@ -118,6 +162,7 @@ def analyze(
     full_image_size: int,
     chunk_size: int,
     alternate_reference_npz: Path | None = None,
+    gpu_ffi: bool = False,
 ) -> dict:
     dump_dir = Path(dump_dir)
     with np.load(recovar_npz, allow_pickle=False) as payload:
@@ -126,10 +171,7 @@ def analyze(
     if alternate_reference_npz is not None:
         with np.load(alternate_reference_npz, allow_pickle=False) as payload:
             alternate = {name: np.array(payload[name]) for name in payload.files}
-        for name in ("rotations", "candidate_mask", "window_indices"):
-            if not np.array_equal(rec[name], alternate[name]):
-                raise ValueError(f"alternate reference has different {name}")
-        alternate_reference = alternate["proj_half"]
+        alternate_reference = _alternate_projected_reference(rec, alternate)
 
     native_eulers = _flat_memmap(dump_dir / "pass1_class0_fine_eulers.bin").reshape(-1, 3, 3)
     nearest, rotation_distance, orientation = _nearest_rotation_rows_by_matrix(
@@ -194,6 +236,16 @@ def analyze(
     ]
     if alternate_reference is not None:
         labels.append("alternate_reference_with_recovar_image_and_weight")
+    if gpu_ffi:
+        labels.extend(
+            (
+                "native_gpu_ffi",
+                "recovar_shifted_image_only_gpu_ffi",
+                "recovar_weight_only_gpu_ffi",
+                "recovar_shifted_image_and_weight_gpu_ffi",
+                "recovar_all_gpu_ffi",
+            )
+        )
     costs = {label: np.empty(candidate_count, dtype=np.float32) for label in labels}
     operand_error = {"reference_num": 0.0, "reference_den": 0.0, "shifted_num": 0.0, "shifted_den": 0.0}
 
@@ -248,13 +300,43 @@ def analyze(
             )
         for label, operands in arms.items():
             costs[label][start:stop] = _diff2(*operands)
+        if gpu_ffi:
+            ffi_arms = {
+                "native_gpu_ffi": (native_reference, native_shifted, native_weight),
+                "recovar_shifted_image_only_gpu_ffi": (
+                    native_reference,
+                    rec_shifted,
+                    native_weight,
+                ),
+                "recovar_weight_only_gpu_ffi": (
+                    native_reference,
+                    native_shifted,
+                    rec_weight,
+                ),
+                "recovar_shifted_image_and_weight_gpu_ffi": (
+                    native_reference,
+                    rec_shifted,
+                    rec_weight,
+                ),
+                "recovar_all_gpu_ffi": (rec_reference, rec_shifted, rec_weight),
+            }
+            for label, operands in ffi_arms.items():
+                costs[label][start:stop] = _diff2_gpu_ffi(*operands)
 
     native_highres, native_highres_exact = _infer_float32_common_addend(costs["native"], native_raw)
     recovar_highres = np.float32(rec["relion_highres_xi2_half"])
     for label in labels:
         highres = (
             recovar_highres
-            if "shifted_image" in label or label in {"recovar_all", "alternate_reference_with_recovar_image_and_weight"}
+            if "shifted_image" in label
+            or label
+            in {
+                "recovar_all",
+                "recovar_all_gpu_ffi",
+                "recovar_shifted_image_only_gpu_ffi",
+                "recovar_shifted_image_and_weight_gpu_ffi",
+                "alternate_reference_with_recovar_image_and_weight",
+            }
             else native_highres
         )
         costs[label] = np.asarray(costs[label] + highres, dtype=np.float32)
@@ -289,6 +371,7 @@ def analyze(
     return {
         "schema": "em-k1-native-fine-operands-v1",
         "status": "complete",
+        "gpu_ffi": bool(gpu_ffi),
         "relion_part_id": int(np.fromfile(dump_dir / "pass1_acc_part_id.bin", dtype=np.float64, count=1)[0]),
         "recovar_original_index": int(rec["original_index"]),
         "candidate_count": int(candidate_count),
@@ -310,6 +393,28 @@ def analyze(
         "captured_centered_score_residual": _stats(captured_residual),
         "native_cost_replay_error": _stats(native_replay_error),
         "recovar_cost_replay_error": _stats(recovar_replay_error),
+        **(
+            {
+                "native_gpu_ffi_replay_error": _stats(
+                    _center(costs["native_gpu_ffi"] - native_raw)
+                ),
+                "recovar_gpu_ffi_replay_error": _stats(
+                    _center(-costs["recovar_all_gpu_ffi"] - rec_score)
+                ),
+                "gpu_ffi_native_score_residuals": {
+                    label: _stats(_center(costs[label] - native_raw))
+                    for label in (
+                        "native_gpu_ffi",
+                        "recovar_shifted_image_only_gpu_ffi",
+                        "recovar_weight_only_gpu_ffi",
+                        "recovar_shifted_image_and_weight_gpu_ffi",
+                        "recovar_all_gpu_ffi",
+                    )
+                },
+            }
+            if gpu_ffi
+            else {}
+        ),
         "interventions": interventions,
         "alternate_reference_npz": (
             str(Path(alternate_reference_npz).resolve())
@@ -326,6 +431,7 @@ def main() -> None:
     parser.add_argument("--full-image-size", type=int, default=128)
     parser.add_argument("--chunk-size", type=int, default=64)
     parser.add_argument("--alternate-reference-npz", type=Path)
+    parser.add_argument("--gpu-ffi", action="store_true")
     parser.add_argument("--output-json", required=True, type=Path)
     args = parser.parse_args()
     result = analyze(
@@ -334,6 +440,7 @@ def main() -> None:
         full_image_size=args.full_image_size,
         chunk_size=args.chunk_size,
         alternate_reference_npz=args.alternate_reference_npz,
+        gpu_ffi=args.gpu_ffi,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")

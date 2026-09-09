@@ -1,9 +1,12 @@
 """JAX scoring and M-step kernels shared by dense single-volume EM helpers."""
 
+import operator
 from functools import partial
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from .dtype_policy import DensePrecisionPolicy
 
@@ -260,6 +263,113 @@ def _relion_coarse_normalized_cc_rescore_f64(
 
     return jax.lax.fori_loop(0, 128, add_once, jnp.zeros_like(contribution))
 
+def _relion_coarse_diff2_rotation_blocks_from_topology_f32(
+    reference,
+    shifted_image,
+    weight,
+    initial_diff2,
+    rotation_block_ids,
+    *,
+    topology,
+    logical_full_pixel_count=None,
+):
+    """Rescore source16 blocks using only the certificate-owned lookup.
+
+    See ``docs/math/vdam_coarse_gemm_error_certificate.md``.  Block IDs remain
+    on device: the existing CUDA primitive owns its ``-1`` padding and invalid
+    ID fail-closed semantics.
+    """
+
+    from recovar import cuda_backproject
+    from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+        SOURCE_ROTATION_BLOCK_SIZE,
+        validate_coarse_gemm_certificate_topology,
+    )
+
+    validate_coarse_gemm_certificate_topology(topology)
+    operands = (
+        reference,
+        shifted_image,
+        weight,
+        initial_diff2,
+        rotation_block_ids,
+    )
+    operand_shapes = tuple(getattr(value, "shape", None) for value in operands)
+    if any(shape is None for shape in operand_shapes):
+        raise TypeError(
+            "selected source-16 operands must be array-like values with shapes",
+        )
+    expected_dtypes = (
+        jnp.complex64,
+        jnp.complex64,
+        jnp.float32,
+        jnp.float32,
+        jnp.int32,
+    )
+    if any(
+        getattr(value, "dtype", None) != expected
+        for value, expected in zip(operands, expected_dtypes)
+    ):
+        raise TypeError("selected source-16 operands have invalid dtypes")
+    reference_shape, shifted_shape, weight_shape, initial_shape, block_shape = (
+        tuple(shape) for shape in operand_shapes
+    )
+    if (
+        len(reference_shape) != 2
+        or len(shifted_shape) != 3
+        or len(weight_shape) != 2
+        or len(initial_shape) != 1
+        or len(block_shape) != 2
+    ):
+        raise ValueError("selected source-16 operands have invalid ranks")
+
+    rotation_count, compact_pixel_count = reference_shape
+    batch_size, translation_count, shifted_pixel_count = shifted_shape
+    if (
+        rotation_count <= 0
+        or rotation_count % SOURCE_ROTATION_BLOCK_SIZE
+        or compact_pixel_count <= 0
+        or batch_size <= 0
+        or translation_count <= 0
+        or translation_count > 128
+        or shifted_pixel_count != compact_pixel_count
+        or weight_shape != (batch_size, compact_pixel_count)
+        or initial_shape != (batch_size,)
+        or block_shape[0] != batch_size
+        or block_shape[1] <= 0
+    ):
+        raise ValueError(
+            "selected source-16 operands have inconsistent shapes or counts",
+        )
+    if (
+        topology.compact_pixel_count != compact_pixel_count
+        or topology.translation_count != translation_count
+    ):
+        raise ValueError(
+            "certificate topology does not match selected source-16 operands",
+        )
+
+    scorer = (
+        cuda_backproject.relion_coarse_diff2_rotation_blocks_f32
+        if logical_full_pixel_count is None
+        else cuda_backproject.relion_coarse_diff2_rotation_blocks_runtime_f32
+    )
+    operands = (
+        reference,
+        shifted_image,
+        weight,
+        initial_diff2,
+        rotation_block_ids,
+        jnp.asarray(topology.full_to_compact),
+    )
+    if logical_full_pixel_count is None:
+        return scorer(*operands)
+    return scorer(
+        *operands,
+        jnp.asarray(logical_full_pixel_count, dtype=jnp.int32),
+    )
+
+
 def _score_rotation_block(
     window_spec,
     *,
@@ -359,21 +469,16 @@ def _e_step_block_scores(
     return -0.5 * residuals
 
 
-@partial(jax.jit, static_argnums=(6, 7, 8, 9, 10))
-def _e_step_block_scores_windowed(
+def _e_step_block_score_components_windowed(
     shifted_windowed,
-    batch_norm,
     ctf2_over_nv_windowed,
     proj_windowed_weighted,
     proj_abs2_windowed,
-    half_weights_windowed,
     n_images,
     n_trans,
-    n_windowed,
-    image_shape,
-    volume_shape,
 ):
-    """E-step for one rotation block using windowed half-spectrum GEMMs."""
+    """Return the mature cross and model-energy GEMM components."""
+
     rot_block_size = proj_windowed_weighted.shape[0]
     cross = (
         -2.0
@@ -390,8 +495,952 @@ def _e_step_block_scores_windowed(
         proj_abs2_windowed.T,
         precision=jax.lax.Precision.HIGHEST,
     )
+    return cross, norms
+
+
+@partial(jax.jit, static_argnums=(6, 7, 8, 9, 10))
+def _e_step_block_scores_windowed(
+    shifted_windowed,
+    batch_norm,
+    ctf2_over_nv_windowed,
+    proj_windowed_weighted,
+    proj_abs2_windowed,
+    half_weights_windowed,
+    n_images,
+    n_trans,
+    n_windowed,
+    image_shape,
+    volume_shape,
+):
+    """E-step for one rotation block using windowed half-spectrum GEMMs."""
+
+    del batch_norm, half_weights_windowed, n_windowed, image_shape, volume_shape
+    cross, norms = _e_step_block_score_components_windowed(
+        shifted_windowed,
+        ctf2_over_nv_windowed,
+        proj_windowed_weighted,
+        proj_abs2_windowed,
+        n_images,
+        n_trans,
+    )
     residuals = cross + norms[..., None]
     return -0.5 * residuals
+
+
+class RelionCoarseGaussianGemmCertificateBlock(NamedTuple):
+    """Promoted macro scores and direct-FP32 enclosures for one block."""
+
+    macro_scores: jax.Array
+    raw_lower: jax.Array
+    raw_upper: jax.Array
+
+
+class RelionCoarseGaussianGemmF64ImageBatch(NamedTuple):
+    """Image-only FP64 operands prepared once for every reference block."""
+
+    weighted_shifted: jax.Array
+    pixel_weight: jax.Array
+    image_energy: jax.Array
+    initial_diff2: jax.Array
+    image_component_abs_max: jax.Array
+    weight_max: jax.Array
+    active: jax.Array
+    stored_inputs_valid: jax.Array
+    actual_image_count: jax.Array
+
+
+@jax.jit
+def _prepare_relion_coarse_gaussian_gemm_f64_image_batch_jit(
+    shifted_corrected,
+    pixel_weight,
+    initial_diff2,
+    actual_image_count,
+):
+    """Promote and reduce image-only terms once per physical image batch.
+
+    See ``docs/math/vdam_coarse_gemm_error_certificate.md``.
+    """
+
+    with jax.enable_x64(True):
+        n_images = int(shifted_corrected.shape[0])
+        active = jnp.arange(n_images, dtype=jnp.int32) < jnp.asarray(
+            actual_image_count,
+            dtype=jnp.int32,
+        )
+        shifted = jnp.where(
+            active[:, None, None],
+            shifted_corrected,
+            jnp.zeros((), dtype=shifted_corrected.dtype),
+        ).astype(jnp.complex128)
+        weight = jnp.where(
+            active[:, None],
+            pixel_weight,
+            jnp.zeros((), dtype=pixel_weight.dtype),
+        ).astype(jnp.float64)
+        initial = jnp.where(
+            active,
+            initial_diff2,
+            jnp.zeros((), dtype=initial_diff2.dtype),
+        ).astype(jnp.float64)
+        shifted_abs2 = shifted.real * shifted.real + shifted.imag * shifted.imag
+        image_energy = jnp.sum(
+            shifted_abs2 * weight[:, None, :],
+            axis=-1,
+            dtype=jnp.float64,
+        )
+        stored_inputs_valid = (
+            jnp.all(
+                jnp.isfinite(shifted.real) & jnp.isfinite(shifted.imag),
+                axis=(1, 2),
+            )
+            & jnp.all(jnp.isfinite(weight) & (weight >= 0.0), axis=1)
+            & jnp.isfinite(initial)
+            & (initial >= 0.0)
+        )
+        return RelionCoarseGaussianGemmF64ImageBatch(
+            weighted_shifted=(shifted * weight[:, None, :]).reshape(
+                shifted_corrected.shape[0] * shifted_corrected.shape[1],
+                shifted_corrected.shape[2],
+            ),
+            pixel_weight=weight,
+            image_energy=image_energy,
+            initial_diff2=initial,
+            image_component_abs_max=jnp.max(
+                jnp.maximum(jnp.abs(shifted.real), jnp.abs(shifted.imag)),
+                axis=(1, 2),
+            ),
+            weight_max=jnp.max(weight, axis=1),
+            active=active,
+            stored_inputs_valid=stored_inputs_valid,
+            actual_image_count=jnp.asarray(actual_image_count, dtype=jnp.int32),
+        )
+
+
+def _prepare_relion_coarse_gaussian_gemm_f64_image_batch(
+    shifted_corrected,
+    pixel_weight,
+    initial_diff2,
+    actual_image_count,
+):
+    """Validate and prepare image-only certificate operands exactly once."""
+
+    shifted_corrected = jnp.asarray(shifted_corrected)
+    pixel_weight = jnp.asarray(pixel_weight)
+    initial_diff2 = jnp.asarray(initial_diff2)
+    if shifted_corrected.ndim != 3:
+        raise ValueError(
+            "certified coarse GEMM expects shifted images with shape (B,T,F)",
+        )
+    n_images, _n_trans, n_pixels = map(int, shifted_corrected.shape)
+    if (
+        n_images <= 0
+        or _n_trans <= 0
+        or n_pixels <= 0
+        or tuple(pixel_weight.shape) != (n_images, n_pixels)
+        or tuple(initial_diff2.shape) != (n_images,)
+    ):
+        raise ValueError("certified coarse GEMM image operands have inconsistent shapes")
+    if (
+        shifted_corrected.dtype != jnp.complex64
+        or pixel_weight.dtype != jnp.float32
+        or initial_diff2.dtype != jnp.float32
+    ):
+        raise TypeError(
+            "certified coarse GEMM requires stored complex64 images and "
+            "float32 weights/initial diff2",
+        )
+    try:
+        actual_count = operator.index(actual_image_count)
+    except TypeError as error:
+        raise ValueError("actual_image_count must be an integer") from error
+    if actual_count <= 0 or actual_count > n_images:
+        raise ValueError(
+            f"actual_image_count must be in [1, {n_images}], got {actual_count}",
+        )
+    with jax.enable_x64(True):
+        return _prepare_relion_coarse_gaussian_gemm_f64_image_batch_jit(
+            shifted_corrected,
+            pixel_weight,
+            initial_diff2,
+            jnp.int32(actual_count),
+        )
+
+
+@partial(jax.jit, static_argnames=("real_cross",))
+def _relion_coarse_gaussian_gemm_certificate_from_prepared_jit(
+    projected_reference,
+    image_batch,
+    cross_gamma,
+    energy_gamma,
+    initial_diff2_gamma,
+    energy_envelope_gamma,
+    direct_gamma,
+    traversed_full_position_count,
+    *,
+    real_cross=False,
+):
+    """Evaluate the promoted center and reduce it to certified endpoints.
+
+    See ``docs/math/vdam_coarse_gemm_error_certificate.md``.
+    """
+
+    from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+        coarse_gemm_direct_f32_ftz_envelope_and_range,
+        coarse_gemm_direct_score_intervals,
+        coarse_gemm_expanded_score_eta_f64,
+    )
+
+    with jax.enable_x64(True):
+        n_images = int(image_batch.pixel_weight.shape[0])
+        n_trans = int(image_batch.image_energy.shape[1])
+        projected = projected_reference.astype(jnp.complex128)
+        # The certificate assumes two explicit component squares.  Do not use
+        # abs/hypot or the upstream FP32 abs2 companion on this path.
+        projected_abs2 = projected.real * projected.real + projected.imag * projected.imag
+        if real_cross:
+            # The certificate needs only Re(conj(Y) @ P.T). One real dot
+            # over 2*n FP64 components avoids computing the unused imaginary
+            # output. The existing gamma(2*n+4) covers this reduction too.
+            image_components = jnp.concatenate(
+                (image_batch.weighted_shifted.real, image_batch.weighted_shifted.imag), axis=1
+            )
+            reference_components = jnp.concatenate((projected.real, projected.imag), axis=1)
+            cross = -2.0 * jnp.matmul(
+                image_components, reference_components.T, precision=jax.lax.Precision.HIGHEST
+            )
+            cross = cross.reshape(n_images, n_trans, projected.shape[0]).swapaxes(1, 2)
+            reference_energy = jnp.matmul(
+                image_batch.pixel_weight, projected_abs2.T, precision=jax.lax.Precision.HIGHEST
+            )
+        else:
+            cross, reference_energy = _e_step_block_score_components_windowed(
+                image_batch.weighted_shifted,
+                image_batch.pixel_weight,
+                projected,
+                projected_abs2,
+                n_images,
+                n_trans,
+            )
+        model_scores = jnp.float64(-0.5) * (cross + reference_energy[..., None])
+        expanded_score = (
+            model_scores
+            - jnp.float64(0.5) * image_batch.image_energy[:, None, :]
+            - image_batch.initial_diff2[:, None, None]
+        )
+        eta = coarse_gemm_expanded_score_eta_f64(
+            reference_energy,
+            image_batch.image_energy,
+            image_batch.initial_diff2,
+            cross_gamma=cross_gamma,
+            energy_gamma=energy_gamma,
+            initial_diff2_gamma=initial_diff2_gamma,
+            energy_envelope_gamma=energy_envelope_gamma,
+        )
+        reference_component_abs_max = jnp.max(
+            jnp.maximum(jnp.abs(projected.real), jnp.abs(projected.imag)),
+            axis=1,
+        )
+        ftz_error, direct_range_valid = coarse_gemm_direct_f32_ftz_envelope_and_range(
+            reference_component_abs_max,
+            image_batch.image_component_abs_max,
+            image_batch.weight_max,
+            image_batch.initial_diff2,
+            traversed_full_position_count,
+            direct_gamma,
+        )
+
+        reference_valid = jnp.all(
+            jnp.isfinite(projected.real) & jnp.isfinite(projected.imag),
+        )
+        macro_scores = expanded_score.astype(jnp.float32)
+        certificate_valid = (
+            reference_valid
+            & image_batch.stored_inputs_valid[:, None, None]
+            & direct_range_valid
+            & jnp.isfinite(macro_scores)
+        )
+        eta = jnp.where(certificate_valid, eta, jnp.nan)
+        raw_lower, raw_upper = coarse_gemm_direct_score_intervals(
+            expanded_score,
+            eta,
+            direct_gamma,
+            ftz_error,
+            direct_range_valid,
+        )
+        active_candidates = image_batch.active[:, None, None]
+        return RelionCoarseGaussianGemmCertificateBlock(
+            macro_scores=jnp.where(
+                active_candidates,
+                macro_scores,
+                jnp.float32(0.0),
+            ),
+            raw_lower=jnp.where(active_candidates, raw_lower, jnp.float64(0.0)),
+            raw_upper=jnp.where(active_candidates, raw_upper, jnp.float64(0.0)),
+        )
+
+
+def _validate_relion_coarse_gaussian_gemm_certificate_binding(
+    projected_reference,
+    image_batch,
+    *,
+    topology,
+):
+    """Bind a projection and prepared image batch to one audited topology."""
+
+    from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+        CoarseGemmCertificateTopology,
+        validate_coarse_gemm_certificate_topology,
+    )
+
+    projected_reference = jnp.asarray(projected_reference)
+    if not isinstance(image_batch, RelionCoarseGaussianGemmF64ImageBatch):
+        raise TypeError("image_batch must be a prepared FP64 coarse GEMM image batch")
+    if not isinstance(topology, CoarseGemmCertificateTopology):
+        raise TypeError("topology must be a host-validated CoarseGemmCertificateTopology")
+    validate_coarse_gemm_certificate_topology(topology)
+    if projected_reference.ndim != 2:
+        raise ValueError(
+            f"certified coarse GEMM expects projection=(R,F), got {projected_reference.shape}",
+        )
+    n_images = int(image_batch.pixel_weight.shape[0])
+    n_trans = int(image_batch.image_energy.shape[1])
+    n_pixels = int(image_batch.pixel_weight.shape[1])
+    if (
+        int(projected_reference.shape[0]) <= 0
+        or tuple(projected_reference.shape[1:]) != (n_pixels,)
+        or tuple(image_batch.weighted_shifted.shape) != (n_images * n_trans, n_pixels)
+        or tuple(image_batch.initial_diff2.shape) != (n_images,)
+        or tuple(image_batch.image_component_abs_max.shape) != (n_images,)
+        or tuple(image_batch.weight_max.shape) != (n_images,)
+        or tuple(image_batch.active.shape) != (n_images,)
+        or tuple(image_batch.stored_inputs_valid.shape) != (n_images,)
+        or image_batch.actual_image_count.shape != ()
+    ):
+        raise ValueError("certified coarse GEMM operands have inconsistent shapes")
+    expected_dtypes = (
+        (projected_reference.dtype, jnp.complex64),
+        (image_batch.weighted_shifted.dtype, jnp.complex128),
+        (image_batch.pixel_weight.dtype, jnp.float64),
+        (image_batch.image_energy.dtype, jnp.float64),
+        (image_batch.initial_diff2.dtype, jnp.float64),
+        (image_batch.image_component_abs_max.dtype, jnp.float64),
+        (image_batch.weight_max.dtype, jnp.float64),
+        (image_batch.active.dtype, jnp.bool_),
+        (image_batch.stored_inputs_valid.dtype, jnp.bool_),
+        (image_batch.actual_image_count.dtype, jnp.int32),
+    )
+    if any(actual != expected for actual, expected in expected_dtypes):
+        raise TypeError("certified coarse GEMM projection or prepared image dtype is invalid")
+    if (
+        topology.compact_pixel_count != n_pixels
+        or topology.translation_count != n_trans
+        or topology.full_position_count < n_pixels
+    ):
+        raise ValueError(
+            "certificate topology does not match the prepared scorer operands",
+        )
+    return projected_reference, n_images, n_trans
+
+
+def _relion_coarse_gaussian_gemm_certificate(
+    projected_reference,
+    shifted_corrected,
+    pixel_weight,
+    initial_diff2,
+    actual_image_count,
+    *,
+    topology,
+    real_cross=False,
+):
+    """Validate stored RELION operands and construct a promoted certificate."""
+
+    image_batch = _prepare_relion_coarse_gaussian_gemm_f64_image_batch(
+        shifted_corrected,
+        pixel_weight,
+        initial_diff2,
+        actual_image_count,
+    )
+    projected_reference, _n_images, _n_trans = _validate_relion_coarse_gaussian_gemm_certificate_binding(
+        projected_reference,
+        image_batch,
+        topology=topology,
+    )
+    with jax.enable_x64(True):
+        return _relion_coarse_gaussian_gemm_certificate_from_prepared_jit(
+            projected_reference,
+            image_batch,
+            *topology.expanded_f64_gammas,
+            topology.direct_f32_gamma,
+            np.int32(topology.full_position_count),
+            real_cross=real_cross,
+        )
+
+
+@partial(jax.jit, static_argnames=("real_cross",))
+def _relion_coarse_gaussian_gemm_update_certificate_state_jit(
+    state,
+    projected_reference,
+    image_batch,
+    class_log_prior,
+    rotation_log_prior,
+    translation_log_prior,
+    cross_gamma,
+    energy_gamma,
+    initial_diff2_gamma,
+    energy_envelope_gamma,
+    direct_gamma,
+    traversed_full_position_count,
+    rotation_offset,
+    *,
+    real_cross=False,
+):
+    """Fuse the promoted certificate, ordered priors, and compact reduction."""
+
+    from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+        _update_coarse_gemm_hybrid_interval_state,
+        propagate_coarse_gemm_intervals_through_f32_priors,
+    )
+
+    certificate = _relion_coarse_gaussian_gemm_certificate_from_prepared_jit(
+        projected_reference,
+        image_batch,
+        cross_gamma,
+        energy_gamma,
+        initial_diff2_gamma,
+        energy_envelope_gamma,
+        direct_gamma,
+        traversed_full_position_count,
+        real_cross=real_cross,
+    )
+    posterior_lower, posterior_upper = propagate_coarse_gemm_intervals_through_f32_priors(
+        certificate.raw_lower,
+        certificate.raw_upper,
+        class_log_prior=class_log_prior,
+        rotation_log_prior=rotation_log_prior,
+        translation_log_prior=translation_log_prior,
+    )
+    rotation_ids = jnp.arange(
+        projected_reference.shape[0],
+        dtype=jnp.int32,
+    ) + jnp.asarray(rotation_offset, dtype=jnp.int32)
+    return _update_coarse_gemm_hybrid_interval_state(
+        state,
+        certificate.raw_lower,
+        certificate.raw_upper,
+        posterior_lower,
+        posterior_upper,
+        rotation_ids,
+        image_batch.actual_image_count,
+    )
+
+
+def _relion_coarse_gaussian_gemm_update_certificate_state(
+    state,
+    projected_reference,
+    image_batch,
+    *,
+    topology,
+    rotation_offset: int,
+    class_log_prior,
+    rotation_log_prior=None,
+    translation_log_prior=None,
+    real_cross=False,
+):
+    """Update the K=1 complete-block selector without publishing score cubes."""
+
+    projected_reference, n_images, _n_trans = _validate_relion_coarse_gaussian_gemm_certificate_binding(
+        projected_reference,
+        image_batch,
+        topology=topology,
+    )
+    try:
+        rotation_offset = operator.index(rotation_offset)
+    except TypeError as error:
+        raise ValueError("rotation_offset must be an integer") from error
+    n_block_rotations = int(projected_reference.shape[0])
+    n_total_rotations = int(state.rotation_visit_count.shape[0])
+    if (
+        rotation_offset < 0
+        or rotation_offset % 16
+        or n_block_rotations % 16
+        or n_total_rotations % 16
+        or rotation_offset + n_block_rotations > n_total_rotations
+        or int(state.raw_block_lower_max.shape[0]) != n_images
+    ):
+        raise ValueError("certificate-state update requires aligned complete source-16 blocks")
+    with jax.enable_x64(True):
+        return _relion_coarse_gaussian_gemm_update_certificate_state_jit(
+            state,
+            projected_reference,
+            image_batch,
+            class_log_prior,
+            rotation_log_prior,
+            translation_log_prior,
+            *topology.expanded_f64_gammas,
+            topology.direct_f32_gamma,
+            np.int32(topology.full_position_count),
+            jnp.int32(rotation_offset),
+            real_cross=real_cross,
+        )
+
+
+@partial(
+    jax.jit,
+    static_argnames=("n_images", "n_trans", "image_shape", "volume_shape"),
+)
+def _relion_coarse_gaussian_gemm_scores_jit(
+    projected_reference,
+    projected_reference_abs2,
+    shifted_corrected,
+    pixel_weight,
+    initial_diff2,
+    actual_image_count,
+    *,
+    n_images: int,
+    n_trans: int,
+    image_shape: tuple[int, int],
+    volume_shape: tuple[int, int, int],
+):
+    """Score exact RELION coarse operands with the mature half-spectrum GEMMs."""
+
+    active = jnp.arange(n_images, dtype=jnp.int32) < jnp.asarray(
+        actual_image_count,
+        dtype=jnp.int32,
+    )
+    shifted_corrected = jnp.where(
+        active[:, None, None],
+        shifted_corrected,
+        jnp.zeros((), dtype=shifted_corrected.dtype),
+    )
+    pixel_weight = jnp.where(
+        active[:, None],
+        pixel_weight,
+        jnp.zeros((), dtype=pixel_weight.dtype),
+    )
+    initial_diff2 = jnp.where(
+        active,
+        initial_diff2,
+        jnp.zeros((), dtype=initial_diff2.dtype),
+    )
+
+    # RELION's exact coarse operands store the image divided by its pixel
+    # correction separately from corr_img * half_weight.  Absorb that
+    # image-specific weight on the image side, then reuse the same two GEMMs
+    # as ordinary dense EM.  Candidate axes remain [image, rotation,
+    # translation]; only the pixel reduction topology changes.
+    weighted_shifted = shifted_corrected * pixel_weight[:, None, :]
+    model_scores = _e_step_block_scores_windowed(
+        weighted_shifted.reshape(n_images * n_trans, -1),
+        jnp.zeros((n_images, 1), dtype=pixel_weight.dtype),
+        pixel_weight,
+        projected_reference,
+        projected_reference_abs2,
+        jnp.ones((projected_reference.shape[-1],), dtype=pixel_weight.dtype),
+        n_images,
+        n_trans,
+        int(projected_reference.shape[-1]),
+        image_shape,
+        volume_shape,
+    )
+
+    # The mature dense score omits the pose-independent image term.  Restore
+    # it here because the exact RELION coarse FFI reports absolute diff2 and
+    # the public log-evidence path deliberately applies no later offset.
+    image_power = (
+        shifted_corrected.real * shifted_corrected.real
+        + shifted_corrected.imag * shifted_corrected.imag
+    )
+    image_diff2 = jnp.asarray(0.5, dtype=pixel_weight.dtype) * jnp.sum(
+        image_power * pixel_weight[:, None, :],
+        axis=-1,
+    )
+    scores = model_scores - image_diff2[:, None, :] - initial_diff2[:, None, None]
+    return jnp.where(
+        active[:, None, None],
+        scores,
+        jnp.zeros((), dtype=scores.dtype),
+    )
+
+
+def _relion_coarse_gaussian_gemm_scores(
+    projected_reference,
+    projected_reference_abs2,
+    shifted_corrected,
+    pixel_weight,
+    initial_diff2,
+    actual_image_count,
+    *,
+    image_shape,
+    volume_shape,
+):
+    """Validate and score one projection-once coarse Gaussian macro batch.
+
+    The arithmetic is mathematically equivalent in exact arithmetic to
+    RELION's direct-square
+    ``0.5 * weight * |reference - shifted_image|**2 + initial_diff2``.
+    It intentionally reuses :func:`_e_step_block_scores_windowed` so both EM
+    and InitialModel exercise the mature half-spectrum GEMMs instead of a
+    second VDAM scoring implementation.  This expands the square into model,
+    cross, and image terms and therefore changes both operation order and
+    cancellation behavior; it is not merely a parallel-reduction reorder.
+    Keep the path qualification-only until paired production operands show
+    repeat-bounded, non-directional, non-growing drift, unchanged discrete
+    choices/support and final quality, plus a material end-to-end speedup.
+    """
+
+    projected_reference = jnp.asarray(projected_reference)
+    projected_reference_abs2 = jnp.asarray(projected_reference_abs2)
+    shifted_corrected = jnp.asarray(shifted_corrected)
+    pixel_weight = jnp.asarray(pixel_weight)
+    initial_diff2 = jnp.asarray(initial_diff2)
+    if projected_reference.ndim != 2 or shifted_corrected.ndim != 3:
+        raise ValueError(
+            "coarse GEMM macro expects projected_reference=(R,F) and "
+            f"shifted_corrected=(B,T,F), got {projected_reference.shape} and "
+            f"{shifted_corrected.shape}",
+        )
+    n_images, n_trans, n_pixels = map(int, shifted_corrected.shape)
+    expected_projection_shape = (int(projected_reference.shape[0]), n_pixels)
+    if tuple(projected_reference.shape) != expected_projection_shape:
+        raise ValueError(
+            "coarse GEMM projection and image pixels must match, got "
+            f"{projected_reference.shape} and {shifted_corrected.shape}",
+        )
+    if tuple(projected_reference_abs2.shape) != expected_projection_shape:
+        raise ValueError(
+            "coarse GEMM projection abs2 must match the projection, got "
+            f"{projected_reference_abs2.shape} and {projected_reference.shape}",
+        )
+    if tuple(pixel_weight.shape) != (n_images, n_pixels):
+        raise ValueError(
+            "coarse GEMM pixel_weight must have shape "
+            f"({n_images}, {n_pixels}), got {pixel_weight.shape}",
+        )
+    if tuple(initial_diff2.shape) != (n_images,):
+        raise ValueError(
+            "coarse GEMM initial_diff2 must have one value per image, got "
+            f"{initial_diff2.shape}",
+        )
+    if projected_reference.dtype != shifted_corrected.dtype:
+        raise TypeError(
+            "coarse GEMM projection and shifted images must share a complex "
+            f"dtype, got {projected_reference.dtype} and {shifted_corrected.dtype}",
+        )
+    expected_real_dtype = jnp.asarray(projected_reference.real).dtype
+    if (
+        projected_reference_abs2.dtype != expected_real_dtype
+        or pixel_weight.dtype != expected_real_dtype
+        or initial_diff2.dtype != expected_real_dtype
+    ):
+        raise TypeError(
+            "coarse GEMM abs2, pixel weights, and initial diff2 must use the "
+            f"projection's real dtype {expected_real_dtype}",
+        )
+    if not isinstance(actual_image_count, jax.core.Tracer):
+        actual_count = int(np.asarray(actual_image_count))
+        if actual_count < 0 or actual_count > n_images:
+            raise ValueError(
+                "coarse GEMM actual_image_count must be in "
+                f"[0, {n_images}], got {actual_count}",
+            )
+    return _relion_coarse_gaussian_gemm_scores_jit(
+        projected_reference,
+        projected_reference_abs2,
+        shifted_corrected,
+        pixel_weight,
+        initial_diff2,
+        actual_image_count,
+        n_images=n_images,
+        n_trans=n_trans,
+        image_shape=tuple(int(value) for value in image_shape),
+        volume_shape=tuple(int(value) for value in volume_shape),
+    )
+
+
+def _coarse_gaussian_direct_macro_diagnostics(
+    direct_scores,
+    macro_scores,
+    *,
+    direct_support=None,
+    macro_support=None,
+):
+    """Summarize paired direct-square and expanded-GEMM score surfaces.
+
+    Inputs use the public coarse layout ``[image, class, rotation,
+    translation]``.  This helper deliberately reports raw deltas, signed bias,
+    winner margins, and exact discrete differences without defining a
+    promotion tolerance.  Repeated H100 artifacts can therefore establish a
+    native/repeat envelope without silently turning one observed delta into an
+    acceptance threshold.
+    """
+
+    direct = np.asarray(direct_scores)
+    macro = np.asarray(macro_scores)
+    if direct.shape != macro.shape or direct.ndim != 4:
+        raise ValueError(
+            "paired coarse score diagnostics require equal "
+            "[image, class, rotation, translation] arrays, got "
+            f"{direct.shape} and {macro.shape}",
+        )
+    if direct.dtype != macro.dtype or direct.dtype not in (np.dtype(np.float32), np.dtype(np.float64)):
+        raise TypeError(
+            "paired coarse score diagnostics require one shared float32 or "
+            f"float64 dtype, got {direct.dtype} and {macro.dtype}",
+        )
+    direct_flat = direct.reshape(direct.shape[0], -1)
+    macro_flat = macro.reshape(macro.shape[0], -1)
+    delta = macro_flat.astype(np.float64) - direct_flat.astype(np.float64)
+    absolute_delta = np.abs(delta)
+    relative_delta_to_direct = np.full(delta.shape, np.nan, dtype=np.float64)
+    np.divide(
+        delta,
+        np.abs(direct_flat.astype(np.float64)),
+        out=relative_delta_to_direct,
+        where=direct_flat != 0,
+    )
+
+    def ordered_float_bits(values):
+        values = np.asarray(values).copy()
+        values[values == 0] = 0
+        if values.dtype == np.float32:
+            unsigned = values.view(np.uint32)
+            sign_mask = np.uint32(1 << 31)
+            ordered = np.where(
+                (unsigned & sign_mask) != 0,
+                ~unsigned,
+                unsigned ^ sign_mask,
+            ).astype(np.uint64)
+        else:
+            unsigned = values.view(np.uint64)
+            sign_mask = np.uint64(1 << 63)
+            ordered = np.where(
+                (unsigned & sign_mask) != 0,
+                ~unsigned,
+                unsigned ^ sign_mask,
+            )
+        return ordered
+
+    direct_ordered = ordered_float_bits(direct_flat)
+    macro_ordered = ordered_float_bits(macro_flat)
+    ulp_delta = np.maximum(direct_ordered, macro_ordered) - np.minimum(
+        direct_ordered,
+        macro_ordered,
+    )
+    nonfinite = ~np.isfinite(direct_flat) | ~np.isfinite(macro_flat)
+    ulp_delta = np.where(nonfinite, np.iinfo(np.uint64).max, ulp_delta)
+
+    def winner_and_margin(values):
+        winner = np.argmax(values, axis=1).astype(np.int64)
+        if values.shape[1] == 1:
+            margin = np.full(values.shape[0], np.inf, dtype=np.float64)
+        else:
+            largest_two = np.partition(values.astype(np.float64), -2, axis=1)[:, -2:]
+            margin = largest_two[:, 1] - largest_two[:, 0]
+        return winner, margin
+
+    direct_winner, direct_margin = winner_and_margin(direct_flat)
+    macro_winner, macro_margin = winner_and_margin(macro_flat)
+    diagnostics = {
+        "score_delta": delta.reshape(direct.shape),
+        "absolute_score_delta": absolute_delta.reshape(direct.shape),
+        "relative_score_delta_to_direct": relative_delta_to_direct.reshape(direct.shape),
+        "ulp_score_delta": ulp_delta.reshape(direct.shape),
+        "score_precision_bits": np.asarray(direct.dtype.itemsize * 8, dtype=np.int64),
+        "direct_max_abs_score_per_image": np.max(
+            np.abs(direct_flat.astype(np.float64)),
+            axis=1,
+        ),
+        "macro_max_abs_score_per_image": np.max(
+            np.abs(macro_flat.astype(np.float64)),
+            axis=1,
+        ),
+        "signed_mean_delta_per_image": np.mean(delta, axis=1),
+        "rms_delta_per_image": np.sqrt(np.mean(delta * delta, axis=1)),
+        "max_abs_delta_per_image": np.max(np.abs(delta), axis=1),
+        "positive_delta_count_per_image": np.count_nonzero(delta > 0.0, axis=1),
+        "negative_delta_count_per_image": np.count_nonzero(delta < 0.0, axis=1),
+        "zero_delta_count_per_image": np.count_nonzero(delta == 0.0, axis=1),
+        "exact_zero_direct_nonzero_macro_per_image": np.all(
+            direct_flat == 0.0,
+            axis=1,
+        )
+        & np.any(macro_flat != 0.0, axis=1),
+        "direct_argmax": direct_winner,
+        "macro_argmax": macro_winner,
+        "argmax_equal": direct_winner == macro_winner,
+        "direct_winner_margin": direct_margin,
+        "macro_winner_margin": macro_margin,
+    }
+    if (direct_support is None) != (macro_support is None):
+        raise ValueError("direct_support and macro_support must be supplied together")
+    if direct_support is not None:
+        direct_support = np.asarray(direct_support, dtype=bool)
+        macro_support = np.asarray(macro_support, dtype=bool)
+        if direct_support.shape != direct_flat.shape or macro_support.shape != direct_flat.shape:
+            raise ValueError(
+                "coarse support diagnostics must match flattened score surfaces, got "
+                f"{direct_support.shape}, {macro_support.shape}, and {direct_flat.shape}",
+            )
+        diagnostics.update(
+            direct_support=direct_support.reshape(direct.shape),
+            macro_support=macro_support.reshape(direct.shape),
+            support_equal=np.all(direct_support == macro_support, axis=1),
+            support_symmetric_difference_count=np.count_nonzero(
+                direct_support != macro_support,
+                axis=1,
+            ).astype(np.int64),
+        )
+    return diagnostics
+
+
+def _coarse_gaussian_repeat_spread_diagnostics(score_delta_repeats):
+    """Report repeat-to-repeat drift without defining an acceptance epsilon.
+
+    ``score_delta_repeats`` has layout
+    ``[repeat,image,class,rotation,translation]`` and should be assembled from
+    immutable same-hardware paired captures.  The caller must compare this raw
+    spread with native/direct repeats, scale panels, discrete outcomes, and
+    final quality; this helper cannot promote the GEMM path by itself.
+    """
+
+    deltas = np.asarray(score_delta_repeats, dtype=np.float64)
+    if deltas.ndim != 5 or deltas.shape[0] < 2:
+        raise ValueError(
+            "coarse GEMM repeat diagnostics require at least two "
+            "[repeat,image,class,rotation,translation] score-delta surfaces",
+        )
+    flattened = deltas.reshape(deltas.shape[0], deltas.shape[1], -1)
+    signed_mean_per_repeat_image = np.mean(flattened, axis=2)
+    max_abs_per_repeat_image = np.max(np.abs(flattened), axis=2)
+    return {
+        "repeat_count": np.asarray(deltas.shape[0], dtype=np.int64),
+        "signed_mean_delta_per_repeat_image": signed_mean_per_repeat_image,
+        "max_abs_delta_per_repeat_image": max_abs_per_repeat_image,
+        "signed_mean_repeat_spread_per_image": np.ptp(
+            signed_mean_per_repeat_image,
+            axis=0,
+        ),
+        "max_abs_repeat_spread_per_image": np.ptp(
+            max_abs_per_repeat_image,
+            axis=0,
+        ),
+        "elementwise_delta_repeat_spread": np.ptp(deltas, axis=0),
+        "qualification_status": np.asarray(
+            "NO_GO_raw_repeat_spread_requires_native_scale_discrete_quality_runtime_context"
+        ),
+    }
+
+
+def _coarse_gaussian_scale_panel_diagnostics(
+    operand_scales,
+    score_deltas_by_scale,
+    *,
+    precision_bits: int,
+):
+    """Classify strictly growing multiscale cancellation drift as NO-GO.
+
+    This is an ordering test over raw observations, not an epsilon threshold.
+    A non-growing panel remains unqualified until same-hardware repeats,
+    discrete outcomes, final quality, and clean runtime all pass.
+    """
+
+    scales = np.asarray(operand_scales, dtype=np.float64).reshape(-1)
+    deltas = np.asarray(score_deltas_by_scale, dtype=np.float64)
+    if scales.size < 2 or deltas.ndim != 5 or deltas.shape[0] != scales.size:
+        raise ValueError(
+            "coarse GEMM scale diagnostics require matching scale and "
+            "[scale,image,class,rotation,translation] arrays with at least two scales",
+        )
+    if np.any(~np.isfinite(scales)) or np.any(scales <= 0.0) or np.any(np.diff(scales) <= 0.0):
+        raise ValueError("coarse GEMM operand scales must be finite, positive, and increasing")
+    if int(precision_bits) not in (32, 64):
+        raise ValueError("coarse GEMM precision_bits must be 32 or 64")
+    flattened = deltas.reshape(scales.size, -1)
+    max_abs_by_scale = np.max(np.abs(flattened), axis=1)
+    signed_mean_by_scale = np.mean(flattened, axis=1)
+    growing_steps = max_abs_by_scale[1:] > max_abs_by_scale[:-1]
+    scale_amplified = bool(np.any(growing_steps))
+    return {
+        "operand_scales": scales,
+        "precision_bits": np.asarray(precision_bits, dtype=np.int64),
+        "signed_mean_delta_by_scale": signed_mean_by_scale,
+        "max_abs_delta_by_scale": max_abs_by_scale,
+        "scale_growth_steps": growing_steps,
+        "scale_amplified": np.asarray(scale_amplified),
+        "qualification_status": np.asarray(
+            (
+                "NO_GO_scale-amplified_drift"
+                if scale_amplified
+                else "NO_GO_unqualified_non-growing_scale_panel"
+            )
+        ),
+    }
+
+
+def _coarse_gaussian_qualification_decision(
+    *,
+    exact_arithmetic_equivalent: bool,
+    repeat_stable: bool | None,
+    unbiased_non_directional: bool | None,
+    bounded_non_growing: bool | None,
+    discrete_choices_equal: bool | None,
+    final_basin_quality_equal: bool | None,
+    material_runtime_win: bool | None,
+    scale_amplified: bool | None,
+    negative_implied_diff2: bool,
+    nonfinite_scores: bool,
+    exact_zero_cancellation_drift: bool,
+):
+    """Apply the coarse GEMM promotion policy without a numeric tolerance.
+
+    Mathematically equivalent reduction-order noise may pass without bitwise
+    score equality only after independent evidence establishes repeat
+    stability, non-directional bias, bounded/non-growing scale and iteration
+    behavior, exact discrete decisions, unchanged final basin/quality, and a
+    material clean-run speedup.  Cancellation evidence, non-finite scores, or
+    a negative implied diff2 is an unconditional NO-GO.  ``None`` means the
+    corresponding empirical gate has not run and therefore cannot promote.
+    """
+
+    failures = []
+    pending = []
+    if not exact_arithmetic_equivalent:
+        failures.append("not_exact-arithmetic-equivalent")
+    if scale_amplified is True:
+        failures.append("scale-amplified_drift")
+    elif scale_amplified is None:
+        pending.append("multiscale_growth")
+    if negative_implied_diff2:
+        failures.append("negative_implied_diff2")
+    if nonfinite_scores:
+        failures.append("nonfinite_scores")
+    if exact_zero_cancellation_drift:
+        failures.append("exact-zero_cancellation_drift")
+    for name, value in (
+        ("repeat_stability", repeat_stable),
+        ("unbiased_non-directional", unbiased_non_directional),
+        ("bounded_non-growing", bounded_non_growing),
+        ("discrete_choices", discrete_choices_equal),
+        ("final_basin_quality", final_basin_quality_equal),
+        ("material_runtime_win", material_runtime_win),
+    ):
+        if value is None:
+            pending.append(name)
+        elif not value:
+            failures.append(name)
+    if failures:
+        status = "NO_GO"
+    elif pending:
+        status = "NO_GO_UNQUALIFIED"
+    else:
+        status = "GO_STABLE_BOUNDED_MATHEMATICALLY_EQUIVALENT_NOISE"
+    return {
+        "status": status,
+        "failure_reasons": tuple(failures),
+        "pending_gates": tuple(pending),
+        "requires_bitwise_score_identity": False,
+        "requires_exact_discrete_identity": True,
+    }
 
 
 @partial(jax.jit, static_argnums=(5, 6, 7, 8))

@@ -1,0 +1,1590 @@
+import hashlib
+import json
+import sqlite3
+from pathlib import Path
+
+import mrcfile
+import numpy as np
+import pandas as pd
+import pytest
+import starfile
+
+from scripts import analyze_vdam_raw_cache_abba as analyzer
+
+GPU_UUID = "GPU-00000000-1111-2222-3333-444444444444"
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+def _write_manifest(path: Path, entries: list[tuple[Path, str]]) -> str:
+    path.write_text("".join(f"{_sha256(artifact)}  {name}\n" for artifact, name in entries))
+    return _sha256(path)
+
+
+def _audit() -> dict:
+    return {
+        "score_mode": "gaussian",
+        "translation_count": 29,
+        "requested_fused": True,
+        "effective_fused": True,
+        "requested_workers": 8,
+        "effective_workers": 8,
+        "requested_atomic": True,
+        "effective_atomic": True,
+        "wrapper": "relion_coarse_diff2_projector_multistream_f32",
+        "target": "cuda_relion_coarse_diff2_projector_multistream_f32",
+        "counts": {
+            "fused_calls": 3,
+            "actual_rows": 3000,
+            "multistream_calls": 3,
+            "native_atomic_selected_calls": 3,
+        },
+    }
+
+
+def _schedule() -> dict:
+    return dict(analyzer.EXPECTED_SCHEDULE)
+
+
+def _metadata(pass1_s: float, pass2_s: float) -> dict:
+    subset_size = analyzer.EXPECTED_SUBSET_SIZE
+    return {
+        **_schedule(),
+        "oversampling": 1,
+        "joint_halfset_particle_stream": True,
+        "halfset_ids": [0, 1],
+        "selected_particle_ids": list(range(subset_size)),
+        "best_pose_rotation_ids": [3] * subset_size,
+        "best_pose_rotations": [[0.0, 0.0, 0.0]] * subset_size,
+        "best_pose_translations": [[0.0, 0.0]] * subset_size,
+        "class_assignments": [0] * subset_size,
+        "max_posterior_per_image": [0.75] * subset_size,
+        "pose_assignments": [1] * subset_size,
+        "halfset_0_class_assignments": [0] * subset_size,
+        "sparse_pass2_profile_summary": {
+            "pass1_time_s": pass1_s,
+            "pass2_time_s": pass2_s,
+        },
+        "halfset_0_profile_summary": {
+            "em_time_s": pass1_s + pass2_s,
+            "coarse_selector_audit": _audit(),
+        },
+    }
+
+
+def _write_star(path: Path, *, changed: bool = False) -> None:
+    optics = pd.DataFrame({"rlnOpticsGroup": [1], "rlnImagePixelSize": [1.5], "rlnImageSize": [128]})
+    particles = pd.DataFrame(
+        {
+            "rlnImageName": [f"{index + 1:06d}@particles.mrcs" for index in range(3000)],
+            "rlnAngleRot": np.arange(3000, dtype=np.float64) + float(changed),
+            "rlnAngleTilt": np.zeros(3000),
+            "rlnAnglePsi": np.zeros(3000),
+            "rlnClassNumber": np.ones(3000, dtype=np.int64),
+        }
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    starfile.write({"optics": optics, "particles": particles}, path, overwrite=True)
+
+
+def _write_map(path: Path, value: np.ndarray) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with mrcfile.new(path, overwrite=True) as stream:
+        stream.set_data(np.asarray(value, dtype=np.float32))
+
+
+def _resource_snapshot(*, hwm_kb: int) -> dict:
+    before = {
+        "user_cpu_s": 1.0,
+        "system_cpu_s": 1.0,
+        "max_rss_kb": hwm_kb - 1024,
+        "minor_faults": 1,
+        "major_faults": 0,
+        "input_blocks": 0,
+        "output_blocks": 0,
+        "voluntary_context_switches": 1,
+        "involuntary_context_switches": 0,
+        "current_rss_kb": hwm_kb - 2048,
+        "high_water_rss_kb": hwm_kb - 1024,
+        "proc_io": {"read_bytes": 100, "write_bytes": 100},
+    }
+    after = {
+        **before,
+        "user_cpu_s": 4.0,
+        "system_cpu_s": 2.0,
+        "max_rss_kb": hwm_kb,
+        "current_rss_kb": hwm_kb - 512,
+        "high_water_rss_kb": hwm_kb,
+        "proc_io": {"read_bytes": 10100, "write_bytes": 2100},
+    }
+    return {
+        "before": before,
+        "after": after,
+        "delta": {
+            "user_cpu_s": 3.0,
+            "system_cpu_s": 1.0,
+            "minor_faults": 0.0,
+            "major_faults": 0.0,
+            "input_blocks": 0.0,
+            "output_blocks": 0.0,
+            "voluntary_context_switches": 0.0,
+            "involuntary_context_switches": 0.0,
+            "proc_io": {"read_bytes": 10000, "write_bytes": 2000},
+        },
+    }
+
+
+def _cache_event() -> dict:
+    rss_before = 1_000_000_000
+    hwm_before = rss_before + 8 * 1024**2
+    particle_stack = str(analyzer.EXPECTED_PARTICLE_STACK)
+    return {
+        "loader_type": analyzer.EXPECTED_CACHE_LOADER_TYPE,
+        "num_images": 3000,
+        "image_size": 128,
+        "dtype": "<f4",
+        "estimated_bytes": analyzer.EXPECTED_CACHE_BYTES,
+        "cached_before": False,
+        "cached_after": True,
+        "cached_nbytes": analyzer.EXPECTED_CACHE_BYTES,
+        "cached_shape": [3000, 128, 128],
+        "cached_dtype": "<f4",
+        "cached_c_contiguous": True,
+        "cached_writeable": True,
+        "loader_topology": {
+            "mapped_rows": 3000,
+            "mapped_files": [particle_stack],
+            "mapped_file_count": 1,
+            "mapping_unique_index_count": 3000,
+            "mapping_min_index": 0,
+            "mapping_max_index": 2999,
+            "mapping_is_unique": True,
+            "mapping_is_contiguous_set": True,
+            "mapping_is_strictly_ascending": False,
+            "mapping_mrc_indices_sha256": analyzer.EXPECTED_CACHE_MAPPING_SHA256,
+            "leaf_loader_count": 1,
+            "leaf_loaders": [
+                {
+                    "path": particle_stack,
+                    "io_path": particle_stack,
+                    "loader_type": analyzer.EXPECTED_CACHE_LEAF_LOADER_TYPE,
+                    "num_images": 3000,
+                    "image_size": 128,
+                    "dtype": "<f4",
+                    "selection_indices_sha256": analyzer.EXPECTED_CACHE_LEAF_SELECTION_SHA256,
+                }
+            ],
+            "leaf_cached_before": [False],
+            "leaf_cached_after": [False],
+        },
+        "elapsed_s": 0.20,
+        "current_rss_before_bytes": rss_before,
+        "current_rss_after_bytes": rss_before + analyzer.EXPECTED_CACHE_BYTES,
+        "current_rss_delta_bytes": analyzer.EXPECTED_CACHE_BYTES,
+        "high_water_rss_before_bytes": hwm_before,
+        "high_water_rss_after_bytes": hwm_before + analyzer.EXPECTED_CACHE_BYTES,
+        "high_water_rss_delta_bytes": analyzer.EXPECTED_CACHE_BYTES,
+    }
+
+
+def _memory_probe() -> dict:
+    event_topology = _cache_event()["loader_topology"]
+    topology = {
+        key: value
+        for key, value in event_topology.items()
+        if key not in {"leaf_cached_before", "leaf_cached_after"}
+    }
+    topology["leaf_cached"] = [False]
+    retained = analyzer.EXPECTED_CACHE_BYTES + 1024
+    peak = retained + 4096
+    digest = analyzer.EXPECTED_LOGICAL_IMAGES_SHA256
+    return {
+        "schema": analyzer.MEMORY_PROBE_SCHEMA,
+        "classification": "untimed_memory_and_bitwise_equivalence_canary",
+        "input_star": str(analyzer.EXPECTED_INPUT_STAR),
+        "input_star_sha256": analyzer.EXPECTED_INPUT_STAR_SHA256,
+        "data_dir": str(analyzer.EXPECTED_DATA_DIR),
+        "cache_dir_env": "",
+        "comparison_batch_size": 500,
+        "loader": {
+            "loader_type": analyzer.EXPECTED_CACHE_LOADER_TYPE,
+            "num_images": analyzer.EXPECTED_CACHE_IMAGES,
+            "image_size": analyzer.EXPECTED_IMAGE_SIZE,
+            "dtype": analyzer.EXPECTED_CACHE_DTYPE,
+            "estimated_bytes": analyzer.EXPECTED_CACHE_BYTES,
+            "cached_nbytes": analyzer.EXPECTED_CACHE_BYTES,
+            "cached_shape": [
+                analyzer.EXPECTED_CACHE_IMAGES,
+                analyzer.EXPECTED_IMAGE_SIZE,
+                analyzer.EXPECTED_IMAGE_SIZE,
+            ],
+            "cached_dtype": analyzer.EXPECTED_CACHE_DTYPE,
+            "cached_c_contiguous": True,
+            "cached_writeable": True,
+            "topology_before": topology,
+            "topology_after": topology,
+        },
+        "tracemalloc": {
+            "baseline_current_bytes": 0,
+            "baseline_peak_bytes": 0,
+            "after_current_bytes": retained,
+            "peak_bytes": peak,
+            "retained_delta_bytes": retained,
+            "peak_above_baseline_bytes": peak,
+            "elapsed_s": 0.25,
+        },
+        "rss_diagnostic": {
+            "current_before_bytes": 1_000_000_000,
+            "current_after_bytes": 1_000_000_000 + analyzer.EXPECTED_CACHE_BYTES,
+            "current_delta_bytes": analyzer.EXPECTED_CACHE_BYTES,
+            "high_water_before_bytes": 1_000_000_000,
+            "high_water_after_bytes": 1_000_000_000 + analyzer.EXPECTED_CACHE_BYTES,
+            "high_water_delta_bytes": analyzer.EXPECTED_CACHE_BYTES,
+        },
+        "bitwise_equivalence": {
+            "exact": True,
+            "cached_sha256": digest,
+            "streamed_uncached_sha256": digest,
+            "compared_images": analyzer.EXPECTED_CACHE_IMAGES,
+            "batch_count": 6,
+            "first_mismatch_index": None,
+            "comparison_loader_cached": False,
+            "comparison_topology_before": topology,
+            "comparison_topology_after": topology,
+        },
+    }
+
+
+def _write_nsight(
+    sqlite_path: Path,
+    summary_path: Path,
+    report_path: Path,
+    *,
+    mode: str,
+    pass1_s: float,
+    pass2_s: float,
+    launches: int = 1000,
+) -> None:
+    sqlite_path.parent.mkdir(parents=True, exist_ok=True)
+    pass1 = (2_000_000_000, 2_000_000_000 + int(pass1_s * 1e9))
+    pass2 = (8_000_000_000, 8_000_000_000 + int(pass2_s * 1e9))
+    strings = {
+        1: analyzer.COARSE_KERNEL_NAME,
+        2: analyzer.GETITEM_RANGE,
+        3: analyzer.LOADER_RANGE,
+        4: analyzer.PASS1_RANGE,
+        5: analyzer.PASS2_RANGE,
+    }
+    with sqlite3.connect(sqlite_path) as connection:
+        connection.execute("CREATE TABLE StringIds (id INTEGER PRIMARY KEY, value TEXT NOT NULL)")
+        connection.executemany("INSERT INTO StringIds(id, value) VALUES (?, ?)", strings.items())
+        connection.execute(
+            "CREATE TABLE CUPTI_ACTIVITY_KIND_KERNEL "
+            "(start INTEGER, end INTEGER, deviceId INTEGER, shortName INTEGER, "
+            "gridX INTEGER, gridY INTEGER, gridZ INTEGER, blockX INTEGER, blockY INTEGER, blockZ INTEGER)"
+        )
+        kernel_rows = []
+        for index in range(launches):
+            start = pass1[0] + index * 2_000_000
+            kernel_rows.append((start, start + 1_000_000, 0, 1, 1, 1, 1, 32, 1, 1))
+        connection.executemany(
+            "INSERT INTO CUPTI_ACTIVITY_KIND_KERNEL VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", kernel_rows
+        )
+        connection.execute("CREATE TABLE NVTX_EVENTS (start INTEGER, end INTEGER, textId INTEGER, text TEXT)")
+        connection.executemany(
+            "INSERT INTO NVTX_EVENTS VALUES (?, ?, ?, NULL)",
+            ((*pass1, 4), (*pass2, 5)),
+        )
+        nvtx_rows = []
+        for bounds, text_id in ((pass1, 2), (pass2, 2)):
+            for index in range(1000):
+                start = bounds[0] + index * 1_000_000
+                nvtx_rows.append((start, start + 500_000, text_id, None))
+        if mode == "off":
+            for bounds in (pass1, pass2):
+                for index in range(1000):
+                    start = bounds[0] + index * 1_000_000 + 100_000
+                    nvtx_rows.append((start, start + 200_000, 3, None))
+        else:
+            nvtx_rows.append((1_000_000_000, 1_200_000_000, 3, None))
+        connection.executemany("INSERT INTO NVTX_EVENTS VALUES (?, ?, ?, ?)", nvtx_rows)
+    kernel_sum = launches * 1_000_000
+    _write_json(
+        summary_path,
+        {
+            "schema": analyzer.NSIGHT_SCHEMA,
+            "sqlite": str(sqlite_path.resolve()),
+            "devices": {"0": {"kernel_count": launches, "gpu_busy_ns": kernel_sum}},
+            "kernels": [
+                {
+                    "name": analyzer.COARSE_KERNEL_NAME,
+                    "count": launches,
+                    "total_ns": kernel_sum,
+                    "max_ns": 1_000_000,
+                    "mean_ns": 1_000_000.0,
+                }
+            ],
+        },
+    )
+    report_path.write_bytes(b"synthetic nsys report")
+
+
+def _build_root(tmp_path: Path) -> tuple[Path, Path]:
+    root = tmp_path / "raw_cache_abba"
+    repo = tmp_path / "repo"
+    provenance = root / "provenance"
+    repo.mkdir()
+    provenance.mkdir(parents=True)
+    (root / "ARMS_COMPLETED").touch()
+    source = repo / "source.py"
+    external_interpreter = tmp_path / "external_python"
+    external_interpreter.write_bytes(b"pixi interpreter")
+    interpreter = repo / "python"
+    interpreter.symlink_to(external_interpreter)
+    source.write_text("VALUE = 1\n")
+    git_head = "1" * 40
+    git_tree = "2" * 40
+
+    def fixture_git_rev_parse(_repo, revision, _label):
+        expected = {
+            f"{git_head}^{{commit}}": git_head,
+            f"{git_head}^{{tree}}": git_tree,
+        }
+        if revision not in expected:
+            raise analyzer.RawCacheSetupError(f"unexpected fixture git revision: {revision}")
+        return expected[revision]
+
+    analyzer._git_rev_parse = fixture_git_rev_parse
+    source_digest = _write_manifest(provenance / "source_manifest.sha256", [(source, "source.py")])
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    particle_stack = data_dir / "particles.128.mrcs"
+    particle_stack.write_bytes(b"synthetic particle stack")
+    checkpoint = tmp_path / "checkpoint.star"
+    checkpoint.write_bytes(b"synthetic checkpoint")
+    input_star = tmp_path / "input.star"
+    input_star.write_bytes(b"synthetic input star")
+    input_digest = _write_manifest(
+        provenance / "input_manifest.sha256",
+        [
+            (checkpoint, str(checkpoint.resolve())),
+            (input_star, str(input_star.resolve())),
+            (particle_stack, str(particle_stack.resolve())),
+        ],
+    )
+    cuda = root / "runtime" / "cuda" / "libcuda_backproject.so"
+    binding = root / "runtime" / "relion_bind" / "_relion_bind_core.so"
+    cuda.parent.mkdir(parents=True)
+    binding.parent.mkdir(parents=True)
+    cuda.write_bytes(b"cuda")
+    binding.write_bytes(b"binding")
+    (provenance / "qualified_cuda.sha256").write_text(f"{_sha256(cuda)}  {cuda.resolve()}\n")
+    (provenance / "relion_bind.sha256").write_text(f"{_sha256(binding)}  {binding.resolve()}\n")
+    (provenance / "interpreter.sha256").write_text(f"{_sha256(interpreter)}  {interpreter.resolve()}\n")
+    gate_ledger = provenance / "qualified_gate.SHA256SUMS"
+    gate_ledger.write_text("sealed focused gate\n")
+    (provenance / "qualified_gate.SHA256SUMS.sha256").write_text(f"{_sha256(gate_ledger)}  SHA256SUMS\n")
+    nsys_binary = tmp_path / "nsys"
+    cusparse_library = tmp_path / "libcusparse.so.12"
+    nsys_binary.write_bytes(b"nsys")
+    cusparse_library.write_bytes(b"cusparse")
+
+    # Unit fixtures replace the production-sealed contract in-process.  The
+    # production CLI has no override path and therefore remains pinned to GF46.
+    analyzer.EXPECTED_CHECKPOINT_OPTIMISER = checkpoint.resolve()
+    analyzer.EXPECTED_INPUT_STAR = input_star.resolve()
+    analyzer.EXPECTED_DATA_DIR = data_dir.resolve()
+    analyzer.EXPECTED_PARTICLE_STACK = particle_stack.resolve()
+    analyzer.EXPECTED_INPUT_MANIFEST_SHA256 = input_digest
+    analyzer.EXPECTED_CHECKPOINT_OPTIMISER_SHA256 = _sha256(checkpoint)
+    analyzer.EXPECTED_INPUT_STAR_SHA256 = _sha256(input_star)
+    analyzer.PARTICLE_STACK_SHA256 = _sha256(particle_stack)
+    analyzer.QUALIFIED_GATE_SHA256SUMS_SHA256 = _sha256(gate_ledger)
+    analyzer.CUDA_SHA256 = _sha256(cuda)
+    analyzer.RELION_BIND_SHA256 = _sha256(binding)
+    analyzer.INTERPRETER_SHA256 = _sha256(interpreter)
+    analyzer.NSYS_SHA256 = _sha256(nsys_binary)
+    analyzer.CUSPARSE_SHA256 = _sha256(cusparse_library)
+    analyzer.EXPECTED_QUALIFIED_GPU_GATE_ROOT = Path("/sealed/gate")
+    analyzer.EXPECTED_GPU_UUID = GPU_UUID
+    analyzer.EXPECTED_GPU_NAME = "NVIDIA H100 80GB HBM3"
+    analyzer.EXPECTED_NODE = "della-h21g4"
+    analyzer.EXPECTED_INPUTS = (
+        (checkpoint.resolve(), _sha256(checkpoint)),
+        (input_star.resolve(), _sha256(input_star)),
+        (particle_stack.resolve(), _sha256(particle_stack)),
+    )
+    (provenance / "raw_cache_memory_probe_command.sh").write_text(
+        "env JAX_PLATFORMS=cpu JAX_PLATFORM_NAME=cpu RECOVAR_CACHE_DIR= "
+        f"{interpreter} -m scripts.probe_vdam_raw_cache_memory "
+        f"--input-star {input_star.resolve()} --data-dir {data_dir.resolve()} "
+        f"--output-json {(provenance / 'raw_cache_memory_probe.json').resolve()} "
+        "--comparison-batch-size 500\n"
+    )
+    _write_json(provenance / "raw_cache_memory_probe.json", _memory_probe())
+
+    run = {
+        "schema": analyzer.RUN_SCHEMA,
+        "classification": "diagnostic_performance_only",
+        "job_id": "12345",
+        "git_head": git_head,
+        "git_tree": git_tree,
+        "science_base_head": analyzer.SCIENCE_BASE_HEAD,
+        "science_base_tree": analyzer.SCIENCE_BASE_TREE,
+        "source_manifest_sha256": source_digest,
+        "source_manifest_scope": "selected_high_risk_files",
+        "input_manifest_sha256": input_digest,
+        "particle_stack_sha256": _sha256(particle_stack),
+        "gpu_uuid": GPU_UUID,
+        "gpu_name": "NVIDIA H100 80GB HBM3",
+        "node": "della-h21g4",
+        "qualified_gpu_gate_root": "/sealed/gate",
+        "qualified_gate_sha256sums_sha256": _sha256(gate_ledger),
+        "cuda_sha256": _sha256(cuda),
+        "relion_bind_sha256": _sha256(binding),
+        "interpreter_sha256": _sha256(interpreter),
+        "nsys_sha256": _sha256(nsys_binary),
+        "cusparse_sha256": _sha256(cusparse_library),
+        "execution_order": list(analyzer.ARM_LABELS),
+        "raw_image_cache_modes": [spec[1] for spec in analyzer.ARM_SPECS],
+        "raw_image_cache_max_gb": 16.0,
+        "raw_image_cache_expected_bytes": analyzer.EXPECTED_CACHE_BYTES,
+        "raw_image_cache_force_used": False,
+        "checkpoint_iteration": 180,
+        "profiled_iteration": 181,
+        "nr_iter_schedule": 200,
+        "random_seed": 29,
+        "image_batch_size": 500,
+        "coarse_multistream_workers": 8,
+        "single_lane_canonical": False,
+        "native_atomic_reduction": True,
+        "exact_local_bucket_radix": 4,
+        "exact_local_physical_order_chunk_size": 0,
+        "science_promotion_allowed": False,
+    }
+    _write_json(provenance / "run.json", run)
+    for name, value in {
+        "repo_head.txt": git_head,
+        "repo_tree.txt": git_tree,
+        "slurm_job_id.txt": run["job_id"],
+        "selected_gpu_uuid.txt": GPU_UUID,
+        "node.txt": run["node"],
+        "gpu_name.txt": run["gpu_name"],
+        "allocated_gpu_uuids.csv": GPU_UUID,
+        "visible_gpu_uuids.csv": GPU_UUID,
+    }.items():
+        (provenance / name).write_text(f"{value}\n")
+    (provenance / "repo_status.txt").write_text("")
+    (provenance / "repo_diff.sha256").write_text(f"{hashlib.sha256(b'').hexdigest()}  -\n")
+    (provenance / "science_base_head.txt").write_text(f"{analyzer.SCIENCE_BASE_HEAD}\n")
+    (provenance / "science_base_tree.txt").write_text(f"{analyzer.SCIENCE_BASE_TREE}\n")
+    (provenance / "nsys.sha256").write_text(f"{_sha256(nsys_binary)}  {nsys_binary.resolve()}\n")
+    (provenance / "cusparse.sha256").write_text(f"{_sha256(cusparse_library)}  {cusparse_library.resolve()}\n")
+
+    execution = [
+        "order\tlabel\traw_image_cache_mode\traw_image_cache_max_gb\tworkers\tsingle_lane_canonical\tnative_atomic_reduction\tnsys_base\n"
+    ]
+    base_map = np.arange(64, dtype=np.float32).reshape(4, 4, 4)
+    map_values = {}
+    for label, delta in (
+        ("cache_off_1", 0.0),
+        ("cache_off_2", 8 / 1024),
+        ("cache_off_3", -6 / 1024),
+        ("cache_off_4", 3 / 1024),
+        ("cache_auto_1", 4 / 1024),
+        ("cache_auto_2", 6 / 1024),
+        ("cache_auto_3", -4 / 1024),
+        ("cache_auto_4", 7 / 1024),
+    ):
+        value = base_map.copy()
+        value[0, 0, 0] += delta
+        value[0, 0, 1] -= delta
+        map_values[label] = value
+    timings = {
+        "cache_off_1": (10.0, 8.0, 4.0, 3.0),
+        "cache_auto_1": (9.0, 7.0, 3.6, 2.8),
+        "cache_auto_2": (8.9, 6.9, 3.5, 2.8),
+        "cache_off_2": (10.2, 8.2, 4.1, 3.0),
+        "cache_auto_3": (9.1, 7.1, 3.6, 2.8),
+        "cache_off_3": (10.1, 8.1, 4.0, 3.0),
+        "cache_off_4": (9.9, 7.9, 4.0, 2.9),
+        "cache_auto_4": (9.0, 7.0, 3.5, 2.8),
+    }
+    for order, (label, mode, _repeat) in enumerate(analyzer.ARM_SPECS, start=1):
+        run_root = root / "runs" / label
+        profile_root = run_root / "profile"
+        cache = run_root / "jax_cache"
+        cache.mkdir(parents=True)
+        (cache / "SAFE_TO_DELETE").touch()
+        (cache / "compiled-cache").write_bytes(b"jax")
+        files = sorted(path.name for path in cache.iterdir())
+        (run_root / "jax_cache_files.txt").write_text("".join(f"{name}\n" for name in files))
+        (run_root / "jax_cache_file_count.txt").write_text(f"{len(files)}\n")
+        (run_root / "process.time").write_text("Maximum resident set size: synthetic\n")
+        (run_root / "runner.stdout").write_text("profile complete\n")
+        (run_root / "runner.stderr").write_text("")
+        nsys_base = root / "nsight" / f"{label}_it181_warm"
+        execution.append(f"{order}\t{label}\t{mode}\t16\t8\t0\t1\t{nsys_base.resolve()}\n")
+        (provenance / f"{label}_command.sh").write_text(
+            "nsys profile env "
+            f"RECOVAR_CACHE_DIR= RECOVAR_EM_RAW_IMAGE_CACHE={mode} "
+            "RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB=16 "
+            "RECOVAR_K1_COARSE_MULTISTREAM_WORKERS=8 "
+            "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL=0 "
+            "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION=1 "
+            f"JAX_COMPILATION_CACHE_DIR={cache.resolve()} python -m scripts.run_vdam_late_iteration_profile "
+            f"--checkpoint-optimiser {checkpoint.resolve()} --input-star {input_star.resolve()} "
+            f"--data-dir {data_dir.resolve()} --output-root {profile_root.resolve()} "
+            "--checkpoint-iteration 180 --nr-iter 200 --random-seed 29 --image-batch-size 500 "
+            "--exact-local-bucket-radix 4 --exact-local-physical-order-chunk-size 0 "
+            "--audit-raw-image-cache --cuda-profiler-range\n"
+        )
+        wall, expectation, pass1_s, pass2_s = timings[label]
+        phases = {}
+        phase_audits = {}
+        for phase_name in ("cold", "warm"):
+            phase_root = profile_root / phase_name
+            metadata_path = phase_root / "run_it181_recovar_meta.json"
+            _write_json(metadata_path, _metadata(pass1_s, pass2_s))
+            _write_star(phase_root / "run_it181_data.star")
+            _write_map(phase_root / "run_it181_class001.mrc", map_values[label])
+            events = [] if mode == "off" else [_cache_event()]
+            audit = {"mode": mode, "max_gb": 16.0, "load_all_events": events}
+            phase_audits[phase_name] = audit
+            phases[phase_name] = {
+                "wall_s": wall + (1.0 if phase_name == "cold" else 0.0),
+                "argv": [
+                    "--i",
+                    str(input_star.resolve()),
+                    "--o",
+                    str((phase_root / "run").resolve()),
+                    "--nr_iter",
+                    "200",
+                    "--grad_write_iter",
+                    "1",
+                    "--K",
+                    "1",
+                    "--tau2_fudge",
+                    "4",
+                    "--sym",
+                    "C1",
+                    "--do_run_C1",
+                    "1",
+                    "--particle_diameter",
+                    "200.0",
+                    "--random_seed",
+                    "29",
+                    "--healpix_order",
+                    "1",
+                    "--oversampling",
+                    "1",
+                    "--offset_range",
+                    "6",
+                    "--offset_step",
+                    "2",
+                    "--padding_factor",
+                    "1",
+                    "--image_batch_size",
+                    "500",
+                    "--datadir",
+                    str(data_dir.resolve()),
+                    "--gpu",
+                    "0",
+                    "--require_custom_cuda",
+                    "--diagnostic_continue_optimiser",
+                    str(checkpoint.resolve()),
+                    "--diagnostic_stop_after_iteration",
+                    "181",
+                ],
+                "meta_path": str(metadata_path.resolve()),
+                "meta_sha256": _sha256(metadata_path),
+                "iteration_profile": {"expectation_time_s": expectation},
+                "schedule": _schedule(),
+                "process_resources": _resource_snapshot(hwm_kb=1_000_000 + (100_000 if mode == "auto" else 0)),
+                "raw_image_cache_audit": audit,
+            }
+        _write_json(
+            profile_root / "profile_summary.json",
+            {
+                "schema": analyzer.PROFILE_SCHEMA,
+                "classification": "diagnostic_performance_only",
+                "checkpoint_iteration": 180,
+                "profiled_iteration": 181,
+                "nr_iter_schedule": 200,
+                "cuda_profiler_range": True,
+                "raw_image_cache_audit_enabled": True,
+                "exact_local_bucket_radix": 4,
+                "exact_local_physical_order_chunk_size": 0,
+                "checkpoint_optimiser": str(checkpoint.resolve()),
+                "checkpoint_optimiser_sha256": _sha256(checkpoint),
+                "input_star": str(input_star.resolve()),
+                "input_star_sha256": _sha256(input_star),
+                "data_dir": str(data_dir.resolve()),
+                **phases,
+            },
+        )
+        _write_json(
+            run_root / "cache_admission.json",
+            {
+                "schema": analyzer.CACHE_ADMISSION_SCHEMA,
+                "label": label,
+                "mode": mode,
+                "max_gb": 16.0,
+                "expected_bytes": analyzer.EXPECTED_CACHE_BYTES,
+                "phases": {
+                    phase: {
+                        "load_all_count": len(audit["load_all_events"]),
+                        "load_all_events": audit["load_all_events"],
+                        "admitted": mode == "auto",
+                    }
+                    for phase, audit in phase_audits.items()
+                },
+            },
+        )
+        _write_nsight(
+            root / "nsight" / f"{label}.sqlite",
+            root / "nsight" / f"{label}_summary.json",
+            root / "nsight" / f"{label}_it181_warm.nsys-rep",
+            mode=mode,
+            pass1_s=pass1_s,
+            pass2_s=pass2_s,
+        )
+    (provenance / "execution_order.tsv").write_text("".join(execution))
+    return root, repo
+
+
+def _rewrite_summary(root: Path, label: str, mutate) -> None:
+    path = root / "runs" / label / "profile" / "profile_summary.json"
+    value = json.loads(path.read_text())
+    mutate(value)
+    _write_json(path, value)
+
+
+def _rewrite_run(root: Path, mutate) -> None:
+    path = root / "provenance" / "run.json"
+    value = json.loads(path.read_text())
+    mutate(value)
+    _write_json(path, value)
+
+
+def _rewrite_cache_event(root: Path, label: str, phase: str, mutate) -> None:
+    summary_path = root / "runs" / label / "profile" / "profile_summary.json"
+    summary = json.loads(summary_path.read_text())
+    event = summary[phase]["raw_image_cache_audit"]["load_all_events"][0]
+    mutate(event)
+    _write_json(summary_path, summary)
+
+    admission_path = root / "runs" / label / "cache_admission.json"
+    admission = json.loads(admission_path.read_text())
+    admission["phases"][phase]["load_all_events"] = [event]
+    _write_json(admission_path, admission)
+
+
+def _rewrite_memory_probe(root: Path, mutate) -> None:
+    path = root / "provenance" / "raw_cache_memory_probe.json"
+    value = json.loads(path.read_text())
+    mutate(value)
+    _write_json(path, value)
+
+
+def _rewrite_memory_probe_command(root: Path, mutate) -> None:
+    path = root / "provenance" / "raw_cache_memory_probe_command.sh"
+    path.write_text(mutate(path.read_text()))
+
+
+def _rewrite_metadata(root: Path, label: str, phase: str, mutate) -> None:
+    metadata_path = (
+        root / "runs" / label / "profile" / phase / "run_it181_recovar_meta.json"
+    )
+    metadata = json.loads(metadata_path.read_text())
+    mutate(metadata)
+    _write_json(metadata_path, metadata)
+    _rewrite_summary(
+        root,
+        label,
+        lambda summary: summary[phase].update(meta_sha256=_sha256(metadata_path)),
+    )
+
+
+def _set_kernel_duration(root: Path, label: str, duration_ns: int) -> None:
+    sqlite_path = root / "nsight" / f"{label}.sqlite"
+    with sqlite3.connect(sqlite_path) as connection:
+        connection.execute(
+            "UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET end = start + ?",
+            (duration_ns,),
+        )
+        count = connection.execute(
+            "SELECT COUNT(*) FROM CUPTI_ACTIVITY_KIND_KERNEL"
+        ).fetchone()[0]
+    total_ns = int(count) * int(duration_ns)
+    summary_path = root / "nsight" / f"{label}_summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["devices"]["0"].update(kernel_count=count, gpu_busy_ns=total_ns)
+    summary["kernels"][0].update(
+        count=count,
+        total_ns=total_ns,
+        max_ns=duration_ns,
+        mean_ns=float(duration_ns),
+    )
+    _write_json(summary_path, summary)
+
+
+def _kernel_signature(name: str, *, block_x: int, grid_x: int) -> str:
+    return json.dumps(
+        {
+            "name": name,
+            "device": 0,
+            "blockX": block_x,
+            "blockY": 1,
+            "blockZ": 1,
+            "gridX": grid_x,
+            "gridY": 1,
+            "gridZ": 1,
+        },
+        sort_keys=True,
+    )
+
+
+@pytest.mark.unit
+def test_kernel_topology_allows_xla_geometry_but_pins_recovar_geometry():
+    recovar = _kernel_signature(analyzer.COARSE_KERNEL_NAME, block_x=128, grid_x=2304)
+    xla_a = _kernel_signature("input_reduce_fusion_1", block_x=256, grid_x=47)
+    xla_b = _kernel_signature("input_reduce_fusion_1", block_x=128, grid_x=94)
+
+    topology_a = analyzer._normalized_kernel_topology({recovar: 1000, xla_a: 12})
+    topology_b = analyzer._normalized_kernel_topology({recovar: 1000, xla_b: 12})
+
+    assert topology_a == topology_b
+    changed_recovar = _kernel_signature(
+        analyzer.COARSE_KERNEL_NAME, block_x=256, grid_x=1152
+    )
+    topology_bad = analyzer._normalized_kernel_topology(
+        {changed_recovar: 1000, xla_b: 12}
+    )
+    assert topology_bad != topology_a
+
+
+@pytest.mark.unit
+def test_gpu_timing_equivalence_requires_one_percent_medians_and_two_percent_arms():
+    metric = "gpu_kernel_sum_s"
+
+    def panel(values: dict[str, float]) -> dict:
+        return {
+            label: {"performance": {metric: values[label]}}
+            for label in analyzer.ARM_LABELS
+        }
+
+    equivalent_values = {
+        "cache_off_1": 1.000,
+        "cache_off_2": 1.002,
+        "cache_off_3": 0.998,
+        "cache_off_4": 1.001,
+        "cache_auto_1": 1.004,
+        "cache_auto_2": 1.003,
+        "cache_auto_3": 1.005,
+        "cache_auto_4": 1.002,
+    }
+    bounded = analyzer._gpu_timing_equivalence(
+        panel(equivalent_values),
+        metric=metric,
+        off_median=float(np.median([equivalent_values[f"cache_off_{i}"] for i in analyzer.REPEAT_IDS])),
+        auto_median=float(np.median([equivalent_values[f"cache_auto_{i}"] for i in analyzer.REPEAT_IDS])),
+    )
+    assert bounded["equivalent"] is True
+
+    shifted = dict(equivalent_values)
+    for repeat in analyzer.REPEAT_IDS:
+        shifted[f"cache_auto_{repeat}"] = 1.015
+    excessive_median = analyzer._gpu_timing_equivalence(
+        panel(shifted),
+        metric=metric,
+        off_median=1.0,
+        auto_median=1.015,
+    )
+    assert excessive_median["equivalent"] is False
+
+    outlier = dict(equivalent_values)
+    outlier["cache_auto_4"] = 1.03
+    excessive_arm = analyzer._gpu_timing_equivalence(
+        panel(outlier),
+        metric=metric,
+        off_median=1.0,
+        auto_median=1.0045,
+    )
+    assert excessive_arm["equivalent"] is False
+
+
+@pytest.mark.unit
+def test_full_analyzer_rejects_mode_dependent_gpu_time_shift(tmp_path):
+    root, repo = _build_root(tmp_path)
+    for repeat in analyzer.REPEAT_IDS:
+        _set_kernel_duration(root, f"cache_auto_{repeat}", 1_015_000)
+
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["performance"]["gates"]["coarse_sum_gpu_time_equivalent"] is False
+    assert report["performance"]["gates"]["total_union_gpu_time_equivalent"] is False
+
+
+@pytest.mark.unit
+def test_complete_fixture_passes_and_cli_writes_json_markdown(tmp_path):
+    root, repo = _build_root(tmp_path)
+
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "GO"
+    assert report["decision"]["pass"] is True
+    assert report["performance"]["median_percent_improvement"]["warm_wall_s"] > 5.0
+    assert report["performance"]["median_off_minus_auto"]["stage_no_kernel_s"] >= 0.3
+    assert report["performance"]["preload"]["break_even_iterations_ceiling"] == 1
+    assert report["schedule"]["subset_size"] == analyzer.EXPECTED_SUBSET_SIZE
+    assert report["performance"]["cache_admission_memory"]["limit_bytes"] == (
+        analyzer.EXPECTED_CACHE_BYTES + analyzer.CACHE_ADMISSION_HWM_SLACK_BYTES
+    )
+    assert report["raw_cache_memory_probe"]["bitwise_equivalence"]["exact"] is True
+    assert report["decision"]["gates"]["raw_cache_bytes_exact_to_streamed_uncached_loader"] is True
+    assert report["decision"]["gates"]["raw_cache_and_streamed_digests_match_frozen_logical_images"] is True
+    assert report["performance"]["gates"]["untimed_trace_tracks_at_least_one_cache_buffer"] is True
+    assert report["performance"]["gates"]["untimed_traced_peak_within_cache_plus_64mib"] is True
+    assert report["science"]["all_auto_repeat_maps_within_off_repeat_envelope"] is True
+    assert report["science"]["all_cross_mode_maps_within_off_repeat_envelope"] is True
+    assert report["provenance"]["final_source_manifest_state"] == "pending_runner_seal"
+    assert report["provenance"]["raw_cache_memory_probe_command"]["sha256"] == _sha256(
+        root / "provenance" / "raw_cache_memory_probe_command.sh"
+    )
+    assert Path(report["provenance"]["interpreter"]["path"]).resolve() == (
+        tmp_path / "external_python"
+    ).resolve()
+    assert report["markdown"].startswith("# GO")
+
+    output_json = tmp_path / "analysis" / "report.json"
+    output_markdown = tmp_path / "analysis" / "report.md"
+    assert analyzer.main(
+        ["--root", str(root), "--repo", str(repo), "--output-json", str(output_json), "--output-markdown", str(output_markdown)]
+    ) == 0
+    assert json.loads(output_json.read_text())["decision"]["status"] == "GO"
+    assert output_markdown.read_text().startswith("# GO")
+
+@pytest.mark.unit
+def test_valid_but_slow_auto_reports_no_go_and_cli_exit_one(tmp_path):
+    root, repo = _build_root(tmp_path)
+    for repeat in analyzer.REPEAT_IDS:
+        _rewrite_summary(
+            root,
+            f"cache_auto_{repeat}",
+            lambda value: value["warm"].update(wall_s=11.0, iteration_profile={"expectation_time_s": 9.0}),
+        )
+
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["decision"]["gates"]["at_least_3_of_4_paired_warm_wall_faster"] is False
+    output_json = tmp_path / "report.json"
+    output_md = tmp_path / "report.md"
+    assert analyzer.main(
+        ["--root", str(root), "--repo", str(repo), "--output-json", str(output_json), "--output-markdown", str(output_md)]
+    ) == 1
+    assert json.loads(output_json.read_text())["decision"]["status"] == "NO_GO"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutations", "expected_status", "gate"),
+    [
+        (
+            [("cache_auto_4", {"wall_s": 10.0})],
+            "GO",
+            "at_least_3_of_4_paired_warm_wall_faster",
+        ),
+        (
+            [
+                ("cache_auto_3", {"wall_s": 10.2}),
+                ("cache_auto_4", {"wall_s": 10.0}),
+            ],
+            "NO_GO",
+            "at_least_3_of_4_paired_warm_wall_faster",
+        ),
+        (
+            [("cache_auto_4", {"iteration_profile": {"expectation_time_s": 8.0}})],
+            "NO_GO",
+            "all_4_paired_expectation_faster",
+        ),
+    ],
+)
+def test_paired_win_boundaries_are_exact(tmp_path, mutations, expected_status, gate):
+    root, repo = _build_root(tmp_path)
+    for label, values in mutations:
+        _rewrite_summary(
+            root,
+            label,
+            lambda summary, values=values: summary["warm"].update(values),
+        )
+
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == expected_status
+    assert report["performance"]["gates"][gate] is (expected_status == "GO")
+
+
+@pytest.mark.unit
+def test_run_json_cannot_self_authorize_an_unsealed_toolchain(tmp_path):
+    root, repo = _build_root(tmp_path)
+    _rewrite_run(root, lambda run: run.update(nsys_sha256="0" * 64))
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="run provenance differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "option",
+    [
+        "--checkpoint-optimiser",
+        "--input-star",
+        "--data-dir",
+        "--output-root",
+        "--random-seed",
+    ],
+)
+def test_command_ledger_must_use_sealed_inputs_seed_and_output(tmp_path, option):
+    root, repo = _build_root(tmp_path)
+    command_path = root / "provenance" / "cache_auto_4_command.sh"
+    expected = {
+        "--checkpoint-optimiser": str(analyzer.EXPECTED_CHECKPOINT_OPTIMISER),
+        "--input-star": str(analyzer.EXPECTED_INPUT_STAR),
+        "--data-dir": str(analyzer.EXPECTED_DATA_DIR),
+        "--output-root": str((root / "runs/cache_auto_4/profile").resolve()),
+        "--random-seed": "29",
+    }
+    wrong = {
+        "--checkpoint-optimiser": str(analyzer.EXPECTED_INPUT_STAR),
+        "--input-star": str(analyzer.EXPECTED_CHECKPOINT_OPTIMISER),
+        "--data-dir": str(root.resolve()),
+        "--output-root": str((root / "runs/cache_auto_4/wrong-profile").resolve()),
+        "--random-seed": "30",
+    }
+    command = command_path.read_text().replace(
+        f"{option} {expected[option]}",
+        f"{option} {wrong[option]}",
+    )
+    command_path.write_text(command)
+
+    with pytest.raises(analyzer.RawCacheSetupError, match=f"wrong {option}"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_command_ledger_must_disable_external_mrc_staging_cache(tmp_path):
+    root, repo = _build_root(tmp_path)
+    command_path = root / "provenance" / "cache_auto_4_command.sh"
+    command_path.write_text(
+        command_path.read_text().replace("RECOVAR_CACHE_DIR= ", "RECOVAR_CACHE_DIR=/shared/cache ")
+    )
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="wrong RECOVAR_CACHE_DIR"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_profile_summary_must_bind_sealed_input_paths_and_digests(tmp_path):
+    root, repo = _build_root(tmp_path)
+    _rewrite_summary(
+        root,
+        "cache_off_3",
+        lambda summary: summary.update(
+            input_star=str(analyzer.EXPECTED_CHECKPOINT_OPTIMISER),
+            input_star_sha256=analyzer.EXPECTED_CHECKPOINT_OPTIMISER_SHA256,
+        ),
+    )
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="profile summary differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_profile_argv_rejects_appended_equals_form_override(tmp_path):
+    root, repo = _build_root(tmp_path)
+    _rewrite_summary(
+        root,
+        "cache_auto_4",
+        lambda summary: summary["warm"]["argv"].append("--random_seed=30"),
+    )
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="profiler argv differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_discrete_mismatch_is_no_go_not_setup_error(tmp_path):
+    root, repo = _build_root(tmp_path)
+    metadata = root / "runs" / "cache_auto_1" / "profile" / "warm" / "run_it181_recovar_meta.json"
+    value = json.loads(metadata.read_text())
+    value["pose_assignments"][0] = 99
+    _write_json(metadata, value)
+    _rewrite_summary(root, "cache_auto_1", lambda summary: summary["warm"].update(meta_sha256=_sha256(metadata)))
+
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["science"]["all_particle_star_and_discrete_metadata_exact"] is False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda metadata: metadata.pop("subset_size"), "lacks schedule field subset_size"),
+        (
+            lambda metadata: metadata.update(subset_size=None),
+            "metadata schedule differs for subset_size",
+        ),
+    ],
+)
+def test_missing_or_null_subset_metadata_fails_closed(tmp_path, mutate, message):
+    root, repo = _build_root(tmp_path)
+    _rewrite_metadata(root, "cache_auto_1", "warm", mutate)
+
+    with pytest.raises(analyzer.RawCacheSetupError, match=message):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_selected_particle_count_must_match_gf46_subset(tmp_path):
+    root, repo = _build_root(tmp_path)
+    _rewrite_metadata(
+        root,
+        "cache_auto_1",
+        "warm",
+        lambda metadata: metadata["selected_particle_ids"].pop(),
+    )
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="selected particle count differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda metadata: metadata["selected_particle_ids"].__setitem__(
+                1, metadata["selected_particle_ids"][0]
+            ),
+            "selected particle IDs repeat",
+        ),
+        (
+            lambda metadata: metadata["selected_particle_ids"].__setitem__(
+                0, analyzer.EXPECTED_CACHE_IMAGES
+            ),
+            "selected particle IDs are outside",
+        ),
+    ],
+)
+def test_selected_particle_ids_must_be_unique_and_in_range(tmp_path, mutate, message):
+    root, repo = _build_root(tmp_path)
+    _rewrite_metadata(root, "cache_auto_4", "warm", mutate)
+
+    with pytest.raises(analyzer.RawCacheSetupError, match=message):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_directional_cross_mode_map_drift_is_no_go(tmp_path):
+    root, repo = _build_root(tmp_path)
+    shifted = np.arange(64, dtype=np.float32).reshape(4, 4, 4)
+    shifted += 0.001
+    for repeat in analyzer.REPEAT_IDS:
+        _write_map(root / "runs" / f"cache_auto_{repeat}" / "profile" / "warm" / "run_it181_class001.mrc", shifted)
+
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["science"]["all_cross_mode_signed_drift_nondirectional"] is False
+
+
+@pytest.mark.unit
+def test_auto_variability_cannot_inflate_its_own_science_envelope(tmp_path):
+    root, repo = _build_root(tmp_path)
+    baseline = np.arange(64, dtype=np.float32).reshape(4, 4, 4)
+    for repeat in analyzer.REPEAT_IDS:
+        _write_map(
+            root
+            / "runs"
+            / f"cache_off_{repeat}"
+            / "profile"
+            / "warm"
+            / "run_it181_class001.mrc",
+            baseline,
+        )
+        shifted = baseline + (0.5 if repeat % 2 else -0.5)
+        _write_map(
+            root
+            / "runs"
+            / f"cache_auto_{repeat}"
+            / "profile"
+            / "warm"
+            / "run_it181_class001.mrc",
+            shifted,
+        )
+
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["science"]["all_auto_repeat_maps_within_off_repeat_envelope"] is False
+    assert report["decision"]["gates"]["auto_repeat_map_variability_within_off_envelope"] is False
+
+
+@pytest.mark.unit
+def test_stale_lifetime_hwm_is_diagnostic_not_an_admission_peak(tmp_path):
+    root, repo = _build_root(tmp_path)
+    excess = (
+        analyzer.EXPECTED_CACHE_BYTES
+        + analyzer.CACHE_ADMISSION_HWM_SLACK_BYTES
+        + 1
+    )
+    _rewrite_cache_event(
+        root,
+        "cache_auto_1",
+        "warm",
+        lambda event: event.update(
+            high_water_rss_after_bytes=event["high_water_rss_before_bytes"] + excess,
+            high_water_rss_delta_bytes=excess,
+        ),
+    )
+
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "GO"
+    assert (
+        report["performance"]["gates"][
+            "each_timed_cache_retained_rss_within_cache_plus_64mib"
+        ]
+        is True
+    )
+    memory = report["performance"]["cache_admission_memory"]["arms"]["cache_auto_1"]["warm"]
+    assert memory["peak_rss_above_call_baseline_bytes"] > report["performance"]["cache_admission_memory"]["limit_bytes"]
+
+
+@pytest.mark.unit
+def test_preexisting_hwm_cannot_mask_excess_cache_admission_memory(tmp_path):
+    root, repo = _build_root(tmp_path)
+    retained = 2 * analyzer.EXPECTED_CACHE_BYTES
+
+    def mask_with_old_hwm(event):
+        baseline = event["current_rss_before_bytes"]
+        event.update(
+            current_rss_after_bytes=baseline + retained,
+            current_rss_delta_bytes=retained,
+            high_water_rss_before_bytes=baseline + retained,
+            high_water_rss_after_bytes=baseline + retained,
+            high_water_rss_delta_bytes=0,
+        )
+
+    _rewrite_cache_event(root, "cache_auto_1", "warm", mask_with_old_hwm)
+
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["performance"]["gates"]["each_timed_cache_retained_rss_within_cache_plus_64mib"] is False
+    memory = report["performance"]["cache_admission_memory"]["arms"]["cache_auto_1"]["warm"]
+    assert memory["high_water_rss_increment_bytes"] == 0
+    assert memory["peak_rss_above_call_baseline_bytes"] == retained
+    assert memory["current_rss_delta_bytes"] == retained
+
+
+@pytest.mark.unit
+def test_missing_memory_probe_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    (root / "provenance" / "raw_cache_memory_probe.json").unlink()
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="memory probe is missing"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_memory_probe_loader_topology_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    _rewrite_memory_probe(
+        root,
+        lambda value: value["loader"]["topology_after"]["leaf_loaders"][0].update(
+            io_path="/wrong/particles.mrcs"
+        ),
+    )
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="memory-probe loader differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda text: text.replace("JAX_PLATFORMS=cpu", "JAX_PLATFORMS=cuda"),
+            "memory-probe environment differs",
+        ),
+        (
+            lambda text: text.replace("--comparison-batch-size 500", "--comparison-batch-size 501"),
+            "memory-probe argv differs",
+        ),
+    ],
+)
+def test_memory_probe_command_mutations_fail_closed(tmp_path, mutate, message):
+    root, repo = _build_root(tmp_path)
+    _rewrite_memory_probe_command(root, mutate)
+
+    with pytest.raises(analyzer.RawCacheSetupError, match=message):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_missing_memory_probe_command_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    (root / "provenance" / "raw_cache_memory_probe_command.sh").unlink()
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="command ledger is missing"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda value: value["tracemalloc"].update(
+                baseline_current_bytes=1,
+                baseline_peak_bytes=0,
+                after_current_bytes=value["tracemalloc"]["retained_delta_bytes"] + 1,
+                peak_bytes=value["tracemalloc"]["peak_above_baseline_bytes"] + 1,
+            ),
+            "baseline peak is below current memory",
+        ),
+        (
+            lambda value: value["tracemalloc"].update(
+                peak_bytes=value["tracemalloc"]["after_current_bytes"] - 1,
+                peak_above_baseline_bytes=(
+                    value["tracemalloc"]["after_current_bytes"]
+                    - value["tracemalloc"]["baseline_current_bytes"]
+                    - 1
+                ),
+            ),
+            "peak is below an observed current value",
+        ),
+        (
+            lambda value: value["rss_diagnostic"].update(
+                current_after_bytes=value["rss_diagnostic"]["current_before_bytes"] - 1,
+                current_delta_bytes=-1,
+            ),
+            "RSS diagnostic contains a negative value",
+        ),
+    ],
+)
+def test_memory_probe_resource_invariants_fail_closed(tmp_path, mutate, message):
+    root, repo = _build_root(tmp_path)
+    _rewrite_memory_probe(root, mutate)
+
+    with pytest.raises(analyzer.RawCacheSetupError, match=message):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_tracer_that_does_not_track_the_cache_is_no_go(tmp_path):
+    root, repo = _build_root(tmp_path)
+    retained = analyzer.EXPECTED_CACHE_BYTES - 1
+
+    def shrink_trace(value):
+        trace = value["tracemalloc"]
+        trace.update(
+            after_current_bytes=trace["baseline_current_bytes"] + retained,
+            retained_delta_bytes=retained,
+        )
+
+    _rewrite_memory_probe(root, shrink_trace)
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["performance"]["gates"]["untimed_trace_tracks_at_least_one_cache_buffer"] is False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("field", ["peak", "retained"])
+def test_excess_traced_cache_memory_is_no_go(tmp_path, field):
+    root, repo = _build_root(tmp_path)
+    excess = analyzer.EXPECTED_CACHE_BYTES + analyzer.CACHE_ADMISSION_HWM_SLACK_BYTES + 1
+
+    def enlarge_trace(value):
+        trace = value["tracemalloc"]
+        if field == "retained":
+            trace.update(
+                after_current_bytes=trace["baseline_current_bytes"] + excess,
+                retained_delta_bytes=excess,
+                peak_bytes=trace["baseline_current_bytes"] + excess,
+                peak_above_baseline_bytes=excess,
+            )
+        else:
+            trace.update(
+                peak_bytes=trace["baseline_current_bytes"] + excess,
+                peak_above_baseline_bytes=excess,
+            )
+
+    _rewrite_memory_probe(root, enlarge_trace)
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["performance"]["gates"]["untimed_traced_peak_within_cache_plus_64mib"] is False
+
+
+@pytest.mark.unit
+def test_nonidentical_streamed_cache_bytes_are_no_go(tmp_path):
+    root, repo = _build_root(tmp_path)
+
+    def make_nonexact(value):
+        evidence = value["bitwise_equivalence"]
+        evidence.update(
+            exact=False,
+            streamed_uncached_sha256=hashlib.sha256(b"different").hexdigest(),
+            first_mismatch_index=17,
+        )
+
+    _rewrite_memory_probe(root, make_nonexact)
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["decision"]["gates"]["raw_cache_bytes_exact_to_streamed_uncached_loader"] is False
+
+
+@pytest.mark.unit
+def test_equal_but_wrong_logical_image_digest_is_no_go(tmp_path):
+    root, repo = _build_root(tmp_path)
+    wrong = hashlib.sha256(b"shared ordering bug").hexdigest()
+
+    def replace_digests(value):
+        value["bitwise_equivalence"].update(
+            cached_sha256=wrong,
+            streamed_uncached_sha256=wrong,
+        )
+
+    _rewrite_memory_probe(root, replace_digests)
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["decision"]["status"] == "NO_GO"
+    assert report["decision"]["gates"]["raw_cache_bytes_exact_to_streamed_uncached_loader"] is True
+    assert report["decision"]["gates"]["raw_cache_and_streamed_digests_match_frozen_logical_images"] is False
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda event: event.update(loader_type="wrong.Loader"),
+            "cache admission differs",
+        ),
+        (
+            lambda event: event["loader_topology"]["leaf_loaders"][0].update(loader_type="wrong.Loader"),
+            "cache admission differs",
+        ),
+        (
+            lambda event: event["loader_topology"]["leaf_loaders"][0].update(io_path="/shared/cache/stack.mrcs"),
+            "cache admission differs",
+        ),
+        (
+            lambda event: event["loader_topology"].update(mapping_mrc_indices_sha256="0" * 64),
+            "cache admission differs",
+        ),
+        (
+            lambda event: event["loader_topology"].update(leaf_cached_after=[True]),
+            "cache admission differs",
+        ),
+        (
+            lambda event: event.update(
+                current_rss_before_bytes=-1,
+                current_rss_after_bytes=analyzer.EXPECTED_CACHE_BYTES - 1,
+                high_water_rss_before_bytes=-1,
+                high_water_rss_after_bytes=analyzer.EXPECTED_CACHE_BYTES - 1,
+            ),
+            "current_rss_before_bytes is negative",
+        ),
+    ],
+)
+def test_cache_event_loader_and_absolute_memory_fail_closed(tmp_path, mutate, message):
+    root, repo = _build_root(tmp_path)
+    _rewrite_cache_event(root, "cache_auto_4", "warm", mutate)
+
+    with pytest.raises(analyzer.RawCacheSetupError, match=message):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_coarse_kernel_outside_pass1_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    sqlite_path = root / "nsight" / "cache_auto_1.sqlite"
+    with sqlite3.connect(sqlite_path) as connection:
+        connection.execute(
+            "UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET start = ?, end = ? WHERE rowid = 1",
+            (7_000_000_000, 7_001_000_000),
+        )
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="coarse-kernel stage placement differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_missing_nsight_geometry_column_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    sqlite_path = root / "nsight" / "cache_auto_2.sqlite"
+    with sqlite3.connect(sqlite_path) as connection:
+        connection.execute("ALTER TABLE CUPTI_ACTIVITY_KIND_KERNEL DROP COLUMN gridZ")
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="kernel geometry columns differ"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_overlapping_or_reordered_pass_ranges_fail_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    sqlite_path = root / "nsight" / "cache_off_4.sqlite"
+    with sqlite3.connect(sqlite_path) as connection:
+        connection.execute(
+            "UPDATE NVTX_EVENTS SET start = ?, end = ? WHERE textId = 5",
+            (3_000_000_000, 4_000_000_000),
+        )
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="ordered, and disjoint"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_nvtx_stage_duration_must_match_serialized_timer(tmp_path):
+    root, repo = _build_root(tmp_path)
+
+    def inflate_pass2(metadata):
+        metadata["sparse_pass2_profile_summary"]["pass2_time_s"] += 0.10
+
+    _rewrite_metadata(root, "cache_auto_3", "warm", inflate_pass2)
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="NVTX duration differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_coarse_kernel_name_and_count_change_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    sqlite_path = root / "nsight" / "cache_auto_1.sqlite"
+    with sqlite3.connect(sqlite_path) as connection:
+        connection.execute(
+            "INSERT INTO StringIds(id, value) VALUES (?, ?)",
+            (6, "generic_replacement_kernel"),
+        )
+        connection.execute(
+            "UPDATE CUPTI_ACTIVITY_KIND_KERNEL SET shortName = 6 WHERE rowid = 1"
+        )
+    summary_path = root / "nsight" / "cache_auto_1_summary.json"
+    summary = json.loads(summary_path.read_text())
+    summary["kernels"][0]["count"] = 999
+    summary["kernels"][0]["total_ns"] = 999_000_000
+    _write_json(summary_path, summary)
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="coarse-kernel stage placement differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda root: (root / "ARMS_COMPLETED").unlink(), "arms are incomplete"),
+        (
+            lambda root: _rewrite_summary(
+                root,
+                "cache_off_1",
+                lambda value: value["warm"]["raw_image_cache_audit"].update(load_all_events=[_cache_event()]),
+            ),
+            "load_all event count differs",
+        ),
+        (
+            lambda root: _rewrite_summary(
+                root,
+                "cache_auto_1",
+                lambda value: value["warm"]["raw_image_cache_audit"]["load_all_events"][0].update(cached_nbytes=1),
+            ),
+            "cache admission differs",
+        ),
+        (
+            lambda root: (root / "runs" / "unexpected").mkdir(),
+            "run-directory topology differs",
+        ),
+        (
+            lambda root: _rewrite_summary(
+                root,
+                "cache_off_1",
+                lambda value: value["warm"]["schedule"].update(healpix_order=2),
+            ),
+            "GF46 iteration-181 schedule differs",
+        ),
+            (
+                lambda root: _rewrite_summary(
+                    root,
+                    "cache_off_1",
+                    lambda value: value["warm"]["schedule"].update(subset_size=None),
+                ),
+                "subset_size must be an integer",
+            ),
+    ],
+)
+def test_structural_evidence_mutations_fail_closed(tmp_path, mutate, message):
+    root, repo = _build_root(tmp_path)
+    mutate(root)
+
+    with pytest.raises(analyzer.RawCacheSetupError, match=message):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_source_manifest_corruption_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    (repo / "source.py").write_text("VALUE = 2\n")
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="artifact digest differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_nvtx_loader_count_corruption_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    sqlite_path = root / "nsight" / "cache_auto_1.sqlite"
+    with sqlite3.connect(sqlite_path) as connection:
+        connection.execute("DELETE FROM NVTX_EVENTS WHERE textId = 3")
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="loader NVTX count differs"):
+        analyzer.analyze(root, repo=repo)
+
+
+@pytest.mark.unit
+def test_final_source_manifest_is_verified_when_present(tmp_path):
+    root, repo = _build_root(tmp_path)
+    initial = root / "provenance" / "source_manifest.sha256"
+    (root / "provenance" / "source_manifest.final.sha256").write_bytes(initial.read_bytes())
+    (root / "COMPLETED").touch()
+
+    report = analyzer.analyze(root, repo=repo)
+
+    assert report["provenance"]["final_source_manifest_state"] == "verified"
+
+
+@pytest.mark.unit
+def test_completed_result_without_final_source_manifest_fails_closed(tmp_path):
+    root, repo = _build_root(tmp_path)
+    (root / "COMPLETED").touch()
+
+    with pytest.raises(analyzer.RawCacheSetupError, match="lacks its final source manifest"):
+        analyzer.analyze(root, repo=repo)

@@ -25,7 +25,7 @@ from recovar.em.dense_single_volume import parity_dump as _parity_dump
 from recovar.em.dense_single_volume.batch_planning import (
     _estimate_relion_em_batch_sizes,
     _image_backend,
-    _maybe_cache_raw_image_loaders,
+    maybe_cache_raw_image_loaders,
     _plan_adaptive_dense_batch_sizes,
     _plan_kclass_adaptive_grid_batch_sizes,
     _safe_dense_k_class_rotation_block_size,
@@ -2759,7 +2759,7 @@ def _run_relion_iteration_loop(
                 RELION_WIDTH_MASK_EDGE,
             )
 
-    _maybe_cache_raw_image_loaders(experiment_datasets)
+    maybe_cache_raw_image_loaders(experiment_datasets)
     _mark_setup_phase("mask_and_image_cache")
 
     # --- Initialize RefinementState ---
@@ -2834,6 +2834,7 @@ def _run_relion_iteration_loop(
             schedule.init_translation_range,
             schedule.init_translation_step,
             n_classes=n_classes,
+            source_units_per_pixel=(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
         ).astype(np.float64, copy=False)
         current_translations = jnp.asarray(
             base_translations,
@@ -3834,6 +3835,7 @@ def _run_relion_iteration_loop(
                 state.translation_range,
                 state.translation_step,
                 n_classes=n_classes,
+                source_units_per_pixel=(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
             ).astype(np.float64, copy=False)
             current_translations = jnp.asarray(base_translations, dtype=_dense_global_scoring_dtype())
             logger.info(
@@ -3850,6 +3852,7 @@ def _run_relion_iteration_loop(
                 state.translation_range,
                 state.translation_step,
                 n_classes=n_classes,
+                source_units_per_pixel=(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
             ).astype(np.float64, copy=False)
             _new_t = jnp.asarray(_new_t_source, dtype=_dense_global_scoring_dtype())
             if _new_t.shape != base_translations.shape or not jnp.allclose(
@@ -6952,6 +6955,7 @@ def _run_relion_iteration_loop(
             state.translation_range,
             state.translation_step,
             n_classes=n_classes,
+            source_units_per_pixel=(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
         ).astype(_dense_global_scoring_dtype(), copy=False),
         dtype=_dense_global_scoring_dtype(),
     )
@@ -7068,11 +7072,13 @@ def _run_relion_iteration_loop(
                     numbered_range,
                     numbered_step,
                     n_classes=n_classes,
+                    source_units_per_pixel=px,
                 ).astype(np.float32)
                 final_grid_preview = _translation_grid_for_class_count(
                     final_translation_range,
                     final_translation_step,
                     n_classes=n_classes,
+                    source_units_per_pixel=px,
                 ).astype(np.float32)
                 same_shape = numbered_grid.shape == final_grid_preview.shape
                 same_grid = bool(
@@ -7102,6 +7108,7 @@ def _run_relion_iteration_loop(
                     final_translation_range,
                     final_translation_step,
                     n_classes=n_classes,
+                    source_units_per_pixel=px,
                 ).astype(_dense_global_scoring_dtype(), copy=False),
                 dtype=_dense_global_scoring_dtype(),
             )

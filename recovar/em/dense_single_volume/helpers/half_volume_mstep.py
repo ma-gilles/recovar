@@ -9,12 +9,10 @@ import jax
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-
 from recovar.em.dense_single_volume.local_backprojection import (
     enforce_relion_half_volume_x0_hermitian,
     enforce_relion_half_volume_x0_hermitian_host,
 )
-
 
 _RELION_X_HALF_TO_NATIVE_HALF_MIN_VOXELS = 200_000_000
 _RELION_X_HALF_FULL_HOST_MIN_VOXELS = 100_000_000
@@ -131,12 +129,20 @@ def relion_backprojector_volume_shape(volume_shape, padding_factor, current_size
     return (int(pad_size), int(pad_size), int(pad_size))
 
 
-def enforce_half_volume_x0(Ft_y, Ft_ctf, recon_volume_shape, *, logger: logging.Logger, label: str):
+def enforce_half_volume_x0(
+    Ft_y,
+    Ft_ctf,
+    recon_volume_shape,
+    *,
+    logger: logging.Logger,
+    label: str,
+    force_host: bool = False,
+):
     """Apply RELION x=0 Hermitian-plane enforcement to half-volume accumulators."""
 
     logger.info("%s M-step: enforcing RELION half-volume x=0 Hermitian plane", label)
     full_voxels = int(np.prod(recon_volume_shape))
-    if _large_relion_x_half_host_x0_enabled(full_voxels):
+    if force_host or _large_relion_x_half_host_x0_enabled(full_voxels):
         logger.info(
             "%s M-step: using host x=0 Hermitian enforcement for large RELION half-volume "
             "accumulators (shape=%s, full_voxels=%d)",
@@ -163,7 +169,7 @@ def half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape):
     )
 
 
-def relion_x_half_volume_to_full(volume_flat, recon_volume_shape):
+def relion_x_half_volume_to_full(volume_flat, recon_volume_shape, *, force_host: bool = False):
     """Expand a RELION-layout ``(z, y, xhalf)`` accumulator to RECOVAR full layout.
 
     RELION's BackProjector packs the Fourier x-axis and stores arrays in
@@ -172,7 +178,7 @@ def relion_x_half_volume_to_full(volume_flat, recon_volume_shape):
     layout followed by a ``(2, 1, 0)`` transpose.
     """
 
-    if _large_relion_x_half_full_host_enabled(int(np.prod(recon_volume_shape))):
+    if force_host or _large_relion_x_half_full_host_enabled(int(np.prod(recon_volume_shape))):
         logging.getLogger(__name__).info(
             "RELION x-half M-step: expanding large accumulator to public full layout on host "
             "(shape=%s, full_voxels=%d)",
@@ -194,7 +200,7 @@ def relion_x_half_volume_to_native_half(volume_flat, recon_volume_shape):
     return _relion_x_half_volume_to_native_half_host(volume_flat, recon_volume_shape).reshape(-1)
 
 
-def relion_x_half_volume_to_public_layout(volume_flat, recon_volume_shape):
+def relion_x_half_volume_to_public_layout(volume_flat, recon_volume_shape, *, force_host: bool = False):
     """Convert RELION x-half to the downstream public accumulator layout.
 
     Normal grids keep the historical full-volume contract.  Very large grids
@@ -210,15 +216,21 @@ def relion_x_half_volume_to_public_layout(volume_flat, recon_volume_shape):
             int(np.prod(recon_volume_shape)),
         )
         return relion_x_half_volume_to_native_half(volume_flat, recon_volume_shape)
-    return relion_x_half_volume_to_full(volume_flat, recon_volume_shape)
+    return relion_x_half_volume_to_full(volume_flat, recon_volume_shape, force_host=force_host)
 
 
-def relion_x_half_accumulators_to_public_layout(Ft_y, Ft_ctf, recon_volume_shape):
+def relion_x_half_accumulators_to_public_layout(
+    Ft_y,
+    Ft_ctf,
+    recon_volume_shape,
+    *,
+    force_host: bool = False,
+):
     """Convert RELION ``(z, y, xhalf)`` accumulators for downstream consumers."""
 
     return (
-        relion_x_half_volume_to_public_layout(Ft_y, recon_volume_shape),
-        relion_x_half_volume_to_public_layout(Ft_ctf, recon_volume_shape),
+        relion_x_half_volume_to_public_layout(Ft_y, recon_volume_shape, force_host=force_host),
+        relion_x_half_volume_to_public_layout(Ft_ctf, recon_volume_shape, force_host=force_host),
     )
 
 
@@ -229,6 +241,51 @@ def relion_x_half_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape):
         relion_x_half_volume_to_full(Ft_y, recon_volume_shape),
         relion_x_half_volume_to_full(Ft_ctf, recon_volume_shape),
     )
+
+
+def crop_relion_x_half_accumulator(
+    values,
+    physical_volume_shape,
+    logical_volume_shape,
+):
+    """Crop a centered physical BPref capacity to its logical odd cube.
+
+    RELION's x-half layout is ``(z, y, x>=0)``.  The signed z/y axes are
+    centered and therefore crop symmetrically; the packed x axis starts at
+    zero and keeps its logical prefix.  No arithmetic is performed here.
+    """
+
+    physical_volume_shape = tuple(int(value) for value in physical_volume_shape)
+    logical_volume_shape = tuple(int(value) for value in logical_volume_shape)
+    if (
+        len(physical_volume_shape) != 3
+        or len(logical_volume_shape) != 3
+        or len(set(physical_volume_shape)) != 1
+        or len(set(logical_volume_shape)) != 1
+        or logical_volume_shape[0] > physical_volume_shape[0]
+        or physical_volume_shape[0] % 2 == 0
+        or logical_volume_shape[0] % 2 == 0
+    ):
+        raise ValueError(
+            "stable RELION BPref cropping requires nested odd cubic shapes, "
+            f"got physical={physical_volume_shape}, logical={logical_volume_shape}"
+        )
+    physical_size = physical_volume_shape[0]
+    logical_size = logical_volume_shape[0]
+    physical_half_width = physical_size // 2 + 1
+    logical_half_width = logical_size // 2 + 1
+    expected_size = physical_size * physical_size * physical_half_width
+    if int(values.size) != expected_size:
+        raise ValueError(
+            f"RELION x-half accumulator has {values.size} entries, expected {expected_size}"
+        )
+    start = (physical_size - logical_size) // 2
+    grid = values.reshape((physical_size, physical_size, physical_half_width))
+    return grid[
+        start : start + logical_size,
+        start : start + logical_size,
+        :logical_half_width,
+    ].reshape(-1)
 
 
 def _relion_x_half_volume_to_native_half_host(volume_flat, recon_volume_shape):

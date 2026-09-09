@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-
 
 MAGIC = "RECOVAR_BPREF_CONTRIBUTION_ROWS"
 SCHEMA = "recovar-bpref-contribution-rows-v3"
@@ -72,15 +71,30 @@ class BPrefContributionBundle:
     def row_count(self) -> int:
         return sum(shard.row_count for shard in self.shards)
 
-    def concatenate(self, order: str = "execution") -> dict[str, np.ndarray]:
-        fields = (
+    def concatenate(
+        self,
+        order: str = "execution",
+        *,
+        reconstruction_group: int | None = None,
+    ) -> dict[str, np.ndarray]:
+        fields = [
             "active_original_indices",
             "active_global_rotation_indices",
             "active_rotation_rows",
             "active_summed",
             "active_ctf_probs",
             "active_rotations",
+        ]
+        has_reconstruction_groups = all(
+            shard.values["active_reconstruction_group_ids"].size == shard.row_count
+            for shard in self.shards
         )
+        if has_reconstruction_groups:
+            fields.append("active_reconstruction_group_ids")
+        elif reconstruction_group is not None:
+            raise ValueError(
+                "BPref contribution bundle does not capture reconstruction groups"
+            )
         combined = {
             key: np.concatenate([shard.values[key] for shard in self.shards], axis=0)
             for key in fields
@@ -91,16 +105,30 @@ class BPrefContributionBundle:
         combined["source_row"] = np.concatenate(
             [np.arange(shard.row_count, dtype=np.int32) for shard in self.shards]
         )
+        selected = np.arange(self.row_count, dtype=np.int64)
+        if reconstruction_group is not None:
+            reconstruction_group = int(reconstruction_group)
+            if reconstruction_group < 0:
+                raise ValueError("reconstruction_group must be non-negative")
+            selected = selected[
+                combined["active_reconstruction_group_ids"] == reconstruction_group
+            ]
+            if selected.size == 0:
+                raise ValueError(
+                    "BPref contribution bundle has no rows for reconstruction group "
+                    f"{reconstruction_group}"
+                )
         if order == "execution":
-            indices = np.arange(self.row_count, dtype=np.int64)
+            indices = selected
         elif order == "canonical":
-            indices = np.lexsort(
+            canonical_order = np.lexsort(
                 (
-                    combined["active_rotation_rows"],
-                    combined["active_global_rotation_indices"],
-                    combined["active_original_indices"],
+                    combined["active_rotation_rows"][selected],
+                    combined["active_global_rotation_indices"][selected],
+                    combined["active_original_indices"][selected],
                 )
             )
+            indices = selected[canonical_order]
         else:
             raise ValueError(f"unknown BPref row order {order!r}")
         return {key: value[indices] for key, value in combined.items()}
@@ -194,6 +222,42 @@ def load_bpref_contribution_shard(path: str | Path) -> BPrefContributionShard:
     if not np.array_equal(active_global, global_rotations[active_particle, active_row]):
         raise ValueError("active rotation identities do not close against candidate rows")
 
+    particle_groups = np.asarray(
+        values.get("reconstruction_group_ids", np.empty((0,), dtype=np.int32))
+    )
+    active_groups = np.asarray(
+        values.get(
+            "active_reconstruction_group_ids",
+            np.empty((0,), dtype=np.int32),
+        )
+    )
+    if particle_groups.ndim != 1 or particle_groups.dtype != np.dtype(np.int32):
+        raise ValueError("BPref reconstruction_group_ids must be one-dimensional int32")
+    if active_groups.ndim != 1 or active_groups.dtype != np.dtype(np.int32):
+        raise ValueError(
+            "BPref active_reconstruction_group_ids must be one-dimensional int32"
+        )
+    if particle_groups.size not in {0, original.size}:
+        raise ValueError("BPref reconstruction_group_ids does not match particle count")
+    if particle_groups.size == 0:
+        if active_groups.size != 0:
+            raise ValueError(
+                "BPref active reconstruction groups require particle reconstruction groups"
+            )
+    else:
+        if np.any(particle_groups < 0):
+            raise ValueError("BPref reconstruction_group_ids must be non-negative")
+        if active_groups.shape != (q,):
+            raise ValueError(
+                "BPref active_reconstruction_group_ids does not match active row count"
+            )
+        if not np.array_equal(active_groups, particle_groups[active_particle]):
+            raise ValueError(
+                "BPref active reconstruction groups do not close against particle rows"
+            )
+    values["reconstruction_group_ids"] = particle_groups
+    values["active_reconstruction_group_ids"] = active_groups
+
     summed = _array(values, "active_summed", ndim=2)
     weights = _array(values, "active_ctf_probs", ndim=2)
     rotations = _array(values, "active_rotations", ndim=3)
@@ -247,6 +311,12 @@ def load_bpref_contribution_bundle(paths) -> BPrefContributionBundle:
     identities = np.concatenate([shard.row_identity for shard in shards], axis=0)
     if np.unique(identities, axis=0).shape[0] != identities.shape[0]:
         raise ValueError("BPref semantic row identities overlap across shards")
+    has_groups = [
+        shard.values["active_reconstruction_group_ids"].size == shard.row_count
+        for shard in shards
+    ]
+    if any(has_groups) and not all(has_groups):
+        raise ValueError("BPref shards mix captured and uncaptured reconstruction groups")
     return BPrefContributionBundle(shards=shards)
 
 
@@ -331,6 +401,7 @@ def replay_relion_double(
     order: str,
     get_backprojector_data,
     interpolator: int,
+    reconstruction_group: int | None = None,
 ) -> BPrefAccumulatorReplay:
     """Replay captured operands through RELION's CPU double BackProjector.
 
@@ -340,7 +411,7 @@ def replay_relion_double(
     canonical order a deterministic double-precision reduction control.
     """
 
-    rows = bundle.concatenate(order)
+    rows = bundle.concatenate(order, reconstruction_group=reconstruction_group)
     boundary = bundle.boundary_values
     image_shape = tuple(int(value) for value in np.asarray(boundary["image_shape"]))
     pixel_indices = np.asarray(boundary["window_indices"], dtype=np.int32)

@@ -1,3 +1,4 @@
+import threading
 from types import SimpleNamespace
 
 import jax.numpy as jnp
@@ -26,6 +27,45 @@ class _DummySource:
             idx = np.arange(*index.indices(self.n))
             return self._store[idx]
         return self._store[np.asarray(index)]
+
+
+def test_prefetch_iterator_stops_a_blocked_producer_when_consumer_closes():
+    producer_reached_blocked_item = threading.Event()
+    producer_stopped = threading.Event()
+
+    def values():
+        try:
+            yield 0
+            yield 1
+            producer_reached_blocked_item.set()
+            yield 2
+        finally:
+            producer_stopped.set()
+
+    iterator = iter(image_backends._PrefetchIterator(values(), buffer_size=1))
+    assert next(iterator) == 0
+    assert producer_reached_blocked_item.wait(timeout=1.0)
+
+    iterator.close()
+
+    assert producer_stopped.wait(timeout=1.0)
+
+
+def test_prefetch_iterator_preserves_complete_iteration():
+    values = list(range(20))
+
+    assert list(image_backends._PrefetchIterator(values, buffer_size=3)) == values
+
+
+def test_prefetch_iterator_preserves_producer_exceptions():
+    def values():
+        yield 0
+        raise RuntimeError("producer failed")
+
+    iterator = iter(image_backends._PrefetchIterator(values(), buffer_size=1))
+    assert next(iterator) == 0
+    with pytest.raises(RuntimeError, match="producer failed"):
+        next(iterator)
 
 
 def test_particle_image_dataset_basic_getitem_and_preprocess(monkeypatch):
@@ -312,6 +352,13 @@ def test_particle_image_dataset_routes_native_lane_softmask_diagnostic(monkeypat
         return jnp.asarray(images), jnp.asarray(images)
 
     monkeypatch.setattr(cuda_backproject, "relion_preprocess_real_f32", fake_preprocess)
+    # This CPU unit test checks CUDA option routing. The FFT has a separate
+    # GPU contract; verify its input here and supply a correctly shaped result.
+    def fake_fft(values):
+        np.testing.assert_array_equal(np.asarray(values), images)
+        return jnp.zeros((images.shape[0], 8, 5), dtype=jnp.complex64)
+
+    monkeypatch.setattr(image_backends, "_centered_rfft2_jax", fake_fft)
     ds.process_images_half(
         images,
         apply_image_mask=True,

@@ -279,7 +279,7 @@ function buildCloneSearchParams(job: JobDetail): {
     type,
     result_dir: p.result_dir ? String(p.result_dir) : undefined,
     density: p.density ? String(p.density) : undefined,
-    input: p.input ? String(p.input) : undefined,
+    input: p.input_star ? String(p.input_star) : p.input ? String(p.input) : undefined,
     particles: p.particles ? String(p.particles) : undefined,
     params: JSON.stringify(p),
   };

@@ -8,7 +8,7 @@ Verifies:
 """
 
 import inspect
-from dataclasses import replace
+from dataclasses import fields, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -131,32 +131,44 @@ from recovar.em.dense_single_volume.local_caches import (
     EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
 )
 from recovar.em.dense_single_volume.local_em_engine import (
+    EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV,
     EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV,
     EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV,
-    EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV,
+
     EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV,
     EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION,
     EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR,
+    EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV,
+    EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV,
+    EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS_ENV,
+    EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV,
     EXACT_LOCAL_TARGET_ROW_PIXELS_ENV,
     EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV,
     LOCAL_SCORE_DUMP_TARGET_ONLY_ENV,
+    _accumulate_relion_physical_particle_grid,
+    _accumulate_relion_vdam_physical_particle_grid,
+    _adjoint_slice_volume_maybe_windowed_row_chunks,
     _build_reconstruction_pack_indices,
     _exact_local_effective_max_hypotheses_per_microbatch,
     _exact_local_max_hypotheses_per_microbatch,
     _exact_local_xhalf_projection_microbatch_cap,
     _exact_local_xhalf_tail_microbatch_cap,
-    _adjoint_slice_volume_maybe_windowed_row_chunks,
     _local_processed_half_cache_enabled,
     _local_raw_cache_enabled,
     _pad_local_big_jit_image_axis,
     _prepare_local_exact_bucket,
     _reorder_bucket_to_indices,
+    _source_faithful_bpref_particle_chunk_cap,
+    _source_faithful_bpref_particle_chunk_size,
+    _source_faithful_bpref_particle_slices,
     run_local_em_exact,
 )
 from recovar.em.dense_single_volume.local_layout import (
+    EXACT_LOCAL_BUCKET_RADIX_ENV,
     LocalBucketSpec,
     LocalHypothesisLayout,
+    _exact_bucket_rotation_size,
     _selected_rotation_matrices,
     bucket_local_hypothesis_layout,
     build_local_adaptive_pass2_hypothesis_layout,
@@ -1334,7 +1346,7 @@ def test_relion_raw_image_cache_loads_unique_loaders(monkeypatch):
     monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE", "auto")
     monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB", "1")
 
-    iteration_loop_module._maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader), _RawCacheFakeDataset(loader)])
+    iteration_loop_module.maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader), _RawCacheFakeDataset(loader)])
 
     assert loader.load_count == 1
     assert loader._cached is not None
@@ -1345,7 +1357,7 @@ def test_relion_raw_image_cache_respects_memory_guard(monkeypatch):
     monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE", "auto")
     monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE_MAX_GB", "0.001")
 
-    iteration_loop_module._maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader)])
+    iteration_loop_module.maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader)])
 
     assert loader.load_count == 0
     assert loader._cached is None
@@ -1355,7 +1367,7 @@ def test_relion_raw_image_cache_can_be_disabled(monkeypatch):
     loader = _RawCacheFakeLoader()
     monkeypatch.setenv("RECOVAR_EM_RAW_IMAGE_CACHE", "off")
 
-    iteration_loop_module._maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader)])
+    iteration_loop_module.maybe_cache_raw_image_loaders([_RawCacheFakeDataset(loader)])
 
     assert loader.load_count == 0
     assert loader._cached is None
@@ -3435,6 +3447,17 @@ def test_exact_local_fine_grid_precompute_auto_policy():
     assert not iteration_loop_module._precompute_exact_local_fine_grid_enabled(6)
 
 
+def test_exact_local_bucket_radix_can_collapse_adjacent_power_two_shapes(monkeypatch):
+    monkeypatch.setenv(EXACT_LOCAL_BUCKET_RADIX_ENV, "4")
+
+    assert _exact_bucket_rotation_size(32, 5000) == 64
+    assert _exact_bucket_rotation_size(64, 5000) == 64
+    assert _exact_bucket_rotation_size(128, 5000) == 256
+    assert _exact_bucket_rotation_size(256, 5000) == 256
+    assert _exact_bucket_rotation_size(512, 5000) == 1024
+    assert _exact_bucket_rotation_size(1024, 5000) == 1024
+
+
 def test_bucket_local_hypothesis_layout_coarsens_large_exact_neighborhoods_without_4096_floor():
     layout = LocalHypothesisLayout(
         n_global_rotations=2000,
@@ -3644,6 +3667,300 @@ def test_bucket_local_hypothesis_layout_unify_argument_collapses_shape_classes(m
     np.testing.assert_array_equal(
         np.sort(np.concatenate([b.image_indices for b in explicit_buckets])),
         np.arange(len(rotation_counts), dtype=np.int32),
+    )
+
+
+def test_bucket_local_hypothesis_layout_can_preserve_physical_image_order(monkeypatch):
+    monkeypatch.delenv("RECOVAR_LOCAL_BUCKET_UNIFY", raising=False)
+    rotation_counts = np.array([16, 64, 16, 64], dtype=np.int32)
+    rotation_offsets = np.concatenate([[0], np.cumsum(rotation_counts)]).astype(np.int64)
+    n_total = int(rotation_counts.sum())
+    layout = LocalHypothesisLayout(
+        n_global_rotations=n_total,
+        n_pixels=16,
+        n_psi=1,
+        rotation_offsets=rotation_offsets,
+        rotation_ids_flat=np.arange(n_total, dtype=np.int32),
+        rotations_flat=np.broadcast_to(
+            np.eye(3, dtype=np.float32),
+            (n_total, 3, 3),
+        ).copy(),
+        rotation_log_priors_flat=np.zeros(n_total, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=np.zeros((1, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((rotation_counts.size, 1), dtype=np.float32),
+    )
+
+    buckets = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=4,
+        rotation_block_size=5000,
+        max_hypotheses_per_microbatch=1024,
+        unify_bucket_sizes=False,
+        preserve_image_order=True,
+    )
+
+    np.testing.assert_array_equal(
+        np.concatenate([bucket.image_indices for bucket in buckets]),
+        np.arange(rotation_counts.size, dtype=np.int32),
+    )
+    assert [bucket.bucket_rotation_count for bucket in buckets] == [16, 64, 16, 64]
+
+
+def test_bucket_local_hypothesis_layout_aligns_preserved_chunks_to_pool_three(monkeypatch):
+    monkeypatch.delenv("RECOVAR_LOCAL_BUCKET_UNIFY", raising=False)
+    rotation_counts = np.full(7, 16, dtype=np.int32)
+    rotation_offsets = np.concatenate([[0], np.cumsum(rotation_counts)]).astype(np.int64)
+    n_total = int(rotation_counts.sum())
+    layout = LocalHypothesisLayout(
+        n_global_rotations=n_total,
+        n_pixels=16,
+        n_psi=1,
+        rotation_offsets=rotation_offsets,
+        rotation_ids_flat=np.arange(n_total, dtype=np.int32),
+        rotations_flat=np.broadcast_to(
+            np.eye(3, dtype=np.float32),
+            (n_total, 3, 3),
+        ).copy(),
+        rotation_log_priors_flat=np.zeros(n_total, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=np.zeros((1, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((rotation_counts.size, 1), dtype=np.float32),
+    )
+
+    buckets = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=7,
+        rotation_block_size=5000,
+        max_hypotheses_per_microbatch=7 * 16,
+        unify_bucket_sizes=False,
+        preserve_image_order=True,
+    )
+
+    assert [bucket.image_indices.size for bucket in buckets] == [6, 1]
+    np.testing.assert_array_equal(
+        np.concatenate([bucket.image_indices for bucket in buckets]),
+        np.arange(7, dtype=np.int32),
+    )
+
+
+def test_relion_physical_particle_grid_fuses_masked_data_and_weight(monkeypatch):
+    import recovar.cuda_backproject as cuda_backproject
+
+    captured = {}
+
+    def fake_particle_grid(
+        data_volume,
+        weight_volume,
+        data_rows,
+        weight_rows,
+        pixel_indices,
+        rotations,
+        image_shape,
+        volume_shape,
+        max_r,
+    ):
+        captured.update(
+            data_rows=np.asarray(data_rows),
+            weight_rows=np.asarray(weight_rows),
+            pixel_indices=np.asarray(pixel_indices),
+            rotations=np.asarray(rotations),
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            max_r=max_r,
+        )
+        return data_volume + 1, weight_volume + 2
+
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_fused_x_half_backproject_particle_grid_indexed",
+        fake_particle_grid,
+    )
+    data_rows = np.arange(24, dtype=np.float32).reshape(2, 3, 4).astype(np.complex64)
+    weight_rows = np.arange(24, dtype=np.float32).reshape(2, 3, 4)
+    rotations = np.broadcast_to(np.eye(3, dtype=np.float32), (2, 3, 3, 3)).copy()
+    row_mask = np.array([[True, False, True], [False, True, True]])
+
+    data_out, weight_out = _accumulate_relion_physical_particle_grid(
+        data_rows,
+        weight_rows,
+        rotations,
+        row_mask,
+        np.zeros(32, dtype=np.complex64),
+        np.zeros(32, dtype=np.float32),
+        pixel_indices=np.arange(4, dtype=np.int32),
+        image_shape=(8, 8),
+        volume_shape=(7, 7, 7),
+        max_r=3.0,
+    )
+
+    np.testing.assert_array_equal(captured["data_rows"], data_rows * row_mask[..., None])
+    np.testing.assert_array_equal(captured["weight_rows"], weight_rows * row_mask[..., None])
+    np.testing.assert_array_equal(captured["pixel_indices"], np.arange(4, dtype=np.int32))
+    np.testing.assert_array_equal(captured["rotations"], rotations)
+    assert captured["image_shape"] == (8, 8)
+    assert captured["volume_shape"] == (7, 7, 7)
+    assert captured["max_r"] == 3.0
+    np.testing.assert_array_equal(np.asarray(data_out), np.ones(32, dtype=np.complex64))
+    np.testing.assert_array_equal(np.asarray(weight_out), np.full(32, 2, dtype=np.float32))
+
+
+def test_source_faithful_bpref_chunks_only_particle_axis_to_memory_cap():
+    rotation_count = 4096
+    n_recon_pixels = 5100
+    bytes_per_particle = rotation_count * n_recon_pixels * 12
+    cap_gb = 6.0
+    expected = int(cap_gb * 1e9) // bytes_per_particle
+
+    assert _source_faithful_bpref_particle_chunk_size(
+        image_count=300,
+        rotation_count=rotation_count,
+        n_recon_pixels=n_recon_pixels,
+        max_gb=cap_gb,
+    ) == expected
+    assert _source_faithful_bpref_particle_chunk_size(
+        image_count=7,
+        rotation_count=rotation_count,
+        n_recon_pixels=n_recon_pixels,
+        max_gb=cap_gb,
+    ) == 7
+    assert _source_faithful_bpref_particle_chunk_size(
+        image_count=300,
+        rotation_count=rotation_count,
+        n_recon_pixels=n_recon_pixels,
+        max_gb=0.0,
+    ) == 1
+    assert _source_faithful_bpref_particle_chunk_size(
+        image_count=300,
+        rotation_count=rotation_count,
+        n_recon_pixels=n_recon_pixels,
+        max_gb=cap_gb,
+        max_particles=3,
+    ) == 3
+
+
+def test_source_faithful_bpref_particle_chunk_cap_is_explicit(monkeypatch):
+    monkeypatch.delenv(EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV, raising=False)
+    assert _source_faithful_bpref_particle_chunk_cap() is None
+
+    monkeypatch.setenv(EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV, "3")
+    assert _source_faithful_bpref_particle_chunk_cap() == 3
+
+    for invalid in ("0", "-1", "three"):
+        monkeypatch.setenv(EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV, invalid)
+        with pytest.raises(ValueError, match="must be a positive integer"):
+            _source_faithful_bpref_particle_chunk_cap()
+
+
+def test_source_faithful_bpref_particle_slices_preserve_physical_order():
+    assert _source_faithful_bpref_particle_slices(8, None) == ((0, 8),)
+    assert _source_faithful_bpref_particle_slices(8, 3) == (
+        (0, 3),
+        (3, 6),
+        (6, 8),
+    )
+    assert _source_faithful_bpref_particle_slices(2, 3) == ((0, 2),)
+    with pytest.raises(ValueError, match="must be non-empty"):
+        _source_faithful_bpref_particle_slices(0, 3)
+    with pytest.raises(ValueError, match="must be positive"):
+        _source_faithful_bpref_particle_slices(3, 0)
+
+
+def test_source_faithful_bpref_particle_cap_is_wired_into_grouped_vdam():
+    source = inspect.getsource(run_local_em_exact)
+    start = source.index('raise RuntimeError("source VDAM physical operands were not packed")')
+    stop = source.index("elif source_faithful_bpref and sparse_big_jit_backprojection", start)
+    grouped_vdam = source[start:stop]
+
+    assert "_source_faithful_bpref_particle_chunk_cap()" in grouped_vdam
+    assert "_source_faithful_bpref_particle_slices(" in grouped_vdam
+    assert "for particle_start, particle_stop in particle_slices" in grouped_vdam
+    assert "source-faithful BPref particle ordering cannot be combined" in grouped_vdam
+    assert "_accumulate_relion_vdam_physical_particle_grid(" in grouped_vdam
+
+
+def test_fused_serial_vdam_particles_use_one_worker_lane(monkeypatch):
+    from recovar import cuda_backproject
+
+    captured = {}
+
+    def fake_fused(*args, **kwargs):
+        captured.update(kwargs)
+        return args[0], args[1], jnp.zeros((2, 3, 4), dtype=jnp.float32)
+
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_vdam_mstep_fused_projector_x_half",
+        fake_fused,
+    )
+    particle_count = 2
+    rotation_count = 3
+    pixel_count = 4
+    translation_count = 2
+    _accumulate_relion_vdam_physical_particle_grid(
+        jnp.ones((particle_count, pixel_count), dtype=jnp.complex64),
+        jnp.ones((particle_count, pixel_count), dtype=jnp.float32),
+        jnp.ones((particle_count, pixel_count), dtype=jnp.float32),
+        jnp.ones(
+            (particle_count, rotation_count, translation_count),
+            dtype=jnp.float32,
+        ),
+        jnp.zeros((translation_count, 2), dtype=jnp.float32),
+        jnp.zeros(
+            (particle_count, rotation_count, pixel_count),
+            dtype=jnp.complex64,
+        ),
+        jnp.broadcast_to(
+            jnp.eye(3, dtype=jnp.float32),
+            (particle_count, rotation_count, 3, 3),
+        ),
+        jnp.ones((particle_count, rotation_count), dtype=bool),
+        jnp.zeros(32, dtype=jnp.complex64),
+        jnp.zeros(32, dtype=jnp.float32),
+        projector_full=jnp.zeros((5, 5, 5), dtype=jnp.complex64),
+        scoring_rotations=jnp.broadcast_to(
+            jnp.eye(3, dtype=jnp.float32),
+            (particle_count, rotation_count, 3, 3),
+        ),
+        projector_r_max=2,
+        pixel_indices=jnp.arange(pixel_count, dtype=jnp.int32),
+        image_shape=(4, 6),
+        volume_shape=(3, 3, 3),
+        max_r=1.0,
+        worker_lane_ids=jnp.asarray([3, 5], dtype=jnp.int32),
+        serial_particle_accumulation=True,
+    )
+
+    np.testing.assert_array_equal(
+        np.asarray(captured["worker_lane_ids"]),
+        np.zeros(particle_count, dtype=np.int32),
+    )
+    assert captured["parallel_worker_replay"] is False
+
+
+def test_fused_serial_vdam_particle_control_is_wired_into_grouped_path():
+    source = inspect.getsource(run_local_em_exact)
+    start = source.index('raise RuntimeError("source VDAM physical operands were not packed")')
+    stop = source.index("elif source_faithful_bpref and sparse_big_jit_backprojection", start)
+    grouped_vdam = source[start:stop]
+
+    assert "EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV" in grouped_vdam
+    assert "fused serial VDAM BPref particles cannot be combined" in grouped_vdam
+    assert "serial_particle_accumulation=fused_serial_particles" in grouped_vdam
+    assert EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV.endswith(
+        "FUSED_SERIAL_PARTICLES"
+    )
+    assert "EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV" in grouped_vdam
+    assert "EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS_ENV" in grouped_vdam
+    assert "or launch_serial_rotations" in grouped_vdam
+    assert "serial_rotation_replay=serial_rotation_replay" in grouped_vdam
+    assert "persistent_serial_rotation_replay=fused_serial_rotations" in grouped_vdam
+    assert "fused serial VDAM BPref rotations cannot be combined" in grouped_vdam
+    assert EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV.endswith(
+        "FUSED_SERIAL_ROTATIONS"
+    )
+    assert EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS_ENV.endswith(
+        "LAUNCH_SERIAL_ROTATIONS"
     )
 
 
@@ -3927,6 +4244,16 @@ def test_texture_centered_crop_masks_current_image_disk():
     expected[:, 1, 2] = 0.0
     expected[:, 3, 2] = 0.0
     np.testing.assert_array_equal(got, expected)
+
+    unmasked = np.asarray(
+        _texture_centered_crop_to_full(
+            crop,
+            image_shape=(4, 4),
+            projector_output_size=4,
+            mask_current_image_disk=False,
+        )
+    ).reshape(1, 4, 3)
+    np.testing.assert_array_equal(unmasked, np.ones((1, 4, 3), dtype=np.complex64))
 
 
 @pytest.mark.parametrize(
@@ -4510,7 +4837,8 @@ def test_exact_local_fused_posterior_missing_warning_respects_filters():
     ) in src
 
 
-def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
+def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path, monkeypatch):
+    monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_OPERANDS", "1")
     class _Dataset:
         def original_image_indices_from_local(self, indices):
             _ = indices
@@ -4548,12 +4876,17 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
             image_pre_shifts=np.array([[2.0, -1.0]], dtype=np.float32),
             scores=np.array([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]], dtype=np.float32),
             probs=np.array([[[0.05, 0.10, 0.15], [0.20, 0.25, 0.25]]], dtype=np.float32),
+            reconstruction_probs=np.array(
+                [[[0.05, 0.0, 0.15], [0.0, 0.25, 0.25]]],
+                dtype=np.float32,
+            ),
             log_Z=np.array([7.0], dtype=np.float32),
             best_log_score=np.array([6.0], dtype=np.float32),
             max_posterior=np.array([0.25], dtype=np.float32),
             reconstruction_sample_mask=np.ones((1, 2, 3), dtype=bool),
             reconstruction_rotation_mask=np.ones((1, 2), dtype=bool),
             n_significant_samples=np.array([6], dtype=np.int32),
+            wavg_cutoff_triplet=np.array([[1.25, 2.5, 3.75]], dtype=np.float64),
             current_size=current_size,
             debug_iteration=9,
             dump_dir=tmp_path,
@@ -4571,6 +4904,10 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
     with np.load(tmp_path / "local_score_it009_image_123.npz") as dump:
         np.testing.assert_array_equal(dump["local_rotation_indices"], np.array([5, 7], dtype=np.int32))
         np.testing.assert_array_equal(dump["debug_iteration"], np.array([9], dtype=np.int32))
+        np.testing.assert_array_equal(
+            dump["debug_wavg_cutoff_triplet_xa_aa_diff2"],
+            np.array([1.25, 2.5, 3.75], dtype=np.float64),
+        )
         assert dump["local_rotation_eulers"].shape == (2, 3)
         assert dump["local_rotation_matrices"].shape == (2, 3, 3)
         np.testing.assert_array_equal(
@@ -4584,6 +4921,10 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
         np.testing.assert_array_equal(dump["best_score_rotation_global_id"], np.array([7], dtype=np.int32))
         np.testing.assert_array_equal(dump["best_score_translation_index"], np.array([2], dtype=np.int32))
         np.testing.assert_allclose(dump["best_score_translation"], np.array([[0.0, 1.0]], dtype=np.float32))
+        np.testing.assert_array_equal(
+            dump["reconstruction_probs"],
+            np.array([[[0.05, 0.0, 0.15], [0.0, 0.25, 0.25]]], dtype=np.float32),
+        )
 
 
 def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translation_prior(monkeypatch, rng):
@@ -5513,7 +5854,8 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         shifted_score_half,
         shifted_recon_half,
         _batch_norm,
-        ctf2_over_nv_half,
+        ctf2_over_nv_score_half,
+        ctf2_over_nv_recon_half,
         _processed_score_half,
         _real_space_pre_shift_applied,
     ) = _prepare_local_exact_bucket(
@@ -5556,7 +5898,7 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     proj_weighted = proj_half * score_half_weights[None, None, :]
     proj_abs2_weighted = proj_abs2 * score_half_weights[None, None, :]
     shifted_score = window_spec.score_values(shifted_score_half)
-    ctf2_over_nv_score = window_spec.score_values(ctf2_over_nv_half)
+    ctf2_over_nv_score = window_spec.score_values(ctf2_over_nv_score_half)
     scores = score_local_bucket(
         shifted_score.reshape(1, 1, -1),
         ctf2_over_nv_score,
@@ -5568,7 +5910,7 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     )
     _log_Z, probs, _best_log_score, _best_argmax, _max_posterior = normalize_local_scores(scores)
     shifted_recon = window_spec.recon_values(shifted_recon_half)
-    ctf2_over_nv_recon = window_spec.recon_values(ctf2_over_nv_half)
+    ctf2_over_nv_recon = window_spec.recon_values(ctf2_over_nv_recon_half)
     shifted_recon_split = shifted_recon.reshape(1, 1, -1)
     manual_summed = compute_local_weighted_sums(probs, shifted_recon_split)
     manual_ctf_probs = compute_local_ctf_sums(probs, ctf2_over_nv_recon)
@@ -5636,6 +5978,118 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         rtol=1e-5,
     )
     assert np.all(np.isfinite(np.asarray(noise_exact.wsum_sigma2_noise)))
+
+
+@pytest.mark.parametrize("score_with_masked_images", [False, True])
+def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(
+    monkeypatch,
+    rng,
+    score_with_masked_images,
+):
+    import recovar.cuda_backproject as cuda_backproject
+    import recovar.em.dense_single_volume.local_em_engine as local_engine_module
+
+    dataset = MockDataset(1, rng)
+    config = ForwardModelConfig.from_dataset(
+        dataset,
+        disc_type="linear_interp",
+        process_fn=dataset.process_images,
+    )
+    n_half = dataset.image_shape[0] * (dataset.image_shape[1] // 2 + 1)
+    processed = (
+        np.arange(n_half, dtype=np.float32)[None, :]
+        + 1j * np.arange(n_half, dtype=np.float32)[None, ::-1]
+    ).astype(np.complex64)
+    ctf_rfloat = np.linspace(-1.25, 1.75, n_half, dtype=np.float64)[None, :]
+    noise_f64 = np.linspace(0.7, 2.3, n_half, dtype=np.float64)
+
+    monkeypatch.setattr(
+        local_engine_module._sparse_pass2_diagnostics,
+        "_relion_exact_ctf_half_from_source_star_host",
+        lambda *_args, **_kwargs: ctf_rfloat,
+    )
+    monkeypatch.setattr(
+        local_engine_module,
+        "resolve_image_mask_for_half_preprocess",
+        lambda *_args, **_kwargs: (np.zeros(dataset.image_shape, dtype=np.float32), "none"),
+    )
+    monkeypatch.setattr(
+        local_engine_module,
+        "_big_jit_preprocess_half",
+        lambda *_args, **_kwargs: jnp.asarray(processed),
+    )
+    captured_bpref = {}
+
+    def fake_relion_translate_bpref(
+        images,
+        weighted_ctf,
+        translation_angles,
+        pixel_indices,
+        image_shape,
+    ):
+        captured_bpref.update(
+            images=np.asarray(images),
+            weighted_ctf=np.asarray(weighted_ctf),
+            translation_angles=np.asarray(translation_angles),
+            pixel_indices=np.asarray(pixel_indices),
+            image_shape=tuple(image_shape),
+        )
+        return (images[:, None, :] * weighted_ctf[:, None, :]).reshape(-1, images.shape[1])
+
+    monkeypatch.setattr(
+        cuda_backproject,
+        "relion_translate_bpref_f32",
+        fake_relion_translate_bpref,
+    )
+
+    (
+        shifted_score,
+        shifted_recon,
+        batch_norm,
+        score_weight,
+        recon_weight,
+        processed_score,
+        pre_shift_applied,
+    ) = _prepare_local_exact_bucket(
+        dataset,
+        np.zeros((1, *dataset.image_shape), dtype=np.float32),
+        np.zeros((1, 9), dtype=np.float32),
+        np.asarray([0], dtype=np.int32),
+        jnp.asarray(noise_f64),
+        jnp.zeros((1, 2), dtype=jnp.float32),
+        config,
+        make_half_image_weights(dataset.image_shape),
+        score_with_masked_images=score_with_masked_images,
+        relion_score_translation_angles=np.zeros((1, 2), dtype=np.float32),
+        relion_exact_bpref_operands=True,
+    )
+
+    inverse_noise = np.reciprocal(noise_f64).astype(np.float32)
+    ctf_f32 = ctf_rfloat.astype(np.float32)
+    expected_weighted_ctf = ctf_f32 * inverse_noise[None, :]
+    expected_score_weight = (
+        inverse_noise[None, :].astype(np.float64) * ctf_rfloat * ctf_rfloat
+    ).astype(np.float32)
+    expected_recon_weight = expected_weighted_ctf * ctf_f32
+    np.testing.assert_array_equal(np.asarray(processed_score), processed)
+    np.testing.assert_array_equal(np.asarray(shifted_score), processed * expected_weighted_ctf)
+    np.testing.assert_array_equal(np.asarray(shifted_recon), processed * expected_weighted_ctf)
+    np.testing.assert_array_equal(np.asarray(score_weight), expected_score_weight)
+    np.testing.assert_array_equal(np.asarray(recon_weight), expected_recon_weight)
+    np.testing.assert_array_equal(captured_bpref["images"], processed)
+    np.testing.assert_array_equal(captured_bpref["weighted_ctf"], expected_weighted_ctf)
+    np.testing.assert_array_equal(captured_bpref["translation_angles"], np.zeros((1, 2), np.float32))
+    np.testing.assert_array_equal(captured_bpref["pixel_indices"], np.arange(n_half, dtype=np.int32))
+    assert captured_bpref["image_shape"] == dataset.image_shape
+    expected_norm = np.sum(
+        np.abs(processed) ** 2
+        * inverse_noise[None, :]
+        * np.asarray(make_half_image_weights(dataset.image_shape))[None, :],
+        axis=-1,
+        keepdims=True,
+    )
+    np.testing.assert_allclose(np.asarray(batch_norm), expected_norm, rtol=1e-6, atol=1e-5)
+    assert pre_shift_applied is False
 
 
 def test_run_local_em_exact_can_return_half_volume_accumulators(rng, monkeypatch):
@@ -5990,6 +6444,84 @@ def test_run_local_em_exact_external_log_evidence_scales_posterior(rng, monkeypa
     np.testing.assert_allclose(
         np.asarray(stats_scaled.max_posterior_per_image),
         np.asarray(stats_fallback.max_posterior_per_image),
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
+
+@pytest.mark.parametrize(
+    "disable_big_jit",
+    [False, True],
+    ids=["big-jit", "fallback"],
+)
+def test_run_local_em_exact_external_pmax_scales_in_one_score_pass(
+    rng,
+    monkeypatch,
+    disable_big_jit,
+):
+    if disable_big_jit:
+        monkeypatch.setenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", "1")
+    else:
+        monkeypatch.delenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", raising=False)
+    dataset = MockDataset(1, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=132)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    local_rotations = _make_rotations(2, seed=140)
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=2,
+        n_pixels=2,
+        n_psi=1,
+        rotation_offsets=np.array([0, 2], dtype=np.int64),
+        rotation_ids_flat=np.array([0, 1], dtype=np.int32),
+        rotations_flat=np.asarray(local_rotations, dtype=np.float32),
+        rotation_log_priors_flat=np.zeros(2, dtype=np.float32),
+        rotation_counts=np.array([2], dtype=np.int32),
+        translation_grid=np.zeros((1, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((1, 1), dtype=np.float32),
+    )
+    common = dict(
+        image_batch_size=1,
+        rotation_block_size=4,
+        current_size=None,
+        reconstruct_significant_only=False,
+    )
+    base_result = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        **common,
+    )
+    Ft_y_base = base_result.Ft_y
+    Ft_ctf_base = base_result.Ft_ctf
+    ha_base = base_result.hard_assignments
+    stats_base = base_result.stats
+    target_pmax = np.asarray([0.25], dtype=np.float64)
+    scaled_result = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        normalization_max_posterior=target_pmax,
+        **common,
+    )
+    Ft_y_scaled = scaled_result.Ft_y
+    Ft_ctf_scaled = scaled_result.Ft_ctf
+    ha_scaled = scaled_result.hard_assignments
+    stats_scaled = scaled_result.stats
+
+    scale = target_pmax / np.asarray(stats_base.max_posterior_per_image, dtype=np.float64)
+    np.testing.assert_array_equal(ha_scaled, ha_base)
+    np.testing.assert_allclose(np.asarray(Ft_y_scaled), scale[0] * np.asarray(Ft_y_base), rtol=5e-3, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(Ft_ctf_scaled), scale[0] * np.asarray(Ft_ctf_base), rtol=5e-3, atol=1e-5)
+    np.testing.assert_allclose(
+        np.asarray(stats_scaled.max_posterior_per_image),
+        target_pmax,
         rtol=1e-5,
         atol=1e-6,
     )
@@ -7484,8 +8016,6 @@ def test_run_local_em_exact_big_jit_cache_ignores_bound_dataset_process_method(
     monkeypatch,
     score_only,
 ):
-    from dataclasses import fields
-
     import jax
 
     from recovar.em.dense_single_volume import local_big_jit, local_em_engine
@@ -7588,9 +8118,14 @@ def test_run_local_em_exact_big_jit_cache_ignores_bound_dataset_process_method(
         # Replay the previous static-key behavior at the same numeric boundary.
         # This checks all scientific outputs, including M-step/noise carries,
         # independently of the cache-reuse assertion above.
+        function_signature = inspect.signature(function)
+
         def with_bound_process(*args, **kwargs):
-            config = args[-1].replace(process_fn=datasets[0].process_images)
-            return function(*args[:-1], config, **kwargs)
+            bound = function_signature.bind(*args, **kwargs)
+            bound.arguments["config"] = bound.arguments["config"].replace(
+                process_fn=datasets[0].process_images
+            )
+            return function(*bound.args, **bound.kwargs)
 
         monkeypatch.setattr(local_em_engine, "run_local_bucket_big_jit", with_bound_process)
         reference = run_local_em_exact(
@@ -7764,6 +8299,7 @@ def test_local_score_debug_dump_defaults_to_big_jit(monkeypatch, rng, tmp_path):
     monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", "0")
     monkeypatch.setenv("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR", str(fused_dump_dir))
     monkeypatch.setenv("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES", "0")
+    monkeypatch.setenv("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES", "1")
     monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT", raising=False)
     monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_OPERANDS", raising=False)
 
@@ -7807,6 +8343,16 @@ def test_local_score_debug_dump_defaults_to_big_jit(monkeypatch, rng, tmp_path):
     with np.load(fused_dumps[0]) as dump:
         assert dump["posterior"].shape == (1, 3, 2)
         assert dump["best_score"].shape == (1,)
+        assert dump["pass2_scores_raw"].shape == (1, 3, 2)
+        assert dump["pass2_scores_total"].shape == (1, 3, 2)
+        np.testing.assert_allclose(
+            dump["pass2_scores_total"],
+            dump["pass2_scores_raw"]
+            + dump["rotation_log_prior"][:, :, None]
+            + dump["translation_log_prior"][:, None, :],
+            atol=1e-6,
+            rtol=1e-6,
+        )
 
 
 def test_local_score_debug_dump_operands_stay_on_big_jit(monkeypatch, rng, tmp_path):
@@ -8172,9 +8718,18 @@ def test_local_score_debug_recon_projection_materialization_is_bucket_scoped():
     assert "jax.clear_caches()" in src
 
 
-def test_local_fused_posterior_debug_does_not_request_scores_without_score_dump():
+def test_local_fused_posterior_debug_requests_scores_only_with_explicit_flag():
     src = inspect.getsource(run_local_em_exact)
-    assert "return_big_jit_debug_scores = bool(score_debug_bucket_matches)" in src
+    assert "debug_fused_posterior_dump_scores = bool(" in src
+    assert 'and _env_flag("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES")' in src
+    debug_scores_block = src[
+        src.index("return_big_jit_debug_scores = bool(") :
+        src.index("return_big_jit_debug_operands = bool(")
+    ]
+    assert "score_debug_bucket_matches" in debug_scores_block
+    assert "bpref_contribution_capture_active" in debug_scores_block
+    assert "fused_debug_bucket_matches" in debug_scores_block
+    assert "debug_fused_posterior_dump_scores" in debug_scores_block
     assert "return_debug_scores=return_big_jit_debug_scores" in src
     assert "if return_big_jit_debug_scores" in src
     assert "if fused_debug_bucket_matches and debug_fused_posterior_dump_targets:" in src
@@ -8214,6 +8769,64 @@ def test_local_big_jit_float64_relion_translation_covers_mstep_operand():
     src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
     assert "cuda_backproject.relion_translate_score_f64" in src
     assert "relion_score_translation_angles is not None and use_float64_scoring" in src
+
+
+def test_local_big_jit_source_ordered_vdam_mstep_is_strictly_guarded():
+    from recovar.em.dense_single_volume import local_big_jit, local_em_engine
+
+    src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
+    source_ordered_block = src[
+        src.index("source_ordered_vdam_mstep = bool(") :
+        src.index("flat_summed = summed.reshape(")
+    ]
+    for guard in (
+        "relion_sequential_mstep_reduction",
+        "mstep_subtract_ctf_projection",
+        "relion_exact_bpref_operands",
+        "use_relion_cuda_preprocess",
+        "not apply_fourier_pre_shift",
+        "relion_score_translation_angles is not None",
+    ):
+        assert guard in source_ordered_block
+    for fused_guard in (
+        "not return_mstep_tensors",
+        "not disable_adjoint_y",
+        "not disable_adjoint_ctf",
+    ):
+        assert fused_guard in source_ordered_block
+    assert "cuda_backproject.relion_vdam_mstep_fused_x_half(" in source_ordered_block
+    assert "cuda_backproject.relion_vdam_mstep_denominator_f32(" in source_ordered_block
+    assert "elif return_source_vdam_operands:" in source_ordered_block
+    assert "not disable_adjoint_y or not disable_adjoint_ctf" in source_ordered_block
+    assert "summed = jnp.zeros_like(proj_for_noise)" not in source_ordered_block
+    assert "elif mstep_subtract_ctf_projection:" in source_ordered_block
+
+    engine_src = inspect.getsource(local_em_engine.run_local_em_exact)
+    for route_guard in (
+        "return_source_vdam_operands = bool(",
+        "return_big_jit_mstep_tensors",
+        "source_faithful_bpref",
+        "not disable_adjoint_y",
+        "not disable_adjoint_ctf",
+        "_accumulate_relion_vdam_physical_particle_grid(",
+        "relion_projector_half_to_texture_full(",
+        "projector_full=source_vdam_projector_full",
+        "packed_rotations_np, particle_start, particle_stop",
+    ):
+        assert route_guard in engine_src
+    accumulator_src = inspect.getsource(
+        local_em_engine._accumulate_relion_vdam_physical_particle_grid
+    )
+    assert "cuda_backproject.relion_vdam_mstep_fused_projector_x_half(" in accumulator_src
+
+    source_capture_block = engine_src[
+        engine_src.index("elif return_big_jit_mstep_tensors and return_source_vdam_operands:") :
+        engine_src.index("elif return_big_jit_mstep_tensors:", engine_src.index("elif return_big_jit_mstep_tensors and return_source_vdam_operands:"))
+    ]
+    assert "if bpref_contribution_capture_active:" in source_capture_block
+    assert "cuda_backproject.relion_vdam_mstep_sums_f32(" in source_capture_block
+    assert "inline_projector_data_volumes" in engine_src
+    assert "_accumulate_relion_vdam_physical_particle_grid(" in engine_src
 
 
 def test_local_exact_relion_translation_requires_half_spectrum_scoring():
@@ -8686,6 +9299,91 @@ def test_run_local_em_exact_over_cap_significant_support_defaults_to_deferred_bi
     np.testing.assert_allclose(np.asarray(deferred.Ft_ctf), np.asarray(sparse.Ft_ctf), rtol=1e-5, atol=1e-6)
     _assert_relion_stats_allclose(deferred.stats, sparse.stats)
     _assert_noise_stats_allclose(deferred.noise_stats, sparse.noise_stats)
+
+
+@pytest.mark.parametrize("deferred", [False, True])
+@pytest.mark.parametrize("spectrum_norm", [False, True])
+def test_skip_deferred_zero_norm_preserves_real_local_outputs(monkeypatch, rng, deferred, spectrum_norm):
+    import jax
+    from recovar.em.dense_single_volume import local_em_engine as engine
+
+    case = _sparse_big_jit_local_case(rng)
+    for key in ("RECOVAR_LOCAL_SCORE_DUMP_DIR", "RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES",
+                "RECOVAR_DISABLE_LOCAL_BIG_JIT", EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv(EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV, "0" if deferred else "1000")
+    original = engine._invoke_local_bucket_big_jit
+    captured = []
+
+    def observe(*args, **kwargs):
+        result = original(*args, **kwargs)
+        # Inspect the real compiled return, not a simulated zero operand.
+        assert kwargs["return_deferred_mstep_inputs"] is deferred
+        assert kwargs["accumulate_noise"] is (not deferred)
+        norm = np.asarray(result[8])
+        assert norm.dtype == np.dtype(np.float64 if spectrum_norm and not deferred else np.float32)
+        if deferred:
+            assert norm.tobytes() == np.zeros_like(norm).tobytes()
+        else:
+            assert np.any(norm != 0)
+        captured.append(norm.copy())
+        return result
+
+    monkeypatch.setattr(engine, "_invoke_local_bucket_big_jit", observe)
+    original_stats = engine.make_noise_stats
+    raw_norms = []
+
+    def observe_stats(**kwargs):
+        raw = np.asarray(kwargs["wsum_norm_correction"])
+        assert raw.dtype == np.dtype(np.float64 if spectrum_norm else np.float32)
+        raw_norms.append(raw.copy())
+        return original_stats(**kwargs)
+
+    monkeypatch.setattr(engine, "make_noise_stats", observe_stats)
+    results = []
+    for enabled in ("0", "1"):
+        monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, enabled)
+        results.append(engine.run_local_em_exact(
+            *case, "linear_interp", image_batch_size=2, rotation_block_size=8,
+            current_size=6, accumulate_noise=True, reconstruct_significant_only=True,
+            return_profile=True, score_with_masked_images=False,
+            half_spectrum_scoring=False, max_significants=-1,
+            source_faithful_spectrum_norm=spectrum_norm,
+        ))
+    assert len(captured) == 4  # Two real buckets in each treatment.
+    assert all(int(result.profile["big_jit_bucket_count"]) == 2 for result in results)
+    assert np.any(np.asarray(results[0].noise_stats.wsum_norm_correction) != 0)
+    # Public NoiseStats casts to float32; compare the raw carry before that cast.
+    assert len(raw_norms) == 2 and raw_norms[0].tobytes() == raw_norms[1].tobytes()
+    assert results[0].noise_stats.wsum_norm_correction.dtype == np.dtype(np.float32)
+    first, first_tree = jax.tree_util.tree_flatten(
+        tuple(getattr(results[0], field.name) for field in fields(results[0]) if field.name != "profile")
+    )
+    second, second_tree = jax.tree_util.tree_flatten(
+        tuple(getattr(results[1], field.name) for field in fields(results[1]) if field.name != "profile")
+    )
+    assert first_tree == second_tree
+    for left, right in zip(first, second, strict=True):
+        left, right = np.asarray(left), np.asarray(right)
+        assert left.dtype == right.dtype and left.shape == right.shape
+        assert left.tobytes() == right.tobytes()
+
+
+@pytest.mark.parametrize("token, expected", [(None, False), ("0", False), ("1", True), (" 1 ", True)])
+def test_skip_deferred_zero_norm_selector(monkeypatch, token, expected):
+    from recovar.em.dense_single_volume import local_em_engine as engine
+    monkeypatch.delenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, raising=False)
+    if token is not None:
+        monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, token)
+    assert engine._local_skip_deferred_zero_norm_requested() is expected
+
+
+@pytest.mark.parametrize("token", ["", "2", "true", "false", "-1"])
+def test_skip_deferred_zero_norm_rejects_invalid_selector(monkeypatch, token):
+    from recovar.em.dense_single_volume import local_em_engine as engine
+    monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, token)
+    with pytest.raises(ValueError, match="RECOVAR_EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM"):
+        engine._local_skip_deferred_zero_norm_requested()
 
 
 def test_run_local_em_exact_deferred_big_jit_no_noise_matches_sparse_big_jit(monkeypatch, rng):
@@ -11440,6 +12138,7 @@ class TestRelionModeSmokeTest:
         """Exercise the opt-in K=1 coarse scorer through significance."""
 
         import jax
+
         from recovar import cuda_backproject
 
         monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
@@ -11705,9 +12404,72 @@ class TestRelionModeSmokeTest:
                 else:
                     np.testing.assert_array_equal(cached_sig, uncached_sig)
         for key, cached in cached_result[5].items():
+            if key == "coarse_selector_audit":
+                continue
             np.testing.assert_allclose(
                 np.asarray(cached),
                 np.asarray(uncached_result[5][key]),
+                rtol=1e-6,
+                atol=1e-6,
+            )
+
+    def test_k_class_significance_tail_padding_preserves_outputs(
+        self,
+        half_datasets,
+        init_volume,
+    ):
+        dataset = half_datasets[0]
+        means = jnp.stack([init_volume, init_volume * jnp.asarray(1.01, dtype=init_volume.dtype)])
+        rotations = _make_rotations(3, seed=312)
+        translations = jnp.array([[0.0, 0.0], [1.0, -1.0]], dtype=jnp.float32)
+        common_kwargs = dict(
+            class_log_priors=np.log(np.array([0.55, 0.45], dtype=np.float64)),
+            adaptive_fraction=0.999,
+            max_significants=-1,
+            rotation_block_size=2,
+            current_size=6,
+            score_with_masked_images=True,
+            translation_log_prior=np.asarray([[0.0, -0.1], [-0.2, 0.0]], dtype=np.float32),
+            image_pre_shifts=np.asarray([[0.25, -0.5], [-0.75, 0.5]], dtype=np.float32),
+            half_spectrum_scoring=True,
+            return_class_best=True,
+            return_class_second=True,
+        )
+
+        unpadded = _compute_k_class_significance_batched(
+            dataset,
+            means,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=dataset.n_units,
+            pad_final_image_batch=False,
+            **common_kwargs,
+        )
+        padded = _compute_k_class_significance_batched(
+            dataset,
+            means,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=dataset.n_units + 1,
+            pad_final_image_batch=True,
+            **common_kwargs,
+        )
+
+        for expected, actual in zip(unpadded[:4], padded[:4]):
+            np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+        for expected_by_class, actual_by_class in zip(unpadded[4], padded[4]):
+            for expected, actual in zip(expected_by_class, actual_by_class):
+                np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
+        for key, expected in unpadded[5].items():
+            if key == "coarse_selector_audit":
+                continue
+            np.testing.assert_allclose(
+                np.asarray(padded[5][key]),
+                np.asarray(expected),
                 rtol=1e-6,
                 atol=1e-6,
             )
@@ -11783,6 +12545,8 @@ class TestRelionModeSmokeTest:
                 else:
                     np.testing.assert_array_equal(fused_sig, unfused_sig)
         for key, fused in fused_result[5].items():
+            if key == "coarse_selector_audit":
+                continue
             np.testing.assert_allclose(
                 np.asarray(fused),
                 np.asarray(unfused_result[5][key]),
@@ -15737,3 +16501,16 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         rtol=1e-6,
         atol=1e-6,
     )
+
+
+def test_canonical_rotation_grid_reuses_relion_euler_table(monkeypatch):
+    """The direct grid owner preserves source Eulers without a SciPy round trip."""
+    order = 1
+    expected_eulers = np.asarray(get_relion_rotation_grid_eulers(order), dtype=np.float32)
+
+    def fail_r_to_relion(*_args, **_kwargs):
+        raise AssertionError("generic R_to_relion should not be called for canonical grids")
+
+    monkeypatch.setattr(iteration_loop_module.utils, "R_to_relion", fail_r_to_relion)
+    _, got = relion_metadata_module._relion_rotation_grid_float32(order)
+    np.testing.assert_allclose(got, expected_eulers, rtol=0.0, atol=0.0)

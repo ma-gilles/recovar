@@ -1,0 +1,76 @@
+{
+  "evidence_version": 1,
+  "date": "2026-08-31",
+  "base_commit": "f90c453f5f52995b4b790e4a0be533bdc5afee3d",
+  "scope": "default-off stable physical Fourier-window planner and runtime-cutoff fine-score CUDA primitive",
+  "production_integration_status": "not enabled; score/Wavg/BPref shapes must be converted together before a trajectory",
+  "host_gate": {
+    "command": "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_vdam_coarse_prefetch_shared_20260830/.pixi/envs/default/bin/python -m pytest -q tests/unit/initial_model/test_stable_fourier_window_shapes.py tests/unit/test_cuda_relion_fine_diff2.py::test_relion_fused_translate_cuda_source_pins_native_block_topology tests/unit/test_cuda_relion_fine_diff2.py::test_relion_runtime_cutoff_fine_diff2_fails_closed_without_gpu",
+    "result": "23 passed in 58.37s"
+  },
+  "gpu_exactness_job": {
+    "job_id": 13264981,
+    "sacct_state": "FAILED",
+    "exit_code": "1:0",
+    "elapsed": "00:03:51",
+    "output_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_stable_fine_window_gate_20260831_02",
+    "submit_command": "OUTPUT_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_stable_fine_window_gate_20260831_02 PIXI_PY_OVERRIDE=/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_vdam_coarse_prefetch_shared_20260830/.pixi/envs/default/bin/python REPO_ROOT=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_vdam_stable_window_shapes_20260831 sbatch --parsable --export=ALL,OUTPUT_ROOT,PIXI_PY_OVERRIDE,REPO_ROOT scripts/run_vdam_stable_fine_window_gate.sbatch",
+    "focused_test_result": "1 passed in 4.76s",
+    "wrapper_failure_after_test": "benchmark was initially invoked as a file after PYTHONPATH was cleared; module invocation fixes the localized import error",
+    "cuda_library": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_stable_fine_window_gate_20260831_02/build/libcuda_backproject.so",
+    "cuda_library_sha256": "3d7a65e0791fcd4cb918d0d3f05cd8b57924798c7f9cc092967221ddc7bbb47c"
+  },
+  "gpu_timing_job": {
+    "job_id": 13265301,
+    "sacct_state": "COMPLETED",
+    "exit_code": "0:0",
+    "elapsed": "00:00:15",
+    "output_root": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_stable_fine_window_gate_20260831_04",
+    "submit_command": "OUTPUT_ROOT=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_stable_fine_window_gate_20260831_04 PIXI_PY_OVERRIDE=/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_vdam_coarse_prefetch_shared_20260830/.pixi/envs/default/bin/python REPO_ROOT=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_vdam_stable_window_shapes_20260831 CUDA_LIB_OVERRIDE=/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_stable_fine_window_gate_20260831_02/build/libcuda_backproject.so RUN_GPU_PYTEST=0 sbatch --parsable --export=ALL,OUTPUT_ROOT,PIXI_PY_OVERRIDE,REPO_ROOT,CUDA_LIB_OVERRIDE,RUN_GPU_PYTEST scripts/run_vdam_stable_fine_window_gate.sbatch",
+    "logical_current_sizes": [68, 70, 72],
+    "physical_current_size": 72,
+    "logical_score_pixels": [1867, 1979, 2092],
+    "physical_score_pixels": [2092, 2092, 2092],
+    "bitwise_equal": true,
+    "output_sha256": {
+      "68": "ddc681fee304da9489d4fce4638da155b225a74ac326dd43e0c1013958b4f31e",
+      "70": "058be9b395c65bd78d06132a218ee056803b72a32007c7154ddea2a843ce1ca7",
+      "72": "1fee4f66013b17d9115ef63e33de1b62bb3ef7f3b5c289cf7fa53bb4a78669c6"
+    },
+    "jit_cache_counts_after_each_call": {
+      "runtime_cutoff": [1, 1, 1],
+      "static_cutoff": [1, 2, 3]
+    },
+    "runtime_first": {
+      "runtime_cutoff_first_call_total_seconds": 0.016167858000699198,
+      "static_cutoff_first_call_total_seconds": 0.04291683899646159,
+      "gain_fraction": 0.6232747243562787,
+      "steady_runtime_over_static_3000_calls": 1.0083030343692343
+    },
+    "static_first": {
+      "runtime_cutoff_first_call_total_seconds": 0.014469988997007022,
+      "static_cutoff_first_call_total_seconds": 0.045068653002090286,
+      "gain_fraction": 0.6789345136111367,
+      "steady_runtime_over_static_3000_calls": 1.0024916378469684
+    }
+  },
+  "source_sha256": {
+    "recovar/cuda/cuda_backproject.cu": "a07fad9a11f8f190115ef4fe2439ca6a0f28ea5baf9e34bae8bee9964ea5e19b",
+    "recovar/cuda_backproject.py": "bac2e1b2d4b06ccbc2de95b01402ff3b3baecd1ccc60b421030f9052ed18c2d8",
+    "recovar/em/dense_single_volume/helpers/fourier_window.py": "0b5f85b30317fae7296d728c6173f3965bb2d8173972b13f99e6b5afc7819bce",
+    "tests/unit/test_cuda_relion_fine_diff2.py": "1e927195497e5b7e9b45394ee3bd2b0c08e1afe18f774b85b1749b8debd8fd19",
+    "tests/unit/initial_model/test_stable_fourier_window_shapes.py": "ea0bfc2b5499bbc59f4d26ae1d71889d473c1d01f5474cb26b44f341d0eda174",
+    "scripts/benchmark_vdam_stable_fine_window.py": "6c7df6a1c70d405c6f12aab6535e3b1b28f9a89cce99e430629dc9eb7b387a77",
+    "scripts/run_vdam_stable_fine_window_gate.sbatch": "a025fdefd950b44dddb5cd95f37a55f8f7fb93ce5d80a0c6b2680064895c77c7"
+  },
+  "gf46_forecast": {
+    "observed_logical_signatures_through_iteration_80": 29,
+    "proposed_physical_signatures": 14,
+    "physical_current_sizes": [32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 126, 128],
+    "aggregate_projection_capacity_increase_fraction": 0.0671,
+    "observed_compile_first_launch_pool_seconds": 57.83,
+    "estimated_net_wall_gain_fraction": [0.052, 0.054],
+    "forecast_only": true
+  },
+  "trajectory_run": false
+}

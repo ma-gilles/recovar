@@ -41,6 +41,9 @@ import numpy as np
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics
+from recovar.em.dense_single_volume.batch_planning import (
+    _plan_consecutive_padded_batches,
+)
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
 )
@@ -126,6 +129,7 @@ from recovar.em.dense_single_volume.helpers.translation_prior import (
 )
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.local_backprojection import (
+    relion_x_half_sequential_translation_reduction_enabled,
     compute_local_ctf_sums_from_probs_sum_t,
     compute_local_mstep_sums,
     compute_local_weighted_sums,
@@ -219,6 +223,12 @@ _SPARSE_KCLASS_COMPACT_PAIRS_THRESHOLD_REPORT_ENV = (
     "RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_THRESHOLD_REPORT"
 )
 _SPARSE_KCLASS_GROUP_TIMING_ENV = "RECOVAR_SPARSE_KCLASS_GROUP_TIMING"
+_SPARSE_KCLASS_EXECUTION_SIGNATURES_ENV = (
+    "RECOVAR_SPARSE_KCLASS_EXECUTION_SIGNATURES"
+)
+_SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE_ENV = (
+    "RECOVAR_SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE"
+)
 _SPARSE_KCLASS_RECTANGULAR_ACTIVE_ROWS_ENV = "RECOVAR_SPARSE_KCLASS_RECTANGULAR_ACTIVE_ROWS"
 _SPARSE_KCLASS_RECTANGULAR_ACTIVE_ROWS_MIN_BUCKET_SIZE_ENV = (
     "RECOVAR_SPARSE_KCLASS_RECTANGULAR_ACTIVE_ROWS_MIN_BUCKET_SIZE"
@@ -231,20 +241,24 @@ _SPARSE_KCLASS_ACTIVE_ROW_PAD_MULTIPLE_ENV = "RECOVAR_SPARSE_KCLASS_ACTIVE_ROW_P
 _SPARSE_KCLASS_FUSED_NOISE_NORM_ENV = "RECOVAR_SPARSE_KCLASS_FUSED_NOISE_NORM"
 _SPARSE_KCLASS_RESIDUAL_TERMS_FUSED_ENV = "RECOVAR_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED"
 _SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS_ENV = "RECOVAR_SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS"
+_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS_ENV = (
+    "RECOVAR_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS"
+)
+_SPARSE_KCLASS_FUSED_MSTEP_NOISE_ENV = "RECOVAR_SPARSE_KCLASS_FUSED_MSTEP_NOISE"
 _SPARSE_KCLASS_COMPACT_PAIR_MSTEP_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MSTEP"
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE"
 _RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR"
 _RELION_FINE_DIFF2_FUSED_FFI_ENV = "RECOVAR_RELION_FINE_DIFF2_FUSED_FFI"
-
-
+_RELION_X_HALF_BP_NATIVE_PARTICLE_GRID_ENV = (
+    "RECOVAR_RELION_X_HALF_BP_NATIVE_PARTICLE_GRID"
+)
 _RELION_X_HALF_BP_PARTICLE_POOL_SIZE_ENV = (
     "RECOVAR_K1_RELION_X_HALF_BP_PARTICLE_POOL_SIZE"
 )
 _RELION_POWERCLASS_SPECTRUM_NORM_ENV = "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM"
 _RELION_EXACT_BPREF_OPERANDS_ENV = "RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS"
 _RELION_TRANSLATED_WAVG_NORM_ENV = "RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM"
-
-
+_RELION_WAVG_SEQUENTIAL_CUDA_ENV = "RECOVAR_K1_RELION_WAVG_SEQUENTIAL_CUDA"
 _BPREF_MEMBERSHIP_DUMP_DIR_ENV = "RECOVAR_BPREF_MEMBERSHIP_DUMP_DIR"
 _BPREF_MEMBERSHIP_DUMP_ITERATION_ENV = "RECOVAR_BPREF_MEMBERSHIP_DUMP_ITERATION"
 _BPREF_MEMBERSHIP_DUMP_HALF_ENV = "RECOVAR_BPREF_MEMBERSHIP_DUMP_HALF"
@@ -547,7 +561,16 @@ def _compact_pair_execution_mask_excluding_full_support(per_image_inputs_by_clas
     return filtered, excluded
 
 
-def _candidate_mask_nonzero(candidate_mask):
+def compact_candidate_indices_in_source_order(candidate_mask):
+    """Return compact ``(rotation, translation)`` ids in dense source order.
+
+    Compact pass 2 and the exact-local scorer must agree on one ordering:
+    rotations are the major axis and translations are the minor axis, exactly
+    as if the dense ``(R, T)`` mask had been flattened in C order.  Keep this
+    encoder shared so selected-pair CUDA paths cannot silently invent a
+    different posterior order.
+    """
+
     if isinstance(candidate_mask, SparseCandidateMask):
         if candidate_mask.mode == "empty":
             return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
@@ -559,6 +582,12 @@ def _candidate_mask_nonzero(candidate_mask):
             dense = _dense_candidate_mask_from_spec(candidate_mask)
             return np.nonzero(dense)
     return np.nonzero(_candidate_mask_to_dense(candidate_mask))
+
+
+def _candidate_mask_nonzero(candidate_mask):
+    """Backward-compatible internal name for the shared source-order encoder."""
+
+    return compact_candidate_indices_in_source_order(candidate_mask)
 
 
 # ---------------------------------------------------------------------------
@@ -967,6 +996,207 @@ def _relion_cuda_score_translation_angles_if_available(
     )
 
 
+def build_compact_pair_index_arrays(
+    candidate_masks,
+    *,
+    pair_bucket_size: int | None = None,
+    pair_block_size_for_quantization: int = 5000,
+):
+    """Pack candidate masks with the mature compact-pass-2 pair ABI.
+
+    Valid pairs occupy a source-ordered prefix of each image row. Padding uses
+    ``-1`` indices plus a false ``pair_mask``.  When no explicit capacity is
+    supplied, use the same compile-friendly bucket quantization as compact
+    pass 2 instead of creating exact-count shape families.
+    """
+
+    candidate_masks = tuple(candidate_masks)
+    compact_indices = tuple(
+        compact_candidate_indices_in_source_order(candidate_mask)
+        for candidate_mask in candidate_masks
+    )
+    pair_counts = np.asarray(
+        [rotation_rows.shape[0] for rotation_rows, _ in compact_indices],
+        dtype=np.int32,
+    )
+    required_capacity = int(pair_counts.max(initial=0))
+    if pair_bucket_size is None:
+        pair_bucket_size = _exact_bucket_rotation_size(
+            required_capacity,
+            pair_block_size_for_quantization,
+        )
+    pair_bucket_size = int(pair_bucket_size)
+    if pair_bucket_size <= 0:
+        raise ValueError("compact pair bucket size must be positive")
+    if required_capacity > pair_bucket_size:
+        raise ValueError(
+            "compact pair bucket is smaller than the source-ordered candidate "
+            f"prefix: required={required_capacity}, capacity={pair_bucket_size}"
+        )
+
+    batch_size = len(candidate_masks)
+    local_rotation_row = np.full(
+        (batch_size, pair_bucket_size),
+        -1,
+        dtype=np.int32,
+    )
+    translation_idx = np.full_like(local_rotation_row, -1)
+    pair_mask = np.zeros((batch_size, pair_bucket_size), dtype=bool)
+    for image_row, (rotation_rows, translation_ids) in enumerate(compact_indices):
+        count = int(rotation_rows.shape[0])
+        if count == 0:
+            continue
+        local_rotation_row[image_row, :count] = rotation_rows.astype(
+            np.int32,
+            copy=False,
+        )
+        translation_idx[image_row, :count] = translation_ids.astype(
+            np.int32,
+            copy=False,
+        )
+        pair_mask[image_row, :count] = True
+    return {
+        "pair_bucket_size": pair_bucket_size,
+        "pair_counts": pair_counts,
+        "local_rotation_row": local_rotation_row,
+        "translation_idx": translation_idx,
+        "pair_mask": pair_mask,
+    }
+
+
+def build_compact_fine_job_plan(
+    candidate_masks,
+    reference_row_lookup,
+    *,
+    job_bucket_size: int | None = None,
+    job_block_size_for_quantization: int = 5000,
+):
+    """Pack all selected fine hypotheses into one global source-order plan.
+
+    The mature pair encoder quantizes a separate capacity for every image and
+    therefore executes ``B * max(P_i)`` slots.  This companion ABI preserves
+    the identical image-major, rotation-major, translation-major order while
+    quantizing only the total selected count.  Rows encode ``(image,
+    projected-reference row, dense rotation row, translation)``; an all-``-1``
+    tail is inert static padding for JAX compilation reuse.
+    """
+
+    candidate_masks = tuple(np.asarray(mask, dtype=bool) for mask in candidate_masks)
+    if not candidate_masks:
+        raise ValueError("compact fine jobs require at least one image mask")
+    first_shape = candidate_masks[0].shape
+    if len(first_shape) != 2 or first_shape[0] <= 0 or first_shape[1] <= 0:
+        raise ValueError(
+            "compact fine-job masks must have nonempty (rotation, translation) shape"
+        )
+    if any(mask.shape != first_shape for mask in candidate_masks):
+        raise ValueError("compact fine-job masks must share one dense shape")
+
+    batch_size = len(candidate_masks)
+    rotation_count, _ = first_shape
+    reference_row_lookup = np.asarray(reference_row_lookup)
+    if (
+        reference_row_lookup.dtype != np.int32
+        or reference_row_lookup.shape != (batch_size, rotation_count)
+    ):
+        raise ValueError(
+            "compact fine-job reference lookup must be int32 with shape "
+            f"{(batch_size, rotation_count)}, got "
+            f"{reference_row_lookup.shape} {reference_row_lookup.dtype}"
+        )
+
+    pair_arrays = build_compact_pair_index_arrays(candidate_masks)
+    return build_compact_fine_job_plan_from_pair_arrays(
+        pair_arrays,
+        reference_row_lookup,
+        job_bucket_size=job_bucket_size,
+        job_block_size_for_quantization=job_block_size_for_quantization,
+    )
+
+
+def build_compact_fine_job_plan_from_pair_arrays(
+    pair_arrays,
+    reference_row_lookup,
+    *,
+    job_bucket_size: int | None = None,
+    job_block_size_for_quantization: int = 5000,
+):
+    """Collapse the mature per-image pair ABI into one global job prefix."""
+
+    local_rotation_row = np.asarray(pair_arrays["local_rotation_row"])
+    translation_idx = np.asarray(pair_arrays["translation_idx"])
+    pair_mask = np.asarray(pair_arrays["pair_mask"])
+    job_counts = np.asarray(pair_arrays["pair_counts"])
+    if (
+        local_rotation_row.dtype != np.int32
+        or translation_idx.dtype != np.int32
+        or pair_mask.dtype != np.bool_
+        or job_counts.dtype != np.int32
+        or local_rotation_row.ndim != 2
+        or translation_idx.shape != local_rotation_row.shape
+        or pair_mask.shape != local_rotation_row.shape
+        or job_counts.shape != (local_rotation_row.shape[0],)
+    ):
+        raise ValueError("compact pair arrays are not aligned with the mature ABI")
+    expected_mask = np.arange(local_rotation_row.shape[1])[None, :] < job_counts[:, None]
+    if not np.array_equal(pair_mask, expected_mask):
+        raise ValueError("compact pair validity must be a source-ordered prefix")
+
+    batch_size = int(local_rotation_row.shape[0])
+    reference_row_lookup = np.asarray(reference_row_lookup)
+    if reference_row_lookup.dtype != np.int32 or reference_row_lookup.ndim != 2:
+        raise ValueError("compact fine-job reference lookup must be a 2-D int32 array")
+    if reference_row_lookup.shape[0] != batch_size:
+        raise ValueError("compact fine-job reference lookup batch axis is misaligned")
+    valid_job_count = int(np.sum(job_counts, dtype=np.int64))
+    if job_bucket_size is None:
+        job_bucket_size = _exact_bucket_rotation_size(
+            valid_job_count,
+            job_block_size_for_quantization,
+        )
+    job_bucket_size = int(job_bucket_size)
+    if job_bucket_size <= 0:
+        raise ValueError("compact fine-job bucket size must be positive")
+    if valid_job_count > job_bucket_size:
+        raise ValueError(
+            "compact fine-job bucket is smaller than the source-ordered prefix: "
+            f"required={valid_job_count}, capacity={job_bucket_size}"
+        )
+
+    job_plan = np.full((job_bucket_size, 4), -1, dtype=np.int32)
+    cursor = 0
+    for image_row, count_value in enumerate(job_counts):
+        count = int(count_value)
+        if count == 0:
+            continue
+        rotation_rows = local_rotation_row[image_row, :count]
+        translation_ids = translation_idx[image_row, :count]
+        if np.any(rotation_rows < 0) or np.any(
+            rotation_rows >= reference_row_lookup.shape[1]
+        ):
+            raise ValueError("a selected fine job has an invalid dense rotation row")
+        if np.any(translation_ids < 0):
+            raise ValueError("a selected fine job has an invalid translation id")
+        reference_rows = reference_row_lookup[image_row, rotation_rows]
+        if np.any(reference_rows < 0):
+            raise ValueError(
+                "a selected fine job has no projected-reference row"
+            )
+        next_cursor = cursor + count
+        job_plan[cursor:next_cursor, 0] = image_row
+        job_plan[cursor:next_cursor, 1] = reference_rows
+        job_plan[cursor:next_cursor, 2] = rotation_rows
+        job_plan[cursor:next_cursor, 3] = translation_ids
+        cursor = next_cursor
+
+    return {
+        "job_bucket_size": job_bucket_size,
+        "job_counts": job_counts,
+        "valid_job_count": valid_job_count,
+        "job_plan": job_plan,
+    }
+
+
 def _prepare_per_image_compact_candidate_pairs(per_image_inputs, *, image_mask=None):
     """Flatten per-image sparse pass-2 masks into valid candidate pairs.
 
@@ -1242,52 +1472,43 @@ def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_in
 
     pair_bucket_size = int(bucket["pair_bucket_size"])
     image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
+    index_arrays = build_compact_pair_index_arrays(
+        (
+            per_image_inputs["candidate_mask"][int(image_idx)]
+            for image_idx in image_indices
+        ),
+        pair_bucket_size=pair_bucket_size,
+    )
     batch = int(image_indices.shape[0])
-
-    padded_local_rotation_row = np.full((batch, pair_bucket_size), -1, dtype=np.int32)
-    padded_translation_idx = np.full((batch, pair_bucket_size), -1, dtype=np.int32)
     padded_rotation_index = np.zeros((batch, pair_bucket_size), dtype=np.int64)
     log_prior_dtype = np.result_type(
         *(np.asarray(per_image_inputs["log_prior"][int(image_idx)]).dtype for image_idx in image_indices)
     )
     padded_log_prior = np.full((batch, pair_bucket_size), -1e30, dtype=log_prior_dtype)
-    padded_pair_mask = np.zeros((batch, pair_bucket_size), dtype=bool)
-    pair_counts = np.zeros(batch, dtype=np.int32)
 
     for row, image_idx in enumerate(image_indices.tolist()):
-        local_rot_rows, translation_idx = _candidate_mask_nonzero(per_image_inputs["candidate_mask"][image_idx])
-        count = int(local_rot_rows.shape[0])
-        if count > pair_bucket_size:
-            raise RuntimeError(
-                "Compact K-class sparse pass-2 bucket is too small for image "
-                f"{int(image_idx)}: pair_count={count}, bucket_size={pair_bucket_size}",
-            )
-        pair_counts[row] = count
+        count = int(index_arrays["pair_counts"][row])
         if count == 0:
             continue
 
-        local_rot_rows = local_rot_rows.astype(np.int32, copy=False)
-        translation_idx = translation_idx.astype(np.int32, copy=False)
+        local_rot_rows = index_arrays["local_rotation_row"][row, :count]
         rotation_indices = np.asarray(per_image_inputs["oversampled_rot_indices"][image_idx], dtype=np.int64)
         rotation_log_prior = np.asarray(
             per_image_inputs["log_prior"][image_idx], dtype=log_prior_dtype
         )
 
-        padded_local_rotation_row[row, :count] = local_rot_rows
-        padded_translation_idx[row, :count] = translation_idx
         padded_rotation_index[row, :count] = rotation_indices[local_rot_rows]
         padded_log_prior[row, :count] = rotation_log_prior[local_rot_rows]
-        padded_pair_mask[row, :count] = True
 
     return {
         "image_indices": image_indices,
         "pair_bucket_size": pair_bucket_size,
-        "pair_counts": pair_counts,
-        "local_rotation_row": padded_local_rotation_row,
-        "translation_idx": padded_translation_idx,
+        "pair_counts": index_arrays["pair_counts"],
+        "local_rotation_row": index_arrays["local_rotation_row"],
+        "translation_idx": index_arrays["translation_idx"],
         "rotation_index": padded_rotation_index,
         "log_prior": padded_log_prior,
-        "pair_mask": padded_pair_mask,
+        "pair_mask": index_arrays["pair_mask"],
     }
 
 
@@ -1612,43 +1833,21 @@ def _bucket_pass2_inputs(
                         )
                     run_start = run_end
                 return buckets
-            ordered_chunk_size = int(processing_order_chunk_size)
-            if ordered_chunk_size <= 0:
-                raise ValueError("processing_order_chunk_size must be positive")
-            requested_max_images = max(
-                1,
-                min(ordered_chunk_size, int(max_images_per_microbatch)),
+            plans = _plan_consecutive_padded_batches(
+                bucket_sizes,
+                processing_order=processing_order,
+                target_items_per_batch=int(processing_order_chunk_size),
+                max_items_per_batch=int(max_images_per_microbatch),
+                max_padded_values_per_batch=int(max_hypotheses_per_microbatch),
+                values_per_padded_size=int(n_fine_trans),
             )
-            buckets = []
-            start = 0
-            while start < n_images:
-                stop = start
-                chunk_bucket_size = 0
-                while stop < n_images and stop - start < requested_max_images:
-                    next_bucket_size = max(
-                        chunk_bucket_size,
-                        int(bucket_sizes[processing_order[stop]]),
-                    )
-                    next_image_count = stop - start + 1
-                    next_hypothesis_count = (
-                        next_image_count * next_bucket_size * int(n_fine_trans)
-                    )
-                    if (
-                        stop > start
-                        and next_hypothesis_count > int(max_hypotheses_per_microbatch)
-                    ):
-                        break
-                    chunk_bucket_size = next_bucket_size
-                    stop += 1
-                chunk = processing_order[start:stop]
-                buckets.append(
-                    {
-                        "bucket_size": int(chunk_bucket_size),
-                        "image_indices": np.asarray(chunk, dtype=np.int64),
-                    }
-                )
-                start = stop
-            return buckets
+            return [
+                {
+                    "bucket_size": int(plan.padded_size),
+                    "image_indices": np.asarray(plan.item_indices, dtype=np.int64),
+                }
+                for plan in plans
+            ]
     else:
         # Group by bucket size, smaller buckets first. The secondary rotation
         # count key is historical RECOVAR behavior; an explicit order keeps
@@ -1898,6 +2097,48 @@ def _optional_positive_float_env(name: str) -> float | None:
     if value <= 0:
         raise ValueError(f"{name} must be a positive float, got {raw!r}")
     return value
+
+
+def _native_dual_weighted_sums_enabled_for_pass(
+    *,
+    use_exact_relion_gaussian: bool,
+    use_relion_x_half_mstep: bool,
+    accumulate_noise: bool,
+) -> bool:
+    """Select the qualified native reduction only on its exact GPU contract."""
+
+    if os.environ.get(_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS_ENV) is not None:
+        return parse_env_flag(
+            _SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS_ENV,
+            default=False,
+        )
+    if not (use_exact_relion_gaussian and use_relion_x_half_mstep and accumulate_noise):
+        return False
+    from recovar.cuda_backproject import custom_cuda_requested
+
+    return bool(jax.default_backend() == "gpu" and custom_cuda_requested())
+
+
+def _fused_mstep_noise_enabled_for_pass(
+    *,
+    native_dual_weighted_sums: bool,
+    use_exact_relion_gaussian: bool,
+    use_relion_x_half_mstep: bool,
+    accumulate_noise: bool,
+    compact_noise_sums_match_mstep: bool,
+) -> bool:
+    """Select the fused reduction only on its qualified exact-GPU contract."""
+
+    if not (
+        native_dual_weighted_sums
+        and use_exact_relion_gaussian
+        and use_relion_x_half_mstep
+        and accumulate_noise
+        and not compact_noise_sums_match_mstep
+        and parse_env_flag(_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED_ENV, default=True)
+    ):
+        return False
+    return parse_env_flag(_SPARSE_KCLASS_FUSED_MSTEP_NOISE_ENV, default=True)
 
 
 def _fresh_k1_direct_noise_default(
@@ -2219,12 +2460,20 @@ def _compact_pair_execution_enabled_for_pass() -> bool:
     )
 
 
-def _compact_pair_min_bucket_size_for_pass() -> int:
-    """Return the hybrid threshold for compact-pair execution buckets."""
+def _compact_pair_min_bucket_size_for_pass(default_value: int | None = None) -> int:
+    """Return the hybrid threshold for compact-pair execution buckets.
+
+    An explicit environment setting wins over a caller-specific default so
+    benchmark and diagnostic jobs retain their existing override behavior.
+    """
 
     explicit = _optional_positive_int_env(_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE_ENV)
     if explicit is not None:
         return int(explicit)
+    if default_value is not None:
+        if int(default_value) <= 0:
+            raise ValueError("compact-pair minimum bucket size must be positive")
+        return int(default_value)
     return _DEFAULT_COMPACT_PAIR_MIN_BUCKET_SIZE
 
 
@@ -2302,14 +2551,23 @@ def _tail_bucket_coalesce_params_for_pass(*, fused_k_class: bool) -> tuple[int |
     return int(max_images), float(max_inflation), int(min_bucket_size)
 
 
-def _compact_pair_tail_bucket_coalesce_params_for_pass() -> tuple[int | None, float | None, int | None]:
+def _compact_pair_tail_bucket_coalesce_params_for_pass(
+    *,
+    default_max_images: int | None = None,
+    default_max_inflation: float | None = None,
+    default_min_bucket_size: int | None = None,
+) -> tuple[int | None, float | None, int | None]:
     """Return bounded tail-coalescing controls for compact-pair K-class buckets."""
 
     max_images = parse_env_nonnegative_int(_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MAX_IMAGES_ENV)
     if max_images is None:
         max_images = parse_env_nonnegative_int(_TAIL_BUCKET_COALESCE_MAX_IMAGES_ENV)
     if max_images is None:
-        max_images = _DEFAULT_COMPACT_PAIR_TAIL_BUCKET_COALESCE_MAX_IMAGES
+        max_images = (
+            _DEFAULT_COMPACT_PAIR_TAIL_BUCKET_COALESCE_MAX_IMAGES
+            if default_max_images is None
+            else int(default_max_images)
+        )
     if int(max_images) <= 1:
         return None, None, None
 
@@ -2317,13 +2575,25 @@ def _compact_pair_tail_bucket_coalesce_params_for_pass() -> tuple[int | None, fl
     if max_inflation is None:
         max_inflation = _optional_positive_float_env(_TAIL_BUCKET_COALESCE_MAX_INFLATION_ENV)
     if max_inflation is None:
-        max_inflation = _DEFAULT_TAIL_BUCKET_COALESCE_MAX_INFLATION
+        max_inflation = (
+            _DEFAULT_TAIL_BUCKET_COALESCE_MAX_INFLATION
+            if default_max_inflation is None
+            else float(default_max_inflation)
+        )
+    if float(max_inflation) <= 0.0:
+        raise ValueError("compact-pair tail coalescing inflation must be positive")
 
     min_bucket_size = _optional_positive_int_env(_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MIN_BUCKET_SIZE_ENV)
     if min_bucket_size is None:
         min_bucket_size = _optional_positive_int_env(_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE_ENV)
     if min_bucket_size is None:
-        min_bucket_size = _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE
+        min_bucket_size = (
+            _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE
+            if default_min_bucket_size is None
+            else int(default_min_bucket_size)
+        )
+    if int(min_bucket_size) <= 0:
+        raise ValueError("compact-pair tail coalescing minimum bucket size must be positive")
     return int(max_images), float(max_inflation), int(min_bucket_size)
 
 
@@ -3198,6 +3468,10 @@ def _compute_sparse_pass2_projections_block(
     projection_kwargs = dict(projection_kwargs)
     return_abs2 = projection_kwargs.pop("return_abs2", True)
     projection_max_r = projection_kwargs.pop("max_r", None)
+    projection_relion_texture_interp = projection_kwargs.get("relion_texture_interp")
+    projection_mask_current_image_disk = bool(
+        projection_kwargs.pop("mask_current_image_disk", True)
+    )
     if projector_output_size is None and projection_max_r is not None:
         projector_output_size = int(2 * float(projection_max_r))
     use_relion_projector = relion_projector_half is not None
@@ -3215,7 +3489,9 @@ def _compute_sparse_pass2_projections_block(
                 return_abs2=bool(return_abs2),
                 centered_rows=True,
                 dense_scale=True,
+                relion_texture_interp=projection_relion_texture_interp,
                 projector_output_size=projector_output_size,
+                mask_current_image_disk=projection_mask_current_image_disk,
             )
         return _compute_projections_block(
             mean_for_proj,
@@ -3690,7 +3966,21 @@ def _weighted_image_power_shells_and_per_image(
     # here perturbs both the shell noise statistics and the per-image norm
     # correction before either is accumulated into the host float64 totals.
     weighted_half = jnp.sum(weighted_pixel_power, axis=0)
-    weighted_shells = bin_shell_values_jax(weighted_half, shell_indices_half, shell_count)
+    if parse_env_flag("RECOVAR_DISABLE_CUDA", default=False):
+        # ``bins.at[indices].add`` lowers to unordered GPU atomics even when
+        # RECOVAR's custom CUDA path is explicitly disabled.  Keep this
+        # fallback repeatable by reducing each shell independently instead.
+        shell_ids = jnp.arange(int(shell_count), dtype=shell_indices_half.dtype)
+        weighted_shells = jnp.sum(
+            jnp.where(
+                shell_indices_half[None, :] == shell_ids[:, None],
+                weighted_half[None, :],
+                0.0,
+            ),
+            axis=1,
+        )
+    else:
+        weighted_shells = bin_shell_values_jax(weighted_half, shell_indices_half, shell_count)
     if source_faithful_spectrum_norm is None:
         source_faithful_spectrum_norm = parse_env_flag(
             _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
@@ -3736,7 +4026,11 @@ def _make_relion_wavg_rectangle(
     *,
     reconstruction_current_size=None,
 ):
-    """Map model BPref pixels into RELION's complete particle Wavg crop.
+    """Map active reconstruction pixels into RELION's complete Wavg crop.
+
+    ``exact_positions`` retains its historical field name, but may describe
+    either the exact BackProjector disk or RELION InitialModel's rounded-shell
+    Wavg support. The supplied reconstruction indices select that contract.
 
     RELION may remap the particle-image ``current_size`` for an optics group
     while retaining the model-coordinate radius for Projector/BackProjector.
@@ -3781,10 +4075,14 @@ def _make_relion_wavg_rectangle(
         exact_radius=True,
     )
     recon_indices = np.asarray(recon_window_indices, dtype=np.int32).reshape(-1)
-    if not np.array_equal(np.sort(recon_indices), exact_indices):
+    exact_support = np.array_equal(np.sort(recon_indices), exact_indices)
+    rounded_support = np.array_equal(np.sort(recon_indices), rounded_indices)
+    if not (exact_support or rounded_support):
         raise ValueError(
-            "RELION Wavg rectangle requires the complete exact-radius BPref window: "
-            f"got {recon_indices.size} pixels, expected {exact_indices.size}"
+            "RELION Wavg rectangle requires a complete exact-radius or rounded-shell "
+            "reconstruction window: "
+            f"got {recon_indices.size} pixels, expected {exact_indices.size} or "
+            f"{rounded_indices.size}"
         )
 
     rectangle_position = {
@@ -3818,10 +4116,90 @@ def _make_relion_wavg_rectangle(
             f"got {rectangle_indices.size}, expected {expected_rectangle_size}"
         )
     if np.unique(exact_positions).size != exact_positions.size:
-        raise ValueError("RELION Wavg exact-radius position mapping is not bijective")
+        raise ValueError("RELION Wavg reconstruction position mapping is not bijective")
     return RelionWavgRectangle(
         centered_indices=rectangle_indices.astype(np.int32, copy=False),
         exact_positions=exact_positions,
+        shell_indices=rectangle_shells,
+    )
+
+
+def _make_stable_relion_wavg_rectangle(image_shape, shape_plan):
+    """Pack a logical Wavg rectangle before its physical-capacity tail.
+
+    RELION's Wavg kernel walks the dense FFTW rectangle, whereas RECOVAR's
+    shared projection path stores a compact disk.  Stable shapes are exact
+    only when both streams retain their original logical order.  The first
+    ``logical_rectangle_pixels`` entries below are therefore byte-for-byte the
+    ordinary logical rectangle.  Physical-only pixels follow it and receive a
+    sentinel shell; runtime CUDA bounds must never issue that tail.
+    """
+
+    logical_recon = shape_plan.packed_indices_np("recon")[
+        : shape_plan.logical_reconstruction_pixels
+    ]
+    physical_recon = shape_plan.packed_indices_np("recon")
+    logical = _make_relion_wavg_rectangle(
+        image_shape,
+        shape_plan.logical_current_size,
+        logical_recon,
+    )
+    physical = _make_relion_wavg_rectangle(
+        image_shape,
+        shape_plan.physical_current_size,
+        physical_recon,
+    )
+
+    logical_set = set(map(int, logical.centered_indices.tolist()))
+    physical_tail = np.asarray(
+        [
+            int(index)
+            for index in physical.centered_indices.tolist()
+            if int(index) not in logical_set
+        ],
+        dtype=np.int32,
+    )
+    packed_rectangle = np.concatenate(
+        (logical.centered_indices, physical_tail),
+    ).astype(np.int32, copy=False)
+    if packed_rectangle.size != shape_plan.physical_rectangle_pixels:
+        raise ValueError(
+            "stable RELION Wavg rectangle does not fill its physical capacity: "
+            f"got {packed_rectangle.size}, expected {shape_plan.physical_rectangle_pixels}"
+        )
+    logical_count = shape_plan.logical_rectangle_pixels
+    recon_tail_count = (
+        shape_plan.physical_reconstruction_pixels
+        - shape_plan.logical_reconstruction_pixels
+    )
+    rectangle_tail_count = packed_rectangle.size - logical_count
+    if recon_tail_count > rectangle_tail_count:
+        raise ValueError(
+            "stable RELION Wavg rectangle tail cannot hold its reconstruction "
+            f"tail: recon={recon_tail_count}, rectangle={rectangle_tail_count}"
+        )
+    # Some pixels newly admitted by the larger physical radius still lie in
+    # the *logical* square rectangle (for example, immediately outside its
+    # exact-radius disk).  Mapping those pixels by coordinate would make the
+    # logical native Wavg/BPref loops consume physical-only values.  Logical
+    # reconstruction rows retain their exact FFTW positions; all capacity-only
+    # rows instead receive arbitrary unique storage in the inert rectangle
+    # tail, whose coordinates are intentionally never issued.
+    recon_positions = np.concatenate(
+        (
+            logical.exact_positions,
+            np.arange(
+                logical_count,
+                logical_count + recon_tail_count,
+                dtype=np.int32,
+            ),
+        )
+    ).astype(np.int32, copy=False)
+    rectangle_shells = np.full(packed_rectangle.size, -1, dtype=np.int32)
+    rectangle_shells[:logical_count] = logical.shell_indices
+    return RelionWavgRectangle(
+        centered_indices=packed_rectangle,
+        exact_positions=recon_positions,
         shell_indices=rectangle_shells,
     )
 
@@ -3832,6 +4210,22 @@ def _select_optional_wavg_exact_pixels(values, rectangle):
     if values is None or rectangle is None:
         return None
     return values[:, rectangle.exact_positions]
+
+
+def _relion_wavg_rectangle_image_power(raw_shifted, posterior):
+    """Shared rectangle power contraction; keep the original F32/barrier order."""
+    raw_shifted = jnp.asarray(raw_shifted, dtype=jnp.complex64)
+    posterior = jnp.asarray(posterior, dtype=jnp.float32)
+    shifted_power = (raw_shifted.real * raw_shifted.real).astype(jnp.float32)
+    shifted_power = jax.lax.optimization_barrier(shifted_power)
+    shifted_power = (shifted_power + raw_shifted.imag * raw_shifted.imag).astype(jnp.float32)
+    image_power = jnp.einsum(
+        "brt,btp->brp",
+        posterior,
+        shifted_power,
+        preferred_element_type=jnp.float32,
+    ).astype(jnp.float32)
+    return image_power
 
 
 @jax.jit
@@ -3860,15 +4254,7 @@ def _relion_wavg_rectangle_triplet_terms(
             f"positions={exact_positions.shape}, terms={exact_terms.shape}"
         )
 
-    shifted_power = (raw_shifted.real * raw_shifted.real).astype(jnp.float32)
-    shifted_power = jax.lax.optimization_barrier(shifted_power)
-    shifted_power = (shifted_power + raw_shifted.imag * raw_shifted.imag).astype(jnp.float32)
-    image_power = jnp.einsum(
-        "brt,btp->brp",
-        posterior,
-        shifted_power,
-        preferred_element_type=jnp.float32,
-    ).astype(jnp.float32)
+    image_power = _relion_wavg_rectangle_image_power(raw_shifted, posterior)
     rectangle_terms = jnp.zeros(
         exact_terms.shape[:2] + (raw_shifted.shape[-1], 3),
         dtype=jnp.float32,
@@ -3973,7 +4359,7 @@ def _relion_wavg_atomic_triplet_terms(
 
 
 @jax.jit
-def _relion_wavg_sequential_triplet_terms(
+def _relion_wavg_sequential_triplet_terms_jax(
     proj,
     raw_ctf,
     scale,
@@ -4059,6 +4445,63 @@ def _relion_wavg_sequential_triplet_terms(
     xa = (xa_raw / safe_scale[:, None, None]).astype(jnp.float32)
     aa = (aa_raw / (safe_scale[:, None, None] ** 2)).astype(jnp.float32)
     return jnp.stack((xa, aa, diff2), axis=-1)
+
+
+def _relion_wavg_sequential_triplet_terms(
+    proj,
+    raw_ctf,
+    scale,
+    raw_shifted_images,
+    posterior,
+    *,
+    relion_wavg_sequential_cuda: bool | None = None,
+    logical_pixel_count=None,
+):
+    """Dispatch the shared Wavg translation-order reduction.
+
+    The CUDA path is an explicit performance discriminator.  It keeps the
+    same image/rotation/pixel ownership and sequential translation arithmetic
+    as the JAX reference while avoiding one XLA loop-body launch per
+    translation.  Both local EM and VDAM reach this helper through the shared
+    exact-local pass-2 implementation.  A typed policy overrides the legacy
+    environment gate; ``None`` preserves its existing behavior.
+    """
+
+    use_cuda = (
+        parse_env_flag(_RELION_WAVG_SEQUENTIAL_CUDA_ENV, default=False)
+        if relion_wavg_sequential_cuda is None
+        else bool(relion_wavg_sequential_cuda)
+    )
+    if use_cuda:
+        from recovar import cuda_backproject
+
+        if logical_pixel_count is not None:
+            return cuda_backproject.relion_wavg_sequential_runtime_triplet_f32(
+                jnp.asarray(proj, dtype=jnp.complex64),
+                jnp.asarray(raw_ctf, dtype=jnp.float32),
+                jnp.asarray(scale, dtype=jnp.float32).reshape(-1),
+                jnp.asarray(raw_shifted_images, dtype=jnp.complex64),
+                jnp.asarray(posterior, dtype=jnp.float32),
+                jnp.asarray(logical_pixel_count, dtype=jnp.int32),
+            )
+        return cuda_backproject.relion_wavg_sequential_triplet_f32(
+            jnp.asarray(proj, dtype=jnp.complex64),
+            jnp.asarray(raw_ctf, dtype=jnp.float32),
+            jnp.asarray(scale, dtype=jnp.float32).reshape(-1),
+            jnp.asarray(raw_shifted_images, dtype=jnp.complex64),
+            jnp.asarray(posterior, dtype=jnp.float32),
+        )
+    if logical_pixel_count is not None:
+        raise ValueError(
+            "stable Fourier-window Wavg requires the runtime-bound CUDA reducer"
+        )
+    return _relion_wavg_sequential_triplet_terms_jax(
+        proj,
+        raw_ctf,
+        scale,
+        raw_shifted_images,
+        posterior,
+    )
 
 
 def _replace_low_shell_noise_with_relion_wavg_direct_residual(
@@ -4245,6 +4688,15 @@ def _adjoint_block_chunk_rows(flat_block, *, max_block_bytes: int) -> int:
         return 1
     row_bytes = _flat_block_row_bytes(flat_block)
     return max(1, int(max_block_bytes) // row_bytes)
+
+
+def relion_x_half_bp_native_particle_grid_enabled() -> bool:
+    """Return whether particle-owned fused launches share one FFI dispatch."""
+
+    return parse_env_flag(
+        _RELION_X_HALF_BP_NATIVE_PARTICLE_GRID_ENV,
+        default=False,
+    )
 
 
 def _accumulate_relion_x_half_per_particle_launches(
@@ -4712,8 +5164,87 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
 ):
     """Split compact-pair execution buckets by gather/prep/dense-M-step memory."""
 
-    if max_gather_bytes is None and max_prepare_images_per_microbatch is None and max_dense_mstep_bytes is None:
+    group_by_rotation_signature = parse_env_flag(
+        _SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE_ENV,
+        default=True,
+    )
+    if (
+        not group_by_rotation_signature
+        and max_gather_bytes is None
+        and max_prepare_images_per_microbatch is None
+        and max_dense_mstep_bytes is None
+    ):
         return list(compact_buckets)
+    ungrouped_bucket_count = len(compact_buckets)
+    original_pair_bucket_max_images: dict[int, int] = {}
+    for bucket in compact_buckets:
+        pair_bucket_size = int(bucket["pair_bucket_size"])
+        original_pair_bucket_max_images[pair_bucket_size] = max(
+            original_pair_bucket_max_images.get(pair_bucket_size, 0),
+            len(bucket["image_indices"]),
+        )
+    if group_by_rotation_signature:
+        image_indices_by_pair_bucket: dict[int, list[int]] = {}
+        for bucket in compact_buckets:
+            image_indices_by_pair_bucket.setdefault(
+                int(bucket["pair_bucket_size"]),
+                [],
+            ).extend(
+                np.asarray(bucket["image_indices"], dtype=np.int64).tolist(),
+            )
+        signature_floors_by_pair_bucket: dict[int, int] = {}
+        for pair_bucket_size, pair_image_indices in image_indices_by_pair_bucket.items():
+            percentile_index = max(
+                0,
+                int(np.ceil(0.95 * len(pair_image_indices))) - 1,
+            )
+            signature_floors_by_pair_bucket[pair_bucket_size] = sorted(
+                max(
+                    _exact_bucket_rotation_size(
+                        int(per_image_inputs["oversampled_rots"][image_idx].shape[0]),
+                        rotation_block_size_for_quantization,
+                    )
+                    for per_image_inputs in per_image_inputs_by_class
+                )
+                for image_idx in pair_image_indices
+            )[percentile_index]
+        grouped_image_indices: dict[tuple[int, tuple[int, ...]], list[int]] = {}
+        for bucket in compact_buckets:
+            pair_bucket_size = int(bucket["pair_bucket_size"])
+            signature_floor = signature_floors_by_pair_bucket[pair_bucket_size]
+            for image_idx in np.asarray(bucket["image_indices"], dtype=np.int64).tolist():
+                exact_rotation_signature = tuple(
+                    _exact_bucket_rotation_size(
+                        int(per_image_inputs["oversampled_rots"][image_idx].shape[0]),
+                        rotation_block_size_for_quantization,
+                    )
+                    for per_image_inputs in per_image_inputs_by_class
+                )
+                outlier_bucket_size = max(exact_rotation_signature)
+                rotation_signature = (
+                    (outlier_bucket_size,) * len(exact_rotation_signature)
+                    if outlier_bucket_size > signature_floor
+                    else (signature_floor,) * len(exact_rotation_signature)
+                )
+                grouped_image_indices.setdefault(
+                    (pair_bucket_size, rotation_signature),
+                    [],
+                ).append(int(image_idx))
+        compact_buckets = [
+            {
+                "pair_bucket_size": pair_bucket_size,
+                "image_indices": np.asarray(image_indices, dtype=np.int64),
+                "class_bucket_sizes": _rotation_signature,
+            }
+            for (pair_bucket_size, _rotation_signature), image_indices in grouped_image_indices.items()
+        ]
+        logger.info(
+            "Sparse fused K-class compact-pair rotation-signature grouping: "
+            "buckets %d -> %d (default on; set %s=0 to opt out)",
+            ungrouped_bucket_count,
+            len(compact_buckets),
+            _SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE_ENV,
+        )
     max_gather_bytes = None if max_gather_bytes is None else int(max_gather_bytes)
     if max_gather_bytes is not None and max_gather_bytes <= 0:
         max_gather_bytes = None
@@ -4753,15 +5284,22 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
             split_max_images = max(split_max_images, int(image_indices.size))
             continue
         max_images = int(image_indices.size)
+        max_images = min(
+            max_images,
+            original_pair_bucket_max_images[int(bucket["pair_bucket_size"])],
+        )
         if max_gather_bytes is not None or max_dense_mstep_bytes is not None:
-            max_class_bucket_size = max(
-                _compact_bucket_size_for_class(
-                    bucket,
-                    per_image_inputs,
-                    rotation_block_size_for_quantization,
+            if "class_bucket_sizes" in bucket:
+                max_class_bucket_size = max(int(value) for value in bucket["class_bucket_sizes"])
+            else:
+                max_class_bucket_size = max(
+                    _compact_bucket_size_for_class(
+                        bucket,
+                        per_image_inputs,
+                        rotation_block_size_for_quantization,
+                    )
+                    for per_image_inputs in per_image_inputs_by_class
                 )
-                for per_image_inputs in per_image_inputs_by_class
-            )
         if max_gather_bytes is not None:
             per_image_bytes = max(1, int(max_class_bucket_size) * row_bytes)
             max_images = min(max_images, max(1, max_gather_bytes // per_image_bytes))
@@ -4941,12 +5479,17 @@ def _build_k_class_bucket_arrays(
         ]
 
     class_arrays = []
-    for per_image_inputs in per_image_inputs_by_class:
+    forced_class_bucket_sizes = bucket.get("class_bucket_sizes")
+    for class_index, per_image_inputs in enumerate(per_image_inputs_by_class):
         class_bucket = dict(bucket)
-        class_bucket["bucket_size"] = _compact_bucket_size_for_class(
-            bucket,
-            per_image_inputs,
-            rotation_block_size_for_quantization,
+        class_bucket["bucket_size"] = (
+            int(forced_class_bucket_sizes[class_index])
+            if forced_class_bucket_sizes is not None
+            else _compact_bucket_size_for_class(
+                bucket,
+                per_image_inputs,
+                rotation_block_size_for_quantization,
+            )
         )
         class_arrays.append(
             _build_bucket_arrays(
@@ -5502,6 +6045,7 @@ def _relion_cuda_powerclass_highres_xi2_half(
     *,
     image_shape,
     current_size,
+    runtime_current_size=None,
 ):
     """Reproduce the class-power high-resolution image tail used by fine diff2.
 
@@ -5538,9 +6082,12 @@ def _relion_cuda_powerclass_highres_xi2_half(
             "RELION powerClass input must be flattened centred rfft images, got "
             f"{processed_score_half.shape} for image_shape={image_shape}"
         )
-    if current_size is None:
-        current_size = image_width
-    resolution_limit = int(current_size) // 2 + 1
+    if runtime_current_size is None:
+        if current_size is None:
+            current_size = image_width
+        resolution_limit = int(current_size) // 2 + 1
+    else:
+        resolution_limit = jnp.asarray(runtime_current_size, dtype=jnp.int32) // 2 + 1
 
     # RELION's packed rows are 0,+1,...,+Nyquist,-Nyquist+1,...,-1. RECOVAR's
     # rows are fftshift-centred, so move the first non-negative row to index 0.
@@ -5559,12 +6106,14 @@ def _relion_cuda_powerclass_highres_xi2_half(
     # __double2int_rn(sqrt(...)) under ACC_DOUBLE_PRECISION.
     shell_real_dtype = np.float64 if real_dtype == jnp.float64 else np.float32
     shell = np.rint(np.sqrt(radius_squared.astype(shell_real_dtype))).astype(np.int32)
-    valid = (
+    valid_base = (
         (shell > 0)
         & (shell < half_width)
         & ~((columns == 0) & (signed_rows < 0))
-        & (shell >= resolution_limit)
     ).reshape(-1)
+    valid = jnp.asarray(valid_base) & (
+        jnp.asarray(shell.reshape(-1), dtype=jnp.int32) >= resolution_limit
+    )
 
     power = relion_image.real * relion_image.real
     power = jax.lax.optimization_barrier(power)
@@ -5593,6 +6142,56 @@ def _relion_cuda_powerclass_highres_xi2_half(
     return highres_xi2 * jnp.asarray(0.5, dtype=real_dtype)
 
 
+@partial(jax.jit, static_argnames=("image_shape", "current_size"))
+def _relion_cuda_powerclass_highres_xi2_half_atomic(
+    processed_score_half,
+    *,
+    image_shape,
+    current_size,
+    runtime_current_size=None,
+):
+    """Run the native CUDA powerClass atomics used by exact fine scoring."""
+
+    from recovar import cuda_backproject
+
+    image_height = int(image_shape[0])
+    image_width = int(image_shape[1])
+    if image_height != image_width:
+        raise ValueError(f"RELION powerClass parity requires square images, got {image_shape}")
+    half_width = image_width // 2 + 1
+    processed_score_half = jnp.asarray(processed_score_half, dtype=jnp.complex64)
+    if processed_score_half.ndim != 2 or processed_score_half.shape[-1] != image_height * half_width:
+        raise ValueError(
+            "RELION powerClass input must be flattened centred rfft images, got "
+            f"{processed_score_half.shape} for image_shape={image_shape}"
+        )
+    relion_image = jnp.roll(
+        processed_score_half.reshape((-1, image_height, half_width)),
+        -(image_height // 2),
+        axis=1,
+    ).reshape((processed_score_half.shape[0], -1))
+    relion_image = (
+        relion_image / jnp.asarray(image_height * image_width, dtype=jnp.float32)
+    ).astype(jnp.complex64)
+    if runtime_current_size is None:
+        spectrum_and_highres = cuda_backproject.relion_powerclass_spectrum_highres_f32(
+            relion_image,
+            xdim=half_width,
+            ydim=image_height,
+            resolution_limit=int(current_size) // 2 + 1,
+        )
+    else:
+        spectrum_and_highres = (
+            cuda_backproject.relion_powerclass_spectrum_highres_runtime_f32(
+                relion_image,
+                jnp.asarray(runtime_current_size, dtype=jnp.int32) // 2 + 1,
+                xdim=half_width,
+                ydim=image_height,
+            )
+        )
+    return spectrum_and_highres[:, -1] * jnp.asarray(0.5, dtype=jnp.float32)
+
+
 def _relion_powerclass_highres_xi2_half_to_norm_units(highres_xi2_half, image_shape):
     """Convert RELION's half-Xi2 FFT units to RECOVAR norm N^4 units."""
 
@@ -5610,6 +6209,7 @@ def _relion_cuda_powerclass_highres_norm_units(
     *,
     image_shape,
     current_size,
+    runtime_current_size=None,
 ):
     """Return source-faithful powerClass high-shell power in RECOVAR N^4 units."""
 
@@ -5618,6 +6218,7 @@ def _relion_cuda_powerclass_highres_norm_units(
             processed_score_half,
             image_shape=image_shape,
             current_size=current_size,
+            runtime_current_size=runtime_current_size,
         ),
         image_shape,
     )
@@ -5629,6 +6230,7 @@ def _relion_cuda_powerclass_spectrum_highres_norm_units(
     *,
     image_shape,
     current_size,
+    runtime_current_size=None,
 ):
     """Reproduce the high-shell norm term from RELION's power spectrum.
 
@@ -5657,7 +6259,12 @@ def _relion_cuda_powerclass_spectrum_highres_norm_units(
             "RELION powerClass input must be flattened centred rfft images, got "
             f"{processed_score_half.shape} for image_shape={image_shape}"
         )
-    resolution_limit = int(current_size) // 2 + 1
+    if runtime_current_size is None:
+        if current_size is None:
+            current_size = image_width
+        resolution_limit = int(current_size) // 2 + 1
+    else:
+        resolution_limit = jnp.asarray(runtime_current_size, dtype=jnp.int32) // 2 + 1
     relion_image = jnp.roll(
         processed_score_half.reshape((-1, image_height, half_width)),
         -(image_height // 2),
@@ -5697,6 +6304,59 @@ def _relion_cuda_powerclass_spectrum_highres_norm_units(
         jnp.zeros((processed_score_half.shape[0],), dtype=jnp.float64),
     )
     return high_shell * jnp.asarray((image_height * image_width) ** 2, dtype=jnp.float64)
+
+
+@partial(jax.jit, static_argnames=("image_shape", "current_size"))
+def _relion_cuda_powerclass_spectrum_norm_units(
+    processed_score_half,
+    *,
+    image_shape,
+    current_size,
+    runtime_current_size=None,
+):
+    """Return RELION's atomically binned per-image power spectrum in N^4 units."""
+
+    from recovar import cuda_backproject
+
+    image_height = int(image_shape[0])
+    image_width = int(image_shape[1])
+    if image_height != image_width:
+        raise ValueError(f"RELION powerClass parity requires square images, got {image_shape}")
+    half_width = image_width // 2 + 1
+    processed_score_half = jnp.asarray(processed_score_half, dtype=jnp.complex64)
+    if processed_score_half.ndim != 2 or processed_score_half.shape[-1] != image_height * half_width:
+        raise ValueError(
+            "RELION powerClass input must be flattened centred rfft images, got "
+            f"{processed_score_half.shape} for image_shape={image_shape}"
+        )
+    relion_image = jnp.roll(
+        processed_score_half.reshape((-1, image_height, half_width)),
+        -(image_height // 2),
+        axis=1,
+    ).reshape((processed_score_half.shape[0], -1))
+    relion_image = (
+        relion_image / jnp.asarray(image_height * image_width, dtype=jnp.float32)
+    ).astype(jnp.complex64)
+    if runtime_current_size is None:
+        spectrum_and_highres = cuda_backproject.relion_powerclass_spectrum_highres_f32(
+            relion_image,
+            xdim=half_width,
+            ydim=image_height,
+            resolution_limit=int(current_size) // 2 + 1,
+        )
+    else:
+        spectrum_and_highres = (
+            cuda_backproject.relion_powerclass_spectrum_highres_runtime_f32(
+                relion_image,
+                jnp.asarray(runtime_current_size, dtype=jnp.int32) // 2 + 1,
+                xdim=half_width,
+                ydim=image_height,
+            )
+        )
+    return spectrum_and_highres[:, :half_width] * jnp.asarray(
+        (image_height * image_width) ** 2,
+        dtype=jnp.float32,
+    )
 
 
 def _relion_cuda_fine_diff2_min(diff2, candidate_mask):
@@ -6495,7 +7155,7 @@ def _compact_pair_sparse_weighted_image_and_prob_sums(
     return summed, probs_sum_t, translation_posterior
 
 
-@partial(jax.jit, static_argnames=("n_rotation_rows",))
+@partial(jax.jit, static_argnames=("n_rotation_rows", "relion_x_half"))
 def _compact_pair_weighted_rotation_sums_dense(
     pair_probs,
     local_rotation_row,
@@ -6504,6 +7164,8 @@ def _compact_pair_weighted_rotation_sums_dense(
     shifted_recon_split,
     ctf2_over_nv_recon,
     n_rotation_rows,
+    *,
+    relion_x_half=False,
 ):
     """Accumulate compact-pair M-step stats without forming dense ``(B,R,T)``.
 
@@ -6525,9 +7187,14 @@ def _compact_pair_weighted_rotation_sums_dense(
     # Use the same dense weighted-sum primitive as the rectangular path after
     # compacting the scalar probabilities. Scattering complex image rows directly
     # changes GPU accumulation order enough to break x-half M-step parity.
-    summed = compute_local_weighted_sums(dense_probs, shifted_recon_split)
     probs_sum_t = jnp.sum(dense_probs, axis=-1)
-    ctf_probs = compute_local_ctf_sums_from_probs_sum_t(probs_sum_t, ctf2_over_nv_recon)
+    summed, ctf_probs = compute_local_mstep_sums(
+        dense_probs,
+        shifted_recon_split,
+        ctf2_over_nv_recon,
+        relion_x_half=bool(relion_x_half),
+        default_probs_sum_t=probs_sum_t,
+    )
     translation_posterior = jnp.sum(dense_probs, axis=1)
     return summed, ctf_probs, probs_sum_t, translation_posterior
 
@@ -6566,12 +7233,26 @@ def _compact_pair_weighted_rotation_sums(
     n_rotation_rows,
     *,
     allow_pair_sparse=True,
+    relion_x_half=False,
 ):
+    use_sequential_relion_reduction = bool(
+        relion_x_half and relion_x_half_sequential_translation_reduction_enabled()
+    )
     impl = (
         _compact_pair_weighted_rotation_sums_pair_sparse
-        if _compact_pair_pair_sparse_mstep_enabled_for_pass(allow_pair_sparse=allow_pair_sparse)
+        if (
+            not use_sequential_relion_reduction
+            and _compact_pair_pair_sparse_mstep_enabled_for_pass(
+                allow_pair_sparse=allow_pair_sparse
+            )
+        )
         else _compact_pair_weighted_rotation_sums_dense
     )
+    kwargs = dict(
+        n_rotation_rows=n_rotation_rows,
+    )
+    if impl is _compact_pair_weighted_rotation_sums_dense:
+        kwargs["relion_x_half"] = bool(relion_x_half)
     return impl(
         pair_probs,
         local_rotation_row,
@@ -6579,7 +7260,7 @@ def _compact_pair_weighted_rotation_sums(
         pair_mask,
         shifted_recon_split,
         ctf2_over_nv_recon,
-        n_rotation_rows=n_rotation_rows,
+        **kwargs,
     )
 
 
@@ -6765,6 +7446,107 @@ def _compact_pair_weighted_rotation_and_image_sums_fused_image_sums(
     ctf_probs = compute_local_ctf_sums_from_probs_sum_t(probs_sum_t, ctf2_over_nv_recon)
     translation_posterior = jnp.sum(dense_probs, axis=1)
     return summed, summed_image, ctf_probs, probs_sum_t, translation_posterior
+
+
+@partial(jax.jit, static_argnames=("n_rotation_rows",))
+def _compact_pair_weighted_rotation_and_image_sums_native(
+    pair_probs,
+    local_rotation_row,
+    translation_idx,
+    pair_mask,
+    shifted_recon_split,
+    shifted_image_split,
+    ctf2_over_nv_recon,
+    n_rotation_rows,
+):
+    """Use one native launch boundary for two independent weighted sums."""
+
+    from recovar.cuda_backproject import dual_weighted_sums_f32
+
+    dense_probs = _compact_pair_dense_probs_and_reductions(
+        pair_probs,
+        local_rotation_row,
+        translation_idx,
+        pair_mask,
+        n_rotation_rows=n_rotation_rows,
+        n_trans=shifted_recon_split.shape[1],
+    )
+    summed, summed_image = dual_weighted_sums_f32(
+        dense_probs,
+        shifted_recon_split,
+        shifted_image_split,
+    )
+    probs_sum_t = jnp.sum(dense_probs, axis=-1)
+    ctf_probs = compute_local_ctf_sums_from_probs_sum_t(probs_sum_t, ctf2_over_nv_recon)
+    translation_posterior = jnp.sum(dense_probs, axis=1)
+    return summed, summed_image, ctf_probs, probs_sum_t, translation_posterior
+
+
+@partial(
+    jax.jit,
+    static_argnames=("n_rotation_rows", "shell_count", "batch_size"),
+)
+def _compact_pair_weighted_sums_and_noise_native(
+    pair_probs,
+    local_rotation_row,
+    translation_idx,
+    pair_mask,
+    shifted_recon_split,
+    shifted_image_split,
+    ctf2_over_nv_recon,
+    proj_for_noise,
+    proj_abs2_for_noise,
+    noise_variance_half,
+    shell_indices,
+    *,
+    n_rotation_rows: int,
+    shell_count: int,
+    batch_size: int,
+):
+    """Fuse compact weighted sums with dense noise/norm sufficient statistics."""
+
+    (
+        summed,
+        summed_image,
+        ctf_probs,
+        probs_sum_t,
+        translation_posterior,
+    ) = _compact_pair_weighted_rotation_and_image_sums_native(
+        pair_probs,
+        local_rotation_row,
+        translation_idx,
+        pair_mask,
+        shifted_recon_split,
+        shifted_image_split,
+        ctf2_over_nv_recon,
+        n_rotation_rows=n_rotation_rows,
+    )
+    flat_image_indices = jnp.broadcast_to(
+        jnp.arange(int(batch_size), dtype=jnp.int32)[:, None],
+        (int(batch_size), int(n_rotation_rows)),
+    ).reshape(-1)
+    block_noise_shells, block_norm_residual = (
+        _compute_noise_block_and_norm_residual_from_flat_rows_residual_terms(
+            proj_for_noise.reshape((-1, proj_for_noise.shape[-1])),
+            proj_abs2_for_noise.reshape((-1, proj_abs2_for_noise.shape[-1])),
+            summed_image.reshape((-1, summed_image.shape[-1])),
+            ctf_probs.reshape((-1, ctf_probs.shape[-1])),
+            noise_variance_half,
+            shell_indices,
+            flat_image_indices,
+            shell_count=int(shell_count),
+            batch_size=int(batch_size),
+        )
+    )
+    return (
+        summed,
+        summed_image,
+        ctf_probs,
+        probs_sum_t,
+        translation_posterior,
+        block_noise_shells,
+        block_norm_residual,
+    )
 
 
 def _compact_pair_weighted_rotation_and_image_sums(
@@ -7381,6 +8163,28 @@ def _normalize_pass2_bucket_with_log_z(scores, log_z):
     return safe_log_z, probs, best_log_score, best_argmax, max_posterior
 
 
+@jax.jit
+def _diagnostics_from_normalized_pass2_probs(scores, probs, log_z):
+    """Return normalization diagnostics without recomputing probabilities."""
+
+    flat_scores = jnp.asarray(scores).reshape(scores.shape[0], -1)
+    flat_probs = jnp.asarray(probs).reshape(probs.shape[0], -1)
+    best_log_score = jnp.max(flat_scores, axis=1)
+    has_finite = jnp.isfinite(best_log_score) & jnp.isfinite(log_z)
+    best_argmax = jnp.where(has_finite, jnp.argmax(flat_scores, axis=1), 0)
+    max_posterior = jnp.where(
+        has_finite,
+        jnp.max(flat_probs, axis=1),
+        jnp.asarray(0.0, dtype=flat_probs.dtype),
+    )
+    return (
+        jnp.where(has_finite, log_z, 0.0),
+        jnp.where(has_finite, best_log_score, -jnp.inf),
+        best_argmax,
+        max_posterior,
+    )
+
+
 def _relion_pass2_reconstruction_probs(probs, *, adaptive_fraction: float):
     """Apply RELION's fine-pass significant threshold before M-step sums."""
 
@@ -7394,9 +8198,15 @@ def _relion_pass2_reconstruction_probs(probs, *, adaptive_fraction: float):
     return jnp.where(mask, probs, 0.0), mask, n_significant
 
 
-@partial(jax.jit, static_argnames=("adaptive_fraction",))
-def _relion_f32_fine_reconstruction_probs(scores, *, adaptive_fraction: float):
-    """Build fine M-step probabilities with RELION GPU float32 arithmetic.
+@partial(jax.jit, static_argnames=("adaptive_fraction", "keep_all"))
+def _relion_f32_fine_posterior(
+    scores,
+    *,
+    adaptive_fraction: float,
+    normalization_sum_weight=None,
+    keep_all: bool = False,
+):
+    """Build full and pruned fine probabilities with RELION GPU arithmetic.
 
     The reference GPU path shifts its float32 log weights so the maximum is
     50, applies ``expf``, sorts the raw weights in ascending order, and obtains
@@ -7424,13 +8234,26 @@ def _relion_f32_fine_reconstruction_probs(scores, *, adaptive_fraction: float):
         # weights at the iteration-2 case-22 boundary.  Its deployed sm_80
         # scan policy also remains observable when the same binary is JITed
         # on Hopper, so the CUDA primitive pins that policy explicitly.
-        raw_weights = jax.vmap(cuda_backproject.relion_exponentiate_f32)(
-            jnp.where(finite, flat_scores, -jnp.inf),
-            exponent_add,
+        finite_scores = jnp.where(finite, flat_scores, -jnp.inf)
+        batched_primitives = (
+            cuda_backproject.relion_batched_posterior_primitives_requested()
         )
-        sorted_weights, cumulative = jax.vmap(
-            cuda_backproject.relion_cub_sort_scan_f32,
-        )(raw_weights)
+        if batched_primitives:
+            raw_weights = cuda_backproject.relion_exponentiate_batched_f32(
+                finite_scores,
+                exponent_add,
+            )
+            sorted_weights, cumulative = (
+                cuda_backproject.relion_cub_sort_scan_batched_f32(raw_weights)
+            )
+        else:
+            raw_weights = jax.vmap(cuda_backproject.relion_exponentiate_f32)(
+                finite_scores,
+                exponent_add,
+            )
+            sorted_weights, cumulative = jax.vmap(
+                cuda_backproject.relion_cub_sort_scan_f32,
+            )(raw_weights)
     else:
         shifted = jnp.where(
             finite,
@@ -7449,22 +8272,42 @@ def _relion_f32_fine_reconstruction_probs(scores, *, adaptive_fraction: float):
         )
         sorted_weights = jnp.sort(raw_weights, axis=1)
         cumulative = jnp.cumsum(sorted_weights, axis=1, dtype=jnp.float32)
-    sum_weight = cumulative[:, -1]
+    fine_sum_weight = cumulative[:, -1]
+    if normalization_sum_weight is None:
+        sum_weight = fine_sum_weight
+    else:
+        # Gradient InitialModel with adaptive_oversampling==0 does not update
+        # op.sum_weight in the symbolic fine pass.  The CUDA fine weights are
+        # shifted by their own maximum, then divided directly by the numeric
+        # float32 denominator retained from the coarse pass.
+        sum_weight = jnp.asarray(normalization_sum_weight, dtype=jnp.float32)
     has_mass = has_finite & jnp.isfinite(sum_weight) & (sum_weight > jnp.float32(0.0))
-    tail_target = _relion_cuda_f32_tail_target(sum_weight, adaptive_fraction)
-    threshold_idx = jax.vmap(lambda row, target: jnp.searchsorted(row, target, side="right"))(
-        cumulative,
-        tail_target,
-    )
-    threshold_idx = jnp.minimum(threshold_idx, cumulative.shape[1] - 1)
-    threshold = sorted_weights[jnp.arange(flat_scores.shape[0]), threshold_idx]
-    mask_flat = has_mass[:, None] & finite & (raw_weights >= threshold[:, None])
+    if keep_all:
+        threshold = jnp.zeros_like(sum_weight)
+        mask_flat = has_mass[:, None] & finite & (raw_weights > jnp.float32(0.0))
+    else:
+        tail_target = _relion_cuda_f32_tail_target(fine_sum_weight, adaptive_fraction)
+        threshold_idx = jax.vmap(
+            lambda row, target: jnp.searchsorted(row, target, side="right")
+        )(
+            cumulative,
+            tail_target,
+        )
+        threshold_idx = jnp.minimum(threshold_idx, cumulative.shape[1] - 1)
+        threshold = sorted_weights[jnp.arange(flat_scores.shape[0]), threshold_idx]
+        mask_flat = has_mass[:, None] & finite & (raw_weights >= threshold[:, None])
     safe_sum_weight = jnp.where(has_mass, sum_weight, jnp.float32(1.0))
     if use_native_cuda:
-        normalized_weights = jax.vmap(cuda_backproject.relion_divide_f32)(
-            raw_weights,
-            safe_sum_weight,
-        )
+        if batched_primitives:
+            normalized_weights = cuda_backproject.relion_divide_batched_f32(
+                raw_weights,
+                safe_sum_weight,
+            )
+        else:
+            normalized_weights = jax.vmap(cuda_backproject.relion_divide_f32)(
+                raw_weights,
+                safe_sum_weight,
+            )
     else:
         normalized_weights = raw_weights / safe_sum_weight[:, None]
     reconstruction_probs_flat = jnp.where(
@@ -7475,6 +8318,7 @@ def _relion_f32_fine_reconstruction_probs(scores, *, adaptive_fraction: float):
     n_significant = jnp.sum(mask_flat, axis=1).astype(jnp.int32)
     output_shape = scores_f32.shape
     return (
+        normalized_weights.reshape(output_shape),
         reconstruction_probs_flat.reshape(output_shape),
         mask_flat.reshape(output_shape),
         n_significant,
@@ -7483,10 +8327,24 @@ def _relion_f32_fine_reconstruction_probs(scores, *, adaptive_fraction: float):
     )
 
 
-def relion_x_half_f32_fine_posterior_enabled() -> bool:
-    """Return whether the opt-in RELION float32 fine posterior is enabled."""
+def _relion_f32_fine_reconstruction_probs(scores, *, adaptive_fraction: float):
+    """Return the legacy pruned view of :func:`_relion_f32_fine_posterior`."""
 
-    return parse_env_flag(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, default=False)
+    full = _relion_f32_fine_posterior(
+        scores,
+        adaptive_fraction=adaptive_fraction,
+    )
+    return full[1:]
+
+
+def relion_x_half_f32_fine_posterior_enabled(*, default: bool = False) -> bool:
+    """Return whether the RELION float32 fine posterior is enabled.
+
+    Preserve the PR179 production default; enable this separately qualified
+    arithmetic path explicitly for boundary experiments.
+    """
+
+    return parse_env_flag(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, default=default)
 
 
 def _relion_fine_parent_execution_order_enabled(
@@ -7565,6 +8423,8 @@ def _relion_fine_mstep_prune_mode(*, use_relion_x_half_mstep: bool, mode_overrid
     ``per_class`` preserves the original opt-in diagnostic. ``joint`` matches
     RELION Class3D storeWeightedSums: threshold one flattened class x pose
     posterior list per image before accumulating M-step sums.
+    ``joint_keep_all`` preserves every admitted coarse candidate while still
+    using the joint RELION float32 posterior arithmetic.
     """
 
     value = mode_override
@@ -7573,6 +8433,10 @@ def _relion_fine_mstep_prune_mode(*, use_relion_x_half_mstep: bool, mode_overrid
     if value is None or not value.strip():
         return "per_class" if use_relion_x_half_mstep else "none"
     mode = value.strip().lower()
+    if mode in {"joint_keep_all", "joint-keep-all"}:
+        return "joint_keep_all"
+    if mode in {"all", "keep_all", "keep-all", "no_prune", "no-prune"}:
+        return "none"
     if mode in _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_JOINT_MODES:
         return "joint"
     if mode in {"1", "true", "yes", "on", "class", "per_class", "per-class"}:
@@ -7581,7 +8445,7 @@ def _relion_fine_mstep_prune_mode(*, use_relion_x_half_mstep: bool, mode_overrid
         return "per_class" if use_relion_x_half_mstep else "none"
     raise ValueError(
         f"{_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV} must be one of "
-        "0/1/per_class/joint"
+        "0/1/per_class/joint/joint_keep_all"
     )
 
 
@@ -9155,7 +10019,7 @@ def _maybe_dump_k_class_pass2_bucket(
                 raw_diff2_dense = np.asarray(
                     raw_diff2_by_batch_row[row],
                     dtype=np.float32,
-                )
+                )[:n_rot, :]
                 if raw_diff2_dense.shape != scores_with.shape:
                     raise ValueError(
                         "dense raw diff2 shape differs from scores: "
@@ -9597,16 +10461,18 @@ def _relion_exact_ctf_source_star(experiment_dataset) -> Path:
     return Path(source_star).expanduser().resolve()
 
 
-def _relion_exact_ctf_half_from_source_star(
+def _relion_exact_ctf_half_from_source_star_host(
     experiment_dataset,
     image_indices,
     image_shape,
 ):
-    """Evaluate source-precision SPA CTFs with RELION's scalar implementation.
+    """Evaluate source-precision SPA CTFs into one host-native operand.
 
     The result uses RECOVAR's centered-y half-spectrum coordinates and sign.
     The source STAR is mandatory because the ordinary dataset metadata has
-    already been rounded to float32 before pass 2.
+    already been rounded to float32 before pass 2.  RELION's binding and the
+    source cache are host-native; callers that must pad on the image axis use
+    this helper so they place the final operand exactly once.
     """
 
     source_path = _relion_exact_ctf_source_star(experiment_dataset)
@@ -9686,7 +10552,30 @@ def _relion_exact_ctf_half_from_source_star(
             cached_image = (-np.fft.fftshift(native, axes=0)).reshape(-1)
             cache["images"][original_index] = cached_image
         ctf_rows.append(cached_image)
-    return jnp.asarray(np.stack(ctf_rows, axis=0), dtype=jnp.float64)
+    return np.asarray(np.stack(ctf_rows, axis=0), dtype=np.float64)
+
+
+def _relion_exact_ctf_half_from_source_star(
+    experiment_dataset,
+    image_indices,
+    image_shape,
+):
+    """Return the shared source-precision CTF operand on the JAX device.
+
+    Device-first EM callers reuse this single binary64 placement for their
+    float32 score and reconstruction operands.  Host-padding callers should
+    use :func:`_relion_exact_ctf_half_from_source_star_host` to avoid a
+    device-to-host-to-device round trip.
+    """
+
+    return jnp.asarray(
+        _relion_exact_ctf_half_from_source_star_host(
+            experiment_dataset,
+            image_indices,
+            image_shape,
+        ),
+        dtype=jnp.float64,
+    )
 
 
 def _prepare_bucket_io(
@@ -10245,6 +11134,40 @@ def _prepare_bucket_io(
     )
 
 
+def subtract_projected_reference_from_sparse_mstep_sums(
+    summed,
+    reconstruction_probs,
+    projected_reference,
+    ctf2_over_noise,
+):
+    """Form RELION VDAM's residual backprojection operand on compact support."""
+
+    reconstruction_probs_sum_t = jnp.sum(reconstruction_probs, axis=-1)
+    return subtract_projected_reference_from_sparse_mstep_rotation_sums(
+        summed,
+        reconstruction_probs_sum_t,
+        projected_reference,
+        ctf2_over_noise,
+    )
+
+
+def subtract_projected_reference_from_sparse_mstep_rotation_sums(
+    summed,
+    posterior_mass_by_rotation,
+    projected_reference,
+    ctf2_over_noise,
+):
+    """Subtract reference signal after dense or pair-sparse translation sums."""
+
+    projected_reference_weighted = projected_reference * ctf2_over_noise[:, None, :]
+    projected_reference_delta = jnp.where(
+        posterior_mass_by_rotation[..., None] != 0.0,
+        posterior_mass_by_rotation[..., None] * projected_reference_weighted,
+        0.0,
+    )
+    return summed - projected_reference_delta
+
+
 def compute_pass2_stats_sparse_bucketed(
     experiment_dataset,
     volume,
@@ -10266,6 +11189,7 @@ def compute_pass2_stats_sparse_bucketed(
     accumulate_noise,
     half_spectrum_scoring,
     projection_padding_factor,
+    projection_mask_current_image_disk=True,
     reconstruction_padding_factor,
     image_corrections,
     scale_corrections,
@@ -10293,6 +11217,7 @@ def compute_pass2_stats_sparse_bucketed(
     fine_translation_parent_override=None,
     relion_half_volume_mstep=False,
     relion_x_half_mstep=False,
+    mstep_subtract_ctf_projection=False,
     relion_fine_mstep_prune=False,
     relion_firstiter_score_mode="gaussian",
     relion_firstiter_winner_take_all=False,
@@ -10387,10 +11312,16 @@ def compute_pass2_stats_sparse_bucketed(
         relion_fine_diff2_fused_ffi
         or parse_env_flag(_RELION_FINE_DIFF2_FUSED_FFI_ENV, default=False)
     )
+    use_relion_f32_fine_posterior = bool(
+        relion_f32_fine_posterior
+        or relion_x_half_f32_fine_posterior_enabled()
+    )
     winner_take_all = bool(relion_firstiter_winner_take_all)
     if bool(disable_adjoint_y) != bool(disable_adjoint_ctf):
         raise NotImplementedError("Sparse pass-2 currently supports disabling both M-step adjoints together")
     score_only = bool(disable_adjoint_y and disable_adjoint_ctf)
+    if score_only and mstep_subtract_ctf_projection:
+        raise ValueError("score-only sparse pass 2 cannot subtract the projected reference")
     if return_score_log_z_only:
         if not score_only:
             raise ValueError("return_score_log_z_only requires both M-step adjoints to be disabled")
@@ -11071,6 +12002,9 @@ def compute_pass2_stats_sparse_bucketed(
                     use_relion_projector=use_relion_projector,
                     current_size=current_size,
                 )
+                projection_kwargs["mask_current_image_disk"] = bool(
+                    projection_mask_current_image_disk
+                )
                 score_cache, recon_cache, recon_abs2_cache = _compute_sparse_pass2_windowed_projections_block(
                     mean_for_proj,
                     jnp.asarray(fine_rotations_override, dtype=precision_policy.score_real_dtype),
@@ -11094,6 +12028,9 @@ def compute_pass2_stats_sparse_bucketed(
                 }
             else:
                 projection_kwargs = window_spec.projection_kwargs(return_abs2=None if not score_only else False)
+                projection_kwargs["mask_current_image_disk"] = bool(
+                    projection_mask_current_image_disk
+                )
                 proj_half_cache_flat, proj_abs2_cache_flat = _compute_sparse_pass2_projections_block(
                     mean_for_proj,
                     jnp.asarray(fine_rotations_override, dtype=precision_policy.score_real_dtype),
@@ -11738,6 +12675,9 @@ def compute_pass2_stats_sparse_bucketed(
                         use_relion_projector=use_relion_projector,
                         current_size=current_size,
                     )
+                    projection_kwargs["mask_current_image_disk"] = bool(
+                        projection_mask_current_image_disk
+                    )
                     score_flat, recon_flat, recon_abs2_flat = _compute_sparse_pass2_windowed_projections_block(
                         mean_for_proj,
                         flat_rotations_chunk,
@@ -12313,6 +13253,13 @@ def compute_pass2_stats_sparse_bucketed(
                         relion_x_half=use_relion_x_half_mstep,
                         sequential_translation_reduction=use_sequential_translation_reduction,
                     )
+                    if mstep_subtract_ctf_projection:
+                        summed = subtract_projected_reference_from_sparse_mstep_sums(
+                            summed,
+                            mstep_probs,
+                            proj_for_noise_chunk,
+                            ctf2_over_nv_recon,
+                        )
                     if contribution_chunked_bucket:
                         dump_summed = summed
                         dump_ctf_probs = ctf_probs
@@ -13165,6 +14112,9 @@ def compute_pass2_stats_sparse_bucketed(
             projection_kwargs = window_spec.projection_kwargs(
                 return_abs2=False if (use_window or score_only) else None
             )
+            projection_kwargs["mask_current_image_disk"] = bool(
+                projection_mask_current_image_disk
+            )
             if use_window:
                 projection_kwargs = _projection_kwargs_for_relion_score_window(
                     projection_kwargs,
@@ -13647,6 +14597,13 @@ def compute_pass2_stats_sparse_bucketed(
                 relion_x_half=use_relion_x_half_mstep,
                 sequential_translation_reduction=use_sequential_translation_reduction,
             )
+            if mstep_subtract_ctf_projection:
+                summed = subtract_projected_reference_from_sparse_mstep_sums(
+                    summed,
+                    mstep_probs,
+                    proj_for_noise,
+                    ctf2_over_nv_recon,
+                )
             dump_summed = summed
             dump_ctf_probs = ctf_probs
             shadow_reduction_agreement = None
@@ -14425,6 +15382,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     disc_type,
     oversampling_order,
     current_size,
+    reconstruction_current_size=None,
     translation_step=None,
     score_with_masked_images=False,
     return_stats=True,
@@ -14432,6 +15390,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     translation_log_prior=None,
     half_spectrum_scoring=False,
     projection_padding_factor=1,
+    projection_mask_current_image_disk=True,
     reconstruction_padding_factor=1,
     image_corrections=None,
     scale_corrections=None,
@@ -14452,14 +15411,24 @@ def compute_k_class_pass2_stats_sparse_fused(
     fine_translation_parent_override=None,
     relion_half_volume_mstep=False,
     relion_x_half_mstep=False,
+    mstep_subtract_ctf_projection=False,
     relion_fine_mstep_prune_mode: str | None = None,
     relion_firstiter_score_mode="gaussian",
     relion_firstiter_winner_take_all=False,
     relion_exact_fine_gaussian=True,
+    relion_fine_diff2_fused_ffi=False,
+    relion_f32_fine_posterior=False,
     relion_projector_half=None,
     relion_projector_r_max=None,
     adaptive_fraction=0.999,
     bpref_device_signature_active: bool = False,
+    normalization_log_evidence=None,
+    relion_f32_normalization_sum_weight=None,
+    compact_pair_min_bucket_size_default: int | None = None,
+    compact_pair_tail_coalesce_max_images_default: int | None = None,
+    compact_pair_tail_coalesce_max_inflation_default: float | None = None,
+    compact_pair_tail_coalesce_min_bucket_size_default: int | None = None,
+    source_faithful_spectrum_norm: bool = False,
 ) -> SparseKClassPass2FusedResult:
     """Evaluate K-class sparse pass-2 in one joint class-normalized sweep.
 
@@ -14479,6 +15448,11 @@ def compute_k_class_pass2_stats_sparse_fused(
     scoped_diagnostic_flags = bpref_diagnostics._scoped_bpref_diagnostic_flags(
         active=bpref_device_signature_active
     )
+    execution_modes = bpref_diagnostics._resolve_bpref_execution_modes(
+        scoped_diagnostic_flags,
+        device_signature_requested=device_signature_requested,
+    )
+    use_per_particle_launches = execution_modes["live_per_particle_launches"]
     if device_signature_requested:
         if not os.environ.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR"):
             raise RuntimeError(
@@ -14505,8 +15479,29 @@ def compute_k_class_pass2_stats_sparse_fused(
         relion_exact_fine_gaussian
         and relion_firstiter_score_mode == "gaussian"
     )
+    use_relion_fine_diff2_fused_ffi = bool(
+        relion_fine_diff2_fused_ffi
+        or parse_env_flag(_RELION_FINE_DIFF2_FUSED_FFI_ENV, default=False)
+    )
+    use_relion_f32_fine_posterior = bool(
+        relion_f32_fine_posterior
+        or relion_x_half_f32_fine_posterior_enabled()
+    )
+    relion_exact_bpref_operands = parse_env_flag(
+        "RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS",
+        default=False,
+    )
+    if relion_exact_bpref_operands:
+        if use_float64_scoring:
+            raise ValueError("exact RELION BPref operands require the native float32 path")
+        logger.info(
+            "Sparse fused K-class pass-2: using RELION binary64-to-float32 "
+            "inverse-noise and fused translate-then-weight BPref operands"
+        )
     volumes = jnp.asarray(volumes)
     n_classes = int(volumes.shape[0])
+    if source_faithful_spectrum_norm and n_classes != 1:
+        raise ValueError("source-faithful powerClass normalization is K=1-only")
     if device_signature_requested and not any(
         bpref_diagnostics._bpref_contribution_class_enabled(class_index)
         for class_index in range(n_classes)
@@ -14535,6 +15530,28 @@ def compute_k_class_pass2_stats_sparse_fused(
         raise NotImplementedError("fused sparse K-class pass-2 requires shared class noise variance")
 
     n_images = int(experiment_dataset.n_units)
+    normalization_log_evidence_np = None
+    if normalization_log_evidence is not None:
+        normalization_log_evidence_np = np.asarray(
+            normalization_log_evidence,
+            dtype=np.float64,
+        )
+        if normalization_log_evidence_np.shape != (n_images,):
+            raise ValueError(
+                "normalization_log_evidence must have shape "
+                f"({n_images},), got {normalization_log_evidence_np.shape}",
+            )
+    relion_f32_normalization_sum_weight_np = None
+    if relion_f32_normalization_sum_weight is not None:
+        relion_f32_normalization_sum_weight_np = np.asarray(
+            relion_f32_normalization_sum_weight,
+            dtype=np.float32,
+        )
+        if relion_f32_normalization_sum_weight_np.shape != (n_images,):
+            raise ValueError(
+                "relion_f32_normalization_sum_weight must have shape "
+                f"({n_images},), got {relion_f32_normalization_sum_weight_np.shape}",
+            )
     n_coarse_trans = int(np.asarray(translations).shape[0])
     n_coarse_rot = rotation_grid_size(nside_level)
     if not hasattr(experiment_dataset, "image_shape") or not hasattr(experiment_dataset, "volume_shape"):
@@ -14542,6 +15559,11 @@ def compute_k_class_pass2_stats_sparse_fused(
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
     H, W = image_shape
+    mstep_current_size = (
+        current_size
+        if reconstruction_current_size is None
+        else int(reconstruction_current_size)
+    )
     if (
         use_exact_relion_gaussian
         and current_size is not None
@@ -14564,6 +15586,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         image_shape,
         current_size,
         n_half,
+        reconstruction_current_size=mstep_current_size,
         square=square_window,
         include_recon_window=True,
         **window_spec_kwargs,
@@ -14582,7 +15605,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         recon_volume_shape = relion_backprojector_volume_shape(
             volume_shape,
             reconstruction_padding_factor,
-            current_size=current_size,
+            current_size=mstep_current_size,
         )
     elif reconstruction_padding_factor > 1:
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
@@ -14593,6 +15616,10 @@ def compute_k_class_pass2_stats_sparse_fused(
         mode_override=relion_fine_mstep_prune_mode,
     )
     relion_fine_mstep_prune = relion_fine_mstep_prune_mode != "none"
+    relion_fine_mstep_joint = relion_fine_mstep_prune_mode in {
+        "joint",
+        "joint_keep_all",
+    }
     use_half_volume_mstep = bool(relion_half_volume_mstep) or use_relion_x_half_mstep
     compact_pair_mstep_mode_requested = _compact_pair_mstep_mode_for_pass()
     compact_pair_pair_sparse_requested = compact_pair_mstep_mode_requested == "pair_sparse"
@@ -14615,7 +15642,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             "Sparse fused K-class RELION x-half current-size BPref accumulator shape: "
             "volume_shape=%s current_size=%s padding_factor=%s recon_volume_shape=%s half_accum_shape=%s voxels=%d",
             tuple(volume_shape),
-            current_size,
+            mstep_current_size,
             reconstruction_padding_factor,
             tuple(recon_volume_shape),
             tuple(recon_accum_shape),
@@ -14858,6 +15885,15 @@ def compute_k_class_pass2_stats_sparse_fused(
     )
     compact_pairs_env = os.environ.get(_SPARSE_KCLASS_COMPACT_PAIRS_ENV)
     compact_pairs = _compact_pair_execution_enabled_for_pass()
+    if use_per_particle_launches:
+        if not relion_x_half_mstep:
+            raise ValueError(
+                "fused K-class per-particle launches require the RELION x-half M-step"
+            )
+        if not compact_pairs:
+            raise ValueError(
+                "fused K-class per-particle launches require compact-pair execution"
+            )
     compact_active_rows_env = os.environ.get(_SPARSE_KCLASS_COMPACT_ACTIVE_ROWS_ENV)
     compact_active_rows = (
         compact_pairs
@@ -14867,10 +15903,22 @@ def compute_k_class_pass2_stats_sparse_fused(
         _SPARSE_KCLASS_REUSE_COMPACT_NOISE_SUMS_ENV,
         default=False,
     )
+    native_dual_weighted_sums = _native_dual_weighted_sums_enabled_for_pass(
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        use_relion_x_half_mstep=use_relion_x_half_mstep,
+        accumulate_noise=accumulate_noise,
+    )
     compact_noise_sums_match_mstep = bool(
         reuse_compact_noise_sums
         and half_spectrum_scoring
         and not score_with_masked_images
+    )
+    fused_mstep_noise = _fused_mstep_noise_enabled_for_pass(
+        native_dual_weighted_sums=native_dual_weighted_sums,
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        use_relion_x_half_mstep=use_relion_x_half_mstep,
+        accumulate_noise=accumulate_noise,
+        compact_noise_sums_match_mstep=compact_noise_sums_match_mstep,
     )
     rectangular_active_rows = parse_env_flag(_SPARSE_KCLASS_RECTANGULAR_ACTIVE_ROWS_ENV, default=True)
     rectangular_active_prematmul = (
@@ -14901,9 +15949,15 @@ def compute_k_class_pass2_stats_sparse_fused(
         compact_pair_tail_coalesce_max_images,
         compact_pair_tail_coalesce_max_inflation,
         compact_pair_tail_coalesce_min_bucket_size,
-    ) = _compact_pair_tail_bucket_coalesce_params_for_pass()
+    ) = _compact_pair_tail_bucket_coalesce_params_for_pass(
+        default_max_images=compact_pair_tail_coalesce_max_images_default,
+        default_max_inflation=compact_pair_tail_coalesce_max_inflation_default,
+        default_min_bucket_size=compact_pair_tail_coalesce_min_bucket_size_default,
+    )
     if compact_pairs:
-        compact_pair_min_bucket_size = _compact_pair_min_bucket_size_for_pass()
+        compact_pair_min_bucket_size = _compact_pair_min_bucket_size_for_pass(
+            compact_pair_min_bucket_size_default,
+        )
         compact_pair_max_images_per_microbatch = _compact_pair_max_images_per_microbatch_for_pass(
             max_images_per_microbatch,
         )
@@ -15108,6 +16162,18 @@ def compute_k_class_pass2_stats_sparse_fused(
                 bool(half_spectrum_scoring),
                 bool(score_with_masked_images),
             )
+        if native_dual_weighted_sums:
+            logger.info(
+                "Sparse fused K-class compact-pair M-step/noise image sums use the "
+                "guarded native dual reduction (%s=1)",
+                _SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS_ENV,
+            )
+        if fused_mstep_noise:
+            logger.info(
+                "Sparse fused K-class compact-pair weighted sums and dense "
+                "noise/norm statistics share one JIT boundary (%s=1)",
+                _SPARSE_KCLASS_FUSED_MSTEP_NOISE_ENV,
+            )
         if parse_env_flag(_COMPACT_KCLASS_PAIRS_CHECK_ENV, default=False):
             raise ValueError(
                 f"{_COMPACT_KCLASS_PAIRS_CHECK_ENV}=1 cannot be combined with "
@@ -15234,6 +16300,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         image_shape,
         current_size,
         n_half,
+        reconstruction_current_size=mstep_current_size,
         square=square_window,
         include_recon_window=True,
         **window_spec_kwargs,
@@ -15356,6 +16423,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                 cache_t0 = time.time()
                 if use_window:
                     projection_kwargs = window_spec.projection_kwargs(return_abs2=False)
+                    projection_kwargs["mask_current_image_disk"] = bool(
+                        projection_mask_current_image_disk
+                    )
                     score_cache, recon_cache, recon_abs2_cache = _compute_sparse_pass2_windowed_projections_block(
                         mean_for_proj_by_class[class_index],
                         jnp.asarray(fine_rotations_override, dtype=precision_policy.score_real_dtype),
@@ -15379,6 +16449,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                     }
                 else:
                     projection_kwargs = window_spec.projection_kwargs(return_abs2=None)
+                    projection_kwargs["mask_current_image_disk"] = bool(
+                        projection_mask_current_image_disk
+                    )
                     proj_half_cache_flat, proj_abs2_cache_flat = _compute_sparse_pass2_projections_block(
                         mean_for_proj_by_class[class_index],
                         jnp.asarray(fine_rotations_override, dtype=precision_policy.score_real_dtype),
@@ -15558,6 +16631,14 @@ def compute_k_class_pass2_stats_sparse_fused(
         bucket_uses_active_rows = (
             compact_active_rows and bucket_uses_compact_pairs
         ) or bucket_uses_rectangular_active_rows
+        if fused_mstep_noise and bucket_uses_compact_pairs:
+            # The fused wrapper consumes dense rotation rows before any host
+            # materialization of the active-row index set.
+            bucket_uses_active_rows = False
+        if mstep_subtract_ctf_projection:
+            # Residual VDAM accumulation needs the dense projected-reference
+            # row tensor before adjoint packing.
+            bucket_uses_active_rows = False
         group_key = (execution_mode, execution_bucket_size_key, bucket_size)
         if group_key != last_bucket_size_logged:
             if last_bucket_size_logged is not None and group_t0 is not None:
@@ -15599,6 +16680,18 @@ def compute_k_class_pass2_stats_sparse_fused(
             include_dense_score_fields=not bucket_uses_compact_pairs,
             rotation_block_size_for_quantization=rotation_block_size_for_quantization,
         )
+        if parse_env_flag(
+            _SPARSE_KCLASS_EXECUTION_SIGNATURES_ENV,
+            default=False,
+        ):
+            print(
+                "VDAM_EXECUTION_SIGNATURE "
+                f"mode={execution_mode} {execution_bucket_size_key}={bucket_size} "
+                f"batch={int(image_indices.shape[0])} "
+                "class_bucket_sizes="
+                f"{tuple(int(arrays['bucket_size']) for arrays in class_bucket_arrays)}",
+                flush=True,
+            )
         compact_pair_arrays_by_class = None
         if bucket_uses_compact_pairs:
             compact_pair_arrays_by_class = [
@@ -15882,6 +16975,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             relion_score_translation_angles=relion_score_translation_angles,
             return_windowed_shifted=windowed_prepare,
             return_shifted_score=not half_spectrum_scoring,
+            relion_exact_bpref_operands=relion_exact_bpref_operands,
         )
         relion_highres_xi2_half = None
         if use_exact_relion_gaussian or (accumulate_noise and current_size is not None):
@@ -15979,6 +17073,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                     proj_abs2_for_noise = cache_recon_abs2[rotation_indices_jax]
             else:
                 projection_kwargs = window_spec.projection_kwargs(return_abs2=False if use_window else None)
+                projection_kwargs["mask_current_image_disk"] = bool(
+                    projection_mask_current_image_disk
+                )
                 if use_window:
                     retained_window_projection_bytes = (
                         int(flat_rotations.shape[0])
@@ -16085,6 +17182,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         pair_mask,
                         relion_score_full_to_compact,
                         relion_highres_xi2_half,
+                        use_fused_ffi=use_relion_fine_diff2_fused_ffi,
                     )
                     row = jnp.arange(batch)[:, None]
                     safe_translation_idx = jnp.where(pair_mask, translation_idx, 0).astype(jnp.int32)
@@ -16152,6 +17250,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                             direct_half_weights,
                             relion_score_full_to_compact,
                             relion_highres_xi2_half[0],
+                            use_fused_ffi=use_relion_fine_diff2_fused_ffi,
                         )[jnp.newaxis, :, :]
                     else:
                         raw_diff2 = _score_pass2_bucket_relion_gpu_diff2_raw(
@@ -16161,6 +17260,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                             direct_half_weights,
                             relion_score_full_to_compact,
                             relion_highres_xi2_half,
+                            use_fused_ffi=use_relion_fine_diff2_fused_ffi,
                         )
                     # Keep the inter-class staging on the host. The score
                     # microbatch cap applies to device residency; retaining
@@ -16412,6 +17512,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         pair_mask,
                         relion_score_full_to_compact,
                         relion_highres_xi2_half,
+                        use_fused_ffi=use_relion_fine_diff2_fused_ffi,
                     )
                     row = jnp.arange(batch)[:, None]
                     safe_translation_idx = jnp.where(pair_mask, translation_idx, 0).astype(jnp.int32)
@@ -16463,9 +17564,30 @@ def compute_k_class_pass2_stats_sparse_fused(
                 )
         _add_sparse_group_timing(group_timing, "score", time.time() - stage_t0)
 
-        global_score_log_z_bucket = _logsumexp_class_log_z(jnp.stack(class_score_log_z_bucket, axis=0))
+        log_score_offset = (
+            np.asarray(
+                _relion_cuda_fine_log_evidence_offset(global_min_diff2),
+                dtype=np.float64,
+            )
+            if use_exact_relion_gaussian
+            else -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+        )
+        if normalization_log_evidence_np is None:
+            global_score_log_z_bucket = _logsumexp_class_log_z(
+                jnp.stack(class_score_log_z_bucket, axis=0)
+            )
+        else:
+            # RELION's oversampling-zero symbolic second pass reuses the
+            # coarse pass sum_weight. Convert its absolute log evidence into
+            # this pass's common-min-centered score frame.
+            global_score_log_z_bucket = jnp.asarray(
+                normalization_log_evidence_np[image_indices] - log_score_offset,
+                dtype=jnp.float64,
+            )
         joint_mstep_masks_by_class = None
-        if relion_fine_mstep_prune_mode == "joint":
+        joint_mstep_probs_by_class = None
+        joint_full_probs_by_class = None
+        if relion_fine_mstep_joint:
             flat_joint_probs_by_class = []
             flat_joint_scores_by_class = []
             joint_prob_shapes = []
@@ -16473,43 +17595,112 @@ def compute_k_class_pass2_stats_sparse_fused(
                 if bucket_uses_compact_pairs:
                     pair_arrays = compact_pair_arrays_by_class[class_index]
                     pair_mask = jnp.asarray(pair_arrays["pair_mask"])
-                    _log_Z, pair_probs, best_log_score_bucket, best_argmax, _max_posterior_bucket = (
-                        _normalize_pass2_pairs_with_log_z(
+                    if use_relion_f32_fine_posterior and not winner_take_all:
+                        # The native RELION fine-posterior path rebuilds both
+                        # full and pruned probabilities directly from the
+                        # concatenated float32 scores below.  Computing the
+                        # generic float64 exp/log-Z probabilities here only
+                        # to discard them caused one shape-specific XLA
+                        # compilation per class and bucket group.
+                        pair_probs = None
+                    else:
+                        (
+                            _log_Z,
+                            pair_probs,
+                            best_log_score_bucket,
+                            best_argmax,
+                            _max_posterior_bucket,
+                        ) = _normalize_pass2_pairs_with_log_z(
                             scores_by_class[class_index],
                             pair_mask,
                             global_score_log_z_bucket,
                         )
-                    )
                     if winner_take_all:
                         pair_probs = _winner_take_all_pair_probs(
                             scores_by_class[class_index],
                             best_argmax,
                             best_log_score_bucket,
                         )
-                    pair_probs = jnp.where(pair_mask, pair_probs, 0.0)
-                    flat_joint_probs_by_class.append(pair_probs.reshape(batch, -1))
+                    if pair_probs is not None:
+                        pair_probs = jnp.where(pair_mask, pair_probs, 0.0)
+                        flat_joint_probs_by_class.append(pair_probs.reshape(batch, -1))
                     flat_joint_scores_by_class.append(
                         jnp.where(pair_mask, scores_by_class[class_index], -jnp.inf).reshape(batch, -1)
                     )
-                    joint_prob_shapes.append(pair_probs.shape)
+                    joint_prob_shapes.append(scores_by_class[class_index].shape)
                 else:
-                    _log_Z, probs, best_log_score_bucket, best_argmax, _max_posterior_bucket = (
-                        _normalize_pass2_bucket_with_log_z(
+                    if use_relion_f32_fine_posterior and not winner_take_all:
+                        probs = None
+                    else:
+                        (
+                            _log_Z,
+                            probs,
+                            best_log_score_bucket,
+                            best_argmax,
+                            _max_posterior_bucket,
+                        ) = _normalize_pass2_bucket_with_log_z(
                             scores_by_class[class_index],
                             global_score_log_z_bucket,
                         )
-                    )
                     if winner_take_all:
                         probs = _winner_take_all_bucket_probs(
                             scores_by_class[class_index],
                             best_argmax,
                             best_log_score_bucket,
                         )
-                    flat_joint_probs_by_class.append(probs.reshape(batch, -1))
+                    if probs is not None:
+                        flat_joint_probs_by_class.append(probs.reshape(batch, -1))
                     flat_joint_scores_by_class.append(scores_by_class[class_index].reshape(batch, -1))
-                    joint_prob_shapes.append(probs.shape)
+                    joint_prob_shapes.append(scores_by_class[class_index].shape)
             if winner_take_all:
                 flat_joint_masks = _relion_joint_winner_take_all_masks(flat_joint_scores_by_class)
+            elif use_relion_f32_fine_posterior:
+                flat_sizes = [int(scores.shape[1]) for scores in flat_joint_scores_by_class]
+                joint_scores = jnp.concatenate(flat_joint_scores_by_class, axis=1)
+                (
+                    joint_full_probs,
+                    joint_reconstruction_probs,
+                    joint_mask,
+                    *_diagnostics,
+                ) = (
+                    _relion_f32_fine_posterior(
+                        joint_scores,
+                        adaptive_fraction=float(adaptive_fraction),
+                        normalization_sum_weight=(
+                            None
+                            if relion_f32_normalization_sum_weight_np is None
+                            else jnp.asarray(
+                                relion_f32_normalization_sum_weight_np[image_indices],
+                                dtype=jnp.float32,
+                            )
+                        ),
+                        keep_all=relion_fine_mstep_prune_mode == "joint_keep_all",
+                    )
+                )
+                split_points = np.cumsum(flat_sizes[:-1], dtype=np.int64).tolist()
+                flat_joint_masks = list(jnp.split(joint_mask, split_points, axis=1))
+                flat_joint_full_probs = list(
+                    jnp.split(joint_full_probs, split_points, axis=1)
+                )
+                flat_joint_reconstruction_probs = list(
+                    jnp.split(joint_reconstruction_probs, split_points, axis=1)
+                )
+                joint_full_probs_by_class = [
+                    flat_probs.reshape(shape)
+                    for flat_probs, shape in zip(
+                        flat_joint_full_probs,
+                        joint_prob_shapes,
+                        strict=True,
+                    )
+                ]
+                joint_mstep_probs_by_class = [
+                    flat_probs.reshape(shape)
+                    for flat_probs, shape in zip(
+                        flat_joint_reconstruction_probs,
+                        joint_prob_shapes,
+                        strict=True,
+                    )
+                ]
             else:
                 flat_joint_masks = _relion_pass2_reconstruction_joint_masks(
                     flat_joint_probs_by_class,
@@ -16525,13 +17716,26 @@ def compute_k_class_pass2_stats_sparse_fused(
                 if bucket_uses_compact_pairs:
                     pair_arrays = compact_pair_arrays_by_class[class_index]
                     pair_mask = jnp.asarray(pair_arrays["pair_mask"])
-                    _log_Z, pair_probs, best_log_score_bucket, best_argmax, _max_posterior_bucket = (
-                        _normalize_pass2_pairs_with_log_z(
+                    if joint_full_probs_by_class is None:
+                        _log_Z, pair_probs, best_log_score_bucket, best_argmax, _max_posterior_bucket = (
+                            _normalize_pass2_pairs_with_log_z(
+                                scores_by_class[class_index],
+                                pair_mask,
+                                global_score_log_z_bucket,
+                            )
+                        )
+                    else:
+                        pair_probs = joint_full_probs_by_class[class_index]
+                        (
+                            _log_Z,
+                            best_log_score_bucket,
+                            best_argmax,
+                            _max_posterior_bucket,
+                        ) = _diagnostics_from_normalized_pass2_probs(
                             scores_by_class[class_index],
-                            pair_mask,
+                            pair_probs,
                             global_score_log_z_bucket,
                         )
-                    )
                     if winner_take_all:
                         pair_probs = _winner_take_all_pair_probs(
                             scores_by_class[class_index],
@@ -16574,12 +17778,25 @@ def compute_k_class_pass2_stats_sparse_fused(
                         relion_min_diff2=relion_min_diff2_dump,
                     )
                 else:
-                    _log_Z, probs, best_log_score_bucket, best_argmax, _max_posterior_bucket = (
-                        _normalize_pass2_bucket_with_log_z(
+                    if joint_full_probs_by_class is None:
+                        _log_Z, probs, best_log_score_bucket, best_argmax, _max_posterior_bucket = (
+                            _normalize_pass2_bucket_with_log_z(
+                                scores_by_class[class_index],
+                                global_score_log_z_bucket,
+                            )
+                        )
+                    else:
+                        probs = joint_full_probs_by_class[class_index]
+                        (
+                            _log_Z,
+                            best_log_score_bucket,
+                            best_argmax,
+                            _max_posterior_bucket,
+                        ) = _diagnostics_from_normalized_pass2_probs(
                             scores_by_class[class_index],
+                            probs,
                             global_score_log_z_bucket,
                         )
-                    )
                     if winner_take_all:
                         probs = _winner_take_all_bucket_probs(
                             scores_by_class[class_index],
@@ -16654,14 +17871,6 @@ def compute_k_class_pass2_stats_sparse_fused(
                         dump_count=completed_dump_count,
                         current_size=current_size,
                     )
-        log_score_offset = (
-            np.asarray(
-                _relion_cuda_fine_log_evidence_offset(global_min_diff2),
-                dtype=np.float64,
-            )
-            if use_exact_relion_gaussian
-            else -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
-        )
         shifted_recon_split = shifted_recon.reshape(batch, n_fine_trans, -1)
         if accumulate_noise:
             shifted_noise_split = (
@@ -16683,16 +17892,31 @@ def compute_k_class_pass2_stats_sparse_fused(
             mstep_active_mask = None
             mstep_active_count = 0
             summed_masked_noise_precomputed = None
+            block_noise_shells_precomputed = None
+            block_norm_residual_precomputed = None
             if bucket_uses_compact_pairs:
                 pair_arrays = compact_pair_arrays_by_class[class_index]
                 pair_mask = jnp.asarray(pair_arrays["pair_mask"])
-                log_Z, pair_probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
-                    _normalize_pass2_pairs_with_log_z(
+                if joint_full_probs_by_class is None:
+                    log_Z, pair_probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
+                        _normalize_pass2_pairs_with_log_z(
+                            scores_by_class[class_index],
+                            pair_mask,
+                            global_score_log_z_bucket,
+                        )
+                    )
+                else:
+                    pair_probs = joint_full_probs_by_class[class_index]
+                    (
+                        log_Z,
+                        best_log_score_bucket,
+                        best_argmax,
+                        max_posterior_bucket,
+                    ) = _diagnostics_from_normalized_pass2_probs(
                         scores_by_class[class_index],
-                        pair_mask,
+                        pair_probs,
                         global_score_log_z_bucket,
                     )
-                )
                 if winner_take_all:
                     pair_probs = _winner_take_all_pair_probs(
                         scores_by_class[class_index],
@@ -16704,9 +17928,13 @@ def compute_k_class_pass2_stats_sparse_fused(
                         jnp.ones_like(max_posterior_bucket),
                         jnp.zeros_like(max_posterior_bucket),
                     )
-                if relion_fine_mstep_prune_mode == "joint":
+                if relion_fine_mstep_joint:
                     reconstruction_mask = joint_mstep_masks_by_class[class_index]
-                    reconstruction_probs = jnp.where(reconstruction_mask, pair_probs, 0.0)
+                    reconstruction_probs = (
+                        joint_mstep_probs_by_class[class_index]
+                        if joint_mstep_probs_by_class is not None
+                        else jnp.where(reconstruction_mask, pair_probs, 0.0)
+                    )
                     mstep_probs = reconstruction_probs
                 elif relion_fine_mstep_prune:
                     reconstruction_probs, reconstruction_mask, _reconstruction_n_significant = (
@@ -16745,24 +17973,67 @@ def compute_k_class_pass2_stats_sparse_fused(
                     ],
                     relion_min_diff2=relion_min_diff2_dump,
                 )
-                if accumulate_noise and reuse_compact_noise_sums and not compact_noise_sums_match_mstep:
+                if (
+                    accumulate_noise
+                    and (reuse_compact_noise_sums or native_dual_weighted_sums)
+                    and not compact_noise_sums_match_mstep
+                ):
                     compact_pair_noise_image_sum_precomputes += 1
-                    (
-                        summed,
-                        summed_masked_noise_precomputed,
-                        ctf_probs,
-                        probs_sum_t_jax,
-                        translation_posterior_jax,
-                    ) = _compact_pair_weighted_rotation_and_image_sums(
-                        mstep_probs,
-                        jnp.asarray(pair_arrays["local_rotation_row"]),
-                        jnp.asarray(pair_arrays["translation_idx"]),
-                        pair_mask,
-                        shifted_recon_split,
+                    if fused_mstep_noise:
+                        (
+                            summed,
+                            summed_masked_noise_precomputed,
+                            ctf_probs,
+                            probs_sum_t_jax,
+                            translation_posterior_jax,
+                            block_noise_shells_precomputed,
+                            block_norm_residual_precomputed,
+                        ) = _compact_pair_weighted_sums_and_noise_native(
+                            mstep_probs,
+                            jnp.asarray(pair_arrays["local_rotation_row"]),
+                            jnp.asarray(pair_arrays["translation_idx"]),
+                            pair_mask,
+                            shifted_recon_split,
                             shifted_noise_split,
                             ctf2_over_nv_recon,
+                            proj_for_noise_by_class[class_index],
+                            proj_abs2_by_class[class_index],
+                            noise_variance_for_noise,
+                            shell_indices_noise,
                             n_rotation_rows=class_bucket_size,
-                            allow_pair_sparse=compact_pair_pair_sparse_effective,
+                            shell_count=n_shells,
+                            batch_size=batch,
+                        )
+                    else:
+                        (
+                            summed,
+                            summed_masked_noise_precomputed,
+                            ctf_probs,
+                            probs_sum_t_jax,
+                            translation_posterior_jax,
+                        ) = (
+                            _compact_pair_weighted_rotation_and_image_sums_native(
+                                mstep_probs,
+                                jnp.asarray(pair_arrays["local_rotation_row"]),
+                                jnp.asarray(pair_arrays["translation_idx"]),
+                                pair_mask,
+                                shifted_recon_split,
+                                shifted_noise_split,
+                                ctf2_over_nv_recon,
+                                n_rotation_rows=class_bucket_size,
+                            )
+                            if native_dual_weighted_sums
+                            else _compact_pair_weighted_rotation_and_image_sums(
+                                mstep_probs,
+                                jnp.asarray(pair_arrays["local_rotation_row"]),
+                                jnp.asarray(pair_arrays["translation_idx"]),
+                                pair_mask,
+                                shifted_recon_split,
+                                shifted_noise_split,
+                                ctf2_over_nv_recon,
+                                n_rotation_rows=class_bucket_size,
+                                allow_pair_sparse=compact_pair_pair_sparse_effective,
+                            )
                         )
                 else:
                     summed, ctf_probs, probs_sum_t_jax, translation_posterior_jax = (
@@ -16775,15 +18046,29 @@ def compute_k_class_pass2_stats_sparse_fused(
                             ctf2_over_nv_recon,
                             n_rotation_rows=class_bucket_size,
                             allow_pair_sparse=compact_pair_pair_sparse_effective,
+                            relion_x_half=use_relion_x_half_mstep,
                         )
                     )
             else:
-                log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
-                    _normalize_pass2_bucket_with_log_z(
+                if joint_full_probs_by_class is None:
+                    log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
+                        _normalize_pass2_bucket_with_log_z(
+                            scores_by_class[class_index],
+                            global_score_log_z_bucket,
+                        )
+                    )
+                else:
+                    probs = joint_full_probs_by_class[class_index]
+                    (
+                        log_Z,
+                        best_log_score_bucket,
+                        best_argmax,
+                        max_posterior_bucket,
+                    ) = _diagnostics_from_normalized_pass2_probs(
                         scores_by_class[class_index],
+                        probs,
                         global_score_log_z_bucket,
                     )
-                )
                 if winner_take_all:
                     probs = _winner_take_all_bucket_probs(
                         scores_by_class[class_index],
@@ -16795,9 +18080,13 @@ def compute_k_class_pass2_stats_sparse_fused(
                         jnp.ones_like(max_posterior_bucket),
                         jnp.zeros_like(max_posterior_bucket),
                     )
-                if relion_fine_mstep_prune_mode == "joint":
+                if relion_fine_mstep_joint:
                     reconstruction_mask = joint_mstep_masks_by_class[class_index]
-                    reconstruction_probs = jnp.where(reconstruction_mask, probs, 0.0)
+                    reconstruction_probs = (
+                        joint_mstep_probs_by_class[class_index]
+                        if joint_mstep_probs_by_class is not None
+                        else jnp.where(reconstruction_mask, probs, 0.0)
+                    )
                     mstep_probs = reconstruction_probs
                 elif relion_fine_mstep_prune:
                     reconstruction_probs, reconstruction_mask, _reconstruction_n_significant = (
@@ -16895,6 +18184,13 @@ def compute_k_class_pass2_stats_sparse_fused(
                         relion_x_half=use_relion_x_half_mstep,
                         default_probs_sum_t=probs_sum_t_jax,
                     )
+            if mstep_subtract_ctf_projection:
+                summed = subtract_projected_reference_from_sparse_mstep_rotation_sums(
+                    summed,
+                    probs_sum_t_jax,
+                    proj_for_noise_by_class[class_index],
+                    ctf2_over_nv_recon,
+                )
             if (
                 bucket_device_signature_requested
                 and bpref_diagnostics._bpref_contribution_class_enabled(class_index)
@@ -17105,7 +18401,30 @@ def compute_k_class_pass2_stats_sparse_fused(
             _add_sparse_group_timing(group_timing, "mstep_weighted_sums", time.time() - substage_t0)
             substage_t0 = time.time()
             mstep_window_indices = relion_x_half_recon_indices if use_relion_x_half_mstep else recon_window_indices
-            if active_flat_rows_chunked:
+            live_per_particle_launches = bool(
+                use_relion_x_half_mstep and use_per_particle_launches
+            )
+            if live_per_particle_launches:
+                Ft_y_total[class_index], Ft_ctf_total[class_index] = (
+                    _accumulate_relion_x_half_per_particle_launches(
+                        jnp.asarray(summed, dtype=jnp.complex64),
+                        jnp.asarray(ctf_probs, dtype=jnp.float32),
+                        jnp.asarray(arrays["mstep_rotations"]),
+                        arrays["actual_counts"],
+                        Ft_y_total[class_index],
+                        Ft_ctf_total[class_index],
+                        window_indices=mstep_window_indices,
+                        image_shape=image_shape,
+                        volume_shape=recon_volume_shape,
+                        disc_type="linear_interp",
+                        half_volume=use_half_volume_mstep,
+                        max_r=float(current_size // 2) if use_window else None,
+                        winner_take_all=winner_take_all,
+                        strict_particle_order=False,
+                        log_label_prefix=f"kclass{class_index + 1}-particle-xhalf",
+                    )
+                )
+            elif active_flat_rows_chunked:
                 if use_window:
                     Ft_y_total[class_index], Ft_ctf_total[class_index] = (
                         _accumulate_active_flat_rows_adjoint_chunked(
@@ -17279,6 +18598,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                 accumulate_noise
                 and bucket_uses_compact_pairs
                 and not reuse_compact_noise_sums
+                and not native_dual_weighted_sums
                 and not compact_noise_sums_match_mstep
             ):
                 # The compact-pair noise path recomputes weighted image sums with
@@ -17305,7 +18625,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         noise_probs_sum_t = probs_sum_t_jax
                         compact_pair_noise_sum_reuses += 1
                         compact_pair_noise_ctf_sum_reuses += 1
-                    elif reuse_compact_noise_sums:
+                    elif reuse_compact_noise_sums or native_dual_weighted_sums:
                         if summed_masked_noise_precomputed is None:
                             summed_masked_noise = _compact_pair_weighted_image_sums(
                                 noise_probs,
@@ -17315,6 +18635,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                                 shifted_noise_split,
                                 n_rotation_rows=class_bucket_size,
                                 allow_pair_sparse=compact_pair_pair_sparse_effective,
+                                relion_x_half=use_relion_x_half_mstep,
                             )
                         else:
                             summed_masked_noise = summed_masked_noise_precomputed
@@ -17402,7 +18723,12 @@ def compute_k_class_pass2_stats_sparse_fused(
                         np.asarray(bucket_group_ids, dtype=np.int64),
                         np.asarray(scale_aa_per_image, dtype=np.float64),
                     )
-                if bucket_uses_active_rows:
+                if block_noise_shells_precomputed is not None:
+                    flat_proj_for_noise = None
+                    flat_proj_abs2_for_noise = None
+                    flat_summed_masked_noise = None
+                    flat_ctf_probs_for_noise = None
+                elif bucket_uses_active_rows:
                     flat_image_indices = None
                     if mstep_active_indices is None:
                         noise_active_indices, noise_active_mask, noise_active_count = (
@@ -17484,7 +18810,16 @@ def compute_k_class_pass2_stats_sparse_fused(
                         noise_variance_for_noise.dtype,
                         summed_masked_noise.dtype,
                     )
-                if bucket_uses_active_rows and bucket_uses_compact_pairs:
+                if block_noise_shells_precomputed is not None:
+                    noise_wsum_total[class_index] += np.asarray(
+                        block_noise_shells_precomputed,
+                        dtype=np.float64,
+                    )
+                    noise_norm_correction_total[class_index][image_indices] += np.asarray(
+                        block_norm_residual_precomputed,
+                        dtype=np.float64,
+                    )
+                elif bucket_uses_active_rows and bucket_uses_compact_pairs:
                     block_noise_shells, block_norm_residual = _compute_active_noise_rows_chunked(
                         proj_for_noise_by_class[class_index],
                         proj_abs2_by_class[class_index],
@@ -17914,6 +19249,12 @@ def compute_k_class_pass2_stats_sparse_fused(
         "sparse_kclass_raw_host_staging_peak_bytes": np.int64(raw_host_staging_peak_bytes),
         "sparse_kclass_raw_host_staging_s": np.float64(raw_host_staging_s),
         "sparse_kclass_exact_relion_gaussian": bool(use_exact_relion_gaussian),
+        "sparse_kclass_relion_fine_diff2_fused_ffi": bool(
+            use_relion_fine_diff2_fused_ffi
+        ),
+        "sparse_kclass_relion_f32_fine_posterior": bool(
+            use_relion_f32_fine_posterior
+        ),
         "sparse_kclass_compact_pair_check_rows": np.int64(compact_pair_check_rows),
         "sparse_kclass_compact_pair_check_finite_mismatches": np.int64(
             compact_pair_check_finite_mismatches,
@@ -17930,6 +19271,8 @@ def compute_k_class_pass2_stats_sparse_fused(
         "sparse_kclass_mstep_class_posterior_sums": class_posterior_sums_mstep.astype(np.float64, copy=True),
         "sparse_kclass_mstep_class_posterior_sum_total": np.float64(np.sum(class_posterior_sums_mstep)),
         "sparse_kclass_compact_pairs": bool(compact_pairs),
+        "sparse_kclass_native_dual_weighted_sums": bool(native_dual_weighted_sums),
+        "sparse_kclass_fused_mstep_noise": bool(fused_mstep_noise),
         "sparse_kclass_compact_pair_mstep_pair_sparse_requested": bool(
             compact_pair_pair_sparse_requested,
         ),

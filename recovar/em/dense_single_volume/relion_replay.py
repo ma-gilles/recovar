@@ -809,11 +809,13 @@ def apply_iter_replay_overrides(
             _relion_offset_range,
             _relion_offset_step,
             n_classes=n_classes,
+            source_units_per_pixel=_px,
         ).astype(runtime_dtype)
         _state_prior_translations = _translation_grid_for_class_count(
             float(state.translation_range),
             float(state.translation_step),
             n_classes=n_classes,
+            source_units_per_pixel=_px,
         ).astype(runtime_dtype)
         _translation_grid_differs = _state_prior_translations.shape != _replay_prior_translations_np.shape
         if not _translation_grid_differs:

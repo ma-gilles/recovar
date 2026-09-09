@@ -22,12 +22,14 @@ module is the pure orchestrator.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Sequence
 
 import numpy as np
 
+from ..dense_single_volume.mean_helpers import _relion_optimizer_average_pmax
 from .m_step import vdam_m_step
 from .schedules import (
     DEFAULT_GRAD_EM_ITERS,
@@ -65,6 +67,26 @@ IterArtifactSink = Callable[[InitialModelState, int, dict], None]
 PostMstepUpdateFn = Callable[[InitialModelState, int, dict], InitialModelState]
 
 
+def _resolve_phase_lengths(
+    nr_iter: int,
+    grad_ini_frac: float,
+    grad_fin_frac: float,
+    phase_lengths: VdamPhaseLengths | None,
+) -> VdamPhaseLengths:
+    if phase_lengths is None:
+        return compute_phase_lengths(nr_iter, grad_ini_frac, grad_fin_frac)
+    if not isinstance(phase_lengths, VdamPhaseLengths):
+        raise TypeError("phase_lengths must be a VdamPhaseLengths instance")
+    values = (
+        int(phase_lengths.grad_ini_iter),
+        int(phase_lengths.grad_inbetween_iter),
+        int(phase_lengths.grad_fin_iter),
+    )
+    if any(value < 0 for value in values) or sum(values) != int(nr_iter):
+        raise ValueError("phase_lengths must be non-negative and sum to nr_iter")
+    return phase_lengths
+
+
 def refresh_tau2_from_projector_power(
     state: InitialModelState,
     *,
@@ -73,13 +95,16 @@ def refresh_tau2_from_projector_power(
 ) -> InitialModelState:
     """``MlModel::setFourierTransformMaps(!fix_tau)``."""
     from recovar.relion_bind import _relion_bind_core as bind
+    from recovar.utils.helpers import recovar_volume_to_relion
 
     current_size = int(state.current_size if state.current_size > 0 else state.ori_size)
     new_tau2 = np.asarray(state.tau2_class, dtype=np.float64).copy()
     for k in range(int(state.K)):
         new_tau2[k] = np.asarray(
             bind.vdam_projector_power_spectrum(
-                np.asarray(state.Iref[k], dtype=np.float64),
+                np.ascontiguousarray(
+                    recovar_volume_to_relion(np.asarray(state.Iref[k], dtype=np.float64))
+                ),
                 int(state.ori_size),
                 int(padding_factor),
                 int(interpolator),
@@ -162,6 +187,69 @@ def _dump_noise_failure_meta(state: InitialModelState, meta: dict, summaries: Se
     return str(dump_path)
 
 
+def _maybe_dump_noise_update_boundary(
+    state: InitialModelState,
+    updated_state: InitialModelState,
+    *,
+    wsum_sigma2_noise: np.ndarray,
+    wsum_img_power: np.ndarray,
+    noise_sumw: float,
+    wsum_noise_a2: np.ndarray | None = None,
+    wsum_noise_xa: np.ndarray | None = None,
+) -> str | None:
+    """Write VDAM noise sufficient statistics only when explicitly requested."""
+
+    dump_root = os.environ.get("RECOVAR_INITIALMODEL_NOISE_UPDATE_DUMP_DIR")
+    if not dump_root:
+        return None
+    requested = os.environ.get("RECOVAR_INITIALMODEL_NOISE_UPDATE_DUMP_ITERATION")
+    if requested:
+        requested_iterations = {int(token.strip()) for token in requested.split(",") if token.strip()}
+        if int(state.iter) not in requested_iterations:
+            return None
+
+    from recovar.em.dense_single_volume.relion_metadata import (
+        _relion_half_plane_shell_counts,
+    )
+
+    dump_dir = Path(dump_root)
+    dump_dir.mkdir(parents=True, exist_ok=True)
+    dump_path = dump_dir / f"initialmodel_noise_update_it{int(state.iter):03d}.npz"
+    if dump_path.exists():
+        raise ValueError(f"refusing to overwrite {dump_path}")
+    n4 = float(int(state.ori_size) ** 4)
+    old_noise = np.asarray(state.sigma2_noise, dtype=np.float64)[0] * n4
+    new_noise = np.asarray(updated_state.sigma2_noise, dtype=np.float64)[0] * n4
+    residual = np.asarray(wsum_sigma2_noise, dtype=np.float64)
+    image_power = np.asarray(wsum_img_power, dtype=np.float64)
+    payload = {
+        "schema": np.asarray("recovar.initialmodel.noise_update_boundary.v1"),
+        "iteration": np.asarray([int(state.iter)], dtype=np.int32),
+        "current_size": np.asarray([int(state.current_size)], dtype=np.int32),
+        "image_shape": np.asarray([int(state.ori_size), int(state.ori_size)], dtype=np.int32),
+        "relion_half_plane_shell_counts": _relion_half_plane_shell_counts(
+            (int(state.ori_size), int(state.ori_size))
+        ),
+        "half0_wsum_sigma2_noise": residual,
+        "half0_wsum_img_power": image_power,
+        "half0_wsum_total": residual + image_power,
+        "half0_sumw": np.asarray([float(noise_sumw)], dtype=np.float64),
+        "half0_previous_sigma2_noise": old_noise,
+        "half0_sigma2_noise": new_noise,
+    }
+    if wsum_noise_a2 is not None or wsum_noise_xa is not None:
+        if wsum_noise_a2 is None or wsum_noise_xa is None:
+            raise ValueError("noise split diagnostics require both wsum_noise_a2 and wsum_noise_xa")
+        noise_a2 = np.asarray(wsum_noise_a2, dtype=np.float64)
+        noise_xa = np.asarray(wsum_noise_xa, dtype=np.float64)
+        if noise_a2.shape != residual.shape or noise_xa.shape != residual.shape:
+            raise ValueError("noise split diagnostics must match the noise shell topology")
+        payload["half0_wsum_noise_a2"] = noise_a2
+        payload["half0_wsum_noise_xa"] = noise_xa
+    np.savez_compressed(dump_path, **payload)
+    return str(dump_path)
+
+
 def update_noise_from_estep_meta(
     state: InitialModelState,
     meta: dict,
@@ -172,6 +260,8 @@ def update_noise_from_estep_meta(
     """Update ``sigma2_noise`` from E-step weighted sums (engine units → RELION /N⁴)."""
     wsum_sigma2_noise = _posterior_sums_from_meta(meta, "wsum_sigma2_noise")
     wsum_img_power = _posterior_sums_from_meta(meta, "wsum_img_power")
+    wsum_noise_a2 = _posterior_sums_from_meta(meta, "wsum_noise_a2")
+    wsum_noise_xa = _posterior_sums_from_meta(meta, "wsum_noise_xa")
     noise_sumw = _scalar_sum_from_meta(meta, "noise_sumw")
     if wsum_sigma2_noise is None or wsum_img_power is None or noise_sumw is None:
         return state
@@ -212,6 +302,15 @@ def update_noise_from_estep_meta(
     if new_sigma2.ndim != 2 or new_sigma2.shape[1] != expected_shells:
         raise ValueError(f"sigma2_noise must have shape (G, {expected_shells}), got {new_sigma2.shape}")
     new_state.sigma2_noise = new_sigma2 * my_mu + (1.0 - my_mu) * sigma2_relion_units[None, :]
+    _maybe_dump_noise_update_boundary(
+        state,
+        new_state,
+        wsum_sigma2_noise=wsum_sigma2_noise,
+        wsum_img_power=wsum_img_power,
+        noise_sumw=float(noise_sumw),
+        wsum_noise_a2=wsum_noise_a2,
+        wsum_noise_xa=wsum_noise_xa,
+    )
     return new_state
 
 
@@ -267,9 +366,15 @@ def update_probabilities_from_estep_meta(
         wsum_sigma2_offset = float(wsum_sigma2_offset)
         if not np.isfinite(wsum_sigma2_offset) or wsum_sigma2_offset < 0.0:
             raise ValueError("wsum_sigma2_offset must be non-negative and finite")
+        sigma2_offset_sumw = float(meta.get("sigma2_offset_sumw", sum_weight))
+        if not np.isfinite(sigma2_offset_sumw) or sigma2_offset_sumw <= 0.0:
+            raise ValueError("sigma2_offset_sumw must be positive and finite")
         sigma2_offset = float(state.sigma2_offset) * my_mu
         # RELION divides by 2*sum_weight for 2D particle translations.
-        sigma2_offset += (1.0 - my_mu) * wsum_sigma2_offset / (2.0 * sum_weight)
+        # Its sum_weight is accumulated from the same significant-pruned
+        # reconstruction weights as wsum_sigma2_offset, rather than from the
+        # unpruned per-image class responsibilities.
+        sigma2_offset += (1.0 - my_mu) * wsum_sigma2_offset / (2.0 * sigma2_offset_sumw)
         new_state.sigma2_offset = max(float(sigma2_offset), MIN_SIGMA2_OFFSET_ANGSTROM2)
 
     return new_state
@@ -285,6 +390,7 @@ def default_schedule_update(
     nr_particles: int,
     tau2_fudge_arg: float,
     grad_em_iters: int = DEFAULT_GRAD_EM_ITERS,
+    grad_stepsize: float | None = None,
 ) -> InitialModelState:
     """Apply the three VDAM schedules to `state.iter=iter`."""
     subset_size = compute_subset_size(
@@ -304,6 +410,7 @@ def default_schedule_update(
         phase_lengths=phase_lengths,
         is_3d_model=True,
         ref_dim=3,
+        grad_stepsize=grad_stepsize,
     )
     tau2_fudge = compute_tau2_fudge(
         iter=iter,
@@ -378,9 +485,21 @@ def update_image_size_and_resolution_pointers(state: InitialModelState) -> Initi
 def _ave_pmax_from_meta(meta: dict) -> float | None:
     pmax = meta.get("max_posterior_per_image")
     if pmax is not None:
-        arr = np.asarray(pmax, dtype=np.float64)
+        arr = np.asarray(pmax, dtype=np.float32)
         if arr.size:
-            return float(np.mean(arr))
+            # RELION accumulates Pmax over all VDAM pseudo-halfsets, then
+            # divides by the retained M-step posterior mass (rather than the
+            # particle count).  Treat the two pseudo-halfsets as one optimiser
+            # population when reusing the Class3D normalization helper.
+            normalization_mass = meta.get("class_posterior_sums")
+            if normalization_mass is not None:
+                normalization_mass = float(np.sum(np.asarray(normalization_mass, dtype=np.float64)))
+            elif meta.get("noise_sumw") is not None:
+                normalization_mass = float(meta["noise_sumw"])
+            if normalization_mass is not None:
+                _, average, _ = _relion_optimizer_average_pmax([arr], [normalization_mass])
+                return average
+            return float(np.mean(arr, dtype=np.float64))
 
     weighted_sum = 0.0
     count = 0
@@ -417,9 +536,21 @@ def select_subset_for_iter(
     particles if ``-1``), stable-sorts by optics group, and assigns pseudo-
     halfset ids.
     """
-    if particle_order is None:
+    stored_order = state.sorted_particle_ids
+    stored_part_ids = state.sorted_particle_part_ids
+    if stored_order is not None or stored_part_ids is not None:
+        if stored_order is None or stored_part_ids is None:
+            raise ValueError("stored RELION particle order is incomplete")
+        base_order = np.asarray(stored_order, dtype=np.int64)
+        base_halfset_ids = np.asarray(stored_part_ids, dtype=np.int64)
+        if base_order.shape != (int(nr_particles),) or base_halfset_ids.shape != base_order.shape:
+            raise ValueError(
+                "stored RELION particle order must match nr_particles: "
+                f"{base_order.shape}, {base_halfset_ids.shape} != ({int(nr_particles)},)",
+            )
+    elif particle_order is None:
         base_order = np.arange(int(nr_particles), dtype=np.int64)
-        base_halfset_ids = base_order
+        base_halfset_ids = np.arange(int(nr_particles), dtype=np.int64)
     else:
         base_order = np.asarray(particle_order, dtype=np.int64)
         if base_order.shape != (int(nr_particles),):
@@ -430,14 +561,18 @@ def select_subset_for_iter(
             or np.any(base_order >= nr_particles)
         ):
             raise ValueError("particle_order must be a permutation of particle ids [0, nr_particles)")
-        # RELION's InitialModel pseudo-halfset routing uses the global particle
-        # table row from ``mydata.sorted_idx``:
+        # RELION's InitialModel pseudo-halfset routing uses Experiment's
+        # internal ``part_id``, i.e. the position in its read-order particle
+        # table, not RECOVAR's original input-table row:
         # ``iproj_offset = (part_id % 2) * nr_classes`` in storeWeightedSums.
-        # ``particle_order`` is RECOVAR's copy of that sorted_idx list, so use
-        # the dataset-row parity rather than the sorted-position parity.
-        base_halfset_ids = base_order
+        # ``particle_order`` maps those internal positions to RECOVAR dataset
+        # rows, so parity must travel with the positions through shuffling.
+        base_halfset_ids = np.arange(int(nr_particles), dtype=np.int64)
 
-    if int(random_seed) == 0:
+    subset_size = state.subset_size if state.subset_size != -1 else nr_particles
+    doing_subset = 0 < int(subset_size) < int(nr_particles)
+    first_randomisation = stored_order is None
+    if int(random_seed) == 0 or (not first_randomisation and not doing_subset):
         shuffled = base_order.copy()
         shuffled_halfset_ids = base_halfset_ids.copy()
     else:
@@ -452,7 +587,19 @@ def select_subset_for_iter(
             permutation = randomise_particles_order(nr_particles, rnd_unif_factory(random_seed + iter))
         shuffled = base_order[permutation]
         shuffled_halfset_ids = base_halfset_ids[permutation]
-    subset_size = state.subset_size if state.subset_size != -1 else nr_particles
+
+    # randomiseParticlesOrder stable-sorts the selected prefix in place before
+    # the expectation step.  Persist that complete vector (including its
+    # untouched tail) because the next true-subset iteration shuffles it again.
+    if int(subset_size) > 0:
+        prefix = shuffled[: int(subset_size)]
+        keys = np.asarray(
+            [optics_group_by_particle[int(particle_id)] for particle_id in prefix],
+            dtype=np.int64,
+        )
+        stable_order = np.argsort(keys, kind="stable")
+        shuffled[: int(subset_size)] = prefix[stable_order]
+        shuffled_halfset_ids[: int(subset_size)] = shuffled_halfset_ids[: int(subset_size)][stable_order]
     # `-1` (all particles) still needs to be translated via select_vdam_subset
     pseudo = do_grad and pseudo_halfsets_active(gradient_refine=True, do_split_random_halves=False)
     plan = select_vdam_subset(
@@ -465,8 +612,110 @@ def select_subset_for_iter(
     new_state = replace(state)
     new_state.subset_particle_ids = plan.particle_ids
     new_state.subset_halfset_ids = plan.halfset_ids
+    new_state.sorted_particle_ids = shuffled
+    new_state.sorted_particle_part_ids = shuffled_halfset_ids
     new_state.pseudo_halfsets = pseudo
     return new_state
+
+
+def restore_subset_order_for_continuation(
+    state: InitialModelState,
+    *,
+    through_iteration: int,
+    nr_particles: int,
+    optics_group_by_particle: Sequence[int],
+    grad_ini_subset_size: int,
+    grad_fin_subset_size: int,
+    random_seed: int,
+    rnd_unif_factory: Callable[[int], RndUnifFn],
+    particle_order: Sequence[int] | None = None,
+    grad_ini_frac: float = 0.3,
+    grad_fin_frac: float = 0.2,
+    grad_em_iters: int = DEFAULT_GRAD_EM_ITERS,
+    phase_lengths: VdamPhaseLengths | None = None,
+) -> InitialModelState:
+    """Rebuild RELION's transient ``sorted_idx`` at a restart boundary.
+
+    InitialModel mutates ``Experiment::sorted_idx`` after every deterministic
+    shuffle and stable optics-group sort, but RELION does not serialize that
+    vector in an optimiser checkpoint.  A bounded diagnostic continuation
+    must therefore replay the inexpensive ordering chronology from iteration
+    one; starting the next shuffle from the input order selects a different
+    particle subset even when every scientific checkpoint array is exact.
+
+    The replay is valid while convergence has not occurred because subset
+    scheduling is then a pure function of the command and iteration.  The
+    onset iteration of convergence is not serialized, so fail closed instead
+    of guessing when either convergence flag is already set.
+    """
+
+    through_iteration = int(through_iteration)
+    nr_particles = int(nr_particles)
+    if through_iteration < 0 or through_iteration > int(state.nr_iter):
+        raise ValueError("continuation iteration must be between 0 and nr_iter")
+    if int(state.iter) != through_iteration:
+        raise ValueError(
+            "continuation state iteration does not match the requested order replay"
+        )
+    if nr_particles <= 0:
+        raise ValueError("continuation particle count must be positive")
+    if state.sorted_particle_ids is not None or state.sorted_particle_part_ids is not None:
+        raise ValueError("continuation state already contains a serialized particle order")
+    if through_iteration and (state.has_converged or state.grad_has_converged):
+        raise ValueError(
+            "cannot reconstruct particle order after an unrecorded convergence boundary"
+        )
+
+    phase_lengths = _resolve_phase_lengths(
+        int(state.nr_iter),
+        float(grad_ini_frac),
+        float(grad_fin_frac),
+        phase_lengths,
+    )
+    order_state = replace(
+        state,
+        subset_particle_ids=None,
+        subset_halfset_ids=None,
+        sorted_particle_ids=None,
+        sorted_particle_part_ids=None,
+    )
+    for iteration in range(1, through_iteration + 1):
+        subset_size = compute_subset_size(
+            iter=iteration,
+            phase_lengths=phase_lengths,
+            grad_ini_subset_size=int(grad_ini_subset_size),
+            grad_fin_subset_size=int(grad_fin_subset_size),
+            nr_particles=nr_particles,
+            nr_iter=int(state.nr_iter),
+            grad_em_iters=int(grad_em_iters),
+            has_converged=False,
+            grad_has_converged=False,
+            nr_classes=int(state.K),
+        )
+        order_state = replace(order_state, subset_size=int(subset_size))
+        do_grad = (int(state.nr_iter) - iteration) >= int(grad_em_iters)
+        order_state = select_subset_for_iter(
+            order_state,
+            iter=iteration,
+            nr_particles=nr_particles,
+            optics_group_by_particle=optics_group_by_particle,
+            rnd_unif_factory=rnd_unif_factory,
+            random_seed=int(random_seed),
+            do_grad=do_grad,
+            particle_order=particle_order,
+        )
+
+    if through_iteration and int(order_state.subset_size) != int(state.subset_size):
+        raise ValueError(
+            "replayed continuation subset size differs from the native checkpoint"
+        )
+    restored = replace(state)
+    restored.subset_particle_ids = order_state.subset_particle_ids
+    restored.subset_halfset_ids = order_state.subset_halfset_ids
+    restored.sorted_particle_ids = order_state.sorted_particle_ids
+    restored.sorted_particle_part_ids = order_state.sorted_particle_part_ids
+    restored.pseudo_halfsets = order_state.pseudo_halfsets
+    return restored
 
 
 def relion_solvent_mask(
@@ -548,16 +797,53 @@ def run_vdam_iterations(
     particle_order: Sequence[int] | None = None,
     grad_ini_frac: float = 0.3,
     grad_fin_frac: float = 0.2,
+    phase_lengths: VdamPhaseLengths | None = None,
+    grad_stepsize: float | None = None,
     mu: float = DEFAULT_GRAD_MU,
     refresh_tau2_from_projector: bool = True,
+    projector_refresh_fn: Callable[..., InitialModelState] | None = None,
     projector_padding_factor: int = 1,
+    mstep_backend: str = "native",
     projector_interpolator: int = 1,
+    start_iteration: int = 0,
+    diagnostic_stop_after_iteration: int | None = None,
 ) -> InitialModelState:
     """Full VDAM loop; ``state`` must come from ``initialise_denovo_state`` + ``seed_noise_from_mavg``."""
-    phase_lengths = compute_phase_lengths(state.nr_iter, grad_ini_frac, grad_fin_frac)
+    phase_lengths = _resolve_phase_lengths(
+        int(state.nr_iter),
+        float(grad_ini_frac),
+        float(grad_fin_frac),
+        phase_lengths,
+    )
+    start_iteration = int(start_iteration)
+    if start_iteration < 0 or start_iteration >= int(state.nr_iter):
+        raise ValueError("start_iteration must be between 0 and state.nr_iter - 1")
+    if int(state.iter) != start_iteration:
+        raise ValueError(
+            f"state.iter must equal start_iteration ({int(state.iter)} != {start_iteration})"
+        )
+    final_iteration = int(state.nr_iter)
+    if diagnostic_stop_after_iteration is not None:
+        final_iteration = int(diagnostic_stop_after_iteration)
+        if final_iteration <= start_iteration or final_iteration > int(state.nr_iter):
+            raise ValueError(
+                "diagnostic_stop_after_iteration must be greater than start_iteration "
+                "and no greater than state.nr_iter"
+            )
     current = state
+    profile_iterations = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
 
-    for it in range(1, state.nr_iter + 1):
+    for it in range(start_iteration + 1, final_iteration + 1):
+        iteration_started = time.perf_counter()
+        stage_started = iteration_started
+        iteration_profile: dict[str, float] = {}
+
+        def _record_stage(name: str) -> None:
+            nonlocal stage_started
+            now = time.perf_counter()
+            iteration_profile[f"{name}_time_s"] = float(now - stage_started)
+            stage_started = now
+
         do_grad = ((state.nr_iter - it) >= grad_em_iters) and not current.has_converged
 
         current = default_schedule_update(
@@ -569,7 +855,10 @@ def run_vdam_iterations(
             nr_particles=nr_particles,
             tau2_fudge_arg=tau2_fudge_arg,
             grad_em_iters=grad_em_iters,
+            grad_stepsize=grad_stepsize,
         )
+        if profile_iterations:
+            _record_stage("schedule")
 
         current = select_subset_for_iter(
             current,
@@ -581,14 +870,19 @@ def run_vdam_iterations(
             do_grad=do_grad,
             particle_order=particle_order,
         )
+        if profile_iterations:
+            _record_stage("subset")
 
         current = update_image_size_and_resolution_pointers(current)
         if refresh_tau2_from_projector:
-            current = refresh_tau2_from_projector_power(
+            refresh = projector_refresh_fn or refresh_tau2_from_projector_power
+            current = refresh(
                 current,
                 padding_factor=projector_padding_factor,
                 interpolator=projector_interpolator,
             )
+        if profile_iterations:
+            _record_stage("projector_refresh")
 
         # E-step: caller-supplied closure over the data loader + dense kernels
         accumulators, meta = expectation_step(
@@ -596,6 +890,8 @@ def run_vdam_iterations(
             current.subset_particle_ids,
             current.subset_halfset_ids,
         )
+        if profile_iterations:
+            _record_stage("expectation")
 
         # M-step
         current = vdam_m_step(
@@ -603,7 +899,11 @@ def run_vdam_iterations(
             accumulators=accumulators,
             grad_current_stepsize=current.grad_current_stepsize,
             tau2_fudge_factor=current.tau2_fudge_factor,
+            padding_factor=projector_padding_factor,
+            mstep_backend=mstep_backend,
         )
+        if profile_iterations:
+            _record_stage("mstep")
         current = update_probabilities_from_estep_meta(current, meta, do_grad=do_grad, mu=mu)
         current = update_noise_from_estep_meta(current, meta, do_grad=do_grad, mu=mu)
         ave_pmax = _ave_pmax_from_meta(meta)
@@ -613,6 +913,8 @@ def run_vdam_iterations(
             current = post_mstep_update(current, it, meta)
 
         current = update_current_resolution_from_data_vs_prior(current)
+        if profile_iterations:
+            _record_stage("state_update")
         meta = dict(meta)
         meta.update(
             {
@@ -620,9 +922,18 @@ def run_vdam_iterations(
                 "current_resolution": float(current.current_resolution),
                 "current_resolution_shell": int(current.current_resolution_shell),
                 "ave_Pmax": float(current.ave_Pmax),
+                "subset_size": int(current.subset_size),
             }
         )
+        if profile_iterations:
+            iteration_profile["pre_artifact_time_s"] = float(time.perf_counter() - iteration_started)
+            meta["vdam_iteration_profile_summary"] = iteration_profile
+            stage_started = time.perf_counter()
         iter_artifact_sink(current, it, meta)
+        if profile_iterations:
+            _record_stage("artifact")
+            iteration_profile["total_time_s"] = float(time.perf_counter() - iteration_started)
+            print(f"VDAM iteration {it} profile: {iteration_profile}", flush=True)
 
         # RECOVAR_CLEAR_JAX_CACHES_PER_ITER=1: release scratch buffers to avoid
         # CUFFT_ALLOC_FAILED at 50k×256² (forces next-iter recompile).

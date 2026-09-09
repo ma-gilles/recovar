@@ -60,6 +60,11 @@ class InitialModelState:
 
     subset_particle_ids: Optional[np.ndarray] = None
     subset_halfset_ids: Optional[np.ndarray] = None
+    # RELION mutates Experiment::sorted_idx in place.  Keep both the RECOVAR
+    # dataset rows and their corresponding Experiment part_id positions so a
+    # later subset shuffle starts from the previous iteration's exact order.
+    sorted_particle_ids: Optional[np.ndarray] = None
+    sorted_particle_part_ids: Optional[np.ndarray] = None
 
     grad_current_stepsize: float = 0.5
     tau2_fudge_factor: float = 1.0

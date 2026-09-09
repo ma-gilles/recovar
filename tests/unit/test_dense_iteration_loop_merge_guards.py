@@ -7,8 +7,8 @@ re-running the expensive parity fixtures.
 
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass
 import inspect
+from dataclasses import fields, is_dataclass
 from types import SimpleNamespace
 
 import numpy as np
@@ -169,6 +169,9 @@ def test_local_search_keeps_relion_x_half_mstep_contract():
     assert "mstep_full_half_axis=0 if local_relion_x_half_mstep else None" in source
     assert "mstep_accumulator_shape=(" in source
     assert "relion_backprojector_volume_shape(" in source
+    assert "reconstruction_current_size_for_engine = (" in source
+    assert "if model_current_size_for_engine is None" in source
+    assert "else model_current_size_for_engine" in source
     assert "current_size=reconstruction_current_size_for_engine" in source[
         source.index("mstep_accumulator_shape=(") :
     ]
@@ -182,6 +185,7 @@ def test_empty_k1_local_or_adaptive_half_keeps_relion_x_half_shape_contract():
     assert "empty_k1_x_half_mstep = (" in empty_source
     assert "and (use_local or use_adaptive)" in empty_source
     assert "relion_backprojector_volume_shape(" in empty_source
+    assert "current_size=(" in empty_source
     assert "if model_current_size_for_engine is None" in empty_source
     assert "else model_current_size_for_engine" in empty_source
     assert "half_volume_accumulator_shape(empty_mstep_accumulator_shape)" in empty_source
@@ -362,6 +366,7 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
         current_translation_range=1.0,
         disc_type="linear_interp",
         cs_for_engine=8,
+        model_current_size_for_engine=8,
         local_pass1_current_size=8,
         image_corrections_k=None,
         scale_corrections_k=None,
@@ -582,6 +587,7 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
         current_translation_range=1.0,
         disc_type="linear_interp",
         cs_for_engine=8,
+        model_current_size_for_engine=8,
         local_pass1_current_size=8,
         image_corrections_k=None,
         scale_corrections_k=None,

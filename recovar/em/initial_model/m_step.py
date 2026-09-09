@@ -1,14 +1,15 @@
 """VDAM M-step: gradient moment update + reference reconstruction.
 
-Routes each step through the RELION C++ binding (backprojector.cpp:1933-2054)
-for bit-identical parity: reweightGrad, getFristMoment, getSecondMoment,
-applyMomenta, updateSSNRarrays, reconstructGrad.
+Defaults to the RELION C++ moment/reconstruction transaction. The opt-in JAX
+backend retains the same state layout and native diagnostic boundaries.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, replace
-from typing import Optional
+from pathlib import Path
+from typing import Literal, Optional
 
 import numpy as np
 
@@ -16,6 +17,15 @@ from .state import InitialModelState, half_slot_index
 
 XMIPP_EQUAL_ACCURACY: float = 1e-6
 RELION_DEFAULT_GRAD_MIN_RESOL_ANGSTROM: float = 20.0
+VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_SECOND_MOMENT_REPLAY_BIN"
+VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV = "RECOVAR_VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER"
+VDAM_NATIVE_FIRST_MOMENT_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_FIRST_MOMENT_REPLAY_BIN"
+VDAM_NATIVE_FIRST_MOMENT_REPLAY_ITER_ENV = "RECOVAR_VDAM_NATIVE_FIRST_MOMENT_REPLAY_ITER"
+VDAM_NATIVE_BPREF_DATA_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_BPREF_DATA_REPLAY_BIN"
+VDAM_NATIVE_BPREF_WEIGHT_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_BPREF_WEIGHT_REPLAY_BIN"
+VDAM_NATIVE_BPREF_REPLAY_ITER_ENV = "RECOVAR_VDAM_NATIVE_BPREF_REPLAY_ITER"
+VDAM_NATIVE_IREF_INPUT_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_IREF_INPUT_REPLAY_BIN"
+VDAM_NATIVE_IREF_INPUT_REPLAY_ITER_ENV = "RECOVAR_VDAM_NATIVE_IREF_INPUT_REPLAY_ITER"
 
 
 def _get_bindings():
@@ -86,6 +96,269 @@ def _has_relion_reconstruction_weight(state: InitialModelState, k: int, accum_h0
     return float(np.sum(np.asarray(accum_h0.weight, dtype=np.float64))) > XMIPP_EQUAL_ACCURACY
 
 
+def _replay_iteration_selected(env_name: str, iteration: int) -> bool:
+    """Return whether an integer/``all`` diagnostic selector matches."""
+
+    replay_iteration_value = os.environ.get(env_name, "1").strip()
+    replay_all_iterations = replay_iteration_value.lower() in {"all", "*"}
+    try:
+        replay_iteration = None if replay_all_iterations else int(replay_iteration_value)
+    except ValueError as exc:
+        raise ValueError(
+            f"{env_name} must be an integer or 'all'"
+        ) from exc
+    return replay_iteration is None or int(iteration) == replay_iteration
+
+
+def _read_native_complex_replay(path: Path, *, expected_shape: tuple[int, ...]) -> np.ndarray:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    with path.open("rb") as stream:
+        shape = np.fromfile(stream, dtype=np.int64, count=3)
+        values = np.fromfile(stream, dtype=np.float64)
+    if shape.size != 3 or np.any(shape <= 0):
+        raise ValueError(f"{path}: invalid three-int64 shape header")
+    value_count = int(np.prod(shape, dtype=np.int64))
+    if values.size != 2 * value_count:
+        raise ValueError(
+            f"{path}: expected {2 * value_count} float64 components, got {values.size}"
+        )
+    replay = values.view(np.complex128).reshape(tuple(int(value) for value in shape))
+    if replay.shape != expected_shape:
+        raise ValueError(f"{path}: replay shape {replay.shape} does not match {expected_shape}")
+    if not np.all(np.isfinite(replay)):
+        raise ValueError(f"{path}: replay contains non-finite values")
+    return replay
+
+
+def _read_native_real_replay(path: Path, *, expected_shape: tuple[int, ...]) -> np.ndarray:
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    with path.open("rb") as stream:
+        shape = np.fromfile(stream, dtype=np.int64, count=3)
+        replay = np.fromfile(stream, dtype=np.float64)
+    if shape.size != 3 or np.any(shape <= 0):
+        raise ValueError(f"{path}: invalid three-int64 shape header")
+    value_count = int(np.prod(shape, dtype=np.int64))
+    if replay.size != value_count:
+        raise ValueError(f"{path}: expected {value_count} float64 values, got {replay.size}")
+    replay = replay.reshape(tuple(int(value) for value in shape))
+    if replay.shape != expected_shape:
+        raise ValueError(f"{path}: replay shape {replay.shape} does not match {expected_shape}")
+    if not np.all(np.isfinite(replay)):
+        raise ValueError(f"{path}: replay contains non-finite values")
+    return replay
+
+
+def _maybe_replay_native_bpref_accumulators(
+    accum_h0: VdamAccumulator,
+    accum_h1: VdamAccumulator | None,
+    *,
+    iteration: int,
+    class_idx: int,
+) -> tuple[VdamAccumulator, VdamAccumulator | None]:
+    """Replay paired native raw BPref buffers for causal diagnosis."""
+
+    data_template = os.environ.get(VDAM_NATIVE_BPREF_DATA_REPLAY_ENV, "").strip()
+    weight_template = os.environ.get(VDAM_NATIVE_BPREF_WEIGHT_REPLAY_ENV, "").strip()
+    if bool(data_template) != bool(weight_template):
+        raise ValueError("native BPref replay requires both data and weight templates")
+    if not data_template or not _replay_iteration_selected(
+        VDAM_NATIVE_BPREF_REPLAY_ITER_ENV, iteration
+    ):
+        return accum_h0, accum_h1
+
+    outputs = []
+    accumulators = (accum_h0,) if accum_h1 is None else (accum_h0, accum_h1)
+    for halfset, accumulator in enumerate(accumulators):
+        fields = {
+            "iteration": int(iteration),
+            "class_idx": int(class_idx),
+            "halfset": halfset,
+            "half_suffix": "" if halfset == 0 else "_h",
+        }
+        data_path = Path(data_template.format(**fields))
+        weight_path = Path(weight_template.format(**fields))
+        outputs.append(
+            replace(
+                accumulator,
+                data=_read_native_complex_replay(
+                    data_path, expected_shape=np.asarray(accumulator.data).shape
+                ),
+                weight=_read_native_real_replay(
+                    weight_path, expected_shape=np.asarray(accumulator.weight).shape
+                ),
+            )
+        )
+    replay_h1 = None if accum_h1 is None else outputs[1]
+    return outputs[0], replay_h1
+
+
+def _maybe_replay_native_reference_input(
+    computed: np.ndarray,
+    *,
+    iteration: int,
+    class_idx: int,
+) -> np.ndarray:
+    """Replay native ``Iref_before`` immediately before reconstruction."""
+
+    replay_template = os.environ.get(VDAM_NATIVE_IREF_INPUT_REPLAY_ENV, "").strip()
+    if not replay_template or not _replay_iteration_selected(
+        VDAM_NATIVE_IREF_INPUT_REPLAY_ITER_ENV, iteration
+    ):
+        return computed
+    replay_path = Path(
+        replay_template.format(iteration=int(iteration), class_idx=int(class_idx))
+    )
+    computed = np.asarray(computed)
+    return _read_native_real_replay(replay_path, expected_shape=computed.shape)
+
+
+def _maybe_replay_native_first_moments(
+    computed_h0: np.ndarray,
+    computed_h1: np.ndarray | None,
+    *,
+    iteration: int,
+    class_idx: int,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Replay paired native ``Igrad1_post`` buffers for causal diagnosis."""
+
+    replay_template = os.environ.get(VDAM_NATIVE_FIRST_MOMENT_REPLAY_ENV, "").strip()
+    if not replay_template or not _replay_iteration_selected(
+        VDAM_NATIVE_FIRST_MOMENT_REPLAY_ITER_ENV, iteration
+    ):
+        return computed_h0, computed_h1
+
+    outputs = []
+    computed_values = (computed_h0,) if computed_h1 is None else (computed_h0, computed_h1)
+    for halfset, computed in enumerate(computed_values):
+        path = Path(
+            replay_template.format(
+                iteration=int(iteration),
+                class_idx=int(class_idx),
+                halfset=halfset,
+                half_suffix="" if halfset == 0 else "_h",
+            )
+        )
+        outputs.append(
+            _read_native_complex_replay(path, expected_shape=np.asarray(computed).shape)
+        )
+    replay_h1 = None if computed_h1 is None else outputs[1]
+    return outputs[0], replay_h1
+
+
+def _maybe_replay_native_second_moment(
+    computed: np.ndarray,
+    *,
+    iteration: int,
+    class_idx: int,
+) -> np.ndarray:
+    """Replay one paired native ``Igrad2_post`` dump for causal diagnosis.
+
+    This is an explicit, fail-closed oracle discriminator. It is inactive by
+    default and is not a production parity mechanism. The path may contain
+    ``{iteration}`` and ``{class_idx}`` placeholders. Setting the iteration
+    selector to ``all`` replays a templated buffer at every M-step.
+    """
+
+    replay_template = os.environ.get(VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV, "").strip()
+    if not replay_template or not _replay_iteration_selected(
+        VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV, iteration
+    ):
+        return computed
+
+    replay_path = Path(
+        replay_template.format(iteration=int(iteration), class_idx=int(class_idx))
+    )
+    computed = np.asarray(computed)
+    return _read_native_complex_replay(replay_path, expected_shape=computed.shape)
+
+
+def _copy_mstep_untouched_slots(values: np.ndarray, updated_slots: tuple[int, ...]) -> np.ndarray:
+    """Allocate independent C-order state, leaving only replaced slots unwritten.
+
+    The caller must fill every listed slot before publishing the new state.
+    In K=1 all large slots are replaced, so none of the previous values need
+    copying. In K-class updates the other classes retain their original bytes.
+    """
+    out = np.empty_like(values, order="C")
+    start = 0
+    for slot in updated_slots:
+        out[start:slot] = values[start:slot]
+        start = slot + 1
+    out[start:] = values[start:]
+    return out
+
+
+def _run_m_step_transaction(
+    transaction,
+    state: InitialModelState,
+    k: int,
+    accum_h0: VdamAccumulator,
+    accum_h1: VdamAccumulator | None,
+    *,
+    grad_current_stepsize: float,
+    tau2_fudge_factor: float,
+    padding_factor: int,
+    r_max: int,
+    min_resol_shell: float,
+) -> InitialModelState:
+    """Apply one shared-layout transaction and preserve state ownership."""
+    from recovar.utils.helpers import recovar_volume_to_relion, relion_volume_to_recovar
+
+    copy_token = os.environ.get("RECOVAR_VDAM_MSTEP_COPY_UNTOUCHED", "0")
+    if copy_token not in {"0", "1"}:
+        raise ValueError("RECOVAR_VDAM_MSTEP_COPY_UNTOUCHED must be 0 or 1")
+    copy_untouched = copy_token == "1"
+    slot_h0 = half_slot_index(k, 0, state.K, state.pseudo_halfsets)
+    slot_h1 = half_slot_index(k, 1, state.K, True) if state.pseudo_halfsets else None
+    effective_stepsize = float(grad_current_stepsize) * (
+        1.0 - np.exp(-float(3 * state.K + 10) * float(np.asarray(state.pdf_class)[k]))
+    )
+    result = transaction(
+        recovar_volume_to_relion(np.asarray(state.Iref[k])),
+        accum_h0.data,
+        accum_h0.weight,
+        accum_h1.data if accum_h1 is not None else None,
+        accum_h1.weight if accum_h1 is not None else None,
+        state.Igrad1[slot_h0],
+        state.Igrad1[slot_h1] if slot_h1 is not None else None,
+        state.Igrad2[k],
+        state.fsc_halves_class[0],
+        state.fsc_halves_class[k],
+        state.tau2_class[k],
+        effective_stepsize,
+        tau2_fudge_factor,
+        state.ori_size,
+        padding_factor,
+        1,
+        r_max,
+        min_resol_shell,
+    )
+    out = replace(state)
+    out.Iref = _copy_mstep_untouched_slots(state.Iref, (k,)) if copy_untouched else state.Iref.copy()
+    out.Iref[k] = relion_volume_to_recovar(np.asarray(result["iref"]))
+    moment_slots = (slot_h0,) if slot_h1 is None else (slot_h0, slot_h1)
+    out.Igrad1 = (
+        _copy_mstep_untouched_slots(state.Igrad1, moment_slots) if copy_untouched else state.Igrad1.copy()
+    )
+    out.Igrad1[slot_h0] = np.asarray(result["mom1_h0"])
+    if slot_h1 is not None:
+        out.Igrad1[slot_h1] = np.asarray(result["mom1_h1"])
+    out.Igrad2 = _copy_mstep_untouched_slots(state.Igrad2, (k,)) if copy_untouched else state.Igrad2.copy()
+    out.Igrad2[k] = np.asarray(result["mom2"])
+    for attribute, key in (
+        ("tau2_class", "tau2"),
+        ("sigma2_class", "sigma2"),
+        ("data_vs_prior_class", "data_vs_prior"),
+        ("fourier_coverage_class", "fourier_coverage"),
+    ):
+        values = getattr(state, attribute).copy()
+        values[k] = np.asarray(result[key], dtype=np.float64)
+        setattr(out, attribute, values)
+    return out
+
+
 def vdam_m_step_single_class(
     state: InitialModelState,
     k: int,
@@ -96,18 +369,28 @@ def vdam_m_step_single_class(
     tau2_fudge_factor: float,
     grad_min_resol_shell: float | None = None,
     padding_factor: int = 1,
+    use_native_transaction: bool = True,
+    mstep_backend: Literal["native", "jax"] = "native",
 ) -> InitialModelState:
     """VDAM M-step for one class (per-class loop matches RELION's binding shape).
 
     Pseudo-halfsets: FSC/noise-power is derived from the halfset-data difference
     in ``applyMomenta``; ``reconstructGrad`` then uses ``mom1_noise_power``.
     """
+    if mstep_backend not in {"native", "jax"}:
+        raise ValueError(f"Unknown mstep_backend: {mstep_backend!r}")
     if not (0 <= k < state.K):
         raise ValueError(f"class index {k} out of range")
     if state.pseudo_halfsets and accum_h1 is None:
         raise ValueError("pseudo_halfsets=True requires accum_h1")
     if not state.pseudo_halfsets and accum_h1 is not None:
         raise ValueError("pseudo_halfsets=False must have accum_h1=None")
+    accum_h0, accum_h1 = _maybe_replay_native_bpref_accumulators(
+        accum_h0,
+        accum_h1,
+        iteration=int(getattr(state, "iter", 0)),
+        class_idx=k,
+    )
     if not _has_relion_reconstruction_weight(state, k, accum_h0):
         return state
 
@@ -118,13 +401,48 @@ def vdam_m_step_single_class(
     # backprojector.h:335/343 EMA defaults
     mu_first, mu_second = 0.9, 0.999
 
-    import os as _os
-
-    _dump_dir = _os.environ.get("RECOVAR_MSTEP_DUMP_DIR")
+    _dump_dir = os.environ.get("RECOVAR_MSTEP_DUMP_DIR")
     _do_dump = _dump_dir is not None and int(getattr(state, "iter", 0)) == int(
-        _os.environ.get("RECOVAR_MSTEP_DUMP_ITER", "1")
+        os.environ.get("RECOVAR_MSTEP_DUMP_ITER", "1")
     )
     _dump_prefix = f"c{k}_" if state.K > 1 else ""
+
+    # Replay and intermediate dump diagnostics retain their original boundaries.
+    replay_requested = any(
+        os.environ.get(name, "").strip()
+        for name in (
+            VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV,
+            VDAM_NATIVE_FIRST_MOMENT_REPLAY_ENV,
+            VDAM_NATIVE_BPREF_DATA_REPLAY_ENV,
+            VDAM_NATIVE_BPREF_WEIGHT_REPLAY_ENV,
+            VDAM_NATIVE_IREF_INPUT_REPLAY_ENV,
+        )
+    )
+    if (
+        use_native_transaction
+        and not _do_dump
+        and not replay_requested
+        and hasattr(bind, "vdam_m_step_transaction")
+    ):
+        transaction = bind.vdam_m_step_transaction
+        if mstep_backend == "jax":
+            if not hasattr(bind, "vdam_first_moment_initializes"):
+                raise RuntimeError("JAX M-step requires the native moment initialization binding")
+            from recovar.em.dense_single_volume.helpers.relion_vdam_mstep import relion_vdam_m_step_host
+
+            transaction = relion_vdam_m_step_host
+        return _run_m_step_transaction(
+            transaction,
+            state,
+            k,
+            accum_h0,
+            accum_h1,
+            grad_current_stepsize=grad_current_stepsize,
+            tau2_fudge_factor=tau2_fudge_factor,
+            padding_factor=padding_factor,
+            r_max=r_max,
+            min_resol_shell=min_resol_shell,
+        )
 
     def _dump(name, arr):
         if not _do_dump:
@@ -186,6 +504,15 @@ def vdam_m_step_single_class(
                 **{"lambda": mu_first},
             )
         )
+    replay_h0, replay_h1 = _maybe_replay_native_first_moments(
+        new_Igrad1[slot_h0],
+        new_Igrad1[slot_h1] if state.pseudo_halfsets else None,
+        iteration=int(getattr(state, "iter", 0)),
+        class_idx=k,
+    )
+    new_Igrad1[slot_h0] = replay_h0
+    if state.pseudo_halfsets:
+        new_Igrad1[slot_h1] = replay_h1
     _dump("m1_h0_post", new_Igrad1[slot_h0])
     if state.pseudo_halfsets:
         _dump("m1_h1_post", new_Igrad1[slot_h1])
@@ -193,7 +520,7 @@ def vdam_m_step_single_class(
     # Step 4. getSecondMoment (uses both halfset accumulators)
     new_Igrad2 = state.Igrad2.copy()
     if state.pseudo_halfsets:
-        new_Igrad2[k] = np.asarray(
+        computed_Igrad2 = np.asarray(
             bind.vdam_second_moment(
                 data_h0,
                 data_h1,
@@ -205,6 +532,12 @@ def vdam_m_step_single_class(
                 **{"lambda": mu_second},
             )
         )
+        new_Igrad2[k] = _maybe_replay_native_second_moment(
+            computed_Igrad2,
+            iteration=int(getattr(state, "iter", 0)),
+            class_idx=k,
+        )
+        _dump("m2_computed_before_replay", computed_Igrad2)
         _dump("m2_post", new_Igrad2[k])
 
     # Step 5. applyMomenta. Non-halfset: pass m1 twice to trigger do_half=false.
@@ -227,12 +560,11 @@ def vdam_m_step_single_class(
     # RELION's gradient InitialModel path routes class 0 FSC into the common
     # updateSSNRarrays call, then passes per-class FSC to reconstructGrad below.
     fsc_for_ssnr = np.asarray(state.fsc_halves_class[0], dtype=np.float64)
-    # K=1: avg(h0,h1) matches RELION's unified BPref weight (HEALPix 1→2 at iter-10).
-    # K>1: h0/h1 per-class accumulators are asymmetric, so averaging regresses K=4 CC.
-    if accum_h1 is not None and state.K == 1:
-        weight_for_ssnr = 0.5 * (accum_h0.weight + accum_h1.weight)
-    else:
-        weight_for_ssnr = accum_h0.weight
+    # RELION calls updateSSNRarrays on BPref[iclass], not on an average with
+    # the pseudo-halfset BPref[iclass + nr_classes].  The latter contributes
+    # to gradient moments only.  Captured native K=1 buffers confirm that
+    # BPref[0].weight matches accum_h0.weight shell-by-shell.
+    weight_for_ssnr = accum_h0.weight
     tau2, sigma2, data_vs_prior, fourier_coverage = bind.vdam_update_ssnr_arrays_from_bpref(
         weight_for_ssnr,
         fsc_for_ssnr,
@@ -261,6 +593,11 @@ def vdam_m_step_single_class(
     from recovar.utils.helpers import recovar_volume_to_relion, relion_volume_to_recovar
 
     iref_relion_in = recovar_volume_to_relion(np.asarray(state.Iref[k]))
+    iref_relion_in = _maybe_replay_native_reference_input(
+        iref_relion_in,
+        iteration=int(getattr(state, "iter", 0)),
+        class_idx=k,
+    )
     _dump("iref_relion_in", iref_relion_in)
     effective_stepsize = float(grad_current_stepsize) * (
         1.0 - np.exp(-float(3 * state.K + 10) * float(np.asarray(state.pdf_class)[k]))
@@ -309,6 +646,8 @@ def vdam_m_step(
     tau2_fudge_factor: float,
     grad_min_resol_shell: float | None = None,
     padding_factor: int = 1,
+    use_native_transaction: bool = True,
+    mstep_backend: Literal["native", "jax"] = "native",
 ) -> InitialModelState:
     """Full VDAM M-step over K classes.
 
@@ -331,5 +670,7 @@ def vdam_m_step(
             tau2_fudge_factor=tau2_fudge_factor,
             grad_min_resol_shell=grad_min_resol_shell,
             padding_factor=padding_factor,
+            use_native_transaction=use_native_transaction,
+            mstep_backend=mstep_backend,
         )
     return out
