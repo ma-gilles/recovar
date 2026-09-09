@@ -50,6 +50,18 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
+Native CPU validation is restored on source `97b82ad40` using an existing,
+source-matched binding through `RECOVAR_RELION_BIND_BUILD_DIR`. A private
+read-only copy and its loaded path/hash were verified;1529 source/build-input
+pins, six runtime-library hashes and both original/private binaries remain
+unchanged. All15 previously blocked/related cases pass, followed by217 combined
+CPU cases with no failures or skips. No source repair, shared rebuild or GPU
+work was required. This supersedes the missing-binding limitation for these
+checks when using the verified environment; older failures remain recorded.
+The receipt supplies the binding path, exact commands and environment. Recheck
+pins/loading before reuse; no trajectory, exactK4 or performance gate is closed.
+[Native provenance and CPU results](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/native_binding_cpu_restore_20260909/result.json).
+
 Initial real-reference half/class layouts now belong to `projector_preparation`;
 initial tau2 and half-prior selection/update belong to `mean_helpers`. The
 controller retains initialization order and the original JAX prior array's
