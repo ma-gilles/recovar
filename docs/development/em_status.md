@@ -41,14 +41,26 @@ Inside Slurm retain scheduler visibility. Do not duplicate peer jobs or analyses
 
 ## Agent efficiency package — September 9
 
-Compact handoffs and batched validation/publication are active. Opt-in Astra/high
-and Terra/medium reader selection were verified, but the reader inherited write
-permissions and no child-close tool was exposed. Delegation remains disabled;
-direct Astra is the fallback. Worker execution, fresh read-only recovery and
-long-term savings remain unverified. No automatic model polling/wakeup promise.
-See [agent workflow](agent_workflow.md) and the board's delegated setup record.
+Compact handoffs and batched validation/publication are active. Two isolated
+Terra process smokes passed, but built-in subagents remain disabled. The subsequent
+read-only pilot used more input tokens/time after Astra review than direct Astra;
+keep small investigations direct. User selected Astra medium for routine cleanup,
+with high effort reserved for difficult numerical/architecture decisions.
+[Runtime evidence and measured limits](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/delegated/README.md).
+No automatic model polling/wakeup promise.
 
 ## Engineering work and recent evidence
+
+Local preprocessing tests now live together: the isolated BPref operand test moved
+out of the large refinement module (113 lines removed there; production unchanged).
+Its zero-translation score boundary is explicitly mocked, repairing two existing
+CPU failures caused by a strict GPU-only primitive. Distinct masked/unmasked inputs
+and reordered/missing cache cases protect host routing. All 7 focused and 46 combined
+CPU cases pass; three in-memory mutants produce the expected 1/1/2 assertion failures.
+Existing numerical tolerances and engine-level cache comparison remain unchanged;
+this is not CUDA or trajectory qualification. Two existing import-order lint findings
+in the large test module remain; the focused module is clean.
+[Commands, source identity and preserved failures](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/local_preprocessing_test_ownership_20260909/result.json).
 
 Native CPU validation is restored on source `97b82ad40` using an existing,
 source-matched binding through `RECOVAR_RELION_BIND_BUILD_DIR`. A private
