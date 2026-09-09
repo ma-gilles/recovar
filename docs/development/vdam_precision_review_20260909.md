@@ -499,9 +499,12 @@ The earlier peer broader panel's three native-projector failures also reproduce
 on unchangedb179; they remain unresolved and are not part of the passing243-case
 inventory. Private H100 evidence matches the transferred route and named helpers,
 but primary has newer structural changes elsewhere, so it does not establish
-current-primary end-to-end acceptance. Full20013644924 is terminal0:0; scientific
-analysis is still pending review. Full-F32, strict state/pose/tie, GT, representative
-100k runtime and exactK4/real-data gates remain open.
+current-primary end-to-end acceptance. Full-200 job 13644924 is terminal 0:0 and
+independently reviewed in the
+[separate F32 M full200 record](vdam_f32_m_full200_review_20260909.md). All four
+registered-GT conditions pass; all four strict cross-engine FSC histories fail.
+Full-F32, strict state/pose/tie, current-primary quality, representative 100k runtime
+and exactK4/real-data gates remain open.
 
 Evidence root:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/mstep_route_integration_20260909/`.

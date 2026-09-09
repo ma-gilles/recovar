@@ -138,10 +138,16 @@ The same211 existing CPU cases pass before/after; integrated coverage is243/243
 including32 new route cases, plus guard38/38. H100 two-update13644423 passed on
 frozen privatebae959. Integrator receipt review verifies35 named hashes, exact
 pose/support metadata and all three saved-curve AUCs; maximum per-image Pmax
-deltas are1.53e-5 and1.78e-5. Continuous state differs. Full200job13644924 completed
-0:0, but its scientific analysis remains pending review. Neither private run
-qualifies the newer primary structural composition; no duplicate GPU work is
-assigned. See the [route review](vdam_precision_review_20260909.md#explicit-cli-m-precision-route-integration).
+deltas are1.53e-5 and1.78e-5. Continuous state differs. Full-200 job 13644924 is now
+reviewed: all four registered-GT comparisons pass the unchanged −0.002 condition
+through 201 checkpoints, but all four strict cross-engine FSC histories fail
+0.999 (minima near 0.970 at 155). Whole-child RECOVAR/native ratio is 1.436880×
+on this 3k/128 H100 fixture. Integrator review reproduces 2,814 saved-curve AUCs,
+1,608 held-out integrals, all summaries and 201 rows and timer/memory receipts;
+87 named hashes remain stable. See the [full200 review](vdam_f32_m_full200_review_20260909.md).
+Strict state/tie and full-F32 gates remain open. Neither private run qualifies
+the newer primary structural composition or current 100k performance; no duplicate
+GPU work is assigned. See the [route review](vdam_precision_review_20260909.md#explicit-cli-m-precision-route-integration).
 See the [integration record](vdam_precision_review_20260909.md#authorized-m-capability-and-dc-integration)
 for commands, source pins and stage-precision limits.
 
@@ -633,8 +639,8 @@ gates remain in the [program archive](../math/em_parity_program.md);
 
 Slurm was checked again on September 9 UTC during the private DC receipt review:
 the frozen older-source K4 pair **13560202 completed 0:0** on `della-l08g4`
-(16:19:39 elapsed). Its audit **13560356** is pending for priority; terminal process
-status alone is not scientific acceptance. K1 real-data window **13610518** is
+(16:19:39 elapsed). In the later full200 review, its audit **13560356** is running
+on `della-r3c1n7` (September 9 observation); terminal process status alone is not scientific acceptance. K1 real-data window **13610518** is
 completed 0:0 on `della-h20g1` (18:13:36); follow-ups **13610539** and
 **13629099** completed 0:0 (69 and 3 seconds). Their saved-result review now
 independently verifies 92 named hashes, 388 numeric fields and natural convergence
