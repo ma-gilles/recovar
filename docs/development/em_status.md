@@ -20,9 +20,12 @@ APIs, saved formats, scientific defaults, numerical behavior, reduction order,
 JIT boundaries and memory lifetime during structural cleanup. Keep proposed
 numerical/runtime repairs separate until authorized.
 
-**Production EM remains float32. Double is diagnostic only.** A smaller double
-gap does not prove roundoff. Preserve deliberate higher-precision metadata,
-host calculations and necessary non-EM mathematics. Do not widen tolerances,
+**Do not switch production EM to double to close parity gaps.** Double replay
+is diagnostic; a smaller gap does not prove roundoff. The existing VDAM numerical
+M-step already uses float64/complex128 and must be reported separately from its
+float32/complex64 E-step. Preserve that boundary until a separate float32 M-step
+change is qualified, alongside deliberate higher-precision metadata, host
+calculations and necessary non-EM mathematics. Do not widen tolerances,
 change baselines, dismiss discrete/convergence mismatches without evidence, or
 use map correlation in place of FSC/FSC-AUC. Follow the
 [EM operating contract](../../recovar/em/AGENTS.md).
@@ -350,11 +353,32 @@ Original control had six failures; separate `1d2e24174` repairs the stale inline
 trace-selector assertion to check its bound value and forwarding. That repaired
 case passes before source moves and rejects both removal mutations. The remaining
 native first-atomic, first-state/M-step runner, tau2-owner and prior-owner source
-guards need separate review; none was weakened or classified as scientific drift.
+guards were preserved for the separate review below; this cleanup did not change them.
 Exact commands, failure identities and audits:
 `hia_source_review_20260906/vdam_replay_owner_20260909/validation.json`.
 CPU logs use `vdam_replay_owner_{control,expanded_control,after,guard}_20260909/`
 and `vdam_trace_guard_repair_20260909/`. No new GPU job.
+
+Test-only follow-up `598a3fa0e` repairs four of those five guards. Native-input
+chronology now checks its default, override and export; tau2 checks the selected
+refresh callback and its invocation; the posterior guard checks the K/oversampling
+policy call. Git history `51fa361c6`/`4c06babd9` shows GPU-release assertions were
+added to the wrong runner test: all nine checks now reside with the full-schedule
+runner, while first-state selection checks its shared helper. No runner or kernel
+changed. All 178 assertions remain, and 17 in-memory missing-wiring mutations fail.
+
+The final CPU panel retains all 116 original case IDs and adds eight unchanged
+functional controls: **123 passed, one failed, zero skips** in 4.66 s. The native
+trace-placement guard remains failed and unchanged. Its declaration token is gone,
+and current CUDA computes interpolation coordinates before the actual trace timer
+in the scatter macro (`ecab47c05`); fixing that guard requires deciding which trace
+boundary must be preserved. It is not a numerical-noise acceptance. All production
+source and the CPU reference binding remained byte-identical. Exact commands,
+case identities, failures and manifests:
+`hia_source_review_20260906/vdam_source_guard_review_20260909/validation.json`;
+CPU logs: `pr180_integration_20260908/vdam_stale_guard_{control,after,final}_20260909/`.
+No GPU run or native rebuild. Next: resolve the trace boundary against its intended
+diagnostic contract before changing either kernel instrumentation or its test.
 
 Continue controller/state/kernel ownership and duplicate-code review with bounded
 changes and proportional tests. Parsers with different blank/unknown-
