@@ -34,7 +34,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
 | Latest production cleanup | `650d71a43`: per-half dispatch and shared execution policies leave the iteration controller; controller 6,123 lines |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
-| Latest test repair | `44d414a6b`: stale InitialModel callers and native source guards repaired; production unchanged |
+| Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
 | Incorporated history | PR180 `1e2f229b3`; cleanup anchor `0b52c995a`; VDAM merge `c38fc62f0`; separate global-window correction `0219caa35` |
 | Publication | [Draft PR179](https://github.com/ma-gilles/recovar/pull/179), stacked on [PR158](https://github.com/ma-gilles/recovar/pull/158); em_clean is sole integrator/publisher |
@@ -68,12 +68,23 @@ second. Only the rectangle-power helper executes in this replay; the atomic
 fallback has focused-test coverage only. These are not full-state equivalence,
 trajectory or runtime acceptance.
 
-VDAM owns the next private composition check at `cbff0b092` plus `907b02ce`:
-reuse the pinned prepared state, verify compact-CTF and rectangle-power dispatch,
-then follow the science call through its next M-step. Exact private paths,
-provenance, comparisons and stop conditions are assigned in
-`handoffs/em_clean_wavg_prepared_gate_20260909.json`. Existing candidates stay
-frozen; there is no shared precision adoption or duplicate GPU submission.
+VDAM's private composition `fe8472947` carries the same `907b02ce` patch atop
+compact-CTF merge `5a39eab29`; only two documentation files separate that parent
+from the assigned `cbff0b092` base. The candidate applies cleanly to the current
+primary, but is **not adopted**. H100 13639506 completed four natural 200-iteration
+old/new/new/old trajectories (0:0, 1,819 s); scientific analysis remains pending.
+The partial metadata ledger contains support/pose differences within repeated
+policies as well as across policies. Their margins and convergence implications
+remain unresolved; completion does not establish trajectory parity.
+
+Prepared E/M job 13639984 failed in diagnostic callable serialization (1:0,
+25 s), before science E/M completion. VDAM owns its separate v2 harness repair;
+the source and original evidence remain frozen. The next gate still compares
+pinned prepared inputs, compact-CTF and rectangle-power dispatch, then the actual
+M-step/state update. See `handoffs/em_clean_wavg_prepared_gate_20260909.json` and
+`handoffs/em_clean_vdam_composition_followup_20260909.json`. No duplicate GPU
+submission or additional production arithmetic change is justified. These runs
+also precede the latest half-scoring extraction and do not qualify that source.
 Raw-prefetch source is unassigned. The RELION header lock is
 released: five diagnostic insertions remain, and shared benchmark binaries plus
 private native captures/builds stay frozen. No shared native writer/build is
@@ -98,6 +109,7 @@ scoring routines still need internal readability work after this ownership step.
 
 | Checkpoint | Executed evidence | Limit |
 | --- | --- | --- |
+| Runner provenance `0954fdfd0` | Four missing/foreign scorer-source regressions fail before the fix; all 8 CPU unit/CLI-entry cases pass after (8.09 s), no skips | Two checked module names added; no scientific operation changed or GPU job launched |
 | Half-scoring ownership `650d71a43` | Same 189-case CPU inventory before/after; final unused-import follow-up 6/6; extended CPU guard 38/38; exact function/constant and test-assertion audits | Intermediate stale owner guard failed once and was migrated; logger namespaces follow owners; no GPU/trajectory claim |
 | Compact-CTF integration `5a39eab29` | 241 CPU passed/23 GPU deselected (31.13 s), 38-case guard; all peer cases retained and six transferred files exact; peer H100 13638270 byte-exact operands/scores | Full-image powerClass and source precision preserved; allocation microbenchmark only, no end-to-end or trajectory claim |
 | Reference-replay ownership `b3b51f0c8` | Same 39-case control/candidate inventory, including tiny K4 map loading and state-swap order; 38-case CPU guard. Exact function/retained-controller AST; no new Ruff findings | Controller −95 lines by relocation; logger namespace follows replay owner; no GPU or trajectory claim |
@@ -112,6 +124,14 @@ were confirmed by failing tests before migration. This does not prove dynamic
 imports/registration or every runtime path. A tracked-reference scan found no
 further unreferenced, undecorated top-level private EM function candidates;
 do not remove code merely to reduce line counts.
+
+Runner provenance rejects a foreign or unlocated `half_scoring`/`scoring_policy`
+module even when the controller comes from the expected checkout. Evidence and
+exact CPU commands are in
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/runner_scoring_provenance_20260909/validation.json`;
+logs/XML use `runner_scoring_provenance_{red,green}_20260909` under the CPU root.
+The original four failures remain recorded. Existing assertions are preserved;
+Ruff has the same two inherited findings under identical configuration.
 
 Half-scoring commands, source fingerprints, the original owner-guard failure,
 case inventories and AST audits are in
