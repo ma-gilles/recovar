@@ -127,9 +127,9 @@ from recovar.em.dense_single_volume.helpers.compact_candidates import (
     SparseCandidateMask,
     _candidate_mask_count,
     _candidate_mask_is_full,
-    compact_candidate_indices_in_source_order,
 )
 from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
+    _prepare_per_image_compact_candidate_pairs,
     _prepare_per_image_pass2_inputs,
     _build_compact_pair_bucket_arrays,
     _build_compact_pair_bucket_arrays_from_per_image_inputs,
@@ -570,69 +570,6 @@ def _relion_cuda_score_translation_angles_if_available(
     )
 
 
-def _prepare_per_image_compact_candidate_pairs(per_image_inputs, *, image_mask=None):
-    """Flatten per-image sparse pass-2 masks into valid candidate pairs.
-
-    The current fused K-class path pads rotations and then scores every
-    translation in the rectangular ``R_bucket x T`` tile.  These arrays are a
-    host-side representation of only the valid ``(rotation, translation)``
-    candidates; the default scoring path does not consume them yet.
-    """
-
-    n_images = len(per_image_inputs["candidate_mask"])
-    if image_mask is not None:
-        image_mask = np.asarray(image_mask, dtype=bool)
-        if image_mask.shape != (n_images,):
-            raise ValueError(f"compact pair image mask shape mismatch: {image_mask.shape} vs {(n_images,)}")
-    compact_local_rotation_row = []
-    compact_translation_idx = []
-    compact_rotation_index = []
-    compact_log_prior = []
-    compact_pair_mask = []
-    pair_counts = np.zeros(n_images, dtype=np.int32)
-    log_prior_dtype = (
-        np.result_type(
-            *(np.asarray(prior).dtype for prior in per_image_inputs["log_prior"])
-        )
-        if n_images
-        else np.dtype(np.float32)
-    )
-
-    for image_idx in range(n_images):
-        if image_mask is not None and not bool(image_mask[image_idx]):
-            compact_local_rotation_row.append(np.zeros(0, dtype=np.int32))
-            compact_translation_idx.append(np.zeros(0, dtype=np.int32))
-            compact_rotation_index.append(np.zeros(0, dtype=np.int64))
-            compact_log_prior.append(np.zeros(0, dtype=log_prior_dtype))
-            compact_pair_mask.append(np.zeros(0, dtype=bool))
-            continue
-        local_rot_rows, translation_idx = compact_candidate_indices_in_source_order(per_image_inputs["candidate_mask"][image_idx])
-        local_rot_rows = local_rot_rows.astype(np.int32, copy=False)
-        translation_idx = translation_idx.astype(np.int32, copy=False)
-        rotation_indices = np.asarray(per_image_inputs["oversampled_rot_indices"][image_idx], dtype=np.int64)
-        rotation_log_prior = np.asarray(
-            per_image_inputs["log_prior"][image_idx], dtype=log_prior_dtype
-        )
-
-        compact_local_rotation_row.append(local_rot_rows)
-        compact_translation_idx.append(translation_idx)
-        compact_rotation_index.append(rotation_indices[local_rot_rows].astype(np.int64, copy=False))
-        compact_log_prior.append(
-            rotation_log_prior[local_rot_rows].astype(log_prior_dtype, copy=False)
-        )
-        compact_pair_mask.append(np.ones(local_rot_rows.shape[0], dtype=bool))
-        pair_counts[image_idx] = int(local_rot_rows.shape[0])
-
-    return {
-        "local_rotation_row": compact_local_rotation_row,
-        "translation_idx": compact_translation_idx,
-        "rotation_index": compact_rotation_index,
-        "log_prior": compact_log_prior,
-        "pair_mask": compact_pair_mask,
-        "pair_counts": pair_counts,
-    }
-
-
 def _compact_pair_counts_from_inputs(compact_inputs_by_class):
     pair_counts_by_class = []
     n_images = None
@@ -779,27 +716,6 @@ def _bucket_sparse_k_class_compact_pair_counts(
     return buckets
 
 
-def _bucket_sparse_k_class_compact_pair_inputs(
-    compact_inputs_by_class,
-    *,
-    pair_block_size_for_quantization=5000,
-    max_pair_candidates_per_microbatch=_DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH,
-    max_images_per_microbatch=2048,
-    tail_bucket_coalesce_max_images=None,
-    tail_bucket_coalesce_max_inflation=None,
-    tail_bucket_coalesce_min_bucket_size=None,
-):
-    return _bucket_sparse_k_class_compact_pair_counts(
-        _compact_pair_counts_from_inputs(compact_inputs_by_class),
-        pair_block_size_for_quantization=pair_block_size_for_quantization,
-        max_pair_candidates_per_microbatch=max_pair_candidates_per_microbatch,
-        max_images_per_microbatch=max_images_per_microbatch,
-        tail_bucket_coalesce_max_images=tail_bucket_coalesce_max_images,
-        tail_bucket_coalesce_max_inflation=tail_bucket_coalesce_max_inflation,
-        tail_bucket_coalesce_min_bucket_size=tail_bucket_coalesce_min_bucket_size,
-    )
-
-
 def _best_compact_pair_from_scores(
     pair_scores,
     pair_mask,
@@ -861,35 +777,6 @@ def _compact_k_class_pair_plan_stats(
         _prepare_per_image_compact_candidate_pairs(per_image_inputs)
         for per_image_inputs in per_image_inputs_by_class
     )
-    return _compact_k_class_pair_plan_stats_from_inputs(
-        compact_inputs_by_class,
-        dense_buckets,
-        n_fine_trans,
-        pair_block_size_for_quantization=pair_block_size_for_quantization,
-        max_pair_candidates_per_microbatch=max_pair_candidates_per_microbatch,
-        max_images_per_microbatch=max_images_per_microbatch,
-        tail_bucket_coalesce_max_images=tail_bucket_coalesce_max_images,
-        tail_bucket_coalesce_max_inflation=tail_bucket_coalesce_max_inflation,
-        tail_bucket_coalesce_min_bucket_size=tail_bucket_coalesce_min_bucket_size,
-        image_mask=image_mask,
-    )
-
-
-def _compact_k_class_pair_plan_stats_from_inputs(
-    compact_inputs_by_class,
-    dense_buckets,
-    n_fine_trans,
-    *,
-    pair_block_size_for_quantization=5000,
-    max_pair_candidates_per_microbatch=_DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH,
-    max_images_per_microbatch=2048,
-    tail_bucket_coalesce_max_images=None,
-    tail_bucket_coalesce_max_inflation=None,
-    tail_bucket_coalesce_min_bucket_size=None,
-    image_mask=None,
-) -> SparseKClassCompactPairPlanStats:
-    """Compute compact-pair work counters from prebuilt compact inputs."""
-
     return _compact_k_class_pair_plan_stats_from_counts(
         _compact_pair_counts_from_inputs(compact_inputs_by_class),
         dense_buckets,

@@ -40,7 +40,7 @@ chase while quality remains open.
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest structural source checkpoint | Candidate preparation simplification following `0e2b13da1`; local engine 7,834, sparse scorer 16,531, half scorer 1,363, controller 6,051 |
+| Latest structural source checkpoint | Candidate/compact-pair simplification following `dd65b3563`; sparse scorer 16,418 lines. Exact source identities and evidence are linked below |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
 | Incorporated history | PR180 `1e2f229b3`; cleanup anchor `0b52c995a`; VDAM merge `c38fc62f0`; separate global-window correction `0219caa35` |
 | Publication | [Draft PR179](https://github.com/ma-gilles/recovar/pull/179), stacked on [PR158](https://github.com/ma-gilles/recovar/pull/158); em_clean is sole integrator/publisher |
@@ -159,6 +159,20 @@ iteration10,class2. No current100k speed or broad quality acceptance is claimed.
 
 ## Engineering work and recent evidence
 
+Compact-pair diagnostics now call the counts planner directly. The statistics
+forwarder and a test-only bucket-input adapter are removed; five test callers use
+the same count conversion and planner, with every assertion preserved. Host pair
+materialization moves to `helpers.sparse_bucket_arrays`, with its calculations
+unchanged and its diagnostic role documented. It remains live in optional score
+checks; deleting it or changing its allocation policy is outside this cleanup.
+17 current/17 archived cases pass. Combined with the prior branch simplification,
+30 focused cases and38 CPU guard cases pass with no skips/failures. Three unused
+test imports introduced during migration were fixed before final validation.
+The two-commit batch removes78 production lines overall; this part removes113
+lines from the sparse scorer and adds59 to the existing host owner. No new API,
+scoring, scheduling, tolerance, default or baseline behavior.
+[Receipt and commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/compact_pair_adapters_20260909/result.json).
+
 Candidate preparation now uses one full-support prior cache and one K-class
 bucket-builder call. Two repeated error arms are removed only after their upfront
 validation was proved to dominate them. Sampling and buffer ownership stay intact.
@@ -167,8 +181,8 @@ current and13 archived-control cases pass, as does38-case CPU guard. Differentia
 replay matches72 preparations,120 invalid-override comparisons and8 four-class
 assemblies, including bytes, dtype, order, sampler calls and input/output sharing.
 The existing cache test now also covers absent priors; no assertion or tolerance
-is relaxed. Local checkpoint for the next publication batch; no scientific or
-runtime acceptance. [Receipt and commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/candidate_branch_cleanup_20260909/result.json).
+is relaxed. Included in the compact-pair
+publication batch; no scientific or runtime acceptance. [Receipt and commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/candidate_branch_cleanup_20260909/result.json).
 
 Per-image fine candidate preparation now lives beside the host bucket builders in
 `helpers.sparse_bucket_arrays`; coarse support encodings have a small independent

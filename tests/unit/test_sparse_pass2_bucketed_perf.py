@@ -60,6 +60,7 @@ from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
     _build_compact_pair_bucket_arrays,
     _build_compact_pair_bucket_arrays_from_per_image_inputs,
     _build_k_class_bucket_arrays,
+    _prepare_per_image_compact_candidate_pairs,
     _prepare_per_image_pass2_inputs,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
@@ -72,13 +73,13 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _best_compact_pair_from_scores,
     _bucket_pass2_inputs,
     _bucket_sparse_k_class_compact_pair_counts,
-    _bucket_sparse_k_class_compact_pair_inputs,
     _bucket_sparse_k_class_pass2_inputs,
     _coalesce_tail_bucket_sizes,
     _compact_k_class_pair_plan_stats,
     _compact_k_class_pair_plan_stats_from_counts,
     _compact_pair_buckets_for_execution_threshold,
     _compact_pair_counts_from_candidate_masks,
+    _compact_pair_counts_from_inputs,
     _compact_pair_dense_mstep_max_bytes_for_pass,
     _compact_pair_dense_probs_and_reductions,
     _compact_pair_execution_enabled_for_pass,
@@ -131,7 +132,6 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _pass2_conservative_dump_execution_enabled,
     _pass2_dump_enabled,
     _prepare_bucket_io,
-    _prepare_per_image_compact_candidate_pairs,
     _projection_budget_pixels_for_pass,
     _projection_cache_budget_complex_dtype,
     _projection_cache_enabled_for_pass,
@@ -370,7 +370,7 @@ def test_k_class_pass2_dump_stop_is_env_gated_diagnostic_only():
 
 def test_k1_pass2_dump_progress_requires_complete_target_set(tmp_path):
     from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-        _k1_pass2_dump_progress,
+    _k1_pass2_dump_progress,
     )
 
     targets = {7, 42, 105}
@@ -981,7 +981,7 @@ def test_bucket_count_bounded_under_varied_per_image_rotation_counts():
 
     # Build per-image inputs the way compute_pass2_stats_sparse_bucketed does.
     from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
-        _prepare_per_image_pass2_inputs,
+    _prepare_per_image_pass2_inputs,
     )
 
     # fine_translation_parent maps fine trans -> coarse trans. With oversampling=1
@@ -5224,8 +5224,8 @@ def test_compact_pair_plan_reports_late_iter_candidate_reduction(monkeypatch):
         _prepare_per_image_compact_candidate_pairs(per_image_inputs)
         for per_image_inputs in per_image_inputs_by_class
     ]
-    compact_buckets = _bucket_sparse_k_class_compact_pair_inputs(
-        compact_inputs_by_class,
+    compact_buckets = _bucket_sparse_k_class_compact_pair_counts(
+        _compact_pair_counts_from_inputs(compact_inputs_by_class),
         max_pair_candidates_per_microbatch=10**12,
         max_images_per_microbatch=1000,
     )
@@ -5279,13 +5279,13 @@ def test_compact_pair_bucketing_can_coalesce_high_pair_tail(monkeypatch):
         for _ in range(4)
     )
 
-    baseline = _bucket_sparse_k_class_compact_pair_inputs(
-        compact_inputs_by_class,
+    baseline = _bucket_sparse_k_class_compact_pair_counts(
+        _compact_pair_counts_from_inputs(compact_inputs_by_class),
         max_pair_candidates_per_microbatch=10**12,
         max_images_per_microbatch=1000,
     )
-    coalesced = _bucket_sparse_k_class_compact_pair_inputs(
-        compact_inputs_by_class,
+    coalesced = _bucket_sparse_k_class_compact_pair_counts(
+        _compact_pair_counts_from_inputs(compact_inputs_by_class),
         max_pair_candidates_per_microbatch=10**12,
         max_images_per_microbatch=1000,
         tail_bucket_coalesce_max_images=8,
@@ -5333,13 +5333,13 @@ def test_compact_pair_tail_coalescing_keeps_executed_chunks_under_hypothesis_cap
         for _ in range(n_classes)
     )
 
-    baseline = _bucket_sparse_k_class_compact_pair_inputs(
-        compact_inputs_by_class,
+    baseline = _bucket_sparse_k_class_compact_pair_counts(
+        _compact_pair_counts_from_inputs(compact_inputs_by_class),
         max_pair_candidates_per_microbatch=max_hypotheses,
         max_images_per_microbatch=19,
     )
-    coalesced = _bucket_sparse_k_class_compact_pair_inputs(
-        compact_inputs_by_class,
+    coalesced = _bucket_sparse_k_class_compact_pair_counts(
+        _compact_pair_counts_from_inputs(compact_inputs_by_class),
         max_pair_candidates_per_microbatch=max_hypotheses,
         max_images_per_microbatch=19,
         tail_bucket_coalesce_max_images=19,
@@ -5836,7 +5836,7 @@ def test_sparse_pass2_windowed_projection_uses_relion_projector_branch(monkeypat
 
 def test_relion_score_window_keeps_particle_crop_separate_from_model_radius():
     from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-        _projection_kwargs_for_relion_score_window,
+    _projection_kwargs_for_relion_score_window,
     )
 
     kwargs = _projection_kwargs_for_relion_score_window(
