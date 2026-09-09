@@ -2,8 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers import bpref_diagnostics
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse
+from recovar.em.dense_single_volume.helpers import bpref_diagnostics, pass2_diagnostics
 from scripts.analyze_k1_scale_aa_boundary import analyze
 
 
@@ -85,7 +84,7 @@ def test_chunked_scale_aa_writer_preserves_float32_chunk_order(tmp_path: Path, m
         np.asarray([[0.25, 0.5]], dtype=np.float32),
         np.asarray([[0.75, 1.0]], dtype=np.float32),
     ]
-    count = sparse._write_chunked_scale_aa_dump(
+    count = pass2_diagnostics._write_chunked_scale_aa_dump(
         dump_dir=tmp_path,
         experiment_dataset=object(),
         image_indices=np.asarray([1096], dtype=np.int64),

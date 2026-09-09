@@ -44,6 +44,7 @@ import numpy as np
 import pytest
 
 import recovar.em.dense_single_volume.helpers.oversampling as oversampling_mod
+import recovar.em.dense_single_volume.helpers.pass2_diagnostics as pass2_diagnostics
 import recovar.em.dense_single_volume.helpers.score_constraints as score_constraints_mod
 import recovar.em.dense_single_volume.helpers.significance as sig_mod
 import recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed as sparse_pass2_mod
@@ -1111,7 +1112,7 @@ def test_sparse_pass2_dump_writes_score_and_recon_operand_arrays(monkeypatch, tm
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ITERATION", "2")
     monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "iteration", 2)
     monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "half", 1)
-    sparse_pass2_mod._maybe_dump_pass2_bucket(
+    pass2_diagnostics._maybe_dump_pass2_bucket(
         experiment_dataset=experiment_dataset,
         image_indices=np.asarray([0], dtype=np.int64),
         per_image_inputs=per_image_inputs,
@@ -1216,7 +1217,7 @@ def test_sparse_pass2_dump_can_retain_only_selected_rotation_rows(monkeypatch, t
     ) + np.float32(100)
     full_to_compact = np.asarray([-1, 0, 1, 2, 3, 4], dtype=np.int32)
 
-    sparse_pass2_mod._maybe_dump_pass2_bucket(
+    pass2_diagnostics._maybe_dump_pass2_bucket(
         experiment_dataset=experiment_dataset,
         image_indices=np.asarray([0], dtype=np.int64),
         per_image_inputs=per_image_inputs,
@@ -1329,7 +1330,7 @@ def test_sparse_pass2_raw_operand_dump_fails_closed_without_raw_diff2(
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_RAW_OPERANDS", "1")
 
     with pytest.raises(ValueError, match="requires the production K=1 RELION raw-diff2"):
-        sparse_pass2_mod._maybe_dump_pass2_bucket(
+        pass2_diagnostics._maybe_dump_pass2_bucket(
             experiment_dataset=experiment_dataset,
             image_indices=np.asarray([0], dtype=np.int64),
             per_image_inputs=per_image_inputs,
@@ -1371,7 +1372,7 @@ def test_sparse_pass2_raw_operand_dump_uses_normalized_cc_score_without_diff2(
     rotation_prior = np.asarray([[0.125]], dtype=np.float32)
     translation_prior = np.asarray([[0.0, -0.25]], dtype=np.float32)
 
-    sparse_pass2_mod._maybe_dump_pass2_bucket(
+    pass2_diagnostics._maybe_dump_pass2_bucket(
         experiment_dataset=experiment_dataset,
         image_indices=np.asarray([0], dtype=np.int64),
         per_image_inputs=per_image_inputs,
@@ -1424,7 +1425,7 @@ def test_sparse_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_path):
     dump_dir = tmp_path / "pass2"
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
-    sparse_pass2_mod._maybe_dump_pass2_bucket(
+    pass2_diagnostics._maybe_dump_pass2_bucket(
         experiment_dataset=experiment_dataset,
         image_indices=np.asarray([local_index], dtype=np.int64),
         per_image_inputs=per_image_inputs,
@@ -1485,7 +1486,7 @@ def test_kclass_compact_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_p
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_CLASS", "2")
-    sparse_pass2_mod._maybe_dump_k_class_pass2_bucket(
+    pass2_diagnostics._maybe_dump_k_class_pass2_bucket(
         experiment_dataset=experiment_dataset,
         image_indices=np.asarray([local_index], dtype=np.int64),
         class_index=0,
@@ -1502,7 +1503,7 @@ def test_kclass_compact_pass2_dump_uses_original_index_mapper(monkeypatch, tmp_p
     )
     assert not list(dump_dir.glob("*.npz"))
 
-    sparse_pass2_mod._maybe_dump_k_class_pass2_bucket(
+    pass2_diagnostics._maybe_dump_k_class_pass2_bucket(
         experiment_dataset=experiment_dataset,
         image_indices=np.asarray([local_index], dtype=np.int64),
         class_index=1,
@@ -1569,7 +1570,7 @@ def test_kclass_dense_pass2_dump_preserves_selected_raw_diff2(monkeypatch, tmp_p
     dump_dir = tmp_path / "pass2"
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
-    sparse_pass2_mod._maybe_dump_k_class_pass2_bucket(
+    pass2_diagnostics._maybe_dump_k_class_pass2_bucket(
         experiment_dataset=experiment_dataset,
         image_indices=np.asarray([0], dtype=np.int64),
         class_index=0,
@@ -1639,7 +1640,7 @@ def test_kclass_pass2_dump_preserves_effective_raw_operands(monkeypatch, tmp_pat
     dump_dir = tmp_path / "pass2"
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42")
-    sparse_pass2_mod._maybe_dump_k_class_pass2_bucket(
+    pass2_diagnostics._maybe_dump_k_class_pass2_bucket(
         experiment_dataset=experiment_dataset,
         image_indices=np.asarray([0], dtype=np.int64),
         class_index=0,
@@ -1732,7 +1733,7 @@ def test_pass2_dump_target_rows_use_original_index_mapping(monkeypatch, tmp_path
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES", "42,300")
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_CURRENT_SIZE", "14")
 
-    rows = sparse_pass2_mod._pass2_dump_target_rows(
+    rows = pass2_diagnostics._pass2_dump_target_rows(
         experiment_dataset=experiment_dataset,
         image_indices=np.asarray([7, 8, 9], dtype=np.int64),
         current_size=14,
@@ -1755,13 +1756,13 @@ def test_pass2_dump_target_rows_require_requested_iteration(monkeypatch, tmp_pat
 
     try:
         bpref_diagnostics.set_bpref_contribution_dump_context(iteration=1, half=1)
-        before_target = sparse_pass2_mod._pass2_dump_target_rows(
+        before_target = pass2_diagnostics._pass2_dump_target_rows(
             experiment_dataset=experiment_dataset,
             image_indices=np.asarray([7, 8, 9], dtype=np.int64),
             current_size=14,
         )
         bpref_diagnostics.set_bpref_contribution_dump_context(iteration=2, half=1)
-        at_target = sparse_pass2_mod._pass2_dump_target_rows(
+        at_target = pass2_diagnostics._pass2_dump_target_rows(
             experiment_dataset=experiment_dataset,
             image_indices=np.asarray([7, 8, 9], dtype=np.int64),
             current_size=14,
