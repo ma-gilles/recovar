@@ -50,6 +50,20 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
+Initial real-reference half/class layouts now belong to `projector_preparation`;
+initial tau2 and half-prior selection/update belong to `mean_helpers`. The
+controller retains initialization order and the original JAX prior array's
+lifetime. Source float64 values, shared aliases, views, casts and reductions are
+preserved. Controller length shrinks77 lines; net production grows33 lines.
+The complete controller matches after inlining; moved selectors and existing
+owner functions are unchanged. Thirty new layout/alias/error cases pass.
+Baseline150/candidate180 pass with the same two failures; a separate stale
+score-only source-inspection repair follows the current `half_scoring` owner and
+rejects three forwarding mutants. Final181 cases pass; the remaining baseline
+failure needs `_relion_bind_core`. All38 CPU guard cases pass. No native or
+trajectory qualification is claimed.
+[Checks and reproduction](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/initial_half_arrays_owner_20260909/result.json).
+
 Six equivalent diagnostic-flag parsers now share `env_flags.parse_env_flag_or_false`.
 Controller/scoring selectors retain their names, defaults, call-time reads and
 caller logging; permissive, binary-only and default-on policies remain distinct.
