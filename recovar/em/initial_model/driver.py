@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Literal
 
 import numpy as np
 
@@ -20,39 +21,110 @@ from recovar.core import mask as core_mask
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.data_io.starfile import read_star, write_star
 from recovar.em import sampling
+from recovar.em.dense_single_volume.batch_planning import maybe_cache_raw_image_loaders
+from recovar.em.dense_single_volume.helpers.convergence import (
+    compute_relion_offset_changes_angstrom,
+    compute_relion_orientation_changes,
+    relion_mpi_hidden_variable_change_is_small,
+)
+from recovar.em.dense_single_volume.helpers.expected_accuracy import (
+    estimate_relion_expected_accuracy_from_prepared_inputs,
+    estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs,
+)
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
+    make_relion_translation_log_prior,
     relion_round_away_from_zero,
     relion_sigma_offset_prior_center,
+    relion_translation_prior_center,
 )
 from recovar.reconstruction.noise import make_radial_noise
-from recovar.utils.helpers import R_to_relion, recovar_volume_to_relion, write_relion_mrc
+from recovar.utils.helpers import (
+    R_from_relion,
+    R_to_relion,
+    get_gpu_memory_total,
+    recovar_volume_to_relion,
+    write_relion_mrc,
+)
 
 from .avg_unaligned import compute_avg_unaligned_and_sigma2
 from .bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstrap_iref_via_cpp
-from .dense_adapter import DenseInitialModelEstepConfig, run_dense_initial_model_estep
+from .dense_adapter import (
+    DenseInitialModelEstepConfig,
+    prepare_relion_projector_class_inputs,
+    prepare_relion_projector_class_inputs_and_power,
+    run_dense_initial_model_estep,
+)
 from .init import initialise_data_vs_prior_from_references, initialise_denovo_state, seed_noise_from_mavg
-from .iteration_loop import relion_solvent_flatten_state, relion_solvent_mask, run_vdam_iterations
-from .schedules import DEFAULT_GRAD_EM_ITERS, DEFAULT_GRAD_MU, default_subset_sizes_for_3d_initial_model
+from .iteration_loop import (
+    relion_solvent_flatten_state,
+    relion_solvent_mask,
+    restore_subset_order_for_continuation,
+    run_vdam_iterations,
+)
+from .schedules import (
+    DEFAULT_GRAD_EM_ITERS,
+    DEFAULT_SIGMA2_FUDGE,
+    GuiInitialModelDefaults,
+    default_subset_sizes_for_3d_initial_model,
+    phase_lengths_from_effective_fractions,
+)
 from .state import InitialModelState
 from .subset import RndUnifFn
 
+INITIAL_MODEL_GUI_DEFAULTS = GuiInitialModelDefaults()
 DEFAULT_WIDTH_MASK_EDGE_PX = 5.0
-DEFAULT_HEALPIX_ORDER = 1
-DEFAULT_OFFSET_RANGE_PX = 6.0
-DEFAULT_OFFSET_STEP_PX = 2.0
-DEFAULT_RANDOM_SEED = 0
-DEFAULT_OVERSAMPLING = 1
-DEFAULT_PERTURBATION_FACTOR = 0.5
+DEFAULT_HEALPIX_ORDER = INITIAL_MODEL_GUI_DEFAULTS.healpix_order
+DEFAULT_OFFSET_RANGE_PX = INITIAL_MODEL_GUI_DEFAULTS.offset_range_px
+DEFAULT_OFFSET_STEP_PX = INITIAL_MODEL_GUI_DEFAULTS.offset_step_px
+DEFAULT_RANDOM_SEED = INITIAL_MODEL_GUI_DEFAULTS.random_seed
+DEFAULT_OVERSAMPLING = INITIAL_MODEL_GUI_DEFAULTS.oversampling
+DEFAULT_PERTURBATION_FACTOR = INITIAL_MODEL_GUI_DEFAULTS.perturbation_factor
 RELION_INITIALMODEL_LOCAL_SEARCH_HEALPIX_ORDER = 4
+RELION_ORIENTATIONAL_PRIOR_NOPRIOR = 0
+RELION_ORIENTATIONAL_PRIOR_ROTTILT_PSI = 1
 RELION_INITIALMODEL_MIN_TRANSLATION_STEP_ANGSTROM = 1.5
 RELION_INITIALMODEL_MAX_NR_ITER_WO_RESOL_GAIN = 1
+RELION_INITIALMODEL_MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES = 1
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_OFFSETS = 999.0
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_ORIENTATIONS = 999.0
 RELION_INITIALMODEL_SMALL_CHANGE_INIT_CLASSES = 9999999.0
 RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS = 100
-# Suppress sub-centiparticle support leakage from the dense sparse-pass
-# adapter while keeping RELION's real small-support update path active.
-RELION_INITIALMODEL_MIN_EFFECTIVE_CLASS_SUPPORT = 1.0e-2
+INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE = 256
+INITIAL_MODEL_LOCAL_BATCH_REFERENCE_COUNT_40GB = 32
+INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV = "RECOVAR_INITIALMODEL_IREF_REPLAY_TEMPLATE"
+INITIAL_MODEL_SKIP_EXPECTED_ACCURACY_ENV = "RECOVAR_INITIALMODEL_SKIP_EXPECTED_ACCURACY"
+INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV = "RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_SUBPROCESS"
+
+
+def _effective_initial_model_image_batch_size(
+    requested: int,
+    *,
+    grid_size: int,
+    gpu_memory_gb: float,
+) -> int:
+    """Conservatively cap exact-local batches for large InitialModel grids.
+
+    Exact fine search has a transient that scales approximately with
+    ``batch * grid_size**2`` in addition to its resident projector/cache
+    state.  The user-facing batch remains an upper bound; 128-pixel jobs keep
+    their established behavior, while 256+ grids scale from 32 images on a
+    40 GB accelerator.
+    """
+
+    if requested < 1:
+        raise ValueError(f"image_batch_size must be positive, got {requested}")
+    if grid_size < 1:
+        raise ValueError(f"grid_size must be positive, got {grid_size}")
+    if gpu_memory_gb <= 0:
+        raise ValueError(f"gpu_memory_gb must be positive, got {gpu_memory_gb}")
+    if grid_size < INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE:
+        return int(requested)
+    scaled_cap = int(
+        INITIAL_MODEL_LOCAL_BATCH_REFERENCE_COUNT_40GB
+        * (INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE / float(grid_size)) ** 2
+        * (float(gpu_memory_gb) / 40.0)
+    )
+    return min(int(requested), max(1, scaled_cap))
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -61,34 +133,58 @@ class NativeInitialModelOptions:
 
     fn_img: str
     outputname: str = "ab_initio/run"
-    nr_iter: int = 200
-    nr_classes: int = 1
-    tau2_fudge: float = 4.0
-    sym_name: str = "C1"
-    do_run_C1: bool = True
-    particle_diameter: float = 200.0
-    do_solvent: bool = True
-    do_zero_mask: bool = True
-    do_ctf_correction: bool = True
+    nr_iter: int = INITIAL_MODEL_GUI_DEFAULTS.nr_iter
+    nr_classes: int = INITIAL_MODEL_GUI_DEFAULTS.nr_classes
+    tau2_fudge: float = INITIAL_MODEL_GUI_DEFAULTS.tau2_fudge
+    grad_ini_frac: float = INITIAL_MODEL_GUI_DEFAULTS.grad_ini_frac
+    grad_fin_frac: float = INITIAL_MODEL_GUI_DEFAULTS.grad_fin_frac
+    grad_em_iters: int = INITIAL_MODEL_GUI_DEFAULTS.grad_em_iters
+    stepsize: float = INITIAL_MODEL_GUI_DEFAULTS.stepsize
+    mu: float = INITIAL_MODEL_GUI_DEFAULTS.mu
+    sym_name: str = INITIAL_MODEL_GUI_DEFAULTS.sym_name
+    do_run_C1: bool = INITIAL_MODEL_GUI_DEFAULTS.do_run_C1
+    particle_diameter: float = INITIAL_MODEL_GUI_DEFAULTS.particle_diameter
+    do_solvent: bool = INITIAL_MODEL_GUI_DEFAULTS.do_solvent
+    do_zero_mask: bool = INITIAL_MODEL_GUI_DEFAULTS.do_zero_mask
+    do_ctf_correction: bool = INITIAL_MODEL_GUI_DEFAULTS.do_ctf_correction
     random_seed: int = DEFAULT_RANDOM_SEED
     width_mask_edge_px: float = DEFAULT_WIDTH_MASK_EDGE_PX
     healpix_order: int = DEFAULT_HEALPIX_ORDER
     oversampling: int = DEFAULT_OVERSAMPLING
     perturbation_factor: float = DEFAULT_PERTURBATION_FACTOR
-    random_perturbation: float | None = None
+    random_perturbation: float | None = INITIAL_MODEL_GUI_DEFAULTS.random_perturbation
     offset_range_px: float = DEFAULT_OFFSET_RANGE_PX
     offset_step_px: float = DEFAULT_OFFSET_STEP_PX
-    image_batch_size: int = 500
-    rotation_block_size: int = 5000
-    bootstrap_min_particles: int = 1000
-    sigma2_min_particles: int = 1000
-    padding_factor: int = 1
-    lazy: bool = True
+    image_batch_size: int = INITIAL_MODEL_GUI_DEFAULTS.image_batch_size
+    rotation_block_size: int = INITIAL_MODEL_GUI_DEFAULTS.rotation_block_size
+    pass2_engine: str = INITIAL_MODEL_GUI_DEFAULTS.pass2_engine
+    relion_wavg_sequential_cuda: bool = INITIAL_MODEL_GUI_DEFAULTS.relion_wavg_sequential_cuda
+    exact_local_bucket_radix: int = INITIAL_MODEL_GUI_DEFAULTS.exact_local_bucket_radix
+    exact_local_physical_order_chunk_size: int = (
+        INITIAL_MODEL_GUI_DEFAULTS.exact_local_physical_order_chunk_size
+    )
+    stable_fourier_window_shapes: bool = (
+        INITIAL_MODEL_GUI_DEFAULTS.stable_fourier_window_shapes
+    )
+    bootstrap_min_particles: int = INITIAL_MODEL_GUI_DEFAULTS.bootstrap_min_particles
+    sigma2_min_particles: int = INITIAL_MODEL_GUI_DEFAULTS.sigma2_min_particles
+    padding_factor: int = INITIAL_MODEL_GUI_DEFAULTS.padding_factor
+    image_fourier_backend: str = "host_numpy"
+    projector_setup_backend: Literal["native", "jax"] = "native"
+    mstep_backend: Literal["native", "jax"] = "native"
+    deterministic_cuda: bool = INITIAL_MODEL_GUI_DEFAULTS.deterministic_cuda
+    lazy: bool = INITIAL_MODEL_GUI_DEFAULTS.lazy
     datadir: str | None = None
     strip_prefix: str | None = None
-    translation_sigma_angstrom: float | None = None
-    write_iter_artifacts: bool = True
+    translation_sigma_angstrom: float | None = INITIAL_MODEL_GUI_DEFAULTS.translation_sigma_angstrom
+    write_iter_artifacts: bool = INITIAL_MODEL_GUI_DEFAULTS.write_iter_artifacts
+    grad_write_iter: int = INITIAL_MODEL_GUI_DEFAULTS.grad_write_iter
     run_relion_align_symmetry: bool = False
+    # Diagnostic-only, one-next-iteration restart from a native RELION VDAM
+    # optimiser.  This is deliberately not a general production continuation
+    # surface: the caller must also stop at checkpoint_iteration + 1.
+    diagnostic_continue_optimiser: str | None = None
+    diagnostic_stop_after_iteration: int | None = None
 
 
 @dataclass(frozen=True)
@@ -104,9 +200,9 @@ class NativeInitialModelResult:
 
 @dataclass(frozen=True)
 class NativeSamplingPlan:
-    """Dense trial grid used by one native InitialModel E-step."""
+    """Trial geometry; sparse execution can defer the unused dense fine grid."""
 
-    rotations: np.ndarray
+    rotations: np.ndarray | None
     translations: np.ndarray
     random_perturbation: float
     healpix_order: int = DEFAULT_HEALPIX_ORDER
@@ -118,6 +214,13 @@ class NativeSamplingPlan:
     coarse_translations: np.ndarray | None = None
     coarse_prior_translations: np.ndarray | None = None
     translation_parent: np.ndarray | None = None
+    metadata_translations: np.ndarray | None = None
+
+    @property
+    def n_rotations(self) -> int:
+        if self.rotations is not None:
+            return int(self.rotations.shape[0])
+        return int(sampling.rotation_grid_size(self.healpix_order)) * 8 ** int(self.oversampling)
 
 
 @dataclass
@@ -145,6 +248,8 @@ class NativeSamplingState:
     nr_iter_wo_large_hidden_variable_changes: int = 0
     has_fine_enough_angular_sampling: bool = False
     last_current_resolution: float = 0.0
+    orientational_prior_mode: int = RELION_ORIENTATIONAL_PRIOR_NOPRIOR
+    uniform_local_orientation_prior: bool = False
 
     @property
     def offset_range_px(self) -> float:
@@ -188,6 +293,416 @@ class NativeOpticsState:
     phase_shift: np.ndarray
 
 
+@dataclass(frozen=True)
+class NativeContinuationCheckpoint:
+    """Fully materialized native VDAM state for one diagnostic restart."""
+
+    optimiser_star: Path
+    model_star: Path
+    data_star: Path
+    sampling_star: Path
+    iteration: int
+    state: InitialModelState
+    sampling_state: NativeSamplingState
+    grad_ini_subset_size: int
+    grad_fin_subset_size: int
+    grad_ini_frac: float
+    grad_fin_frac: float
+    grad_suspended_local_searches_iter: int
+
+
+def _relion_star_list_value(text: str, label: str, cast=str):
+    """Read one required scalar from a RELION list-style STAR block."""
+
+    import re
+    import shlex
+
+    matches = re.findall(rf"(?m)^_{re.escape(label)}\s+(.+?)\s*$", text)
+    if len(matches) != 1:
+        raise ValueError(f"expected exactly one _{label} field, found {len(matches)}")
+    tokens = shlex.split(matches[0], comments=False, posix=True)
+    if len(tokens) != 1:
+        raise ValueError(f"_{label} must contain exactly one scalar token")
+    return cast(tokens[0])
+
+
+def _resolve_relion_checkpoint_path(value: str, *, owner: Path) -> Path:
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = owner.parent / path
+    return path.resolve(strict=True)
+
+
+def _read_relion_complex_moment(path: Path, *, expected_shape: tuple[int, int, int]) -> np.ndarray:
+    """Read RELION's interleaved real/imaginary gradient-moment MRC."""
+
+    import mrcfile
+
+    with mrcfile.open(path, permissive=True) as mrc:
+        raw = np.asarray(mrc.data, dtype=np.float32).copy()
+    expected_storage_shape = (*expected_shape[:-1], 2 * expected_shape[-1])
+    if raw.shape != expected_storage_shape:
+        raise ValueError(
+            f"RELION gradient moment {path} has shape {raw.shape}; "
+            f"expected interleaved shape {expected_storage_shape}"
+        )
+    if not raw.flags.c_contiguous:
+        raw = np.ascontiguousarray(raw)
+    values = raw.view(np.complex64).reshape(expected_shape).astype(np.complex128)
+    if not np.all(np.isfinite(values)):
+        raise ValueError(f"RELION gradient moment {path} contains non-finite values")
+    return values
+
+
+def _second_pseudo_half_moment_path(first_path: Path, *, nr_classes: int) -> Path:
+    """Mirror ``MlModel::readStar``'s filename arithmetic for pseudo-half moment 1."""
+
+    import re
+
+    match = re.fullmatch(r"(.*?)(\d{3})(\.[^.]+)", first_path.name)
+    if match is None:
+        raise ValueError(
+            "native VDAM diagnostic continuation requires a three-digit moment filename, "
+            f"got {first_path}"
+        )
+    second_index = int(match.group(2)) + int(nr_classes)
+    return first_path.with_name(f"{match.group(1)}{second_index:03d}{match.group(3)}").resolve(strict=True)
+
+
+def _load_native_vdam_continuation(
+    optimiser_star: str | Path,
+    *,
+    expected_data_star: str | Path,
+    opts: NativeInitialModelOptions,
+    dataset,
+) -> NativeContinuationCheckpoint:
+    """Load every state field RELION consumes at a VDAM continuation boundary.
+
+    This loader is intentionally fail closed and is only used by the bounded
+    one-next-iteration profiler.  In particular, it requires native gradient
+    moment files rather than reconstructing or approximating momentum.
+    """
+
+    import starfile
+
+    from recovar.utils.helpers import load_relion_volume
+
+    optimiser_path = Path(optimiser_star).expanduser().resolve(strict=True)
+    optimiser_text = optimiser_path.read_text()
+    iteration = _relion_star_list_value(optimiser_text, "rlnCurrentIteration", int)
+    nr_iter = _relion_star_list_value(optimiser_text, "rlnNumberOfIterations", int)
+    data_path = _resolve_relion_checkpoint_path(
+        _relion_star_list_value(optimiser_text, "rlnExperimentalDataStarFile"),
+        owner=optimiser_path,
+    )
+    model_path = _resolve_relion_checkpoint_path(
+        _relion_star_list_value(optimiser_text, "rlnModelStarFile"),
+        owner=optimiser_path,
+    )
+    sampling_path = _resolve_relion_checkpoint_path(
+        _relion_star_list_value(optimiser_text, "rlnOrientSamplingStarFile"),
+        owner=optimiser_path,
+    )
+    if data_path != Path(expected_data_star).expanduser().resolve(strict=True):
+        raise ValueError(
+            "--i must be the exact data STAR named by --diagnostic_continue_optimiser: "
+            f"{expected_data_star} != {data_path}"
+        )
+    if nr_iter != int(opts.nr_iter):
+        raise ValueError(f"checkpoint nr_iter={nr_iter} differs from requested nr_iter={opts.nr_iter}")
+    required_optimizer_values = {
+        "rlnDoGradientRefine": 1,
+        "rlnDoStochasticGradientDescent": 1,
+        "rlnDoSplitRandomHalves": 0,
+        "rlnRandomSeed": int(opts.random_seed),
+        "rlnAdaptiveOversampleOrder": int(opts.oversampling),
+    }
+    for label, expected in required_optimizer_values.items():
+        observed = _relion_star_list_value(optimiser_text, label, int)
+        if observed != expected:
+            raise ValueError(f"checkpoint _{label}={observed} differs from requested value {expected}")
+    if _relion_star_list_value(optimiser_text, "rlnGradEmIters", int) != int(opts.grad_em_iters):
+        raise ValueError("checkpoint grad_em_iters differs from requested schedule")
+    if _relion_star_list_value(optimiser_text, "rlnParticleDiameter", float) != float(opts.particle_diameter):
+        raise ValueError("checkpoint particle diameter differs from requested value")
+    unsupported_subset_modes = {
+        "rlnDoFastSubsetOptimisation": _relion_star_list_value(
+            optimiser_text,
+            "rlnDoFastSubsetOptimisation",
+            int,
+        ),
+        "rlnGradSubsetOrder": _relion_star_list_value(
+            optimiser_text,
+            "rlnGradSubsetOrder",
+            int,
+        ),
+    }
+    enabled_subset_modes = [
+        name for name, value in unsupported_subset_modes.items() if int(value) != 0
+    ]
+    if enabled_subset_modes:
+        raise NotImplementedError(
+            "diagnostic native VDAM continuation does not support "
+            + ", ".join(enabled_subset_modes)
+        )
+    grad_suspended_local_searches_iter = _relion_star_list_value(
+        optimiser_text,
+        "rlnGradSuspendLocalSamplingIter",
+        int,
+    )
+    grad_ini_subset_size = _relion_star_list_value(
+        optimiser_text,
+        "rlnSgdInitialSubsetSize",
+        int,
+    )
+    grad_fin_subset_size = _relion_star_list_value(
+        optimiser_text,
+        "rlnSgdFinalSubsetSize",
+        int,
+    )
+    grad_ini_frac = _relion_star_list_value(
+        optimiser_text,
+        "rlnSgdInitialIterationsFraction",
+        float,
+    )
+    grad_fin_frac = _relion_star_list_value(
+        optimiser_text,
+        "rlnSgdFinalIterationsFraction",
+        float,
+    )
+
+    model = starfile.read(model_path, always_dict=True)
+    general = model.get("model_general")
+    classes = model.get("model_classes")
+    if not isinstance(general, dict) or classes is None:
+        raise ValueError(f"{model_path} lacks native model_general/model_classes tables")
+
+    def _general(name: str, cast=float):
+        if name not in general:
+            raise ValueError(f"{model_path} lacks {name}")
+        return cast(general[name])
+
+    ori_size = _general("rlnOriginalImageSize", int)
+    current_size = _general("rlnCurrentImageSize", int)
+    pixel_size = _general("rlnPixelSize", float)
+    nr_classes = _general("rlnNrClasses", int)
+    padding_factor = _general("rlnPaddingFactor", float)
+    if nr_classes != int(opts.nr_classes):
+        raise ValueError(f"checkpoint K={nr_classes} differs from requested K={opts.nr_classes}")
+    if nr_classes != 1:
+        raise NotImplementedError("diagnostic native VDAM continuation is currently K=1-only")
+    if ori_size != int(dataset.grid_size) or not np.isclose(pixel_size, float(dataset.voxel_size)):
+        raise ValueError("checkpoint model geometry differs from the input particle stack")
+    if not np.isclose(padding_factor, float(opts.padding_factor)):
+        raise ValueError("checkpoint padding factor differs from requested value")
+    n_shells = ori_size // 2 + 1
+    moment_shape = (ori_size * int(opts.padding_factor),) * 2 + (
+        (ori_size * int(opts.padding_factor)) // 2 + 1,
+    )
+
+    references = []
+    moment1_first = []
+    moment1_second = []
+    moment2 = []
+    pdf_class = []
+    tau2 = []
+    sigma2 = []
+    fsc = []
+    coverage = []
+    data_vs_prior = []
+    direction_priors = []
+    for class_index in range(nr_classes):
+        row = classes.iloc[class_index]
+        reference_path = _resolve_relion_checkpoint_path(str(row["rlnReferenceImage"]), owner=model_path)
+        moment1_path = _resolve_relion_checkpoint_path(str(row["rlnGradMoment1"]), owner=model_path)
+        moment2_path = _resolve_relion_checkpoint_path(str(row["rlnGradMoment2"]), owner=model_path)
+        second_moment1_path = _second_pseudo_half_moment_path(
+            moment1_path,
+            nr_classes=nr_classes,
+        )
+        references.append(np.asarray(load_relion_volume(reference_path), dtype=np.float64))
+        moment1_first.append(_read_relion_complex_moment(moment1_path, expected_shape=moment_shape))
+        moment1_second.append(_read_relion_complex_moment(second_moment1_path, expected_shape=moment_shape))
+        moment2.append(_read_relion_complex_moment(moment2_path, expected_shape=moment_shape))
+        pdf_class.append(float(row["rlnClassDistribution"]))
+
+        spectrum = model.get(f"model_class_{class_index + 1}")
+        direction = model.get(f"model_pdf_orient_class_{class_index + 1}")
+        if spectrum is None or direction is None or len(spectrum) != n_shells:
+            raise ValueError(f"{model_path} lacks complete class-{class_index + 1} spectra/prior")
+        tau2.append(np.asarray(spectrum["rlnReferenceTau2"], dtype=np.float64))
+        sigma2.append(np.asarray(spectrum["rlnReferenceSigma2"], dtype=np.float64))
+        fsc.append(np.asarray(spectrum["rlnGoldStandardFsc"], dtype=np.float64))
+        coverage.append(np.asarray(spectrum["rlnFourierCompleteness"], dtype=np.float64))
+        data_vs_prior.append(np.asarray(spectrum["rlnSsnrMap"], dtype=np.float64))
+        direction_priors.append(np.asarray(direction["rlnOrientationDistribution"], dtype=np.float64))
+
+    optics_tables = sorted(key for key in model if str(key).startswith("model_optics_group_"))
+    if len(optics_tables) != 1:
+        raise NotImplementedError("diagnostic native VDAM continuation requires one optics group")
+    noise_table = model[optics_tables[0]]
+    if len(noise_table) != n_shells:
+        raise ValueError("checkpoint sigma2_noise spectrum has the wrong shell count")
+    sigma2_noise = np.asarray(noise_table["rlnSigma2Noise"], dtype=np.float64)[None, :]
+    current_resolution_angstrom = _general("rlnCurrentResolution", float)
+    current_resolution = 1.0 / current_resolution_angstrom
+    state = InitialModelState(
+        iter=iteration,
+        nr_iter=nr_iter,
+        K=nr_classes,
+        ori_size=ori_size,
+        pixel_size=pixel_size,
+        pseudo_halfsets=True,
+        Iref=np.stack(references, axis=0),
+        Igrad1=np.concatenate(
+            [np.stack(moment1_first, axis=0), np.stack(moment1_second, axis=0)],
+            axis=0,
+        ),
+        Igrad2=np.stack(moment2, axis=0),
+        sigma2_noise=sigma2_noise,
+        tau2_class=np.stack(tau2, axis=0),
+        sigma2_class=np.stack(sigma2, axis=0),
+        fsc_halves_class=np.stack(fsc, axis=0),
+        fourier_coverage_class=np.stack(coverage, axis=0),
+        data_vs_prior_class=np.stack(data_vs_prior, axis=0),
+        pdf_class=np.asarray(pdf_class, dtype=np.float64),
+        pdf_direction=np.stack(direction_priors, axis=0),
+        sigma2_offset=_general("rlnSigmaOffsetsAngst", float) ** 2,
+        current_resolution=current_resolution,
+        current_resolution_shell=int(np.floor(current_resolution * pixel_size * ori_size + 0.5)),
+        current_size=current_size,
+        incr_size=_relion_star_list_value(optimiser_text, "rlnIncrementImageSize", int),
+        ave_Pmax=_general("rlnAveragePmax", float),
+        has_high_fsc_at_limit=bool(
+            _relion_star_list_value(optimiser_text, "rlnHasHighFscAtResolLimit", int)
+        ),
+        grad_current_stepsize=_relion_star_list_value(
+            optimiser_text,
+            "rlnGradCurrentStepsize",
+            float,
+        ),
+        tau2_fudge_factor=_general("rlnTau2FudgeFactor", float),
+        subset_size=_relion_star_list_value(optimiser_text, "rlnSgdSubsetSize", int),
+        has_converged=bool(_relion_star_list_value(optimiser_text, "rlnHasConverged", int)),
+        grad_has_converged=bool(
+            _relion_star_list_value(optimiser_text, "rlnGradHasConverged", int)
+        ),
+    )
+    for name in (
+        "Iref",
+        "Igrad1",
+        "Igrad2",
+        "sigma2_noise",
+        "tau2_class",
+        "sigma2_class",
+        "fsc_halves_class",
+        "fourier_coverage_class",
+        "data_vs_prior_class",
+        "pdf_class",
+        "pdf_direction",
+    ):
+        if not np.all(np.isfinite(np.asarray(getattr(state, name)))):
+            raise ValueError(f"checkpoint state field {name} contains non-finite values")
+
+    sampling_text = sampling_path.read_text()
+    sampling_state = NativeSamplingState(
+        healpix_order=_relion_star_list_value(sampling_text, "rlnHealpixOrder", int),
+        adaptive_oversampling=_relion_star_list_value(
+            optimiser_text,
+            "rlnAdaptiveOversampleOrder",
+            int,
+        ),
+        offset_range_angstrom=_relion_star_list_value(sampling_text, "rlnOffsetRange", float),
+        offset_step_angstrom=_relion_star_list_value(sampling_text, "rlnOffsetStep", float),
+        offset_range_ori_angstrom=_relion_star_list_value(
+            sampling_text,
+            "rlnOffsetRangeOriginal",
+            float,
+        ),
+        offset_step_ori_angstrom=_relion_star_list_value(
+            sampling_text,
+            "rlnOffsetStepOriginal",
+            float,
+        ),
+        pixel_size=pixel_size,
+        auto_local_healpix_order=_relion_star_list_value(
+            optimiser_text,
+            "rlnAutoLocalSearchesHealpixOrder",
+            int,
+        ),
+        acc_rot=_relion_star_list_value(optimiser_text, "rlnOverallAccuracyRotations", float),
+        acc_trans_angstrom=_relion_star_list_value(
+            optimiser_text,
+            "rlnOverallAccuracyTranslationsAngst",
+            float,
+        ),
+        current_changes_optimal_offsets_angstrom=_relion_star_list_value(
+            optimiser_text,
+            "rlnChangesOptimalOffsets",
+            float,
+        ),
+        current_changes_optimal_orientations=_relion_star_list_value(
+            optimiser_text,
+            "rlnChangesOptimalOrientations",
+            float,
+        ),
+        current_changes_optimal_classes=_relion_star_list_value(
+            optimiser_text,
+            "rlnChangesOptimalClasses",
+            float,
+        ),
+        smallest_changes_optimal_offsets_angstrom=_relion_star_list_value(
+            optimiser_text,
+            "rlnSmallestChangesOffsets",
+            float,
+        ),
+        smallest_changes_optimal_orientations=_relion_star_list_value(
+            optimiser_text,
+            "rlnSmallestChangesOrientations",
+            float,
+        ),
+        smallest_changes_optimal_classes=_relion_star_list_value(
+            optimiser_text,
+            "rlnSmallestChangesClasses",
+            float,
+        ),
+        nr_iter_wo_resol_gain=_relion_star_list_value(
+            optimiser_text,
+            "rlnNumberOfIterWithoutResolutionGain",
+            int,
+        ),
+        nr_iter_wo_large_hidden_variable_changes=_relion_star_list_value(
+            optimiser_text,
+            "rlnNumberOfIterWithoutChangingAssignments",
+            int,
+        ),
+        # updateCurrentResolution compares against mymodel.current_resolution,
+        # not best_resol_thus_far.  The former lives in the model checkpoint.
+        last_current_resolution=current_resolution,
+        orientational_prior_mode=_general("rlnOrientationalPriorMode", int),
+        uniform_local_orientation_prior=(
+            _general("rlnOrientationalPriorMode", int) == RELION_ORIENTATIONAL_PRIOR_ROTTILT_PSI
+            and _general("rlnSigmaPriorRotAngle", float) == 0.0
+            and _general("rlnSigmaPriorTiltAngle", float) == 0.0
+            and _general("rlnSigmaPriorPsiAngle", float) == 0.0
+        ),
+    )
+    return NativeContinuationCheckpoint(
+        optimiser_star=optimiser_path,
+        model_star=model_path,
+        data_star=data_path,
+        sampling_star=sampling_path,
+        iteration=iteration,
+        state=state,
+        sampling_state=sampling_state,
+        grad_ini_subset_size=grad_ini_subset_size,
+        grad_fin_subset_size=grad_fin_subset_size,
+        grad_ini_frac=grad_ini_frac,
+        grad_fin_frac=grad_fin_frac,
+        grad_suspended_local_searches_iter=grad_suspended_local_searches_iter,
+    )
+
+
 def _relion_rnd_unif_factory(seed: int) -> RndUnifFn:
     """Return a RELION ``rnd_unif`` source using the local C++ binding."""
 
@@ -203,6 +718,20 @@ def _relion_rnd_unif_factory(seed: int) -> RndUnifFn:
         return float(cache[call_idx])
 
     return _rnd
+
+
+def _validate_continuation_order_replay(checkpoint: NativeContinuationCheckpoint) -> None:
+    """Fail closed when native subset-order history is not reconstructible."""
+
+    if (
+        int(checkpoint.sampling_state.orientational_prior_mode)
+        != RELION_ORIENTATIONAL_PRIOR_NOPRIOR
+        or int(checkpoint.grad_suspended_local_searches_iter) != -1
+    ):
+        raise NotImplementedError(
+            "diagnostic native VDAM continuation can reconstruct particle "
+            "order only before the first local-search transition"
+        )
 
 
 def _output_dir_from_prefix(outputname: str) -> Path:
@@ -353,31 +882,128 @@ def _image_pre_shifts_from_star(main_star, dataset) -> np.ndarray:
     return relion_round_away_from_zero(_image_origin_offsets_pixels_from_star(main_star, dataset))
 
 
-def _particle_state_from_star(main_star, dataset) -> NativeParticleState:
+def _particle_state_from_star(
+    main_star,
+    dataset,
+    *,
+    allow_unvisited_class_zero: bool = False,
+    nr_classes: int | None = None,
+) -> NativeParticleState:
+    """Load particle state, optionally accepting RELION's K=1 restart sentinel.
+
+    Fresh production inputs retain the ordinary one-indexed positive-class
+    contract.  Native InitialModel continuation STARs use class zero only for
+    particles that the stochastic gradient schedule has not visited yet.
+    """
+
+    if allow_unvisited_class_zero and nr_classes != 1:
+        raise ValueError(
+            "unvisited _rlnClassNumber=0 is supported only for a verified K=1 "
+            "diagnostic continuation",
+        )
     n_images = int(getattr(dataset, "n_images", len(main_star)))
     if len(main_star) != n_images:
         raise ValueError(f"STAR table has {len(main_star)} particles but dataset has {n_images} images")
     class_col = _star_column(main_star, "_rlnClassNumber")
     if class_col is None:
+        if allow_unvisited_class_zero:
+            raise ValueError(
+                "K=1 diagnostic continuation requires _rlnClassNumber",
+            )
+        class_numbers = None
         class_assignments = np.zeros(n_images, dtype=np.int32)
     else:
-        class_assignments = np.asarray(class_col.astype(int).to_numpy(), dtype=np.int32) - 1
-        if np.any(class_assignments < 0):
+        class_numbers = np.asarray(class_col.astype(int).to_numpy(), dtype=np.int32)
+        if allow_unvisited_class_zero:
+            if np.any((class_numbers < 0) | (class_numbers > 1)):
+                raise ValueError(
+                    "K=1 diagnostic continuation _rlnClassNumber values must be 0 or 1",
+                )
+            class_assignments = np.zeros(n_images, dtype=np.int32)
+        else:
+            class_assignments = class_numbers - 1
+        if not allow_unvisited_class_zero and np.any(class_assignments < 0):
             raise ValueError("_rlnClassNumber values must be one-indexed positive class ids")
 
     pmax_col = _star_column(main_star, "_rlnMaxValueProbDistribution")
     if pmax_col is None:
         max_posterior = np.zeros(n_images, dtype=np.float32)
+        max_posterior_values = None
     else:
-        max_posterior = np.asarray(pmax_col.astype(float).to_numpy(), dtype=np.float32)
-        if not np.all(np.isfinite(max_posterior)):
+        max_posterior_values = np.asarray(
+            pmax_col.astype(float).to_numpy(),
+            dtype=np.float64,
+        )
+        if not np.all(np.isfinite(max_posterior_values)):
             raise ValueError("_rlnMaxValueProbDistribution values must be finite")
+        max_posterior = max_posterior_values.astype(np.float32)
+
+    if allow_unvisited_class_zero:
+        assert class_numbers is not None
+        zero_state_evidence: list[np.ndarray] = []
+        if max_posterior_values is not None:
+            if np.any(max_posterior_values < 0.0):
+                raise ValueError(
+                    "diagnostic continuation probability values must be non-negative",
+                )
+            zero_state_evidence.append(max_posterior_values == 0.0)
+        significant_col = _star_column(main_star, "_rlnNrOfSignificantSamples")
+        if significant_col is not None:
+            significant_samples = np.asarray(
+                significant_col.astype(float).to_numpy(),
+                dtype=np.float64,
+            )
+            if (
+                not np.all(np.isfinite(significant_samples))
+                or np.any(significant_samples < 0.0)
+                or np.any(significant_samples != np.floor(significant_samples))
+            ):
+                raise ValueError(
+                    "diagnostic continuation significant-sample counts must be "
+                    "finite non-negative integers",
+                )
+            zero_state_evidence.append(significant_samples == 0.0)
+        if not zero_state_evidence:
+            raise ValueError(
+                "K=1 diagnostic continuation cannot validate unvisited class-zero rows "
+                "without posterior or significant-sample state",
+            )
+        state_is_unvisited = np.logical_and.reduce(zero_state_evidence)
+        class_is_unvisited = class_numbers == 0
+        if not np.array_equal(class_is_unvisited, state_is_unvisited):
+            mismatched_rows = np.flatnonzero(class_is_unvisited != state_is_unvisited)
+            raise ValueError(
+                "K=1 diagnostic continuation class-zero sentinels disagree with "
+                f"unvisited particle state at rows {mismatched_rows[:8].tolist()}",
+            )
+        visited = ~class_is_unvisited
+    else:
+        visited = max_posterior > 0.0
+
+    angle_names = ("_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi")
+    angle_columns = tuple(_star_column(main_star, name) for name in angle_names)
+    if any(column is not None for column in angle_columns) and not all(column is not None for column in angle_columns):
+        missing = [name for name, column in zip(angle_names, angle_columns) if column is None]
+        raise ValueError(f"STAR file must provide all Euler-angle columns; missing {', '.join(missing)}")
+    best_pose_rotations = None
+    if all(column is not None for column in angle_columns):
+        eulers = np.stack(
+            [np.asarray(column.astype(float).to_numpy(), dtype=np.float64) for column in angle_columns],
+            axis=1,
+        )
+        if not np.all(np.isfinite(eulers)):
+            raise ValueError("STAR Euler angles must be finite")
+        # RELION keeps the input metadata orientations available before every
+        # gradient subset has been visited. Sampling-accuracy estimation uses
+        # those orientations, then replaces rows as fresh E-step poses arrive.
+        best_pose_rotations = np.asarray(R_from_relion(eulers, degrees=True), dtype=np.float32)
     return NativeParticleState(
         translation_offsets=_image_origin_offsets_pixels_from_star(main_star, dataset),
         class_assignments=class_assignments,
         max_posterior=max_posterior,
         pose_assignments=np.full(n_images, -1, dtype=np.int32),
-        visited=max_posterior > 0.0,
+        best_pose_rotations=best_pose_rotations,
+        visited=visited,
     )
 
 
@@ -421,18 +1047,33 @@ def _configure_relion_image_mask(dataset, opts: NativeInitialModelOptions) -> No
     backend = getattr(source, "backend", source)
     if backend is None:
         return
-    image_mask = core_mask.relion_soft_image_mask(
-        int(dataset.grid_size),
-        float(dataset.voxel_size),
-        float(opts.particle_diameter),
-        float(opts.width_mask_edge_px),
-    )
-    if hasattr(backend, "image_mask"):
-        backend.image_mask = image_mask
-    if hasattr(backend, "mask"):
-        backend.mask = image_mask
-    if hasattr(backend, "image_mask_mode"):
-        backend.image_mask_mode = "relion_background_fill"
+    if hasattr(backend, "set_relion_image_mask"):
+        backend.set_relion_image_mask(
+            pixel_size=float(dataset.voxel_size),
+            particle_diameter_ang=float(opts.particle_diameter),
+            width_mask_edge_px=float(opts.width_mask_edge_px),
+        )
+    else:
+        image_mask = core_mask.relion_soft_image_mask(
+            int(dataset.grid_size),
+            float(dataset.voxel_size),
+            float(opts.particle_diameter),
+            float(opts.width_mask_edge_px),
+        )
+        if hasattr(backend, "image_mask"):
+            backend.image_mask = image_mask
+        if hasattr(backend, "mask"):
+            backend.mask = image_mask
+        if hasattr(backend, "image_mask_mode"):
+            backend.image_mask_mode = "relion_background_fill"
+
+    if hasattr(backend, "set_relion_fourier_backend"):
+        backend.set_relion_fourier_backend(opts.image_fourier_backend)
+    elif opts.image_fourier_backend != "host_numpy":
+        raise ValueError(
+            "InitialModel image_fourier_backend requires a compatible image backend; "
+            f"got {opts.image_fourier_backend!r}",
+        )
 
 
 def _initial_sampling_state(opts: NativeInitialModelOptions, *, pixel_size: float) -> NativeSamplingState:
@@ -450,8 +1091,13 @@ def _initial_sampling_state(opts: NativeInitialModelOptions, *, pixel_size: floa
     )
 
 
-def _native_initialmodel_do_grad(state: InitialModelState, iteration: int) -> bool:
-    return ((int(state.nr_iter) - int(iteration)) >= DEFAULT_GRAD_EM_ITERS) and not bool(state.has_converged)
+def _native_initialmodel_do_grad(
+    state: InitialModelState,
+    iteration: int,
+    *,
+    grad_em_iters: int = DEFAULT_GRAD_EM_ITERS,
+) -> bool:
+    return ((int(state.nr_iter) - int(iteration)) >= int(grad_em_iters)) and not bool(state.has_converged)
 
 
 def _active_relion_initialmodel_max_significants(state: InitialModelState, *, do_grad: bool) -> int:
@@ -460,77 +1106,6 @@ def _active_relion_initialmodel_max_significants(state: InitialModelState, *, do
     if not bool(do_grad):
         return -1
     return int(RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS) * int(state.K)
-
-
-def _apply_effective_class_support_floor(result, state: InitialModelState):
-    """Drop sub-particle reconstruction support before the RELION M-step branch."""
-
-    if int(state.K) <= 1:
-        return result
-    posterior_sums = result.meta.get("class_posterior_sums")
-    bpref_weight_sums = result.meta.get("class_bpref_weight_sums")
-    support = result.meta.get("class_reconstruction_support_sums", posterior_sums)
-    if support is None:
-        return result
-    support = np.asarray(support, dtype=np.float64)
-    if support.shape != (int(state.K),):
-        return result
-    active = support >= RELION_INITIALMODEL_MIN_EFFECTIVE_CLASS_SUPPORT
-    if np.all(active):
-        return result
-
-    accumulators = []
-    for accum in result.accumulators:
-        if active[int(accum.class_idx)]:
-            accumulators.append(accum)
-        else:
-            accumulators.append(
-                replace(
-                    accum,
-                    data=np.zeros_like(accum.data),
-                    weight=np.zeros_like(accum.weight),
-                )
-            )
-
-    meta = dict(result.meta)
-    meta["class_reconstruction_support_sums_raw"] = support
-    meta["class_effective_support_active"] = active
-    meta["class_reconstruction_support_sums"] = np.where(active, support, 0.0)
-    if posterior_sums is not None:
-        posterior_sums = np.asarray(posterior_sums, dtype=np.float64)
-        if posterior_sums.shape == active.shape:
-            meta["class_posterior_sums_raw"] = posterior_sums
-            posterior_for_update = np.where(active, posterior_sums, 0.0)
-            if bpref_weight_sums is not None:
-                bpref_weight_sums = np.asarray(bpref_weight_sums, dtype=np.float64)
-                if bpref_weight_sums.shape == active.shape:
-                    meta["class_bpref_weight_sums_raw"] = bpref_weight_sums
-                    masked_bpref = np.where(active, bpref_weight_sums, 0.0)
-                    bpref_total = float(np.sum(masked_bpref))
-                    posterior_total = float(np.sum(posterior_for_update))
-                    if bpref_total > 0.0 and posterior_total > 0.0:
-                        posterior_for_update = masked_bpref * (posterior_total / bpref_total)
-            meta["class_posterior_sums"] = posterior_for_update
-    if bpref_weight_sums is not None:
-        bpref_weight_sums = np.asarray(bpref_weight_sums, dtype=np.float64)
-        if bpref_weight_sums.shape == active.shape:
-            meta["class_bpref_weight_sums"] = np.where(active, bpref_weight_sums, 0.0)
-    for key in tuple(meta):
-        if key.startswith("halfset_") and key.endswith("_class_reconstruction_support_sums"):
-            half_sums = np.asarray(meta[key], dtype=np.float64)
-            if half_sums.shape == active.shape:
-                meta[key] = np.where(active, half_sums, 0.0)
-        if key.startswith("halfset_") and key.endswith("_class_posterior_sums"):
-            half_sums = np.asarray(meta[key], dtype=np.float64)
-            if half_sums.shape == active.shape:
-                meta[f"{key}_raw"] = half_sums
-                meta[key] = np.where(active, half_sums, 0.0)
-    if (direction_sums := meta.get("class_direction_posterior_sums")) is not None:
-        direction_sums = np.asarray(direction_sums, dtype=np.float64).copy()
-        direction_sums[~active] = 0.0
-        meta["class_direction_posterior_sums"] = direction_sums
-
-    return replace(result, accumulators=accumulators, meta=meta)
 
 
 def _should_update_native_sampling(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
@@ -552,16 +1127,35 @@ def _record_resolution_stall_for_sampling(
     *,
     iteration: int,
 ) -> None:
-    """Track RELION's resolution-stall counter (audit only; not used for autosampling here)."""
+    """Track RELION's post-maximization resolution-stall counter."""
     current_resolution = float(state.current_resolution)
-    if int(iteration) < 10:
-        sampling_state.nr_iter_wo_resol_gain = 0
-        sampling_state.nr_iter_wo_large_hidden_variable_changes = 0
-    elif current_resolution <= float(sampling_state.last_current_resolution) + 0.0001:
+    if current_resolution <= float(sampling_state.last_current_resolution) + 0.0001:
         sampling_state.nr_iter_wo_resol_gain += 1
     else:
         sampling_state.nr_iter_wo_resol_gain = 0
     sampling_state.last_current_resolution = current_resolution
+
+
+def _record_native_sampling_post_iteration(
+    sampling_state: NativeSamplingState,
+    state: InitialModelState,
+    *,
+    iteration: int,
+    meta: dict,
+) -> None:
+    """Record sampling-controller state after the completed M-step.
+
+    RELION calls ``updateAngularSampling`` near the start of expectation, then
+    calls ``updateCurrentResolution`` after maximization.  Keep that ordering:
+    the sampling decision for iteration ``N`` must only see the stall counter
+    written by iteration ``N - 1``.
+    """
+    _record_resolution_stall_for_sampling(sampling_state, state, iteration=iteration)
+    meta["sampling_nr_iter_wo_resol_gain"] = int(sampling_state.nr_iter_wo_resol_gain)
+    meta["sampling_nr_iter_wo_large_hidden_variable_changes"] = int(
+        sampling_state.nr_iter_wo_large_hidden_variable_changes
+    )
+    meta["sampling_last_current_resolution"] = float(sampling_state.last_current_resolution)
 
 
 def _reset_native_sampling_change_trackers(sampling_state: NativeSamplingState) -> None:
@@ -609,21 +1203,37 @@ def _relion_update_native_sampling_state(
         new_step = new_range / 4.0
 
     new_healpix_order = int(sampling_state.healpix_order)
-    if not (
+    requested_healpix_order = new_healpix_order + 1
+    gradient_ceiling_reached = (
         bool(do_grad)
         and not bool(do_auto_refine)
-        and (int(sampling_state.healpix_order) + 1) >= int(sampling_state.auto_local_healpix_order)
-    ):
-        new_healpix_order += 1
+        and requested_healpix_order >= int(sampling_state.auto_local_healpix_order)
+    )
+    if not gradient_ceiling_reached:
+        new_healpix_order = requested_healpix_order
 
     if new_step > float(sampling_state.offset_step_angstrom):
         new_step = float(sampling_state.offset_step_angstrom)
         new_range = float(sampling_state.offset_range_angstrom)
 
+    old_orientational_prior_mode = int(sampling_state.orientational_prior_mode)
+    old_uniform_local_orientation_prior = bool(sampling_state.uniform_local_orientation_prior)
+    if requested_healpix_order >= int(sampling_state.auto_local_healpix_order):
+        sampling_state.orientational_prior_mode = RELION_ORIENTATIONAL_PRIOR_ROTTILT_PSI
+        # RELION's gradient InitialModel stops at the exhaustive HEALPix-3
+        # grid, but its pinned updateAngularSampling path still switches to
+        # PRIOR_ROTTILT_PSI. The stored zero angular-prior widths then produce
+        # uniform direction and psi priors, as observed at the live GPU score
+        # boundary. Keep this transition explicit instead of carrying the
+        # learned pdf_direction into iteration 90 and later.
+        sampling_state.uniform_local_orientation_prior = bool(gradient_ceiling_reached)
+
     changed = (
         new_healpix_order != int(sampling_state.healpix_order)
         or abs(new_step - float(sampling_state.offset_step_angstrom)) > 1e-12
         or abs(new_range - float(sampling_state.offset_range_angstrom)) > 1e-12
+        or int(sampling_state.orientational_prior_mode) != old_orientational_prior_mode
+        or bool(sampling_state.uniform_local_orientation_prior) != old_uniform_local_orientation_prior
     )
     sampling_state.healpix_order = int(new_healpix_order)
     sampling_state.offset_step_angstrom = float(new_step)
@@ -639,11 +1249,19 @@ def _prepare_native_sampling_for_iteration(
     iteration: int,
     do_grad: bool,
 ) -> bool:
-    _record_resolution_stall_for_sampling(sampling_state, state, iteration=iteration)
+    # MlOptimiser::iterate resets both convergence counters before expectation
+    # during the initial gradient burn-in.  The completed M-step may populate
+    # them again for the checkpoint written by this iteration.
+    if bool(do_grad) and int(iteration) < 10:
+        sampling_state.nr_iter_wo_resol_gain = 0
+        sampling_state.nr_iter_wo_large_hidden_variable_changes = 0
     if not _should_update_native_sampling(iteration=iteration, nr_iter=int(state.nr_iter), do_grad=do_grad):
         return False
     if sampling_state.nr_iter_wo_resol_gain < RELION_INITIALMODEL_MAX_NR_ITER_WO_RESOL_GAIN:
         return False
+    # RELION initialiseGeneral sets auto_ignore_angle_changes for the entire
+    # gradient_refine run, including its final EM phase. InitialModel therefore
+    # updates sampling on resolution stalls even when assignments still change.
     return _relion_update_native_sampling_state(sampling_state, do_grad=do_grad)
 
 
@@ -655,6 +1273,22 @@ def _should_estimate_native_sampling_accuracy(*, iteration: int, nr_iter: int, d
     if bool(do_grad) and iteration % 10 != 0:
         return False
     return iteration <= int(nr_iter)
+
+
+def _skip_native_sampling_accuracy_diagnostic() -> bool:
+    """Return whether the focused controller discriminator skips accuracy estimation."""
+    value = os.environ.get(INITIAL_MODEL_SKIP_EXPECTED_ACCURACY_ENV, "").strip()
+    if value not in {"", "0", "1"}:
+        raise ValueError(f"{INITIAL_MODEL_SKIP_EXPECTED_ACCURACY_ENV} must be 0 or 1")
+    return value == "1"
+
+
+def _isolate_native_sampling_accuracy_diagnostic() -> bool:
+    """Return whether expected accuracy runs in a fresh spawned process."""
+    value = os.environ.get(INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV, "").strip()
+    if value not in {"", "0", "1"}:
+        raise ValueError(f"{INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV} must be 0 or 1")
+    return value == "1"
 
 
 def _best_eulers_from_particle_state(
@@ -694,6 +1328,7 @@ def _estimate_native_sampling_accuracy(
     particle_order: np.ndarray,
     random_seed: int,
     padding_factor: int,
+    sigma2_fudge: float,
 ) -> dict[str, object] | None:
     n_trials = min(100, int(particle_order.size))
     if n_trials <= 0:
@@ -710,46 +1345,103 @@ def _estimate_native_sampling_accuracy(
     if np.any(class_ids < 0) or np.any(class_ids >= int(state.K)):
         return None
 
-    from recovar.relion_bind import _relion_bind_core as bind
+    random_seed_particle_ids = np.arange(n_trials, dtype=np.int64)
+    if state.sorted_particle_part_ids is not None:
+        sorted_particle_ids = np.asarray(state.sorted_particle_ids, dtype=np.int64)
+        sorted_part_ids = np.asarray(state.sorted_particle_part_ids, dtype=np.int64)
+        if sorted_particle_ids.shape != sorted_part_ids.shape:
+            raise ValueError("stored RELION particle ids and part ids must have matching shapes")
+        if sorted_particle_ids.size < particle_order.size or not np.array_equal(
+            sorted_particle_ids[: particle_order.size],
+            np.asarray(particle_order, dtype=np.int64),
+        ):
+            raise ValueError("sampling-accuracy particle order is not the stored RELION subset prefix")
+        random_seed_particle_ids = sorted_part_ids[:n_trials].copy()
 
     refs_relion = np.stack(
         [np.asarray(recovar_volume_to_relion(ref), dtype=np.float64) for ref in np.asarray(state.Iref)],
         axis=0,
     )
     current_image_size = int(state.current_size if state.current_size > 0 else state.ori_size)
-    out = bind.vdam_expected_angular_errors(
-        refs_relion,
-        eulers,
-        trial_particle_ids.astype(np.int64, copy=False),
-        class_ids.astype(np.int32, copy=False),
-        np.asarray(state.pdf_class, dtype=np.float64),
-        np.asarray(state.sigma2_noise[0], dtype=np.float64),
-        np.asarray(optics_state.defU, dtype=np.float64),
-        np.asarray(optics_state.defV, dtype=np.float64),
-        np.asarray(optics_state.defAngle, dtype=np.float64),
-        np.asarray(optics_state.phase_shift, dtype=np.float64),
-        float(optics_state.voltage),
-        float(optics_state.Cs),
-        float(optics_state.Q0),
-        float(optics_state.pixel_size),
-        int(state.ori_size),
-        current_image_size,
-        int(padding_factor),
-        1,
-        float(state.tau2_fudge_factor),
-        int(random_seed),
-        True,
-        False,
+    accuracy_estimator = (
+        estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs
+        if _isolate_native_sampling_accuracy_diagnostic()
+        else estimate_relion_expected_accuracy_from_prepared_inputs
     )
-    sampling_state.acc_rot = float(out["acc_rot"])
-    sampling_state.acc_trans_angstrom = float(out["acc_trans"])
+    accuracy = accuracy_estimator(
+        references_relion=refs_relion,
+        trial_eulers_deg=eulers,
+        trial_local_indices=trial_particle_ids,
+        trial_class_ids=class_ids,
+        class_weights=np.asarray(state.pdf_class, dtype=np.float64),
+        sigma2_noise_relion=np.asarray(state.sigma2_noise[0], dtype=np.float64),
+        defocus_u=np.asarray(optics_state.defU, dtype=np.float64),
+        defocus_v=np.asarray(optics_state.defV, dtype=np.float64),
+        defocus_angle=np.asarray(optics_state.defAngle, dtype=np.float64),
+        phase_shift=np.asarray(optics_state.phase_shift, dtype=np.float64),
+        voltage=float(optics_state.voltage),
+        spherical_aberration=float(optics_state.Cs),
+        amplitude_contrast=float(optics_state.Q0),
+        pixel_size=float(optics_state.pixel_size),
+        ori_size=int(state.ori_size),
+        current_image_size=current_image_size,
+        padding_factor=int(padding_factor),
+        sigma2_fudge=float(sigma2_fudge),
+        random_seed=int(random_seed),
+        do_ctf_correction=True,
+        # RELION seeds these trials with Experiment's internal ``part_id``,
+        # not the original input-table row ids carried by RECOVAR's dataset.
+        random_seed_particle_ids=random_seed_particle_ids,
+    )
+    dump_dir = os.environ.get("RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_DIR", "").strip()
+    dump_iterations = os.environ.get(
+        "RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_ITERATIONS",
+        "",
+    ).strip()
+    selected_dump_iterations = {
+        int(value.strip()) for value in dump_iterations.split(",") if value.strip()
+    }
+    if dump_dir and (
+        not selected_dump_iterations or int(state.iter) in selected_dump_iterations
+    ):
+        dump_path = Path(dump_dir)
+        dump_path.mkdir(parents=True, exist_ok=True)
+        np.savez(
+            dump_path / f"iter{int(state.iter):03d}_expected_accuracy_inputs.npz",
+            refs_relion=refs_relion,
+            eulers=eulers,
+            trial_particle_ids=trial_particle_ids,
+            class_ids=class_ids,
+            pdf_class=np.asarray(state.pdf_class, dtype=np.float64),
+            sigma2_noise=np.asarray(state.sigma2_noise[0], dtype=np.float64),
+            defU=np.asarray(optics_state.defU, dtype=np.float64),
+            defV=np.asarray(optics_state.defV, dtype=np.float64),
+            defAngle=np.asarray(optics_state.defAngle, dtype=np.float64),
+            phase_shift=np.asarray(optics_state.phase_shift, dtype=np.float64),
+            voltage=np.asarray(float(optics_state.voltage), dtype=np.float64),
+            Cs=np.asarray(float(optics_state.Cs), dtype=np.float64),
+            Q0=np.asarray(float(optics_state.Q0), dtype=np.float64),
+            pixel_size=np.asarray(float(optics_state.pixel_size), dtype=np.float64),
+            ori_size=np.asarray(int(state.ori_size), dtype=np.int64),
+            current_image_size=np.asarray(current_image_size, dtype=np.int64),
+            padding_factor=np.asarray(int(padding_factor), dtype=np.int64),
+            sigma2_fudge=np.asarray(float(sigma2_fudge), dtype=np.float64),
+            random_seed=np.asarray(int(random_seed), dtype=np.int64),
+            random_seed_particle_ids=random_seed_particle_ids,
+            acc_rot=np.asarray(accuracy.acc_rot, dtype=np.float64),
+            acc_trans=np.asarray(accuracy.acc_trans_angstrom, dtype=np.float64),
+        )
+    sampling_state.acc_rot = accuracy.acc_rot
+    sampling_state.acc_trans_angstrom = accuracy.acc_trans_angstrom
     return {
-        "estimated_acc_rot": float(out["acc_rot"]),
-        "estimated_acc_trans_angstrom": float(out["acc_trans"]),
-        "estimated_acc_rot_class": np.asarray(out["acc_rot_class"], dtype=np.float64),
-        "estimated_acc_trans_class": np.asarray(out["acc_trans_class"], dtype=np.float64),
-        "estimated_acc_class_counts": np.asarray(out["class_counts"], dtype=np.int64),
+        "estimated_acc_rot": accuracy.acc_rot,
+        "estimated_acc_trans_angstrom": accuracy.acc_trans_angstrom,
+        "estimated_acc_rot_class": accuracy.acc_rot_per_class,
+        "estimated_acc_trans_class": accuracy.acc_trans_per_class_angstrom,
+        "estimated_acc_class_counts": accuracy.class_counts,
         "estimated_acc_n_trials": int(n_trials),
+        "estimated_acc_sigma2_fudge": float(sigma2_fudge),
+        "estimated_acc_seed_part_ids": random_seed_particle_ids,
     }
 
 
@@ -759,6 +1451,8 @@ def _record_native_sampling_assignment_changes(
     particle_ids: np.ndarray | None,
     previous_translations: np.ndarray,
     current_translations: np.ndarray,
+    previous_rotations: np.ndarray | None,
+    current_rotations: np.ndarray | None,
     previous_classes: np.ndarray,
     current_classes: np.ndarray,
 ) -> None:
@@ -770,24 +1464,65 @@ def _record_native_sampling_assignment_changes(
 
     prev_t = np.asarray(previous_translations, dtype=np.float64)
     curr_t = np.asarray(current_translations, dtype=np.float64)
-    delta = curr_t[ids, :2] - prev_t[ids, :2]
-    if delta.size:
-        rms_pixels = float(np.sqrt(np.sum(delta[:, 0] ** 2 + delta[:, 1] ** 2) / (2.0 * float(ids.size))))
-        sampling_state.current_changes_optimal_offsets_angstrom = rms_pixels * float(sampling_state.pixel_size)
-        if (
-            sampling_state.current_changes_optimal_offsets_angstrom
-            < sampling_state.smallest_changes_optimal_offsets_angstrom
-        ):
-            sampling_state.smallest_changes_optimal_offsets_angstrom = (
-                sampling_state.current_changes_optimal_offsets_angstrom
-            )
+    current_offsets = compute_relion_offset_changes_angstrom(
+        curr_t[ids, :2],
+        prev_t[ids, :2],
+        float(sampling_state.pixel_size),
+    )
+    sampling_state.current_changes_optimal_offsets_angstrom = current_offsets
+
+    current_orientations = compute_relion_orientation_changes(
+        None if current_rotations is None else np.asarray(current_rotations)[ids],
+        None if previous_rotations is None else np.asarray(previous_rotations)[ids],
+    )
+    sampling_state.current_changes_optimal_orientations = current_orientations
 
     prev_c = np.asarray(previous_classes, dtype=np.int32)
     curr_c = np.asarray(current_classes, dtype=np.int32)
-    class_changes = float(np.count_nonzero(curr_c[ids] != prev_c[ids]))
+    class_changes = float(np.count_nonzero(curr_c[ids] != prev_c[ids])) / float(ids.size)
     sampling_state.current_changes_optimal_classes = class_changes
+
+    if np.isfinite(current_offsets) and np.isfinite(current_orientations):
+        # The shared predicate is named for the MPI controller because that
+        # path supplies leader-held sampling steps.  InitialModel is the same
+        # RELION predicate with this process's current effective steps.
+        changes_are_small = relion_mpi_hidden_variable_change_is_small(
+            current_classes=class_changes,
+            current_offsets_angstrom=current_offsets,
+            current_orientations_deg=current_orientations,
+            smallest_classes=sampling_state.smallest_changes_optimal_classes,
+            smallest_offsets_angstrom=(
+                sampling_state.smallest_changes_optimal_offsets_angstrom
+            ),
+            smallest_orientations_deg=(
+                sampling_state.smallest_changes_optimal_orientations
+            ),
+            mpi_leader_angular_step_deg=sampling.relion_angular_sampling_deg(
+                sampling_state.healpix_order,
+                sampling_state.adaptive_oversampling,
+            ),
+            mpi_leader_translation_step_angstrom=(
+                sampling_state.effective_offset_step_angstrom
+            ),
+        )
+        if changes_are_small:
+            sampling_state.nr_iter_wo_large_hidden_variable_changes += 1
+        else:
+            sampling_state.nr_iter_wo_large_hidden_variable_changes = 0
+
+        # RELION updates the sticky minima after evaluating the counter.
+        if current_offsets < sampling_state.smallest_changes_optimal_offsets_angstrom:
+            sampling_state.smallest_changes_optimal_offsets_angstrom = current_offsets
+        if current_orientations < sampling_state.smallest_changes_optimal_orientations:
+            sampling_state.smallest_changes_optimal_orientations = current_orientations
+    else:
+        sampling_state.nr_iter_wo_large_hidden_variable_changes = 0
+
     if class_changes < sampling_state.smallest_changes_optimal_classes:
-        sampling_state.smallest_changes_optimal_classes = class_changes
+        # RELION's ROUND macro is floor(x + 0.5), not Python's bankers round.
+        sampling_state.smallest_changes_optimal_classes = float(
+            np.floor(class_changes + 0.5)
+        )
 
 
 def _build_sampling_plan(
@@ -795,6 +1530,7 @@ def _build_sampling_plan(
     *,
     iteration: int = 1,
     sampling_state: NativeSamplingState | None = None,
+    defer_fine_rotations: bool = False,
 ) -> NativeSamplingPlan:
     if sampling_state is None:
         healpix_order = int(opts.healpix_order)
@@ -814,9 +1550,15 @@ def _build_sampling_plan(
     random_perturbation = _random_perturbation_for_iteration(opts, iteration)
     perturbed = abs(random_perturbation) > 1e-12
 
-    coarse_translations = sampling.get_translation_grid(max_pixel=offset_range_px, pixel_offset=offset_step_px).astype(
-        np.float32
+    source_units_per_pixel = (
+        float(sampling_state.pixel_size) if sampling_state is not None else 1.0
     )
+    metadata_coarse_translations = sampling.get_relion_translation_grid(
+        max_pixel=offset_range_px,
+        pixel_offset=offset_step_px,
+        source_units_per_pixel=source_units_per_pixel,
+    )
+    coarse_translations = metadata_coarse_translations.astype(np.float32)
     coarse_pass1_translations = (
         sampling.apply_relion_translation_perturbation(coarse_translations, random_perturbation, offset_step_px).astype(
             np.float32
@@ -828,6 +1570,7 @@ def _build_sampling_plan(
     if oversampling == 0:
         rotations = sampling.get_relion_hidden_rotation_grid(healpix_order, matrices=True).astype(np.float32)
         translations = coarse_translations
+        metadata_translations = metadata_coarse_translations
         if perturbed:
             rotations = sampling.apply_relion_rotation_perturbation(
                 rotations, random_perturbation, sampling.relion_angular_sampling_deg(healpix_order)
@@ -835,24 +1578,41 @@ def _build_sampling_plan(
             translations = sampling.apply_relion_translation_perturbation(
                 translations, random_perturbation, offset_step_px
             ).astype(np.float32)
+            metadata_translations = sampling.apply_relion_translation_perturbation(
+                metadata_translations, random_perturbation, offset_step_px
+            )
         translation_parent = None
     else:
-        rotations, _ = sampling.get_oversampled_relion_hidden_rotation_grid_from_samples(
-            np.arange(sampling.rotation_grid_size(healpix_order), dtype=np.int64),
-            parent_nside_level=healpix_order,
-            oversampling_order=oversampling,
-            random_perturbation=random_perturbation,
-        )
+        rotations = None
+        if not defer_fine_rotations:
+            rotations, _ = sampling.get_oversampled_relion_hidden_rotation_grid_from_samples(
+                np.arange(sampling.rotation_grid_size(healpix_order), dtype=np.int64),
+                parent_nside_level=healpix_order,
+                oversampling_order=oversampling,
+                random_perturbation=random_perturbation,
+            )
         oversampled_trans, _translation_parent = sampling.get_oversampled_translation_grid(
             coarse_translations, pixel_offset=offset_step_px, oversampling_order=oversampling
         )
+        metadata_translations, _metadata_translation_parent = sampling.get_oversampled_translation_grid(
+            metadata_coarse_translations,
+            pixel_offset=offset_step_px,
+            oversampling_order=oversampling,
+        )
+        if not np.array_equal(_translation_parent, _metadata_translation_parent):
+            raise RuntimeError("GPU and metadata translation parent maps differ")
         translations = sampling.apply_relion_translation_perturbation(
             oversampled_trans.astype(np.float32, copy=False), random_perturbation, offset_step_pixels=offset_step_px
+        )
+        metadata_translations = sampling.apply_relion_translation_perturbation(
+            metadata_translations,
+            random_perturbation,
+            offset_step_pixels=offset_step_px,
         )
         translation_parent = np.asarray(_translation_parent, dtype=np.int64)
 
     return NativeSamplingPlan(
-        rotations=np.asarray(rotations, dtype=np.float32),
+        rotations=None if rotations is None else np.asarray(rotations, dtype=np.float32),
         translations=np.asarray(translations, dtype=np.float32),
         random_perturbation=random_perturbation,
         healpix_order=healpix_order,
@@ -864,6 +1624,7 @@ def _build_sampling_plan(
         coarse_translations=coarse_pass1_translations,
         coarse_prior_translations=coarse_translations,
         translation_parent=translation_parent,
+        metadata_translations=np.asarray(metadata_translations, dtype=np.float64),
     )
 
 
@@ -874,24 +1635,20 @@ def _translation_log_prior(
     sigma_angstrom: float | None,
     centers: np.ndarray | None = None,
 ) -> np.ndarray | None:
+    """Build InitialModel's RELION accelerated-path ``pdf_offset`` values."""
+
     if sigma_angstrom is None:
         return None
-    sigma_angstrom = float(sigma_angstrom)
-    if sigma_angstrom <= 0.0:
-        raise ValueError("translation_sigma_angstrom must be positive when provided")
     translations = np.asarray(translations, dtype=np.float32)
     shared = centers is None
-    if centers is not None:
-        centers_arr = np.asarray(centers, dtype=np.float32)
-        if centers_arr.ndim != 2 or centers_arr.shape[1] != 2:
-            raise ValueError(f"translation prior centers must have shape (N, 2), got {centers_arr.shape}")
-    else:
-        centers_arr = np.zeros((1, 2), dtype=np.float32)
-
-    diffs_angstrom = (translations[None, :, :2] - centers_arr[:, None, :2]) * float(voxel_size)
-    log_prior = -0.5 * np.sum(diffs_angstrom**2, axis=-1) / (sigma_angstrom**2)
-    log_prior = log_prior.astype(np.float32, copy=False)
-    return log_prior[0] if shared else log_prior
+    centers_arr = np.zeros(2, dtype=np.float32) if shared else np.asarray(centers, dtype=np.float32)
+    log_prior = make_relion_translation_log_prior(
+        translations,
+        voxel_size=float(voxel_size),
+        sigma_offset_angstrom=float(sigma_angstrom),
+        prior_centers=centers_arr,
+    )
+    return np.asarray(log_prior, dtype=np.float32)
 
 
 def _random_perturbation_for_iteration(opts: NativeInitialModelOptions, iteration: int) -> float:
@@ -908,29 +1665,34 @@ def _random_perturbation_for_iteration(opts: NativeInitialModelOptions, iteratio
 
 
 def _random_perturbation_sequence(random_seed: int, perturbation_factor: float, n_steps: int) -> float:
-    """Replay RELION's per-iter perturbation sequence (seed=1 first, then random_seed+step)."""
+    """Replay RELION's per-iter perturbation sequence with source float arithmetic."""
     if perturbation_factor <= 0.0:
         return 0.0
-    pf = float(perturbation_factor)
-    value = 0.0
-    for step in range(max(1, int(n_steps)) + 1):
-        seed = 1 if step == 0 else int(random_seed) + step
-        value += 0.5 * pf + (pf - 0.5 * pf) * _relion_rnd_unif_factory(seed)(0)
-        while value > pf:
-            value -= 2.0 * pf
-        while value < -pf:
-            value += 2.0 * pf
-    return float(value)
+    # rnd_unif(low, high) performs its range scaling inside RELION's float
+    # function. Scaling a separately rounded unit draw changes the result by
+    # one float32 ulp for seed 0 / iteration 1, which is enough to flip the
+    # integer-truncated fine-projector radius predicate on the rounded rim.
+    return sampling.relion_sampling_perturbation_for_iteration(
+        float(perturbation_factor),
+        int(random_seed),
+        max(1, int(n_steps)),
+    )
 
 
 def _noise_variance_from_sigma2(sigma2_noise: np.ndarray, ori_size: int) -> np.ndarray:
     """Convert RELION normalized shell power to engine-frame radial noise (unnormalised FFT)."""
     n4 = int(ori_size) ** 4
-    return (
-        np.asarray(make_radial_noise(np.asarray(sigma2_noise)[0] * n4, (ori_size, ori_size)))
-        .astype(np.float32, copy=False)
-        .reshape(-1)
-    )
+    # Keep RELION's RFLOAT shell spectrum through the reciprocal used by the
+    # guarded exact coarse path.  The downstream float32 kernels already cast
+    # their ordinary operands explicitly; narrowing here first loses up to a
+    # few ULP in Minvsigma2 and changes near-threshold candidate weights.
+    return np.asarray(
+        make_radial_noise(
+            np.asarray(sigma2_noise, dtype=np.float64)[0] * n4,
+            (ori_size, ori_size),
+        ),
+        dtype=np.float64,
+    ).reshape(-1)
 
 
 def _n_directions_for_healpix_order(healpix_order: int) -> int:
@@ -940,7 +1702,14 @@ def _n_directions_for_healpix_order(healpix_order: int) -> int:
 
 
 def _class_direction_rotation_log_prior(state: InitialModelState, healpix_order: int) -> np.ndarray:
-    """Return RELION's class-specific direction prior over coarse rotations."""
+    """Return RELION's class-specific direction prior over coarse rotations.
+
+    RELION copies ``pdf_direction`` into an ``RFLOAT`` buffer and its CUDA
+    ``initOrientations`` kernel stores ``log(pdf)`` directly in ``XFLOAT``.
+    Do not remove the class-common scale before taking the logarithm.  Although
+    that scale cancels analytically, changing it changes float32 addition and
+    adaptive-significance ties.
+    """
 
     n_psi = int(sampling.rotation_grid_n_in_planes(int(healpix_order)))
     n_dir = _n_directions_for_healpix_order(int(healpix_order))
@@ -948,15 +1717,25 @@ def _class_direction_rotation_log_prior(state: InitialModelState, healpix_order:
     pdf_direction = np.asarray(state.pdf_direction, dtype=np.float64)
     if pdf_direction.shape != (int(state.K), n_dir):
         pdf_direction = np.full((int(state.K), n_dir), 1.0 / float(int(state.K) * n_dir), dtype=np.float64)
-    mean_pdf = float(np.mean(pdf_direction))
-    if mean_pdf <= 0.0 or not np.isfinite(mean_pdf):
-        return np.zeros((int(state.K), n_rot), dtype=np.float32)
     direction_ids = np.arange(n_rot, dtype=np.int64) // n_psi
     values = pdf_direction[:, direction_ids]
     out = np.full(values.shape, -1.0e30, dtype=np.float64)
     positive = values > 0.0
-    out[positive] = np.log(values[positive] / mean_pdf)
+    out[positive] = np.log(values[positive])
     return out.astype(np.float32)
+
+
+def _class_rotation_log_prior_for_sampling(
+    state: InitialModelState,
+    sampling_state: NativeSamplingState | None,
+    healpix_order: int,
+) -> np.ndarray:
+    """Select the live RELION orientation-prior source for this sampling state."""
+
+    if sampling_state is not None and bool(sampling_state.uniform_local_orientation_prior):
+        n_rot = int(sampling.rotation_grid_size(int(healpix_order)))
+        return np.zeros((int(state.K), n_rot), dtype=np.float32)
+    return _class_direction_rotation_log_prior(state, int(healpix_order))
 
 
 def _expand_class_rotation_log_prior_for_dense_fine_grid(
@@ -995,6 +1774,7 @@ def _dense_estep_config(
     translation_offsets: np.ndarray,
     sigma_offset_angstrom: float | None = None,
     class_log_priors: np.ndarray | None = None,
+    pass1_healpix_order: int | None = None,
 ) -> DenseInitialModelEstepConfig:
     image_pre_shifts = relion_round_away_from_zero(translation_offsets)
     coarse_translations = np.asarray(
@@ -1014,10 +1794,13 @@ def _dense_estep_config(
         sigma_angstrom = opts.translation_sigma_angstrom if opts.translation_sigma_angstrom is not None else 10.0
     else:
         sigma_angstrom = float(sigma_offset_angstrom)
-    # InitialModel pre-applies rounded image shifts, so pdf_offset is centered
-    # on the remaining sub-pixel residual and scored in Angstrom units.
-    residual_offsets = np.asarray(translation_offsets, dtype=np.float32)[:, :2] - image_pre_shifts[:, :2]
-    translation_prior_centers = (residual_offsets / float(dataset.voxel_size)).astype(np.float32, copy=False)
+    # InitialModel uses the same accelerated ``pdf_offset`` convention as the
+    # supplied-map EM path: the sampling grid is represented in projection
+    # pixels, while RELION applies its source-faithful pixel_size**4 scale.
+    translation_prior_centers = relion_translation_prior_center(
+        translation_offsets,
+        float(dataset.voxel_size),
+    )
     _prior_kwargs = dict(
         voxel_size=float(dataset.voxel_size),
         sigma_angstrom=sigma_angstrom,
@@ -1026,6 +1809,13 @@ def _dense_estep_config(
     coarse_translation_log_prior = _translation_log_prior(coarse_prior_translations, **_prior_kwargs)
     translation_log_prior = _translation_log_prior(sampling_plan.translations, **_prior_kwargs)
 
+    sparse_pass2_enabled = os.environ.get("RECOVAR_DISABLE_SPARSE_PASS2", "") not in (
+        "1",
+        "true",
+        "TRUE",
+    )
+    if sampling_plan.rotations is None and not sparse_pass2_enabled:
+        raise ValueError("Deferred fine rotations require sparse pass 2")
     engine_kwargs: dict = {
         "score_with_masked_images": True,
         "reconstruct_with_masked_images": False,
@@ -1035,12 +1825,13 @@ def _dense_estep_config(
         "image_pre_shifts": image_pre_shifts,
         "translation_prior_centers": relion_sigma_offset_prior_center(translation_offsets),
         # RECOVAR_DISABLE_SPARSE_PASS2=1 forces dense path (cuFFT plan OOM at 256²+).
-        "sparse_pass2": (
-            int(sampling_plan.oversampling) > 0
-            and os.environ.get("RECOVAR_DISABLE_SPARSE_PASS2", "") not in ("1", "true", "TRUE")
-        ),
+        # Oversampling zero is still RELION's adaptive two-pass algorithm: its
+        # fine children are the coarse samples themselves.  Keep it on the
+        # same exact significance/local route as positive oversampling instead
+        # of falling back to RECOVAR's algebraic dense engine.
+        "sparse_pass2": sparse_pass2_enabled,
     }
-    if int(sampling_plan.oversampling) > 0:
+    if sparse_pass2_enabled or int(sampling_plan.oversampling) > 0:
         engine_kwargs.update(
             healpix_order=int(sampling_plan.healpix_order),
             oversampling_order=int(sampling_plan.oversampling),
@@ -1048,6 +1839,11 @@ def _dense_estep_config(
             random_perturbation=float(sampling_plan.random_perturbation),
             coarse_translations=coarse_translations,
             particle_diameter_ang=float(opts.particle_diameter),
+            pass1_healpix_order=(
+                int(sampling_plan.healpix_order)
+                if pass1_healpix_order is None
+                else int(pass1_healpix_order)
+            ),
             return_profile=bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE")),
         )
         if _af := os.environ.get("RECOVAR_ADAPTIVE_FRACTION"):
@@ -1068,18 +1864,83 @@ def _dense_estep_config(
     if coarse_translation_log_prior is not None:
         engine_kwargs["coarse_translation_log_prior"] = coarse_translation_log_prior
 
+    dataset_image_shape = getattr(dataset, "image_shape", None)
+    if dataset_image_shape is None:
+        # Lightweight test/adaptor datasets may intentionally expose only the
+        # metadata consumed by this function.  The cap is an execution-policy
+        # guard for real image stacks, so an unknown grid keeps the requested
+        # value rather than inventing a size or probing a device.
+        effective_image_batch_size = int(opts.image_batch_size)
+    else:
+        grid_size = int(dataset_image_shape[0])
+        gpu_memory_gb = (
+            float(get_gpu_memory_total())
+            if grid_size >= INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE
+            else 40.0
+        )
+        effective_image_batch_size = _effective_initial_model_image_batch_size(
+            int(opts.image_batch_size),
+            grid_size=grid_size,
+            gpu_memory_gb=gpu_memory_gb,
+        )
     return DenseInitialModelEstepConfig(
         noise_variance=noise_variance,
         rotations=sampling_plan.rotations,
         translations=sampling_plan.translations,
-        image_batch_size=int(opts.image_batch_size),
+        image_batch_size=effective_image_batch_size,
         rotation_block_size=int(opts.rotation_block_size),
+        pass2_engine=str(opts.pass2_engine),
+        relion_wavg_sequential_cuda=bool(opts.relion_wavg_sequential_cuda),
+        exact_local_bucket_radix=int(opts.exact_local_bucket_radix),
+        exact_local_physical_order_chunk_size=int(
+            opts.exact_local_physical_order_chunk_size
+        ),
+        stable_fourier_window_shapes=bool(opts.stable_fourier_window_shapes),
         padding_factor=int(opts.padding_factor),
+        projector_setup_backend=opts.projector_setup_backend,
         relion_bpref_frame=True,
         relion_projector_frame=True,
         class_log_priors=class_log_priors,
         engine_kwargs=engine_kwargs,
     )
+
+
+@dataclass
+class _IterationProjectorContext:
+    """One refresh-to-E-step handoff; never a cache across iterations."""
+
+    projector_setup_backend: Literal["native", "jax"] = "native"
+    prepared: tuple | None = None
+    reference: np.ndarray | None = None
+    geometry: tuple | None = None
+
+    def refresh(self, state, *, padding_factor, interpolator):
+        # Clear even if construction fails, so stale data cannot survive a retry.
+        self.prepared = self.reference = self.geometry = None
+        inputs, power = prepare_relion_projector_class_inputs_and_power(
+            state, padding_factor=padding_factor, interpolator=interpolator,
+            projector_setup_backend=self.projector_setup_backend,
+        )
+        self.prepared = inputs
+        self.reference = state.Iref
+        self.geometry = (
+            int(state.iter), int(state.ori_size), int(state.current_size),
+            int(state.K), int(padding_factor), int(interpolator),
+        )
+        return replace(state, tau2_class=power)
+
+    def take(self, state, *, padding_factor, interpolator=1):
+        if self.prepared is None:
+            return None  # No refresh callback: preserve standalone/disabled behavior.
+        inputs, reference, geometry = self.prepared, self.reference, self.geometry
+        self.prepared = self.reference = self.geometry = None
+        expected = (
+            int(state.iter), int(state.ori_size), int(state.current_size),
+            int(state.K), int(padding_factor), int(interpolator),
+        )
+        if reference is not state.Iref or geometry != expected:
+            raise ValueError("projector refresh/E-step reference or geometry changed")
+        return inputs
 
 
 def _native_expectation_step(
@@ -1089,6 +1950,8 @@ def _native_expectation_step(
     particle_state: NativeParticleState | np.ndarray,
     sampling_state: NativeSamplingState | None = None,
     optics_state: NativeOpticsState | None = None,
+    *,
+    projector_context: _IterationProjectorContext | None = None,
 ):
     if not isinstance(particle_state, NativeParticleState):
         particle_state = NativeParticleState(
@@ -1099,18 +1962,52 @@ def _native_expectation_step(
         )
 
     def _expectation_step(state: InitialModelState, particle_ids: np.ndarray, halfset_ids: np.ndarray):
+        defer_token = os.environ.get("RECOVAR_VDAM_DEFER_SPARSE_ROTATIONS", "0").strip()
+        if defer_token not in {"0", "1"}:
+            raise ValueError("RECOVAR_VDAM_DEFER_SPARSE_ROTATIONS must be 0 or 1")
+        sampling_kwargs = {"defer_fine_rotations": True} if defer_token == "1" else {}
         iteration = max(1, int(state.iter))
-        do_grad = _native_initialmodel_do_grad(state, iteration)
+        do_grad = _native_initialmodel_do_grad(
+            state,
+            iteration,
+            grad_em_iters=int(opts.grad_em_iters),
+        )
         sampling_updated = False
         accuracy_meta = None
+        prepared_projector_inputs = (
+            None if projector_context is None else projector_context.take(
+                state, padding_factor=int(opts.padding_factor)
+            )
+        )
+        pass1_healpix_order = (
+            int(opts.healpix_order)
+            if sampling_state is None
+            else int(sampling_state.healpix_order)
+        )
         if sampling_state is None:
-            sampling_plan = _build_sampling_plan(opts, iteration=iteration)
+            sampling_plan = _build_sampling_plan(opts, iteration=iteration, **sampling_kwargs)
         else:
-            if optics_state is not None and _should_estimate_native_sampling_accuracy(
-                iteration=iteration,
-                nr_iter=int(state.nr_iter),
-                do_grad=do_grad,
+            skip_expected_accuracy = _skip_native_sampling_accuracy_diagnostic()
+            if (
+                optics_state is not None
+                and not skip_expected_accuracy
+                and _should_estimate_native_sampling_accuracy(
+                    iteration=iteration,
+                    nr_iter=int(state.nr_iter),
+                    do_grad=do_grad,
+                )
             ):
+                # RELION expectationSetup constructs the production PPref
+                # before calculateExpectedAngularErrors and reuses that PPref
+                # for scoring. Build RECOVAR's production projector in the
+                # same order and pass it through the shared E-step adapter so
+                # the accuracy helper cannot perturb a later rebuild.
+                if prepared_projector_inputs is None:
+                    prepared_projector_inputs = prepare_relion_projector_class_inputs(
+                        state,
+                        padding_factor=int(opts.padding_factor),
+                        projector_setup_backend=opts.projector_setup_backend,
+                    )
                 accuracy_meta = _estimate_native_sampling_accuracy(
                     sampling_state,
                     state,
@@ -1119,6 +2016,7 @@ def _native_expectation_step(
                     particle_order=np.asarray(particle_ids, dtype=np.int64),
                     random_seed=int(opts.random_seed),
                     padding_factor=int(opts.padding_factor),
+                    sigma2_fudge=DEFAULT_SIGMA2_FUDGE,
                 )
             sampling_updated = _prepare_native_sampling_for_iteration(
                 sampling_state,
@@ -1130,6 +2028,7 @@ def _native_expectation_step(
                 opts,
                 iteration=iteration,
                 sampling_state=sampling_state,
+                **sampling_kwargs,
             )
         sigma_offset_angstrom = float(np.sqrt(max(float(state.sigma2_offset), 0.0)))
         current_noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
@@ -1141,8 +2040,24 @@ def _native_expectation_step(
             particle_state.translation_offsets,
             sigma_offset_angstrom=sigma_offset_angstrom,
             class_log_priors=np.zeros(int(state.K), dtype=np.float64),
+            pass1_healpix_order=pass1_healpix_order,
         )
-        class_rotation_log_prior = _class_direction_rotation_log_prior(state, int(sampling_plan.healpix_order))
+        if prepared_projector_inputs is not None:
+            prepared_means, prepared_variance, prepared_half, prepared_r_max = (
+                prepared_projector_inputs
+            )
+            config = replace(
+                config,
+                means=prepared_means,
+                mean_variance=prepared_variance,
+                relion_projector_half_by_class=prepared_half,
+                relion_projector_r_max=prepared_r_max,
+            )
+        class_rotation_log_prior = _class_rotation_log_prior_for_sampling(
+            state,
+            sampling_state,
+            int(sampling_plan.healpix_order),
+        )
         if not bool(config.engine_kwargs.get("sparse_pass2", False)):
             class_rotation_log_prior = _expand_class_rotation_log_prior_for_dense_fine_grid(
                 class_rotation_log_prior,
@@ -1154,16 +2069,27 @@ def _native_expectation_step(
             _active_relion_initialmodel_max_significants(state, do_grad=do_grad),
         )
         config.engine_kwargs["debug_iteration"] = iteration
-        previous_translations = np.asarray(particle_state.translation_offsets, dtype=np.float32).copy()
+        previous_translations = np.asarray(particle_state.translation_offsets, dtype=np.float64).copy()
+        previous_rotations = (
+            None
+            if particle_state.best_pose_rotations is None
+            else np.asarray(particle_state.best_pose_rotations, dtype=np.float64).copy()
+        )
         previous_classes = np.asarray(particle_state.class_assignments, dtype=np.int32).copy()
+        if particle_state.visited is not None:
+            # RELION's old class number is zero until the first visit. Our
+            # scorer uses zero-based classes, so preserve that distinct old
+            # state only in this change-monitor snapshot, before visits update.
+            previous_classes[~np.asarray(particle_state.visited, dtype=bool)] = -1
         result = run_dense_initial_model_estep(
             dataset, state, config, particle_ids=particle_ids, halfset_ids=halfset_ids
         )
-        result = _apply_effective_class_support_floor(result, state)
         result.meta.update(
             random_perturbation=float(sampling_plan.random_perturbation),
-            n_rotations=int(sampling_plan.rotations.shape[0]),
+            n_rotations=sampling_plan.n_rotations,
             n_translations=int(sampling_plan.translations.shape[0]),
+            requested_image_batch_size=int(opts.image_batch_size),
+            effective_image_batch_size=int(config.image_batch_size),
             healpix_order=int(sampling_plan.healpix_order),
             oversampling=int(sampling_plan.oversampling),
             offset_range_px=float(sampling_plan.offset_range_px),
@@ -1176,6 +2102,10 @@ def _native_expectation_step(
         )
         if sampling_state is not None:
             result.meta["sampling_accuracy_estimated"] = accuracy_meta is not None
+            result.meta["sampling_accuracy_skipped_by_diagnostic"] = bool(skip_expected_accuracy)
+            result.meta["sampling_accuracy_isolated_by_diagnostic"] = bool(
+                _isolate_native_sampling_accuracy_diagnostic()
+            )
             if accuracy_meta is not None:
                 result.meta.update(accuracy_meta)
             result.meta.update(
@@ -1185,11 +2115,17 @@ def _native_expectation_step(
                 sampling_acc_trans_angstrom=float(sampling_state.acc_trans_angstrom),
                 sampling_nr_iter_wo_resol_gain=int(sampling_state.nr_iter_wo_resol_gain),
                 sampling_has_fine_enough_angular_sampling=bool(sampling_state.has_fine_enough_angular_sampling),
+                orientational_prior_mode=int(sampling_state.orientational_prior_mode),
+                uniform_local_orientation_prior=bool(sampling_state.uniform_local_orientation_prior),
             )
         _update_particle_state_from_estep_meta(
             particle_state,
             result.meta,
-            sampling_plan.translations,
+            (
+                sampling_plan.translations
+                if sampling_plan.metadata_translations is None
+                else sampling_plan.metadata_translations
+            ),
         )
         if sampling_state is not None and _should_record_native_sampling_changes(
             iteration=iteration,
@@ -1201,6 +2137,8 @@ def _native_expectation_step(
                 particle_ids=result.meta.get("selected_particle_ids"),
                 previous_translations=previous_translations,
                 current_translations=particle_state.translation_offsets,
+                previous_rotations=previous_rotations,
+                current_rotations=particle_state.best_pose_rotations,
                 previous_classes=previous_classes,
                 current_classes=particle_state.class_assignments,
             )
@@ -1208,7 +2146,22 @@ def _native_expectation_step(
             result.meta["current_changes_optimal_offsets_angstrom"] = float(
                 sampling_state.current_changes_optimal_offsets_angstrom
             )
+            result.meta["current_changes_optimal_orientations"] = float(
+                sampling_state.current_changes_optimal_orientations
+            )
             result.meta["current_changes_optimal_classes"] = float(sampling_state.current_changes_optimal_classes)
+            result.meta["sampling_nr_iter_wo_large_hidden_variable_changes"] = int(
+                sampling_state.nr_iter_wo_large_hidden_variable_changes
+            )
+            result.meta["sampling_smallest_changes_optimal_offsets_angstrom"] = float(
+                sampling_state.smallest_changes_optimal_offsets_angstrom
+            )
+            result.meta["sampling_smallest_changes_optimal_orientations"] = float(
+                sampling_state.smallest_changes_optimal_orientations
+            )
+            result.meta["sampling_smallest_changes_optimal_classes"] = float(
+                sampling_state.smallest_changes_optimal_classes
+            )
         return result.accumulators, result.meta
 
     return _expectation_step
@@ -1234,12 +2187,13 @@ def _update_particle_state_from_estep_meta(
     N = particle_state.translation_offsets.shape[0]
     if np.any(ids < 0) or np.any(ids >= N):
         raise ValueError("selected_particle_ids contains entries outside the particle state table")
-    particle_state.visited = np.zeros(N, dtype=bool)
+    if particle_state.visited is None or np.asarray(particle_state.visited).shape != (N,):
+        particle_state.visited = np.zeros(N, dtype=bool)
     particle_state.visited[ids] = True
 
     if (pose := meta.get("pose_assignments")) is not None:
         assignments = np.asarray(pose, dtype=np.int64).reshape(-1)
-        trans = np.asarray(translations, dtype=np.float32)
+        trans = np.asarray(translations, dtype=np.float64)
         translation_ids = np.mod(assignments, int(trans.shape[0]))
         base = relion_round_away_from_zero(particle_state.translation_offsets[ids])
         particle_state.translation_offsets[ids] = base + trans[translation_ids, :2]
@@ -1278,6 +2232,19 @@ def _initial_state_from_particles(
     opts: NativeInitialModelOptions,
     rotations: np.ndarray,
 ) -> tuple[InitialModelState, np.ndarray]:
+    profile_initial_state = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
+    initial_state_started = time.perf_counter()
+    stage_started = initial_state_started
+    initial_state_profile: dict[str, float] = {}
+
+    def _record_initial_state_stage(name: str) -> None:
+        nonlocal stage_started
+        if not profile_initial_state:
+            return
+        now = time.perf_counter()
+        initial_state_profile[f"{name}_time_s"] = float(now - stage_started)
+        stage_started = now
+
     ori_size = int(dataset.grid_size)
     pixel_size = float(dataset.voxel_size)
     order = _experiment_read_order(main_star)
@@ -1285,6 +2252,7 @@ def _initial_state_from_particles(
     nr_optics_groups = int(np.unique(optics_group_by_particle).size)
     if nr_optics_groups != 1:
         raise NotImplementedError("native InitialModel currently supports one optics group")
+    _record_initial_state_stage("setup")
 
     Mavg, sigma2_per_group = compute_avg_unaligned_and_sigma2(
         _image_sigma2_iter(
@@ -1301,12 +2269,15 @@ def _initial_state_from_particles(
         nr_optics_groups=nr_optics_groups,
         minimum_nr_particles=int(opts.sigma2_min_particles),
     )
+    _record_initial_state_stage("average_unaligned")
 
     bootstrap_count = min(len(order), int(opts.bootstrap_min_particles))
     bootstrap_order = order[:bootstrap_count]
     images = _load_raw_images(dataset, bootstrap_order, batch_size=max(1, int(opts.image_batch_size)))
+    _record_initial_state_stage("raw_images")
     sorted_star = main_star.iloc[bootstrap_order]
     voltage, Cs, Q0, pixel_size = _single_optics_scalars(sorted_star, optics_star, dataset)
+    _record_initial_state_stage("optics_metadata")
 
     iref = compute_bootstrap_iref_via_cpp(
         images=images,
@@ -1329,6 +2300,7 @@ def _initial_state_from_particles(
         current_size=-1,
         minimum_nr_particles=int(opts.bootstrap_min_particles),
     )
+    _record_initial_state_stage("bootstrap")
 
     state = initialise_denovo_state(
         ori_size=ori_size,
@@ -1346,6 +2318,7 @@ def _initial_state_from_particles(
     )
     state.sigma2_offset = float(init_sigma_offset_angstrom) ** 2
     state.Mavg = Mavg
+    _record_initial_state_stage("state_init")
     # RECOVAR_INITIAL_IREF_OVERRIDE lets a parity caller swap in RELION's
     # iter000 ref directly when isolating E/M-step behavior from bootstrap.
     override_path = os.environ.get("RECOVAR_INITIAL_IREF_OVERRIDE")
@@ -1377,12 +2350,78 @@ def _initial_state_from_particles(
             do_init_blobs=True,
             is_helical_segment=False,
         )
+    _record_initial_state_stage("initial_reference")
     state = initialise_data_vs_prior_from_references(
         state,
         nr_particles=len(main_star),
         fix_tau=False,
     )
+    _record_initial_state_stage("data_vs_prior")
+    if profile_initial_state:
+        initial_state_profile["total_time_s"] = float(time.perf_counter() - initial_state_started)
+        print(
+            f"VDAM initial state profile: {json.dumps(initial_state_profile, sort_keys=True)}",
+            flush=True,
+        )
     return state, optics_group_by_particle
+
+
+def _maybe_replay_iteration_references(
+    state: InitialModelState,
+    *,
+    iteration: int,
+    meta: dict,
+) -> InitialModelState:
+    """Replace post-M-step references from an explicit diagnostic template.
+
+    This fail-closed hook is used only for causal trajectory boundaries.  A
+    template may contain ``{iteration}`` and ``{k}`` format fields, where
+    ``k`` is RELION's one-based class number.  A comma-separated list supplies
+    one path per class; a single path is broadcast only for K=1.
+    """
+
+    template = os.environ.get(INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV, "").strip()
+    if not template:
+        return state
+
+    tokens = [token.strip() for token in template.split(",") if token.strip()]
+    if len(tokens) == 1 and "{k" in tokens[0]:
+        paths = [
+            tokens[0].format(iteration=int(iteration), k=class_index + 1)
+            for class_index in range(int(state.K))
+        ]
+    elif len(tokens) == 1 and int(state.K) == 1:
+        paths = [tokens[0].format(iteration=int(iteration), k=1)]
+    elif len(tokens) == int(state.K):
+        paths = [
+            token.format(iteration=int(iteration), k=class_index + 1)
+            for class_index, token in enumerate(tokens)
+        ]
+    else:
+        raise ValueError(
+            f"{INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV} expects one path for K=1 "
+            f"or K={int(state.K)} comma-separated paths, got {len(tokens)}"
+        )
+
+    from recovar.utils.helpers import load_relion_volume
+
+    references = np.stack(
+        [np.asarray(load_relion_volume(path), dtype=np.float64) for path in paths],
+        axis=0,
+    )
+    expected_shape = (int(state.K), int(state.ori_size), int(state.ori_size), int(state.ori_size))
+    if references.shape != expected_shape:
+        raise ValueError(
+            f"iteration reference replay shape {references.shape} != {expected_shape}"
+        )
+    if not np.all(np.isfinite(references)):
+        raise ValueError("iteration reference replay contains non-finite values")
+
+    out = replace(state)
+    out.Iref = references
+    meta["diagnostic_iref_replay_paths"] = paths
+    meta["diagnostic_iref_replay_iteration"] = int(iteration)
+    return out
 
 
 def _class_mrc_paths(output_prefix: str, iteration: int, K: int) -> tuple[str, ...]:
@@ -1460,7 +2499,33 @@ def _format_float_column(values: np.ndarray, precision: int = 6) -> list[str]:
     return [f"{float(value):.{precision}f}" for value in np.asarray(values).reshape(-1)]
 
 
+def _initial_model_random_subsets(main_star) -> np.ndarray:
+    """Return RELION's one-based pseudo-halfset for every input-table row.
+
+    InitialModel routes ``Experiment`` part ids by ``part_id % 2`` even when
+    ordinary split-half refinement is disabled.  ``_experiment_read_order``
+    maps those internal part ids to RECOVAR's input-table rows; invert that
+    map here so the written data STAR records the same persistent identity.
+    """
+
+    order = np.asarray(_experiment_read_order(main_star), dtype=np.int64)
+    n_images = len(main_star)
+    if (
+        order.shape != (n_images,)
+        or np.unique(order).size != n_images
+        or np.any(order < 0)
+        or np.any(order >= n_images)
+    ):
+        raise ValueError("RELION experiment read order must be a particle-row permutation")
+    part_ids = np.empty(n_images, dtype=np.int64)
+    part_ids[order] = np.arange(n_images, dtype=np.int64)
+    return (part_ids % 2 + 1).astype(np.int32, copy=False)
+
+
 def _write_data_star(path: str, main_star, optics_star, dataset, particle_state: NativeParticleState) -> None:
+    array_rows_token = os.environ.get("RECOVAR_VDAM_STAR_ARRAY_ROWS", "0").strip()
+    if array_rows_token not in {"0", "1"}:
+        raise ValueError("RECOVAR_VDAM_STAR_ARRAY_ROWS must be 0 or 1")
     n_images = int(getattr(dataset, "n_images", len(main_star)))
     if len(main_star) != n_images:
         raise ValueError(f"STAR table has {len(main_star)} particles but dataset has {n_images} images")
@@ -1486,6 +2551,7 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
     class_numbers = np.zeros(n_images, dtype=np.int32)
     class_numbers[visited] = np.asarray(particle_state.class_assignments, dtype=np.int32)[visited] + 1
     _set_star_column(table, "_rlnClassNumber", class_numbers)
+    _set_star_column(table, "_rlnRandomSubset", _initial_model_random_subsets(main_star))
     _set_star_column(table, "_rlnMaxValueProbDistribution", _format_float_column(particle_state.max_posterior))
 
     has_rotations = particle_state.best_pose_rotation_ids is not None or particle_state.best_pose_rotations is not None
@@ -1542,7 +2608,8 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
     out_path = Path(path)
     if str(out_path.parent) not in ("", "."):
         out_path.parent.mkdir(parents=True, exist_ok=True)
-    write_star(str(out_path), table, optics_star.copy() if optics_star is not None else None)
+    writer_kwargs = {"array_rows": True} if array_rows_token == "1" else {}
+    write_star(str(out_path), table, optics_star.copy() if optics_star is not None else None, **writer_kwargs)
 
 
 def _write_iteration_artifacts(
@@ -1556,16 +2623,33 @@ def _write_iteration_artifacts(
     dataset=None,
     particle_state: NativeParticleState | None = None,
 ) -> None:
+    profile_artifacts = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
+    artifact_started = time.perf_counter()
+    stage_started = artifact_started
+    artifact_profile: dict[str, float] = {}
+
+    def _record_artifact_stage(name: str) -> None:
+        nonlocal stage_started
+        if not profile_artifacts:
+            return
+        now = time.perf_counter()
+        artifact_profile[f"{name}_time_s"] = float(now - stage_started)
+        stage_started = now
+
     out_dir = _output_dir_from_prefix(output_prefix)
     out_dir.mkdir(parents=True, exist_ok=True)
     class_mrcs = _class_mrc_paths(output_prefix, iteration, int(state.K))
+    _record_artifact_stage("setup")
     for k, class_mrc in enumerate(class_mrcs):
         write_relion_mrc(class_mrc, np.asarray(state.Iref[k]), voxel_size=float(state.pixel_size))
+    _record_artifact_stage("class_mrc")
     model_star = f"{output_prefix}_it{iteration:03d}_model.star"
     _write_model_star(model_star, state, class_mrcs)
+    _record_artifact_stage("model_star")
     meta_path = f"{output_prefix}_it{iteration:03d}_recovar_meta.json"
     with open(meta_path, "w") as f:
         json.dump(_json_ready(meta), f, indent=2, sort_keys=True)
+    _record_artifact_stage("meta_json")
     if main_star is not None and dataset is not None and particle_state is not None:
         _write_data_star(
             f"{output_prefix}_it{iteration:03d}_data.star",
@@ -1574,6 +2658,22 @@ def _write_iteration_artifacts(
             dataset,
             particle_state,
         )
+    _record_artifact_stage("data_star")
+    if profile_artifacts:
+        artifact_profile["total_time_s"] = float(time.perf_counter() - artifact_started)
+        print(
+            f"VDAM iteration {iteration} artifact profile: "
+            f"{json.dumps(artifact_profile, sort_keys=True)}",
+            flush=True,
+        )
+
+
+def _should_write_iteration_artifacts(iteration: int, nr_iter: int, grad_write_iter: int) -> bool:
+    """Match RELION's gradient-output cadence, including the final iteration."""
+
+    if grad_write_iter < 1:
+        raise ValueError("grad_write_iter must be >= 1")
+    return (iteration % grad_write_iter) == 0 or iteration == nr_iter
 
 
 def _json_ready(value):
@@ -1605,17 +2705,59 @@ def _write_final_outputs(output_prefix: str, state: InitialModelState) -> tuple[
 def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialModelResult:
     """Run native recovar InitialModel refinement."""
 
+    profile_driver = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
+    driver_started = time.perf_counter()
+    stage_started = driver_started
+    driver_profile: dict[str, float] = {}
+
+    def _record_driver_stage(name: str) -> None:
+        nonlocal stage_started
+        if not profile_driver:
+            return
+        now = time.perf_counter()
+        driver_profile[f"{name}_time_s"] = float(now - stage_started)
+        stage_started = now
+
     if opts.nr_classes < 1:
         raise ValueError("nr_classes must be >= 1")
     if opts.nr_iter < 1:
         raise ValueError("nr_iter must be >= 1")
+    if opts.grad_write_iter < 1:
+        raise ValueError("grad_write_iter must be >= 1")
+    if int(opts.exact_local_bucket_radix) not in (2, 4):
+        raise ValueError("exact_local_bucket_radix must be 2 or 4")
+    if int(opts.exact_local_physical_order_chunk_size) not in (0,) and int(
+        opts.exact_local_physical_order_chunk_size
+    ) < 3:
+        raise ValueError(
+            "exact_local_physical_order_chunk_size must be 0 (disabled) or at least 3"
+        )
+    if opts.diagnostic_stop_after_iteration is not None and not (
+        1 <= int(opts.diagnostic_stop_after_iteration) <= int(opts.nr_iter)
+    ):
+        raise ValueError("diagnostic_stop_after_iteration must be between 1 and nr_iter")
+    if (
+        opts.diagnostic_continue_optimiser is not None
+        and opts.diagnostic_stop_after_iteration is None
+    ):
+        raise ValueError(
+            "diagnostic_continue_optimiser requires diagnostic_stop_after_iteration; "
+            "unbounded continuation is intentionally unsupported"
+        )
     if opts.padding_factor not in (1, 2):
         raise NotImplementedError("native InitialModel currently supports RELION GUI --pad 1 or 2 only")
     if opts.run_relion_align_symmetry:
         raise NotImplementedError("native post-run relion_align_symmetry execution is not wired yet")
+    if not opts.do_run_C1 and opts.sym_name.lower() != "c1":
+        raise NotImplementedError(
+            "native InitialModel direct refinement currently supports C1 only; "
+            "use the GUI-default do_run_C1 mode until symmetry-restricted sampling is implemented"
+        )
+    _record_driver_stage("validation")
 
     main_star, optics_star = read_star(opts.fn_img)
     particle_order = _micrograph_sort_order(main_star)
+    _record_driver_stage("input_star")
     dataset = load_dataset(
         opts.fn_img,
         lazy=bool(opts.lazy),
@@ -1624,20 +2766,90 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     )
     if getattr(dataset, "tilt_series_flag", False):
         raise NotImplementedError("native InitialModel currently supports SPA particle STAR files, not tilt-series")
+    _record_driver_stage("dataset_load")
+    maybe_cache_raw_image_loaders((dataset,))
+    _record_driver_stage("raw_cache_setup")
 
     _configure_relion_image_mask(dataset, opts)
     optics_state = _native_optics_state(main_star, optics_star, dataset)
-    sampling_state = _initial_sampling_state(opts, pixel_size=float(dataset.voxel_size))
-    sampling_plan = _build_sampling_plan(opts, iteration=1, sampling_state=sampling_state)
-    particle_state = _particle_state_from_star(main_star, dataset)
-    state, optics_group_by_particle = _initial_state_from_particles(
-        dataset,
+    continuation = None
+    if opts.diagnostic_continue_optimiser is not None:
+        continuation = _load_native_vdam_continuation(
+            opts.diagnostic_continue_optimiser,
+            expected_data_star=opts.fn_img,
+            opts=opts,
+            dataset=dataset,
+        )
+        if int(opts.diagnostic_stop_after_iteration) != int(continuation.iteration) + 1:
+            raise ValueError(
+                "diagnostic native VDAM continuation must execute exactly one next iteration: "
+                f"checkpoint={continuation.iteration}, "
+                f"stop={opts.diagnostic_stop_after_iteration}"
+            )
+    particle_state = _particle_state_from_star(
         main_star,
-        optics_star,
-        opts,
-        sampling_plan.rotations,
+        dataset,
+        allow_unvisited_class_zero=continuation is not None,
+        nr_classes=int(opts.nr_classes),
     )
+    if continuation is None:
+        grad_ini_subset_size, grad_fin_subset_size = (
+            default_subset_sizes_for_3d_initial_model(int(dataset.n_images))
+        )
+        grad_ini_frac = float(opts.grad_ini_frac)
+        grad_fin_frac = float(opts.grad_fin_frac)
+        continuation_phase_lengths = None
+        sampling_state = _initial_sampling_state(opts, pixel_size=float(dataset.voxel_size))
+        sampling_plan = _build_sampling_plan(opts, iteration=1, sampling_state=sampling_state)
+        state, optics_group_by_particle = _initial_state_from_particles(
+            dataset,
+            main_star,
+            optics_star,
+            opts,
+            sampling_plan.rotations,
+        )
+        sampling_state.last_current_resolution = float(state.current_resolution)
+    else:
+        _validate_continuation_order_replay(continuation)
+        grad_ini_subset_size = int(continuation.grad_ini_subset_size)
+        grad_fin_subset_size = int(continuation.grad_fin_subset_size)
+        grad_ini_frac = float(continuation.grad_ini_frac)
+        grad_fin_frac = float(continuation.grad_fin_frac)
+        continuation_phase_lengths = phase_lengths_from_effective_fractions(
+            int(continuation.state.nr_iter),
+            grad_ini_frac,
+            grad_fin_frac,
+        )
+        optics_group_by_particle = _optics_group_indices(main_star)
+        if int(np.unique(optics_group_by_particle).size) != 1:
+            raise NotImplementedError(
+                "diagnostic native VDAM continuation currently supports one optics group"
+            )
+        state = restore_subset_order_for_continuation(
+            continuation.state,
+            through_iteration=int(continuation.iteration),
+            nr_particles=int(dataset.n_images),
+            optics_group_by_particle=optics_group_by_particle,
+            grad_ini_subset_size=grad_ini_subset_size,
+            grad_fin_subset_size=grad_fin_subset_size,
+            random_seed=int(opts.random_seed),
+            rnd_unif_factory=_relion_rnd_unif_factory,
+            particle_order=particle_order,
+            grad_ini_frac=grad_ini_frac,
+            grad_fin_frac=grad_fin_frac,
+            grad_em_iters=int(opts.grad_em_iters),
+            phase_lengths=continuation_phase_lengths,
+        )
+        sampling_state = continuation.sampling_state
+    _record_driver_stage("state_setup")
     noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
+    exact_projector_setting = os.environ.get(
+        "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR", "1"
+    ).strip().lower()
+    projector_context = (
+        None if exact_projector_setting in {"0", "false", "no", "off"}
+        else _IterationProjectorContext(projector_setup_backend=opts.projector_setup_backend)
+    )
     expectation_step = _native_expectation_step(
         dataset,
         opts,
@@ -1645,32 +2857,84 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         particle_state,
         sampling_state,
         optics_state,
+        projector_context=projector_context,
     )
-    grad_ini_subset_size, grad_fin_subset_size = default_subset_sizes_for_3d_initial_model(int(dataset.n_images))
+    _record_driver_stage("expectation_setup")
 
     if opts.write_iter_artifacts:
         _output_dir_from_prefix(opts.outputname).mkdir(parents=True, exist_ok=True)
         config_path = f"{opts.outputname}_native_options.json"
+        native_options = asdict(opts)
+        native_options["resolved_cuda_allocator"] = os.environ.get(
+            "TF_GPU_ALLOCATOR",
+            "default",
+        )
+        native_options["jax_compilation_cache_enabled"] = bool(
+            os.environ.get("JAX_COMPILATION_CACHE_DIR")
+        )
+        native_options["jax_compilation_cache_dir"] = os.environ.get(
+            "JAX_COMPILATION_CACHE_DIR"
+        )
+        native_options["jax_persistent_cache_min_compile_time_secs"] = os.environ.get(
+            "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS"
+        )
         with open(config_path, "w") as f:
-            json.dump(asdict(opts), f, indent=2, sort_keys=True)
-
-    if opts.write_iter_artifacts:
-
-        def artifact_sink(current, iteration, meta):
+            json.dump(native_options, f, indent=2, sort_keys=True)
+        if continuation is None:
             _write_iteration_artifacts(
                 opts.outputname,
-                current,
-                iteration,
-                meta,
+                state,
+                0,
+                {"checkpoint_iteration": 0, "phase": "bootstrap"},
                 main_star=main_star,
                 optics_star=optics_star,
                 dataset=dataset,
                 particle_state=particle_state,
             )
-    else:
-        artifact_sink = lambda *args, **kwargs: None
+        else:
+            continuation_path = f"{opts.outputname}_diagnostic_continuation.json"
+            with open(continuation_path, "w") as f:
+                json.dump(
+                    {
+                        "classification": "diagnostic_performance_only",
+                        "exactly_one_next_iteration": True,
+                        "iteration": int(continuation.iteration),
+                        "optimiser_star": str(continuation.optimiser_star),
+                        "model_star": str(continuation.model_star),
+                        "data_star": str(continuation.data_star),
+                        "sampling_star": str(continuation.sampling_star),
+                    },
+                    f,
+                    indent=2,
+                    sort_keys=True,
+                )
+                f.write("\n")
+    _record_driver_stage("initial_artifacts")
+
+    def artifact_sink(current, iteration, meta):
+        _record_native_sampling_post_iteration(
+            sampling_state,
+            current,
+            iteration=iteration,
+            meta=meta,
+        )
+        if not opts.write_iter_artifacts or not _should_write_iteration_artifacts(
+            iteration, int(opts.nr_iter), int(opts.grad_write_iter)
+        ):
+            return
+        _write_iteration_artifacts(
+            opts.outputname,
+            current,
+            iteration,
+            meta,
+            main_star=main_star,
+            optics_star=optics_star,
+            dataset=dataset,
+            particle_state=particle_state,
+        )
 
     post_mstep_update = None
+    solvent_mask = None
     if opts.do_solvent:
         solvent_mask = relion_solvent_mask(
             ori_size=int(state.ori_size),
@@ -1678,7 +2942,17 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             particle_diameter_ang=float(opts.particle_diameter),
             width_mask_edge_px=float(opts.width_mask_edge_px),
         )
-        post_mstep_update = lambda current, _iteration, _meta: relion_solvent_flatten_state(current, mask=solvent_mask)
+    if opts.do_solvent or os.environ.get(INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV, "").strip():
+
+        def post_mstep_update(current, _iteration, _meta):
+            if solvent_mask is not None:
+                current = relion_solvent_flatten_state(current, mask=solvent_mask)
+            return _maybe_replay_iteration_references(
+                current,
+                iteration=int(_iteration),
+                meta=_meta,
+            )
+    _record_driver_stage("iteration_setup")
 
     final_state = run_vdam_iterations(
         state,
@@ -1687,20 +2961,33 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         grad_ini_subset_size=grad_ini_subset_size,
         grad_fin_subset_size=grad_fin_subset_size,
         tau2_fudge_arg=float(opts.tau2_fudge),
-        grad_em_iters=DEFAULT_GRAD_EM_ITERS,
+        grad_em_iters=int(opts.grad_em_iters),
         random_seed=int(opts.random_seed),
         rnd_unif_factory=_relion_rnd_unif_factory,
         expectation_step=expectation_step,
         iter_artifact_sink=artifact_sink,
         post_mstep_update=post_mstep_update,
         particle_order=particle_order,
-        mu=DEFAULT_GRAD_MU,
+        grad_ini_frac=grad_ini_frac,
+        grad_fin_frac=grad_fin_frac,
+        phase_lengths=continuation_phase_lengths,
+        grad_stepsize=float(opts.stepsize),
+        mu=float(opts.mu),
         projector_padding_factor=int(opts.padding_factor),
+        mstep_backend=opts.mstep_backend,
+        projector_refresh_fn=None if projector_context is None else projector_context.refresh,
+        start_iteration=int(state.iter),
+        diagnostic_stop_after_iteration=opts.diagnostic_stop_after_iteration,
     )
+    _record_driver_stage("iterations")
     final_mrc, class_mrcs = _write_final_outputs(opts.outputname, final_state)
     final_model_star = f"{opts.outputname}_it{final_state.iter:03d}_model.star"
     if not os.path.exists(final_model_star):
         _write_model_star(final_model_star, final_state, class_mrcs)
+    _record_driver_stage("final_artifacts")
+    if profile_driver:
+        driver_profile["total_time_s"] = float(time.perf_counter() - driver_started)
+        print(f"VDAM driver profile: {json.dumps(driver_profile, sort_keys=True)}", flush=True)
     return NativeInitialModelResult(
         state=final_state,
         output_prefix=opts.outputname,

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import functools
 import gc
 import logging
 import os
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -17,6 +19,12 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+from recovar.em.dense_single_volume.deferred_noise_pack import pack_noise_pixel_capacity
+from recovar.em.dense_single_volume.fixed_capacity_local import (
+    _FixedCapacityLocalCallView,
+    _FixedCapacityLocalExecutionBundle,
+    _materialize_fixed_capacity_local_call_view,
+)
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_maybe_windowed as _adjoint_slice_volume_maybe_windowed,
 )
@@ -25,12 +33,23 @@ from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPo
 from recovar.em.dense_single_volume.helpers.env_flags import (
     parse_env_nonnegative_int,
 )
+from recovar.em.dense_single_volume.helpers.flat_local_rows import (
+    build_dense_to_flat_local_row_lookup,
+    build_pool_flat_local_row_plan,
+    encode_flat_local_row_plan,
+    map_dense_local_rows_to_flat_rows,
+    scatter_flat_local_rows,
+)
 from recovar.em.dense_single_volume.helpers.fourier_window import (
+    DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM,
     centered_half_indices_to_fftw_half_indices,
-    make_fourier_window_spec,
+    make_stable_fourier_window_shape_plan,
+    stable_fourier_window_quantum,
+)
+from recovar.em.dense_single_volume.helpers.fourier_window import (
+    STABLE_FOURIER_WINDOW_QUANTUM_ENV as STABLE_FOURIER_WINDOW_QUANTUM_ENV,
 )
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
-    bin_shell_values_jax,
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
@@ -38,12 +57,13 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
     mask_relion_noise_shell_indices_to_current_window,
 )
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
+    crop_relion_x_half_accumulator,
     enforce_half_volume_x0,
     half_volume_accumulator_shape,
     half_volume_accumulators_to_full,
     relion_backprojector_volume_shape,
-    relion_x_half_mstep_accumulator_dtypes,
     relion_x_half_accumulators_to_public_layout,
+    relion_x_half_mstep_accumulator_dtypes,
 )
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
@@ -53,38 +73,22 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
 from recovar.em.dense_single_volume.helpers.jax_runtime import block_until_ready as _block_until_ready
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     _cast_shift_inputs,
+    _norm_inputs,
+    prepare_batch_preprocess_operands,
+    process_half_image,
+    resolve_image_mask_for_half_preprocess,
+)
+from recovar.em.dense_single_volume.helpers.preprocessing import (
     apply_half_translation_phases as _apply_half_translation_phases,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     half_translation_phase_table as _half_translation_phase_table,
 )
-from recovar.em.dense_single_volume.helpers.preprocessing import (
-    _norm_inputs,
-    process_half_image,
-    resolve_image_mask_for_half_preprocess,
-)
-from recovar.em.dense_single_volume.local_timing import (
-    _LocalTiming,
-    _local_timing_profile,
-    _new_local_preprocess_timer,
-    _new_local_transfer_timer,
-    _prefixed_timer_profile,
-)
-from recovar.em.dense_single_volume.local_caches import (
-    _LocalProcessedHalfCache,
-    _all_integer_pre_shifts_or_none,
-    _build_local_processed_half_cache,
-    _build_local_raw_cache,
-    _local_processed_half_cache_enabled,
-    _local_raw_cache_enabled,
-    _sparse_big_jit_mstep_tensors_memory_gb,
-    _validate_native_half_batch,
-)
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_noise_block as _compute_noise_block,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     compute_norm_residual_per_image as _compute_norm_residual_per_image,
-    compute_scale_correction_terms_per_image as _compute_scale_correction_terms_per_image,
-    relion_scale_correction_pixel_mask as _relion_scale_correction_pixel_mask,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_projections_block as _compute_projections_block,
@@ -93,10 +97,20 @@ from recovar.em.dense_single_volume.helpers.projection import (
     compute_relion_projector_projections_block as _compute_relion_projector_projections_block,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
+    compute_scale_correction_terms_per_image as _compute_scale_correction_terms_per_image,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     indexed_projection_available as _indexed_projection_available,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
     project_indexed_half_spectrum as _project_indexed_half_spectrum,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
+    relion_scale_correction_pixel_mask as _relion_scale_correction_pixel_mask,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _make_relion_wavg_rectangle,
+    _make_stable_relion_wavg_rectangle,
 )
 from recovar.em.dense_single_volume.helpers.translation_prior import (
     translation_prior_centers_for_images,
@@ -107,13 +121,41 @@ from recovar.em.dense_single_volume.helpers.types import LocalEMResult, make_noi
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_ctf_sums_from_probs_sum_t,
+    compute_local_mstep_sums,
+    compute_local_noise_scalar_terms,
     compute_local_weighted_sums,
     flatten_bucket_rotations,
     flatten_bucket_rows,
 )
 from recovar.em.dense_single_volume.local_big_jit import (
-    _norm_correction_image_power_per_image,
+    _noise_image_power_shells_and_per_image,
+    _partition_uniform_fixed_capacity_calls,
+    _prepare_fixed_capacity_local_call,
+    _reconstruct_fixed_capacity_score_only_result,
+    _relion_wavg_direct_triplet_shells,
+    run_deferred_local_exact_noise_core_jit,
+    run_deferred_local_exact_noise_jit,
+    run_fixed_capacity_segmented_local_scan,
     run_local_bucket_big_jit,
+)
+from recovar.em.dense_single_volume.local_big_jit import (
+    _preprocess_half as _big_jit_preprocess_half,
+)
+from recovar.em.dense_single_volume.local_caches import (  # noqa: F401
+    EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB,
+    EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV,
+    EXACT_LOCAL_RAW_CACHE_MAX_GB,
+    EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
+    EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB,
+    EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
+    _all_integer_pre_shifts_or_none,
+    _build_local_processed_half_cache,
+    _build_local_raw_cache,
+    _local_processed_half_cache_enabled,
+    _local_raw_cache_enabled,
+    _LocalProcessedHalfCache,
+    _sparse_big_jit_mstep_tensors_memory_gb,
+    _validate_native_half_batch,
 )
 from recovar.em.dense_single_volume.local_debug import (
     current_size_matches_request,
@@ -131,6 +173,7 @@ from recovar.em.dense_single_volume.local_layout import (
     LocalHypothesisLayout,
     _exact_bucket_rotation_size,
     _exact_local_large_bucket_quantum,
+    _resolve_exact_local_bucket_radix,
     bucket_local_hypothesis_layout,
 )
 from recovar.em.dense_single_volume.local_score_pass import (
@@ -138,8 +181,8 @@ from recovar.em.dense_single_volume.local_score_pass import (
     compute_reconstruction_support_from_threshold,
     fused_score_normalize_mstep_abs2_on_demand,
     fused_score_normalize_support_abs2_on_demand,
-    fused_score_normalize_support_probs_abs2_with_log_z_on_demand,
     fused_score_normalize_support_probs_abs2_on_demand,
+    fused_score_normalize_support_probs_abs2_with_log_z_on_demand,
     normalize_local_scores,
     normalize_local_scores_float32,
     normalize_local_scores_with_log_z,
@@ -147,11 +190,48 @@ from recovar.em.dense_single_volume.local_score_pass import (
     score_local_bucket_abs2_on_demand,
     score_local_bucket_abs2_weighted_on_demand,
 )
+from recovar.em.dense_single_volume.local_timing import (  # noqa: F401
+    _LOCAL_ACCOUNTED_TIMING_FIELDS,
+    _LOCAL_ACCOUNTED_TIMING_SETUP_FIELDS,
+    _LOCAL_PREPROCESS_TIMER_KEYS,
+    _LOCAL_TIMING_PROFILE_FIELDS,
+    _LOCAL_TRANSFER_TIMER_KEYS,
+    _local_timing_profile,
+    _LocalTiming,
+    _new_local_preprocess_timer,
+    _new_local_transfer_timer,
+    _new_zero_timer,
+    _prefixed_timer_profile,
+)
 from recovar.em.dense_single_volume.shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
 from recovar.reconstruction import noise as noise_utils
 from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
+
+def _noise_wsum_initial_dtype(*, relion_exact_fine_diff2: bool, use_window: bool):
+    """Match the initial carry to the direct-Wavg post-bucket dtype."""
+
+    return jnp.float64 if relion_exact_fine_diff2 and use_window else jnp.float32
+
+
+def _relion_exact_fine_full_to_compact_lookup(
+    image_shape,
+    current_size,
+    n_half,
+    window_spec,
+):
+    """Build RELION fine-score row mapping for cropped or full-size images."""
+    compact_indices = (
+        window_spec.score_indices_np
+        if window_spec.use_window
+        else np.arange(int(n_half), dtype=np.int32)
+    )
+    return sparse_pass2_bucketed._relion_cuda_fine_full_to_compact_lookup(
+        image_shape,
+        int(current_size),
+        compact_indices,
+    )
 
 
 def _maybe_dump_exact_local_bpref_contribution_rows(**kwargs) -> None:
@@ -172,6 +252,40 @@ def _maybe_dump_exact_local_bpref_contribution_rows(**kwargs) -> None:
             "Exact-local BPref contribution capture does not yet support device signatures"
         )
     bpref_diagnostics._maybe_dump_bpref_contribution_rows(**kwargs)
+
+
+def _exact_local_bpref_reconstruction_probs_for_capture(
+    scores,
+    generic_probs,
+    reconstruction_sample_mask,
+    *,
+    use_relion_f32_fine_posterior: bool,
+    adaptive_fraction: float,
+):
+    """Return the same reconstruction weights consumed by the big-JIT M-step.
+
+    ``debug_probs`` deliberately exposes the generic normalized posterior for
+    score diagnostics.  It is not the M-step tensor when the RELION float32
+    exp/sort/scan/divide path is active, so a contribution capture must rebuild
+    that source-faithful tensor from the returned score boundary.
+    """
+
+    if not use_relion_f32_fine_posterior:
+        return jnp.where(reconstruction_sample_mask, generic_probs, 0.0)
+    reconstruction_probs, exact_mask, *_diagnostics = (
+        sparse_pass2_bucketed._relion_f32_fine_reconstruction_probs(
+            scores,
+            adaptive_fraction=float(adaptive_fraction),
+        )
+    )
+    if not np.array_equal(
+        np.asarray(exact_mask, dtype=bool),
+        np.asarray(reconstruction_sample_mask, dtype=bool),
+    ):
+        raise RuntimeError(
+            "big-JIT BPref capture rebuilt a different RELION reconstruction mask"
+        )
+    return reconstruction_probs
 
 
 def _exact_local_bpref_contribution_capture_active(
@@ -261,11 +375,36 @@ EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR = 1.25
 # i.e. about a 512 MB complex64 projection temporary before JAX overhead.
 EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS = 64_000_000
 EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV = "RECOVAR_EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS"
+EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV = (
+    "RECOVAR_EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE"
+)
+EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV = (
+    "RECOVAR_EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES"
+)
+EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV = (
+    "RECOVAR_EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS"
+)
+EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS_ENV = (
+    "RECOVAR_EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS"
+)
 EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM = 512
 EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV = "RECOVAR_EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM"
 EXACT_LOCAL_DEFER_PACKED_MSTEP_ENV = "RECOVAR_EXACT_LOCAL_DEFER_PACKED_MSTEP"
 EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV = "RECOVAR_EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB = 0.0
+EXACT_LOCAL_PROJECTOR_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_PROJECTOR_CAPACITY"
+EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY"
+EXACT_LOCAL_NOISE_STABLE_CORE_ENV = "RECOVAR_EXACT_LOCAL_NOISE_STABLE_CORE"
+EXACT_LOCAL_NOISE_NATIVE_RESIDUAL_ENV = "RECOVAR_EXACT_LOCAL_NOISE_NATIVE_RESIDUAL"
+EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_NOISE_NORM_CAPACITY"
+EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_NOISE_PIXEL_CAPACITY"
+EXACT_LOCAL_HOST_PLAN_PACK_ENV = "RECOVAR_EXACT_LOCAL_HOST_PLAN_PACK"
+EXACT_LOCAL_HOST_PUBLICATION_ENV = "RECOVAR_EXACT_LOCAL_HOST_PUBLICATION"
+EXACT_LOCAL_BPREF_TRANSACTION_ENV = "RECOVAR_EXACT_LOCAL_BPREF_TRANSACTION"
+EXACT_LOCAL_BPREF_PARTICLE_CAPACITY_ENV = "RECOVAR_EXACT_LOCAL_BPREF_PARTICLE_CAPACITY"
+EXACT_LOCAL_BPREF_CUDA_PACKING_ENV = "RECOVAR_EXACT_LOCAL_BPREF_CUDA_PACKING"
+EXACT_LOCAL_HOST_PLAN_CUDA_ENV = "RECOVAR_EXACT_LOCAL_HOST_PLAN_CUDA"
+EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV = "RECOVAR_EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB"
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS = 64_000_000
 EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS_ENV = (
@@ -279,6 +418,58 @@ LOCAL_SCORE_DUMP_TARGET_ONLY_ENV = "RECOVAR_LOCAL_SCORE_DUMP_TARGET_ONLY"
 EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS_ENV = "RECOVAR_EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS"
 EXACT_LOCAL_PROGRESS_CHUNKS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS"
 EXACT_LOCAL_PROGRESS_SECONDS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS"
+RELION_VDAM_WORKER_SCHEDULE_ENV = "RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ"
+RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV = "RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY"
+RELION_VDAM_WORKER_REPLAY_ITER_ENV = "RECOVAR_RELION_VDAM_WORKER_REPLAY_ITER"
+RELION_VDAM_WORKER_STREAM_COUNT = 8
+RELION_VDAM_BLOCK_CHRONOLOGY_ENV = "RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ"
+VDAM_CANDIDATE_BLOCK_TRACE_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE"
+VDAM_CANDIDATE_BLOCK_TRACE_ITER_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_ITER"
+VDAM_WAVG_BPREF_HOST_GAP_TRACE_ENV = "RECOVAR_VDAM_WAVG_BPREF_HOST_GAP_TRACE"
+VDAM_EXTERNAL_HOST_REPLAY_CAPTURE_DIR_ENV = (
+    "RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_CAPTURE_DIR"
+)
+VDAM_QUIESCED_PRELAUNCH_CAPTURE_DIR_ENV = (
+    "RECOVAR_VDAM_QUIESCED_PRELAUNCH_CAPTURE_DIR"
+)
+VDAM_CANDIDATE_BLOCK_MAP_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP"
+VDAM_CANDIDATE_BLOCK_MAP_ITER_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP_ITER"
+VDAM_CANDIDATE_BLOCK_MAP_CAPACITY_ENV = "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP_CAPACITY"
+VDAM_CANDIDATE_BLOCK_MAP_MAGIC = b"RECOVAR_VDAMBM1\0"
+VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE = np.dtype(
+    [
+        ("magic", "S16"),
+        ("schema_version", "<u4"),
+        ("header_size", "<u4"),
+        ("record_size", "<u4"),
+        ("iteration", "<u4"),
+        ("record_count", "<u8"),
+        ("capacity", "<u8"),
+        ("reserved0", "<u8"),
+        ("reserved1", "<u8"),
+    ]
+)
+VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE = np.dtype(
+    [
+        ("particle_id", "<i8"),
+        ("candidate_orientation_row", "<u4"),
+        ("native_orientation_row", "<u4"),
+        ("global_rotation_id", "<i4"),
+        ("class_id", "<i4"),
+        ("reconstruction_group_id", "<i4"),
+        ("iteration", "<u4"),
+        ("flags", "<u4"),
+        ("reserved", "<u4"),
+    ]
+)
+VDAM_CANDIDATE_BLOCK_MAP_VALID = np.uint32(1 << 0)
+VDAM_CANDIDATE_BLOCK_MAP_CONTRIBUTING = np.uint32(1 << 1)
+VDAM_CANDIDATE_BLOCK_MAP_INVALID_ROW = np.iinfo(np.uint32).max
+if (
+    VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE.itemsize != 64
+    or VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE.itemsize != 40
+):
+    raise RuntimeError("VDAM candidate block-map binary schema has an invalid item size")
 DEFAULT_EXACT_LOCAL_PROGRESS_CHUNKS = 1000
 DEFAULT_EXACT_LOCAL_PROGRESS_SECONDS = 300
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
@@ -304,6 +495,1044 @@ def _local_mstep_rotations(bucket: LocalBucketSpec) -> np.ndarray:
     if rotations is None:
         rotations = bucket.local_rotations
     return np.asarray(rotations)
+
+
+@functools.lru_cache(maxsize=8)
+def _load_relion_vdam_worker_schedule(path: str) -> np.ndarray:
+    """Return a dense stack-index to worker-lane map from a sealed v2 trace."""
+
+    with np.load(path, allow_pickle=False) as payload:
+        schema_version = int(np.asarray(payload["schema_version"]).item())
+        dataset_particles = int(np.asarray(payload["dataset_particles"]).item())
+        n_threads = int(np.asarray(payload["n_threads"]).item())
+        stack_indices = np.asarray(
+            payload["stack_index_by_sorted_position"], dtype=np.int64
+        )
+        owners = np.asarray(payload["owner_by_sorted_position"], dtype=np.int64)
+    if schema_version != 2:
+        raise ValueError(
+            "VDAM worker replay requires a v2 trace with stack-image join keys"
+        )
+    if dataset_particles <= 0 or n_threads != 8:
+        raise ValueError("VDAM worker replay requires a positive dataset and eight workers")
+    if stack_indices.ndim != 1 or owners.shape != stack_indices.shape:
+        raise ValueError("VDAM worker replay arrays must be matching vectors")
+    if (
+        np.unique(stack_indices).size != stack_indices.size
+        or np.any(stack_indices < 0)
+        or np.any(stack_indices >= dataset_particles)
+        or np.any(owners < 0)
+        or np.any(owners >= n_threads)
+    ):
+        raise ValueError("VDAM worker replay schedule contains invalid stack IDs or owners")
+    owner_by_stack_index = np.full(dataset_particles, -1, dtype=np.int32)
+    owner_by_stack_index[stack_indices] = owners.astype(np.int32)
+    owner_by_stack_index.setflags(write=False)
+    return owner_by_stack_index
+
+
+@functools.lru_cache(maxsize=8)
+def _load_relion_vdam_block_start_orders(
+    worker_schedule_path: str,
+    chronology_path: str,
+) -> tuple[int, int, tuple[np.ndarray | None, ...]]:
+    """Join a sealed native block chronology to zero-based stack-image IDs."""
+
+    with np.load(worker_schedule_path, allow_pickle=False) as schedule:
+        schedule_schema = int(np.asarray(schedule["schema_version"]).item())
+        schedule_iteration = int(np.asarray(schedule["iteration"]).item())
+        dataset_particles = int(np.asarray(schedule["dataset_particles"]).item())
+        internal_ids = np.asarray(
+            schedule["internal_particle_id_by_sorted_position"], dtype=np.int64
+        )
+        stack_indices = np.asarray(
+            schedule["stack_index_by_sorted_position"], dtype=np.int64
+        )
+    with np.load(chronology_path, allow_pickle=False) as chronology:
+        chronology_schema = int(np.asarray(chronology["schema_version"]).item())
+        chronology_iteration = int(np.asarray(chronology["iteration"]).item())
+        chronology_particles = int(np.asarray(chronology["n_particles"]).item())
+        records = np.asarray(chronology["records"])
+    if schedule_schema != 2 or chronology_schema != 1:
+        raise ValueError("captured block replay requires worker v2 and chronology v1")
+    if schedule_iteration != chronology_iteration:
+        raise ValueError("worker schedule and block chronology iterations differ")
+    if dataset_particles <= 0 or chronology_particles != internal_ids.size:
+        raise ValueError("captured block replay particle counts differ")
+    if (
+        internal_ids.ndim != 1
+        or stack_indices.shape != internal_ids.shape
+        or np.unique(internal_ids).size != internal_ids.size
+        or np.unique(stack_indices).size != stack_indices.size
+        or np.any(stack_indices < 0)
+        or np.any(stack_indices >= dataset_particles)
+    ):
+        raise ValueError("captured block replay join keys are invalid")
+    required_fields = {
+        "particle_id",
+        "block_start_globaltimer",
+        "orientation_row",
+        "image_count",
+    }
+    if records.ndim != 1 or records.dtype.names is None or not required_fields.issubset(
+        records.dtype.names
+    ):
+        raise ValueError("captured block replay records have an invalid schema")
+    if not np.array_equal(np.unique(records["particle_id"]), np.sort(internal_ids)):
+        raise ValueError("captured block replay internal particle IDs differ")
+
+    stack_by_internal = {
+        int(internal_id): int(stack_index)
+        for internal_id, stack_index in zip(internal_ids.tolist(), stack_indices.tolist())
+    }
+    orders: list[np.ndarray | None] = [None] * dataset_particles
+    for internal_id in internal_ids.tolist():
+        rows = records[records["particle_id"] == internal_id]
+        image_counts = np.unique(rows["image_count"])
+        if image_counts.size != 1:
+            raise ValueError("captured block replay launch image counts differ")
+        image_count = int(image_counts[0])
+        if rows.size != image_count or not np.array_equal(
+            np.sort(rows["orientation_row"]),
+            np.arange(image_count, dtype=rows["orientation_row"].dtype),
+        ):
+            raise ValueError("captured block replay orientation rows are not a bijection")
+        order = rows[
+            np.lexsort((rows["orientation_row"], rows["block_start_globaltimer"]))
+        ]["orientation_row"].astype(np.int32, copy=True)
+        order.setflags(write=False)
+        orders[stack_by_internal[int(internal_id)]] = order
+    return schedule_iteration, dataset_particles, tuple(orders)
+
+
+@functools.lru_cache(maxsize=8)
+def _load_relion_vdam_particle_issue_ranks(
+    worker_schedule_path: str,
+    chronology_path: str,
+) -> tuple[int, int, np.ndarray]:
+    """Join native launch sequence to a dense stack-index issue-rank map."""
+
+    with np.load(worker_schedule_path, allow_pickle=False) as schedule:
+        schedule_schema = int(np.asarray(schedule["schema_version"]).item())
+        schedule_iteration = int(np.asarray(schedule["iteration"]).item())
+        dataset_particles = int(np.asarray(schedule["dataset_particles"]).item())
+        n_threads = int(np.asarray(schedule["n_threads"]).item())
+        internal_ids = np.asarray(
+            schedule["internal_particle_id_by_sorted_position"], dtype=np.int64
+        )
+        stack_indices = np.asarray(
+            schedule["stack_index_by_sorted_position"], dtype=np.int64
+        )
+        owners = np.asarray(
+            schedule["owner_by_sorted_position"], dtype=np.int64
+        )
+    with np.load(chronology_path, allow_pickle=False) as chronology:
+        chronology_schema = int(np.asarray(chronology["schema_version"]).item())
+        chronology_iteration = int(np.asarray(chronology["iteration"]).item())
+        chronology_particles = int(np.asarray(chronology["n_particles"]).item())
+        chronology_threads = int(np.asarray(chronology["n_threads"]).item())
+        records = np.asarray(chronology["records"])
+    if schedule_schema != 2 or chronology_schema != 1:
+        raise ValueError("captured particle issue replay requires worker v2 and chronology v1")
+    if schedule_iteration != chronology_iteration:
+        raise ValueError("worker schedule and particle chronology iterations differ")
+    if (
+        dataset_particles <= 0
+        or chronology_particles != internal_ids.size
+        or n_threads != RELION_VDAM_WORKER_STREAM_COUNT
+        or chronology_threads != n_threads
+    ):
+        raise ValueError("captured particle issue replay topology differs")
+    if (
+        internal_ids.ndim != 1
+        or stack_indices.shape != internal_ids.shape
+        or owners.shape != internal_ids.shape
+        or np.unique(internal_ids).size != internal_ids.size
+        or np.unique(stack_indices).size != stack_indices.size
+        or np.any(stack_indices < 0)
+        or np.any(stack_indices >= dataset_particles)
+        or np.any(owners < 0)
+        or np.any(owners >= n_threads)
+    ):
+        raise ValueError("captured particle issue replay join keys are invalid")
+    required_fields = {"launch_sequence", "particle_id", "worker_id"}
+    if records.ndim != 1 or records.dtype.names is None or not required_fields.issubset(
+        records.dtype.names
+    ):
+        raise ValueError("captured particle issue chronology has an invalid schema")
+    if not np.array_equal(np.unique(records["particle_id"]), np.sort(internal_ids)):
+        raise ValueError("captured particle issue internal particle IDs differ")
+
+    stack_by_internal = {
+        int(internal_id): int(stack_index)
+        for internal_id, stack_index in zip(internal_ids.tolist(), stack_indices.tolist())
+    }
+    owner_by_internal = {
+        int(internal_id): int(owner)
+        for internal_id, owner in zip(internal_ids.tolist(), owners.tolist())
+    }
+    issue_rank_by_stack_index = np.full(dataset_particles, -1, dtype=np.int32)
+    seen_launch_sequences: list[int] = []
+    for internal_id in internal_ids.tolist():
+        rows = records[records["particle_id"] == internal_id]
+        launch_sequences = np.unique(rows["launch_sequence"])
+        worker_ids = np.unique(rows["worker_id"])
+        if launch_sequences.size != 1 or worker_ids.size != 1:
+            raise ValueError("captured particle issue launch identity is not unique")
+        if int(worker_ids[0]) != owner_by_internal[int(internal_id)]:
+            raise ValueError("captured particle issue worker owner differs from schedule")
+        launch_sequence = int(launch_sequences[0])
+        seen_launch_sequences.append(launch_sequence)
+        issue_rank_by_stack_index[stack_by_internal[int(internal_id)]] = launch_sequence
+    if not np.array_equal(
+        np.sort(np.asarray(seen_launch_sequences, dtype=np.int64)),
+        np.arange(internal_ids.size, dtype=np.int64),
+    ):
+        raise ValueError("captured particle issue launch sequences are not a bijection")
+    issue_rank_by_stack_index.setflags(write=False)
+    return schedule_iteration, dataset_particles, issue_rank_by_stack_index
+
+
+@functools.lru_cache(maxsize=8)
+def _load_relion_vdam_particle_start_offsets_ns(
+    worker_schedule_path: str,
+    chronology_path: str,
+) -> tuple[int, int, np.ndarray]:
+    """Join native first-block timestamps to dense stack-index offsets."""
+
+    trace_iteration, dataset_particles, issue_ranks = (
+        _load_relion_vdam_particle_issue_ranks(
+            worker_schedule_path,
+            chronology_path,
+        )
+    )
+    with np.load(worker_schedule_path, allow_pickle=False) as schedule:
+        internal_ids = np.asarray(
+            schedule["internal_particle_id_by_sorted_position"], dtype=np.int64
+        )
+        stack_indices = np.asarray(
+            schedule["stack_index_by_sorted_position"], dtype=np.int64
+        )
+    with np.load(chronology_path, allow_pickle=False) as chronology:
+        records = np.asarray(chronology["records"])
+    if records.dtype.names is None or "block_start_globaltimer" not in records.dtype.names:
+        raise ValueError("captured particle timing chronology has no block-start timestamps")
+
+    starts_by_issue_rank = np.empty(internal_ids.size, dtype=np.uint64)
+    stack_by_issue_rank = np.empty(internal_ids.size, dtype=np.int64)
+    for internal_id, stack_index in zip(internal_ids.tolist(), stack_indices.tolist()):
+        rows = records[records["particle_id"] == internal_id]
+        starts = rows["block_start_globaltimer"]
+        starts = starts[starts > 0]
+        if starts.size == 0:
+            raise ValueError("captured particle timing has no valid block start")
+        issue_rank = int(issue_ranks[int(stack_index)])
+        starts_by_issue_rank[issue_rank] = np.min(starts)
+        stack_by_issue_rank[issue_rank] = int(stack_index)
+
+    # NVIDIA's %globaltimer timestamps are nanoseconds.  The first native
+    # launch is also the earliest launch in the sealed trace; retain the tiny
+    # measured cross-stream inversions rather than changing their identities.
+    first_start = int(starts_by_issue_rank[0])
+    offsets_by_issue_rank = np.asarray(
+        [int(start) - first_start for start in starts_by_issue_rank],
+        dtype=np.int64,
+    )
+    if np.any(offsets_by_issue_rank < 0):
+        raise ValueError("captured particle timing precedes the first launch")
+    if np.any(offsets_by_issue_rank > np.iinfo(np.int32).max):
+        raise ValueError("captured particle timing exceeds the int32 nanosecond range")
+    offsets_by_stack_index = np.full(dataset_particles, -1, dtype=np.int32)
+    offsets_by_stack_index[stack_by_issue_rank] = offsets_by_issue_rank.astype(np.int32)
+    offsets_by_stack_index.setflags(write=False)
+    return trace_iteration, dataset_particles, offsets_by_stack_index
+
+
+def _relion_vdam_particle_issue_order_for_images(
+    experiment_dataset,
+    image_indices,
+    *,
+    debug_iteration: int | None,
+) -> np.ndarray | None:
+    """Return the current particles ordered by native global launch sequence."""
+
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    if topology not in {
+        "captured_particle_issue",
+        "captured_particle_issue_native_count",
+        "captured_particle_issue_native_grid",
+        "captured_particle_timing",
+        "captured_particle_timing_native_count",
+        "captured_particle_timing_native_grid",
+    }:
+        return None
+    schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+    if not schedule_path or not chronology_path:
+        raise ValueError(
+            "captured particle issue replay requires sealed worker schedule and chronology NPZs"
+        )
+    trace_iteration, dataset_particles, issue_ranks = (
+        _load_relion_vdam_particle_issue_ranks(schedule_path, chronology_path)
+    )
+    if debug_iteration is None or int(debug_iteration) != trace_iteration:
+        return None
+    original_indices = np.asarray(
+        experiment_dataset.original_image_indices_from_local(image_indices),
+        dtype=np.int64,
+    )
+    if original_indices.shape != np.asarray(image_indices).shape:
+        raise ValueError("captured particle issue image-index mapping returned an invalid shape")
+    if np.any(original_indices < 0) or np.any(original_indices >= dataset_particles):
+        raise ValueError("captured particle issue image index is outside the traced dataset")
+    selected_ranks = issue_ranks[original_indices]
+    if np.any(selected_ranks < 0):
+        missing = original_indices[selected_ranks < 0]
+        raise ValueError(
+            "captured particle issue replay is missing selected stack indices "
+            f"{missing[:8].tolist()}"
+        )
+    if np.unique(selected_ranks).size != selected_ranks.size:
+        raise ValueError("captured particle issue ranks are not unique")
+    return np.argsort(selected_ranks, kind="stable").astype(np.int32, copy=False)
+
+
+def _relion_vdam_particle_start_offsets_for_images(
+    experiment_dataset,
+    image_indices,
+    *,
+    debug_iteration: int | None,
+) -> np.ndarray | None:
+    """Return native first-block offsets for the exact sealed iteration."""
+
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    if topology not in {
+        "captured_particle_timing",
+        "captured_particle_timing_native_count",
+        "captured_particle_timing_native_grid",
+    }:
+        return None
+    schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+    if not schedule_path or not chronology_path:
+        raise ValueError(
+            "captured particle timing requires sealed worker schedule and chronology NPZs"
+        )
+    trace_iteration, dataset_particles, offsets = (
+        _load_relion_vdam_particle_start_offsets_ns(schedule_path, chronology_path)
+    )
+    if debug_iteration is None or int(debug_iteration) != trace_iteration:
+        return None
+    original_indices = np.asarray(
+        experiment_dataset.original_image_indices_from_local(image_indices),
+        dtype=np.int64,
+    )
+    if original_indices.shape != np.asarray(image_indices).shape:
+        raise ValueError("captured particle timing image-index mapping returned an invalid shape")
+    if np.any(original_indices < 0) or np.any(original_indices >= dataset_particles):
+        raise ValueError("captured particle timing image index is outside the traced dataset")
+    selected_offsets = offsets[original_indices]
+    if np.any(selected_offsets < 0):
+        missing = original_indices[selected_offsets < 0]
+        raise ValueError(
+            "captured particle timing is missing selected stack indices "
+            f"{missing[:8].tolist()}"
+        )
+    return selected_offsets.astype(np.int32, copy=False)
+
+
+def _relion_vdam_block_start_orders_for_images(
+    experiment_dataset,
+    image_indices,
+    *,
+    rotation_count: int,
+    valid_rotation_counts,
+    debug_iteration: int | None,
+) -> np.ndarray | None:
+    """Resolve captured native block-start order for its exact traced iteration."""
+
+    if not _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration):
+        return None
+    schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+    _, dataset_particles, orders = _load_relion_vdam_block_start_orders(
+        schedule_path,
+        chronology_path,
+    )
+    original_indices = np.asarray(
+        experiment_dataset.original_image_indices_from_local(image_indices),
+        dtype=np.int64,
+    )
+    if original_indices.shape != np.asarray(image_indices).shape:
+        raise ValueError("captured block replay image-index mapping returned an invalid shape")
+    if np.any(original_indices < 0) or np.any(original_indices >= dataset_particles):
+        raise ValueError("captured block replay image index is outside the traced dataset")
+    selected_orders = [orders[int(index)] for index in original_indices.tolist()]
+    if any(order is None for order in selected_orders):
+        missing = original_indices[
+            np.asarray([order is None for order in selected_orders], dtype=bool)
+        ]
+        raise ValueError(
+            "captured block replay is missing selected stack indices "
+            f"{missing[:8].tolist()}"
+        )
+    valid_rotation_counts = np.asarray(valid_rotation_counts, dtype=np.int64)
+    if valid_rotation_counts.shape != original_indices.shape:
+        raise ValueError("captured block replay valid-row counts have an invalid shape")
+    native_counts_array = np.asarray(
+        [order.size for order in selected_orders],
+        dtype=np.int64,
+    )
+    if np.any(valid_rotation_counts <= 0) or np.any(
+        native_counts_array < valid_rotation_counts
+    ) or np.any(native_counts_array - valid_rotation_counts >= 8):
+        raise ValueError(
+            "captured block replay cannot prove a native-grid prefix: "
+            f"native={np.unique(native_counts_array).tolist()} "
+            f"valid={np.unique(valid_rotation_counts).tolist()}"
+        )
+    if any(order.size > rotation_count for order in selected_orders):
+        native_counts = sorted({int(order.size) for order in selected_orders})
+        raise ValueError(
+            "captured block replay native rotation count exceeds the current bucket: "
+            f"native={native_counts} candidate={rotation_count}"
+        )
+    expanded_orders = []
+    for order in selected_orders:
+        # RECOVAR's static bucket can be larger than RELION's per-particle
+        # eight-row-padded launch. Rows beyond the native launch carry zero
+        # posterior; append them after the complete measured native order.
+        if order.size < rotation_count:
+            order = np.concatenate(
+                (
+                    order,
+                    np.arange(order.size, rotation_count, dtype=np.int32),
+                )
+            )
+        expanded_orders.append(order)
+    return np.stack(expanded_orders, axis=0).astype(np.int32, copy=False)
+
+
+def _relion_vdam_block_start_replay_active(*, debug_iteration: int | None) -> bool:
+    """Return whether this call is the exact iteration represented by the seal."""
+
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    if topology not in {
+        "captured_block_start",
+        "captured_block_grid",
+        "captured_native_grid",
+        "captured_native_count",
+        "captured_native_trace_shape",
+        "captured_native_grid_trace_shape",
+        "materialized_native_grid_trace_shape",
+        "captured_particle_issue_native_count",
+        "captured_particle_timing_native_count",
+        "captured_particle_issue_native_grid",
+        "captured_particle_timing_native_grid",
+    }:
+        return False
+    schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+    if not schedule_path or not chronology_path:
+        raise ValueError(
+            "captured block replay requires sealed worker schedule and block chronology NPZs"
+        )
+    trace_iteration, _, _ = _load_relion_vdam_block_start_orders(
+        schedule_path,
+        chronology_path,
+    )
+    return debug_iteration is not None and int(debug_iteration) == trace_iteration
+
+
+def _relion_vdam_worker_lanes_for_images(
+    experiment_dataset,
+    image_indices,
+    *,
+    debug_iteration: int | None = None,
+):
+    """Resolve optional native worker owners into the current physical bucket order."""
+
+    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    replay_iteration_raw = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_ITER_ENV,
+        "",
+    ).strip()
+    if replay_iteration_raw and (topology == "round_robin" or path):
+        try:
+            replay_iteration = int(replay_iteration_raw)
+        except ValueError as exc:
+            raise ValueError(
+                "VDAM worker replay iteration must be a positive integer"
+            ) from exc
+        if replay_iteration <= 0:
+            raise ValueError(
+                "VDAM worker replay iteration must be a positive integer"
+            )
+        if debug_iteration is None or int(debug_iteration) != replay_iteration:
+            return None
+    if topology == "round_robin":
+        if path:
+            raise ValueError(
+                "round-robin VDAM worker replay cannot also use a captured schedule"
+            )
+        image_indices_array = np.asarray(image_indices)
+        return (
+            np.arange(image_indices_array.size, dtype=np.int32)
+            .reshape(image_indices_array.shape)
+            % RELION_VDAM_WORKER_STREAM_COUNT
+        )
+    if not path:
+        return None
+    owner_by_stack_index = _load_relion_vdam_worker_schedule(path)
+    if topology in {
+        "captured_particle_issue",
+        "captured_particle_issue_native_count",
+        "captured_particle_issue_native_grid",
+        "captured_particle_timing",
+        "captured_particle_timing_native_count",
+        "captured_particle_timing_native_grid",
+        "captured_block_start",
+        "captured_block_grid",
+        "captured_native_grid",
+        "captured_native_count",
+        "captured_native_trace_shape",
+        "captured_native_grid_trace_shape",
+        "materialized_native_grid_trace_shape",
+    }:
+        if topology in {
+            "captured_particle_issue",
+            "captured_particle_issue_native_count",
+            "captured_particle_issue_native_grid",
+            "captured_particle_timing",
+            "captured_particle_timing_native_count",
+            "captured_particle_timing_native_grid",
+        }:
+            if (
+                _relion_vdam_particle_issue_order_for_images(
+                    experiment_dataset,
+                    image_indices,
+                    debug_iteration=debug_iteration,
+                )
+                is None
+            ):
+                return None
+        elif not _relion_vdam_block_start_replay_active(
+            debug_iteration=debug_iteration
+        ):
+            return None
+    if topology in {
+        "single_rotation",
+        "single_rotation_f64",
+        "single_rotation_reverse",
+        "single_rotation_sm132",
+    }:
+        # This diagnostic intentionally discards captured owners and serializes
+        # every particle and orientation block.  The v2 trace still gets fully
+        # schema-validated above, but later VDAM iterations may select particles
+        # that were not present in the iteration-1 trace.
+        return np.zeros(np.asarray(image_indices).shape, dtype=np.int32)
+    original_indices = np.asarray(
+        experiment_dataset.original_image_indices_from_local(image_indices),
+        dtype=np.int64,
+    )
+    if original_indices.shape != np.asarray(image_indices).shape:
+        raise ValueError("VDAM worker replay image-index mapping returned an invalid shape")
+    if np.any(original_indices < 0) or np.any(original_indices >= owner_by_stack_index.size):
+        raise ValueError("VDAM worker replay image index is outside the traced dataset")
+    owners = owner_by_stack_index[original_indices]
+    if np.any(owners < 0):
+        missing = original_indices[owners < 0]
+        raise ValueError(
+            "VDAM worker replay is missing selected stack indices "
+            f"{missing[:8].tolist()}"
+        )
+    if topology == "single":
+        owners = np.zeros_like(owners)
+    elif topology not in {
+        "captured",
+        "captured_particle_issue",
+        "captured_particle_issue_native_count",
+        "captured_particle_issue_native_grid",
+        "captured_particle_timing",
+        "captured_particle_timing_native_count",
+        "captured_particle_timing_native_grid",
+        "captured_block_start",
+        "captured_block_grid",
+        "captured_native_grid",
+        "captured_native_count",
+        "captured_native_trace_shape",
+        "captured_native_grid_trace_shape",
+        "materialized_native_grid_trace_shape",
+    }:
+        raise ValueError(
+            "VDAM worker replay topology must be 'captured', 'single', or "
+            "'single_rotation', 'single_rotation_f64', 'single_rotation_reverse', "
+            "'single_rotation_sm132', 'captured_particle_issue', 'captured_block_start', "
+            "'captured_particle_timing', "
+            "'captured_particle_issue_native_count', "
+            "'captured_particle_issue_native_grid', "
+            "'captured_particle_timing_native_count', "
+            "'captured_particle_timing_native_grid', "
+            "'captured_block_grid', 'captured_native_grid', or "
+            "'captured_native_count', 'captured_native_trace_shape', or "
+            "'captured_native_grid_trace_shape', or "
+            "'materialized_native_grid_trace_shape'"
+        )
+    return owners.astype(np.int32, copy=False)
+
+
+def _relion_vdam_native_grid_counts_for_images(
+    experiment_dataset,
+    image_indices,
+    *,
+    rotation_count: int,
+    valid_rotation_counts,
+    debug_iteration: int | None,
+) -> np.ndarray | None:
+    """Return sealed native per-particle grid sizes for the exact-grid replay."""
+
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    if topology not in {
+        "captured_native_grid",
+        "captured_native_count",
+        "captured_native_trace_shape",
+        "captured_native_grid_trace_shape",
+        "materialized_native_grid_trace_shape",
+        "captured_particle_issue_native_count",
+        "captured_particle_timing_native_count",
+        "captured_particle_issue_native_grid",
+        "captured_particle_timing_native_grid",
+    }:
+        return None
+    orders = _relion_vdam_block_start_orders_for_images(
+        experiment_dataset,
+        image_indices,
+        rotation_count=rotation_count,
+        valid_rotation_counts=valid_rotation_counts,
+        debug_iteration=debug_iteration,
+    )
+    if orders is None:
+        return None
+    schedule_path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    chronology_path = os.environ.get(RELION_VDAM_BLOCK_CHRONOLOGY_ENV, "").strip()
+    _, dataset_particles, captured_orders = _load_relion_vdam_block_start_orders(
+        schedule_path,
+        chronology_path,
+    )
+    original_indices = np.asarray(
+        experiment_dataset.original_image_indices_from_local(image_indices),
+        dtype=np.int64,
+    )
+    if np.any(original_indices < 0) or np.any(original_indices >= dataset_particles):
+        raise ValueError("native-grid replay image index is outside the traced dataset")
+    counts = np.asarray(
+        [captured_orders[int(index)].size for index in original_indices.tolist()],
+        dtype=np.int32,
+    )
+    if counts.shape != np.asarray(image_indices).shape:
+        raise ValueError("native-grid replay counts have an invalid shape")
+    if np.any(counts <= 0) or np.any(counts > rotation_count):
+        raise ValueError("native-grid replay count is outside the candidate bucket")
+    return counts
+
+
+def _relion_vdam_identity_native_grid_replay() -> bool:
+    """Return whether native grid counts should keep identity physical rows."""
+
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    return topology in {
+        "captured_native_count",
+        "captured_native_trace_shape",
+        "captured_particle_issue_native_count",
+        "captured_particle_timing_native_count",
+    }
+
+
+def _relion_vdam_materialized_native_grid_replay(
+    *, debug_iteration: int | None
+) -> bool:
+    """Materialize captured logical rows before the native identity-grid launch."""
+
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    return topology == "materialized_native_grid_trace_shape" and (
+        _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration)
+    )
+
+
+def _relion_vdam_native_trace_shape_replay(
+    *, debug_iteration: int | None
+) -> bool:
+    """Retain native trace instructions only at the sealed trace iteration."""
+
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    return topology in {
+        "captured_native_trace_shape",
+        "captured_native_grid_trace_shape",
+        "materialized_native_grid_trace_shape",
+    } and (
+        _relion_vdam_block_start_replay_active(debug_iteration=debug_iteration)
+    )
+
+
+def _materialize_relion_vdam_rotation_rows(value, replay_order):
+    """Gather logical rotation rows into their captured physical block order."""
+
+    value = jnp.asarray(value)
+    replay_order = jnp.asarray(replay_order, dtype=jnp.int32)
+    if value.ndim < 2 or value.shape[:2] != replay_order.shape:
+        raise ValueError(
+            "materialized VDAM operand must match the particle/rotation order axes"
+        )
+    index = replay_order.reshape(
+        replay_order.shape + (1,) * (value.ndim - replay_order.ndim)
+    )
+    return jnp.take_along_axis(
+        value,
+        jnp.broadcast_to(index, value.shape),
+        axis=1,
+    )
+
+
+def _relion_vdam_candidate_trace_active(*, debug_iteration: int | None) -> bool:
+    """Gate passive candidate tracing to its explicitly sealed iteration."""
+
+    if not os.environ.get(VDAM_CANDIDATE_BLOCK_TRACE_ENV, "").strip():
+        return False
+    iteration_text = os.environ.get(
+        VDAM_CANDIDATE_BLOCK_TRACE_ITER_ENV,
+        "",
+    ).strip()
+    if not iteration_text:
+        raise ValueError("candidate block trace requires an explicit iteration")
+    try:
+        target_iteration = int(iteration_text)
+    except ValueError as exc:
+        raise ValueError("candidate block trace iteration must be an integer") from exc
+    if target_iteration <= 0:
+        raise ValueError("candidate block trace iteration must be positive")
+    return debug_iteration is not None and int(debug_iteration) == target_iteration
+
+
+def _relion_vdam_candidate_trace_ids_for_images(
+    experiment_dataset,
+    image_indices,
+    *,
+    debug_iteration: int | None,
+):
+    """Return stable stack IDs when a passive launch diagnostic needs them."""
+
+    block_trace_active = _relion_vdam_candidate_trace_active(
+        debug_iteration=debug_iteration
+    )
+    host_gap_trace_active = bool(
+        os.environ.get(VDAM_WAVG_BPREF_HOST_GAP_TRACE_ENV, "").strip()
+    )
+    host_replay_capture_active = bool(
+        os.environ.get(VDAM_EXTERNAL_HOST_REPLAY_CAPTURE_DIR_ENV, "").strip()
+    )
+    quiesced_prelaunch_capture_active = bool(
+        os.environ.get(VDAM_QUIESCED_PRELAUNCH_CAPTURE_DIR_ENV, "").strip()
+    )
+    if not (
+        block_trace_active
+        or host_gap_trace_active
+        or host_replay_capture_active
+        or quiesced_prelaunch_capture_active
+    ):
+        return None
+    original_indices = np.asarray(
+        experiment_dataset.original_image_indices_from_local(image_indices),
+        dtype=np.int64,
+    )
+    if original_indices.shape != np.asarray(image_indices).shape:
+        raise ValueError("candidate block trace image-index mapping returned an invalid shape")
+    if np.any(original_indices < 0) or np.any(
+        original_indices > np.iinfo(np.int32).max
+    ):
+        raise ValueError("candidate block trace stack index is outside int32 range")
+    return original_indices.astype(np.int32, copy=False)
+
+
+def _maybe_write_vdam_candidate_block_map(
+    *,
+    particle_ids,
+    reconstruction_take_indices,
+    reconstruction_pack_mask,
+    reconstruction_contributing_mask,
+    local_rotation_ids,
+    reconstruction_group_ids,
+    candidate_launch_counts=None,
+    debug_iteration: int | None,
+) -> None:
+    """Append the exact compact-row to native-local-row mapping for one bucket."""
+
+    path_text = os.environ.get(VDAM_CANDIDATE_BLOCK_MAP_ENV, "").strip()
+    if not path_text:
+        return
+    if not os.environ.get(VDAM_CANDIDATE_BLOCK_TRACE_ENV, "").strip():
+        raise ValueError("candidate block-map capture requires passive block tracing")
+    iteration_text = os.environ.get(
+        VDAM_CANDIDATE_BLOCK_MAP_ITER_ENV,
+        "",
+    ).strip()
+    if not iteration_text:
+        raise ValueError("candidate block-map capture requires an explicit iteration")
+    try:
+        target_iteration = int(iteration_text)
+    except ValueError as exc:
+        raise ValueError("candidate block-map iteration must be an integer") from exc
+    if target_iteration <= 0:
+        raise ValueError("candidate block-map iteration must be positive")
+    if debug_iteration is None or int(debug_iteration) != target_iteration:
+        return
+    capacity_text = os.environ.get(
+        VDAM_CANDIDATE_BLOCK_MAP_CAPACITY_ENV,
+        "1000000",
+    ).strip()
+    try:
+        capacity = int(capacity_text)
+    except ValueError as exc:
+        raise ValueError("candidate block-map capacity must be an integer") from exc
+    if capacity <= 0:
+        raise ValueError("candidate block-map capacity must be positive")
+
+    particle_ids = np.asarray(particle_ids, dtype=np.int64)
+    take_indices = np.asarray(reconstruction_take_indices, dtype=np.int64)
+    pack_mask = np.asarray(reconstruction_pack_mask, dtype=bool)
+    contributing_mask = np.asarray(reconstruction_contributing_mask, dtype=bool)
+    local_rotation_ids = np.asarray(local_rotation_ids, dtype=np.int64)
+    if (
+        take_indices.ndim != 2
+        or pack_mask.shape != take_indices.shape
+        or contributing_mask.shape != take_indices.shape
+    ):
+        raise ValueError("candidate block-map packed row arrays must have matching rank-two shapes")
+    if np.any(contributing_mask & ~pack_mask):
+        raise ValueError("candidate block-map contributing rows must be valid logical rows")
+    particle_count, candidate_count = take_indices.shape
+    if particle_ids.shape != (particle_count,):
+        raise ValueError("candidate block-map particle IDs must match the packed particle axis")
+    if local_rotation_ids.ndim != 2 or local_rotation_ids.shape[0] != particle_count:
+        raise ValueError("candidate block-map local rotation IDs must match the particle axis")
+    if np.any(particle_ids < 0):
+        raise ValueError("candidate block-map particle IDs must be nonnegative")
+    if candidate_launch_counts is None:
+        candidate_launch_counts = np.full(
+            particle_count,
+            candidate_count,
+            dtype=np.int64,
+        )
+    else:
+        candidate_launch_counts = np.asarray(candidate_launch_counts, dtype=np.int64)
+        if candidate_launch_counts.shape != (particle_count,):
+            raise ValueError("candidate block-map launch counts must match particles")
+        if np.any(candidate_launch_counts <= 0) or np.any(
+            candidate_launch_counts > candidate_count
+        ):
+            raise ValueError("candidate block-map launch count is outside the packed grid")
+    if np.any(pack_mask & ((take_indices < 0) | (take_indices >= local_rotation_ids.shape[1]))):
+        raise ValueError("candidate block-map valid native rows are out of range")
+    if reconstruction_group_ids is None:
+        reconstruction_group_ids = np.zeros((particle_count,), dtype=np.int32)
+    else:
+        reconstruction_group_ids = np.asarray(reconstruction_group_ids, dtype=np.int64)
+        if reconstruction_group_ids.shape != (particle_count,):
+            raise ValueError("candidate block-map reconstruction groups must match particles")
+        if np.any(
+            (reconstruction_group_ids < np.iinfo(np.int32).min)
+            | (reconstruction_group_ids > np.iinfo(np.int32).max)
+        ):
+            raise ValueError("candidate block-map reconstruction group is outside int32")
+
+    safe_take_indices = np.where(pack_mask, take_indices, 0)
+    global_rotation_ids = np.take_along_axis(
+        local_rotation_ids,
+        safe_take_indices,
+        axis=1,
+    )
+    if np.any(pack_mask & ((global_rotation_ids < 0) | (global_rotation_ids > np.iinfo(np.int32).max))):
+        raise ValueError("candidate block-map global rotation ID is outside int32")
+    records = np.zeros(
+        particle_count * candidate_count,
+        dtype=VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE,
+    )
+    records["particle_id"] = np.repeat(particle_ids, candidate_count)
+    records["candidate_orientation_row"] = np.tile(
+        np.arange(candidate_count, dtype=np.uint32),
+        particle_count,
+    )
+    records["native_orientation_row"] = np.where(
+        pack_mask,
+        take_indices,
+        VDAM_CANDIDATE_BLOCK_MAP_INVALID_ROW,
+    ).astype(np.uint32, copy=False).ravel()
+    records["global_rotation_id"] = np.where(
+        pack_mask,
+        global_rotation_ids,
+        -1,
+    ).astype(np.int32, copy=False).ravel()
+    records["class_id"] = 0
+    records["reconstruction_group_id"] = np.repeat(
+        reconstruction_group_ids.astype(np.int32, copy=False),
+        candidate_count,
+    )
+    records["iteration"] = np.uint32(target_iteration)
+    records["flags"] = (
+        np.where(
+            pack_mask.ravel(),
+            VDAM_CANDIDATE_BLOCK_MAP_VALID,
+            np.uint32(0),
+        )
+        | np.where(
+            contributing_mask.ravel(),
+            VDAM_CANDIDATE_BLOCK_MAP_CONTRIBUTING,
+            np.uint32(0),
+        )
+    )
+    launched = (
+        np.arange(candidate_count, dtype=np.int64)[None, :]
+        < candidate_launch_counts[:, None]
+    ).ravel()
+    records = records[launched]
+
+    output_path = Path(path_text).expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        with output_path.open("rb") as stream:
+            header_payload = stream.read(VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE.itemsize)
+        if len(header_payload) != VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE.itemsize:
+            raise ValueError("candidate block-map file has a truncated header")
+        header = np.frombuffer(
+            header_payload,
+            dtype=VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE,
+            count=1,
+        ).copy()
+        row = header[0]
+        if bytes(row["magic"]) != VDAM_CANDIDATE_BLOCK_MAP_MAGIC.rstrip(b"\0"):
+            raise ValueError("candidate block-map file has invalid magic")
+        if (
+            int(row["schema_version"]) != 2
+            or int(row["header_size"]) != VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE.itemsize
+            or int(row["record_size"]) != VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE.itemsize
+            or int(row["iteration"]) != target_iteration
+            or int(row["capacity"]) != capacity
+            or int(row["reserved0"]) != 0
+            or int(row["reserved1"]) != 0
+        ):
+            raise ValueError("candidate block-map header does not match this capture")
+        old_count = int(row["record_count"])
+        expected_size = (
+            VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE.itemsize
+            + old_count * VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE.itemsize
+        )
+        if output_path.stat().st_size != expected_size:
+            raise ValueError("candidate block-map file is truncated or has trailing bytes")
+    else:
+        header = np.zeros(1, dtype=VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE)
+        header["magic"] = VDAM_CANDIDATE_BLOCK_MAP_MAGIC
+        header["schema_version"] = 2
+        header["header_size"] = VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE.itemsize
+        header["record_size"] = VDAM_CANDIDATE_BLOCK_MAP_RECORD_DTYPE.itemsize
+        header["iteration"] = target_iteration
+        header["capacity"] = capacity
+        output_path.write_bytes(header.tobytes())
+        old_count = 0
+    new_count = old_count + int(records.size)
+    if new_count > capacity:
+        raise ValueError("candidate block-map capture exceeds its declared capacity")
+    with output_path.open("r+b") as stream:
+        stream.seek(0, os.SEEK_END)
+        stream.write(records.tobytes())
+        stream.flush()
+        header["record_count"] = new_count
+        stream.seek(0)
+        stream.write(header.tobytes())
+        stream.flush()
+
+
+def _relion_vdam_serial_rotation_replay() -> bool:
+    """Return whether the opt-in worker replay also serializes rotations."""
+
+    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    return bool(path) and topology in {
+        "single_rotation",
+        "single_rotation_f64",
+        "single_rotation_reverse",
+        "single_rotation_sm132",
+    }
+
+
+def _relion_vdam_captured_block_serial_replay() -> bool:
+    """Return whether captured native block order uses one-block launches."""
+
+    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    return bool(path) and topology == "captured_block_start"
+
+
+def _relion_vdam_float64_accumulator_replay() -> bool:
+    """Return whether the diagnostic uses binary64 accumulator storage."""
+
+    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    return bool(path) and topology == "single_rotation_f64"
+
+
+def _relion_vdam_reverse_rotation_replay() -> bool:
+    """Return whether serialized orientation blocks run in reverse order."""
+
+    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    return bool(path) and topology == "single_rotation_reverse"
+
+
+def _relion_vdam_rotation_replay_stride() -> int:
+    """Return the logical native-SM stride for serialized orientation blocks."""
+
+    path = os.environ.get(RELION_VDAM_WORKER_SCHEDULE_ENV, "").strip()
+    topology = os.environ.get(
+        RELION_VDAM_WORKER_REPLAY_TOPOLOGY_ENV,
+        "captured",
+    ).strip().lower()
+    return 132 if path and topology == "single_rotation_sm132" else 0
 
 
 def _bucket_contains_debug_target(experiment_dataset, image_indices, pending_targets: set[int] | None) -> bool:
@@ -355,6 +1584,15 @@ class _LocalPostprocessBuffers:
     reconstruction_sample_indices_by_image: list[np.ndarray] | None = None
 
 
+@dataclass(frozen=True)
+class _FixedCapacityWholeScoreCallContext:
+    """Host metadata retained while score calls execute in one boundary."""
+
+    unpadded_bucket: LocalBucketSpec
+    padded_bucket: LocalBucketSpec
+    unpadded_batch_size: int
+
+
 @dataclass
 class _LocalProjectionBlock:
     proj_weighted: jnp.ndarray
@@ -399,6 +1637,335 @@ def _local_mstep_adjoint_window(
     return mstep_recon_window_indices, mstep_adjoint_max_r
 
 
+def _accumulate_relion_physical_particle_grid(
+    summed,
+    ctf_probs,
+    rotations,
+    row_mask,
+    Ft_y,
+    Ft_ctf,
+    *,
+    pixel_indices,
+    image_shape,
+    volume_shape,
+    max_r,
+):
+    """Scatter one physically ordered VDAM bucket with RELION fused atomics."""
+
+    if max_r is None:
+        raise ValueError("RELION physical particle-grid accumulation requires max_r")
+    summed = jnp.asarray(summed, dtype=jnp.complex64)
+    ctf_probs = jnp.asarray(ctf_probs, dtype=jnp.float32)
+    rotations = jnp.asarray(rotations, dtype=jnp.float32)
+    row_mask = jnp.asarray(row_mask, dtype=bool)
+    if summed.shape != ctf_probs.shape:
+        raise ValueError(
+            "RELION physical particle-grid data/weight shapes differ: "
+            f"{summed.shape} vs {ctf_probs.shape}"
+        )
+    if row_mask.shape != summed.shape[:2]:
+        raise ValueError(
+            "RELION physical particle-grid row mask must match particle/rotation axes: "
+            f"{row_mask.shape} vs {summed.shape[:2]}"
+        )
+    if rotations.shape != (*summed.shape[:2], 3, 3):
+        raise ValueError(
+            "RELION physical particle-grid rotations must match particle/rotation axes: "
+            f"{rotations.shape} vs {(*summed.shape[:2], 3, 3)}"
+        )
+    summed = jnp.where(row_mask[..., None], summed, 0.0)
+    ctf_probs = jnp.where(row_mask[..., None], ctf_probs, 0.0)
+
+    from recovar import cuda_backproject
+
+    return cuda_backproject.relion_fused_x_half_backproject_particle_grid_indexed(
+        Ft_y,
+        Ft_ctf,
+        summed,
+        ctf_probs,
+        jnp.asarray(pixel_indices, dtype=jnp.int32),
+        rotations,
+        tuple(int(value) for value in image_shape),
+        tuple(int(value) for value in volume_shape),
+        float(max_r),
+    )
+
+
+def _accumulate_relion_vdam_physical_particle_grid(
+    images,
+    ctf,
+    minvsigma2,
+    posterior_over_weight_norm,
+    translation_angles,
+    reference,
+    rotations,
+    row_mask,
+    Ft_y,
+    Ft_ctf,
+    *,
+    projector_full=None,
+    scoring_rotations=None,
+    projector_r_max=None,
+    projection_padding_factor=1,
+    pixel_indices,
+    image_shape,
+    volume_shape,
+    max_r,
+    stable_dense_positions=None,
+    logical_current_size=None,
+    reconstruction_group_ids=None,
+    worker_lane_ids=None,
+    particle_trace_ids=None,
+    serial_rotation_replay=False,
+    persistent_serial_rotation_replay=False,
+    float64_accumulator_replay=False,
+    reverse_rotation_replay=False,
+    rotation_replay_stride=0,
+    rotation_replay_order=None,
+    rotation_replay_counts=None,
+    particle_start_offsets_ns=None,
+    native_trace_shape_replay=False,
+    materialized_rotation_replay=False,
+    particle_replay_order=None,
+    candidate_trace_active=False,
+    serial_particle_accumulation=False,
+    runtime_projector_radius=None,
+    transaction_queue=None,
+):
+    """Form and scatter VDAM residuals in physical particle order."""
+
+    if max_r is None:
+        raise ValueError("RELION VDAM physical particle-grid accumulation requires max_r")
+    if transaction_queue is not None and (
+        projector_full is None
+        or materialized_rotation_replay
+        or particle_replay_order is not None
+        or serial_particle_accumulation
+    ):
+        raise ValueError(
+            "BPref transactions require inline projection without materialized or serial particle replay"
+        )
+    if runtime_projector_radius is not None and projector_full is None:
+        raise ValueError("BPref projector capacity requires the inline projector")
+    images = jnp.asarray(images, dtype=jnp.complex64)
+    ctf = jnp.asarray(ctf, dtype=jnp.float32)
+    minvsigma2 = jnp.asarray(minvsigma2, dtype=jnp.float32)
+    posterior_over_weight_norm = jnp.asarray(
+        posterior_over_weight_norm,
+        dtype=jnp.float32,
+    )
+    reference = (
+        None
+        if reference is None
+        else jnp.asarray(reference, dtype=jnp.complex64)
+    )
+    rotations = jnp.asarray(rotations, dtype=jnp.float32)
+    row_mask = jnp.asarray(row_mask, dtype=bool)
+    if ctf.shape != images.shape or minvsigma2.shape != images.shape:
+        raise ValueError("RELION VDAM image/CTF/noise operands must have matching shapes")
+    if posterior_over_weight_norm.ndim != 3:
+        raise ValueError("RELION VDAM posterior operands must be particle/rotation/translation")
+    particle_count, rotation_count, _ = posterior_over_weight_norm.shape
+    if projector_full is None:
+        if reference is None:
+            raise ValueError(
+                "RELION VDAM preprojected accumulation requires reference operands"
+            )
+        if reference.shape != (particle_count, rotation_count, images.shape[1]):
+            raise ValueError(
+                "RELION VDAM reference operands must match particle/rotation/pixel axes"
+            )
+    elif reference is not None and reference.shape != (
+        particle_count,
+        rotation_count,
+        images.shape[1],
+    ):
+        raise ValueError(
+            "RELION VDAM optional reference operands must match particle/rotation/pixel axes"
+        )
+    if rotations.shape != (particle_count, rotation_count, 3, 3):
+        raise ValueError("RELION VDAM rotations must match particle/rotation axes")
+    if row_mask.shape != (particle_count, rotation_count):
+        raise ValueError("RELION VDAM row mask must match particle/rotation axes")
+    if reconstruction_group_ids is not None:
+        reconstruction_group_ids = jnp.asarray(
+            reconstruction_group_ids,
+            dtype=jnp.int32,
+        )
+        if reconstruction_group_ids.shape != (particle_count,):
+            raise ValueError(
+                "RELION VDAM reconstruction groups must match the particle axis"
+            )
+    if particle_replay_order is not None:
+        particle_replay_order = np.asarray(particle_replay_order, dtype=np.int32)
+        if particle_replay_order.shape != (particle_count,) or not np.array_equal(
+            np.sort(particle_replay_order),
+            np.arange(particle_count, dtype=np.int32),
+        ):
+            raise ValueError("VDAM particle replay order must be a particle-axis bijection")
+        images = jnp.take(images, particle_replay_order, axis=0)
+        ctf = jnp.take(ctf, particle_replay_order, axis=0)
+        minvsigma2 = jnp.take(minvsigma2, particle_replay_order, axis=0)
+        posterior_over_weight_norm = jnp.take(
+            posterior_over_weight_norm, particle_replay_order, axis=0
+        )
+        if reference is not None:
+            reference = jnp.take(reference, particle_replay_order, axis=0)
+        rotations = jnp.take(rotations, particle_replay_order, axis=0)
+        row_mask = jnp.take(row_mask, particle_replay_order, axis=0)
+        if scoring_rotations is not None:
+            scoring_rotations = jnp.take(
+                jnp.asarray(scoring_rotations, dtype=jnp.float32),
+                particle_replay_order,
+                axis=0,
+            )
+        if reconstruction_group_ids is not None:
+            reconstruction_group_ids = jnp.take(
+                reconstruction_group_ids, particle_replay_order, axis=0
+            )
+        if worker_lane_ids is not None:
+            worker_lane_ids = jnp.take(
+                jnp.asarray(worker_lane_ids, dtype=jnp.int32),
+                particle_replay_order,
+                axis=0,
+            )
+        if particle_trace_ids is not None:
+            particle_trace_ids = jnp.take(
+                jnp.asarray(particle_trace_ids, dtype=jnp.int32),
+                particle_replay_order,
+                axis=0,
+            )
+        if rotation_replay_order is not None:
+            rotation_replay_order = jnp.take(
+                jnp.asarray(rotation_replay_order, dtype=jnp.int32),
+                particle_replay_order,
+                axis=0,
+            )
+        if rotation_replay_counts is not None:
+            rotation_replay_counts = jnp.take(
+                jnp.asarray(rotation_replay_counts, dtype=jnp.int32),
+                particle_replay_order,
+                axis=0,
+            )
+        if particle_start_offsets_ns is not None:
+            particle_start_offsets_ns = jnp.take(
+                jnp.asarray(particle_start_offsets_ns, dtype=jnp.int32),
+                particle_replay_order,
+                axis=0,
+            )
+    posterior_over_weight_norm = jnp.where(
+        row_mask[..., None],
+        posterior_over_weight_norm,
+        0.0,
+    )
+    if serial_particle_accumulation:
+        # One worker lane gives the fused callback the same inter-particle
+        # ordering as separate one-particle callbacks without rebuilding the
+        # projector texture and host staging allocations for every particle.
+        # Kernels for successive particles are issued to one CUDA stream; the
+        # callback's existing per-lane synchronization therefore closes each
+        # particle before the next one contributes to the shared BPref.
+        worker_lane_ids = jnp.zeros((particle_count,), dtype=jnp.int32)
+    if materialized_rotation_replay:
+        if rotation_replay_order is None:
+            raise ValueError("materialized VDAM replay requires a captured row order")
+        replay_order = jnp.asarray(rotation_replay_order, dtype=jnp.int32)
+        if replay_order.shape != (particle_count, rotation_count):
+            raise ValueError("materialized VDAM row order must match particle/rotation axes")
+        posterior_over_weight_norm = _materialize_relion_vdam_rotation_rows(
+            posterior_over_weight_norm,
+            replay_order,
+        )
+        if reference is not None:
+            reference = _materialize_relion_vdam_rotation_rows(
+                reference,
+                replay_order,
+            )
+        rotations = _materialize_relion_vdam_rotation_rows(
+            rotations,
+            replay_order,
+        )
+        if scoring_rotations is not None:
+            scoring_rotations = jnp.asarray(scoring_rotations, dtype=jnp.float32)
+            scoring_rotations = _materialize_relion_vdam_rotation_rows(
+                scoring_rotations,
+                replay_order,
+            )
+        rotation_replay_order = None
+
+    from recovar import cuda_backproject
+
+    common_args = (
+        Ft_y,
+        Ft_ctf,
+        images,
+        ctf,
+        minvsigma2,
+        posterior_over_weight_norm,
+        jnp.asarray(translation_angles, dtype=jnp.float32),
+        jnp.asarray(pixel_indices, dtype=jnp.int32),
+    )
+    if projector_full is None:
+        if stable_dense_positions is not None or logical_current_size is not None:
+            raise ValueError(
+                "stable Fourier-window BPref requires the inline RELION projector"
+            )
+        if reconstruction_group_ids is not None:
+            raise ValueError(
+                "grouped VDAM reconstruction requires the inline projector path"
+            )
+        Ft_y, Ft_ctf, _ = cuda_backproject.relion_vdam_mstep_fused_x_half(
+            *common_args,
+            reference,
+            rotations,
+            tuple(int(value) for value in image_shape),
+            tuple(int(value) for value in volume_shape),
+            float(max_r),
+        )
+    else:
+        if scoring_rotations is None or projector_r_max is None:
+            raise ValueError(
+                "inline RELION VDAM projection requires scoring rotations and projector radius"
+            )
+        callback = cuda_backproject.relion_vdam_mstep_fused_projector_x_half
+        if transaction_queue is not None:
+            callback = functools.partial(transaction_queue.accumulate, callback)
+        Ft_y, Ft_ctf, _ = (
+            callback(
+                *common_args,
+                jnp.asarray(projector_full, dtype=jnp.complex64),
+                jnp.asarray(scoring_rotations, dtype=jnp.float32),
+                tuple(int(value) for value in image_shape),
+                tuple(int(value) for value in volume_shape),
+                float(max_r),
+                int(projector_r_max),
+                int(projection_padding_factor),
+                reconstruction_group_ids=reconstruction_group_ids,
+                worker_lane_ids=worker_lane_ids,
+                particle_trace_ids=particle_trace_ids,
+                serial_rotation_replay=serial_rotation_replay,
+                persistent_serial_rotation_replay=persistent_serial_rotation_replay,
+                float64_accumulator_replay=float64_accumulator_replay,
+                reverse_rotation_replay=reverse_rotation_replay,
+                rotation_replay_stride=rotation_replay_stride,
+                rotation_replay_order=rotation_replay_order,
+                rotation_replay_counts=rotation_replay_counts,
+                particle_start_offsets_ns=particle_start_offsets_ns,
+                native_trace_shape_replay=native_trace_shape_replay,
+                parallel_worker_replay=(
+                    False
+                    if serial_particle_accumulation or particle_replay_order is not None
+                    else None
+                ),
+                candidate_trace_active=candidate_trace_active,
+                stable_dense_positions=stable_dense_positions,
+                logical_current_size=logical_current_size,
+                runtime_projector_radius=runtime_projector_radius,
+            )
+        )
+    return Ft_y, Ft_ctf
+
+
 def _packed_noise_projection_chunk_rows(n_recon_pixels: int, *, batch_size: int = 1) -> int:
     """Return packed local noise-projection rows per chunk."""
 
@@ -419,6 +1986,67 @@ def _packed_noise_projection_chunk_rows(n_recon_pixels: int, *, batch_size: int 
     return max(1, int(target) // row_pixels)
 
 
+def _source_faithful_bpref_particle_chunk_size(
+    *,
+    image_count: int,
+    rotation_count: int,
+    n_recon_pixels: int,
+    max_gb: float,
+    max_particles: int | None = None,
+) -> int:
+    """Bound deferred BPref operands while preserving particle-major order.
+
+    The source-faithful path keeps a complex64 numerator and float32
+    denominator for every particle/rotation/pixel triplet.  Split only the
+    leading particle axis: consecutive calls then visit particles and every
+    rotation within each particle in the same order as RELION.
+    """
+
+    bytes_per_particle = max(1, int(rotation_count)) * max(1, int(n_recon_pixels)) * 12
+    cap_bytes = max(0, int(float(max_gb) * 1e9))
+    chunk_size = min(max(1, int(image_count)), max(1, cap_bytes // bytes_per_particle))
+    if max_particles is not None:
+        if int(max_particles) < 1:
+            raise ValueError("source-faithful BPref particle chunk cap must be positive")
+        chunk_size = min(chunk_size, int(max_particles))
+    return chunk_size
+
+
+def _source_faithful_bpref_particle_chunk_cap() -> int | None:
+    raw = os.environ.get(EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"{EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV} must be a positive integer"
+        ) from exc
+    if value < 1:
+        raise ValueError(
+            f"{EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV} must be a positive integer"
+        )
+    return value
+
+
+def _source_faithful_bpref_particle_slices(
+    image_count: int,
+    max_particles: int | None,
+) -> tuple[tuple[int, int], ...]:
+    """Partition a physical particle stream without reordering it."""
+
+    image_count = int(image_count)
+    if image_count < 1:
+        raise ValueError("source-faithful BPref particle stream must be non-empty")
+    chunk_size = image_count if max_particles is None else min(image_count, int(max_particles))
+    if chunk_size < 1:
+        raise ValueError("source-faithful BPref particle chunk cap must be positive")
+    return tuple(
+        (particle_start, min(image_count, particle_start + chunk_size))
+        for particle_start in range(0, image_count, chunk_size)
+    )
+
+
 def _reconstruction_pack_large_bucket_quantum() -> int:
     raw = os.environ.get(EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV, "").strip()
     if raw:
@@ -436,6 +2064,114 @@ def _reconstruction_pack_large_bucket_quantum() -> int:
 
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
+
+
+def _local_projector_capacity_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_PROJECTOR_CAPACITY_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_PROJECTOR_CAPACITY_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_noise_stable_core_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_NOISE_STABLE_CORE_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_NOISE_STABLE_CORE_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_noise_native_residual_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_NOISE_NATIVE_RESIDUAL_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_NOISE_NATIVE_RESIDUAL_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_noise_norm_capacity_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_NOISE_NORM_CAPACITY_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _noise_norm_capacity(n_images: int, *, enabled: bool) -> int:
+    """Keep the global norm carry from specializing each packed noise bucket.
+
+    This pads only a scalar per-image accumulator, never image/pose batches.
+    Logical indices remain unchanged; publication crops the unused zero tail.
+    """
+    return ((n_images + 1023) // 1024) * 1024 if enabled else n_images
+
+
+def _local_noise_pixel_capacity_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_noise_pixel_cuda_requested() -> bool:
+    name = "RECOVAR_EXACT_LOCAL_NOISE_PIXEL_CUDA"
+    token = os.environ.get(name, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{name} must be 0 or 1")
+    return token == "1"
+
+
+def _local_host_plan_pack_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_HOST_PLAN_PACK_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_HOST_PLAN_PACK_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_host_plan_cuda_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_HOST_PLAN_CUDA_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_HOST_PLAN_CUDA_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_bpref_transaction_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_BPREF_TRANSACTION_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_BPREF_TRANSACTION_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_bpref_particle_capacity_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_BPREF_PARTICLE_CAPACITY_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_BPREF_PARTICLE_CAPACITY_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_bpref_cuda_packing_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_BPREF_CUDA_PACKING_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_BPREF_CUDA_PACKING_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_skip_deferred_zero_norm_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_host_publication_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_HOST_PUBLICATION_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_HOST_PUBLICATION_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _local_bpref_projector_capacity_requested() -> bool:
+    token = os.environ.get(EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV} must be 0 or 1")
+    return token == "1"
 
 
 def _optional_nonnegative_float_env(name: str, default: float) -> float:
@@ -658,6 +2394,7 @@ def _build_exact_local_relion_projection_cache_for_buckets(
     max_global_rotation_id: int,
     group_index: int,
     n_groups: int,
+    projection_mask_current_image_disk: bool = True,
 ) -> _LocalRelionProjectionCache:
     """Precompute compact RELION projections for one bounded bucket group."""
 
@@ -710,6 +2447,9 @@ def _build_exact_local_relion_projection_cache_for_buckets(
     )
     for start in range(0, row_count, chunk_rows):
         stop = min(row_count, start + chunk_rows)
+        disk_kwargs = {}
+        if not projection_mask_current_image_disk:
+            disk_kwargs["mask_current_image_disk"] = False
         proj_chunk, _ = _compute_relion_projector_projections_block(
             relion_projector_half,
             jnp.asarray(cache_rotations[start:stop], dtype=jnp.float32),
@@ -723,6 +2463,7 @@ def _build_exact_local_relion_projection_cache_for_buckets(
             relion_acc_double_floorf_quirk=projection_relion_acc_double_floorf_quirk,
             projector_output_size=int(projector_output_size) if int(projector_output_size) > 0 else None,
             pixel_indices=projection_pixel_indices,
+            **disk_kwargs,
         )
         _block_until_ready(proj_chunk)
         host_cache[start:stop] = np.asarray(proj_chunk, dtype=np.complex64)
@@ -858,6 +2599,7 @@ def _project_local_bucket(
             )
         relion_texture_interp = projection_kwargs.get("relion_texture_interp")
         relion_acc_double_floorf_quirk = bool(projection_kwargs.get("relion_acc_double_floorf_quirk", False))
+        mask_current_image_disk = bool(projection_kwargs.get("mask_current_image_disk", True))
         projector_kwargs = {}
         if window_spec.use_window and window_spec.max_r is not None:
             projector_kwargs["projector_output_size"] = int(2 * window_spec.max_r)
@@ -868,6 +2610,8 @@ def _project_local_bucket(
             )
         if projection_indices is not None:
             projector_kwargs["pixel_indices"] = projection_indices
+        if not mask_current_image_disk:
+            projector_kwargs["mask_current_image_disk"] = False
         proj_relion_flat, _ = _compute_relion_projector_projections_block(
             relion_projector_half,
             flat_rotations,
@@ -948,6 +2692,8 @@ def _project_local_bucket(
         )
         return _LocalProjectionBlock(proj_weighted=proj_weighted, proj_for_noise=proj_for_noise)
     else:
+        ordinary_projection_kwargs = dict(projection_kwargs)
+        ordinary_projection_kwargs.pop("mask_current_image_disk", None)
         proj_half_flat, _ = _compute_projections_block(
             mean_for_proj,
             flat_rotations,
@@ -955,7 +2701,7 @@ def _project_local_bucket(
             proj_volume_shape,
             disc_type,
             return_abs2=False,
-            **projection_kwargs,
+            **ordinary_projection_kwargs,
         )
 
     if window_spec.use_window:
@@ -1027,6 +2773,7 @@ def _project_packed_noise_rows(
             )
         relion_texture_interp = projection_kwargs.get("relion_texture_interp")
         relion_acc_double_floorf_quirk = bool(projection_kwargs.get("relion_acc_double_floorf_quirk", False))
+        mask_current_image_disk = bool(projection_kwargs.get("mask_current_image_disk", True))
         projector_kwargs = {}
         if window_spec.use_window and window_spec.max_r is not None:
             projector_kwargs["projector_output_size"] = int(2 * window_spec.max_r)
@@ -1037,6 +2784,8 @@ def _project_packed_noise_rows(
             )
         if projection_indices is not None:
             projector_kwargs["pixel_indices"] = projection_indices
+        if not mask_current_image_disk:
+            projector_kwargs["mask_current_image_disk"] = False
         proj_relion_flat, _ = _compute_relion_projector_projections_block(
             relion_projector_half,
             packed_flat_rotations,
@@ -1067,6 +2816,8 @@ def _project_packed_noise_rows(
             max_r=projection_kwargs.get("max_r"),
         )
     else:
+        ordinary_projection_kwargs = dict(projection_kwargs)
+        ordinary_projection_kwargs.pop("mask_current_image_disk", None)
         proj_half_flat, _ = _compute_projections_block(
             mean_for_proj,
             packed_flat_rotations,
@@ -1074,7 +2825,7 @@ def _project_packed_noise_rows(
             proj_volume_shape,
             disc_type,
             return_abs2=False,
-            **projection_kwargs,
+            **ordinary_projection_kwargs,
         )
         flat_proj_for_noise = window_spec.recon_values(proj_half_flat) if window_spec.use_window else proj_half_flat
 
@@ -1131,14 +2882,26 @@ def _postprocess_local_bucket(
     reconstruction_take_indices,
     reconstruction_pack_mask,
     buffers: _LocalPostprocessBuffers,
+    host_prefix: bool = False,
 ):
-    """Scatter one local bucket's host-side pose, posterior, and profile stats."""
+    """Scatter one local bucket's host-side pose, posterior, and profile stats.
+
+    With host_prefix, small device outputs retain their physical batch until
+    their existing NumPy consumer. Slice and decode after that transfer so a
+    changing tail does not compile separate device bookkeeping executables.
+    """
 
     image_indices_np = np.asarray(image_indices, dtype=np.int32)
     local_rotation_ids_np = np.asarray(local_rotation_ids, dtype=np.int32)
     local_mask_np = np.asarray(local_rotation_mask, dtype=bool)
 
+    def host_array(value, dtype=None):
+        array = np.asarray(value, dtype=dtype)
+        return array[:len(image_indices_np)] if host_prefix else array
+
     transfer_t0 = time.time()
+    if host_prefix:
+        best_argmax = host_array(best_argmax)
     best_rot_idx = np.asarray(best_argmax // n_trans, dtype=np.int32)
     best_trans_idx = np.asarray(best_argmax % n_trans, dtype=np.int32)
     buffers.transfer_profile["postprocess_argmax_to_host_s"] += time.time() - transfer_t0
@@ -1153,25 +2916,24 @@ def _postprocess_local_bucket(
     buffers.hard_assignment[image_indices_np] = (best_rotation_ids * n_trans + best_trans_idx).astype(np.int32)
 
     transfer_t0 = time.time()
-    # log_score_offset is deliberately computed at float64; do not narrow it
-    # or log_Z/best_log_score/max_posterior back to float32 here -- the
-    # destination buffers.* arrays carry the caller's own precision-policy
-    # dtype (see buffer allocation below), so a bare np.asarray preserves
-    # whatever precision the JIT scoring kernel actually produced.
-    log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
-    log_z_np = np.asarray(log_Z)
-    best_log_score_np = np.asarray(best_log_score)
-    max_posterior_np = np.asarray(max_posterior)
+    log_score_offset = -0.5 * (
+        np.squeeze(host_array(batch_norm, np.float64), axis=1)
+        if host_prefix
+        else np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+    )
+    log_z_np = host_array(log_Z)
+    best_log_score_np = host_array(best_log_score)
+    max_posterior_np = host_array(max_posterior)
     buffers.transfer_profile["postprocess_scores_to_host_s"] += time.time() - transfer_t0
     buffers.log_evidence_per_image[image_indices_np] = log_z_np + log_score_offset
     buffers.best_log_score_per_image[image_indices_np] = best_log_score_np + log_score_offset
     buffers.max_posterior_per_image[image_indices_np] = max_posterior_np
 
     transfer_t0 = time.time()
-    probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
+    probs_sum_t_np = host_array(probs_sum_t, np.float64)
     collect_significant_counts = collect_profile_stats or buffers.significant_counts is not None
     n_significant_samples_np = (
-        np.asarray(n_significant_samples, dtype=np.int32) if collect_significant_counts else None
+        host_array(n_significant_samples, np.int32) if collect_significant_counts else None
     )
     buffers.transfer_profile["postprocess_posterior_to_host_s"] += time.time() - transfer_t0
 
@@ -1203,7 +2965,7 @@ def _postprocess_local_bucket(
     if buffers.reconstruction_sample_indices_by_image is not None:
         if reconstruction_sample_mask is None:
             raise RuntimeError("reconstruction_sample_mask is required when collecting local significant samples")
-        sample_mask_np = np.asarray(reconstruction_sample_mask, dtype=bool)
+        sample_mask_np = host_array(reconstruction_sample_mask, bool)
         for row, image_idx in enumerate(image_indices_np):
             valid_sample_mask = sample_mask_np[row] & local_mask_np[row, :, None]
             rot_rows, trans_cols = np.nonzero(valid_sample_mask)
@@ -1222,6 +2984,125 @@ def _postprocess_local_bucket(
         buffers.best_pose_rotation_ids[image_indices_np] = best_rotation_ids.astype(np.int32, copy=False)
 
     return significant_sample_count, int(reconstruction_row_count)
+
+
+def _postprocess_fixed_capacity_whole_score_calls(
+    contexts,
+    final_carry,
+    call_outputs,
+    *,
+    n_trans: int,
+    translation_grid,
+    stats_use_reconstruction_probs: bool,
+    collect_profile_stats: bool,
+    buffers: _LocalPostprocessBuffers,
+) -> tuple[int, int]:
+    """Scatter one-boundary score outputs with the mature host postprocessor."""
+
+    contexts = tuple(contexts)
+    call_outputs = tuple(call_outputs)
+    if len(contexts) != len(call_outputs):
+        raise RuntimeError(
+            "fixed-capacity whole-local score output count does not match its call program"
+        )
+    total_significant_samples = 0
+    total_reconstruction_rows = 0
+    for context, call_output in zip(contexts, call_outputs, strict=True):
+        result = _reconstruct_fixed_capacity_score_only_result(
+            final_carry,
+            call_output,
+        )
+        if len(result) != 22:
+            raise RuntimeError(
+                "fixed-capacity whole-local score call returned a non-production topology"
+            )
+        (
+            _Ft_y,
+            _Ft_ctf,
+            _noise_wsum,
+            _noise_img_power,
+            _noise_a2,
+            _noise_xa,
+            _noise_scale_xa,
+            _noise_scale_aa,
+            _bucket_norm_correction,
+            _noise_sigma2_offset,
+            _noise_sumw,
+            batch_norm,
+            log_Z,
+            best_log_score,
+            best_argmax,
+            max_posterior,
+            probs_sum_t,
+            reconstruction_probs_sum_t,
+            n_significant_samples,
+            reconstruction_sample_mask,
+            reconstruction_rotation_mask,
+            reconstruction_row_count_jax,
+        ) = result
+        bucket = context.padded_bucket
+        unpadded_bucket = context.unpadded_bucket
+        unpadded_batch_size = int(context.unpadded_batch_size)
+        reconstruction_rotation_mask_np = np.asarray(
+            reconstruction_rotation_mask[:unpadded_batch_size],
+            dtype=bool,
+        )
+        local_mask_np = np.asarray(
+            bucket.local_rotation_mask[:unpadded_batch_size],
+            dtype=bool,
+        )
+        reconstruction_take_indices = np.broadcast_to(
+            np.arange(int(bucket.bucket_rotation_count), dtype=np.int32)[None, :],
+            (unpadded_batch_size, int(bucket.bucket_rotation_count)),
+        )
+        reconstruction_pack_mask_np = reconstruction_rotation_mask_np & local_mask_np
+        reconstruction_row_count = int(
+            np.asarray(reconstruction_row_count_jax, dtype=np.int32)
+        )
+        stats_probs_sum_t = (
+            reconstruction_probs_sum_t
+            if stats_use_reconstruction_probs
+            else probs_sum_t
+        )
+        significant_sample_count, reconstruction_row_count = _postprocess_local_bucket(
+            image_indices=unpadded_bucket.image_indices,
+            local_rotation_ids=bucket.local_rotation_ids[:unpadded_batch_size],
+            local_rotation_mask=bucket.local_rotation_mask[:unpadded_batch_size],
+            local_rotations=bucket.local_rotations[:unpadded_batch_size],
+            local_rotation_posterior_ids=(
+                None
+                if bucket.local_rotation_posterior_ids is None
+                else bucket.local_rotation_posterior_ids[:unpadded_batch_size]
+            ),
+            translation_grid=translation_grid,
+            n_trans=n_trans,
+            best_argmax=best_argmax[:unpadded_batch_size],
+            batch_norm=batch_norm[:unpadded_batch_size],
+            log_Z=log_Z[:unpadded_batch_size],
+            best_log_score=best_log_score[:unpadded_batch_size],
+            max_posterior=max_posterior[:unpadded_batch_size],
+            probs_sum_t=stats_probs_sum_t[:unpadded_batch_size],
+            n_significant_samples=n_significant_samples[:unpadded_batch_size],
+            reconstruction_sample_mask=reconstruction_sample_mask[
+                :unpadded_batch_size
+            ],
+            collect_profile_stats=collect_profile_stats,
+            reconstruction_row_count=reconstruction_row_count,
+            reconstruction_take_indices=reconstruction_take_indices,
+            reconstruction_pack_mask=reconstruction_pack_mask_np,
+            buffers=buffers,
+        )
+        if collect_profile_stats:
+            total_significant_samples += significant_sample_count
+            total_reconstruction_rows += int(reconstruction_row_count)
+        logger.debug(
+            "Exact local one-boundary score call: %d images, bucket_rot=%d, "
+            "total_local_rot=%d",
+            unpadded_batch_size,
+            int(bucket.bucket_rotation_count),
+            int(np.sum(unpadded_bucket.actual_rotation_counts)),
+        )
+    return total_significant_samples, total_reconstruction_rows
 
 
 def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_params):
@@ -1279,6 +3160,652 @@ def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_param
         padded_batch_size,
     )
     return padded_bucket, padded_batch_data, padded_ctf_params, valid_image_mask, padded_batch_size
+
+
+def _plan_flat_local_row_capacities(
+    bucket_specs,
+    *,
+    rotation_block_size: int,
+    exact_local_bucket_radix: int,
+    stable_rectangular_capacity: bool = False,
+) -> dict[tuple[int, int], int]:
+    """Choose one packed-row shape for every existing dense bucket ABI.
+
+    The stable policy deliberately reuses the mature rectangular ``B x R``
+    ABI. Logical pool rows still occupy the exact same source-ordered prefix;
+    only a score-inert physical tail is appended. The shared projector still
+    evaluates that tail, but validity-aware fine CUDA returns ``+inf`` before
+    pixel work while repeated iterations can reuse the same compiled shape.
+    """
+
+    capacities: dict[tuple[int, int], int] = {}
+    for bucket in bucket_specs:
+        physical_image_count = int(np.asarray(bucket.image_indices).shape[0])
+        dense_batch_size = max(
+            physical_image_count,
+            int(getattr(bucket, "bucket_image_count", physical_image_count)),
+        )
+        dense_rotation_count = int(bucket.bucket_rotation_count)
+        plan = build_pool_flat_local_row_plan(
+            np.asarray(bucket.actual_rotation_counts, dtype=np.int32),
+            dense_rotation_count,
+            pool_size=3,
+            rotation_block_size=rotation_block_size,
+            exact_local_bucket_radix=exact_local_bucket_radix,
+            dense_batch_size=dense_batch_size,
+        )
+        key = (dense_batch_size, dense_rotation_count)
+        required_capacity = int(plan.packed_row_count)
+        if stable_rectangular_capacity:
+            required_capacity = dense_batch_size * dense_rotation_count
+        capacities[key] = max(capacities.get(key, 0), required_capacity)
+    return capacities
+
+
+def _build_flat_local_row_argument(
+    bucket: LocalBucketSpec,
+    capacities: dict[tuple[int, int], int],
+    *,
+    dense_batch_size: int,
+    rotation_block_size: int,
+    exact_local_bucket_radix: int,
+) -> np.ndarray:
+    """Materialize one source-ordered packed plan at its shared static shape."""
+
+    dense_rotation_count = int(bucket.bucket_rotation_count)
+    key = (int(dense_batch_size), dense_rotation_count)
+    if key not in capacities:
+        raise ValueError(f"flat local row capacity is missing dense bucket ABI {key}")
+    plan = build_pool_flat_local_row_plan(
+        np.asarray(bucket.actual_rotation_counts, dtype=np.int32),
+        dense_rotation_count,
+        pool_size=3,
+        rotation_block_size=rotation_block_size,
+        exact_local_bucket_radix=exact_local_bucket_radix,
+        packed_row_count=int(capacities[key]),
+        dense_batch_size=int(dense_batch_size),
+    )
+    return encode_flat_local_row_plan(plan)
+
+
+_FINE_JOB_BUCKET_QUANTUM_ENV = "RECOVAR_EXACT_FINE_JOB_BUCKET_QUANTUM"
+_FINE_JOB_BUCKET_QUANTUM_DEFAULT = 65536
+_FINE_JOB_MIN_CAPACITY = 4096
+
+
+def _local_fine_candidate_mask(
+    bucket: LocalBucketSpec,
+    valid_image_mask,
+) -> np.ndarray:
+    """Return the canonical dense candidate mask used by both compact ABIs."""
+
+    rotation_mask = np.asarray(bucket.local_rotation_mask, dtype=bool)
+    valid_image_mask = np.asarray(valid_image_mask, dtype=bool)
+    if rotation_mask.ndim != 2 or valid_image_mask.shape != (rotation_mask.shape[0],):
+        raise ValueError(
+            "fused fine scoring requires aligned bucket and valid-image axes"
+        )
+    n_translations = int(np.asarray(bucket.translation_log_prior).shape[1])
+    candidate_mask = np.broadcast_to(
+        rotation_mask[:, :, None],
+        (*rotation_mask.shape, n_translations),
+    ).copy()
+    if bucket.local_sample_mask is not None:
+        sample_mask = np.asarray(bucket.local_sample_mask, dtype=bool)
+        if sample_mask.shape != candidate_mask.shape:
+            raise ValueError(
+                "fused fine sample mask does not match the dense source layout"
+            )
+        candidate_mask &= sample_mask
+    candidate_mask &= valid_image_mask[:, None, None]
+    return candidate_mask
+
+
+def _plan_local_fine_job_capacities(
+    bucket_specs,
+) -> dict[tuple[int, int], int]:
+    """Choose stable global-job capacity per physical big-JIT bucket ABI."""
+
+    try:
+        large_quantum = int(
+            os.environ.get(
+                _FINE_JOB_BUCKET_QUANTUM_ENV,
+                str(_FINE_JOB_BUCKET_QUANTUM_DEFAULT),
+            )
+        )
+    except ValueError as exc:
+        raise ValueError(f"{_FINE_JOB_BUCKET_QUANTUM_ENV} must be an integer") from exc
+    if large_quantum < _FINE_JOB_MIN_CAPACITY:
+        raise ValueError(
+            f"{_FINE_JOB_BUCKET_QUANTUM_ENV} must be at least "
+            f"{_FINE_JOB_MIN_CAPACITY}"
+        )
+
+    required_by_abi: dict[tuple[int, int], int] = {}
+    dense_capacity_by_abi: dict[tuple[int, int], int] = {}
+    for bucket in bucket_specs:
+        physical_image_count = int(np.asarray(bucket.image_indices).shape[0])
+        dense_batch_size = max(
+            physical_image_count,
+            int(getattr(bucket, "bucket_image_count", physical_image_count)),
+        )
+        dense_rotation_count = int(bucket.bucket_rotation_count)
+        candidate_mask = _local_fine_candidate_mask(
+            bucket,
+            np.ones(physical_image_count, dtype=bool),
+        )
+        required = int(np.count_nonzero(candidate_mask))
+        key = (dense_batch_size, dense_rotation_count)
+        required_by_abi[key] = max(required_by_abi.get(key, 0), required)
+        dense_capacity_by_abi[key] = max(
+            dense_capacity_by_abi.get(key, 0),
+            dense_batch_size * dense_rotation_count * candidate_mask.shape[2],
+        )
+
+    return {
+        key: min(
+            dense_capacity_by_abi[key],
+            max(
+                _FINE_JOB_MIN_CAPACITY,
+                _exact_bucket_rotation_size(
+                    required,
+                    5000,
+                    large_bucket_quantum=large_quantum,
+                ),
+            ),
+        )
+        for key, required in required_by_abi.items()
+    }
+
+
+def _build_local_fused_pair_fine_arguments(
+    bucket: LocalBucketSpec,
+    flat_local_row_argument,
+    valid_image_mask,
+    *,
+    fine_job_bucket_size: int | None = None,
+) -> dict[str, np.ndarray | int]:
+    """Map the mature compact-pair ABI onto packed local projection rows.
+
+    Candidate order and pair padding come from the shared compact-pass-2 host
+    encoder.  This local bridge adds only the projection-storage row mapping
+    needed by the fused CUDA ABI; it does not define another pair layout.
+    """
+
+    rotation_mask = np.asarray(bucket.local_rotation_mask, dtype=bool)
+    candidate_mask = _local_fine_candidate_mask(bucket, valid_image_mask)
+
+    pair_arrays = sparse_pass2_bucketed.build_compact_pair_index_arrays(
+        candidate_mask,
+    )
+    pair_mask = np.asarray(pair_arrays["pair_mask"], dtype=bool)
+    local_rotation_rows = np.asarray(
+        pair_arrays["local_rotation_row"],
+        dtype=np.int32,
+    )
+    dense_to_flat = build_dense_to_flat_local_row_lookup(
+        flat_local_row_argument,
+        batch_size=rotation_mask.shape[0],
+        dense_rotation_count=rotation_mask.shape[1],
+    )
+    reference_rows = map_dense_local_rows_to_flat_rows(
+        dense_to_flat,
+        local_rotation_rows,
+        pair_mask,
+    )
+    reference_rows = np.where(pair_mask, reference_rows, -1).astype(
+        np.int32,
+        copy=False,
+    )
+    flat_jobs = sparse_pass2_bucketed.build_compact_fine_job_plan_from_pair_arrays(
+        pair_arrays,
+        dense_to_flat,
+        job_bucket_size=fine_job_bucket_size,
+    )
+    return {
+        **pair_arrays,
+        **flat_jobs,
+        "reference_row": reference_rows,
+        "valid_pair_count": int(np.sum(pair_arrays["pair_counts"], dtype=np.int64)),
+        "dense_candidate_capacity": int(candidate_mask.size),
+    }
+
+
+_FIXED_CAPACITY_IMAGE_PRE_SHIFTS_METADATA = "image_pre_shifts"
+
+
+def _fixed_capacity_call_arrays_match(field_name: str, actual, expected) -> None:
+    actual_array = np.asarray(actual)
+    expected_array = np.asarray(expected)
+    if (
+        actual_array.dtype != expected_array.dtype
+        or actual_array.shape != expected_array.shape
+        or actual_array.tobytes(order="C") != expected_array.tobytes(order="C")
+    ):
+        raise ValueError(f"fixed-capacity call {field_name} does not match the mature call")
+
+
+def _validate_fixed_capacity_call_matches_mature(
+    view: _FixedCapacityLocalCallView,
+    mature_bucket: LocalBucketSpec,
+    *,
+    image_pre_shifts,
+) -> None:
+    """Require one sealed call view to equal its authoritative mature call."""
+
+    if not isinstance(view, _FixedCapacityLocalCallView):
+        raise ValueError("fixed-capacity score-only selection requires a fixed-capacity call view")
+    if not isinstance(mature_bucket, LocalBucketSpec):
+        raise ValueError("fixed-capacity score-only selection requires a mature local bucket")
+    call_index = int(view.call_index)
+    if (
+        int(mature_bucket.bucket_image_count) != view.physical_image_capacity
+        or int(mature_bucket.bucket_rotation_count) != view.physical_rotation_capacity
+    ):
+        raise ValueError(
+            f"fixed-capacity call {call_index} physical B x R shape does not match the mature call"
+        )
+
+    fixed_bucket = view.bucket
+    pairs = (
+        ("image_indices", fixed_bucket.image_indices, mature_bucket.image_indices),
+        ("actual_rotation_counts", fixed_bucket.actual_rotation_counts, mature_bucket.actual_rotation_counts),
+        ("local_rotation_ids", fixed_bucket.local_rotation_ids, mature_bucket.local_rotation_ids),
+        ("local_rotations", fixed_bucket.local_rotations, mature_bucket.local_rotations),
+        ("local_mstep_rotations", fixed_bucket.local_mstep_rotations, _local_mstep_rotations(mature_bucket)),
+        ("local_rotation_log_prior", fixed_bucket.local_rotation_log_prior, mature_bucket.local_rotation_log_prior),
+        ("local_rotation_mask", fixed_bucket.local_rotation_mask, mature_bucket.local_rotation_mask),
+        ("translation_log_prior", fixed_bucket.translation_log_prior, mature_bucket.translation_log_prior),
+    )
+    for field_name, fixed_value, mature_value in pairs:
+        _fixed_capacity_call_arrays_match(field_name, fixed_value, mature_value)
+
+    for field_name in ("local_rotation_posterior_ids", "local_sample_mask"):
+        fixed_value = getattr(fixed_bucket, field_name)
+        mature_value = getattr(mature_bucket, field_name)
+        if (fixed_value is None) != (mature_value is None):
+            raise ValueError(
+                f"fixed-capacity call {call_index} {field_name} optional topology does not match the mature call"
+            )
+        if fixed_value is not None:
+            _fixed_capacity_call_arrays_match(field_name, fixed_value, mature_value)
+
+    if _FIXED_CAPACITY_IMAGE_PRE_SHIFTS_METADATA not in view.metadata_by_name:
+        raise ValueError(
+            f"fixed-capacity call {call_index} is missing required image_pre_shifts metadata",
+        )
+    source_pre_shifts = np.asarray(image_pre_shifts)
+    if source_pre_shifts.dtype != np.dtype(np.float32) or source_pre_shifts.ndim != 2 or source_pre_shifts.shape[1] != 2:
+        raise ValueError("fixed-capacity score-only image_pre_shifts must have canonical float32 shape (N, 2)")
+    image_indices = np.asarray(fixed_bucket.image_indices, dtype=np.int64)
+    if image_indices.size == 0 or np.any(image_indices < 0) or int(np.max(image_indices)) >= source_pre_shifts.shape[0]:
+        raise ValueError(
+            f"fixed-capacity call {call_index} image_pre_shifts do not cover its image IDs"
+        )
+    call_pre_shifts = np.asarray(view.metadata_by_name[_FIXED_CAPACITY_IMAGE_PRE_SHIFTS_METADATA])
+    if call_pre_shifts.flags.writeable:
+        raise ValueError(
+            f"fixed-capacity call {call_index} image_pre_shifts metadata must be read-only"
+        )
+    _fixed_capacity_call_arrays_match(
+        "image_pre_shifts metadata",
+        call_pre_shifts,
+        source_pre_shifts[image_indices],
+    )
+
+
+def _select_fixed_capacity_score_only_view(
+    bundle: _FixedCapacityLocalExecutionBundle,
+    mature_bucket: LocalBucketSpec,
+    *,
+    call_index: int,
+    n_classes,
+    class_log_prior: float,
+    image_pre_shifts,
+    image_corrections,
+    scale_corrections,
+    score_only: bool,
+    disable_adjoint_y: bool,
+    disable_adjoint_ctf: bool,
+    accumulate_noise: bool,
+    mstep_requested: bool,
+    unsupported_diagnostics: tuple[str, ...] = (),
+    enabled: bool = False,
+) -> _FixedCapacityLocalCallView | None:
+    """Select one sealed call view for the narrow K=1 score-only seam."""
+
+    if not enabled:
+        return None
+    if isinstance(n_classes, (bool, np.bool_)) or not isinstance(n_classes, (int, np.integer)):
+        raise ValueError("fixed-capacity score-only execution requires an explicit integer class count")
+    if int(n_classes) != 1:
+        raise ValueError("fixed-capacity score-only execution currently supports K=1 only")
+    if float(class_log_prior) != 0.0:
+        raise ValueError("fixed-capacity K=1 score-only execution requires a zero class log prior")
+    if not score_only:
+        raise ValueError("fixed-capacity local execution currently supports score-only execution")
+    if not (disable_adjoint_y and disable_adjoint_ctf):
+        raise ValueError("fixed-capacity score-only execution requires both adjoints disabled")
+    if accumulate_noise:
+        raise ValueError("fixed-capacity score-only execution does not support noise accumulation")
+    if mstep_requested:
+        raise ValueError("fixed-capacity score-only execution does not support an M-step")
+    if image_corrections is not None or scale_corrections is not None:
+        raise ValueError("fixed-capacity score-only execution does not yet support image or scale corrections")
+    if image_pre_shifts is None:
+        raise ValueError("fixed-capacity score-only execution requires explicit image_pre_shifts metadata")
+    unsupported_diagnostics = tuple(unsupported_diagnostics)
+    if unsupported_diagnostics:
+        raise ValueError(
+            "fixed-capacity score-only execution does not support diagnostics: "
+            + ", ".join(unsupported_diagnostics),
+        )
+
+    view = _materialize_fixed_capacity_local_call_view(bundle, call_index=call_index, enabled=True)
+    _validate_fixed_capacity_call_matches_mature(
+        view,
+        mature_bucket,
+        image_pre_shifts=image_pre_shifts,
+    )
+    return view
+
+
+def _select_fixed_capacity_call0_score_only_view(
+    bundle: _FixedCapacityLocalExecutionBundle,
+    mature_bucket: LocalBucketSpec,
+    **kwargs,
+) -> _FixedCapacityLocalCallView | None:
+    """Backward-compatible call-0 wrapper for focused seam tests."""
+
+    return _select_fixed_capacity_score_only_view(
+        bundle,
+        mature_bucket,
+        call_index=0,
+        **kwargs,
+    )
+
+
+def _fetch_and_validate_fixed_capacity_call_operands(
+    experiment_dataset,
+    view: _FixedCapacityLocalCallView,
+    mature_bucket: LocalBucketSpec,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Match sealed call operands to an authoritative current-dataset fetch."""
+
+    if not isinstance(view, _FixedCapacityLocalCallView):
+        raise ValueError("fixed-capacity current-dataset validation requires a sealed call view")
+    if not isinstance(mature_bucket, LocalBucketSpec):
+        raise ValueError("fixed-capacity current-dataset validation requires a mature call bucket")
+    call_index = int(view.call_index)
+    expected_indices = np.asarray(mature_bucket.image_indices)
+    _fixed_capacity_call_arrays_match(
+        "current-dataset fetch image order",
+        expected_indices,
+        view.bucket.image_indices,
+    )
+    mature_raw, mature_ctf, fetched_indices = fetch_indexed_batch(
+        experiment_dataset,
+        expected_indices,
+    )
+    fetched_indices = np.asarray(fetched_indices)
+    if (
+        fetched_indices.ndim != 1
+        or not np.issubdtype(fetched_indices.dtype, np.integer)
+        or fetched_indices.shape != expected_indices.shape
+        or not np.array_equal(fetched_indices, expected_indices)
+    ):
+        raise ValueError(
+            f"fixed-capacity call {call_index} current-dataset fetch did not preserve the authoritative image order",
+        )
+    _fixed_capacity_call_arrays_match(
+        "current-dataset raw_images",
+        mature_raw,
+        view.raw_images,
+    )
+    _fixed_capacity_call_arrays_match(
+        "current-dataset ctf_params",
+        mature_ctf,
+        view.ctf_params,
+    )
+    return view.raw_images, view.ctf_params, expected_indices
+
+
+def _fetch_and_validate_fixed_capacity_call0_operands(
+    experiment_dataset,
+    view: _FixedCapacityLocalCallView,
+    mature_bucket: LocalBucketSpec,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Backward-compatible call-0 wrapper for focused seam tests."""
+
+    if not isinstance(view, _FixedCapacityLocalCallView) or view.call_index != 0:
+        raise ValueError("fixed-capacity current-dataset validation requires the sealed call-0 view")
+    return _fetch_and_validate_fixed_capacity_call_operands(
+        experiment_dataset,
+        view,
+        mature_bucket,
+    )
+
+
+def _validate_fixed_capacity_padded_call(
+    view: _FixedCapacityLocalCallView,
+    padded_bucket: LocalBucketSpec,
+    padded_batch_data,
+    padded_ctf_params,
+    valid_image_mask,
+    padded_batch_size: int,
+) -> None:
+    """Fail if mature padding did not produce canonical fixed B x R inputs."""
+
+    if not isinstance(view, _FixedCapacityLocalCallView):
+        raise ValueError("fixed-capacity padded validation requires a sealed call view")
+    call_index = int(view.call_index)
+    B = int(view.physical_image_capacity)
+    R = int(view.physical_rotation_capacity)
+    b = int(view.valid_image_count)
+    if int(padded_batch_size) != B:
+        raise ValueError(
+            f"fixed-capacity call {call_index} common padding produced the wrong physical image size"
+        )
+    array_specs = (
+        ("actual_rotation_counts", padded_bucket.actual_rotation_counts, np.int32, (B,)),
+        ("local_rotation_ids", padded_bucket.local_rotation_ids, np.int32, (B, R)),
+        ("local_rotations", padded_bucket.local_rotations, np.float32, (B, R, 3, 3)),
+        ("local_mstep_rotations", padded_bucket.local_mstep_rotations, np.float32, (B, R, 3, 3)),
+        ("local_rotation_log_prior", padded_bucket.local_rotation_log_prior, np.float32, (B, R)),
+        ("local_rotation_mask", padded_bucket.local_rotation_mask, np.bool_, (B, R)),
+    )
+    for field_name, value, dtype, shape in array_specs:
+        array = np.asarray(value)
+        if array.dtype != np.dtype(dtype) or array.shape != shape:
+            raise ValueError(
+                f"fixed-capacity padded call {call_index} {field_name} has noncanonical dtype or shape",
+            )
+    fixed_bucket = view.bucket
+    if (
+        np.asarray(padded_bucket.image_indices).dtype != np.dtype(np.int32)
+        or np.asarray(padded_bucket.image_indices).shape != (b,)
+    ):
+        raise ValueError(
+            f"fixed-capacity padded call {call_index} image IDs have noncanonical dtype or shape"
+        )
+    prefix_pairs = (
+        ("image_indices", padded_bucket.image_indices, fixed_bucket.image_indices),
+        ("actual_rotation_counts", np.asarray(padded_bucket.actual_rotation_counts)[:b], fixed_bucket.actual_rotation_counts),
+        ("local_rotation_ids", np.asarray(padded_bucket.local_rotation_ids)[:b], fixed_bucket.local_rotation_ids),
+        ("local_rotations", np.asarray(padded_bucket.local_rotations)[:b], fixed_bucket.local_rotations),
+        (
+            "local_mstep_rotations",
+            np.asarray(padded_bucket.local_mstep_rotations)[:b],
+            fixed_bucket.local_mstep_rotations,
+        ),
+        (
+            "local_rotation_log_prior",
+            np.asarray(padded_bucket.local_rotation_log_prior)[:b],
+            fixed_bucket.local_rotation_log_prior,
+        ),
+        ("local_rotation_mask", np.asarray(padded_bucket.local_rotation_mask)[:b], fixed_bucket.local_rotation_mask),
+    )
+    for field_name, padded_value, fixed_value in prefix_pairs:
+        _fixed_capacity_call_arrays_match(f"padded {field_name} prefix", padded_value, fixed_value)
+    if np.any(np.asarray(padded_bucket.actual_rotation_counts)[b:] != 0):
+        raise ValueError(f"fixed-capacity padded call {call_index} row-count tail is not zero")
+    translation_prior = np.asarray(padded_bucket.translation_log_prior)
+    if (
+        translation_prior.dtype != np.dtype(np.float32)
+        or translation_prior.ndim != 2
+        or translation_prior.shape[0] != B
+    ):
+        raise ValueError(
+            f"fixed-capacity padded call {call_index} translation priors have noncanonical dtype or shape"
+        )
+    batch = np.asarray(padded_batch_data)
+    ctf = np.asarray(padded_ctf_params)
+    image_mask = np.asarray(valid_image_mask)
+    if batch.dtype != np.dtype(np.float32) or batch.ndim != 3 or batch.shape[0] != B:
+        raise ValueError(
+            f"fixed-capacity padded call {call_index} raw images have noncanonical dtype or shape"
+        )
+    if ctf.dtype != np.dtype(np.float32) or ctf.ndim != 2 or ctf.shape[0] != B:
+        raise ValueError(
+            f"fixed-capacity padded call {call_index} CTF parameters have noncanonical dtype or shape"
+        )
+    expected_image_mask = np.arange(B, dtype=np.int64) < b
+    if image_mask.dtype != np.bool_ or not np.array_equal(image_mask, expected_image_mask):
+        raise ValueError(
+            f"fixed-capacity padded call {call_index} has a noncanonical valid-image mask"
+        )
+    _fixed_capacity_call_arrays_match(
+        "padded translation-prior prefix",
+        translation_prior[:b],
+        fixed_bucket.translation_log_prior,
+    )
+    _fixed_capacity_call_arrays_match("padded raw-image prefix", batch[:b], view.raw_images)
+    _fixed_capacity_call_arrays_match("padded CTF prefix", ctf[:b], view.ctf_params)
+
+    expected_rotation_mask = np.arange(R, dtype=np.int64)[None, :] < np.asarray(
+        padded_bucket.actual_rotation_counts,
+        dtype=np.int64,
+    )[:, None]
+    if not np.array_equal(padded_bucket.local_rotation_mask, expected_rotation_mask):
+        raise ValueError(
+            f"fixed-capacity padded call {call_index} has a noncanonical rotation mask"
+        )
+    inactive = ~expected_rotation_mask
+    identity = np.eye(3, dtype=np.float32)
+    if np.any(np.asarray(padded_bucket.local_rotation_ids)[inactive] != -1):
+        raise ValueError(
+            f"fixed-capacity padded call {call_index} rotation-ID padding is not -1"
+        )
+    if not np.array_equal(
+        np.asarray(padded_bucket.local_rotations)[inactive],
+        np.broadcast_to(identity, np.asarray(padded_bucket.local_rotations)[inactive].shape),
+    ) or not np.array_equal(
+        np.asarray(padded_bucket.local_mstep_rotations)[inactive],
+        np.broadcast_to(identity, np.asarray(padded_bucket.local_mstep_rotations)[inactive].shape),
+    ):
+        raise ValueError(
+            f"fixed-capacity padded call {call_index} rotation padding is not identity"
+        )
+    if np.any(
+        np.asarray(padded_bucket.local_rotation_log_prior)[inactive]
+        != np.asarray(-1e30, dtype=np.float32)
+    ):
+        raise ValueError(
+            f"fixed-capacity padded call {call_index} rotation-prior padding is not -1e30"
+        )
+    if b < B:
+        if np.any(translation_prior[b:] != 0) or np.any(batch[b:] != 0):
+            raise ValueError(
+                f"fixed-capacity padded call {call_index} image-tail padding is not zero"
+            )
+        if not np.array_equal(ctf[b:], np.broadcast_to(ctf[0], ctf[b:].shape)):
+            raise ValueError(
+                f"fixed-capacity padded call {call_index} CTF tail does not repeat the first active row"
+            )
+    if (
+        not np.all(np.isfinite(np.asarray(padded_bucket.local_rotations)))
+        or not np.all(np.isfinite(np.asarray(padded_bucket.local_mstep_rotations)))
+        or np.any(np.isnan(padded_bucket.local_rotation_log_prior))
+        or np.any(np.isnan(translation_prior))
+        or not np.all(np.isfinite(batch))
+        or not np.all(np.isfinite(ctf))
+    ):
+        raise ValueError(f"fixed-capacity padded call {call_index} contains NaN poison")
+    if np.any(np.isneginf(np.asarray(padded_bucket.local_rotation_log_prior)[inactive])):
+        raise ValueError(
+            f"fixed-capacity padded call {call_index} contains whole-arena -inf padding"
+        )
+    if padded_bucket.local_rotation_posterior_ids is not None:
+        posterior_ids = np.asarray(padded_bucket.local_rotation_posterior_ids)
+        if posterior_ids.dtype != np.dtype(np.int32) or posterior_ids.shape != (B, R):
+            raise ValueError(
+                f"fixed-capacity padded call {call_index} posterior IDs have noncanonical dtype or shape"
+            )
+        if np.any(posterior_ids[inactive] != -1):
+            raise ValueError(
+                f"fixed-capacity padded call {call_index} posterior-ID padding is not -1"
+            )
+        if fixed_bucket.local_rotation_posterior_ids is None:
+            raise ValueError(
+                f"fixed-capacity padded call {call_index} posterior-ID topology changed during padding"
+            )
+        _fixed_capacity_call_arrays_match(
+            "padded posterior-ID prefix",
+            posterior_ids[:b],
+            fixed_bucket.local_rotation_posterior_ids,
+        )
+    elif fixed_bucket.local_rotation_posterior_ids is not None:
+        raise ValueError(f"fixed-capacity padded call {call_index} lost posterior IDs during padding")
+    if padded_bucket.local_sample_mask is not None:
+        sample_mask = np.asarray(padded_bucket.local_sample_mask)
+        expected_sample_shape = (B, R, translation_prior.shape[1])
+        if sample_mask.dtype != np.bool_ or sample_mask.shape != expected_sample_shape:
+            raise ValueError(
+                f"fixed-capacity padded call {call_index} sample mask has noncanonical dtype or shape"
+            )
+        if np.any(sample_mask[inactive]):
+            raise ValueError(
+                f"fixed-capacity padded call {call_index} sample-mask padding is not false"
+            )
+        if fixed_bucket.local_sample_mask is None:
+            raise ValueError(
+                f"fixed-capacity padded call {call_index} sample-mask topology changed during padding"
+            )
+        _fixed_capacity_call_arrays_match(
+            "padded sample-mask prefix",
+            sample_mask[:b],
+            fixed_bucket.local_sample_mask,
+        )
+    elif fixed_bucket.local_sample_mask is not None:
+        raise ValueError(f"fixed-capacity padded call {call_index} lost its sample mask during padding")
+
+
+def _validate_fixed_capacity_padded_call0(
+    view: _FixedCapacityLocalCallView,
+    padded_bucket: LocalBucketSpec,
+    padded_batch_data,
+    padded_ctf_params,
+    valid_image_mask,
+    padded_batch_size: int,
+) -> None:
+    """Backward-compatible call-0 wrapper for focused seam tests."""
+
+    if not isinstance(view, _FixedCapacityLocalCallView) or view.call_index != 0:
+        raise ValueError("fixed-capacity padded validation requires the sealed call-0 view")
+    _validate_fixed_capacity_padded_call(
+        view,
+        padded_bucket,
+        padded_batch_data,
+        padded_ctf_params,
+        valid_image_mask,
+        padded_batch_size,
+    )
+
+
+def _invoke_local_bucket_big_jit(*args, **kwargs):
+    """Single shared numeric invocation for mature and fixed call views."""
+
+    return run_local_bucket_big_jit(*args, **kwargs)
 
 
 def _exact_local_max_hypotheses_per_microbatch(
@@ -1383,6 +3910,7 @@ def _exact_local_planned_hypotheses_floor(
     *,
     image_batch_size: int,
     rotation_block_size: int,
+    exact_local_bucket_radix: int | None = None,
 ) -> int:
     """Minimum row cap needed to honor the memory planner's image batch."""
 
@@ -1396,6 +3924,7 @@ def _exact_local_planned_hypotheses_floor(
         max_rotation_count,
         rotation_block_size,
         large_bucket_quantum=large_bucket_quantum,
+        exact_local_bucket_radix=exact_local_bucket_radix,
     )
     return int(image_batch_size * max(1, bucket_rotation_count))
 
@@ -1409,6 +3938,7 @@ def _exact_local_effective_max_hypotheses_per_microbatch(
     local_layout: LocalHypothesisLayout,
     image_batch_size: int,
     rotation_block_size: int,
+    exact_local_bucket_radix: int | None = None,
     allow_auto_boost: bool = True,
     auto_boost_factor: float | None = None,
     allow_high_memory_default: bool = True,
@@ -1430,6 +3960,7 @@ def _exact_local_effective_max_hypotheses_per_microbatch(
         local_layout,
         image_batch_size=image_batch_size,
         rotation_block_size=rotation_block_size,
+        exact_local_bucket_radix=exact_local_bucket_radix,
     )
     boost_factor = _exact_local_auto_microbatch_boost() if auto_boost_factor is None else float(auto_boost_factor)
     if boost_factor <= 0.0 or not np.isfinite(boost_factor):
@@ -1511,6 +4042,7 @@ def _exact_local_xhalf_projection_microbatch_cap(
     *,
     n_projection_pixels: int,
     rotation_block_size: int,
+    exact_local_bucket_radix: int | None = None,
 ) -> int:
     """Bound fused x-half projection rows without truncating neighborhoods."""
 
@@ -1528,6 +4060,7 @@ def _exact_local_xhalf_projection_microbatch_cap(
             int(count),
             rotation_block_size,
             large_bucket_quantum=large_bucket_quantum,
+            exact_local_bucket_radix=exact_local_bucket_radix,
         )
         for count in rotation_counts
     )
@@ -1586,6 +4119,7 @@ def _prepare_local_exact_bucket(
     score_complex_dtype=None,
     score_real_dtype=None,
     norm_real_dtype=None,
+    relion_exact_bpref_operands: bool = False,
 ):
     """Prepare score, reconstruction, and noise inputs for one local bucket.
 
@@ -1622,27 +4156,87 @@ def _prepare_local_exact_bucket(
     if raw_translations and timer is not None:
         timer["translation_phase_s"] += time.time() - phase_t0
 
+    exact_image_mask = None
+    exact_image_mask_mode = None
+    if relion_exact_bpref_operands:
+        exact_image_mask, exact_image_mask_mode = resolve_image_mask_for_half_preprocess(
+            experiment_dataset,
+            config.image_shape,
+            require_mask=score_with_masked_images,
+        )
+
     def _process_half(apply_image_mask: bool):
+        if relion_exact_bpref_operands:
+            # Contribution capture forces the split scorer, but its operands
+            # must still be those of the production big-JIT path.  In
+            # particular, do not fall back through the image-source backend:
+            # a relion_cuda source requires separate normalization/shift
+            # operands and would introduce a different preprocessing graph.
+            return _big_jit_preprocess_half(
+                jnp.asarray(batch),
+                jnp.asarray(exact_image_mask),
+                config,
+                apply_image_mask=apply_image_mask,
+                mask_mode=exact_image_mask_mode,
+            )
+        # Integer shifts are applied to ``batch`` above and image/scale
+        # corrections are applied to the Fourier result by the caller.  The
+        # strict RELION CUDA backend still requires explicit typed operands at
+        # its boundary, so provide the corresponding identity values here.
+        # Other backends receive ``None`` and retain their existing path.
+        _, _, _, _, relion_preprocess_kwargs = prepare_batch_preprocess_operands(
+            experiment_dataset,
+            batch,
+            image_indices,
+        )
         return process_half_image(
             experiment_dataset,
             batch,
             apply_image_mask,
+            relion_preprocess_kwargs=relion_preprocess_kwargs,
         )
 
     ctf_t0 = time.time()
-    ctf_eval_params = (
-        jnp.asarray(ctf_params, dtype=score_real_dtype)
-        if score_real_dtype is not None
-        else ctf_params
-    )
-    ctf_half = config.compute_ctf_half(ctf_eval_params)
-    ctf2_over_nv_ctf = ctf_half.astype(score_real_dtype) if score_real_dtype is not None else ctf_half
-    ctf2_over_nv_noise = (
-        noise_variance_half.astype(score_real_dtype) if score_real_dtype is not None else noise_variance_half
-    )
-    ctf2_over_nv_half = ctf2_over_nv_ctf**2 / ctf2_over_nv_noise
+    if relion_exact_bpref_operands:
+        ctf_rfloat = np.asarray(
+            sparse_pass2_bucketed._relion_exact_ctf_half_from_source_star_host(
+                experiment_dataset,
+                image_indices,
+                config.image_shape,
+            ),
+            dtype=np.float64,
+        )
+        inverse_noise_rfloat_cast = np.reciprocal(
+            np.asarray(noise_variance_half, dtype=np.float64)
+        ).astype(np.float32)
+        ctf_half = jnp.asarray(ctf_rfloat, dtype=jnp.float64).astype(jnp.float32)
+        inverse_noise_half = jnp.asarray(inverse_noise_rfloat_cast, dtype=jnp.float32)
+        weighted_ctf_half = ctf_half * inverse_noise_half[None, :]
+        ctf2_over_nv_recon_half = weighted_ctf_half * ctf_half
+        ctf2_over_nv_score_half = jnp.asarray(
+            (
+                inverse_noise_rfloat_cast[None, :].astype(np.float64)
+                * ctf_rfloat
+                * ctf_rfloat
+            ).astype(np.float32),
+            dtype=jnp.float32,
+        )
+    else:
+        ctf_eval_params = (
+            jnp.asarray(ctf_params, dtype=score_real_dtype)
+            if score_real_dtype is not None
+            else ctf_params
+        )
+        ctf_half = config.compute_ctf_half(ctf_eval_params)
+        ctf2_over_nv_ctf = ctf_half.astype(score_real_dtype) if score_real_dtype is not None else ctf_half
+        ctf2_over_nv_noise = (
+            noise_variance_half.astype(score_real_dtype) if score_real_dtype is not None else noise_variance_half
+        )
+        ctf2_over_nv_recon_half = ctf2_over_nv_ctf**2 / ctf2_over_nv_noise
+        ctf2_over_nv_score_half = ctf2_over_nv_recon_half
+        weighted_ctf_half = None
     if synchronize_profile:
-        _block_until_ready(ctf2_over_nv_half)
+        _block_until_ready(ctf2_over_nv_score_half, ctf2_over_nv_recon_half)
     if timer is not None:
         timer["ctf_s"] += time.time() - ctf_t0
 
@@ -1668,7 +4262,11 @@ def _prepare_local_exact_bucket(
         score_complex_dtype=score_complex_dtype,
         score_real_dtype=score_real_dtype,
     )
-    score_weighted_half = shift_processed_score_half * shift_ctf_half / shift_noise_half
+    score_weighted_half = (
+        shift_processed_score_half * weighted_ctf_half
+        if relion_exact_bpref_operands
+        else shift_processed_score_half * shift_ctf_half / shift_noise_half
+    )
     if relion_score_translation_angles is not None:
         from recovar import cuda_backproject
 
@@ -1705,8 +4303,14 @@ def _prepare_local_exact_bucket(
         norm_half_weights,
         norm_real_dtype=norm_real_dtype,
     )
+    norm_power_over_noise = (
+        jnp.abs(norm_processed_score_half) ** 2
+        * inverse_noise_half.astype(norm_processed_score_half.real.dtype)[None, :]
+        if relion_exact_bpref_operands
+        else jnp.abs(norm_processed_score_half) ** 2 / norm_noise_half
+    )
     batch_norm = jnp.sum(
-        (jnp.abs(norm_processed_score_half) ** 2 / norm_noise_half) * norm_weights[None, :],
+        norm_power_over_noise * norm_weights[None, :],
         axis=-1,
         keepdims=True,
     ).real
@@ -1742,21 +4346,54 @@ def _prepare_local_exact_bucket(
             score_complex_dtype=score_complex_dtype,
             score_real_dtype=score_real_dtype,
         )
-        recon_weighted_half = shift_processed_recon_half * shift_ctf_half / shift_noise_half
-        if relion_score_translation_angles is not None and translation_dtype == jnp.dtype(jnp.float64):
+        recon_weighted_half = (
+            shift_processed_recon_half * weighted_ctf_half
+            if relion_exact_bpref_operands
+            else shift_processed_recon_half * shift_ctf_half / shift_noise_half
+        )
+        if relion_exact_bpref_operands:
+            if relion_score_translation_angles is None:
+                raise ValueError(
+                    "exact RELION BPref operands require RELION translation angles"
+                )
+            from recovar import cuda_backproject
+
+            shifted_recon_half = cuda_backproject.relion_translate_bpref_f32(
+                jnp.asarray(processed_recon_half, dtype=jnp.complex64),
+                jnp.asarray(weighted_ctf_half, dtype=jnp.float32),
+                jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+                jnp.arange(processed_recon_half.shape[1], dtype=jnp.int32),
+                config.image_shape,
+            )
+        elif relion_score_translation_angles is not None and translation_dtype == jnp.dtype(jnp.float64):
             shifted_recon_half = _cuda_translate(recon_weighted_half)
         else:
-            shifted_recon_half = _apply_half_translation_phases(recon_weighted_half, shift_phases_half)
+            shifted_recon_half = _apply_half_translation_phases(
+                recon_weighted_half,
+                shift_phases_half,
+            )
         if synchronize_profile:
             _block_until_ready(shifted_recon_half)
         if timer is not None:
             timer["tile_shift_recon_s"] += time.time() - shift_recon_t0
     else:
-        if relion_score_translation_angles is None or translation_dtype == jnp.dtype(jnp.float64):
+        if relion_exact_bpref_operands:
+            if relion_score_translation_angles is None:
+                raise ValueError(
+                    "exact RELION BPref operands require RELION translation angles"
+                )
+            from recovar import cuda_backproject
+
+            shifted_recon_half = cuda_backproject.relion_translate_bpref_f32(
+                jnp.asarray(processed_score_half, dtype=jnp.complex64),
+                jnp.asarray(weighted_ctf_half, dtype=jnp.float32),
+                jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
+                jnp.arange(processed_score_half.shape[1], dtype=jnp.int32),
+                config.image_shape,
+            )
+        elif relion_score_translation_angles is None or translation_dtype == jnp.dtype(jnp.float64):
             shifted_recon_half = shifted_score_half
         else:
-            # Exact RELION arithmetic applies only to score translation.
-            # Reconstruction retains the ordinary JAX phase table.
             shifted_recon_half = _apply_half_translation_phases(
                 score_weighted_half,
                 shift_phases_half,
@@ -1765,7 +4402,8 @@ def _prepare_local_exact_bucket(
         shifted_score_half,
         shifted_recon_half,
         batch_norm,
-        ctf2_over_nv_half,
+        ctf2_over_nv_score_half,
+        ctf2_over_nv_recon_half,
         processed_score_half,
         real_space_pre_shift_applied,
     )
@@ -1775,6 +4413,8 @@ def _build_reconstruction_pack_indices(
     significant_rotation_mask: np.ndarray,
     local_rotation_mask: np.ndarray,
     rotation_block_size: int,
+    *,
+    exact_local_bucket_radix: int | None = None,
 ):
     """Pack RELION-style reconstruction rows into a smaller padded bucket."""
 
@@ -1789,6 +4429,7 @@ def _build_reconstruction_pack_indices(
         max_count,
         rotation_block_size,
         large_bucket_quantum=_reconstruction_pack_large_bucket_quantum(),
+        exact_local_bucket_radix=exact_local_bucket_radix,
     )
     batch_size = int(pack_mask.shape[0])
     take_indices = np.zeros((batch_size, packed_rotation_count), dtype=np.int32)
@@ -1807,6 +4448,8 @@ def _build_nonzero_reconstruction_pack_indices(
     local_rotation_mask: np.ndarray,
     probs_sum_t_np: np.ndarray,
     rotation_block_size: int,
+    *,
+    exact_local_bucket_radix: int | None = None,
 ):
     """Pack rows that can make a nonzero M-step contribution.
 
@@ -1821,6 +4464,35 @@ def _build_nonzero_reconstruction_pack_indices(
         np.asarray(significant_rotation_mask, dtype=bool) & nonzero_rotation_mask,
         local_rotation_mask,
         rotation_block_size,
+        exact_local_bucket_radix=exact_local_bucket_radix,
+    )
+
+
+def _return_local_big_jit_mstep_tensors(
+    *,
+    sparse_big_jit_backprojection: bool,
+    source_faithful_bpref: bool,
+    grouped_reconstruction: bool,
+    reconstruct_significant_only: bool,
+    disable_adjoint_y: bool,
+    disable_adjoint_ctf: bool,
+) -> bool:
+    """Keep grouped os0 BPref scatter outside the ungrouped fused kernel.
+
+    The direct fused x-half call owns one accumulator.  A joint pseudo-halfset
+    stream owns one accumulator per half, so the keep-all oversampling-zero
+    path must return its physical operands and use the existing group-aware
+    inline-projector scatter in the outer loop.
+    """
+
+    grouped_keep_all_source_mstep = bool(
+        source_faithful_bpref
+        and grouped_reconstruction
+        and not reconstruct_significant_only
+    )
+    return bool(
+        (sparse_big_jit_backprojection or grouped_keep_all_source_mstep)
+        and (not disable_adjoint_y or not disable_adjoint_ctf)
     )
 
 
@@ -1849,18 +4521,27 @@ def run_local_em_exact(
     projection_relion_texture_interp: bool = False,
     projection_relion_acc_double_floorf_quirk: bool = False,
     projection_force_jax: bool = False,
+    projection_mask_current_image_disk: bool = True,
+    relion_exact_bpref_operands: bool = False,
+    relion_exact_fine_diff2: bool = False,
+    relion_wavg_sequential_cuda: bool | None = None,
     relion_projector_half=None,
     relion_projector_r_max: int | None = None,
     do_gridding_correction: bool = False,
     square_window: bool = False,
+    recon_exact_radius: bool = True,
     image_corrections: np.ndarray | None = None,
     scale_corrections: np.ndarray | None = None,
     group_ids: np.ndarray | None = None,
+    reconstruction_group_ids: np.ndarray | None = None,
+    reconstruction_group_count: int | None = None,
     scale_correction_group_count: int | None = None,
     scale_correction_data_vs_prior: np.ndarray | None = None,
     image_pre_shifts: np.ndarray | None = None,
     mstep_subtract_ctf_projection: bool = False,
     mstep_relion_x_half: bool = False,
+    host_accumulator_finalize: bool = False,
+    host_stats_publication: bool = False,
     return_half_volume_accumulators: bool = False,
     return_profile: bool = False,
     disable_adjoint_y: bool = False,
@@ -1875,16 +4556,33 @@ def run_local_em_exact(
     normalization_log_z: np.ndarray | None = None,
     class_log_prior: float = 0.0,
     normalization_log_evidence: np.ndarray | None = None,
+    normalization_max_posterior: np.ndarray | None = None,
     translation_prior_centers: np.ndarray | None = None,
     unify_local_bucket_sizes: bool | None = None,
+    exact_local_bucket_radix: int | None = None,
+    consecutive_mixed_bucket_size: int | None = None,
+    preserve_bpref_particle_order: bool = False,
+    stable_fourier_window_shapes: bool = False,
     stats_use_reconstruction_probs: bool = False,
+    relion_f32_fine_posterior: bool = False,
     include_unweighted_norm_high_shell: bool = True,
+    unweighted_high_shell_image_power: bool = False,
     source_faithful_spectrum_norm: bool = False,
     reconstruction_probability_threshold: np.ndarray | None = None,
     return_reconstruction_probability_values: bool = False,
     return_reconstruction_sample_indices: bool = False,
     return_significant_counts: bool = False,
     score_only: bool = False,
+    _fixed_capacity_bundle: _FixedCapacityLocalExecutionBundle | None = None,
+    _fixed_capacity_enabled: bool = False,
+    _fixed_capacity_class_count: int | None = None,
+    _fixed_capacity_whole_boundary_enabled: bool = False,
+    _flat_local_rows_enabled: bool = False,
+    _stable_flat_row_capacity_enabled: bool = False,
+    _packed_local_projection_enabled: bool = False,
+    fused_pair_fine_score: bool = False,
+    _defer_packed_vdam_enabled: bool = False,
+    _packed_final_noise_enabled: bool = False,
 ) -> LocalEMResult:
     """Run exact local EM over per-image local hypothesis sets.
 
@@ -1900,14 +4598,220 @@ def run_local_em_exact(
     noise, profile and significant-count fields are None when disabled.
     Requesting reconstruction probabilities or sample IDs also enables the
     profile that carries those captures, as with explicit ``return_profile``.
+
+    ``unweighted_high_shell_image_power`` selects InitialModel's unweighted
+    per-particle noise-spectrum tail. The default preserves ordinary local
+    EM's posterior-weighted spectrum. Norm correction has its own unchanged
+    high-shell ownership policy.
     """
 
+    resolved_exact_local_bucket_radix = _resolve_exact_local_bucket_radix(exact_local_bucket_radix)
     score_only = bool(score_only)
+    fixed_capacity_enabled = bool(_fixed_capacity_enabled)
+    fixed_capacity_whole_boundary_enabled = bool(
+        _fixed_capacity_whole_boundary_enabled
+    )
+    flat_local_rows_enabled = bool(_flat_local_rows_enabled)
+    stable_flat_row_capacity_enabled = bool(
+        _stable_flat_row_capacity_enabled
+    )
+    packed_local_projection_enabled = bool(_packed_local_projection_enabled)
+    fused_pair_fine_score_enabled = bool(fused_pair_fine_score)
+    defer_packed_vdam_enabled = bool(_defer_packed_vdam_enabled)
+    stable_fourier_window_shapes = bool(stable_fourier_window_shapes)
+    projector_capacity_enabled = _local_projector_capacity_requested()
+    if projector_capacity_enabled and not stable_fourier_window_shapes:
+        raise ValueError("projector capacity requires stable exact-local VDAM Fourier windows")
+    bpref_projector_capacity_enabled = _local_bpref_projector_capacity_requested()
+    if bpref_projector_capacity_enabled and not projector_capacity_enabled:
+        raise ValueError("BPref projector capacity requires the shared local projector capacity")
+    packed_final_noise_enabled = bool(_packed_final_noise_enabled)
+    bpref_transaction_enabled = _local_bpref_transaction_requested()
+    bpref_particle_capacity_enabled = _local_bpref_particle_capacity_requested()
+    bpref_cuda_packing_enabled = _local_bpref_cuda_packing_requested()
+    if bpref_cuda_packing_enabled and not bpref_particle_capacity_enabled:
+        raise ValueError("CUDA BPref packing requires stable particle capacity")
+    if bpref_particle_capacity_enabled and (
+        not bpref_transaction_enabled or bpref_projector_capacity_enabled
+    ):
+        raise ValueError("BPref particle capacity requires transactions and no BPref projector capacity")
+    if bpref_transaction_enabled and not (
+        defer_packed_vdam_enabled and packed_final_noise_enabled
+    ):
+        raise ValueError("BPref transactions require deferred packed final-noise execution")
+    host_plan_pack_enabled = _local_host_plan_pack_requested()
+    host_plan_cuda_enabled = _local_host_plan_cuda_requested()
+    if host_plan_cuda_enabled and not host_plan_pack_enabled:
+        raise ValueError("CUDA host-plan packing requires host-plan packing")
+    host_publication_enabled = _local_host_publication_requested()
+    if type(host_stats_publication) is not bool:
+        raise TypeError("host_stats_publication must be a bool")
+    if host_stats_publication and not host_accumulator_finalize:
+        raise ValueError("host statistics publication requires host accumulator finalization")
+    skip_deferred_zero_norm = _local_skip_deferred_zero_norm_requested()
+    if host_publication_enabled and not defer_packed_vdam_enabled:
+        raise ValueError("host publication requires deferred packed VDAM execution")
+    if host_plan_pack_enabled and not (
+        defer_packed_vdam_enabled and packed_final_noise_enabled
+    ):
+        raise ValueError("host-plan packing requires deferred packed final-noise execution")
+    noise_stable_core_enabled = _local_noise_stable_core_requested()
+    noise_native_residual_enabled = _local_noise_native_residual_requested()
+    if noise_native_residual_enabled and not (
+        stable_fourier_window_shapes
+        and defer_packed_vdam_enabled
+        and packed_final_noise_enabled
+        and accumulate_noise
+    ):
+        raise ValueError("native noise residual requires stable deferred packed final-noise accumulation")
+    if noise_stable_core_enabled and not (
+        stable_fourier_window_shapes and packed_final_noise_enabled
+    ):
+        raise ValueError("separate noise core requires stable packed final-noise execution")
+    noise_norm_capacity_enabled = _local_noise_norm_capacity_requested()
+    if noise_norm_capacity_enabled and not (
+        stable_fourier_window_shapes
+        and defer_packed_vdam_enabled
+        and packed_final_noise_enabled
+        and accumulate_noise
+    ):
+        raise ValueError("noise norm capacity requires stable deferred packed final-noise accumulation")
+    noise_pixel_capacity_enabled = _local_noise_pixel_capacity_requested()
+    noise_pixel_cuda_enabled = _local_noise_pixel_cuda_requested()
+    if noise_pixel_cuda_enabled and not noise_pixel_capacity_enabled:
+        raise ValueError("noise pixel CUDA packing requires noise pixel capacity")
+    if noise_pixel_capacity_enabled and not noise_norm_capacity_enabled:
+        raise ValueError("noise pixel capacity requires noise norm capacity")
+    if fixed_capacity_whole_boundary_enabled and not fixed_capacity_enabled:
+        raise ValueError(
+            "fixed-capacity whole-local boundary requires fixed-capacity execution"
+        )
+    use_relion_f32_fine_posterior = bool(
+        relion_f32_fine_posterior
+        and mstep_relion_x_half
+        and reconstruct_significant_only
+        and not score_only
+    )
+    if relion_f32_fine_posterior and not use_relion_f32_fine_posterior:
+        raise ValueError(
+            "RELION float32 fine posterior requires a significant-only "
+            "RELION x-half M-step"
+        )
+    unweighted_high_shell_image_power = bool(unweighted_high_shell_image_power)
     include_unweighted_norm_high_shell = bool(include_unweighted_norm_high_shell)
     source_faithful_spectrum_norm = bool(source_faithful_spectrum_norm)
     relion_exact_score_translation = bool(relion_exact_score_translation)
+    relion_exact_bpref_operands = bool(relion_exact_bpref_operands)
+    relion_exact_fine_diff2 = bool(relion_exact_fine_diff2)
+    if flat_local_rows_enabled and not relion_exact_fine_diff2:
+        raise ValueError(
+            "flat local rows require exact RELION fine diff2"
+        )
+    if stable_flat_row_capacity_enabled and not flat_local_rows_enabled:
+        raise ValueError("stable flat-row capacity requires flat local rows")
+    if packed_local_projection_enabled and not flat_local_rows_enabled:
+        raise ValueError(
+            "packed local projection requires flat local rows"
+        )
+    if fused_pair_fine_score_enabled and not (
+        relion_exact_fine_diff2 and flat_local_rows_enabled
+    ):
+        raise ValueError(
+            "fused-pair fine scoring requires exact RELION fine diff2 and flat local rows"
+        )
+    if defer_packed_vdam_enabled and not packed_local_projection_enabled:
+        raise ValueError(
+            "deferred packed VDAM requires packed local projection"
+        )
+    if packed_final_noise_enabled and not defer_packed_vdam_enabled:
+        raise ValueError(
+            "packed final-support VDAM noise requires deferred packed VDAM"
+        )
+    if relion_wavg_sequential_cuda is not None:
+        relion_wavg_sequential_cuda = bool(relion_wavg_sequential_cuda)
+    preserve_bpref_particle_order = bool(preserve_bpref_particle_order)
+    source_faithful_bpref = bool(
+        preserve_bpref_particle_order and relion_exact_bpref_operands
+    )
+    if stable_fourier_window_shapes and not (
+        relion_exact_fine_diff2
+        and relion_exact_bpref_operands
+        and relion_wavg_sequential_cuda is True
+        and accumulate_noise
+        and mstep_relion_x_half
+        and source_faithful_bpref
+        and relion_projector_half is not None
+        and not disable_adjoint_y
+        and not disable_adjoint_ctf
+        and not score_only
+    ):
+        raise ValueError(
+            "stable Fourier-window shapes require the K=1 exact-local VDAM "
+            "topology: exact fine scoring, CUDA Wavg, source-faithful x-half "
+            "BPref, a RELION projector, noise accumulation, and a full M-step"
+        )
+    if stable_fourier_window_shapes and os.environ.get(
+        "RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY", ""
+    ).strip():
+        raise ValueError(
+            "stable Fourier-window shapes do not support external VDAM host replay"
+        )
+    if defer_packed_vdam_enabled and not (
+        source_faithful_bpref
+        and mstep_subtract_ctf_projection
+        and mstep_relion_x_half
+        and reconstruct_significant_only
+        and relion_projector_half is not None
+        and not disable_adjoint_y
+        and not disable_adjoint_ctf
+    ):
+        raise ValueError(
+            "deferred packed VDAM requires source-faithful significant-only "
+            "RELION residual backprojection"
+        )
+    reconstruction_group_ids_np = None
+    resolved_reconstruction_group_count = 1
+    if reconstruction_group_ids is not None:
+        reconstruction_group_ids_np = np.asarray(reconstruction_group_ids)
+        if reconstruction_group_ids_np.dtype != np.int32:
+            raise TypeError("reconstruction_group_ids must be int32")
+        if reconstruction_group_ids_np.shape != (int(local_layout.n_images),):
+            raise ValueError(
+                "reconstruction_group_ids must match the local-layout image axis"
+            )
+        if reconstruction_group_count is None:
+            raise ValueError(
+                "reconstruction_group_count is required with reconstruction_group_ids"
+            )
+        resolved_reconstruction_group_count = int(reconstruction_group_count)
+        if resolved_reconstruction_group_count <= 0:
+            raise ValueError("reconstruction_group_count must be positive")
+        if np.any(reconstruction_group_ids_np < 0) or np.any(
+            reconstruction_group_ids_np >= resolved_reconstruction_group_count
+        ):
+            raise ValueError("reconstruction_group_ids contains an out-of-range group")
+        if score_only:
+            raise ValueError("grouped reconstruction is not supported in score-only mode")
+        if not source_faithful_bpref:
+            raise ValueError(
+                "grouped reconstruction requires source-faithful RELION BPref accumulation"
+            )
+    elif reconstruction_group_count not in (None, 1):
+        raise ValueError(
+            "reconstruction_group_ids is required when reconstruction_group_count is not one"
+        )
+    if preserve_bpref_particle_order and not mstep_relion_x_half:
+        raise ValueError("BPref particle-order preservation requires the RELION x-half M-step")
+    if preserve_bpref_particle_order and not relion_exact_bpref_operands:
+        raise ValueError("BPref particle-order preservation requires exact RELION BPref operands")
+    if source_faithful_bpref and (disable_adjoint_y or disable_adjoint_ctf):
+        raise ValueError(
+            "source-faithful BPref accumulation requires both data and weight adjoints"
+        )
     if relion_exact_score_translation and not half_spectrum_scoring:
         raise ValueError("exact RELION score translation requires half_spectrum_scoring=True")
+    if relion_exact_fine_diff2 and not relion_exact_bpref_operands:
+        raise ValueError("exact RELION fine diff2 requires exact BPref operands")
     if score_only:
         if not (disable_adjoint_y and disable_adjoint_ctf):
             raise ValueError("score_only exact-local EM requires both adjoints disabled")
@@ -1925,12 +4829,43 @@ def run_local_em_exact(
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
     H, W = image_shape
+    logical_current_size = int(H) if current_size is None else int(current_size)
     mstep_current_size = (
-        current_size
+        logical_current_size
         if reconstruction_current_size is None
         else int(reconstruction_current_size)
     )
     n_half = H * (W // 2 + 1)
+    if stable_fourier_window_shapes and mstep_current_size != logical_current_size:
+        raise ValueError(
+            "stable Fourier-window VDAM currently requires identical score and "
+            "reconstruction current sizes"
+        )
+    resolved_window_quantum = (
+        stable_fourier_window_quantum()
+        if stable_fourier_window_shapes
+        else DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM
+    )
+    stable_window_plan = make_stable_fourier_window_shape_plan(
+        image_shape,
+        logical_current_size,
+        n_half,
+        reconstruction_current_size=mstep_current_size,
+        enabled=stable_fourier_window_shapes,
+        quantum=resolved_window_quantum,
+        square=square_window,
+        recon_exact_radius=bool(recon_exact_radius),
+    )
+    physical_current_size = stable_window_plan.physical_current_size
+    physical_mstep_current_size = (
+        stable_window_plan.physical_reconstruction_current_size
+    )
+    # Every non-full stable window uses a runtime logical bound, even when its
+    # logical size equals the physical class boundary. This keeps one JIT
+    # topology for all members of a physical capacity class.
+    stable_window_active = bool(
+        stable_fourier_window_shapes and stable_window_plan.logical_spec.use_window
+    )
     n_trans = int(local_layout.translation_grid.shape[0])
     n_images = int(local_layout.n_images)
     class_log_prior = float(class_log_prior)
@@ -1972,6 +4907,24 @@ def run_local_em_exact(
             )
     if normalization_log_z_np is not None and normalization_log_evidence_np is not None:
         raise ValueError("Provide only one of normalization_log_z or normalization_log_evidence")
+    normalization_max_posterior_np = None
+    if normalization_max_posterior is not None:
+        normalization_max_posterior_np = np.asarray(normalization_max_posterior, dtype=np.float64)
+        if normalization_max_posterior_np.shape != (n_images,):
+            raise ValueError(
+                "normalization_max_posterior must have shape "
+                f"({n_images},), got {normalization_max_posterior_np.shape}",
+            )
+        if (
+            not np.all(np.isfinite(normalization_max_posterior_np))
+            or np.any(normalization_max_posterior_np <= 0.0)
+            or np.any(normalization_max_posterior_np > 1.0)
+        ):
+            raise ValueError("normalization_max_posterior must contain finite probabilities in (0, 1]")
+        if normalization_log_z_np is not None or normalization_log_evidence_np is not None:
+            raise ValueError(
+                "normalization_max_posterior is mutually exclusive with external log normalization",
+            )
     reconstruction_probability_threshold_np = None
     if reconstruction_probability_threshold is not None:
         reconstruction_probability_threshold_np = np.asarray(reconstruction_probability_threshold, dtype=np.float64)
@@ -2016,6 +4969,10 @@ def run_local_em_exact(
         debug_fused_posterior_dump_dir is not None
         and current_size_matches_request(debug_fused_posterior_dump_current_sizes, current_size)
         and iteration_matches_request(debug_fused_posterior_dump_iterations, debug_iteration)
+    )
+    debug_fused_posterior_dump_scores = bool(
+        debug_fused_posterior_dump_filter_matches
+        and _env_flag("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES")
     )
     debug_noise_dump_filter_matches = (
         debug_noise_dump_dir is not None
@@ -2074,15 +5031,22 @@ def run_local_em_exact(
         # RELION BPref::initZeros(current_size) sizes the accumulator from the
         # iteration r_max.  The reconstruction boundary then crops the output
         # back to ``volume_shape``.
-        recon_volume_shape = relion_backprojector_volume_shape(
+        logical_recon_volume_shape = relion_backprojector_volume_shape(
             volume_shape,
             reconstruction_padding_factor,
             current_size=mstep_current_size,
         )
+        recon_volume_shape = relion_backprojector_volume_shape(
+            volume_shape,
+            reconstruction_padding_factor,
+            current_size=physical_mstep_current_size,
+        )
     elif reconstruction_padding_factor > 1:
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
+        logical_recon_volume_shape = recon_volume_shape
     else:
         recon_volume_shape = volume_shape
+        logical_recon_volume_shape = recon_volume_shape
     if score_only:
         logger.info("Exact local score-only: M-step accumulators disabled")
     elif mstep_relion_x_half:
@@ -2096,21 +5060,41 @@ def run_local_em_exact(
     recon_volume_size = int(np.prod(recon_accum_shape))
     score_only_accumulator_size = 1 if score_only else recon_volume_size
 
-    window_spec = make_fourier_window_spec(
-        image_shape,
-        current_size,
-        n_half,
-        reconstruction_current_size=mstep_current_size,
-        square=square_window,
-        include_recon_window=True,
+    window_spec = (
+        stable_window_plan.packed_physical_spec()
+        if stable_window_active
+        else stable_window_plan.logical_spec
     )
     use_window = window_spec.use_window
     window_indices = window_spec.score_indices
+    if relion_exact_fine_diff2:
+        if stable_window_active:
+            logical_lookup = _relion_exact_fine_full_to_compact_lookup(
+                image_shape,
+                logical_current_size,
+                n_half,
+                stable_window_plan.logical_spec,
+            )
+            relion_fine_full_to_compact = pad_axis(
+                logical_lookup,
+                0,
+                stable_window_plan.physical_rectangle_pixels,
+                value=-1,
+            )
+        else:
+            relion_fine_full_to_compact = _relion_exact_fine_full_to_compact_lookup(
+                image_shape,
+                logical_current_size,
+                n_half,
+                window_spec,
+            )
+    else:
+        relion_fine_full_to_compact = np.zeros(1, dtype=np.int32)
     recon_window_indices = window_spec.recon_indices
     mstep_recon_window_indices, mstep_adjoint_max_r = _local_mstep_adjoint_window(
         image_shape,
         n_half,
-        mstep_current_size,
+        physical_mstep_current_size,
         use_window=use_window,
         recon_window_indices=recon_window_indices,
         mstep_relion_x_half=bool(mstep_relion_x_half),
@@ -2120,6 +5104,7 @@ def run_local_em_exact(
     projection_kwargs["relion_texture_interp"] = projection_relion_texture_interp
     projection_kwargs["relion_acc_double_floorf_quirk"] = projection_relion_acc_double_floorf_quirk
     projection_kwargs["force_jax"] = bool(projection_force_jax)
+    projection_kwargs["mask_current_image_disk"] = bool(projection_mask_current_image_disk)
     projection_mode = _local_projection_mode(window_spec, projection_kwargs, relion_projector_half)
 
     half_weights = make_scoring_half_image_weights(
@@ -2134,8 +5119,13 @@ def run_local_em_exact(
         experiment_dataset.dtype,
         use_relion_x_half_mstep=bool(mstep_relion_x_half),
     )
-    Ft_y = jnp.zeros(score_only_accumulator_size, dtype=recon_y_accum_dtype)
-    Ft_ctf = jnp.zeros(score_only_accumulator_size, dtype=recon_ctf_accum_dtype)
+    accumulator_shape = (
+        (resolved_reconstruction_group_count, score_only_accumulator_size)
+        if reconstruction_group_ids_np is not None
+        else (score_only_accumulator_size,)
+    )
+    Ft_y = jnp.zeros(accumulator_shape, dtype=recon_y_accum_dtype)
+    Ft_ctf = jnp.zeros(accumulator_shape, dtype=recon_ctf_accum_dtype)
     hard_assignment = np.empty(n_images, dtype=np.int32)
     log_evidence_per_image = np.empty(n_images, dtype=precision_policy.score_real_dtype)
     best_log_score_per_image = np.empty(n_images, dtype=precision_policy.score_real_dtype)
@@ -2162,6 +5152,33 @@ def run_local_em_exact(
     noise_sigma2_offset = jnp.asarray(0.0, dtype=precision_policy.score_real_dtype)
     noise_sumw = jnp.asarray(0.0, dtype=precision_policy.score_real_dtype)
     return_noise_split = noise_split_diagnostics_requested()
+    fixed_capacity_unsupported_diagnostics = tuple(
+        name
+        for name, requested in (
+            ("return_profile", return_profile),
+            ("return_best_pose_details", return_best_pose_details),
+            ("return_reconstruction_probability_values", return_reconstruction_probability_values),
+            ("return_reconstruction_sample_indices", return_reconstruction_sample_indices),
+            ("return_significant_counts", return_significant_counts),
+            ("normalization_log_z", normalization_log_z_np is not None),
+            ("normalization_log_evidence", normalization_log_evidence_np is not None),
+            ("normalization_max_posterior", normalization_max_posterior_np is not None),
+            ("reconstruction_probability_threshold", reconstruction_probability_threshold_np is not None),
+            ("score_dump", debug_score_dump_filter_matches),
+            ("fused_posterior_dump", debug_fused_posterior_dump_filter_matches),
+            ("noise_dump", debug_noise_dump_filter_matches),
+            ("noise_split", return_noise_split),
+            ("bpref_contribution_capture", bpref_contribution_capture_active),
+        )
+        if requested
+    )
+    fixed_capacity_mstep_requested = bool(
+        mstep_subtract_ctf_projection
+        or mstep_relion_x_half
+        or host_accumulator_finalize
+        or return_half_volume_accumulators
+        or preserve_bpref_particle_order
+    )
     require_materialized_recon_projection = bool(
         mstep_subtract_ctf_projection
         or debug_noise_dump_filter_matches
@@ -2188,26 +5205,50 @@ def run_local_em_exact(
             shell_indices_half = mask_relion_noise_shell_indices_to_current_window(
                 shell_indices_half,
                 image_shape,
-                current_size,
-                window_indices,
+                logical_current_size,
+                (
+                    stable_window_plan.logical_spec.score_indices
+                    if stable_window_active
+                    else window_indices
+                ),
             )
         shell_indices_noise = window_spec.recon_values(shell_indices_half)
-        norm_unweighted_shell_cutoff = image_shape[0] // 2 if current_size is None else int(current_size // 2)
+        norm_unweighted_shell_cutoff = int(logical_current_size // 2)
         noise_variance_for_noise = window_spec.recon_values(noise_variance_half)
+        if stable_window_active:
+            logical_recon_mask = jnp.arange(window_spec.n_recon) < int(
+                stable_window_plan.logical_reconstruction_pixels
+            )
+            shell_indices_noise = jnp.where(
+                logical_recon_mask,
+                shell_indices_noise,
+                jnp.asarray(-1, dtype=jnp.int32),
+            )
+            noise_variance_for_noise = jnp.where(
+                logical_recon_mask,
+                noise_variance_for_noise,
+                jnp.asarray(0, dtype=noise_variance_for_noise.dtype),
+            )
         scale_correction_pixel_mask = _relion_scale_correction_pixel_mask(
             scale_correction_data_vs_prior,
             shell_indices_noise,
             n_shells=n_shells,
         )
-        noise_wsum = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
+        # Direct Wavg replaces the cutoff shell with its ordered float64
+        # reduction, so the first bucket otherwise promotes this carry and
+        # creates a one-off float32 big-JIT ABI.  Starting from float64 zero is
+        # numerically identical and matches every subsequent bucket.
+        noise_wsum = jnp.zeros(
+            n_shells,
+            dtype=_noise_wsum_initial_dtype(
+                relion_exact_fine_diff2=relion_exact_fine_diff2,
+                use_window=use_window,
+            ) if not use_float64_scoring else precision_policy.score_real_dtype,
+        )
         noise_img_power = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
         noise_norm_correction = jnp.zeros(
-            n_images,
-            dtype=(
-                jnp.float64
-                if source_faithful_spectrum_norm
-                else precision_policy.score_real_dtype
-            ),
+            _noise_norm_capacity(n_images, enabled=noise_norm_capacity_enabled),
+            dtype=jnp.float64 if source_faithful_spectrum_norm else precision_policy.score_real_dtype,
         )
         noise_a2 = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
         noise_xa = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
@@ -2241,9 +5282,17 @@ def run_local_em_exact(
     seen_nonzero_global_rotations = np.zeros_like(seen_global_rotations)
     seen_reconstruction_global_rotations = np.zeros_like(seen_global_rotations)
     total_padded_rotations = 0
+    total_planned_padded_rotations = 0
     chunk_sizes = []
+    chunk_padded_image_counts = []
+    chunk_planned_padded_image_counts = []
     chunk_local_rotations = []
     chunk_padded_rotations = []
+    chunk_flat_score_rows = []
+    chunk_fused_pair_capacities = []
+    chunk_fused_pair_counts = []
+    chunk_fused_pair_dense_capacities = []
+    chunk_planned_padded_rotations = []
     chunk_unique_rotations = []
     chunk_nonzero_posterior_rows = []
     chunk_reconstruction_rows = []
@@ -2252,6 +5301,11 @@ def run_local_em_exact(
     local_total_hypotheses = 0
     total_significant_samples = 0
     total_reconstruction_rows = 0
+    total_flat_score_rows = 0
+    total_fused_pair_candidates = 0
+    total_fused_pair_capacity = 0
+    total_fused_pair_dense_capacity = 0
+    total_packed_final_noise_rows = 0
     reconstruction_sample_indices_by_image = (
         [np.zeros(0, dtype=np.int64) for _ in range(n_images)] if return_reconstruction_sample_indices else None
     )
@@ -2320,6 +5374,7 @@ def run_local_em_exact(
         local_layout=local_layout,
         image_batch_size=image_batch_size,
         rotation_block_size=rotation_block_size,
+        exact_local_bucket_radix=resolved_exact_local_bucket_radix,
         allow_auto_boost=allow_microbatch_auto_boost,
         auto_boost_factor=xhalf_auto_microbatch_boost,
         allow_high_memory_default=not xhalf_bpref_mstep,
@@ -2349,6 +5404,7 @@ def run_local_em_exact(
             local_layout,
             n_projection_pixels=int(window_spec.n_projection),
             rotation_block_size=rotation_block_size,
+            exact_local_bucket_radix=resolved_exact_local_bucket_radix,
         )
         if max_hypotheses_per_microbatch < tail_capped_hypotheses_per_microbatch:
             logger.info(
@@ -2366,6 +5422,9 @@ def run_local_em_exact(
         rotation_block_size=rotation_block_size,
         max_hypotheses_per_microbatch=max_hypotheses_per_microbatch,
         unify_bucket_sizes=unify_local_bucket_sizes,
+        preserve_image_order=source_faithful_bpref,
+        exact_local_bucket_radix=resolved_exact_local_bucket_radix,
+        consecutive_mixed_bucket_size=consecutive_mixed_bucket_size,
     )
     timing.bucket_build_s += time.time() - bucket_build_t0
     debug_target_only_targets: set[int] = set()
@@ -2410,6 +5469,30 @@ def run_local_em_exact(
             sorted(int(target) for target in debug_target_only_targets),
             LOCAL_SCORE_DUMP_TARGET_ONLY_ENV,
         )
+    if fixed_capacity_enabled:
+        if not isinstance(_fixed_capacity_bundle, _FixedCapacityLocalExecutionBundle):
+            raise ValueError("fixed-capacity score-only execution requires a bound execution bundle")
+        if not bucket_specs:
+            raise ValueError("fixed-capacity score-only execution requires authoritative local calls")
+        if int(_fixed_capacity_bundle.plan.valid_call_count) != len(bucket_specs):
+            raise ValueError(
+                "fixed-capacity score-only execution requires every authoritative local call"
+            )
+    flat_local_row_capacities = (
+        _plan_flat_local_row_capacities(
+            bucket_specs,
+            rotation_block_size=rotation_block_size,
+            exact_local_bucket_radix=resolved_exact_local_bucket_radix,
+            stable_rectangular_capacity=stable_flat_row_capacity_enabled,
+        )
+        if flat_local_rows_enabled
+        else {}
+    )
+    fine_job_capacities = (
+        _plan_local_fine_job_capacities(bucket_specs)
+        if fused_pair_fine_score_enabled
+        else {}
+    )
     if bucket_specs:
         bucket_rotation_counts = np.asarray(
             [int(bucket.bucket_rotation_count) for bucket in bucket_specs],
@@ -2547,9 +5630,45 @@ def run_local_em_exact(
         require_mask=score_with_masked_images,
     )
     big_jit_image_mask_arg = jnp.asarray(big_jit_image_mask_arg)
+    relion_cuda_preprocess_radius = 0.0
+    relion_cuda_preprocess_cosine_width = 0.0
+    if relion_exact_bpref_operands:
+        image_source = getattr(experiment_dataset, "image_source", None)
+        while hasattr(image_source, "parent"):
+            image_source = image_source.parent
+        preprocess_backend = getattr(image_source, "backend", image_source)
+        if getattr(preprocess_backend, "relion_fourier_backend", None) != "relion_cuda":
+            raise ValueError("exact RELION BPref operands require RELION CUDA image preprocessing")
+        preprocess_params = getattr(preprocess_backend, "_relion_image_mask_params", None)
+        if preprocess_params is None:
+            raise ValueError("RELION CUDA image preprocessing requires explicit image-mask parameters")
+        pixel_size, particle_diameter_ang, cosine_width = preprocess_params
+        relion_cuda_preprocess_radius = float(particle_diameter_ang) / (2.0 * float(pixel_size))
+        relion_cuda_preprocess_cosine_width = float(cosine_width)
 
     big_jit_window_indices_arg = window_spec.score_or_full_indices(n_half)
     big_jit_recon_window_indices_arg = window_spec.recon_or_full_indices(n_half)
+    stable_bpref_dense_positions = None
+    if relion_exact_fine_diff2 and accumulate_noise and use_window:
+        if stable_window_active:
+            relion_wavg_rectangle = _make_stable_relion_wavg_rectangle(
+                image_shape,
+                stable_window_plan,
+            )
+            stable_bpref_dense_positions = relion_wavg_rectangle.exact_positions
+        else:
+            relion_wavg_rectangle = _make_relion_wavg_rectangle(
+                image_shape,
+                logical_current_size,
+                big_jit_recon_window_indices_arg,
+            )
+        big_jit_relion_wavg_rectangle_indices_arg = relion_wavg_rectangle.centered_indices
+        big_jit_relion_wavg_exact_positions_arg = relion_wavg_rectangle.exact_positions
+        big_jit_relion_wavg_rectangle_shell_indices_arg = relion_wavg_rectangle.shell_indices
+    else:
+        big_jit_relion_wavg_rectangle_indices_arg = np.zeros(1, dtype=np.int32)
+        big_jit_relion_wavg_exact_positions_arg = np.zeros(1, dtype=np.int32)
+        big_jit_relion_wavg_rectangle_shell_indices_arg = np.zeros(1, dtype=np.int32)
     big_jit_mstep_recon_window_indices_arg = (
         mstep_recon_window_indices if mstep_relion_x_half else big_jit_recon_window_indices_arg
     )
@@ -2587,11 +5706,53 @@ def run_local_em_exact(
     use_big_jit_buckets = (
         ((not use_relion_projector) or relion_projector_big_jit_supported)
         and not disable_big_jit_buckets
-        and not bpref_contribution_capture_active
         and not return_reconstruction_probability_values
         and not (accumulate_noise and debug_noise_dump_dir is not None)
         and not processed_half_cache_preferred
     )
+    if projector_capacity_enabled and use_relion_projector and logical_current_size == H and not use_window:
+        if bpref_projector_capacity_enabled:
+            raise ValueError("BPref projector capacity is not supported for full-box local projection")
+        # The full-box projector already occupies its maximum capacity. Keep
+        # the existing full-spectrum projection path and its pixel ordering;
+        # scientific window/DC/noise behavior must not change to admit this
+        # optimization, which only combines cropped projector shapes.
+        projector_capacity_enabled = False
+    if projector_capacity_enabled and not (
+        stable_window_active and use_big_jit_buckets and compact_relion_projector_big_jit
+        and flat_local_rows_enabled and packed_local_projection_enabled
+        and not projection_force_jax and not fixed_capacity_enabled
+    ):
+        raise ValueError("projector capacity requires the stable packed compact local BigJIT VDAM route")
+    if projector_capacity_enabled and _optional_nonnegative_float_env(
+        EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV, EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB
+    ) > 0:
+        raise ValueError("projector capacity cannot be combined with the local projection cache")
+    if bpref_projector_capacity_enabled and (not source_faithful_bpref or score_only):
+        raise ValueError("BPref projector capacity requires the source-faithful VDAM accumulator route")
+    bpref_transaction_queue = None
+    if bpref_transaction_enabled:
+        if (
+            not source_faithful_bpref or score_only
+            or not use_big_jit_buckets or fixed_capacity_enabled
+        ):
+            raise ValueError(
+                "BPref transactions require the source-faithful packed local BigJIT VDAM route"
+            )
+        from recovar.em.dense_single_volume.bpref_transaction import BprefTransactionQueue
+
+        bpref_transaction_queue = BprefTransactionQueue(
+            stable_particle_capacity=bpref_particle_capacity_enabled,
+            cuda_packing=bpref_cuda_packing_enabled,
+        )
+    if fixed_capacity_enabled and not use_big_jit_buckets:
+        raise ValueError(
+            "fixed-capacity score-only execution requires the mature local big-JIT bucket path",
+        )
+    if flat_local_rows_enabled and not use_big_jit_buckets:
+        raise ValueError("flat local rows require the mature local big-JIT bucket path")
+    if relion_exact_fine_diff2 and not use_big_jit_buckets:
+        raise ValueError("exact RELION fine diff2 requires the local big-JIT bucket path")
     mean_for_proj_big_jit = mean_for_proj
     projection_half_volume_big_jit = False
     relion_projector_half_big_jit = jnp.zeros((1, 1, 1), dtype=jnp.complex64)
@@ -2611,6 +5772,8 @@ def run_local_em_exact(
     relion_projection_cache_max_estimated_gb = 0.0
     relion_projection_cache_n_projection_pixels = 0
     relion_projection_cache_id_map_rows = 0
+    source_vdam_projector_full = None
+    big_jit_projection_pixel_count = int(window_spec.n_projection)
     if use_relion_projector:
         if relion_projector_r_max is None:
             raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
@@ -2636,17 +5799,48 @@ def run_local_em_exact(
                 big_jit_projection_pixel_indices_arg = jnp.asarray(window_spec.score_indices, dtype=jnp.int32)
                 big_jit_projection_score_take_arg = jnp.arange(window_spec.n_score, dtype=jnp.int32)
                 big_jit_projection_recon_take_arg = jnp.zeros((1,), dtype=jnp.int32)
+                big_jit_projection_pixel_count = int(window_spec.n_score)
             else:
                 big_jit_projection_pixel_indices_arg = jnp.asarray(window_spec.projection_indices, dtype=jnp.int32)
                 big_jit_projection_score_take_arg = jnp.asarray(window_spec.score_projection_take, dtype=jnp.int32)
                 big_jit_projection_recon_take_arg = jnp.asarray(window_spec.recon_projection_take, dtype=jnp.int32)
+        if source_faithful_bpref and not score_only and not bpref_projector_capacity_enabled:
+            from recovar.em.dense_single_volume.helpers.projection import (
+                relion_projector_half_to_texture_full,
+            )
+
+            source_vdam_projector_full = relion_projector_half_to_texture_full(
+                relion_projector_half_big_jit
+            )
+    # Keep logical inputs above unchanged for BPref and the legacy projection cache.
+    local_projection_half_arg = relion_projector_half_big_jit
+    local_projection_static_radius = relion_projector_r_max_big_jit
+    local_projection_runtime_radius = None
+    if projector_capacity_enabled:
+        from recovar.em.dense_single_volume.helpers.projection import prepare_relion_projector_capacity
+
+        local_projection_half_arg, local_projection_runtime_radius = prepare_relion_projector_capacity(
+            relion_projector_half_big_jit,
+            r_max=relion_projector_r_max_big_jit,
+            physical_size=physical_current_size,
+            padding_factor=projection_padding_factor,
+        )
+        local_projection_static_radius = 0
+    source_vdam_projector_static_radius = relion_projector_r_max_big_jit
+    source_vdam_projector_runtime_radius = None
+    if bpref_projector_capacity_enabled:
+        # Reuse the exact same physical half slab and device radius as BigJIT.
+        # No logical full-cube materialization is needed for this BPref ABI.
+        source_vdam_projector_full = local_projection_half_arg
+        source_vdam_projector_static_radius = 0
+        source_vdam_projector_runtime_radius = local_projection_runtime_radius
     if (
         use_big_jit_buckets
         and compact_relion_projector_big_jit
         and not score_only
     ):
         requested_cache_rows, relion_projection_cache_cap_gb = _exact_local_relion_projection_cache_capacity_rows(
-            int(window_spec.n_projection)
+            big_jit_projection_pixel_count
         )
         if requested_cache_rows > 0:
             bucket_specs = _sort_buckets_for_relion_projection_cache(bucket_specs)
@@ -2663,14 +5857,16 @@ def run_local_em_exact(
                 max_cache_groups,
                 int(requested_cache_rows),
                 float(relion_projection_cache_cap_gb),
-                int(window_spec.n_projection),
+                big_jit_projection_pixel_count,
             )
             relion_projection_cache_groups = []
         if relion_projection_cache_groups:
             relion_projection_cache_capacity_rows = int(
                 max(row_count for _, _, row_count in relion_projection_cache_groups)
             )
-            relion_projection_cache_n_projection_pixels = int(window_spec.n_projection)
+            relion_projection_cache_n_projection_pixels = (
+                big_jit_projection_pixel_count
+            )
             valid_layout_ids = np.asarray(local_layout.rotation_ids_flat, dtype=np.int64)
             valid_layout_ids = valid_layout_ids[valid_layout_ids >= 0]
             relion_projection_cache_id_map_rows = (
@@ -2717,6 +5913,11 @@ def run_local_em_exact(
             raw_batch_cache, ctf_param_cache = _build_local_raw_cache(experiment_dataset, n_images)
             timing.raw_cache_build_s = time.time() - raw_cache_t0
 
+    fixed_capacity_whole_call_program = []
+    fixed_capacity_whole_call_contexts = []
+    fixed_capacity_whole_initial_carry = None
+    fixed_capacity_whole_static_options = None
+    fixed_capacity_whole_preparation_s = 0.0
     for bucket_index, bucket in enumerate(bucket_specs):
         if (
             relion_projection_cache_groups
@@ -2728,12 +5929,13 @@ def run_local_em_exact(
                 bucket_specs[group_start:group_stop],
                 relion_projector_half_big_jit,
                 image_shape=image_shape,
-                n_projection_pixels=int(window_spec.n_projection),
+                n_projection_pixels=big_jit_projection_pixel_count,
                 relion_projector_r_max=int(relion_projector_r_max_big_jit),
                 projection_padding_factor=int(projection_padding_factor),
                 projection_relion_texture_interp=projection_relion_texture_interp,
                 projection_relion_acc_double_floorf_quirk=projection_relion_acc_double_floorf_quirk,
-                projection_pixel_indices=jnp.asarray(window_spec.projection_indices, dtype=jnp.int32),
+                projection_mask_current_image_disk=bool(projection_mask_current_image_disk),
+                projection_pixel_indices=big_jit_projection_pixel_indices_arg,
                 projector_output_size=int(big_jit_relion_projector_output_size),
                 cache_row_capacity=int(relion_projection_cache_capacity_rows),
                 max_global_rotation_id=max(relion_projection_cache_id_map_rows - 1, 0),
@@ -2751,16 +5953,51 @@ def run_local_em_exact(
         n_chunks += 1
         if collect_profile_stats:
             chunk_sizes.append(int(bucket.image_indices.shape[0]))
+            planned_padded_image_count = max(
+                int(bucket.image_indices.shape[0]),
+                int(getattr(bucket, "bucket_image_count", bucket.image_indices.shape[0])),
+            )
+            chunk_planned_padded_image_counts.append(planned_padded_image_count)
             chunk_local_rotations.append(int(np.sum(bucket.actual_rotation_counts)))
-            chunk_padded_rotations.append(int(bucket.image_indices.shape[0] * bucket.bucket_rotation_count))
+            chunk_planned_padded_rotations.append(
+                int(planned_padded_image_count * bucket.bucket_rotation_count)
+            )
             bucket_valid_rotation_ids = np.asarray(bucket.local_rotation_ids, dtype=np.int64)[
                 np.asarray(bucket.local_rotation_mask, dtype=bool)
             ]
             chunk_unique_rotations.append(int(np.unique(bucket_valid_rotation_ids).shape[0]))
-            total_padded_rotations += int(bucket.image_indices.shape[0] * bucket.bucket_rotation_count)
+            total_planned_padded_rotations += int(
+                planned_padded_image_count * bucket.bucket_rotation_count
+            )
             local_total_hypotheses += int(np.sum(bucket.actual_rotation_counts) * n_trans)
         fetch_t0 = time.time()
-        if raw_batch_cache is None:
+        fixed_capacity_call_view = None
+        if fixed_capacity_enabled:
+            fixed_capacity_call_view = _select_fixed_capacity_score_only_view(
+                _fixed_capacity_bundle,
+                bucket,
+                call_index=bucket_index,
+                n_classes=_fixed_capacity_class_count,
+                class_log_prior=class_log_prior,
+                image_pre_shifts=image_pre_shifts,
+                image_corrections=image_corrections,
+                scale_corrections=scale_corrections,
+                score_only=score_only,
+                disable_adjoint_y=disable_adjoint_y,
+                disable_adjoint_ctf=disable_adjoint_ctf,
+                accumulate_noise=accumulate_noise,
+                mstep_requested=fixed_capacity_mstep_requested,
+                unsupported_diagnostics=fixed_capacity_unsupported_diagnostics,
+                enabled=True,
+            )
+            batch_data, ctf_params, fetched_indices = _fetch_and_validate_fixed_capacity_call_operands(
+                experiment_dataset,
+                fixed_capacity_call_view,
+                bucket,
+            )
+            bucket = fixed_capacity_call_view.bucket
+            bucket_image_indices = np.asarray(fetched_indices, dtype=np.int32)
+        elif raw_batch_cache is None:
             bucket_image_indices = np.asarray(bucket.image_indices, dtype=np.int32)
             if processed_half_cache is None:
                 batch_data, ctf_params, fetched_indices = fetch_indexed_batch(experiment_dataset, bucket.image_indices)
@@ -2776,6 +6013,13 @@ def run_local_em_exact(
         timing.batch_fetch_s += time.time() - fetch_t0
         bucket = _reorder_bucket_to_indices(bucket, fetched_indices)
         batch_size = int(bucket.image_indices.shape[0])
+        bucket_reconstruction_group_ids = (
+            None
+            if reconstruction_group_ids_np is None
+            else reconstruction_group_ids_np[
+                np.asarray(bucket.image_indices, dtype=np.int64)
+            ]
+        )
         debug_fused_posterior_bucket_matches = (
             debug_fused_posterior_dump_filter_matches
             and _bucket_contains_debug_target(
@@ -2836,10 +6080,16 @@ def run_local_em_exact(
             use_big_jit_buckets_for_bucket
             and significant_backprojection_candidate
             and not score_only
-            and not mstep_subtract_ctf_projection
+            and (
+                not mstep_subtract_ctf_projection
+                or defer_packed_vdam_enabled
+            )
             and (not disable_adjoint_y or not disable_adjoint_ctf or accumulate_noise)
         )
-        force_deferred_big_jit_backprojection = _env_flag(EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV)
+        force_deferred_big_jit_backprojection = bool(
+            defer_packed_vdam_enabled
+            or _env_flag(EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV)
+        )
         deferred_big_jit_backprojection = (
             can_defer_big_jit_backprojection
             and (
@@ -2865,12 +6115,53 @@ def run_local_em_exact(
             )
             logged_sparse_big_jit_deferred_fallback = True
 
-        if use_big_jit_buckets_for_bucket and (
-            not significant_backprojection_candidate
-            or sparse_big_jit_backprojection
-            or deferred_big_jit_backprojection
-            or score_only
-        ):
+        execute_big_jit_bucket = bool(
+            use_big_jit_buckets_for_bucket
+            and (
+                not significant_backprojection_candidate
+                or sparse_big_jit_backprojection
+                or deferred_big_jit_backprojection
+                or score_only
+            )
+        )
+        if fixed_capacity_call_view is not None and not execute_big_jit_bucket:
+            raise ValueError(
+                f"fixed-capacity call {fixed_capacity_call_view.call_index} did not reach "
+                "the mature local big-JIT bucket path"
+            )
+        if flat_local_rows_enabled and not execute_big_jit_bucket:
+            raise ValueError("flat local rows did not reach the mature local big-JIT bucket path")
+        if collect_profile_stats:
+            executed_padded_image_count = (
+                max(
+                    batch_size,
+                    int(getattr(bucket, "bucket_image_count", batch_size)),
+                )
+                if execute_big_jit_bucket
+                else batch_size
+            )
+            executed_padded_rotations = int(
+                executed_padded_image_count * bucket.bucket_rotation_count
+            )
+            chunk_padded_image_counts.append(executed_padded_image_count)
+            chunk_padded_rotations.append(executed_padded_rotations)
+            total_padded_rotations += executed_padded_rotations
+            flat_score_rows = (
+                int(
+                    flat_local_row_capacities[
+                        (
+                            int(executed_padded_image_count),
+                            int(bucket.bucket_rotation_count),
+                        )
+                    ]
+                )
+                if flat_local_rows_enabled
+                else executed_padded_rotations
+            )
+            chunk_flat_score_rows.append(flat_score_rows)
+            total_flat_score_rows += flat_score_rows
+
+        if execute_big_jit_bucket:
             if batch_data is None:
                 raise RuntimeError("exact local big-JIT requires fetched native image batches")
             big_jit_t0 = time.time()
@@ -2887,7 +6178,68 @@ def run_local_em_exact(
                 batch_data,
                 ctf_params,
             )
+            if fixed_capacity_call_view is not None:
+                _validate_fixed_capacity_padded_call(
+                    fixed_capacity_call_view,
+                    bucket,
+                    batch_data,
+                    ctf_params,
+                    valid_image_mask,
+                    batch_size,
+                )
             bucket_image_indices = np.asarray(unpadded_bucket.image_indices, dtype=np.int32)
+            if relion_exact_bpref_operands:
+                ctf_rfloat_unpadded = np.asarray(
+                    sparse_pass2_bucketed._relion_exact_ctf_half_from_source_star_host(
+                        experiment_dataset,
+                        bucket_image_indices,
+                        image_shape,
+                    ),
+                    dtype=np.float64,
+                )
+                ctf_rfloat_half_arg = jnp.asarray(
+                    pad_axis(
+                        ctf_rfloat_unpadded,
+                        0,
+                        batch_size,
+                        value=0,
+                    ),
+                    dtype=jnp.float64,
+                )
+                inverse_noise_rfloat_cast_np = np.reciprocal(
+                    np.asarray(noise_variance_half, dtype=np.float64)
+                ).astype(np.float32)
+                ctf_squared_rfloat = ctf_rfloat_unpadded * ctf_rfloat_unpadded
+                corr_img_rfloat_square_unpadded = (
+                    inverse_noise_rfloat_cast_np[None, :].astype(np.float64)
+                    * ctf_squared_rfloat
+                ).astype(np.float32)
+                inverse_noise_rfloat_cast_arg = jnp.asarray(
+                    inverse_noise_rfloat_cast_np,
+                    dtype=jnp.float32,
+                )
+                corr_img_rfloat_square_arg = jnp.asarray(
+                    pad_axis(
+                        corr_img_rfloat_square_unpadded,
+                        0,
+                        batch_size,
+                        value=0,
+                    ),
+                    dtype=jnp.float32,
+                )
+            else:
+                ctf_rfloat_half_arg = jnp.zeros(
+                    (batch_size, n_half),
+                    dtype=jnp.float64,
+                )
+                inverse_noise_rfloat_cast_arg = jnp.zeros(
+                    (n_half,),
+                    dtype=jnp.float32,
+                )
+                corr_img_rfloat_square_arg = jnp.zeros(
+                    (batch_size, n_half),
+                    dtype=jnp.float32,
+                )
             apply_integer_pre_shift = integer_pre_shifts is not None
             if apply_integer_pre_shift:
                 integer_pre_shifts_arg = jnp.asarray(
@@ -2973,6 +6325,19 @@ def run_local_em_exact(
                 if normalization_log_evidence_np is not None
                 else jnp.zeros(batch_size, dtype=(jnp.float64 if use_float64_normalization else jnp.float32))
             )
+            normalization_max_posterior_arg = (
+                jnp.asarray(
+                    pad_axis(
+                        normalization_max_posterior_np[bucket_image_indices],
+                        0,
+                        batch_size,
+                        value=0,
+                    ),
+                    dtype=(jnp.float64 if use_float64_normalization else jnp.float32),
+                )
+                if normalization_max_posterior_np is not None
+                else jnp.zeros(batch_size, dtype=jnp.float32)
+            )
             local_rotation_log_prior_arg = jnp.asarray(bucket.local_rotation_log_prior)
             if class_log_prior != 0.0:
                 local_rotation_log_prior_arg = local_rotation_log_prior_arg + jnp.asarray(
@@ -3022,12 +6387,47 @@ def run_local_em_exact(
                 has_reconstruction_probability_threshold = True
 
             projection_max_r_big_jit = window_spec.dense_big_jit_max_r()
-            return_big_jit_mstep_tensors = sparse_big_jit_backprojection and (
-                not disable_adjoint_y or not disable_adjoint_ctf
+            return_big_jit_mstep_tensors = _return_local_big_jit_mstep_tensors(
+                sparse_big_jit_backprojection=sparse_big_jit_backprojection,
+                source_faithful_bpref=source_faithful_bpref,
+                grouped_reconstruction=reconstruction_group_ids_np is not None,
+                reconstruct_significant_only=reconstruct_significant_only,
+                disable_adjoint_y=disable_adjoint_y,
+                disable_adjoint_ctf=disable_adjoint_ctf,
+            )
+            if defer_packed_vdam_enabled:
+                if not deferred_big_jit_backprojection:
+                    raise ValueError(
+                        "deferred packed VDAM did not reach the deferred big-JIT path"
+                    )
+                return_big_jit_mstep_tensors = False
+            return_source_vdam_operands = bool(
+                return_big_jit_mstep_tensors
+                and source_faithful_bpref
+                and not disable_adjoint_y
+                and not disable_adjoint_ctf
             )
             return_big_jit_deferred_mstep_inputs = (
                 deferred_big_jit_backprojection and not return_big_jit_mstep_tensors
             )
+            return_deferred_source_vdam_operands = bool(
+                return_big_jit_deferred_mstep_inputs
+                and defer_packed_vdam_enabled
+            )
+            if host_plan_pack_enabled and not (
+                return_big_jit_deferred_mstep_inputs
+                and return_deferred_source_vdam_operands
+                and packed_final_noise_enabled
+            ):
+                raise ValueError("host-plan packing did not reach the deferred source-noise lane")
+            if stable_window_active and not (
+                return_source_vdam_operands
+                or return_deferred_source_vdam_operands
+            ):
+                raise ValueError(
+                    "stable Fourier-window BPref requires the sparse source-operand "
+                    "route for every bucket"
+                )
             big_jit_disable_adjoint_y = (
                 disable_adjoint_y or return_big_jit_mstep_tensors or return_big_jit_deferred_mstep_inputs
             )
@@ -3036,16 +6436,77 @@ def run_local_em_exact(
             )
             fused_debug_bucket_matches = debug_fused_posterior_bucket_matches
             score_debug_bucket_matches = bool(debug_score_dump_big_jit and debug_score_dump_bucket_matches)
-            return_big_jit_debug_arrays = bool(fused_debug_bucket_matches or score_debug_bucket_matches)
-            return_big_jit_debug_scores = bool(score_debug_bucket_matches)
+            return_big_jit_debug_arrays = bool(
+                fused_debug_bucket_matches
+                or score_debug_bucket_matches
+                or bpref_contribution_capture_active
+            )
+            return_big_jit_debug_scores = bool(
+                score_debug_bucket_matches
+                or bpref_contribution_capture_active
+                or (
+                    fused_debug_bucket_matches
+                    and debug_fused_posterior_dump_scores
+                )
+            )
             return_big_jit_debug_operands = bool(debug_score_dump_operands and score_debug_bucket_matches)
+            if flat_local_rows_enabled and score_only and return_big_jit_debug_operands:
+                raise ValueError("flat local rows do not yet support dense projection operand dumps")
             if return_big_jit_debug_arrays:
                 big_jit_debug_bucket_count += 1
-            big_jit_result = run_local_bucket_big_jit(
+            flat_local_row_argument = (
+                _build_flat_local_row_argument(
+                    unpadded_bucket,
+                    flat_local_row_capacities,
+                    dense_batch_size=batch_size,
+                    rotation_block_size=rotation_block_size,
+                    exact_local_bucket_radix=resolved_exact_local_bucket_radix,
+                )
+                if flat_local_rows_enabled
+                else np.zeros((1, 3), dtype=np.int32)
+            )
+            if fused_pair_fine_score_enabled:
+                fine_job_capacity_key = (
+                    int(batch_size),
+                    int(bucket.bucket_rotation_count),
+                )
+                fused_pair_arguments = _build_local_fused_pair_fine_arguments(
+                    bucket,
+                    flat_local_row_argument,
+                    valid_image_mask,
+                    fine_job_bucket_size=fine_job_capacities[
+                        fine_job_capacity_key
+                    ],
+                )
+                fused_fine_job_plan_arg = jnp.asarray(
+                    fused_pair_arguments["job_plan"],
+                    dtype=jnp.int32,
+                )
+                pair_capacity = int(fused_pair_arguments["job_bucket_size"])
+                valid_pair_count = int(fused_pair_arguments["valid_pair_count"])
+                dense_pair_capacity = int(
+                    fused_pair_arguments["dense_candidate_capacity"]
+                )
+                chunk_fused_pair_capacities.append(pair_capacity)
+                chunk_fused_pair_counts.append(valid_pair_count)
+                chunk_fused_pair_dense_capacities.append(dense_pair_capacity)
+                total_fused_pair_capacity += pair_capacity
+                total_fused_pair_candidates += valid_pair_count
+                total_fused_pair_dense_capacity += dense_pair_capacity
+            else:
+                fused_fine_job_plan_arg = jnp.full(
+                    (1, 4),
+                    -1,
+                    dtype=jnp.int32,
+                )
+            big_jit_arguments = (
                 jnp.asarray(batch_data),
                 jnp.asarray(ctf_params),
+                ctf_rfloat_half_arg,
+                inverse_noise_rfloat_cast_arg,
+                corr_img_rfloat_square_arg,
                 mean_for_proj_big_jit,
-                relion_projector_half_big_jit,
+                local_projection_half_arg,
                 Ft_y,
                 Ft_ctf,
                 noise_wsum_arg,
@@ -3069,7 +6530,11 @@ def run_local_em_exact(
                 half_weights,
                 norm_half_weights,
                 big_jit_window_indices_arg,
+                jnp.asarray(relion_fine_full_to_compact, dtype=jnp.int32),
                 big_jit_recon_window_indices_arg,
+                jnp.asarray(big_jit_relion_wavg_rectangle_indices_arg, dtype=jnp.int32),
+                jnp.asarray(big_jit_relion_wavg_exact_positions_arg, dtype=jnp.int32),
+                jnp.asarray(big_jit_relion_wavg_rectangle_shell_indices_arg, dtype=jnp.int32),
                 big_jit_mstep_recon_window_indices_arg,
                 shell_indices_half_arg,
                 shell_indices_noise_arg,
@@ -3083,6 +6548,8 @@ def run_local_em_exact(
                 jnp.asarray(bucket.local_rotation_ids, dtype=jnp.int32),
                 jnp.asarray(bucket.local_rotations),
                 jnp.asarray(_local_mstep_rotations(bucket)),
+                jnp.asarray(flat_local_row_argument, dtype=jnp.int32),
+                fused_fine_job_plan_arg,
                 local_rotation_log_prior_arg,
                 jnp.asarray(bucket.translation_log_prior),
                 jnp.asarray(bucket.local_rotation_mask),
@@ -3091,8 +6558,13 @@ def run_local_em_exact(
                 group_ids_arg,
                 normalization_log_z_arg,
                 normalization_log_evidence_arg,
+                normalization_max_posterior_arg,
                 reconstruction_probability_threshold_arg,
+                jnp.asarray(logical_current_size, dtype=jnp.int32),
                 big_jit_config,
+                local_projection_runtime_radius,
+            )
+            big_jit_static_options = dict(
                 mask_mode=big_jit_mask_mode,
                 score_with_masked_images=score_with_masked_images,
                 apply_integer_pre_shift=apply_integer_pre_shift,
@@ -3102,6 +6574,7 @@ def run_local_em_exact(
                 use_float64_normalization=use_float64_normalization,
                 use_window=use_window,
                 reconstruct_significant_only=reconstruct_significant_only,
+                use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
                 adaptive_fraction=adaptive_fraction,
                 max_significants=max_significants,
                 image_shape=image_shape,
@@ -3116,31 +6589,130 @@ def run_local_em_exact(
                 relion_projector_output_size=int(big_jit_relion_projector_output_size),
                 projection_relion_texture_interp=bool(projection_relion_texture_interp),
                 projection_force_jax=bool(projection_force_jax),
+                projection_mask_current_image_disk=bool(projection_mask_current_image_disk),
+                relion_exact_bpref_operands=relion_exact_bpref_operands,
+                relion_exact_fine_diff2=relion_exact_fine_diff2,
+                use_flat_local_rows=flat_local_rows_enabled,
+                use_packed_local_projection=packed_local_projection_enabled,
+                use_fused_pair_fine_score=fused_pair_fine_score_enabled,
+                relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
+                stable_fourier_window_shapes=stable_window_active,
+                relion_cuda_preprocess_radius=relion_cuda_preprocess_radius,
+                relion_cuda_preprocess_cosine_width=relion_cuda_preprocess_cosine_width,
                 mstep_subtract_ctf_projection=bool(mstep_subtract_ctf_projection),
                 mstep_relion_x_half=bool(mstep_relion_x_half),
+                relion_sequential_mstep_reduction=source_faithful_bpref,
                 disable_adjoint_y=big_jit_disable_adjoint_y,
                 disable_adjoint_ctf=big_jit_disable_adjoint_ctf,
                 accumulate_noise=accumulate_noise and not return_big_jit_deferred_mstep_inputs,
                 accumulate_scale_correction=group_ids_np is not None,
                 return_noise_split=return_noise_split,
                 return_mstep_tensors=return_big_jit_mstep_tensors,
+                return_source_vdam_operands=return_source_vdam_operands,
                 return_deferred_mstep_inputs=return_big_jit_deferred_mstep_inputs,
+                return_deferred_source_vdam_operands=(
+                    return_deferred_source_vdam_operands
+                ),
+                packed_deferred_source_vdam_noise=bool(
+                    return_deferred_source_vdam_operands
+                    and packed_final_noise_enabled
+                ),
                 return_deferred_noise_inputs=bool(return_big_jit_deferred_mstep_inputs and accumulate_noise),
                 n_shells=n_shells_arg,
-                norm_current_size=current_size,
+                norm_current_size=physical_current_size,
                 include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
                 source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                 has_normalization_log_z=normalization_log_z_np is not None,
                 has_normalization_log_evidence=normalization_log_evidence_np is not None,
+                has_normalization_max_posterior=normalization_max_posterior_np is not None,
                 has_reconstruction_probability_threshold=has_reconstruction_probability_threshold,
                 score_only=score_only,
                 use_relion_projector=bool(use_relion_projector),
-                relion_projector_r_max=relion_projector_r_max_big_jit,
+                relion_projector_r_max=local_projection_static_radius,
+                projector_capacity=projector_capacity_enabled,
                 projection_padding_factor=int(projection_padding_factor),
                 return_debug_arrays=return_big_jit_debug_arrays,
                 return_debug_scores=return_big_jit_debug_scores,
                 return_debug_operands=return_big_jit_debug_operands,
+                unweighted_high_shell_image_power=unweighted_high_shell_image_power,
             )
+            if fixed_capacity_whole_boundary_enabled:
+                fixed_capacity_whole_preparation_s += time.time() - big_jit_t0
+                if fixed_capacity_whole_initial_carry is None:
+                    fixed_capacity_whole_initial_carry = tuple(
+                        big_jit_arguments[7:17]
+                    )
+                    fixed_capacity_whole_static_options = big_jit_static_options
+                elif big_jit_static_options != fixed_capacity_whole_static_options:
+                    raise ValueError(
+                        "fixed-capacity whole-local calls require one static option topology"
+                    )
+                fixed_capacity_whole_call_program.append(
+                    _prepare_fixed_capacity_local_call(*big_jit_arguments)
+                )
+                fixed_capacity_whole_call_contexts.append(
+                    _FixedCapacityWholeScoreCallContext(
+                        unpadded_bucket=unpadded_bucket,
+                        padded_bucket=bucket,
+                        unpadded_batch_size=unpadded_batch_size,
+                    )
+                )
+                if bucket_index + 1 < len(bucket_specs):
+                    continue
+                fixed_capacity_whole_execution_t0 = time.time()
+                fixed_capacity_segments = _partition_uniform_fixed_capacity_calls(
+                    fixed_capacity_whole_call_program
+                )
+                logger.info(
+                    "Exact local fixed-capacity score executor: calls=%d "
+                    "uniform_scan_segments=%d",
+                    len(fixed_capacity_whole_call_program),
+                    len(fixed_capacity_segments),
+                )
+                final_carry, whole_call_outputs = (
+                    run_fixed_capacity_segmented_local_scan(
+                        fixed_capacity_whole_call_program,
+                        *fixed_capacity_whole_initial_carry,
+                        **fixed_capacity_whole_static_options,
+                    )
+                )
+                Ft_y, Ft_ctf = final_carry[:2]
+                if return_profile:
+                    _block_until_ready(Ft_y, Ft_ctf, whole_call_outputs)
+                timing.big_jit_bucket_s += (
+                    fixed_capacity_whole_preparation_s
+                    + time.time()
+                    - fixed_capacity_whole_execution_t0
+                )
+                big_jit_bucket_count += len(fixed_capacity_whole_call_program)
+                postprocess_t0 = time.time()
+                added_significant, added_reconstruction_rows = (
+                    _postprocess_fixed_capacity_whole_score_calls(
+                        fixed_capacity_whole_call_contexts,
+                        final_carry,
+                        whole_call_outputs,
+                        n_trans=n_trans,
+                        translation_grid=local_layout.translation_grid,
+                        stats_use_reconstruction_probs=stats_use_reconstruction_probs,
+                        collect_profile_stats=collect_profile_stats,
+                        buffers=postprocess_buffers,
+                    )
+                )
+                total_significant_samples += added_significant
+                total_reconstruction_rows += added_reconstruction_rows
+                timing.postprocess_s += time.time() - postprocess_t0
+                for context in fixed_capacity_whole_call_contexts:
+                    _mark_exact_local_bucket_done(context.padded_bucket)
+                continue
+            if bpref_transaction_queue is not None:
+                big_jit_result = bpref_transaction_queue.run_deferred_scorer(
+                    _invoke_local_bucket_big_jit, big_jit_arguments, big_jit_static_options
+                )
+            else:
+                big_jit_result = _invoke_local_bucket_big_jit(
+                    *big_jit_arguments,
+                    **big_jit_static_options,
+                )
             debug_scores = None
             debug_probs = None
             debug_shifted_score_split = None
@@ -3149,6 +6721,7 @@ def run_local_em_exact(
             debug_ctf2_over_nv_recon = None
             debug_proj_weighted = None
             debug_proj_for_noise = None
+            debug_wavg_cutoff_triplet = None
             if return_big_jit_debug_arrays:
                 if return_big_jit_debug_operands:
                     (
@@ -3161,11 +6734,13 @@ def run_local_em_exact(
                         debug_ctf2_over_nv_recon,
                         debug_proj_weighted,
                         debug_proj_for_noise,
+                        debug_wavg_cutoff_triplet,
                     ) = big_jit_result
                     if score_only:
                         debug_shifted_recon_split = None
                         debug_ctf2_over_nv_recon = None
                         debug_proj_for_noise = None
+                        debug_wavg_cutoff_triplet = None
                 else:
                     *big_jit_result, debug_scores, debug_probs = big_jit_result
             if return_big_jit_deferred_mstep_inputs:
@@ -3197,9 +6772,66 @@ def run_local_em_exact(
                     ctf2_over_nv_recon,
                     shifted_noise_split,
                     processed_score_half,
+                    deferred_flat_proj_for_noise,
+                    deferred_source_vdam_images,
+                    deferred_source_vdam_ctf,
+                    deferred_source_vdam_minvsigma2,
+                    deferred_source_vdam_ctf_probs,
                 ) = big_jit_result
                 summed = None
                 ctf_probs = None
+            elif return_big_jit_mstep_tensors and return_source_vdam_operands:
+                (
+                    Ft_y,
+                    Ft_ctf,
+                    noise_wsum,
+                    noise_img_power,
+                    noise_a2,
+                    noise_xa,
+                    noise_scale_xa,
+                    noise_scale_aa,
+                    bucket_norm_correction,
+                    noise_sigma2_offset,
+                    noise_sumw,
+                    batch_norm,
+                    log_Z,
+                    best_log_score,
+                    best_argmax,
+                    max_posterior,
+                    probs_sum_t,
+                    reconstruction_probs_sum_t,
+                    n_significant_samples,
+                    reconstruction_sample_mask,
+                    reconstruction_rotation_mask,
+                    reconstruction_row_count_jax,
+                    source_vdam_images,
+                    source_vdam_ctf,
+                    source_vdam_minvsigma2,
+                    source_vdam_posterior,
+                    source_vdam_reference,
+                    ctf_probs,
+                ) = big_jit_result
+                summed = None
+                if bpref_contribution_capture_active:
+                    # The source-faithful production route deliberately avoids
+                    # materializing the large (particle, rotation, pixel)
+                    # numerator tensor.  Contribution capture is diagnostic and
+                    # needs those pre-scatter rows, so reproduce them only for
+                    # the selected capture bucket in RELION's native statement
+                    # order.  Recompute the denominator as well so both captured
+                    # operands come from the same reducer.
+                    from recovar import cuda_backproject
+
+                    summed, ctf_probs = cuda_backproject.relion_vdam_mstep_sums_f32(
+                        source_vdam_images,
+                        source_vdam_ctf,
+                        source_vdam_minvsigma2,
+                        source_vdam_posterior,
+                        relion_score_translation_angles,
+                        mstep_recon_window_indices,
+                        source_vdam_reference,
+                        image_shape,
+                    )
             elif return_big_jit_mstep_tensors:
                 (
                     Ft_y,
@@ -3285,10 +6917,19 @@ def run_local_em_exact(
                             ctf2_over_nv_recon,
                             shifted_noise_split,
                             processed_score_half,
+                            deferred_flat_proj_for_noise,
+                            deferred_source_vdam_images,
+                            deferred_source_vdam_ctf,
+                            deferred_source_vdam_minvsigma2,
+                            deferred_source_vdam_ctf_probs,
                         )
                     ),
                 )
-            if accumulate_noise:
+            # Deferred BigJIT returns float32 zero norm rows without computing
+            # noise. The later deferred noise path owns the real update.
+            if accumulate_noise and not (
+                skip_deferred_zero_norm and return_big_jit_deferred_mstep_inputs
+            ):
                 noise_norm_correction = noise_norm_correction.at[jnp.asarray(bucket_image_indices, dtype=jnp.int32)].add(
                     bucket_norm_correction[:unpadded_batch_size].astype(noise_norm_correction.dtype),
                 )
@@ -3311,12 +6952,205 @@ def run_local_em_exact(
                 reconstruction_sample_mask_unpadded = reconstruction_sample_mask[:unpadded_batch_size]
                 reconstruction_rotation_mask_unpadded = reconstruction_rotation_mask[:unpadded_batch_size]
                 n_significant_samples_unpadded = n_significant_samples[:unpadded_batch_size]
+                if bpref_contribution_capture_active:
+                    if summed is None or ctf_probs is None or debug_scores_unpadded is None:
+                        raise RuntimeError(
+                            "big-JIT BPref contribution capture requires returned M-step tensors and scores"
+                        )
+                    inline_projector_data_volumes = None
+                    inline_projector_weight_volumes = None
+                    if (
+                        return_source_vdam_operands
+                        and os.environ.get(
+                            "RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES",
+                            "",
+                        ).strip()
+                    ):
+                        target_particle_rows = (
+                            bpref_diagnostics._bpref_contribution_target_rows(
+                                experiment_dataset,
+                                unpadded_bucket.image_indices,
+                            )
+                        )
+                        inline_data_parts = []
+                        inline_weight_parts = []
+                        inline_row_mask = (
+                            reconstruction_rotation_mask_unpadded
+                            & jnp.asarray(unpadded_bucket.local_rotation_mask)
+                        )
+                        for target_particle_row in target_particle_rows.tolist():
+                            if bucket_reconstruction_group_ids is None:
+                                zero_data = jnp.zeros_like(Ft_y)
+                                zero_weight = jnp.zeros_like(Ft_ctf)
+                            else:
+                                # The diagnostic replays one particle without a
+                                # group-ID operand, so give the ungrouped kernel
+                                # one group's native x-half accumulator shape.
+                                zero_data = jnp.zeros_like(Ft_y[0])
+                                zero_weight = jnp.zeros_like(Ft_ctf[0])
+                            target_slice = slice(
+                                int(target_particle_row),
+                                int(target_particle_row) + 1,
+                            )
+                            inline_data, inline_weight = (
+                                _accumulate_relion_vdam_physical_particle_grid(
+                                    source_vdam_images[target_slice],
+                                    source_vdam_ctf[target_slice],
+                                    source_vdam_minvsigma2[target_slice],
+                                    source_vdam_posterior[target_slice],
+                                    relion_score_translation_angles,
+                                    source_vdam_reference[target_slice],
+                                    _local_mstep_rotations(unpadded_bucket)[target_slice],
+                                    inline_row_mask[target_slice],
+                                    zero_data,
+                                    zero_weight,
+                                    projector_full=source_vdam_projector_full,
+                                    scoring_rotations=unpadded_bucket.local_rotations[
+                                        target_slice
+                                    ],
+                                    projector_r_max=source_vdam_projector_static_radius,
+                                    runtime_projector_radius=source_vdam_projector_runtime_radius,
+                                    projection_padding_factor=projection_padding_factor,
+                                    pixel_indices=mstep_recon_window_indices,
+                                    image_shape=image_shape,
+                                    volume_shape=recon_volume_shape,
+                                    max_r=mstep_adjoint_max_r,
+                                    stable_dense_positions=(
+                                        stable_bpref_dense_positions
+                                        if stable_window_active
+                                        else None
+                                    ),
+                                    logical_current_size=(
+                                        mstep_current_size
+                                        if stable_window_active
+                                        else None
+                                    ),
+                                )
+                            )
+                            inline_data_parts.append(inline_data)
+                            inline_weight_parts.append(inline_weight)
+                        if inline_data_parts:
+                            inline_projector_data_volumes = jnp.stack(
+                                inline_data_parts,
+                                axis=0,
+                            )
+                            inline_projector_weight_volumes = jnp.stack(
+                                inline_weight_parts,
+                                axis=0,
+                            )
+                    candidate_mask = jnp.broadcast_to(
+                        jnp.asarray(unpadded_bucket.local_rotation_mask)[:, :, None],
+                        debug_probs_unpadded.shape,
+                    )
+                    if unpadded_bucket.local_sample_mask is not None:
+                        candidate_mask = candidate_mask & jnp.asarray(
+                            unpadded_bucket.local_sample_mask
+                        )
+                    rotation_prior = local_rotation_log_prior_arg[:unpadded_batch_size]
+                    translation_prior = jnp.asarray(unpadded_bucket.translation_log_prior)
+                    preprior_scores = (
+                        debug_scores_unpadded
+                        - rotation_prior[:, :, None]
+                        - translation_prior[:, None, :]
+                    )
+                    preprior_scores = jnp.where(
+                        candidate_mask & jnp.isfinite(preprior_scores),
+                        preprior_scores,
+                        -jnp.inf,
+                    )
+                    reconstruction_probs_for_dump = (
+                        _exact_local_bpref_reconstruction_probs_for_capture(
+                            debug_scores_unpadded,
+                            debug_probs_unpadded,
+                            reconstruction_sample_mask_unpadded,
+                            use_relion_f32_fine_posterior=(
+                                use_relion_f32_fine_posterior
+                            ),
+                            adaptive_fraction=adaptive_fraction,
+                        )
+                    )
+                    if reconstruction_probability_threshold_np is None:
+                        reconstruction_threshold_for_dump = jnp.zeros(
+                            (unpadded_batch_size,), dtype=jnp.float64
+                        )
+                    else:
+                        reconstruction_threshold_for_dump = jnp.asarray(
+                            reconstruction_probability_threshold_np[
+                                np.asarray(unpadded_bucket.image_indices)
+                            ],
+                            dtype=jnp.float64,
+                        )
+                    _maybe_dump_exact_local_bpref_contribution_rows(
+                        experiment_dataset=experiment_dataset,
+                        image_indices=unpadded_bucket.image_indices,
+                        current_size=current_size,
+                        summed=summed[:unpadded_batch_size],
+                        ctf_probs=ctf_probs[:unpadded_batch_size],
+                        rotations=_local_mstep_rotations(unpadded_bucket),
+                        actual_counts=unpadded_bucket.actual_rotation_counts,
+                        rotation_indices=unpadded_bucket.local_rotation_ids,
+                        fine_translations=local_layout.translation_grid,
+                        scores=debug_scores_unpadded,
+                        preprior_scores=preprior_scores,
+                        probs=debug_probs_unpadded,
+                        rotation_log_prior=rotation_prior,
+                        translation_log_prior=translation_prior,
+                        log_z=log_Z_unpadded,
+                        best_log_score=best_log_score_unpadded,
+                        reconstruction_probs=reconstruction_probs_for_dump,
+                        reconstruction_mask=reconstruction_sample_mask_unpadded,
+                        reconstruction_sum_weight=jnp.sum(
+                            reconstruction_probs_for_dump, axis=(1, 2)
+                        ),
+                        reconstruction_threshold=reconstruction_threshold_for_dump,
+                        candidate_mask=candidate_mask,
+                        high_precision_operand_bundle=False,
+                        raw_batch_data=None,
+                        ctf_params=None,
+                        noise_variance_half=None,
+                        integer_pre_shifts=None,
+                        batch_image_corrections=None,
+                        batch_scale_corrections=None,
+                        relion_preprocess_normalization_factors=None,
+                        relion_cuda_preprocess=False,
+                        score_with_masked_images=score_with_masked_images,
+                        image_mask=None,
+                        image_mask_mode="not-captured",
+                        voxel_size=experiment_dataset.voxel_size,
+                        ctf_mode="not-captured",
+                        ctf_dose_per_tilt=0.0,
+                        ctf_angle_per_tilt=0.0,
+                        disc_type=disc_type,
+                        projection_padding_factor=projection_padding_factor,
+                        reconstruction_padding_factor=reconstruction_padding_factor,
+                        use_relion_x_half_mstep=mstep_relion_x_half,
+                        winner_take_all=False,
+                        max_r=mstep_adjoint_max_r,
+                        window_indices=mstep_recon_window_indices,
+                        image_shape=image_shape,
+                        volume_shape=recon_volume_shape,
+                        shadow_only_mode=False,
+                        shadow_score_bitwise_equal=True,
+                        shadow_reduction_agreement=None,
+                        inline_projector_data_volumes=inline_projector_data_volumes,
+                        inline_projector_weight_volumes=inline_projector_weight_volumes,
+                        reconstruction_group_ids=(
+                            None
+                            if bucket_reconstruction_group_ids is None
+                            else bucket_reconstruction_group_ids[:unpadded_batch_size]
+                        ),
+                    )
                 if fused_debug_bucket_matches and debug_fused_posterior_dump_targets:
                     debug_fused_posterior_dump_targets = maybe_write_debug_fused_posterior_dump(
                         experiment_dataset=experiment_dataset,
                         local_layout=local_layout,
                         bucket=unpadded_bucket,
                         image_pre_shifts=image_pre_shifts,
+                        scores=(
+                            debug_scores_unpadded
+                            if debug_fused_posterior_dump_scores
+                            else None
+                        ),
                         probs=debug_probs_unpadded,
                         log_Z=log_Z_unpadded,
                         best_log_score=best_log_score_unpadded,
@@ -3333,6 +7167,17 @@ def run_local_em_exact(
                         requested_iterations=debug_fused_posterior_dump_iterations,
                     )
                 if score_debug_bucket_matches and debug_score_dump_targets:
+                    reconstruction_probs_for_score_dump = (
+                        _exact_local_bpref_reconstruction_probs_for_capture(
+                            debug_scores_unpadded,
+                            debug_probs_unpadded,
+                            reconstruction_sample_mask_unpadded,
+                            use_relion_f32_fine_posterior=(
+                                use_relion_f32_fine_posterior
+                            ),
+                            adaptive_fraction=adaptive_fraction,
+                        )
+                    )
                     debug_score_dump_targets = maybe_write_debug_score_dump(
                         experiment_dataset=experiment_dataset,
                         local_layout=local_layout,
@@ -3340,6 +7185,7 @@ def run_local_em_exact(
                         image_pre_shifts=image_pre_shifts,
                         scores=debug_scores_unpadded,
                         probs=debug_probs_unpadded,
+                        reconstruction_probs=reconstruction_probs_for_score_dump,
                         log_Z=log_Z_unpadded,
                         best_log_score=best_log_score_unpadded,
                         max_posterior=max_posterior_unpadded,
@@ -3356,6 +7202,7 @@ def run_local_em_exact(
                         proj_weighted=debug_proj_weighted,
                         proj_for_noise=debug_proj_for_noise,
                         proj_abs2_weighted=None,
+                        wavg_cutoff_triplet=debug_wavg_cutoff_triplet,
                         dump_dir=debug_score_dump_dir,
                         pending_targets=debug_score_dump_targets,
                         requested_current_sizes=debug_score_dump_current_sizes,
@@ -3365,24 +7212,25 @@ def run_local_em_exact(
             pack_t0 = time.time()
             reconstruction_rotation_mask_np = np.asarray(reconstruction_rotation_mask, dtype=bool)[:unpadded_batch_size]
             local_mask_np = np.asarray(bucket.local_rotation_mask, dtype=bool)[:unpadded_batch_size]
-            # Latent bug fix 2026-05-08: the pack branch below uses ``summed``
-            # and ``ctf_probs`` which the upstream big_jit only returns when
-            # ``return_big_jit_mstep_tensors`` is True. That gate is set to
-            # ``sparse_big_jit_backprojection AND (not disable_adjoint_y or
-            # not disable_adjoint_ctf)`` (this file, line 1532). The probe
-            # phase of run_local_k_class_em (k_class.py:874) sets both adjoint
-            # disables, so summed/ctf_probs are None and the previous
-            # ``if sparse_big_jit_backprojection:`` gate would crash with
-            # NoneType subscription when the memory heuristic enabled
-            # sparse_big_jit. Mirror the upstream gate so we only enter the
-            # pack branch when summed/ctf_probs are actually returned (and
-            # the downstream ``if sparse_big_jit_backprojection and not
-            # disable_adjoint_y/ctf`` consumers at lines 1716/1736 can use
-            # them).
+            # Pack only outputs explicitly returned by the big JIT.  Besides
+            # the sparse M-step path, grouped oversampling-zero VDAM returns
+            # physical operands here so the outer group-aware scatter can
+            # route each particle to its pseudo-halfset accumulator.
             packed_reconstruction_probs = None
             packed_reconstruction_probs_sum_t = None
+            packed_source_vdam_images = None
+            packed_source_vdam_ctf = None
+            packed_source_vdam_minvsigma2 = None
+            packed_source_vdam_posterior = None
+            packed_source_vdam_reference = None
+            packed_source_vdam_ctf_probs = None
+            packed_source_vdam_noise_projection = None
             if return_big_jit_deferred_mstep_inputs:
-                probs_sum_t_np = np.asarray(probs_sum_t[:unpadded_batch_size], dtype=np.float64)
+                probs_sum_t_np = (
+                    np.asarray(probs_sum_t, dtype=np.float64)[:unpadded_batch_size]
+                    if host_publication_enabled
+                    else np.asarray(probs_sum_t[:unpadded_batch_size], dtype=np.float64)
+                )
                 (
                     reconstruction_take_indices,
                     reconstruction_pack_mask_np,
@@ -3393,7 +7241,12 @@ def run_local_em_exact(
                     local_mask_np,
                     probs_sum_t_np,
                     rotation_block_size,
+                    exact_local_bucket_radix=resolved_exact_local_bucket_radix,
                 )
+                if collect_profile_stats and packed_final_noise_enabled:
+                    total_packed_final_noise_rows += int(
+                        reconstruction_pack_mask_np.size
+                    )
                 reconstruction_take_indices_jnp = jnp.asarray(reconstruction_take_indices, dtype=jnp.int32)
                 reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
                 packed_rotations_np = np.take_along_axis(
@@ -3406,24 +7259,207 @@ def run_local_em_exact(
                     reconstruction_take_indices[:, :, None, None],
                     axis=1,
                 )
-                packed_reconstruction_probs = jnp.take_along_axis(
-                    reconstruction_probs[:unpadded_batch_size],
+                if not host_plan_pack_enabled:
+                    packed_reconstruction_probs = jnp.take_along_axis(
+                        reconstruction_probs[:unpadded_batch_size],
+                        reconstruction_take_indices_jnp[:, :, None],
+                        axis=1,
+                    )
+                    packed_reconstruction_probs = jnp.where(
+                        reconstruction_pack_mask_jnp[:, :, None],
+                        packed_reconstruction_probs,
+                        0.0,
+                    )
+                    packed_reconstruction_probs_sum_t = jnp.take_along_axis(
+                        reconstruction_probs_sum_t[:unpadded_batch_size],
+                        reconstruction_take_indices_jnp,
+                        axis=1,
+                    )
+                    packed_reconstruction_probs_sum_t = jnp.where(
+                        reconstruction_pack_mask_jnp,
+                        packed_reconstruction_probs_sum_t,
+                        0.0,
+                    )
+                if return_deferred_source_vdam_operands:
+                    if not host_plan_pack_enabled:
+                        packed_source_vdam_images = deferred_source_vdam_images[
+                            :unpadded_batch_size
+                        ]
+                        packed_source_vdam_ctf = deferred_source_vdam_ctf[
+                            :unpadded_batch_size
+                        ]
+                        packed_source_vdam_minvsigma2 = (
+                            deferred_source_vdam_minvsigma2[:unpadded_batch_size]
+                        )
+                        packed_source_vdam_posterior = packed_reconstruction_probs
+                    if packed_final_noise_enabled:
+                        flat_proj_for_noise = jnp.asarray(
+                            deferred_flat_proj_for_noise,
+                            dtype=jnp.complex64,
+                        )
+                        expected_flat_projection_shape = (
+                            int(flat_local_row_argument.shape[0]),
+                            window_spec.n_recon
+                            if window_spec.use_window
+                            else int(n_half),
+                        )
+                        if flat_proj_for_noise.shape != expected_flat_projection_shape:
+                            raise RuntimeError(
+                                "deferred VDAM scoring projection did not retain the "
+                                "packed reconstruction layout: "
+                                f"{flat_proj_for_noise.shape} vs "
+                                f"{expected_flat_projection_shape}",
+                            )
+                        dense_to_flat_lookup = build_dense_to_flat_local_row_lookup(
+                            flat_local_row_argument,
+                            batch_size=int(batch_size),
+                            dense_rotation_count=int(bucket.bucket_rotation_count),
+                        )
+                        packed_flat_take_indices = map_dense_local_rows_to_flat_rows(
+                            dense_to_flat_lookup,
+                            reconstruction_take_indices,
+                            reconstruction_pack_mask_np,
+                        )
+                        if host_plan_pack_enabled:
+                            from recovar.em.dense_single_volume.helpers.deferred_vdam_host_pack import (
+                                pack_deferred_vdam_host_plan,
+                            )
+                            if host_plan_cuda_enabled:
+                                from recovar.em.dense_single_volume.helpers.deferred_vdam_host_pack import (
+                                    pack_deferred_vdam_host_plan_cuda as pack_deferred_vdam_host_plan,
+                                )
+
+                            (
+                                packed_reconstruction_probs,
+                                packed_reconstruction_probs_sum_t,
+                                packed_source_vdam_images,
+                                packed_source_vdam_ctf,
+                                packed_source_vdam_minvsigma2,
+                                packed_source_vdam_noise_projection,
+                                packed_source_vdam_ctf_probs,
+                            ) = pack_deferred_vdam_host_plan(
+                                reconstruction_probs,
+                                reconstruction_probs_sum_t,
+                                deferred_source_vdam_images,
+                                deferred_source_vdam_ctf,
+                                deferred_source_vdam_minvsigma2,
+                                flat_proj_for_noise,
+                                reconstruction_take_indices_jnp,
+                                reconstruction_pack_mask_jnp,
+                                jnp.asarray(packed_flat_take_indices, dtype=jnp.int32),
+                            )
+                            packed_source_vdam_posterior = packed_reconstruction_probs
+                        else:
+                            packed_source_vdam_noise_projection = jnp.take(
+                                flat_proj_for_noise,
+                                jnp.asarray(packed_flat_take_indices).reshape(-1),
+                                axis=0,
+                            ).reshape(
+                                (
+                                    *packed_flat_take_indices.shape,
+                                    flat_proj_for_noise.shape[-1],
+                                )
+                            )
+                            packed_source_vdam_noise_projection = jnp.where(
+                                reconstruction_pack_mask_jnp[:, :, None],
+                                packed_source_vdam_noise_projection,
+                                0.0,
+                            )
+
+                            from recovar import cuda_backproject
+
+                            packed_source_vdam_ctf_probs = (
+                                cuda_backproject.relion_vdam_mstep_denominator_f32(
+                                    packed_source_vdam_ctf,
+                                    packed_source_vdam_minvsigma2,
+                                    packed_source_vdam_posterior,
+                                )
+                            )
+                    else:
+                        packed_source_vdam_ctf_probs = jnp.take_along_axis(
+                            deferred_source_vdam_ctf_probs[:unpadded_batch_size],
+                            reconstruction_take_indices_jnp[:, :, None],
+                            axis=1,
+                        )
+                    if not host_plan_pack_enabled:
+                        packed_source_vdam_ctf_probs = jnp.where(
+                            reconstruction_pack_mask_jnp[:, :, None],
+                            packed_source_vdam_ctf_probs,
+                            0.0,
+                        )
+                packed_summed = None
+                packed_ctf_probs = None
+                packed_flat_rotations = None
+            elif return_source_vdam_operands:
+                probs_sum_t_np = np.asarray(probs_sum_t[:unpadded_batch_size], dtype=np.float64)
+                if _relion_vdam_block_start_replay_active(
+                    debug_iteration=debug_iteration
+                ):
+                    # Native launches every row in its padded significant-
+                    # orientation grid, including rows whose posterior is zero.
+                    # The production optimization below removes those no-op
+                    # blocks; retain them only for exact captured chronology
+                    # replay so native row IDs and launch timing remain aligned.
+                    (
+                        reconstruction_take_indices,
+                        reconstruction_pack_mask_np,
+                        _,
+                        reconstruction_row_count,
+                    ) = _build_reconstruction_pack_indices(
+                        local_mask_np,
+                        local_mask_np,
+                        rotation_block_size,
+                        exact_local_bucket_radix=resolved_exact_local_bucket_radix,
+                    )
+                else:
+                    (
+                        reconstruction_take_indices,
+                        reconstruction_pack_mask_np,
+                        _,
+                        reconstruction_row_count,
+                    ) = _build_nonzero_reconstruction_pack_indices(
+                        reconstruction_rotation_mask_np,
+                        local_mask_np,
+                        probs_sum_t_np,
+                        rotation_block_size,
+                        exact_local_bucket_radix=resolved_exact_local_bucket_radix,
+                    )
+                reconstruction_take_indices_jnp = jnp.asarray(
+                    reconstruction_take_indices,
+                    dtype=jnp.int32,
+                )
+                reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
+                packed_rotations_np = np.take_along_axis(
+                    np.asarray(bucket.local_rotations[:unpadded_batch_size], dtype=np.float32),
+                    reconstruction_take_indices[:, :, None, None],
+                    axis=1,
+                )
+                packed_mstep_rotations_np = np.take_along_axis(
+                    _local_mstep_rotations(bucket)[:unpadded_batch_size],
+                    reconstruction_take_indices[:, :, None, None],
+                    axis=1,
+                )
+                packed_source_vdam_images = source_vdam_images[:unpadded_batch_size]
+                packed_source_vdam_ctf = source_vdam_ctf[:unpadded_batch_size]
+                packed_source_vdam_minvsigma2 = source_vdam_minvsigma2[:unpadded_batch_size]
+                packed_source_vdam_posterior = jnp.take_along_axis(
+                    source_vdam_posterior[:unpadded_batch_size],
                     reconstruction_take_indices_jnp[:, :, None],
                     axis=1,
                 )
-                packed_reconstruction_probs = jnp.where(
+                packed_source_vdam_posterior = jnp.where(
                     reconstruction_pack_mask_jnp[:, :, None],
-                    packed_reconstruction_probs,
+                    packed_source_vdam_posterior,
                     0.0,
                 )
-                packed_reconstruction_probs_sum_t = jnp.take_along_axis(
-                    reconstruction_probs_sum_t[:unpadded_batch_size],
-                    reconstruction_take_indices_jnp,
+                packed_source_vdam_reference = jnp.take_along_axis(
+                    source_vdam_reference[:unpadded_batch_size],
+                    reconstruction_take_indices_jnp[:, :, None],
                     axis=1,
                 )
-                packed_reconstruction_probs_sum_t = jnp.where(
-                    reconstruction_pack_mask_jnp,
-                    packed_reconstruction_probs_sum_t,
+                packed_source_vdam_reference = jnp.where(
+                    reconstruction_pack_mask_jnp[:, :, None],
+                    packed_source_vdam_reference,
                     0.0,
                 )
                 packed_summed = None
@@ -3441,6 +7477,7 @@ def run_local_em_exact(
                     local_mask_np,
                     probs_sum_t_np,
                     rotation_block_size,
+                    exact_local_bucket_radix=resolved_exact_local_bucket_radix,
                 )
                 reconstruction_take_indices_jnp = jnp.asarray(reconstruction_take_indices, dtype=jnp.int32)
                 reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
@@ -3479,11 +7516,84 @@ def run_local_em_exact(
 
             flat_packed_summed = None
             flat_packed_ctf_probs = None
-            if sparse_big_jit_backprojection and (not disable_adjoint_y or not disable_adjoint_ctf):
+            if (
+                not source_faithful_bpref
+                and sparse_big_jit_backprojection
+                and (not disable_adjoint_y or not disable_adjoint_ctf)
+            ):
                 flat_packed_summed = flatten_bucket_rows(packed_summed)
                 flat_packed_ctf_probs = flatten_bucket_rows(packed_ctf_probs)
 
-            if return_big_jit_deferred_mstep_inputs and (not disable_adjoint_y or not disable_adjoint_ctf):
+            if (
+                return_big_jit_deferred_mstep_inputs
+                and source_faithful_bpref
+                and not return_deferred_source_vdam_operands
+                and (not disable_adjoint_y or not disable_adjoint_ctf)
+            ):
+                # The fused scorer intentionally did not materialize the
+                # oversized (particle, rotation, pixel) BPref tensors. Reduce
+                # and scatter consecutive particle groups instead. Splitting
+                # the particle axis retains RELION's complete rotation/pixel
+                # traversal for one particle before advancing to the next.
+                n_recon_pixels = window_spec.n_recon if window_spec.use_window else int(n_half)
+                particle_chunk_size = _source_faithful_bpref_particle_chunk_size(
+                    image_count=unpadded_batch_size,
+                    rotation_count=int(packed_rotations_np.shape[1]),
+                    n_recon_pixels=n_recon_pixels,
+                    max_gb=sparse_big_jit_mstep_cap_gb,
+                    max_particles=_source_faithful_bpref_particle_chunk_cap(),
+                )
+                if particle_chunk_size < unpadded_batch_size and not logged_deferred_mstep_chunking:
+                    logger.info(
+                        "Exact local source-faithful BPref particle chunking: "
+                        "particles=%d chunk_particles=%d packed_rows=%d n_recon_pixels=%d cap_gb=%.3f",
+                        unpadded_batch_size,
+                        particle_chunk_size,
+                        int(packed_rotations_np.shape[1]),
+                        n_recon_pixels,
+                        float(sparse_big_jit_mstep_cap_gb),
+                    )
+                    logged_deferred_mstep_chunking = True
+                shifted_recon_split_unpadded = shifted_recon_split[:unpadded_batch_size]
+                ctf2_over_nv_recon_unpadded = ctf2_over_nv_recon[:unpadded_batch_size]
+                for particle_start in range(0, unpadded_batch_size, particle_chunk_size):
+                    particle_stop = min(
+                        unpadded_batch_size,
+                        particle_start + particle_chunk_size,
+                    )
+                    mstep_t0 = time.time()
+                    chunk_summed, chunk_ctf_probs = compute_local_mstep_sums(
+                        packed_reconstruction_probs[particle_start:particle_stop],
+                        shifted_recon_split_unpadded[particle_start:particle_stop],
+                        ctf2_over_nv_recon_unpadded[particle_start:particle_stop],
+                        relion_x_half=True,
+                        sequential_translation_reduction=True,
+                    )
+                    if return_profile:
+                        _block_until_ready(chunk_summed, chunk_ctf_probs)
+                    timing.mstep_s += time.time() - mstep_t0
+
+                    adjoint_t0 = time.time()
+                    Ft_y, Ft_ctf = _accumulate_relion_physical_particle_grid(
+                        chunk_summed,
+                        chunk_ctf_probs,
+                        packed_mstep_rotations_np[particle_start:particle_stop],
+                        reconstruction_pack_mask_jnp[particle_start:particle_stop],
+                        Ft_y,
+                        Ft_ctf,
+                        pixel_indices=mstep_recon_window_indices,
+                        image_shape=image_shape,
+                        volume_shape=recon_volume_shape,
+                        max_r=mstep_adjoint_max_r,
+                    )
+                    if return_profile:
+                        _block_until_ready(Ft_y, Ft_ctf)
+                    timing.adjoint_y_s += time.time() - adjoint_t0
+            elif (
+                return_big_jit_deferred_mstep_inputs
+                and not return_deferred_source_vdam_operands
+                and (not disable_adjoint_y or not disable_adjoint_ctf)
+            ):
                 if packed_reconstruction_probs is None:
                     raise RuntimeError("deferred big-JIT local M-step requires packed posterior rows")
                 if packed_reconstruction_probs_sum_t is None:
@@ -3509,11 +7619,45 @@ def run_local_em_exact(
                 for chunk_start in range(0, packed_rotation_count, chunk_rows):
                     chunk_stop = min(packed_rotation_count, chunk_start + chunk_rows)
                     chunk_probs = packed_reconstruction_probs[:, chunk_start:chunk_stop]
+                    chunk_scoring_rotations = packed_rotations_np[:, chunk_start:chunk_stop]
                     chunk_rotations = packed_mstep_rotations_np[:, chunk_start:chunk_stop]
                     chunk_flat_rotations = flatten_bucket_rotations(jnp.asarray(chunk_rotations))
                     if not disable_adjoint_y:
                         mstep_t0 = time.time()
                         chunk_summed = compute_local_weighted_sums(chunk_probs, shifted_recon_split_unpadded)
+                        if mstep_subtract_ctf_projection:
+                            # The memory-deferred big-JIT path returns posterior rows instead
+                            # of the already reduced residual-image rows. Recreate RELION's
+                            # Fimg_store = Fimg - Frefctf operand before backprojection, just
+                            # as the ordinary deferred path does below.
+                            chunk_proj_for_residual = _project_packed_noise_rows(
+                                mean_for_proj=mean_for_proj,
+                                packed_flat_rotations=flatten_bucket_rotations(
+                                    jnp.asarray(chunk_scoring_rotations)
+                                ),
+                                packed_rotation_count=chunk_stop - chunk_start,
+                                batch_size=unpadded_batch_size,
+                                image_shape=image_shape,
+                                proj_volume_shape=proj_volume_shape,
+                                disc_type=disc_type,
+                                projection_kwargs=projection_kwargs,
+                                window_spec=window_spec,
+                                n_half=n_half,
+                                precision_policy=precision_policy,
+                                reconstruction_pack_mask_jnp=reconstruction_pack_mask_jnp[
+                                    :, chunk_start:chunk_stop
+                                ],
+                                relion_projector_half=relion_projector_half,
+                                relion_projector_r_max=relion_projector_r_max,
+                                projection_padding_factor=projection_padding_factor,
+                            )
+                            chunk_probs_sum_t = packed_reconstruction_probs_sum_t[
+                                :, chunk_start:chunk_stop
+                            ]
+                            frefctf_weighted = (
+                                chunk_proj_for_residual * ctf2_over_nv_recon_unpadded[:, None, :]
+                            )
+                            chunk_summed = chunk_summed - chunk_probs_sum_t[..., None] * frefctf_weighted
                         if return_profile:
                             _block_until_ready(chunk_summed)
                         timing.mstep_s += time.time() - mstep_t0
@@ -3567,7 +7711,323 @@ def run_local_em_exact(
                         sparse_adjoint_chunk_count += int(n_adjoint_chunks)
                         timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
 
-            if sparse_big_jit_backprojection and (not disable_adjoint_y or not disable_adjoint_ctf):
+            source_vdam_outer_scatter = bool(
+                return_source_vdam_operands
+                or return_deferred_source_vdam_operands
+            )
+            if source_vdam_outer_scatter:
+                if any(
+                    value is None
+                    for value in (
+                        packed_source_vdam_images,
+                        packed_source_vdam_ctf,
+                        packed_source_vdam_minvsigma2,
+                        packed_source_vdam_posterior,
+                    )
+                ):
+                    raise RuntimeError("source VDAM physical operands were not packed")
+                adjoint_t0 = time.time()
+                candidate_trace_ids = _relion_vdam_candidate_trace_ids_for_images(
+                    experiment_dataset,
+                    unpadded_bucket.image_indices,
+                    debug_iteration=debug_iteration,
+                )
+                block_start_order = _relion_vdam_block_start_orders_for_images(
+                    experiment_dataset,
+                    unpadded_bucket.image_indices,
+                    rotation_count=packed_mstep_rotations_np.shape[1],
+                    valid_rotation_counts=np.sum(
+                        reconstruction_pack_mask_np,
+                        axis=1,
+                        dtype=np.int64,
+                    ),
+                    debug_iteration=debug_iteration,
+                )
+                native_grid_counts = _relion_vdam_native_grid_counts_for_images(
+                    experiment_dataset,
+                    unpadded_bucket.image_indices,
+                    rotation_count=packed_mstep_rotations_np.shape[1],
+                    valid_rotation_counts=np.sum(
+                        reconstruction_pack_mask_np,
+                        axis=1,
+                        dtype=np.int64,
+                    ),
+                    debug_iteration=debug_iteration,
+                )
+                particle_issue_order = _relion_vdam_particle_issue_order_for_images(
+                    experiment_dataset,
+                    unpadded_bucket.image_indices,
+                    debug_iteration=debug_iteration,
+                )
+                particle_start_offsets_ns = (
+                    _relion_vdam_particle_start_offsets_for_images(
+                        experiment_dataset,
+                        unpadded_bucket.image_indices,
+                        debug_iteration=debug_iteration,
+                    )
+                )
+                if _relion_vdam_identity_native_grid_replay():
+                    # RELION launches physical block IDs directly.  Preserve its
+                    # sealed per-particle grid cardinality without translating
+                    # those IDs through the captured chronology permutation.
+                    block_start_order = None
+                _maybe_write_vdam_candidate_block_map(
+                    particle_ids=candidate_trace_ids,
+                    reconstruction_take_indices=reconstruction_take_indices,
+                    reconstruction_pack_mask=reconstruction_pack_mask_np,
+                    reconstruction_contributing_mask=(
+                        np.take_along_axis(
+                            reconstruction_rotation_mask_np
+                            & local_mask_np
+                            & (probs_sum_t_np > 0.0),
+                            reconstruction_take_indices,
+                            axis=1,
+                        )
+                        & reconstruction_pack_mask_np
+                    ),
+                    local_rotation_ids=bucket.local_rotation_ids[:unpadded_batch_size],
+                    reconstruction_group_ids=(
+                        None
+                        if bucket_reconstruction_group_ids is None
+                        else bucket_reconstruction_group_ids[:unpadded_batch_size]
+                    ),
+                    candidate_launch_counts=native_grid_counts,
+                    debug_iteration=debug_iteration,
+                )
+                worker_lane_ids = _relion_vdam_worker_lanes_for_images(
+                    experiment_dataset,
+                    unpadded_bucket.image_indices,
+                    debug_iteration=debug_iteration,
+                )
+                chronology_serial_rotation_replay = bool(
+                    _relion_vdam_serial_rotation_replay()
+                    or _relion_vdam_captured_block_serial_replay()
+                )
+                fused_serial_rotations = _env_flag(
+                    EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV
+                )
+                launch_serial_rotations = _env_flag(
+                    EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS_ENV
+                )
+                if fused_serial_rotations and launch_serial_rotations:
+                    raise ValueError(
+                        "persistent and launch-serialized VDAM BPref rotations "
+                        "are mutually exclusive"
+                    )
+                serial_rotation_replay = bool(
+                    chronology_serial_rotation_replay
+                    or fused_serial_rotations
+                    or launch_serial_rotations
+                )
+                float64_accumulator_replay = _relion_vdam_float64_accumulator_replay()
+                reverse_rotation_replay = _relion_vdam_reverse_rotation_replay()
+                rotation_replay_stride = _relion_vdam_rotation_replay_stride()
+                native_trace_shape_replay = _relion_vdam_native_trace_shape_replay(
+                    debug_iteration=debug_iteration
+                )
+                materialized_rotation_replay = _relion_vdam_materialized_native_grid_replay(
+                    debug_iteration=debug_iteration
+                )
+                candidate_trace_active = _relion_vdam_candidate_trace_active(
+                    debug_iteration=debug_iteration
+                )
+                particle_chunk_cap = _source_faithful_bpref_particle_chunk_cap()
+                fused_serial_particles = _env_flag(
+                    EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV
+                )
+                if (fused_serial_rotations or launch_serial_rotations) and (
+                    worker_lane_ids is not None
+                    or any(
+                        value is not None
+                        for value in (
+                            block_start_order,
+                            native_grid_counts,
+                            particle_start_offsets_ns,
+                            particle_issue_order,
+                        )
+                    )
+                    or any(
+                        (
+                            chronology_serial_rotation_replay,
+                            float64_accumulator_replay,
+                            reverse_rotation_replay,
+                            native_trace_shape_replay,
+                            materialized_rotation_replay,
+                        )
+                    )
+                ):
+                    raise ValueError(
+                        "fused serial VDAM BPref rotations cannot be combined "
+                        "with VDAM chronology replay"
+                    )
+                if fused_serial_particles and particle_chunk_cap is not None:
+                    raise ValueError(
+                        "fused serial VDAM BPref particles cannot be combined with "
+                        "host particle chunking"
+                    )
+                particle_slices = _source_faithful_bpref_particle_slices(
+                    unpadded_batch_size,
+                    particle_chunk_cap,
+                )
+                particle_chunk_size = particle_slices[0][1] - particle_slices[0][0]
+                split_particle_stream = particle_chunk_size < unpadded_batch_size
+                if split_particle_stream or fused_serial_particles:
+                    if any(
+                        value is not None
+                        for value in (
+                            block_start_order,
+                            native_grid_counts,
+                            particle_start_offsets_ns,
+                            particle_issue_order,
+                        )
+                    ) or any(
+                        (
+                            chronology_serial_rotation_replay,
+                            float64_accumulator_replay,
+                            reverse_rotation_replay,
+                            native_trace_shape_replay,
+                            materialized_rotation_replay,
+                        )
+                    ):
+                        raise ValueError(
+                            "source-faithful BPref particle ordering cannot be combined "
+                            "with VDAM chronology replay"
+                        )
+                if split_particle_stream:
+                    if not logged_deferred_mstep_chunking:
+                        logger.info(
+                            "Exact local VDAM BPref particle chunking: "
+                            "particles=%d chunk_particles=%d packed_rows=%d",
+                            unpadded_batch_size,
+                            particle_chunk_size,
+                            int(packed_mstep_rotations_np.shape[1]),
+                        )
+                        logged_deferred_mstep_chunking = True
+                elif (
+                    fused_serial_particles
+                    or fused_serial_rotations
+                    or launch_serial_rotations
+                ) and not logged_deferred_mstep_chunking:
+                    logger.info(
+                        "Exact local VDAM BPref fused serial ordering: "
+                        "particles=%d packed_rows=%d serial_particles=%s "
+                        "persistent_serial_rotations=%s "
+                        "launch_serial_rotations=%s",
+                        unpadded_batch_size,
+                        int(packed_mstep_rotations_np.shape[1]),
+                        fused_serial_particles,
+                        fused_serial_rotations,
+                        launch_serial_rotations,
+                    )
+                    logged_deferred_mstep_chunking = True
+
+                def _particle_slice(value, particle_start, particle_stop):
+                    if value is None or not split_particle_stream:
+                        return value
+                    return value[particle_start:particle_stop]
+
+                for particle_start, particle_stop in particle_slices:
+                    Ft_y, Ft_ctf = _accumulate_relion_vdam_physical_particle_grid(
+                        _particle_slice(
+                            packed_source_vdam_images, particle_start, particle_stop
+                        ),
+                        _particle_slice(
+                            packed_source_vdam_ctf, particle_start, particle_stop
+                        ),
+                        _particle_slice(
+                            packed_source_vdam_minvsigma2, particle_start, particle_stop
+                        ),
+                        _particle_slice(
+                            packed_source_vdam_posterior, particle_start, particle_stop
+                        ),
+                        relion_score_translation_angles,
+                        _particle_slice(
+                            packed_source_vdam_reference, particle_start, particle_stop
+                        ),
+                        _particle_slice(
+                            packed_mstep_rotations_np, particle_start, particle_stop
+                        ),
+                        _particle_slice(
+                            reconstruction_pack_mask_jnp, particle_start, particle_stop
+                        ),
+                        Ft_y,
+                        Ft_ctf,
+                        transaction_queue=bpref_transaction_queue,
+                        projector_full=source_vdam_projector_full,
+                        scoring_rotations=_particle_slice(
+                            packed_rotations_np, particle_start, particle_stop
+                        ),
+                        projector_r_max=source_vdam_projector_static_radius,
+                        runtime_projector_radius=source_vdam_projector_runtime_radius,
+                        projection_padding_factor=projection_padding_factor,
+                        pixel_indices=mstep_recon_window_indices,
+                        image_shape=image_shape,
+                        volume_shape=recon_volume_shape,
+                        max_r=mstep_adjoint_max_r,
+                        stable_dense_positions=(
+                            stable_bpref_dense_positions
+                            if stable_window_active
+                            else None
+                        ),
+                        logical_current_size=(
+                            mstep_current_size if stable_window_active else None
+                        ),
+                        reconstruction_group_ids=_particle_slice(
+                            bucket_reconstruction_group_ids,
+                            particle_start,
+                            particle_stop,
+                        ),
+                        worker_lane_ids=_particle_slice(
+                            worker_lane_ids, particle_start, particle_stop
+                        ),
+                        particle_trace_ids=_particle_slice(
+                            candidate_trace_ids, particle_start, particle_stop
+                        ),
+                        serial_rotation_replay=serial_rotation_replay,
+                        persistent_serial_rotation_replay=fused_serial_rotations,
+                        float64_accumulator_replay=float64_accumulator_replay,
+                        reverse_rotation_replay=reverse_rotation_replay,
+                        rotation_replay_stride=rotation_replay_stride,
+                        rotation_replay_order=_particle_slice(
+                            block_start_order, particle_start, particle_stop
+                        ),
+                        rotation_replay_counts=_particle_slice(
+                            native_grid_counts, particle_start, particle_stop
+                        ),
+                        particle_start_offsets_ns=_particle_slice(
+                            particle_start_offsets_ns, particle_start, particle_stop
+                        ),
+                        native_trace_shape_replay=native_trace_shape_replay,
+                        materialized_rotation_replay=materialized_rotation_replay,
+                        particle_replay_order=_particle_slice(
+                            particle_issue_order, particle_start, particle_stop
+                        ),
+                        candidate_trace_active=candidate_trace_active,
+                        serial_particle_accumulation=fused_serial_particles,
+                    )
+                if return_profile:
+                    _block_until_ready(Ft_y, Ft_ctf)
+                timing.adjoint_y_s += time.time() - adjoint_t0
+            elif source_faithful_bpref and sparse_big_jit_backprojection:
+                adjoint_t0 = time.time()
+                Ft_y, Ft_ctf = _accumulate_relion_physical_particle_grid(
+                    packed_summed,
+                    packed_ctf_probs,
+                    packed_mstep_rotations_np,
+                    reconstruction_pack_mask_jnp,
+                    Ft_y,
+                    Ft_ctf,
+                    pixel_indices=mstep_recon_window_indices,
+                    image_shape=image_shape,
+                    volume_shape=recon_volume_shape,
+                    max_r=mstep_adjoint_max_r,
+                )
+                if return_profile:
+                    _block_until_ready(Ft_y, Ft_ctf)
+                timing.adjoint_y_s += time.time() - adjoint_t0
+            elif sparse_big_jit_backprojection and (
+                not disable_adjoint_y or not disable_adjoint_ctf
+            ):
                 if not disable_adjoint_y:
                     adjoint_y_t0 = time.time()
                     Ft_y, n_adjoint_chunks = _adjoint_slice_volume_maybe_windowed_row_chunks(
@@ -3608,149 +8068,587 @@ def run_local_em_exact(
                     sparse_adjoint_chunk_count += int(n_adjoint_chunks)
                     timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
 
-            if return_big_jit_deferred_mstep_inputs and accumulate_noise:
+            use_packed_final_noise = bool(
+                return_big_jit_deferred_mstep_inputs
+                and accumulate_noise
+                and return_deferred_source_vdam_operands
+                and packed_final_noise_enabled
+            )
+            if noise_stable_core_enabled and not use_packed_final_noise:
+                raise ValueError("separate noise core requires a deferred VDAM noise bucket")
+            if noise_native_residual_enabled and not use_packed_final_noise:
+                raise ValueError("native noise residual requires a deferred VDAM noise bucket")
+            if use_packed_final_noise:
+                if packed_reconstruction_probs is None:
+                    raise RuntimeError(
+                        "packed final-support VDAM noise is missing posterior rows"
+                    )
+                if (
+                    packed_source_vdam_noise_projection is None
+                    or packed_source_vdam_ctf_probs is None
+                ):
+                    raise RuntimeError(
+                        "packed final-support VDAM noise operands were not built"
+                    )
+                packed_noise_scale_xa = (
+                    noise_scale_xa
+                    if noise_scale_xa is not None
+                    else disabled_noise_scale
+                )
+                packed_noise_scale_aa = (
+                    noise_scale_aa
+                    if noise_scale_aa is not None
+                    else disabled_noise_scale
+                )
+                noise_t0 = time.time()
+                prepared_noise_core = None
+                noise_pixel_probs = packed_reconstruction_probs
+                noise_pixel_projection = packed_source_vdam_noise_projection
+                noise_pixel_ctf_probs = packed_source_vdam_ctf_probs
+                noise_image_indices = jnp.asarray(bucket_image_indices, dtype=jnp.int32)
+                if noise_pixel_capacity_enabled:
+                    (
+                        noise_pixel_probs,
+                        noise_pixel_projection,
+                        noise_pixel_ctf_probs,
+                        noise_image_indices,
+                    ) = pack_noise_pixel_capacity(
+                        noise_pixel_probs,
+                        noise_pixel_projection,
+                        noise_pixel_ctf_probs,
+                        noise_image_indices,
+                        target_batch=reconstruction_probs.shape[0],
+                        n_images=n_images,
+                        norm_capacity=noise_norm_correction.shape[0],
+                        cuda_packing=noise_pixel_cuda_enabled,
+                    )
+                if noise_stable_core_enabled:
+                    prepared_noise_core = run_deferred_local_exact_noise_core_jit(
+                        reconstruction_probs,
+                        processed_score_half,
+                        image_only_corrections_arg,
+                        translation_sqdist_arg,
+                        valid_image_mask,
+                        shell_indices_half,
+                        jnp.asarray(logical_current_size, dtype=jnp.int32),
+                        image_shape=image_shape,
+                        shell_count=n_shells,
+                        norm_current_size=(
+                            physical_current_size
+                            if stable_window_active
+                            else current_size
+                        ),
+                        stable_fourier_window_shapes=stable_window_active,
+                        include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
+                        use_relion_cuda_powerclass_spectrum=bool(
+                            relion_exact_fine_diff2
+                            and return_deferred_source_vdam_operands
+                        ),
+                        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                        unweighted_high_shell_image_power=unweighted_high_shell_image_power,
+                    )
+                (
+                    noise_wsum,
+                    noise_img_power,
+                    noise_a2,
+                    noise_xa,
+                    packed_noise_scale_xa,
+                    packed_noise_scale_aa,
+                    noise_norm_correction,
+                    noise_sigma2_offset,
+                    noise_sumw,
+                ) = run_deferred_local_exact_noise_jit(
+                    noise_wsum,
+                    noise_img_power,
+                    noise_a2,
+                    noise_xa,
+                    packed_noise_scale_xa,
+                    packed_noise_scale_aa,
+                    noise_norm_correction,
+                    noise_sigma2_offset,
+                    noise_sumw,
+                    reconstruction_probs,
+                    noise_pixel_probs,
+                    noise_pixel_projection,
+                    noise_pixel_ctf_probs,
+                    shifted_noise_split,
+                    processed_score_half,
+                    image_only_corrections_arg,
+                    translation_sqdist_arg,
+                    valid_image_mask,
+                    shell_indices_half,
+                    shell_indices_noise,
+                    noise_variance_for_noise,
+                    scale_correction_pixel_mask,
+                    group_ids_arg,
+                    ctf_rfloat_half_arg,
+                    scale_corrections_arg,
+                    relion_score_translation_angles,
+                    big_jit_relion_wavg_rectangle_indices_arg,
+                    big_jit_relion_wavg_exact_positions_arg,
+                    big_jit_relion_wavg_rectangle_shell_indices_arg,
+                    big_jit_recon_window_indices_arg,
+                    noise_image_indices,
+                    jnp.asarray(logical_current_size, dtype=jnp.int32),
+                    image_shape=image_shape,
+                    shell_count=n_shells,
+                    norm_current_size=(
+                        physical_current_size
+                        if stable_window_active
+                        else current_size
+                    ),
+                    stable_fourier_window_shapes=stable_window_active,
+                    include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
+                    use_relion_cuda_powerclass_spectrum=bool(
+                        relion_exact_fine_diff2
+                        and return_deferred_source_vdam_operands
+                    ),
+                    source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                    accumulate_scale_correction=group_ids_np is not None,
+                    return_noise_split=return_noise_split,
+                    use_relion_wavg_cutoff=bool(
+                        relion_exact_fine_diff2
+                        and use_window
+                        and logical_current_size is not None
+                    ),
+                    relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
+                    prepared_core=prepared_noise_core,
+                    native_residual_statistics=noise_native_residual_enabled,
+                    unweighted_high_shell_image_power=unweighted_high_shell_image_power,
+                )
+                if noise_scale_xa is not None:
+                    noise_scale_xa = packed_noise_scale_xa
+                    noise_scale_aa = packed_noise_scale_aa
+                if return_profile:
+                    _block_until_ready(
+                        noise_wsum,
+                        noise_img_power,
+                        noise_a2,
+                        noise_xa,
+                        noise_norm_correction,
+                        noise_sigma2_offset,
+                        noise_sumw,
+                    )
+                timing.noise_s += time.time() - noise_t0
+
+            if (
+                return_big_jit_deferred_mstep_inputs
+                and accumulate_noise
+                and not use_packed_final_noise
+            ):
                 noise_t0 = time.time()
                 reconstruction_probs_unpadded = reconstruction_probs[:unpadded_batch_size]
-                support_mass = jnp.sum(reconstruction_probs_unpadded.reshape(unpadded_batch_size, -1), axis=1).astype(
-                    precision_policy.score_real_dtype
+                preserve_dense_noise_reduction = bool(
+                    return_deferred_source_vdam_operands
                 )
-                translation_posterior = jnp.sum(reconstruction_probs_unpadded, axis=1).astype(
-                    precision_policy.score_real_dtype
+                preserve_dense_scalar_reduction = bool(
+                    return_deferred_source_vdam_operands
                 )
-                noise_sumw_offset = jnp.sum(
-                    translation_posterior * translation_sqdist_arg[:unpadded_batch_size],
+                if preserve_dense_scalar_reduction:
+                    scalar_noise_reconstruction_probs = reconstruction_probs
+                    scalar_noise_batch_size = int(batch_size)
+                    scalar_noise_valid_image_mask = valid_image_mask
+                else:
+                    scalar_noise_reconstruction_probs = reconstruction_probs_unpadded
+                    scalar_noise_batch_size = int(unpadded_batch_size)
+                    scalar_noise_valid_image_mask = jnp.ones(
+                        scalar_noise_batch_size,
+                        dtype=bool,
+                    )
+                (
+                    support_mass,
+                    _translation_posterior,
+                    noise_sumw_offset,
+                ) = compute_local_noise_scalar_terms(
+                    scalar_noise_reconstruction_probs,
+                    translation_sqdist_arg[:scalar_noise_batch_size],
+                    scalar_noise_valid_image_mask,
                 )
-                processed_noise_power_half = processed_score_half[:unpadded_batch_size]
+                processed_noise_power_half = processed_score_half[
+                    :scalar_noise_batch_size
+                ]
                 processed_noise_power_half = (
-                    processed_noise_power_half * image_only_corrections_arg[:unpadded_batch_size, None]
+                    processed_noise_power_half
+                    * image_only_corrections_arg[:scalar_noise_batch_size, None]
                 )
-                batch_img_power = jnp.sum(
-                    (jnp.abs(processed_noise_power_half) ** 2) * support_mass[:, None],
-                    axis=0,
-                ).astype(precision_policy.score_real_dtype)
-                batch_img_power_per_image = _norm_correction_image_power_per_image(
+                batch_img_power_shells, batch_img_power_per_image = _noise_image_power_shells_and_per_image(
                     processed_noise_power_half,
                     support_mass,
                     shell_indices_half,
-                    jnp.ones_like(support_mass, dtype=bool),
+                    scalar_noise_valid_image_mask,
                     norm_unweighted_shell_cutoff,
                     shell_count=n_shells,
                     image_shape=image_shape,
-                    current_size=current_size,
+                    current_size=(
+                        physical_current_size
+                        if stable_window_active
+                        else current_size
+                    ),
+                    runtime_current_size=(
+                        jnp.asarray(logical_current_size, dtype=jnp.int32)
+                        if stable_window_active
+                        else None
+                    ),
                     include_unweighted_high_shell=include_unweighted_norm_high_shell,
+                    use_relion_cuda_powerclass_spectrum=bool(
+                        relion_exact_fine_diff2
+                        and return_deferred_source_vdam_operands
+                    ),
                     source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                    unweighted_high_shell_image_power=unweighted_high_shell_image_power,
                 )
-                batch_img_power_shells = bin_shell_values_jax(batch_img_power, shell_indices_half, n_shells)
-                noise_img_power = noise_img_power + batch_img_power_shells
                 noise_sumw = noise_sumw + jnp.sum(support_mass)
 
-                shifted_noise_split_unpadded = shifted_noise_split[:unpadded_batch_size]
-                packed_rotation_count = int(packed_rotations_np.shape[1])
-                n_recon_pixels = window_spec.n_recon if window_spec.use_window else int(n_half)
-                noise_projection_pixels = int(n_half) if relion_projector_half is not None else int(n_recon_pixels)
-                chunk_rows = min(
-                    packed_rotation_count,
-                    _packed_noise_projection_chunk_rows(noise_projection_pixels, batch_size=unpadded_batch_size),
-                )
-                if chunk_rows < packed_rotation_count and not logged_deferred_noise_projection_chunking:
-                    logger.info(
-                        "Exact local big-JIT deferred noise projection chunking: "
-                        "packed_rows=%d chunk_rows=%d n_recon_pixels=%d projection_pixels=%d batch_size=%d",
-                        packed_rotation_count,
-                        chunk_rows,
-                        n_recon_pixels,
-                        noise_projection_pixels,
-                        unpadded_batch_size,
-                    )
-                    logged_deferred_noise_projection_chunking = True
                 block_noise_shells = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
                 block_a2_shells = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
                 block_xa_shells = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
-                block_norm_residual = jnp.zeros(unpadded_batch_size, dtype=precision_policy.score_real_dtype)
+                direct_wavg_triplet_shells = jnp.zeros(
+                    (3, n_shells),
+                    dtype=jnp.float64,
+                )
+                use_relion_wavg_cutoff = bool(
+                    return_deferred_source_vdam_operands
+                    and relion_exact_fine_diff2
+                    and use_window
+                    and logical_current_size is not None
+                )
                 bucket_group_ids = (
                     group_ids_arg[:unpadded_batch_size] if group_ids_np is not None else None
                 )
-                batch_scale_unpadded = scale_corrections_arg[:unpadded_batch_size]
-                for chunk_start in range(0, packed_rotation_count, chunk_rows):
-                    chunk_stop = min(packed_rotation_count, chunk_start + chunk_rows)
-                    chunk_rotations = packed_rotations_np[:, chunk_start:chunk_stop]
-                    chunk_proj_for_noise = _project_packed_noise_rows(
-                        mean_for_proj=mean_for_proj,
-                        packed_flat_rotations=flatten_bucket_rotations(jnp.asarray(chunk_rotations)),
-                        packed_rotation_count=chunk_stop - chunk_start,
-                        batch_size=unpadded_batch_size,
-                        image_shape=image_shape,
-                        proj_volume_shape=proj_volume_shape,
-                        disc_type=disc_type,
-                        projection_kwargs=projection_kwargs,
-                        window_spec=window_spec,
-                        n_half=n_half,
-                        precision_policy=precision_policy,
-                        reconstruction_pack_mask_jnp=reconstruction_pack_mask_jnp[:, chunk_start:chunk_stop],
-                        relion_projector_half=relion_projector_half,
-                        relion_projector_r_max=relion_projector_r_max,
-                        projection_padding_factor=projection_padding_factor,
+                if preserve_dense_noise_reduction:
+                    flat_row_plan = jnp.asarray(
+                        flat_local_row_argument,
+                        dtype=jnp.int32,
                     )
-                    chunk_probs = packed_reconstruction_probs[:, chunk_start:chunk_stop]
-                    chunk_probs_sum_t = packed_reconstruction_probs_sum_t[:, chunk_start:chunk_stop]
-                    chunk_summed_masked_noise = compute_local_weighted_sums(chunk_probs, shifted_noise_split_unpadded)
-                    chunk_ctf_probs = compute_local_ctf_sums_from_probs_sum_t(
-                        chunk_probs_sum_t,
-                        ctf2_over_nv_recon_unpadded,
+                    flat_proj_for_noise = jnp.asarray(
+                        deferred_flat_proj_for_noise,
+                        dtype=jnp.complex64,
                     )
-                    flat_proj_for_noise = flatten_bucket_rows(chunk_proj_for_noise)
-                    flat_proj_abs2_for_noise = jnp.abs(flat_proj_for_noise) ** 2
-                    chunk_noise_shells, chunk_a2_shells, chunk_xa_shells = _compute_noise_block(
+                    expected_flat_projection_shape = (
+                        int(flat_row_plan.shape[0]),
+                        window_spec.n_recon
+                        if window_spec.use_window
+                        else int(n_half),
+                    )
+                    if flat_proj_for_noise.shape != expected_flat_projection_shape:
+                        raise RuntimeError(
+                            "deferred VDAM scoring projection did not retain the "
+                            "packed reconstruction layout: "
+                            f"{flat_proj_for_noise.shape} vs "
+                            f"{expected_flat_projection_shape}",
+                        )
+                    proj_for_noise_reduction = scatter_flat_local_rows(
                         flat_proj_for_noise,
-                        flat_proj_abs2_for_noise,
-                        flatten_bucket_rows(chunk_summed_masked_noise),
-                        flatten_bucket_rows(chunk_ctf_probs),
+                        flat_row_plan[:, 0],
+                        flat_row_plan[:, 1],
+                        flat_row_plan[:, 2] != 0,
+                        batch_size=int(batch_size),
+                        dense_rotation_count=int(bucket.bucket_rotation_count),
+                        fill_value=0.0,
+                    )
+                    probs_for_noise_reduction = reconstruction_probs
+                    ctf_probs_for_noise_reduction = (
+                        deferred_source_vdam_ctf_probs
+                    )
+                    processed_score_for_wavg = processed_score_half
+                    ctf_rfloat_for_wavg = ctf_rfloat_half_arg
+                    scale_for_noise_reduction = scale_corrections_arg
+                    pixel_noise_batch_size = int(batch_size)
+                    pixel_support_mass = support_mass
+                    pixel_noise_valid_image_mask = valid_image_mask
+
+                    shifted_for_noise_reduction = jnp.where(
+                        pixel_support_mass[:, None, None] != 0.0,
+                        shifted_noise_split[:pixel_noise_batch_size],
+                        0.0,
+                    )
+                    summed_masked_for_noise_reduction = compute_local_weighted_sums(
+                        probs_for_noise_reduction,
+                        shifted_for_noise_reduction,
+                    )
+                    flat_proj_for_noise_reduction = flatten_bucket_rows(
+                        proj_for_noise_reduction
+                    )
+                    proj_abs2_for_noise_reduction = (
+                        jnp.abs(proj_for_noise_reduction) ** 2
+                    )
+                    (
+                        block_noise_shells,
+                        block_a2_shells,
+                        block_xa_shells,
+                    ) = _compute_noise_block(
+                        flat_proj_for_noise_reduction,
+                        flatten_bucket_rows(proj_abs2_for_noise_reduction),
+                        flatten_bucket_rows(summed_masked_for_noise_reduction),
+                        flatten_bucket_rows(ctf_probs_for_noise_reduction),
                         noise_variance_for_noise,
                         shell_indices_noise,
                         n_shells,
                         return_noise_split,
                     )
-                    block_noise_shells = block_noise_shells + chunk_noise_shells
-                    block_a2_shells = block_a2_shells + chunk_a2_shells
-                    block_xa_shells = block_xa_shells + chunk_xa_shells
-                    chunk_proj_abs2_for_norm = flat_proj_abs2_for_noise.reshape(chunk_proj_for_noise.shape)
-                    block_norm_residual = block_norm_residual + _compute_norm_residual_per_image(
-                        chunk_proj_for_noise,
-                        chunk_proj_abs2_for_norm,
-                        chunk_summed_masked_noise,
-                        chunk_ctf_probs,
+                    block_norm_residual = _compute_norm_residual_per_image(
+                        proj_for_noise_reduction,
+                        proj_abs2_for_noise_reduction,
+                        summed_masked_for_noise_reduction,
+                        ctf_probs_for_noise_reduction,
                         noise_variance_for_noise,
                     )
+                    if use_relion_wavg_cutoff:
+                        direct_wavg_triplet_shells, _ = (
+                            _relion_wavg_direct_triplet_shells(
+                                processed_score_for_wavg,
+                                relion_score_translation_angles,
+                                big_jit_relion_wavg_rectangle_indices_arg,
+                                big_jit_relion_wavg_exact_positions_arg,
+                                big_jit_relion_wavg_rectangle_shell_indices_arg,
+                                big_jit_recon_window_indices_arg,
+                                proj_for_noise_reduction,
+                                ctf_rfloat_for_wavg,
+                                scale_for_noise_reduction,
+                                probs_for_noise_reduction,
+                                pixel_noise_valid_image_mask,
+                                image_shape=image_shape,
+                                shell_count=n_shells,
+                                cutoff_shell=int(logical_current_size) // 2,
+                                relion_wavg_sequential_cuda=(
+                                    relion_wavg_sequential_cuda
+                                ),
+                                logical_recon_pixel_count=(
+                                    stable_window_plan.logical_reconstruction_pixels
+                                    if stable_window_active
+                                    else None
+                                ),
+                                logical_rectangle_pixel_count=(
+                                    stable_window_plan.logical_rectangle_pixels
+                                    if stable_window_active
+                                    else None
+                                ),
+                            )
+                        )
                     if noise_scale_xa is not None:
                         scale_xa_per_image, scale_aa_per_image = _compute_scale_correction_terms_per_image(
-                            chunk_proj_for_noise,
-                            chunk_proj_abs2_for_norm,
-                            chunk_summed_masked_noise,
-                            chunk_ctf_probs,
+                            proj_for_noise_reduction,
+                            proj_abs2_for_noise_reduction,
+                            summed_masked_for_noise_reduction,
+                            ctf_probs_for_noise_reduction,
                             noise_variance_for_noise,
-                            batch_scale_unpadded,
+                            scale_for_noise_reduction,
                             scale_correction_pixel_mask,
                         )
-                        noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(scale_xa_per_image.astype(noise_scale_xa.dtype))
-                        noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(scale_aa_per_image.astype(noise_scale_aa.dtype))
+                        noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(
+                            scale_xa_per_image[:unpadded_batch_size].astype(noise_scale_xa.dtype)
+                        )
+                        noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(
+                            scale_aa_per_image[:unpadded_batch_size].astype(noise_scale_aa.dtype)
+                        )
+                else:
+                    shifted_noise_split_unpadded = shifted_noise_split[
+                        :unpadded_batch_size
+                    ]
+                    ctf2_over_nv_recon_unpadded = ctf2_over_nv_recon[
+                        :unpadded_batch_size
+                    ]
+                    packed_rotation_count = int(packed_rotations_np.shape[1])
+                    n_recon_pixels = (
+                        window_spec.n_recon
+                        if window_spec.use_window
+                        else int(n_half)
+                    )
+                    noise_projection_pixels = (
+                        int(n_half)
+                        if relion_projector_half is not None
+                        else int(n_recon_pixels)
+                    )
+                    chunk_rows = min(
+                        packed_rotation_count,
+                        _packed_noise_projection_chunk_rows(
+                            noise_projection_pixels,
+                            batch_size=unpadded_batch_size,
+                        ),
+                    )
+                    if (
+                        chunk_rows < packed_rotation_count
+                        and not logged_deferred_noise_projection_chunking
+                    ):
+                        logger.info(
+                            "Exact local big-JIT deferred noise projection chunking: "
+                            "packed_rows=%d chunk_rows=%d n_recon_pixels=%d "
+                            "projection_pixels=%d batch_size=%d",
+                            packed_rotation_count,
+                            chunk_rows,
+                            n_recon_pixels,
+                            noise_projection_pixels,
+                            unpadded_batch_size,
+                        )
+                        logged_deferred_noise_projection_chunking = True
+                    block_norm_residual = jnp.zeros(
+                        unpadded_batch_size,
+                        dtype=precision_policy.score_real_dtype,
+                    )
+                    batch_scale_unpadded = scale_corrections_arg[
+                        :unpadded_batch_size
+                    ]
+                    for chunk_start in range(
+                        0,
+                        packed_rotation_count,
+                        chunk_rows,
+                    ):
+                        chunk_stop = min(
+                            packed_rotation_count,
+                            chunk_start + chunk_rows,
+                        )
+                        chunk_rotations = packed_rotations_np[
+                            :,
+                            chunk_start:chunk_stop,
+                        ]
+                        chunk_proj_for_noise = _project_packed_noise_rows(
+                            mean_for_proj=mean_for_proj,
+                            packed_flat_rotations=flatten_bucket_rotations(
+                                jnp.asarray(chunk_rotations)
+                            ),
+                            packed_rotation_count=chunk_stop - chunk_start,
+                            batch_size=unpadded_batch_size,
+                            image_shape=image_shape,
+                            proj_volume_shape=proj_volume_shape,
+                            disc_type=disc_type,
+                            projection_kwargs=projection_kwargs,
+                            window_spec=window_spec,
+                            n_half=n_half,
+                            precision_policy=precision_policy,
+                            reconstruction_pack_mask_jnp=reconstruction_pack_mask_jnp[
+                                :,
+                                chunk_start:chunk_stop,
+                            ],
+                            relion_projector_half=relion_projector_half,
+                            relion_projector_r_max=relion_projector_r_max,
+                            projection_padding_factor=projection_padding_factor,
+                        )
+                        chunk_probs = packed_reconstruction_probs[
+                            :,
+                            chunk_start:chunk_stop,
+                        ]
+                        chunk_probs_sum_t = packed_reconstruction_probs_sum_t[
+                            :,
+                            chunk_start:chunk_stop,
+                        ]
+                        chunk_summed_masked_noise = compute_local_weighted_sums(
+                            chunk_probs,
+                            shifted_noise_split_unpadded,
+                        )
+                        chunk_ctf_probs = compute_local_ctf_sums_from_probs_sum_t(
+                            chunk_probs_sum_t,
+                            ctf2_over_nv_recon_unpadded,
+                        )
+                        flat_proj_for_noise = flatten_bucket_rows(
+                            chunk_proj_for_noise
+                        )
+                        flat_proj_abs2_for_noise = (
+                            jnp.abs(flat_proj_for_noise) ** 2
+                        )
+                        (
+                            chunk_noise_shells,
+                            chunk_a2_shells,
+                            chunk_xa_shells,
+                        ) = _compute_noise_block(
+                            flat_proj_for_noise,
+                            flat_proj_abs2_for_noise,
+                            flatten_bucket_rows(chunk_summed_masked_noise),
+                            flatten_bucket_rows(chunk_ctf_probs),
+                            noise_variance_for_noise,
+                            shell_indices_noise,
+                            n_shells,
+                            return_noise_split,
+                        )
+                        block_noise_shells = (
+                            block_noise_shells + chunk_noise_shells
+                        )
+                        block_a2_shells = block_a2_shells + chunk_a2_shells
+                        block_xa_shells = block_xa_shells + chunk_xa_shells
+                        chunk_proj_abs2_for_norm = (
+                            jnp.abs(chunk_proj_for_noise) ** 2
+                        )
+                        block_norm_residual = (
+                            block_norm_residual
+                            + _compute_norm_residual_per_image(
+                                chunk_proj_for_noise,
+                                chunk_proj_abs2_for_norm,
+                                chunk_summed_masked_noise,
+                                chunk_ctf_probs,
+                                noise_variance_for_noise,
+                            )
+                        )
+                        if noise_scale_xa is not None:
+                            (
+                                scale_xa_per_image,
+                                scale_aa_per_image,
+                            ) = _compute_scale_correction_terms_per_image(
+                                chunk_proj_for_noise,
+                                chunk_proj_abs2_for_norm,
+                                chunk_summed_masked_noise,
+                                chunk_ctf_probs,
+                                noise_variance_for_noise,
+                                batch_scale_unpadded,
+                                scale_correction_pixel_mask,
+                            )
+                            noise_scale_xa = noise_scale_xa.at[
+                                bucket_group_ids
+                            ].add(scale_xa_per_image.astype(noise_scale_xa.dtype))
+                            noise_scale_aa = noise_scale_aa.at[
+                                bucket_group_ids
+                            ].add(scale_aa_per_image.astype(noise_scale_aa.dtype))
+                if use_relion_wavg_cutoff:
+                    cutoff_mask = (
+                        jnp.arange(n_shells, dtype=jnp.int32)
+                        == int(current_size) // 2
+                    )
+                    block_noise_shells = jnp.where(
+                        cutoff_mask,
+                        direct_wavg_triplet_shells[2],
+                        block_noise_shells,
+                    )
+                    batch_img_power_shells = jnp.where(
+                        cutoff_mask,
+                        0.0,
+                        batch_img_power_shells,
+                    )
+                    if return_noise_split:
+                        block_a2_shells = jnp.where(
+                            cutoff_mask,
+                            direct_wavg_triplet_shells[1],
+                            block_a2_shells,
+                        )
+                        block_xa_shells = jnp.where(
+                            cutoff_mask,
+                            direct_wavg_triplet_shells[0],
+                            block_xa_shells,
+                        )
                 if return_profile:
                     _block_until_ready(block_noise_shells, block_norm_residual)
                 noise_wsum = noise_wsum + block_noise_shells
+                noise_img_power = noise_img_power + batch_img_power_shells
                 if return_noise_split:
                     noise_a2 = noise_a2 + block_a2_shells
                     noise_xa = noise_xa + block_xa_shells
+                bucket_norm_rows = batch_img_power_per_image + block_norm_residual
+                if preserve_dense_noise_reduction:
+                    bucket_norm_rows = bucket_norm_rows[:unpadded_batch_size]
                 noise_norm_correction = noise_norm_correction.at[jnp.asarray(bucket_image_indices, dtype=jnp.int32)].add(
-                    (batch_img_power_per_image + block_norm_residual).astype(noise_norm_correction.dtype),
+                    bucket_norm_rows.astype(noise_norm_correction.dtype),
                 )
                 noise_sigma2_offset = noise_sigma2_offset + noise_sumw_offset
                 timing.noise_s += time.time() - noise_t0
 
             postprocess_t0 = time.time()
             stats_probs_sum_t = reconstruction_probs_sum_t if stats_use_reconstruction_probs else probs_sum_t
+            # The postprocessor already needs these small arrays on the host.
+            # Preserve their physical shapes until that consumer when enabled.
+            def postprocess_rows(value):
+                return value if host_publication_enabled else value[:unpadded_batch_size]
+
             stats_probs_sum_t_np = (
                 None
                 if probs_sum_t_np is None
-                else np.asarray(stats_probs_sum_t[:unpadded_batch_size], dtype=np.float64)
+                else np.asarray(postprocess_rows(stats_probs_sum_t), dtype=np.float64)[:unpadded_batch_size]
             )
             significant_sample_count, reconstruction_row_count = _postprocess_local_bucket(
                 image_indices=unpadded_bucket.image_indices,
@@ -3764,23 +8662,28 @@ def run_local_em_exact(
                 ),
                 translation_grid=local_layout.translation_grid,
                 n_trans=n_trans,
-                best_argmax=best_argmax[:unpadded_batch_size],
-                batch_norm=batch_norm[:unpadded_batch_size],
-                log_Z=log_Z[:unpadded_batch_size],
-                best_log_score=best_log_score[:unpadded_batch_size],
-                max_posterior=max_posterior[:unpadded_batch_size],
+                best_argmax=postprocess_rows(best_argmax),
+                batch_norm=postprocess_rows(batch_norm),
+                log_Z=postprocess_rows(log_Z),
+                best_log_score=postprocess_rows(best_log_score),
+                max_posterior=postprocess_rows(max_posterior),
                 probs_sum_t=(
-                    stats_probs_sum_t[:unpadded_batch_size]
+                    postprocess_rows(stats_probs_sum_t)
                     if stats_probs_sum_t_np is None
                     else stats_probs_sum_t_np
                 ),
-                n_significant_samples=n_significant_samples[:unpadded_batch_size],
-                reconstruction_sample_mask=reconstruction_sample_mask[:unpadded_batch_size],
+                n_significant_samples=postprocess_rows(n_significant_samples),
+                reconstruction_sample_mask=(
+                    None
+                    if host_publication_enabled and postprocess_buffers.reconstruction_sample_indices_by_image is None
+                    else postprocess_rows(reconstruction_sample_mask)
+                ),
                 collect_profile_stats=collect_profile_stats,
                 reconstruction_row_count=reconstruction_row_count,
                 reconstruction_take_indices=reconstruction_take_indices,
                 reconstruction_pack_mask=reconstruction_pack_mask_np,
                 buffers=postprocess_buffers,
+                host_prefix=host_publication_enabled,
             )
             if collect_profile_stats:
                 total_significant_samples += significant_sample_count
@@ -3803,7 +8706,8 @@ def run_local_em_exact(
             shifted_half,
             shifted_recon_half,
             batch_norm,
-            ctf2_over_nv_half,
+            ctf2_over_nv_score_half,
+            ctf2_over_nv_recon_half,
             processed_score_half,
             real_space_pre_shift_applied,
         ) = _prepare_local_exact_bucket(
@@ -3824,6 +8728,7 @@ def run_local_em_exact(
             score_complex_dtype=precision_policy.score_complex_dtype,
             score_real_dtype=precision_policy.score_real_dtype,
             norm_real_dtype=precision_policy.normalization_real_dtype,
+            relion_exact_bpref_operands=relion_exact_bpref_operands,
         )
         if scale_corrections is not None:
             batch_scale = jnp.asarray(scale_corrections[np.asarray(bucket.image_indices)])
@@ -3847,7 +8752,8 @@ def run_local_em_exact(
             image_only_corr = None
 
         if scale_corrections is not None:
-            ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
+            ctf2_over_nv_score_half = ctf2_over_nv_score_half * (batch_scale**2)[:, None]
+            ctf2_over_nv_recon_half = ctf2_over_nv_recon_half * (batch_scale**2)[:, None]
 
         if image_pre_shifts is not None and not real_space_pre_shift_applied:
             batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(bucket.image_indices)])
@@ -3857,24 +8763,26 @@ def run_local_em_exact(
             shifted_half = shifted_half * phase_expanded
             shifted_recon_half = shifted_recon_half * phase_expanded
         shifted_half_with_dc = shifted_half
-        ctf2_over_nv_half_with_dc = ctf2_over_nv_half
+        ctf2_over_nv_recon_half_with_dc = ctf2_over_nv_recon_half
 
         if half_spectrum_scoring:
             dc_mask = make_shell_indices_half(image_shape) == 0
             shifted_half = jnp.where(dc_mask[None, :], 0.0, shifted_half)
-            ctf2_over_nv_half = jnp.where(dc_mask[None, :], 0.0, ctf2_over_nv_half)
+            ctf2_over_nv_score_half = jnp.where(
+                dc_mask[None, :], 0.0, ctf2_over_nv_score_half
+            )
 
         if use_window:
             shifted_score = shifted_half[:, window_indices]
             shifted_recon = shifted_recon_half[:, recon_window_indices]
-            ctf2_over_nv_score = ctf2_over_nv_half[:, window_indices]
-            ctf2_over_nv_recon = ctf2_over_nv_half_with_dc[:, recon_window_indices]
+            ctf2_over_nv_score = ctf2_over_nv_score_half[:, window_indices]
+            ctf2_over_nv_recon = ctf2_over_nv_recon_half_with_dc[:, recon_window_indices]
             shifted_noise = shifted_half_with_dc[:, recon_window_indices]
         else:
             shifted_score = shifted_half
             shifted_recon = shifted_recon_half
-            ctf2_over_nv_score = ctf2_over_nv_half
-            ctf2_over_nv_recon = ctf2_over_nv_half_with_dc
+            ctf2_over_nv_score = ctf2_over_nv_score_half
+            ctf2_over_nv_recon = ctf2_over_nv_recon_half_with_dc
             shifted_noise = shifted_half_with_dc
 
         (
@@ -3924,9 +8832,14 @@ def run_local_em_exact(
                 dtype=local_rotation_log_prior.dtype,
             )
         defer_packed_mstep_reduction = False
-        has_external_normalization = normalization_log_z_np is not None or normalization_log_evidence_np is not None
+        has_external_normalization = (
+            normalization_log_z_np is not None
+            or normalization_log_evidence_np is not None
+            or normalization_max_posterior_np is not None
+        )
         can_use_fused_score_mstep = (
             fused_score_mstep_enabled
+            and normalization_max_posterior_np is None
             and reconstruction_probability_threshold_np is None
             and not debug_score_dump_bucket_matches
             and not bpref_contribution_capture_active
@@ -4256,13 +9169,27 @@ def run_local_em_exact(
             timing.score_s += time.time() - score_t0
 
             normalize_t0 = time.time()
-            if normalization_log_z_np is None and normalization_log_evidence_np is None:
+            if (
+                normalization_log_z_np is None
+                and normalization_log_evidence_np is None
+                and normalization_max_posterior_np is None
+            ):
                 if use_float64_normalization:
                     log_Z, probs, best_log_score, best_argmax, max_posterior = normalize_local_scores(scores)
                 else:
                     log_Z, probs, best_log_score, best_argmax, max_posterior = normalize_local_scores_float32(scores)
             else:
-                if normalization_log_evidence_np is None:
+                if normalization_max_posterior_np is not None:
+                    normalization_dtype = precision_policy.normalization_real_dtype
+                    fine_best = jnp.max(scores.reshape(scores.shape[0], -1), axis=1).astype(
+                        normalization_dtype,
+                    )
+                    bucket_pmax = jnp.asarray(
+                        normalization_max_posterior_np[np.asarray(bucket.image_indices)],
+                        dtype=normalization_dtype,
+                    )
+                    bucket_log_z = fine_best - jnp.log(bucket_pmax)
+                elif normalization_log_evidence_np is None:
                     bucket_log_z = jnp.asarray(
                         normalization_log_z_np[np.asarray(bucket.image_indices)],
                         dtype=scores.real.dtype,
@@ -4294,7 +9221,31 @@ def run_local_em_exact(
             timing.normalize_s += time.time() - normalize_t0
 
             significance_t0 = time.time()
-            if reconstruct_significant_only:
+            if reconstruct_significant_only and use_relion_f32_fine_posterior:
+                if threshold_for_bucket is not None:
+                    raise ValueError(
+                        "RELION float32 fine posterior does not accept an external "
+                        "reconstruction threshold"
+                    )
+                (
+                    reconstruction_probs,
+                    reconstruction_sample_mask,
+                    n_significant_samples,
+                    _relion_sum_weight,
+                    _relion_significant_weight,
+                ) = sparse_pass2_bucketed._relion_f32_fine_reconstruction_probs(
+                    scores,
+                    adaptive_fraction=adaptive_fraction,
+                )
+                reconstruction_rotation_mask = jnp.any(
+                    reconstruction_sample_mask,
+                    axis=-1,
+                )
+                max_posterior = jnp.max(
+                    reconstruction_probs.reshape(reconstruction_probs.shape[0], -1),
+                    axis=1,
+                )
+            elif reconstruct_significant_only:
                 if threshold_for_bucket is None:
                     reconstruction_sample_mask, reconstruction_rotation_mask, n_significant_samples = (
                         compute_reconstruction_support(
@@ -4330,6 +9281,7 @@ def run_local_em_exact(
                 image_pre_shifts=image_pre_shifts,
                 scores=scores,
                 probs=probs,
+                reconstruction_probs=reconstruction_probs,
                 log_Z=log_Z,
                 best_log_score=best_log_score,
                 max_posterior=max_posterior,
@@ -4444,8 +9396,35 @@ def run_local_em_exact(
                     shadow_only_mode=False,
                     shadow_score_bitwise_equal=True,
                     shadow_reduction_agreement=None,
+                    reconstruction_group_ids=bucket_reconstruction_group_ids,
                 )
             scores = None
+
+        if source_faithful_bpref and not score_only:
+            # RELION carries one float32 numerator and denominator through the
+            # translation loop for every orientation/pixel. Recompute this
+            # narrow boundary after any fused score path so GEMM/reduce_sum
+            # ordering cannot leak into the physical particle scatter.
+            mstep_t0 = time.time()
+            summed, ctf_probs = compute_local_mstep_sums(
+                reconstruction_probs,
+                shifted_recon_split,
+                ctf2_over_nv_recon,
+                relion_x_half=True,
+                sequential_translation_reduction=True,
+            )
+            if mstep_subtract_ctf_projection:
+                if proj_for_noise is None:
+                    raise RuntimeError(
+                        "Residual local M-step requires materialized recon projections"
+                    )
+                reconstruction_probs_sum_t = jnp.sum(reconstruction_probs, axis=-1)
+                frefctf_weighted = proj_for_noise * ctf2_over_nv_recon[:, None, :]
+                summed = summed - reconstruction_probs_sum_t[..., None] * frefctf_weighted
+            defer_packed_mstep_reduction = False
+            if return_profile:
+                _block_until_ready(summed, ctf_probs)
+            timing.mstep_s += time.time() - mstep_t0
 
         _collect_reconstruction_probability_values(bucket.image_indices, probs)
 
@@ -4474,6 +9453,7 @@ def run_local_em_exact(
             np.asarray(bucket.local_rotation_mask, dtype=bool),
             probs_sum_t_np,
             rotation_block_size,
+            exact_local_bucket_radix=resolved_exact_local_bucket_radix,
         )
         reconstruction_take_indices_jnp = jnp.asarray(reconstruction_take_indices, dtype=jnp.int32)
         reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
@@ -4521,7 +9501,26 @@ def run_local_em_exact(
             packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_mstep_rotations_np))
         timing.pack_s += time.time() - pack_t0
 
-        if defer_packed_mstep_reduction and not score_only and (not disable_adjoint_y or not disable_adjoint_ctf):
+        if source_faithful_bpref and not score_only:
+            adjoint_t0 = time.time()
+            Ft_y, Ft_ctf = _accumulate_relion_physical_particle_grid(
+                packed_summed,
+                packed_ctf_probs,
+                packed_mstep_rotations_np,
+                reconstruction_pack_mask_jnp,
+                Ft_y,
+                Ft_ctf,
+                pixel_indices=mstep_recon_window_indices,
+                image_shape=image_shape,
+                volume_shape=recon_volume_shape,
+                max_r=mstep_adjoint_max_r,
+            )
+            if return_profile:
+                _block_until_ready(Ft_y, Ft_ctf)
+            timing.adjoint_y_s += time.time() - adjoint_t0
+        elif defer_packed_mstep_reduction and not score_only and (
+            not disable_adjoint_y or not disable_adjoint_ctf
+        ):
             if packed_reconstruction_probs is None:
                 raise RuntimeError("packed posterior rows are required for deferred local M-step")
             packed_rotation_count = int(packed_rotations_np.shape[1])
@@ -4634,7 +9633,11 @@ def run_local_em_exact(
                 _block_until_ready(Ft_y)
             timing.adjoint_y_s += time.time() - adjoint_y_t0
 
-        if (not defer_packed_mstep_reduction) and not disable_adjoint_ctf:
+        if (
+            not source_faithful_bpref
+            and not defer_packed_mstep_reduction
+            and not disable_adjoint_ctf
+        ):
             adjoint_ctf_t0 = time.time()
             Ft_ctf = _adjoint_slice_volume_maybe_windowed(
                 flatten_bucket_rows(packed_ctf_probs),
@@ -4669,11 +9672,7 @@ def run_local_em_exact(
             processed_noise_power_half = processed_score_half
             if image_only_corr is not None:
                 processed_noise_power_half = processed_noise_power_half * image_only_corr[:, None]
-            batch_img_power = jnp.sum(
-                (jnp.abs(processed_noise_power_half) ** 2) * support_mass[:, None],
-                axis=0,
-            ).astype(precision_policy.score_real_dtype)
-            batch_img_power_per_image = _norm_correction_image_power_per_image(
+            batch_img_power_shells, batch_img_power_per_image = _noise_image_power_shells_and_per_image(
                 processed_noise_power_half,
                 support_mass,
                 shell_indices_half,
@@ -4684,8 +9683,8 @@ def run_local_em_exact(
                 current_size=current_size,
                 include_unweighted_high_shell=include_unweighted_norm_high_shell,
                 source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                unweighted_high_shell_image_power=unweighted_high_shell_image_power,
             )
-            batch_img_power_shells = bin_shell_values_jax(batch_img_power, shell_indices_half, n_shells)
             noise_img_power = noise_img_power + batch_img_power_shells
             noise_sumw = noise_sumw + jnp.sum(support_mass)
 
@@ -4985,22 +9984,72 @@ def run_local_em_exact(
             jax.clear_caches()
             timing.host_stats_s += time.time() - cleanup_t0
 
+    if bpref_transaction_queue is not None:
+        adjoint_t0 = time.time()
+        Ft_y, Ft_ctf, _ = bpref_transaction_queue.flush(Ft_y, Ft_ctf)
+        if return_profile:
+            _block_until_ready(Ft_y, Ft_ctf)
+        timing.adjoint_y_s += time.time() - adjoint_t0
     _log_exact_local_progress(force=True, done=True)
     final_accumulator_t0 = time.time()
     if not score_only:
-        Ft_y, Ft_ctf = enforce_half_volume_x0(
-            Ft_y,
-            Ft_ctf,
-            recon_volume_shape,
-            logger=logger,
-            label="Exact local",
-        )
+        def _finalize_accumulator(data, weight, *, label):
+            final_recon_volume_shape = recon_volume_shape
+            if stable_window_active and mstep_relion_x_half:
+                data = crop_relion_x_half_accumulator(
+                    data,
+                    recon_volume_shape,
+                    logical_recon_volume_shape,
+                )
+                weight = crop_relion_x_half_accumulator(
+                    weight,
+                    recon_volume_shape,
+                    logical_recon_volume_shape,
+                )
+                final_recon_volume_shape = logical_recon_volume_shape
+            data, weight = enforce_half_volume_x0(
+                data,
+                weight,
+                final_recon_volume_shape,
+                logger=logger,
+                label=label,
+                force_host=host_accumulator_finalize,
+            )
+            if return_half_volume_accumulators:
+                return data, weight
+            if mstep_relion_x_half:
+                return relion_x_half_accumulators_to_public_layout(
+                    data,
+                    weight,
+                    final_recon_volume_shape,
+                    force_host=host_accumulator_finalize,
+                )
+            return half_volume_accumulators_to_full(
+                data,
+                weight,
+                final_recon_volume_shape,
+            )
+
+        if reconstruction_group_ids_np is None:
+            Ft_y, Ft_ctf = _finalize_accumulator(
+                Ft_y,
+                Ft_ctf,
+                label="Exact local",
+            )
+        else:
+            grouped = [
+                _finalize_accumulator(
+                    Ft_y[group_index],
+                    Ft_ctf[group_index],
+                    label=f"Exact local reconstruction group {group_index}",
+                )
+                for group_index in range(resolved_reconstruction_group_count)
+            ]
+            stack = np.stack if host_accumulator_finalize else jnp.stack
+            Ft_y = stack([value[0] for value in grouped], axis=0)
+            Ft_ctf = stack([value[1] for value in grouped], axis=0)
         if return_half_volume_accumulators:
             logger.info("Exact local M-step: keeping native half-volume accumulators for downstream reconstruction")
-        elif mstep_relion_x_half:
-            Ft_y, Ft_ctf = relion_x_half_accumulators_to_public_layout(Ft_y, Ft_ctf, recon_volume_shape)
-        else:
-            Ft_y, Ft_ctf = half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape)
 
         if return_profile:
             _block_until_ready(Ft_y, Ft_ctf)
@@ -5012,6 +10061,7 @@ def run_local_em_exact(
         best_log_score_per_image=best_log_score_per_image,
         max_posterior_per_image=max_posterior_per_image,
         rotation_posterior_sums=rotation_posterior_sums,
+        host_arrays=host_stats_publication,
     )
     noise_stats = None
     if accumulate_noise:
@@ -5019,6 +10069,10 @@ def run_local_em_exact(
         noise_sigma2_offset_value = float(np.asarray(noise_sigma2_offset, dtype=np.float64))
         noise_sumw_value = float(np.asarray(noise_sumw, dtype=np.float64))
         transfer_profile["final_noise_to_host_s"] += time.time() - transfer_t0
+        if host_stats_publication:
+            # Publish the physical carry before taking the logical host prefix;
+            # do not compile a fresh device slice for every subset length.
+            noise_norm_correction = np.asarray(noise_norm_correction)
         noise_stats = make_noise_stats(
             wsum_sigma2_noise=noise_wsum,
             wsum_img_power=noise_img_power,
@@ -5026,9 +10080,14 @@ def run_local_em_exact(
             sumw=noise_sumw_value,
             wsum_noise_a2=(noise_a2 if return_noise_split else None),
             wsum_noise_xa=(noise_xa if return_noise_split else None),
-            wsum_norm_correction=noise_norm_correction,
+            wsum_norm_correction=(
+                noise_norm_correction[:n_images]
+                if noise_norm_capacity_enabled
+                else noise_norm_correction
+            ),
             wsum_scale_correction_xa=noise_scale_xa,
             wsum_scale_correction_aa=noise_scale_aa,
+            host_arrays=host_stats_publication,
         )
     timing.stats_finalize_s += time.time() - stats_finalize_t0
 
@@ -5111,17 +10170,102 @@ def run_local_em_exact(
         "n_chunks": np.int32(n_chunks),
         "projection_mode": np.asarray(projection_mode),
         "n_projection_windowed": np.int32(window_spec.n_projection),
+        "big_jit_projection_pixels": np.int32(big_jit_projection_pixel_count),
         "chunk_sizes": np.asarray(chunk_sizes, dtype=np.int32),
+        "chunk_padded_image_counts": np.asarray(
+            chunk_padded_image_counts,
+            dtype=np.int32,
+        ),
+        "chunk_planned_padded_image_counts": np.asarray(
+            chunk_planned_padded_image_counts,
+            dtype=np.int32,
+        ),
         "chunk_local_rotations": np.asarray(chunk_local_rotations, dtype=np.int32),
         "chunk_padded_rotations": np.asarray(chunk_padded_rotations, dtype=np.int32),
+        "flat_local_rows_enabled": np.asarray(flat_local_rows_enabled),
+        "stable_flat_row_capacity_enabled": np.asarray(
+            stable_flat_row_capacity_enabled
+        ),
+        "packed_local_projection_enabled": np.asarray(
+            packed_local_projection_enabled
+        ),
+        "fused_pair_fine_score_enabled": np.asarray(
+            fused_pair_fine_score_enabled
+        ),
+        "fused_pair_fine_score_default_enabled": np.asarray(False),
+        "fused_pair_fine_uses_shared_compact_order": np.asarray(
+            fused_pair_fine_score_enabled
+        ),
+        "fused_pair_fine_avoids_pair_pixel_gathers": np.asarray(
+            fused_pair_fine_score_enabled
+        ),
+        "fused_pair_fine_restores_dense_posterior_order": np.asarray(
+            fused_pair_fine_score_enabled
+        ),
+        "defer_packed_vdam_enabled": np.asarray(defer_packed_vdam_enabled),
+        "stable_fourier_window_shapes": np.asarray(stable_window_active),
+        "stable_fourier_window_quantum": np.int32(resolved_window_quantum),
+        "logical_current_size": np.int32(logical_current_size),
+        "physical_current_size": np.int32(physical_current_size),
+        "logical_reconstruction_pixels": np.int32(
+            stable_window_plan.logical_reconstruction_pixels
+        ),
+        "physical_reconstruction_pixels": np.int32(window_spec.n_recon),
+        "packed_final_noise_enabled": np.asarray(packed_final_noise_enabled),
+        "packed_vdam_reuses_flat_score_projection": np.asarray(
+            defer_packed_vdam_enabled and accumulate_noise
+        ),
+        "packed_vdam_avoids_dense_noise_rows": np.asarray(
+            packed_final_noise_enabled and accumulate_noise
+        ),
+        "packed_final_noise_preserves_dense_scalar_order": np.asarray(
+            packed_final_noise_enabled and accumulate_noise
+        ),
+        "chunk_flat_score_rows": np.asarray(chunk_flat_score_rows, dtype=np.int32),
+        "chunk_fused_pair_capacities": np.asarray(
+            chunk_fused_pair_capacities,
+            dtype=np.int32,
+        ),
+        "chunk_fused_pair_counts": np.asarray(
+            chunk_fused_pair_counts,
+            dtype=np.int64,
+        ),
+        "chunk_fused_pair_dense_capacities": np.asarray(
+            chunk_fused_pair_dense_capacities,
+            dtype=np.int64,
+        ),
+        "chunk_planned_padded_rotations": np.asarray(
+            chunk_planned_padded_rotations,
+            dtype=np.int32,
+        ),
         "chunk_unique_rotations": np.asarray(chunk_unique_rotations, dtype=np.int32),
         "chunk_nonzero_posterior_rows": np.asarray(chunk_nonzero_posterior_rows, dtype=np.int32),
         "chunk_reconstruction_rows": np.asarray(chunk_reconstruction_rows, dtype=np.int32),
         "chunk_significant_samples": np.asarray(chunk_significant_samples, dtype=np.int32),
         "sum_union_rows": np.int64(total_local_rotations),
         "sum_padded_rows": np.int64(total_padded_rotations),
+        "sum_flat_score_rows": np.int64(total_flat_score_rows),
+        "sum_fused_pair_candidates": np.int64(total_fused_pair_candidates),
+        "sum_fused_pair_capacity": np.int64(total_fused_pair_capacity),
+        "sum_fused_pair_dense_capacity": np.int64(
+            total_fused_pair_dense_capacity
+        ),
+        "fused_pair_valid_fraction_of_dense": np.float64(
+            0.0
+            if total_fused_pair_dense_capacity == 0
+            else total_fused_pair_candidates / total_fused_pair_dense_capacity
+        ),
+        "fused_pair_padded_fraction_of_dense": np.float64(
+            0.0
+            if total_fused_pair_dense_capacity == 0
+            else total_fused_pair_capacity / total_fused_pair_dense_capacity
+        ),
+        "sum_planned_padded_rows": np.int64(total_planned_padded_rotations),
         "sum_nonzero_posterior_rows": np.int64(np.sum(chunk_nonzero_posterior_rows)),
         "sum_reconstruction_rows": np.int64(total_reconstruction_rows),
+        "sum_packed_final_noise_rows": np.int64(
+            total_packed_final_noise_rows
+        ),
         "sum_significant_samples": np.int64(total_significant_samples),
         "unique_global_rotations": np.int64(np.count_nonzero(seen_global_rotations)),
         "unique_nonzero_global_rotations": np.int64(np.count_nonzero(seen_nonzero_global_rotations)),
@@ -5150,6 +10294,11 @@ def run_local_em_exact(
         "sparse_adjoint_chunk_count": np.int64(sparse_adjoint_chunk_count),
         "local_pad_fraction": np.float64(
             0.0 if total_padded_rotations == 0 else 1.0 - total_local_rotations / total_padded_rotations
+        ),
+        "flat_score_row_reduction_fraction": np.float64(
+            0.0
+            if total_padded_rotations == 0
+            else 1.0 - total_flat_score_rows / total_padded_rotations
         ),
         "n_windowed": np.int32(n_windowed),
     }

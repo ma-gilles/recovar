@@ -200,6 +200,7 @@ def analyze(
     half: int,
     image_size: int,
     native_components_tsv: Path | None = None,
+    recovar_prefix: str | None = None,
 ) -> dict[str, object]:
     rows = _parse_native_rows(native_tsv, iteration=iteration, half=half)
     native = _native_final_arrays(rows, iteration=iteration, half=half)
@@ -210,7 +211,7 @@ def analyze(
         shell_count=int(np.asarray(native["shell"]).size),
     )
     with np.load(recovar_npz, allow_pickle=False) as payload:
-        prefix = f"half{half}"
+        prefix = recovar_prefix or f"half{half}"
         rec_raw = np.asarray(payload[f"{prefix}_wsum_total"], dtype=np.float64)
         rec_residual = np.asarray(payload[f"{prefix}_wsum_sigma2_noise"], dtype=np.float64)
         rec_image_power = np.asarray(payload[f"{prefix}_wsum_img_power"], dtype=np.float64)
@@ -218,6 +219,11 @@ def analyze(
         rec_npix = np.asarray(payload["relion_half_plane_shell_counts"], dtype=np.float64)
         rec_old = np.asarray(payload[f"{prefix}_previous_sigma2_noise"], dtype=np.float64)
         rec_new = np.asarray(payload[f"{prefix}_sigma2_noise"], dtype=np.float64)
+        a2_key = f"{prefix}_wsum_noise_a2"
+        xa_key = f"{prefix}_wsum_noise_xa"
+        _require((a2_key in payload) == (xa_key in payload), "RECOVAR A2/XA split is incomplete")
+        rec_a2 = np.asarray(payload[a2_key], dtype=np.float64) if a2_key in payload else None
+        rec_xa = np.asarray(payload[xa_key], dtype=np.float64) if xa_key in payload else None
         current_size = int(np.asarray(payload["current_size"]).reshape(-1)[0])
     count = int(np.asarray(native["shell"]).size)
     for name, values in (
@@ -245,7 +251,9 @@ def analyze(
     native_sumw = float(native["sumw"])
     mu = float(native["mu"])
     native_formula = mu * native_old + (1.0 - mu) * native_raw / (2.0 * native_sumw * native_npix)
-    rec_formula = rec_raw_relion / (2.0 * rec_sumw * rec_npix)
+    rec_formula = mu * rec_old_relion + (1.0 - mu) * rec_raw_relion / (
+        2.0 * rec_sumw * rec_npix
+    )
     native_raw_rec_denominator = mu * native_old + (1.0 - mu) * native_raw / (
         2.0 * rec_sumw * rec_npix
     )
@@ -334,6 +342,22 @@ def analyze(
             "image_power_fraction_of_signed_raw_delta": image_delta_sum / raw_delta_sum,
             "a2_minus_2xa_fraction_of_signed_raw_delta": residual_delta_sum / raw_delta_sum,
         }
+        if rec_a2 is not None and rec_xa is not None:
+            _require(rec_a2.shape == (count,) and rec_xa.shape == (count,), "RECOVAR A2/XA topology changed")
+            comparisons.update(
+                {
+                    "low_shell_a2_recovar_vs_native_components": _metric(
+                        rec_a2[low] / n4, np.asarray(detailed["aa"])[low]
+                    ),
+                    "low_shell_xa_recovar_vs_native_components": _metric(
+                        rec_xa[low] / n4, np.asarray(detailed["xa"])[low]
+                    ),
+                    "recovar_a2_minus_2xa_split_closure": _metric(
+                        rec_a2 - 2.0 * rec_xa,
+                        rec_residual,
+                    ),
+                }
+            )
 
     report = {
         "schema": "recovar.em.k1_noise_update_terms.v1",
@@ -345,6 +369,8 @@ def analyze(
             "active_shell_stop_exclusive": active_stop,
             "shell_count": count,
             "native_particle_count": int(native_components["particle_count"]),
+            "native_halfset": int(half),
+            "recovar_prefix": prefix,
         },
         "denominator": {
             "native_sumw": native_sumw,
@@ -391,7 +417,8 @@ def main() -> None:
     parser.add_argument("--native-components-tsv", type=Path)
     parser.add_argument("--recovar-npz", type=Path, required=True)
     parser.add_argument("--iteration", type=int, required=True)
-    parser.add_argument("--half", type=int, choices=(1, 2), required=True)
+    parser.add_argument("--half", type=int, choices=(-1, 0, 1, 2), required=True)
+    parser.add_argument("--recovar-prefix")
     parser.add_argument("--image-size", type=int, default=128)
     parser.add_argument("--output-json", type=Path, required=True)
     args = parser.parse_args()
@@ -404,6 +431,7 @@ def main() -> None:
         half=args.half,
         image_size=args.image_size,
         native_components_tsv=args.native_components_tsv,
+        recovar_prefix=args.recovar_prefix,
     )
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

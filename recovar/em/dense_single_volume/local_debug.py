@@ -185,6 +185,25 @@ def _pass_label_suffix(debug_pass_label: str | None) -> str:
     return f"_{label}" if label else ""
 
 
+def _local_fused_posterior_dump_label_suffix() -> str:
+    """Return the fused-posterior label without losing its caller prefix.
+
+    K-class execution supplies a phase suffix to both local debug label
+    variables.  A same-state caller can additionally prefix only the fused
+    posterior label with its arm name.  Prefer that more-specific value here;
+    otherwise the generic score label silently collapses every arm onto one
+    output filename.
+    """
+
+    label = os.environ.get("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_LABEL") or os.environ.get(
+        "RECOVAR_LOCAL_SCORE_DUMP_LABEL",
+    )
+    if not label:
+        return ""
+    label = re.sub(r"[^A-Za-z0-9_.-]+", "_", label.strip())
+    return f"_{label}" if label else ""
+
+
 def _target_rows_to_numpy(array, target_rows: list[int], dtype):
     rows = np.asarray(target_rows, dtype=np.intp)
     try:
@@ -464,6 +483,7 @@ def maybe_write_debug_fused_posterior_dump(
     local_layout,
     bucket,
     image_pre_shifts,
+    scores=None,
     probs,
     log_Z,
     best_log_score,
@@ -501,6 +521,11 @@ def maybe_write_debug_fused_posterior_dump(
         return pending_targets
 
     probs_np = _target_rows_to_numpy(probs, target_rows, np.float32)
+    scores_np = (
+        _target_rows_to_numpy(scores, target_rows, np.float32)
+        if scores is not None
+        else None
+    )
     log_Z_np = _target_rows_to_numpy(log_Z, target_rows, np.float32)
     best_log_score_np = _target_rows_to_numpy(best_log_score, target_rows, np.float32)
     best_argmax_np = _target_rows_to_numpy(best_argmax, target_rows, np.int64)
@@ -549,11 +574,37 @@ def maybe_write_debug_fused_posterior_dump(
             dtype=bool,
         )
         iteration_label = int(debug_iteration or -1)
-        label_suffix = _local_debug_dump_label_suffix()
+        label_suffix = _local_fused_posterior_dump_label_suffix()
         dump_path = (
             dump_dir
             / f"local_fused_posterior_it{iteration_label:03d}_image_{original_idx}{label_suffix}.npz"
         )
+        score_payload = {}
+        if scores_np is not None:
+            rotation_log_prior = np.asarray(
+                bucket.local_rotation_log_prior[row, :actual_count],
+                dtype=np.float32,
+            )
+            translation_log_prior = np.asarray(
+                bucket.translation_log_prior[row],
+                dtype=np.float32,
+            )
+            total_scores = np.asarray(
+                scores_np[compact_row, :actual_count, :],
+                dtype=np.float32,
+            )
+            raw_scores = total_scores - rotation_log_prior[:, None] - translation_log_prior[None, :]
+            raw_scores = np.where(
+                metadata["rotation_mask"][:, None],
+                raw_scores,
+                -np.inf,
+            )
+            score_payload = {
+                "pass2_scores_raw": raw_scores[None, :, :],
+                "pass2_scores_total": total_scores[None, :, :],
+                "rotation_log_prior": rotation_log_prior[None, :],
+                "translation_log_prior": translation_log_prior[None, :],
+            }
         np.savez_compressed(
             dump_path,
             selected_global_image_indices=np.array([original_idx], dtype=np.int64),
@@ -649,6 +700,7 @@ def maybe_write_debug_fused_posterior_dump(
             n_trans=np.array([n_trans], dtype=np.int32),
             grid_n_pixels=np.array([int(local_layout.n_pixels)], dtype=np.int32),
             grid_n_psi=np.array([int(local_layout.n_psi)], dtype=np.int32),
+            **score_payload,
         )
         if requested_iterations is None:
             pending_targets.remove(original_idx)
@@ -664,6 +716,7 @@ def maybe_write_debug_score_dump(
     image_pre_shifts,
     scores,
     probs,
+    reconstruction_probs=None,
     log_Z,
     best_log_score,
     max_posterior,
@@ -680,6 +733,7 @@ def maybe_write_debug_score_dump(
     proj_weighted=None,
     proj_for_noise=None,
     proj_abs2_weighted=None,
+    wavg_cutoff_triplet=None,
     dump_dir: Path | None,
     pending_targets: set[int],
     requested_current_sizes: set[int] | None = None,
@@ -717,11 +771,25 @@ def maybe_write_debug_score_dump(
 
     score_dtype = _debug_capture_dtype(scores)
     probability_dtype = _debug_capture_dtype(probs)
+    reconstruction_probability_dtype = (
+        _debug_capture_dtype(reconstruction_probs)
+        if reconstruction_probs is not None
+        else None
+    )
     log_z_dtype = _debug_capture_dtype(log_Z)
     best_score_dtype = _debug_capture_dtype(best_log_score)
     max_posterior_dtype = _debug_capture_dtype(max_posterior)
     scores_np = _target_rows_to_numpy(scores, target_rows, score_dtype)
     probs_np = _target_rows_to_numpy(probs, target_rows, probability_dtype)
+    reconstruction_probs_np = (
+        _target_rows_to_numpy(
+            reconstruction_probs,
+            target_rows,
+            reconstruction_probability_dtype,
+        )
+        if reconstruction_probs is not None
+        else None
+    )
     log_Z_np = _target_rows_to_numpy(log_Z, target_rows, log_z_dtype)
     best_log_score_np = _target_rows_to_numpy(best_log_score, target_rows, best_score_dtype)
     max_posterior_np = _target_rows_to_numpy(max_posterior, target_rows, max_posterior_dtype)
@@ -785,6 +853,15 @@ def maybe_write_debug_score_dump(
         if dump_operands and proj_abs2_weighted is not None
         else None
     )
+    wavg_cutoff_triplet_np = (
+        _target_rows_to_numpy(
+            wavg_cutoff_triplet,
+            target_rows,
+            _debug_capture_dtype(wavg_cutoff_triplet),
+        )
+        if dump_operands and wavg_cutoff_triplet is not None
+        else None
+    )
 
     for compact_row, row in enumerate(target_rows):
         original_idx = int(original_image_indices[row])
@@ -808,6 +885,18 @@ def maybe_write_debug_score_dump(
         raw_scores = total_scores - rotation_log_prior[:, None] - translation_log_prior[None, :]
         raw_scores = np.where(rotation_mask[:, None], raw_scores, -np.inf)
         posterior = np.asarray(probs_np[compact_row, :actual_count, :], dtype=probability_dtype)
+        reconstruction_posterior = (
+            np.asarray(
+                reconstruction_probs_np[compact_row, :actual_count, :],
+                dtype=reconstruction_probability_dtype,
+            )
+            if reconstruction_probs_np is not None
+            else np.where(
+                reconstruction_sample_mask_np[compact_row, :actual_count, :],
+                posterior,
+                0.0,
+            )
+        )
         n_trans = int(translation_log_prior.shape[0])
         translation_indices = metadata["translation_indices"]
         translation_parent_indices = metadata["translation_parent_indices"]
@@ -893,6 +982,7 @@ def maybe_write_debug_score_dump(
                 else np.array([], dtype=np.float32)
             ),
             "posterior": posterior[None, :, :],
+            "reconstruction_probs": reconstruction_posterior[None, :, :],
             "reconstruction_sample_mask": reconstruction_sample_mask_row[None, :, :],
             "reconstruction_rotation_mask": reconstruction_rotation_mask_row[None, :],
             "n_significant_samples": np.array([int(n_significant_samples_np[compact_row])], dtype=np.int32),
@@ -965,6 +1055,11 @@ def maybe_write_debug_score_dump(
                 payload["debug_proj_abs2_weighted"] = np.asarray(
                     proj_abs2_weighted_np[compact_row, :actual_count, :],
                     dtype=proj_abs2_weighted_np.dtype,
+                )
+            if wavg_cutoff_triplet_np is not None:
+                payload["debug_wavg_cutoff_triplet_xa_aa_diff2"] = np.asarray(
+                    wavg_cutoff_triplet_np[compact_row],
+                    dtype=np.float64,
                 )
         np.savez_compressed(dump_path, **payload)
         if requested_iterations is None:

@@ -52,12 +52,23 @@ def _relion_cuda_f32_tail_target(sum_weight, adaptive_fraction: float):
     )
 
 
-@partial(jax.jit, static_argnames=("adaptive_fraction", "max_significants"))
+@partial(
+    jax.jit,
+    static_argnames=(
+        "adaptive_fraction",
+        "max_significants",
+        "tie_score_ulps",
+        "filter_positive_before_sort",
+    ),
+)
 def relion_cuda_f32_coarse_posterior(
     scores_flat,
     *,
     adaptive_fraction=0.999,
     max_significants=500,
+    tie_score_ulps=0,
+    min_diff2_offsets=None,
+    filter_positive_before_sort=False,
 ):
     """Reproduce RELION CUDA coarse-weight and significance arithmetic.
 
@@ -67,36 +78,91 @@ def relion_cuda_f32_coarse_posterior(
     inclusive float32 scan to select the lower-tail cutoff.  The surviving
     weights remain normalized by the full, pre-pruning sum.
 
-    ``cutoff_count`` is the pre-tie rank serialized by RELION.  ``mask`` and
+    RELION constructs each coarse log weight as ``prior + min_diff2 - diff2``
+    before finding the maximum and adding the exponentiation offset. Although
+    ``min_diff2`` is common to every pose, omitting it can change float32
+    cancellation in ``score + (50 - maximum)`` and collapse adjacent cutoff
+    scores into a false tie. ``min_diff2_offsets`` restores that absolute
+    score frame without changing normalized probabilities mathematically.
+
+    ``cutoff_count`` is the pre-tie rank serialized by RELION. ``mask`` and
     ``n_significant`` include every positive weight tied at the cutoff.
+    ``tie_score_ulps`` optionally absorbs a small score-level atomic-rounding
+    envelope below that exact cutoff. It is an explicit diagnostic control;
+    production InitialModel keeps the exact threshold comparison.
+
+    ``filter_positive_before_sort`` explicitly selects RELION's native
+    positive-only CUB primitive. Its fixed-size sort/scan outputs are
+    right-aligned so all downstream indexing remains unchanged. It defaults
+    off until a separate GPU parity/performance gate accepts it.
     """
 
+    tie_score_ulps = int(tie_score_ulps)
+    if tie_score_ulps < 0:
+        raise ValueError("tie_score_ulps must be non-negative")
+
     scores_f32 = jnp.asarray(scores_flat, dtype=jnp.float32)
+    if min_diff2_offsets is not None:
+        offsets_f32 = jnp.asarray(min_diff2_offsets, dtype=jnp.float32)
+        if offsets_f32.ndim != 1 or offsets_f32.shape[0] != scores_f32.shape[0]:
+            raise ValueError(
+                "min_diff2_offsets must have shape (n_images,), got "
+                f"{offsets_f32.shape} for scores {scores_f32.shape}",
+            )
+        scores_f32 = scores_f32 + offsets_f32[:, None]
     finite = jnp.isfinite(scores_f32)
     best = jnp.max(jnp.where(finite, scores_f32, -jnp.inf), axis=1)
     has_finite = jnp.isfinite(best)
     safe_best = jnp.where(has_finite, best, jnp.float32(0.0))
-    shifted = jnp.where(
-        finite,
-        scores_f32 - safe_best[:, None] + jnp.float32(50.0),
-        -jnp.inf,
-    )
-    raw_weights = jnp.where(
-        shifted < jnp.float32(-88.0),
-        jnp.float32(0.0),
-        jnp.exp(shifted),
-    )
-    raw_weights = jnp.where(
-        finite & jnp.isfinite(raw_weights),
-        raw_weights,
-        jnp.float32(0.0),
-    )
-
+    exponent_add = jnp.float32(50.0) - safe_best
+    use_native_cuda = False
     if jax.default_backend() == "gpu":
-        from recovar.cuda_backproject import relion_cub_sort_scan_f32
+        from recovar import cuda_backproject
 
-        sorted_weights, cumulative = jax.vmap(relion_cub_sort_scan_f32)(raw_weights)
+        use_native_cuda = cuda_backproject.custom_cuda_requested()
+    if use_native_cuda:
+        finite_scores = jnp.where(finite, scores_f32, -jnp.inf)
+        batched_primitives = (
+            cuda_backproject.relion_batched_posterior_primitives_requested()
+        )
+        if batched_primitives:
+            raw_weights = cuda_backproject.relion_exponentiate_batched_f32(
+                finite_scores,
+                exponent_add,
+            )
+        else:
+            raw_weights = jax.vmap(cuda_backproject.relion_exponentiate_f32)(
+                finite_scores,
+                exponent_add,
+            )
+        sort_scan = (
+            cuda_backproject.relion_cub_positive_sort_scan_f32
+            if filter_positive_before_sort
+            else cuda_backproject.relion_cub_sort_scan_f32
+        )
+        if batched_primitives and not filter_positive_before_sort:
+            sorted_weights, cumulative = (
+                cuda_backproject.relion_cub_sort_scan_batched_f32(raw_weights)
+            )
+        else:
+            sorted_weights, cumulative = jax.vmap(sort_scan)(raw_weights)
     else:
+        shifted = jnp.where(
+            finite,
+            scores_f32 + exponent_add[:, None],
+            -jnp.inf,
+        )
+        raw_weights = jnp.where(
+            shifted < jnp.float32(-88.0),
+            jnp.float32(0.0),
+            jnp.exp(shifted),
+        )
+        raw_weights = jnp.where(
+            finite & jnp.isfinite(raw_weights),
+            raw_weights,
+            jnp.float32(0.0),
+        )
+
         # Keep a CPU reference path for isolated unit tests. The live opt-in
         # route is CUDA-only and uses RELION's exact CUB primitives above.
         sorted_weights = jnp.sort(raw_weights, axis=1)
@@ -123,12 +189,46 @@ def relion_cuda_f32_coarse_posterior(
     mask = has_mass[:, None] & (raw_weights > jnp.float32(0.0)) & (
         raw_weights >= threshold[:, None]
     )
+    if tie_score_ulps > 0:
+        cutoff_score = jnp.min(
+            jnp.where(mask, scores_f32, jnp.float32(jnp.inf)),
+            axis=1,
+        )
+        expanded_cutoff_score = cutoff_score
+        for _ in range(tie_score_ulps):
+            expanded_cutoff_score = jnp.nextafter(
+                expanded_cutoff_score,
+                jnp.full_like(expanded_cutoff_score, -jnp.inf),
+            )
+        mask = mask | (
+            has_mass[:, None]
+            & finite
+            & (raw_weights > jnp.float32(0.0))
+            & (scores_f32 >= expanded_cutoff_score[:, None])
+        )
     safe_sum_weight = jnp.where(has_mass, sum_weight, jnp.float32(1.0))
-    probabilities = jnp.where(
-        has_mass[:, None],
-        raw_weights / safe_sum_weight[:, None],
-        jnp.float32(0.0),
-    )
+    if use_native_cuda:
+        if batched_primitives:
+            probabilities = cuda_backproject.relion_divide_batched_f32(
+                raw_weights,
+                safe_sum_weight,
+            )
+        else:
+            probabilities = jax.vmap(cuda_backproject.relion_divide_f32)(
+                raw_weights,
+                safe_sum_weight,
+            )
+        probabilities = jnp.where(
+            has_mass[:, None],
+            probabilities,
+            jnp.float32(0.0),
+        )
+    else:
+        probabilities = jnp.where(
+            has_mass[:, None],
+            raw_weights / safe_sum_weight[:, None],
+            jnp.float32(0.0),
+        )
     n_significant = jnp.sum(mask, axis=1).astype(jnp.int32)
     cutoff_count = jnp.where(
         has_mass,
@@ -731,6 +831,7 @@ def compute_pass2_stats_sparse(
     accumulate_noise=False,
     half_spectrum_scoring=False,
     projection_padding_factor=1,
+    projection_mask_current_image_disk=True,
     reconstruction_padding_factor=1,
     image_corrections=None,
     scale_corrections=None,
@@ -757,6 +858,7 @@ def compute_pass2_stats_sparse(
     fine_translation_parent_override=None,
     relion_half_volume_mstep=False,
     relion_x_half_mstep=False,
+    mstep_subtract_ctf_projection=False,
     relion_fine_mstep_prune=False,
     relion_firstiter_score_mode="gaussian",
     relion_firstiter_winner_take_all=False,
@@ -885,6 +987,7 @@ def compute_pass2_stats_sparse(
             accumulate_noise=accumulate_noise,
             half_spectrum_scoring=half_spectrum_scoring,
             projection_padding_factor=projection_padding_factor,
+            projection_mask_current_image_disk=projection_mask_current_image_disk,
             reconstruction_padding_factor=reconstruction_padding_factor,
             image_corrections=image_corrections,
             scale_corrections=scale_corrections,
@@ -911,6 +1014,7 @@ def compute_pass2_stats_sparse(
             fine_translation_parent_override=fine_translation_parent_override,
             relion_half_volume_mstep=relion_half_volume_mstep,
             relion_x_half_mstep=relion_x_half_mstep,
+            mstep_subtract_ctf_projection=mstep_subtract_ctf_projection,
             relion_fine_mstep_prune=relion_fine_mstep_prune,
             relion_firstiter_score_mode=relion_firstiter_score_mode,
             relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,

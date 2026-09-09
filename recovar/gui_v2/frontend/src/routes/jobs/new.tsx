@@ -12,9 +12,11 @@ import { DensityForm } from "../../components/job-form/DensityForm";
 import { StableStatesForm } from "../../components/job-form/StableStatesForm";
 import { PostprocessForm } from "../../components/job-form/PostprocessForm";
 import { DownsampleForm } from "../../components/job-form/DownsampleForm";
+import { InitialModelForm } from "../../components/job-form/InitialModelForm";
 
 const JOB_TYPES = [
   { value: "pipeline", label: "Pipeline" },
+  { value: "initial_model", label: "Initial Model (VDAM)" },
   { value: "analyze", label: "Analyze" },
   { value: "compute_state", label: "Compute State" },
   { value: "compute_trajectory", label: "Compute Trajectory" },
@@ -111,6 +113,15 @@ export function NewJobPage(): React.JSX.Element {
               projectPath={project.path}
               onSubmitted={handleSubmitted}
               prefilledParams={safeParseJson(searchParams.params) as Record<string, unknown> | undefined}
+            />
+          )}
+          {jobType === "initial_model" && (
+            <InitialModelForm
+              projectId={project.id}
+              projectPath={project.path}
+              prefilledInput={searchParams.input}
+              prefilledParams={searchParams.params ? JSON.parse(searchParams.params) : undefined}
+              onSubmitted={handleSubmitted}
             />
           )}
           {jobType === "analyze" && (

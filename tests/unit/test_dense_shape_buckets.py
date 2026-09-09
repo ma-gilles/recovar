@@ -6,6 +6,7 @@ from recovar.em.dense_single_volume.shape_buckets import (
     dense_shape_bucket,
     local_shape_bucket,
     pad_axis,
+    power_bucket,
     power_of_two_bucket,
     round_up_to_multiple,
 )
@@ -22,6 +23,12 @@ def test_power_of_two_bucket():
     assert power_of_two_bucket(1, minimum=16, maximum=4096) == 16
     assert power_of_two_bucket(17, minimum=16, maximum=4096) == 32
     assert power_of_two_bucket(4097, minimum=16, maximum=4096) == 4097
+
+
+def test_power_bucket_can_use_low_cardinality_radix_four_classes():
+    assert power_bucket(17, base=4, minimum=16, maximum=4096) == 64
+    assert power_bucket(65, base=4, minimum=16, maximum=4096) == 256
+    assert power_bucket(257, base=4, minimum=16, maximum=4096) == 1024
 
 
 def test_coarse_bucket():

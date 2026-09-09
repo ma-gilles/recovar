@@ -38,17 +38,35 @@ def round_up_to_multiple(value: int, multiple: int) -> int:
     return ((value + multiple - 1) // multiple) * multiple
 
 
-def power_of_two_bucket(value: int, *, minimum: int = 1, maximum: int | None = None) -> int:
-    """Return a power-of-two padded bucket for low-cardinality shape classes."""
+def power_bucket(
+    value: int,
+    *,
+    base: int = 2,
+    minimum: int = 1,
+    maximum: int | None = None,
+) -> int:
+    """Return a power-of-``base`` padded bucket for low-cardinality shapes."""
 
     value = int(value)
     minimum = int(minimum)
+    base = int(base)
+    if base < 2:
+        raise ValueError(f"base must be at least 2, got {base}")
     if value <= 0:
         return max(1, minimum)
-    bucket = 1 << max(value - 1, minimum - 1).bit_length()
+    target = max(value, minimum)
+    bucket = 1
+    while bucket < target:
+        bucket *= base
     if maximum is not None:
         bucket = min(bucket, int(maximum))
     return max(bucket, value, minimum)
+
+
+def power_of_two_bucket(value: int, *, minimum: int = 1, maximum: int | None = None) -> int:
+    """Return a power-of-two padded bucket for low-cardinality shape classes."""
+
+    return power_bucket(value, base=2, minimum=minimum, maximum=maximum)
 
 
 def coarse_bucket(value: int, *, small_power2_max: int, large_multiple: int, minimum: int = 1) -> int:

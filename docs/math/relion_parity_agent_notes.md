@@ -14405,3 +14405,57 @@ inventory, hardware and artifact hashes. Bulky results are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/k1_targeted_capture/`
 with `SAFE_TO_DELETE`. The corresponding preparation is in
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr180_integration_20260908/k1_targeted_capture/`.
+
+
+## 2026-09-01 — fixed-capacity call-0 score gate sealed for review
+
+- Scope is K=1, score-only call 0 with both adjoints disabled.  The fixed seam
+  remains private and default-off; unsupported diagnostics, correction paths,
+  M-step/noise work, K>1, and later calls still fail closed.
+- The deterministic gate has three active raw-real images, a four-image
+  physical capacity, radix 16, eight active rotation rows, two translations,
+  nonuniform priors and pre-shifts, and significant-support pruning.  It runs
+  mature/default, selector-disabled, and fixed arms through the same wrapper.
+- Diagnostic capture checks byte-identical prepared arrays and exact
+  scores/`log_Z`/argmax/Pmax/posterior/support/significant counts.  It then
+  checks the public score-only outputs and repeats the three arms through the
+  ordinary non-debug production topology.  Float32 and float64 are separate
+  lanes; the dormant future-noise envelope is at least `1e3` tighter in
+  float64 and cannot activate without a material speed result.
+- The first CPU dry run completed with zero mature/fixed and default/disabled
+  deltas in every continuous metric and exact discrete outputs.  It emitted a
+  JAX warning that exposed the existing donation-position error:
+  `donate_argnums=(4,5)` named `corr_img_rfloat_square_half` and
+  `mean_for_proj`, not the documented accumulators.  Dedicated commit
+  `13bfcce4a` changes the mapping to `(7,8)` (`Ft_y`, `Ft_ctf`) and adds
+  signature/caller guards; the corrected dry run emits no warning.
+- The Slurm seal pins the committed HEAD, full source manifest, H100 node and
+  physical GPU UUID, focused test count, isolated CUDA binary/runtime caches,
+  import/ancestry provenance, final clean tree, final manifest, and final GPU
+  identity.  `COMPLETED` is written last.  Its result classification is
+  `correctness_only`; `speed_claim_allowed` and `default_promotion_allowed`
+  are false.
+- Harness/test/runner commit `d880da3d0` remained separate from donation fix
+  `13bfcce4a`.  Independent review returned GO with no blockers.  Its reviewed
+  source-manifest digest is
+  `986f6c733672425e87c8de6b8c7dec18e5d4085c663145d5e2510af6d0a72e6c`.
+- H100 job `13288282` completed `0:0` in `00:01:23` on `della-h21g4`, UUID
+  `GPU-099c0d77-bb85-f2e9-f628-148b733c9176`, with `7/7` focused tests.  It
+  ran eight diagnostic comparisons and twelve independent uninstrumented
+  output comparisons.  All max and p95 score/centered-score, `log_Z`, best
+  score, Pmax, posterior, and posterior-mass deltas are `0.0`; exact input
+  bytes, support, argmax, significant counts `[2,4,4]`, and reconstruction row
+  count `6` all pass.  Float32/float64 score dtypes are independently sealed.
+- Evidence root is
+  `/scratch/gpfs/GILLES/mg6942/fixed_capacity_local_score_gate_d880da3d0_20260901T065944Z`
+  with `SAFE_TO_DELETE` and `COMPLETED`.  CUDA SHA-256 is
+  `948a728b98e2d38c882a6832abba991cbbcb4ae87474b849f109166dd7158db6`;
+  diagnostics SHA-256 is
+  `f9b73b6facd9f74b41c4e7c76a46f6b47fb6d45734cc032f5a07f8fcadf64d25`;
+  gate JSON SHA-256 is
+  `065e2901accefe57e59e61e6048a3ae5e66d929e4ce470527c640bec19849f7f`;
+  JUnit SHA-256 is
+  `96dc875b31f7c0a5bbe61f3344cd9f07745a92bd0b1b8ee8ddb5408185d2082f`.
+- This result closes correctness only.  No speed or default claim is allowed.
+  Next run a separate donation M-step runtime/peak-memory gate, then continue
+  extending the fixed executor beyond call 0 before any production promotion.

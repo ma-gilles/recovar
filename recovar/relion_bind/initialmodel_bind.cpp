@@ -35,6 +35,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -565,12 +566,12 @@ static double vdam_compute_stepsize(
         float inflate = textToFloat(_scheme.substr(0, _scheme.find("-step")));
         if (inflate <= 0.)
             throw std::runtime_error("Invalid inflate value for grad_stepsize_scheme");
-        RFLOAT x = (RFLOAT)iter;
+        float x = iter;
         // RELION assigns `float a = grad_inbetween_iter/2`, so C++ integer
-        // division happens before conversion to RFLOAT.
-        RFLOAT a = (RFLOAT)(grad_inbetween_iter / 2);
-        RFLOAT b = (RFLOAT)grad_ini_iter;
-        RFLOAT scale = 1. / (std::pow(10.0, (x - b - a / 2.) / (a / 4.)) + 1.);
+        // division happens before conversion to float.
+        float a = grad_inbetween_iter / 2;
+        float b = grad_ini_iter;
+        float scale = 1. / (std::pow(10.0, (x - b - a / 2.) / (a / 4.)) + 1.);
         return (_stepsize * inflate) * scale + _stepsize * (1 - scale);
     }
 
@@ -618,13 +619,13 @@ static double vdam_compute_tau2_fudge(
         float deflate = textToFloat(_scheme.substr(0, _scheme.find("-step")));
         if (deflate <= 0.)
             throw std::runtime_error("Invalid deflate value for tau2_fudge_scheme");
-        RFLOAT x = (RFLOAT)iter;
+        float x = iter;
         // RELION assigns `float a = grad_inbetween_iter/4`. Short runs can
         // therefore hit a=0 and intentionally propagate NaN through the
         // sigmoid, matching InitialModel model.star output.
-        RFLOAT a = (RFLOAT)(grad_inbetween_iter / 4);
-        RFLOAT b = (RFLOAT)grad_ini_iter;
-        RFLOAT scale = 1. / (std::pow(10.0, (x - b - a / 2.) / (a / 4.)) + 1.);
+        float a = grad_inbetween_iter / 4;
+        float b = grad_ini_iter;
+        float scale = 1. / (std::pow(10.0, (x - b - a / 2.) / (a / 4.)) + 1.);
         return (_fudge / deflate) * scale + _fudge * (1 - scale);
     }
 
@@ -1414,13 +1415,202 @@ static py::array_t<long> vdam_randomise_particles_order(
 }
 
 
+// Execute the same primitive sequence without rebuilding a BackProjector and
+// copying its intermediate data through NumPy after every operation.
+static py::dict vdam_m_step_transaction(
+    py::array_t<double, py::array::c_style | py::array::forcecast> vol_relion,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> data_h0,
+    py::array_t<double, py::array::c_style | py::array::forcecast> weight_h0,
+    py::object data_h1_in,
+    py::object weight_h1_in,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> mom1_h0_in,
+    py::object mom1_h1_in,
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> mom2_in,
+    py::array_t<double, py::array::c_style | py::array::forcecast> fsc_ssnr_in,
+    py::array_t<double, py::array::c_style | py::array::forcecast> fsc_reconstruct_in,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tau2_in,
+    double grad_stepsize,
+    double tau2_fudge,
+    int ori_size,
+    int padding_factor,
+    int interpolator,
+    int r_max,
+    double min_resol_shell
+) {
+    using ComplexArray = py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast>;
+    using RealArray = py::array_t<double, py::array::c_style | py::array::forcecast>;
+    if (ori_size <= 0 || padding_factor <= 0 || r_max > ori_size / 2)
+        throw std::invalid_argument("invalid M-step original size, padding factor, or radius");
+    // The old primitives override initZeros(-1)'s radius only when r_max > 0.
+    const int radius = r_max > 0 ? r_max : ori_size / 2;
+    const long padded_radius = static_cast<long>(padding_factor) * radius;
+    const long n_shells = ori_size / 2 + 1;
+    const auto vol_buf = vol_relion.request();
+    if (vol_buf.ndim != 3 || vol_buf.shape[0] != ori_size ||
+        vol_buf.shape[1] != ori_size || vol_buf.shape[2] != ori_size)
+        throw std::invalid_argument("vol_relion must have shape (ori_size, ori_size, ori_size)");
+
+    const auto validate_half = [padded_radius](const py::buffer_info &buf, const char *name) {
+        // Moments live on the original grid and may be larger than BPref.
+        // Both odd current-size BPref and even original-grid half maps occur.
+        if (buf.ndim != 3 || buf.shape[0] <= 0 || buf.shape[0] != buf.shape[1] ||
+            buf.shape[2] != buf.shape[0] / 2 + 1 || buf.shape[0] / 2 < padded_radius)
+            throw std::invalid_argument(std::string(name) + " must be a centered half volume covering r_max");
+    };
+    const auto require_same_shape = [](const py::buffer_info &left,
+                                       const py::buffer_info &right, const char *name) {
+        if (left.shape != right.shape)
+            throw std::invalid_argument(std::string(name) + " shapes differ");
+    };
+    const auto data0_buf = data_h0.request();
+    const auto weight0_buf = weight_h0.request();
+    const auto mom10_buf = mom1_h0_in.request();
+    const auto mom2_buf = mom2_in.request();
+    validate_half(data0_buf, "data_h0");
+    validate_half(weight0_buf, "weight_h0");
+    validate_half(mom10_buf, "mom1_h0");
+    validate_half(mom2_buf, "mom2");
+    require_same_shape(data0_buf, weight0_buf, "half-0 data/weight");
+    require_same_shape(mom10_buf, mom2_buf, "first/second moments");
+
+    const bool pseudo_halfsets = !data_h1_in.is_none();
+    if (pseudo_halfsets != !weight_h1_in.is_none() || pseudo_halfsets != !mom1_h1_in.is_none())
+        throw std::invalid_argument("data_h1, weight_h1, and mom1_h1 must be present together");
+    ComplexArray data_h1, mom1_h1;
+    RealArray weight_h1;
+    if (pseudo_halfsets) {
+        data_h1 = data_h1_in.cast<ComplexArray>();
+        weight_h1 = weight_h1_in.cast<RealArray>();
+        mom1_h1 = mom1_h1_in.cast<ComplexArray>();
+        validate_half(data_h1.request(), "data_h1");
+        validate_half(weight_h1.request(), "weight_h1");
+        validate_half(mom1_h1.request(), "mom1_h1");
+        require_same_shape(data0_buf, data_h1.request(), "halfset data");
+        require_same_shape(data0_buf, weight_h1.request(), "halfset weight");
+        require_same_shape(mom10_buf, mom1_h1.request(), "halfset moments");
+    }
+    for (const auto *array : {&fsc_ssnr_in, &fsc_reconstruct_in, &tau2_in}) {
+        const auto buf = array->request();
+        if (buf.ndim != 1 || buf.shape[0] != n_shells)
+            throw std::invalid_argument("FSC and tau2 inputs must have ori_size/2+1 shells");
+    }
+
+    // No initZeros: every field read by the moment/SSNR methods is set by
+    // this constructor or below. Data/weight are fully copied and given their
+    // Xmipp origins by the same helpers as the primitive bindings. pad_size
+    // is read only by reconstructGrad, which uses its explicit radius there.
+    BackProjector bp0(ori_size, 3, "C1", interpolator, (float)padding_factor,
+                     10, 0, 1.9, 15, 2, false);
+    bp0.r_max = radius;
+    bp0.pad_size = 2 * (padded_radius + 1) + 1;
+    bp0.data = numpy_to_complex_3d(data_h0);
+    bp0.weight = numpy_to_real_3d(weight_h0);
+    std::unique_ptr<BackProjector> bp1;
+    if (pseudo_halfsets) {
+        bp1 = std::make_unique<BackProjector>(ori_size, 3, "C1", interpolator,
+                                            (float)padding_factor, 10, 0, 1.9, 15, 2, false);
+        bp1->r_max = radius;
+        bp1->pad_size = bp0.pad_size;
+        bp1->data = numpy_to_complex_3d(data_h1);
+        bp1->weight = numpy_to_real_3d(weight_h1);
+    }
+    MultidimArray<Complex> mom10 = numpy_to_complex_3d(mom1_h0_in);
+    MultidimArray<Complex> mom11;
+    if (pseudo_halfsets)
+        mom11 = numpy_to_complex_3d(mom1_h1);
+    MultidimArray<Complex> mom2 = numpy_to_complex_3d(mom2_in);
+
+    bp0.reweightGrad();
+    if (pseudo_halfsets)
+        bp1->reweightGrad();
+    bp0.getFristMoment(mom10, (RFLOAT)0.9);
+    if (pseudo_halfsets)
+        bp1->getFristMoment(mom11, (RFLOAT)0.9);
+    if (pseudo_halfsets)
+        bp0.getSecondMoment(mom2, bp1->data, (RFLOAT)0.999);
+    // Python passes m1_h0 twice when pseudo-halfsets are disabled. RELION's
+    // shape-based do_half detection still applies; do not change that behavior.
+    // applyMomenta reads the moment values without modifying them.
+    bp0.applyMomenta(mom10, pseudo_halfsets ? mom11 : mom10, mom2);
+
+    MultidimArray<RFLOAT> fsc_ssnr(n_shells), fsc_reconstruct(n_shells), tau2(n_shells);
+    std::memcpy(fsc_ssnr.data, fsc_ssnr_in.request().ptr, n_shells * sizeof(RFLOAT));
+    std::memcpy(fsc_reconstruct.data, fsc_reconstruct_in.request().ptr, n_shells * sizeof(RFLOAT));
+    std::memcpy(tau2.data, tau2_in.request().ptr, n_shells * sizeof(RFLOAT));
+    MultidimArray<RFLOAT> sigma2, data_vs_prior, fourier_coverage, avgctf2(n_shells);
+    avgctf2.initConstant(1.0);
+    bp0.updateSSNRarrays((RFLOAT)tau2_fudge, tau2, sigma2, data_vs_prior,
+                        fourier_coverage, fsc_ssnr, avgctf2, false, false, false);
+
+    // Match vdam_reconstruct_grad's skip_gridding=true and retain the native
+    // uncorrected reference FFT. This is not the corrected E-step projector.
+    bp0.skip_gridding = true;
+    MultidimArray<RFLOAT> vol(ori_size, ori_size, ori_size);
+    std::memcpy(vol.data, vol_buf.ptr, vol_buf.size * sizeof(RFLOAT));
+    bp0.reconstructGrad(vol, fsc_reconstruct, (RFLOAT)grad_stepsize,
+                        (RFLOAT)tau2_fudge, (RFLOAT)min_resol_shell, false, false);
+
+    py::array_t<double> iref({(long)ZSIZE(vol), (long)YSIZE(vol), (long)XSIZE(vol)});
+    std::memcpy(iref.request().ptr, vol.data, ZSIZE(vol) * YSIZE(vol) * XSIZE(vol) * sizeof(RFLOAT));
+    py::dict result;
+    result["iref"] = iref;
+    result["mom1_h0"] = complex_3d_to_numpy(mom10);
+    result["mom1_h1"] = py::none();
+    if (pseudo_halfsets)
+        result["mom1_h1"] = complex_3d_to_numpy(mom11);
+    result["mom2"] = complex_3d_to_numpy(mom2);
+    result["tau2"] = real_1d_to_numpy(tau2);
+    result["sigma2"] = real_1d_to_numpy(sigma2);
+    result["data_vs_prior"] = real_1d_to_numpy(data_vs_prior);
+    result["fourier_coverage"] = real_1d_to_numpy(fourier_coverage);
+    result["mom1_noise_power"] = real_1d_to_numpy(bp0.mom1_noise_power);
+    return result;
+}
+
+
 // ===========================================================================
 //  Binding registration
 // ===========================================================================
 
 
+// getFristMoment's branch uses MultidimArray<Complex>::sum(): the
+// sequential RFLOAT sum of real components over the complete moment array.
+// Keep this certificate on already-host-resident inputs; a parallel device
+// reduction can change the exact-zero branch for cancelling nonzero moments.
+static bool vdam_first_moment_initializes(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> moment
+) {
+    const auto buf = moment.request();
+    if (buf.ndim != 3)
+        throw std::invalid_argument("moment must be a three-dimensional complex array");
+    const auto *values = static_cast<const std::complex<double> *>(buf.ptr);
+    RFLOAT sum = 0;
+    for (py::ssize_t index = 0; index < buf.size; ++index)
+        sum += values[index].real();
+    return sum == 0.;
+}
+
+
 void init_initialmodel_bindings(py::module_ &m) {
+    m.def("vdam_first_moment_initializes", &vdam_first_moment_initializes,
+          py::arg("moment"),
+          "Return the native serial real-sum==0 first-moment branch certificate.");
+
     // ----- Moment primitives -----
+
+    m.def("vdam_m_step_transaction", &vdam_m_step_transaction,
+          py::arg("vol_relion"), py::arg("data_h0"), py::arg("weight_h0"),
+          py::arg("data_h1"), py::arg("weight_h1"), py::arg("mom1_h0"),
+          py::arg("mom1_h1"), py::arg("mom2"), py::arg("fsc_ssnr"),
+          py::arg("fsc_reconstruct"), py::arg("tau2"), py::arg("grad_stepsize"),
+          py::arg("tau2_fudge"), py::arg("ori_size"), py::arg("padding_factor"),
+          py::arg("interpolator"), py::arg("r_max"), py::arg("min_resol_shell"),
+          R"doc(
+Run the native VDAM M-step primitive sequence with private resident buffers.
+Half-1 data, weight, and first moment must all be arrays or all None.
+Inputs are not modified. Returns reference, moments, and shell statistics.
+)doc");
+
 
     m.def("vdam_reweight_grad", &vdam_reweight_grad,
           py::arg("data"), py::arg("weight"),

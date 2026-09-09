@@ -6,21 +6,45 @@ from __future__ import annotations
 import numpy as np
 
 
-def _as_centered_full_volume(values: np.ndarray, ori_size: int) -> np.ndarray:
-    arr = np.asarray(values)
-    if arr.shape == (ori_size, ori_size, ori_size):
-        return arr
-    if arr.size != ori_size**3:
-        raise ValueError(f"expected full centered Fourier volume of size {ori_size**3}, got shape {arr.shape}")
-    return arr.reshape(ori_size, ori_size, ori_size)
-
-
 def _bp_slab(arr: np.ndarray, r_max: int, c: int) -> np.ndarray:
     """Slice a centered full volume into a RELION BPref slab (full half-complex or cropped)."""
     if r_max >= c:
         return np.concatenate([arr[:, :, c:], arr[:, :, :1]], axis=2)
     half_ps = r_max + 1
     return arr[c - half_ps : c + half_ps + 1, c - half_ps : c + half_ps + 1, c : c + half_ps + 1]
+
+
+def _as_centered_bpref_source(
+    values: np.ndarray,
+    *,
+    ori_size: int,
+    r_max: int,
+    padding_factor: int,
+) -> tuple[np.ndarray, int, int]:
+    """Return ``(centered cube, center, effective radius)`` for BPref slicing.
+
+    Dense EM historically returned an original-box full cube. The shared
+    RELION x-half M-step returns its current-size odd BackProjector cube after
+    conversion to the public full layout. Both encode the same centered
+    support and must feed the one BPref slab conversion below.
+    """
+    arr = np.asarray(values)
+    full_size = int(ori_size) * int(padding_factor)
+    if arr.size == full_size**3:
+        return arr.reshape(full_size, full_size, full_size), full_size // 2, int(r_max)
+
+    effective_radius = int(float(padding_factor) * float(r_max) + 0.5)
+    compact_size = 2 * (effective_radius + 1) + 1
+    if arr.size == compact_size**3:
+        return (
+            arr.reshape(compact_size, compact_size, compact_size),
+            compact_size // 2,
+            effective_radius,
+        )
+    raise ValueError(
+        "expected either an original-box centered Fourier cube of size "
+        f"{full_size**3} or a current-size BackProjector cube of size {compact_size**3}; got shape {arr.shape}"
+    )
 
 
 def run_em_output_to_bpref(
@@ -36,10 +60,22 @@ def run_em_output_to_bpref(
     if r_max < 0:
         raise ValueError(f"r_max must be non-negative, got {r_max}")
 
-    N = int(ori_size) * int(padding_factor)
-    c = N // 2
-    bp_data = _bp_slab(_as_centered_full_volume(Ft_y, N), r_max, c)
-    bp_weight = _bp_slab(_as_centered_full_volume(Ft_ctf, N), r_max, c)
+    data_cube, data_center, data_radius = _as_centered_bpref_source(
+        Ft_y,
+        ori_size=ori_size,
+        r_max=r_max,
+        padding_factor=padding_factor,
+    )
+    weight_cube, weight_center, weight_radius = _as_centered_bpref_source(
+        Ft_ctf,
+        ori_size=ori_size,
+        r_max=r_max,
+        padding_factor=padding_factor,
+    )
+    if (data_center, data_radius) != (weight_center, weight_radius):
+        raise ValueError("data and weight accumulators use different centered layouts")
+    bp_data = _bp_slab(data_cube, data_radius, data_center)
+    bp_weight = _bp_slab(weight_cube, weight_radius, weight_center)
 
     # Clamp denormal weights to 0 (RELION ``updateSSNRarrays`` aborts on (0, 1e-20]).
     bp_weight_f64 = np.asarray(bp_weight.real, dtype=np.float64).copy()

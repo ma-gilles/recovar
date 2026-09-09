@@ -29,6 +29,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from recovar.commands.initial_model import initial_model_defaults_dict
 from recovar.gui_v2.backend.api.project import get_project_path
 from recovar.gui_v2.backend.config import get_db_path, iso_utc
 from recovar.gui_v2.backend.db import init_db
@@ -39,6 +40,7 @@ from recovar.gui_v2.backend.services.command_builder import (
     build_compute_trajectory_command,
     build_density_command,
     build_downsample_command,
+    build_initial_model_command,
     build_pipeline_command,
     build_postprocess_command,
     build_stable_states_command,
@@ -510,7 +512,16 @@ async def _validate_job_params(
     warnings: list[str] = []
     info: dict[str, Any] = {}
 
-    if job_type == "Pipeline":
+    if job_type == "InitialModel":
+        input_star = params.get("input_star", "")
+        if not input_star:
+            errors.append("Input STAR file is required.")
+        elif not os.path.isfile(input_star):
+            errors.append(f"Input STAR file not found: {input_star}")
+        elif Path(input_star).suffix.lower() != ".star":
+            errors.append("InitialModel input must be a RELION STAR file.")
+
+    elif job_type == "Pipeline":
         particles = params.get("particles", "")
         if particles and not os.path.isfile(particles):
             errors.append(f"Particles file not found: {particles}")
@@ -623,6 +634,9 @@ async def validate_job(req: ValidateJobRequest) -> ValidationResult:
     # Normalize job type
     _type_aliases_local = {
         "pipeline": "Pipeline",
+        "initial_model": "InitialModel",
+        "initialmodel": "InitialModel",
+        "abinitio": "InitialModel",
         "analyze": "Analyze",
         "compute_state": "ComputeState",
         "computestate": "ComputeState",
@@ -641,6 +655,13 @@ async def validate_job(req: ValidateJobRequest) -> ValidationResult:
     return await _validate_job_params(project_path, job_type, req.params)
 
 
+@router.get("/initial-model/defaults", response_model=dict[str, Any])
+async def get_initial_model_defaults() -> dict[str, Any]:
+    """Return the native defaults consumed by both the CLI and GUI form."""
+
+    return initial_model_defaults_dict()
+
+
 @router.post("", response_model=SubmitJobResponse, status_code=201)
 async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
     """Validate parameters, create job record, submit to executor."""
@@ -654,6 +675,9 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
     # Normalize job type: accept lowercase/underscore forms from the frontend
     _type_aliases = {
         "pipeline": "Pipeline",
+        "initial_model": "InitialModel",
+        "initialmodel": "InitialModel",
+        "abinitio": "InitialModel",
         "analyze": "Analyze",
         "compute_state": "ComputeState",
         "computestate": "ComputeState",
@@ -672,6 +696,7 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
     # Allocate output directory
     type_dir_map = {
         "Pipeline": "Pipeline",
+        "InitialModel": "InitialModel",
         "Analyze": "Analyze",
         "ComputeState": "ReconstructState",
         "ComputeTrajectory": "ReconstructTrajectory",
@@ -697,7 +722,15 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
 
     # Validate key inputs before submission
     warnings: list[str] = []
-    if job_type == "Pipeline":
+    if job_type == "InitialModel":
+        input_star = params.get("input_star", "")
+        if not input_star:
+            raise HTTPException(status_code=400, detail="Input STAR file is required.")
+        if not os.path.isfile(input_star):
+            raise HTTPException(status_code=400, detail=f"Input STAR file not found: {input_star}")
+        if Path(input_star).suffix.lower() != ".star":
+            raise HTTPException(status_code=400, detail="InitialModel input must be a RELION STAR file.")
+    elif job_type == "Pipeline":
         particles = params.get("particles", "")
         if particles and not os.path.isfile(particles):
             raise HTTPException(status_code=400, detail=f"Particles file not found: {particles}")
@@ -729,7 +762,9 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
         pass
 
     # Build command based on type
-    if job_type == "Pipeline":
+    if job_type == "InitialModel":
+        command = build_initial_model_command(params)
+    elif job_type == "Pipeline":
         command = build_pipeline_command(params)
     elif job_type == "Analyze":
         command = build_analyze_command(params)

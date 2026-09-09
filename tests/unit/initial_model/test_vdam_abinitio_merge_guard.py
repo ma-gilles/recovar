@@ -12,7 +12,6 @@ from recovar.em.initial_model.gt_metrics import (
 )
 from scripts.run_vdam_abinitio_merge_guard import _default_output_root, build_guard_commands, run_guard
 
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
@@ -74,6 +73,7 @@ def test_merge_guard_plan_contains_cpu_and_gpu_gates():
     assert cpu_names == [
         "py_compile",
         "vdam_abinitio_contracts",
+        "vdam_frozen_scorecard",
         "initial_model_vdam_unit_slice",
         "initial_model_unit_suite",
         "em_fast_guard",
@@ -180,7 +180,7 @@ def test_native_vdam_solvent_flattening_is_separate_from_zero_mask():
     run_ab_initio = (REPO_ROOT / "scripts/run_ab_initio.py").read_text()
 
     expected_tokens = [
-        "do_solvent: bool = True",
+        "do_solvent: bool = INITIAL_MODEL_GUI_DEFAULTS.do_solvent",
         "if opts.do_solvent",
         "relion_solvent_mask",
         "relion_solvent_flatten_state",
@@ -189,6 +189,692 @@ def test_native_vdam_solvent_flattening_is_separate_from_zero_mask():
     haystack = "\n".join([driver, iteration_loop, run_ab_initio])
     missing = [token for token in expected_tokens if token not in haystack]
     assert not missing, f"native InitialModel lost RELION --flatten_solvent post-M-step wiring: {missing}"
+
+
+def test_native_vdam_writes_auditable_iteration_zero_checkpoint():
+    driver = (REPO_ROOT / "recovar/em/initial_model/driver.py").read_text()
+    tests = (REPO_ROOT / "tests/unit/initial_model/test_native_driver.py").read_text()
+    expected_tokens = [
+        '{"checkpoint_iteration": 0, "phase": "bootstrap"}',
+        "test_iteration_zero_artifacts_use_the_normal_iteration_writer",
+        'run_it000_class001.mrc',
+        'run_it000_model.star',
+        'run_it000_data.star',
+        'run_it000_recovar_meta.json',
+    ]
+    missing = [token for token in expected_tokens if token not in driver + tests]
+    assert not missing, f"native InitialModel lost iteration-zero checkpoint wiring: {missing}"
+
+
+def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
+    guard = (REPO_ROOT / "scripts/run_vdam_abinitio_merge_guard.py").read_text()
+    runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.py").read_text()
+    auditor = (REPO_ROOT / "scripts/audit_vdam_fsc_trajectory.py").read_text()
+    sbatch = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
+    preprocess_sbatch = (
+        REPO_ROOT / "scripts/run_vdam_relion_preprocess_capture.sbatch"
+    ).read_text()
+    expected_tokens = [
+        "test_audit_vdam_fsc_trajectory.py",
+        "test_run_vdam_relion_parity_case.py",
+        "build_relion_command",
+        "build_recovar_command",
+        "--require_custom_cuda",
+        'env["JAX_PLATFORMS"] = "cuda,cpu"',
+        "runtime_environment.json",
+        "materialize(",
+        "cwd=fixture_dir",
+        "paired_gpu_uuid.json",
+        "signed shellwise FSC and normalized non-DC FSC-AUC only",
+        "CHECKPOINTS = (0, 1, 2, 4, 8)",
+        "artifact_topology_exact",
+        "correlation_used",
+        "--gres=gpu:1",
+        "RECOVAR_CUDA_LIB",
+        "cuda_backproject.cuda_available()",
+        "VDAM parity provenance/GPU/CUDA-FFI gate passed",
+        "binding_path.is_file()",
+        '--threads "${RELION_THREADS:-8}"',
+        '--relion-refine "${RELION_REFINE}"',
+        'mkdir -p "${RELION_ACC_DUMP_DIR}"',
+        "export RELION_DUMP_DIR=",
+        "export RELION_DUMP_PART_ID=",
+        "export RELION_DUMP_ITER=",
+        "VDAM_PREPROCESS_PART_IDS",
+        "VDAM_PREPROCESS_EXPECTED_PART_COUNT",
+        "VDAM_PREPROCESS_THREADS",
+        "VDAM_PREPROCESS_CAPTURE_MSTEP",
+        "VDAM_PREPROCESS_REQUIRE_UNMASKED_WAVG_IMAGE",
+        'test "${actual_part_count}" -eq "${EXPECTED_PART_COUNT}"',
+        "export RELION_ACC_DUMP_PART_IDS=",
+        "export RECOVAR_DEBUG_DUMP_DIR=",
+        "pipe_it1_c0_bp_data_h_pre_reweight.bin",
+        "img0_part${capture_part_id}_storeWavg_${suffix}.bin",
+        'if [[ "${REQUIRE_UNMASKED_WAVG_IMAGE}" = 1 ]]',
+        "Minvsigma2 sigma2_noise sigma2_fudge",
+    ]
+    haystack = "\n".join([guard, runner, auditor, sbatch, preprocess_sbatch])
+    assert 'pathlib.Path(_relion_bind_core.__file__).resolve()).startswith' not in sbatch
+    missing = [token for token in expected_tokens if token not in haystack]
+    assert not missing, f"VDAM trajectory runner/auditor lost required wiring: {missing}"
+
+
+def test_vdam_fixed12_matrix_maps_array_tasks_to_frozen_case_ids():
+    matrix = (REPO_ROOT / "scripts/run_vdam_relion_parity_matrix.sbatch").read_text()
+    expected_tokens = [
+        "#SBATCH --array=1-12%4",
+        "SLURM_ARRAY_TASK_ID < 1",
+        "SLURM_ARRAY_TASK_ID > 12",
+        "printf 'vdam-%02d'",
+        "run_vdam_relion_parity_case.sbatch",
+        "OUTPUT_ROOT",
+    ]
+    missing = [token for token in expected_tokens if token not in matrix]
+    assert not missing, f"VDAM fixed12 matrix lost task-to-case wiring: {missing}"
+    assert "RECOVAR_VDAM_IMAGE_BATCH_SIZE" not in matrix
+    assert "RECOVAR_EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB" not in matrix
+
+
+def test_vdam_parameter_suite_freezes_user_facing_variants_and_default_resources():
+    suite_path = REPO_ROOT / "docs/math/vdam_k1_parameter_suite_v1.json"
+    suite = json.loads(suite_path.read_text())
+    matrix = (REPO_ROOT / "scripts/run_vdam_relion_parameter_suite.sbatch").read_text()
+    case_runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
+
+    assert suite["schema"] == "recovar.vdam_relion_parity_suite.v1"
+    assert suite["suite_id"] == "vdam-k1-parameter-v1"
+    assert len(suite["cases"]) == 11
+    assert [case["id"] for case in suite["cases"]] == [f"vdam-p{index:02d}" for index in range(1, 12)]
+    definitions = [case["definition"] for case in suite["cases"]]
+    assert {definition["tau2_fudge"] for definition in definitions} >= {2, 4, 8}
+    assert {definition["healpix_order"] for definition in definitions} >= {0, 1, 2}
+    assert {definition["oversampling"] for definition in definitions} >= {0, 1, 2}
+    assert {definition["padding_factor"] for definition in definitions} >= {1, 2}
+    assert {definition["symmetry"] for definition in definitions} >= {"C1", "C2"}
+    assert "#SBATCH --array=1-11%4" in matrix
+    assert "VDAM_SCORECARD" in matrix and "VDAM_SCORECARD" in case_runner
+    assert "RECOVAR_VDAM_IMAGE_BATCH_SIZE" not in matrix
+
+
+def test_vdam_long_trajectory_suite_freezes_all_late_checkpoints():
+    suite = json.loads((REPO_ROOT / "docs/math/vdam_k1_long_trajectory_suite_v1.json").read_text())
+    matrix = (REPO_ROOT / "scripts/run_vdam_relion_long_trajectory_suite.sbatch").read_text()
+
+    assert suite["suite_id"] == "vdam-k1-long-trajectory-v1"
+    assert suite["acceptance_contract"]["required_checkpoints"] == [0, 1, 2, 4, 8, 12, 16, 20, 25]
+    assert [case["id"] for case in suite["cases"]] == ["vdam-l01", "vdam-l02", "vdam-l03"]
+    assert all(case["definition"]["nr_iter"] == 25 for case in suite["cases"])
+    assert "#SBATCH --array=1-3%3" in matrix
+    assert "VDAM_SCORECARD" in matrix
+
+
+def test_vdam_robustness_suite_covers_em_outlier_pose_and_noise_matrix():
+    suite = json.loads((REPO_ROOT / "docs/math/vdam_k1_robustness_suite_v1.json").read_text())
+    matrix = (REPO_ROOT / "scripts/run_vdam_relion_robustness_suite.sbatch").read_text()
+
+    assert suite["schema"] == "recovar.vdam_relion_parity_suite.v1"
+    assert suite["suite_id"] == "vdam-k1-robustness-v1"
+    assert suite["acceptance_contract"] == {
+        "cross_engine_fsc_auc_min": 0.999,
+        "recovar_minus_relion_gt_fsc_auc_min": -0.002,
+        "required_checkpoints": [0, 1, 2, 4, 8],
+        "exact_schedule": True,
+        "exact_artifact_topology": True,
+        "same_physical_gpu_per_pair": True,
+        "correlation_used": False,
+    }
+    cases = suite["cases"]
+    assert [case["id"] for case in cases] == [f"vdam-b{index:02d}" for index in range(1, 13)]
+    assert [case["definition"]["source_em_case_id"] for case in cases] == [
+        "k1-15", "k1-16", "k1-17", "k1-21", "k1-23", "k1-24",
+        "k1-26", "k1-27", "k1-28", "k1-29", "k1-30", "k1-32",
+    ]
+    assert all(case["definition"]["nr_iter"] == 8 for case in cases)
+    assert all(case["definition"]["nr_classes"] == 1 for case in cases)
+    coverage = {axis for case in cases for axis in case["coverage"]}
+    assert {
+        "outliers",
+        "extreme_outliers",
+        "junk_particles",
+        "uniform_poses",
+        "anisotropic_poses",
+        "kent_poses",
+        "white_noise",
+        "radial_noise",
+        "low_noise",
+        "high_noise",
+        "no_ctf",
+        "contrast_noise_scale",
+        "translations",
+        "small_n",
+        "midscale",
+    } <= coverage
+    assert "#SBATCH --array=1-12%4" in matrix
+    assert "printf 'vdam-b%02d'" in matrix
+    assert "VDAM_SCORECARD" in matrix
+    assert "run_vdam_relion_parity_case.sbatch" in matrix
+    assert "RECOVAR_VDAM_IMAGE_BATCH_SIZE" not in matrix
+
+
+def test_vdam_robustness_long_suite_carries_stress_cases_through_late_schedule():
+    suite = json.loads((REPO_ROOT / "docs/math/vdam_k1_robustness_long_suite_v1.json").read_text())
+    matrix = (REPO_ROOT / "scripts/run_vdam_relion_robustness_long_suite.sbatch").read_text()
+
+    assert suite["schema"] == "recovar.vdam_relion_parity_suite.v1"
+    assert suite["suite_id"] == "vdam-k1-robustness-long-v1"
+    assert suite["acceptance_contract"]["required_checkpoints"] == [
+        0, 1, 2, 4, 8, 12, 16, 20, 25,
+    ]
+    cases = suite["cases"]
+    assert [case["id"] for case in cases] == [f"vdam-bl{index:02d}" for index in range(1, 5)]
+    assert [case["definition"]["source_em_case_id"] for case in cases] == [
+        "k1-16", "k1-24", "k1-27", "k1-32",
+    ]
+    assert all(case["definition"]["nr_iter"] == 25 for case in cases)
+    assert all("late_schedule" in case["coverage"] for case in cases)
+    assert "#SBATCH --array=1-4%4" in matrix
+    assert "printf 'vdam-bl%02d'" in matrix
+    assert "VDAM_SCORECARD" in matrix
+    assert "run_vdam_relion_parity_case.sbatch" in matrix
+
+
+def test_vdam_gui_default_full_suite_audits_every_200_iteration_checkpoint():
+    suite = json.loads((REPO_ROOT / "docs/math/vdam_k1_gui_default_full_suite_v1.json").read_text())
+    matrix = (REPO_ROOT / "scripts/run_vdam_relion_gui_default_full_suite.sbatch").read_text()
+
+    assert suite["schema"] == "recovar.vdam_relion_parity_suite.v1"
+    assert suite["suite_id"] == "vdam-k1-gui-default-full-v1"
+    assert suite["acceptance_contract"]["required_checkpoints"] == list(range(201))
+    cases = suite["cases"]
+    assert [case["id"] for case in cases] == [f"vdam-gf{index:02d}" for index in range(1, 23)]
+    assert [case["definition"]["source_em_case_id"] for case in cases] == [
+        "k1-11", "k1-16", "k1-24", "k1-32", "k1-15", "k1-17", "k1-21",
+        "k1-23", "k1-26", "k1-27", "k1-28", "k1-29", "k1-30",
+        "k1-12", "k1-13", "k1-14", "k1-18", "k1-19", "k1-20", "k1-22",
+        "k1-25", "k1-31",
+    ]
+    gui_defaults = {
+        "nr_classes": 1,
+        "nr_iter": 200,
+        "random_seed": 0,
+        "tau2_fudge": 4,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6,
+        "offset_step_px": 2,
+        "padding_factor": 1,
+        "symmetry": "C1",
+        "particle_diameter_angstrom": 200,
+    }
+    assert all(
+        all(case["definition"][key] == value for key, value in gui_defaults.items())
+        for case in cases
+    )
+    coverage = {axis for case in cases for axis in case["coverage"]}
+    assert {
+        "baseline",
+        "outliers",
+        "severe_outliers",
+        "extreme_outliers",
+        "junk_particles",
+        "uniform_poses",
+        "anisotropic_poses",
+        "kent_poses",
+        "white_noise",
+        "radial_noise",
+        "low_noise",
+        "high_noise",
+        "very_high_noise",
+        "no_ctf",
+        "contrast_noise_scale",
+        "translations",
+        "high_resolution",
+        "small_n",
+        "midscale",
+        "full_gui_schedule",
+    } <= coverage
+    assert all("full_gui_schedule" in case["coverage"] for case in cases)
+    assert "#SBATCH --array=1-22%4" in matrix
+    assert "JAX_COMPILATION_CACHE_DIR" in matrix
+    assert "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS" in matrix
+    assert "printf 'vdam-gf%02d'" in matrix
+    assert "RECOVAR_VDAM_IMAGE_BATCH_SIZE" not in matrix
+    assert "run_vdam_relion_parity_case.sbatch" in matrix
+
+
+def test_vdam_full_trajectory_expansion_covers_seed_and_parameter_robustness():
+    suite = json.loads(
+        (REPO_ROOT / "docs/math/vdam_k1_full_trajectory_expansion_v2.json").read_text()
+    )
+
+    assert suite["schema"] == "recovar.vdam_relion_parity_suite.v1"
+    assert suite["suite_id"] == "vdam-k1-full-trajectory-expansion-v2"
+    assert suite["acceptance_contract"]["required_checkpoints"] == list(range(201))
+    cases = suite["cases"]
+    assert [case["id"] for case in cases] == [f"vdam-gf{index:02d}" for index in range(23, 43)]
+    assert all(case["definition"]["nr_classes"] == 1 for case in cases)
+    assert all(case["definition"]["nr_iter"] == 200 for case in cases)
+    assert all(case["definition"]["random_seed"] == 17 for case in cases[:12])
+    assert all("seed_replica" in case["coverage"] for case in cases[:12])
+    assert all("parameter_override" in case["coverage"] for case in cases[12:])
+    coverage = {axis for case in cases for axis in case["coverage"]}
+    assert {
+        "uniform_poses",
+        "anisotropic_poses",
+        "kent_poses",
+        "white_noise",
+        "radial_noise",
+        "low_noise",
+        "high_noise",
+        "very_high_noise",
+        "outliers",
+        "severe_outliers",
+        "extreme_outliers",
+        "junk_particles",
+        "no_ctf",
+        "translations",
+        "high_resolution",
+        "midscale",
+        "tau2_fudge",
+        "healpix_order",
+        "oversampling",
+        "offset_search",
+        "particle_diameter",
+        "padding_factor",
+    } <= coverage
+    by_id = {case["id"]: case["definition"] for case in cases}
+    assert by_id["vdam-gf35"]["tau2_fudge"] == 2
+    assert by_id["vdam-gf36"]["tau2_fudge"] == 8
+    assert by_id["vdam-gf37"]["healpix_order"] == 2
+    assert by_id["vdam-gf38"]["oversampling"] == 0
+    assert (by_id["vdam-gf39"]["offset_range_px"], by_id["vdam-gf39"]["offset_step_px"]) == (4, 1)
+    assert (by_id["vdam-gf40"]["offset_range_px"], by_id["vdam-gf40"]["offset_step_px"]) == (8, 2)
+    assert by_id["vdam-gf41"]["particle_diameter_angstrom"] == 160
+    assert by_id["vdam-gf42"]["padding_factor"] == 2
+
+
+def test_vdam_case_runner_uses_job_scoped_runtime_roots():
+    runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
+    expected_tokens = [
+        "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/",
+        'export TMPDIR="${RUNTIME_ROOT}/tmp"',
+        'export PIXI_HOME="${RUNTIME_ROOT}/pixi_home"',
+        'export RATTLER_CACHE_DIR="${RUNTIME_ROOT}/rattler_cache"',
+    ]
+    missing = [token for token in expected_tokens if token not in runner]
+    assert not missing, f"VDAM case runner lost job-scoped runtime roots: {missing}"
+
+
+def test_vdam_first_state_boundary_capture_preserves_full_schedule():
+    capture = (REPO_ROOT / "scripts/run_vdam_first_state_boundary_capture.sbatch").read_text()
+
+    expected_tokens = [
+        '--nr_iter "${NR_ITER_SCHEDULE}"',
+        '--diagnostic_stop_after_iteration "${TARGET_ITERATION}"',
+        "VDAM_RELION_CONT_OPTIMISER=${RELION_OPTIMISER}",
+        "VDAM_RELION_CONT_NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE}",
+        "VDAM_RELION_CONT_CAPTURE=1",
+        "VDAM_RELION_CONT_STACK_INDEX=${TARGET_STACK_INDEX}",
+        "VDAM_RELION_CONT_PERTURBATION=${TARGET_RELION_PERTURBATION}",
+        "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES=${TARGET_ORIGINAL_INDEX}",
+        "CAPTURE_FUSED_SCORES=${CAPTURE_FUSED_SCORES:-0}",
+        "CAPTURE_COARSE_SCORE=${CAPTURE_COARSE_SCORE:-0}",
+        "RECOVAR_SIGNIFICANCE_DUMP_DIR=${RECOVAR_COARSE_CAPTURE}",
+        "RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES=${TARGET_ORIGINAL_INDEX}",
+        "RECOVAR_SIGNIFICANCE_DUMP_ITERATION=${TARGET_ITERATION}",
+        "significance_*.npz",
+        "export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES=1",
+        '"capture_coarse_score": bool(int(sys.argv[12]))',
+        "TARGET_ORIGINAL_INDEX=${TARGET_ORIGINAL_INDEX:-1002}",
+        "TARGET_STACK_INDEX=${TARGET_STACK_INDEX:-1003}",
+        "TARGET_RELION_PERTURBATION=${TARGET_RELION_PERTURBATION:-}",
+        "TARGET_RELION_PERTURBATION_SOURCE=${TARGET_RELION_PERTURBATION_SOURCE:-}",
+        '["random_perturbation"]',
+        'TARGET_RELION_PERTURBATION_SOURCE=${TARGET_RELION_PERTURBATION_SOURCE:-environment}',
+        "VDAM_SCORECARD=${VDAM_SCORECARD:-}",
+        "CASE_ID=${CASE_ID:-}",
+        "TARGET_GPU_UUID=${TARGET_GPU_UUID:-}",
+        "VDAM_TARGET_GPU_MISS",
+        "VDAM_GPU_RELEASE_MAX_USED_MIB",
+        "VDAM_GPU_RELEASE_TIMEOUT_S",
+        "gpu_memory_released=0",
+        'gpu_used_mib_before_recovar.txt',
+        '"gpu_used_mib_before_recovar":%d',
+        "VDAM_XLA_PYTHON_CLIENT_MEM_FRACTION",
+        'XLA_PYTHON_CLIENT_MEM_FRACTION=${BOUNDARY_XLA_MEM_FRACTION}',
+        '"xla_python_client_mem_fraction":"%s"',
+        "exit 75",
+        "build_recovar_command",
+        'int(definition["nr_classes"]) != 1',
+        'int(definition["nr_iter"]) != nr_iter_schedule',
+        'command.extend(["--diagnostic_stop_after_iteration", str(target_iteration)])',
+        'STATIC_INPUTS+=("${VDAM_SCORECARD}")',
+        "CAPTURE_LOCAL_SCORE=${CAPTURE_LOCAL_SCORE:-0}",
+        "CAPTURE_NATIVE_REPLAY=${CAPTURE_NATIVE_REPLAY:-1}",
+        "BOUNDARY_DETERMINISTIC_CUDA=${BOUNDARY_DETERMINISTIC_CUDA:-0}",
+        'export CUDA_LAUNCH_BLOCKING=${BOUNDARY_DETERMINISTIC_CUDA}',
+        'COMMAND+=(--deterministic_cuda)',
+        '"deterministic_cuda": bool(int(sys.argv[19]))',
+        '"cuda_launch_blocking": int(sys.argv[19])',
+        'if [[ "${CAPTURE_NATIVE_REPLAY}" == 1 ]]; then',
+        'test -z "$(find "${NATIVE_ROOT}" -mindepth 1 -print -quit)"',
+        "RECOVAR_LOCAL_SCORE_DUMP_DIR=${RECOVAR_SCORE_CAPTURE}",
+        "RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES=${TARGET_ORIGINAL_INDEX}",
+        "RECOVAR_LOCAL_SCORE_DUMP_ITERATION=${TARGET_ITERATION}",
+        "RECOVAR_LOCAL_SCORE_DUMP_OPERANDS=1",
+        "RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT RECOVAR_LOCAL_SCORE_DUMP_TARGET_ONLY",
+        "native_replay_state_audit.json",
+        "MetaDataTable::getValueToString uses %12.5f for negative doubles",
+        'serialized_expected = float(format(expected, ".5f" if expected < 0.0 else ".6f"))',
+        "observed != serialized_expected",
+        "serialized perturbation differs from RELION's representation",
+        'report["native_replay_full_schedule"] = True',
+        'report["native_replay_nr_iter_schedule"] = int(sys.argv[5])',
+        'report["target_pmax"]',
+        "target_error > 5.0e-4",
+        "#SBATCH --constraint=h100",
+        "#SBATCH --gres=gpu:h100:1",
+        '"nr_iter_schedule": int(sys.argv[5])',
+        '"case_id": sys.argv[15] or None',
+        '"target_relion_perturbation": float(sys.argv[17])',
+        '"scorecard": sys.argv[16] or None',
+        '"stopped_after_iteration": int(sys.argv[6])',
+        '"capture_native_replay": bool(int(sys.argv[13]))',
+        'test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"',
+        "RECOVAR_CUDA_LIB_OVERRIDE",
+        "CUDA_SOURCE_BINARY=${RECOVAR_CUDA_LIB_OVERRIDE:-${REPO_ROOT}/recovar/cuda/libcuda_backproject.so}",
+        "CUDA_BINARY=${OUTPUT_ROOT}/runtime/native/libcuda_backproject.so",
+        'cp --reflink=auto "${CUDA_SOURCE_BINARY}" "${CUDA_BINARY}"',
+        'export RECOVAR_CUDA_LIB=${CUDA_BINARY}',
+        "VDAM boundary GPU/CUDA-FFI gate passed",
+        "VDAM boundary CUDA library changed during import",
+        "VDAM boundary CUDA library changed during science",
+    ]
+    missing = [token for token in expected_tokens if token not in capture]
+    assert not missing, f"VDAM first-boundary capture lost full-schedule isolation: {missing}"
+    assert "--nr_iter 33" not in capture
+
+
+def test_vdam_first_state_boundary_capture_disables_unrequested_fused_dump():
+    capture = (REPO_ROOT / "scripts/run_vdam_first_state_boundary_capture.sbatch").read_text()
+
+    setup = """if [[ "${CAPTURE_FUSED_SCORES}" == 1 ]]; then
+  export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR=${RECOVAR_CAPTURE}
+  export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES=${TARGET_ORIGINAL_INDEX}
+  export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_ITERATION=${TARGET_ITERATION}
+  export RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES=1
+else
+  unset RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR
+  unset RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES
+  unset RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_ITERATION
+  unset RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES
+fi"""
+    validation = """if [[ "${CAPTURE_FUSED_SCORES}" == 1 ]]; then
+  test "$(find "${RECOVAR_CAPTURE}" -maxdepth 1 -type f -name 'local_fused_posterior_*.npz' | wc -l)" -eq 1"""
+
+    assert setup in capture
+    assert validation in capture
+    assert 'test -z "$(find "${RECOVAR_CAPTURE}" -mindepth 1 -print -quit)"' in capture
+
+
+def test_vdam_sampling_gate_can_stop_at_pretransition_boundary():
+    runner = (REPO_ROOT / "scripts/run_vdam_sampling_transition_gate.sbatch").read_text()
+
+    expected_tokens = [
+        '"${AUDIT_MODE}" != pretransition',
+        'elif [[ "${AUDIT_MODE}" == pretransition ]]; then',
+        "pretransition_maps.json",
+        "pretransition_particles.json",
+        "if (( STOP_ITERATION >= 90 )); then",
+        '--diagnostic_stop_after_iteration "${STOP_ITERATION}"',
+        'RANDOM_SEED=${RANDOM_SEED:-0}',
+        '--random_seed "${RANDOM_SEED}"',
+    ]
+    missing = [token for token in expected_tokens if token not in runner]
+    assert not missing, f"VDAM pretransition capture lost bounded audit wiring: {missing}"
+
+
+def test_vdam_native_continuation_repeat_panel_can_disable_observer():
+    runner = (REPO_ROOT / "scripts/run_vdam_native_continuation_repeat_panel.sbatch").read_text()
+
+    expected_tokens = [
+        "CAPTURE=${VDAM_RELION_REPEAT_CAPTURE:-1}",
+        'case "${CAPTURE}" in 0|1)',
+        "VDAM_RELION_CONT_CAPTURE=${CAPTURE}",
+    ]
+    missing = [token for token in expected_tokens if token not in runner]
+    assert not missing, f"VDAM native repeat panel lost observer-free mode: {missing}"
+
+
+def test_vdam_native_full_repeat_preserves_autonomous_schedule():
+    runner = (REPO_ROOT / "scripts/run_vdam_native_full_repeat.sbatch").read_text()
+
+    expected_tokens = [
+        'command[command.index("--iter") + 1] != "200"',
+        'test "$(sha256sum "${RELION_BINARY}"',
+        'for ((iteration = 0; iteration <= 200; iteration++)); do',
+        "native_repeat_maps.json",
+        "native_repeat_particles.json",
+        '"${PIXI_PY}" -m scripts.audit_vdam_kclass_trajectory',
+        '"${PIXI_PY}" -m scripts.audit_vdam_particle_state_trajectory',
+        'touch "${OUTPUT_ROOT}/SCIENCE_COMPLETED"',
+        'touch "${OUTPUT_ROOT}/AUDIT_FAILED"',
+        "#SBATCH --constraint=h100",
+        "#SBATCH --gres=gpu:h100:1",
+    ]
+    missing = [token for token in expected_tokens if token not in runner]
+    assert not missing, f"VDAM native full repeat lost autonomous trajectory contract: {missing}"
+
+
+def test_vdam_paired_runner_imports_from_clean_environment():
+    runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.sbatch").read_text()
+
+    assert '"${PIXI_PY}" -m scripts.run_vdam_relion_parity_case "${RUN_ARGS[@]}"' in runner
+    assert '"${PIXI_PY}" scripts/run_vdam_relion_parity_case.py' not in runner
+
+
+def test_vdam_mstep_boundary_capture_preserves_full_schedule_in_both_engines():
+    capture = (REPO_ROOT / "scripts/run_vdam_fullschedule_mstep_boundary.sbatch").read_text()
+
+    expected_tokens = [
+        "NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE:-200}",
+        "RELION_THREADS=${RELION_THREADS:-8}",
+        '--iter "${NR_ITER_SCHEDULE}"',
+        '--cpus-per-task="${RELION_THREADS}"',
+        '--j "${RELION_THREADS}"',
+        '--nr_iter "${NR_ITER_SCHEDULE}"',
+        '--diagnostic_stop_after_iteration "${TARGET_ITERATION}"',
+        'RECOVAR_DEBUG_DUMP_DIR=${NATIVE_MSTEP}',
+        'RECOVAR_DEBUG_DUMP_MSTEP_ITER=${TARGET_ITERATION}',
+        'RECOVAR_MSTEP_DUMP_DIR=${RECOVAR_MSTEP}',
+        'RECOVAR_MSTEP_DUMP_ITER=${TARGET_ITERATION}',
+        "NATIVE_SECOND_MOMENT_REPLAY=${VDAM_NATIVE_SECOND_MOMENT_REPLAY:-0}",
+        "NATIVE_SECOND_MOMENT_REPLAY_ALL=${VDAM_NATIVE_SECOND_MOMENT_REPLAY_ALL:-0}",
+        "NATIVE_FIRST_MOMENT_REPLAY=${VDAM_NATIVE_FIRST_MOMENT_REPLAY:-0}",
+        "NATIVE_FIRST_MOMENT_REPLAY_ALL=${VDAM_NATIVE_FIRST_MOMENT_REPLAY_ALL:-0}",
+        "NATIVE_BPREF_REPLAY=${VDAM_NATIVE_BPREF_REPLAY:-0}",
+        "NATIVE_BPREF_REPLAY_ALL=${VDAM_NATIVE_BPREF_REPLAY_ALL:-0}",
+        "NATIVE_IREF_INPUT_REPLAY=${VDAM_NATIVE_IREF_INPUT_REPLAY:-0}",
+        "NATIVE_IREF_INPUT_REPLAY_ALL=${VDAM_NATIVE_IREF_INPUT_REPLAY_ALL:-0}",
+        'RECOVAR_VDAM_NATIVE_SECOND_MOMENT_REPLAY_BIN=${NATIVE_SECOND_MOMENT_REPLAY_BIN}',
+        'RECOVAR_VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER=${TARGET_ITERATION}',
+        'RECOVAR_VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER=all',
+        'pipe_it{iteration}_c0_Igrad2_post.bin',
+        'native_second_moment_replay":%d',
+        'native_second_moment_replay_all":%d',
+        'RECOVAR_VDAM_NATIVE_FIRST_MOMENT_REPLAY_BIN=${NATIVE_FIRST_MOMENT_REPLAY_BIN}',
+        'RECOVAR_VDAM_NATIVE_FIRST_MOMENT_REPLAY_ITER=all',
+        'Igrad1{half_suffix}_post.bin',
+        'native_first_moment_replay":%d',
+        'native_first_moment_replay_all":%d',
+        'RECOVAR_VDAM_NATIVE_BPREF_DATA_REPLAY_BIN=${NATIVE_BPREF_DATA_REPLAY_BIN}',
+        'RECOVAR_VDAM_NATIVE_BPREF_WEIGHT_REPLAY_BIN=${NATIVE_BPREF_WEIGHT_REPLAY_BIN}',
+        'RECOVAR_VDAM_NATIVE_BPREF_REPLAY_ITER=all',
+        'bp_data{half_suffix}_pre_reweight.bin',
+        'bp_weight{half_suffix}.bin',
+        'native_bpref_replay":%d',
+        'native_bpref_replay_all":%d',
+        'RECOVAR_VDAM_NATIVE_IREF_INPUT_REPLAY_BIN=${NATIVE_IREF_INPUT_REPLAY_BIN}',
+        'RECOVAR_VDAM_NATIVE_IREF_INPUT_REPLAY_ITER=all',
+        'mstep_it{iteration}_c{class_idx}_iref_before.bin',
+        'native_iref_input_replay":%d',
+        'native_iref_input_replay_all":%d',
+        'run_it${target_tag}_sampling.star',
+        'touch "${OUTPUT_ROOT}/NATIVE_STOPPED_AFTER_IT${target_tag}"',
+        "awk '$0 ~ /\\.[0-9]+$/",
+        'native_relion_step_id.txt',
+        'failed to resolve the active RELION Slurm step',
+        'test "${gpu_uuid_after_relion}" = "${gpu_uuid_before}"',
+        "ORIGINAL_LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}",
+        "export LD_LIBRARY_PATH=${ORIGINAL_LD_LIBRARY_PATH}",
+        "unset LD_LIBRARY_PATH",
+        "unset MPI_ROOT CUDA_HOME",
+        'test "${gpu_uuid_after_recovar}" = "${gpu_uuid_before}"',
+        "CUDA_SOURCE_BINARY=${RECOVAR_CUDA_LIB_SOURCE:-",
+        'CUDA_BINARY=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/cuda/libcuda_backproject.so',
+        'cp --no-preserve=mode,ownership,timestamps "${CUDA_SOURCE_BINARY}" "${CUDA_BINARY}"',
+        'test "$(sha256sum "${CUDA_SOURCE_BINARY}"',
+        'test "$(sha256sum "${CUDA_BINARY}"',
+        '"relion_threads":%d',
+        "scripts.analyze_vdam_mstep_boundary",
+        "BPREF_CONTRIBUTION_HALF=${BPREF_CONTRIBUTION_HALF:-}",
+        "VDAM_PREPROCESS_STACK_INDEX",
+        'export RELION_ACC_DUMP_STACK_INDEX=${STACK_INDEX}',
+        '"preprocess_stack_index":"%s"',
+        "BPREF_CONTRIBUTION_CAPTURE_HALF=${BPREF_CONTRIBUTION_CAPTURE_HALF:-${BPREF_CONTRIBUTION_HALF}}",
+        "BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP=${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP:-}",
+        "BPREF_CONTRIBUTION_ORIGINAL_INDICES=${BPREF_CONTRIBUTION_ORIGINAL_INDICES:-}",
+        'RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION=${TARGET_ITERATION}',
+        'RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF=${BPREF_CONTRIBUTION_CAPTURE_HALF}',
+        'RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE=${BPREF_CONTRIBUTION_CURRENT_SIZE}',
+        'RECOVAR_BPREF_CONTRIBUTION_DUMP_ORIGINAL_INDICES=${BPREF_CONTRIBUTION_ORIGINAL_INDICES}',
+        "RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY",
+        "RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256",
+        "resolved_image_names = np.asarray(",
+        'bpref_contribution_rows_it${target_tag}_h*.npz',
+        "scripts.analyze_vdam_bpref_accumulator_boundary",
+        '--half "${BPREF_CONTRIBUTION_HALF}"',
+        '--reconstruction-group "${BPREF_CONTRIBUTION_RECONSTRUCTION_GROUP}"',
+        'bpref_accumulator_boundary.json',
+        '--iteration "${TARGET_ITERATION}"',
+        '"nr_iter_schedule":%d',
+        '"stopped_after_iteration":%d',
+        "VDAM_WORKER_SCHEDULE_NPZ",
+        "EXPECTED_WORKER_SCHEDULE_SHA256",
+        "VDAM_BLOCK_CHRONOLOGY_NPZ",
+        "EXPECTED_BLOCK_CHRONOLOGY_SHA256",
+        'RECOVAR_RELION_VDAM_WORKER_SCHEDULE_NPZ=${CANDIDATE_WORKER_SCHEDULE}',
+        'RECOVAR_RELION_VDAM_BLOCK_CHRONOLOGY_NPZ=${CANDIDATE_BLOCK_CHRONOLOGY}',
+        "RECOVAR_INITIALMODEL_IREF_REPLAY_TEMPLATE",
+        "VDAM_REPLAY_NATIVE_REFERENCES",
+        'IREF_REPLAY_TEMPLATE=${RELION_OUTPUT}/run_it{iteration:03d}_class{k:03d}.mrc',
+        '"replay_native_references":%d',
+        "TARGET_GPU_UUID=${TARGET_GPU_UUID:-}",
+        "VDAM_TARGET_GPU_MISS",
+    ]
+    missing = [token for token in expected_tokens if token not in capture]
+    assert not missing, f"VDAM M-step capture lost full-schedule isolation: {missing}"
+    assert "VDAM_NR_ITER_OVERRIDE" not in capture
+
+
+def test_vdam_mstep_boundary_native_only_seals_raw_bpref_without_candidate():
+    capture = (REPO_ROOT / "scripts/run_vdam_fullschedule_mstep_boundary.sbatch").read_text()
+
+    expected_tokens = [
+        "NATIVE_ONLY=${VDAM_NATIVE_ONLY:-0}",
+        'if [[ "${NATIVE_ONLY}" = 1 ]]; then',
+        "mstep_it${TARGET_ITERATION}_c0_bpref_data.bin",
+        "mstep_it${TARGET_ITERATION}_c0_bpref_weight.bin",
+        "native_only_evidence.sha256",
+        "recovar.vdam_native_bpref_repeat.v1",
+        'touch "${OUTPUT_ROOT}/NATIVE_ONLY_SUCCESS"',
+        'touch "${OUTPUT_ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"',
+        "exit 0",
+    ]
+    missing = [token for token in expected_tokens if token not in capture]
+    assert not missing, f"VDAM native-only BPref capture contract differs: {missing}"
+
+
+def test_vdam_relion_continuation_can_capture_noise_sufficient_statistics():
+    continuation = (REPO_ROOT / "scripts/run_vdam_relion_continuation_capture.sbatch").read_text()
+
+    expected_tokens = [
+        "VDAM_RELION_CONT_SIGMA2_NOISE_DUMP_DIR",
+        'export RELION_DUMP_SIGMA2_NOISE_DIR=${SIGMA2_NOISE_DUMP_DIR}',
+        'NR_ITER_SCHEDULE=${VDAM_RELION_CONT_NR_ITER_SCHEDULE:-${ITERATION}}',
+        'RELION_SKIP_MODULE=${VDAM_RELION_SKIP_MODULE:-0}',
+        'BPREF_OPERANDS=${VDAM_RELION_CONT_BPREF_OPERANDS:-0}',
+        'export RELION_ACC_DUMP_BPREF_OPERANDS=1',
+        '"bpref_operands":%s',
+        'if [[ "${RELION_SKIP_MODULE}" == 0 ]]; then',
+        'test "${NR_ITER_SCHEDULE}" -ge "${ITERATION}"',
+        '--iter "${NR_ITER_SCHEDULE}"',
+        '"nr_iter_schedule":%d',
+    ]
+    missing = [token for token in expected_tokens if token not in continuation]
+    assert not missing, f"VDAM continuation lost capture/target-iteration wiring: {missing}"
+
+
+def test_vdam_storewavg_runner_supports_fail_closed_posterior_only_replay():
+    runner = (REPO_ROOT / "scripts/run_vdam_storewavg_boundary.sbatch").read_text()
+
+    expected_tokens = [
+        "POSTERIOR_ONLY=${POSTERIOR_ONLY:-0}",
+        'test "${POSTERIOR_ONLY}" = 0 -o "${POSTERIOR_ONLY}" = 1',
+        'if [[ "${POSTERIOR_ONLY}" = 1 ]]; then',
+        "ANALYZER_ARGS+=(--posterior-only)",
+    ]
+    missing = [token for token in expected_tokens if token not in runner]
+    assert not missing, f"VDAM StoreWavg runner lost posterior-only wiring: {missing}"
+
+
+def test_vdam_native_full_repeat_supports_focused_coarse_capture():
+    runner = (REPO_ROOT / "scripts/run_vdam_native_full_repeat.sbatch").read_text()
+
+    expected_tokens = [
+        "VDAM_NATIVE_CAPTURE_DIR",
+        "VDAM_NATIVE_CAPTURE_ITERATION",
+        "VDAM_NATIVE_CAPTURE_PART_ID",
+        "VDAM_NATIVE_CAPTURE_STACK_INDEX",
+        "VDAM_NATIVE_CAPTURE_PERTURBATION",
+        "VDAM_NATIVE_CAPTURE_ONLY",
+        "VDAM_TARGET_GPU_UUID",
+        'RELION_SKIP_MODULE=${VDAM_RELION_SKIP_MODULE:-0}',
+        "RELION_ACC_DUMP_DIR=${CAPTURE_DIR}",
+        "RELION_ACC_DUMP_ITER=${CAPTURE_ITERATION}",
+        "RELION_FORCE_SAMPLING_PERTURB=${CAPTURE_PERTURBATION}",
+        'test -s "${CAPTURE_DIR}/pass0_coarse_raw_diff2.bin"',
+        "VDAM_TARGET_GPU_MISS",
+        'touch "${OUTPUT_ROOT}/CAPTURE_COMPLETED"',
+    ]
+    missing = [token for token in expected_tokens if token not in runner]
+    assert not missing, f"VDAM native repeat lost focused capture wiring: {missing}"
+
+
+def test_vdam_native_observer_pair_keeps_same_gpu_and_full_schedule():
+    runner = (REPO_ROOT / "scripts/run_vdam_native_observer_pair.sbatch").read_text()
+
+    expected_tokens = [
+        "run_variant observer_off_a 0",
+        "run_variant observer_on 1",
+        "run_variant observer_off_b 0",
+        "run_variant observer_on_a 1",
+        "run_variant observer_off 0",
+        "run_variant observer_on_b 1",
+        "OBSERVER_ORDER=${OBSERVER_ORDER:-off_on_off}",
+        'case "${OBSERVER_ORDER}" in',
+        '--iter "${NR_ITER_SCHEDULE}"',
+        'export RELION_ACC_DUMP_PART_ID=${TARGET_PART_ID}',
+        'export RELION_ACC_DUMP_VERBOSE=0',
+        'test "${gpu_uuid_after}" = "${gpu_uuid_before}"',
+        "observer_off_repeat_pmax_absolute_error",
+        "observer_on_minus_off_a_pmax",
+        "observer_off_minus_on_a_pmax",
+        "recovar.vdam_native_observer_pair.v1",
+        'touch "${OUTPUT_ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"',
+    ]
+    missing = [token for token in expected_tokens if token not in runner]
+    assert not missing, f"VDAM native observer pair lost A/B/A controls: {missing}"
 
 
 def test_native_vdam_tau2_refresh_and_ssnr_diagnostics_are_merge_guarded():
@@ -263,7 +949,7 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
             "sigma2_offset: float = 100.0",
             "sigma2_offset=100.0",
             "MIN_SIGMA2_OFFSET_ANGSTROM2",
-            "wsum_sigma2_offset / (2.0 * sum_weight)",
+            "wsum_sigma2_offset / (2.0 * sigma2_offset_sumw)",
             "def update_noise_from_estep_meta",
             "normalize_wsum_to_sigma2_noise",
             "int(state.ori_size) ** 4",
@@ -274,7 +960,8 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
             "translation_prior_centers",
             "def _class_direction_rotation_log_prior",
             "class_rotation_log_prior",
-            "values[positive] / mean_pdf",
+            "out[positive] = np.log(values[positive])",
+            "relion_f32_coarse_tie_ulps=(",
             "rotation_log_prior=_class_pass2_rotation_log_prior(group_kwargs, class_index)",
             "local_layout = tuple(local_layouts)",
             "allow_empty=True",
@@ -285,6 +972,10 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
             "class_bpref_weight_sums",
             "class_posterior_sums_override",
             "reconstruction_probs_sum_t if stats_use_reconstruction_probs else probs_sum_t",
+            "relion_f32_fine_posterior=bool(",
+            "sparse_diagnostics.relion_x_half_f32_fine_posterior_enabled()",
+            "use_relion_f32_fine_posterior=use_relion_f32_fine_posterior",
+            "_relion_f32_fine_reconstruction_probs(",
         ],
         "relion_model_star_contract": [
             "data_model_pdf_orient_class_",
@@ -313,6 +1004,94 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
     }
     missing = {area: tokens for area, tokens in missing.items() if tokens}
     assert not missing, f"VDAM post-merge parity guard lost required wiring: {missing}"
+
+
+def test_deferred_big_jit_backprojects_vdam_residual_images():
+    """The memory-deferred path must not silently backproject raw images."""
+
+    source = (REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py").read_text()
+    comment = source.index("# The memory-deferred big-JIT path returns posterior rows")
+    start = source.rindex("if mstep_subtract_ctf_projection:", 0, comment)
+    stop = source.index("source_vdam_outer_scatter = bool(", start)
+    deferred_mstep = source[start:stop]
+
+    assert "if mstep_subtract_ctf_projection:" in deferred_mstep
+    assert "chunk_proj_for_residual = _project_packed_noise_rows(" in deferred_mstep
+    assert "chunk_summed = chunk_summed - chunk_probs_sum_t[..., None] * frefctf_weighted" in deferred_mstep
+
+
+def test_source_faithful_bpref_respects_memory_gate_without_changing_particle_order():
+    """Large BPref buckets must defer by particles, never allocate past the cap."""
+
+    source = (REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py").read_text()
+    decision_start = source.index("sparse_big_jit_backprojection = False")
+    decision_stop = source.index("can_defer_big_jit_backprojection = (", decision_start)
+    decision = source[decision_start:decision_stop]
+    assert "sparse_big_jit_mstep_estimated_gb <= sparse_big_jit_mstep_cap_gb" in decision
+    assert "source_faithful_bpref" not in decision
+
+    deferred_start = source.index(
+        "return_big_jit_deferred_mstep_inputs\n                and source_faithful_bpref"
+    )
+    deferred_stop = source.index("source_vdam_outer_scatter = bool(", deferred_start)
+    deferred = source[deferred_start:deferred_stop]
+    assert "for particle_start in range(" in deferred
+    assert "sequential_translation_reduction=True" in deferred
+    assert "_accumulate_relion_physical_particle_grid(" in deferred
+
+
+def test_deferred_packed_vdam_keeps_dense_oracle_and_packed_final_noise_lane():
+    engine = (
+        REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py"
+    ).read_text()
+    big_jit = (
+        REPO_ROOT / "recovar/em/dense_single_volume/local_big_jit.py"
+    ).read_text()
+
+    assert "_defer_packed_vdam_enabled: bool = False" in engine
+    assert "_packed_final_noise_enabled: bool = False" in engine
+    assert "if score_only or defer_packed_vdam_enabled:" not in engine
+    assert "if score_only:" in engine
+    assert '"big_jit_projection_pixels"' in engine
+    assert "return_deferred_source_vdam_operands" in engine
+    assert "packed_source_vdam_ctf_probs = jnp.take_along_axis(" in engine
+    assert "source_vdam_outer_scatter = bool(" in engine
+    assert "_project_packed_noise_rows(" in engine
+    assert "flat_proj_for_noise = jnp.asarray(" in engine
+    assert "deferred_flat_proj_for_noise," in engine
+    assert "proj_for_noise_reduction = scatter_flat_local_rows(" in engine
+    assert "summed_masked_for_noise_reduction = compute_local_weighted_sums(" in engine
+    assert "build_dense_to_flat_local_row_lookup(" in engine
+    assert "map_dense_local_rows_to_flat_rows(" in engine
+    assert "packed_source_vdam_noise_projection = jnp.take(" in engine
+    assert "packed_source_vdam_posterior," in engine
+    assert '"packed_vdam_reuses_flat_score_projection"' in engine
+    assert '"packed_vdam_avoids_dense_noise_rows"' in engine
+    assert '"packed_final_noise_preserves_dense_scalar_order"' in engine
+    assert "preserve_dense_scalar_reduction = bool(" in engine
+    assert "scalar_noise_reconstruction_probs = reconstruction_probs" in engine
+    packed_noise_start = engine.index("if use_packed_final_noise:")
+    packed_noise_stop = engine.index(
+        "and not use_packed_final_noise",
+        packed_noise_start,
+    )
+    packed_noise = engine[packed_noise_start:packed_noise_stop]
+    assert packed_noise.count("run_deferred_local_exact_noise_jit(") == 1
+    assert "compute_local_weighted_sums(" not in packed_noise
+    assert "support_mass[:pixel_batch_size, None, None]" in big_jit
+    assert "def compute_local_exact_noise(" in big_jit
+    assert "def run_deferred_local_exact_noise_jit(" in big_jit
+    assert "compute_local_noise_scalar_terms(" in engine
+    assert "compute_local_noise_scalar_terms(" in big_jit
+    assert "support_mass = jnp.sum(reconstruction_probs.reshape" not in big_jit
+    assert "noise_sumw = noise_sumw + jnp.sum(support_mass)" in big_jit
+    assert "_relion_wavg_direct_triplet_shells(" in engine
+    assert "materialize_shifted_recon = not return_deferred_source_vdam_operands" in big_jit
+    assert "deferred_flat_proj_for_noise = proj_half_flat[" in big_jit
+    assert "processed_score_half_for_return,\n            deferred_flat_proj_for_noise," in big_jit
+    assert "relion_vdam_mstep_denominator_f32(" in big_jit
+    assert "if packed_deferred_source_vdam_noise:" in big_jit
+    assert big_jit.count("and (not accumulate_noise or return_deferred_source_vdam_operands)") == 3
 
 
 def test_relion_initialmodel_reference_checker_rejects_autorefine(tmp_path):
@@ -380,6 +1159,7 @@ def test_merge_guard_dry_run_writes_reproducibility_ledger(tmp_path):
     assert [command["name"] for command in ledger["commands"]] == [
         "py_compile",
         "vdam_abinitio_contracts",
+        "vdam_frozen_scorecard",
         "initial_model_vdam_unit_slice",
         "em_fast_guard",
     ]

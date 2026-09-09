@@ -18,17 +18,44 @@ underlying CUDA image grid.
 See ``docs/math/plan_relion_parity.md``, Phase 3.
 """
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, replace
 from typing import Any
 
 import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as ftu
+from recovar.em.dense_single_volume.shape_buckets import round_up_to_multiple
 
 # Representative sizes kept for explicit callers that still want a bounded set.
 ALLOWED_CURRENT_SIZES = [16, 24, 32, 48, 64, 80, 96, 104, 112, 120, 128, 160, 192, 224, 256]
 _DEFAULT_PROJECTION_MAX_R = object()
+STABLE_FOURIER_WINDOW_QUANTUM_ENV = (
+    "RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM"
+)
+DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM = 8
+
+
+def stable_fourier_window_quantum() -> int:
+    """Return the shared physical-size quantum for stable EM windows."""
+
+    raw = os.environ.get(STABLE_FOURIER_WINDOW_QUANTUM_ENV, "").strip()
+    if not raw:
+        return DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM
+    try:
+        quantum = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"{STABLE_FOURIER_WINDOW_QUANTUM_ENV} must be an even integer >= 2, "
+            f"got {raw!r}"
+        ) from exc
+    if quantum < 2 or quantum % 2:
+        raise ValueError(
+            f"{STABLE_FOURIER_WINDOW_QUANTUM_ENV} must be an even integer >= 2, "
+            f"got {raw!r}"
+        )
+    return quantum
 
 
 @dataclass(frozen=True)
@@ -82,6 +109,141 @@ class FourierWindowSpec:
         return self.recon_indices if self.recon_indices is not None else jnp.arange(int(n_half), dtype=dtype)
 
 
+@dataclass(frozen=True)
+class StableFourierWindowShapePlan:
+    """Separate RELION's logical cutoff from a low-cardinality buffer shape.
+
+    The ``logical_*`` fields describe the exact support and loop bounds that
+    numerical kernels must consume.  The ``physical_*`` fields are capacities
+    only: callers may append inert storage after each logical prefix, but must
+    not extend a pixel reduction or a BPref issue stream to that capacity.
+
+    This is deliberately a host-side plan.  Merely padding a JAX reduction
+    with zeroes is not exact because a different contracting dimension may
+    select a different reduction tree.  A runtime implementation therefore
+    needs an explicit logical loop bound in each affected CUDA FFI primitive.
+    """
+
+    logical_current_size: int
+    physical_current_size: int
+    logical_reconstruction_current_size: int
+    physical_reconstruction_current_size: int
+    logical_spec: FourierWindowSpec
+    physical_spec: FourierWindowSpec
+
+    @property
+    def logical_score_pixels(self) -> int:
+        return int(self.logical_spec.n_score)
+
+    @property
+    def physical_score_pixels(self) -> int:
+        return int(self.physical_spec.n_score)
+
+    @property
+    def logical_reconstruction_pixels(self) -> int:
+        return int(self.logical_spec.n_recon)
+
+    @property
+    def physical_reconstruction_pixels(self) -> int:
+        return int(self.physical_spec.n_recon)
+
+    @property
+    def logical_projection_pixels(self) -> int:
+        return int(self.logical_spec.n_projection)
+
+    @property
+    def physical_projection_pixels(self) -> int:
+        return int(self.physical_spec.n_projection)
+
+    @property
+    def logical_rectangle_pixels(self) -> int:
+        return self.logical_current_size * (self.logical_current_size // 2 + 1)
+
+    @property
+    def physical_rectangle_pixels(self) -> int:
+        return self.physical_current_size * (self.physical_current_size // 2 + 1)
+
+    @property
+    def physical_signature(self) -> tuple[int, ...]:
+        """Return the shape-only cache key; logical cutoffs are not included."""
+
+        return (
+            self.physical_current_size,
+            self.physical_reconstruction_current_size,
+            self.physical_score_pixels,
+            self.physical_reconstruction_pixels,
+            self.physical_projection_pixels,
+            self.physical_rectangle_pixels,
+        )
+
+    @property
+    def logical_loop_bounds(self) -> tuple[int, ...]:
+        """Return the bounds that exact score/Wavg/BPref kernels must retain."""
+
+        return (
+            self.logical_score_pixels,
+            self.logical_reconstruction_pixels,
+            self.logical_projection_pixels,
+            self.logical_rectangle_pixels,
+        )
+
+    @staticmethod
+    def _spec_indices(spec: FourierWindowSpec, name: str) -> np.ndarray:
+        indices = getattr(spec, f"{name}_indices_np")
+        if indices is not None:
+            return np.asarray(indices, dtype=np.int32)
+        return np.arange(int(getattr(spec, f"n_{name}")), dtype=np.int32)
+
+    def packed_indices_np(self, name: str) -> np.ndarray:
+        """Place the exact logical issue stream before physical-only storage."""
+
+        if name not in {"score", "recon", "projection"}:
+            raise ValueError(f"unknown Fourier window support {name!r}")
+        logical = self._spec_indices(self.logical_spec, name)
+        physical = self._spec_indices(self.physical_spec, name)
+        tail = np.setdiff1d(physical, logical, assume_unique=True)
+        return np.concatenate((logical, tail)).astype(np.int32, copy=False)
+
+    def packed_projection_take_np(self, name: str) -> np.ndarray:
+        """Map a logical-first score/reconstruction capacity into projection storage."""
+
+        if name not in {"score", "recon"}:
+            raise ValueError(f"unknown projection take support {name!r}")
+        projection = self.packed_indices_np("projection")
+        support = self.packed_indices_np(name)
+        positions = {int(pixel): offset for offset, pixel in enumerate(projection)}
+        return np.asarray([positions[int(pixel)] for pixel in support], dtype=np.int32)
+
+    def packed_physical_spec(self, *, dtype=jnp.int32) -> FourierWindowSpec:
+        """Return the physical-capacity spec in logical-first storage order.
+
+        The returned shapes are those of ``physical_spec``. Only their order
+        changes: exact logical score/reconstruction/projection pixels are the
+        prefix consumed by runtime-bound CUDA kernels, followed by the
+        physical-only capacity tail. This keeps the mature shared EM
+        projection implementation as the single producer of Fourier rows.
+        """
+
+        score_indices_np = self.packed_indices_np("score")
+        recon_indices_np = self.packed_indices_np("recon")
+        projection_indices_np = self.packed_indices_np("projection")
+        score_projection_take_np = self.packed_projection_take_np("score")
+        recon_projection_take_np = self.packed_projection_take_np("recon")
+        return replace(
+            self.physical_spec,
+            score_indices_np=score_indices_np,
+            recon_indices_np=recon_indices_np,
+            projection_indices_np=projection_indices_np,
+            score_projection_take_np=score_projection_take_np,
+            recon_projection_take_np=recon_projection_take_np,
+            score_indices=jnp.asarray(score_indices_np, dtype=dtype),
+            recon_indices=jnp.asarray(recon_indices_np, dtype=dtype),
+            projection_indices=jnp.asarray(projection_indices_np, dtype=dtype),
+            score_projection_take=jnp.asarray(score_projection_take_np, dtype=dtype),
+            recon_projection_take=jnp.asarray(recon_projection_take_np, dtype=dtype),
+        )
+
+
 def make_frequency_radius_map_half(image_shape):
     """Return (N_half,) array of frequency radius at each pixel of the half-spectrum.
 
@@ -107,12 +269,12 @@ def make_frequency_radius_map_half(image_shape):
 
 def make_frequency_coords_half(image_shape):
     """Return packed-half integer frequency coordinates as a JAX array."""
-    return jnp.asarray(ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False))
+    return jnp.asarray(make_frequency_coords_half_np(image_shape))
 
 
 def make_frequency_coords_half_np(image_shape):
-    """Return packed-half integer frequency coordinates as a NumPy array."""
-    return np.asarray(ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False))
+    """Return cached packed-half coordinates from the host geometry planner."""
+    return ftu.get_k_coordinate_of_each_pixel_half_np(image_shape, voxel_size=1, scaled=False)
 
 
 def _relion_half_layout_mask(coords, current_size, *, square=False, include_dc=False, exact_radius=False):
@@ -340,6 +502,7 @@ def make_fourier_window_spec(
     square=False,
     score_square=None,
     score_include_dc=False,
+    recon_exact_radius=True,
     projection_max_r=_DEFAULT_PROJECTION_MAX_R,
     include_recon_window=True,
     dtype=jnp.int32,
@@ -409,7 +572,7 @@ def make_fourier_window_spec(
             resolved_reconstruction_current_size,
             square=square,
             include_dc=True,
-            exact_radius=True,
+            exact_radius=bool(recon_exact_radius),
         )
         recon_indices = jnp.asarray(recon_indices_np, dtype=dtype)
     projection_recon_indices_np = score_indices_np if recon_indices_np is None else recon_indices_np
@@ -437,6 +600,138 @@ def make_fourier_window_spec(
         n_projection=int(projection_indices_np.shape[0]),
         max_r=resolved_max_r,
         projection_max_r=resolved_projection_max_r,
+    )
+
+
+def stable_fourier_window_current_size(
+    current_size: int,
+    image_size: int,
+    *,
+    quantum: int = 8,
+) -> int:
+    """Return a physical window class without changing the logical cutoff.
+
+    Non-full windows round up to an even ``quantum``.  The full box is kept in
+    a separate class because ``make_fourier_window_spec`` switches from radial
+    support to the complete packed half image there; folding ``N - 2`` into
+    ``N`` would introduce a disproportionate storage and projection jump.
+
+    The return value is a capacity selector only.  It must never replace
+    RELION's ``rlnCurrentImageSize`` in scheduling, scoring, noise updates, or
+    reconstruction support decisions.
+    """
+
+    current_size = int(current_size)
+    image_size = int(image_size)
+    quantum = int(quantum)
+    if image_size < 4 or image_size % 2:
+        raise ValueError(f"image_size must be an even integer >= 4, got {image_size}")
+    if current_size <= 0 or current_size > image_size or current_size % 2:
+        raise ValueError(
+            f"current_size must be positive, even, and <= {image_size}, got {current_size}",
+        )
+    if quantum < 2 or quantum % 2:
+        raise ValueError(f"quantum must be a positive even integer >= 2, got {quantum}")
+    if current_size == image_size:
+        return image_size
+    return min(
+        round_up_to_multiple(current_size, quantum),
+        image_size - 2,
+    )
+
+
+def make_stable_fourier_window_shape_plan(
+    image_shape,
+    current_size: int,
+    n_half: int,
+    *,
+    reconstruction_current_size: int | None = None,
+    enabled: bool = False,
+    quantum: int = 8,
+    square: bool = False,
+    score_square: bool | None = None,
+    score_include_dc: bool = False,
+    recon_exact_radius: bool = True,
+) -> StableFourierWindowShapePlan:
+    """Plan exact logical supports inside optional stable physical capacities.
+
+    ``enabled=False`` is intentionally the default and reproduces today's
+    one-shape-per-current-size behavior.  When enabled, the returned physical
+    capacities may be used to pad arrays after their logical prefixes.  The
+    logical fields remain the source of truth for runtime CUDA loop bounds.
+    """
+
+    image_shape = tuple(int(value) for value in image_shape)
+    if len(image_shape) != 2 or image_shape[0] != image_shape[1]:
+        raise ValueError(f"stable Fourier windows require a square image, got {image_shape}")
+    expected_n_half = image_shape[0] * (image_shape[1] // 2 + 1)
+    if int(n_half) != expected_n_half:
+        raise ValueError(f"n_half must be {expected_n_half} for {image_shape}, got {n_half}")
+
+    logical_current_size = int(current_size)
+    logical_reconstruction_current_size = (
+        logical_current_size
+        if reconstruction_current_size is None
+        else int(reconstruction_current_size)
+    )
+    # Validate both values even when the shape policy is disabled.
+    stable_fourier_window_current_size(logical_current_size, image_shape[0], quantum=quantum)
+    stable_fourier_window_current_size(
+        logical_reconstruction_current_size,
+        image_shape[0],
+        quantum=quantum,
+    )
+    if enabled:
+        physical_current_size = stable_fourier_window_current_size(
+            logical_current_size,
+            image_shape[0],
+            quantum=quantum,
+        )
+        physical_reconstruction_current_size = stable_fourier_window_current_size(
+            logical_reconstruction_current_size,
+            image_shape[0],
+            quantum=quantum,
+        )
+    else:
+        physical_current_size = logical_current_size
+        physical_reconstruction_current_size = logical_reconstruction_current_size
+
+    logical_spec = make_fourier_window_spec(
+        image_shape,
+        logical_current_size,
+        n_half,
+        reconstruction_current_size=logical_reconstruction_current_size,
+        square=square,
+        score_square=score_square,
+        score_include_dc=score_include_dc,
+        recon_exact_radius=recon_exact_radius,
+    )
+    physical_spec = make_fourier_window_spec(
+        image_shape,
+        physical_current_size,
+        n_half,
+        reconstruction_current_size=physical_reconstruction_current_size,
+        square=square,
+        score_square=score_square,
+        score_include_dc=score_include_dc,
+        recon_exact_radius=recon_exact_radius,
+    )
+
+    for name in ("score", "recon", "projection"):
+        logical_indices = StableFourierWindowShapePlan._spec_indices(logical_spec, name)
+        physical_indices = StableFourierWindowShapePlan._spec_indices(physical_spec, name)
+        if np.setdiff1d(logical_indices, physical_indices, assume_unique=True).size:
+            raise ValueError(
+                f"physical Fourier {name} window does not contain its logical support",
+            )
+
+    return StableFourierWindowShapePlan(
+        logical_current_size=logical_current_size,
+        physical_current_size=physical_current_size,
+        logical_reconstruction_current_size=logical_reconstruction_current_size,
+        physical_reconstruction_current_size=physical_reconstruction_current_size,
+        logical_spec=logical_spec,
+        physical_spec=physical_spec,
     )
 
 

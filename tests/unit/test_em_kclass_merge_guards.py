@@ -150,6 +150,20 @@ def test_kclass_pass2_dump_completion_honors_class_filter(tmp_path):
     assert sparse_pass2_mod._k_class_pass2_dump_progress(**kwargs) == (2, 2)
 
 
+def test_kclass_fused_pass2_accepts_reconstruction_current_size():
+    """The K-class adapter and fused implementation must share the M-step window API."""
+
+    signature = inspect.signature(
+        sparse_pass2_mod.compute_k_class_pass2_stats_sparse_fused,
+    )
+    assert "reconstruction_current_size" in signature.parameters
+    source = inspect.getsource(
+        sparse_pass2_mod.compute_k_class_pass2_stats_sparse_fused,
+    )
+    assert "reconstruction_current_size=mstep_current_size" in source
+    assert "current_size=mstep_current_size" in source
+
+
 def test_kclass_adaptive_wires_relion_x_half_without_mislabeling_dense_branch():
     source = inspect.getsource(iteration_loop._score_half_dense)
     assert "k_class_relion_x_half_mstep = _k_class_relion_x_half_mstep_enabled()" in source
@@ -334,7 +348,11 @@ def test_sparse_pass2_preserves_relion_projector_api_and_forwarding():
         sparse_pass2_mod.compute_k_class_pass2_stats_sparse_fused,
     ):
         sig = inspect.signature(func)
-        for name in ("relion_projector_half", "relion_projector_r_max"):
+        for name in (
+            "relion_projector_half",
+            "relion_projector_r_max",
+            "projection_mask_current_image_disk",
+        ):
             assert name in sig.parameters, f"{func.__name__} lost projector parameter {name!r}"
 
     source = inspect.getsource(k_class_mod._run_sparse_k_class_adaptive_pass2)
@@ -342,6 +360,7 @@ def test_sparse_pass2_preserves_relion_projector_api_and_forwarding():
         'fused_common["relion_projector_half"] = relion_projector_half_by_class',
         "relion_projector_half=_select_projector_half_for_class(",
         "relion_projector_r_max=relion_projector_r_max",
+        'base_engine_kwargs.get("projection_mask_current_image_disk", True)',
     ):
         assert needle in source, f"adaptive sparse pass-2 lost projector forwarding: {needle!r}"
 
@@ -381,6 +400,9 @@ def test_kclass_dump_helper_accepts_operand_kwargs():
         "projected_reference_norm_score_per_class",
         "projected_cross_score_per_class",
         "coarse_gaussian_shifted_corrected",
+        "relion_projector_half",
+        "relion_projector_r_max",
+        "projection_padding_factor",
     }
     missing = required - set(sig.parameters)
     assert not missing, (
@@ -411,6 +433,9 @@ def test_kclass_dump_call_site_passes_operand_kwargs():
         "projected_reference_norm_score_per_class=",
         "projected_cross_score_per_class=projected_cross_score_per_class",
         "coarse_gaussian_shifted_corrected=coarse_gaussian_shifted_corrected",
+        "relion_projector_half=relion_projector_half",
+        "relion_projector_r_max=relion_projector_r_max",
+        "projection_padding_factor=projection_padding_factor",
     ):
         assert needle in window, f"K-class dump call site lost kwarg: {needle!r}"
     # The half_weights_used branch must distinguish windowed vs
@@ -535,6 +560,10 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
         n_images * n_trans * n_pix,
         dtype=np.float32,
     ).reshape(n_images, n_trans, n_pix).astype(np.complex64)
+    relion_projector_half = [
+        np.full((3, 4, 2), class_index + 1j, dtype=np.complex64)
+        for class_index in range(n_classes)
+    ]
     projected_reference_rotation_ids = np.asarray([0, 2], dtype=np.int32)
     projected_reference_per_class = np.arange(
         n_classes * projected_reference_rotation_ids.size * n_pix,
@@ -584,6 +613,9 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
         window_indices=window_indices,
         half_weights_used=half_weights_used,
         coarse_gaussian_shifted_corrected=coarse_gaussian_shifted_corrected,
+        relion_projector_half=relion_projector_half,
+        relion_projector_r_max=7,
+        projection_padding_factor=1,
         projected_reference_rotation_ids=projected_reference_rotation_ids,
         projected_reference_per_class=projected_reference_per_class,
         projected_reference_norm_score_per_class=(
@@ -601,6 +633,9 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
         "window_indices",
         "half_weights",
         "coarse_gaussian_shifted_corrected",
+        "relion_projector_half_per_class",
+        "relion_projector_r_max",
+        "projection_padding_factor",
     ):
         assert name in payload.files, f"Dump npz is missing schema field {name!r}"
     assert payload["shifted_data"].dtype == np.complex128
@@ -608,6 +643,7 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
     assert payload["window_indices"].dtype == np.int32
     assert payload["half_weights"].dtype == np.float64
     assert payload["coarse_gaussian_shifted_corrected"].dtype == np.complex64
+    assert payload["relion_projector_half_per_class"].dtype == np.complex64
     assert payload["projected_reference_rotation_ids"].dtype == np.int32
     assert payload["projected_reference_per_class"].dtype == np.complex128
     assert payload["projected_reference_norm_score_per_class"].dtype == np.float64
@@ -615,6 +651,9 @@ def test_kclass_dump_writes_operand_arrays_to_npz(monkeypatch, tmp_path):
     assert payload["window_indices"].shape == (n_pix,)
     assert payload["half_weights"].shape == (n_pix,)
     assert payload["coarse_gaussian_shifted_corrected"].shape == (n_trans, n_pix)
+    assert payload["relion_projector_half_per_class"].shape == (n_classes, 3, 4, 2)
+    assert int(payload["relion_projector_r_max"]) == 7
+    assert int(payload["projection_padding_factor"]) == 1
     assert payload["projected_reference_rotation_ids"].shape == (2,)
     assert payload["projected_reference_per_class"].shape == (n_classes, 2, n_pix)
     assert payload["projected_reference_norm_score_per_class"].shape == (
@@ -1497,11 +1536,13 @@ def test_kclass_dense_pass2_dump_preserves_selected_raw_diff2(monkeypatch, tmp_p
         n_rot * n_trans,
         dtype=np.float32,
     ).reshape(1, n_rot, n_trans)
-    raw_diff2 = (
-        np.arange(n_rot * n_trans, dtype=np.float32)
-        .reshape(n_rot, n_trans)
+    padded_rotations = 4
+    raw_diff2_padded = (
+        np.arange(padded_rotations * n_trans, dtype=np.float32)
+        .reshape(padded_rotations, n_trans)
         + np.float32(500.0)
     )
+    raw_diff2 = raw_diff2_padded[:n_rot]
 
     dump_dir = tmp_path / "pass2"
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(dump_dir))
@@ -1520,7 +1561,7 @@ def test_kclass_dense_pass2_dump_preserves_selected_raw_diff2(monkeypatch, tmp_p
         probs=np.full_like(scores, 1.0 / scores.size),
         bucket_translation_prior=np.zeros((1, n_trans), dtype=np.float32),
         compact_pairs=False,
-        raw_diff2_by_batch_row={0: raw_diff2},
+        raw_diff2_by_batch_row={0: raw_diff2_padded},
         relion_min_diff2=np.asarray([499.0], dtype=np.float32),
     )
 

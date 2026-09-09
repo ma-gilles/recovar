@@ -273,7 +273,12 @@ def get_translation_grid(max_pixel, pixel_offset):
     return grid
 
 
-def get_relion_translation_grid(max_pixel, pixel_offset):
+def get_relion_translation_grid(
+    max_pixel,
+    pixel_offset,
+    *,
+    source_units_per_pixel=1.0,
+):
     """Return RELION's non-helical 2D translation grid in pixel units.
 
     RELION enumerates integer step indices through
@@ -281,13 +286,25 @@ def get_relion_translation_grid(max_pixel, pixel_offset):
     cutoff.  The ceil is important when rounded STAR values convert to a
     ratio just below an integer (for example, 4.25 / 1.416667 pixels): using
     floor division silently drops the outer axial translation samples.
+
+    ``offset_range`` and ``offset_step`` live in Angstroms in RELION, and its
+    ``+0.001`` squared-radius tolerance is therefore in Angstrom squared.  Our
+    search grids live in pixels, so callers must supply the Angstroms-per-pixel
+    conversion through ``source_units_per_pixel``.  Applying the unscaled
+    tolerance after converting to pixels can incorrectly admit boundary rows.
     """
     max_pixel = float(max_pixel)
     pixel_offset = float(pixel_offset)
+    source_units_per_pixel = float(source_units_per_pixel)
     if not np.isfinite(max_pixel) or max_pixel < 0.0:
         raise ValueError(f"max_pixel must be finite and nonnegative, got {max_pixel}")
     if not np.isfinite(pixel_offset) or pixel_offset <= 0.0:
         raise ValueError(f"pixel_offset must be finite and positive, got {pixel_offset}")
+    if not np.isfinite(source_units_per_pixel) or source_units_per_pixel <= 0.0:
+        raise ValueError(
+            "source_units_per_pixel must be finite and positive, got "
+            f"{source_units_per_pixel}"
+        )
 
     max_index = int(np.ceil(max_pixel / pixel_offset))
     indices = np.arange(-max_index, max_index + 1, dtype=np.int64)
@@ -298,7 +315,8 @@ def get_relion_translation_grid(max_pixel, pixel_offset):
     ).astype(np.float64)
     grid *= pixel_offset
     squared_radius = np.sum(grid * grid, axis=1)
-    return grid[squared_radius < max_pixel * max_pixel + 0.001]
+    squared_tolerance_pixels = 0.001 / (source_units_per_pixel * source_units_per_pixel)
+    return grid[squared_radius < max_pixel * max_pixel + squared_tolerance_pixels]
 
 
 _K1_RELION_EXACT_TRANSLATION_GRID_ENV = "RECOVAR_K1_RELION_EXACT_TRANSLATION_GRID"
@@ -317,10 +335,12 @@ def _k1_relion_exact_translation_grid_enabled(environ=None):
     )
 
 
-def _translation_grid_for_class_count(max_pixel, pixel_offset, *, n_classes):
+def _translation_grid_for_class_count(max_pixel, pixel_offset, *, n_classes, source_units_per_pixel=1.0):
     """Use source-exact RELION translation enumeration for K=1 only."""
     if int(n_classes) == 1 and _k1_relion_exact_translation_grid_enabled():
-        return get_relion_translation_grid(max_pixel, pixel_offset)
+        return get_relion_translation_grid(
+            max_pixel, pixel_offset, source_units_per_pixel=source_units_per_pixel
+        )
     return get_translation_grid(max_pixel, pixel_offset)
 
 

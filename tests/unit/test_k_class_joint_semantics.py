@@ -17,9 +17,9 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
 )
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.k_class import (
-    _ClassFineGridSignificanceMask,
     _assemble_result,
     _build_fine_grid_significance_mask,
+    _ClassFineGridSignificanceMask,
     _compact_sparse_pass2_preferred_over_dense,
     _dense_engine_kwargs_for_class,
     _expand_subset_noise_stats,
@@ -72,6 +72,27 @@ def _firstiter_probe_result(class_assignments, per_class_hard=None, n_rot=1):
         ),
         class_assignments=class_assignments,
     )
+
+
+def _control_coarse_selector_audit(score_mode: str, translation_count: int) -> dict:
+    return {
+        "score_mode": score_mode,
+        "translation_count": int(translation_count),
+        "requested_fused": False,
+        "effective_fused": False,
+        "requested_workers": 0,
+        "effective_workers": 0,
+        "requested_atomic": False,
+        "effective_atomic": False,
+        "wrapper": None,
+        "target": None,
+        "counts": {
+            "fused_calls": 0,
+            "actual_rows": 0,
+            "multistream_calls": 0,
+            "native_atomic_selected_calls": 0,
+        },
+    }
 
 
 def test_large_k_class_prefers_compact_sparse_pass2_over_dense_fallback(monkeypatch):
@@ -168,7 +189,13 @@ def test_adaptive_exact_fine_gaussian_retains_sparse_on_broad_support(monkeypatc
             np.zeros(1, dtype=np.int32),
             np.zeros(1, dtype=np.int32),
             [[np.asarray([0], dtype=np.int32)]],
-            {"significant_cutoff_counts": np.full(1, 5, dtype=np.int32)},
+            {
+                "significant_cutoff_counts": np.full(1, 5, dtype=np.int32),
+                "coarse_selector_audit": _control_coarse_selector_audit(
+                    "gaussian",
+                    1,
+                ),
+            },
         )
 
     sparse_result = _assemble_result(
@@ -274,6 +301,28 @@ def test_k_class_assemble_result_reports_joint_pmax_not_per_class_pmax():
     np.testing.assert_allclose(
         np.asarray(result.stats.max_posterior_per_image),
         np.asarray([expected_joint_pmax], dtype=np.float32),
+    )
+
+
+def test_single_class_assemble_result_preserves_authoritative_kernel_pmax():
+    kernel_pmax = np.float32(0.97628003)
+    result = _assemble_result(
+        class_log_evidence=np.asarray([[-100000.0]], dtype=np.float64),
+        new_means=[jnp.zeros(2)],
+        Ft_y=[jnp.zeros(2)],
+        Ft_ctf=[jnp.zeros(2)],
+        per_class_hard_assignments=np.asarray([[3]], dtype=np.int32),
+        per_class_stats=(
+            _stats([-100000.0], [-100000.03125], [kernel_pmax]),
+        ),
+        noise_stats=None,
+    )
+
+    recomputed = np.exp(-100000.03125 - (-100000.0))
+    assert abs(float(kernel_pmax) - recomputed) > 5e-3
+    np.testing.assert_array_equal(
+        np.asarray(result.stats.max_posterior_per_image),
+        np.asarray([kernel_pmax], dtype=np.float32),
     )
 
 
@@ -874,6 +923,10 @@ def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
                     dtype=np.float32,
                 ),
                 "class_assignments": np.asarray([1, 0, 1], dtype=np.int32),
+                "coarse_selector_audit": _control_coarse_selector_audit(
+                    "normalized_cc",
+                    3,
+                ),
             },
         )
 
@@ -1468,6 +1521,10 @@ def test_lazy_k_class_adaptive_mask_matches_dense_blocks_without_materializing()
 def test_sparse_k_class_adaptive_mstep_uses_score_space_log_z(monkeypatch):
     """Sparse K-class pass-2 normalizes scores, not evidence plus image offset."""
 
+    # This probe exercises the legacy 2K-1 normalization choreography. The
+    # production default is the joint fused path, covered separately.
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED", "0")
+
     from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
     from recovar.em.sampling import rotation_grid_size
 
@@ -1567,6 +1624,9 @@ def test_sparse_k_class_adaptive_mstep_uses_score_space_log_z(monkeypatch):
 
 def test_sparse_k_class_adaptive_single_pass_uses_largest_support_class(monkeypatch):
     """Avoid duplicating the most expensive class in the current sparse scheme."""
+
+    # Largest-support-class reuse is specific to the legacy 2K-1 path.
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED", "0")
 
     from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
     from recovar.em.sampling import rotation_grid_size
@@ -1936,6 +1996,23 @@ def test_local_k_class_single_class_skips_score_probe(monkeypatch):
     np.testing.assert_allclose(np.asarray(result.class_responsibilities), np.ones((1, 2), dtype=np.float32))
     np.testing.assert_allclose(np.asarray(result.class_posterior_sums), np.asarray([2.0], dtype=np.float32))
     np.testing.assert_array_equal(np.asarray(result.best_pose_rotation_ids), np.asarray([1, 0], dtype=np.int32))
+
+    calls.clear()
+    coarse_pmax = np.asarray([0.25, 0.5], dtype=np.float64)
+    run_local_k_class_em(
+        TinyDataset(),
+        jnp.zeros((1, 4), dtype=jnp.complex64),
+        jnp.ones(4, dtype=jnp.float32),
+        jnp.ones(4, dtype=jnp.float32),
+        local_layout,
+        "linear_interp",
+        return_best_pose_details=True,
+        class_log_evidence=np.asarray([[4.0, 5.0]], dtype=np.float64),
+        normalization_max_posterior=coarse_pmax,
+    )
+    assert len(calls) == 1
+    np.testing.assert_array_equal(calls[0]["normalization_max_posterior"], coarse_pmax)
+    assert "normalization_log_evidence" not in calls[0]
 
 
 def test_local_k_class_accepts_per_class_layouts_and_external_evidence(monkeypatch):

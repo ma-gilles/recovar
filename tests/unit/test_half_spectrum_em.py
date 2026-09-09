@@ -21,10 +21,9 @@ import jax
 import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
+import recovar.em.dense_single_volume.em_engine as em_engine_module
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-import recovar.em.dense_single_volume.em_engine as em_engine_module
-import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume.em_engine import run_em
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
@@ -35,6 +34,7 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
+    make_shell_indices_half,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     preprocess_batch as _preprocess_batch,
@@ -98,6 +98,52 @@ def test_non_relion_scoring_half_weights_keep_hermitian_multiplicity():
     np.testing.assert_array_equal(np.asarray(actual), np.asarray(make_half_image_weights(IMAGE_SHAPE)))
 
 
+@pytest.mark.parametrize(
+    "image_shape",
+    [(4, 6), (6, 4), (7, 7), (8, 8), (127, 127), (128, 128)],
+)
+def test_host_planned_shell_geometry_is_byte_exact_to_jax_reference(image_shape):
+    expected = np.asarray(
+        ftu.get_grid_of_radial_distances_real(
+            image_shape,
+            voxel_size=1,
+            scaled=False,
+            frequency_shift=0,
+            rounded=True,
+        ),
+        dtype=np.int32,
+    ).reshape(-1)
+    actual = np.asarray(make_shell_indices_half(image_shape), dtype=np.int32)
+
+    np.testing.assert_array_equal(actual, expected)
+
+    height, width = image_shape
+    half_width = width // 2 + 1
+    n_shells = height // 2 + 1
+    coords = np.asarray(
+        ftu.get_k_coordinate_of_each_pixel_half(
+            image_shape,
+            voxel_size=1,
+            scaled=False,
+        ),
+    ).reshape(height, half_width, 2)
+    kx = np.rint(coords[..., 0]).astype(np.int32)
+    ky = np.rint(coords[..., 1]).astype(np.int32)
+    expected_grid = expected.reshape(height, half_width)
+    vertical_nyquist = (height % 2 == 0) & (ky == -(height // 2))
+    redundant_x0 = (kx == 0) & (ky < 0) & ~vertical_nyquist
+    expected_noise_shells = np.where(
+        (expected_grid < n_shells) & ~redundant_x0,
+        expected_grid,
+        n_shells,
+    ).reshape(-1)
+
+    np.testing.assert_array_equal(
+        np.asarray(make_relion_noise_shell_indices_half(image_shape)),
+        expected_noise_shells,
+    )
+
+
 def test_relion_shell_binning_drops_sentinel_indices_under_jit():
     shell_count = IMAGE_SHAPE[0] // 2 + 1
     shell_indices = np.asarray(make_relion_noise_shell_indices_half(IMAGE_SHAPE), dtype=np.int32)
@@ -138,17 +184,17 @@ def test_shell_binning_maps_arbitrary_out_of_range_indices_to_drop_bin():
 
 def test_noise_shell_accumulation_uses_sentinel_safe_binning_helper():
     repo_root = Path(__file__).resolve().parents[2]
-    rel_paths = [
-        "recovar/em/dense_single_volume/em_engine.py",
-        "recovar/em/dense_single_volume/local_big_jit.py",
-        "recovar/em/dense_single_volume/local_em_engine.py",
-        "recovar/em/dense_single_volume/helpers/projection.py",
-        "recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py",
-    ]
-    for rel_path in rel_paths:
+    safe_binning_markers = {
+        "recovar/em/dense_single_volume/em_engine.py": "bin_shell_values_jax",
+        "recovar/em/dense_single_volume/local_big_jit.py": "bin_shell_values_jax",
+        "recovar/em/dense_single_volume/local_em_engine.py": "_noise_image_power_shells_and_per_image",
+        "recovar/em/dense_single_volume/helpers/projection.py": "bin_shell_values_jax",
+        "recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py": "bin_shell_values_jax",
+    }
+    for rel_path, safe_binning_marker in safe_binning_markers.items():
         source = (repo_root / rel_path).read_text()
         assert ".at[shell_indices" not in source
-        assert "bin_shell_values_jax" in source
+        assert safe_binning_marker in source
 
 
 # ---------------------------------------------------------------------------

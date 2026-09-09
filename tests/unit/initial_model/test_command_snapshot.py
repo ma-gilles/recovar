@@ -67,6 +67,11 @@ class TestCommandContainsRequiredFlags:
         cmd = run_ab_initio.build_command(_basic_opts(run_ab_initio))
         assert "--grad" in cmd
         assert "--denovo_3dref" in cmd
+        assert cmd[cmd.index("--grad_write_iter") + 1] == "10"
+
+    def test_grad_write_interval_is_configurable(self, run_ab_initio):
+        cmd = run_ab_initio.build_command(_basic_opts(run_ab_initio, grad_write_iter=1))
+        assert cmd[cmd.index("--grad_write_iter") + 1] == "1"
 
     def test_pad_1(self, run_ab_initio):
         cmd = run_ab_initio.build_command(_basic_opts(run_ab_initio))
@@ -170,6 +175,39 @@ class TestInputValidation:
         opts = _basic_opts(run_ab_initio, ctf_intact_first_peak=False)
         cmd = run_ab_initio.build_command(opts)
         assert "--ctf_intact_first_peak" not in cmd
+
+
+class TestRecovarRuntimeOptions:
+    def test_stable_fourier_window_shapes_defaults_off(self, run_ab_initio):
+        args = run_ab_initio._parse_args(["--i", "particles.star"])
+        assert args.stable_fourier_window_shapes is False
+
+    def test_stable_fourier_window_shapes_reaches_native_driver(
+        self, run_ab_initio, monkeypatch
+    ):
+        from types import SimpleNamespace
+
+        import recovar.em.initial_model.driver as driver
+
+        captured = {}
+
+        def fake_run_native_initial_model(options):
+            captured["options"] = options
+            return SimpleNamespace(final_mrc="initial_model.mrc", final_model_star="model.star")
+
+        monkeypatch.setattr(driver, "run_native_initial_model", fake_run_native_initial_model)
+        assert (
+            run_ab_initio.main(
+                [
+                    "--i",
+                    "particles.star",
+                    "--stable-fourier-window-shapes",
+                    "--no_iter_artifacts",
+                ]
+            )
+            == 0
+        )
+        assert captured["options"].stable_fourier_window_shapes is True
 
 
 # ---------------------------------------------------------------------------

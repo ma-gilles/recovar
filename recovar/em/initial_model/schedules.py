@@ -22,17 +22,51 @@ DEFAULT_GRAD_MU: float = 0.9
 GUI_DEFAULT_NR_ITER: int = 200
 GUI_DEFAULT_NR_CLASSES: int = 1
 GUI_DEFAULT_TAU2_FUDGE: float = 4.0
+DEFAULT_SIGMA2_FUDGE: float = 1.0
 DEFAULT_STEPSIZE_3D_INITIAL_MODEL: float = 0.5
 DEFAULT_TAU2_FUDGE_3D_INITIAL_MODEL: float = 4.0
 
 
 @dataclass(frozen=True)
 class GuiInitialModelDefaults:
-    """Knobs that a GUI-InitialModel recovar driver must reproduce verbatim."""
+    """Single source of truth for RECOVAR's RELION-GUI InitialModel defaults."""
 
     nr_iter: int = GUI_DEFAULT_NR_ITER
+    grad_write_iter: int = 10
     nr_classes: int = GUI_DEFAULT_NR_CLASSES
     tau2_fudge: float = GUI_DEFAULT_TAU2_FUDGE
+    sym_name: str = "C1"
+    do_run_C1: bool = True
+    particle_diameter: float = 200.0
+    do_solvent: bool = True
+    do_zero_mask: bool = True
+    do_ctf_correction: bool = True
+    random_seed: int = 0
+    healpix_order: int = 1
+    oversampling: int = 1
+    offset_range_px: float = 6.0
+    offset_step_px: float = 2.0
+    perturbation_factor: float = 0.5
+    image_batch_size: int = 500
+    rotation_block_size: int = 5000
+    pass2_engine: str = "auto"
+    relion_wavg_sequential_cuda: bool = True
+    exact_local_bucket_radix: int = 4
+    exact_local_physical_order_chunk_size: int = 0
+    stable_fourier_window_shapes: bool = False
+    bootstrap_min_particles: int = 1000
+    sigma2_min_particles: int = 1000
+    padding_factor: int = 1
+    image_fourier_backend: str = "auto"
+    gpu_ids: str = "0"
+    require_custom_cuda: bool = True
+    lazy: bool = True
+    write_iter_artifacts: bool = True
+    deterministic_cuda: bool = False
+    use_jax_compilation_cache: bool = True
+    jax_compilation_cache_dir: str = ""
+    random_perturbation: float | None = None
+    translation_sigma_angstrom: float | None = None
     grad_ini_frac: float = DEFAULT_GRAD_INI_FRAC
     grad_fin_frac: float = DEFAULT_GRAD_FIN_FRAC
     grad_em_iters: int = DEFAULT_GRAD_EM_ITERS
@@ -47,6 +81,33 @@ class VdamPhaseLengths:
     grad_ini_iter: int
     grad_inbetween_iter: int
     grad_fin_iter: int
+
+
+def phase_lengths_from_effective_fractions(
+    nr_iter: int,
+    grad_ini_frac: float,
+    grad_fin_frac: float,
+) -> VdamPhaseLengths:
+    """Build phase lengths from fractions RELION already normalized.
+
+    Optimiser checkpoints serialize the effective fractions after RELION's
+    command-line normalization.  Applying that normalization a second time
+    changes nondefault schedules whose original fractions summed above 0.9.
+    """
+
+    if nr_iter <= 0:
+        raise ValueError("nr_iter must be positive")
+    if grad_ini_frac <= 0.0 or grad_ini_frac >= 1.0:
+        raise ValueError("Invalid value for grad_ini_frac (must be in (0, 1))")
+    if grad_fin_frac <= 0.0 or grad_fin_frac >= 1.0:
+        raise ValueError("Invalid value for grad_fin_frac (must be in (0, 1))")
+    if grad_ini_frac + grad_fin_frac > 1.0:
+        raise ValueError("effective gradient phase fractions must sum to at most 1")
+
+    grad_ini_iter = int(nr_iter * grad_ini_frac)
+    grad_fin_iter = int(nr_iter * grad_fin_frac)
+    grad_inbetween_iter = nr_iter - grad_ini_iter - grad_fin_iter
+    return VdamPhaseLengths(grad_ini_iter, grad_inbetween_iter, grad_fin_iter)
 
 
 def compute_phase_lengths(
@@ -69,10 +130,11 @@ def compute_phase_lengths(
         grad_ini_frac /= s
         grad_fin_frac /= s
 
-    grad_ini_iter = int(nr_iter * grad_ini_frac)
-    grad_fin_iter = int(nr_iter * grad_fin_frac)
-    grad_inbetween_iter = max(0, nr_iter - grad_ini_iter - grad_fin_iter)
-    return VdamPhaseLengths(grad_ini_iter, grad_inbetween_iter, grad_fin_iter)
+    return phase_lengths_from_effective_fractions(
+        nr_iter,
+        grad_ini_frac,
+        grad_fin_frac,
+    )
 
 
 def default_subset_sizes_for_3d_initial_model(dataset_size: int) -> tuple[int, int]:
@@ -238,9 +300,14 @@ def _step_sigmoid_value(
     ``value = inflated * scale + base * (1 - scale)`` with
     ``scale = 1 / (10**((iter - grad_ini - len/2) / (len/4)) + 1)``.
     """
-    x = float(iter)
-    a = float(sigmoid_length)
-    b = float(grad_ini_iter)
+    # RELION declares all four locals as ``float`` (not RFLOAT):
+    # ``float x, a, b, scale``.  The arithmetic inside ``pow`` is promoted
+    # by the double literals, then the result is rounded back to float when
+    # assigned to ``scale``.  Preserve that rounding boundary exactly; it is
+    # large enough to perturb reconstructGrad on long VDAM trajectories.
+    x = float(np.float32(iter))
+    a = float(np.float32(sigmoid_length))
+    b = float(np.float32(grad_ini_iter))
     if a <= 0.0:
         offset = x - b
         if offset == 0.0:
@@ -251,12 +318,15 @@ def _step_sigmoid_value(
     # Cap the exponent to avoid math.pow overflow; RELION relies on IEEE-754
     # saturating to +inf which makes scale -> 0.
     if exponent > 308.0:
-        scale = 0.0
+        scale = float(np.float32(0.0))
     elif exponent < -308.0:
-        scale = 1.0
+        scale = float(np.float32(1.0))
     else:
-        scale = 1.0 / (math.pow(10.0, exponent) + 1.0)
-    return inflated * scale + base * (1.0 - scale)
+        scale = float(np.float32(1.0 / (math.pow(10.0, exponent) + 1.0)))
+    # In RELION, ``1 - scale`` is also evaluated in float before the
+    # surrounding RFLOAT multiplication.
+    one_minus_scale = float(np.float32(1.0) - np.float32(scale))
+    return inflated * scale + base * one_minus_scale
 
 
 def _relion_round(x: float) -> int:
