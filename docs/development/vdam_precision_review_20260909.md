@@ -306,3 +306,71 @@ Board receipt: `handoffs/em_clean_resolution_boundary_review_20260909.json`.
 Outcome SHA-256: `e1f6f668d67263b5dd4724a40bc398a1656860fec0b0bac8c761afca762635da`.
 The next scientific question is the upstream SSNR construction on matched state;
 no numerical change, new GPU job, precision907 or F32 M adoption follows.
+
+
+## Private F32 M inverse-FFT DC follow-up
+
+The private fixed-M experiment `1b4f2adee` exposed an imaginary DC component
+(about 0.00011390) at the inverse FFT boundary. NVIDIA documents that C2R input
+must be Hermitian; violating this requirement leaves the result undefined.
+See the [cuFFT transform contract](https://docs.nvidia.com/cuda/cufft/index.html#fourier-transform-types).
+This requirement alone does not prove the cause of a measured map difference.
+The peer subsequently ran saved-tail raw, DC-cleared and Hermitian-projected
+controls, native CPU compatibility checks, and a corrected full-M replay.
+
+Private correction `b17913a91`, separate from the explicit F32 capability commit,
+clears only the imaginary centered DC immediately before the inverse FFT in both
+M precisions. It retains real DC, all other Fourier coefficients and the earlier
+moments/priors/accumulators. This is not a general Hermitian-boundary repair.
+The shared implementation has not adopted either commit; its inherited F64
+numerical M default remains unchanged.
+
+Integrator review independently checked 53 named material hashes before/after,
+the clean private source identities and nine changed-file hashes across the DC
+and later route handoffs. All six old/new prepared-input pairs agree exactly,
+including array dtype/shape/bytes and serialized scalars. Four saved map arrays
+reproduce the following descriptive numerical comparisons:
+
+| Saved-state comparison | Relative L2 map difference | Maximum absolute difference |
+| --- | ---: | ---: |
+| Original F32 versus original F64 | 6.928921219355242e-5 | 9.380339799081039e-7 |
+| DC-corrected F32 versus corrected F64 | 2.3645888560075493e-7 | 5.055884433335933e-8 |
+| Original versus corrected F64 | 2.1884647693715523e-16 | 5.551115123125783e-17 |
+
+These are fixed-input numerical diagnostics, not map-quality gates. Independent
+relative-norm recomputation differs from the producer's analysis by 4.46e-19 and
+4.09e-28 in the latter two rows; maximum absolute differences are exact. Initial
+review-script attempts asserted relative-norm agreement at 1e-12 and failed.
+They remain preserved; the final report records these recomputation differences
+without adding or changing a scientific tolerance.
+
+The two saved native CPU maps are byte-identical over all 2,097,152 F64 voxels
+when only gradient imaginary DC is removed. The integrator verified those files;
+it did not rerun native code, E/M or FFTs. The peer reports 173 CPU passes,
+four GPU tests passing after their CPU skips, guard38 and 18 corrected full-M
+calls. Full peer source/dependency manifests and all replay outputs were not
+independently re-audited in this receipt review.
+
+A separate same-reference CPU check on serialized iteration-153 maps matches
+native/JAX projector power at roughly 1e-16 relative L2. The incoming maps
+reproduce the shell-27 prior-power difference. Stored MRCs were rounded to F32;
+this does not replay full-precision in-memory references or identify their first
+upstream divergence. That report was read and hashed, not independently rerun.
+It does not connect the DC finding to the source-closed iteration-155 GT failure.
+
+The later private `bae959dab` adds an explicit CLI-to-M F32 route. Peer H100 job
+13644423 completed two updates with exact pose/support decisions, Pmax changes
+up to 1.78e-5 and verified F32 M/state/mask boundaries. Other numerical stages
+remain higher precision. Its focused44 and guard38 pass; three broader native
+projector failures reproduce on its base and remain recorded. This smoke is
+not trajectory acceptance or a benchmark. Full200 job13644924 is running on
+that frozen source; preserve its source/native pins and avoid duplicate jobs.
+The route has only source-identity/receipt review here, not integration approval.
+Precision907, the F32 capability, DC fix and route remain private and unadopted.
+
+Independent review and reproduction: run
+`mstep_dc_receipt_review_20260909/review.py` under the source-review root with
+primary pixi Python, `CUDA_VISIBLE_DEVICES=''`, `JAX_PLATFORMS=cpu` and one
+OpenBLAS thread. Exact findings/pins are in `review.json`; peer artifacts are
+under `em_work/codex/vdam_mstep_f32_replay_20260909/`. Coordination receipt:
+`handoffs/em_clean_mstep_dc_receipt_review_20260909.json`.

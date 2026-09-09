@@ -105,6 +105,18 @@ link to the GT loss. The eight counter differences from a replay omitting sampli
 resets remain recorded; full convergence/finalization parity is not established.
 See the [resolution review](vdam_precision_review_20260909.md#saved-spectrum-resolution-boundary).
 
+Private F32 M follow-ups are now separated into capability `1b4f2adee`, DC
+correction `b17913a91` and opt-in CLI route `bae959dab`. Integrator saved-artifact
+review verifies all six prepared-input pairs and the map-gap reduction
+6.93e-5→2.36e-7 after DC correction, plus byte-identical native CPU maps with
+imaginary gradient DC removed. These are fixed-input numerical measurements;
+they do not resolve the earlier trajectory GT failure. The same-reference
+projector-power CPU check supports a difference already in incoming maps.
+Peer two-update H100 smoke13644423 passed; full200 job13644924 is running on
+frozen private source. All three changes and precision907 remain unadopted.
+See the [DC and route review](vdam_precision_review_20260909.md#private-f32-m-inverse-fft-dc-follow-up)
+for exact independent/peer evidence scopes, residual differences and open gates.
+
 Raw-prefetch source is unassigned. The RELION header lock is
 released: five diagnostic insertions remain, and shared benchmark binaries plus
 private native captures/builds stay frozen. No shared native writer/build is
@@ -531,12 +543,14 @@ gates remain in the [program archive](../math/em_parity_program.md);
 
 ## Frozen jobs and representative performance
 
-Slurm was checked on September 9 UTC after the normalization-input cleanup:
+Slurm was checked again on September 9 UTC during the private DC receipt review:
 the frozen older-source K4 pair **13560202 completed 0:0** on `della-l08g4`
 (16:19:39 elapsed). Its audit **13560356** is pending for priority; terminal process
 status alone is not scientific acceptance. K1 real-data window **13610518** is
-running on `della-h20g1`; **13610539** and **13629099** remain dependency-pending.
-Recorded poll: `hia_source_review_20260906/normalization_input_owner_20260909/milestone_sacct.txt`.
+completed 0:0 on `della-h20g1` (18:13:36); follow-ups **13610539** and
+**13629099** completed 0:0 (69 and 3 seconds). Their scientific receipts still
+require review; terminal status is not current-primary qualification.
+Recorded poll: `hia_source_review_20260906/mstep_dc_receipt_review_20260909/milestone_sacct.txt`.
 The queued audit script is `hia_source_review_20260906/k4_cleanup_pair/audit.sbatch`;
 outputs belong to `em_work/codex/hia_k4_cleanup_pair_20260907/quality/`.
 Poll these exact jobs before using this status as current.
