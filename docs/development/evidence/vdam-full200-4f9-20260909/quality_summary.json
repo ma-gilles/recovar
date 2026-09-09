@@ -1,0 +1,74 @@
+{
+  "job": 13653485,
+  "source_head": "4f9a194923b084c649c7d9ce929eec7ae9f78902",
+  "fixture": "GF43 synthetic3000/128 K1 seed29",
+  "final_GT_AUC_candidate": 0.38897697468181186,
+  "final_GT_AUC_native": 0.38907639621865686,
+  "final_GT_delta": -9.942153684500132e-05,
+  "final_cross_AUC": 0.9997294862648998,
+  "map_conditions": {
+    "minimum_cross_auc": 0.9997253944709251,
+    "minimum_cross_iteration": 193,
+    "cross_below_0_999": [],
+    "minimum_registered_gt_delta": -0.0002512155449481135,
+    "minimum_gt_delta_iteration": 173,
+    "gt_below_minus_0_002": []
+  },
+  "final_GT_condition_met": true,
+  "all_iteration_GT_condition_met": true,
+  "all_iteration_cross_condition_met": true,
+  "first_selected_coarse_count_disagreement": {
+    "iteration": 32,
+    "selected_index": 124,
+    "input_row_zero_based": 312,
+    "image_name": "313@particles.128.mrcs",
+    "candidate_coarse_cutoff_count": 6,
+    "native_coarse_cutoff_count": 5,
+    "candidate_metadata_pmax": 0.7756052613258362,
+    "native_STAR_pmax": 0.775682,
+    "fine_support_unavailable": true
+  },
+  "first_selected_Pmax_gap_at_least_1e_3": {
+    "iteration": 61,
+    "selected_index": 117,
+    "input_row_zero_based": 2604,
+    "image_name": "2605@particles.128.mrcs",
+    "candidate_coarse_cutoff_count": 2,
+    "native_coarse_cutoff_count": 2,
+    "candidate_metadata_pmax": 0.529369056224823,
+    "native_STAR_pmax": 0.530514,
+    "fine_support_unavailable": true
+  },
+  "all_selected_coarse_count_disagreements": 3726,
+  "selected_updated_rows": 112400,
+  "timing": {
+    "job": 13653485,
+    "native_whole_process_s": 303.9049498109962,
+    "candidate_whole_process_s": 452.29460101603763,
+    "candidate_over_native_whole_process": 1.4882765196727712,
+    "candidate_internal_timing": {
+      "cli_end_monotonic": 313484.479529727,
+      "cli_start_monotonic": 313044.604447151,
+      "cli_wall_s": 439.8750825760071,
+      "main_entry_monotonic": 313039.086597172,
+      "postvalidation_end_monotonic": 313487.050410894,
+      "postvalidation_s": 2.570881166961044,
+      "postvalidation_scope": "CLI return through native/source/dependency/options/artifact/schema validation; excludes final timing/output-manifest/completion serialization and process teardown, all included in parent spawn-to-exit timing",
+      "postvalidation_start_monotonic": 313484.479529727,
+      "return_value": 0,
+      "scope": "Stock CLI including cold JIT/compilation and all iteration I/O; use parent spawn-to-exit timing for whole-process comparison",
+      "setup_before_cli_s": 5.517849978990853,
+      "setup_scope": "main entry through immediately before CLI; module-import/startup costs are outside this internal interval and included by parent spawn-to-exit timing"
+    },
+    "cell": "GF43 3000/128 K1 C1 seed29, one native then candidate pair on same H100",
+    "limits": [
+      "Cold compilation and alliteration I/O included.",
+      "Candidate whole-process includes import/loader/validation overhead; internalCLI is not substituted for whole-process.",
+      "One ordering/repetition; not representative100k or broad performance qualification."
+    ],
+    "performance_qualified": false
+  },
+  "no_strict_state_noise_waiver": true,
+  "broad_quality_accepted": false,
+  "source_changed": false
+}

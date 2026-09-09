@@ -134,3 +134,10 @@ preserves independent CPU comparisons of 16 saved float32 score outputs, their
 hashes and the exact audit script. Same-input raw winners are stable despite
 score variation; this scoped diagnostic does not qualify trajectory decisions,
 M-step precision or performance.
+
+The [frozen VDAM full201 cell at4f9](evidence/vdam-full200-4f9-20260909/README.md)
+preserves all1,005 shellwise curves/AUCs, commands, source/input/build pins, timing
+boundaries and a self-contained read-only audit. Both map conditions pass at all201
+checkpoints on one3k/128 K1 natural200 H100 pair; strict state parity still fails.
+The1.4883× wall ratio is one measured pair, not representative speed qualification.
+This is historical evidence, not a baseline replacement or later-tip acceptance.

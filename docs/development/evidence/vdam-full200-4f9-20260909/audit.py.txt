@@ -1,0 +1,76 @@
+"""Read-only archived-curve audit; no imports of RECOVAR/JAX or GPU work."""
+import argparse
+import hashlib
+import json
+import math
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+
+def normalized_fsc_auc(values: Any, axis: Any | None = None) -> float:
+    """Integrate an FSC curve over a normalized shell/radius axis."""
+    fsc = np.asarray(values, dtype=np.float64).reshape(-1)
+    if fsc.size == 0:
+        return float("nan")
+
+    if axis is None:
+        x = np.arange(fsc.size, dtype=np.float64)
+    else:
+        x = np.asarray(axis, dtype=np.float64).reshape(-1)
+        if x.size != fsc.size:
+            return float("nan")
+
+    finite = np.isfinite(fsc) & np.isfinite(x)
+    if finite.size:
+        finite[0] = False  # Shell 0/DC is excluded from the existing FSC shell summaries.
+    x = x[finite]
+    y = fsc[finite]
+    if y.size == 0:
+        return float("nan")
+    if y.size == 1:
+        return float(y[0])
+
+    order = np.argsort(x)
+    x = x[order]
+    y = y[order]
+    span = float(x[-1] - x[0])
+    if span <= 0.0 or not math.isfinite(span):
+        return float(np.mean(y))
+    x_norm = (x - x[0]) / span
+    integrate = getattr(np, "trapezoid", np.trapz)
+    return float(integrate(y, x_norm))
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--archive", type=Path, default=Path(__file__).resolve().parent)
+root = parser.parse_args().archive
+manifest = json.loads((root / "manifest.json").read_text())
+for name, expected in manifest["archive_sha256"].items():
+    assert hashlib.sha256((root / name).read_bytes()).hexdigest() == expected, name
+summary = json.loads((root / "quality_summary.json").read_text())
+with np.load(root / "shellwise.npz", allow_pickle=False) as arrays:
+    assert set(arrays.files) == {"labels", "iterations", "cross_fsc", "raw_gt_fsc", "registered_gt_fsc", "cross_auc", "raw_gt_auc", "registered_gt_auc"}
+    assert arrays["labels"].tolist() == ["new_candidate", "native"]
+    assert np.array_equal(arrays["iterations"], np.arange(201))
+    integrated = 0
+    for name, shape in [("cross", (201, 63)), ("raw_gt", (2, 201, 63)), ("registered_gt", (2, 201, 63))]:
+        curves, aucs = arrays[name + "_fsc"], arrays[name + "_auc"]
+        assert curves.shape == shape and aucs.shape == shape[:-1]
+        assert curves.dtype == aucs.dtype == np.float64
+        assert np.isfinite(curves).all() and np.isfinite(aucs).all()
+        computed = np.apply_along_axis(normalized_fsc_auc, -1, curves)
+        assert np.array_equal(computed, aucs), name
+        integrated += aucs.size
+    cross = arrays["cross_auc"]
+    delta = arrays["registered_gt_auc"][0] - arrays["registered_gt_auc"][1]
+    gates = summary["map_conditions"]
+    assert float(cross.min()) == gates["minimum_cross_auc"]
+    assert int(cross.argmin()) == gates["minimum_cross_iteration"]
+    assert float(delta.min()) == gates["minimum_registered_gt_delta"]
+    assert int(delta.argmin()) == gates["minimum_gt_delta_iteration"]
+    assert np.flatnonzero(cross < .999).tolist() == gates["cross_below_0_999"] == []
+    assert np.flatnonzero(delta < -.002).tolist() == gates["gt_below_minus_0_002"] == []
+    assert float(delta[-1]) == summary["final_GT_delta"]
+    assert float(cross[-1]) == summary["final_cross_AUC"]
+assert integrated == 1005
+print(json.dumps({"curve_integrals_exact": integrated, "checkpoints": 201, "map_conditions_pass": True, "strict_state_accepted": False, "later_source_qualified": False}))
