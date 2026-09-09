@@ -46,11 +46,11 @@ assert str(recovar_file).startswith(str(repo) + "/"), recovar_file
 assert str(jax_file).startswith(str(pixi_env) + "/"), (jax_file, pixi_env)
 for helper in (
     "relion_replay", "relion_normalization", "projector_preparation",
-    "score_outputs", "helpers.resolution", "helpers.bpref_diagnostics",
+    "score_outputs", "scoring_policy", "helpers.resolution", "helpers.bpref_diagnostics",
 ):
     importlib.import_module(f"recovar.em.dense_single_volume.{helper}")
 execution_modules = (
-    "iteration_loop", "k_class", "em_engine", "local_em_engine", "local_big_jit",
+    "iteration_loop", "half_scoring", "k_class", "em_engine", "local_em_engine", "local_big_jit",
     "helpers.significance", "helpers.sparse_pass2_bucketed",
 )
 loaded = [name for name in execution_modules

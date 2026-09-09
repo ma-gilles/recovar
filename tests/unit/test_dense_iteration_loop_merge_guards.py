@@ -15,11 +15,18 @@ import numpy as np
 import pytest
 
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop
-from recovar.em.dense_single_volume import score_outputs, relion_worker_scale
 import recovar.em.dense_single_volume.local_search_iteration as local_search_iteration
-from recovar.em.dense_single_volume.local_search_iteration import _LocalSearchIterationResult
+from recovar.em.dense_single_volume import (
+    half_scoring,
+    mean_helpers,
+    ppca_bridge,
+    relion_replay,
+    relion_worker_scale,
+    score_outputs,
+    scoring_policy,
+)
 from recovar.em.dense_single_volume.helpers.convergence import _native_final_perturbation_healpix_order
-from recovar.em.dense_single_volume import mean_helpers, ppca_bridge, relion_replay
+from recovar.em.dense_single_volume.local_search_iteration import _LocalSearchIterationResult
 from recovar.em.initial_model.iteration_loop import run_vdam_iterations
 
 pytestmark = pytest.mark.unit
@@ -130,7 +137,7 @@ def test_per_half_update_preserves_double_posterior_state_in_double_mode(monkeyp
         max_posterior_per_image = np.array([0.123456789012345], dtype=np.float64)
         rotation_posterior_sums = np.array([0.987654321098765], dtype=np.float64)
 
-    monkeypatch.setitem(iteration_loop._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", True)
+    monkeypatch.setitem(scoring_policy._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", True)
     outs = iteration_loop.PerHalfOutputs.empty()
     outs.update_from(
         0,
@@ -141,7 +148,7 @@ def test_per_half_update_preserves_double_posterior_state_in_double_mode(monkeyp
             em_stats=_Stats(),
             noise_stats=None,
         ),
-        dtype=iteration_loop._dense_global_scoring_dtype(),
+        dtype=scoring_policy._dense_global_scoring_dtype(),
     )
 
     assert outs.max_posterior[0].dtype == np.float64
@@ -160,7 +167,7 @@ def test_mstep_full_half_axis_resolver_keeps_common_axis_or_default():
 
 
 def test_local_search_keeps_relion_x_half_mstep_contract():
-    source = inspect.getsource(iteration_loop._score_half_local)
+    source = inspect.getsource(half_scoring._score_half_local)
 
     assert "if k_class_enabled" in source
     assert "_k_class_relion_x_half_mstep_enabled()" in source
@@ -214,14 +221,14 @@ def test_relion_correction_range_formatter_accepts_empty_halves():
 
 
 def test_k1_local_search_significant_reconstruction_uses_actual_local_oversampling():
-    source = inspect.getsource(iteration_loop._score_half_local)
+    source = inspect.getsource(half_scoring._score_half_local)
 
     assert "local_reconstruct_significant_only = int(local_parent_oversampling_order) > 0" in source
     assert "local_reconstruct_significant_only = state.adaptive_oversampling > 0" not in source
 
 
 def test_k1_local_search_stats_use_relion_retained_weights():
-    source = inspect.getsource(iteration_loop._score_half_local)
+    source = inspect.getsource(half_scoring._score_half_local)
     wrapper_source = inspect.getsource(local_search_iteration._run_local_search_iteration)
 
     assert "stats_use_reconstruction_probs=local_reconstruct_significant_only" in source
@@ -230,7 +237,7 @@ def test_k1_local_search_stats_use_relion_retained_weights():
 
 
 def test_fresh_k1_spectrum_norm_reaches_local_noise_update_only():
-    score_source = inspect.getsource(iteration_loop._score_half_local)
+    score_source = inspect.getsource(half_scoring._score_half_local)
     wrapper_source = inspect.getsource(local_search_iteration._run_local_search_iteration)
     loop_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
 
@@ -246,14 +253,14 @@ def test_fresh_k1_spectrum_norm_reaches_local_noise_update_only():
 
 
 def test_k1_local_full_parent_diagnostic_counts_unmasked_parent_layout():
-    source = inspect.getsource(iteration_loop._score_half_local)
+    source = inspect.getsource(half_scoring._score_half_local)
 
     assert "if parent_layout.sample_mask_flat is not None" in source
     assert "else int(stop - start) * int(current_translations.shape[0])" in source
 
 
 def test_k1_local_parent_probe_applies_relion_max_significants_cap():
-    score_source = inspect.getsource(iteration_loop._score_half_local)
+    score_source = inspect.getsource(half_scoring._score_half_local)
     parent_call = score_source[
         score_source.index("parent_outputs = _run_local_search_iteration") : score_source.index(
             "parent_profile = parent_outputs.profile_summary"
@@ -268,7 +275,7 @@ def test_k1_local_parent_probe_applies_relion_max_significants_cap():
 
 
 def test_k1_local_records_coarse_parent_support_not_fine_reconstruction_count():
-    source = inspect.getsource(iteration_loop._score_half_local)
+    source = inspect.getsource(half_scoring._score_half_local)
 
     parent_count_start = source.index("pruned_parent_significant_sample_indices = significant_sample_indices")
     parent_count_end = source.index("if local_adaptive_pass2_full_parent:", parent_count_start)
@@ -277,15 +284,15 @@ def test_k1_local_records_coarse_parent_support_not_fine_reconstruction_count():
     assert "return_significant_counts=False" in source
     assert "significant_counts=relion_significant_counts_k" in source
 
-    counts = iteration_loop._relion_coarse_significant_counts(
+    counts = half_scoring._relion_coarse_significant_counts(
         [np.array([2, 8], dtype=np.int64), np.array([1, 3, 5, 7], dtype=np.int64)]
     )
     np.testing.assert_array_equal(counts, np.array([2, 4], dtype=np.int32))
-    assert iteration_loop._relion_coarse_significant_counts([np.array([2]), None]) is None
+    assert half_scoring._relion_coarse_significant_counts([np.array([2]), None]) is None
 
 
 def test_k1_local_search_does_not_score_learned_global_direction_prior():
-    source = inspect.getsource(iteration_loop._score_half_local)
+    source = inspect.getsource(half_scoring._score_half_local)
     assert "RELION's convertAllSquaredDifferencesToWeights uses mymodel.pdf_direction" in source
     assert "relion_local_rotation_log_prior_k = None" in source
     assert "rotation_log_prior=relion_local_rotation_log_prior_k" in source
@@ -339,10 +346,10 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
         return outputs
 
     monkeypatch.delenv("RECOVAR_K1_RELION_X_HALF_MSTEP", raising=False)
-    monkeypatch.setattr(iteration_loop, "_k1_relion_x_half_mstep_default_available", lambda: True)
-    monkeypatch.setattr(iteration_loop, "_run_local_search_iteration", fake_run_local_search_iteration)
+    monkeypatch.setattr(scoring_policy, "_k1_relion_x_half_mstep_default_available", lambda: True)
+    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_run_local_search_iteration)
 
-    result = iteration_loop._score_half_local(
+    result = half_scoring._score_half_local(
         k=0,
         experiment_dataset=SimpleNamespace(
             voxel_size=1.0,
@@ -452,20 +459,20 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
             noise_stats="fine_noise",
         )
 
-    monkeypatch.setattr(iteration_loop, "build_local_search_grid_metadata", lambda _order: {})
-    monkeypatch.setattr(iteration_loop, "build_local_hypothesis_layout", lambda *_args, **_kwargs: parent_layout)
+    monkeypatch.setattr(half_scoring, "build_local_search_grid_metadata", lambda _order: {})
+    monkeypatch.setattr(half_scoring, "build_local_hypothesis_layout", lambda *_args, **_kwargs: parent_layout)
     monkeypatch.setattr(
-        iteration_loop,
+        half_scoring,
         "build_local_adaptive_pass2_hypothesis_layout",
         lambda *_args, **_kwargs: fine_layout,
     )
-    monkeypatch.setattr(iteration_loop, "_local_adaptive_pass2_full_parent_enabled", lambda: False)
-    monkeypatch.setattr(iteration_loop, "_local_adaptive_pass2_rotation_only_enabled", lambda: False)
-    monkeypatch.setattr(iteration_loop, "_local_adaptive_pass2_denominator_support_mode", lambda: None)
-    monkeypatch.setattr(iteration_loop, "_k1_relion_x_half_mstep_enabled", lambda: False)
-    monkeypatch.setattr(iteration_loop, "_run_local_search_iteration", fake_run_local_search_iteration)
+    monkeypatch.setattr(half_scoring, "_local_adaptive_pass2_full_parent_enabled", lambda: False)
+    monkeypatch.setattr(half_scoring, "_local_adaptive_pass2_rotation_only_enabled", lambda: False)
+    monkeypatch.setattr(half_scoring, "_local_adaptive_pass2_denominator_support_mode", lambda: None)
+    monkeypatch.setattr(half_scoring, "_k1_relion_x_half_mstep_enabled", lambda: False)
+    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_run_local_search_iteration)
 
-    result = iteration_loop._score_half_local(
+    result = half_scoring._score_half_local(
         k=0,
         experiment_dataset=SimpleNamespace(
             voxel_size=1.0,
@@ -560,10 +567,10 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
             class_full_posterior_sums=np.array([0.2, 0.8], dtype=np.float64),
         )
 
-    monkeypatch.setattr(iteration_loop, "_k_class_relion_x_half_mstep_enabled", lambda: True)
-    monkeypatch.setattr(iteration_loop, "_run_local_search_iteration", fake_run_local_search_iteration)
+    monkeypatch.setattr(half_scoring, "_k_class_relion_x_half_mstep_enabled", lambda: True)
+    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_run_local_search_iteration)
 
-    result = iteration_loop._score_half_local(
+    result = half_scoring._score_half_local(
         k=0,
         experiment_dataset=SimpleNamespace(
             voxel_size=1.0,
@@ -759,13 +766,13 @@ def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
         "apply_relion_rotation_perturbation",
         "apply_relion_rotation_perturbation_to_eulers",
         "apply_relion_translation_perturbation",
-        "build_local_hypothesis_layout",
         "read_relion_optimiser_metadata",
         "read_relion_sampling_metadata",
     ]
 
     missing = [name for name in required_iteration_loop_symbols if not hasattr(iteration_loop, name)]
     assert missing == []
+    assert hasattr(half_scoring, "build_local_hypothesis_layout")
     assert callable(relion_replay.read_relion_model_metadata)
     assert callable(local_search_iteration.run_local_em_exact)
     assert callable(local_search_iteration.run_local_k_class_em)
@@ -782,17 +789,17 @@ def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
 
 
 def test_local_adaptive_pass2_defaults_to_relion_pruned_parent(monkeypatch):
-    monkeypatch.delenv(iteration_loop._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, raising=False)
-    monkeypatch.delenv(iteration_loop._LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV, raising=False)
+    monkeypatch.delenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, raising=False)
+    monkeypatch.delenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV, raising=False)
 
-    assert iteration_loop._local_adaptive_pass2_full_parent_enabled() is False
+    assert scoring_policy._local_adaptive_pass2_full_parent_enabled() is False
 
-    monkeypatch.setenv(iteration_loop._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, "1")
-    assert iteration_loop._local_adaptive_pass2_full_parent_enabled() is True
+    monkeypatch.setenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, "1")
+    assert scoring_policy._local_adaptive_pass2_full_parent_enabled() is True
 
-    monkeypatch.setenv(iteration_loop._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, "0")
-    assert iteration_loop._local_adaptive_pass2_full_parent_enabled() is False
+    monkeypatch.setenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, "0")
+    assert scoring_policy._local_adaptive_pass2_full_parent_enabled() is False
 
-    monkeypatch.setenv(iteration_loop._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, "1")
-    monkeypatch.setenv(iteration_loop._LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV, "1")
-    assert iteration_loop._local_adaptive_pass2_full_parent_enabled() is False
+    monkeypatch.setenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, "1")
+    monkeypatch.setenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV, "1")
+    assert scoring_policy._local_adaptive_pass2_full_parent_enabled() is False

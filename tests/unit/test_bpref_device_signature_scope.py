@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume import debug_dumps, iteration_loop, k_class, local_em_engine
+from recovar.em.dense_single_volume import debug_dumps, half_scoring, iteration_loop, k_class, local_em_engine
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics, sparse_pass2_bucketed
 from recovar.em.dense_single_volume.local_backprojection import compute_local_mstep_sums
 
@@ -452,8 +452,8 @@ def test_target_dense_half_keeps_block_topology_inactive_for_live_work(monkeypat
         assert not cuda_backproject.relion_x_half_bp_block_topology_enabled()
         return "ordinary-live"
 
-    monkeypatch.setattr(iteration_loop, "_score_half_dense", fake_dense)
-    assert iteration_loop._score_half_dense_in_bpref_scope(
+    monkeypatch.setattr(half_scoring, "_score_half_dense", fake_dense)
+    assert half_scoring._score_half_dense_in_bpref_scope(
         bpref_device_signature_active=True,
     ) == "ordinary-live"
     assert not cuda_backproject.relion_x_half_bp_block_topology_enabled()
@@ -620,12 +620,12 @@ def test_target_half2_cannot_leak_into_final_all_data_or_local_search(monkeypatc
         assert not cuda_backproject.relion_x_half_bp_block_topology_enabled()
         return "ordinary-local"
 
-    monkeypatch.setattr(iteration_loop, "_score_half_local", fake_local)
-    assert iteration_loop._score_half_local_in_bpref_scope(
+    monkeypatch.setattr(half_scoring, "_score_half_local", fake_local)
+    assert half_scoring._score_half_local_in_bpref_scope(
         bpref_device_signature_active=False
     ) == "ordinary-local"
     with pytest.raises(RuntimeError, match="sparse adaptive pass 2"):
-        iteration_loop._score_half_local_in_bpref_scope(
+        half_scoring._score_half_local_in_bpref_scope(
             bpref_device_signature_active=True
         )
 

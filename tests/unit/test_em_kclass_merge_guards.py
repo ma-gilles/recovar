@@ -38,19 +38,18 @@ import os
 import re
 from types import SimpleNamespace
 
+import jax.numpy as jnp
 import numpy as np
 import pytest
-import jax.numpy as jnp
 
 import recovar.em.dense_single_volume.helpers.oversampling as oversampling_mod
 import recovar.em.dense_single_volume.helpers.score_constraints as score_constraints_mod
 import recovar.em.dense_single_volume.helpers.significance as sig_mod
-from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 import recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed as sparse_pass2_mod
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop
-from recovar.em.dense_single_volume import debug_dumps
-from recovar.em.dense_single_volume import score_outputs
 import recovar.em.dense_single_volume.k_class as k_class_mod
+from recovar.em.dense_single_volume import debug_dumps, half_scoring, score_outputs, scoring_policy
+from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 
 pytestmark = pytest.mark.unit
 
@@ -61,57 +60,57 @@ def test_kclass_mstep_defaults_to_relion_x_half_with_full_and_native_escape_hatc
     monkeypatch.delenv("RECOVAR_K_CLASS_RELION_X_HALF_MSTEP", raising=False)
     monkeypatch.delenv("RECOVAR_K_CLASS_FULL_VOLUME_MSTEP", raising=False)
     monkeypatch.delenv("RECOVAR_K_CLASS_HALF_VOLUME_MSTEP", raising=False)
-    assert iteration_loop._k_class_relion_x_half_mstep_enabled() is True
-    assert iteration_loop._k_class_relion_half_volume_mstep_enabled() is False
+    assert scoring_policy._k_class_relion_x_half_mstep_enabled() is True
+    assert scoring_policy._k_class_relion_half_volume_mstep_enabled() is False
 
     monkeypatch.setenv("RECOVAR_K_CLASS_RELION_X_HALF_MSTEP", "0")
-    assert iteration_loop._k_class_relion_x_half_mstep_enabled() is False
-    assert iteration_loop._k_class_relion_half_volume_mstep_enabled() is False
+    assert scoring_policy._k_class_relion_x_half_mstep_enabled() is False
+    assert scoring_policy._k_class_relion_half_volume_mstep_enabled() is False
 
     monkeypatch.setenv("RECOVAR_K_CLASS_RELION_X_HALF_MSTEP", "1")
-    assert iteration_loop._k_class_relion_x_half_mstep_enabled() is True
+    assert scoring_policy._k_class_relion_x_half_mstep_enabled() is True
 
     monkeypatch.delenv("RECOVAR_K_CLASS_RELION_X_HALF_MSTEP", raising=False)
     monkeypatch.setenv("RECOVAR_K_CLASS_FULL_VOLUME_MSTEP", "1")
-    assert iteration_loop._k_class_relion_x_half_mstep_enabled() is False
-    assert iteration_loop._k_class_relion_half_volume_mstep_enabled() is False
+    assert scoring_policy._k_class_relion_x_half_mstep_enabled() is False
+    assert scoring_policy._k_class_relion_half_volume_mstep_enabled() is False
 
     monkeypatch.setenv("RECOVAR_K_CLASS_FULL_VOLUME_MSTEP", "0")
-    assert iteration_loop._k_class_relion_x_half_mstep_enabled() is False
-    assert iteration_loop._k_class_relion_half_volume_mstep_enabled() is True
+    assert scoring_policy._k_class_relion_x_half_mstep_enabled() is False
+    assert scoring_policy._k_class_relion_half_volume_mstep_enabled() is True
 
     monkeypatch.setenv("RECOVAR_K_CLASS_FULL_VOLUME_MSTEP", "1")
     monkeypatch.setenv("RECOVAR_K_CLASS_HALF_VOLUME_MSTEP", "1")
-    assert iteration_loop._k_class_relion_x_half_mstep_enabled() is False
-    assert iteration_loop._k_class_relion_half_volume_mstep_enabled() is True
+    assert scoring_policy._k_class_relion_x_half_mstep_enabled() is False
+    assert scoring_policy._k_class_relion_half_volume_mstep_enabled() is True
 
 
 def test_k1_relion_x_half_mstep_defaults_on_with_escape_hatch(monkeypatch):
     """K=1 adaptive RELION mode should use x-half BPref layout by default."""
 
-    monkeypatch.delenv(iteration_loop._K1_RELION_X_HALF_MSTEP_ENV, raising=False)
-    monkeypatch.setattr(iteration_loop, "_k1_relion_x_half_mstep_default_available", lambda: True)
-    assert iteration_loop._k1_relion_x_half_mstep_enabled() is True
+    monkeypatch.delenv(scoring_policy._K1_RELION_X_HALF_MSTEP_ENV, raising=False)
+    monkeypatch.setattr(scoring_policy, "_k1_relion_x_half_mstep_default_available", lambda: True)
+    assert scoring_policy._k1_relion_x_half_mstep_enabled() is True
 
-    monkeypatch.setenv(iteration_loop._K1_RELION_X_HALF_MSTEP_ENV, "0")
-    assert iteration_loop._k1_relion_x_half_mstep_enabled() is False
+    monkeypatch.setenv(scoring_policy._K1_RELION_X_HALF_MSTEP_ENV, "0")
+    assert scoring_policy._k1_relion_x_half_mstep_enabled() is False
 
-    monkeypatch.setenv(iteration_loop._K1_RELION_X_HALF_MSTEP_ENV, "1")
-    assert iteration_loop._k1_relion_x_half_mstep_enabled() is True
+    monkeypatch.setenv(scoring_policy._K1_RELION_X_HALF_MSTEP_ENV, "1")
+    assert scoring_policy._k1_relion_x_half_mstep_enabled() is True
 
-    monkeypatch.setenv(iteration_loop._K1_RELION_X_HALF_MSTEP_ENV, "invalid")
-    assert iteration_loop._k1_relion_x_half_mstep_enabled() is True
+    monkeypatch.setenv(scoring_policy._K1_RELION_X_HALF_MSTEP_ENV, "invalid")
+    assert scoring_policy._k1_relion_x_half_mstep_enabled() is True
 
 
 def test_k1_relion_x_half_mstep_default_disables_when_cuda_unavailable(monkeypatch):
     """The default must not request CUDA-only x-half adjoints on CPU tests."""
 
-    monkeypatch.delenv(iteration_loop._K1_RELION_X_HALF_MSTEP_ENV, raising=False)
-    monkeypatch.setattr(iteration_loop, "_k1_relion_x_half_mstep_default_available", lambda: False)
-    assert iteration_loop._k1_relion_x_half_mstep_enabled() is False
+    monkeypatch.delenv(scoring_policy._K1_RELION_X_HALF_MSTEP_ENV, raising=False)
+    monkeypatch.setattr(scoring_policy, "_k1_relion_x_half_mstep_default_available", lambda: False)
+    assert scoring_policy._k1_relion_x_half_mstep_enabled() is False
 
-    monkeypatch.setenv(iteration_loop._K1_RELION_X_HALF_MSTEP_ENV, "1")
-    assert iteration_loop._k1_relion_x_half_mstep_enabled() is True
+    monkeypatch.setenv(scoring_policy._K1_RELION_X_HALF_MSTEP_ENV, "1")
+    assert scoring_policy._k1_relion_x_half_mstep_enabled() is True
 
 
 def test_kclass_pass2_dump_completion_waits_for_full_target_set(tmp_path):
@@ -166,7 +165,7 @@ def test_kclass_fused_pass2_accepts_reconstruction_current_size():
 
 
 def test_kclass_adaptive_wires_relion_x_half_without_mislabeling_dense_branch():
-    source = inspect.getsource(iteration_loop._score_half_dense)
+    source = inspect.getsource(half_scoring._score_half_dense)
     assert "k_class_relion_x_half_mstep = _k_class_relion_x_half_mstep_enabled()" in source
     assert 'em_kwargs["mstep_relion_x_half"] = bool(k_class_relion_x_half_mstep)' in source
     assert "k_class_mstep_full_half_axis_this_score = k_class_result.mstep_full_half_axis" in source
@@ -448,7 +447,7 @@ def test_kclass_dump_call_site_passes_operand_kwargs():
 
 
 def test_kclass_significance_dump_threads_one_based_iteration():
-    assert "debug_iteration" in inspect.signature(iteration_loop._score_half_dense).parameters
+    assert "debug_iteration" in inspect.signature(half_scoring._score_half_dense).parameters
     assert "debug_iteration" in inspect.signature(
         k_class_mod.run_dense_k_class_em_adaptive
     ).parameters
@@ -456,7 +455,7 @@ def test_kclass_significance_dump_threads_one_based_iteration():
         sig_mod._compute_k_class_significance_batched
     ).parameters
     loop_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
-    score_source = inspect.getsource(iteration_loop._score_half_dense)
+    score_source = inspect.getsource(half_scoring._score_half_dense)
     adaptive_source = inspect.getsource(k_class_mod.run_dense_k_class_em_adaptive)
     significance_source = inspect.getsource(sig_mod._compute_k_class_significance_batched)
     assert iteration_loop._numbered_relion_iteration(0, 0) == 1
@@ -978,8 +977,8 @@ def test_pass2_norm_dump_half_selector_fails_closed(tmp_path):
 
 def test_relion_adaptive_fraction_preserves_text_to_float_boundary():
     expected = float(np.float32("0.999"))
-    assert iteration_loop.RELION_ADAPTIVE_FRACTION == expected
-    assert iteration_loop.RELION_ADAPTIVE_FRACTION != 0.999
+    assert scoring_policy.RELION_ADAPTIVE_FRACTION == expected
+    assert scoring_policy.RELION_ADAPTIVE_FRACTION != 0.999
     assert "adaptive_fraction=0.999" not in inspect.getsource(iteration_loop)
 
     # This two-weight boundary is intentionally between Python's binary64
@@ -993,7 +992,7 @@ def test_relion_adaptive_fraction_preserves_text_to_float_boundary():
     )
     _, relion_count = oversampling_mod._find_significant_mask_full_sort(
         weights,
-        adaptive_fraction=iteration_loop.RELION_ADAPTIVE_FRACTION,
+        adaptive_fraction=scoring_policy.RELION_ADAPTIVE_FRACTION,
         max_significants=-1,
     )
     assert int(np.asarray(binary64_count)[0]) == 1

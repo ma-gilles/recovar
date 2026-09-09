@@ -3,8 +3,14 @@ from types import SimpleNamespace
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume import batch_planning, firstiter_cc, iteration_loop, k_class
-from recovar.em.dense_single_volume import score_outputs
+from recovar.em.dense_single_volume import (
+    batch_planning,
+    firstiter_cc,
+    half_scoring,
+    iteration_loop,
+    k_class,
+    score_outputs,
+)
 from recovar.em.dense_single_volume.batch_planning import (
     _estimate_relion_em_batch_sizes,
     _safe_dense_k_class_rotation_block_size,
@@ -259,7 +265,7 @@ def test_k1_firstiter_cc_dispatch_uses_coarse_batch_for_significance(monkeypatch
     monkeypatch.setattr(firstiter_cc, "_build_firstiter_cc_pass2_grids", fake_grids)
     monkeypatch.setattr(firstiter_cc, "run_dense_k_class_em_adaptive", fake_adaptive)
 
-    result = iteration_loop._score_half_dense(
+    result = half_scoring._score_half_dense(
         k=0,
         experiment_dataset=TinyDataset(),
         means_k=jnp.zeros(4, dtype=jnp.complex64),
@@ -377,10 +383,10 @@ def test_kclass_nonfirstiter_adaptive_dispatch_sizes_actual_fine_grid(monkeypatc
             best_pose_rotation_ids=jnp.zeros(n_images, dtype=jnp.int32),
         )
 
-    monkeypatch.setattr(iteration_loop, "_build_firstiter_cc_pass2_grids", fake_grids)
-    monkeypatch.setattr(iteration_loop, "run_dense_k_class_em_adaptive", fake_adaptive)
+    monkeypatch.setattr(half_scoring, "_build_firstiter_cc_pass2_grids", fake_grids)
+    monkeypatch.setattr(half_scoring, "run_dense_k_class_em_adaptive", fake_adaptive)
 
-    result = iteration_loop._score_half_dense(
+    result = half_scoring._score_half_dense(
         k=0,
         experiment_dataset=TinyDataset(),
         means_k=jnp.zeros((4, 4), dtype=jnp.complex64),
