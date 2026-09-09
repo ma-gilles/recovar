@@ -77,6 +77,20 @@ hidden. `tests/unit/test_local_search_result_contract.py` covers this routing,
 plus K2/exact-K4 pose, noise and class-summary settings. Returned arrays retain
 their layouts, dtypes and identities; saved refinement field names are unchanged.
 
+Per-half dispatch belongs to
+[`half_scoring`](../../recovar/em/dense_single_volume/half_scoring.py).
+Its dense and local adapters prepare engine arguments, retain adaptive/first-CC
+routing, and write class/pose fields into the caller-owned `PerHalfOutputs`.
+The controller calls its two BPref-scoped entry points and retains iteration
+scheduling, state transitions, reconstruction and device-buffer lifetime.
+[`scoring_policy`](../../recovar/em/dense_single_volume/scoring_policy.py)
+owns shared padding/window constants, the import-time static kwargs object,
+and the existing call-time environment selectors. Their override precedence,
+invalid-value handling and float32 defaults are preserved. The controller and
+scorers share the same kwargs object; policy imports do not load engine modules.
+These owners have no imports back into the controller. Log messages are unchanged,
+with namespaces following the owner of each moved function.
+
 The dense single-class kernel is
 [`em_engine.run_em`](../../recovar/em/dense_single_volume/em_engine.py).
 It returns `DenseEMResult` from
@@ -124,9 +138,13 @@ new result omits them, while always replacing accumulator-layout metadata.
 
 Local-search dependencies are imported from their owners. Tests that replace a
 kernel for a local dispatch check patch its binding in `local_search_iteration`.
-The controller still has its own active `build_local_hypothesis_layout` binding
-for adaptive parent-layout construction. Patch the call site exercised by the
-test; do not add reverse imports merely to preserve an old monkeypatch location.
+`half_scoring` has its own active `build_local_hypothesis_layout` binding for
+adaptive parent-layout construction. Tests of whole-controller dispatch patch
+engine bindings in `half_scoring`; tests of local chunk execution patch
+`local_search_iteration`. A shared sizing function mocked across both the
+controller and scorer must be patched at both consumers. Patch the call site
+exercised by the test; do not add reverse imports to preserve an old monkeypatch
+location.
 
 [`debug_dumps`](../../recovar/em/dense_single_volume/debug_dumps.py) owns the
 half-selection policy for terminating significance/noise captures and numbered

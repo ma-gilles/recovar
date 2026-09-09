@@ -32,7 +32,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | `b3b51f0c8`: diagnostic reference gating/map loading joins the replay validators in `relion_replay.py`; controller 7,814 lines |
+| Latest production cleanup | `650d71a43`: per-half dispatch and shared execution policies leave the iteration controller; controller 6,123 lines |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest test repair | `44d414a6b`: stale InitialModel callers and native source guards repaired; production unchanged |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -82,13 +82,23 @@ and restrict by idle-device UUID, or use Slurm visibility. Avoid duplicate jobs.
 
 ## Engineering work and recent evidence
 
-The latest audit repaired two stale test callers. Native source guards now
-inspect the complete denominator argument list and each FFI handler's own macro,
-preserving static/runtime buffer counts 17/18. Production code is unchanged;
-all other test statements and numeric assertions survive explicit owner mapping.
+The controller now delegates dense/local half scoring to `half_scoring.py`;
+`scoring_policy.py` owns shared defaults and diagnostic selectors. Scheduling,
+state transitions, reconstruction and offloading remain in the controller.
+All 17 moved functions and 17 constant expressions are exact under AST review.
+Tests migrate direct calls and monkeypatches to their real owners; shared sizing
+patches still reach both controller and scorer. No numeric assertion, default,
+reduction or stored result class changes. The helper import guard now includes
+the policy owner and rejects accidental half-scoring imports.
+
+Controller size falls **7,814 → 6,123 lines (−1,691)**. This is responsibility
+separation, not net source deletion: the three owner modules together add 73
+lines for explicit imports, module documentation and spacing. The two large
+scoring routines still need internal readability work after this ownership step.
 
 | Checkpoint | Executed evidence | Limit |
 | --- | --- | --- |
+| Half-scoring ownership `650d71a43` | Same 189-case CPU inventory before/after; final unused-import follow-up 6/6; extended CPU guard 38/38; exact function/constant and test-assertion audits | Intermediate stale owner guard failed once and was migrated; logger namespaces follow owners; no GPU/trajectory claim |
 | Compact-CTF integration `5a39eab29` | 241 CPU passed/23 GPU deselected (31.13 s), 38-case guard; all peer cases retained and six transferred files exact; peer H100 13638270 byte-exact operands/scores | Full-image powerClass and source precision preserved; allocation microbenchmark only, no end-to-end or trajectory claim |
 | Reference-replay ownership `b3b51f0c8` | Same 39-case control/candidate inventory, including tiny K4 map loading and state-swap order; 38-case CPU guard. Exact function/retained-controller AST; no new Ruff findings | Controller −95 lines by relocation; logger namespace follows replay owner; no GPU or trajectory claim |
 | InitialModel test repair `44d414a6b` | Fourier-window control 49 passed/3 failed, then 52 passed (8.73 s); coarse-audit control 8 passed/4 failed, then 12 passed (2.75 s). Identical inventories; four in-memory native-contract mutations rejected; no new Ruff findings | CPU/test-source contracts, not compiled CUDA or trajectory qualification |
@@ -102,6 +112,12 @@ were confirmed by failing tests before migration. This does not prove dynamic
 imports/registration or every runtime path. A tracked-reference scan found no
 further unreferenced, undecorated top-level private EM function candidates;
 do not remove code merely to reduce line counts.
+
+Half-scoring commands, source fingerprints, the original owner-guard failure,
+case inventories and AST audits are in
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/half_scoring_owner_20260909/validation.json`.
+CPU logs/XML use `half_scoring_{control,extra_control,after,final,import_cleanup,guard}_20260909`
+under the CPU run root below. No new GPU job was launched.
 
 Compact-CTF integration commands, fingerprints and case inventories are in
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/compact_ctf_integration_20260909/validation.json`.
