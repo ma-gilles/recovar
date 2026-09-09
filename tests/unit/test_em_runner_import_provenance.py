@@ -1,5 +1,6 @@
 """Static and direct checks for EM runner checkout provenance."""
 
+import importlib
 from pathlib import Path
 
 import pytest
@@ -38,4 +39,21 @@ def test_concrete_em_imports_are_bound_to_expected_repo(monkeypatch):
 def test_concrete_em_imports_reject_wrong_repo(monkeypatch, tmp_path):
     monkeypatch.setenv("RECOVAR_EXPECTED_REPO_ROOT", str(tmp_path))
     with pytest.raises(RuntimeError, match="RECOVAR import provenance failure"):
+        run_full_refinement._assert_expected_repo_imports()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("owner", ["half_scoring", "scoring_policy"])
+@pytest.mark.parametrize("missing_source", [False, True], ids=["foreign", "missing"])
+def test_concrete_em_imports_reject_unverified_scoring_owner(
+    monkeypatch, tmp_path, owner, missing_source
+):
+    """A correct controller path must not mask a stale or unlocated scorer."""
+    monkeypatch.setenv("RECOVAR_EXPECTED_REPO_ROOT", str(REPO_ROOT))
+    module_name = f"recovar.em.dense_single_volume.{owner}"
+    module = importlib.import_module(module_name)
+    source_file = None if missing_source else str(tmp_path / f"{owner}.py")
+    monkeypatch.setattr(module, "__file__", source_file)
+
+    with pytest.raises(RuntimeError, match=module_name):
         run_full_refinement._assert_expected_repo_imports()

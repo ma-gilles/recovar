@@ -34,6 +34,8 @@ def test_module_entry_point_checks_concrete_imports(tmp_path):
     )
     assert accepted.returncode == 0, accepted.stderr
     assert "recovar.em.dense_single_volume.iteration_loop=" in accepted.stderr
+    assert "recovar.em.dense_single_volume.half_scoring=" in accepted.stderr
+    assert "recovar.em.dense_single_volume.scoring_policy=" in accepted.stderr
     assert "recovar.em.dense_single_volume.k_class=" in accepted.stderr
     assert "recovar.em.dense_single_volume.helpers.significance=" in accepted.stderr
 

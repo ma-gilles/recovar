@@ -84,6 +84,8 @@ logger = logging.getLogger(__name__)
 _CONCRETE_RECOVAR_PROVENANCE_MODULES = (
     "recovar",
     "recovar.em.dense_single_volume.iteration_loop",
+    "recovar.em.dense_single_volume.half_scoring",
+    "recovar.em.dense_single_volume.scoring_policy",
     "recovar.em.dense_single_volume.k_class",
     "recovar.em.dense_single_volume.helpers.significance",
 )
