@@ -21,6 +21,7 @@ from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_co
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.dense_single_volume import fixed_capacity_local
+from recovar.em.dense_single_volume.projector_preparation import prepare_local_projector_slab
 from recovar.em.dense_single_volume import local_projection_cache as projection_cache
 from recovar.em.dense_single_volume.helpers import relion_ctf
 from recovar.em.dense_single_volume.helpers import vdam_replay
@@ -1368,19 +1369,7 @@ def _project_local_bucket(
     if relion_projector_half is not None:
         if relion_projector_r_max is None:
             raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
-        relion_projector_half = jnp.asarray(relion_projector_half)
-        if relion_projector_half.ndim == 4:
-            if int(relion_projector_half.shape[0]) != 1:
-                raise ValueError(
-                    "local RELION projector path expected a single-class projector slab, "
-                    f"got {relion_projector_half.shape}",
-                )
-            relion_projector_half = relion_projector_half[0]
-        if relion_projector_half.ndim != 3:
-            raise ValueError(
-                "local RELION projector path expected Projector::data shape (z, y, x_half), "
-                f"got {relion_projector_half.shape}",
-            )
+        relion_projector_half = prepare_local_projector_slab(relion_projector_half)
         relion_texture_interp = projection_kwargs.get("relion_texture_interp")
         relion_acc_double_floorf_quirk = bool(projection_kwargs.get("relion_acc_double_floorf_quirk", False))
         mask_current_image_disk = bool(projection_kwargs.get("mask_current_image_disk", True))
@@ -1542,19 +1531,7 @@ def _project_packed_noise_rows(
     if relion_projector_half is not None:
         if relion_projector_r_max is None:
             raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
-        relion_projector_half = jnp.asarray(relion_projector_half)
-        if relion_projector_half.ndim == 4:
-            if int(relion_projector_half.shape[0]) != 1:
-                raise ValueError(
-                    "local RELION projector path expected a single-class projector slab, "
-                    f"got {relion_projector_half.shape}",
-                )
-            relion_projector_half = relion_projector_half[0]
-        if relion_projector_half.ndim != 3:
-            raise ValueError(
-                "local RELION projector path expected Projector::data shape (z, y, x_half), "
-                f"got {relion_projector_half.shape}",
-            )
+        relion_projector_half = prepare_local_projector_slab(relion_projector_half)
         relion_texture_interp = projection_kwargs.get("relion_texture_interp")
         relion_acc_double_floorf_quirk = bool(projection_kwargs.get("relion_acc_double_floorf_quirk", False))
         mask_current_image_disk = bool(projection_kwargs.get("mask_current_image_disk", True))
@@ -4078,19 +4055,9 @@ def run_local_em_exact(
     if use_relion_projector:
         if relion_projector_r_max is None:
             raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
-        relion_projector_half_big_jit = jnp.asarray(relion_projector_half)
-        if relion_projector_half_big_jit.ndim == 4:
-            if int(relion_projector_half_big_jit.shape[0]) != 1:
-                raise ValueError(
-                    "local RELION projector big-JIT path expected a single-class projector slab, "
-                    f"got {relion_projector_half_big_jit.shape}",
-                )
-            relion_projector_half_big_jit = relion_projector_half_big_jit[0]
-        if relion_projector_half_big_jit.ndim != 3:
-            raise ValueError(
-                "local RELION projector big-JIT path expected Projector::data shape (z, y, x_half), "
-                f"got {relion_projector_half_big_jit.shape}",
-            )
+        relion_projector_half_big_jit = prepare_local_projector_slab(
+            relion_projector_half, path_label="local RELION projector big-JIT path",
+        )
         relion_projector_r_max_big_jit = int(relion_projector_r_max)
         if compact_relion_projector_big_jit:
             big_jit_relion_projector_output_size = (

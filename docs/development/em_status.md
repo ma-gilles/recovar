@@ -35,7 +35,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | Projection-cache ownership follows `19544d3b6`: local engine 8,626 lines, sparse scorer 17,383, half scorer 1,358, controller 6,123 |
+| Latest production cleanup | Shared local projector-slab preparation follows cache owner `351c30b26`: local engine 8,593 lines, sparse scorer 17,383, half scorer 1,358, controller 6,123 |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -244,6 +244,29 @@ use that owner directly. Function bodies and all retained scorer statements are
 AST-identical after namespace mapping. Counter sequencing, filter short-circuit
 order, NPZ schema, casts and error behavior remain unchanged. Sparse scoring
 loses 176 lines (19,460 → 19,284); the two modules together add one line.
+
+Three duplicate local projector-slab normalization blocks now call
+`projector_preparation.prepare_local_projector_slab`: ordinary buckets, packed
+noise rows and main BigJIT preparation. Expanding all three calls reproduces the
+complete prior engine executable AST, including path-specific error strings.
+Earlier preparation functions and existing tests are untouched. The change
+preserves conversion order/dtype, singleton-class handling and error behavior;
+it introduces no shape restriction beyond the existing ndim/class-axis checks.
+Radius validation, projection operands and numerical execution remain at their
+original call sites. The engine shrinks33 lines (8,626→8,593), including10 lines
+from its still-large main function. The new helper adds20 lines: combined
+production decreases13 lines.
+
+Validation uses the five existing bucket/noise/BigJIT/cache CPU cases on both
+sources, plus the new shape/dtype/error tests and CPU guard. Exact commands,
+source fingerprints and final counts are in
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/local_projector_slab_20260909/validation.json`.
+Reproduce through the existing `mstep_dc_integration_20260909/run_checks.sh`
+wrapper with `tests/unit/test_refine_relion_mode.py` and
+`tests/unit/test_local_projector_slab.py`, selecting
+`-k 'project_local_bucket or packed_local_noise_projection_accepts or windowed_relion_projector_big_jit_matches_split or relion_projection_cache_matches or test_local_projector_slab'`;
+run `--fast-guard` with a separate fresh label. This is structural CPU evidence,
+not current-source GPU, quality, memory or runtime qualification.
 
 Projection-cache budgets, grouping, ID mapping and construction now belong to
 [`local_projection_cache.py`](../../recovar/em/dense_single_volume/local_projection_cache.py).

@@ -134,6 +134,13 @@ conversion and retain their different semantic checks. This owner prepares input
 posterior arithmetic and normalization kernels remain at their execution sites.
 It preserves input strides and avoids copying already suitable F64 arrays.
 
+Local projector slab normalization has one owner,
+[`projector_preparation.prepare_local_projector_slab`](../../recovar/em/dense_single_volume/projector_preparation.py).
+Bucket projection, packed-noise projection and the main BigJIT path accept the
+same three-dimensional slab or singleton class axis. The helper preserves JAX
+dtype conversion and path-specific errors. Radius requirements, pixel selection,
+interpolation, masking and projection execution stay with the callers.
+
 Sealed VDAM worker and block-chronology replay lives in
 [`helpers/vdam_replay.py`](../../recovar/em/dense_single_volume/helpers/vdam_replay.py).
 It owns NPZ schema validation, four cached loaders, stack-ID joins, worker/launch
