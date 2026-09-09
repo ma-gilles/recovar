@@ -439,5 +439,93 @@ No new GPU or Slurm job was launched. Private routebae959's smoke13644423 and
 full200job13644924 do not qualify this exact shared composition. Strict state,
 pose/tie, trajectoryGT, current100k performance and exactK4/real-data completion
 gates remain open. Capability/DC source admission does not mean those gates
-passed. Precision907 and the CLI route remain unmerged; frozen peer sources,
-existing failed runs and native dependencies remain untouched.
+passed. Precision907 and the CLI route were unmerged at that checkpoint; the
+subsequent route integration is recorded below. Frozen peer sources, existing
+failed runs and native dependencies remain untouched.
+
+## Explicit CLI M precision route integration
+
+User-authorized merge **`cb897cda5d917af37f0542ed741ac8b3de943c73`** preserves
+original commit **`bae959dabe465dcb7e7d6d3aee586ed2039a9203`** on primary
+`a4cb21490`. All five handoff files match exactly: `scripts/run_ab_initio.py`,
+InitialModel `driver.py`, `iteration_loop.py`, `m_step.py`, and new
+`test_mstep_precision_route.py`. Their preimages match candidate parentb179.
+Precision907 remains excluded.
+
+Select the capability explicitly with:
+
+```bash
+pixi run python scripts/run_ab_initio.py <existing-run-arguments> \
+  --mstep-backend jax --mstep-compute-dtype float32
+```
+
+The driver converts six M-owned state fields once after bootstrap or continuation:
+Iref, Igrad1/2, sigma2_class, data_vs_prior_class and fourier_coverage_class.
+The transaction verifies F32/C64 output and publication, leaves other class slots
+and incoming state untouched, and preserves authoritative tau2 exactly. Post-M
+mask multiplication uses the selected dtype. Native backend, replay/dump routes,
+missing transaction certificates and silent native-double fallback are rejected
+when incompatible with the explicit F32 request. The inherited F64 default stays
+unchanged. Tests include actual CPU M execution and K4 class-slot ownership;
+this is not K4 trajectory qualification.
+
+Bootstrap, corrected E projector/FFT and tau2 preparation, E normalization/noise,
+BPref export and M shell geometry still include higher-precision numerical work.
+Native initialization certificates evaluate the selected incoming moments,
+including their explicit initial quantization. This is a bounded M capability,
+not an all-F32 pipeline or a remedy established for earlier trajectory failures.
+
+Primary validation uses pinned existing native binding `6fefa350…`:
+
+| Check | Result |
+| --- | --- |
+| Existing driver/iteration/M callers before merge | 211 passed, 6.21 s |
+| Same callers plus32 new route cases after merge | 243 passed, 6.38 s; no skips |
+| CPU/import guard on identical merged source | 38 passed, 42.49 s |
+| Private H100 CLI smoke13644423 | Two actual updates per precision; terminal0:0, 78 s allocation |
+
+Integrator review independently checks the recorded dtype/state-stage inventory,
+bootstrap equality, exact tau2 receipts and dependency path/hash equality; it
+reintegrates all three saved FSC curves and compares actual saved pose/support
+and Pmax metadata. Thirty-five named hashes are stable. Cross-arm FSC-AUC is
+1 at initialization, 0.9999999997857151 at1 and 0.9999999997278919 at2. Both updates
+preserve the six recorded pose/support fields, with maximum Pmax differences
+1.52587890625e-5 and1.7762184143066406e-5. Continuous state differs. The observer's
+cast/input-ownership attestations are saved receipts, not independent reconstruction
+of omitted runtime arrays. This review does not repeat the producer's full2306-pin
+inventory or execute E/M, FFT, native code or GPU work.
+
+The earlier peer broader panel's three native-projector failures also reproduce
+on unchangedb179; they remain unresolved and are not part of the passing243-case
+inventory. Private H100 evidence matches the transferred route and named helpers,
+but primary has newer structural changes elsewhere, so it does not establish
+current-primary end-to-end acceptance. Full20013644924 is terminal0:0; scientific
+analysis is still pending review. Full-F32, strict state/pose/tie, GT, representative
+100k runtime and exactK4/real-data gates remain open.
+
+Evidence root:
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/mstep_route_integration_20260909/`.
+Read `scope.json`, `merge.json`, `validation.json`, `gpu_receipt_review.json` and
+`review_receipts.py`. Three initial receipt-review attempts are preserved: raw
+ldd text differed in ASLR addresses, then independent AUC reducers differed in
+DC exclusion and normalization order. The repaired review compares exact dependency
+path/hash maps and the existing normalized-axis, DC-excluded AUC definition;
+no scientific assertion, producer output or tolerance was relaxed.
+
+Reproduce CPU checks using the existing task wrapper:
+
+```bash
+REVIEW=/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/mstep_dc_integration_20260909
+bash "$REVIEW/run_checks.sh" <fresh-label> \
+  tests/unit/initial_model/test_native_driver.py \
+  tests/unit/initial_model/test_iteration_loop.py \
+  tests/unit/initial_model/test_m_step.py \
+  tests/unit/initial_model/test_native_m_step_transaction.py \
+  tests/unit/initial_model/test_mstep_precision_route.py
+bash "$REVIEW/run_checks.sh" <fresh-guard-label> --fast-guard
+```
+
+Exact commands, import provenance and XML/logs are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/`
+in `mstep_route_{control,integrated,guard}_20260909/`. No source or library changed
+during either integrated check; frozen peer sources and jobs were not modified.

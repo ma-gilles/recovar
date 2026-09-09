@@ -125,9 +125,23 @@ Previous independent saved-input review verifies six exact prepared pairs and
 map-gap reduction6.93e-5→2.36e-7 after DC correction, plus byte-identical native
 CPU maps when imaginary gradient DC is removed. This does not resolve the
 trajectoryGT155 failure. The same-reference projector-power CPU check supports
-a difference already in incoming maps. **CLI route `bae959dab` and precision907
-remain private/unmerged.** Peer route smoke13644423 and full200job13644924 are
-separate evidence on frozen private source; no duplicate GPU work is assigned.
+a difference already in incoming maps. **Precision907 remains private/unmerged.**
+The separately authorized CLI route `bae959dab` is now incorporated by merge
+`cb897cda5`, with all five transferred files byte-identical. Explicit
+`--mstep-backend jax --mstep-compute-dtype float32` selects F32/C64 M computation,
+six persistent M-owned state fields and post-M mask multiplication. The inherited
+F64 default is preserved; bootstrap, corrected E projector/tau2 preparation,
+normalization/noise, BPref export and M shell geometry retain higher-precision
+numerical work. This is not full-production-F32 closure.
+
+The same211 existing CPU cases pass before/after; integrated coverage is243/243
+including32 new route cases, plus guard38/38. H100 two-update13644423 passed on
+frozen privatebae959. Integrator receipt review verifies35 named hashes, exact
+pose/support metadata and all three saved-curve AUCs; maximum per-image Pmax
+deltas are1.53e-5 and1.78e-5. Continuous state differs. Full200job13644924 completed
+0:0, but its scientific analysis remains pending review. Neither private run
+qualifies the newer primary structural composition; no duplicate GPU work is
+assigned. See the [route review](vdam_precision_review_20260909.md#explicit-cli-m-precision-route-integration).
 See the [integration record](vdam_precision_review_20260909.md#authorized-m-capability-and-dc-integration)
 for commands, source pins and stage-precision limits.
 
