@@ -28,6 +28,10 @@ from recovar.em.dense_single_volume.helpers.dtype_policy import (
 )
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import relion_backprojector_volume_shape
 from recovar.em.dense_single_volume.k_class import run_dense_k_class_em, run_dense_k_class_em_adaptive
+from recovar.em.dense_single_volume.local_debug import (
+    log_local_adaptive_support,
+    log_local_denominator_support,
+)
 from recovar.em.dense_single_volume.local_layout import (
     build_local_adaptive_pass2_hypothesis_layout,
     build_local_hypothesis_layout,
@@ -1120,70 +1124,14 @@ def _score_half_local(
                 random_perturbation=float(local_search_random_perturbation),
                 dtype=fine_local_layout_dtype,
             )
-            if local_adaptive_pass2_denominator_layout.sample_mask_flat is None:
-                denominator_valid_samples_per_image = (
-                    np.asarray(local_adaptive_pass2_denominator_layout.rotation_counts, dtype=np.int64)
-                    * int(local_adaptive_pass2_denominator_layout.translation_grid.shape[0])
-                )
-            else:
-                denominator_valid_samples_per_image = np.asarray(
-                    [
-                        int(np.count_nonzero(local_adaptive_pass2_denominator_layout.sample_mask_flat[start:stop]))
-                        for start, stop in zip(
-                            local_adaptive_pass2_denominator_layout.rotation_offsets[:-1],
-                            local_adaptive_pass2_denominator_layout.rotation_offsets[1:],
-                        )
-                    ],
-                    dtype=np.int64,
-                )
-            logger.info(
-                "RELION local adaptive pass 2 diagnostic: denominator support mode=%s "
-                "fine valid candidates median=%d max=%d via %s",
+            log_local_denominator_support(
+                logger,
+                local_adaptive_pass2_denominator_layout,
                 local_adaptive_pass2_denominator_mode,
-                int(np.median(denominator_valid_samples_per_image))
-                if denominator_valid_samples_per_image.size
-                else 0,
-                int(np.max(denominator_valid_samples_per_image)) if denominator_valid_samples_per_image.size else 0,
                 _LOCAL_ADAPTIVE_PASS2_DENOMINATOR_SUPPORT_ENV,
             )
-        parent_samples_per_image = np.asarray(
-            [
-                (
-                    (
-                        int(np.count_nonzero(parent_layout.sample_mask_flat[start:stop]))
-                        if parent_layout.sample_mask_flat is not None
-                        else int(stop - start) * int(current_translations.shape[0])
-                    )
-                    if sig is None
-                    else int(np.asarray(sig).size)
-                )
-                for sig, start, stop in zip(
-                    significant_sample_indices,
-                    parent_layout.rotation_offsets[:-1],
-                    parent_layout.rotation_offsets[1:],
-                )
-            ],
-            dtype=np.int64,
-        )
-        if pass2_layout.sample_mask_flat is None:
-            valid_samples_per_image = (
-                np.asarray(pass2_layout.rotation_counts, dtype=np.int64) * int(pass2_layout.translation_grid.shape[0])
-            )
-        else:
-            valid_samples_per_image = np.asarray(
-                [
-                    int(np.count_nonzero(pass2_layout.sample_mask_flat[start:stop]))
-                    for start, stop in zip(pass2_layout.rotation_offsets[:-1], pass2_layout.rotation_offsets[1:])
-                ],
-                dtype=np.int64,
-            )
-        logger.info(
-            "RELION local adaptive pass 2 mask: parent significant samples median=%d max=%d; "
-            "fine valid candidates median=%d max=%d",
-            int(np.median(parent_samples_per_image)) if parent_samples_per_image.size else 0,
-            int(np.max(parent_samples_per_image)) if parent_samples_per_image.size else 0,
-            int(np.median(valid_samples_per_image)) if valid_samples_per_image.size else 0,
-            int(np.max(valid_samples_per_image)) if valid_samples_per_image.size else 0,
+        log_local_adaptive_support(
+            logger, parent_layout, significant_sample_indices, current_translations, pass2_layout
         )
     elif int(local_parent_oversampling_order) > 0:
         local_adaptive_pass2_parent_mode = "k_class_parent_expanded"

@@ -19,6 +19,7 @@ import recovar.em.dense_single_volume.iteration_loop as iteration_loop
 import recovar.em.dense_single_volume.local_search_iteration as local_search_iteration
 from recovar.em.dense_single_volume import (
     half_scoring,
+    local_debug,
     mean_helpers,
     ppca_bridge,
     relion_replay,
@@ -287,11 +288,83 @@ def test_fresh_k1_spectrum_norm_reaches_local_noise_update_only():
     assert "source_faithful_spectrum_norm=source_faithful_spectrum_norm" in local_dispatch
 
 
-def test_k1_local_full_parent_diagnostic_counts_unmasked_parent_layout():
-    source = inspect.getsource(half_scoring._score_half_local)
+@pytest.mark.parametrize(
+    "parent_masked,fine_masked,empty,expected",
+    [
+        (False, False, False, (4, 6, 3, 6)),
+        (True, False, False, (3, 4, 3, 6)),
+        (False, True, False, (4, 6, 2, 3)),
+        (True, True, False, (3, 4, 2, 3)),
+        (False, False, True, (0, 0, 0, 0)),
+    ],
+)
+def test_k1_local_full_parent_diagnostic_counts_unmasked_parent_layout(parent_masked, fine_masked, empty, expected):
+    # An empty explicit selection remains empty; repeated explicit IDs still
+    # count as entries. None means the full masked or unmasked parent support.
+    translations = np.zeros((3, 2), dtype=np.float32)
+    counts = np.array([] if empty else [2, 0, 1], dtype=np.int32)
+    offsets = np.array([0] if empty else [0, 2, 2, 3], dtype=np.int64)
+    mask = np.array([[True, False, True], [False, True, False], [True, True, False]])
+    parent_layout = SimpleNamespace(
+        rotation_counts=counts,
+        rotation_offsets=offsets,
+        translation_grid=translations,
+        sample_mask_flat=mask if parent_masked else None,
+    )
+    fine_layout = SimpleNamespace(
+        rotation_counts=counts,
+        rotation_offsets=offsets,
+        translation_grid=translations,
+        sample_mask_flat=mask if fine_masked else None,
+    )
+    selected = [] if empty else [None, np.array([], dtype=np.int64), np.array([0, 0, 1, 2])]
+    records = []
+    local_debug.log_local_adaptive_support(
+        SimpleNamespace(info=lambda *args: records.append(args)),
+        parent_layout,
+        selected,
+        translations,
+        fine_layout,
+    )
+    assert records == [
+        (
+            "RELION local adaptive pass 2 mask: parent significant samples median=%d max=%d; "
+            "fine valid candidates median=%d max=%d",
+            *expected,
+        )
+    ]
 
-    assert "if parent_layout.sample_mask_flat is not None" in source
-    assert "else int(stop - start) * int(current_translations.shape[0])" in source
+
+@pytest.mark.parametrize(
+    "masked,empty,expected",
+    [
+        (False, False, (3, 6)),
+        (True, False, (2, 3)),
+        (False, True, (0, 0)),
+    ],
+)
+def test_local_denominator_diagnostic_counts_masked_and_empty_support(masked, empty, expected):
+    layout = SimpleNamespace(
+        rotation_counts=np.array([] if empty else [2, 0, 1], dtype=np.int32),
+        rotation_offsets=np.array([0] if empty else [0, 2, 2, 3], dtype=np.int64),
+        translation_grid=np.zeros((3, 2), dtype=np.float32),
+        sample_mask_flat=(
+            np.array([[True, False, True], [False, True, False], [True, True, False]]) if masked else None
+        ),
+    )
+    records = []
+    local_debug.log_local_denominator_support(
+        SimpleNamespace(info=lambda *args: records.append(args)), layout, "full_parent", "TEST_ENV"
+    )
+    assert records == [
+        (
+            "RELION local adaptive pass 2 diagnostic: denominator support mode=%s "
+            "fine valid candidates median=%d max=%d via %s",
+            "full_parent",
+            *expected,
+            "TEST_ENV",
+        )
+    ]
 
 
 def test_k1_local_parent_probe_applies_relion_max_significants_cap():
