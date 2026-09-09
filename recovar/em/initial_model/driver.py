@@ -172,6 +172,7 @@ class NativeInitialModelOptions:
     image_fourier_backend: str = "host_numpy"
     projector_setup_backend: Literal["native", "jax"] = "native"
     mstep_backend: Literal["native", "jax"] = "native"
+    mstep_compute_dtype: Literal["float32", "float64"] = "float64"
     deterministic_cuda: bool = INITIAL_MODEL_GUI_DEFAULTS.deterministic_cuda
     lazy: bool = INITIAL_MODEL_GUI_DEFAULTS.lazy
     datadir: str | None = None
@@ -2702,6 +2703,27 @@ def _write_final_outputs(output_prefix: str, state: InitialModelState) -> tuple[
     return final_mrc, class_mrcs
 
 
+def _prepare_mstep_state_precision(state, mstep_compute_dtype):
+    """Convert M-owned numerical state once after bootstrap or continuation.
+
+    FSC, authoritative tau2, noise and priors retain their existing precision.
+    Bootstrap and projector refresh are not part of this F32 transaction route.
+    """
+    from .m_step import _MSTEP_F32_STATE_DTYPES
+
+    if mstep_compute_dtype == "float64":
+        return state
+    if mstep_compute_dtype != "float32":
+        raise ValueError(f"Unknown mstep_compute_dtype: {mstep_compute_dtype!r}")
+    return replace(
+        state,
+        **{
+            name: np.asarray(getattr(state, name)).astype(dtype, copy=True)
+            for name, dtype in _MSTEP_F32_STATE_DTYPES.items()
+        },
+    )
+
+
 def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialModelResult:
     """Run native recovar InitialModel refinement."""
 
@@ -2718,6 +2740,13 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         driver_profile[f"{name}_time_s"] = float(now - stage_started)
         stage_started = now
 
+    from .m_step import _validate_mstep_precision_route
+
+    _validate_mstep_precision_route(opts.mstep_compute_dtype, opts.mstep_backend)
+    if opts.mstep_compute_dtype == "float32" and os.environ.get(
+        INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV, ""
+    ).strip():
+        raise ValueError("float32 M-step is incompatible with iteration reference replay")
     if opts.nr_classes < 1:
         raise ValueError("nr_classes must be >= 1")
     if opts.nr_iter < 1:
@@ -2841,6 +2870,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             phase_lengths=continuation_phase_lengths,
         )
         sampling_state = continuation.sampling_state
+    state = _prepare_mstep_state_precision(state, opts.mstep_compute_dtype)
     _record_driver_stage("state_setup")
     noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
     exact_projector_setting = os.environ.get(
@@ -2945,8 +2975,16 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     if opts.do_solvent or os.environ.get(INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV, "").strip():
 
         def post_mstep_update(current, _iteration, _meta):
+            if opts.mstep_compute_dtype == "float32" and os.environ.get(
+                INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV, ""
+            ).strip():
+                raise ValueError("float32 M-step is incompatible with iteration reference replay")
             if solvent_mask is not None:
-                current = relion_solvent_flatten_state(current, mask=solvent_mask)
+                current = relion_solvent_flatten_state(
+                    current,
+                    mask=solvent_mask,
+                    compute_dtype=opts.mstep_compute_dtype,
+                )
             return _maybe_replay_iteration_references(
                 current,
                 iteration=int(_iteration),
@@ -2975,6 +3013,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         mu=float(opts.mu),
         projector_padding_factor=int(opts.padding_factor),
         mstep_backend=opts.mstep_backend,
+        mstep_compute_dtype=opts.mstep_compute_dtype,
         projector_refresh_fn=None if projector_context is None else projector_context.refresh,
         start_iteration=int(state.iter),
         diagnostic_stop_after_iteration=opts.diagnostic_stop_after_iteration,

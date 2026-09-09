@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import Literal, Optional
 
@@ -26,6 +27,48 @@ VDAM_NATIVE_BPREF_WEIGHT_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_BPREF_WEIGHT_REPLAY_B
 VDAM_NATIVE_BPREF_REPLAY_ITER_ENV = "RECOVAR_VDAM_NATIVE_BPREF_REPLAY_ITER"
 VDAM_NATIVE_IREF_INPUT_REPLAY_ENV = "RECOVAR_VDAM_NATIVE_IREF_INPUT_REPLAY_BIN"
 VDAM_NATIVE_IREF_INPUT_REPLAY_ITER_ENV = "RECOVAR_VDAM_NATIVE_IREF_INPUT_REPLAY_ITER"
+
+
+# Numerical state owned by the M transaction; authoritative priors stay separate.
+_MSTEP_F32_STATE_DTYPES = {
+    "Iref": np.float32,
+    "Igrad1": np.complex64,
+    "Igrad2": np.complex64,
+    "sigma2_class": np.float32,
+    "data_vs_prior_class": np.float32,
+    "fourier_coverage_class": np.float32,
+}
+
+
+def _validate_mstep_precision_route(
+    mstep_compute_dtype: Literal["float32", "float64"],
+    mstep_backend: Literal["native", "jax"],
+    *,
+    use_native_transaction: bool = True,
+) -> None:
+    """Reject precision-changing diagnostic diversions before reading overrides."""
+    if mstep_compute_dtype not in {"float32", "float64"}:
+        raise ValueError(f"Unknown mstep_compute_dtype: {mstep_compute_dtype!r}")
+    if mstep_compute_dtype == "float64":
+        return
+    if mstep_backend != "jax" or not use_native_transaction:
+        raise ValueError("float32 M-step requires the JAX transaction backend")
+    for name in (
+        "RECOVAR_MSTEP_DUMP_DIR",
+        VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV,
+        VDAM_NATIVE_FIRST_MOMENT_REPLAY_ENV,
+        VDAM_NATIVE_BPREF_DATA_REPLAY_ENV,
+        VDAM_NATIVE_BPREF_WEIGHT_REPLAY_ENV,
+        VDAM_NATIVE_IREF_INPUT_REPLAY_ENV,
+    ):
+        if name in os.environ and (name == "RECOVAR_MSTEP_DUMP_DIR" or os.environ[name].strip()):
+            raise ValueError(f"float32 M-step is incompatible with {name}")
+
+
+def _validate_mstep_state_precision(state: InitialModelState) -> None:
+    for name, dtype in _MSTEP_F32_STATE_DTYPES.items():
+        if np.asarray(getattr(state, name)).dtype != np.dtype(dtype):
+            raise ValueError(f"float32 M-step requires state.{name} dtype {np.dtype(dtype)}")
 
 
 def _get_bindings():
@@ -302,10 +345,13 @@ def _run_m_step_transaction(
     padding_factor: int,
     r_max: int,
     min_resol_shell: float,
+    mstep_compute_dtype: Literal["float32", "float64"] = "float64",
 ) -> InitialModelState:
     """Apply one shared-layout transaction and preserve state ownership."""
     from recovar.utils.helpers import recovar_volume_to_relion, relion_volume_to_recovar
 
+    if mstep_compute_dtype == "float32":
+        _validate_mstep_state_precision(state)
     copy_token = os.environ.get("RECOVAR_VDAM_MSTEP_COPY_UNTOUCHED", "0")
     if copy_token not in {"0", "1"}:
         raise ValueError("RECOVAR_VDAM_MSTEP_COPY_UNTOUCHED must be 0 or 1")
@@ -335,6 +381,28 @@ def _run_m_step_transaction(
         r_max,
         min_resol_shell,
     )
+    if mstep_compute_dtype == "float32":
+        expected_dtypes = {
+            "iref": np.float32,
+            "mom1_h0": np.complex64,
+            "mom2": np.complex64,
+            "sigma2": np.float32,
+            "data_vs_prior": np.float32,
+            "fourier_coverage": np.float32,
+        }
+        if slot_h1 is not None:
+            expected_dtypes["mom1_h1"] = np.complex64
+        for name, dtype in expected_dtypes.items():
+            if np.asarray(result[name]).dtype != np.dtype(dtype):
+                raise ValueError(f"float32 M-step output {name} must have dtype {np.dtype(dtype)}")
+        prior = np.asarray(state.tau2_class[k])
+        returned_prior = np.asarray(result["tau2"])
+        if (
+            returned_prior.dtype != prior.dtype
+            or returned_prior.shape != prior.shape
+            or returned_prior.tobytes() != prior.tobytes()
+        ):
+            raise ValueError("float32 M-step must preserve authoritative tau2")
     out = replace(state)
     out.Iref = _copy_mstep_untouched_slots(state.Iref, (k,)) if copy_untouched else state.Iref.copy()
     out.Iref[k] = relion_volume_to_recovar(np.asarray(result["iref"]))
@@ -354,7 +422,8 @@ def _run_m_step_transaction(
         ("fourier_coverage_class", "fourier_coverage"),
     ):
         values = getattr(state, attribute).copy()
-        values[k] = np.asarray(result[key], dtype=np.float64)
+        dtype = values.dtype if mstep_compute_dtype == "float32" else np.float64
+        values[k] = np.asarray(result[key], dtype=dtype)
         setattr(out, attribute, values)
     return out
 
@@ -371,12 +440,18 @@ def vdam_m_step_single_class(
     padding_factor: int = 1,
     use_native_transaction: bool = True,
     mstep_backend: Literal["native", "jax"] = "native",
+    mstep_compute_dtype: Literal["float32", "float64"] = "float64",
 ) -> InitialModelState:
     """VDAM M-step for one class (per-class loop matches RELION's binding shape).
 
     Pseudo-halfsets: FSC/noise-power is derived from the halfset-data difference
     in ``applyMomenta``; ``reconstructGrad`` then uses ``mom1_noise_power``.
     """
+    _validate_mstep_precision_route(
+        mstep_compute_dtype, mstep_backend, use_native_transaction=use_native_transaction
+    )
+    if mstep_compute_dtype == "float32":
+        _validate_mstep_state_precision(state)
     if mstep_backend not in {"native", "jax"}:
         raise ValueError(f"Unknown mstep_backend: {mstep_backend!r}")
     if not (0 <= k < state.K):
@@ -395,6 +470,8 @@ def vdam_m_step_single_class(
         return state
 
     bind = _get_bindings()
+    if mstep_compute_dtype == "float32" and not hasattr(bind, "vdam_m_step_transaction"):
+        raise RuntimeError("float32 M-step requires transaction-capable native certificates")
     ori_size = state.ori_size
     r_max = _r_max_from_state(state, padding_factor)
     min_resol_shell = _grad_min_resol_shell_from_state(state, grad_min_resol_shell)
@@ -431,6 +508,8 @@ def vdam_m_step_single_class(
             from recovar.em.dense_single_volume.helpers.relion_vdam_mstep import relion_vdam_m_step_host
 
             transaction = relion_vdam_m_step_host
+            if mstep_compute_dtype == "float32":
+                transaction = partial(transaction, compute_dtype=np.float32)
         return _run_m_step_transaction(
             transaction,
             state,
@@ -442,6 +521,7 @@ def vdam_m_step_single_class(
             padding_factor=padding_factor,
             r_max=r_max,
             min_resol_shell=min_resol_shell,
+            mstep_compute_dtype=mstep_compute_dtype,
         )
 
     def _dump(name, arr):
@@ -648,6 +728,7 @@ def vdam_m_step(
     padding_factor: int = 1,
     use_native_transaction: bool = True,
     mstep_backend: Literal["native", "jax"] = "native",
+    mstep_compute_dtype: Literal["float32", "float64"] = "float64",
 ) -> InitialModelState:
     """Full VDAM M-step over K classes.
 
@@ -672,5 +753,6 @@ def vdam_m_step(
             padding_factor=padding_factor,
             use_native_transaction=use_native_transaction,
             mstep_backend=mstep_backend,
+            mstep_compute_dtype=mstep_compute_dtype,
         )
     return out

@@ -388,7 +388,15 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--mstep-backend", choices=("native", "jax"), default="native",
         help="VDAM M-step transaction backend (small FFT grids retain native execution).",
     )
-    return p.parse_args(argv)
+    p.add_argument(
+        "--mstep-compute-dtype", choices=("float32", "float64"), default="float64",
+        help="M transaction and M-owned state precision; float32 requires --mstep-backend jax. "
+             "Bootstrap, projector refresh, noise and authoritative priors retain their existing precision.",
+    )
+    args = p.parse_args(argv)
+    if args.mstep_compute_dtype == "float32" and args.mstep_backend != "jax":
+        p.error("--mstep-compute-dtype float32 requires --mstep-backend jax")
+    return args
 
 
 def _configure_cuda_launch_blocking(*, deterministic_cuda: bool) -> str:
@@ -495,6 +503,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         padding_factor=int(args.padding_factor),
         projector_setup_backend=args.projector_setup_backend,
         mstep_backend=args.mstep_backend,
+        mstep_compute_dtype=args.mstep_compute_dtype,
         image_fourier_backend=(
             "relion_cuda"
             if args.image_fourier_backend == "auto" and bool(args.gpu_ids)
