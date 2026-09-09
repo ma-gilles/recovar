@@ -58,6 +58,40 @@ def _pass2_dump_target_rows(
     ).astype(np.int64, copy=False)
 
 
+def _k1_raw_operand_fields(
+    *,
+    schema,
+    rotation_count,
+    row,
+    rotation_rows,
+    raw_diff2,
+    shifted_corrected,
+    ctf2_over_nv,
+    projections,
+    half_weights,
+    full_to_compact,
+    highres_xi2_half,
+):
+    """Serialize selected or full K1 rows with the same effective operand dtypes.
+
+    Select batch/rotation rows here so host conversions retain their order in
+    both capture paths. ``raw_diff2`` is already the selected float32 array;
+    both saved score names refer to it.
+    """
+    return {
+        "raw_operand_schema": np.asarray(schema),
+        "raw_operand_actual_rotation_count": np.int64(rotation_count),
+        "raw_operand_raw_diff2": raw_diff2,
+        "raw_operand_shifted_corrected": np.asarray(shifted_corrected[row], dtype=np.complex64),
+        "raw_operand_corr_img_score": np.asarray(ctf2_over_nv[row], dtype=np.float32),
+        "raw_operand_proj_half": np.asarray(projections[row, rotation_rows, :], dtype=np.complex64),
+        "raw_operand_half_weights": np.asarray(half_weights, dtype=np.float32),
+        "raw_operand_relion_full_to_compact": full_to_compact,
+        "raw_operand_highres_xi2_half": np.float32(highres_xi2_half[row]),
+        "relion_raw_diff2": raw_diff2,
+    }
+
+
 def _maybe_dump_pass2_bucket(
     *,
     experiment_dataset,
@@ -245,34 +279,19 @@ def _maybe_dump_pass2_bucket(
             raw_operand_fields = {}
             if raw_operands_requested:
                 selected_raw_diff2 = raw_diff2_np[row, rotation_rows, :]
-                raw_operand_fields = {
-                    "raw_operand_schema": np.asarray(
-                        "recovar-k1-pass2-selected-raw-operands-v1"
-                    ),
-                    "raw_operand_actual_rotation_count": np.int64(
-                        rotation_rows.size
-                    ),
-                    "raw_operand_raw_diff2": selected_raw_diff2,
-                    "raw_operand_shifted_corrected": np.asarray(
-                        shifted_corrected_score_split[row],
-                        dtype=np.complex64,
-                    ),
-                    "raw_operand_corr_img_score": np.asarray(
-                        ctf2_over_nv_score[row],
-                        dtype=np.float32,
-                    ),
-                    "raw_operand_proj_half": np.asarray(
-                        proj_half[row, rotation_rows, :],
-                        dtype=np.complex64,
-                    ),
-                    "raw_operand_half_weights": np.asarray(
-                        half_weights_used,
-                        dtype=np.float32,
-                    ),
-                    "raw_operand_relion_full_to_compact": raw_full_to_compact_np,
-                    "raw_operand_highres_xi2_half": np.float32(raw_highres_np[row]),
-                    "relion_raw_diff2": selected_raw_diff2,
-                }
+                raw_operand_fields = _k1_raw_operand_fields(
+                    schema='recovar-k1-pass2-selected-raw-operands-v1',
+                    rotation_count=rotation_rows.size,
+                    row=row,
+                    rotation_rows=rotation_rows,
+                    raw_diff2=selected_raw_diff2,
+                    shifted_corrected=shifted_corrected_score_split,
+                    ctf2_over_nv=ctf2_over_nv_score,
+                    projections=proj_half,
+                    half_weights=half_weights_used,
+                    full_to_compact=raw_full_to_compact_np,
+                    highres_xi2_half=raw_highres_np,
+                )
             out_path = os.path.join(
                 dump_dir,
                 f"pass2_orig{original_idx:06d}_cs{(-1 if current_size is None else int(current_size)):03d}.npz",
@@ -475,32 +494,19 @@ def _maybe_dump_pass2_bucket(
         raw_operand_fields = {}
         if raw_operands_requested:
             selected_raw_diff2 = raw_diff2_np[row, :cnt, :]
-            raw_operand_fields = {
-                "raw_operand_schema": np.asarray(
-                    "recovar-k1-pass2-effective-raw-operands-v1"
-                ),
-                "raw_operand_actual_rotation_count": np.int64(cnt),
-                "raw_operand_raw_diff2": selected_raw_diff2,
-                "raw_operand_shifted_corrected": np.asarray(
-                    shifted_corrected_np[row],
-                    dtype=np.complex64,
-                ),
-                "raw_operand_corr_img_score": np.asarray(
-                    ctf2_np[row],
-                    dtype=np.float32,
-                ),
-                "raw_operand_proj_half": np.asarray(
-                    proj_np[row, :cnt, :],
-                    dtype=np.complex64,
-                ),
-                "raw_operand_half_weights": np.asarray(
-                    half_weights_used,
-                    dtype=np.float32,
-                ),
-                "raw_operand_relion_full_to_compact": raw_full_to_compact_np,
-                "raw_operand_highres_xi2_half": np.float32(raw_highres_np[row]),
-                "relion_raw_diff2": selected_raw_diff2,
-            }
+            raw_operand_fields = _k1_raw_operand_fields(
+                schema='recovar-k1-pass2-effective-raw-operands-v1',
+                rotation_count=cnt,
+                row=row,
+                rotation_rows=slice(None, cnt),
+                raw_diff2=selected_raw_diff2,
+                shifted_corrected=shifted_corrected_np,
+                ctf2_over_nv=ctf2_np,
+                projections=proj_np,
+                half_weights=half_weights_used,
+                full_to_compact=raw_full_to_compact_np,
+                highres_xi2_half=raw_highres_np,
+            )
         np.savez_compressed(
             out_path,
             iteration=np.int64(context_iteration),
