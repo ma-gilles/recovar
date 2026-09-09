@@ -32,7 +32,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | `f401cbb09`: pass-2 dump writers have a dedicated diagnostic owner; sparse scorer 17,780 lines, half scorer 1,358, controller 6,123 |
+| Latest production cleanup | `a392cd145`: K1 raw-operand schema shared by selected/full dumps; sparse scorer 17,780 lines, half scorer 1,358, controller 6,123 |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -147,8 +147,25 @@ summary margin arithmetic; it did not independently recompute snapshot arrays or
 repeat the full RNG reachability audit. See board handoff
 `vdam_paired_history_terminal_20260909.json` and review/reproduction script under
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/paired_history_review_20260909/`.
-VDAM's next step is an artifact-only CPU comparison of saved checkpoints0–31 to
-locate the first scientific-state divergence; quality and speed remain open.
+That prefix audit is now complete: all 64 metadata files for checkpoints 0–31
+have matching schemas. Initial stored map arrays are exact; small accumulator,
+noise and offset-sum differences appear at iteration 1, followed by support mass
+at 2. Significant counts first differ at 18 for particle 1290 (36 versus 35);
+no saved pose change occurs through 31. Full incoming E1 operands were not saved,
+so initial-map equality does not establish identical E1 inputs or identify the
+first divergent operation. The support-count tie remains unclassified.
+
+The producer's momentum audit reports matching update formulas and no near-zero
+square-root denominator (minimum 0.98634); the ten largest Fourier-cell differences
+account for 98.68% of squared second-moment difference. Neither observation proves
+the cause or its effect on poses. em_clean checked both pinned reports and the
+prefix CPU completion receipt, without recomputing arrays or independently auditing
+the full momentum formula. See `handoffs/vdam_prefix_first_divergence_20260909.json`
+and `pass2_raw_schema_20260909/prefix_review.json` under the source-review root.
+VDAM's next artifact-only CPU pilot includes translation in GT registration,
+fitting one transform on native_1 and applying it unchanged to all six final maps,
+with synthetic recovery and null controls. Strict accumulator/tie and quality/speed
+gates remain open; no production or native-source change is assigned.
 
 The reviewed runs use **float32 scoring with an existing double-precision
 M-step**. Effective precision is stage-specific:
@@ -169,7 +186,7 @@ the intended production-float32 goal remains. See board handoff
 Warm prepared E is 268.953 → 284.035 ms,
 **1.056075× (+5.61%)** in this small preloaded-data panel; no full-runtime
 acceptance. Only rectangle power executes; full local score surfaces are absent.
-VDAM continues the saved-checkpoint history audit described above, keeping both
+VDAM continues the GT-registration pilot described above, keeping both
 Wavg helpers fixed. Preserve fe847 and its original evidence; no shared
 precision adoption, new arithmetic change or duplicate GPU job. See
 `handoffs/em_clean_prepared_em_composition_review_20260909.json` and the producer
@@ -229,6 +246,7 @@ loses 176 lines (19,460 → 19,284); the two modules together add one line.
 
 | Checkpoint | Executed evidence | Limit |
 | --- | --- | --- |
+| K1 raw schema `a392cd145` | Same 79 CPU cases before/after (7.75/7.68 s), guard 38/38 (43.83 s), zero skips/Ruff findings | Includes four new selected/full × source-float32/float64 round trips that pass before the change; expanding both constructor calls reproduces the original module AST. No GPU/trajectory/runtime claim |
 | Pass-2 diagnostic owner `f401cbb09` | Identical 76-case CPU inventory before/after (6.84/6.76 s), extended import/CPU guard 38/38 (45.37 s), no skips | Five function/three constant ASTs exact; all retained scorer statements and 260 test assertions preserved under owner mapping. No new Ruff findings; no GPU/trajectory/runtime claim |
 | BPref membership owner `2b6cf430c` | Original 32/32 plus 11 new cases pass before source changes; candidate 43/43 (4.06 s), guard 38/38 (44.08 s), no skips | Every original case retained; 3 function/4 state ASTs exact. No new Ruff findings (existing sparse import I001 remains). Ownership only, no GPU/trajectory/runtime claim |
 | First-iteration arguments `3970ea71d` | Control 75/75; four K1/K4 × batch-update variants pass before source changes; candidate 78/78 (4.72 s), guard 38/38 (44.78 s), no skips/Ruff findings | 74 original IDs retained; one case expanded to four. Initial new K4 fixture incorrectly expected the K1 cap700, then corrected to existing K4 cap368 and rerun before source edits. No GPU/trajectory/runtime claim |
@@ -258,6 +276,20 @@ in the scorer. Five function bodies and three constant definitions are AST-exact
 all NPZ schemas, casts, diagnostic reductions and errors are preserved. The
 scorer loses 1,504 lines (19,284 → 17,780); combined modules add 20 lines of
 imports/documentation, so this is an ownership improvement, not net deletion.
+
+K1 selected/full captures now share `_k1_raw_operand_fields`, which owns their
+common ten-field raw schema. Field order, row indexing, casts and the two names
+for the same raw-score array are preserved; inlining both calls reproduces the
+original module AST. Four round-trip cases cover source float32/float64 arrays,
+the second batch row, padded rotations, nonconsecutive row selection, exact
+dtypes, shapes and bytes. This removes duplicate schema definitions but adds six
+production lines for the helper boundary/documentation (1,524 → 1,530).
+Audit and exact test commands are in
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pass2_raw_schema_20260909/validation.json`;
+CPU logs/XML use `pass2_raw_schema_{control,after,final,guard}_20260909` under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/`.
+Only the unit marker was added after the first before/after panel; test bodies
+are unchanged, and the final panel/guard use identical source manifests.
 
 Pass-2 source/caller audit and exact reproduction commands:
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pass2_diagnostics_owner_20260909/validation.json`.
