@@ -1,4 +1,4 @@
-"""Opt-in FP64 RELION VDAM M-step with an explicit native capability fallback.
+"""Explicit-precision RELION VDAM M-step; FP64 remains the default.
 
 The device transaction uses full original-size Fourier capacity and a dynamic
 logical radius. First-moment initialization certificates are explicit inputs:
@@ -23,7 +23,14 @@ from recovar.core import fourier_transform_utils as ftu
 from recovar.core import mask
 from recovar.reconstruction.relion_functions import _relion_window_centered_half_fourier
 
-from .relion_projector_setup import setup_relion_projector
+from .relion_projector_setup import setup_relion_projector, setup_relion_projector_uncorrected
+
+
+def _compute_dtypes(compute_dtype):
+    real_dtype = jnp.dtype(compute_dtype)
+    if real_dtype not in (jnp.dtype(jnp.float32), jnp.dtype(jnp.float64)):
+        raise ValueError("compute_dtype must be float32 or float64")
+    return real_dtype, jnp.dtype(jnp.complex64 if real_dtype == jnp.float32 else jnp.complex128)
 
 
 def _complex(real, imag):
@@ -53,7 +60,9 @@ def _first_moment(old, data, initialize, valid):
     return jnp.where(valid, updated, old)
 
 
-@partial(jax.jit, static_argnames=("ori_size", "padding_factor", "pseudo_halfsets", "return_intermediates"))
+@partial(
+    jax.jit, static_argnames=("ori_size", "padding_factor", "pseudo_halfsets", "return_intermediates", "compute_dtype")
+)
 def relion_vdam_m_step_device(
     reference_relion,
     data_h0,
@@ -75,15 +84,19 @@ def relion_vdam_m_step_device(
     padding_factor: int = 1,
     pseudo_halfsets: bool = True,
     return_intermediates: bool = False,
+    compute_dtype=jnp.float64,
 ):
     """Return device arrays matching the native transaction's final outputs.
 
     Data/weights have shape (pf*N+3, pf*N+3, pf*N//2+2); moments retain their
-    original (pf*N, pf*N, pf*N//2+1) layout. All numerical arrays are FP64 or
-    complex128. Radius <=0 means full, matching the native M-step binding.
+    original (pf*N, pf*N, pf*N//2+1) layout. ``compute_dtype`` selects working
+    real/complex precision. Unchanged authoritative tau2 retains its input dtype
+    in F32 mode; shell geometry retains the original FP64 rounding rule.
+    Radius <=0 means full, matching the native M-step binding.
     The private invalid flags preserve native SSNR error conditions; the host
     wrapper raises after the one result transfer. No host operations occur here.
     """
+    real_dtype, complex_dtype = _compute_dtypes(compute_dtype)
     if not jax.config.x64_enabled:
         raise ValueError("RELION VDAM M-step requires JAX float64 support")
     if ori_size <= 0 or ori_size % 2 or padding_factor not in (1, 2):
@@ -108,14 +121,15 @@ def relion_vdam_m_step_device(
         pairs += [(data_h1, half_shape), (weight_h1, half_shape), (mom1_h1, moment_shape)]
     if any(value is None or value.shape != shape for value, shape in pairs):
         raise ValueError("M-step input has incompatible full-capacity shape")
-    d0 = jnp.asarray(data_h0, jnp.complex128)
-    w0 = jnp.asarray(weight_h0, jnp.float64)
-    m10 = _pad_moment(jnp.asarray(mom1_h0, jnp.complex128), capacity)
-    m2 = _pad_moment(jnp.asarray(mom2, jnp.complex128), capacity)
-    tau2 = jnp.asarray(tau2, jnp.float64)
-    fsc_reconstruct = jnp.asarray(fsc_reconstruct, jnp.float64)
-    stepsize = jnp.asarray(grad_stepsize, jnp.float64)
-    fudge = jnp.asarray(tau2_fudge, jnp.float64)
+    d0 = jnp.asarray(data_h0, complex_dtype)
+    w0 = jnp.asarray(weight_h0, real_dtype)
+    m10 = _pad_moment(jnp.asarray(mom1_h0, complex_dtype), capacity)
+    m2 = _pad_moment(jnp.asarray(mom2, complex_dtype), capacity)
+    authoritative_tau2 = jnp.asarray(tau2, jnp.float64) if real_dtype == jnp.float64 else jnp.asarray(tau2)
+    tau2 = jnp.asarray(authoritative_tau2, real_dtype)
+    fsc_reconstruct = jnp.asarray(fsc_reconstruct, real_dtype)
+    stepsize = jnp.asarray(grad_stepsize, real_dtype)
+    fudge = jnp.asarray(tau2_fudge, real_dtype)
     radius = jnp.asarray(r_max, jnp.int32)
     radius = jnp.where(radius > 0, radius, ori_size // 2)
     coord = jnp.arange(capacity, dtype=jnp.int32) - capacity // 2
@@ -130,21 +144,21 @@ def relion_vdam_m_step_device(
     def shell_sum(values):
         # Invalid elements are dropped, rather than contending on a final bin.
         return (
-            jnp.zeros(n_shells, jnp.float64)
+            jnp.zeros(n_shells, real_dtype)
             .at[shell_indices]
             .add(jnp.where(valid, values, 0.0).reshape(-1), mode="drop")
         )
 
-    counts = shell_sum(jnp.ones(half_shape, jnp.float64))
+    counts = shell_sum(jnp.ones(half_shape, real_dtype))
     safe_counts = jnp.maximum(counts, 1.0)
     denominator = jnp.maximum(1.0, w0)
     d0 = jnp.where(valid, _complex(d0.real / denominator, d0.imag / denominator), d0)
     m10 = _first_moment(m10, d0, first_initializes_h0, valid)
     if pseudo_halfsets:
-        d1 = jnp.asarray(data_h1, jnp.complex128)
-        denominator = jnp.maximum(1.0, jnp.asarray(weight_h1, jnp.float64))
+        d1 = jnp.asarray(data_h1, complex_dtype)
+        denominator = jnp.maximum(1.0, jnp.asarray(weight_h1, real_dtype))
         d1 = jnp.where(valid, _complex(d1.real / denominator, d1.imag / denominator), d1)
-        m11 = _pad_moment(jnp.asarray(mom1_h1, jnp.complex128), capacity)
+        m11 = _pad_moment(jnp.asarray(mom1_h1, complex_dtype), capacity)
         m11 = _first_moment(m11, d1, first_initializes_h1, valid)
         difference = d1 - d0
         average = _complex((d1.real + d0.real) / 2.0, (d1.imag + d0.imag) / 2.0)
@@ -182,17 +196,26 @@ def relion_vdam_m_step_device(
         0.0,
         jnp.where(counts < 0.001, 999.0, data_vs_prior / safe_counts),
     )
-    coverage = shell_sum((evidence >= 1.0).astype(jnp.float64)) / safe_counts
-    invalid_tau = jnp.any(~((tau2 > 0.0) | (tau2 == 0.0)) & (counts > 0.0))
+    coverage = shell_sum((evidence >= 1.0).astype(real_dtype)) / safe_counts
+    invalid_tau = jnp.any(~((authoritative_tau2 > 0.0) | (authoritative_tau2 == 0.0)) & (counts > 0.0))
 
     # reconstructGrad: uncorrected projector, never the E-step's corrected FFT.
-    projector, _unused_power = setup_relion_projector(
-        reference_relion,
-        radius,
-        ori_size=ori_size,
-        padding_factor=padding_factor,
-        do_gridding=False,
-    )
+    if real_dtype == jnp.float64:
+        projector, _unused_power = setup_relion_projector(
+            reference_relion,
+            radius,
+            ori_size=ori_size,
+            padding_factor=padding_factor,
+            do_gridding=False,
+        )
+    else:
+        projector, _unused_power = setup_relion_projector_uncorrected(
+            reference_relion,
+            radius,
+            ori_size=ori_size,
+            padding_factor=padding_factor,
+            compute_dtype=real_dtype,
+        )
     previous_power = shell_sum(jnp.sqrt(_norm(projector))) / safe_counts
     snr = jnp.where(noise_power > 0.0, 2.0 * fudge * previous_power / noise_power, 0.0)
     fsc = jnp.where(counts > 0.0, jnp.minimum(jnp.maximum(snr / (1.0 + snr), fsc_reconstruct), 1.0), 0.0)
@@ -218,7 +241,7 @@ def relion_vdam_m_step_device(
         "mom1_h0": _unpad_moment(m10, moment_shape),
         "mom1_h1": _unpad_moment(m11, moment_shape) if pseudo_halfsets else None,
         "mom2": _unpad_moment(m2, moment_shape),
-        "tau2": tau2,
+        "tau2": authoritative_tau2,
         "sigma2": sigma2,
         "data_vs_prior": data_vs_prior,
         "fourier_coverage": coverage,
@@ -250,13 +273,21 @@ def relion_vdam_m_step_host(
     interpolator=1,
     r_max=-1,
     min_resol_shell=0.0,
+    *,
+    compute_dtype=jnp.float64,
 ):
     """Host-facing oracle adapter with native fallback for FFT grids <16.
 
     ``fsc_ssnr`` is unused with native update_tau2_with_fsc=false.
     ``min_resol_shell`` is unused in the pinned native reconstructGrad body.
     Native-equivalent validation errors are raised rather than concealed.
+    ``compute_dtype`` controls only this transaction; it does not narrow the
+    caller's persistent numerical state. Requested F32 never falls back to native
+    double. Certificates use original moments, and authoritative tau2 is retained.
     """
+    real_dtype, complex_dtype = _compute_dtypes(compute_dtype)
+    if real_dtype == jnp.float32 and ori_size * padding_factor < 16:
+        raise ValueError("float32 M-step requires FFT grid >=16; native fallback is float64")
     from recovar.relion_bind import _relion_bind_core as bind
 
     # Preserve all native arithmetic for the unsupported small FFT capability.
@@ -310,24 +341,25 @@ def relion_vdam_m_step_host(
     first1 = bind.vdam_first_moment_initializes(mom1_h1) if pseudo else first0
     result = jax.device_get(
         relion_vdam_m_step_device(
-            np.asarray(reference_relion, np.float64),
+            np.asarray(reference_relion, real_dtype),
             pack(data_h0),
             pack(weight_h0),
             pack(data_h1) if pseudo else None,
             pack(weight_h1) if pseudo else None,
-            np.asarray(mom1_h0, np.complex128),
-            np.asarray(mom1_h1, np.complex128) if pseudo else None,
-            np.asarray(mom2, np.complex128),
-            np.asarray(fsc_reconstruct, np.float64),
-            np.asarray(tau2, np.float64),
-            np.float64(grad_stepsize),
-            np.float64(tau2_fudge),
+            np.asarray(mom1_h0, complex_dtype),
+            np.asarray(mom1_h1, complex_dtype) if pseudo else None,
+            np.asarray(mom2, complex_dtype),
+            np.asarray(fsc_reconstruct, real_dtype),
+            np.asarray(tau2, np.float64) if real_dtype == jnp.float64 else np.asarray(tau2),
+            real_dtype.type(grad_stepsize),
+            real_dtype.type(tau2_fudge),
             np.int32(r_max),
             np.bool_(first0),
             np.bool_(first1),
             ori_size=ori_size,
             padding_factor=padding_factor,
             pseudo_halfsets=pseudo,
+            compute_dtype=real_dtype,
         )
     )
     if result.pop("_invalid_sigma2"):

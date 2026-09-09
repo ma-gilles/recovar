@@ -40,12 +40,7 @@ def setup_relion_projector(
     The global RECOVAR x64 policy is required. No Python callbacks, host
     materialization, persistent mutable cache, or per-class batching is used.
     """
-    if ori_size <= 0 or ori_size % 2:
-        raise ValueError("ori_size must be positive and even")
-    if padding_factor not in (1, 2):
-        raise ValueError("projector setup supports padding_factor 1 or 2")
-    if reference_relion.shape != (ori_size,) * 3:
-        raise ValueError("reference_relion must have shape (ori_size,)*3")
+    _validate_reference(reference_relion, ori_size, padding_factor)
     if not jax.config.x64_enabled:
         raise ValueError("RELION projector setup requires JAX float64 support")
     reference = jnp.asarray(reference_relion, dtype=jnp.float64)
@@ -55,6 +50,46 @@ def setup_relion_projector(
         lambda volume: volume,
         reference,
     )
+    return _project_reference(reference, r_max, ori_size, padding_factor)
+
+
+@partial(jax.jit, static_argnames=("ori_size", "padding_factor", "compute_dtype"))
+def setup_relion_projector_uncorrected(
+    reference_relion,
+    r_max,
+    *,
+    ori_size: int,
+    padding_factor: int = 1,
+    compute_dtype=jnp.float64,
+):
+    """Prepare an uncorrected M-step projector at the requested precision.
+
+    The FFT, power reductions and shell geometry use ``compute_dtype``;
+    outputs are complex64/float32 or complex128/float64. This static path
+    does not trace the double-precision gridding-correction branch used by
+    the existing E-step wrapper. Radius and Nyquist ownership are shared.
+    """
+    _validate_reference(reference_relion, ori_size, padding_factor)
+    dtype = jnp.dtype(compute_dtype)
+    if dtype not in (jnp.dtype(jnp.float32), jnp.dtype(jnp.float64)):
+        raise ValueError("Projector computation dtype must be float32 or float64")
+    if dtype == jnp.dtype(jnp.float64) and not jax.config.x64_enabled:
+        raise ValueError("Float64 projector setup requires JAX float64 support")
+    reference = jnp.asarray(reference_relion, dtype=dtype)
+    return _project_reference(reference, r_max, ori_size, padding_factor)
+
+
+def _validate_reference(reference_relion, ori_size, padding_factor):
+    if ori_size <= 0 or ori_size % 2:
+        raise ValueError("ori_size must be positive and even")
+    if padding_factor not in (1, 2):
+        raise ValueError("projector setup supports padding_factor 1 or 2")
+    if reference_relion.shape != (ori_size,) * 3:
+        raise ValueError("reference_relion must have shape (ori_size,)*3")
+
+
+def _project_reference(reference, r_max, ori_size, padding_factor):
+    """Shared FFT, native half-grid ownership and shell-power calculation."""
     fft_size = padding_factor * ori_size
     pad = (fft_size - ori_size) // 2
     padded = jnp.pad(reference, ((pad, pad),) * 3)
@@ -86,12 +121,14 @@ def setup_relion_projector(
     yz_indices = (coord + fft_size // 2) % fft_size
     x_indices = jnp.minimum(x, fft_size // 2)
     gathered = transformed[yz_indices[:, None, None], yz_indices[None, :, None], x_indices[None, None, :]]
-    projector = jnp.where(valid, gathered, jnp.complex128(0))
-    shells = jnp.floor(jnp.sqrt(r2.astype(jnp.float64)) / padding_factor + 0.5).astype(jnp.int32)
+    projector = jnp.where(valid, gathered, jnp.asarray(0, dtype=transformed.dtype))
+    shells = jnp.floor(jnp.sqrt(r2.astype(reference.dtype)) / padding_factor + 0.5).astype(jnp.int32)
     shells = jnp.minimum(shells, ori_size // 2)
     # Native uses norm(complex)/2 rather than abs(complex)**2/2.
     power = (projector.real * projector.real + projector.imag * projector.imag) / 2.0
     sums = jnp.bincount(shells.reshape(-1), weights=power.reshape(-1), length=ori_size // 2 + 1)
-    counts = jnp.bincount(shells.reshape(-1), weights=valid.reshape(-1).astype(jnp.float64), length=ori_size // 2 + 1)
-    spectrum = jnp.where(counts >= 1, sums / jnp.maximum(counts, 1), 0.0)
+    counts = jnp.bincount(
+        shells.reshape(-1), weights=valid.reshape(-1).astype(reference.dtype), length=ori_size // 2 + 1
+    )
+    spectrum = jnp.where(counts >= 1, sums / jnp.maximum(counts, 1), jnp.zeros((), dtype=reference.dtype))
     return projector, spectrum
