@@ -4,7 +4,19 @@ Keep NumPy evidence summaries separate from JAX score/M-step kernels.
 These reports do not establish scientific or performance acceptance by themselves.
 """
 
+import hashlib
+import operator
+
 import numpy as np
+
+from .significant_samples import significant_sample_ids
+
+_COARSE_SELECTOR_WRAPPER_TARGETS = {
+    "relion_coarse_diff2_projector_f32": "cuda_relion_coarse_diff2_projector_f32",
+    "relion_coarse_diff2_projector_multistream_f32": (
+        "cuda_relion_coarse_diff2_projector_multistream_f32"
+    ),
+}
 
 
 def _coarse_gaussian_direct_macro_diagnostics(
@@ -291,3 +303,369 @@ def _coarse_gaussian_qualification_decision(
         "requires_bitwise_score_identity": False,
         "requires_exact_discrete_identity": True,
     }
+
+
+def _validate_coarse_selector_audit(audit: dict) -> dict:
+    """Validate and normalize one host-observed coarse selector audit.
+
+    A configured fused selector is not evidence that its wrapper ran.  The
+    wrapper name, XLA target, and positive call/row counters are therefore
+    required whenever the fused path is effective.  An inactive control is
+    represented explicitly by ``None`` wrapper/target values and zero counts.
+    """
+
+    if not isinstance(audit, dict):
+        raise TypeError("coarse selector audit must be a dict")
+    required = {
+        "score_mode",
+        "translation_count",
+        "requested_fused",
+        "effective_fused",
+        "requested_workers",
+        "effective_workers",
+        "requested_atomic",
+        "effective_atomic",
+        "wrapper",
+        "target",
+        "counts",
+    }
+    missing = sorted(required.difference(audit))
+    if missing:
+        raise ValueError(
+            "coarse selector audit is missing fields: " + ", ".join(missing)
+        )
+
+    score_mode = audit["score_mode"]
+    if score_mode not in {"gaussian", "normalized_cc"}:
+        raise ValueError(
+            f"coarse selector audit has unsupported score_mode={score_mode!r}"
+        )
+
+    integer_fields = {
+        "translation_count": audit["translation_count"],
+        "requested_workers": audit["requested_workers"],
+        "effective_workers": audit["effective_workers"],
+    }
+    normalized_integers = {}
+    for name, value in integer_fields.items():
+        if isinstance(value, (bool, np.bool_)) or not isinstance(
+            value,
+            (int, np.integer),
+        ):
+            raise TypeError(f"coarse selector audit {name} must be an integer")
+        normalized_integers[name] = int(value)
+    translation_count = normalized_integers["translation_count"]
+    requested_workers = normalized_integers["requested_workers"]
+    effective_workers = normalized_integers["effective_workers"]
+    if translation_count <= 0:
+        raise ValueError("coarse selector audit translation_count must be positive")
+    if requested_workers not in {0, 8} or effective_workers not in {0, 8}:
+        raise ValueError(
+            "coarse selector audit requested/effective workers must be 0 or 8"
+        )
+
+    prehalf_fields = {"requested_prehalf", "effective_prehalf"}
+    present_prehalf_fields = prehalf_fields.intersection(audit)
+    if present_prehalf_fields and present_prehalf_fields != prehalf_fields:
+        raise ValueError(
+            "coarse selector audit must provide requested/effective prehalf together"
+        )
+
+    normalized_booleans = {}
+    for name in (
+        "requested_fused",
+        "effective_fused",
+        "requested_atomic",
+        "effective_atomic",
+        *(sorted(prehalf_fields) if present_prehalf_fields else ()),
+    ):
+        value = audit[name]
+        if not isinstance(value, (bool, np.bool_)):
+            raise TypeError(f"coarse selector audit {name} must be boolean")
+        normalized_booleans[name] = bool(value)
+    requested_fused = normalized_booleans["requested_fused"]
+    effective_fused = normalized_booleans["effective_fused"]
+    requested_atomic = normalized_booleans["requested_atomic"]
+    effective_atomic = normalized_booleans["effective_atomic"]
+    requested_prehalf = normalized_booleans.get("requested_prehalf", False)
+    effective_prehalf = normalized_booleans.get("effective_prehalf", False)
+    if effective_fused and not requested_fused:
+        raise ValueError("effective fused coarse selector was not requested")
+    if effective_workers and requested_workers != effective_workers:
+        raise ValueError("effective coarse workers do not match the request")
+    if effective_atomic and not requested_atomic:
+        raise ValueError("effective native-atomic coarse reduction was not requested")
+    if effective_prehalf and not requested_prehalf:
+        raise ValueError("effective coarse prehalf weight was not requested")
+    if effective_workers and not effective_fused:
+        raise ValueError("effective coarse workers require the fused selector")
+    if effective_atomic and not effective_fused:
+        raise ValueError("effective native-atomic reduction requires the fused selector")
+    if effective_prehalf and not effective_atomic:
+        raise ValueError("effective coarse prehalf weight requires native-atomic reduction")
+    if effective_fused and score_mode != "gaussian":
+        raise ValueError("the fused coarse selector is Gaussian-only")
+    if effective_workers and score_mode != "gaussian":
+        raise ValueError("coarse worker streams are Gaussian-only")
+    if effective_atomic and (
+        score_mode != "gaussian" or translation_count != 29
+    ):
+        raise ValueError(
+            "effective native-atomic reduction requires the Gaussian T=29 gate"
+        )
+
+    counts = audit["counts"]
+    if not isinstance(counts, dict):
+        raise TypeError("coarse selector audit counts must be a dict")
+    required_counts = {
+        "fused_calls",
+        "actual_rows",
+        "multistream_calls",
+        "native_atomic_selected_calls",
+    }
+    if present_prehalf_fields:
+        required_counts.add("prehalf_selected_calls")
+    missing_counts = sorted(required_counts.difference(counts))
+    if missing_counts:
+        raise ValueError(
+            "coarse selector audit counts are missing fields: "
+            + ", ".join(missing_counts)
+        )
+    normalized_counts = {}
+    for name in sorted(required_counts):
+        value = counts[name]
+        if isinstance(value, (bool, np.bool_)) or not isinstance(
+            value,
+            (int, np.integer),
+        ):
+            raise TypeError(f"coarse selector audit count {name} must be an integer")
+        value = int(value)
+        if value < 0:
+            raise ValueError(f"coarse selector audit count {name} must be non-negative")
+        normalized_counts[name] = value
+
+    wrapper = audit["wrapper"]
+    target = audit["target"]
+    if wrapper is not None and not isinstance(wrapper, str):
+        raise TypeError("coarse selector audit wrapper must be a string or None")
+    if target is not None and not isinstance(target, str):
+        raise TypeError("coarse selector audit target must be a string or None")
+    fused_calls = normalized_counts["fused_calls"]
+    actual_rows = normalized_counts["actual_rows"]
+    multistream_calls = normalized_counts["multistream_calls"]
+    native_atomic_calls = normalized_counts["native_atomic_selected_calls"]
+    prehalf_calls = normalized_counts.get("prehalf_selected_calls", 0)
+    if effective_fused:
+        expected_wrapper = (
+            "relion_coarse_diff2_projector_multistream_f32"
+            if effective_workers
+            else "relion_coarse_diff2_projector_f32"
+        )
+        expected_target = _COARSE_SELECTOR_WRAPPER_TARGETS[expected_wrapper]
+        if wrapper != expected_wrapper or target != expected_target:
+            raise ValueError(
+                "coarse selector audit observed the wrong wrapper/target: "
+                f"{wrapper!r}/{target!r} != {expected_wrapper!r}/{expected_target!r}"
+            )
+        if fused_calls <= 0:
+            raise ValueError("effective fused coarse selector recorded zero calls")
+        if actual_rows <= 0:
+            raise ValueError("effective fused coarse selector recorded zero actual rows")
+        if actual_rows < fused_calls:
+            raise ValueError("coarse selector actual rows cannot be smaller than calls")
+        expected_multistream_calls = fused_calls if effective_workers else 0
+        if multistream_calls != expected_multistream_calls:
+            raise ValueError(
+                "coarse selector multistream call count does not match the effective wrapper"
+            )
+        expected_atomic_calls = fused_calls if effective_atomic else 0
+        if native_atomic_calls != expected_atomic_calls:
+            raise ValueError(
+                "coarse selector native-atomic call count does not match the effective reduction"
+            )
+        expected_prehalf_calls = fused_calls if effective_prehalf else 0
+        if prehalf_calls != expected_prehalf_calls:
+            raise ValueError(
+                "coarse selector prehalf call count does not match the effective specialization"
+            )
+    else:
+        if wrapper is not None or target is not None:
+            raise ValueError("inactive coarse selector must not report a wrapper/target")
+        if effective_workers or effective_atomic or effective_prehalf:
+            raise ValueError(
+                "inactive coarse selector cannot report effective workers/atomic/prehalf"
+            )
+        if any(normalized_counts.values()):
+            raise ValueError("inactive coarse selector must report zero execution counts")
+
+    normalized = dict(audit)
+    normalized.update(normalized_integers)
+    normalized.update(normalized_booleans)
+    normalized["counts"] = normalized_counts
+    return normalized
+
+
+
+def _build_coarse_significance_support_audit(
+    significant_sample_indices,
+    *,
+    samples_per_class: int,
+    include_ids: bool = False,
+) -> dict:
+    """Hash every ordered class/image coarse support without changing it.
+
+    The canonical byte stream for one row is four little-endian int64 header
+    values ``(class, image, samples_per_class, selected_count)`` followed by
+    the strictly increasing selected sample IDs as little-endian int64. Each
+    length-prefixed row enters the aggregate digest in class-major/image-major
+    order. Per-row digests and counts make any mismatch localizable while the
+    aggregate digest provides a compact direct/hybrid equality gate.
+    """
+
+    try:
+        total_size = operator.index(samples_per_class)
+    except TypeError as error:
+        raise ValueError("samples_per_class must be an integer") from error
+    if total_size <= 0:
+        raise ValueError("samples_per_class must be positive")
+    if not isinstance(significant_sample_indices, (tuple, list)) or not significant_sample_indices:
+        raise ValueError("support audit requires at least one class")
+    n_images = None
+    aggregate = hashlib.sha256()
+    per_class_image_sha256: list[list[str]] = []
+    per_class_counts: list[list[int]] = []
+    per_class_ids: list[list[list[int]]] = []
+    for class_index, rows in enumerate(significant_sample_indices):
+        if not isinstance(rows, (tuple, list)):
+            raise TypeError("support audit class rows must be a sequence")
+        if n_images is None:
+            n_images = len(rows)
+            if n_images <= 0:
+                raise ValueError("support audit requires at least one image")
+        elif len(rows) != n_images:
+            raise ValueError("support audit classes must cover the same images")
+        row_digests = []
+        row_counts = []
+        row_ids: list[list[int]] = []
+        for image_index, samples in enumerate(rows):
+            ids = np.asarray(
+                significant_sample_ids(samples, total_size),
+                dtype=np.int64,
+            ).reshape(-1)
+            if (
+                np.any(ids < 0)
+                or np.any(ids >= total_size)
+                or (ids.size > 1 and np.any(np.diff(ids) <= 0))
+            ):
+                raise ValueError(
+                    "support audit requires unique, strictly increasing in-range IDs",
+                )
+            header = np.asarray(
+                (class_index, image_index, total_size, ids.size),
+                dtype="<i8",
+            )
+            ids_le = np.ascontiguousarray(ids.astype("<i8", copy=False))
+            row_bytes = header.tobytes(order="C") + ids_le.tobytes(order="C")
+            row_digests.append(hashlib.sha256(row_bytes).hexdigest())
+            row_counts.append(int(ids.size))
+            if include_ids:
+                row_ids.append([int(value) for value in ids])
+            aggregate.update(
+                np.asarray((len(row_bytes),), dtype="<u8").tobytes(order="C"),
+            )
+            aggregate.update(row_bytes)
+        per_class_image_sha256.append(row_digests)
+        per_class_counts.append(row_counts)
+        if include_ids:
+            per_class_ids.append(row_ids)
+
+    counts = np.ascontiguousarray(np.asarray(per_class_counts, dtype="<i8"))
+    result = {
+        "schema": "recovar.coarse_significance_support_audit.v2",
+        "classification": "diagnostic_only",
+        "canonical_encoding": (
+            "class-major/image-major; uint64 row-byte-length; "
+            "int64-le header(class,image,total,count); int64-le sorted IDs"
+        ),
+        "n_classes": len(per_class_counts),
+        "n_images": int(n_images),
+        "samples_per_class": total_size,
+        "selected_count_sum": int(np.sum(counts, dtype=np.int64)),
+        "selected_count_min": int(np.min(counts)),
+        "selected_count_max": int(np.max(counts)),
+        "per_class_image_selected_counts": per_class_counts,
+        "per_class_image_selected_counts_sha256": hashlib.sha256(
+            counts.tobytes(order="C"),
+        ).hexdigest(),
+        "support_ids_included": bool(include_ids),
+        "per_class_image_support_sha256": per_class_image_sha256,
+        "aggregate_support_sha256": aggregate.hexdigest(),
+    }
+    if include_ids:
+        # Explicit opt-in avoids retaining a potentially enormous full-support
+        # diagnostic in other geometries. GF46 iteration 181 has only ~5,900
+        # selected IDs across all 1,000 images.
+        result["per_class_image_support_ids"] = per_class_ids
+    return result
+
+
+
+def _coarse_selector_audit_from_full_stats(full_stats: dict) -> dict:
+    """Require a valid execution audit at the coarse-score boundary."""
+
+    if not isinstance(full_stats, dict):
+        raise RuntimeError("K-class significance did not return coarse full_stats")
+    if "coarse_selector_audit" not in full_stats:
+        raise RuntimeError(
+            "K-class significance did not return a coarse selector execution audit"
+        )
+    try:
+        return _validate_coarse_selector_audit(full_stats["coarse_selector_audit"])
+    except (TypeError, ValueError) as error:
+        raise RuntimeError("K-class significance returned an invalid coarse selector audit") from error
+
+
+
+def _with_coarse_selector_audit(result, audit: dict | None):
+    """Seal the validated coarse audit into a result profile summary."""
+
+    if audit is None:
+        return result
+    try:
+        validated = _validate_coarse_selector_audit(audit)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError("cannot propagate an invalid coarse selector audit") from error
+    profile_summary = dict(result.profile_summary or {})
+    profile_summary["coarse_selector_audit"] = validated
+    return result._replace(profile_summary=profile_summary)
+
+
+
+def _with_coarse_significance_diagnostics(
+    result,
+    *,
+    selector_audit: dict | None,
+    support_audit: dict | None,
+    hybrid_stats: dict | None,
+    exact_coarse_operand_assembly: dict | None = None,
+):
+    """Propagate exact coarse-support and hybrid telemetry to InitialModel."""
+
+    result = _with_coarse_selector_audit(result, selector_audit)
+    additions = {
+        key: dict(value)
+        for key, value in (
+            ("coarse_significance_support_audit", support_audit),
+            ("coarse_gaussian_gemm_hybrid", hybrid_stats),
+            (
+                "exact_coarse_operand_assembly",
+                exact_coarse_operand_assembly,
+            ),
+        )
+        if value is not None
+    }
+    if not additions:
+        return result
+    profile_summary = dict(result.profile_summary or {})
+    profile_summary.update(additions)
+    return result._replace(profile_summary=profile_summary)

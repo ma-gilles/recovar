@@ -50,6 +50,16 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
+Coarse selector validation, exact support hashing and result-profile attachment
+now share the existing `helpers.coarse_score_diagnostics` owner. Five function
+bodies and the wrapper registry are unchanged; controllers, analyzers and tests
+use direct imports. The late-pair analyzer no longer loads `significance`; the
+x-half summarizer still has a separate local-engine budget dependency.
+Baseline and candidate each pass300 CPU cases;38 guard cases pass, with no skips
+or new lint findings. Significance/scheduling shrink367 lines; net production
+grows13 lines. This structural checkpoint adds no numerical qualification.
+[Receipt and exact checks](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/coarse_audit_owner_20260909/result.json).
+
 The K-class result-owner series on430c0763d separates the shared assembler, result
 type, publication/noise helpers and subset-stat expansion into `k_class_results.py`.
 Dense and sparse firstiter paths now share their identical six-statement pose

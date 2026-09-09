@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume.helpers import significance
+from recovar.em.dense_single_volume.helpers import coarse_score_diagnostics, significance
 from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
     map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids,
     plan_coarse_gemm_certificate_topology,
@@ -216,12 +216,12 @@ def test_coarse_significance_support_audit_is_exact_and_localizable():
         ],
     ]
 
-    first = significance._build_coarse_significance_support_audit(
+    first = coarse_score_diagnostics._build_coarse_significance_support_audit(
         supports,
         samples_per_class=4,
         include_ids=True,
     )
-    repeated = significance._build_coarse_significance_support_audit(
+    repeated = coarse_score_diagnostics._build_coarse_significance_support_audit(
         supports,
         samples_per_class=4,
         include_ids=True,
@@ -247,7 +247,7 @@ def test_coarse_significance_support_audit_is_exact_and_localizable():
         len(digest) == 64 for class_digests in first["per_class_image_support_sha256"] for digest in class_digests
     )
 
-    changed = significance._build_coarse_significance_support_audit(
+    changed = coarse_score_diagnostics._build_coarse_significance_support_audit(
         [[np.asarray([1, 2]), supports[0][1]], supports[1]],
         samples_per_class=4,
         include_ids=True,
@@ -255,7 +255,7 @@ def test_coarse_significance_support_audit_is_exact_and_localizable():
     assert changed["aggregate_support_sha256"] != first["aggregate_support_sha256"]
     assert changed["per_class_image_support_sha256"][0][1] == first["per_class_image_support_sha256"][0][1]
 
-    hashes_only = significance._build_coarse_significance_support_audit(
+    hashes_only = coarse_score_diagnostics._build_coarse_significance_support_audit(
         supports,
         samples_per_class=4,
     )
@@ -274,7 +274,7 @@ def test_coarse_significance_support_audit_is_exact_and_localizable():
 )
 def test_coarse_significance_support_audit_rejects_noncanonical_ids(supports):
     with pytest.raises(ValueError, match="strictly increasing in-range"):
-        significance._build_coarse_significance_support_audit(
+        coarse_score_diagnostics._build_coarse_significance_support_audit(
             supports,
             samples_per_class=4,
         )

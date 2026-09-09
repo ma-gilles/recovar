@@ -27,11 +27,13 @@ from recovar.em.dense_single_volume.helpers.significance import (
     _compute_k_class_significance_batched,
 )
 from recovar.em.dense_single_volume.k_class import (
-    _coarse_selector_audit_from_full_stats,
     _run_sparse_k_class_adaptive_pass2,
-    _with_coarse_significance_diagnostics,
     run_dense_k_class_em,
     run_local_k_class_em,
+)
+from recovar.em.dense_single_volume.helpers.coarse_score_diagnostics import (
+    _coarse_selector_audit_from_full_stats,
+    _with_coarse_significance_diagnostics,
 )
 from recovar.em.dense_single_volume.local_layout import build_pass2_hypothesis_layout
 from recovar.em.sampling import (

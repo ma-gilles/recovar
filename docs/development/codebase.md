@@ -214,7 +214,10 @@ separate diagnostic owner below.
 [`helpers.coarse_score_diagnostics`](../../recovar/em/dense_single_volume/helpers/coarse_score_diagnostics.py)
 owns host NumPy summaries of direct/GEMM score deltas, ULPs, winner margins,
 support changes, repeated runs and scale panels, plus the qualification decision.
-`significance` calls this owner directly. JAX scoring/M-step kernels remain in
+It also validates selector audits, hashes exact support and attaches diagnostic
+profiles to results. Scoring, K-class/InitialModel controllers and reporting
+scripts import these helpers directly; saved-audit validation does not require
+loading `significance`. `significance` calls this owner directly. JAX scoring/M-step kernels remain in
 `helpers.scoring`; diagnostic imports do not initialize those execution modules.
 
 [`helpers.pass2_diagnostics`](../../recovar/em/dense_single_volume/helpers/pass2_diagnostics.py)

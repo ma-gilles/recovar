@@ -1511,7 +1511,7 @@ def _validate_fused_coarse_projector_profiles(
 ) -> dict[str, Any]:
     """Prove that the shared RELION fused projector did or did not execute."""
 
-    from recovar.em.dense_single_volume.helpers.significance import (
+    from recovar.em.dense_single_volume.helpers.coarse_score_diagnostics import (
         _validate_coarse_selector_audit,
     )
 

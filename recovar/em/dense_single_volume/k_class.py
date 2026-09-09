@@ -18,10 +18,11 @@ from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_co
 from recovar.utils.nvtx_shim import nvtx
 
 from .em_engine import run_em
-from .helpers.half_volume_mstep import relion_backprojector_volume_shape
-from .helpers.significance import (
-    _validate_coarse_selector_audit,
+from .helpers.coarse_score_diagnostics import (
+    _coarse_selector_audit_from_full_stats,
+    _with_coarse_significance_diagnostics,
 )
+from .helpers.half_volume_mstep import relion_backprojector_volume_shape
 from .helpers.significant_samples import (
     ComplementSignificantSampleIndices,
     significant_sample_count,
@@ -63,65 +64,6 @@ class _DenseKClassScoreProbeResult(NamedTuple):
     per_class_stats: tuple[RelionStats, ...]
     class_assignments: np.ndarray
     coarse_selector_audit: dict | None = None
-
-
-def _coarse_selector_audit_from_full_stats(full_stats: dict) -> dict:
-    """Require a valid execution audit at the coarse-score boundary."""
-
-    if not isinstance(full_stats, dict):
-        raise RuntimeError("K-class significance did not return coarse full_stats")
-    if "coarse_selector_audit" not in full_stats:
-        raise RuntimeError(
-            "K-class significance did not return a coarse selector execution audit"
-        )
-    try:
-        return _validate_coarse_selector_audit(full_stats["coarse_selector_audit"])
-    except (TypeError, ValueError) as error:
-        raise RuntimeError("K-class significance returned an invalid coarse selector audit") from error
-
-
-def _with_coarse_selector_audit(result, audit: dict | None):
-    """Seal the validated coarse audit into a result profile summary."""
-
-    if audit is None:
-        return result
-    try:
-        validated = _validate_coarse_selector_audit(audit)
-    except (TypeError, ValueError) as error:
-        raise RuntimeError("cannot propagate an invalid coarse selector audit") from error
-    profile_summary = dict(result.profile_summary or {})
-    profile_summary["coarse_selector_audit"] = validated
-    return result._replace(profile_summary=profile_summary)
-
-
-def _with_coarse_significance_diagnostics(
-    result,
-    *,
-    selector_audit: dict | None,
-    support_audit: dict | None,
-    hybrid_stats: dict | None,
-    exact_coarse_operand_assembly: dict | None = None,
-):
-    """Propagate exact coarse-support and hybrid telemetry to InitialModel."""
-
-    result = _with_coarse_selector_audit(result, selector_audit)
-    additions = {
-        key: dict(value)
-        for key, value in (
-            ("coarse_significance_support_audit", support_audit),
-            ("coarse_gaussian_gemm_hybrid", hybrid_stats),
-            (
-                "exact_coarse_operand_assembly",
-                exact_coarse_operand_assembly,
-            ),
-        )
-        if value is not None
-    }
-    if not additions:
-        return result
-    profile_summary = dict(result.profile_summary or {})
-    profile_summary.update(additions)
-    return result._replace(profile_summary=profile_summary)
 
 
 def _env_flag_enabled(name: str, *, default: bool = False) -> bool:

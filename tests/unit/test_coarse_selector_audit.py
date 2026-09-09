@@ -6,8 +6,8 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar.em.dense_single_volume.helpers import significance
-from recovar.em.dense_single_volume.k_class import (
+from recovar.em.dense_single_volume.helpers import coarse_score_diagnostics, significance
+from recovar.em.dense_single_volume.helpers.coarse_score_diagnostics import (
     _coarse_selector_audit_from_full_stats,
     _with_coarse_selector_audit,
     _with_coarse_significance_diagnostics,
@@ -89,7 +89,7 @@ def test_default_selector_control_remains_inactive(monkeypatch):
     assert significance._k1_coarse_multistream_worker_count() == 0
     assert not significance._k1_coarse_native_atomic_reduction_enabled()
     assert not significance._k1_coarse_prehalf_weight_enabled()
-    assert significance._validate_coarse_selector_audit(_control_audit()) == (
+    assert coarse_score_diagnostics._validate_coarse_selector_audit(_control_audit()) == (
         _control_audit()
     )
 
@@ -97,7 +97,7 @@ def test_default_selector_control_remains_inactive(monkeypatch):
 def test_active_multistream_native_atomic_audit_is_accepted():
     audit = _active_audit(workers=8, atomic=True)
 
-    assert significance._validate_coarse_selector_audit(audit) == audit
+    assert coarse_score_diagnostics._validate_coarse_selector_audit(audit) == audit
 
 
 def test_requested_fused_selector_may_remain_lazy_without_execution():
@@ -111,25 +111,25 @@ def test_requested_fused_selector_may_remain_lazy_without_execution():
     )
     audit["counts"] = dict(audit["counts"], prehalf_selected_calls=0)
 
-    assert significance._validate_coarse_selector_audit(audit) == audit
+    assert coarse_score_diagnostics._validate_coarse_selector_audit(audit) == audit
 
 
 def test_active_prehalf_audit_is_accepted_and_requires_atomic_execution():
     audit = _prehalf_audit()
-    assert significance._validate_coarse_selector_audit(audit) == audit
+    assert coarse_score_diagnostics._validate_coarse_selector_audit(audit) == audit
 
     no_atomic = _prehalf_audit()
     no_atomic["effective_atomic"] = False
     no_atomic["counts"]["native_atomic_selected_calls"] = 0
     with pytest.raises(ValueError, match="prehalf weight requires native-atomic"):
-        significance._validate_coarse_selector_audit(no_atomic)
+        coarse_score_diagnostics._validate_coarse_selector_audit(no_atomic)
 
 
 def test_active_prehalf_audit_rejects_a_noop_call_count():
     audit = _prehalf_audit()
     audit["counts"]["prehalf_selected_calls"] = 0
     with pytest.raises(ValueError, match="prehalf call count"):
-        significance._validate_coarse_selector_audit(audit)
+        coarse_score_diagnostics._validate_coarse_selector_audit(audit)
 
 
 @pytest.mark.parametrize("missing_field", ["requested_prehalf", "effective_prehalf"])
@@ -138,7 +138,7 @@ def test_prehalf_audit_requires_paired_selector_fields(missing_field):
     del audit[missing_field]
 
     with pytest.raises(ValueError, match="requested/effective prehalf together"):
-        significance._validate_coarse_selector_audit(audit)
+        coarse_score_diagnostics._validate_coarse_selector_audit(audit)
 
 
 def test_prehalf_audit_requires_the_execution_counter():
@@ -146,7 +146,7 @@ def test_prehalf_audit_requires_the_execution_counter():
     del audit["counts"]["prehalf_selected_calls"]
 
     with pytest.raises(ValueError, match="prehalf_selected_calls"):
-        significance._validate_coarse_selector_audit(audit)
+        coarse_score_diagnostics._validate_coarse_selector_audit(audit)
 
 
 def test_effective_selector_rejects_noop_zero_call_count():
@@ -154,7 +154,7 @@ def test_effective_selector_rejects_noop_zero_call_count():
     audit["counts"] = dict(audit["counts"], fused_calls=0)
 
     with pytest.raises(ValueError, match="zero calls"):
-        significance._validate_coarse_selector_audit(audit)
+        coarse_score_diagnostics._validate_coarse_selector_audit(audit)
 
 
 def test_effective_selector_rejects_zero_actual_row_count():
@@ -162,7 +162,7 @@ def test_effective_selector_rejects_zero_actual_row_count():
     audit["counts"] = dict(audit["counts"], actual_rows=0)
 
     with pytest.raises(ValueError, match="zero actual rows"):
-        significance._validate_coarse_selector_audit(audit)
+        coarse_score_diagnostics._validate_coarse_selector_audit(audit)
 
 
 def test_effective_selector_rejects_wrong_target():
@@ -170,7 +170,7 @@ def test_effective_selector_rejects_wrong_target():
     audit["target"] = "cuda_relion_coarse_diff2_projector_f32"
 
     with pytest.raises(ValueError, match="wrong wrapper/target"):
-        significance._validate_coarse_selector_audit(audit)
+        coarse_score_diagnostics._validate_coarse_selector_audit(audit)
 
 
 def test_profile_boundary_rejects_missing_audit():

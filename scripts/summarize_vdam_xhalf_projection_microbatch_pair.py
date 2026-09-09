@@ -12,7 +12,7 @@ from typing import Any
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.significance import (
+from recovar.em.dense_single_volume.helpers.coarse_score_diagnostics import (
     _validate_coarse_selector_audit,
 )
 from recovar.em.dense_single_volume.local_em_engine import (
