@@ -138,3 +138,60 @@ def test_builder_disabled_and_oversized_groups_do_not_project(monkeypatch):
         np.testing.assert_array_equal(result.id_map, [0])
     with pytest.raises(RuntimeError, match="group has 2 rows but capacity is 1"):
         cache.build_cache([bucket([0, 1])], object(), cache_row_capacity=1, **kwargs)
+
+
+@pytest.mark.parametrize("budget", ["0", "0.000000001"])
+def test_inactive_plan_preserves_bucket_order_and_does_not_inspect_rows(monkeypatch, budget):
+    monkeypatch.setenv(cache.EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV, budget)
+    monkeypatch.setenv(cache.EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GROUPS_ENV, "2")
+    buckets = [object(), object()]
+    plan = cache.plan_cache(buckets, n_projection_pixels=3)
+    assert plan.buckets is buckets
+    assert plan.groups == []
+    assert plan.capacity_rows == plan.projection_pixels == plan.requested_rows == 0
+    assert plan.budget_gb == float(budget)
+
+
+@pytest.mark.parametrize("limit", ["0", "invalid"])
+def test_disabled_budget_still_validates_group_limit(monkeypatch, limit):
+    monkeypatch.setenv(cache.EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV, "0")
+    monkeypatch.setenv(cache.EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GROUPS_ENV, limit)
+    with pytest.raises(ValueError, match="must be positive"):
+        cache.plan_cache([], n_projection_pixels=3)
+
+
+def test_group_limit_rejection_retains_sorted_bucket_order(monkeypatch, caplog):
+    monkeypatch.setenv(cache.EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV, "0.000000024")
+    monkeypatch.setenv(cache.EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GROUPS_ENV, "2")
+    caplog.set_level("INFO", logger=cache.logger.name)
+    buckets = [bucket([7]), bucket([2]), bucket([5])]
+    plan = cache.plan_cache(buckets, n_projection_pixels=3)
+    assert [id(b) for b in plan.buckets] == [id(buckets[i]) for i in (1, 2, 0)]
+    assert plan.buckets is not buckets
+    assert plan.groups == []
+    assert plan.capacity_rows == plan.projection_pixels == 0
+    assert plan.requested_rows == 1 and plan.budget_gb == 2.4e-8
+    assert caplog.records[-1].args == (3, 2, 1, 2.4e-8, 3)
+
+
+def test_plan_reports_used_capacity_and_enabled_log_arguments(monkeypatch, caplog):
+    monkeypatch.setenv(cache.EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV, "0.000000048")
+    monkeypatch.setenv(cache.EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GROUPS_ENV, "2")
+    caplog.set_level("INFO", logger=cache.logger.name)
+    buckets = [bucket([8]), bucket([2]), bucket([8])]
+    plan = cache.plan_cache(buckets, n_projection_pixels=3)
+    assert plan.groups == [(0, 3, 2)]
+    assert plan.capacity_rows == plan.requested_rows == 2
+    assert plan.projection_pixels == 3 and plan.budget_gb == 4.8e-8
+    assert not caplog.records
+    plan.log_enabled(9)
+    assert caplog.records[-1].args == (1, 2, 2, 4.8e-8, 3, 9)
+
+
+def test_empty_plan_has_no_used_capacity_under_positive_budget(monkeypatch):
+    monkeypatch.setenv(cache.EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV, "0.000000048")
+    monkeypatch.setenv(cache.EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GROUPS_ENV, "2")
+    plan = cache.plan_cache([], n_projection_pixels=3)
+    assert plan.groups == []
+    assert plan.capacity_rows == plan.projection_pixels == 0
+    assert plan.requested_rows == 2 and plan.budget_gb == 4.8e-8

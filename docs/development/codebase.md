@@ -261,8 +261,11 @@ Raw and processed-image cache limits belong to
 Bounded RELION projection caches belong to
 [`local_projection_cache.py`](../../recovar/em/dense_single_volume/local_projection_cache.py):
 budget parsing, stable bucket sorting/grouping, rotation-ID mapping and chunked
-projection construction share that owner. The local engine retains cache
-enablement, construction timing, group advancement and release. Only mapped
+projection construction share that owner. `plan_cache` returns a
+`ProjectionCachePlan` containing the ordered buckets, groups and capacity
+metadata. Positive requested capacity still sorts buckets even when the group
+limit subsequently rejects caching. The local engine retains eligibility,
+layout-ID storage, buffer construction, timing, group advancement and release. Only mapped
 valid rows may be consumed; unused capacity keeps its existing uninitialized
 padding. Cache consumers and tests import the owner directly, without engine
 re-exports. Importing it does not initialize execution controllers.

@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import jax.numpy as jnp
 import numpy as np
@@ -45,6 +45,71 @@ class LocalRelionProjectionCache:
     n_projection_pixels: int = 0
     estimated_gb: float = 0.0
     build_s: float = 0.0
+
+
+@dataclass(frozen=True)
+class ProjectionCachePlan:
+    """Bucket order and capacity decisions, separate from live cache buffers."""
+
+    buckets: list[LocalBucketSpec]
+    groups: list[tuple[int, int, int]] = field(default_factory=list)
+    capacity_rows: int = 0
+    budget_gb: float = 0.0
+    projection_pixels: int = 0
+    requested_rows: int = 0
+
+    def log_enabled(self, id_map_rows: int) -> None:
+        logger.info(
+            "Exact local RELION projection cache groups enabled: groups=%d capacity_rows=%d "
+            "requested_rows=%d cap=%.2f GB projection_pixels=%d id_map_rows=%d",
+            len(self.groups),
+            self.capacity_rows,
+            int(self.requested_rows),
+            float(self.budget_gb),
+            self.projection_pixels,
+            id_map_rows,
+        )
+
+
+def plan_cache(
+    bucket_specs: list[LocalBucketSpec],
+    *,
+    n_projection_pixels: int,
+) -> ProjectionCachePlan:
+    """Plan eligible local buckets, preserving sort order even if caching is rejected.
+
+    The caller decides whether this policy applies. Planning never materializes
+    projections or the layout ID map; their allocation stays with execution.
+    """
+    requested_rows, budget_gb = cache_capacity_rows(n_projection_pixels)
+    if requested_rows > 0:
+        bucket_specs = sort_buckets(bucket_specs)
+    groups = plan_cache_groups(bucket_specs, cache_row_capacity=int(requested_rows))
+    max_groups = max_cache_groups()
+    if len(groups) > max_groups:
+        logger.info(
+            "Exact local RELION projection cache disabled: planned groups=%d exceeds max_groups=%d "
+            "(capacity_rows=%d cap=%.2f GB projection_pixels=%d)",
+            len(groups),
+            max_groups,
+            int(requested_rows),
+            float(budget_gb),
+            n_projection_pixels,
+        )
+        groups = []
+    capacity_rows = 0
+    projection_pixels = 0
+    if groups:
+        capacity_rows = int(max(row_count for _, _, row_count in groups))
+        projection_pixels = n_projection_pixels
+    return ProjectionCachePlan(
+        buckets=bucket_specs,
+        groups=groups,
+        capacity_rows=capacity_rows,
+        budget_gb=budget_gb,
+        projection_pixels=projection_pixels,
+        requested_rows=requested_rows,
+    )
 
 
 def read_nonnegative_float_env(name: str, default: float) -> float:
