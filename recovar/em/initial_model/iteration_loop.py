@@ -25,7 +25,7 @@ import os
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Literal, Sequence
 
 import numpy as np
 
@@ -757,9 +757,14 @@ def relion_solvent_flatten_state(
     particle_diameter_ang: float | None = None,
     width_mask_edge_px: float | None = None,
     mask: np.ndarray | None = None,
+    compute_dtype: Literal["float32", "float64"] = "float64",
 ) -> InitialModelState:
     """Apply RELION's spherical ``solventFlatten`` mask to all references (post-maximization)."""
+    if compute_dtype not in {"float32", "float64"}:
+        raise ValueError(f"Unknown solvent compute_dtype: {compute_dtype!r}")
     iref = np.asarray(state.Iref)
+    if compute_dtype == "float32" and iref.dtype != np.dtype(np.float32):
+        raise ValueError("float32 solvent multiplication requires float32 state.Iref")
     if iref.ndim != 4 or iref.shape[1:] != (state.ori_size,) * 3:
         raise ValueError(f"state.Iref must have shape (K, {state.ori_size}, ...), got {iref.shape}")
     if mask is None:
@@ -771,7 +776,7 @@ def relion_solvent_flatten_state(
             particle_diameter_ang=float(particle_diameter_ang),
             width_mask_edge_px=float(width_mask_edge_px),
         )
-    mask = np.asarray(mask, dtype=np.float64)
+    mask = np.asarray(mask, dtype=np.dtype(compute_dtype))
     if mask.shape != (state.ori_size,) * 3:
         raise ValueError(f"mask must have shape ({state.ori_size},)*3, got {mask.shape}")
 
@@ -804,6 +809,7 @@ def run_vdam_iterations(
     projector_refresh_fn: Callable[..., InitialModelState] | None = None,
     projector_padding_factor: int = 1,
     mstep_backend: str = "native",
+    mstep_compute_dtype: Literal["float32", "float64"] = "float64",
     projector_interpolator: int = 1,
     start_iteration: int = 0,
     diagnostic_stop_after_iteration: int | None = None,
@@ -901,6 +907,7 @@ def run_vdam_iterations(
             tau2_fudge_factor=current.tau2_fudge_factor,
             padding_factor=projector_padding_factor,
             mstep_backend=mstep_backend,
+            mstep_compute_dtype=mstep_compute_dtype,
         )
         if profile_iterations:
             _record_stage("mstep")
