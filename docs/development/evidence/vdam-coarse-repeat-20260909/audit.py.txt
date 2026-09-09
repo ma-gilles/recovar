@@ -1,0 +1,82 @@
+"""Independently audit saved raw-score repeats without invoking GPU code."""
+from pathlib import Path
+import ast
+import hashlib
+import json
+import subprocess
+import numpy as np
+
+ROOT = Path('/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909')
+OUT = Path(__file__).resolve().parent
+SOURCE = Path('/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_vdam_quality_integrated_20260909')
+DATA = ROOT / 'results_13640613'
+
+def sha(path):
+    h = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for part in iter(lambda: stream.read(8 * 1024 * 1024), b''):
+            h.update(part)
+    return h.hexdigest()
+
+manifest = json.loads((ROOT/'manifest.json').read_text())
+for path, expected in manifest['pins'].items():
+    assert sha(path) == expected, path
+native_path = Path('/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_wavg_composition_v2_20260909/native_provenance.json')
+native = json.loads(native_path.read_text())
+for path, expected in native['source_inputs'].items():
+    assert sha(SOURCE/path) == expected, path
+    assert sha(Path.cwd()/path) == expected, path
+library = native_path.parent/'native/cuda/libcuda_backproject.so'
+assert sha(library) == 'd5c09bede91f9d619dee0154d9a8b88614084f534f97190fd5349ffc3ce15c6c'
+assert subprocess.check_output(['git','-C',str(SOURCE),'rev-parse','HEAD'],text=True).strip() == manifest['head']
+assert not subprocess.check_output(['git','-C',str(SOURCE),'status','--porcelain'],text=True)
+summary = json.loads((ROOT/'result_summary.json').read_text())
+assert sha(DATA/'result.json') == summary['result_sha256']
+result = json.loads((DATA/'result.json').read_text())
+receipt = json.loads((ROOT/'runtime/13640613/outcome.json').read_text())
+assert receipt['returncode'] == 0 and receipt['source_and_pins_unchanged']
+assert (DATA/'COMPLETE').is_file()
+assert sha(DATA/'raw_scorer.stablehlo') == result['stablehlo_sha256']
+assert 'cuda_relion_coarse_diff2_shared_pretranslated_runtime_f32' in (DATA/'raw_scorer.stablehlo').read_text()
+# One raw executable compiled before the repeat loop; no compilation in its body.
+tree = ast.parse((ROOT/'replay.py').read_text())
+fn = next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='gpu_replay')
+raw_loop = next(n for n in fn.body if isinstance(n,ast.For) and any(isinstance(x,ast.Name) and x.id=='device_output' for x in ast.walk(n)))
+assert not any(isinstance(n,ast.Call) and isinstance(n.func,ast.Attribute) and n.func.attr in {'lower','compile'} for n in ast.walk(raw_loop))
+assert any(isinstance(n,ast.Call) and isinstance(n.func,ast.Name) and n.func.id=='executable' for n in ast.walk(raw_loop))
+assert result['raw_scorer_compile_calls']==1 and result['compiled_executable_same_object']
+assert len(set(result['held_output_buffer_pointers'])) == 17
+reference = np.load(DATA/'raw_diff2_00.npy',allow_pickle=False)
+assert reference.shape == (200,576,29) and reference.dtype == np.float32
+saved = np.load(DATA/'raw_winners.npz',allow_pickle=False)
+rows=[]; files={}; winners0=None
+for i, recorded in enumerate(result['repeats']):
+    path=DATA/f'raw_diff2_{i:02d}.npy'; value=np.load(path,allow_pickle=False)
+    assert value.shape == reference.shape and value.dtype == reference.dtype and np.isfinite(value).all()
+    assert hashlib.sha256(value.tobytes()).hexdigest() == recorded['raw_diff2']['sha256']
+    flat=value.reshape(200,-1)
+    ids=np.argmin(flat,axis=1)
+    best=flat[np.arange(200),ids].copy()
+    # Independent runner-up calculation: mask winners rather than use producer partition.
+    remaining=flat.copy();remaining[np.arange(200),ids]=np.inf
+    margins=remaining.min(axis=1).astype(np.float64)-best.astype(np.float64)
+    assert np.array_equal(saved['raw_argmax_flat'][i],ids)
+    assert np.array_equal(saved['rotation_row'][i],ids//29)
+    assert np.array_equal(saved['translation_row'][i],ids%29)
+    assert np.array_equal(saved['raw_score_max'][i],-best)
+    assert np.array_equal(saved['raw_winner_margin'][i],margins)
+    if winners0 is None: winners0=ids.copy()
+    assert np.array_equal(ids,winners0)
+    difference=np.abs(value.astype(np.float64)-reference.astype(np.float64))
+    metrics={'repeat':i,'changed_values':int(np.count_nonzero(value!=reference)),'maxabs':float(difference.max()),'p95':float(np.percentile(difference,95)),'minimum_raw_margin':float(margins.min()),'all_200_winners_exact':True}
+    assert metrics['changed_values']==recorded['versus_repeat00']['changed_values']
+    assert metrics['maxabs']==recorded['versus_repeat00']['maximum']
+    assert metrics['p95']==recorded['versus_repeat00']['p95']
+    assert metrics['minimum_raw_margin']==recorded['raw_margin_min']
+    rows.append(metrics);files[str(path)]=sha(path)
+assert len(rows)==16
+context=json.loads((native_path.parent/'native_coarse_atomic_context.json').read_text())
+assert sha(context['source'])==context['sha256']
+report={'source_head':manifest['head'],'reviewed_against_shared_head':subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip(),'scope':'Independent CPU recomputation of all16 saved arrays and winners/margins; source/harness and hash review, no GPU rerun','manifest_pins_verified':len(manifest['pins']),'native_source_inputs_verified_both_checkouts':len(native['source_inputs']),'native_library_sha256':sha(library),'result_sha256':sha(DATA/'result.json'),'manifest_sha256':sha(ROOT/'manifest.json'),'rows':rows,'changed_repeats':sum(r['changed_values']>0 for r in rows),'maxabs':max(r['maxabs'] for r in rows),'minimum_raw_margin':min(r['minimum_raw_margin'] for r in rows),'array_file_hashes':files,'production_changed':False,'quality_accepted':False,'runtime_accepted':False,'limitations':['Raw pre-prior winners only; not posterior winner margins or later trajectory decisions','One compilation is supported by frozen harness source and receipt, not independent runtime tracing','Lane atomics are visible in the selected CUDA source; actual execution chronology was not measured','Fixed-output postprocess equality is producer-reported; no independent GPU repetition','Native source uses atomic lane addition, but historical native binary/source closure remains unavailable']}
+(OUT/'review.json').write_text(json.dumps(report,indent=2)+'\n')
+print(json.dumps({k:v for k,v in report.items() if k not in ('rows','array_file_hashes')},indent=2))

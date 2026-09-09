@@ -1,0 +1,171 @@
+{
+  "source_head": "fe8472947b8667f65498933fa4e9515f90ff33b7",
+  "reviewed_against_shared_head": "b3fbfef79ecfde69f53651f517c9cd6dcb5771f9",
+  "scope": "Independent CPU recomputation of all16 saved arrays and winners/margins; source/harness and hash review, no GPU rerun",
+  "manifest_pins_verified": 13,
+  "native_source_inputs_verified_both_checkouts": 17,
+  "native_library_sha256": "d5c09bede91f9d619dee0154d9a8b88614084f534f97190fd5349ffc3ce15c6c",
+  "result_sha256": "87ee3e90051144558271d2454805ea2626ded4f3e13f4833f67e5e81b6b47dae",
+  "manifest_sha256": "81e9deac399b1d5d0bfa006063edda0087b78ee81e90c58caaab3881ac7183c7",
+  "rows": [
+    {
+      "repeat": 0,
+      "changed_values": 0,
+      "maxabs": 0.0,
+      "p95": 0.0,
+      "minimum_raw_margin": 0.0014190673828125,
+      "all_200_winners_exact": true
+    },
+    {
+      "repeat": 1,
+      "changed_values": 803234,
+      "maxabs": 0.0001220703125,
+      "p95": 3.0517578125e-05,
+      "minimum_raw_margin": 0.001434326171875,
+      "all_200_winners_exact": true
+    },
+    {
+      "repeat": 2,
+      "changed_values": 792874,
+      "maxabs": 0.0001220703125,
+      "p95": 3.0517578125e-05,
+      "minimum_raw_margin": 0.0014190673828125,
+      "all_200_winners_exact": true
+    },
+    {
+      "repeat": 3,
+      "changed_values": 794209,
+      "maxabs": 0.0001220703125,
+      "p95": 3.0517578125e-05,
+      "minimum_raw_margin": 0.0014190673828125,
+      "all_200_winners_exact": true
+    },
+    {
+      "repeat": 4,
+      "changed_values": 799598,
+      "maxabs": 0.0001220703125,
+      "p95": 3.0517578125e-05,
+      "minimum_raw_margin": 0.001434326171875,
+      "all_200_winners_exact": true
+    },
+    {
+      "repeat": 5,
+      "changed_values": 796924,
+      "maxabs": 0.0001220703125,
+      "p95": 3.0517578125e-05,
+      "minimum_raw_margin": 0.0014190673828125,
+      "all_200_winners_exact": true
+    },
+    {
+      "repeat": 6,
+      "changed_values": 795802,
+      "maxabs": 0.0001220703125,
+      "p95": 3.0517578125e-05,
+      "minimum_raw_margin": 0.001434326171875,
+      "all_200_winners_exact": true
+    },
+    {
+      "repeat": 7,
+      "changed_values": 789573,
+      "maxabs": 0.0001220703125,
+      "p95": 3.0517578125e-05,
+      "minimum_raw_margin": 0.0013885498046875,
+      "all_200_winners_exact": true
+    },
+    {
+      "repeat": 8,
+      "changed_values": 793149,
+      "maxabs": 0.0001220703125,
+      "p95": 3.0517578125e-05,
+      "minimum_raw_margin": 0.001434326171875,
+      "all_200_winners_exact": true
+    },
+    {
+      "repeat": 9,
+      "changed_values": 797933,
+      "maxabs": 0.0001220703125,
+      "p95": 3.0517578125e-05,
+      "minimum_raw_margin": 0.001434326171875,
+      "all_200_winners_exact": true
+    },
+    {
+      "repeat": 10,
+      "changed_values": 792037,
+      "maxabs": 0.0001220703125,
+      "p95": 3.0517578125e-05,
+      "minimum_raw_margin": 0.001434326171875,
+      "all_200_winners_exact": true
+    },
+    {
+      "repeat": 11,
+      "changed_values": 790131,
+      "maxabs": 0.0001220703125,
+      "p95": 3.0517578125e-05,
+      "minimum_raw_margin": 0.001434326171875,
+      "all_200_winners_exact": true
+    },
+    {
+      "repeat": 12,
+      "changed_values": 792280,
+      "maxabs": 0.0001220703125,
+      "p95": 3.0517578125e-05,
+      "minimum_raw_margin": 0.0014190673828125,
+      "all_200_winners_exact": true
+    },
+    {
+      "repeat": 13,
+      "changed_values": 792447,
+      "maxabs": 0.0001220703125,
+      "p95": 3.0517578125e-05,
+      "minimum_raw_margin": 0.001434326171875,
+      "all_200_winners_exact": true
+    },
+    {
+      "repeat": 14,
+      "changed_values": 792376,
+      "maxabs": 0.0001220703125,
+      "p95": 3.0517578125e-05,
+      "minimum_raw_margin": 0.0014190673828125,
+      "all_200_winners_exact": true
+    },
+    {
+      "repeat": 15,
+      "changed_values": 794570,
+      "maxabs": 0.0001220703125,
+      "p95": 3.0517578125e-05,
+      "minimum_raw_margin": 0.0014190673828125,
+      "all_200_winners_exact": true
+    }
+  ],
+  "changed_repeats": 15,
+  "maxabs": 0.0001220703125,
+  "minimum_raw_margin": 0.0013885498046875,
+  "array_file_hashes": {
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909/results_13640613/raw_diff2_00.npy": "636363b9e9ca2b228192cb1f0bc66ac794bc5524f67c30e2994b281bdbcea424",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909/results_13640613/raw_diff2_01.npy": "7ff2ca8cdf1ff4a50b5fb5526ff68eb84c999cb0b8bc5c80ac813171fa77ba45",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909/results_13640613/raw_diff2_02.npy": "ccfd5c726698052639f6c6c011ebf2c863b13a33b796fca32bdd1a9cb40246b2",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909/results_13640613/raw_diff2_03.npy": "36301af28acabe9e013dd128ca1ad207f6a91114eb2f61da0364120b387988fa",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909/results_13640613/raw_diff2_04.npy": "bbae99baebc079183a5a5432838e7b9e9cf23d4128e6f65e4a70a3b8d3fa392f",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909/results_13640613/raw_diff2_05.npy": "65087d283c5442436dcacd80d764461fe7eb8f81c61c47615c314158212159a1",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909/results_13640613/raw_diff2_06.npy": "f82b6e51f7b3c3af1bca6722c92f8d32d15aa898174a1fe2a5046e4acd7708e9",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909/results_13640613/raw_diff2_07.npy": "ff765de08cde7a77acd872d743956d1dd802acc986173c30c2cc1634f32685bd",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909/results_13640613/raw_diff2_08.npy": "4eca8365444fb25a9b26547e8130f2c38feb8a10bb9d679275009aa5bc64a589",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909/results_13640613/raw_diff2_09.npy": "0d9d558d27b495424eb94fc4f9ad94994d816046ada17f25c68634fd9323d6d5",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909/results_13640613/raw_diff2_10.npy": "b0facece3eb8ddbc88e2a091815350ca832b2c72f6747ab056b01ee23e483ad8",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909/results_13640613/raw_diff2_11.npy": "336bcbcc0e42f70e94c96514e1dea67155ad6a80e3404757165f367742e4f1be",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909/results_13640613/raw_diff2_12.npy": "cf0f9099d4911d2b8e983d1ebdfe0f71c4efdec8de3b5419e07f33f6317e7961",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909/results_13640613/raw_diff2_13.npy": "6fb6e31ee7bb9f34794f34eccf4a42f2df52d377c7da9001c0fd61d34095fcd7",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909/results_13640613/raw_diff2_14.npy": "505518b721afca8cb3fc3bab0807fadd563358ac1a3ffe59543c9c4c4c67da4f",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_coarse_atomic_repeat_20260909/results_13640613/raw_diff2_15.npy": "7dc33e3f426b3ce3fcb8f032b37be0f41d499c8f868b40c941afd27a437fdf29"
+  },
+  "production_changed": false,
+  "quality_accepted": false,
+  "runtime_accepted": false,
+  "limitations": [
+    "Raw pre-prior winners only; not posterior winner margins or later trajectory decisions",
+    "One compilation is supported by frozen harness source and receipt, not independent runtime tracing",
+    "Lane atomics are visible in the selected CUDA source; actual execution chronology was not measured",
+    "Fixed-output postprocess equality is producer-reported; no independent GPU repetition",
+    "Native source uses atomic lane addition, but historical native binary/source closure remains unavailable"
+  ]
+}

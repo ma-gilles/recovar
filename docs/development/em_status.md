@@ -101,6 +101,24 @@ including same-policy repeats. Accumulators and six post-state arrays vary;
 crossed maxima are not uniformly bounded by the two same-policy comparisons.
 Single-boundary cross-map FSC near one does not establish trajectory quality.
 
+Follow-up raw FFI job **13640613** completed on frozen fe847. Independent CPU
+recomputation of all 16 saved `(200,576,29)` float32 outputs verifies variation
+in all 15 comparisons with repeat 0: maximum 1.220703125e-4, p95 3.0517578125e-5.
+All 200 pre-prior raw winners remain exact across 16 runs; the minimum represented
+score margin is 0.0013885498046875. Thirteen manifest pins, 17 native source
+inputs in both checkouts, the library hash and terminal receipt were checked.
+The frozen harness compiles the raw scorer once and uses distinct retained
+output buffers; it reports exact negation/max controls on one fixed output.
+
+The captured route is the shared-pretranslated direct float32 FFI, whose CUDA
+source merges lane sums with atomics. Recompilation and the later Wavg product
+intervention are not necessary for this observed variation. Actual atomic order
+was not recorded, and these are raw pre-prior margins, not posterior margins or
+evidence for later trajectory flips. No arithmetic change or quality acceptance
+follows. The [durable audit archive](evidence/vdam-coarse-repeat-20260909/README.md) preserves
+metrics, hashes, the exact CPU audit script and its reproduction command. Original
+outputs are under `vdam_coarse_atomic_repeat_20260909` in scratch.
+
 The reviewed runs use **float32 scoring with an existing double-precision
 M-step**. Effective precision is stage-specific:
 
@@ -191,7 +209,7 @@ imports/registration or every runtime path. A tracked-reference scan found no
 further unreferenced, undecorated top-level private EM function candidates;
 do not remove code merely to reduce line counts.
 
-Support-reporting source/AST audits and exact commands are in
+The first-iteration audit
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/dense_firstiter_arguments_20260909/validation.json`
 records exact commands, test identities, failure history and fingerprints; logs/XML use
 `dense_firstiter_arguments_{control,expanded_control,expanded_control_v2,after,guard}_20260909`.

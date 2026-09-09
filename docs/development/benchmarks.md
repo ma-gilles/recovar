@@ -52,7 +52,11 @@ qualify instrumentation effects before interpreting interventions or timings.
 Production EM qualification uses float32. Double-precision EM runs are
 diagnostic references for identifying arithmetic or implementation errors;
 they cannot replace the final K1/K4 quality and performance evidence. Record
-effective scoring, projection and accumulator precision in every run. Match
+effective scoring, projection, accumulator and numerical M-step precision in
+every run. Distinguish configured precision from captured operand/output dtypes
+and explicit computation casts. Float32 scoring with an existing float64/complex128
+M-step is a mixed-precision trajectory, not an all-float32 qualification. A
+float32-only patch does not establish the precision of untouched stages. Match
 the input state and candidates before comparing precisions, and do not infer
 numerical noise merely because a discrepancy shrinks in double. Preserve
 intentional higher-precision host/metadata operations; this is not a blanket
@@ -124,3 +128,9 @@ The [shared SPA/ET checkpoint](evidence/shared-spa-et-20260907/README.md) preser
 historical quality/performance comparisons, generated fixture identities and
 six shellwise FSC curves recovered from saved outputs. Its threshold-frequency
 summaries saturate; use the archived curves when reviewing map-quality changes.
+
+The [VDAM coarse-repeat audit from 9 September 2026](evidence/vdam-coarse-repeat-20260909/README.md)
+preserves independent CPU comparisons of 16 saved float32 score outputs, their
+hashes and the exact audit script. Same-input raw winners are stable despite
+score variation; this scoped diagnostic does not qualify trajectory decisions,
+M-step precision or performance.
