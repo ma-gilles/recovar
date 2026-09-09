@@ -1,5 +1,58 @@
 # Current EM development scope
 
+## Frozen combined-source qualification — September 9
+
+Checkpoint `d21f52d726c70acd27d99cbbfff65a79d341d497` is frozen in
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_pr179_validation_d21f52d72_20260909`.
+The current CUDA source builds for H100 (`sm_90`), and the current RELION
+bindings build against archived source `f2c1a384400aec37dc6805856a5ba645650a44f1`.
+Both libraries are pinned by hash outside shared builds. All 194 selected shared
+CPU cases pass in 25.08 seconds, including the new InitialModel bindings,
+configuration, build selection, metadata export and project/CLI contracts.
+Three GPU cases are explicitly deselected from this CPU panel.
+
+H100 job **13634222** on `della-h20g4` passes 222 native GPU cases in 62.51
+seconds, but fails strict admission because the rectangular CUDA/JAX case is
+explicitly skipped for a known pixel-ordering mismatch. That skip also exists
+at pinned PR158 `44d770de3f`; it remains an unresolved coverage gap. No test
+assertion failed, but the full 223-case native panel is not accepted. The
+sequential launcher stopped before API execution. Independent H100 job
+**13634313** now runs the unchanged 604-case API panel; results remain pending.
+Two newly imported operand-order cases fail while patching the removed
+`local_engine._sparse_pass2_diagnostics` alias. Test-only repair `21bb76086`
+imports the canonical `helpers.sparse_pass2_bucketed` owner directly. Reversing
+that import/patch-target mapping produces the identical complete test-module
+AST; all assertions and production source remain unchanged. Both cases pass
+on H100 in 3.53 seconds in targeted job **13634507**. The full original API
+panel remains frozen and running; its failures will not be overwritten.
+
+The launcher checks exact collected and executed case identities, rejects
+unexpected skips, and verifies source,
+native libraries and baseline files before and after each panel. Production
+float32 defaults remain selected; existing float64 companion tests are diagnostic.
+
+The first CPU attempt passed 193 cases and failed the spawned-worker case
+because the test launcher ran pytest at import time. The corrected launcher
+uses a `__main__` guard; all 194 unchanged tests then pass. Both attempts are
+preserved. No production source, test assertions or baselines changed.
+
+Reproduction configuration and scripts (`shared.sh`, `gpu.sbatch`, `inputs.json`):
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr179_validation_20260909_v2/`.
+Run `bash shared.sh` for CPU or `sbatch --parsable gpu.sbatch` for H100 after
+copying the configuration to a new output root; drivers reject existing results.
+Logs, XML and outcomes are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr179_validation_d21f52d72_20260909/v2/`.
+The parent output directory retains the original launcher failure and build logs.
+The coordination handoff `em_clean_frozen_native_validation_20260909.json`
+records commands, inventories and hashes. These selected contracts do not
+qualify full shared workflows, real K1, exactly K4 or performance parity.
+The caller-migration handoff `em_clean_operand_caller_migration_20260909.json`
+records its exact two-case command and dirty status-document fingerprint.
+Its logs and XML are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr179_operand_caller_20260909/`;
+the corresponding `pr179_operand_caller_20260909` directory under the review
+root above contains the pinned inputs and `api_only.sbatch` reproduction script.
+
 ## Structural cleanup after VDAM integration — September 9
 
 Fourteen duplicated local binary-flag readers were replaced with direct calls
