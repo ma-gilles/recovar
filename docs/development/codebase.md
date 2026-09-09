@@ -155,9 +155,9 @@ logger namespace follows `debug_dumps`. Capture state and counters belong to the
 separate diagnostic owner below.
 
 [`helpers.bpref_diagnostics`](../../recovar/em/dense_single_volume/helpers/bpref_diagnostics.py)
-owns the numbered-half capture context, contribution counters, device-panel
-state, capture validation and artifact writers shared by sparse and exact-local
-EM. The controller and replay scripts set and clear that context through this
+owns the numbered-half capture context, contribution and membership counters,
+membership selectors/rotation-mass writers, device-panel state, capture validation
+and artifact writers shared by sparse and exact-local EM. The controller and replay scripts set and clear that context through this
 owner. Sparse scoring retains candidate planning, numerical kernels and live
 accumulation; it asks the diagnostic owner for scoped capture decisions. The
 diagnostic module has no direct import of sparse scoring or the iteration

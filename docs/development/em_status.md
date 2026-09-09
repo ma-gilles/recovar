@@ -32,7 +32,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | `3970ea71d`: shared first-iteration arguments with explicit K1/K4 differences; half-scoring owner 1,358 lines, controller 6,123 lines |
+| Latest production cleanup | `2b6cf430c`: BPref membership writers/context share one owner; sparse scorer 19,284 lines, half scorer 1,358, controller 6,123 |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -84,6 +84,13 @@ The completed producer FSC review reports old-repeat minimum cross-FSC-AUC
 0.969668 at iteration 155, versus 0.998219 for new repeats at 86. The two paired
 old/new minima are 0.969722 and 0.998219. These are cross-map diagnostics;
 GT registration and historical native source-to-binary closure are missing.
+The candidate cross-native minima span 0.998196–0.998767 at iteration 86,
+versus a native-repeat minimum of 0.9997155. The second old-policy arm is closer
+to both native endpoints than either candidate arm: no uniform candidate win.
+The producer reports exact independent agreement for all 15 terminal AUCs and
+shell curves; em_clean's review here is the pinned report, not a fresh curve
+recomputation. See `handoffs/vdam_full201_fsc_terminal_20260909.json` and
+`vdam_f32_full200_20260909/fsc_trajectory_figure/fsc_trajectories.png` in scratch.
 em_clean verified the review's seven artifact hashes, without independently
 recomputing its arrays. No full-state, trajectory or runtime acceptance follows.
 See `vdam_f32_full200_20260909/analysis_integrated_v2_review/result_summary.json`
@@ -188,8 +195,17 @@ module AST after keyword-order normalization. The callee has explicit parameters
 No arithmetic, casts or array buffers change; one host dictionary binds names
 and constants when first-iteration CC is selected.
 
+BPref membership capture now shares the existing `helpers/bpref_diagnostics.py`
+owner with its numbered-half context. Three helpers, three environment constants
+and the single process counter move together; three production calls and tests
+use that owner directly. Function bodies and all retained scorer statements are
+AST-identical after namespace mapping. Counter sequencing, filter short-circuit
+order, NPZ schema, casts and error behavior remain unchanged. Sparse scoring
+loses 176 lines (19,460 → 19,284); the two modules together add one line.
+
 | Checkpoint | Executed evidence | Limit |
 | --- | --- | --- |
+| BPref membership owner `2b6cf430c` | Original 32/32 plus 11 new cases pass before source changes; candidate 43/43 (4.06 s), guard 38/38 (44.08 s), no skips | Every original case retained; 3 function/4 state ASTs exact. No new Ruff findings (existing sparse import I001 remains). Ownership only, no GPU/trajectory/runtime claim |
 | First-iteration arguments `3970ea71d` | Control 75/75; four K1/K4 × batch-update variants pass before source changes; candidate 78/78 (4.72 s), guard 38/38 (44.78 s), no skips/Ruff findings | 74 original IDs retained; one case expanded to four. Initial new K4 fixture incorrectly expected the K1 cap700, then corrected to existing K4 cap368 and rerun before source edits. No GPU/trajectory/runtime claim |
 | Support diagnostics `5b42961e7` | Control 32/32; candidate 39/39 (3.51 s), CPU guard 38/38 (44.88 s), no skips or Ruff findings | One static guard replaced by five exact-log cases, three denominator cases added; other 31 identities unchanged. Reporting ownership only, no GPU/trajectory/runtime claim |
 | Local-scoring arguments `19073ab50` | Control 42/42; candidate 47/47 (9.95 s), including six denominator/spectrum variants and existing exact-K4 dispatch; CPU guard 38/38 (44.30 s); no skips or Ruff findings | 41 original case IDs unchanged, one original case expanded to six; two source guards resolve the common kwargs; no GPU/trajectory or timing-gain claim |
@@ -208,6 +224,13 @@ were confirmed by failing tests before migration. This does not prove dynamic
 imports/registration or every runtime path. A tracked-reference scan found no
 further unreferenced, undecorated top-level private EM function candidates;
 do not remove code merely to reduce line counts.
+
+Membership-owner source/caller audit, exact commands and test inventories:
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/bpref_membership_owner_20260909/validation.json`.
+CPU logs/XML use `bpref_membership_owner_{control,expanded_control,after,guard}_20260909`
+under the CPU run root below. Source/native hashes stay fixed during every panel.
+Explicit module reloads now follow the diagnostic state owner; frozen sources
+and existing output formats are untouched.
 
 The first-iteration audit
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/dense_firstiter_arguments_20260909/validation.json`
