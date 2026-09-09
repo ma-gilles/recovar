@@ -9,9 +9,11 @@ explicit and reports both raw and alignment-aware GT metrics.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -66,6 +68,28 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output_json", default=None, help="Optional JSON path for scalar metric summary.")
     parser.add_argument("--gt_align", action="store_true", help="Also compute alignment-aware GT metrics.")
     parser.add_argument(
+        "--gt_align_rigid",
+        action="store_true",
+        help=(
+            "Opt in to rigid translation/rotation fitting with fixed contrast sign +1. "
+            "Requires --gt_align; use shared transform options to fit once for a trajectory. Discrete refinement "
+            "orders/sigma are inactive in this mode. Effective fit controls are saved."
+        ),
+    )
+    shared = parser.add_mutually_exclusive_group()
+    shared.add_argument(
+        "--gt_align_fit_label",
+        help="Fit this input label to GT once and apply its rigid transform to every input volume.",
+    )
+    shared.add_argument(
+        "--gt_align_transform_json",
+        help="Apply a previously saved rigid transform to every input volume without fitting.",
+    )
+    parser.add_argument(
+        "--gt_align_transform_output",
+        help="Save the common transform JSON; requires --gt_align_fit_label or --gt_align_transform_json.",
+    )
+    parser.add_argument(
         "--gt_align_healpix_order",
         type=int,
         default=DEFAULT_GT_ALIGN_HEALPIX_ORDER,
@@ -105,7 +129,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Print full per-shell FSC curve for each volume.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.gt_align_rigid and not args.gt_align:
+        parser.error("--gt_align_rigid requires --gt_align")
+    if args.gt_align_rigid and args.gt_align_allow_sign:
+        parser.error("--gt_align_rigid fixes contrast sign +1; omit --gt_align_allow_sign")
+    if (
+        args.gt_align_fit_label or args.gt_align_transform_json or args.gt_align_transform_output
+    ) and not args.gt_align_rigid:
+        parser.error("Shared transform options require --gt_align_rigid")
+    if args.gt_align_transform_output and not (args.gt_align_fit_label or args.gt_align_transform_json):
+        parser.error("--gt_align_transform_output requires a common transform")
+    return args
 
 
 def _voxel_size_value(raw: Any) -> float | None:
@@ -125,13 +160,17 @@ def _voxel_size_value(raw: Any) -> float | None:
     return None
 
 
-def _load_volume(path: str | Path, frame: str) -> tuple[np.ndarray, float | None]:
+def _load_volume(path: str | Path, frame: str, *, strict_voxel_grid: bool = False) -> tuple[np.ndarray, float | None]:
     if frame == "relion":
         vol, voxel = helpers.load_relion_volume(str(path), return_voxel_size=True)
     elif frame == "recovar":
         vol, voxel = helpers.load_mrc(str(path), return_voxel_size=True)
     else:
         raise ValueError(f"Unknown volume frame: {frame!r}")
+    if strict_voxel_grid:
+        axes = np.asarray([getattr(voxel, axis) for axis in "xyz"], dtype=np.float64)
+        if not np.isfinite(axes).all() or np.any(axes <= 0) or not np.all(axes == axes[0]):
+            raise ValueError(f"{path}: rigid registration requires a finite positive isotropic voxel grid")
     return np.asarray(vol, dtype=np.float64), _voxel_size_value(voxel)
 
 
@@ -224,6 +263,21 @@ def _add_metric_set(
     )
 
 
+def _common_rigid_transform(document: dict[str, Any]):
+    """Load the evaluator's transport record without invoking the fitter."""
+    from recovar.em.initial_model.gt_registration import RigidVolumeTransform
+
+    expected = {"transform", "identity_sha256", "fit_receipt", "fit_reference"}
+    if not isinstance(document, dict) or set(document) != expected:
+        raise ValueError("Invalid common rigid transform document")
+    transform = RigidVolumeTransform.from_dict(document["transform"])
+    if document["identity_sha256"] != transform.identity_sha256:
+        raise ValueError("Rigid transform identity does not match its contents")
+    if not isinstance(document["fit_receipt"], dict) or not isinstance(document["fit_reference"], dict):
+        raise ValueError("Rigid transform fit metadata must be objects")
+    return transform
+
+
 def evaluate(
     *,
     volume_paths: list[str],
@@ -239,14 +293,31 @@ def evaluate(
     gt_align_allow_sign: bool,
     gt_align_refine_orders: tuple[int, ...] = (),
     gt_align_refine_sigma_deg: float = 30.0,
+    gt_align_rigid: bool = False,
+    gt_align_fit_label: str | None = None,
+    gt_align_transform: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    gt_real, gt_voxel = _load_volume(gt_volume_path, gt_frame)
+    if gt_align_rigid and (not gt_align or gt_align_allow_sign):
+        raise ValueError("Rigid alignment requires gt_align=True and gt_align_allow_sign=False")
+    if (gt_align_fit_label is not None or gt_align_transform is not None) and not gt_align_rigid:
+        raise ValueError("Shared transforms require rigid alignment")
+    if gt_align_fit_label is not None and gt_align_transform is not None:
+        raise ValueError("Select either a fit label or an existing transform")
+    if gt_align_rigid and (not volume_paths or len(volume_paths) != len(labels) or len(set(labels)) != len(labels)):
+        raise ValueError("Rigid alignment requires one unique label per input volume")
+    if (
+        gt_align_rigid
+        and voxel_size_override is not None
+        and (not math.isfinite(voxel_size_override) or voxel_size_override <= 0)
+    ):
+        raise ValueError("Voxel size override must be finite and positive")
+    gt_real, gt_voxel = _load_volume(gt_volume_path, gt_frame, strict_voxel_grid=gt_align_rigid)
     if gt_real.ndim != 3 or len(set(gt_real.shape)) != 1:
         raise ValueError(f"GT volume must be cubic 3D, got shape {gt_real.shape}")
 
     volume_shape = tuple(int(x) for x in gt_real.shape)
     gt_ft = _real_to_ft(gt_real)
-    rotations = relion_alignment_rotations(gt_align_healpix_order) if gt_align else None
+    rotations = relion_alignment_rotations(gt_align_healpix_order) if gt_align and gt_align_transform is None else None
 
     npz_payload: dict[str, Any] = {
         "gt_volume": np.asarray(str(gt_volume_path)),
@@ -272,11 +343,70 @@ def evaluate(
         "volumes": [],
     }
 
+    shared_transform = None
+    shared_document = gt_align_transform
+    if gt_align_rigid:
+        from recovar.em.initial_model.gt_registration import (
+            RigidFitControls,
+            RigidVolumeTransform,
+            align_volume_rigid_to_reference,
+        )
+
+        gt_identity = hashlib.sha256(np.ascontiguousarray(gt_real, dtype="<f8").tobytes()).hexdigest()
+        if gt_align_fit_label is not None:
+            if gt_align_fit_label not in labels:
+                raise ValueError(f"Unknown rigid fit label: {gt_align_fit_label!r}")
+            fit_path = volume_paths[labels.index(gt_align_fit_label)]
+            fit_volume, fit_voxel = _load_volume(fit_path, volume_frame, strict_voxel_grid=True)
+            if fit_volume.shape != gt_real.shape or fit_voxel != gt_voxel:
+                raise ValueError("Rigid fit reference and GT must have matching shapes and voxel grids")
+            fitted = align_volume_rigid_to_reference(
+                fit_volume,
+                gt_real,
+                rotations,
+                controls=RigidFitControls(
+                    score_max_shell=int(gt_align_max_shell), allow_mirror=bool(gt_align_allow_mirror)
+                ),
+            )
+            shared_transform = RigidVolumeTransform.from_alignment(
+                fitted,
+                volume_shape=volume_shape,
+                voxel_size=float(voxel_size_override or gt_voxel),
+                gt_sha256=gt_identity,
+            )
+            shared_document = {
+                "transform": shared_transform.to_dict(),
+                "identity_sha256": shared_transform.identity_sha256,
+                "fit_receipt": json.loads(json.dumps(asdict(fitted.receipt), allow_nan=False)),
+                "fit_reference": {
+                    "label": gt_align_fit_label,
+                    "path": str(fit_path),
+                    "lowpass_objective": float(fitted.score),
+                },
+            }
+        elif shared_document is not None:
+            shared_transform = _common_rigid_transform(shared_document)
+        json_summary["gt_align_options_applied"] = gt_align_transform is None
+        json_summary["gt_align_rigid_mode"] = (
+            "shared_fit"
+            if gt_align_fit_label is not None
+            else "shared_transform"
+            if shared_transform is not None
+            else "independent"
+        )
+        if shared_document is not None:
+            json_summary["rigid_transform"] = shared_document
+            npz_payload["gt_align_rigid_transform_json"] = np.asarray(
+                json.dumps(shared_document, sort_keys=True, allow_nan=False)
+            )
+
     for label, path in zip(labels, volume_paths):
-        real, vol_voxel = _load_volume(path, volume_frame)
+        real, vol_voxel = _load_volume(path, volume_frame, strict_voxel_grid=gt_align_rigid)
         if real.shape != gt_real.shape:
             raise ValueError(f"{path} shape {real.shape} does not match GT shape {gt_real.shape}")
         voxel_size = voxel_size_override or gt_voxel or vol_voxel or 1.0
+        if gt_align_rigid and vol_voxel != gt_voxel:
+            raise ValueError(f"{path}: rigid comparison requires the same voxel grid as GT")
         npz_payload["voxel_size"] = np.float64(voxel_size)
         json_summary["voxel_size"] = float(voxel_size)
 
@@ -294,21 +424,48 @@ def evaluate(
         )
 
         if gt_align:
-            assert rotations is not None
-            alignment = align_volume_to_reference(
-                real,
-                gt_real,
-                rotations,
-                score_max_shell=int(gt_align_max_shell),
-                allow_mirror=bool(gt_align_allow_mirror),
-                allow_sign=bool(gt_align_allow_sign),
-                refine_orders=tuple(int(o) for o in gt_align_refine_orders) or None,
-                refine_sigma_deg=float(gt_align_refine_sigma_deg),
-            )
+            if shared_transform is not None:
+                aligned_volume = shared_transform.apply(real, voxel_size=float(voxel_size), gt_sha256=gt_identity)
+                rotation_index = int(shared_document["fit_receipt"]["coarse_rotation_index"])
+                rotation_matrix = np.asarray(shared_transform.rotation_matrix)
+                mirror_x, sign, score = shared_transform.mirror_x, 1, None
+                translation = np.asarray(shared_transform.translation_voxels)
+            elif gt_align_rigid:
+                from recovar.em.initial_model.gt_registration import (
+                    RigidFitControls,
+                    align_volume_rigid_to_reference,
+                )
+
+                alignment = align_volume_rigid_to_reference(
+                    real,
+                    gt_real,
+                    rotations,
+                    controls=RigidFitControls(
+                        score_max_shell=int(gt_align_max_shell),
+                        allow_mirror=bool(gt_align_allow_mirror),
+                    ),
+                )
+            else:
+                alignment = align_volume_to_reference(
+                    real,
+                    gt_real,
+                    rotations,
+                    score_max_shell=int(gt_align_max_shell),
+                    allow_mirror=bool(gt_align_allow_mirror),
+                    allow_sign=bool(gt_align_allow_sign),
+                    refine_orders=tuple(int(o) for o in gt_align_refine_orders) or None,
+                    refine_sigma_deg=float(gt_align_refine_sigma_deg),
+                )
+            if shared_transform is None:
+                aligned_volume = alignment.aligned_volume
+                rotation_index, rotation_matrix = alignment.rotation_index, alignment.rotation_matrix
+                mirror_x, sign, score = alignment.mirror_x, alignment.sign, float(alignment.score)
+                if gt_align_rigid:
+                    translation = alignment.translation_voxels
             aligned_prefix = f"{label}_aligned"
             _add_metric_set(
                 prefix=aligned_prefix,
-                volume=alignment.aligned_volume,
+                volume=aligned_volume,
                 reference=gt_real,
                 reference_ft=gt_ft,
                 volume_shape=volume_shape,
@@ -316,19 +473,42 @@ def evaluate(
                 npz_payload=npz_payload,
                 json_payload=per_volume.setdefault("aligned", {}),
             )
-            npz_payload[f"{label}_gt_align_rotation_index"] = np.int32(alignment.rotation_index)
-            npz_payload[f"{label}_gt_align_rotation_matrix"] = alignment.rotation_matrix
-            npz_payload[f"{label}_gt_align_mirror_x"] = np.bool_(alignment.mirror_x)
-            npz_payload[f"{label}_gt_align_sign"] = np.int32(alignment.sign)
+            npz_payload[f"{label}_gt_align_rotation_index"] = np.int32(rotation_index)
+            npz_payload[f"{label}_gt_align_rotation_matrix"] = rotation_matrix
+            npz_payload[f"{label}_gt_align_mirror_x"] = np.bool_(mirror_x)
+            npz_payload[f"{label}_gt_align_sign"] = np.int32(sign)
             per_volume["aligned"].update(
                 {
-                    "rotation_index": int(alignment.rotation_index),
-                    "rotation_matrix": np.asarray(alignment.rotation_matrix).tolist(),
-                    "mirror_x": bool(alignment.mirror_x),
-                    "sign": int(alignment.sign),
-                    "score_vs_gt": float(alignment.score),
+                    "rotation_index": int(rotation_index),
+                    "rotation_matrix": np.asarray(rotation_matrix).tolist(),
+                    "mirror_x": bool(mirror_x),
+                    "sign": int(sign),
+                    "score_vs_gt": score,
                 }
             )
+
+            if gt_align_rigid:
+                receipt = (
+                    dict(shared_document["fit_receipt"]) if shared_transform is not None else asdict(alignment.receipt)
+                )
+                receipt.update(
+                    translation_voxels=translation.tolist(),
+                    translation_A=(translation * float(voxel_size)).tolist(),
+                    coordinate_frame="recovar_array_axes_0_1_2",
+                    forward_transform="y=c+R*M*(x-c)+t; c=(shape-1)/2; M reflects axis0",
+                    sign=1,
+                    independently_fitted_per_volume=shared_transform is None,
+                    discrete_refinement_used=False,
+                    quality_accepted=False,
+                )
+                if shared_transform is not None:
+                    receipt["transform_identity_sha256"] = shared_transform.identity_sha256
+                    receipt["fit_reference"] = shared_document["fit_reference"]
+                per_volume["aligned"]["rigid_registration"] = receipt
+                npz_payload[f"{label}_gt_align_translation_voxels"] = translation
+                npz_payload[f"{label}_gt_align_rigid_receipt_json"] = np.asarray(
+                    json.dumps(receipt, sort_keys=True, allow_nan=False)
+                )
 
         json_summary["volumes"].append(per_volume)
 
@@ -393,8 +573,19 @@ def main(argv: list[str] | None = None) -> int:
         gt_align_allow_sign=bool(args.gt_align_allow_sign),
         gt_align_refine_orders=tuple(int(o) for o in (args.gt_align_refine_orders or [])),
         gt_align_refine_sigma_deg=float(args.gt_align_refine_sigma_deg),
+        gt_align_rigid=bool(args.gt_align_rigid),
+        gt_align_fit_label=args.gt_align_fit_label,
+        gt_align_transform=json.loads(Path(args.gt_align_transform_json).read_text())
+        if args.gt_align_transform_json
+        else None,
     )
 
+    if args.gt_align_transform_output:
+        transform_path = Path(args.gt_align_transform_output)
+        transform_path.parent.mkdir(parents=True, exist_ok=True)
+        transform_path.write_text(
+            json.dumps(json_summary["rigid_transform"], sort_keys=True, indent=2, allow_nan=False) + "\n"
+        )
     if args.output_npz:
         out_npz = Path(args.output_npz)
         out_npz.parent.mkdir(parents=True, exist_ok=True)
