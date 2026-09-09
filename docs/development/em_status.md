@@ -86,6 +86,16 @@ and mask. The extra42nd parent therefore requires an incoming score/state audit
 for this capture, not support pruning or a normalization change. See
 [VDAM's report](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_source_euler_metadata_20260909/PMAX24_RESULTS.md).
 
+Native-input follow-ups13651334/13651600 on frozen df9975ee reconstruct all840
+saved Fourier values and validate21×2 coarse phases plus84 fine controls. Both
+shared-pretranslated and fused scorers compare774,144 scores in each of six calls,
+with maximum absolute error0.00018310546875; all calls preserve the native minimum
+and41 support bits. Original Xi2 was not captured: three independent measured
+initializations were used, with no fitted offset. This one-particle/B1 result
+supports auditing incoming reference/image state; it does not establish universal
+roundoff bounds, trajectory quality, or a kernel/cutoff repair. Terminal and
+independent-review receipts are linked from the report; no duplicate job is assigned.
+
 Publication follow-up `974aa11cf` is integrated separately as `1624dd396`.
 It retains canonical source Euler metadata in `score_outputs` and `local_debug`,
 with the matrix-only fallback preserved. Fresh combined-source checks pass all
@@ -115,6 +125,19 @@ Different physical H100, same class/driver: timing descriptive only. K4 audit
 iteration10,class2. No current100k speed or broad quality acceptance is claimed.
 
 ## Engineering work and recent evidence
+
+The validated controller batch moves post-update optimiser convergence replay to
+`relion_replay.apply_optimiser_convergence_replay`. The controller still applies
+accuracy before the native state update and replay counters afterward. Missing
+fields, partial mutation on malformed metadata, and unnumbered final-pass detection
+retain their original behavior; restart defaults intentionally remain separate.
+Controller6,123→6,051 lines; the explicit interface/documentation grows total
+production by34 lines. All61 affected CPU and38 final guard cases pass, zero skips;12 new boundary
+cases also pass against the archived original controller block. Inlining proves
+all22 controller function ASTs exact. An initial six-case filename-renaming failure
+was fixed and preserved in the [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/optimiser_replay_owner_20260909/result.json).
+Existing E402/I001 style findings reproduce on control. This is a local
+validated checkpoint for the next publication; no GPU or trajectory claim follows.
 
 The diagnostic batch separates reconstruction-window normalization and group-scale
 captures into `helpers.norm_scale_diagnostics`, with direct sparse-scorer/test
