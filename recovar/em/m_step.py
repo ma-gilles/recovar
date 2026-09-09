@@ -87,34 +87,6 @@ batch_vol_adjoint_slice_volume_half = jax.vmap(
 
 
 @eqx.filter_jit
-def backproject_one_image_eqx(
-    config: ForwardModelConfig,
-    probabilities,
-    images_i,
-    rotation_matrices,
-    translations,
-    ctf_params,
-    noise_variance,
-    translation_fn="fft",
-):
-    """Equinox version of backproject_one_image (12 → 8 params)."""
-    images = sum_up_translations(images_i, probabilities, translations, config.image_shape, translation_fn)
-    CTF = config.compute_ctf(ctf_params)
-    images *= CTF[:, None, None] / noise_variance
-    images_half = fourier_transform_utils.full_image_to_half_image(images, config.image_shape)
-    Ft_y = batch_vol_adjoint_slice_volume_half(
-        images_half, rotation_matrices, config.image_shape, config.volume_shape, None
-    )
-    probabilites_summed_over_translations = jnp.sum(probabilities, axis=-1)[..., None]
-    CTF_probs = (CTF**2 / noise_variance)[:, None, None] * probabilites_summed_over_translations
-    CTF_probs_half = fourier_transform_utils.full_image_to_half_image(CTF_probs, config.image_shape)
-    Ft_ctf = batch_vol_adjoint_slice_volume_half(
-        CTF_probs_half, rotation_matrices, config.image_shape, config.volume_shape, None
-    )
-    return Ft_y, Ft_ctf
-
-
-@eqx.filter_jit
 def sum_up_images_fixed_rots_eqx(
     config: ForwardModelConfig,
     batch,

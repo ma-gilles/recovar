@@ -1351,41 +1351,6 @@ def get_oversampled_translation_grid(parent_translations, pixel_offset, oversamp
     return fine_translations, parent_map
 
 
-def subdivide_healpix_pixels(pixels, nside_level):
-    """Subdivide HEALPix pixels and return child pixel angles and indices.
-
-    Args:
-        pixels: array-like of RING-ordered pixel indices at level
-            ``nside_level``.
-        nside_level: int, HEALPix level of ``pixels``.
-
-    Returns:
-        angles: float (n_child_pixels * n_in_planes, 3) Euler angles in
-            degrees (rot, tilt, psi) for each child orientation.
-        child_pixels: int (n_child_pixels,) RING-ordered child pixel indices
-            at level ``nside_level + 1``.
-    """
-    pixels = np.asarray(pixels)
-    child_pixels = get_healpix_children(pixels, nside_level)
-    child_nside_level = nside_level + 1
-    child_nside = 2**child_nside_level
-    theta, phi = hp.pix2ang(child_nside, child_pixels)
-
-    angle_res = 360 / (6 * 2**child_nside_level)
-    n_in_planes = int(np.round(360 / angle_res))
-    in_plane_angles = np.linspace(0, 2 * np.pi, n_in_planes, endpoint=False)
-
-    pix_idx, ip_idx = np.meshgrid(np.arange(len(child_pixels)), np.arange(n_in_planes))
-    pix_idx_flat = pix_idx.ravel()
-
-    angles = np.stack(
-        [phi[pix_idx_flat], theta[pix_idx_flat], in_plane_angles[ip_idx.ravel()]],
-        axis=-1,
-    )
-    angles = angles / (2 * np.pi) * 360  # radians → degrees
-    return angles, child_pixels
-
-
 # ---------------------------------------------------------------------------
 # Variable-order rotation grid
 # ---------------------------------------------------------------------------

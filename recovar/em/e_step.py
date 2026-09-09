@@ -5,7 +5,6 @@ import logging
 import numpy as np
 import jax
 import jax.numpy as jnp
-import equinox as eqx
 from recovar import core, utils
 from recovar.core.configs import ForwardModelConfig
 from .core import (
@@ -202,49 +201,6 @@ compute_probability_from_residual_normal_squared = jax.vmap(compute_probability_
 
 
 ## This is the version of the code to be used when poses are not the same for all images.
-
-# ============================================================================
-# Equinox-based E-step API
-# ============================================================================
-
-
-@eqx.filter_jit
-def compute_residuals_many_poses_eqx(
-    config: ForwardModelConfig,
-    volumes,
-    images,
-    rotation_matrices,
-    translations,
-    ctf_params,
-    noise_variance,
-    translation_fn="fft",
-):
-    """Equinox version of compute_residuals_many_poses (12 → 8 params)."""
-    projected_volumes = batch_vol_rot_slice_volume(
-        volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
-    )
-    projected_volumes = projected_volumes * config.compute_ctf(ctf_params)[:, None, None, :]
-
-    images /= jnp.sqrt(noise_variance)
-    projected_volumes /= jnp.sqrt(noise_variance)
-
-    if translation_fn == "fft":
-        proj_volume_norm = jnp.linalg.norm(projected_volumes, axis=(-1), keepdims=True) ** 2
-        projected_volumes = norm_squared_residuals_from_ft(projected_volumes, images, config.image_shape)
-        image_size = np.prod(config.image_shape)
-        if NORM_FFT != "ortho":
-            projected_volumes = projected_volumes * image_size
-        translations_indices = translations_to_indices(translations, config.image_shape)
-        dots_chosen = batch_take(projected_volumes, translations_indices, axis=-1)
-        norm_res_squared = proj_volume_norm - 2 * dots_chosen.real
-        norm_res_squared += jnp.linalg.norm(images, axis=(-1), keepdims=True)[:, None, None] ** 2
-    else:
-        projected_volumes = projected_volumes[..., None, :]
-        translated_images = core.batch_trans_translate_images(images, translations, config.image_shape)[:, None, None]
-        norm_res_squared = jnp.linalg.norm((projected_volumes - translated_images), axis=(-1)) ** 2
-
-    return norm_res_squared
-
 
 # ============================================================================
 # Legacy E-step API

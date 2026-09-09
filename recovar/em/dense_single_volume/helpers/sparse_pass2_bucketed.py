@@ -249,9 +249,6 @@ _SPARSE_KCLASS_COMPACT_PAIR_MSTEP_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MSTE
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE"
 _RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR"
 _RELION_FINE_DIFF2_FUSED_FFI_ENV = "RECOVAR_RELION_FINE_DIFF2_FUSED_FFI"
-_RELION_X_HALF_BP_NATIVE_PARTICLE_GRID_ENV = (
-    "RECOVAR_RELION_X_HALF_BP_NATIVE_PARTICLE_GRID"
-)
 _RELION_X_HALF_BP_PARTICLE_POOL_SIZE_ENV = (
     "RECOVAR_K1_RELION_X_HALF_BP_PARTICLE_POOL_SIZE"
 )
@@ -4688,15 +4685,6 @@ def _adjoint_block_chunk_rows(flat_block, *, max_block_bytes: int) -> int:
         return 1
     row_bytes = _flat_block_row_bytes(flat_block)
     return max(1, int(max_block_bytes) // row_bytes)
-
-
-def relion_x_half_bp_native_particle_grid_enabled() -> bool:
-    """Return whether particle-owned fused launches share one FFI dispatch."""
-
-    return parse_env_flag(
-        _RELION_X_HALF_BP_NATIVE_PARTICLE_GRID_ENV,
-        default=False,
-    )
 
 
 def _accumulate_relion_x_half_per_particle_launches(

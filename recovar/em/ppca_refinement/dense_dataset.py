@@ -772,41 +772,6 @@ def compute_dense_ppca_adaptive_significance(
     )
 
 
-def build_dense_ppca_fine_pose_mask_from_significance(
-    significant_sample_indices,
-    *,
-    n_coarse_rotations: int,
-    n_coarse_translations: int,
-    rot_parent_map: np.ndarray,
-    trans_parent_map: np.ndarray,
-    n_fine_rotations: int,
-    n_fine_translations: int,
-) -> np.ndarray:
-    """Expand coarse PPCA significant samples to a fine-grid pass-2 mask."""
-
-    rot_parent_map = np.asarray(rot_parent_map, dtype=np.int64)
-    trans_parent_map = np.asarray(trans_parent_map, dtype=np.int64)
-    if rot_parent_map.shape != (int(n_fine_rotations),):
-        raise ValueError(f"rot_parent_map shape {rot_parent_map.shape} != ({int(n_fine_rotations)},)")
-    if trans_parent_map.shape != (int(n_fine_translations),):
-        raise ValueError(f"trans_parent_map shape {trans_parent_map.shape} != ({int(n_fine_translations)},)")
-    n_images = len(significant_sample_indices)
-    mask = np.zeros((n_images, int(n_fine_rotations), int(n_fine_translations)), dtype=bool)
-    for image_idx, sig in enumerate(significant_sample_indices):
-        if sig is None:
-            mask[image_idx] = True
-            continue
-        sig = np.asarray(sig, dtype=np.int64).reshape(-1)
-        if sig.size == 0:
-            continue
-        coarse_rot = sig // int(n_coarse_translations)
-        coarse_trans = sig % int(n_coarse_translations)
-        coarse_pair = np.zeros((int(n_coarse_rotations), int(n_coarse_translations)), dtype=bool)
-        coarse_pair[coarse_rot, coarse_trans] = True
-        mask[image_idx] = coarse_pair[rot_parent_map][:, trans_parent_map]
-    return mask
-
-
 def run_dense_ppca_fused_em_iteration(
     experiment_dataset,
     mu,

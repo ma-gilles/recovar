@@ -234,15 +234,6 @@ def relion_x_half_accumulators_to_public_layout(
     )
 
 
-def relion_x_half_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape):
-    """Convert RELION ``(z, y, xhalf)`` accumulators to RECOVAR full volumes."""
-
-    return (
-        relion_x_half_volume_to_full(Ft_y, recon_volume_shape),
-        relion_x_half_volume_to_full(Ft_ctf, recon_volume_shape),
-    )
-
-
 def crop_relion_x_half_accumulator(
     values,
     physical_volume_shape,

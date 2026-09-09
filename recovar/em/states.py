@@ -14,14 +14,6 @@ from .heterogeneity import compute_H_B, compute_projected_covariance_rhs_lhs, so
 logger = logging.getLogger(__name__)
 
 
-def get_default_sgd_options():
-    options = {}
-    options["minibatch_size"] = 30
-    options["steps_size"] = "hess"
-    options["mu"] = 0.9
-    return options
-
-
 ## Probably should implement these so we don't have to pass around so many arguments
 class EMState:
     mean = None
