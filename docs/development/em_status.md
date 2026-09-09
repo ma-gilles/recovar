@@ -1,5 +1,37 @@
 # Current EM development scope
 
+## Diagnostic half-selection ownership — September 9
+
+Two diagnostic half selectors and their environment-name constants now live in
+`dense_single_volume/debug_dumps.py`, alongside the dump writers. The refinement
+controller keeps dispatch timing and diagnostic completion/stop control. It is
+**126 lines shorter: 8,108 → 7,982**. This is an ownership relocation, not net
+code deletion. Function bodies, retained controller statements and existing dump
+writers are AST-identical. Test bodies and assertions are identical after mapping
+the selector owner. Log messages are unchanged; their namespace follows the new
+owner. No numerical, precision, scheduling-order or saved-format change is made.
+
+The unchanged control and final affected CPU panel each pass **93 cases**, with
+identical inventories and no skips (7.62 s / 6.44 s). The CPU fast guard passes
+**38 cases in 47.71 s** before the final import-order correction; the final
+93-case run covers that correction. All run source/native checks pass, and Ruff
+retains three inherited findings with no new ones. No GPU jobs were launched.
+These checks do not close the existing normalization bytewise failures or any
+trajectory-quality/performance gate.
+
+Exact source patch, AST/Ruff audit, run commands and fingerprints are in
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/diagnostic_half_policy_20260909/validation.json`
+and its companion files. Logs/XML are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/diagnostic_half_policy_{control,after,fast_guard,final}_20260909/`.
+Reproduce the recorded command arrays with fresh output roots and the recorded
+CPU environment. Continue controller cleanup independently of numerical repairs.
+
+VDAM has exclusive private ownership of the six compact-CTF source/test paths
+listed in the [coordination board](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/README.md), under
+`handoffs/em_clean_vdam_compact_ctf_scope_20260909.json`. This remains a separate
+performance proposal; shared publication/docs stay with em_clean. The RELION
+header assignment is released as recorded below; shared binaries remain frozen.
+
 ## Remove unused EM helpers — September 9
 
 Eight unreferenced functions and their dead import/constant are removed from

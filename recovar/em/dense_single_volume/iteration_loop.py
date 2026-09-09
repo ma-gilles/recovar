@@ -205,134 +205,6 @@ from recovar.reconstruction.regularization import (
     update_relion_growth_state_from_fsc,
 )
 
-_SIGNIFICANCE_DUMP_TARGET_HALF_ENV = "RECOVAR_SIGNIFICANCE_DUMP_TARGET_HALF"
-_PASS2_NORM_DUMP_TARGET_HALF_ENV = "RECOVAR_PASS2_DUMP_TARGET_HALF"
-
-
-def _significance_dump_half_indices(
-    *,
-    numbered_iteration: int,
-    n_classes: int,
-    experiment_datasets,
-    environ=None,
-) -> tuple[int, ...]:
-    """Select one half only at an explicitly terminating diagnostic boundary."""
-
-    env = os.environ if environ is None else environ
-    raw_significance_half = str(env.get(_SIGNIFICANCE_DUMP_TARGET_HALF_ENV, "")).strip()
-    raw_pass2_half = str(env.get(_PASS2_NORM_DUMP_TARGET_HALF_ENV, "")).strip()
-    if raw_significance_half and raw_pass2_half:
-        raise RuntimeError(
-            f"{_SIGNIFICANCE_DUMP_TARGET_HALF_ENV} and "
-            f"{_PASS2_NORM_DUMP_TARGET_HALF_ENV} are mutually exclusive"
-        )
-    if not raw_significance_half and not raw_pass2_half:
-        return (0, 1)
-    pass2_norm_mode = bool(raw_pass2_half)
-    target_half_env = (
-        _PASS2_NORM_DUMP_TARGET_HALF_ENV
-        if pass2_norm_mode
-        else _SIGNIFICANCE_DUMP_TARGET_HALF_ENV
-    )
-    raw_half = raw_pass2_half if pass2_norm_mode else raw_significance_half
-    if pass2_norm_mode:
-        if str(env.get("RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS", "")).strip() != "1":
-            raise RuntimeError(
-                f"{_PASS2_NORM_DUMP_TARGET_HALF_ENV} requires "
-                "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS=1"
-            )
-        if str(env.get("RECOVAR_PASS2_DUMP_NORM_RESIDUAL_STOP_AFTER_TARGET", "")).strip() != "1":
-            raise RuntimeError(
-                f"{_PASS2_NORM_DUMP_TARGET_HALF_ENV} requires "
-                "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_STOP_AFTER_TARGET=1"
-            )
-    elif str(env.get("RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET", "")).strip() != "1":
-        raise RuntimeError(
-            f"{_SIGNIFICANCE_DUMP_TARGET_HALF_ENV} requires "
-            "RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET=1"
-        )
-    if int(n_classes) != 1:
-        raise RuntimeError(f"{target_half_env} is K=1 diagnostic-only")
-    try:
-        target_half = int(raw_half)
-    except ValueError as exc:
-        raise ValueError(f"{target_half_env} must be 1 or 2") from exc
-    if target_half not in {1, 2}:
-        raise ValueError(f"{target_half_env} must be 1 or 2")
-
-    prefix = "RECOVAR_PASS2_DUMP" if pass2_norm_mode else "RECOVAR_SIGNIFICANCE_DUMP"
-    raw_iteration = str(env.get(f"{prefix}_ITERATION", "")).strip()
-    raw_targets = str(env.get(f"{prefix}_ORIGINAL_INDICES", "")).strip()
-    dump_dir = str(env.get(f"{prefix}_DIR", "")).strip()
-    if not raw_iteration or not raw_targets or not dump_dir:
-        raise RuntimeError(
-            f"{target_half_env} requires an explicit dump directory, "
-            "iteration, and original-index target set"
-        )
-    try:
-        target_iteration = int(raw_iteration)
-        target_indices = {
-            int(token) for token in raw_targets.replace(",", " ").split()
-        }
-    except ValueError as exc:
-        raise ValueError("significance dump iteration and original indices must be integers") from exc
-    if target_iteration <= 0 or not target_indices:
-        raise ValueError("significance dump iteration and original-index target set must be nonempty")
-    if int(numbered_iteration) != target_iteration:
-        return (0, 1)
-
-    selected_half_indices = set(
-        np.asarray(experiment_datasets[target_half - 1].dataset_indices, dtype=np.int64).tolist()
-    )
-    missing = sorted(target_indices - selected_half_indices)
-    if missing:
-        raise RuntimeError(
-            "significance dump targets are not all present in the selected half: "
-            f"half={target_half} missing={missing}"
-        )
-    logger.info(
-        "RECOVAR %s diagnostic: iteration=%d entering only half=%d "
-        "for %d target particles; completion is mandatory before returning from the half",
-        "pass-2 norm operand" if pass2_norm_mode else "coarse-significance",
-        int(numbered_iteration),
-        target_half,
-        len(target_indices),
-    )
-    return (target_half - 1,)
-
-
-def _bpref_device_signature_active_for_numbered_half(
-    *,
-    iteration: int,
-    half: int,
-    final_all_data: bool = False,
-    environ=None,
-) -> bool:
-    """Resolve one explicit numbered half boundary for device capture."""
-
-    env = os.environ if environ is None else environ
-    if not str(env.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "")).strip():
-        return False
-    raw_iteration = str(env.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION", "")).strip()
-    raw_half = str(env.get("RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF", "")).strip()
-    if not raw_iteration or not raw_half:
-        raise RuntimeError(
-            "Scoped BPref device capture requires explicit positive "
-            "RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION and half 1 or 2"
-        )
-    try:
-        target_iteration = int(raw_iteration)
-        target_half = int(raw_half)
-    except ValueError as exc:
-        raise ValueError("BPref device capture iteration/half targets must be integers") from exc
-    if target_iteration <= 0 or target_half not in {1, 2}:
-        raise ValueError("BPref device capture requires target iteration > 0 and half 1 or 2")
-    if int(iteration) <= 0 or int(half) not in {1, 2}:
-        raise ValueError("BPref device capture context requires numbered iteration > 0 and half 1 or 2")
-    if final_all_data:
-        return False
-    return int(iteration) == target_iteration and int(half) == target_half
-
 logger = logging.getLogger(__name__)
 
 # RELION parses ``--adaptive_fraction 0.999`` through ``textToFloat`` and
@@ -935,9 +807,11 @@ def _k1_skip_significance_pruning_enabled() -> bool:
 
 
 from recovar.em.dense_single_volume.debug_dumps import (  # noqa: F401
+    _bpref_device_signature_active_for_numbered_half,
     _maybe_dump_noise_update_debug,
     _save_bpref_accumulators,
     _save_iteration_intermediates,
+    _significance_dump_half_indices,
 )
 
 # RELION stores windowFourierTransform(in, out, current_size) as a rectangular

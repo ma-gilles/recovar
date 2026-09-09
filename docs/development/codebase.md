@@ -106,6 +106,14 @@ The controller still has its own active `build_local_hypothesis_layout` binding
 for adaptive parent-layout construction. Patch the call site exercised by the
 test; do not add reverse imports merely to preserve an old monkeypatch location.
 
+[`debug_dumps`](../../recovar/em/dense_single_volume/debug_dumps.py) owns the
+half-selection policy for terminating significance/noise captures and numbered
+BPref device captures, together with iteration dump writers. The controller
+calls those selectors at the same dispatch boundaries and retains diagnostic
+completion/stop control. Selector errors and log messages are unchanged; their
+logger namespace follows `debug_dumps`. Capture state and counters belong to the
+separate diagnostic owner below.
+
 [`helpers.bpref_diagnostics`](../../recovar/em/dense_single_volume/helpers/bpref_diagnostics.py)
 owns the numbered-half capture context, contribution counters, device-panel
 state, capture validation and artifact writers shared by sparse and exact-local

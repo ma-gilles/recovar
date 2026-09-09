@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume import iteration_loop, k_class, local_em_engine
+from recovar.em.dense_single_volume import debug_dumps, iteration_loop, k_class, local_em_engine
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics, sparse_pass2_bucketed
 from recovar.em.dense_single_volume.local_backprojection import compute_local_mstep_sums
 
@@ -27,22 +27,22 @@ def test_device_signature_scope_activates_only_target_numbered_half():
 
     for iteration in range(1, 5):
         for half in (1, 2):
-            assert not iteration_loop._bpref_device_signature_active_for_numbered_half(
+            assert not debug_dumps._bpref_device_signature_active_for_numbered_half(
                 iteration=iteration,
                 half=half,
                 environ=env,
             )
-    assert iteration_loop._bpref_device_signature_active_for_numbered_half(
+    assert debug_dumps._bpref_device_signature_active_for_numbered_half(
         iteration=5,
         half=1,
         environ=env,
     )
-    assert not iteration_loop._bpref_device_signature_active_for_numbered_half(
+    assert not debug_dumps._bpref_device_signature_active_for_numbered_half(
         iteration=5,
         half=2,
         environ=env,
     )
-    assert not iteration_loop._bpref_device_signature_active_for_numbered_half(
+    assert not debug_dumps._bpref_device_signature_active_for_numbered_half(
         iteration=5,
         half=1,
         final_all_data=True,
@@ -59,7 +59,7 @@ def test_device_signature_scope_rejects_missing_or_invalid_target():
         invalid = dict(env)
         invalid.pop(missing)
         with pytest.raises(RuntimeError, match="requires explicit positive"):
-            iteration_loop._bpref_device_signature_active_for_numbered_half(
+            debug_dumps._bpref_device_signature_active_for_numbered_half(
                 iteration=1,
                 half=1,
                 environ=invalid,
@@ -73,7 +73,7 @@ def test_device_signature_scope_rejects_missing_or_invalid_target():
         invalid = dict(env)
         invalid[name] = value
         with pytest.raises((ValueError, RuntimeError)):
-            iteration_loop._bpref_device_signature_active_for_numbered_half(
+            debug_dumps._bpref_device_signature_active_for_numbered_half(
                 iteration=1,
                 half=1,
                 environ=invalid,
@@ -600,12 +600,12 @@ def test_standalone_diagnostics_keep_legacy_flags_without_device_capture(monkeyp
 def test_target_half2_cannot_leak_into_final_all_data_or_local_search(monkeypatch):
     env = _capture_environment()
     env["RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF"] = "2"
-    assert iteration_loop._bpref_device_signature_active_for_numbered_half(
+    assert debug_dumps._bpref_device_signature_active_for_numbered_half(
         iteration=5,
         half=2,
         environ=env,
     )
-    assert not iteration_loop._bpref_device_signature_active_for_numbered_half(
+    assert not debug_dumps._bpref_device_signature_active_for_numbered_half(
         iteration=5,
         half=2,
         final_all_data=True,

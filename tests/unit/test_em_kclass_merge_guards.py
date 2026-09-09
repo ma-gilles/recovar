@@ -48,6 +48,7 @@ import recovar.em.dense_single_volume.helpers.significance as sig_mod
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 import recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed as sparse_pass2_mod
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop
+from recovar.em.dense_single_volume import debug_dumps
 from recovar.em.dense_single_volume import score_outputs
 import recovar.em.dense_single_volume.k_class as k_class_mod
 
@@ -858,13 +859,13 @@ def test_significance_dump_half_selector_is_scoped_to_target_iteration(tmp_path)
         "RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES": "1,3",
     }
 
-    assert iteration_loop._significance_dump_half_indices(
+    assert debug_dumps._significance_dump_half_indices(
         numbered_iteration=1,
         n_classes=1,
         experiment_datasets=datasets,
         environ=environ,
     ) == (0, 1)
-    assert iteration_loop._significance_dump_half_indices(
+    assert debug_dumps._significance_dump_half_indices(
         numbered_iteration=2,
         n_classes=1,
         experiment_datasets=datasets,
@@ -884,7 +885,7 @@ def test_significance_dump_half_selector_fails_closed(tmp_path):
         "RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES": "1",
     }
     with pytest.raises(RuntimeError, match="STOP_AFTER_TARGET"):
-        iteration_loop._significance_dump_half_indices(
+        debug_dumps._significance_dump_half_indices(
             numbered_iteration=2,
             n_classes=1,
             experiment_datasets=datasets,
@@ -895,14 +896,14 @@ def test_significance_dump_half_selector_fails_closed(tmp_path):
     target_missing["RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET"] = "1"
     target_missing["RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES"] = "2"
     with pytest.raises(RuntimeError, match="not all present"):
-        iteration_loop._significance_dump_half_indices(
+        debug_dumps._significance_dump_half_indices(
             numbered_iteration=2,
             n_classes=1,
             experiment_datasets=datasets,
             environ=target_missing,
         )
     with pytest.raises(RuntimeError, match="K=1 diagnostic-only"):
-        iteration_loop._significance_dump_half_indices(
+        debug_dumps._significance_dump_half_indices(
             numbered_iteration=2,
             n_classes=4,
             experiment_datasets=datasets,
@@ -924,13 +925,13 @@ def test_pass2_norm_dump_half_selector_reaches_only_target_half(tmp_path):
         "RECOVAR_PASS2_DUMP_ORIGINAL_INDICES": "1,3",
     }
 
-    assert iteration_loop._significance_dump_half_indices(
+    assert debug_dumps._significance_dump_half_indices(
         numbered_iteration=1,
         n_classes=1,
         experiment_datasets=datasets,
         environ=environ,
     ) == (0, 1)
-    assert iteration_loop._significance_dump_half_indices(
+    assert debug_dumps._significance_dump_half_indices(
         numbered_iteration=2,
         n_classes=1,
         experiment_datasets=datasets,
@@ -950,21 +951,21 @@ def test_pass2_norm_dump_half_selector_fails_closed(tmp_path):
         "RECOVAR_PASS2_DUMP_ORIGINAL_INDICES": "1",
     }
     with pytest.raises(RuntimeError, match="NORM_RESIDUAL_INPUTS"):
-        iteration_loop._significance_dump_half_indices(
+        debug_dumps._significance_dump_half_indices(
             numbered_iteration=2,
             n_classes=1,
             experiment_datasets=datasets,
             environ=base,
         )
     with pytest.raises(RuntimeError, match="NORM_RESIDUAL_STOP_AFTER_TARGET"):
-        iteration_loop._significance_dump_half_indices(
+        debug_dumps._significance_dump_half_indices(
             numbered_iteration=2,
             n_classes=1,
             experiment_datasets=datasets,
             environ={**base, "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS": "1"},
         )
     with pytest.raises(RuntimeError, match="mutually exclusive"):
-        iteration_loop._significance_dump_half_indices(
+        debug_dumps._significance_dump_half_indices(
             numbered_iteration=2,
             n_classes=1,
             experiment_datasets=datasets,
