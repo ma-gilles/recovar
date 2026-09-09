@@ -17,14 +17,19 @@ explicitly skipped for a known pixel-ordering mismatch. That skip also exists
 at pinned PR158 `44d770de3f`; it remains an unresolved coverage gap. No test
 assertion failed, but the full 223-case native panel is not accepted. The
 sequential launcher stopped before API execution. Independent H100 job
-**13634313** now runs the unchanged 604-case API panel; results remain pending.
+**13634313** completed the unchanged 604-case API panel: **592 passed, 12
+failed**, no skips, in 686.27 seconds. Exact case identities and unchanged
+source, libraries and baselines are verified. The panel is not accepted.
 Two newly imported operand-order cases fail while patching the removed
 `local_engine._sparse_pass2_diagnostics` alias. Test-only repair `21bb76086`
 imports the canonical `helpers.sparse_pass2_bucketed` owner directly. Reversing
 that import/patch-target mapping produces the identical complete test-module
 AST; all assertions and production source remain unchanged. Both cases pass
-on H100 in 3.53 seconds in targeted job **13634507**. The full original API
-panel remains frozen and running; its failures will not be overwritten.
+on H100 in 3.53 seconds in targeted job **13634507**. The original failed
+result remains preserved. Ten other failures remain for focused review:
+three unbound projector-size closure cases, three normalization dtype/bitwise
+checks, one result-comparison case and three source-contract guards. These
+are failure descriptions, not conclusions about correctness or roundoff.
 
 The launcher checks exact collected and executed case identities, rejects
 unexpected skips, and verifies source,
@@ -52,6 +57,14 @@ Its logs and XML are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr179_operand_caller_20260909/`;
 the corresponding `pr179_operand_caller_20260909` directory under the review
 root above contains the pinned inputs and `api_only.sbatch` reproduction script.
+
+VDAM has resumed its private quality audit and speed monitoring at `5056e760d`,
+based on d21. It owns `scripts/run_vdam_prepared_estep_replay.py` and
+`tests/unit/initial_model/test_prepared_estep_replay.py`; production source is
+read-only pending a bounded ownership request. Its replay and existing 100k
+sources stay frozen. em_clean retains shared status/docs, publication and
+GPU/API qualification. The coordination handoff
+`em_clean_vdam_resume_ack_20260909.json` records the current scope and jobs.
 
 ## Structural cleanup after VDAM integration — September 9
 
