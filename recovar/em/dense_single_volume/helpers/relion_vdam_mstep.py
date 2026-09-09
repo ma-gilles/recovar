@@ -231,6 +231,12 @@ def relion_vdam_m_step_device(
     # Projector setup already supplies the inclusive decenter sphere. Its
     # +Nyquist-only native coordinates are retained by the shared FFTW window.
     fft_half = _relion_window_centered_half_fourier(updated, (capacity,) * 3, (fft_size,) * 3)
+    # Backprojection symmetry leaves DC untouched, so gradient moments can
+    # retain an imaginary residue. A real inverse FFT ignores this component,
+    # but cuFFT C2R requires DC to be real to avoid undefined output.
+    dc = (fft_size // 2, fft_size // 2, 0)
+    dc_real = fft_half[dc].real
+    fft_half = fft_half.at[dc].set(_complex(dc_real, jnp.zeros_like(dc_real)))
     real = ftu.get_idft3_real(fft_half, (fft_size,) * 3, norm="forward")
     start = (fft_size - ori_size) // 2
     real = real[start : start + ori_size, start : start + ori_size, start : start + ori_size]
