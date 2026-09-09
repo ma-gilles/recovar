@@ -9,7 +9,6 @@ import os
 import subprocess
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -93,26 +92,12 @@ from recovar.em.dense_single_volume.helpers.preprocessing import (
 )
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_noise_block as _compute_noise_block,
-)
-from recovar.em.dense_single_volume.helpers.projection import (
     compute_norm_residual_per_image as _compute_norm_residual_per_image,
-)
-from recovar.em.dense_single_volume.helpers.projection import (
     compute_projections_block as _compute_projections_block,
-)
-from recovar.em.dense_single_volume.helpers.projection import (
     compute_relion_projector_projections_block as _compute_relion_projector_projections_block,
-)
-from recovar.em.dense_single_volume.helpers.projection import (
     compute_scale_correction_terms_per_image as _compute_scale_correction_terms_per_image,
-)
-from recovar.em.dense_single_volume.helpers.projection import (
     indexed_projection_available as _indexed_projection_available,
-)
-from recovar.em.dense_single_volume.helpers.projection import (
     project_indexed_half_spectrum as _project_indexed_half_spectrum,
-)
-from recovar.em.dense_single_volume.helpers.projection import (
     relion_scale_correction_pixel_mask as _relion_scale_correction_pixel_mask,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
@@ -148,13 +133,7 @@ from recovar.em.dense_single_volume.local_big_jit import (
 from recovar.em.dense_single_volume.local_big_jit import (
     _preprocess_half as _big_jit_preprocess_half,
 )
-from recovar.em.dense_single_volume.local_caches import (  # noqa: F401
-    EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB,
-    EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV,
-    EXACT_LOCAL_RAW_CACHE_MAX_GB,
-    EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
-    EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB,
-    EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
+from recovar.em.dense_single_volume.local_caches import (
     _all_integer_pre_shifts_or_none,
     _build_local_processed_half_cache,
     _build_local_raw_cache,
@@ -198,18 +177,12 @@ from recovar.em.dense_single_volume.local_score_pass import (
     score_local_bucket_abs2_on_demand,
     score_local_bucket_abs2_weighted_on_demand,
 )
-from recovar.em.dense_single_volume.local_timing import (  # noqa: F401
+from recovar.em.dense_single_volume.local_timing import (
     LocalBucketProgress,
-    _LOCAL_ACCOUNTED_TIMING_FIELDS,
-    _LOCAL_ACCOUNTED_TIMING_SETUP_FIELDS,
-    _LOCAL_PREPROCESS_TIMER_KEYS,
-    _LOCAL_TIMING_PROFILE_FIELDS,
-    _LOCAL_TRANSFER_TIMER_KEYS,
     _local_timing_profile,
     _LocalTiming,
     _new_local_preprocess_timer,
     _new_local_transfer_timer,
-    _new_zero_timer,
     _prefixed_timer_profile,
 )
 from recovar.em.dense_single_volume.shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
@@ -3459,7 +3432,6 @@ def run_local_em_exact(
     debug_target_only_original_image_count = int(
         sum(int(bucket.image_indices.shape[0]) for bucket in bucket_specs)
     )
-    debug_target_only_original_rotations = int(total_local_rotations)
     if debug_score_dump_target_only:
         filter_t0 = time.time()
         bucket_specs = _filter_buckets_to_debug_targets(
@@ -3637,7 +3609,6 @@ def run_local_em_exact(
     )
     use_relion_projector = relion_projector_half is not None
     compact_relion_projector_big_jit = bool(use_relion_projector and window_spec.use_window)
-    relion_projector_big_jit_supported = bool(use_relion_projector and (not use_window or compact_relion_projector_big_jit))
     disable_big_jit_buckets = os.environ.get("RECOVAR_DISABLE_LOCAL_BIG_JIT", "").lower() in {
         "1",
         "true",
@@ -3653,8 +3624,7 @@ def run_local_em_exact(
         store_recon_half=bool(score_with_masked_images),
     )
     use_big_jit_buckets = (
-        ((not use_relion_projector) or relion_projector_big_jit_supported)
-        and not disable_big_jit_buckets
+        not disable_big_jit_buckets
         and not return_reconstruction_probability_values
         and not (accumulate_noise and debug_noise_dump_dir is not None)
         and not processed_half_cache_preferred

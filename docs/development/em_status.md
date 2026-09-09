@@ -34,7 +34,7 @@ in place of FSC/FSC-AUC. Follow the [EM operating contract](../../recovar/em/AGE
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest structural source checkpoint | `121144413`: local projection result assembly; local engine 8,229 lines, sparse scorer 17,383, half scorer 1,358, controller 6,123 |
+| Latest structural source checkpoint | Local routing/import cleanup following `121144413`; local engine 8,199 lines, sparse scorer 17,383, half scorer 1,358, controller 6,123 |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
 | Incorporated history | PR180 `1e2f229b3`; cleanup anchor `0b52c995a`; VDAM merge `c38fc62f0`; separate global-window correction `0219caa35` |
 | Publication | [Draft PR179](https://github.com/ma-gilles/recovar/pull/179), stacked on [PR158](https://github.com/ma-gilles/recovar/pull/158); em_clean is sole integrator/publisher |
@@ -48,8 +48,7 @@ as well as structural cleanup.
 
 em_clean owns shared docs/status and publication. EM remains paused; its frozen
 sources/jobs stay untouched. VDAM's private source-Euler repair is based on
-`bae959dab`, on `codex/vdam-source-euler-metadata-20260909`; ten Python owners
-plus the oversampling forwarder are private scope only. Host metadata stays
+`bae959dab`, on `codex/vdam-source-euler-metadata-20260909`; 12 EM Python owners and three tests are private scope only. Host metadata stays
 outside JIT/FFI; no shared source adoption or native build is assigned by that
 handoff. Precision proposal `907b02ce` remains private/unmerged. Raw-prefetch
 source is unassigned. The RELION header lock is released: five diagnostic
@@ -61,15 +60,18 @@ jobs and preserve source snapshots while their jobs run.
 
 ## Engineering work and recent evidence
 
-The latest cleanup consolidates local projection result assembly while keeping
-all three backend call ASTs and the remaining engine AST unchanged. Source
-`121144413` passes 83 focused CPU cases and the 38-case guard; sealed old/new
-replay covers 80 valid configurations and nine error cases with exact output
-bytes/dtypes/shapes and backend/cast calls. Engine size falls 8,256 → 8,229 lines;
-the main routine still has 5,665 lines and needs further cleanup. No new GPU or
-trajectory claim follows. Reproduction and receipts:
-`hia_source_review_20260906/local_projection_results_20260909/` under the
-implementation checkout's parent directory.
+The latest batch removes a tautological projector eligibility condition, an
+unread debug counter and 13 stale imports; eight adjacent imports from the
+projection owner are grouped together. The window alias is immutable and all
+128 routing combinations are unchanged. The import-only follow-up preserves
+the executable AST. Existing routing/debug/cache coverage passes 11 CPU cases
+(seven routing cases also pass on the control); the final guard passes 38.
+No tests or tolerances changed. Engine size falls 8,229 → 8,199 lines; the main
+routine still has 5,662 lines. No GPU or runtime qualification follows.
+Commands, original/new source fingerprints and receipts:
+`hia_source_review_20260906/local_engine_import_cleanup_20260909/` under the
+implementation checkout's parent directory. The prior projection-assembly
+checkpoint and its 83-case panel remain recorded in the linked archive.
 
 Earlier checkpoints gave projection caching, progress reporting and VDAM block-map
 serialization explicit owners; the [codebase map](codebase.md) identifies them.
@@ -93,20 +95,23 @@ records all four registered-GT conditions passing across 201 checkpoints on
 private `bae959dab`, while all four strict cross-engine FSC histories fail
 0.999, first at 71. It does not qualify the newer primary composition or 100k runs.
 
-Latest private accuracy20 evidence isolates a source-Euler roundtrip: swapping
-only the Euler triple reverses trial 16's 4.6/5.1 crossing in both incoming-state
-bases. VDAM reports two radius-15 pixels moving between squared radius 225 and
-225 + one ULP, changing SNR 4.6004183 → 4.613779 across 4.60517. The existing
-native sampler recovers source Euler values bitwise at last update 8. The private
-repair's baseline is 32 passed/126 deselected; repaired behavior is not yet
-qualified. See board handoff `vdam_source_euler_repair_assigned_20260909.json`
-and the integrator's `em_clean_accuracy20_private_capture_ack_20260909.json`.
-No scoring-precision, cutoff or kernel change follows from this metadata finding.
+The private Euler repair `df9975ee2` preserves the native source triple instead
+of deriving it from a float32 matrix. Peer H100 prefix20 job13647974 reports
+100 exact angular/translation crossings and Euler triples, 21 passing map gates
+(minimum cross-FSC-AUC 0.99999999957), 657 available discrete comparisons exact
+and 36 unavailable. Pmax maximum is 8e-5 versus native_off1 and 1.89e-4 across
+three controls; saved Euler/origin maxima are 5e-6. Full200 and broader gates
+remain open. Integrator review verifies 15 source hashes and no textual merge
+conflicts, but reproduces metadata loss in `_local_layout_for_class` with
+class-specific priors. Forwarding plus a regression is required before shared
+K-class coverage acceptance. Review: board handoff
+`em_clean_source_euler_readonly_review_20260909.json`. No source adoption,
+scoring-precision change, cutoff change or duplicate GPU run is assigned.
 
 Next work:
 
-1. Check local projection routing predicates and setup data flow for demonstrated
-   redundancy; preserve backend selection, JIT boundaries and allocation lifetime.
+1. Continue separating local execution stages and setup data flow; preserve
+   backend selection, JIT boundaries and allocation lifetime.
 2. Review the private Euler repair at a clean handoff, with a failing regression
    and fixed-state evidence before integration. Keep numerical review separate
    from structural cleanup and precision907.
@@ -182,4 +187,4 @@ The old 100k saved cross-FSC has final AUC 0.9924569/minimum 0.9900306 at 70;
 its GT registration remains unqualified. All raw receipts, incomplete controller
 summaries, native-capture limits and earlier timings remain in the
 [full checkpoint archive](em_cleanup_history_20260909_121144413.md#frozen-jobs-and-representative-performance).
-No new jobs or builds were launched for this docs-only consolidation.
+No new GPU jobs or builds were launched for this cleanup batch.
