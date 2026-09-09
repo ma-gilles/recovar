@@ -19,7 +19,7 @@ from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_co
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume import fixed_capacity_local
+from recovar.em.dense_single_volume import fixed_capacity_local, local_preprocessing
 from recovar.em.dense_single_volume.projector_preparation import prepare_local_projector_slab
 from recovar.em.dense_single_volume import local_projection_cache as projection_cache
 from recovar.em.dense_single_volume.helpers import relion_ctf
@@ -72,20 +72,12 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
     relion_x_half_mstep_accumulator_dtypes,
 )
 from recovar.em.dense_single_volume.helpers.image_shifts import (
-    apply_relion_integer_pre_shifts,
     integer_pre_shifts_or_none,
     tiled_half_image_phase_factors,
 )
 from recovar.em.dense_single_volume.helpers.jax_runtime import block_until_ready as _block_until_ready
 from recovar.em.dense_single_volume.helpers.preprocessing import (
-    _cast_shift_inputs,
-    _norm_inputs,
-    prepare_batch_preprocess_operands,
-    process_half_image,
     resolve_image_mask_for_half_preprocess,
-)
-from recovar.em.dense_single_volume.helpers.preprocessing import (
-    apply_half_translation_phases as _apply_half_translation_phases,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     half_translation_phase_table as _half_translation_phase_table,
@@ -130,16 +122,12 @@ from recovar.em.dense_single_volume.local_big_jit import (
     run_fixed_capacity_segmented_local_scan,
     run_local_bucket_big_jit,
 )
-from recovar.em.dense_single_volume.local_big_jit import (
-    _preprocess_half as _big_jit_preprocess_half,
-)
 from recovar.em.dense_single_volume.local_caches import (
     _all_integer_pre_shifts_or_none,
     _build_local_processed_half_cache,
     _build_local_raw_cache,
     _local_processed_half_cache_enabled,
     _local_raw_cache_enabled,
-    _LocalProcessedHalfCache,
     _sparse_big_jit_mstep_tensors_memory_gb,
     _validate_native_half_batch,
 )
@@ -2136,314 +2124,6 @@ def _reorder_bucket_to_indices(bucket: LocalBucketSpec, returned_indices: np.nda
         local_sample_mask=(
             None if bucket.local_sample_mask is None else np.asarray(bucket.local_sample_mask[order], dtype=bool)
         ),
-    )
-
-
-def _prepare_local_exact_bucket(
-    experiment_dataset,
-    batch,
-    ctf_params,
-    image_indices,
-    noise_variance_half,
-    translation_phases_half,
-    config,
-    norm_half_weights,
-    score_with_masked_images: bool,
-    relion_score_translation_angles=None,
-    image_pre_shifts=None,
-    processed_half_cache: _LocalProcessedHalfCache | None = None,
-    timer: dict[str, float] | None = None,
-    synchronize_profile: bool = False,
-    score_complex_dtype=None,
-    score_real_dtype=None,
-    norm_real_dtype=None,
-    relion_exact_bpref_operands: bool = False,
-):
-    """Prepare score, reconstruction, and noise inputs for one local bucket.
-
-    This keeps the exact-local path separate from the dense engine and avoids
-    recomputing CTF / translation tiling scaffolding across masked, unmasked,
-    and noise-specific preprocessing.
-    """
-
-    integer_t0 = time.time()
-    real_space_pre_shift_applied = False
-    if processed_half_cache is None or not processed_half_cache.integer_pre_shifts_applied:
-        integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, image_indices, batch=batch)
-        if integer_pre_shifts is not None:
-            batch = apply_relion_integer_pre_shifts(batch, integer_pre_shifts)
-            real_space_pre_shift_applied = True
-    else:
-        integer_pre_shifts = None
-        real_space_pre_shift_applied = True
-    if timer is not None:
-        timer["integer_shift_s"] += time.time() - integer_t0
-
-    phase_t0 = time.time()
-    translation_phases_half = jnp.asarray(translation_phases_half)
-    raw_translations = translation_phases_half.shape[-1] == len(config.image_shape)
-    if raw_translations:
-        # Backward compatibility for tests and direct callers that pass raw
-        # translations instead of the precomputed phase table used by the hot path.
-        translation_phases_half = _half_translation_phase_table(
-            translation_phases_half,
-            config.image_shape,
-        )
-    if raw_translations and synchronize_profile:
-        _block_until_ready(translation_phases_half)
-    if raw_translations and timer is not None:
-        timer["translation_phase_s"] += time.time() - phase_t0
-
-    exact_image_mask = None
-    exact_image_mask_mode = None
-    if relion_exact_bpref_operands:
-        exact_image_mask, exact_image_mask_mode = resolve_image_mask_for_half_preprocess(
-            experiment_dataset,
-            config.image_shape,
-            require_mask=score_with_masked_images,
-        )
-
-    def _process_half(apply_image_mask: bool):
-        if relion_exact_bpref_operands:
-            # Contribution capture forces the split scorer, but its operands
-            # must still be those of the production big-JIT path.  In
-            # particular, do not fall back through the image-source backend:
-            # a relion_cuda source requires separate normalization/shift
-            # operands and would introduce a different preprocessing graph.
-            return _big_jit_preprocess_half(
-                jnp.asarray(batch),
-                jnp.asarray(exact_image_mask),
-                config,
-                apply_image_mask=apply_image_mask,
-                mask_mode=exact_image_mask_mode,
-            )
-        # Integer shifts are applied to ``batch`` above and image/scale
-        # corrections are applied to the Fourier result by the caller.  The
-        # strict RELION CUDA backend still requires explicit typed operands at
-        # its boundary, so provide the corresponding identity values here.
-        # Other backends receive ``None`` and retain their existing path.
-        _, _, _, _, relion_preprocess_kwargs = prepare_batch_preprocess_operands(
-            experiment_dataset,
-            batch,
-            image_indices,
-        )
-        return process_half_image(
-            experiment_dataset,
-            batch,
-            apply_image_mask,
-            relion_preprocess_kwargs=relion_preprocess_kwargs,
-        )
-
-    ctf_t0 = time.time()
-    if relion_exact_bpref_operands:
-        ctf_rfloat = np.asarray(
-            relion_ctf._relion_exact_ctf_half_from_source_star_host(
-                experiment_dataset,
-                image_indices,
-                config.image_shape,
-            ),
-            dtype=np.float64,
-        )
-        inverse_noise_rfloat_cast = np.reciprocal(
-            np.asarray(noise_variance_half, dtype=np.float64)
-        ).astype(np.float32)
-        ctf_half = jnp.asarray(ctf_rfloat, dtype=jnp.float64).astype(jnp.float32)
-        inverse_noise_half = jnp.asarray(inverse_noise_rfloat_cast, dtype=jnp.float32)
-        weighted_ctf_half = ctf_half * inverse_noise_half[None, :]
-        ctf2_over_nv_recon_half = weighted_ctf_half * ctf_half
-        ctf2_over_nv_score_half = jnp.asarray(
-            (
-                inverse_noise_rfloat_cast[None, :].astype(np.float64)
-                * ctf_rfloat
-                * ctf_rfloat
-            ).astype(np.float32),
-            dtype=jnp.float32,
-        )
-    else:
-        ctf_eval_params = (
-            jnp.asarray(ctf_params, dtype=score_real_dtype)
-            if score_real_dtype is not None
-            else ctf_params
-        )
-        ctf_half = config.compute_ctf_half(ctf_eval_params)
-        ctf2_over_nv_ctf = ctf_half.astype(score_real_dtype) if score_real_dtype is not None else ctf_half
-        ctf2_over_nv_noise = (
-            noise_variance_half.astype(score_real_dtype) if score_real_dtype is not None else noise_variance_half
-        )
-        ctf2_over_nv_recon_half = ctf2_over_nv_ctf**2 / ctf2_over_nv_noise
-        ctf2_over_nv_score_half = ctf2_over_nv_recon_half
-        weighted_ctf_half = None
-    if synchronize_profile:
-        _block_until_ready(ctf2_over_nv_score_half, ctf2_over_nv_recon_half)
-    if timer is not None:
-        timer["ctf_s"] += time.time() - ctf_t0
-
-    if processed_half_cache is None:
-        score_process_t0 = time.time()
-        processed_score_half = _process_half(score_with_masked_images)
-        if synchronize_profile:
-            _block_until_ready(processed_score_half)
-        if timer is not None:
-            timer["score_process_s"] += time.time() - score_process_t0
-    else:
-        cache_fetch_t0 = time.time()
-        processed_score_half = jnp.asarray(processed_half_cache.score_half[np.asarray(image_indices, dtype=np.int32)])
-        if timer is not None:
-            timer["cache_fetch_s"] += time.time() - cache_fetch_t0
-
-    shift_score_t0 = time.time()
-    shift_processed_score_half, shift_ctf_half, shift_noise_half, shift_phases_half = _cast_shift_inputs(
-        processed_score_half,
-        ctf_half,
-        noise_variance_half,
-        translation_phases_half,
-        score_complex_dtype=score_complex_dtype,
-        score_real_dtype=score_real_dtype,
-    )
-    score_weighted_half = (
-        shift_processed_score_half * weighted_ctf_half
-        if relion_exact_bpref_operands
-        else shift_processed_score_half * shift_ctf_half / shift_noise_half
-    )
-    if relion_score_translation_angles is not None:
-        from recovar import cuda_backproject
-
-        translation_dtype = jnp.asarray(relion_score_translation_angles).dtype
-
-        def _cuda_translate(weighted_half):
-            pixel_indices = jnp.arange(weighted_half.shape[1], dtype=jnp.int32)
-            if translation_dtype == jnp.dtype(jnp.float64):
-                return cuda_backproject.relion_translate_score_f64(
-                    jnp.asarray(weighted_half, dtype=jnp.complex128),
-                    jnp.asarray(relion_score_translation_angles, dtype=jnp.float64),
-                    pixel_indices,
-                    config.image_shape,
-                )
-            return cuda_backproject.relion_translate_score_f32(
-                jnp.asarray(weighted_half, dtype=jnp.complex64),
-                jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
-                pixel_indices,
-                config.image_shape,
-            )
-
-        shifted_score_half = _cuda_translate(score_weighted_half)
-    else:
-        shifted_score_half = _apply_half_translation_phases(score_weighted_half, shift_phases_half)
-    if synchronize_profile:
-        _block_until_ready(shifted_score_half)
-    if timer is not None:
-        timer["tile_shift_score_s"] += time.time() - shift_score_t0
-
-    norm_t0 = time.time()
-    norm_processed_score_half, norm_noise_half, norm_weights = _norm_inputs(
-        processed_score_half,
-        noise_variance_half,
-        norm_half_weights,
-        norm_real_dtype=norm_real_dtype,
-    )
-    norm_power_over_noise = (
-        jnp.abs(norm_processed_score_half) ** 2
-        * inverse_noise_half.astype(norm_processed_score_half.real.dtype)[None, :]
-        if relion_exact_bpref_operands
-        else jnp.abs(norm_processed_score_half) ** 2 / norm_noise_half
-    )
-    batch_norm = jnp.sum(
-        norm_power_over_noise * norm_weights[None, :],
-        axis=-1,
-        keepdims=True,
-    ).real
-    if synchronize_profile:
-        _block_until_ready(batch_norm)
-    if timer is not None:
-        timer["norm_s"] += time.time() - norm_t0
-
-    if score_with_masked_images:
-        if processed_half_cache is None:
-            recon_process_t0 = time.time()
-            processed_recon_half = _process_half(False)
-            if synchronize_profile:
-                _block_until_ready(processed_recon_half)
-            if timer is not None:
-                timer["recon_process_s"] += time.time() - recon_process_t0
-        else:
-            cache_fetch_t0 = time.time()
-            if processed_half_cache.recon_half is None:
-                raise RuntimeError("processed half-image cache is missing unmasked reconstruction images")
-            processed_recon_half = jnp.asarray(
-                processed_half_cache.recon_half[np.asarray(image_indices, dtype=np.int32)]
-            )
-            if timer is not None:
-                timer["cache_fetch_s"] += time.time() - cache_fetch_t0
-
-        shift_recon_t0 = time.time()
-        shift_processed_recon_half, shift_ctf_half, shift_noise_half, shift_phases_half = _cast_shift_inputs(
-            processed_recon_half,
-            ctf_half,
-            noise_variance_half,
-            translation_phases_half,
-            score_complex_dtype=score_complex_dtype,
-            score_real_dtype=score_real_dtype,
-        )
-        recon_weighted_half = (
-            shift_processed_recon_half * weighted_ctf_half
-            if relion_exact_bpref_operands
-            else shift_processed_recon_half * shift_ctf_half / shift_noise_half
-        )
-        if relion_exact_bpref_operands:
-            if relion_score_translation_angles is None:
-                raise ValueError(
-                    "exact RELION BPref operands require RELION translation angles"
-                )
-            from recovar import cuda_backproject
-
-            shifted_recon_half = cuda_backproject.relion_translate_bpref_f32(
-                jnp.asarray(processed_recon_half, dtype=jnp.complex64),
-                jnp.asarray(weighted_ctf_half, dtype=jnp.float32),
-                jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
-                jnp.arange(processed_recon_half.shape[1], dtype=jnp.int32),
-                config.image_shape,
-            )
-        elif relion_score_translation_angles is not None and translation_dtype == jnp.dtype(jnp.float64):
-            shifted_recon_half = _cuda_translate(recon_weighted_half)
-        else:
-            shifted_recon_half = _apply_half_translation_phases(
-                recon_weighted_half,
-                shift_phases_half,
-            )
-        if synchronize_profile:
-            _block_until_ready(shifted_recon_half)
-        if timer is not None:
-            timer["tile_shift_recon_s"] += time.time() - shift_recon_t0
-    else:
-        if relion_exact_bpref_operands:
-            if relion_score_translation_angles is None:
-                raise ValueError(
-                    "exact RELION BPref operands require RELION translation angles"
-                )
-            from recovar import cuda_backproject
-
-            shifted_recon_half = cuda_backproject.relion_translate_bpref_f32(
-                jnp.asarray(processed_score_half, dtype=jnp.complex64),
-                jnp.asarray(weighted_ctf_half, dtype=jnp.float32),
-                jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
-                jnp.arange(processed_score_half.shape[1], dtype=jnp.int32),
-                config.image_shape,
-            )
-        elif relion_score_translation_angles is None or translation_dtype == jnp.dtype(jnp.float64):
-            shifted_recon_half = shifted_score_half
-        else:
-            shifted_recon_half = _apply_half_translation_phases(
-                score_weighted_half,
-                shift_phases_half,
-            )
-    return (
-        shifted_score_half,
-        shifted_recon_half,
-        batch_norm,
-        ctf2_over_nv_score_half,
-        ctf2_over_nv_recon_half,
-        processed_score_half,
-        real_space_pre_shift_applied,
     )
 
 
@@ -6584,7 +6264,7 @@ def run_local_em_exact(
             ctf2_over_nv_recon_half,
             processed_score_half,
             real_space_pre_shift_applied,
-        ) = _prepare_local_exact_bucket(
+        ) = local_preprocessing.prepare_local_bucket(
             experiment_dataset,
             batch_data,
             ctf_params,
@@ -7996,195 +7676,184 @@ def run_local_em_exact(
             0.0 if n_images == 0 else total_significant_samples / n_images,
         )
 
-    if not return_profile:
-        return LocalEMResult(
-            Ft_y=Ft_y,
-            Ft_ctf=Ft_ctf,
-            hard_assignments=hard_assignment,
-            stats=relion_stats,
-            best_pose_rotations=best_pose_rotations if return_best_pose_details else None,
-            best_pose_translations=best_pose_translations if return_best_pose_details else None,
-            best_pose_rotation_ids=best_pose_rotation_ids if return_best_pose_details else None,
-            noise_stats=noise_stats if accumulate_noise else None,
-            significant_counts=significant_counts if return_significant_counts else None,
-        )
-
-    _block_until_ready(Ft_y, Ft_ctf)
-    total_wall_time = time.time() - overall_t0
-    profile_summary = {
-        "big_jit_bucket_count": np.int32(big_jit_bucket_count),
-        "sparse_big_jit_bucket_count": np.int32(sparse_big_jit_bucket_count),
-        "big_jit_debug_bucket_count": np.int32(big_jit_debug_bucket_count),
-        "score_only": np.asarray(score_only),
-        "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
-        "defer_local_noise_projection": np.asarray(defer_local_noise_projection),
-        "bucket_build_time_s": np.float64(timing.bucket_build_s),
-        "raw_cache_build_time_s": np.float64(timing.raw_cache_build_s),
-        "raw_cache_enabled": np.asarray(raw_cache_enabled),
-        "processed_half_cache_enabled": np.asarray(processed_half_cache_enabled),
-        "relion_projection_cache_enabled": np.asarray(relion_projection_cache_groups_built > 0),
-        "relion_projection_cache_groups": np.int64(len(projection_cache_plan.groups)),
-        "relion_projection_cache_groups_built": np.int64(relion_projection_cache_groups_built),
-        "relion_projection_cache_rows": np.int64(relion_projection_cache_max_rows),
-        "relion_projection_cache_capacity_rows": np.int64(projection_cache_plan.capacity_rows),
-        "relion_projection_cache_id_map_rows": np.int64(relion_projection_cache_id_map_rows),
-        "relion_projection_cache_pixels": np.int64(projection_cache_plan.projection_pixels),
-        "relion_projection_cache_estimated_gb": np.float64(relion_projection_cache_max_estimated_gb),
-        "relion_projection_cache_build_s": np.float64(relion_projection_cache_total_build_s),
-        "relion_projection_cache_cap_gb": np.float64(projection_cache_plan.budget_gb),
-        "batch_fetch_time_s": np.float64(timing.batch_fetch_s),
-        "preprocess_time_s": np.float64(timing.preprocess_s),
-        **_prefixed_timer_profile("preprocess_", preprocess_profile),
-        **_prefixed_timer_profile("transfer_", transfer_profile),
-        "transfer_total_to_host_s": np.float64(sum(transfer_profile.values())),
-        **_local_timing_profile(timing),
-        "em_time_s": np.float64(total_wall_time),
-        "accounted_em_time_s": np.float64(timing.accounted_s()),
-        "unattributed_em_time_s": np.float64(max(total_wall_time - timing.accounted_s(), 0.0)),
-        "n_chunks": np.int32(n_chunks),
-        "projection_mode": np.asarray(projection_mode),
-        "n_projection_windowed": np.int32(window_spec.n_projection),
-        "big_jit_projection_pixels": np.int32(big_jit_projection_pixel_count),
-        "chunk_sizes": np.asarray(chunk_sizes, dtype=np.int32),
-        "chunk_padded_image_counts": np.asarray(
-            chunk_padded_image_counts,
-            dtype=np.int32,
-        ),
-        "chunk_planned_padded_image_counts": np.asarray(
-            chunk_planned_padded_image_counts,
-            dtype=np.int32,
-        ),
-        "chunk_local_rotations": np.asarray(chunk_local_rotations, dtype=np.int32),
-        "chunk_padded_rotations": np.asarray(chunk_padded_rotations, dtype=np.int32),
-        "flat_local_rows_enabled": np.asarray(flat_local_rows_enabled),
-        "stable_flat_row_capacity_enabled": np.asarray(
-            stable_flat_row_capacity_enabled
-        ),
-        "packed_local_projection_enabled": np.asarray(
-            packed_local_projection_enabled
-        ),
-        "fused_pair_fine_score_enabled": np.asarray(
-            fused_pair_fine_score_enabled
-        ),
-        "fused_pair_fine_score_default_enabled": np.asarray(False),
-        "fused_pair_fine_uses_shared_compact_order": np.asarray(
-            fused_pair_fine_score_enabled
-        ),
-        "fused_pair_fine_avoids_pair_pixel_gathers": np.asarray(
-            fused_pair_fine_score_enabled
-        ),
-        "fused_pair_fine_restores_dense_posterior_order": np.asarray(
-            fused_pair_fine_score_enabled
-        ),
-        "defer_packed_vdam_enabled": np.asarray(defer_packed_vdam_enabled),
-        "stable_fourier_window_shapes": np.asarray(stable_window_active),
-        "stable_fourier_window_quantum": np.int32(resolved_window_quantum),
-        "logical_current_size": np.int32(logical_current_size),
-        "physical_current_size": np.int32(physical_current_size),
-        "logical_reconstruction_pixels": np.int32(
-            stable_window_plan.logical_reconstruction_pixels
-        ),
-        "physical_reconstruction_pixels": np.int32(window_spec.n_recon),
-        "packed_final_noise_enabled": np.asarray(packed_final_noise_enabled),
-        "packed_vdam_reuses_flat_score_projection": np.asarray(
-            defer_packed_vdam_enabled and accumulate_noise
-        ),
-        "packed_vdam_avoids_dense_noise_rows": np.asarray(
-            packed_final_noise_enabled and accumulate_noise
-        ),
-        "packed_final_noise_preserves_dense_scalar_order": np.asarray(
-            packed_final_noise_enabled and accumulate_noise
-        ),
-        "chunk_flat_score_rows": np.asarray(chunk_flat_score_rows, dtype=np.int32),
-        "chunk_fused_pair_capacities": np.asarray(
-            chunk_fused_pair_capacities,
-            dtype=np.int32,
-        ),
-        "chunk_fused_pair_counts": np.asarray(
-            chunk_fused_pair_counts,
-            dtype=np.int64,
-        ),
-        "chunk_fused_pair_dense_capacities": np.asarray(
-            chunk_fused_pair_dense_capacities,
-            dtype=np.int64,
-        ),
-        "chunk_planned_padded_rotations": np.asarray(
-            chunk_planned_padded_rotations,
-            dtype=np.int32,
-        ),
-        "chunk_unique_rotations": np.asarray(chunk_unique_rotations, dtype=np.int32),
-        "chunk_nonzero_posterior_rows": np.asarray(chunk_nonzero_posterior_rows, dtype=np.int32),
-        "chunk_reconstruction_rows": np.asarray(chunk_reconstruction_rows, dtype=np.int32),
-        "chunk_significant_samples": np.asarray(chunk_significant_samples, dtype=np.int32),
-        "sum_union_rows": np.int64(total_local_rotations),
-        "sum_padded_rows": np.int64(total_padded_rotations),
-        "sum_flat_score_rows": np.int64(total_flat_score_rows),
-        "sum_fused_pair_candidates": np.int64(total_fused_pair_candidates),
-        "sum_fused_pair_capacity": np.int64(total_fused_pair_capacity),
-        "sum_fused_pair_dense_capacity": np.int64(
-            total_fused_pair_dense_capacity
-        ),
-        "fused_pair_valid_fraction_of_dense": np.float64(
-            0.0
-            if total_fused_pair_dense_capacity == 0
-            else total_fused_pair_candidates / total_fused_pair_dense_capacity
-        ),
-        "fused_pair_padded_fraction_of_dense": np.float64(
-            0.0
-            if total_fused_pair_dense_capacity == 0
-            else total_fused_pair_capacity / total_fused_pair_dense_capacity
-        ),
-        "sum_planned_padded_rows": np.int64(total_planned_padded_rotations),
-        "sum_nonzero_posterior_rows": np.int64(np.sum(chunk_nonzero_posterior_rows)),
-        "sum_reconstruction_rows": np.int64(total_reconstruction_rows),
-        "sum_packed_final_noise_rows": np.int64(
-            total_packed_final_noise_rows
-        ),
-        "sum_significant_samples": np.int64(total_significant_samples),
-        "unique_global_rotations": np.int64(np.count_nonzero(seen_global_rotations)),
-        "unique_nonzero_global_rotations": np.int64(np.count_nonzero(seen_nonzero_global_rotations)),
-        "unique_reconstruction_global_rotations": np.int64(np.count_nonzero(seen_reconstruction_global_rotations)),
-        "duplicate_rotation_factor": np.float64(
-            0.0
-            if not np.any(seen_global_rotations)
-            else total_local_rotations / np.count_nonzero(seen_global_rotations)
-        ),
-        "reconstruction_duplicate_rotation_factor": np.float64(
-            0.0
-            if not np.any(seen_reconstruction_global_rotations)
-            else total_reconstruction_rows / np.count_nonzero(seen_reconstruction_global_rotations)
-        ),
-        "local_total_hypotheses": np.int64(local_total_hypotheses),
-        "local_mean_rotations_per_image": np.float64(0.0 if n_images == 0 else total_local_rotations / n_images),
-        "local_mean_reconstruction_rows_per_image": np.float64(
-            0.0 if n_images == 0 else total_reconstruction_rows / n_images
-        ),
-        "local_mean_significant_samples_per_image": np.float64(
-            0.0 if n_images == 0 else total_significant_samples / n_images
-        ),
-        "local_num_buckets": np.int32(n_chunks),
-        "max_hypotheses_per_microbatch": np.int64(max_hypotheses_per_microbatch),
-        "sparse_adjoint_target_rows": np.int64(sparse_adjoint_target_rows),
-        "sparse_adjoint_chunk_count": np.int64(sparse_adjoint_chunk_count),
-        "local_pad_fraction": np.float64(
-            0.0 if total_padded_rotations == 0 else 1.0 - total_local_rotations / total_padded_rotations
-        ),
-        "flat_score_row_reduction_fraction": np.float64(
-            0.0
-            if total_padded_rotations == 0
-            else 1.0 - total_flat_score_rows / total_padded_rotations
-        ),
-        "n_windowed": np.int32(n_windowed),
-    }
-    if reconstruction_probability_values_by_image is not None:
-        profile_summary["reconstruction_probability_values_by_image"] = tuple(
-            np.concatenate(values).astype(precision_policy.score_real_dtype, copy=False)
-            if values
-            else np.zeros(0, dtype=precision_policy.score_real_dtype)
-            for values in reconstruction_probability_values_by_image
-        )
-    if reconstruction_sample_indices_by_image is not None:
-        profile_summary["reconstruction_sample_indices_by_image"] = tuple(reconstruction_sample_indices_by_image)
+    profile_summary = None
+    if return_profile:
+        _block_until_ready(Ft_y, Ft_ctf)
+        total_wall_time = time.time() - overall_t0
+        profile_summary = {
+            "big_jit_bucket_count": np.int32(big_jit_bucket_count),
+            "sparse_big_jit_bucket_count": np.int32(sparse_big_jit_bucket_count),
+            "big_jit_debug_bucket_count": np.int32(big_jit_debug_bucket_count),
+            "score_only": np.asarray(score_only),
+            "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
+            "defer_local_noise_projection": np.asarray(defer_local_noise_projection),
+            "bucket_build_time_s": np.float64(timing.bucket_build_s),
+            "raw_cache_build_time_s": np.float64(timing.raw_cache_build_s),
+            "raw_cache_enabled": np.asarray(raw_cache_enabled),
+            "processed_half_cache_enabled": np.asarray(processed_half_cache_enabled),
+            "relion_projection_cache_enabled": np.asarray(relion_projection_cache_groups_built > 0),
+            "relion_projection_cache_groups": np.int64(len(projection_cache_plan.groups)),
+            "relion_projection_cache_groups_built": np.int64(relion_projection_cache_groups_built),
+            "relion_projection_cache_rows": np.int64(relion_projection_cache_max_rows),
+            "relion_projection_cache_capacity_rows": np.int64(projection_cache_plan.capacity_rows),
+            "relion_projection_cache_id_map_rows": np.int64(relion_projection_cache_id_map_rows),
+            "relion_projection_cache_pixels": np.int64(projection_cache_plan.projection_pixels),
+            "relion_projection_cache_estimated_gb": np.float64(relion_projection_cache_max_estimated_gb),
+            "relion_projection_cache_build_s": np.float64(relion_projection_cache_total_build_s),
+            "relion_projection_cache_cap_gb": np.float64(projection_cache_plan.budget_gb),
+            "batch_fetch_time_s": np.float64(timing.batch_fetch_s),
+            "preprocess_time_s": np.float64(timing.preprocess_s),
+            **_prefixed_timer_profile("preprocess_", preprocess_profile),
+            **_prefixed_timer_profile("transfer_", transfer_profile),
+            "transfer_total_to_host_s": np.float64(sum(transfer_profile.values())),
+            **_local_timing_profile(timing),
+            "em_time_s": np.float64(total_wall_time),
+            "accounted_em_time_s": np.float64(timing.accounted_s()),
+            "unattributed_em_time_s": np.float64(max(total_wall_time - timing.accounted_s(), 0.0)),
+            "n_chunks": np.int32(n_chunks),
+            "projection_mode": np.asarray(projection_mode),
+            "n_projection_windowed": np.int32(window_spec.n_projection),
+            "big_jit_projection_pixels": np.int32(big_jit_projection_pixel_count),
+            "chunk_sizes": np.asarray(chunk_sizes, dtype=np.int32),
+            "chunk_padded_image_counts": np.asarray(
+                chunk_padded_image_counts,
+                dtype=np.int32,
+            ),
+            "chunk_planned_padded_image_counts": np.asarray(
+                chunk_planned_padded_image_counts,
+                dtype=np.int32,
+            ),
+            "chunk_local_rotations": np.asarray(chunk_local_rotations, dtype=np.int32),
+            "chunk_padded_rotations": np.asarray(chunk_padded_rotations, dtype=np.int32),
+            "flat_local_rows_enabled": np.asarray(flat_local_rows_enabled),
+            "stable_flat_row_capacity_enabled": np.asarray(
+                stable_flat_row_capacity_enabled
+            ),
+            "packed_local_projection_enabled": np.asarray(
+                packed_local_projection_enabled
+            ),
+            "fused_pair_fine_score_enabled": np.asarray(
+                fused_pair_fine_score_enabled
+            ),
+            "fused_pair_fine_score_default_enabled": np.asarray(False),
+            "fused_pair_fine_uses_shared_compact_order": np.asarray(
+                fused_pair_fine_score_enabled
+            ),
+            "fused_pair_fine_avoids_pair_pixel_gathers": np.asarray(
+                fused_pair_fine_score_enabled
+            ),
+            "fused_pair_fine_restores_dense_posterior_order": np.asarray(
+                fused_pair_fine_score_enabled
+            ),
+            "defer_packed_vdam_enabled": np.asarray(defer_packed_vdam_enabled),
+            "stable_fourier_window_shapes": np.asarray(stable_window_active),
+            "stable_fourier_window_quantum": np.int32(resolved_window_quantum),
+            "logical_current_size": np.int32(logical_current_size),
+            "physical_current_size": np.int32(physical_current_size),
+            "logical_reconstruction_pixels": np.int32(
+                stable_window_plan.logical_reconstruction_pixels
+            ),
+            "physical_reconstruction_pixels": np.int32(window_spec.n_recon),
+            "packed_final_noise_enabled": np.asarray(packed_final_noise_enabled),
+            "packed_vdam_reuses_flat_score_projection": np.asarray(
+                defer_packed_vdam_enabled and accumulate_noise
+            ),
+            "packed_vdam_avoids_dense_noise_rows": np.asarray(
+                packed_final_noise_enabled and accumulate_noise
+            ),
+            "packed_final_noise_preserves_dense_scalar_order": np.asarray(
+                packed_final_noise_enabled and accumulate_noise
+            ),
+            "chunk_flat_score_rows": np.asarray(chunk_flat_score_rows, dtype=np.int32),
+            "chunk_fused_pair_capacities": np.asarray(
+                chunk_fused_pair_capacities,
+                dtype=np.int32,
+            ),
+            "chunk_fused_pair_counts": np.asarray(
+                chunk_fused_pair_counts,
+                dtype=np.int64,
+            ),
+            "chunk_fused_pair_dense_capacities": np.asarray(
+                chunk_fused_pair_dense_capacities,
+                dtype=np.int64,
+            ),
+            "chunk_planned_padded_rotations": np.asarray(
+                chunk_planned_padded_rotations,
+                dtype=np.int32,
+            ),
+            "chunk_unique_rotations": np.asarray(chunk_unique_rotations, dtype=np.int32),
+            "chunk_nonzero_posterior_rows": np.asarray(chunk_nonzero_posterior_rows, dtype=np.int32),
+            "chunk_reconstruction_rows": np.asarray(chunk_reconstruction_rows, dtype=np.int32),
+            "chunk_significant_samples": np.asarray(chunk_significant_samples, dtype=np.int32),
+            "sum_union_rows": np.int64(total_local_rotations),
+            "sum_padded_rows": np.int64(total_padded_rotations),
+            "sum_flat_score_rows": np.int64(total_flat_score_rows),
+            "sum_fused_pair_candidates": np.int64(total_fused_pair_candidates),
+            "sum_fused_pair_capacity": np.int64(total_fused_pair_capacity),
+            "sum_fused_pair_dense_capacity": np.int64(
+                total_fused_pair_dense_capacity
+            ),
+            "fused_pair_valid_fraction_of_dense": np.float64(
+                0.0
+                if total_fused_pair_dense_capacity == 0
+                else total_fused_pair_candidates / total_fused_pair_dense_capacity
+            ),
+            "fused_pair_padded_fraction_of_dense": np.float64(
+                0.0
+                if total_fused_pair_dense_capacity == 0
+                else total_fused_pair_capacity / total_fused_pair_dense_capacity
+            ),
+            "sum_planned_padded_rows": np.int64(total_planned_padded_rotations),
+            "sum_nonzero_posterior_rows": np.int64(np.sum(chunk_nonzero_posterior_rows)),
+            "sum_reconstruction_rows": np.int64(total_reconstruction_rows),
+            "sum_packed_final_noise_rows": np.int64(
+                total_packed_final_noise_rows
+            ),
+            "sum_significant_samples": np.int64(total_significant_samples),
+            "unique_global_rotations": np.int64(np.count_nonzero(seen_global_rotations)),
+            "unique_nonzero_global_rotations": np.int64(np.count_nonzero(seen_nonzero_global_rotations)),
+            "unique_reconstruction_global_rotations": np.int64(np.count_nonzero(seen_reconstruction_global_rotations)),
+            "duplicate_rotation_factor": np.float64(
+                0.0
+                if not np.any(seen_global_rotations)
+                else total_local_rotations / np.count_nonzero(seen_global_rotations)
+            ),
+            "reconstruction_duplicate_rotation_factor": np.float64(
+                0.0
+                if not np.any(seen_reconstruction_global_rotations)
+                else total_reconstruction_rows / np.count_nonzero(seen_reconstruction_global_rotations)
+            ),
+            "local_total_hypotheses": np.int64(local_total_hypotheses),
+            "local_mean_rotations_per_image": np.float64(0.0 if n_images == 0 else total_local_rotations / n_images),
+            "local_mean_reconstruction_rows_per_image": np.float64(
+                0.0 if n_images == 0 else total_reconstruction_rows / n_images
+            ),
+            "local_mean_significant_samples_per_image": np.float64(
+                0.0 if n_images == 0 else total_significant_samples / n_images
+            ),
+            "local_num_buckets": np.int32(n_chunks),
+            "max_hypotheses_per_microbatch": np.int64(max_hypotheses_per_microbatch),
+            "sparse_adjoint_target_rows": np.int64(sparse_adjoint_target_rows),
+            "sparse_adjoint_chunk_count": np.int64(sparse_adjoint_chunk_count),
+            "local_pad_fraction": np.float64(
+                0.0 if total_padded_rotations == 0 else 1.0 - total_local_rotations / total_padded_rotations
+            ),
+            "flat_score_row_reduction_fraction": np.float64(
+                0.0
+                if total_padded_rotations == 0
+                else 1.0 - total_flat_score_rows / total_padded_rotations
+            ),
+            "n_windowed": np.int32(n_windowed),
+        }
+        if reconstruction_probability_values_by_image is not None:
+            profile_summary["reconstruction_probability_values_by_image"] = tuple(
+                np.concatenate(values).astype(precision_policy.score_real_dtype, copy=False)
+                if values
+                else np.zeros(0, dtype=precision_policy.score_real_dtype)
+                for values in reconstruction_probability_values_by_image
+            )
+        if reconstruction_sample_indices_by_image is not None:
+            profile_summary["reconstruction_sample_indices_by_image"] = tuple(reconstruction_sample_indices_by_image)
     return LocalEMResult(
         Ft_y=Ft_y,
         Ft_ctf=Ft_ctf,

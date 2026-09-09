@@ -135,6 +135,7 @@ from recovar.em.dense_single_volume.local_caches import (
     EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
 )
+from recovar.em.dense_single_volume.local_preprocessing import prepare_local_bucket
 from recovar.em.dense_single_volume.local_em_engine import (
     EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV,
     EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV,
@@ -161,7 +162,6 @@ from recovar.em.dense_single_volume.local_em_engine import (
     _local_processed_half_cache_enabled,
     _local_raw_cache_enabled,
     _pad_local_big_jit_image_axis,
-    _prepare_local_exact_bucket,
     _reorder_bucket_to_indices,
     _source_faithful_bpref_particle_chunk_cap,
     _source_faithful_bpref_particle_chunk_size,
@@ -5863,7 +5863,7 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         ctf2_over_nv_recon_half,
         _processed_score_half,
         _real_space_pre_shift_applied,
-    ) = _prepare_local_exact_bucket(
+    ) = prepare_local_bucket(
         dataset,
         batch_data,
         ctf_params,
@@ -5992,7 +5992,7 @@ def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(
     score_with_masked_images,
 ):
     import recovar.cuda_backproject as cuda_backproject
-    import recovar.em.dense_single_volume.local_em_engine as local_engine_module
+    import recovar.em.dense_single_volume.local_preprocessing as local_preprocessing_module
 
     dataset = MockDataset(1, rng)
     config = ForwardModelConfig.from_dataset(
@@ -6014,12 +6014,12 @@ def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(
         lambda *_args, **_kwargs: ctf_rfloat,
     )
     monkeypatch.setattr(
-        local_engine_module,
+        local_preprocessing_module,
         "resolve_image_mask_for_half_preprocess",
         lambda *_args, **_kwargs: (np.zeros(dataset.image_shape, dtype=np.float32), "none"),
     )
     monkeypatch.setattr(
-        local_engine_module,
+        local_preprocessing_module,
         "_big_jit_preprocess_half",
         lambda *_args, **_kwargs: jnp.asarray(processed),
     )
@@ -6055,7 +6055,7 @@ def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(
         recon_weight,
         processed_score,
         pre_shift_applied,
-    ) = _prepare_local_exact_bucket(
+    ) = prepare_local_bucket(
         dataset,
         np.zeros((1, *dataset.image_shape), dtype=np.float32),
         np.zeros((1, 9), dtype=np.float32),
@@ -6095,6 +6095,7 @@ def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(
     )
     np.testing.assert_allclose(np.asarray(batch_norm), expected_norm, rtol=1e-6, atol=1e-5)
     assert pre_shift_applied is False
+
 
 
 def test_run_local_em_exact_can_return_half_volume_accumulators(rng, monkeypatch):

@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.dense_single_volume import local_preprocessing
 
 
 class _CapturedPreprocess(RuntimeError):
@@ -24,7 +24,7 @@ def _exercise_prepare(monkeypatch: pytest.MonkeyPatch, *, backend: str):
         )
         raise _CapturedPreprocess
 
-    monkeypatch.setattr(local_em_engine, "process_half_image", capture_process)
+    monkeypatch.setattr(local_preprocessing, "process_half_image", capture_process)
     dataset = SimpleNamespace(
         image_source=SimpleNamespace(backend=SimpleNamespace(relion_fourier_backend=backend)),
     )
@@ -34,7 +34,7 @@ def _exercise_prepare(monkeypatch: pytest.MonkeyPatch, *, backend: str):
     )
     images = np.arange(32, dtype=np.float32).reshape(2, 4, 4)
     with pytest.raises(_CapturedPreprocess):
-        local_em_engine._prepare_local_exact_bucket(
+        local_preprocessing.prepare_local_bucket(
             dataset,
             images,
             np.zeros((2, 9), dtype=np.float32),

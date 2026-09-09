@@ -264,6 +264,15 @@ Both use `(prior - rounded_old_offset) / pixel_size`, as before. The separate
 `relion_sigma_offset_prior_center` serves sufficient statistics and keeps its
 pixel-space formula without that division.
 
+Split local bucket preparation belongs to
+[`local_preprocessing.prepare_local_bucket`](../../recovar/em/dense_single_volume/local_preprocessing.py).
+It owns mask/cache selection, CTF weighting, translation operands and batch norms;
+`local_big_jit` retains the compiled preprocessing primitive and fused kernel.
+Masked/unmasked reconstruction share one exact BPref translation operation.
+Callers and operand-capture tests import the preparation owner directly. The
+local engine retains execution scheduling and one final `LocalEMResult` assembly;
+profile construction and synchronization run only when requested.
+
 Raw and processed-image cache limits belong to
 [`local_caches.py`](../../recovar/em/dense_single_volume/local_caches.py).
 Bounded RELION projection caches belong to

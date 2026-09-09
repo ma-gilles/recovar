@@ -34,7 +34,7 @@ in place of FSC/FSC-AUC. Follow the [EM operating contract](../../recovar/em/AGE
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest structural source checkpoint | Local routing/import cleanup following `121144413`; local engine 8,199 lines, sparse scorer 17,383, half scorer 1,358, controller 6,123 |
+| Latest structural source checkpoint | Bucket preprocessing/result publication following `6e2bd10ac`; local engine 7,868 lines, sparse scorer 17,383, half scorer 1,358, controller 6,123 |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
 | Incorporated history | PR180 `1e2f229b3`; cleanup anchor `0b52c995a`; VDAM merge `c38fc62f0`; separate global-window correction `0219caa35` |
 | Publication | [Draft PR179](https://github.com/ma-gilles/recovar/pull/179), stacked on [PR158](https://github.com/ma-gilles/recovar/pull/158); em_clean is sole integrator/publisher |
@@ -69,13 +69,30 @@ seven-case patch; final focused coverage was11 plus guard38.
 
 Peer reports private class-prior repair `f91eed7d6` atop frozen `df9975ee`,
 red2fail/2pass then42 focused/38guard; review/adoption remains separate. Replacement
-full200 K1 job13648609 was observed RUNNING;13648479 failed pre-science UUID
+full200 K1 job13648609 completed0:0 (8:33);13648479 failed pre-science UUID
 preflight. Different physical H100, same class/driver: timing descriptive only.
-K4 audit13560356 also remains live. No duplicate job or shared Euler adoption.
+K4 audit13560356 failed2:0: both control/candidate logs first miss RELION FSC-AUC
+0.995 at iteration10, class2. Full audit review remains open. No duplicate job
+or shared Euler adoption; job completion alone is not quality acceptance.
 
 ## Engineering work and recent evidence
 
-The latest batch removes a tautological projector eligibility condition, an
+The current package moves split bucket preparation into `local_preprocessing`,
+shares the duplicated exact BPref translation operation and gives profiled and
+unprofiled execution one result constructor. All numerical operations match the
+old syntax tree after inlining the shared operation; profile ordering and every
+returned field are preserved. Caller imports and operand-capture patches migrate
+with the owner. Local engine size falls8,199→7,868; the new owner has339 lines,
+so combined production source grows by8 lines. This is clearer ownership and
+removal of duplicate operations, not a net line-deletion claim.
+
+The control affected CPU panel has55 passes and two GPU-only score-translation
+failures. Candidate has56 passes (including an additional single-image dense/local
+oracle case) and the exact same two failures. Final CPU guard passes38. Package evidence is in
+`hia_source_review_20260906/local_preprocessing_publication_20260909/` under the
+implementation checkout's parent. No GPU or trajectory qualification follows.
+
+The preceding batch removes a tautological projector eligibility condition, an
 unread debug counter and 13 stale imports; eight adjacent imports from the
 projection owner are grouped together. The window alias is immutable and all
 128 routing combinations are unchanged. The import-only follow-up preserves
