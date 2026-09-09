@@ -5,11 +5,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.local_em_engine import (
+from recovar.em.dense_single_volume.local_batch_planning import (
     EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV,
-    _build_reconstruction_pack_indices,
     _exact_local_planned_hypotheses_floor,
     _exact_local_xhalf_projection_microbatch_cap,
+)
+from recovar.em.dense_single_volume.local_em_engine import (
+    _build_reconstruction_pack_indices,
     run_local_em_exact,
 )
 from recovar.em.dense_single_volume.local_layout import (

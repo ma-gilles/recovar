@@ -50,6 +50,16 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
+Exact-local batching policies now live in `local_batch_planning.py`:13 unchanged
+functions and their constants leave the engine. The x-half reporting summarizer
+imports no execution modules after this and the preceding audit-owner extraction.
+It still initializes a JAX CPU backend through dependencies; this is not a
+JAX-free reporting claim. Baseline/candidate each pass52 CPU cases;38 guard cases
+pass. Engine shrinks374 lines; net production grows34 lines for the new owner.
+Memory-query semantics and logger messages remain; warnings use the planning
+logger namespace. The existing all-device memory probe needs a separately
+qualified resource-policy review. [Receipt and checks](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/local_batch_owner_20260909/result.json).
+
 Coarse selector validation, exact support hashing and result-profile attachment
 now share the existing `helpers.coarse_score_diagnostics` owner. Five function
 bodies and the wrapper registry are unchanged; controllers, analyzers and tests

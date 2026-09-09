@@ -101,6 +101,13 @@ disabled; changing flags no longer changes tuple positions. The container does
 not copy arrays. Controller and K-class callers read these fields directly.
 The local single-class kernel is
 [`local_em_engine.run_local_em_exact`](../../recovar/em/dense_single_volume/local_em_engine.py).
+
+[`local_batch_planning`](../../recovar/em/dense_single_volume/local_batch_planning.py)
+owns exact-local row limits, environment overrides, automatic boosts and memory
+probes. The engine applies these policies at the same dispatch boundaries;
+reporting imports the planning owner directly. Layout padding stays in
+`local_layout`. The existing device-memory query/cache behavior is preserved,
+including the all-device `nvidia-smi` query; it is not a visibility-aware probe.
 [`k_class`](../../recovar/em/dense_single_volume/k_class.py) supplies dense,
 adaptive and local K-class orchestration.
 [`k_class_results`](../../recovar/em/dense_single_volume/k_class_results.py) owns
