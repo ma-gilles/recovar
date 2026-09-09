@@ -6,6 +6,25 @@ import logging
 import os
 
 
+def parse_env_flag_or_false(name: str, *, logger: logging.Logger) -> bool:
+    """Read a recognized boolean token; invalid values warn and stay disabled.
+
+    Unlike ``parse_env_flag``, an unknown non-empty value does not enable the
+    flag. Unlike ``parse_env_binary_flag``, words and blank values are accepted.
+    Read at call time and retain the caller's diagnostic logging context.
+    """
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return False
+    normalized = value.strip().lower()
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    logger.warning("Ignoring invalid %s=%r; using default false", name, value)
+    return False
+
+
 def parse_env_binary_flag(name: str) -> bool:
     """Read a strict 0/1 flag; unset is false, whitespace is stripped, blank is invalid."""
     token = os.environ.get(name, "0").strip()

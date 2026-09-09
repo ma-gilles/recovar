@@ -50,6 +50,15 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
+Six equivalent diagnostic-flag parsers now share `env_flags.parse_env_flag_or_false`.
+Controller/scoring selectors retain their names, defaults, call-time reads and
+caller logging; permissive, binary-only and default-on policies remain distinct.
+Net production shrinks33 lines. All186 old/new return/read/warning traces match;
+41 baseline and60 candidate CPU cases pass, plus38 guard cases. Other controller,
+scoring-policy and environment-helper function bodies are unchanged. No numerical
+or native qualification is implied.
+[Checks and reproduction](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/false_env_parser_owner_20260909/result.json).
+
 Half-1 expected-accuracy trial-order preparation now lives beside its native
 ordering helper in `helpers/expected_accuracy.py`. The controller retains seed
 selection and execution order; explicit permutation validation and warning/None

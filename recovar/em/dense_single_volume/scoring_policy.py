@@ -12,6 +12,8 @@ import os
 import jax
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_flag_or_false
+
 logger = logging.getLogger(__name__)
 
 # RELION parses ``--adaptive_fraction 0.999`` through ``textToFloat`` and
@@ -243,16 +245,7 @@ def _local_adaptive_pass2_full_parent_enabled() -> bool:
 def _local_adaptive_pass2_rotation_only_enabled() -> bool:
     """Diagnostic: expand significant parent rotations to all parent translations."""
 
-    value = os.environ.get(_LOCAL_ADAPTIVE_PASS2_ROTATION_ONLY_ENV)
-    if value is None or value.strip() == "":
-        return False
-    normalized = value.strip().lower()
-    if normalized in _TRUE_ENV_VALUES:
-        return True
-    if normalized in _FALSE_ENV_VALUES:
-        return False
-    logger.warning("Ignoring invalid %s=%r; using default false", _LOCAL_ADAPTIVE_PASS2_ROTATION_ONLY_ENV, value)
-    return False
+    return parse_env_flag_or_false(_LOCAL_ADAPTIVE_PASS2_ROTATION_ONLY_ENV, logger=logger)
 
 
 def _local_adaptive_pass2_denominator_support_mode() -> str | None:
@@ -279,16 +272,7 @@ def _local_adaptive_pass2_denominator_support_mode() -> str | None:
 def _k1_skip_significance_pruning_enabled() -> bool:
     """Diagnostic switch: evaluate the full K=1 adaptive fine grid."""
 
-    value = os.environ.get(_K1_SKIP_SIGNIFICANCE_PRUNING_ENV)
-    if value is None or value.strip() == "":
-        return False
-    normalized = value.strip().lower()
-    if normalized in _FALSE_ENV_VALUES:
-        return False
-    if normalized in _TRUE_ENV_VALUES:
-        return True
-    logger.warning("Ignoring invalid %s=%r; using default false", _K1_SKIP_SIGNIFICANCE_PRUNING_ENV, value)
-    return False
+    return parse_env_flag_or_false(_K1_SKIP_SIGNIFICANCE_PRUNING_ENV, logger=logger)
 
 
 def _dense_global_scoring_dtype() -> np.dtype:

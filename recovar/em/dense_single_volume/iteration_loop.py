@@ -57,6 +57,7 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     update_refinement_state,
 )
 from recovar.em.dense_single_volume.helpers.dtype_policy import _local_search_precision_flags
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_flag_or_false
 from recovar.em.dense_single_volume.helpers.expected_accuracy import (
     estimate_relion_expected_accuracy,
     prepare_relion_half1_trial_order,
@@ -164,7 +165,6 @@ from recovar.em.dense_single_volume.score_outputs import (
 )
 from recovar.em.dense_single_volume.scoring_policy import (
     _DENSE_EM_STATIC_KWARGS,
-    _FALSE_ENV_VALUES,
     _TRUE_ENV_VALUES,
     PADDING_FACTOR,
     PROJECTION_PADDING_FACTOR,
@@ -215,31 +215,13 @@ def _final_all_data_grid_correct_enabled() -> bool:
     ``RECOVAR_FINAL_ALL_DATA_GRID_CORRECT=1``.
     """
 
-    value = os.environ.get(_FINAL_ALL_DATA_GRID_CORRECT_ENV)
-    if value is None or value.strip() == "":
-        return False
-    normalized = value.strip().lower()
-    if normalized in _FALSE_ENV_VALUES:
-        return False
-    if normalized in _TRUE_ENV_VALUES:
-        return True
-    logger.warning("Ignoring invalid %s=%r; using default false", _FINAL_ALL_DATA_GRID_CORRECT_ENV, value)
-    return False
+    return parse_env_flag_or_false(_FINAL_ALL_DATA_GRID_CORRECT_ENV, logger=logger)
 
 
 def _final_all_data_after_max_iter_enabled() -> bool:
     """Return whether diagnostics force final all-data after iteration-cap exit."""
 
-    value = os.environ.get(_FINAL_ALL_DATA_AFTER_MAX_ITER_ENV)
-    if value is None or value.strip() == "":
-        return False
-    normalized = value.strip().lower()
-    if normalized in _FALSE_ENV_VALUES:
-        return False
-    if normalized in _TRUE_ENV_VALUES:
-        return True
-    logger.warning("Ignoring invalid %s=%r; using default false", _FINAL_ALL_DATA_AFTER_MAX_ITER_ENV, value)
-    return False
+    return parse_env_flag_or_false(_FINAL_ALL_DATA_AFTER_MAX_ITER_ENV, logger=logger)
 
 
 def _fresh_k1_spectrum_norm_default(
@@ -283,16 +265,7 @@ def _should_run_final_all_data_iteration(
 def _kclass_replay_tau2_enabled() -> bool:
     """Diagnostic switch: use RELION replayed Class3D tau2 spectra directly."""
 
-    value = os.environ.get(_KCLASS_REPLAY_TAU2_ENV)
-    if value is None or value.strip() == "":
-        return False
-    normalized = value.strip().lower()
-    if normalized in _FALSE_ENV_VALUES:
-        return False
-    if normalized in _TRUE_ENV_VALUES:
-        return True
-    logger.warning("Ignoring invalid %s=%r; using default false", _KCLASS_REPLAY_TAU2_ENV, value)
-    return False
+    return parse_env_flag_or_false(_KCLASS_REPLAY_TAU2_ENV, logger=logger)
 
 
 def _kclass_replay_tau2_same_iter_enabled() -> bool:
@@ -303,16 +276,7 @@ def _kclass_replay_tau2_same_iter_enabled() -> bool:
     existing diagnostic scripts that also set the flag continue to work.
     """
 
-    value = os.environ.get(_KCLASS_REPLAY_TAU2_SAME_ITER_ENV)
-    if value is None or value.strip() == "":
-        return False
-    normalized = value.strip().lower()
-    if normalized in _FALSE_ENV_VALUES:
-        return False
-    if normalized in _TRUE_ENV_VALUES:
-        return True
-    logger.warning("Ignoring invalid %s=%r; using default false", _KCLASS_REPLAY_TAU2_SAME_ITER_ENV, value)
-    return False
+    return parse_env_flag_or_false(_KCLASS_REPLAY_TAU2_SAME_ITER_ENV, logger=logger)
 
 
 def _concatenate_pose_stacks_or_none(stacks, *, trailing_shape, label):
