@@ -57,9 +57,12 @@ from recovar.em.dense_single_volume.helpers.significant_samples import (
     significant_sample_ids,
 )
 from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
+    _bucket_pass2_inputs,
+    _bucket_sparse_k_class_pass2_inputs,
     _build_compact_pair_bucket_arrays,
     _build_compact_pair_bucket_arrays_from_per_image_inputs,
     _build_k_class_bucket_arrays,
+    _coalesce_tail_bucket_sizes,
     _prepare_per_image_compact_candidate_pairs,
     _prepare_per_image_pass2_inputs,
 )
@@ -70,10 +73,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _active_row_grouping_for_canonical_matmul,
     _active_row_grouping_shape,
     _adjoint_block_chunk_rows,
-    _bucket_pass2_inputs,
     _bucket_sparse_k_class_compact_pair_counts,
-    _bucket_sparse_k_class_pass2_inputs,
-    _coalesce_tail_bucket_sizes,
     _compact_k_class_pair_plan_stats,
     _compact_k_class_pair_plan_stats_from_counts,
     _compact_pair_buckets_for_execution_threshold,

@@ -8,13 +8,15 @@ from recovar.em.dense_single_volume.batch_planning import (
     _plan_consecutive_padded_batches,
 )
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_flag
+from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
+    _bucket_pass2_inputs,
+)
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT_ENV,
     _BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV,
     _BPREF_EXECUTION_ORDER_CHUNK_SIZE_ENV,
     _BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV,
     _BPREF_REVERSE_PHYSICAL_ORDER_ENV,
-    _bucket_pass2_inputs,
     _load_bpref_execution_order_local_override,
     _normalize_pass2_bucket,
     _resolve_bpref_execution_bucket_policy,

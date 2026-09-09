@@ -1,14 +1,16 @@
-"""Host array assembly for rectangular and compact sparse pass-2 buckets.
+"""Host planning and array assembly for rectangular and compact sparse buckets.
 
-Coarse selection and bucket scheduling remain with their callers. These
-builders expand supplied parent support and gather/pad rows, preserving source order,
-precision, scoring/M-step rotation aliases and inert padding conventions.
+Callers select execution policies and budgets. These helpers group supplied
+support into bounded buckets, expand parent support and gather/pad rows. They
+preserve particle order, precision, scoring/M-step aliases and inert padding;
+they neither execute scoring nor choose scientific or device policies.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
+from recovar.em.dense_single_volume.batch_planning import _plan_consecutive_padded_batches
 from recovar.em.dense_single_volume.helpers.compact_candidates import (
     SparseCandidateMask,
     _candidate_mask_to_dense,
@@ -17,6 +19,333 @@ from recovar.em.dense_single_volume.helpers.compact_candidates import (
 )
 from recovar.em.dense_single_volume.helpers.significant_samples import ComplementSignificantSampleIndices
 from recovar.em.dense_single_volume.local_layout import _exact_bucket_rotation_size
+
+_DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH = 1_000_000
+_DEFAULT_TAIL_BUCKET_COALESCE_MAX_INFLATION = 2.0
+_DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE = 4096
+
+
+def _bucket_pass2_inputs(
+    per_image_inputs,
+    n_fine_trans,
+    rotation_block_size_for_quantization=5000,
+    max_hypotheses_per_microbatch=_DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH,
+    max_images_per_microbatch=2048,
+    small_bucket_coalesce_size=None,
+    tail_bucket_coalesce_max_images=None,
+    tail_bucket_coalesce_max_inflation=None,
+    tail_bucket_coalesce_min_bucket_size=None,
+    processing_order_override=None,
+    processing_order_chunk_size=1,
+    processing_order_group_by_bucket_size=False,
+    processing_order_batch_consecutive_bucket_sizes=False,
+):
+    """Group images into buckets that share a padded rotation count.
+
+    Return bucket specifications: a padded rotation count and the image indices
+    assigned to that bucket. Array builders materialize the selected rows later.
+
+    To avoid OOM when one bucket is very large
+    (``bucket_size * n_images_in_bucket * n_fine_trans`` is the (B, R, T)
+    score tensor footprint), we split each per-quantization-size group
+    into chunks of at most ``max_hypotheses_per_microbatch /
+    (bucket_size * n_fine_trans)`` images.
+    """
+    n_images = len(per_image_inputs["oversampled_rots"])
+    rotation_counts = np.array(
+        [rots.shape[0] for rots in per_image_inputs["oversampled_rots"]],
+        dtype=np.int64,
+    )
+    if n_images == 0:
+        return []
+
+    bucket_sizes = np.array(
+        [_exact_bucket_rotation_size(int(count), rotation_block_size_for_quantization) for count in rotation_counts],
+        dtype=np.int64,
+    )
+    if small_bucket_coalesce_size is not None:
+        bucket_sizes = _coalesce_small_bucket_sizes(bucket_sizes, small_bucket_coalesce_size)
+    bucket_sizes = _coalesce_tail_bucket_sizes(
+        bucket_sizes,
+        max_images=tail_bucket_coalesce_max_images,
+        max_inflation=tail_bucket_coalesce_max_inflation,
+        min_bucket_size=tail_bucket_coalesce_min_bucket_size,
+        max_hypotheses_per_microbatch=max_hypotheses_per_microbatch,
+        max_images_per_microbatch=max_images_per_microbatch,
+        n_fine_trans=n_fine_trans,
+        n_classes=1,
+    )
+
+    if processing_order_override is not None:
+        processing_order = np.asarray(processing_order_override, dtype=np.int64).reshape(-1)
+        if processing_order.shape != (n_images,):
+            raise ValueError(
+                "processing_order_override must have shape "
+                f"({n_images},), got {processing_order.shape}",
+            )
+        if not np.array_equal(np.sort(processing_order), np.arange(n_images, dtype=np.int64)):
+            raise ValueError("processing_order_override must be a permutation of image indices")
+        if not processing_order_group_by_bucket_size:
+            if processing_order_batch_consecutive_bucket_sizes:
+                buckets = []
+                run_start = 0
+                while run_start < n_images:
+                    run_bucket_size = int(bucket_sizes[processing_order[run_start]])
+                    run_end = run_start + 1
+                    while (
+                        run_end < n_images
+                        and int(bucket_sizes[processing_order[run_end]]) == run_bucket_size
+                    ):
+                        run_end += 1
+                    cap_by_hypotheses = max(
+                        1,
+                        int(max_hypotheses_per_microbatch)
+                        // max(1, run_bucket_size * int(n_fine_trans)),
+                    )
+                    max_per_chunk = max(
+                        1,
+                        min(int(max_images_per_microbatch), cap_by_hypotheses),
+                    )
+                    for start in range(run_start, run_end, max_per_chunk):
+                        chunk = processing_order[start : min(start + max_per_chunk, run_end)]
+                        buckets.append(
+                            {
+                                "bucket_size": run_bucket_size,
+                                "image_indices": np.asarray(chunk, dtype=np.int64),
+                            }
+                        )
+                    run_start = run_end
+                return buckets
+            plans = _plan_consecutive_padded_batches(
+                bucket_sizes,
+                processing_order=processing_order,
+                target_items_per_batch=int(processing_order_chunk_size),
+                max_items_per_batch=int(max_images_per_microbatch),
+                max_padded_values_per_batch=int(max_hypotheses_per_microbatch),
+                values_per_padded_size=int(n_fine_trans),
+            )
+            return [
+                {
+                    "bucket_size": int(plan.padded_size),
+                    "image_indices": np.asarray(plan.item_indices, dtype=np.int64),
+                }
+                for plan in plans
+            ]
+    else:
+        # Group by bucket size, smaller buckets first. The secondary rotation
+        # count key is historical RECOVAR behavior; an explicit order keeps
+        # RELION order stable within each equal padded-size bucket.
+        processing_order = np.lexsort((rotation_counts, bucket_sizes)).astype(np.int64)
+
+    unique_bucket_sizes = np.unique(bucket_sizes[processing_order])
+
+    buckets = []
+    for bucket_size in unique_bucket_sizes:
+        bucket_size = int(bucket_size)
+        bucket_image_indices = processing_order[bucket_sizes[processing_order] == bucket_size]
+        # Chunk by max_hypotheses_per_microbatch and max_images_per_microbatch
+        cap_by_hypotheses = max(
+            1,
+            int(max_hypotheses_per_microbatch) // max(1, bucket_size * int(n_fine_trans)),
+        )
+        max_per_chunk = max(1, min(int(max_images_per_microbatch), cap_by_hypotheses))
+        for start in range(0, bucket_image_indices.shape[0], max_per_chunk):
+            chunk = bucket_image_indices[start : start + max_per_chunk]
+            buckets.append(
+                {
+                    "bucket_size": bucket_size,
+                    "image_indices": np.asarray(chunk, dtype=np.int64),
+                }
+            )
+    return buckets
+
+
+def _bucket_sparse_k_class_pass2_inputs(
+    per_image_inputs_by_class,
+    n_fine_trans,
+    *,
+    rotation_block_size_for_quantization=5000,
+    max_hypotheses_per_microbatch=_DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH,
+    max_images_per_microbatch=2048,
+    small_bucket_threshold=None,
+    small_bucket_max_images_per_microbatch=None,
+    small_bucket_coalesce_size=None,
+    tail_bucket_coalesce_max_images=None,
+    tail_bucket_coalesce_max_inflation=None,
+    tail_bucket_coalesce_min_bucket_size=None,
+):
+    """Group images by the largest padded class support in a fused K-class pass."""
+
+    n_classes = len(per_image_inputs_by_class)
+    if n_classes == 0:
+        return []
+    n_images = len(per_image_inputs_by_class[0]["oversampled_rots"])
+    if n_images == 0:
+        return []
+    bucket_sizes_by_class = []
+    for per_image_inputs in per_image_inputs_by_class:
+        if len(per_image_inputs["oversampled_rots"]) != n_images:
+            raise ValueError("All classes must have the same image count for fused sparse pass-2")
+        counts = np.asarray(
+            [rots.shape[0] for rots in per_image_inputs["oversampled_rots"]],
+            dtype=np.int64,
+        )
+        bucket_sizes_by_class.append(
+            np.asarray(
+                [
+                    _exact_bucket_rotation_size(int(count), rotation_block_size_for_quantization)
+                    for count in counts
+                ],
+                dtype=np.int64,
+            )
+        )
+    fused_bucket_sizes = np.max(np.stack(bucket_sizes_by_class, axis=0), axis=0)
+    if small_bucket_coalesce_size is not None:
+        fused_bucket_sizes = _coalesce_small_bucket_sizes(fused_bucket_sizes, small_bucket_coalesce_size)
+    fused_bucket_sizes = _coalesce_tail_bucket_sizes(
+        fused_bucket_sizes,
+        max_images=tail_bucket_coalesce_max_images,
+        max_inflation=tail_bucket_coalesce_max_inflation,
+        min_bucket_size=tail_bucket_coalesce_min_bucket_size,
+        max_hypotheses_per_microbatch=max_hypotheses_per_microbatch,
+        max_images_per_microbatch=max_images_per_microbatch,
+        n_fine_trans=n_fine_trans,
+        n_classes=n_classes,
+    )
+    processing_order = np.argsort(fused_bucket_sizes, kind="stable").astype(np.int64)
+    unique_bucket_sizes = np.unique(fused_bucket_sizes[processing_order])
+
+    buckets = []
+    for bucket_size in unique_bucket_sizes:
+        bucket_size = int(bucket_size)
+        bucket_image_indices = processing_order[fused_bucket_sizes[processing_order] == bucket_size]
+        cap_by_hypotheses = max(
+            1,
+            int(max_hypotheses_per_microbatch)
+            // max(1, int(n_classes) * bucket_size * int(n_fine_trans)),
+        )
+        image_cap = int(max_images_per_microbatch)
+        if (
+            small_bucket_threshold is not None
+            and small_bucket_max_images_per_microbatch is not None
+            and bucket_size <= int(small_bucket_threshold)
+        ):
+            image_cap = max(image_cap, int(small_bucket_max_images_per_microbatch))
+        max_per_chunk = max(
+            1,
+            min(
+                image_cap,
+                cap_by_hypotheses,
+            ),
+        )
+        for start in range(0, bucket_image_indices.shape[0], max_per_chunk):
+            buckets.append(
+                {
+                    "bucket_size": bucket_size,
+                    "image_indices": np.asarray(
+                        bucket_image_indices[start : start + max_per_chunk],
+                        dtype=np.int64,
+                    ),
+                }
+            )
+    return buckets
+
+
+def _coalesce_small_bucket_sizes(bucket_sizes, small_bucket_coalesce_size):
+    bucket_sizes = np.asarray(bucket_sizes, dtype=np.int64)
+    coalesce_size = int(small_bucket_coalesce_size)
+    if coalesce_size <= 1:
+        return bucket_sizes
+    small_or_target_mask = bucket_sizes <= coalesce_size
+    if np.unique(bucket_sizes[small_or_target_mask]).size <= 1:
+        return bucket_sizes
+    return np.where(bucket_sizes < coalesce_size, coalesce_size, bucket_sizes)
+
+
+def _coalesce_tail_bucket_sizes(
+    bucket_sizes,
+    *,
+    max_images,
+    max_inflation,
+    min_bucket_size,
+    max_hypotheses_per_microbatch,
+    max_images_per_microbatch,
+    n_fine_trans,
+    n_classes,
+):
+    """Merge only tiny adjacent high-bucket groups under strict padding caps."""
+
+    bucket_sizes = np.asarray(bucket_sizes, dtype=np.int64)
+    if bucket_sizes.size == 0 or max_images is None:
+        return bucket_sizes
+    max_images = int(max_images)
+    if max_images <= 1:
+        return bucket_sizes
+    max_inflation = (
+        _DEFAULT_TAIL_BUCKET_COALESCE_MAX_INFLATION
+        if max_inflation is None
+        else float(max_inflation)
+    )
+    min_bucket_size = (
+        _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE
+        if min_bucket_size is None
+        else int(min_bucket_size)
+    )
+    if max_inflation < 1.0:
+        return bucket_sizes
+
+    unique_sizes, inverse, counts = np.unique(
+        bucket_sizes,
+        return_inverse=True,
+        return_counts=True,
+    )
+    if unique_sizes.size <= 1:
+        return bucket_sizes
+
+    assigned_sizes = unique_sizes.copy()
+    group_count = unique_sizes.size
+    i = 0
+    while i < group_count:
+        size_i = int(unique_sizes[i])
+        count_i = int(counts[i])
+        if size_i < min_bucket_size or count_i > max_images:
+            i += 1
+            continue
+
+        best_j = i
+        total_images = 0
+        total_rows = 0
+        for j in range(i, group_count):
+            size_j = int(unique_sizes[j])
+            count_j = int(counts[j])
+            if size_j < min_bucket_size or count_j > max_images:
+                break
+            total_images += count_j
+            total_rows += size_j * count_j
+            if total_images > max_images or total_images > int(max_images_per_microbatch):
+                break
+            target_size = size_j
+            padded_rows = target_size * total_images
+            if total_rows <= 0:
+                continue
+            inflation = float(padded_rows) / float(total_rows)
+            # The bucket builder chunks each coalesced size by
+            # max_hypotheses_per_microbatch before execution.  Applying the
+            # same cap here prevents adjacent tiny high-tail groups from
+            # sharing one padded size even when every eventual chunk remains
+            # within the score-tensor budget.
+            if inflation <= max_inflation:
+                best_j = j
+
+        if best_j > i:
+            assigned_sizes[i : best_j + 1] = unique_sizes[best_j]
+            i = best_j + 1
+        else:
+            i += 1
+
+    if np.array_equal(assigned_sizes, unique_sizes):
+        return bucket_sizes
+    return assigned_sizes[inverse]
 
 
 def _prepare_per_image_pass2_inputs(

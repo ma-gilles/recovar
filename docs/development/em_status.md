@@ -29,7 +29,7 @@ speed goal. Full-production-F32, broad quality and completion remain unproved.
 | Item | Current identity or rule |
 | --- | --- |
 | Primary checkout | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907`, branch `codex/integrate-pr180` |
-| Source checkpoint | Published `5fd41da6f` contains production `f0a8804e2`; the local structural batch below is validated and awaiting batched publication. Actual HEAD/diff/untracked manifest takes precedence |
+| Source checkpoint | Structural series on published `5fd41da6f`: deletion checkpoint `a95050c95` plus host bucket-planning extraction below. Actual HEAD/diff/untracked manifest takes precedence |
 | Publication | [Draft PR179](https://github.com/ma-gilles/recovar/pull/179), stacked on [PR158](https://github.com/ma-gilles/recovar/pull/158), pinned base `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; em_clean is sole integrator/publisher |
 | Coordination | [Compact handoff](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/CURRENT_TASK.md); [board and live scopes](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/README.md). EM paused; VDAM owns private evidence, em_clean shared source/docs/publication |
 | Frozen scientific source | `4f9a194923b084c649c7d9ce929eec7ae9f78902`, private `recovar_vdam_quality_prefix_integrated_20260909`; later cleanups are outside its run scope |
@@ -50,12 +50,21 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
-Local structural batch on `5fd41da6f`: remove two test-only candidate helpers and
+Structural batch `a95050c95` on `5fd41da6f`: remove two test-only candidate helpers and
 collapse two bucket-reporting adapters, **59 fewer production lines**. The padding
 test now checks the live joint-log-Z normalizer; image IDs use an explicit fixture.
 All expected values/tolerances and independent numerical references are preserved.
 Eight focused CPU cases and38 guard pass;36 bucket-report comparisons are exact,
 and the remaining computation AST is unchanged. [Receipt and commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/sparse_test_only_helpers_20260909/result.json).
+
+The following extraction moves four bucket-planning/coalescing functions and
+three defaults into `helpers.sparse_bucket_arrays`, beside host array assembly.
+Execution-policy selection stays in the scorer. **323 lines leave the scorer**;
+net production grows6 lines for ownership imports/documentation, not a deletion
+claim. All planning bodies/defaults and caller assertions are unchanged;26 CPU
+cases pass before and after the move. The owner loads without scoring engines.
+Final combined34 focused CPU cases,38 guard cases and parity CLI help pass.
+[Combined-source validation and publication receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/sparse_bucket_planning_owner_20260909/result.json).
 
 Latest structural batch `dd65b3563`/`f0a8804e2` simplifies candidate caches/class
 assembly, removes two unreachable error arms and two compact-pair adapters, and
@@ -126,8 +135,13 @@ passes all21 cross-FSC conditions, minimum0.9990900154943916 at20; GT unavailabl
 Six handoff pins match; peer independently recomputed all21 AUCs and the worst
 raw-map curve. Strict state remains open: count mismatch at3, two Pmax gaps>=.001
 at4, worst0.210868 with equal39 coarse counts and a one-pixel Y shift. Pixel-size
-narrowing1.6375→1.6375000476837158 is established; causality is not. VDAM owns the
-private scalar ablation and E4 capture design. These supervised prefixes provide
+narrowing1.6375→1.6375000476837158 explains the initial-map discrepancy in the
+[matched CPU bootstrap](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10076_prefix20_4f9a19492_20260909/pixel_bootstrap/README.md):
+with the original1,000 images/seed29, changing only pixel size and derived ini_high
+reduces native relative-L2 residual8.65e-8→4.65e-19, leaving one voxel at3.47e-18.
+Rounded repeats are byte-identical; five evidence pins match. E4 causality remains
+unmeasured. VDAM owns the private prefix4 diagnostic; no shared loader API change
+is implied. These supervised prefixes provide
 no valid runtime ratio or final-real/absolute-accuracy acceptance.
 
 | Timing evidence | Result and limit |
