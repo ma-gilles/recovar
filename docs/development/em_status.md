@@ -1,6 +1,25 @@
 # Current EM development scope
 
-## Helper import boundary cleanup — September 9
+## Structural cleanup after VDAM integration — September 9
+
+The materialized fine-grid significance mask now belongs to
+`tests/helpers/fine_grid_significance_reference.py`. Only two test modules use
+it, to check production lazy masks and explicit/complement support. The moved
+70-line function is AST-identical; all other K-class statements are unchanged.
+`k_class.py` shrinks by 72 lines including spacing. Both modules retain the same
+228 collected cases and identical test bodies; all 51 affected K-class and
+support tests pass in 4.73 seconds. No tolerance or baseline changed.
+
+Evidence is under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/`:
+`fine_grid_reference_collect_before_20260909`,
+`fine_grid_reference_collect_after_20260909`, and
+`fine_grid_reference_affected_20260909`. Their `outcome.json` files record the
+commands and source/native fingerprints. The coordination handoff
+`handoffs/em_clean_fine_grid_reference_20260909.json` records reference identity,
+caller review, case inventory and validation. The affected test command uses
+the wrapper below with the full `test_k_class_joint_semantics.py` module and
+the four explicit/complement support cases recorded in that outcome.
 
 Following published integration `2b4596e99`, remove three unused package-level
 K-class exports. Repository callers already import `KClassEMResult`,

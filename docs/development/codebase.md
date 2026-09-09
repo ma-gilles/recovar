@@ -81,6 +81,13 @@ adaptive and local K-class orchestration. Class evidence and posterior mass
 must be handled at the K-class level, not inferred from independently normalized
 single-class probabilities.
 
+The production fine-grid significance mask is lazy: `_ClassFineGridSignificanceMask`
+and `_PerClassFineGridSignificanceMask` generate only the requested image/rotation
+block. The materialized NumPy comparison lives in
+[`tests/helpers/fine_grid_significance_reference.py`](../../tests/helpers/fine_grid_significance_reference.py).
+It has no production callers and retains a separate mask-building algorithm
+for checking lazy blocks and explicit/complement coarse support.
+
 [`score_outputs`](../../recovar/em/dense_single_volume/score_outputs.py) owns
 the scoring containers and class/coarse-grid result adapters. It also owns
 optional half-accumulator combination, shape/axis resolution and profile-row

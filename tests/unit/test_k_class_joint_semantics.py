@@ -5,6 +5,7 @@ import pytest
 
 pytest.importorskip("jax")
 import jax.numpy as jnp
+from helpers.fine_grid_significance_reference import _build_fine_grid_significance_mask
 
 import recovar.em.dense_single_volume.k_class as k_class_module
 from recovar.em.dense_single_volume.helpers.types import DenseEMResult, LocalEMResult
@@ -18,7 +19,6 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.k_class import (
     _assemble_result,
-    _build_fine_grid_significance_mask,
     _ClassFineGridSignificanceMask,
     _compact_sparse_pass2_preferred_over_dense,
     _dense_engine_kwargs_for_class,

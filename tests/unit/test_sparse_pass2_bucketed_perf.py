@@ -32,6 +32,7 @@ import pytest
 pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
+from helpers.fine_grid_significance_reference import _build_fine_grid_significance_mask
 
 import recovar.core as core
 import recovar.core.fourier_transform_utils as ftu
@@ -165,7 +166,6 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _winner_take_all_bucket_probs_from_global_argmax,
 )
 from recovar.em.dense_single_volume.k_class import (
-    _build_fine_grid_significance_mask,
     _fine_support_stats,
     _k_class_fused_relion_fine_mstep_prune_mode_override,
     _run_sparse_k_class_adaptive_pass2,
