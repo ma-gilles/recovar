@@ -1,5 +1,37 @@
 # Current EM development scope
 
+## Completed representative timing and host profile — September 9
+
+Frozen source `8ab1a44be1b983acab4f056d12e49f9208902abe` completed RECOVAR2
+in **14,399.809 s**, versus native1 **7,966.705 s**: **1.8075×, unpaired**.
+Different physical A100s, launch orders and shared-host conditions prevent a
+paired performance claim. Native2 was running at the report timestamp; that
+historical observation is not a current job-status check. The separately
+instrumented profile took 14,764.576 s and is not a clean timing arm.
+
+The terminal profile records backend compilation at **195.662 s (1.33% of
+profiled exclusive time)**. This excludes tracing/lowering. Dominant measured
+host costs are prefetch queue waiting (5,777.491 s) and exact CTF-host `np.stack`
+(3,709.627 s exclusive). The CTF helper totals 4,557.538 s cumulative, while the
+native CTF binding itself takes 69.060 s exclusive. Cumulative costs overlap
+their children and must not be added. Queue waiting is not proven disk time,
+and host stack wall time is not a guaranteed removable speedup. These results
+support the two bounded host-boundary investigations, not compiler-first tuning.
+
+Native build **13636510** completed; capture **13636553** is an accepted target
+artifact with complete exact inputs and finite residual rows. It deliberately
+stopped after capture, so it is not a completed trajectory. Replay must consume
+masked `Fimgs` planes 0/1; unmasked planes 2/3 differ and are not interchangeable.
+The source lock is released, the five diagnostic insertions remain, and private
+capture/shared benchmark binaries stay frozen. No trajectory-quality acceptance
+or production arithmetic adoption follows.
+
+Report, exact profile inputs and capture audit:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_native_residual_audit_20260909T024139Z/report.md`.
+The coordination handoff `em_clean_vdam_terminal_100k_ack_20260909.json` records
+hashes of the report and its four JSON evidence files. This acknowledgment used
+stdlib artifact inspection only; no tests, source edits or GPU jobs were needed.
+
 ## Diagnostic half-selection ownership — September 9
 
 Two diagnostic half selectors and their environment-name constants now live in
