@@ -10,9 +10,6 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.helpers.half_spectrum import (
-    make_relion_noise_shell_indices_half,
-)
 from helpers.sparse_pass2_test_support import (
     _relion_cuda_fine_tree_sum,
     _score_pass2_bucket_relion_gpu_diff2_single_cached,
@@ -258,7 +255,7 @@ def test_relion_cuda_powerclass_highres_preserves_acc_double_precision():
     assert not np.array_equal(actual, expected.astype(np.float32).astype(np.float64))
 
 
-def test_relion_cuda_powerclass_norm_units_preserve_divide_before_square():
+def test_relion_cuda_powerclass_norm_units_match_randomized_reference():
     rng = np.random.default_rng(4021)
     height = 32
     centered = (
@@ -279,16 +276,31 @@ def test_relion_cuda_powerclass_norm_units_preserve_divide_before_square():
             current_size=current_size,
         )
     )
-    processed = jnp.asarray(centered.reshape(2, -1))
-    shells = jnp.asarray(make_relion_noise_shell_indices_half((height, height)))
-    high_shell = (shells >= 0) & (shells < height // 2 + 1) & (shells > current_size // 2)
-    generic_square_first = np.asarray(
-        jnp.sum(jnp.where(high_shell[None, :], jnp.abs(processed) ** 2, 0.0), axis=-1).astype(jnp.float32)
-    )
-
     np.testing.assert_array_equal(actual, expected)
     assert actual.dtype == np.float32
-    assert not np.array_equal(actual, generic_square_first)
+
+
+@pytest.mark.parametrize("height", [30, 32])
+def test_relion_cuda_powerclass_norm_units_preserve_divide_before_square(height):
+    # One high-shell pixel removes every reduction-order ambiguity. At 30x30,
+    # rounding 1/900 before squaring/rescaling gives the next float32 above 1.
+    # At 32x32, division by 1024 is exact: both orders legitimately give 1.
+    centered = np.zeros((1, height, height // 2 + 1), dtype=np.complex64)
+    centered[0, height // 2, 9] = 1.0  # ky=0, kx=9; above current_size/2=7.
+    expected = np.float32(1.0)
+    if height == 30:
+        expected = np.nextafter(expected, np.float32(2.0))
+
+    actual = np.asarray(
+        _relion_cuda_powerclass_highres_norm_units(
+            jnp.asarray(centered.reshape(1, -1)),
+            image_shape=(height, height),
+            current_size=14,
+        )
+    )
+
+    np.testing.assert_array_equal(actual, np.asarray([expected], dtype=np.float32))
+    assert actual.dtype == np.float32
 
 
 def test_relion_cuda_fine_raw_routes_add_powerclass_tail_once_per_hypothesis():

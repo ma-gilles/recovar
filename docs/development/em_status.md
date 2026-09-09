@@ -50,6 +50,16 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
+The earlier power-class CPU negative-control failure is a demonstrated fixture
+defect:32x32 scales by an exact power of two, so normalization order need not
+produce different values. The randomized independent-reference assertion remains;
+a single high-shell pixel at30x30 now discriminates divide-before-square exactly
+(one float32 ULP), with32x32 retained as an equality control. A square-first
+mutation is rejected at30 and accepted at32 as expected. Combined sparse/BPref
+panel107/107 passes with no skips; production and tolerances are untouched.
+Historical failures remain in their original receipts. [Proof, mutation check
+and commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/powerclass_order_fixture_20260909/result.json).
+
 K1/fused-K-class BPref preprocessing capture assembly now shares one diagnostic
 builder; callers retain the original device operands and capture gates. The
 expanded execution AST and original tests are unchanged. Baseline65/candidate75
