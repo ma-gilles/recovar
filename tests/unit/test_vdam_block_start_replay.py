@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import numpy as np
@@ -292,12 +293,21 @@ def test_native_trace_first_atomic_precedes_interpolation_registers():
         "__global__ void relion_vdam_cast_accumulator_kernel(", maxsplit=1
     )[0]
 
-    trace_position = kernel.index("trace_record->first_atomic_globaltimer =")
-    interpolation_position = kernel.index("int x0 = floorf(xp);")
+    # Match the clock sample, not the earlier initialization to zero. The
+    # native trace marks entry to interpolation, before the first atomic add.
+    trace_assignment = re.search(
+        r"trace_record->first_atomic_globaltimer\s*=\s*vdam_candidate_globaltimer\(\);",
+        kernel,
+    )
+    assert trace_assignment is not None, "missing first-atomic clock sample"
+    trace_position = trace_assignment.start()
+    interpolation_position = kernel.index("x0 = floorf(xp);")
     first_atomic_position = kernel.index(
         "RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y0, x0, dd000);"
     )
-    assert trace_position < interpolation_position < first_atomic_position
+    assert trace_position < interpolation_position < first_atomic_position, (
+        "first-atomic clock sample must precede interpolation setup, as in native RELION"
+    )
 
     no_atomic_position = kernel.rindex("if (trace_first_atomic_claimed == 0)")
     block_end_position = kernel.rindex(
