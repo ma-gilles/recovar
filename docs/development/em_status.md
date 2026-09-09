@@ -35,7 +35,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | Candidate block-map schema/writer now share the VDAM replay owner: local engine 8,256 lines, sparse scorer 17,383, half scorer 1,358, controller 6,123 |
+| Latest production cleanup | Local projection backends now share result assembly: local engine 8,229 lines, sparse scorer 17,383, half scorer 1,358, controller 6,123 |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -260,6 +260,39 @@ use that owner directly. Function bodies and all retained scorer statements are
 AST-identical after namespace mapping. Counter sequencing, filter short-circuit
 order, NPZ schema, casts and error behavior remain unchanged. Sparse scoring
 loses 176 lines (19,460 → 19,284); the two modules together add one line.
+
+Local bucket projection now selects its backend, then assembles its result once.
+RELION and indexed compact outputs share score/reconstruction gathers; ordinary
+full-spectrum output retains its window selection. All paths share weighting
+and precision conversion. Backend conditions/calls, pixel order, optional noise
+projection and per-stage dtypes are unchanged. No new module, class or wrapper.
+
+The three existing helper/BigJIT-vs-split CPU checks pass before/after. Eighty
+new exact cases cover five backend choices, full/cropped windows, reconstruction
+on/off, complex64/complex128 input and both scoring policies (**83 total**, zero
+skips). A separate replay executes the sealed original helper against the new
+one: 80 valid configurations and nine error cases match returned shape/dtype/
+bytes, input preservation and backend/cast-call sequences. All three backend
+call ASTs and every engine statement outside this helper are unchanged.
+The CPU/import guard passes 38/38 on the same source/test manifest and fingerprint.
+This does not run native GPU kernels or qualify trajectory/runtime behavior.
+
+The helper shrinks 165→138 lines; engine 8,256→8,229, a net production reduction
+of **27 lines**. The main routine remains 5,665 lines. Array operations retain
+their order; function-local aliases converge before return, with no measured
+memory claim. Production precision/defaults and source-Euler metadata are untouched.
+Existing unrelated trace-order, strict-state and quality failures remain open.
+
+Reproduce with `mstep_dc_integration_20260909/run_checks.sh NEW_LABEL -v`
+plus `tests/unit/test_local_projection_results.py` and
+`tests/unit/test_refine_relion_mode.py -k 'test_local_projection_views or
+project_local_bucket or windowed_relion_projector_big_jit_matches_split'`
+(on one command line), then `--fast-guard` under a fresh label. Sealed source,
+audit script/results and validation receipts:
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/local_projection_results_20260909/`.
+Logs/XML:
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/local_projection_results_{control,after,guard}_20260909/`.
+No new Slurm/GPU job or native build. Broader cleanup and qualification remain.
 
 Candidate block-map publication now belongs to `helpers/vdam_replay.py` together
 with its binary schema. The CLI reader imports the same magic, dtypes and flags;

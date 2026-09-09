@@ -1160,30 +1160,7 @@ def _project_local_bucket(
             relion_acc_double_floorf_quirk=relion_acc_double_floorf_quirk,
             **projector_kwargs,
         )
-        if window_spec.use_window:
-            if materialize_recon_projection:
-                proj_half = proj_relion_flat[..., window_spec.score_projection_take].reshape(
-                    batch_size,
-                    bucket_rotation_count,
-                    window_spec.n_score,
-                )
-                proj_for_noise = proj_relion_flat[..., window_spec.recon_projection_take].reshape(
-                    batch_size,
-                    bucket_rotation_count,
-                    window_spec.n_recon,
-                )
-            else:
-                proj_half = proj_relion_flat.reshape(batch_size, bucket_rotation_count, window_spec.n_score)
-                proj_for_noise = None
-            score_half_weights = window_spec.score_values(half_weights)
-            proj_weighted = proj_half * score_half_weights[None, None, :]
-            proj_weighted, proj_for_noise, _, _ = precision_policy.cast_local_projection_scores(
-                proj_weighted,
-                proj_for_noise,
-                None,
-                None,
-            )
-            return _LocalProjectionBlock(proj_weighted=proj_weighted, proj_for_noise=proj_for_noise)
+        compact_projection = window_spec.use_window
         proj_half_flat = proj_relion_flat
     elif (
         window_spec.use_window
@@ -1203,29 +1180,8 @@ def _project_local_bucket(
             disc_type,
             max_r=projection_kwargs.get("max_r"),
         )
-        if materialize_recon_projection:
-            proj_half = proj_window_flat[..., window_spec.score_projection_take].reshape(
-                batch_size,
-                bucket_rotation_count,
-                window_spec.n_score,
-            )
-            proj_for_noise = proj_window_flat[..., window_spec.recon_projection_take].reshape(
-                batch_size,
-                bucket_rotation_count,
-                window_spec.n_recon,
-            )
-        else:
-            proj_half = proj_window_flat.reshape(batch_size, bucket_rotation_count, window_spec.n_score)
-            proj_for_noise = None
-        score_half_weights = window_spec.score_values(half_weights)
-        proj_weighted = proj_half * score_half_weights[None, None, :]
-        proj_weighted, proj_for_noise, _, _ = precision_policy.cast_local_projection_scores(
-            proj_weighted,
-            proj_for_noise,
-            None,
-            None,
-        )
-        return _LocalProjectionBlock(proj_weighted=proj_weighted, proj_for_noise=proj_for_noise)
+        proj_half_flat = proj_window_flat
+        compact_projection = True
     else:
         ordinary_projection_kwargs = dict(projection_kwargs)
         ordinary_projection_kwargs.pop("mask_current_image_disk", None)
@@ -1238,22 +1194,39 @@ def _project_local_bucket(
             return_abs2=False,
             **ordinary_projection_kwargs,
         )
+        compact_projection = False
 
     if window_spec.use_window:
-        proj_half = window_spec.score_values(proj_half_flat).reshape(
-            batch_size,
-            bucket_rotation_count,
-            window_spec.n_score,
-        )
-        proj_for_noise = (
-            window_spec.recon_values(proj_half_flat).reshape(
+        if compact_projection:
+            if materialize_recon_projection:
+                proj_half = proj_half_flat[..., window_spec.score_projection_take].reshape(
+                    batch_size,
+                    bucket_rotation_count,
+                    window_spec.n_score,
+                )
+                proj_for_noise = proj_half_flat[..., window_spec.recon_projection_take].reshape(
+                    batch_size,
+                    bucket_rotation_count,
+                    window_spec.n_recon,
+                )
+            else:
+                proj_half = proj_half_flat.reshape(batch_size, bucket_rotation_count, window_spec.n_score)
+                proj_for_noise = None
+        else:
+            proj_half = window_spec.score_values(proj_half_flat).reshape(
                 batch_size,
                 bucket_rotation_count,
-                window_spec.n_recon,
+                window_spec.n_score,
             )
-            if materialize_recon_projection
-            else None
-        )
+            proj_for_noise = (
+                window_spec.recon_values(proj_half_flat).reshape(
+                    batch_size,
+                    bucket_rotation_count,
+                    window_spec.n_recon,
+                )
+                if materialize_recon_projection
+                else None
+            )
         score_half_weights = window_spec.score_values(half_weights)
     else:
         proj_half = proj_half_flat.reshape(batch_size, bucket_rotation_count, n_half)

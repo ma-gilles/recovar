@@ -141,6 +141,12 @@ same three-dimensional slab or singleton class axis. The helper preserves JAX
 dtype conversion and path-specific errors. Radius requirements, pixel selection,
 interpolation, masking and projection execution stay with the callers.
 
+Within `local_em_engine._project_local_bucket`, backend selection is separate
+from shared result assembly. RELION/indexed compact rows use the same score and
+reconstruction gathers; full outputs use the existing window selectors. Weighting
+and precision conversion have one call site. Optional reconstruction and native
+projection arguments remain explicit, with no additional result wrapper.
+
 Sealed VDAM worker and block-chronology replay lives in
 [`helpers/vdam_replay.py`](../../recovar/em/dense_single_volume/helpers/vdam_replay.py).
 It owns NPZ schema validation, four cached loaders, stack-ID joins, worker/launch
