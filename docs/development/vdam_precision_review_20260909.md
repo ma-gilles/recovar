@@ -322,8 +322,8 @@ Private correction `b17913a91`, separate from the explicit F32 capability commit
 clears only the imaginary centered DC immediately before the inverse FFT in both
 M precisions. It retains real DC, all other Fourier coefficients and the earlier
 moments/priors/accumulators. This is not a general Hermitian-boundary repair.
-The shared implementation has not adopted either commit; its inherited F64
-numerical M default remains unchanged.
+At the initial receipt review neither commit was adopted. The later authorized
+integration below preserves the inherited F64 numerical M default.
 
 Integrator review independently checked 53 named material hashes before/after,
 the clean private source identities and nine changed-file hashes across the DC
@@ -366,7 +366,8 @@ projector failures reproduce on its base and remain recorded. This smoke is
 not trajectory acceptance or a benchmark. Full200 job13644924 is running on
 that frozen source; preserve its source/native pins and avoid duplicate jobs.
 The route has only source-identity/receipt review here, not integration approval.
-Precision907, the F32 capability, DC fix and route remain private and unadopted.
+At this initial receipt review, precision907, the F32 capability, DC fix and
+route were private and unadopted. The subsequent integration decision follows.
 
 Independent review and reproduction: run
 `mstep_dc_receipt_review_20260909/review.py` under the source-review root with
@@ -374,3 +375,69 @@ primary pixi Python, `CUDA_VISIBLE_DEVICES=''`, `JAX_PLATFORMS=cpu` and one
 OpenBLAS thread. Exact findings/pins are in `review.json`; peer artifacts are
 under `em_work/codex/vdam_mstep_f32_replay_20260909/`. Coordination receipt:
 `handoffs/em_clean_mstep_dc_receipt_review_20260909.json`.
+
+
+## Authorized M capability and DC integration
+
+Following explicit user authorization, merge **`29d7e38a500892b61e28579f251653bf0bef591b`**
+incorporates capability `1b4f2adee` and DC correction `b17913a91` onto shared
+`c9bc5ab0b`. Both original commits remain in history. Exactly four files change:
+`helpers/relion_projector_setup.py`, `helpers/relion_vdam_mstep.py` and the two
+new `initial_model/test_device_m_step_{precision,real_dc}.py` tests. Each merged
+file is byte-identical to the reviewed handoff. Core, reconstruction, native
+binding and existing affected tests are unchanged since the candidate base49ef.
+No CLI route, precision907, baseline or non-EM behavior change is included.
+
+The device/host M APIs accept explicit `compute_dtype`; inherited F64 remains
+the default. Requested F32 uses an uncorrected F32 projector/FFT, rejects silent
+native-double fallback for FFT grids below16 and preserves authoritative tau2.
+M shell geometry keeps the existing F64 rounding rule. Persistent publication,
+solvent masking, corrected projector refresh and other numerical stages retain
+their existing precision. This capability does not establish an all-F32 pipeline.
+The separately approved DC correction is active for both working precisions.
+
+Integration validation on primary:
+
+- Pre-merge control:156 existing native transaction/projector cases pass.
+- Merged source:173 CPU cases pass in18.55s; four GPU cases explicitly deselected.
+  These comprise the same156 existing cases plus17 new precision/DC checks.
+- CPU/import guard:38 pass in43.44s. Both integrated panels preserve identical
+  complete source manifests and the pinned native library hash.
+- Existing A100 analytical tests:4 pass, zero skips. Integrator verified XML,
+  both changed source/test hashes and the exact dirty precommit diff that became
+  b179. This is reused private-source evidence, not a fresh primary GPU panel.
+  The earlier18-call saved-state replay remains separately bounded evidence.
+
+The first control attempt failed at fixture setup because the generic cleanup
+wrapper's older native binding lacked `vdam_m_step_transaction`:19 passes and
+137 setup errors. That output remains intact. A task-specific wrapper selects
+existing pinned binding`6fefa350…` from
+`vdam_source_closed_pair_20260909_v2/native/relion_bind/`; it does not rebuild or
+mutate either binding. The corrected control and merged panels pass unchanged
+assertions. This environment repair does not erase prior numerical failures.
+
+Reproduce with the primary checkout and
+`hia_source_review_20260906/mstep_dc_integration_20260909/run_checks.sh`:
+
+```bash
+bash "$REVIEW/run_checks.sh" <fresh-label> \
+  tests/unit/initial_model/test_device_m_step_transaction.py \
+  tests/unit/test_relion_projector_setup.py \
+  tests/unit/initial_model/test_device_m_step_precision.py \
+  tests/unit/initial_model/test_device_m_step_real_dc.py -m 'not gpu'
+bash "$REVIEW/run_checks.sh" <fresh-guard-label> --fast-guard
+```
+
+Here `REVIEW` is the absolute source-review directory ending in
+`mstep_dc_integration_20260909`. Scope, exact commands, checks and pins are in
+`{scope,merge,validation,gpu_evidence_review,environment_repair}.json` there.
+CPU logs/XML live under `em_work/codex/pr180_integration_20260908/` in
+`mstep_dc_control_20260909`, `mstep_dc_control_v2_20260909`,
+`mstep_dc_integrated_20260909` and `mstep_dc_guard_20260909`.
+
+No new GPU or Slurm job was launched. Private routebae959's smoke13644423 and
+full200job13644924 do not qualify this exact shared composition. Strict state,
+pose/tie, trajectoryGT, current100k performance and exactK4/real-data completion
+gates remain open. Capability/DC source admission does not mean those gates
+passed. Precision907 and the CLI route remain unmerged; frozen peer sources,
+existing failed runs and native dependencies remain untouched.

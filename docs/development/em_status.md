@@ -105,17 +105,31 @@ link to the GT loss. The eight counter differences from a replay omitting sampli
 resets remain recorded; full convergence/finalization parity is not established.
 See the [resolution review](vdam_precision_review_20260909.md#saved-spectrum-resolution-boundary).
 
-Private F32 M follow-ups are now separated into capability `1b4f2adee`, DC
-correction `b17913a91` and opt-in CLI route `bae959dab`. Integrator saved-artifact
-review verifies all six prepared-input pairs and the map-gap reduction
-6.93e-5→2.36e-7 after DC correction, plus byte-identical native CPU maps with
-imaginary gradient DC removed. These are fixed-input numerical measurements;
-they do not resolve the earlier trajectory GT failure. The same-reference
-projector-power CPU check supports a difference already in incoming maps.
-Peer two-update H100 smoke13644423 passed; full200 job13644924 is running on
-frozen private source. All three changes and precision907 remain unadopted.
-See the [DC and route review](vdam_precision_review_20260909.md#private-f32-m-inverse-fft-dc-follow-up)
-for exact independent/peer evidence scopes, residual differences and open gates.
+User-authorized merge **`29d7e38a5`** incorporates explicit M precision capability
+`1b4f2adee` and separate six-line DC correction `b17913a91`, preserving both
+original commits and all four handoff files byte-for-byte. The inherited F64
+working default remains; F32 is an explicit helper argument. Real DC is enforced
+before inverse FFT in both precisions. This is a separately approved numerical
+integration, not structural cleanup or full-F32 trajectory acceptance.
+
+With the pinned VDAM-capable native binding, the same156 original native/F64
+cases pass before/after; integrated focused coverage totals173 CPU passes,
+four GPU cases deselected, followed by guard38/38 with identical source manifests.
+The existing four analytical A100 cases have verified source/test hashes and
+recorded precommit diff matching mergedb179; they were not rerun on primary.
+The first control attempt used an older binding lacking the VDAM API (19pass,
+137 setup errors), is preserved, and was rerun under a new output label without
+rebuilding or changing scientific assertions.
+
+Previous independent saved-input review verifies six exact prepared pairs and
+map-gap reduction6.93e-5→2.36e-7 after DC correction, plus byte-identical native
+CPU maps when imaginary gradient DC is removed. This does not resolve the
+trajectoryGT155 failure. The same-reference projector-power CPU check supports
+a difference already in incoming maps. **CLI route `bae959dab` and precision907
+remain private/unmerged.** Peer route smoke13644423 and full200job13644924 are
+separate evidence on frozen private source; no duplicate GPU work is assigned.
+See the [integration record](vdam_precision_review_20260909.md#authorized-m-capability-and-dc-integration)
+for commands, source pins and stage-precision limits.
 
 Raw-prefetch source is unassigned. The RELION header lock is
 released: five diagnostic insertions remain, and shared benchmark binaries plus
