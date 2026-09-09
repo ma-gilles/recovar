@@ -40,7 +40,7 @@ chase while quality remains open.
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest structural source checkpoint | Bucket preprocessing/result publication following `6e2bd10ac`; local engine 7,868 lines, sparse scorer 17,383, half scorer 1,358, controller 6,123 |
+| Latest structural source checkpoint | Host candidate preparation following `c6a5eccd2`; local engine 7,834, sparse scorer 16,531, half scorer 1,363, controller 6,051 |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
 | Incorporated history | PR180 `1e2f229b3`; cleanup anchor `0b52c995a`; VDAM merge `c38fc62f0`; separate global-window correction `0219caa35` |
 | Publication | [Draft PR179](https://github.com/ma-gilles/recovar/pull/179), stacked on [PR158](https://github.com/ma-gilles/recovar/pull/158); em_clean is sole integrator/publisher |
@@ -159,6 +159,23 @@ iteration10,class2. No current100k speed or broad quality acceptance is claimed.
 
 ## Engineering work and recent evidence
 
+Per-image fine candidate preparation now lives beside the host bucket builders in
+`helpers.sparse_bucket_arrays`; coarse support encodings have a small independent
+owner, `helpers.significant_samples`. This removes their dependency on coarse
+scoring. The class, three encoding functions and preparation function retain exact
+ASTs, including source-Euler permutations, priors, shared buffers and dtype/order.
+All affected callers and independent-reference imports migrate without changing
+reference expressions. The complement class retains its legacy pickle identity
+and annotation types. Final31 CPU cases and38 guard cases pass; archived bodies
+also pass31 cases, and254 old/new support/pickle payload hashes are exact. One new
+import-order finding was fixed; final checks rerun, pre-existing scorer I001 retained.
+No GPU/build/job changes. Receipt with source inventories and exact commands:
+[Candidate preparation](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/per_image_candidate_owner_20260909/result.json).
+
+VDAM full200 job13653485 on frozen4f9 is terminal COMPLETED0:0 (Slurm checked
+September9); scientific analysis remains peer-owned and pending review. This run
+cannot qualify later structural checkpoints merely by successful execution.
+
 Rectangular and compact sparse bucket arrays now have one host assembly owner,
 `helpers.sparse_bucket_arrays`. Five exact function bodies move with direct
 engine/test/parity-script callers; scheduling and candidate selection stay in the
@@ -166,8 +183,8 @@ engine. Existing12 CPU cases pass on current and archived builders, including
 padding, M-step rotation aliases, explicit F64 inputs and dense-reference score
 comparisons. The38-case guard passes and checks the new helper import boundary;
 parity CLI help passes. No assertions or numerical tolerances changed. Sparse
-scorer−241 lines, new owner246; net production+5. Local checkpoint for the next
-batch; no GPU/trajectory/runtime qualification.
+scorer−241 lines, new owner246; net production+5. Part of the host-preparation
+publication batch; no GPU/trajectory/runtime qualification.
 [Receipt and commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/sparse_bucket_arrays_owner_20260909/result.json).
 
 Host candidate masks, compact pair indices and flat fine-job plans now live in
@@ -310,23 +327,21 @@ of deriving it from a float32 matrix. Peer H100 prefix20 job13647974 reports
 100 exact angular/translation crossings and Euler triples, 21 passing map gates
 (minimum cross-FSC-AUC 0.99999999957), 657 available discrete comparisons exact
 and 36 unavailable. Pmax maximum is 8e-5 versus native_off1 and 1.89e-4 across
-three controls; saved Euler/origin maxima are 5e-6. Full200 and broader gates
-remain open. Integrator review verifies 15 source hashes and no textual merge
-conflicts, but reproduces metadata loss in `_local_layout_for_class` with
-class-specific priors. Forwarding plus a regression is required before shared
-K-class coverage acceptance. Review: board handoff
-`em_clean_source_euler_readonly_review_20260909.json`. No source adoption,
-scoring-precision change, cutoff change or duplicate GPU run is assigned.
+three controls; saved Euler/origin maxima are 5e-6. These are the historical private prefix results. The initial integrator review
+verified15 source hashes and reproduced source-Euler loss with class-specific
+priors; that repair is now integrated at479e888f9/db52d1bca, with canonical-angle
+publication at1624dd396. See the integration evidence above and the historical
+`em_clean_source_euler_readonly_review_20260909.json` handoff. Broader K4 and
+strict trajectory coverage remain open; precision907 remains separate.
 
 Next work:
 
 1. Continue separating local execution stages and setup data flow; preserve
    backend selection, JIT boundaries and allocation lifetime.
-2. Review the private Euler repair at a clean handoff, with a failing regression
-   and fixed-state evidence before integration. Keep numerical review separate
-   from structural cleanup and precision907.
-3. Reconcile current-source validation failures and inspect the existing exact-K4
-   audit when terminal; do not repeat long jobs after each helper edit.
+2. Review VDAM's completed frozen4f9 full200 analysis when the peer handoff is
+   ready. Keep numerical acceptance separate from structural cleanup and907.
+3. Reconcile current-source validation failures and the failed exact-K4 audit;
+   do not repeat long jobs after each helper edit.
 4. Continue shared non-EM cleanup and plan the required shared/real/K4 milestone
    checks after cohesive checkpoints. GUI and the new engine remain deferred.
 

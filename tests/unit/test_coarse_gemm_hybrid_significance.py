@@ -14,6 +14,7 @@ from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
     map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids,
     plan_coarse_gemm_certificate_topology,
 )
+from recovar.em.dense_single_volume.helpers.significant_samples import ComplementSignificantSampleIndices
 
 
 def test_direct_and_hybrid_share_disk_masked_compact_projection_operands():
@@ -204,7 +205,7 @@ def test_coarse_significance_support_audit_is_exact_and_localizable():
     supports = [
         [
             np.asarray([1, 3], dtype=np.int32),
-            significance.ComplementSignificantSampleIndices(
+            ComplementSignificantSampleIndices(
                 excluded_indices=np.asarray([0, 2], dtype=np.int32),
                 total_size=4,
             ),

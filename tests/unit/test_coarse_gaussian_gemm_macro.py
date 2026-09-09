@@ -13,6 +13,7 @@ from recovar.em.dense_single_volume.helpers import coarse_score_diagnostics, rel
 from recovar.em.dense_single_volume.helpers.coarse_gemm_streaming import (
     COARSE_GEMM_STREAMING_SCHEMA,
 )
+from recovar.em.dense_single_volume.helpers.significant_samples import significant_sample_ids
 
 
 def _macro_operands(*, real_dtype, n_images=4, n_trans=3, n_rotations=5, n_pixels=11):
@@ -2573,7 +2574,7 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
         for image_index in range(3):
             image_pairs = []
             for class_index in range(2):
-                for pose_id in significance.significant_sample_ids(
+                for pose_id in significant_sample_ids(
                     result[4][class_index][image_index],
                     6,
                 ):
@@ -2661,7 +2662,7 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
     for class_index in range(2):
         for image_index in range(3):
             np.testing.assert_array_equal(
-                significance.significant_sample_ids(
+                significant_sample_ids(
                     clean[4][class_index][image_index],
                     6,
                 ),

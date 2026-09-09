@@ -20,8 +20,10 @@ from recovar.utils.nvtx_shim import nvtx
 from .em_engine import run_em
 from .helpers.half_volume_mstep import relion_backprojector_volume_shape
 from .helpers.significance import (
-    ComplementSignificantSampleIndices,
     _validate_coarse_selector_audit,
+)
+from .helpers.significant_samples import (
+    ComplementSignificantSampleIndices,
     significant_sample_count,
 )
 from .helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats

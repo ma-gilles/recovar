@@ -12,7 +12,9 @@ import pytest
 from recovar.em import sampling
 from recovar.em.dense_single_volume import k_class
 from recovar.em.dense_single_volume import local_em_engine as engine
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import _prepare_per_image_pass2_inputs
+from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
+    _prepare_per_image_pass2_inputs,
+)
 from recovar.em.dense_single_volume.helpers.types import LocalEMResult, make_relion_stats
 from recovar.em.dense_single_volume.local_layout import (
     LocalHypothesisLayout,

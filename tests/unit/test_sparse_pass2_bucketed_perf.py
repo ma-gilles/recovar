@@ -50,7 +50,7 @@ from recovar.em.dense_single_volume.helpers.preprocessing import (
     half_translation_phase_table,
 )
 from recovar.em.dense_single_volume.helpers.projection import compute_noise_block
-from recovar.em.dense_single_volume.helpers.significance import (
+from recovar.em.dense_single_volume.helpers.significant_samples import (
     ComplementSignificantSampleIndices,
     compact_significant_sample_indices_from_mask,
     significant_sample_count,
@@ -60,6 +60,7 @@ from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
     _build_compact_pair_bucket_arrays,
     _build_compact_pair_bucket_arrays_from_per_image_inputs,
     _build_k_class_bucket_arrays,
+    _prepare_per_image_pass2_inputs,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _accumulate_adjoint_block_chunked,
@@ -131,7 +132,6 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _pass2_dump_enabled,
     _prepare_bucket_io,
     _prepare_per_image_compact_candidate_pairs,
-    _prepare_per_image_pass2_inputs,
     _projection_budget_pixels_for_pass,
     _projection_cache_budget_complex_dtype,
     _projection_cache_enabled_for_pass,
@@ -980,7 +980,9 @@ def test_bucket_count_bounded_under_varied_per_image_rotation_counts():
     ]
 
     # Build per-image inputs the way compute_pass2_stats_sparse_bucketed does.
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import _prepare_per_image_pass2_inputs
+    from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
+        _prepare_per_image_pass2_inputs,
+    )
 
     # fine_translation_parent maps fine trans -> coarse trans. With oversampling=1
     # in 2D, each coarse trans expands to 4 children, so trans 0..3 map to coarse 0,
