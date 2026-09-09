@@ -2,6 +2,36 @@
 
 ## Structural cleanup after VDAM integration — September 9
 
+Fourteen duplicated local binary-flag readers were replaced with direct calls
+to `helpers.env_flags.parse_env_binary_flag` in `7b687dde8`. The engine shrinks
+by 98 lines and production Python by 90 net lines. All 336 frozen comparisons
+match return values, error types/messages and environment lookups. The engine
+AST is unchanged after the explicit call mapping; existing tests retain their
+assertions and parameters under that mapping. Permissive flag readers and
+scientific defaults are unchanged.
+
+The first affected run passed 322 cases and exposed one inherited frozen
+packing-checksum failure. The pre-edit and current packing blocks were identical;
+the only difference from pinned `6d11f325` was its former float32 rotation cast.
+A separate test repair retains the original checksum and explicitly normalizes
+only that reviewed expression. Four new live packing cases check float32 and
+float64 rotation dtype/values; injecting the old cast into the test's extracted
+AST makes both float64 cases fail. Production code is untouched by this repair.
+The final affected CPU panel passes 327 cases in 21.38 seconds, retaining all
+323 prior cases and adding four; 48 GPU cases are explicitly deselected. The
+38-case numerical fast guard also passes. No GPU or Slurm jobs were launched.
+
+Exact commands, source hashes and the original failure are recorded under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/` in
+`binary_flags_affected_20260909`, `binary_flags_affected_final_20260909`,
+`binary_flags_packing_migration_20260909`,
+`binary_flags_packing_precision_red_20260909` and
+`binary_flags_fast_guard_20260909`. The coordination handoffs
+`em_clean_binary_flags_20260909.json` and
+`em_clean_packing_checksum_migration_20260909.json` link reproducible comparison
+and fault-injection scripts. The existing unrelated import-order lint findings
+are unchanged; the shared parser and repaired test pass Ruff.
+
 The materialized fine-grid significance mask now belongs to
 `tests/helpers/fine_grid_significance_reference.py`. Only two test modules use
 it, to check production lazy masks and explicit/complement support. The moved

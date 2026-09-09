@@ -117,13 +117,29 @@ def test_disabled_packing_statement_order_matches_frozen_parent():
             return self.generic_visit(node)
 
     body = ast.Module(body=_packing_body(), type_ignores=[])
+    # The precision integration removed one narrowing cast. Require exactly
+    # that expression, then restore its old AST only for the frozen comparison.
+    # The live packing test below independently checks dtype preservation.
+    rotation_inputs = [
+        node.value.args[0] for node in ast.walk(body)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "packed_rotations_np" for target in node.targets)
+    ]
+    assert len(rotation_inputs) == 1
+    assert ast.unparse(rotation_inputs[0]) == "np.asarray(bucket.local_rotations[:unpadded_batch_size])"
+    rotation_inputs[0].keywords.append(
+        ast.keyword(arg="dtype", value=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="float32", ctx=ast.Load()))
+    )
     normalized = Disable().visit(body)
     # Entire original packing body from immutable 6d11f325, not just selected expressions.
     digest = hashlib.sha256(ast.dump(normalized, include_attributes=False).encode()).hexdigest()
     assert digest == "2aad4cc3e721ba61736b47a031e252d2b2c1097abda8e653812adfb58f967e4f"
 
 
-def _execute(monkeypatch, enabled, batch=2, use_window=True, bad_shape=False, fail_helper=False, cuda_enabled=False):
+def _execute(
+    monkeypatch, enabled, batch=2, use_window=True, bad_shape=False, fail_helper=False,
+    cuda_enabled=False, rotation_dtype=np.float32,
+):
     b, r, t, p = 3, 4, 3, 2
     probabilities = jnp.asarray(np.arange(b * r * t, dtype=np.float32).reshape(b, r, t) / 16)
     sums = jnp.sum(probabilities, axis=2)
@@ -134,7 +150,9 @@ def _execute(monkeypatch, enabled, batch=2, use_window=True, bad_shape=False, fa
     plan = np.asarray([(i, j, 1) for i in range(b) for j in range(r)], np.int32)[::-1].copy()
     take = np.asarray([[3, 1], [2, 0], [1, 3]], np.int32)[:batch]
     mask = np.asarray([[True, False], [True, True], [False, True]])[:batch]
-    rotations = np.arange(b * r * 9, dtype=np.float32).reshape(b, r, 3, 3)
+    rotations = np.arange(b * r * 9, dtype=rotation_dtype).reshape(b, r, 3, 3)
+    if rotation_dtype == np.float64:
+        rotations += 2.0 ** -30  # Values that an unintended float32 cast loses.
     events = []
     calls = []
     returned = []
@@ -226,6 +244,7 @@ def _execute(monkeypatch, enabled, batch=2, use_window=True, bad_shape=False, fa
     assert events.count("denominator_double") == 1
     assert events.count("compiled_helper") == int(enabled)
     assert env["reconstruction_take_indices"] is take and env["reconstruction_pack_mask_np"] is mask
+    assert env["packed_rotations_np"].dtype == rotations.dtype
     np.testing.assert_array_equal(
         env["packed_rotations_np"], np.take_along_axis(rotations[:batch], take[:, :, None, None], axis=1)
     )
@@ -252,6 +271,12 @@ def _execute(monkeypatch, enabled, batch=2, use_window=True, bad_shape=False, fa
         np.testing.assert_array_equal(args[8], env["packed_flat_take_indices"])
         assert all(env[n] is out for n, out in zip(names, returned[0], strict=True))
     return tuple(np.asarray(env[n]) for n in names)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("rotation_dtype", [np.float32, np.float64])
+def test_actual_pack_preserves_rotation_precision(monkeypatch, enabled, rotation_dtype):
+    _execute(monkeypatch, enabled, rotation_dtype=rotation_dtype)
 
 
 @pytest.mark.parametrize("batch,use_window", [(2, True), (3, True), (2, False), (3, False)])

@@ -121,6 +121,12 @@ native signature panels. Dump schemas, precision, counter order and error
 behavior remain unchanged. The boolean parser is shared through
 `helpers.env_flags.parse_env_flag`; file identities use `utils.file_hash`.
 
+Strict local capacity/packing selectors call `helpers.env_flags.parse_env_binary_flag`
+directly. It accepts only `0` and `1` after stripping whitespace, defaults to
+false when unset, and rejects blank or textual boolean values. Its behavior
+differs from the permissive diagnostic parser above; do not interchange them
+during structural cleanup. The engine retains the order of reads and mode checks.
+
 Unused constant copies in `iteration_loop` have also been retired. Batch and
 raw-image-cache limits, first-iteration reconstruction caps, dense K-class
 hypothesis budgets and adaptive pass plans belong to `batch_planning`.
