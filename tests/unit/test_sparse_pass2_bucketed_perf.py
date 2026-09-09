@@ -6697,7 +6697,8 @@ def test_exact_relion_fine_posterior_implies_relion_parent_execution_order(monke
     )
 
 
-def test_full_support_fine_rotation_override_reuses_shared_arrays():
+@pytest.mark.parametrize("with_prior", [False, True])
+def test_full_support_fine_rotation_override_reuses_shared_arrays(with_prior):
     fine_rotations = np.arange(6 * 9, dtype=np.float32).reshape(6, 3, 3)
     fine_parent = np.array([0, 1, 0, 2, 1, 2], dtype=np.int64)
     rotation_log_prior = np.log(np.array([0.2, 0.3, 0.5], dtype=np.float32))
@@ -6710,7 +6711,7 @@ def test_full_support_fine_rotation_override_reuses_shared_arrays():
         oversampling_order=1,
         n_fine_trans=2,
         fine_translation_parent=np.array([0, 0], dtype=np.int32),
-        rotation_log_prior=rotation_log_prior,
+        rotation_log_prior=rotation_log_prior if with_prior else None,
         random_perturbation=0.0,
         fine_rotations_override=fine_rotations,
         fine_rotation_parent_override=fine_parent,
@@ -6722,7 +6723,8 @@ def test_full_support_fine_rotation_override_reuses_shared_arrays():
     np.testing.assert_array_equal(per_image["oversampled_rot_indices"][0], np.arange(6, dtype=np.int64))
     np.testing.assert_array_equal(per_image["parent_map"][0], fine_parent.astype(np.int32))
     np.testing.assert_array_equal(per_image["oversampled_rots"][0], fine_rotations)
-    np.testing.assert_allclose(per_image["log_prior"][0], rotation_log_prior[fine_parent], rtol=0, atol=0)
+    expected_prior = rotation_log_prior[fine_parent] if with_prior else np.zeros(6, dtype=np.float32)
+    np.testing.assert_allclose(per_image["log_prior"][0], expected_prior, rtol=0, atol=0)
     assert isinstance(per_image["candidate_mask"][0], SparseCandidateMask)
     assert per_image["candidate_mask"][0].mode == "full"
     assert _candidate_mask_count(per_image["candidate_mask"][0]) == 12

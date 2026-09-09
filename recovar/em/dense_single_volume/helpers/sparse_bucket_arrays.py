@@ -65,7 +65,6 @@ def _prepare_per_image_pass2_inputs(
     full_unique_rot = np.arange(n_coarse_rot, dtype=np.int32)
     full_support_rotation_cache = None
     full_support_log_prior_cache = None
-    full_support_zero_log_prior_cache = None
     full_support_candidate_mask_cache = None
 
     if rotation_log_prior is not None:
@@ -158,19 +157,17 @@ def _prepare_per_image_pass2_inputs(
             coarse_trans = None
             coarse_excluded = np.asarray(sig_samples.excluded_indices, dtype=np.int32).reshape(-1)
         else:
+            use_full_candidate_mask = False
+            use_full_rotation_support = False
             sig_samples = np.asarray(sig_samples, dtype=np.int32).reshape(-1)
             if sig_samples.size == 0:
                 coarse_rot = np.empty(0, dtype=np.int32)
                 coarse_trans = np.empty(0, dtype=np.int32)
                 unique_rot = np.array([0], dtype=np.int32)
-                use_full_candidate_mask = False
-                use_full_rotation_support = False
             else:
                 coarse_rot = sig_samples // n_coarse_trans
                 coarse_trans = sig_samples % n_coarse_trans
                 unique_rot = np.unique(coarse_rot)
-                use_full_candidate_mask = False
-                use_full_rotation_support = False
 
         if unique_rot.size == 0:
             raise ValueError(f"Image {image_idx} has no significant coarse samples for sparse pass 2")
@@ -195,16 +192,12 @@ def _prepare_per_image_pass2_inputs(
                         np.asarray(full_rot_indices, dtype=np.int64),
                         full_eulers,
                     )
-                elif fine_rotations_np is not None and fine_parent_np is not None:
+                else:  # Paired overrides were validated before entering the image loop.
                     full_support_rotation_cache = (
                         fine_rotations_np,
                         fine_parent_np.astype(np.int32, copy=False),
                         np.arange(fine_rotations_np.shape[0], dtype=np.int64),
                         fine_source_eulers,
-                    )
-                else:
-                    raise ValueError(
-                        "fine_rotations_override and fine_rotation_parent_override must be provided together"
                     )
                 full_support_rotation_cache = _reorder_children(
                     *full_support_rotation_cache,
@@ -233,7 +226,7 @@ def _prepare_per_image_pass2_inputs(
                 source_eulers,
                 unique_rot[parent_map],
             )
-        elif fine_rotations_np is not None and fine_parent_np is not None:
+        else:  # Paired overrides were validated before entering the image loop.
             selected_parent = np.zeros(n_coarse_rot, dtype=bool)
             selected_parent[unique_rot] = True
             child_mask = selected_parent[fine_parent_np]
@@ -247,29 +240,21 @@ def _prepare_per_image_pass2_inputs(
                 None if fine_source_eulers is None else fine_source_eulers[oversampled_rot_indices],
                 fine_parent_np[oversampled_rot_indices],
             )
-        else:
-            raise ValueError("fine_rotations_override and fine_rotation_parent_override must be provided together")
 
         oversampled_mstep_rots = (
             oversampled_rots if fine_mstep_rotations_np is None else fine_mstep_rotations_np[oversampled_rot_indices]
         )
 
-        if use_full_rotation_support:
-            if rotation_log_prior_np is not None:
-                if full_support_log_prior_cache is None:
-                    full_support_log_prior_cache = rotation_log_prior_np[full_unique_rot][parent_map].astype(
-                        dtype,
-                        copy=False,
-                    )
-                local_rotation_log_prior = full_support_log_prior_cache
-            else:
-                if full_support_zero_log_prior_cache is None:
-                    full_support_zero_log_prior_cache = np.zeros(oversampled_rots.shape[0], dtype=dtype)
-                local_rotation_log_prior = full_support_zero_log_prior_cache
+        if use_full_rotation_support and full_support_log_prior_cache is not None:
+            local_rotation_log_prior = full_support_log_prior_cache
         elif rotation_log_prior_np is not None:
             local_rotation_log_prior = rotation_log_prior_np[unique_rot][parent_map]
+            if use_full_rotation_support:
+                local_rotation_log_prior = local_rotation_log_prior.astype(dtype, copy=False)
         else:
             local_rotation_log_prior = np.zeros(oversampled_rots.shape[0], dtype=dtype)
+        if use_full_rotation_support:
+            full_support_log_prior_cache = local_rotation_log_prior
 
         if use_full_candidate_mask:
             if full_support_candidate_mask_cache is None:
@@ -543,30 +528,21 @@ def _build_k_class_bucket_arrays(
     maximum rotation support inside that chunk.
     """
 
-    if not compact_buckets:
-        return [
-            _build_bucket_arrays(
-                bucket,
-                per_image_inputs,
-                n_fine_trans,
-                include_dense_score_fields=include_dense_score_fields,
-            )
-            for per_image_inputs in per_image_inputs_by_class
-        ]
-
     class_arrays = []
-    forced_class_bucket_sizes = bucket.get("class_bucket_sizes")
+    forced_class_bucket_sizes = bucket.get("class_bucket_sizes") if compact_buckets else None
     for class_index, per_image_inputs in enumerate(per_image_inputs_by_class):
-        class_bucket = dict(bucket)
-        class_bucket["bucket_size"] = (
-            int(forced_class_bucket_sizes[class_index])
-            if forced_class_bucket_sizes is not None
-            else _compact_bucket_size_for_class(
-                bucket,
-                per_image_inputs,
-                rotation_block_size_for_quantization,
+        class_bucket = bucket
+        if compact_buckets:
+            class_bucket = dict(bucket)
+            class_bucket["bucket_size"] = (
+                int(forced_class_bucket_sizes[class_index])
+                if forced_class_bucket_sizes is not None
+                else _compact_bucket_size_for_class(
+                    bucket,
+                    per_image_inputs,
+                    rotation_block_size_for_quantization,
+                )
             )
-        )
         class_arrays.append(
             _build_bucket_arrays(
                 class_bucket,

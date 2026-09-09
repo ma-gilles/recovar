@@ -40,7 +40,7 @@ chase while quality remains open.
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest structural source checkpoint | Host candidate preparation following `c6a5eccd2`; local engine 7,834, sparse scorer 16,531, half scorer 1,363, controller 6,051 |
+| Latest structural source checkpoint | Candidate preparation simplification following `0e2b13da1`; local engine 7,834, sparse scorer 16,531, half scorer 1,363, controller 6,051 |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
 | Incorporated history | PR180 `1e2f229b3`; cleanup anchor `0b52c995a`; VDAM merge `c38fc62f0`; separate global-window correction `0219caa35` |
 | Publication | [Draft PR179](https://github.com/ma-gilles/recovar/pull/179), stacked on [PR158](https://github.com/ma-gilles/recovar/pull/158); em_clean is sole integrator/publisher |
@@ -158,6 +158,17 @@ Different physical H100, same class/driver: timing descriptive only. K4 audit
 iteration10,class2. No current100k speed or broad quality acceptance is claimed.
 
 ## Engineering work and recent evidence
+
+Candidate preparation now uses one full-support prior cache and one K-class
+bucket-builder call. Two repeated error arms are removed only after their upfront
+validation was proved to dominate them. Sampling and buffer ownership stay intact.
+The change removes24 production lines with no new abstraction/API.13 focused
+current and13 archived-control cases pass, as does38-case CPU guard. Differential
+replay matches72 preparations,120 invalid-override comparisons and8 four-class
+assemblies, including bytes, dtype, order, sampler calls and input/output sharing.
+The existing cache test now also covers absent priors; no assertion or tolerance
+is relaxed. Local checkpoint for the next publication batch; no scientific or
+runtime acceptance. [Receipt and commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/candidate_branch_cleanup_20260909/result.json).
 
 Per-image fine candidate preparation now lives beside the host bucket builders in
 `helpers.sparse_bucket_arrays`; coarse support encodings have a small independent
