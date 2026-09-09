@@ -879,6 +879,7 @@ def _local_layout_for_class(
         translation_log_priors=local_layout.translation_log_priors,
         rotation_posterior_ids_flat=local_layout.rotation_posterior_ids_flat,
         sample_mask_flat=local_layout.sample_mask_flat,
+        source_eulers_flat=local_layout.source_eulers_flat,
     )
 
 

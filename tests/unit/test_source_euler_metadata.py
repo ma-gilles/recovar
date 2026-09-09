@@ -14,9 +14,43 @@ from recovar.em.dense_single_volume import k_class
 from recovar.em.dense_single_volume import local_em_engine as engine
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import _prepare_per_image_pass2_inputs
 from recovar.em.dense_single_volume.helpers.types import LocalEMResult, make_relion_stats
-from recovar.em.dense_single_volume.local_layout import bucket_local_hypothesis_layout, build_pass2_hypothesis_layout
+from recovar.em.dense_single_volume.local_layout import (
+    LocalHypothesisLayout,
+    bucket_local_hypothesis_layout,
+    build_pass2_hypothesis_layout,
+)
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("with_source", [False, True])
+def test_class_prior_override_preserves_source_eulers(dtype, with_source):
+    source = (
+        np.array([[159.3271497477632, 126.91279408422895, 85.75518260708287]]) if with_source else None
+    )
+    layout = LocalHypothesisLayout(
+        n_global_rotations=1, n_pixels=1, n_psi=1,
+        rotation_offsets=np.array([0, 1]), rotation_ids_flat=np.array([0]),
+        rotations_flat=np.eye(3, dtype=dtype)[None],
+        rotation_log_priors_flat=np.zeros(1, dtype), rotation_counts=np.ones(1, np.int32),
+        translation_grid=np.zeros((1, 2), dtype), translation_log_priors=np.zeros((1, 1), dtype),
+        source_eulers_flat=source,
+    )
+    assert k_class._local_layout_for_class(layout, None, 0, 4) is layout
+    priors = np.arange(4, dtype=dtype).reshape(4, 1)
+    for class_id in range(4):
+        result = k_class._local_layout_for_class(layout, priors, class_id, 4)
+        assert result.source_eulers_flat is source
+        assert result.rotations_flat is layout.rotations_flat
+        np.testing.assert_array_equal(result.rotation_log_priors_flat, priors[class_id])
+        assert result.rotation_log_priors_flat.dtype == dtype
+        buckets = bucket_local_hypothesis_layout(result, 1, 4)
+        assert len(buckets) == 1
+        if source is None:
+            assert buckets[0].local_source_eulers is None
+        else:
+            np.testing.assert_array_equal(buckets[0].local_source_eulers[0, :1], source)
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
