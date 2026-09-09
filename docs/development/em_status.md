@@ -1,5 +1,47 @@
 # Current EM development scope
 
+## Replace stale source guards with execution checks — September 9
+
+Three original API failures inspected retired source spellings rather than
+the behavior they intended to protect. Production code is unchanged:
+
+- The projector callback is selected before optional queue dispatch. The
+  transaction test now executes both immediate and queued routes, checking
+  masked posterior rows, projector/window arguments and returned accumulators.
+  The other source-order, capture and admission assertions remain intact.
+- Full-box noise cutoff now comes from `logical_current_size`. Four real
+  local-engine runs check full-box/reduced-window cutoffs and shell counts in
+  both ordinary and deferred branches, replacing the old text/count guard.
+- Local BPref planning separates logical reconstruction size from physical
+  capacity. Six engine probes inspect actual shape-helper calls for full box,
+  reduced size, an independent reconstruction size and stable capacity. Sparse
+  and K-class allocator guards retain their original assertions.
+
+The combined CPU panel passes **53 cases in 31.41 s**; H100 job **13635898**
+passes all **15 affected cases in 25.25 s** on `della-h20g4`. Exact inventories,
+unchanged source/libraries/baselines and unrelated test AST are verified.
+Three isolated in-memory mutations fail for the expected reasons: bypassing
+the callback, dividing `None` by two, and substituting logical size for a larger
+physical capacity. These checks never modify production files.
+
+The first shape probe also rejected an incorrect new-test expectation that
+size 6 would expand to 8 for an 8-pixel image. The documented policy reserves
+the full box as a separate class: 6 stays 6, while 4 expands to 6. Both boundaries
+are now checked explicitly; the original failed probe is preserved.
+
+CPU logs, XML and exact commands are in `callback_guard_{red,green}_20260909`,
+`noise_cutoff_guard_review_20260909`, `bpref_shape_guard_{review,runtime}_20260909`
+and `source_guards_green_20260909` under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/`.
+H100 inputs, source diff and `api_only.sbatch` are under
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr179_source_guards_20260909/`.
+Results, mutation scripts/logs and the AST audit are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr179_source_guards_20260909/`.
+Use fresh output roots for reproduction. Three original normalization failures
+remain; the full API tier, native rectangular coverage and trajectory quality
+are not accepted. Next, inspect normalization precision assumptions and repeat
+behavior without weakening dtype, bytewise or numeric assertions.
+
 ## Significance statistics test repair — September 9
 
 The cached/uncached comparison failed because it passed the nested
@@ -154,6 +196,32 @@ The 100k panel still lacks a completed timing ratio. See
 `handoffs/vdam_prepared_it32_result_20260909.json` and
 `handoffs/em_clean_vdam_noise_capture_scope_20260909.json`; no scientific or
 performance acceptance is added by this status update.
+
+VDAM's subsequent noise-operand handoff is private clean `5656a7ef3` on d21,
+following `5056e760d`; the only added source paths remain the prepared-replay
+script and companion test above. All four H100 jobs **13634323**, **13634428**,
+**13634884** and **13635022** completed with exit 0 on `della-h20g4`.
+The peer reports 18 passing CPU companion cases. em_clean verified the commit
+scope and scheduler accounting, but has not independently rerun or audited
+the complete numerical arrays.
+
+The reported first noise-call operands are exact across arms; later calls
+differ only in the two running noise/image-power carries. Raw JAX and CUDA
+cross-statistic repeats are each exact, while their crossed relative L2
+difference is `6.882442850236349e-8` in float32 and
+`2.2682338837993804e-16` with promoted-double diagnostic operands. Separate
+shell/image-power variation remains. This contraction alone does not establish
+individual-product versus reduction-order causation or accept historical
+trajectory differences. Production remains float32. The next private check
+isolates individual complex products before restoring the full row reduction.
+
+Evidence and reproduction: coordination handoff
+`handoffs/vdam_noise_operand_result_20260909.json` and
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_noise_operand_replay_20260909/RESULTS.md`.
+Reported 100k RECOVAR arms are at 120/180, with no completed RECOVAR ratio;
+that panel uses separate frozen `8ab1a44be` source. This docs-only acknowledgment
+adds no production merge, test launch, quality acceptance or performance claim.
+Shared source/docs/publication ownership and the two-file VDAM scope remain.
 
 ## Structural cleanup after VDAM integration — September 9
 
