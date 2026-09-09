@@ -32,7 +32,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | `4da8954ae`: replay validators moved to `relion_replay.py`; controller 7,909 lines |
+| Latest production cleanup | `b3b51f0c8`: diagnostic reference gating/map loading joins the replay validators in `relion_replay.py`; controller 7,814 lines |
 | Latest test repair | `44d414a6b`: stale InitialModel callers and native source guards repaired; production unchanged |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
 | Incorporated history | PR180 `1e2f229b3`; cleanup anchor `0b52c995a`; VDAM merge `c38fc62f0`; separate global-window correction `0219caa35` |
@@ -74,6 +74,7 @@ all other test statements and numeric assertions survive explicit owner mapping.
 
 | Checkpoint | Executed evidence | Limit |
 | --- | --- | --- |
+| Reference-replay ownership `b3b51f0c8` | Same 39-case control/candidate inventory, including tiny K4 map loading and state-swap order; 38-case CPU guard. Exact function/retained-controller AST; no new Ruff findings | Controller −95 lines by relocation; logger namespace follows replay owner; no GPU or trajectory claim |
 | InitialModel test repair `44d414a6b` | Fourier-window control 49 passed/3 failed, then 52 passed (8.73 s); coarse-audit control 8 passed/4 failed, then 12 passed (2.75 s). Identical inventories; four in-memory native-contract mutations rejected; no new Ruff findings | CPU/test-source contracts, not compiled CUDA or trajectory qualification |
 | Replay-order ownership `4da8954ae` | Same 24-case control/candidate inventory, 493 deselections; 38-case CPU guard. Separate parser-caller repair `1895bc50e`: 28 passed | AST-exact relocation; controller −73 lines, not net deletion |
 | Diagnostic selectors `acbf6545e` | Same 93-case control/final inventory; 38-case guard; AST-exact relocation | Controller −126 lines; diagnostic logger namespace follows owner |
@@ -86,8 +87,11 @@ imports/registration or every runtime path. A tracked-reference scan found no
 further unreferenced, undecorated top-level private EM function candidates;
 do not remove code merely to reduce line counts.
 
-Latest exact commands, fingerprints, inventories, original failures and mutation/
-AST audits are in
+Reference-replay commands, fingerprints and AST/case inventories are in
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/reference_replay_owner_20260909/validation.json`.
+Control/after/guard logs use `reference_replay_{control,after,guard}_20260909`
+under the CPU run root below. The previous test repair’s commands, fingerprints,
+original failures and mutation/AST audits are in
 `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/em_import_audit_20260909/validation.json`.
 CPU logs/XML are under
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/{stable_window_import,coarse_audit_import}_{control,after}_20260909/`.

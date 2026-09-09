@@ -55,6 +55,10 @@ particle ordering is legal at a fresh, imported or sealed boundary. The controll
 calls these guards before refinement and when choosing final replay behavior;
 the replay module owns the rules and errors. Initial-only overrides remain
 separate from numbered trajectory replay.
+The same owner selects diagnostic reference replay and loads the requested
+half/class maps, including shared-class fallback files. The controller keeps
+the replacement boundary; source casts, Fourier/frame conversion and errors
+remain unchanged. Replay messages use that module’s logger.
 
 The local kernel returns `LocalEMResult` from
 [`helpers.types`](../../recovar/em/dense_single_volume/helpers/types.py):
