@@ -1,5 +1,38 @@
 # Current EM development scope
 
+## Compact projector routing repair — September 9
+
+Runtime repair `ecd75fdfb` fixes three failures from the frozen API panel.
+The shared compact texture helper captured a projector size and row table
+initialized only for Gaussian FFI scoring. Ordinary texture and first-iteration
+CC scoring also called that helper, causing `NameError`. Select the physical
+output size and host row table together for each path, and initialize logical
+score size once. Gaussian FFI keeps its existing arguments; ordinary scoring
+again uses the current window's rows. No kernel, precision, scientific default,
+tolerance or baseline changes are included.
+
+All three original failures reproduce on CPU. The expanded ten-case panel
+passes in 10.71 s, covering both scoring modes, two window sizes, stable-window
+settings and CC winner rescoring. The CPU guard passes 38 cases in 44.98 s.
+H100 job **13634914** passes all eleven cases in 13.20 s, including the actual
+Gaussian FFI path. Exact inventories and unchanged source, native libraries
+and baselines are verified. Seven other original API failures and the native
+rectangular-image skip remain open; trajectory and performance acceptance
+remain unqualified.
+
+CPU commands use the existing `pr180_integration_20260908/run_checks.sh`
+wrapper with labels `compact_projector_red_20260909`,
+`compact_projector_green_20260909`, and `compact_projector_fast_guard_20260909`.
+Logs and exact commands are in those directories under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/`.
+GPU inputs and `api_only.sbatch` are under
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/pr179_compact_projector_20260909/`;
+logs and XML are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr179_compact_projector_20260909/`.
+The coordination handoff `em_clean_compact_projector_fix_20260909.json`
+records the tested dirty fingerprint, source diff, commands and limits.
+Keep the original failed runs; reproduction requires a fresh output root.
+
 ## Frozen combined-source qualification — September 9
 
 Checkpoint `d21f52d726c70acd27d99cbbfff65a79d341d497` is frozen in
@@ -26,10 +59,11 @@ imports the canonical `helpers.sparse_pass2_bucketed` owner directly. Reversing
 that import/patch-target mapping produces the identical complete test-module
 AST; all assertions and production source remain unchanged. Both cases pass
 on H100 in 3.53 seconds in targeted job **13634507**. The original failed
-result remains preserved. Ten other failures remain for focused review:
+result remains preserved. The other ten failures comprised:
 three unbound projector-size closure cases, three normalization dtype/bitwise
 checks, one result-comparison case and three source-contract guards. These
 are failure descriptions, not conclusions about correctness or roundoff.
+The three closure cases are repaired above; seven others remain for review.
 
 The launcher checks exact collected and executed case identities, rejects
 unexpected skips, and verifies source,
@@ -65,6 +99,18 @@ read-only pending a bounded ownership request. Its replay and existing 100k
 sources stay frozen. em_clean retains shared status/docs, publication and
 GPU/API qualification. The coordination handoff
 `em_clean_vdam_resume_ack_20260909.json` records the current scope and jobs.
+
+Prepared-state diagnostic job **13634323** at clean `5056e760d` completed
+successfully in 45 seconds on H100 `della-h20g4`. Its 17 listed native source
+inputs match the d21 build manifest; both private copied libraries and the
+original builds match the recorded hashes. VDAM reports 13 CPU helper tests
+and the configured gf43 snapshot passing. It also reports exact prepared
+inputs, candidates, posteriors, poses and support across the target-2 pairs,
+with accumulator differences still under investigation. These array findings
+are peer-reported, not independently audited by em_clean. Neither scheduler
+success nor this fixed-state result establishes trajectory acceptance or
+classifies all remaining differences as roundoff. Provenance and acknowledgment:
+`handoffs/em_clean_vdam_prepared_job_ack_20260909.json` on the coordination board.
 
 ## Structural cleanup after VDAM integration — September 9
 
