@@ -48,7 +48,7 @@ for helper in (
     "relion_replay", "relion_normalization", "projector_preparation",
     "score_outputs", "scoring_policy", "helpers.resolution", "helpers.bpref_diagnostics",
     "helpers.pass2_diagnostics", "helpers.relion_ctf", "helpers.scale_groups", "helpers.normalization_inputs",
-    "helpers.vdam_replay", "fixed_capacity_local", "local_layout",
+    "helpers.vdam_replay", "fixed_capacity_local", "local_layout", "local_projection_cache",
 ):
     importlib.import_module(f"recovar.em.dense_single_volume.{helper}")
 execution_modules = (

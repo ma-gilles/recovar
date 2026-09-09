@@ -35,7 +35,7 @@ use map correlation in place of FSC/FSC-AUC. Follow the
 | Item | Identity or rule |
 | --- | --- |
 | Implementation | `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907/`, branch `codex/integrate-pr180` |
-| Latest production cleanup | `19544d3b6`: normalization inputs are prepared separately from local scoring; local engine 8,879 lines, sparse scorer 17,383, half scorer 1,358, controller 6,123 |
+| Latest production cleanup | Projection-cache ownership follows `19544d3b6`: local engine 8,626 lines, sparse scorer 17,383, half scorer 1,358, controller 6,123 |
 | Authorized performance integration | `5a39eab29` merges compact-CTF `b1d57608d`; host gather before stacking, full-grid default preserved |
 | Latest runner guard | `0954fdfd0`: concrete import provenance includes the extracted half-scoring and policy owners |
 | Pinned PR158 control | `44d770de3f9336ab2f3f6a34203394bae8d1aeed`; preserve unchanged |
@@ -244,6 +244,43 @@ use that owner directly. Function bodies and all retained scorer statements are
 AST-identical after namespace mapping. Counter sequencing, filter short-circuit
 order, NPZ schema, casts and error behavior remain unchanged. Sparse scoring
 loses 176 lines (19,460 → 19,284); the two modules together add one line.
+
+Projection-cache budgets, grouping, ID mapping and construction now belong to
+[`local_projection_cache.py`](../../recovar/em/dense_single_volume/local_projection_cache.py).
+The engine keeps enablement, group advancement, build timing and release at the
+same sites. Ten function bodies, one cache record and six constants preserve
+their executable ASTs under explicit name mapping; all119 retained engine
+top-level statements and the existing test module's1,024 assertions are preserved.
+There are no old engine aliases or forwarding wrappers. The helper imports
+independently of execution modules, checked by the extended CPU guard.
+
+The local engine loses253 lines (8,879→8,626); the new owner is283 lines, so combined
+production grows30 lines for explicit ownership/imports/documentation. This is
+organization, not net dead-code removal or a runtime optimization. Cache defaults,
+sorting stability, first occurrence per rotation ID, compact pixel order/duplicates,
+float32/complex64 casts, projection options, readiness barriers and uninitialized
+unused capacity remain unchanged. Do not consume unmapped padding rows.
+
+The original two CPU cases pass before/after, including cached-versus-uncached
+local EM. Eighteen new exact boundary cases cover invalid/disabled budgets,
+consecutive grouping, stable ties, masked IDs, duplicate-ID ownership, projection
+chunks, arguments and barriers. Focused coverage is20 passes; guard38 passes.
+Existing lint diagnostics are unchanged; both new files pass Ruff and formatting.
+No GPU or native job was launched. No trajectory, memory or timing improvement
+is claimed from these checks. Full current-source scientific gates remain open.
+
+Reproduction: use
+`hia_source_review_20260906/mstep_dc_integration_20260909/run_checks.sh`
+with `tests/unit/test_refine_relion_mode.py::test_local_relion_projection_cache_forwards_texture_selection`,
+`tests/unit/test_refine_relion_mode.py::test_run_local_em_exact_relion_projection_cache_matches_uncached_big_jit`
+and `tests/unit/test_local_projection_cache.py`; use `--fast-guard` under another
+fresh output label. Source/caller AST checks, exact commands and validation
+receipts live in
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/local_projection_cache_owner_20260909/`.
+Logs/XML live under `em_work/codex/pr180_integration_20260908/` with labels
+`local_projection_cache_{control,integrated,guard,final,final_guard}_20260909`.
+The initial verifier incorrectly renamed unrelated engine locals; its corrected
+version restores only module-qualified calls, without changing source semantics.
 
 | Checkpoint | Executed evidence | Limit |
 | --- | --- | --- |

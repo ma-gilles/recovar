@@ -25,6 +25,7 @@ import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume import half_scoring, local_search_iteration, scoring_policy
 from recovar.em.dense_single_volume import score_outputs
 import recovar.em.dense_single_volume.local_layout as local_layout_module
+from recovar.em.dense_single_volume.local_projection_cache import EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV
 from recovar.em.dense_single_volume.local_search_iteration import _LocalSearchIterationResult
 import recovar.em.dense_single_volume.relion_metadata as relion_metadata_module
 import recovar.em.dense_single_volume.projector_preparation as projector_preparation
@@ -140,7 +141,6 @@ from recovar.em.dense_single_volume.local_em_engine import (
     EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV,
 
     EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV,
-    EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV,
     EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION,
     EXACT_LOCAL_SCORE_TILE_LIVE_FACTOR,
     EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV,
@@ -4525,7 +4525,7 @@ def test_packed_local_noise_projection_accepts_relion_projector(monkeypatch):
 
 
 def test_local_relion_projection_cache_forwards_texture_selection(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.dense_single_volume import local_projection_cache
 
     bucket = LocalBucketSpec(
         image_indices=np.array([0], dtype=np.int32),
@@ -4544,8 +4544,8 @@ def test_local_relion_projection_cache_forwards_texture_selection(monkeypatch):
         calls.append(dict(kwargs))
         return jnp.ones((rotations.shape[0], 12), dtype=jnp.complex64), None
 
-    monkeypatch.setattr(local_em_engine, "_compute_relion_projector_projections_block", fake_projector)
-    cache = local_em_engine._build_exact_local_relion_projection_cache_for_buckets(
+    monkeypatch.setattr(local_projection_cache, "_compute_relion_projector_projections_block", fake_projector)
+    cache = local_projection_cache.build_cache(
         [bucket],
         jnp.ones((4, 4, 3), dtype=jnp.complex64),
         image_shape=(4, 4),

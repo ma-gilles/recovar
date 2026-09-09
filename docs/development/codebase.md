@@ -249,9 +249,17 @@ Both use `(prior - rounded_old_offset) / pixel_size`, as before. The separate
 `relion_sigma_offset_prior_center` serves sufficient statistics and keeps its
 pixel-space formula without that division.
 
-Local cache limits belong to
-[`local_caches.py`](../../recovar/em/dense_single_volume/local_caches.py), and
-profile field definitions belong to
+Raw and processed-image cache limits belong to
+[`local_caches.py`](../../recovar/em/dense_single_volume/local_caches.py).
+Bounded RELION projection caches belong to
+[`local_projection_cache.py`](../../recovar/em/dense_single_volume/local_projection_cache.py):
+budget parsing, stable bucket sorting/grouping, rotation-ID mapping and chunked
+projection construction share that owner. The local engine retains cache
+enablement, construction timing, group advancement and release. Only mapped
+valid rows may be consumed; unused capacity keeps its existing uninitialized
+padding. Cache consumers and tests import the owner directly, without engine
+re-exports. Importing it does not initialize execution controllers.
+Profile field definitions belong to
 [`local_timing.py`](../../recovar/em/dense_single_volume/local_timing.py).
 Their unused local-engine re-exports have been removed. Tests import cache
 limit names directly from their owner.
