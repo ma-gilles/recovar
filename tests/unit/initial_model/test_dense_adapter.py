@@ -1427,7 +1427,7 @@ def test_initial_model_local_bucket_unification_can_be_disabled(monkeypatch):
 
 def test_dense_initial_model_estep_os0_keeps_coarse_normalization_pose_and_support(monkeypatch):
     from recovar.em.dense_single_volume.helpers.types import make_relion_stats
-    from recovar.em.dense_single_volume.k_class import KClassEMResult
+    from recovar.em.dense_single_volume.k_class_results import KClassEMResult
 
     calls = {}
     coarse_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 72, axis=0)
@@ -1661,7 +1661,7 @@ def test_dense_initial_model_estep_compact_os0_reuses_coarse_normalization_and_s
 
 def test_zero_oversampling_restores_k_class_coarse_argmax_metadata():
     from recovar.em.dense_single_volume.helpers.types import make_relion_stats
-    from recovar.em.dense_single_volume.k_class import KClassEMResult
+    from recovar.em.dense_single_volume.k_class_results import KClassEMResult
     from recovar.em.initial_model.dense_adapter import (
         _restore_zero_oversampling_coarse_metadata,
     )

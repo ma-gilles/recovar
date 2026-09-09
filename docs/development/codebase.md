@@ -102,7 +102,11 @@ not copy arrays. Controller and K-class callers read these fields directly.
 The local single-class kernel is
 [`local_em_engine.run_local_em_exact`](../../recovar/em/dense_single_volume/local_em_engine.py).
 [`k_class`](../../recovar/em/dense_single_volume/k_class.py) supplies dense,
-adaptive and local K-class orchestration. Class evidence and posterior mass
+adaptive and local K-class orchestration.
+[`k_class_results`](../../recovar/em/dense_single_volume/k_class_results.py) owns
+the shared result type, joint result assembly and host/device publication.
+Accumulator offloading and scheduling stay in the orchestrator.
+Class evidence and posterior mass
 must be handled at the K-class level, not inferred from independently normalized
 single-class probabilities.
 
@@ -230,7 +234,9 @@ owner. Sparse scoring retains candidate planning, numerical kernels and live
 accumulation; it asks the diagnostic owner for scoped capture decisions. The
 diagnostic module has no direct import of sparse scoring or the iteration
 controller. The package initializer exposes options and sampling/statistics
-helpers; import K-class results and execution directly from `k_class.py`.
+helpers; import K-class execution from `k_class.py` and result assembly/types
+from `k_class_results.py`. The historical result type alias in `k_class` preserves
+pickle compatibility; importing the new result owner does not load engines.
 Standalone helper imports do not load dense/local engines or sparse scoring.
 Tests replace capture functions and state at this owner, including optional
 native signature panels. Dump schemas, precision, counter order and error
@@ -439,8 +445,8 @@ Import execution entry points explicitly from their owners:
 
 ```python
 from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
+from recovar.em.dense_single_volume.k_class_results import KClassEMResult
 from recovar.em.dense_single_volume.k_class import (
-    KClassEMResult,
     run_dense_k_class_em,
     run_local_k_class_em,
 )

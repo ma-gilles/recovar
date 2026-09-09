@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import k_class
+from recovar.em.dense_single_volume import k_class_results
 from recovar.em.dense_single_volume.helpers.types import make_relion_stats
 
 pytestmark = pytest.mark.unit
@@ -13,17 +13,17 @@ pytestmark = pytest.mark.unit
 
 @pytest.mark.parametrize("token,expected", [(None, False), ("0", False), ("1", True), (" 1 ", True)])
 def test_selector(monkeypatch, token, expected):
-    monkeypatch.delenv(k_class._K1_POSE_PUBLISH_DIRECT_ENV, raising=False)
+    monkeypatch.delenv(k_class_results._K1_POSE_PUBLISH_DIRECT_ENV, raising=False)
     if token is not None:
-        monkeypatch.setenv(k_class._K1_POSE_PUBLISH_DIRECT_ENV, token)
-    assert k_class._k1_pose_publish_direct_requested() is expected
+        monkeypatch.setenv(k_class_results._K1_POSE_PUBLISH_DIRECT_ENV, token)
+    assert k_class_results._k1_pose_publish_direct_requested() is expected
 
 
 @pytest.mark.parametrize("token", ["", "true", "false", "2", "-1", "typo"])
 def test_invalid_selector(monkeypatch, token):
-    monkeypatch.setenv(k_class._K1_POSE_PUBLISH_DIRECT_ENV, token)
+    monkeypatch.setenv(k_class_results._K1_POSE_PUBLISH_DIRECT_ENV, token)
     with pytest.raises(ValueError, match="must be 0 or 1"):
-        k_class._k1_pose_publish_direct_requested()
+        k_class_results._k1_pose_publish_direct_requested()
 
 
 @pytest.mark.parametrize(
@@ -47,8 +47,8 @@ def test_single_class_publication_is_bitwise_and_device_identity(shape, dtype, n
     if device:
         value = jnp.asarray(value)
     assignments = np.zeros(n_images, dtype=np.int32)
-    expected = k_class._selected_by_class([value], assignments)
-    actual = k_class._selected_by_class([value], assignments, direct_single_class=True)
+    expected = k_class_results._selected_by_class([value], assignments)
+    actual = k_class_results._selected_by_class([value], assignments, direct_single_class=True)
     assert actual.shape == expected.shape and actual.dtype == expected.dtype
     assert np.asarray(actual).tobytes() == np.asarray(expected).tobytes()
     if device:
@@ -80,10 +80,10 @@ def test_actual_result_assembly_preserves_every_field(monkeypatch, classes):
         per_class_best_pose_translations=[v[:, 0, :2] for v in values],
         per_class_best_pose_rotation_ids=[jnp.arange(n_images, dtype=jnp.int32) + k for k in range(classes)],
     )
-    monkeypatch.setenv(k_class._K1_POSE_PUBLISH_DIRECT_ENV, "0")
-    expected = k_class._assemble_result(**kwargs)
-    monkeypatch.setenv(k_class._K1_POSE_PUBLISH_DIRECT_ENV, "1")
-    actual = k_class._assemble_result(**kwargs)
+    monkeypatch.setenv(k_class_results._K1_POSE_PUBLISH_DIRECT_ENV, "0")
+    expected = k_class_results._assemble_result(**kwargs)
+    monkeypatch.setenv(k_class_results._K1_POSE_PUBLISH_DIRECT_ENV, "1")
+    actual = k_class_results._assemble_result(**kwargs)
     first, spec = jax.tree_util.tree_flatten(expected)
     second, other_spec = jax.tree_util.tree_flatten(actual)
     assert spec == other_spec
@@ -110,16 +110,16 @@ def test_unhandled_inputs_keep_original_gather_path(monkeypatch, mode):
         assignments[-1] = -1
     elif mode == "missing":
         values = None
-    expected = k_class._selected_by_class(values, assignments)
+    expected = k_class_results._selected_by_class(values, assignments)
     calls = []
-    original = k_class._stack_or_none
+    original = k_class_results._stack_or_none
 
     def record(values):
         calls.append(values)
         return original(values)
 
-    monkeypatch.setattr(k_class, "_stack_or_none", record)
-    actual = k_class._selected_by_class(values, assignments, direct_single_class=True)
+    monkeypatch.setattr(k_class_results, "_stack_or_none", record)
+    actual = k_class_results._selected_by_class(values, assignments, direct_single_class=True)
     assert len(calls) == 1
     if expected is None:
         assert actual is None

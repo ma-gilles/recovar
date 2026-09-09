@@ -23,7 +23,8 @@ GUI excluded**, before new-engine development. Root instructions also apply.
   structural work. Keep numerical and runtime repairs separate.
 - Keep `dense_single_volume/__init__.py` free of execution imports. Import
   `refine_single_volume` from `dense_single_volume.iteration_loop`, K-class entry
-  points/results from `dense_single_volume.k_class`. Helpers must not initialize
+  points from `dense_single_volume.k_class` and result assembly/types from
+  `dense_single_volume.k_class_results`. Helpers must not initialize
   schedulers, dense/local engines or sparse scoring.
 
 ## Scientific rules — never waived by cleanup or cost reduction

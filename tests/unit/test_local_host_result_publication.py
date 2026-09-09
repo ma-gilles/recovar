@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import k_class
+from recovar.em.dense_single_volume import k_class, k_class_results
 from recovar.em.dense_single_volume.helpers.types import (
     LocalEMResult,
     _stats_array,
@@ -85,8 +85,8 @@ def test_single_class_reduction_preserves_payloads_and_scalar_sum(optional):
         dtype=np.uint32,
     ).view(np.float32)
     stats = _noise(values, optional=optional)
-    actual = k_class._sum_noise_stats((stats,), host_arrays=True)
-    expected = k_class._sum_noise_stats((stats,))
+    actual = k_class_results._sum_noise_stats((stats,), host_arrays=True)
+    expected = k_class_results._sum_noise_stats((stats,))
     _same_bytes(actual, expected)
     assert isinstance(actual.wsum_sigma2_noise, np.ndarray)
     _same_bytes(np.asarray(jnp.sum(jnp.stack([jnp.asarray(values)]), axis=0)), values)
@@ -115,8 +115,8 @@ def test_complete_result_publication_matches_device_result(host):
         per_class_best_pose_translations=[np.zeros((3, 2), dtype=np.float32)],
         per_class_best_pose_rotations=[np.tile(np.eye(3, dtype=np.float32), (3, 1, 1))],
     )
-    expected = k_class._assemble_result(**kwargs)
-    actual = k_class._assemble_result(
+    expected = k_class_results._assemble_result(**kwargs)
+    actual = k_class_results._assemble_result(
         **kwargs,
         host_accumulators=True,
         host_stats_publication=True,
@@ -200,7 +200,7 @@ def test_host_publication_default_and_multiclass_rejection(monkeypatch):
     assert not k_class._local_host_result_publication_requested()
     stats = _noise(np.ones(2, dtype=np.float32))
     with pytest.raises(ValueError, match="exactly one class"):
-        k_class._sum_noise_stats((stats, stats), host_arrays=True)
+        k_class_results._sum_noise_stats((stats, stats), host_arrays=True)
     with pytest.raises(TypeError, match="must be a bool"):
         _stats_array([1.0], None, 1)
 

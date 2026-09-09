@@ -9,7 +9,7 @@ from recovar.em.dense_single_volume import (
     firstiter_cc,
     half_scoring,
     iteration_loop,
-    k_class,
+    k_class_results,
     score_outputs,
 )
 from recovar.em.dense_single_volume.batch_planning import (
@@ -18,7 +18,7 @@ from recovar.em.dense_single_volume.batch_planning import (
     _safe_firstiter_cc_image_batch_size,
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, make_relion_stats
-from recovar.em.dense_single_volume.k_class import KClassEMResult
+from recovar.em.dense_single_volume.k_class_results import KClassEMResult
 
 
 def test_firstiter_winner_take_all_assembly_reports_unit_pmax_across_score_normalizations():
@@ -32,7 +32,7 @@ def test_firstiter_winner_take_all_assembly_reports_unit_pmax_across_score_norma
         ),
     )
 
-    result = k_class._assemble_result(
+    result = k_class_results._assemble_result(
         class_log_evidence=np.array([[1_000.0]], dtype=np.float64),
         new_means=None,
         Ft_y=[jnp.zeros(1, dtype=jnp.complex64)],

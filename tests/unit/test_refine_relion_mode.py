@@ -112,12 +112,11 @@ from recovar.em.dense_single_volume.refinement_options import (
     RelionParityOptions,
     ReplayState,
 )
-from recovar.em.dense_single_volume.k_class import (
+from recovar.em.dense_single_volume.k_class import run_dense_k_class_em, run_local_k_class_em
+from recovar.em.dense_single_volume.k_class_results import (
     KClassEMResult,
     _resolve_class_mstep_posterior_sums,
     _sum_noise_stats,
-    run_dense_k_class_em,
-    run_local_k_class_em,
 )
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,

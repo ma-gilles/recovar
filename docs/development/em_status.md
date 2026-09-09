@@ -50,6 +50,19 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
+The structural successor to430c0763d moves the shared K-class assembler, its result
+type and publication/noise helpers into `k_class_results.py`. Dense/local already
+shared that assembler; no duplicate deletion is claimed. **390 lines leave the
+scheduler; production grows33 lines for module documentation/imports/compatibility.**
+All70 original class/function ASTs are exact. The result type keeps its historical
+pickle GLOBAL name through the `k_class` alias; canonical imports avoid engines.
+Final243 CPU cases pass,3 native-binding cases skip, and38 guard cases pass with
+the new owner in its import-boundary check. The last test-import ordering change
+passes all48 joint cases. Numeric assertions stay; source-location guards follow
+the new owner. Mirrored instructions and the codebase map agree. [Receipt and
+exact checks](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k_class_results_owner_20260909/result.json).
+This remains local for batched publication; frozen5ca9 qualification is unchanged.
+
 The next structural checkpoint on `5ca9c8fff` completes compact-pair host planning
 ownership in `helpers.sparse_bucket_arrays`: four live helpers move with direct
 callers; one test-only count scanner and its vacuous spy are removed. Three unused

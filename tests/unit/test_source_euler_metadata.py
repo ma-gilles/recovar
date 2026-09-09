@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from recovar.em import sampling
-from recovar.em.dense_single_volume import k_class
+from recovar.em.dense_single_volume import k_class, k_class_results
 from recovar.em.dense_single_volume import local_em_engine as engine
 from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
     _prepare_per_image_pass2_inputs,
@@ -171,7 +171,7 @@ def test_direct_k1_result_preserves_host_eulers(monkeypatch):
 
 def test_inactive_class_without_metadata_does_not_erase_winner():
     eulers = np.array([[1.0 + 2**-40, 2.0, 3.0], [4.0, 5.0, 6.0]])
-    result = k_class._assemble_result(
+    result = k_class_results._assemble_result(
         class_log_evidence=np.array([[0.0, -20.0], [-20.0, 0.0], [-np.inf, -np.inf], [-np.inf, -np.inf]]),
         new_means=None,
         Ft_y=[np.zeros(1, np.complex64)] * 4,

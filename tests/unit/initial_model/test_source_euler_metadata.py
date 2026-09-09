@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from recovar.em.dense_single_volume import k_class_results
 from recovar.em.initial_model import dense_adapter, driver
 
 pytestmark = pytest.mark.unit
@@ -100,7 +101,6 @@ def test_mixed_halfset_rows_keep_identity_and_validity():
 
 
 def test_coarse_winner_replaces_or_invalidates_fine_source_metadata():
-    from recovar.em.dense_single_volume import k_class
     from recovar.em.dense_single_volume.helpers.types import make_relion_stats
 
     stats = make_relion_stats(
@@ -109,7 +109,7 @@ def test_coarse_winner_replaces_or_invalidates_fine_source_metadata():
         max_posterior_per_image=np.ones(1),
         rotation_posterior_sums=np.ones(1),
     )
-    result = k_class._assemble_result(
+    result = k_class_results._assemble_result(
         class_log_evidence=np.zeros((1, 1)),
         new_means=None,
         Ft_y=[np.zeros(1, np.complex64)],

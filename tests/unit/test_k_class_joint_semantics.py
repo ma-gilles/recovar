@@ -8,6 +8,7 @@ import jax.numpy as jnp
 from helpers.fine_grid_significance_reference import _build_fine_grid_significance_mask
 
 import recovar.em.dense_single_volume.k_class as k_class_module
+from recovar.em.dense_single_volume import k_class_results
 from recovar.em.dense_single_volume.helpers.types import DenseEMResult, LocalEMResult
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
     class_weights_from_direction_prior,
@@ -18,7 +19,6 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
 )
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.k_class import (
-    _assemble_result,
     _ClassFineGridSignificanceMask,
     _compact_sparse_pass2_preferred_over_dense,
     _dense_engine_kwargs_for_class,
@@ -31,6 +31,7 @@ from recovar.em.dense_single_volume.k_class import (
     run_dense_k_class_em_adaptive,
     run_local_k_class_em,
 )
+from recovar.em.dense_single_volume.k_class_results import _assemble_result
 from recovar.em.dense_single_volume.helpers.oversampling import (
     build_adaptive_pass2_grids,
 )
@@ -521,7 +522,7 @@ def test_subset_noise_stats_expand_optional_fields_to_parent_axes():
         full_group_count=3,
     )
 
-    summed = k_class_module._sum_noise_stats((expanded0, expanded1, expanded_empty))
+    summed = k_class_results._sum_noise_stats((expanded0, expanded1, expanded_empty))
 
     np.testing.assert_allclose(np.asarray(summed.wsum_norm_correction), [5.0, 23.0, 7.0, 0.0])
     np.testing.assert_allclose(np.asarray(summed.wsum_scale_correction_xa), [40.0, 13.0, 0.0])
@@ -2233,3 +2234,15 @@ def test_read_relion_direction_priors_reads_all_classes(tmp_path):
         rtol=0.0,
         atol=0.0,
     )
+
+
+def test_k_class_result_preserves_historical_pickle_global():
+    """Old result streams resolve to the sole type at its new source owner."""
+    import pickle
+
+    from recovar.em.dense_single_volume import k_class, k_class_results
+
+    historical_global = b"crecovar.em.dense_single_volume.k_class\nKClassEMResult\np0\n."
+    assert k_class.KClassEMResult is k_class_results.KClassEMResult
+    assert pickle.loads(historical_global) is k_class_results.KClassEMResult
+    assert pickle.dumps(k_class_results.KClassEMResult, protocol=0) == historical_global

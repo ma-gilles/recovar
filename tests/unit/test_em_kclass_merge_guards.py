@@ -50,7 +50,7 @@ import recovar.em.dense_single_volume.helpers.significance as sig_mod
 import recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed as sparse_pass2_mod
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop
 import recovar.em.dense_single_volume.k_class as k_class_mod
-from recovar.em.dense_single_volume import debug_dumps, half_scoring, score_outputs, scoring_policy
+from recovar.em.dense_single_volume import debug_dumps, half_scoring, k_class_results, score_outputs, scoring_policy
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 
 pytestmark = pytest.mark.unit
@@ -174,11 +174,9 @@ def test_kclass_adaptive_wires_relion_x_half_without_mislabeling_dense_branch():
     assert 'dense_em_kwargs.pop("mstep_relion_x_half", None)' in source
     assert "mstep_full_half_axis=k_class_mstep_full_half_axis_this_score" in source
     assert "mstep_full_half_axis=k1_adaptive_result.mstep_full_half_axis" in source
-    assert "mstep_full_half_axis: int | None = None" in inspect.getsource(k_class_mod.KClassEMResult)
-    assert "mstep_accumulator_shape: tuple[int, int, int] | None = None" in inspect.getsource(
-        k_class_mod.KClassEMResult
-    )
-    assert "mstep_accumulator_shape=mstep_accumulator_shape" in inspect.getsource(k_class_mod)
+    assert "mstep_full_half_axis: int | None = None" in inspect.getsource(k_class_results)
+    assert "mstep_accumulator_shape: tuple[int, int, int] | None = None" in inspect.getsource(k_class_results)
+    assert "mstep_accumulator_shape=mstep_accumulator_shape" in inspect.getsource(k_class_results._assemble_result)
 
 
 def test_kclass_scatter_uses_mstep_class_mass_for_relion_priors():
