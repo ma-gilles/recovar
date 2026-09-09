@@ -139,6 +139,12 @@ scoped suites and completion evidence, instead of unrelated SPA/ET suites.
 A change spanning both scopes requires both sets of applicable checks when
 covered by the task; do not infer repeated permission requirements from scope.
 
+Explicit user authorization may allow publishing a draft checkpoint before
+these publication prerequisites are complete. Record that authorization and
+all missing or failed checks in the PR; retain the requested integration base
+and frozen controls. Draft publication does not waive merge, quality or
+performance acceptance gates.
+
 Start a PR description with the problem and resulting behavior, then evidence.
 Do not confuse replay agreement with an autonomous trajectory, or per-class
 quality with an average. See [benchmark contracts](docs/development/benchmarks.md).

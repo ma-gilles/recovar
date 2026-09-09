@@ -68,8 +68,10 @@ related changes form a frozen checkpoint for broader CPU and applicable GPU
 checks. Synthetic/real/K-class pairs qualify scientific checkpoints, rather
 than every edit. Re-auditing saved outputs should not rerun their GPU workload.
 
-Before publication, follow the full shared-suite and rebase requirements in
-[CONTRIBUTING](../../CONTRIBUTING.md). A rebase creates a new candidate. Keep
+For a merge-ready shared checkpoint, follow the full shared-suite and rebase
+requirements in [CONTRIBUTING](../../CONTRIBUTING.md). The user authorized
+PR179 draft checkpoints stacked on PR158 with incomplete validation; keep their
+failed and missing checks explicit. A rebase creates a new candidate. Keep
 source snapshots for queued jobs immutable and continue independent work in the
 implementation checkout. Never claim a later commit passed an earlier commit's
 end-to-end test.
@@ -83,6 +85,6 @@ end-to-end test.
 - Selected synthetic, real and K-class workloads have complete source/fixture
   identities, preserved failures and reproducible accuracy/performance reports.
 - Shared SPA/ET, outlier and downstream qualification covers the actual selected
-  source, and all publication checks pass before a push or PR.
+  source, and all applicable merge checks pass before the draft is accepted.
 - Remaining numerical and architectural issues have concrete owners, evidence
   and next checks. The new engine remains a subsequent milestone.

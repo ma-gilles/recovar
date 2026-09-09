@@ -1,5 +1,45 @@
 # Current EM development scope
 
+## Remove unused EM helpers — September 9
+
+Eight unreferenced functions and their dead import/constant are removed from
+legacy E/M steps, sampling/state utilities, PPCA pose planning, and x-half
+wrappers: **202 production lines deleted**. The tracked caller audit includes
+scripts, tests, documentation and notebooks; each removed name appeared only
+at its definition and none was a package export. All retained module statements
+are AST-identical. Test sources and serialized classes are unchanged.
+
+The same affected CPU panel reports **309 passed, one opt-in CUDA skip and ten
+GPU deselections** before (237.18 s) and after (236.59 s), with identical case
+identities and source/native/baseline checks. The unmarked opt-in skip is
+`test_compact_pair_xhalf_gpu_matches_rectangular_fused`; it remains unqualified.
+These are validation durations, not pipeline speed measurements. No GPU job
+was launched for this deletion. Existing normalization bytewise failures remain
+open and no new quality or performance acceptance follows.
+
+The candidate has 187,184 production Python lines excluding both GUI directories
+and the legacy GUI module, versus 157,729 at PR180 and 155,748 at PR158. Earlier
+totals included that 261-line legacy GUI module; the matched comparison still
+shows the combined VDAM branch is larger by 29,455/31,436 lines. The controller
+remains 8,108 lines; further ownership/readability work is required.
+
+Exact deleted names, before/after source copies, caller references, AST audit,
+line-count rules and CPU commands are in
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/hia_source_review_20260906/unused_em_helpers_20260909/`.
+Logs/XML and per-run provenance are under
+`/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pr180_integration_20260908/unused_em_helpers_{control,after}_20260909/`.
+Reproduce with the command arrays in `validation.json` using fresh output roots.
+Next, continue controller/state ownership cleanup while keeping the separate
+normalization repeatability investigation and broader qualification gates open.
+
+VDAM's later handoff supersedes the initial native-build acknowledgment:
+13636459 failed configuration; private build 13636510 completed, and bounded
+capture 13636553 stopped deliberately after obtaining its target. VDAM released
+the shared-header lock at 02:48:06 UTC. The five diagnostic insertions remain;
+1,507 source and 125 protected-binary hashes match the applied-patch record.
+No writer is currently assigned, and shared binaries remain frozen. The board
+records this release; capture completion does not establish trajectory quality.
+
 ## Normalization dtype migration and repeatability — September 9
 
 The normalization test arrived on a branch that did not preserve producer
