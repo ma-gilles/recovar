@@ -13,6 +13,11 @@ import jax.numpy as jnp
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_relion_noise_shell_indices_half,
 )
+from helpers.sparse_pass2_test_support import (
+    _relion_cuda_fine_tree_sum,
+    _score_pass2_bucket_relion_gpu_diff2_single_cached,
+)
+
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _RELION_CUDA_FINE_REF3D_BLOCK_SIZE,
     _RELION_CUDA_POWERCLASS_BLOCK_SIZE,
@@ -23,13 +28,11 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_fine_full_to_compact_lookup,
     _relion_cuda_fine_log_evidence_offset,
     _relion_cuda_fine_pixel_weights,
-    _relion_cuda_fine_tree_sum,
     _relion_cuda_powerclass_highres_norm_units,
     _relion_cuda_powerclass_highres_xi2_half,
     _score_pass2_bucket_relion_gpu_diff2,
     _score_pass2_bucket_relion_gpu_diff2_from_raw,
     _score_pass2_bucket_relion_gpu_diff2_raw,
-    _score_pass2_bucket_relion_gpu_diff2_single_cached,
     _score_pass2_bucket_relion_gpu_diff2_single_cached_raw,
     _score_pass2_pairs_relion_gpu_diff2,
     _score_pass2_pairs_relion_gpu_diff2_raw,

@@ -33,6 +33,10 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 from helpers.fine_grid_significance_reference import _build_fine_grid_significance_mask
+from helpers.sparse_pass2_test_support import (
+    _normalize_pass2_pairs_score_only,
+    _select_active_noise_rows,
+)
 
 import recovar.core as core
 import recovar.core.fourier_transform_utils as ftu
@@ -123,7 +127,6 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _normalize_pass2_bucket,
     _normalize_pass2_bucket_score_only,
     _normalize_pass2_bucket_with_log_z,
-    _normalize_pass2_pairs_score_only,
     _normalize_pass2_pairs_with_log_z,
     _nvidia_smi_visible_device_memory_bytes,
     _pass2_conservative_dump_execution_enabled,
@@ -156,7 +159,6 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _score_pass2_pairs_relion_gpu_diff2_raw,
     _select_active_flat_rows,
     _select_active_flat_values,
-    _select_active_noise_rows,
     _small_bucket_coalesce_size_for_pass,
     _split_compact_pair_buckets_by_projection_gather_budget,
     _tail_bucket_coalesce_params_for_pass,

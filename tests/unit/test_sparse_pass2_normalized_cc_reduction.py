@@ -6,12 +6,14 @@ import pytest
 pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
+from helpers.sparse_pass2_test_support import (
+    _score_pass2_bucket_relion_gpu_normalized_cc_single_cached,
+    _score_pass2_pairs_relion_gpu_normalized_cc,
+)
 
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _score_pass2_bucket_normalized_cc,
     _score_pass2_bucket_relion_gpu_normalized_cc,
-    _score_pass2_bucket_relion_gpu_normalized_cc_single_cached,
-    _score_pass2_pairs_relion_gpu_normalized_cc,
 )
 
 pytestmark = pytest.mark.unit

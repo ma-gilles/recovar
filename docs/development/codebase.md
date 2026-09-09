@@ -356,6 +356,13 @@ Diagnostic scripts compare specific captures, layouts and policies. Similar
 names or similar-looking reductions are insufficient evidence of duplication.
 Keep an independent numerical reference separate from the implementation it tests.
 
+[`tests/helpers/sparse_pass2_test_support.py`](../../tests/helpers/sparse_pass2_test_support.py)
+retains six former runtime helpers used only by tests: cached/packed scoring
+variants, a lane-tree wrapper, pair normalization and materialized noise-row
+gathers. These share production primitives and are comparison utilities, not
+independent numerical oracles. The tests keep their separate NumPy references;
+production imports no test helpers.
+
 Common transport and command mechanics have narrow owners:
 
 - [`file_hash.sha256_file`](../../recovar/utils/file_hash.py) hashes files in

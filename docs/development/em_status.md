@@ -50,6 +50,16 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
+Six sparse helpers with no production/CLI/notebook consumers now live under
+`tests/helpers/sparse_pass2_test_support.py`, retaining all tests and independent
+NumPy references. The scorer loses162 runtime lines; this is relocation, not
+162 lines deleted from the entire repository. All callable ASTs/JIT decorators
+and test bodies remain exact. Baseline/candidate each pass29/fail1: the unchanged
+power-class test expects generic and reference float32 reductions to differ,
+but they coincide on this CPU; its independent expected-value assertion passes.
+No waiver or test repair was made.38 CPU guard and9 final import/caller cases
+pass; no new lint, new helper format clean. [Evidence and exact commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/sparse_test_support_20260909/result.json).
+
 Exact-local batching policies now live in `local_batch_planning.py`:13 unchanged
 functions and their constants leave the engine. The x-half reporting summarizer
 imports no execution modules after this and the preceding audit-owner extraction.
