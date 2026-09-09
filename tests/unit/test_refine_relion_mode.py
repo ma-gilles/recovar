@@ -12064,10 +12064,16 @@ class TestRelionModeSmokeTest:
         assert manual_calls
         assert all(not call[-1] for call in manual_calls)
 
+    @pytest.mark.parametrize("current_size", [4, 6])
+    @pytest.mark.parametrize("score_mode", ["gaussian", "normalized_cc"])
+    @pytest.mark.parametrize("stable_fourier_window_shapes", [False, True])
     def test_k_class_significance_texture_ppref_requests_compact_score_rows(
         self,
         half_datasets,
         monkeypatch,
+        current_size,
+        score_mode,
+        stable_fourier_window_shapes,
     ):
         """Windowed texture scoring must not materialize full projection rows."""
         from recovar.em.dense_single_volume.helpers import projection as projection_helpers
@@ -12077,7 +12083,10 @@ class TestRelionModeSmokeTest:
 
         def fake_texture(projector_half, rotations, image_shape, **kwargs):
             pixel_indices = kwargs.get("pixel_indices")
-            assert pixel_indices is not None
+            assert isinstance(pixel_indices, np.ndarray)
+            assert kwargs["projector_output_size"] == current_size
+            expected_mask_size = current_size if stable_fourier_window_shapes else None
+            assert kwargs["current_image_mask_size"] == expected_mask_size
             calls.append(np.asarray(pixel_indices, dtype=np.int32))
             n_pixels = int(pixel_indices.shape[0])
             projection = jnp.ones(
@@ -12094,7 +12103,6 @@ class TestRelionModeSmokeTest:
 
         dataset = half_datasets[0]
         rotations = _make_rotations(3, seed=201)
-        current_size = 6
         _compute_k_class_significance_batched(
             dataset,
             jnp.zeros((1, VOLUME_SIZE), dtype=jnp.complex64),
@@ -12108,6 +12116,8 @@ class TestRelionModeSmokeTest:
             image_batch_size=dataset.n_units,
             rotation_block_size=2,
             current_size=current_size,
+            score_mode=score_mode,
+            stable_fourier_window_shapes=stable_fourier_window_shapes,
             half_spectrum_scoring=True,
             relion_projector_half=jnp.zeros((1, 3, 3, 2), dtype=jnp.complex64),
             relion_projector_r_max=1,
@@ -12121,6 +12131,8 @@ class TestRelionModeSmokeTest:
                 IMAGE_SHAPE,
                 current_size,
                 IMAGE_SHAPE[0] * (IMAGE_SHAPE[1] // 2 + 1),
+                score_square=score_mode == "normalized_cc",
+                score_include_dc=score_mode == "normalized_cc",
             ).score_indices,
             dtype=np.int32,
         )

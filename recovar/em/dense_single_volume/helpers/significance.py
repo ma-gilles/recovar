@@ -4356,6 +4356,7 @@ def _compute_k_class_significance_batched(
         **window_spec_kwargs,
     )
     use_window = window_spec.use_window
+    score_size = int(image_shape[0]) if current_size is None else int(current_size)
     window_indices = window_spec.score_indices
     n_windowed = window_spec.n_score
     projection_kwargs = window_spec.projection_kwargs()
@@ -4890,7 +4891,6 @@ def _compute_k_class_significance_batched(
             raise RuntimeError(
                 f"{_K1_COARSE_GAUSSIAN_FFI_ENV} requires the custom CUDA backend"
             )
-        score_size = int(image_shape[0]) if current_size is None else int(current_size)
         active_score_indices_np = (
             np.arange(n_half, dtype=np.int32)
             if window_spec.score_indices_np is None
@@ -5234,7 +5234,6 @@ def _compute_k_class_significance_batched(
             * jnp.asarray(_dense_projection_scale(image_shape), dtype=jnp.float32),
             dtype=jnp.complex64,
         )
-        score_size = int(image_shape[0]) if current_size is None else int(current_size)
         score_indices_np = (
             np.arange(n_half, dtype=np.int32)
             if window_spec.score_indices_np is None
@@ -5385,13 +5384,16 @@ def _compute_k_class_significance_batched(
     # crop into a full image and immediately gathering the same rows again.
     # This is an exact index remapping and avoids a large transient scatter for
     # global rotation blocks.
-    projector_compact_indices = None
+    projector_compact_indices_np = None
+    projector_output_size = None
     if use_relion_projector and coarse_texture_interp:
         if coarse_gaussian_ffi_enabled:
-            projector_compact_indices = coarse_gaussian_score_indices
+            projector_compact_indices_np = coarse_gaussian_score_indices_np
+            projector_output_size = coarse_gaussian_projector_output_size
         elif use_window:
-            projector_compact_indices = window_indices
-    projector_returns_compact = projector_compact_indices is not None
+            projector_compact_indices_np = window_spec.score_indices_np
+            projector_output_size = score_size
+    projector_returns_compact = projector_compact_indices_np is not None
 
     coarse_rotated_radius = _coarse_rotated_radius_enabled()
     if coarse_rotated_radius and not (
@@ -5425,10 +5427,10 @@ def _compute_k_class_significance_batched(
             return_abs2=return_abs2,
             centered_rows=True,
             dense_scale=True,
-            projector_output_size=int(coarse_gaussian_projector_output_size),
+            projector_output_size=int(projector_output_size),
             # Keep the already-host-resident table on the host so validation
             # cannot materialize its JAX mirror once per score block.
-            pixel_indices=coarse_gaussian_score_indices_np,
+            pixel_indices=projector_compact_indices_np,
             relion_texture_interp=True,
             # Certificate and exact scorer share this table. The qualified
             # legacy convention masks source pixels; the opt-in correction
@@ -5452,7 +5454,7 @@ def _compute_k_class_significance_batched(
             if current_size is not None:
                 projector_kwargs["projector_output_size"] = int(current_size)
             if projector_returns_compact:
-                projector_kwargs["pixel_indices"] = projector_compact_indices
+                projector_kwargs["pixel_indices"] = projector_compact_indices_np
             if coarse_texture_interp:
                 if projector_returns_compact:
                     proj_half_b, proj_abs2_half_b = (
