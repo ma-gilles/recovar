@@ -234,6 +234,11 @@ scoring. It reads the shared numbered-half context from `bpref_diagnostics`;
 it does not import sparse scoring. The scorer retains scheduling and numerical
 operand preparation, calling the capture helpers at their original boundaries. Capture schemas, casts and reduction order are unchanged.
 
+K1 and fused K-class preprocessing captures share
+`bpref_diagnostics.build_bpref_preprocess_capture`. Callers retain the raw
+preprocessing tuple to preserve operand lifetime and invoke the builder at the
+original capture gate; schema, defaults, masks and dtype casts stay unchanged.
+
 [`helpers.bpref_diagnostics`](../../recovar/em/dense_single_volume/helpers/bpref_diagnostics.py)
 owns the numbered-half capture context, contribution and membership counters,
 membership selectors/rotation-mass writers, device-panel state, capture validation

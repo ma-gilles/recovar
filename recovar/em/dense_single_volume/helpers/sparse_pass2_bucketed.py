@@ -100,7 +100,6 @@ from recovar.em.dense_single_volume.helpers.preprocessing import (
     half_translation_phase_table,
     prepare_batch_preprocess_operands,
     process_half_image,
-    resolve_image_mask_for_half_preprocess,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_noise_block as _compute_noise_block,
@@ -8604,13 +8603,7 @@ def compute_pass2_stats_sparse_bucketed(
             "high_precision_operand_bundle"
         ]
         if high_precision_operand_bundle:
-            (
-                diagnostic_relion_cuda_preprocess,
-                diagnostic_integer_pre_shifts,
-                diagnostic_batch_corr,
-                diagnostic_batch_scale,
-                diagnostic_relion_preprocess_kwargs,
-            ) = prepare_batch_preprocess_operands(
+            diagnostic_preprocess_operands = prepare_batch_preprocess_operands(
                 experiment_dataset,
                 batch_data,
                 image_indices,
@@ -8618,31 +8611,13 @@ def compute_pass2_stats_sparse_bucketed(
                 scale_corrections=scale_corrections,
                 image_pre_shifts=image_pre_shifts,
             )
-            if diagnostic_integer_pre_shifts is None:
-                diagnostic_integer_pre_shifts = np.zeros((batch, 2), dtype=np.int32)
-            if diagnostic_batch_corr is None:
-                diagnostic_batch_corr = np.ones(batch, dtype=np.float32)
-            if diagnostic_relion_preprocess_kwargs is None:
-                diagnostic_normalization_factors = np.ones(batch, dtype=np.float32)
-            else:
-                diagnostic_normalization_factors = np.asarray(
-                    diagnostic_relion_preprocess_kwargs["relion_normalization_factors"],
-                    dtype=np.float32,
-                )
-            diagnostic_image_mask, diagnostic_image_mask_mode = resolve_image_mask_for_half_preprocess(
+            contribution_preprocess_operands = bpref_diagnostics.build_bpref_preprocess_capture(
                 experiment_dataset,
                 image_shape,
-                require_mask=bool(score_with_masked_images),
+                diagnostic_preprocess_operands,
+                batch=batch,
+                score_with_masked_images=score_with_masked_images,
             )
-            contribution_preprocess_operands = {
-                "integer_pre_shifts": diagnostic_integer_pre_shifts,
-                "batch_image_corrections": diagnostic_batch_corr,
-                "batch_scale_corrections": diagnostic_batch_scale,
-                "relion_preprocess_normalization_factors": diagnostic_normalization_factors,
-                "relion_cuda_preprocess": diagnostic_relion_cuda_preprocess,
-                "image_mask": diagnostic_image_mask,
-                "image_mask_mode": diagnostic_image_mask_mode,
-            }
 
         # Preprocess
         (
@@ -13122,13 +13097,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         ]
         contribution_preprocess_operands = None
         if high_precision_operand_bundle:
-            (
-                diagnostic_relion_cuda_preprocess,
-                diagnostic_integer_pre_shifts,
-                diagnostic_batch_corr,
-                diagnostic_batch_scale,
-                diagnostic_relion_preprocess_kwargs,
-            ) = prepare_batch_preprocess_operands(
+            diagnostic_preprocess_operands = prepare_batch_preprocess_operands(
                 experiment_dataset,
                 batch_data,
                 image_indices,
@@ -13136,31 +13105,13 @@ def compute_k_class_pass2_stats_sparse_fused(
                 scale_corrections=scale_corrections,
                 image_pre_shifts=image_pre_shifts,
             )
-            if diagnostic_integer_pre_shifts is None:
-                diagnostic_integer_pre_shifts = np.zeros((batch, 2), dtype=np.int32)
-            if diagnostic_batch_corr is None:
-                diagnostic_batch_corr = np.ones(batch, dtype=np.float32)
-            if diagnostic_relion_preprocess_kwargs is None:
-                diagnostic_normalization_factors = np.ones(batch, dtype=np.float32)
-            else:
-                diagnostic_normalization_factors = np.asarray(
-                    diagnostic_relion_preprocess_kwargs["relion_normalization_factors"],
-                    dtype=np.float32,
-                )
-            diagnostic_image_mask, diagnostic_image_mask_mode = resolve_image_mask_for_half_preprocess(
+            contribution_preprocess_operands = bpref_diagnostics.build_bpref_preprocess_capture(
                 experiment_dataset,
                 image_shape,
-                require_mask=bool(score_with_masked_images),
+                diagnostic_preprocess_operands,
+                batch=batch,
+                score_with_masked_images=score_with_masked_images,
             )
-            contribution_preprocess_operands = {
-                "integer_pre_shifts": diagnostic_integer_pre_shifts,
-                "batch_image_corrections": diagnostic_batch_corr,
-                "batch_scale_corrections": diagnostic_batch_scale,
-                "relion_preprocess_normalization_factors": diagnostic_normalization_factors,
-                "relion_cuda_preprocess": diagnostic_relion_cuda_preprocess,
-                "image_mask": diagnostic_image_mask,
-                "image_mask_mode": diagnostic_image_mask_mode,
-            }
         bucket_group_ids = (
             jnp.asarray(group_ids_np[image_indices], dtype=jnp.int32)
             if group_ids_np is not None

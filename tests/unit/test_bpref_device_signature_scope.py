@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -943,3 +944,71 @@ def test_later_capture_support_excludes_dense_full_support_fallback():
     support_end = source.index("fused_atomic_diagnostic_supported =", support_start)
     support_block = source[support_start:support_end]
     assert "and not skip_significance_pruning" in support_block
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("provided", [False, True])
+@pytest.mark.parametrize("masked", [False, True])
+def test_preprocess_capture_preserves_selected_metadata(native, provided, masked):
+    from recovar.em.dense_single_volume.helpers.preprocessing import prepare_batch_preprocess_operands
+
+    mask = np.arange(16, dtype=np.float32).reshape(4, 4) if masked else None
+    backend = SimpleNamespace(relion_fourier_backend="relion_cuda" if native else "jax", image_mask=mask)
+    dataset = SimpleNamespace(image_source=SimpleNamespace(backend=backend))
+    indices = np.asarray([2, 0])
+    shifts = np.asarray([[1, -1], [2, -2], [3, -3]], dtype=np.int32)
+    operands = prepare_batch_preprocess_operands(
+        dataset,
+        np.zeros((2, 4, 4), dtype=np.float32),
+        indices,
+        image_corrections=np.asarray([4.0, 8.0, 16.0]) if provided else None,
+        scale_corrections=np.asarray([2.0, 4.0, 8.0]) if provided else None,
+        image_pre_shifts=shifts if provided else None,
+    )
+    result = bpref_diagnostics.build_bpref_preprocess_capture(
+        dataset,
+        (4, 4),
+        operands,
+        batch=2,
+        score_with_masked_images=masked,
+    )
+    assert list(result) == [
+        "integer_pre_shifts",
+        "batch_image_corrections",
+        "batch_scale_corrections",
+        "relion_preprocess_normalization_factors",
+        "relion_cuda_preprocess",
+        "image_mask",
+        "image_mask_mode",
+    ]
+    np.testing.assert_array_equal(result["integer_pre_shifts"], shifts[indices] if provided else np.zeros((2, 2)))
+    np.testing.assert_array_equal(result["batch_image_corrections"], [16.0, 4.0] if provided else [1.0, 1.0])
+    np.testing.assert_array_equal(result["batch_scale_corrections"], [8.0, 2.0] if provided else [1.0, 1.0])
+    np.testing.assert_array_equal(
+        result["relion_preprocess_normalization_factors"], [2.0, 2.0] if native and provided else [1.0, 1.0]
+    )
+    assert result["relion_cuda_preprocess"] == native
+    assert result["integer_pre_shifts"].dtype == np.int32
+    for key in ("batch_image_corrections", "batch_scale_corrections", "relion_preprocess_normalization_factors"):
+        assert result[key].dtype == np.float32
+    if masked:
+        assert result["image_mask"] is mask
+        assert result["image_mask_mode"] == "multiply"
+    else:
+        np.testing.assert_array_equal(result["image_mask"], np.ones((4, 4)))
+        assert result["image_mask_mode"] == "none"
+
+
+@pytest.mark.parametrize("mode", ["multiply", "invalid"])
+def test_preprocess_capture_rejects_missing_or_invalid_required_mask(mode):
+    backend = SimpleNamespace(image_mask_mode=mode)
+    dataset = SimpleNamespace(image_source=SimpleNamespace(backend=backend))
+    operands = (False, None, None, np.ones(2, dtype=np.float32), None)
+    with pytest.raises(ValueError, match="image.mask"):
+        bpref_diagnostics.build_bpref_preprocess_capture(
+            dataset,
+            (4, 4),
+            operands,
+            batch=2,
+            score_with_masked_images=True,
+        )

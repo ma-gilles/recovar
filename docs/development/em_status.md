@@ -50,6 +50,13 @@ See [agent workflow](agent_workflow.md) and the board's delegated setup record.
 
 ## Engineering work and recent evidence
 
+K1/fused-K-class BPref preprocessing capture assembly now shares one diagnostic
+builder; callers retain the original device operands and capture gates. The
+expanded execution AST and original tests are unchanged. Baseline65/candidate75
+CPU cases pass, including10 added metadata cases;38 guard cases pass. Runtime
+shrinks6 lines after readable call formatting. This is capture-schema cleanup,
+not a numerical precision change. [Receipt and checks](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/bpref_preprocess_owner_20260909/result.json).
+
 Six sparse helpers with no production/CLI/notebook consumers now live under
 `tests/helpers/sparse_pass2_test_support.py`, retaining all tests and independent
 NumPy references. The scorer loses162 runtime lines; this is relocation, not

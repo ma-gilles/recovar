@@ -18,7 +18,10 @@ import numpy as np
 
 from recovar.em.dense_single_volume.helpers.batch_fetch import original_image_indices
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_flag, parse_env_int_set
-from recovar.em.dense_single_volume.helpers.preprocessing import image_preprocess_backend
+from recovar.em.dense_single_volume.helpers.preprocessing import (
+    image_preprocess_backend,
+    resolve_image_mask_for_half_preprocess,
+)
 from recovar.em.dense_single_volume.local_backprojection import (
     relion_x_half_sequential_translation_reduction_enabled,
 )
@@ -1565,3 +1568,43 @@ def _maybe_dump_k1_bpref_membership(
         reconstruction_sum_weight=reconstruction_sum_weight,
         reconstruction_threshold=reconstruction_threshold,
     )
+
+
+def build_bpref_preprocess_capture(
+    experiment_dataset, image_shape, preprocess_operands, *, batch: int, score_with_masked_images: bool
+):
+    """Assemble the shared K1/K-class preprocessing capture schema.
+
+    The caller retains ``preprocess_operands`` through bucket execution, keeping
+    the original device normalization/shift operands alive beside this capture.
+    Defaults and capture casts follow the existing accelerated diagnostic path.
+    """
+    (
+        diagnostic_relion_cuda_preprocess,
+        diagnostic_integer_pre_shifts,
+        diagnostic_batch_corr,
+        diagnostic_batch_scale,
+        diagnostic_relion_preprocess_kwargs,
+    ) = preprocess_operands
+    if diagnostic_integer_pre_shifts is None:
+        diagnostic_integer_pre_shifts = np.zeros((batch, 2), dtype=np.int32)
+    if diagnostic_batch_corr is None:
+        diagnostic_batch_corr = np.ones(batch, dtype=np.float32)
+    if diagnostic_relion_preprocess_kwargs is None:
+        diagnostic_normalization_factors = np.ones(batch, dtype=np.float32)
+    else:
+        diagnostic_normalization_factors = np.asarray(
+            diagnostic_relion_preprocess_kwargs["relion_normalization_factors"], dtype=np.float32
+        )
+    diagnostic_image_mask, diagnostic_image_mask_mode = resolve_image_mask_for_half_preprocess(
+        experiment_dataset, image_shape, require_mask=bool(score_with_masked_images)
+    )
+    return {
+        "integer_pre_shifts": diagnostic_integer_pre_shifts,
+        "batch_image_corrections": diagnostic_batch_corr,
+        "batch_scale_corrections": diagnostic_batch_scale,
+        "relion_preprocess_normalization_factors": diagnostic_normalization_factors,
+        "relion_cuda_preprocess": diagnostic_relion_cuda_preprocess,
+        "image_mask": diagnostic_image_mask,
+        "image_mask_mode": diagnostic_image_mask_mode,
+    }
