@@ -152,4 +152,4 @@ def estimate_error_from_hard_assignment(hard_assignment, gt_pose, gt_trans, rota
     logger.info("mean trans error: %s pixels", mean_trans_error)
     logger.info("mean angle error: %s degrees", mean_angle_error)
 
-    return np.mean(error), np.mean(np.linalg.norm(predicted_trans - gt_trans, axis=-1))
+    return mean_angle_error, mean_trans_error
