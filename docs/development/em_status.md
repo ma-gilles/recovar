@@ -38,6 +38,16 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+Learned direction-prior updates now belong to
+`mean_helpers.update_learned_direction_priors`, with `RefinementHistory` owning
+the rotation-posterior and learned-prior snapshot copies; the controller keeps
+the admission decision and supplies grid geometry. 768 exact old/new cases and
+byte-exact inverse substitution match; 155 CPU guard cases pass and the whole
+controller test module plus override tests pass 501 cases with one GPU-only
+skip. Eleven controller-test monkeypatch sites moved to the owner. Structural
+checkpoint only.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/direction_prior_learning_owner_20260910/result.json).
+
 Two further owners follow in the same batch. `relion_replay.read_optimiser_accuracy_replay`
 owns the numbered optimiser accuracy override (selection, finite substitution,
 warnings on read/parse failure); 240 exact old/new cases, 149 guard and 153
