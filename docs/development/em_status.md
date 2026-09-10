@@ -38,6 +38,11 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+Replay numbering and cutoff helpers now live in `relion_replay.py`, with direct
+controller/test callers. Moved helper ASTs and remaining controller AST match
+the parent after ownership normalization; 147 CPU guard/affected cases pass.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/replay_boundary_owner_20260910/result.json).
+
 Final-pass admission and gridding selectors now belong to `finalization_policy.py`;
 the controller passes its logger explicitly. All168 old/new decision and warning
 comparisons match, and the remaining controller AST is unchanged after owner

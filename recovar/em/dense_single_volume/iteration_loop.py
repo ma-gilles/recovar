@@ -204,6 +204,7 @@ from recovar.reconstruction.regularization import (
 )
 
 from recovar.em.dense_single_volume import finalization_policy
+from recovar.em.dense_single_volume import relion_replay as replay_policy
 
 logger = logging.getLogger(__name__)
 
@@ -337,47 +338,6 @@ def refine_single_volume(
 # ---------------------------------------------------------------------------
 # RELION-parity refinement mode
 # ---------------------------------------------------------------------------
-
-
-def _numbered_relion_iteration(init_relion_iteration: int, local_iteration: int) -> int:
-    """Map a restart-local zero-based loop index to RELION's numbered iteration."""
-
-    return int(init_relion_iteration) + int(local_iteration) + 1
-
-
-def _past_perturb_replay_max_iter(iteration: int, perturb_replay_max_iter: int | None) -> bool:
-    """Return whether ``iteration`` (0-indexed) is past the diagnostic replay cutoff.
-
-    ``perturb_replay_max_iter`` is 1-indexed to match
-    ``scripts/run_multi_iter_parity.py``'s ``--replay-override-max-iter``
-    (and ``replay_iteration_overrides``, which the same flag also gates).
-    ``None`` means "no cutoff": every iteration stays in range.
-    """
-
-    if perturb_replay_max_iter is None:
-        return False
-    return (int(iteration) + 1) > int(perturb_replay_max_iter)
-
-
-def _native_sampling_boundary_for_iteration(
-    *,
-    iteration: int,
-    perturb_replay_relion_dir: str | None,
-    perturb_replay_max_iter: int | None,
-    sealed_sampling_state,
-) -> bool:
-    """Return whether this physical iteration owns sampling and convergence.
-
-    A diagnostic replay cutoff is a real ownership boundary, not merely a
-    guard around STAR reads. Once crossed, RECOVAR must resume its native
-    expected-accuracy, angular-sampling, and convergence transitions.
-    """
-
-    replay_active = perturb_replay_relion_dir is not None and not _past_perturb_replay_max_iter(
-        iteration,
-        perturb_replay_max_iter,
-    )
-    return not replay_active and sealed_sampling_state is None
 
 
 def _run_relion_iteration_loop(
@@ -813,7 +773,7 @@ def _run_relion_iteration_loop(
         "RELION mode setup timing before iteration loop: %s",
         ", ".join(f"{key}={value:.1f}s" for key, value in setup_phase_seconds.items()),
     )
-    native_sampling_boundary = _native_sampling_boundary_for_iteration(
+    native_sampling_boundary = replay_policy._native_sampling_boundary_for_iteration(
         iteration=iteration,
         perturb_replay_relion_dir=perturb_replay_relion_dir,
         perturb_replay_max_iter=perturb_replay_max_iter,
@@ -849,7 +809,7 @@ def _run_relion_iteration_loop(
             sealed_scoring_context=debug.sealed_scoring_context,
         )
     while (schedule.force_max_iter_after_convergence or not state.has_converged) and iteration < schedule.max_iter:
-        if perturb_replay_relion_dir is not None and _past_perturb_replay_max_iter(
+        if perturb_replay_relion_dir is not None and replay_policy._past_perturb_replay_max_iter(
             iteration, perturb_replay_max_iter
         ):
             logger.info(
@@ -860,7 +820,7 @@ def _run_relion_iteration_loop(
             )
             perturb_replay_relion_dir = None
             replay_saved_healpix_order = None
-        native_sampling_boundary = _native_sampling_boundary_for_iteration(
+        native_sampling_boundary = replay_policy._native_sampling_boundary_for_iteration(
             iteration=iteration,
             perturb_replay_relion_dir=perturb_replay_relion_dir,
             perturb_replay_max_iter=perturb_replay_max_iter,
@@ -903,7 +863,7 @@ def _run_relion_iteration_loop(
         firstiter_winner_take_all_this_iter = bool(
             relion_firstiter_cc_this_iter or first_iter_hard_reconstruction_this_iter
         )
-        numbered_relion_iteration = _numbered_relion_iteration(init_relion_iteration, iteration)
+        numbered_relion_iteration = replay_policy._numbered_relion_iteration(init_relion_iteration, iteration)
 
         if follower_setup.follower_scale_state is not None:
             _dispatch_relion_follower_scale_for_numbered_iteration(

@@ -55,6 +55,48 @@ _DEBUG_REPLAY_RELION_REFERENCES_ITERATION_ENV = "RECOVAR_DEBUG_REPLAY_RELION_REF
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 
 
+def _numbered_relion_iteration(init_relion_iteration: int, local_iteration: int) -> int:
+    """Map a restart-local zero-based loop index to RELION's numbered iteration."""
+
+    return int(init_relion_iteration) + int(local_iteration) + 1
+
+
+def _past_perturb_replay_max_iter(iteration: int, perturb_replay_max_iter: int | None) -> bool:
+    """Return whether ``iteration`` (0-indexed) is past the diagnostic replay cutoff.
+
+    ``perturb_replay_max_iter`` is 1-indexed to match
+    ``scripts/run_multi_iter_parity.py``'s ``--replay-override-max-iter``
+    (and ``replay_iteration_overrides``, which the same flag also gates).
+    ``None`` means "no cutoff": every iteration stays in range.
+    """
+
+    if perturb_replay_max_iter is None:
+        return False
+    return (int(iteration) + 1) > int(perturb_replay_max_iter)
+
+
+def _native_sampling_boundary_for_iteration(
+    *,
+    iteration: int,
+    perturb_replay_relion_dir: str | None,
+    perturb_replay_max_iter: int | None,
+    sealed_sampling_state,
+) -> bool:
+    """Return whether this physical iteration owns sampling and convergence.
+
+    A diagnostic replay cutoff is a real ownership boundary, not merely a
+    guard around STAR reads. Once crossed, RECOVAR must resume its native
+    expected-accuracy, angular-sampling, and convergence transitions.
+    """
+
+    replay_active = perturb_replay_relion_dir is not None and not _past_perturb_replay_max_iter(
+        iteration,
+        perturb_replay_max_iter,
+    )
+    return not replay_active and sealed_sampling_state is None
+
+
+
 def _has_numbered_replay_iteration_overrides(replay_iteration_overrides) -> bool:
     """Return whether replay contains state beyond the cold-start boundary.
 

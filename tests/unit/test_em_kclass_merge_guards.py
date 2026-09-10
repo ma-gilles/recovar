@@ -49,6 +49,7 @@ import recovar.em.dense_single_volume.helpers.score_constraints as score_constra
 import recovar.em.dense_single_volume.helpers.significance as sig_mod
 import recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed as sparse_pass2_mod
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop
+from recovar.em.dense_single_volume import relion_replay
 import recovar.em.dense_single_volume.k_class as k_class_mod
 from recovar.em.dense_single_volume import debug_dumps, half_scoring, k_class_results, score_outputs, scoring_policy
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics
@@ -458,10 +459,10 @@ def test_kclass_significance_dump_threads_one_based_iteration():
     score_source = inspect.getsource(half_scoring._score_half_dense)
     adaptive_source = inspect.getsource(k_class_mod.run_dense_k_class_em_adaptive)
     significance_source = inspect.getsource(sig_mod._compute_k_class_significance_batched)
-    assert iteration_loop._numbered_relion_iteration(0, 0) == 1
-    assert iteration_loop._numbered_relion_iteration(1, 0) == 2
-    assert iteration_loop._numbered_relion_iteration(11, 2) == 14
-    assert "numbered_relion_iteration = _numbered_relion_iteration(" in loop_source
+    assert relion_replay._numbered_relion_iteration(0, 0) == 1
+    assert relion_replay._numbered_relion_iteration(1, 0) == 2
+    assert relion_replay._numbered_relion_iteration(11, 2) == 14
+    assert "numbered_relion_iteration = replay_policy._numbered_relion_iteration(" in loop_source
     assert loop_source.count("debug_iteration=numbered_relion_iteration") >= 3
     score_tree = ast.parse(score_source)
     firstiter_inputs = next(

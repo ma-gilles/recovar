@@ -682,7 +682,7 @@ def test_past_perturb_replay_max_iter_matches_one_indexed_cutoff(
     iteration, perturb_replay_max_iter, expected_past_cutoff
 ):
     assert (
-        iteration_loop_module._past_perturb_replay_max_iter(iteration, perturb_replay_max_iter)
+        relion_replay_module._past_perturb_replay_max_iter(iteration, perturb_replay_max_iter)
         is expected_past_cutoff
     )
 
@@ -721,7 +721,7 @@ def test_native_sampling_boundary_transitions_at_replay_cutoff(
     iteration, replay_dir, cutoff, sealed, expected_native
 ):
     assert (
-        iteration_loop_module._native_sampling_boundary_for_iteration(
+        relion_replay_module._native_sampling_boundary_for_iteration(
             iteration=iteration,
             perturb_replay_relion_dir=replay_dir,
             perturb_replay_max_iter=cutoff,
