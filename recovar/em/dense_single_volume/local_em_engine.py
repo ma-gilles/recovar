@@ -44,7 +44,10 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_maybe_windowed as _adjoint_slice_volume_maybe_windowed,
 )
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
-from recovar.em.dense_single_volume.helpers.deterministic_reduce import add_segment_sum
+from recovar.em.dense_single_volume.helpers.deterministic_reduce import (
+    add_segment_sum,
+    deterministic_reductions_enabled,
+)
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.env_flags import (
     parse_env_binary_flag,
