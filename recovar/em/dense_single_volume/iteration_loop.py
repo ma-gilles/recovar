@@ -158,6 +158,7 @@ from recovar.em.dense_single_volume.relion_replay import (
     _validate_bpref_particle_order_scope,
     apply_iter_replay_overrides,
     apply_optimiser_convergence_replay,
+    read_optimiser_accuracy_replay,
 )
 from recovar.em.dense_single_volume.relion_worker_scale import (
     _dispatch_relion_follower_scale_for_final_all_data,
@@ -194,7 +195,6 @@ from recovar.em.sampling import (
     apply_relion_rotation_perturbation_to_eulers,
     apply_relion_translation_perturbation,
     build_local_search_grid_metadata,
-    read_relion_optimiser_metadata,
     read_relion_sampling_metadata,
     relion_angular_sampling_deg,
     relion_sampling_perturbation_for_iteration,
@@ -3693,35 +3693,22 @@ def _run_relion_iteration_loop(
                 approx_convergence_reason,
             )
 
-        _optimiser_meta = None
-        _optimiser_star = None
-        if perturb_replay_relion_dir is not None and sealed_sampling_state is None:
-            _optimiser_iter = int(init_relion_iteration) + iteration + 1
-            _optimiser_star = os.path.join(
-                perturb_replay_relion_dir,
-                f"{perturb_replay_relion_prefix}_it{_optimiser_iter:03d}_optimiser.star",
-            )
-            if os.path.exists(_optimiser_star):
-                try:
-                    _optimiser_meta = read_relion_optimiser_metadata(_optimiser_star)
-                    _relion_acc_rot = _optimiser_meta.get("overall_accuracy_rotations")
-                    _relion_acc_trans_angst = _optimiser_meta.get("overall_accuracy_translations_angst")
-                    if _relion_acc_rot is not None and np.isfinite(float(_relion_acc_rot)):
-                        iter_acc_rot = float(_relion_acc_rot)
-                        convergence_acc_rot = iter_acc_rot
-                    if _relion_acc_trans_angst is not None and np.isfinite(float(_relion_acc_trans_angst)):
-                        iter_acc_trans = float(_relion_acc_trans_angst)
-                        convergence_acc_trans = iter_acc_trans
-                    logger.info(
-                        "Replay override: optimiser accuracy <- %s (acc_rot=%.3f deg, acc_trans=%s Å)",
-                        _optimiser_star,
-                        float(iter_acc_rot) if iter_acc_rot is not None else float("nan"),
-                        f"{iter_acc_trans:.3f}" if iter_acc_trans is not None else "unset",
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "Replay override: failed to read optimiser metadata from %s: %s", _optimiser_star, exc
-                    )
+        accuracy_replay = read_optimiser_accuracy_replay(
+            replay_dir=perturb_replay_relion_dir,
+            replay_prefix=perturb_replay_relion_prefix,
+            init_relion_iteration=init_relion_iteration,
+            iteration=iteration,
+            sealed_sampling_state=sealed_sampling_state,
+            acc_rot=iter_acc_rot,
+            acc_trans=iter_acc_trans,
+            convergence_acc_rot=convergence_acc_rot,
+            convergence_acc_trans=convergence_acc_trans,
+            logger=logger,
+        )
+        iter_acc_rot = accuracy_replay.acc_rot
+        iter_acc_trans = accuracy_replay.acc_trans
+        convergence_acc_rot = accuracy_replay.convergence_acc_rot
+        convergence_acc_trans = accuracy_replay.convergence_acc_trans
 
         state = update_refinement_state(
             state,
@@ -3744,12 +3731,12 @@ def _run_relion_iteration_loop(
             update_sampling=not native_sampling_boundary,
             check_convergence_now=not native_sampling_boundary,
         )
-        if _optimiser_meta is not None:
+        if accuracy_replay.metadata is not None:
             apply_optimiser_convergence_replay(
                 state,
-                metadata=_optimiser_meta,
-                optimiser_star=_optimiser_star,
-                optimiser_iteration=_optimiser_iter,
+                metadata=accuracy_replay.metadata,
+                optimiser_star=accuracy_replay.optimiser_star,
+                optimiser_iteration=accuracy_replay.optimiser_iteration,
                 replay_dir=perturb_replay_relion_dir,
                 replay_prefix=perturb_replay_relion_prefix,
                 sealed_sampling_state=sealed_sampling_state,

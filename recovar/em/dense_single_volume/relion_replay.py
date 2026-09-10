@@ -992,6 +992,90 @@ def _restore_convergence_state_from_replay_restart(state, options: RefinementOpt
     )
 
 
+@dataclass
+class OptimiserAccuracyReplay:
+    """Numbered optimiser accuracy override read before the state update.
+
+    ``metadata`` and ``optimiser_iteration`` are ``None`` unless the numbered
+    optimiser STAR was read; ``optimiser_star`` is the selected path whenever
+    replay is active. The accuracy fields carry the caller's values with finite
+    RELION accuracies substituted.
+    """
+
+    metadata: dict | None
+    optimiser_star: str | None
+    optimiser_iteration: int | None
+    acc_rot: float | None
+    acc_trans: float | None
+    convergence_acc_rot: float | None
+    convergence_acc_trans: float | None
+
+
+def read_optimiser_accuracy_replay(
+    *,
+    replay_dir,
+    replay_prefix,
+    init_relion_iteration,
+    iteration: int,
+    sealed_sampling_state,
+    acc_rot,
+    acc_trans,
+    convergence_acc_rot,
+    convergence_acc_trans,
+    logger,
+) -> OptimiserAccuracyReplay:
+    """Read RELION's numbered optimiser accuracies for the convergence update.
+
+    With a replay directory and no sealed sampling state, the numbered
+    optimiser STAR for this iteration is selected. When it exists, its finite
+    ``overall_accuracy_rotations`` / ``overall_accuracy_translations_angst``
+    replace both the reported and the convergence accuracies. Read or parse
+    failures are logged as warnings and keep whatever was assigned before the
+    failure, as the controller did inline. Sealed replay leaves every input
+    unchanged.
+    """
+
+    metadata = None
+    optimiser_star = None
+    optimiser_iteration = None
+    if replay_dir is not None and sealed_sampling_state is None:
+        optimiser_iteration = int(init_relion_iteration) + iteration + 1
+        optimiser_star = os.path.join(
+            replay_dir,
+            f"{replay_prefix}_it{optimiser_iteration:03d}_optimiser.star",
+        )
+        if os.path.exists(optimiser_star):
+            try:
+                metadata = read_relion_optimiser_metadata(optimiser_star)
+                relion_acc_rot = metadata.get("overall_accuracy_rotations")
+                relion_acc_trans_angst = metadata.get("overall_accuracy_translations_angst")
+                if relion_acc_rot is not None and np.isfinite(float(relion_acc_rot)):
+                    acc_rot = float(relion_acc_rot)
+                    convergence_acc_rot = acc_rot
+                if relion_acc_trans_angst is not None and np.isfinite(float(relion_acc_trans_angst)):
+                    acc_trans = float(relion_acc_trans_angst)
+                    convergence_acc_trans = acc_trans
+                logger.info(
+                    "Replay override: optimiser accuracy <- %s (acc_rot=%.3f deg, acc_trans=%s Å)",
+                    optimiser_star,
+                    float(acc_rot) if acc_rot is not None else float("nan"),
+                    f"{acc_trans:.3f}" if acc_trans is not None else "unset",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Replay override: failed to read optimiser metadata from %s: %s", optimiser_star, exc
+                )
+    return OptimiserAccuracyReplay(
+        metadata=metadata,
+        optimiser_star=optimiser_star,
+        optimiser_iteration=optimiser_iteration,
+        acc_rot=acc_rot,
+        acc_trans=acc_trans,
+        convergence_acc_rot=convergence_acc_rot,
+        convergence_acc_trans=convergence_acc_trans,
+    )
+
+
 def apply_optimiser_convergence_replay(
     state,
     *,
@@ -1007,8 +1091,9 @@ def apply_optimiser_convergence_replay(
 
     Mutate the existing state in metadata order. Missing fields retain their
     computed values. An unnumbered final optimiser may close the numbered
-    replay only when the next sampling STAR is absent. The controller keeps
-    accuracy overrides before its state update and calls this afterward.
+    replay only when the next sampling STAR is absent.
+    ``read_optimiser_accuracy_replay`` supplies the accuracy overrides before
+    the controller's state update; the controller calls this afterward.
 
     Unlike restart restoration, missing numbered counters retain computed
     values rather than defaulting to zero. Keep those contracts separate.

@@ -905,7 +905,6 @@ def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
         "apply_relion_rotation_perturbation",
         "apply_relion_rotation_perturbation_to_eulers",
         "apply_relion_translation_perturbation",
-        "read_relion_optimiser_metadata",
         "read_relion_sampling_metadata",
     ]
 
@@ -918,6 +917,13 @@ def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
     assert callable(mean_helpers._align_fourier_volume_sign_to_reference)
     assert callable(mean_helpers._combined_noise_stats)
     assert callable(relion_replay._replay_control_model_iteration)
+    # The numbered optimiser accuracy override belongs to the replay owner.
+    assert callable(relion_replay.read_relion_optimiser_metadata)
+    assert callable(relion_replay.read_optimiser_accuracy_replay)
+    assert not hasattr(iteration_loop, "read_relion_optimiser_metadata")
+    controller_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    assert controller_source.count("read_optimiser_accuracy_replay(") == 1
+    assert "read_relion_optimiser_metadata(" not in controller_source
     assert callable(relion_replay.read_relion_direction_prior)
     assert callable(relion_replay.read_relion_direction_priors)
     assert iteration_loop._translation_grid_for_class_count is relion_replay._translation_grid_for_class_count
