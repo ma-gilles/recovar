@@ -99,3 +99,28 @@ def test_fixed_order_segment_sum_is_bitwise_repeatable_under_jit():
     first = np.asarray(fn(jnp.asarray(values, dtype=jnp.float32)))
     for _ in range(3):
         np.testing.assert_array_equal(np.asarray(fn(jnp.asarray(values, dtype=jnp.float32))), first)
+
+
+def test_scatter_flat_local_rows_flagged_path_matches_set_and_fixes_duplicates(monkeypatch):
+    from recovar.em.dense_single_volume.helpers.flat_local_rows import scatter_flat_local_rows
+
+    rng = np.random.default_rng(11)
+    batch, n_rot, n_trans = 3, 5, 4
+    values = (rng.standard_normal((9, n_trans)) + 1j * rng.standard_normal((9, n_trans))).astype(np.complex64)
+    image = np.array([0, 0, 1, 1, 2, 2, 2, 0, 0], dtype=np.int32)
+    rot = np.array([0, 3, 1, 4, 2, 0, 3, 1, 1], dtype=np.int32)  # rows 7 and 8 duplicate (0, 1); last two are padding
+    present = np.array([1, 1, 1, 1, 1, 1, 1, 0, 0], dtype=bool)
+    kw = dict(batch_size=batch, dense_rotation_count=n_rot, fill_value=np.inf)
+    monkeypatch.delenv(dr.DETERMINISTIC_REDUCTIONS_ENV, raising=False)
+    scatter = np.asarray(scatter_flat_local_rows(values, image, rot, present, **kw))
+    monkeypatch.setenv(dr.DETERMINISTIC_REDUCTIONS_ENV, "1")
+    fixed = np.asarray(scatter_flat_local_rows(values, image, rot, present, **kw))
+    assert fixed.shape == scatter.shape == (batch, n_rot, n_trans)
+    np.testing.assert_array_equal(fixed, scatter)  # unique present rows: identical result, padding dropped
+    assert np.isinf(fixed[0, 1]).all() and np.isinf(fixed[2, 4]).all()
+    # Duplicate present rows: the flagged path deterministically keeps the highest packed row id.
+    present_dup = present.copy(); present_dup[7] = present_dup[8] = True
+    fixed_dup = np.asarray(scatter_flat_local_rows(values, image, rot, present_dup, **kw))
+    np.testing.assert_array_equal(fixed_dup[0, 1], values[8])
+    for _ in range(3):
+        np.testing.assert_array_equal(np.asarray(scatter_flat_local_rows(values, image, rot, present_dup, **kw)), fixed_dup)
