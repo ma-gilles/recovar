@@ -918,16 +918,25 @@ def compute_unregularized_halfmaps_and_align_signs(
 
 @_dataclass
 class NoiseUpdateResult:
-    """Posterior-weighted noise-variance update output.
+    """Noise-update values in both shell and image-pixel layouts.
 
-    All four arrays are normalized to RELION conventions:
-    - ``noise_from_res`` / ``noise_from_res_per_half`` are per-shell
-      sigma2_noise (1D arrays of length ``n_shells``).
-    - ``noise_variance_per_half`` is the same data unrolled to a flat
-      ``ravel(make_radial_noise(...))`` representation for the engine.
-    - ``noise_variance`` is the mean of the two halves' radial.
-    - ``previous_noise_radial[_per_half]`` carry the per-shell values
-      forward to the next iteration's update.
+    ``noise_from_res`` is the mean per-shell sigma2_noise profile;
+    ``noise_from_res_per_half`` contains its two per-half profiles.
+    These are NumPy float64 arrays with ``n_shells`` entries per profile.
+
+    ``noise_variance_per_half`` contains flattened image-pixel arrays obtained
+    by expanding the radial noise model. ``noise_variance`` is their elementwise
+    mean in that same pixel layout, not a shell profile. The returned
+    ``previous_noise_radial`` and ``previous_noise_radial_per_half`` carry shell
+    profiles for the next update and its diagnostics.
+
+    Ownership is path-dependent. Ordinary K1 updates replace entries in the
+    supplied pixel-array list. K-class updates return a new two-entry list whose
+    entries refer to the same expanded shared-noise array. The first-iteration
+    CC path preserves the input pixel list and previous radial-history objects.
+    Otherwise the returned per-half radial history is the same list as
+    ``noise_from_res_per_half``. Do not assume these outputs are independent
+    copies or change their aliasing during structural cleanup.
     """
 
     noise_from_res: np.ndarray
