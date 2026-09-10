@@ -1089,7 +1089,6 @@ def _assemble_coarse_gemm_hybrid_compact_scores_f32_jit(
     """Device implementation for exact ordered compact score assembly."""
 
     batch_size, capacity, _source_block_size, n_translations = selected_diff2.shape
-    n_rotations = rotation_log_prior.shape[0]
     active_rows = jnp.arange(batch_size, dtype=jnp.int32) < actual_image_count
     active_slots = active_rows[:, None] & (
         jnp.arange(capacity, dtype=jnp.int32)[None, :] < block_count[:, None]

@@ -546,7 +546,6 @@ def run_dense_bucket_big_jit(
     )
     batch_size = scores.shape[0]
     rot_block_size = scores.shape[1]
-    n_trans = scores.shape[2]
     block_best = jnp.max(scores.reshape(batch_size, -1), axis=1)
     block_argmax = jnp.argmax(scores.reshape(batch_size, -1), axis=1)
     max_posterior = jnp.zeros(batch_size, dtype=scores.real.dtype)
