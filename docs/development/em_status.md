@@ -38,6 +38,13 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+The trial-grid SamplingPerturbation and the M-step source-angle rule now have
+one implementation each in the controller module, shared by the regular
+iterations and the final all-data pass (four inline sites before). 40 exact
+old/new cases with recorded grid-call order match; 154 CPU guard cases and the
+502-case controller panel pass (one GPU-only skip). Structural checkpoint only.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/trial_grid_perturbation_owner_20260910/result.json).
+
 Direction log priors for scoring now follow RELION through one owner,
 `orientation_priors.relion_direction_log_priors_for_half`, in both the regular
 iterations and the final all-data pass (user decision: reproduce RELION, clean
