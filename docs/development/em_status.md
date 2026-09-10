@@ -38,6 +38,21 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+Two further owners follow in the same batch. `relion_replay.read_optimiser_accuracy_replay`
+owns the numbered optimiser accuracy override (selection, finite substitution,
+warnings on read/parse failure); 240 exact old/new cases, 149 guard and 153
+replay-affected controller cases pass, zero skips.
+`orientation_priors.relion_half_translation_prior_inputs` owns the per-half
+score/sigma-offset prior centers, cold-start engine center and prior grid for
+both passes; 576 exact cases, 171 guard cases pass. The batch panel over the
+whole controller test module and override tests ran 502 cases: 500 pass, one
+GPU-only skip, and one pre-existing failure reproduced on published `48de9d9d1`
+(an oversampling test fake predating the source-Euler return) is repaired in a
+separate test-only commit. Structural checkpoints only; no numerical, GPU or
+trajectory qualification.
+[Replay receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/optimiser_accuracy_replay_owner_20260910/result.json),
+[translation-prior receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/half_translation_prior_inputs_owner_20260910/result.json).
+
 The pre-Wiener low-resolution half join and the Class3D per-class tau2 statistics
 now have one owner each in `mean_helpers`; the regular iterations and the final
 all-data pass call them with their own accumulators, current size and layout.
