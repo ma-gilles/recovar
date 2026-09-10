@@ -1639,8 +1639,8 @@ def _update_relion_follower_corrections(
     """Install follower scales and image corrections after a numbered M-step.
 
     Mutates the setup's scale state and both halves' runtime correction arrays.
-    Returns that state and the rank-1 model-STAR diagnostic, whose second half
-    remains absent. The controller owns scheduling and history recording and
+    Returns only the rank-1 model-STAR diagnostic, whose second half
+    remains absent; the updated state stays in its owner. The controller owns scheduling and history recording and
     supplies its selected precision and logger.
     """
     relion_follower_scale_state = follower_setup.follower_scale_state
@@ -1687,4 +1687,4 @@ def _update_relion_follower_corrections(
         if relion_follower_scale_state.n_followers > 1
         else "none",
     )
-    return relion_follower_scale_state, group_scale_corrections_for_dump
+    return group_scale_corrections_for_dump

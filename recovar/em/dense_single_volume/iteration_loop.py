@@ -961,10 +961,6 @@ def _run_relion_iteration_loop(
         experiment_datasets=experiment_datasets,
         k_class_enabled=k_class_enabled,
     )
-    relion_follower_scale_state = follower_setup.follower_scale_state
-    relion_follower_owners_per_half = follower_setup.follower_owners_per_half
-    relion_scale_stats_group_ids_per_half = follower_setup.scale_stats_group_ids_per_half
-    relion_scale_stats_group_count_per_half = follower_setup.scale_stats_group_count_per_half
 
     # --- RELION SamplingPerturbation state (healpix_sampling.cpp:167-174) ---
     # RELION applies a random rigid rotation of the entire SO(3) trial grid at
@@ -1086,7 +1082,7 @@ def _run_relion_iteration_loop(
         )
         numbered_relion_iteration = _numbered_relion_iteration(init_relion_iteration, iteration)
 
-        if relion_follower_scale_state is not None:
+        if follower_setup.follower_scale_state is not None:
             _dispatch_relion_follower_scale_for_numbered_iteration(
                 follower_setup,
                 history,
@@ -1097,9 +1093,6 @@ def _run_relion_iteration_loop(
                 dtype=_dense_global_scoring_dtype(),
                 logger=logger,
             )
-            relion_follower_scale_state = follower_setup.follower_scale_state
-            relion_follower_owners_per_half = follower_setup.follower_owners_per_half
-            relion_scale_stats_group_ids_per_half = follower_setup.scale_stats_group_ids_per_half
 
         # --- Determine current_size using RELION's FSC-derived SSNR (C4/C5) ---
         # At iteration 0, no previous half-map FSC exists yet; use the initial
@@ -2478,8 +2471,8 @@ def _run_relion_iteration_loop(
                     local_pass1_current_size=local_pass1_current_size,
                     image_corrections_k=relion_half_inputs.image_corrections[k],
                     scale_corrections_k=relion_half_inputs.scale_corrections[k],
-                    group_ids_k=relion_scale_stats_group_ids_per_half[k],
-                    group_count_k=relion_scale_stats_group_count_per_half[k],
+                    group_ids_k=follower_setup.scale_stats_group_ids_per_half[k],
+                    group_count_k=follower_setup.scale_stats_group_count_per_half[k],
                     scale_correction_data_vs_prior=scale_correction_data_vs_prior_this_iter,
                     translation_search_base=translation_search_base,
                     disable_adjoint_y=debug.disable_adjoint_y,
@@ -2541,8 +2534,8 @@ def _run_relion_iteration_loop(
                     trans_prior_center_for_engine=trans_prior_center_for_engine,
                     image_corrections_k=relion_half_inputs.image_corrections[k],
                     scale_corrections_k=relion_half_inputs.scale_corrections[k],
-                    group_ids_k=relion_scale_stats_group_ids_per_half[k],
-                    group_count_k=relion_scale_stats_group_count_per_half[k],
+                    group_ids_k=follower_setup.scale_stats_group_ids_per_half[k],
+                    group_count_k=follower_setup.scale_stats_group_count_per_half[k],
                     scale_correction_data_vs_prior=scale_correction_data_vs_prior_this_iter,
                     firstiter_score_mode_this_iter=firstiter_score_mode_this_iter,
                     firstiter_winner_take_all_this_iter=firstiter_winner_take_all_this_iter,
@@ -2611,8 +2604,8 @@ def _run_relion_iteration_loop(
                     trans_prior_center_for_engine=trans_prior_center_for_engine,
                     image_corrections_k=relion_half_inputs.image_corrections[k],
                     scale_corrections_k=relion_half_inputs.scale_corrections[k],
-                    group_ids_k=relion_scale_stats_group_ids_per_half[k],
-                    group_count_k=relion_scale_stats_group_count_per_half[k],
+                    group_ids_k=follower_setup.scale_stats_group_ids_per_half[k],
+                    group_count_k=follower_setup.scale_stats_group_count_per_half[k],
                     scale_correction_data_vs_prior=scale_correction_data_vs_prior_this_iter,
                     firstiter_score_mode_this_iter=firstiter_score_mode_this_iter,
                     firstiter_winner_take_all_this_iter=firstiter_winner_take_all_this_iter,
@@ -3858,7 +3851,7 @@ def _run_relion_iteration_loop(
                 for _half_idx, stats_k in enumerate(noise_stats_per_half)
             )
         )
-        if relion_follower_scale_state is not None and not can_update_norm_scale:
+        if follower_setup.follower_scale_state is not None and not can_update_norm_scale:
             raise RuntimeError(
                 "Strict RELION follower-scale topology requires per-half norm/scale "
                 "statistics at every numbered M-step"
@@ -3878,24 +3871,22 @@ def _run_relion_iteration_loop(
                 group_count_per_half=relion_half_inputs.group_count,
                 relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
                 do_norm_correction=True,
-                do_scale_correction=relion_follower_scale_state is None,
+                do_scale_correction=follower_setup.follower_scale_state is None,
                 dtype=_dense_global_scoring_dtype(),
             )
-            if relion_follower_scale_state is None:
+            if follower_setup.follower_scale_state is None:
                 relion_half_inputs.image_corrections = norm_scale_update.image_corrections_per_half
                 relion_half_inputs.scale_corrections = norm_scale_update.scale_corrections_per_half
                 group_scale_corrections_for_dump = norm_scale_update.group_scale_corrections_per_half
             else:
-                relion_follower_scale_state, group_scale_corrections_for_dump = (
-                    _update_relion_follower_corrections(
-                        follower_setup,
-                        noise_stats_per_half=noise_stats_per_half,
-                        norm_scale_update=norm_scale_update,
-                        relion_half_inputs=relion_half_inputs,
-                        relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
-                        dtype=_dense_global_scoring_dtype(),
-                        logger=logger,
-                    )
+                group_scale_corrections_for_dump = _update_relion_follower_corrections(
+                    follower_setup,
+                    noise_stats_per_half=noise_stats_per_half,
+                    norm_scale_update=norm_scale_update,
+                    relion_half_inputs=relion_half_inputs,
+                    relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
+                    dtype=_dense_global_scoring_dtype(),
+                    logger=logger,
                 )
             norm_corrections_for_dump = norm_scale_update.norm_corrections_per_half
             avg_norm_corrections_for_dump = norm_scale_update.avg_norm_correction_per_half
@@ -3917,9 +3908,9 @@ def _run_relion_iteration_loop(
                 _format_relion_correction_range(norm_scale_update.scale_corrections_per_half[0]),
                 _format_relion_correction_range(norm_scale_update.scale_corrections_per_half[1]),
             )
-        if relion_follower_scale_state is not None:
+        if follower_setup.follower_scale_state is not None:
             history.record_follower_scale_post_mstep(
-                np.asarray(relion_follower_scale_state.scales, dtype=np.float64).copy()
+                np.asarray(follower_setup.follower_scale_state.scales, dtype=np.float64).copy()
             )
 
         # Save per-iter per-shell sigma2 (after this iter's noise update) and
@@ -4504,7 +4495,7 @@ def _run_relion_iteration_loop(
             "Diagnostic %s=1: final all-data skips automatic last-numbered RELION state replay",
             _FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE_ENV,
         )
-    if relion_follower_scale_state is not None:
+    if follower_setup.follower_scale_state is not None:
         _dispatch_relion_follower_scale_for_final_all_data(
             follower_setup,
             init_relion_iteration=int(init_relion_iteration),
@@ -4513,8 +4504,6 @@ def _run_relion_iteration_loop(
             dtype=_dense_global_scoring_dtype(),
             logger=logger,
         )
-        relion_follower_owners_per_half = follower_setup.follower_owners_per_half
-        relion_scale_stats_group_ids_per_half = follower_setup.scale_stats_group_ids_per_half
     final_noise_variance_per_half = noise_variance_per_half
     if not k_class_enabled:
         # RELION joins the half-set weighted sums after the post-convergence
@@ -5148,8 +5137,8 @@ def _run_relion_iteration_loop(
                 local_pass1_current_size=final_local_pass1_current_size,
                 image_corrections_k=relion_half_inputs.image_corrections[k],
                 scale_corrections_k=relion_half_inputs.scale_corrections[k],
-                group_ids_k=relion_scale_stats_group_ids_per_half[k],
-                group_count_k=relion_scale_stats_group_count_per_half[k],
+                group_ids_k=follower_setup.scale_stats_group_ids_per_half[k],
+                group_count_k=follower_setup.scale_stats_group_count_per_half[k],
                 scale_correction_data_vs_prior=previous_data_vs_prior_for_scheduling,
                 translation_search_base=translation_search_base,
                 disable_adjoint_y=debug.disable_adjoint_y,
@@ -5196,8 +5185,8 @@ def _run_relion_iteration_loop(
                 trans_prior_center_for_engine=final_trans_prior_center_for_engine,
                 image_corrections_k=relion_half_inputs.image_corrections[k],
                 scale_corrections_k=relion_half_inputs.scale_corrections[k],
-                group_ids_k=relion_scale_stats_group_ids_per_half[k],
-                group_count_k=relion_scale_stats_group_count_per_half[k],
+                group_ids_k=follower_setup.scale_stats_group_ids_per_half[k],
+                group_count_k=follower_setup.scale_stats_group_count_per_half[k],
                 scale_correction_data_vs_prior=previous_data_vs_prior_for_scheduling,
                 firstiter_score_mode_this_iter="gaussian",
                 firstiter_winner_take_all_this_iter=False,

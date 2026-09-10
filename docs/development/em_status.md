@@ -51,6 +51,17 @@ No automatic model polling/wakeup promise.
 
 ## Engineering work and recent evidence
 
+Follower dispatch/correction state now has one owner, `RelionFollowerScaleSetup`.
+The controller's four shadow aliases and nine refresh assignments are removed;
+the correction updater returns only its model-STAR diagnostic. The same owner
+supplies numbered/final scoring and history. Twelve paired old/new updates have
+exact state/correction bytes; the remaining controller AST matches after the
+explicit alias/API migration. All 40 focused and 95 combined publication CPU
+cases pass. The initial baseline's missing native binding was resolved by the
+verified existing binary (unchanged source:35/35), without rebuilding.
+This source change removes 11 production lines; no trajectory acceptance follows.
+[Exact commands, source/binary pins and limits](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/follower_state_single_owner_20260910/result.json).
+
 Three score diagnostics with only test callers now live under
 `tests/helpers/score_diagnostics.py`: repeat spread, scale-panel classification
 and the float64 normalized-CC lane replay. Runtime copies and imports are gone
