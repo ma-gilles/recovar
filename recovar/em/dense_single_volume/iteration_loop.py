@@ -75,8 +75,7 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     make_relion_translation_log_prior,
     normalize_class_direction_prior_per_half,
     normalize_direction_prior_per_half,
-    relion_sigma_offset_prior_center,
-    relion_translation_prior_center,
+    relion_half_translation_prior_inputs,
     relion_translation_search_base,
     remap_half_direction_prior_to_healpix_order,
 )
@@ -2076,61 +2075,23 @@ def _run_relion_iteration_loop(
                         coarse_cs,
                         cs_for_engine,
                     )
-            # RELION translation prior sigma (ml_optimiser.cpp:7737-7746):
-            # RELION checks `offset_range_x` (rlnOffsetRangeX in optimiser.star),
-            # NOT the search-grid `offset_range` (rlnOffsetRange in sampling.star).
-            # When offset_range_x > 0: sigma² = range_x²/9 (per-axis override)
-            # When offset_range_x <= 0: sigma² = model.sigma2_offset (learned)
-            # For this dataset, rlnOffsetRangeX = -1 → model sigma is used.
-            # In split-half auto-refine, RELION keeps this in each half-model.
-            #
-            # Evaluate scoring and sigma-offset priors with their separate
-            # RELION source formulas. `pdf_offset` scores the unperturbed
-            # coarse sampling grid, while `wsum_sigma2_offset` accumulates
-            # getTranslationsInPixel() shifts in storeWeightedSums.
-            trans_prior_center = relion_translation_prior_center(
+            # RELION translation priors: relion_half_translation_prior_inputs
+            # documents the pdf_offset / wsum_sigma2_offset centers, the
+            # cold-start engine center and the prior-grid selection.
+            translation_prior_inputs = relion_half_translation_prior_inputs(
                 previous_translations_k,
-                cryo.voxel_size,
+                voxel_size=cryo.voxel_size,
+                base_translations=base_translations,
+                current_translations=current_translations,
                 dtype=_dense_global_scoring_dtype(),
             )
-            local_trans_prior_center = relion_translation_prior_center(
-                previous_translations_k,
-                cryo.voxel_size,
-                dtype=_dense_global_scoring_dtype(),
-            )
-            trans_sigma_center = relion_sigma_offset_prior_center(
-                previous_translations_k, dtype=_dense_global_scoring_dtype()
-            )
-            # A.1 fix: at iter 1 cold-start `previous_translations_k` is None, so
-            # `trans_sigma_center` is None and em_engine's wsum_sigma2_offset
-            # accumulator (em_engine.py:1636) is gated off. RELION still computes
-            # wsum_sigma2_offset = sum_i E[||t_i||²] at iter 1 using the implicit
-            # zero prior center, which seeds iter-2's sigma_offset ~ 1.6 Å (vs
-            # default 10 Å). Pass a zero-centered prior to the engine so the
-            # noise accumulator fires. Keep the score log-prior path separate:
-            # prior_centers=None means RELION's cold-start flat offset prior,
-            # while an explicit zero center means a real Gaussian offset prior.
-            trans_prior_center_for_engine = (
-                np.zeros(2, dtype=_dense_global_scoring_dtype())
-                if trans_sigma_center is None
-                else trans_sigma_center
-            )
-            translation_prior_translations = np.asarray(base_translations, dtype=_dense_global_scoring_dtype())
-            if current_translations.shape[0] != base_translations.shape[0]:
-                if current_translations.shape[0] == 1 and base_translations.shape[0] > 1:
-                    center_idx = int(base_translations.shape[0] // 2)
-                    translation_prior_translations = np.asarray(
-                        base_translations[center_idx : center_idx + 1],
-                        dtype=_dense_global_scoring_dtype(),
-                    )
-                else:
-                    translation_prior_translations = np.asarray(
-                        current_translations, dtype=_dense_global_scoring_dtype()
-                    )
+            trans_prior_center = translation_prior_inputs.prior_center
+            local_trans_prior_center = translation_prior_inputs.local_prior_center
+            trans_prior_center_for_engine = translation_prior_inputs.engine_prior_center
             translation_log_prior = None
             if not use_local:
                 translation_log_prior = make_relion_translation_log_prior(
-                    translation_prior_translations,
+                    translation_prior_inputs.prior_translations,
                     cryo.voxel_size,
                     sigma_offset_k,
                     trans_prior_center,
@@ -4618,40 +4579,18 @@ def _run_relion_iteration_loop(
             current_sigma_offset_angstrom_per_half,
             k,
         )
-        final_trans_prior_center = relion_translation_prior_center(
+        final_translation_prior_inputs = relion_half_translation_prior_inputs(
             previous_translations_k,
-            cryo.voxel_size,
+            voxel_size=cryo.voxel_size,
+            base_translations=final_base_translations,
+            current_translations=final_current_translations,
             dtype=_dense_global_scoring_dtype(),
         )
-        final_local_trans_prior_center = relion_translation_prior_center(
-            previous_translations_k,
-            cryo.voxel_size,
-            dtype=_dense_global_scoring_dtype(),
-        )
-        final_trans_sigma_center = relion_sigma_offset_prior_center(
-            previous_translations_k, dtype=_dense_global_scoring_dtype()
-        )
-        final_trans_prior_center_for_engine = (
-            np.zeros(2, dtype=_dense_global_scoring_dtype())
-            if final_trans_sigma_center is None
-            else final_trans_sigma_center
-        )
-        final_translation_prior_translations = np.asarray(
-            final_base_translations, dtype=_dense_global_scoring_dtype()
-        )
-        if final_current_translations.shape[0] != final_base_translations.shape[0]:
-            if final_current_translations.shape[0] == 1 and final_base_translations.shape[0] > 1:
-                center_idx = int(final_base_translations.shape[0] // 2)
-                final_translation_prior_translations = np.asarray(
-                    final_base_translations[center_idx : center_idx + 1],
-                    dtype=_dense_global_scoring_dtype(),
-                )
-            else:
-                final_translation_prior_translations = np.asarray(
-                    final_current_translations, dtype=_dense_global_scoring_dtype()
-                )
+        final_trans_prior_center = final_translation_prior_inputs.prior_center
+        final_local_trans_prior_center = final_translation_prior_inputs.local_prior_center
+        final_trans_prior_center_for_engine = final_translation_prior_inputs.engine_prior_center
         final_translation_log_prior = make_relion_translation_log_prior(
-            final_translation_prior_translations,
+            final_translation_prior_inputs.prior_translations,
             cryo.voxel_size,
             final_sigma_offset_k,
             final_trans_prior_center,

@@ -6,6 +6,8 @@ Called by ``_run_relion_iteration_loop`` and ``_run_local_search_iteration``
 in ``refine.py``.
 """
 
+from dataclasses import dataclass
+
 import healpy as hp
 import numpy as np
 
@@ -143,6 +145,78 @@ def relion_sigma_offset_prior_center(previous_best_translations, prior_offsets=N
     else:
         prior = np.asarray(prior_offsets, dtype=dtype).reshape(old_offset.shape)
     return (prior - old_offset).astype(dtype)
+
+
+@dataclass(frozen=True)
+class HalfTranslationPriorInputs:
+    """Per-half translation prior inputs for one scoring pass.
+
+    ``prior_center`` and ``local_prior_center`` are independent arrays with the
+    same ``pdf_offset`` center in search-grid pixels (``None`` on cold start);
+    the dense score log-prior uses the first and the local adapter the second.
+    ``sigma_center`` is the ``wsum_sigma2_offset`` accumulation center in pixels
+    (``None`` on cold start) and ``engine_prior_center`` its zero-centered
+    cold-start substitute. ``prior_translations`` are the translations the
+    score log-prior is evaluated on.
+    """
+
+    prior_center: np.ndarray | None
+    local_prior_center: np.ndarray | None
+    sigma_center: np.ndarray | None
+    engine_prior_center: np.ndarray
+    prior_translations: np.ndarray
+
+
+def relion_half_translation_prior_inputs(
+    previous_best_translations,
+    *,
+    voxel_size,
+    base_translations,
+    current_translations,
+    dtype: np.dtype = np.float32,
+):
+    """Build one half-set's RELION translation prior inputs.
+
+    RELION's translation prior sigma follows ``ml_optimiser.cpp:7737-7746``:
+    ``offset_range_x > 0`` overrides the per-axis sigma, otherwise the learned
+    model ``sigma2_offset`` is used, kept per half-model in split auto-refine.
+    The score prior (``pdf_offset``) and the sigma-offset sufficient statistic
+    use their separate RELION center formulas, see
+    :func:`relion_translation_prior_center` and
+    :func:`relion_sigma_offset_prior_center`.
+
+    On the iteration-1 cold start ``previous_best_translations`` is ``None``,
+    so the sigma center is ``None`` and the engine's ``wsum_sigma2_offset``
+    accumulator would stay off. RELION still accumulates
+    ``sum_i E[||t_i||^2]`` around the implicit zero prior, which seeds the
+    iteration-2 sigma offset, so the engine receives a zero center instead.
+    The score log-prior path stays separate: ``None`` centers mean RELION's
+    flat cold-start offset prior, an explicit zero center a real Gaussian.
+
+    The score log-prior is evaluated on the base translation grid; when the
+    current grid has a different size, a single current translation selects
+    the central base translation and any other mismatch uses the current
+    grid itself.
+    """
+
+    prior_center = relion_translation_prior_center(previous_best_translations, voxel_size, dtype=dtype)
+    local_prior_center = relion_translation_prior_center(previous_best_translations, voxel_size, dtype=dtype)
+    sigma_center = relion_sigma_offset_prior_center(previous_best_translations, dtype=dtype)
+    engine_prior_center = np.zeros(2, dtype=dtype) if sigma_center is None else sigma_center
+    prior_translations = np.asarray(base_translations, dtype=dtype)
+    if current_translations.shape[0] != base_translations.shape[0]:
+        if current_translations.shape[0] == 1 and base_translations.shape[0] > 1:
+            center_idx = int(base_translations.shape[0] // 2)
+            prior_translations = np.asarray(base_translations[center_idx : center_idx + 1], dtype=dtype)
+        else:
+            prior_translations = np.asarray(current_translations, dtype=dtype)
+    return HalfTranslationPriorInputs(
+        prior_center=prior_center,
+        local_prior_center=local_prior_center,
+        sigma_center=sigma_center,
+        engine_prior_center=engine_prior_center,
+        prior_translations=prior_translations,
+    )
 
 
 def collapse_rotation_posterior_to_direction_prior(

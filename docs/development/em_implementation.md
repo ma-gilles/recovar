@@ -317,6 +317,12 @@ directly. The old `mean_helpers` normalization exports are removed.
 
 Dense and local scoring share `orientation_priors.relion_translation_prior_center`;
 the duplicate `relion_local_translation_prior_center` entry point has been removed.
+`orientation_priors.relion_half_translation_prior_inputs` builds one half-set's
+score and sigma-offset prior centers, the zero-centered cold-start engine
+center and the prior translation grid for both the regular iterations and the
+final all-data pass; the controller keeps the search base, the per-half sigma
+offset and the dense-only score log-prior call. The local adapter receives
+its own center array, and the engine center aliases the sigma center.
 Both use `(prior - rounded_old_offset) / pixel_size`, as before. The separate
 `relion_sigma_offset_prior_center` serves sufficient statistics and keeps its
 pixel-space formula without that division.
