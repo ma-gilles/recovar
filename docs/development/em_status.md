@@ -38,6 +38,15 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+PPCA cleanup removes59 net lines of unused private helpers across refinement
+postprocessing and shared PPCA; remaining live arithmetic and public exports
+are unchanged. Two native-dependent PPCA tests now declare GPU requirements.
+CPU companion:11 pass,3 GPU skipped. On clean9b09516ce, all3 GPU cases execute
+and pass on local A100 GPU1 with an explicitly built, sealed sm80 library;
+source/binary/header hashes remain unchanged. The earlier CPU auto-build attempts
+were stopped and preserved; no dispatch repair or full-pipeline acceptance.
+[GPU qualification and commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/ppca_gpu_9b09516ce_20260910/result.json).
+
 Particle-state reporting now rejects null/blank image IDs before alignment and
 shares its identity validator. Non-finite or negative comparison tolerances also
 fail explicitly; zero and established finite defaults are preserved. Sixteen
