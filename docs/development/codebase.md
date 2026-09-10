@@ -51,7 +51,7 @@ it compares decoded rotation indices, with no angular-distance threshold.
 
 The [refinement controller](../../recovar/em/dense_single_volume/iteration_loop.py)
 owns iteration history, half-set dispatch, sampling updates, convergence and
-finalization. Its exact local-search stage is implemented in
+finalization scheduling/state mutation. Its exact local-search stage is implemented in
 [`local_search_iteration`](../../recovar/em/dense_single_volume/local_search_iteration.py).
 That module builds local pose neighborhoods, asks
 [`batch_planning`](../../recovar/em/dense_single_volume/batch_planning.py) for
@@ -59,19 +59,38 @@ batch sizes, calls the selected kernel and returns `_LocalSearchIterationResult`
 with named accumulators, pose fields, statistics and optional class summaries.
 The controller reads those fields directly.
 
-[`relion_replay`](../../recovar/em/dense_single_volume/relion_replay.py) validates
-whether overrides contain numbered trajectory state and whether physical BPref
-particle ordering is legal at a fresh, imported or sealed boundary. The controller
-calls these guards before refinement and when choosing final replay behavior;
-the replay module owns the rules and errors. Initial-only overrides remain
-separate from numbered trajectory replay.
-The same replay owner selects final sampling STARs and validates required final
-state files; the controller retains metadata interpretation and numerical grid
-construction after selection.
-The same owner selects diagnostic reference replay and loads the requested
-half/class maps, including shared-class fallback files. The controller keeps
-the replacement boundary; source casts, Fourier/frame conversion and errors
-remain unchanged. Replay messages use that module’s logger.
+Replay and finalization have separate selection and mutation boundaries:
+
+| Responsibility | Owner | Inputs and preserved behavior |
+| --- | --- | --- |
+| Final-pass admission and gridding selector | [`finalization_policy.py`](../../recovar/em/dense_single_volume/finalization_policy.py) | Receives convergence/cap state and the controller logger. Reads diagnostic flags when called; does not mutate refinement state. |
+| Replay numbering and cutoff | [`relion_replay.py`](../../recovar/em/dense_single_volume/relion_replay.py) | `_numbered_relion_iteration` maps restart-local indices; `_native_sampling_boundary_for_iteration` checks cutoff and sealed state. The controller retains scheduling. |
+| Final override selection | `relion_replay._select_final_replay_override` | Receives the requested index, explicit override, recorded history and its already-computed presence flag. Returns an index and the original override object; no copying or state updates. |
+| Applying selected state | [`iteration_loop.py`](../../recovar/em/dense_single_volume/iteration_loop.py) | Retains sigma, pose, corrections, noise and direction-prior updates in their original order, including casts and half-set handling. |
+
+Read `_should_run_final_all_data_iteration` in decision order: forced-cap mode
+rejects the extra pass first; otherwise convergence admits it. Without
+convergence, the optional after-cap diagnostic can admit K1 only when the cap
+has been reached. K-class still requires convergence. Gridding correction
+currently defaults **off**; the strict-parity target specifies on. Resolving
+that discrepancy is a separate scientific change, not part of extraction.
+
+Replay admission is also explicit. An initial-only override does not activate
+numbered final replay. An explicit final diagnostic override wins, even an
+empty dictionary; otherwise automatic replay requires numbered overrides or
+its force flag and must not be disabled. Selection clamps to the final stored
+slot when needed. A `None` slot in a nonempty history raises an error; an absent
+history logs that no override exists. The selected dictionary retains identity.
+These final-selection diagnostics use the controller logger passed by the caller.
+
+The replay owner also validates physical BPref ordering for fresh/imported/sealed
+boundaries, selects final sampling STARs and checks required files. Numerical
+grid construction after selection remains in the controller. Diagnostic map
+loading includes half/class and shared-class fallback files, with unchanged
+casts and Fourier/frame conversion; these map-loading messages use the replay
+module's logger. Review [replay-state tests](../../tests/unit/test_relion_replay_state.py)
+and [controller tests](../../tests/unit/test_refine_relion_mode.py) for selection
+identity, missing-slot errors, cutoff behavior and cold-start finalization.
 
 The local kernel returns `LocalEMResult` from
 [`helpers.types`](../../recovar/em/dense_single_volume/helpers/types.py):
