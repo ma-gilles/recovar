@@ -422,3 +422,13 @@ per-class failures and the reported large K-class runtime regression during
 review. Start from the live [VDAM status](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/status/vdam.json)
 `overnight_program.receipts`; do not duplicate jobs or adopt a repeat-band waiver
 without checking the actual competing scores and established map conditions.
+
+K4 saved-metric review now confirms the fixed-gate failures rather than admitting
+a repeat-band waiver. Synthetic candidate/original-native fails at19–20;
+real fails at14–20, and even real candidate/closest native repeat fails the map
+gate at20. All3,200 saved curve integrals and optimal class matches were checked.
+The benchmark script now rejects missing/duplicate IDs and malformed class
+labels;26 CPU cases pass and80 original STAR results are unchanged.
+[Per-comparison values, evidence limits and reproduction](benchmarks.md#k4-audit-integrity-and-reviewed-saved-comparisons--september-10).
+Next: review robustness/case22 and remaining source/build admission, retaining
+current100k/exactK4 and strict-state gates. No new jobs are implied.

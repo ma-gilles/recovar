@@ -77,6 +77,26 @@ def _column(table, names: tuple[str, ...], *, path: Path) -> str:
     return name
 
 
+def _class_assignments_by_image(table, *, path: Path, K: int) -> dict[str, int]:
+    image_column = _column(table, ("_rlnImageName", "rlnImageName"), path=path)
+    class_column = _column(table, ("_rlnClassNumber", "rlnClassNumber"), path=path)
+    images = table[image_column]
+    identities = [str(image) for image in images]
+    if images.isna().any() or any(not image.strip() for image in identities):
+        raise AuditError(f"{path} contains missing image identities")
+    if len(set(identities)) != len(identities):
+        raise AuditError(f"{path} contains duplicate image identities")
+    try:
+        labels = np.asarray(table[class_column], dtype=np.float64)
+    except (TypeError, ValueError) as exc:
+        raise AuditError(f"{path} contains nonnumeric class labels") from exc
+    # Zero is the existing InitialModel unassigned sentinel. Preserve it;
+    # never silently truncate fractional labels or discard out-of-range ones.
+    if not np.all(np.isfinite(labels) & (labels == np.floor(labels)) & (labels >= 0) & (labels <= K)):
+        raise AuditError(f"{path} class labels must be integers in [0, {K}]")
+    return dict(zip(identities, labels.astype(np.int64) - 1))
+
+
 def _matched_assignments(
     candidate_star: Path,
     reference_star: Path,
@@ -84,23 +104,21 @@ def _matched_assignments(
 ) -> dict[str, Any]:
     candidate, _ = read_star(str(candidate_star))
     reference, _ = read_star(str(reference_star))
-    candidate_image = _column(candidate, ("_rlnImageName", "rlnImageName"), path=candidate_star)
-    reference_image = _column(reference, ("_rlnImageName", "rlnImageName"), path=reference_star)
-    candidate_class = _column(candidate, ("_rlnClassNumber", "rlnClassNumber"), path=candidate_star)
-    reference_class = _column(reference, ("_rlnClassNumber", "rlnClassNumber"), path=reference_star)
-
-    candidate_by_image = {
-        str(image): int(label) - 1 for image, label in zip(candidate[candidate_image], candidate[candidate_class])
-    }
-    reference_by_image = {
-        str(image): int(label) - 1 for image, label in zip(reference[reference_image], reference[reference_class])
-    }
-    common = sorted(set(candidate_by_image).intersection(reference_by_image))
+    K = len(permutation)
+    candidate_by_image = _class_assignments_by_image(candidate, path=candidate_star, K=K)
+    reference_by_image = _class_assignments_by_image(reference, path=reference_star, K=K)
+    candidate_ids, reference_ids = set(candidate_by_image), set(reference_by_image)
+    if candidate_ids != reference_ids:
+        raise AuditError(
+            "candidate and reference image identities differ: "
+            f"candidate_only={len(candidate_ids - reference_ids)}, "
+            f"reference_only={len(reference_ids - candidate_ids)}"
+        )
+    common = sorted(candidate_ids)
     if not common:
-        raise AuditError("candidate and reference data STAR files share no image identities")
+        raise AuditError("candidate and reference data STAR files contain no image identities")
     candidate_labels = np.asarray([candidate_by_image[image] for image in common], dtype=np.int64)
     reference_labels = np.asarray([reference_by_image[image] for image in common], dtype=np.int64)
-    K = len(permutation)
     assigned = (candidate_labels >= 0) & (candidate_labels < K) & (reference_labels >= 0) & (reference_labels < K)
     accuracy = (
         _class_assignment_accuracy(candidate_labels[assigned], reference_labels[assigned], permutation)

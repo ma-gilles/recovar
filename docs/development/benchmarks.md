@@ -147,3 +147,37 @@ now has integrator-verified source/input pins,21 exact FSC integrals, a worst-ce
 raw-map recheck and initial-map byte equality. All0–20 cross-map conditions pass
 on real10076 10k/256 K1; count/Pmax differences remain. This closes the missing
 integrated-repair prefix measurement, not later-tip or completion qualification.
+
+## K4 audit integrity and reviewed saved comparisons — September 10
+
+The trajectory audit now requires identical, unique particle-ID sets and finite
+integer class labels in0..K. Missing rows, duplicate IDs and out-of-range labels
+fail with `AuditError`; zero remains the established unassigned sentinel. Valid
+rows may appear in different orders. The common-assigned accuracy policy and
+all numerical thresholds are unchanged.26 focused audit/runner tests pass;
+80 original synthetic/real STAR files retain exactly their prior audit results.
+
+The integrator reintegrated all3,200 saved shell curves from10 original/repeat
+comparisons, verified their4×4 score matrices and optimal class assignments, and
+recomputed the existing per-checkpoint pass/fail decisions. These are frozen5ca9
+InitialModel20-iteration diagnostics, synthetic5k/128 and real10k/256, not the
+required100k/256 completion workloads. Full run/source/build admission and raw-map
+recomputation are not claimed by this saved-curve audit.
+
+| Saved comparison | Minimum matched FSC-AUC | Minimum assignment accuracy | Fixed-gate failure iterations |
+| --- | ---: | ---: | --- |
+| Synthetic candidate / original native |0.9976801201|0.9986|19–20|
+| Synthetic candidate / native repeat A |0.9999999943|1.0|None|
+| Real candidate / original native |0.6489987975|0.9638|14–20|
+| Real candidate / native repeat B |0.9983333846|0.9958|20|
+
+Some native/native pairs also fail the same gates. Reproducing a branch is
+useful diagnostic evidence, but does not change the fixed thresholds or prove
+all competing-score/state differences are numerical. Preserve both original
+failures and repeat comparisons; the peer's “closed at repeat-band level”
+wording is not an integrator acceptance decision. Large reported K-class runtime
+ratios also remain an open performance concern, not a qualified comparison here.
+
+[All comparisons and pinned saved artifacts](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/kclass_audit_identity_guard_20260910/saved_review.json);
+[reproducible CPU review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/kclass_audit_identity_guard_20260910/review_saved.py);
+[red/green test commands, source hashes and limits](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/kclass_audit_identity_guard_20260910/result.json).

@@ -7,7 +7,6 @@ import pytest
 
 from scripts import audit_vdam_kclass_trajectory as audit
 
-
 pytestmark = pytest.mark.unit
 
 
@@ -83,3 +82,43 @@ def test_trajectory_audit_rejects_zero_classes(tmp_path):
             minimum_fsc_auc=0.999,
             minimum_assignment_accuracy=0.999,
         )
+
+
+def _assignment_star(path, rows):
+    path.write_text(
+        "data_particles\n\nloop_\n_rlnImageName #1\n_rlnClassNumber #2\n"
+        + "".join(f"{image} {label}\n" for image, label in rows)
+    )
+    return path
+
+
+@pytest.mark.parametrize("side", ["candidate", "reference"])
+@pytest.mark.parametrize(
+    "bad_rows",
+    [
+        [("1@stack.mrcs", 1)],  # Silent intersection used to discard the other row.
+        [("1@stack.mrcs", 1), ("2@stack.mrcs", 2), ("1@stack.mrcs", 1)],
+        [("1@stack.mrcs", 1), ("2@stack.mrcs", 5)],
+        [("1@stack.mrcs", 1), ("2@stack.mrcs", -1)],
+        [("1@stack.mrcs", 1), ("2@stack.mrcs", 2.5)],
+    ],
+)
+def test_assignment_audit_rejects_incomplete_or_invalid_rows(tmp_path, side, bad_rows):
+    paths = {}
+    for arm in ("candidate", "reference"):
+        rows = bad_rows if arm == side else [("1@stack.mrcs", 1), ("2@stack.mrcs", 2)]
+        paths[arm] = _assignment_star(tmp_path / f"{arm}.star", rows)
+    with pytest.raises(audit.AuditError):
+        audit._matched_assignments(paths["candidate"], paths["reference"], (0, 1, 2, 3))
+
+
+def test_assignment_audit_keeps_unassigned_rows_and_matches_by_identity(tmp_path):
+    candidate = _assignment_star(tmp_path / "candidate.star", [("2@s", 1), ("1@s", 2), ("3@s", 0)])
+    reference = _assignment_star(tmp_path / "reference.star", [("1@s", 1), ("2@s", 2), ("3@s", 0)])
+    assert audit._matched_assignments(candidate, reference, (1, 0)) == {
+        "common_particles": 3,
+        "common_assigned_particles": 2,
+        "candidate_particles": 3,
+        "reference_particles": 3,
+        "accuracy": 1.0,
+    }
