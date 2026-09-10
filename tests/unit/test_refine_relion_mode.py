@@ -79,6 +79,8 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     bootstrap_current_size_from_ini_high_relion,
     clamp_relion_coarse_image_size,
     compute_coarse_image_size,
+    relion_expectation_coarse_size_order,
+    relion_local_pass1_current_size,
     relion_optics_image_current_sizes,
     shell_index_to_resolution_angstrom,
     should_skip_adaptive_pass2,
@@ -92,8 +94,6 @@ from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.iteration_loop import (
     _combined_class_direction_prior_from_halves,
     _estimate_relion_em_batch_sizes,
-    _relion_expectation_coarse_size_order,
-    _relion_local_pass1_current_size,
     _normalize_noise_variance_per_half,
     refine_single_volume,
 )
@@ -10174,7 +10174,7 @@ class TestRelionModeSmokeTest:
         oversampling_order = 1
         fine_order = updated_parent_order + oversampling_order
 
-        pass1_size = _relion_local_pass1_current_size(
+        pass1_size = relion_local_pass1_current_size(
             pre_update_healpix_order=incoming_order,
             pixel_size=3.28,
             ori_size=128,
@@ -10208,14 +10208,14 @@ class TestRelionModeSmokeTest:
 
     def test_replay_coarse_size_uses_previous_saved_order_not_live_post_mstep_state(self):
         assert (
-            _relion_expectation_coarse_size_order(
+            relion_expectation_coarse_size_order(
                 state_healpix_order=4,
                 replay_saved_healpix_order=3,
             )
             == 3
         )
         assert (
-            _relion_expectation_coarse_size_order(
+            relion_expectation_coarse_size_order(
                 state_healpix_order=4,
                 replay_saved_healpix_order=None,
             )

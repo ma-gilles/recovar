@@ -454,6 +454,9 @@ keep their existing routing.
 `helpers/resolution.py` owns current-size growth inputs and first-iteration
 resolution rules: the inclusive FSC/data-vs-prior boundary, raw versus corrected
 K1 scheduling, the initial high-resolution cutoff, and the tau2 reporting taper.
+It also owns expectation-boundary coarse sizing: replay selects the incoming
+HEALPix order, and local pass 1 sizes its Fourier window from that order while
+child expansion retains the updated order. Callers import these policies directly.
 The controller retains their timing within the refinement loop. The pure
 scheduling cases live in `tests/unit/test_resolution_scheduling.py`; the
 reconstruction/taper ordering check remains with the controller tests.

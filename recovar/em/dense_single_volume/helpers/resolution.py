@@ -8,9 +8,58 @@ iteration controller selects when to apply these rules.
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers.convergence import healpix_angular_step
+
 # Re-import so callers can get it from this module.
 from recovar.em.dense_single_volume.helpers.fourier_window import quantize_current_size
 from recovar.reconstruction.regularization import compute_current_size_relion, fsc_to_relion_ssnr
+
+
+def relion_local_pass1_current_size(
+    *,
+    pre_update_healpix_order: int,
+    pixel_size: float,
+    ori_size: int,
+    particle_diameter: float | None,
+    current_size: int | None,
+) -> int | None:
+    """Return RELION's local pass-1 size for the current expectation.
+
+    RELION computes ``image_coarse_size`` before ``updateAngularSampling``.
+    When an expectation advances the sampling order, its parent hypotheses
+    therefore use the incoming order for Fourier sizing even though the
+    updated order controls the parent grid and fine-child expansion.
+    """
+
+    coarse_size = compute_coarse_image_size(
+        healpix_angular_step(int(pre_update_healpix_order)),
+        pixel_size,
+        ori_size,
+        particle_diameter=particle_diameter,
+    )
+    coarse_size = clamp_relion_coarse_image_size(
+        coarse_size,
+        current_size,
+        ori_size,
+    )
+    return coarse_size if coarse_size < int(ori_size) else None
+
+def relion_expectation_coarse_size_order(
+    *,
+    state_healpix_order: int,
+    replay_saved_healpix_order: int | None,
+) -> int:
+    """Choose the pre-update sampling order at an expectation boundary.
+
+    In strict replay, RECOVAR's live refinement state may have advanced after
+    the preceding M-step.  RELION instead enters the next expectation from
+    the preceding numbered sampling STAR and only then updates angular
+    sampling, so the saved replay order is authoritative for Fourier sizing.
+    """
+
+    if replay_saved_healpix_order is not None:
+        return int(replay_saved_healpix_order)
+    return int(state_healpix_order)
 
 
 def shell_index_to_resolution_angstrom(shell_index, ori_size, voxel_size):

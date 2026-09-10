@@ -91,6 +91,8 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     bootstrap_current_size_from_ini_high_relion,
     clamp_relion_coarse_image_size,
     compute_coarse_image_size,
+    relion_expectation_coarse_size_order,
+    relion_local_pass1_current_size,
     relion_optics_image_current_sizes,
     shell_index_to_resolution_angstrom,
 )
@@ -305,54 +307,6 @@ def _concatenate_pose_stacks_or_none(stacks, *, trailing_shape, label):
             return None
         arrays.append(arr)
     return np.concatenate(arrays, axis=0)
-
-
-def _relion_local_pass1_current_size(
-    *,
-    pre_update_healpix_order: int,
-    pixel_size: float,
-    ori_size: int,
-    particle_diameter: float | None,
-    current_size: int | None,
-) -> int | None:
-    """Return RELION's local pass-1 size for the current expectation.
-
-    RELION computes ``image_coarse_size`` before ``updateAngularSampling``.
-    When an expectation advances the sampling order, its parent hypotheses
-    therefore use the incoming order for Fourier sizing even though the
-    updated order controls the parent grid and fine-child expansion.
-    """
-
-    coarse_size = compute_coarse_image_size(
-        healpix_angular_step(int(pre_update_healpix_order)),
-        pixel_size,
-        ori_size,
-        particle_diameter=particle_diameter,
-    )
-    coarse_size = clamp_relion_coarse_image_size(
-        coarse_size,
-        current_size,
-        ori_size,
-    )
-    return coarse_size if coarse_size < int(ori_size) else None
-
-
-def _relion_expectation_coarse_size_order(
-    *,
-    state_healpix_order: int,
-    replay_saved_healpix_order: int | None,
-) -> int:
-    """Choose the pre-update sampling order at an expectation boundary.
-
-    In strict replay, RECOVAR's live refinement state may have advanced after
-    the preceding M-step.  RELION instead enters the next expectation from
-    the preceding numbered sampling STAR and only then updates angular
-    sampling, so the saved replay order is authoritative for Fourier sizing.
-    """
-
-    if replay_saved_healpix_order is not None:
-        return int(replay_saved_healpix_order)
-    return int(state_healpix_order)
 
 
 from recovar.em.dense_single_volume.debug_dumps import (  # noqa: F401
@@ -1303,7 +1257,7 @@ def _run_relion_iteration_loop(
         # RELION updates image_coarse_size before updateAngularSampling at the
         # start of expectation(). Preserve that incoming sampling order even
         # when replay/native scheduling advances state.healpix_order below.
-        coarse_size_healpix_order = _relion_expectation_coarse_size_order(
+        coarse_size_healpix_order = relion_expectation_coarse_size_order(
             state_healpix_order=state.healpix_order,
             replay_saved_healpix_order=replay_saved_healpix_order,
         )
@@ -1914,7 +1868,7 @@ def _run_relion_iteration_loop(
                             int(state.adaptive_oversampling),
                         )
                         parent_order = local_search_order - int(state.adaptive_oversampling)
-                        local_pass1_current_size = _relion_local_pass1_current_size(
+                        local_pass1_current_size = relion_local_pass1_current_size(
                             pre_update_healpix_order=coarse_size_healpix_order,
                             pixel_size=(
                                 float(optics_pixel_sizes[0])
