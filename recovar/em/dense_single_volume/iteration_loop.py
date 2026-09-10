@@ -163,6 +163,7 @@ from recovar.em.dense_single_volume.score_outputs import (
     HalfScoreResult,
     PerHalfOutputs,
     _combine_optional_half_accumulators,
+    _maybe_host_offload_half0_local_accumulators,
     _record_score_profile,
     _resolve_mstep_accumulator_shape,
     _resolve_mstep_full_half_axis,
@@ -365,49 +366,6 @@ from recovar.em.dense_single_volume.debug_dumps import (  # noqa: F401
 # RELION's --minres_map default: do not add the Wiener prior term to the
 # lowest Fourier shells during MAP reconstruction.
 RELION_MINRES_MAP = 5
-
-
-def _host_offload_array(value):
-    """Copy a retained accumulator to host memory and release its device buffer."""
-
-    if isinstance(value, np.ndarray):
-        return value
-    host_value = np.asarray(jax.device_get(value))
-    delete = getattr(value, "delete", None)
-    if callable(delete):
-        try:
-            delete()
-        except RuntimeError:
-            pass
-    return host_value
-
-
-def _maybe_host_offload_half0_local_accumulators(
-    *,
-    half_index: int,
-    use_local: bool,
-    k_class_enabled: bool,
-    score_result: HalfScoreResult,
-) -> HalfScoreResult:
-    """Keep finished half-0 local accumulators off GPU while half 1 scores."""
-
-    if int(half_index) != 0 or not use_local or k_class_enabled:
-        return score_result
-    if score_result.mstep_full_half_axis is None:
-        return score_result
-
-    ft_y_nbytes = int(np.size(score_result.Ft_y)) * int(np.dtype(getattr(score_result.Ft_y, "dtype")).itemsize)
-    ft_ctf_nbytes = int(np.size(score_result.Ft_ctf)) * int(np.dtype(getattr(score_result.Ft_ctf, "dtype")).itemsize)
-    score_result.Ft_y = _host_offload_array(score_result.Ft_y)
-    score_result.Ft_ctf = _host_offload_array(score_result.Ft_ctf)
-    gc.collect()
-    logger.info(
-        "Offloaded half-1 local RELION M-step accumulators to host before scoring half-2 "
-        "(Ft_y=%.2f GB, Ft_ctf=%.2f GB)",
-        ft_y_nbytes / 1e9,
-        ft_ctf_nbytes / 1e9,
-    )
-    return score_result
 
 
 def _sigma_offset_for_half(current_sigma_offset_angstrom, current_sigma_offset_angstrom_per_half, half_index):
@@ -2745,6 +2703,7 @@ def _run_relion_iteration_loop(
                 use_local=use_local,
                 k_class_enabled=k_class_enabled,
                 score_result=score_result,
+                log=logger,
             )
             Ft_y_k = score_result.Ft_y
             Ft_ctf_k = score_result.Ft_ctf

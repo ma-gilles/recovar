@@ -51,6 +51,16 @@ No automatic model polling/wakeup promise.
 
 ## Engineering work and recent evidence
 
+Accumulator host offload now belongs to `score_outputs` beside `HalfScoreResult`;
+the controller retains the same scheduling call and supplies its existing logger.
+Moved helper bodies and remaining controller logic match by AST after the explicit
+import/logger migration. The controller is 41 lines shorter (net production +5).
+All 12 focused and 50 combined CPU cases pass; a final same-module import-order
+fix was followed by another 12 passing cases. Tests cover transfer-before-delete,
+collection/log ordering, host identity, skip conditions and error propagation.
+This is ownership cleanup, not a GPU memory or performance claim.
+[Commands, source pins and limits](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/accumulator_offload_owner_20260910/result.json).
+
 Local preprocessing tests now live together: the isolated BPref operand test moved
 out of the large refinement module (113 lines removed there; production unchanged).
 Its zero-translation score boundary is explicitly mocked, repairing two existing
