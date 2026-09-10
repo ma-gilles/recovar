@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import numpy as np
+
 
 @dataclass(frozen=True)
 class RefinementHistory:
@@ -128,6 +130,25 @@ class RefinementHistory:
         self.best_translations_history.append(translation_snapshot_per_half)
 
     def record_noise_and_tau2(self, noise_radial, noise_radial_per_half, tau2_details, *, k_class_enabled: bool) -> None:
+        """Format shell diagnostics before appending a complete iteration.
+
+        Float64 input shell arrays remain shared; stacking the halves creates
+        a fresh array. Prepare every field before mutating history so malformed
+        input cannot leave the trajectory lists at different lengths.
+        """
+        noise_radial = np.asarray(noise_radial, dtype=np.float64)
+        noise_radial_per_half = np.stack(
+            [np.asarray(noise_k, dtype=np.float64) for noise_k in noise_radial_per_half], axis=0,
+        )
+        tau2_details = None if tau2_details is None else {
+            "prior_shells": np.asarray(tau2_details["prior_shells"], dtype=np.float64),
+            "sigma2_shells": np.asarray(tau2_details["sigma2_shells"], dtype=np.float64),
+            "avg_weight_shells": np.asarray(tau2_details["avg_weight_shells"], dtype=np.float64),
+            "shell_sum": np.asarray(tau2_details["shell_sum"], dtype=np.float64),
+            "shell_count": np.asarray(tau2_details["shell_count"], dtype=np.float64),
+            "fsc_shells": None if k_class_enabled else np.asarray(tau2_details["fsc_shells"], dtype=np.float64),
+            "ssnr_shells": np.asarray(tau2_details["ssnr_shells"], dtype=np.float64),
+        }
         self.noise_radial_trajectory.append(noise_radial)
         self.noise_radial_per_half_trajectory.append(noise_radial_per_half)
         if tau2_details is None:

@@ -3703,19 +3703,7 @@ def _run_relion_iteration_loop(
         # Save per-iter per-shell sigma2 (after this iter's noise update) and
         # the exact shell-wise tau2 ingredients used in the Wiener update.
         history.record_noise_and_tau2(
-            np.asarray(noise_from_res, dtype=np.float64),
-            np.stack([np.asarray(noise_k, dtype=np.float64) for noise_k in noise_from_res_per_half], axis=0),
-            None
-            if tau2_update_details is None
-            else {
-                "prior_shells": np.asarray(tau2_update_details["prior_shells"], dtype=np.float64),
-                "sigma2_shells": np.asarray(tau2_update_details["sigma2_shells"], dtype=np.float64),
-                "avg_weight_shells": np.asarray(tau2_update_details["avg_weight_shells"], dtype=np.float64),
-                "shell_sum": np.asarray(tau2_update_details["shell_sum"], dtype=np.float64),
-                "shell_count": np.asarray(tau2_update_details["shell_count"], dtype=np.float64),
-                "fsc_shells": None if k_class_enabled else np.asarray(tau2_update_details["fsc_shells"], dtype=np.float64),
-                "ssnr_shells": np.asarray(tau2_update_details["ssnr_shells"], dtype=np.float64),
-            },
+            noise_from_res, noise_from_res_per_half, tau2_update_details,
             k_class_enabled=k_class_enabled,
         )
 
