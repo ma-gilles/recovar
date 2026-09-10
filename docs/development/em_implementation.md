@@ -438,7 +438,12 @@ diagnostics and batching. `refinement_options.with_validated_sampling_schedule`
 owns explicit current-size/HEALPix schedule admission and shallow option copies;
 the entry point invokes it before starting the loop. Option construction does
 not trigger these checks. `helpers/iteration_history.py` owns the per-iteration
-history lists and their established result-dictionary keys. The controller
+history lists and their established result-dictionary keys. Its noise/tau2 recorder
+also owns host diagnostic formatting: it prepares all float64 shell fields
+before appending, retains aliases to existing float64 shell arrays, and stacks
+the halves into a fresh array. `mean_helpers._noise_radial_history` constructs
+the radial history used by initialization and replay; pixel-noise normalization
+and estimation remain with their callers. The controller
 still chooses when each snapshot is recorded.
 
 Precision is explicit at extracted boundaries: replay grids, resolution

@@ -1526,7 +1526,9 @@ def apply_iter_replay_overrides(
             noise_variance_per_half = _normalize_noise_variance_per_half(_replay_noise, n_halves=2)
             noise_variance = _mean_noise_variance(noise_variance_per_half)
             previous_noise_radial_per_half, previous_noise_radial = _noise_radial_history(
-                noise_variance_per_half, cryo.image_shape, dtype=runtime_dtype,
+                noise_variance_per_half,
+                cryo.image_shape,
+                dtype=runtime_dtype,
             )
             logger.info("Replay override: sigma2_noise <- per-half model.star arrays")
         _replay_dir_prior = iter_replay_override.get("direction_prior")

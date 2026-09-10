@@ -38,17 +38,17 @@ def test_noise_history_formats_host_arrays_without_changing_alias_contract(dtype
 
 def test_noise_history_without_tau2_records_none_for_every_tau2_series():
     history = RefinementHistory()
-    history.record_noise_and_tau2([1., 2.], [[1., 2.], [3., 4.]], None, k_class_enabled=False)
+    history.record_noise_and_tau2([1.0, 2.0], [[1.0, 2.0], [3.0, 4.0]], None, k_class_enabled=False)
     assert history.noise_radial_trajectory[0].dtype == np.float64
     for field in fields(history):
         if field.name.startswith("tau2_"):
             assert getattr(history, field.name) == [None]
 
 
-@pytest.mark.parametrize("details", [{}, {"prior_shells": [1., 2.]}])
+@pytest.mark.parametrize("details", [{}, {"prior_shells": [1.0, 2.0]}])
 def test_malformed_tau2_does_not_partially_append_history(details):
     history = RefinementHistory()
     before = {field.name: list(getattr(history, field.name)) for field in fields(history)}
     with pytest.raises(KeyError):
-        history.record_noise_and_tau2([1., 2.], [[1., 2.], [3., 4.]], details, k_class_enabled=False)
+        history.record_noise_and_tau2([1.0, 2.0], [[1.0, 2.0], [3.0, 4.0]], details, k_class_enabled=False)
     assert {field.name: getattr(history, field.name) for field in fields(history)} == before

@@ -714,7 +714,9 @@ def _run_relion_iteration_loop(
     # Extract per-shell radial profiles from the input pixel-array noise
     # variances for diagnostic logging ("noise update per shell: old=... new=...").
     previous_noise_radial_per_half, previous_noise_radial = _noise_radial_history(
-        noise_variance_per_half, cryo.image_shape, dtype=_dense_global_scoring_dtype(),
+        noise_variance_per_half,
+        cryo.image_shape,
+        dtype=_dense_global_scoring_dtype(),
     )
     _mark_setup_phase("noise_radial_init")
 
@@ -3703,7 +3705,9 @@ def _run_relion_iteration_loop(
         # Save per-iter per-shell sigma2 (after this iter's noise update) and
         # the exact shell-wise tau2 ingredients used in the Wiener update.
         history.record_noise_and_tau2(
-            noise_from_res, noise_from_res_per_half, tau2_update_details,
+            noise_from_res,
+            noise_from_res_per_half,
+            tau2_update_details,
             k_class_enabled=k_class_enabled,
         )
 
@@ -4144,7 +4148,9 @@ def _run_relion_iteration_loop(
                 )
                 noise_variance = _mean_noise_variance(noise_variance_per_half)
                 previous_noise_radial_per_half, previous_noise_radial = _noise_radial_history(
-                    noise_variance_per_half, cryo.image_shape, dtype=_dense_global_scoring_dtype(),
+                    noise_variance_per_half,
+                    cryo.image_shape,
+                    dtype=_dense_global_scoring_dtype(),
                 )
                 _final_replay_fields.append("noise_variance")
             _final_replay_dir_prior = final_replay_override.get("direction_prior")
