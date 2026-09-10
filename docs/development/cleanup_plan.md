@@ -8,14 +8,26 @@ refactor or permission to change the scientific contract.
 
 ## Establish reliable comparisons
 
-| Work | Current evidence | Next bounded step |
+The table below routes remaining work; quantitative results and reviewed limits
+live in [current EM status](em_status.md#unresolved-validation-gates).
+Historical plans are not job state or current-source qualification.
+
+| Work | Established evidence | Next decision and owner |
 | --- | --- | --- |
-| PR180 K1 integration | Per-half noise-state correction reduces large Pmax gaps from 292 to 6. A six-particle replay exactly preserves those Pmax values and saved poses. The score dump changes Pmax by at most `3.05e-5`; float64 normalization of row 901's captured scores changes Pmax by only `5.01e-10`. | Compare matched score operands, priors and candidate geometry. The [targeted evidence](evidence/pr180-k1-targeted-capture-20260908/README.md) preserves the dump's execution change; final normalization does not close its gap. RELION live candidate scores and the historical generating build remain unavailable. |
-| Synthetic K1 repeatability | One of three no-capture candidate pairs fails support/Pmax checks; all final-map gates pass. One candidate repeat differs from its two repeats. | Use the first recorded boundary to select a fixed-state diagnostic with the same candidates, priors, noise and map inputs. Capture the competing probabilities for image 685 before classifying the support change. |
-| Real K1 repeatability | Two unchanged PR158 runs fail the direct-map gate from iteration 8. All captured first-iteration half-1 operands match; three identical-input production accumulation trials differ, including the warm pair. | Preserve the fixed-input evidence and investigate its relationship to the first iteration-2 support/Pmax differences before attributing trajectory changes. Keep autonomous convergence and fixed-state arithmetic as separate results. |
-| K-class execution and comparisons | PR180 fixes the PR158 undefined-variable path; its focused comparison passes on the merged source. Older repaired-control K2 passes; K8/K16 retain historical failures, and K16 has a class/pose flip without score margins. The historical exact-K4 pair started September 8 in Slurm13560202; its audit remains pending. | Qualify the merged PR180 source for K2/K4/K8/K16 after the K1 checks. Preserve the prior failures and distinguish PR180's numerical changes from structural equivalence to PR158. |
-| Shared SPA/ET metrics | Both existing tests pass 16 canonical required metric keys. Ten historical aliases explain the first external inventory failure. | Complete the held strict-inventory proposal without dropping required metrics, widening tolerances or writing baselines. |
-| Performance measurements | Repeated K1 timings exist; sampled RSS warnings and quality failures remain. Shared stage timings are historical single-run comparisons. | Compare accepted workloads on the same physical GPU with repeated orders and independent caches. Retain sampled process-tree RSS and OS process high-water RSS as separate measurements. |
+| K1 score/state parity | PR180's six remaining Pmax gaps lack complete matched candidate/oracle evidence. Frozen4f9 synthetic full200 meets map conditions but has strict state differences. | EM/VDAM own their private first-divergence investigations. Review matched inputs, competing scores and margins before integrating numerical repairs; do not duplicate their captures. |
+| Real K1 qualification | Frozen5ca9 real10076 prefix20 passes map conditions, with state differences. Its reviewed full200 final cross-engine AUCs fail .999; native-repeat variation is not a waiver. | Review source/fixture/build closure and first divergence. New completed runs require their own result admission; earlier prefix results do not qualify full trajectories or moving source. |
+| Exact K4 | Reviewed saved20-iteration synthetic and real comparisons contain failures; a synthetic repeat passes, while the closest real repeat still fails at20. Earlier job13560356 failed at10/class2. | Admit raw maps and complete source/build identities before acceptance. VDAM owns the separate full200 K4 experiment; completion still requires exactlyK4 at100k/256 with per-class Hungarian matching. |
+| Robustness and repeats | Saved GT screening includes failures in cases13/22/32. Per-map alignment differs from the prespecified shared-transform gate. Same-state saved E-step summaries are not wholly exact. | Review incoming state, candidate margins and the prescribed GT transform. Deterministic-reduction experiments are separate numerical/runtime candidates, not structural changes or automatic proof of parity. |
+| Shared SPA/ET and downstream | Historical required-metric inventories and failures are retained; the selected moving source has no complete shared qualification. | Freeze a source checkpoint and run applicable shared checks before merge acceptance. Never drop required metrics or rewrite baselines to pass. |
+| Performance | Historical ratios describe their frozen sources, fixtures and hardware; no moving-source100k/256 K1+K4 completion is accepted. | Admit completed timing pairs with matched source/input/hardware and quality evidence. Consult the ownership board before launching anything; pending/terminal jobs alone establish no scientific result. |
+
+Live assignments and jobs belong to the
+[coordination board](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/README.md),
+not this plan. Check scheduler state when a decision depends on it; a status
+file's empty top-level job list can conflict with pending entries elsewhere.
+Keep private numerical proposals out of the structural series until reviewed
+and authorized. Detailed historical plans remain in Git history and the
+[refresh receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/benchmark_plan_refresh_20260910/result.json).
 
 The current captures locate divergence but do not contain every candidate score
 or accumulator. A tiny first-iteration shell-statistic difference is not proof
