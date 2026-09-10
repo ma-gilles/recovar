@@ -9,7 +9,7 @@ See ``docs/math/relion_refinement_algorithm.md`` for the execution map.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal
 
 from recovar.em.dense_single_volume.helpers.convergence import LOCAL_SEARCH_HEALPIX_ORDER
@@ -243,6 +243,50 @@ class RefinementOptions:
     disc_type: str = "linear_interp"
 
 
+def _validate_relion_healpix_orders(orders, *, max_iter, init_healpix_order, max_healpix_order):
+    if orders is None:
+        return None
+    orders = tuple(int(order) for order in orders)
+    if len(orders) < int(max_iter):
+        raise ValueError(
+            "relion_healpix_orders must provide at least max_iter entries "
+            f"({len(orders)} < {int(max_iter)})"
+        )
+    if any(right < left for left, right in zip(orders, orders[1:])):
+        raise ValueError("relion_healpix_orders must be monotone nondecreasing")
+    if orders[0] < int(init_healpix_order):
+        raise ValueError(
+            "relion_healpix_orders cannot coarsen below init_healpix_order "
+            f"({orders[0]} < {int(init_healpix_order)})"
+        )
+    if orders[-1] > int(max_healpix_order):
+        raise ValueError(
+            "relion_healpix_orders exceeds max_healpix_order "
+            f"({orders[-1]} > {int(max_healpix_order)})"
+        )
+    return orders
+
+
+def with_validated_sampling_schedule(options: RefinementOptions) -> RefinementOptions:
+    """Validate explicit sampling schedules when refinement starts.
+
+    Return shallow option/adaptive copies; retain all other payload identities.
+    Construction itself deliberately does not run these entry-point checks.
+    """
+    adaptive = options.adaptive
+    if adaptive.relion_current_sizes is not None and len(adaptive.relion_current_sizes) == 0:
+        raise ValueError("relion_current_sizes must be non-empty when provided")
+    validated_orders = _validate_relion_healpix_orders(
+        adaptive.relion_healpix_orders,
+        max_iter=options.schedule.max_iter,
+        init_healpix_order=options.schedule.init_healpix_order,
+        max_healpix_order=options.schedule.max_healpix_order,
+    )
+    return replace(
+        options, adaptive=replace(adaptive, relion_healpix_orders=validated_orders)
+    )
+
+
 __all__ = [
     "RefinementSchedule",
     "AdaptiveOptions",
@@ -254,4 +298,5 @@ __all__ = [
     "ReplayState",
     "RefinementBatching",
     "RefinementOptions",
+    "with_validated_sampling_schedule",
 ]

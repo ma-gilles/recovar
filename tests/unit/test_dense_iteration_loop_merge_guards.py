@@ -27,6 +27,7 @@ from recovar.em.dense_single_volume import (
     score_outputs,
     scoring_policy,
 )
+from recovar.em.dense_single_volume.helpers import reconstruction_diagnostics
 from recovar.em.dense_single_volume.helpers.convergence import _native_final_perturbation_healpix_order
 from recovar.em.dense_single_volume.local_search_iteration import _LocalSearchIterationResult
 from recovar.em.initial_model.iteration_loop import run_vdam_iterations
@@ -798,7 +799,9 @@ def test_final_all_data_tau2_uses_joined_half_weight_sum():
     tau2_call = source[source.index(marker) : source.index("        logger.info(", source.index(marker))]
 
     assert 'weight_combination="sum"' in tau2_call
-    assert '"tau2_weight_combination": np.asarray("class_iref" if k_class_enabled else "sum")' in source
+    assert "reconstruction_diagnostics.write_final_bpref_accumulators(" in source
+    capture_source = inspect.getsource(reconstruction_diagnostics.write_final_bpref_accumulators)
+    assert '"tau2_weight_combination": np.asarray("class_iref" if k_class_enabled else "sum")' in capture_source
     assert '"tau2_weight_combination_final_all_data": "class_iref" if k_class_enabled else "sum"' in source
 
 

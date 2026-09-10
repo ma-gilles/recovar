@@ -432,7 +432,10 @@ The controller selects when to use these grids.
 
 Refinement now receives one `RefinementOptions` container. Its groups own
 scheduling, adaptive search, parity behavior, local search, class setup, replay,
-diagnostics and batching. `helpers/iteration_history.py` owns the per-iteration
+diagnostics and batching. `refinement_options.with_validated_sampling_schedule`
+owns explicit current-size/HEALPix schedule admission and shallow option copies;
+the entry point invokes it before starting the loop. Option construction does
+not trigger these checks. `helpers/iteration_history.py` owns the per-iteration
 history lists and their established result-dictionary keys. The controller
 still chooses when each snapshot is recorded.
 

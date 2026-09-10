@@ -9,7 +9,6 @@ to ``helpers.state_swap_runtime``.
 See ``docs/math/relion_refinement_algorithm.md`` for the algorithm map.
 """
 
-import dataclasses
 import gc
 import logging
 import os
@@ -49,7 +48,6 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     _exhaustive_grid_order_for_state,
     _final_local_sampling_orders,
     _native_final_perturbation_healpix_order,
-    _validate_relion_healpix_orders,
     calculate_expected_angular_errors,
     check_convergence,
     healpix_angular_step,
@@ -128,7 +126,7 @@ from recovar.em.dense_single_volume.projector_preparation import (
     _validate_captured_relion_projector_for_iteration,
     prepare_initial_real_references,
 )
-from recovar.em.dense_single_volume.refinement_options import RefinementOptions
+from recovar.em.dense_single_volume.refinement_options import RefinementOptions, with_validated_sampling_schedule
 from recovar.em.dense_single_volume.relion_metadata import (
     _radial_profile_from_noise_variance,
     _relion_metadata_translations,
@@ -328,23 +326,6 @@ def _sigma_offset_for_half(current_sigma_offset_angstrom, current_sigma_offset_a
     return float(current_sigma_offset_angstrom_per_half[int(half_index)])
 
 
-def _with_validated_relion_healpix_orders(options: RefinementOptions) -> RefinementOptions:
-    """Return a copy of `options` with validated `adaptive.relion_healpix_orders`.
-    """
-    adaptive = options.adaptive
-    if adaptive.relion_current_sizes is not None and len(adaptive.relion_current_sizes) == 0:
-        raise ValueError("relion_current_sizes must be non-empty when provided")
-    validated_orders = _validate_relion_healpix_orders(
-        adaptive.relion_healpix_orders,
-        max_iter=options.schedule.max_iter,
-        init_healpix_order=options.schedule.init_healpix_order,
-        max_healpix_order=options.schedule.max_healpix_order,
-    )
-    return dataclasses.replace(
-        options, adaptive=dataclasses.replace(adaptive, relion_healpix_orders=validated_orders)
-    )
-
-
 def _init_resolution_from_fsc(
     state: RefinementState, options: RefinementOptions, *, grid_size: int, voxel_size: float
 ) -> None:
@@ -432,9 +413,7 @@ def refine_single_volume(
     if options is None:
         options = RefinementOptions()
 
-    if options.adaptive.relion_current_sizes is not None and len(options.adaptive.relion_current_sizes) == 0:
-        raise ValueError("relion_current_sizes must be non-empty when provided")
-    options = _with_validated_relion_healpix_orders(options)
+    options = with_validated_sampling_schedule(options)
 
     return _run_relion_iteration_loop(
         experiment_datasets=experiment_datasets,
