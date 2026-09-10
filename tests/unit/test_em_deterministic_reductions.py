@@ -124,3 +124,26 @@ def test_scatter_flat_local_rows_flagged_path_matches_set_and_fixes_duplicates(m
     np.testing.assert_array_equal(fixed_dup[0, 1], values[8])
     for _ in range(3):
         np.testing.assert_array_equal(np.asarray(scatter_flat_local_rows(values, image, rot, present_dup, **kw)), fixed_dup)
+
+
+def test_powerclass_spectrum_flagged_path_matches_host_binning(monkeypatch):
+    """Under the opt-in the RELION powerClass spectrum is binned in XLA with the kernel's shell rule."""
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        _relion_cuda_powerclass_spectrum_norm_units,
+    )
+
+    n, half = 16, 9
+    rng = np.random.default_rng(2)
+    centred = (rng.standard_normal((3, n, half)) + 1j * rng.standard_normal((3, n, half))).astype(np.complex64)
+    monkeypatch.setenv(dr.DETERMINISTIC_REDUCTIONS_ENV, "1")
+    got = np.asarray(_relion_cuda_powerclass_spectrum_norm_units(centred.reshape(3, -1), image_shape=(n, n), current_size=8))
+    assert got.shape == (3, half)
+    # Host reference: RELION layout (rows rolled by n//2), 1/N^2 scaling, shell = rint(sqrt(x^2+y^2)),
+    # shells 1..half-1, half-row x==0,y<0 excluded, then N^4 back-scaling.
+    rel = np.roll(centred, -(n // 2), axis=1) / np.float32(n * n)
+    rows = np.arange(n)[:, None]; cols = np.arange(half)[None, :]
+    y = np.where(rows < half, rows, rows - n); shell = np.rint(np.sqrt((cols * cols + y * y).astype(np.float32))).astype(int)
+    valid = (shell > 0) & (shell < half) & ~((cols == 0) & (y < 0))
+    power = (rel.real.astype(np.float64) ** 2 + rel.imag.astype(np.float64) ** 2)
+    ref = np.stack([np.bincount(shell[valid], weights=power[i][valid], minlength=half)[:half] for i in range(3)]) * float(n * n) ** 2
+    np.testing.assert_allclose(got, ref, rtol=2e-6, atol=0)
