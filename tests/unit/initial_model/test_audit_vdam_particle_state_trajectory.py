@@ -96,3 +96,30 @@ def test_particle_state_audit_accepts_zero_tolerances():
         pose_tolerance_deg=0.0, translation_tolerance_angst=0.0,
     )
     assert report["divergent_particle_count"] == 0
+
+
+def test_empty_trajectory_is_not_reported_as_no_divergence(tmp_path):
+    from scripts.audit_vdam_particle_state_trajectory import audit_trajectory
+
+    with pytest.raises(AuditError, match="at least one iteration"):
+        audit_trajectory(tmp_path, tmp_path, iterations=())
+
+
+@pytest.mark.parametrize("changed,expected", [((2, 8), 2), ((8,), 8), ((), None)])
+def test_trajectory_reports_earliest_checked_divergence_in_any_request_order(tmp_path, changed, expected):
+    from recovar.data_io.starfile import write_star
+    from scripts.audit_vdam_particle_state_trajectory import audit_trajectory
+
+    candidate = tmp_path / "candidate"
+    reference = tmp_path / "reference"
+    candidate.mkdir()
+    reference.mkdir()
+    for iteration in (2, 8):
+        table = _table([("1@stack.mrcs", 0, 0, 0, 0, 0, 0.5)])
+        write_star(str(reference / f"run_it{iteration:03d}_data.star"), table)
+        if iteration in changed:
+            table.loc[0, "_rlnOriginYAngst"] = 1.0
+        write_star(str(candidate / f"run_it{iteration:03d}_data.star"), table)
+    report = audit_trajectory(candidate, reference, iterations=(8, 2))
+    assert [row["iteration"] for row in report["iterations"]] == [8, 2]
+    assert report["first_divergent_iteration"] == expected

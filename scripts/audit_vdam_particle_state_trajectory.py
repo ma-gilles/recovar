@@ -186,7 +186,13 @@ def audit_trajectory(
                 translation_tolerance_angst=translation_tolerance_angst,
             )
         )
-    first = next((row for row in rows if row["divergent_particle_count"]), None)
+    if not rows:
+        raise AuditError("trajectory audit requires at least one iteration")
+    first = min(
+        (row for row in rows if row["divergent_particle_count"]),
+        key=lambda row: row["iteration"],
+        default=None,
+    )
     return {
         "schema": SCHEMA,
         "metric_policy": {

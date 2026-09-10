@@ -41,7 +41,11 @@ Particle-state reporting now rejects null/blank image IDs before alignment and
 shares its identity validator. Non-finite or negative comparison tolerances also
 fail explicitly; zero and established finite defaults are preserved. Sixteen
 malformed cases exposed missing validation;80 reporting CPU tests pass and30
-valid reports are unchanged. No engine or gate changes.
+valid reports are unchanged. Empty trajectory requests now fail explicitly;
+reverse-ordered requests report the earliest checked divergence while preserving
+row order. Two reproduced failures are fixed, with51 affected CPU cases passing;
+this does not establish behavior at unsampled iterations. No engine or gate changes.
+[Iteration receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/trajectory_iteration_admission_20260910/result.json).
 [Identity receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/particle_identity_admission_20260910/result.json),
 [threshold receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/particle_tolerance_admission_20260910/result.json).
 
