@@ -71,7 +71,10 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
     make_fourier_window_spec,
     relion_fftw_order_for_square_score_window,
 )
-from recovar.em.dense_single_volume.helpers.deterministic_reduce import add_segment_sum
+from recovar.em.dense_single_volume.helpers.deterministic_reduce import (
+    add_segment_sum,
+    deterministic_reductions_enabled,
+)
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     bin_shell_values_jax,
     make_half_image_weights,
@@ -4932,6 +4935,33 @@ def _relion_cuda_powerclass_spectrum_norm_units(
 ):
     """Return RELION's atomically binned per-image power spectrum in N^4 units."""
 
+    if deterministic_reductions_enabled():
+        # The CUDA powerClass kernel bins |F|^2 with float atomicAdd per pixel,
+        # so its shell sums vary between launches (verified across processes).
+        # Under the opt-in, bin the identical float32 per-pixel values with the
+        # fixed-order shell reduction instead; same operands, fixed order.
+        relion_image, _real_dtype, image_height, image_width, half_width = _relion_powerclass_packed_image(
+            processed_score_half, image_shape=image_shape, dtype=jnp.complex64
+        )
+        relion_image = relion_image.astype(jnp.complex64)
+        rows = np.arange(image_height, dtype=np.int32)[:, None]
+        columns = np.arange(half_width, dtype=np.int32)[None, :]
+        signed_rows = np.where(rows < half_width, rows, rows - image_height)
+        radius_squared = columns * columns + signed_rows * signed_rows
+        shell = np.rint(np.sqrt(radius_squared.astype(np.float32))).astype(np.int32)
+        valid = (
+            (shell > 0)
+            & (shell < half_width)
+            & ~((columns == 0) & (signed_rows < 0))
+        ).reshape(-1)
+        shell = np.where(valid, shell.reshape(-1), half_width).astype(np.int32)
+        power = relion_image.real * relion_image.real
+        power = jax.lax.optimization_barrier(power)
+        power = power + relion_image.imag * relion_image.imag
+        spectrum = jax.vmap(
+            lambda row: bin_shell_values_jax(row, jnp.asarray(shell), half_width)
+        )(power)
+        return spectrum * jnp.asarray((image_height * image_width) ** 2, dtype=jnp.float32)
     spectrum_and_highres, image_height, image_width, half_width = _relion_powerclass_native_spectrum_highres(
         processed_score_half,
         image_shape=image_shape,
