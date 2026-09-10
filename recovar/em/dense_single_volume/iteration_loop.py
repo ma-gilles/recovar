@@ -3501,15 +3501,9 @@ def _run_relion_iteration_loop(
         new_iter_best_rotations = [None, None]
         new_iter_best_rotation_eulers = [None, None]
         new_iter_best_translations = [None, None]
-        # Cross-iteration pose/translation state: RELION carries this in
-        # ``exp_metadata`` (``MultidimArray<RFLOAT>``) and writes it back via
-        # ``EMDL_ORIENT_ORIGIN_X/Y_ANGSTROM`` (registered ``EMDL_DOUBLE``,
-        # backed by ``std::vector<double>`` in ``MetaDataContainer``) -- never
-        # narrowed to float, so this snapshot must follow the same dtype as
-        # the rest of the dense/global-path float64-sensitive operands
-        # (``_dense_global_scoring_dtype``). The Euler columns live in the
-        # same ``MultidimArray<RFLOAT> exp_metadata`` as translations in
-        # RELION, so ACC_DOUBLE_PRECISION also keeps them double internally.
+        # Preserve the configured dtype for rotations and translation updates.
+        # Explicit source Euler metadata stays float64; legacy matrix/grid
+        # fallbacks retain their existing casts until separately qualified.
         _pose_state_dtype = _dense_global_scoring_dtype()
         for k in range(2):
             if best_pose_rotations[k] is not None:
@@ -3520,34 +3514,32 @@ def _run_relion_iteration_loop(
                     else utils.R_to_relion(best_rots, degrees=True).astype(_pose_state_dtype)
                 )
                 best_trans = np.asarray(best_pose_translations[k], dtype=_pose_state_dtype)
-            elif use_local:
-                rot_idx = hard_assignments[k] // current_translations.shape[0]
-                trans_idx = hard_assignments[k] % current_translations.shape[0]
-                if local_search_rotations is None:
-                    local_grid_metadata = build_local_search_grid_metadata(local_search_order)
-                    best_rots = _selected_rotation_matrices(
-                        rot_idx,
-                        None,
-                        local_grid_metadata,
-                        random_perturbation=local_search_random_perturbation,
-                        angular_sampling_deg=local_search_angular_sampling_deg,
-                    )
-                    best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(_pose_state_dtype)
-                else:
-                    best_rots = np.asarray(local_search_rotations, dtype=_pose_state_dtype)[rot_idx]
-                    if local_search_rotation_eulers is not None:
-                        best_eulers = np.asarray(local_search_rotation_eulers, dtype=_pose_state_dtype)[rot_idx]
-                    else:
-                        best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(_pose_state_dtype)
-                best_trans = np.asarray(current_translations)[trans_idx]
             else:
-                # Global search uses the dense grid in pose_rotations[k].
-                # All dense EM / K-class paths report the flattened
-                # rotation-translation row index here.
                 rot_idx = hard_assignments[k] // current_translations.shape[0]
                 trans_idx = hard_assignments[k] % current_translations.shape[0]
-                best_rots = np.asarray(pose_rotations[k], dtype=_pose_state_dtype)[rot_idx]
-                best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(_pose_state_dtype)
+                if use_local:
+                    if local_search_rotations is None:
+                        local_grid_metadata = build_local_search_grid_metadata(local_search_order)
+                        best_rots = _selected_rotation_matrices(
+                            rot_idx,
+                            None,
+                            local_grid_metadata,
+                            random_perturbation=local_search_random_perturbation,
+                            angular_sampling_deg=local_search_angular_sampling_deg,
+                        )
+                        best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(_pose_state_dtype)
+                    else:
+                        best_rots = np.asarray(local_search_rotations, dtype=_pose_state_dtype)[rot_idx]
+                        if local_search_rotation_eulers is not None:
+                            best_eulers = np.asarray(local_search_rotation_eulers, dtype=_pose_state_dtype)[rot_idx]
+                        else:
+                            best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(
+                                _pose_state_dtype
+                            )
+                else:
+                    # Dense assignments index pose_rotations[k].
+                    best_rots = np.asarray(pose_rotations[k], dtype=_pose_state_dtype)[rot_idx]
+                    best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(_pose_state_dtype)
                 best_trans = np.asarray(current_translations)[trans_idx]
             new_iter_best_rotations[k] = best_rots
             new_iter_best_rotation_eulers[k] = best_eulers
