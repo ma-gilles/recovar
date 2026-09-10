@@ -77,3 +77,31 @@ def test_local_command_requires_explicit_device_visibility(package, monkeypatch,
     monkeypatch.delenv("SLURM_JOB_ID", raising=False)
     with pytest.raises(ValueError, match="CUDA_VISIBLE_DEVICES"):
         package.run(SimpleNamespace(repo=tmp_path, output=tmp_path, command=["python", "check.py"]))
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_receipt_records_native_and_cache_overrides_without_unrelated_env(
+    package, monkeypatch, tmp_path, configured,
+):
+    keys = (
+        "RECOVAR_DISABLE_CUDA", "RECOVAR_CUDA_LIB", "RECOVAR_CUDA_CACHE_DIR",
+        "RECOVAR_RELION_BIND_BUILD_DIR", "RECOVAR_JAX_CACHE_DIR",
+        "JAX_COMPILATION_CACHE_DIR",
+    )
+    expected = {key: ("1" if key == "RECOVAR_DISABLE_CUDA" else str(tmp_path / key))
+                if configured else None for key in keys}
+    for key, value in expected.items():
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
+    monkeypatch.setenv("RECOVAR_TEST_SECRET", "must-not-be-recorded")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
+    monkeypatch.setattr(package, "snapshot", lambda repo: {"head": "abc", "diff_sha256": "123"})
+    monkeypatch.setattr(package.subprocess, "run", Mock(return_value=SimpleNamespace(returncode=0)))
+    assert package.run(SimpleNamespace(repo=tmp_path, output=tmp_path, command=["true"])) == 0
+    text = (tmp_path / "receipt.json").read_text()
+    environment = json.loads(text)["environment"]
+    assert {key: environment[key] for key in keys} == expected
+    assert "RECOVAR_TEST_SECRET" not in environment
+    assert "must-not-be-recorded" not in text
