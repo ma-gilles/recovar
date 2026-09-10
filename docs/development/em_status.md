@@ -38,6 +38,19 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+Qualification of frozen `400ad81e4` on H100 (immutable worktree): the GPU fast
+parity tier failed 6 of 7 cases for pre-existing reasons (direct dense K=1 path
+rejected under default native group-scale correction since `1d84d63e0`; K-class
+fixtures predate dispatch capture); the K1 100k/256 completion failed at start
+because the launcher used the `host_numpy` image backend while the K1
+`firstiter_cc` defaults (since `59430e5aa`) require RELION CUDA image
+preprocessing. The launcher now passes `--image-fourier-backend relion_cuda`
+for K1; the K1 run was resubmitted from the frozen worktree with that flag
+(job 13709226, summary 13709227). A first RELION K4 oracle rerun used a legacy
+dispatch-log build and is preserved as failed; the schema-v2 oracle (13708102)
+is running with the chained RECOVAR exactly-K4 launch (13708103). No gate has
+moved. [Fast-tier review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_completion_k1_fast_400ad81e4_h100_20260910/fast_tier_review.md).
+
 Snapshot direction-prior initialization belongs to
 `orientation_priors.initial_direction_priors_from_snapshot`; 16 exact old/new
 cases including log text match, 173 CPU guard cases and the 502-case controller

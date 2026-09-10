@@ -932,6 +932,8 @@ if [[ "${EM_COMPLETION_TIMING_PROBE}" == "1" ]]; then
   REFINEMENT_EXTRA_ARGS+=(--skip-large-outputs)
 fi
 set +e
+# K=1 firstiter_cc defaults enable RELION's coarse-tree top-2 rescoring, which
+# requires RELION CUDA image preprocessing; the host_numpy default cannot run it.
 "\${PIXI_PY}" -m scripts.run_full_refinement \\
   --data_dir "${K1_DATA_DIR}" \\
   --output "\${OUTPUT_DIR}" \\
@@ -951,6 +953,7 @@ set +e
   --particle_diameter_ang 200 \\
   --tau2_fudge 1.0 \\
   --firstiter_cc \\
+  --image-fourier-backend relion_cuda \\
   --apply-initial-lowpass \\
   --benchmark_ledger_json "\${OUTPUT_DIR}/benchmark_ledger.json" \\
   --timing_dir "\${OUTPUT_DIR}/timing" \\
