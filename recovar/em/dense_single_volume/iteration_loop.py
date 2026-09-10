@@ -682,34 +682,14 @@ def _run_relion_iteration_loop(
             n_classes=n_classes if classes is None else classes,
             current_size=current_size_for_batch,
         )
-        if plan.image_batch_size != batching.image_batch_size or plan.rotation_block_size != batching.rotation_block_size:
-            logger.info(
-                "RELION EM batch sizing: requested image_batch_size=%d rotation_block_size=%d; "
-                "using image_batch_size=%d rotation_block_size=%d "
-                "(n_rot=%d n_trans=%d K=%d, score_budget=%.1fM floats, score_pixels=%d, "
-                "projection_tile=%.2f/%.2f GB, active_score_tile=%.2f/%.2f GB, "
-                "pose_pixel_tile=%.2f GB, translation_tile=%.2f/%.2f GB, "
-                "persistent_est=%.2f GB, usable_est=%.2f GB, gpu_used_est=%.2f GB)",
-                batching.image_batch_size,
-                batching.rotation_block_size,
-                plan.image_batch_size,
-                plan.rotation_block_size,
-                int(n_rot),
-                int(n_trans),
-                int(n_classes if classes is None else classes),
-                plan.score_float_budget / 1e6,
-                plan.score_pixel_count,
-                plan.projection_block_gb,
-                plan.projection_budget_gb,
-                plan.active_score_tile_gb,
-                plan.active_score_tile_budget_gb,
-                plan.pose_pixel_tile_gb,
-                plan.translation_tile_gb,
-                plan.translation_tile_budget_gb,
-                plan.persistent_estimate_gb,
-                plan.usable_estimate_gb,
-                plan.gpu_used_estimate_gb,
-            )
+        plan.log_adjustment(
+            requested_image_batch_size=batching.image_batch_size,
+            requested_rotation_block_size=batching.rotation_block_size,
+            n_rot=n_rot,
+            n_trans=n_trans,
+            n_classes=n_classes if classes is None else classes,
+            logger=logger,
+        )
         return plan.image_batch_size, plan.rotation_block_size
 
     # State: two half-set references.  For K-class refinement each half stores

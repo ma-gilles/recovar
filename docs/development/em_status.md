@@ -29,7 +29,8 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
   on pinned PR158 base `44d770de3f9336ab2f3f6a34203394bae8d1aeed`.
   [Compact handoff](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/CURRENT_TASK.md)
   and [ownership board](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/README.md)
-  govern assignments. EM is paused; VDAM owns private scientific evidence.
+  govern assignments. Consult peer status for current numerical work and jobs;
+  historical paused states do not establish current ownership or availability.
 - Preserve frozen checkouts, jobs, inputs and binaries. No shared RELION writer
   lock is granted here. No active em_clean job; peer job state must be checked
   before acting, not inferred from historical records. Never duplicate peer work.
@@ -48,6 +49,12 @@ this does not establish behavior at unsampled iterations. No engine or gate chan
 [Iteration receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/trajectory_iteration_admission_20260910/result.json).
 [Identity receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/particle_identity_admission_20260910/result.json),
 [threshold receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/particle_tolerance_admission_20260910/result.json).
+
+Batch-plan adjustment logging now belongs to the immutable batch-plan type;
+the controller retains estimator inputs and scheduling.100 affected CPU cases
+and the CPU guard pass;48 log and108 controller comparisons are exact.
+Controller −20 lines, net production +14; no numerical or performance claim.
+[Batch reporting receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/batch_report_owner_20260910/result.json).
 
 Final sampling-file admission/selection now belongs to the replay owner,
 including searched-path provenance for the missing-file diagnostic. All111 final
