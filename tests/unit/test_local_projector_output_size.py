@@ -153,3 +153,18 @@ def _rotation_z(angle):
 def _rotation_x(angle):
     c, s = np.cos(angle), np.sin(angle)
     return np.array([[1.0, 0.0, 0.0], [0.0, c, -s], [0.0, s, c]])
+
+
+def test_validate_local_relion_projector_window_accepts_image_window_and_rejects_model_window():
+    """The host-side local check must reject the pre-fix ``2 * max_r`` crop and accept the image window."""
+
+    from dataclasses import replace
+
+    from recovar.em.dense_single_volume import local_em_engine
+
+    spec = _spec()
+    assert local_em_engine.validate_local_relion_projector_window(spec, (IMAGE, IMAGE)) == IMAGE_CURRENT
+    model_window_spec = replace(spec, image_current_size=MODEL_CURRENT)
+    assert model_window_spec.relion_projector_output_size() == MODEL_CURRENT
+    with pytest.raises(ValueError, match="exceed projector crop"):
+        local_em_engine.validate_local_relion_projector_window(model_window_spec, (IMAGE, IMAGE))

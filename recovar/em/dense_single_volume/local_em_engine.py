@@ -106,6 +106,9 @@ from recovar.em.dense_single_volume.helpers.projection import (
     compute_relion_projector_projections_block as _compute_relion_projector_projections_block,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
+    _validate_centered_relion_projector_pixel_indices,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     indexed_projection_available as _indexed_projection_available,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
@@ -1052,6 +1055,38 @@ def _local_em_return_tuple(
     if return_significant_counts:
         result.append(significant_counts)
     return tuple(result)
+
+
+def validate_local_relion_projector_window(window_spec, image_shape) -> int | None:
+    """Host-side check that every windowed index fits the local RELION projector crop.
+
+    The local pass-2 sites gather ``score_indices``, ``projection_indices`` and
+    ``recon_indices`` from a projector cropped to
+    ``window_spec.relion_projector_output_size()``.  Inside the big-JIT path
+    those indices are tracers, so the trace-time validation in
+    ``compute_relion_projector_projections_block`` is skipped; the aliasing
+    fixed in 9216a1b8f went undetected for that reason.  Validate the concrete
+    NumPy copies once per call instead, and return the crop size used.
+    """
+
+    if not window_spec.use_window:
+        return None
+    projector_output_size = window_spec.relion_projector_output_size()
+    if projector_output_size is None:
+        return None
+    for indices_np in (
+        window_spec.score_indices_np,
+        window_spec.projection_indices_np,
+        window_spec.recon_indices_np,
+    ):
+        if indices_np is None:
+            continue
+        _validate_centered_relion_projector_pixel_indices(
+            indices_np,
+            image_shape=image_shape,
+            projector_output_size=int(projector_output_size),
+        )
+    return int(projector_output_size)
 
 
 def _project_local_bucket(
@@ -2400,6 +2435,8 @@ def run_local_em_exact(
     projection_kwargs["relion_texture_interp"] = projection_relion_texture_interp
     projection_kwargs["force_jax"] = bool(projection_force_jax)
     projection_mode = _local_projection_mode(window_spec, projection_kwargs, relion_projector_half)
+    if relion_projector_half is not None:
+        validate_local_relion_projector_window(window_spec, image_shape)
 
     half_weights = make_scoring_half_image_weights(
         image_shape,
