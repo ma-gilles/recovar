@@ -1096,7 +1096,7 @@ def _project_local_bucket(
         relion_texture_interp = projection_kwargs.get("relion_texture_interp")
         projector_kwargs = {}
         if window_spec.use_window and window_spec.max_r is not None:
-            projector_kwargs["projector_output_size"] = int(2 * window_spec.max_r)
+            projector_kwargs["projector_output_size"] = int(window_spec.relion_projector_output_size())
         projection_indices = None
         if window_spec.use_window:
             projection_indices = (
@@ -1261,7 +1261,7 @@ def _project_packed_noise_rows(
         relion_texture_interp = projection_kwargs.get("relion_texture_interp")
         projector_kwargs = {}
         if window_spec.use_window and window_spec.max_r is not None:
-            projector_kwargs["projector_output_size"] = int(2 * window_spec.max_r)
+            projector_kwargs["projector_output_size"] = int(window_spec.relion_projector_output_size())
         projection_indices = None
         if window_spec.use_window:
             projection_indices = (
@@ -2935,9 +2935,7 @@ def run_local_em_exact(
             )
         relion_projector_r_max_big_jit = int(relion_projector_r_max)
         if compact_relion_projector_big_jit:
-            big_jit_relion_projector_output_size = (
-                int(2 * window_spec.max_r) if window_spec.max_r is not None else 0
-            )
+            big_jit_relion_projector_output_size = int(window_spec.relion_projector_output_size() or 0)
             if score_only:
                 big_jit_projection_pixel_indices_arg = jnp.asarray(window_spec.score_indices, dtype=jnp.int32)
                 big_jit_projection_score_take_arg = jnp.arange(window_spec.n_score, dtype=jnp.int32)
