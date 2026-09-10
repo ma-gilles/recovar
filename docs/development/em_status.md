@@ -38,6 +38,25 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+Convergence inputs now have owners: `convergence.concatenate_assignments` /
+`concatenate_assignments_or_none` join the half-set assignment stacks and
+`mean_helpers._relion_pmax_normalization_mass_per_half` selects the optimizer
+Pmax mass. 48 exact old/new cases including error paths match; 247 CPU guard
+cases and the whole controller test module plus override tests (501 pass, one
+GPU-only skip) pass. A read-only review of the main-loop versus final-pass
+direction log-prior construction records three behavioral asymmetries for a
+decision, not a silent consolidation.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/convergence_input_owners_20260910/result.json),
+[asymmetry review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/convergence_input_owners_20260910/prescoring_direction_prior_asymmetry_review.md).
+
+Qualification of frozen `400ad81e4` is queued from the immutable worktree
+`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_qual_400ad81e4_20260910`:
+fast GPU parity tier and K1 100k/256 completion on exclusive H100 against the
+stored H100 RELION baseline (jobs 13704244/13704245, summary 13704246), and a
+dispatch-logging RELION K4 100k/256 oracle (13704399, H100) chained to a
+schema-v3 schedule build and the RECOVAR exactly-K4 completion launch (13704408).
+No result is observed yet; these jobs qualify only that frozen commit.
+
 Learned direction-prior updates now belong to
 `mean_helpers.update_learned_direction_priors`, with `RefinementHistory` owning
 the rotation-posterior and learned-prior snapshot copies; the controller keeps
