@@ -37,6 +37,12 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+The current convergence batch moves pose-stack preparation to its helper owner
+and reuses the completed state's assignment fraction instead of recomputing it.
+All208 combined CPU cases pass;200 pose-stack and48 post-update/replay fraction
+comparisons are exact. Controller−21 lines, net production+6. Local checkpoint,
+not trajectory/performance qualification. [Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pose_stack_owner_20260910/result.json).
+
 The current sampling/initialization batch consolidates coarse sizing, initial
 resolution seeding and explicit schedule validation in their existing owners.
 Duplicate checks/calculations are removed; defaults and state order are preserved.

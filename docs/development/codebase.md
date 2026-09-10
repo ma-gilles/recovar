@@ -39,6 +39,14 @@ raw MRC arrays and uncentered FFT calls are not interchangeable with them.
 
 ## Dense and local EM ownership
 
+Pose-stack preparation for convergence belongs to
+[`helpers.convergence.concatenate_pose_stacks_or_none`](../../recovar/em/dense_single_volume/helpers/convergence.py).
+The iteration controller supplies precision and logging context and retains the
+four current/previous rotation/translation call sites. Empty half-sets, missing
+poses, malformed-shape warnings and concatenation ownership are preserved.
+The completed state also owns `fraction_changed`; the controller reuses it for
+history instead of repeating the assignment reduction after replay overrides.
+
 The [refinement controller](../../recovar/em/dense_single_volume/iteration_loop.py)
 owns iteration history, half-set dispatch, sampling updates, convergence and
 finalization. Its exact local-search stage is implemented in

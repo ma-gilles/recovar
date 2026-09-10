@@ -26,7 +26,7 @@ def _apply(state, metadata, tmp_path, **overrides):
 
 
 def test_numbered_metadata_updates_only_supplied_controls(tmp_path):
-    state = RefinementState(acc_rot=1.5, acc_trans=2.5, current_resolution=8.0)
+    state = RefinementState(acc_rot=1.5, acc_trans=2.5, current_resolution=8.0, fraction_changed=0.375)
     before = asdict(state)
     metadata = {
         "number_iter_without_resolution_gain": "2",

@@ -1538,3 +1538,63 @@ class TestRefinementPolicy:
         )
         assert allow
         assert reason == "forced-by-env"
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("trailing_shape", [(2,), (3, 3)])
+def test_pose_stacks_preserve_empty_half_and_requested_precision(dtype, trailing_shape):
+    from recovar.em.dense_single_volume.helpers.convergence import concatenate_pose_stacks_or_none
+
+    populated = np.arange(2 * np.prod(trailing_shape), dtype=np.float64).reshape(2, *trailing_shape)
+    result = concatenate_pose_stacks_or_none(
+        [np.array([]), populated], trailing_shape=trailing_shape,
+        label="current pose", dtype=dtype, logger=logging.getLogger(__name__),
+    )
+    assert result.dtype == dtype
+    np.testing.assert_array_equal(result, populated.astype(dtype))
+    assert not np.shares_memory(result, populated)
+
+
+@pytest.mark.parametrize("stacks,warning", [([None, np.zeros((1, 2))], False), ([np.zeros((1, 3))], True)])
+def test_pose_stacks_skip_unavailable_or_malformed_half(stacks, warning, caplog):
+    from recovar.em.dense_single_volume.helpers.convergence import concatenate_pose_stacks_or_none
+
+    with caplog.at_level(logging.WARNING):
+        result = concatenate_pose_stacks_or_none(
+            stacks, trailing_shape=(2,), label="previous translation",
+            dtype=np.float32, logger=logging.getLogger(__name__),
+        )
+    assert result is None
+    assert bool(caplog.records) is warning
+    if warning:
+        assert "half-1 shape (1, 3)" in caplog.text
+
+
+@pytest.mark.parametrize("update_sampling", [False, True])
+def test_computed_assignment_fraction_survives_sampling_transition(update_sampling):
+    """History can reuse the completed state's fraction after a grid change."""
+    state = RefinementState(
+        healpix_order=2, max_healpix_order=4, current_resolution=8.0,
+        nr_iter_wo_resol_gain=3, nr_iter_wo_large_hidden_variable_changes=3,
+        smallest_changes_optimal_classes=0.0,
+        acc_rot=1.0,
+    )
+    updated = update_refinement_state(
+        state, current_assignments=np.array([0, 1, 4, 6]),
+        previous_assignments=np.array([0, 0, 2, 6]),
+        n_rotations=10, n_translations=2, translations=np.zeros((2, 2)),
+        new_resolution=8.0, update_sampling=update_sampling,
+        current_rotation_matrices=np.tile(np.eye(3), (4, 1, 1)),
+        previous_rotation_matrices=np.tile(np.eye(3), (4, 1, 1)),
+        current_translations_pixel=np.zeros((4, 2)),
+        previous_translations_pixel=np.zeros((4, 2)),
+        current_classes=np.zeros(4, dtype=int),
+        previous_classes=np.zeros(4, dtype=int),
+        ave_pmax_override=1.0,
+        check_convergence_now=False,
+    )
+    assert updated.fraction_changed == 0.25
+    if update_sampling:
+        assert updated.healpix_order == 3
+    else:
+        assert updated.healpix_order == 2

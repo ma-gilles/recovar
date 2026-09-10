@@ -60,6 +60,33 @@ SMALLEST_CHANGES_INIT_OFFSETS = 999.0  # angstroms
 SMALLEST_CHANGES_INIT_CLASSES = 9999999.0  # integer count
 
 
+def concatenate_pose_stacks_or_none(stacks, *, trailing_shape, label, dtype, logger):
+    """Prepare half-set pose stacks for convergence-change measurements.
+
+    Preserve empty replay halves; return None for missing or malformed poses.
+    The caller supplies its pose precision and diagnostic logging context.
+    """
+    arrays = []
+    expected_ndim = 1 + len(tuple(trailing_shape))
+    for half_idx, stack in enumerate(stacks):
+        if stack is None:
+            return None
+        arr = np.asarray(stack, dtype=dtype)
+        if arr.size == 0:
+            arr = arr.reshape((0, *tuple(trailing_shape)))
+        if arr.ndim != expected_ndim or tuple(arr.shape[1:]) != tuple(trailing_shape):
+            logger.warning(
+                "Skipping %s pose-delta stack: half-%d shape %s does not match (*, %s)",
+                label,
+                half_idx + 1,
+                arr.shape,
+                ", ".join(str(dim) for dim in trailing_shape),
+            )
+            return None
+        arrays.append(arr)
+    return np.concatenate(arrays, axis=0)
+
+
 def healpix_angular_step(order: int) -> float:
     """Return approximate angular step in degrees for a HEALPix order.
 

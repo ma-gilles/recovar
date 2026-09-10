@@ -49,6 +49,7 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     _final_local_sampling_orders,
     _native_final_perturbation_healpix_order,
     calculate_expected_angular_errors,
+    concatenate_pose_stacks_or_none,
     check_convergence,
     healpix_angular_step,
     update_angular_sampling,
@@ -284,29 +285,6 @@ def _kclass_replay_tau2_same_iter_enabled() -> bool:
     """
 
     return parse_env_flag_or_false(_KCLASS_REPLAY_TAU2_SAME_ITER_ENV, logger=logger)
-
-
-def _concatenate_pose_stacks_or_none(stacks, *, trailing_shape, label):
-    """Concatenate per-half pose stacks, accepting empty replay stacks."""
-    arrays = []
-    expected_ndim = 1 + len(tuple(trailing_shape))
-    for half_idx, stack in enumerate(stacks):
-        if stack is None:
-            return None
-        arr = np.asarray(stack, dtype=_dense_global_scoring_dtype())
-        if arr.size == 0:
-            arr = arr.reshape((0, *tuple(trailing_shape)))
-        if arr.ndim != expected_ndim or tuple(arr.shape[1:]) != tuple(trailing_shape):
-            logger.warning(
-                "Skipping %s pose-delta stack: half-%d shape %s does not match (*, %s)",
-                label,
-                half_idx + 1,
-                arr.shape,
-                ", ".join(str(dim) for dim in trailing_shape),
-            )
-            return None
-        arrays.append(arr)
-    return np.concatenate(arrays, axis=0)
 
 
 from recovar.em.dense_single_volume.debug_dumps import (  # noqa: F401
@@ -3691,25 +3669,33 @@ def _run_relion_iteration_loop(
             [np.asarray(t).copy() if t is not None else None for t in new_iter_best_translations],
         )
 
-        current_rotation_matrices_combined = _concatenate_pose_stacks_or_none(
+        current_rotation_matrices_combined = concatenate_pose_stacks_or_none(
             new_iter_best_rotations,
             trailing_shape=(3, 3),
             label="current rotation",
+            dtype=_dense_global_scoring_dtype(),
+            logger=logger,
         )
-        previous_rotation_matrices_combined = _concatenate_pose_stacks_or_none(
+        previous_rotation_matrices_combined = concatenate_pose_stacks_or_none(
             prior_iter_best_rotations,
             trailing_shape=(3, 3),
             label="previous rotation",
+            dtype=_dense_global_scoring_dtype(),
+            logger=logger,
         )
-        current_translations_pixel_combined = _concatenate_pose_stacks_or_none(
+        current_translations_pixel_combined = concatenate_pose_stacks_or_none(
             new_iter_best_translations,
             trailing_shape=(2,),
             label="current translation",
+            dtype=_dense_global_scoring_dtype(),
+            logger=logger,
         )
-        previous_translations_pixel_combined = _concatenate_pose_stacks_or_none(
+        previous_translations_pixel_combined = concatenate_pose_stacks_or_none(
             prior_iter_best_translations,
             trailing_shape=(2,),
             label="previous translation",
+            dtype=_dense_global_scoring_dtype(),
+            logger=logger,
         )
 
         if not k_class_enabled:
@@ -3954,16 +3940,9 @@ def _run_relion_iteration_loop(
                 logger=logger,
             )
 
-        # Track frac_changed for local search fallback
-        from recovar.em.dense_single_volume.helpers.convergence import compute_assignment_changes
-
-        frac_changed = compute_assignment_changes(
-            current_combined_ha,
-            previous_combined_ha,
-            n_rot_current,
-            n_trans_current,
-            current_healpix_order,
-        )
+        # Reuse the assignment statistic computed by update_refinement_state.
+        # Sampling transitions and optimiser replay preserve this field.
+        frac_changed = state.fraction_changed
         state._last_frac_changed = frac_changed
         history.record_frac_changed(float(frac_changed))
 
