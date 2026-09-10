@@ -35,6 +35,7 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_maybe_windowed as _adjoint_slice_volume_maybe_windowed,
 )
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
+from recovar.em.dense_single_volume.helpers.deterministic_reduce import add_segment_sum
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.env_flags import (
     parse_env_binary_flag,
@@ -6014,11 +6015,15 @@ def run_local_em_exact(
                             scale_for_noise_reduction,
                             scale_correction_pixel_mask,
                         )
-                        noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(
-                            scale_xa_per_image[:unpadded_batch_size].astype(noise_scale_xa.dtype)
+                        noise_scale_xa = add_segment_sum(
+                            noise_scale_xa,
+                            bucket_group_ids,
+                            scale_xa_per_image[:unpadded_batch_size].astype(noise_scale_xa.dtype),
                         )
-                        noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(
-                            scale_aa_per_image[:unpadded_batch_size].astype(noise_scale_aa.dtype)
+                        noise_scale_aa = add_segment_sum(
+                            noise_scale_aa,
+                            bucket_group_ids,
+                            scale_aa_per_image[:unpadded_batch_size].astype(noise_scale_aa.dtype),
                         )
                 else:
                     shifted_noise_split_unpadded = shifted_noise_split[
@@ -7356,8 +7361,8 @@ def run_local_em_exact(
                             batch_scale,
                             scale_correction_pixel_mask,
                         )
-                        noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(scale_xa_per_image.astype(noise_scale_xa.dtype))
-                        noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(scale_aa_per_image.astype(noise_scale_aa.dtype))
+                        noise_scale_xa = add_segment_sum(noise_scale_xa, bucket_group_ids, scale_xa_per_image.astype(noise_scale_xa.dtype))
+                        noise_scale_aa = add_segment_sum(noise_scale_aa, bucket_group_ids, scale_aa_per_image.astype(noise_scale_aa.dtype))
             else:
                 packed_rotation_count = int(reconstruction_take_indices_jnp.shape[1])
                 noise_projection_pixels = int(proj_for_noise.shape[-1])
@@ -7428,8 +7433,8 @@ def run_local_em_exact(
                             batch_scale,
                             scale_correction_pixel_mask,
                         )
-                        noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(scale_xa_per_image.astype(noise_scale_xa.dtype))
-                        noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(scale_aa_per_image.astype(noise_scale_aa.dtype))
+                        noise_scale_xa = add_segment_sum(noise_scale_xa, bucket_group_ids, scale_xa_per_image.astype(noise_scale_xa.dtype))
+                        noise_scale_aa = add_segment_sum(noise_scale_aa, bucket_group_ids, scale_aa_per_image.astype(noise_scale_aa.dtype))
             if return_profile:
                 _block_until_ready(block_noise_shells, block_norm_residual)
             noise_wsum = noise_wsum + block_noise_shells
