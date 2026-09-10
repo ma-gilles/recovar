@@ -30,6 +30,10 @@ if [[ -z "$PYTHON_BIN" ]]; then
   fi
 fi
 
+# Catch incomplete caller migrations before importing JAX or compiling tests.
+# This guard covers the dense/local package; shared/legacy EM has separate gates.
+"$PYTHON_BIN" -m ruff check --select F821 "$ROOT/recovar/em/dense_single_volume"
+
 "$PYTHON_BIN" - <<'PY'
 import pathlib
 import importlib

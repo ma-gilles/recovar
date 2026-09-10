@@ -84,6 +84,11 @@ empty or were warmed by a specified command.
 | Shared pipeline | Affected unit/integration tests | SPA, cryo-ET, outlier and downstream quality/performance under Slurm |
 | GUI or docs | Applicable scoped checks | Build and relevant user workflow checks |
 
+The dense/local fast guard first checks undefined names with the installed Ruff
+before importing JAX or compiling tests. This check covers
+`recovar/em/dense_single_volume`; it is not repository-wide lint or scientific
+qualification.
+
 Use focused tests between edits. Group related changes into a frozen checkpoint
 for broader CPU and applicable GPU checks; full long suites are publication or
 milestone checks, not the default response to a small change. Reuse saved outputs

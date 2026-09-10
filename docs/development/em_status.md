@@ -102,6 +102,11 @@ without actual score/support evidence. Counter187 is
 [monitor-only in fixed200 InitialModel](evidence/vdam-full200-4f9-20260909/late_counter_scope.md),
 not an ordinary auto-refine/K4 waiver; four native adaptive fields are uncaptured.
 
+The dense/local fast guard now rejects undefined names before JAX startup.
+A broader static scan found existing `picked_frequencies` use-before-assignment
+in `recovar/em/heterogeneity.py:971`; outside this guard's scope, unfixed.
+[Guard check and exact finding](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/undefined_name_guard_20260910/result.json).
+
 Historical failures stay open: API13641893 has6 failures (older13634313:12),
 normalization13636581 has4 GPU bytewise failures, PR180 CPU has25 failures, and
 K1 matched-noise replay has6 Pmax failures with incomplete margins/oracle identity.
