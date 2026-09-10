@@ -22,6 +22,7 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
     batch_adjoint_slice_volume_maybe_windowed as _batch_adjoint_slice_volume_maybe_windowed,
 )
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 from recovar.em.dense_single_volume.helpers.flat_local_rows import scatter_flat_local_rows
 from recovar.em.dense_single_volume.helpers.half_spectrum import bin_shell_values_jax
 from recovar.em.dense_single_volume.helpers.image_shifts import (
@@ -333,6 +334,17 @@ def _noise_image_power_shells_and_per_image(
     return shells, per_image
 
 
+# Opt-in deterministic accumulation of the RELION Wavg ``[XA, AA, diff2]``
+# rotation terms.  The atomic FFI adds the materialized float32
+# ``[batch, rotation, pixel, 3]`` terms in scheduler-dependent order, which
+# makes the per-shell noise/power sums (and therefore sigma2_noise and the
+# next map) differ between otherwise identical runs at the 1e-7 level.  A
+# fixed-order XLA float32 reduction over the rotation axis uses the same
+# operands and dtype; only the association order differs.  Diagnostic opt-in;
+# see docs/development/em_status.md (determinism) for the qualification.
+RELION_WAVG_DETERMINISTIC_ROTATION_SUM_ENV = "RECOVAR_RELION_WAVG_DETERMINISTIC_ROTATION_SUM"
+
+
 def _relion_wavg_direct_triplet_shells(
     processed_score_half,
     relion_score_translation_angles,
@@ -413,21 +425,38 @@ def _relion_wavg_direct_triplet_shells(
             reconstruction_probs,
             exact_positions,
         )
-        atomic_accumulator = jnp.zeros(
-            rectangle_terms.shape[:1] + rectangle_terms.shape[2:],
-            dtype=jnp.float32,
-        )
-        if logical_rectangle_pixel_count is None:
-            atomic = cuda_backproject.relion_wavg_rotation_atomic_triplet_add_f32(
-                rectangle_terms,
-                atomic_accumulator,
+        if parse_env_binary_flag(RELION_WAVG_DETERMINISTIC_ROTATION_SUM_ENV):
+            # Same float32 operands as the atomic FFI, reduced over the
+            # rotation axis in XLA's fixed order.  Pixels at or beyond the
+            # logical rectangle count stay zero, as with the runtime kernel.
+            summed = jnp.sum(
+                jnp.asarray(rectangle_terms, dtype=jnp.float32),
+                axis=1,
+                dtype=jnp.float32,
             )
+            if logical_rectangle_pixel_count is None:
+                atomic = summed
+            else:
+                pixel_mask = jnp.arange(summed.shape[1], dtype=jnp.int32) < jnp.asarray(
+                    logical_rectangle_pixel_count, dtype=jnp.int32
+                )
+                atomic = jnp.where(pixel_mask[None, :, None], summed, jnp.float32(0.0))
         else:
-            atomic = cuda_backproject.relion_wavg_rotation_atomic_runtime_triplet_add_f32(
-                rectangle_terms,
-                atomic_accumulator,
-                jnp.asarray(logical_rectangle_pixel_count, dtype=jnp.int32),
+            atomic_accumulator = jnp.zeros(
+                rectangle_terms.shape[:1] + rectangle_terms.shape[2:],
+                dtype=jnp.float32,
             )
+            if logical_rectangle_pixel_count is None:
+                atomic = cuda_backproject.relion_wavg_rotation_atomic_triplet_add_f32(
+                    rectangle_terms,
+                    atomic_accumulator,
+                )
+            else:
+                atomic = cuda_backproject.relion_wavg_rotation_atomic_runtime_triplet_add_f32(
+                    rectangle_terms,
+                    atomic_accumulator,
+                    jnp.asarray(logical_rectangle_pixel_count, dtype=jnp.int32),
+                )
     atomic = jnp.where(valid_image_mask[:, None, None], atomic, 0.0)
     atomic_f64 = atomic.astype(jnp.float64)
     pixel_triplets = jnp.sum(atomic_f64, axis=0)
