@@ -37,6 +37,12 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+Final sampling-file admission/selection now belongs to the replay owner,
+including searched-path provenance for the missing-file diagnostic. All111 final
+CPU guard/controller cases pass;162 old/new file-state comparisons are exact.
+The initial private extraction missed that diagnostic consumer; a real-branch
+regression now covers it. [Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/final_sampling_owner_20260910/result.json).
+
 The current convergence batch gives pose-stack preparation one owner, reuses
 `state.fraction_changed`, and removes unused rotation-count/HEALPix parameters
 from the assignment API and its controller/PPCA callers. The metric is documented

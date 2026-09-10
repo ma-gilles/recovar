@@ -1474,3 +1474,36 @@ def apply_iter_replay_overrides(
         class_weights=_replay_class_weights,
         relion_projector_state=_replay_projector_state,
     )
+
+
+def select_final_sampling_star(
+    replay_dir, replay_prefix, *, final_iteration, previous_iteration, require_final_state,
+):
+    """Select final-pass sampling metadata, preserving strict replay admission.
+
+    Strict replay requires both unnumbered final state files, even when an
+    explicit final-numbered sampling file exists. Selection then prefers that
+    numbered file, the unnumbered final file, and finally the last numbered file.
+    Return the selected path, provenance label and ordered candidate list for
+    diagnostics. Path and label are None when no candidate exists.
+    """
+    if require_final_state:
+        required = [
+            os.path.join(replay_dir, f"{replay_prefix}_sampling.star"),
+            os.path.join(replay_dir, f"{replay_prefix}_optimiser.star"),
+        ]
+        missing = [path for path in required if not os.path.isfile(path)]
+        if missing:
+            raise RuntimeError(
+                "Strict RELION final all-data replay requires the unnumbered final "
+                "sampling and optimiser state; missing " + ", ".join(missing)
+            )
+    candidates = [
+        (os.path.join(replay_dir, f"{replay_prefix}_it{final_iteration:03d}_sampling.star"), "final-numbered"),
+        (os.path.join(replay_dir, f"{replay_prefix}_sampling.star"), "final"),
+        (os.path.join(replay_dir, f"{replay_prefix}_it{previous_iteration:03d}_sampling.star"), "last-numbered"),
+    ]
+    for path, source in candidates:
+        if os.path.exists(path):
+            return path, source, candidates
+    return None, None, candidates

@@ -137,6 +137,7 @@ from recovar.em.dense_single_volume.relion_metadata import (
 )
 from recovar.em.dense_single_volume.relion_normalization import update_relion_norm_scale_corrections
 from recovar.em.dense_single_volume.relion_replay import (
+    select_final_sampling_star,
     _apply_replay_correction_overrides,
     _as_sigma_offset_half_pair,
     _has_numbered_replay_iteration_overrides,
@@ -4499,54 +4500,13 @@ def _run_relion_iteration_loop(
         else perturb_replay_relion_dir
     )
     if final_sampling_replay_dir is not None:
-        if replay.replay_iteration_overrides is not None:
-            required_final_state = [
-                os.path.join(
-                    final_sampling_replay_dir,
-                    f"{perturb_replay_relion_prefix}_sampling.star",
-                ),
-                os.path.join(
-                    final_sampling_replay_dir,
-                    f"{perturb_replay_relion_prefix}_optimiser.star",
-                ),
-            ]
-            missing_final_state = [
-                path for path in required_final_state if not os.path.isfile(path)
-            ]
-            if missing_final_state:
-                raise RuntimeError(
-                    "Strict RELION final all-data replay requires the unnumbered final "
-                    "sampling and optimiser state; missing "
-                    + ", ".join(missing_final_state)
-                )
-        final_sampling_candidates = [
-            (
-                os.path.join(
-                    final_sampling_replay_dir,
-                    f"{perturb_replay_relion_prefix}_it{final_sampling_relion_iteration:03d}_sampling.star",
-                ),
-                "final-numbered",
-            ),
-            (
-                os.path.join(
-                    final_sampling_replay_dir,
-                    f"{perturb_replay_relion_prefix}_sampling.star",
-                ),
-                "final",
-            ),
-            (
-                os.path.join(
-                    final_sampling_replay_dir,
-                    f"{perturb_replay_relion_prefix}_it{final_numbered_sampling_relion_iteration:03d}_sampling.star",
-                ),
-                "last-numbered",
-            ),
-        ]
-        for candidate_path, candidate_source in final_sampling_candidates:
-            if os.path.exists(candidate_path):
-                final_sampling_star = candidate_path
-                final_sampling_star_source = candidate_source
-                break
+        final_sampling_star, final_sampling_star_source, final_sampling_candidates = select_final_sampling_star(
+            final_sampling_replay_dir,
+            perturb_replay_relion_prefix,
+            final_iteration=final_sampling_relion_iteration,
+            previous_iteration=final_numbered_sampling_relion_iteration,
+            require_final_state=replay.replay_iteration_overrides is not None,
+        )
         if final_sampling_star is not None:
             final_replay_meta = read_relion_sampling_metadata(final_sampling_star)
             final_perturbation_factor = float(final_replay_meta.get("perturbation_factor", parity.perturb_factor))

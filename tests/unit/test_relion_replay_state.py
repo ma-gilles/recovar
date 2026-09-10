@@ -306,3 +306,37 @@ def test_captured_relion_projector_replay_state_rejects_live_geometry_mismatch()
             padding_factor=2,
             n_classes=1,
         )
+
+
+@pytest.mark.parametrize("available", range(8))
+def test_final_sampling_file_precedence(tmp_path, available):
+    names = ["run_it021_sampling.star", "run_sampling.star", "run_it020_sampling.star"]
+    labels = ["final-numbered", "final", "last-numbered"]
+    for index, name in enumerate(names):
+        if available & (1 << index):
+            (tmp_path / name).touch()
+    result = relion_replay_module.select_final_sampling_star(
+        str(tmp_path), "run", final_iteration=21, previous_iteration=20,
+        require_final_state=False,
+    )
+    selected = next((i for i in range(3) if available & (1 << i)), None)
+    expected = (None, None) if selected is None else (str(tmp_path / names[selected]), labels[selected])
+    assert result[:2] == expected
+    assert result[2] == [(str(tmp_path / name), label) for name, label in zip(names, labels)]
+
+
+@pytest.mark.parametrize("missing", ["sampling", "optimiser"])
+@pytest.mark.parametrize("directory", [False, True])
+def test_final_numbered_sampling_does_not_bypass_required_final_state(tmp_path, missing, directory):
+    (tmp_path / "run_it021_sampling.star").touch()
+    for suffix in ("sampling", "optimiser"):
+        path = tmp_path / f"run_{suffix}.star"
+        if suffix != missing:
+            path.touch()
+        elif directory:
+            path.mkdir()
+    with pytest.raises(RuntimeError, match=f"missing .*run_{missing}.star"):
+        relion_replay_module.select_final_sampling_star(
+            str(tmp_path), "run", final_iteration=21, previous_iteration=20,
+            require_final_state=True,
+        )

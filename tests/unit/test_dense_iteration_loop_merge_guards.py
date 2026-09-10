@@ -855,27 +855,15 @@ def test_final_all_data_local_search_uses_replayed_translation_range():
     assert "debug_iteration=final_sampling_relion_iteration" in final_call
 
 
-def test_final_all_data_sampling_replay_prefers_final_sampling_star_before_last_numbered():
+def test_final_all_data_sampling_replay_forwards_numbered_boundaries_and_strictness():
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
-    marker = "final_sampling_candidates = ["
-    start = source.index(marker)
-    block = source[start : source.index("        for candidate_path", start)]
-
-    final_numbered = (
-        'f"{perturb_replay_relion_prefix}_it{final_sampling_relion_iteration:03d}_sampling.star"'
-    )
-    last_numbered = (
-        'f"{perturb_replay_relion_prefix}_it{final_numbered_sampling_relion_iteration:03d}_sampling.star"'
-    )
-    run_sampling = 'f"{perturb_replay_relion_prefix}_sampling.star"'
-
-    assert final_numbered in block
-    assert last_numbered in block
-    assert run_sampling in block
-    assert block.index(final_numbered) < block.index(run_sampling) < block.index(last_numbered)
-    assert '"final-numbered"' in block
-    assert '"final"' in block
-    assert '"last-numbered"' in block
+    start = source.index("final_sampling_star, final_sampling_star_source, final_sampling_candidates = select_final_sampling_star(")
+    block = source[start : source.index("        )", start)]
+    assert "final_sampling_replay_dir," in block
+    assert "perturb_replay_relion_prefix," in block
+    assert "final_iteration=final_sampling_relion_iteration," in block
+    assert "previous_iteration=final_numbered_sampling_relion_iteration," in block
+    assert "require_final_state=replay.replay_iteration_overrides is not None," in block
 
 
 def test_native_final_perturbation_uses_active_local_order_but_preserves_global_order():
@@ -934,3 +922,31 @@ def test_local_adaptive_pass2_defaults_to_relion_pruned_parent(monkeypatch):
     monkeypatch.setenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, "1")
     monkeypatch.setenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV, "1")
     assert scoring_policy._local_adaptive_pass2_full_parent_enabled() is False
+
+
+def test_final_sampling_missing_files_log_all_candidates_without_changing_grid(tmp_path, caplog):
+    """Execute the controller's real replay branch with no sampling files."""
+    tree = ast.parse(inspect.getsource(iteration_loop._run_relion_iteration_loop))
+    branch = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and ast.unparse(node.test) == "final_sampling_replay_dir is not None"
+    )
+    ns = dict(vars(iteration_loop))
+    grid = object()
+    ns.update(
+        final_sampling_replay_dir=str(tmp_path), perturb_replay_relion_prefix="run",
+        final_sampling_relion_iteration=21, final_numbered_sampling_relion_iteration=20,
+        replay=SimpleNamespace(replay_iteration_overrides=None),
+        final_current_translations=grid,
+    )
+    with caplog.at_level("INFO", logger=iteration_loop.logger.name):
+        exec(compile(ast.Module(body=[branch], type_ignores=[]), "controller_final_sampling", "exec"), ns)
+    assert ns["final_sampling_star"] is None
+    assert ns["final_sampling_star_source"] is None
+    assert ns["final_current_translations"] is grid
+    expected_paths = ", ".join(str(tmp_path / name) for name in (
+        "run_it021_sampling.star", "run_sampling.star", "run_it020_sampling.star",
+    ))
+    assert f"relion_iter=21 ({expected_paths})" in caplog.text
+    assert "leaving final trial grid unperturbed" in caplog.text
