@@ -3300,6 +3300,9 @@ def test_lazy_pass2_layouts_request_aligned_relion_mstep_rotations(monkeypatch, 
             outputs.append(child_ids)
         if kwargs.get("return_mstep_rotations"):
             outputs.append(mstep)
+        if kwargs.get("return_source_eulers"):
+            # The adaptive local builder also requests the native RFLOAT source Euler angles.
+            outputs.append(np.zeros((n_rows, 3), dtype=np.float64))
         return tuple(outputs)
 
     monkeypatch.setattr(local_layout_module, "get_oversampled_rotation_grid_from_samples", fake_oversampled_rotations)
