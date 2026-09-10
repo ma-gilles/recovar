@@ -203,34 +203,16 @@ from recovar.reconstruction.regularization import (
     update_relion_growth_state_from_fsc,
 )
 
+from recovar.em.dense_single_volume import finalization_policy
+
 logger = logging.getLogger(__name__)
 
 
 _FINAL_ALL_DATA_USE_MERGED_REFERENCE_ENV = "RECOVAR_FINAL_ALL_DATA_USE_MERGED_REFERENCE"
 _FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE_ENV = "RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE"
 _FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE_ENV = "RECOVAR_FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE"
-_FINAL_ALL_DATA_GRID_CORRECT_ENV = "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT"
-_FINAL_ALL_DATA_AFTER_MAX_ITER_ENV = "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER"
 _KCLASS_REPLAY_TAU2_ENV = "RECOVAR_KCLASS_REPLAY_TAU2"
 _KCLASS_REPLAY_TAU2_SAME_ITER_ENV = "RECOVAR_KCLASS_REPLAY_TAU2_SAME_ITER"
-
-
-def _final_all_data_grid_correct_enabled() -> bool:
-    """Return whether final all-data output applies RELION gridding correction.
-
-    The GUI-quality path keeps final all-data gridding correction off by
-    default because enabling it can shift final-map FSC-AUC.  Strict RELION
-    replay can still enable it explicitly with
-    ``RECOVAR_FINAL_ALL_DATA_GRID_CORRECT=1``.
-    """
-
-    return parse_env_flag_or_false(_FINAL_ALL_DATA_GRID_CORRECT_ENV, logger=logger)
-
-
-def _final_all_data_after_max_iter_enabled() -> bool:
-    """Return whether diagnostics force final all-data after iteration-cap exit."""
-
-    return parse_env_flag_or_false(_FINAL_ALL_DATA_AFTER_MAX_ITER_ENV, logger=logger)
 
 
 def _fresh_k1_spectrum_norm_default(
@@ -243,32 +225,6 @@ def _fresh_k1_spectrum_norm_default(
     return bool(
         preserve_bpref_particle_order and not allow_replayed_bpref_particle_order
     )
-
-
-def _should_run_final_all_data_iteration(
-    *,
-    has_converged: bool,
-    iteration: int,
-    max_iter: int,
-    force_max_iter_after_convergence: bool,
-    k_class_enabled: bool = False,
-) -> bool:
-    """Return whether to run RELION's final all-data reconstruction pass."""
-
-    if force_max_iter_after_convergence:
-        return False
-    if bool(has_converged):
-        return True
-    if not (_final_all_data_after_max_iter_enabled() and int(iteration) >= int(max_iter)):
-        return False
-    if bool(k_class_enabled):
-        logger.warning(
-            "Ignoring %s=1 for K-class after max_iter exhaustion; final all-data "
-            "is only valid for K-class after convergence",
-            _FINAL_ALL_DATA_AFTER_MAX_ITER_ENV,
-        )
-        return False
-    return True
 
 
 def _kclass_replay_tau2_enabled() -> bool:
@@ -4088,7 +4044,8 @@ def _run_relion_iteration_loop(
     # top of a permitted loop iteration.  If the last numbered iteration
     # merely makes the state convergence-ready, ``iter <= nr_iter`` ends and
     # RELION does not synthesize another boundary after the cap.
-    should_run_final_iteration = _should_run_final_all_data_iteration(
+    should_run_final_iteration = finalization_policy._should_run_final_all_data_iteration(
+        logger=logger,
         has_converged=state.has_converged,
         iteration=iteration,
         max_iter=schedule.max_iter,
@@ -4139,7 +4096,7 @@ def _run_relion_iteration_loop(
         logger.info(
             "Diagnostic %s=1: running RELION final all-data iteration after max_iter exhaustion "
             "(iteration=%d, max_iter=%d)",
-            _FINAL_ALL_DATA_AFTER_MAX_ITER_ENV,
+            finalization_policy._FINAL_ALL_DATA_AFTER_MAX_ITER_ENV,
             iteration,
             schedule.max_iter,
         )
@@ -5316,13 +5273,13 @@ def _run_relion_iteration_loop(
         )
         tau2_update_details = final_tau2_update_details
 
-    final_grid_correct = _final_all_data_grid_correct_enabled()
+    final_grid_correct = finalization_policy._final_all_data_grid_correct_enabled(logger=logger)
     if final_grid_correct:
         logger.info("RELION final all-data reconstruction gridding correction enabled")
     else:
         logger.info(
             "RELION final all-data reconstruction gridding correction disabled by explicit %s override",
-            _FINAL_ALL_DATA_GRID_CORRECT_ENV,
+            finalization_policy._FINAL_ALL_DATA_GRID_CORRECT_ENV,
         )
 
     _final_bpref_accum_dir = os.environ.get("RECOVAR_FINAL_BPREF_ACCUM_DUMP_DIR")

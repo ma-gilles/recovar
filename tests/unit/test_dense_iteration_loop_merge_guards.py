@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from recovar.em.dense_single_volume import finalization_policy
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop
 import recovar.em.dense_single_volume.local_search_iteration as local_search_iteration
 from recovar.em.dense_single_volume import (
@@ -830,15 +831,15 @@ def test_kclass_final_all_data_recomputes_tau2_from_iref_and_returns_final_means
 
 
 def test_final_all_data_grid_correction_defaults_to_gui_quality(monkeypatch):
-    monkeypatch.delenv(iteration_loop._FINAL_ALL_DATA_GRID_CORRECT_ENV, raising=False)
+    monkeypatch.delenv(finalization_policy._FINAL_ALL_DATA_GRID_CORRECT_ENV, raising=False)
 
-    assert iteration_loop._final_all_data_grid_correct_enabled() is False
+    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop.logger) is False
 
-    monkeypatch.setenv(iteration_loop._FINAL_ALL_DATA_GRID_CORRECT_ENV, "0")
-    assert iteration_loop._final_all_data_grid_correct_enabled() is False
+    monkeypatch.setenv(finalization_policy._FINAL_ALL_DATA_GRID_CORRECT_ENV, "0")
+    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop.logger) is False
 
-    monkeypatch.setenv(iteration_loop._FINAL_ALL_DATA_GRID_CORRECT_ENV, "unexpected")
-    assert iteration_loop._final_all_data_grid_correct_enabled() is False
+    monkeypatch.setenv(finalization_policy._FINAL_ALL_DATA_GRID_CORRECT_ENV, "unexpected")
+    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop.logger) is False
 
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
     assert "RELION final all-data reconstruction gridding correction enabled" in source

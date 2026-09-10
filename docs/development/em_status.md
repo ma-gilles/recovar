@@ -38,6 +38,13 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+Final-pass admission and gridding selectors now belong to `finalization_policy.py`;
+the controller passes its logger explicitly. All168 old/new decision and warning
+comparisons match, and the remaining controller AST is unchanged after owner
+migration. The combined CPU guard/affected panel passes 113 cases. Defaults and
+K-class convergence requirements are preserved; no new trajectory qualification.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/finalization_policy_owner_20260910/result.json).
+
 PPCA cleanup removes59 net lines of unused private helpers across refinement
 postprocessing and shared PPCA; remaining live arithmetic and public exports
 are unchanged. Two native-dependent PPCA tests now declare GPU requirements.

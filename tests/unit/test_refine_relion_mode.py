@@ -22,6 +22,7 @@ import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
 import recovar.em.dense_single_volume.helpers.expected_accuracy as expected_accuracy_module
+from recovar.em.dense_single_volume import finalization_policy
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume import half_scoring, local_search_iteration, scoring_policy
 from recovar.em.dense_single_volume import score_outputs
@@ -505,27 +506,28 @@ def test_significance_offset_free_capture_preserves_margin_lost_after_large_comm
 def test_final_all_data_grid_correct_env_defaults_to_gui_quality(monkeypatch):
     env_name = "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT"
     monkeypatch.delenv(env_name, raising=False)
-    assert iteration_loop_module._final_all_data_grid_correct_enabled() is False
+    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop_module.logger) is False
 
     monkeypatch.setenv(env_name, "0")
-    assert iteration_loop_module._final_all_data_grid_correct_enabled() is False
+    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop_module.logger) is False
 
     monkeypatch.setenv(env_name, "false")
-    assert iteration_loop_module._final_all_data_grid_correct_enabled() is False
+    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop_module.logger) is False
 
     monkeypatch.setenv(env_name, "1")
-    assert iteration_loop_module._final_all_data_grid_correct_enabled() is True
+    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop_module.logger) is True
 
     monkeypatch.setenv(env_name, "unexpected")
-    assert iteration_loop_module._final_all_data_grid_correct_enabled() is False
+    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop_module.logger) is False
 
 
 def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
     env_name = "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER"
     monkeypatch.delenv(env_name, raising=False)
-    assert iteration_loop_module._final_all_data_after_max_iter_enabled() is False
+    assert finalization_policy._final_all_data_after_max_iter_enabled(logger=iteration_loop_module.logger) is False
     assert (
-        iteration_loop_module._should_run_final_all_data_iteration(
+        finalization_policy._should_run_final_all_data_iteration(
+            logger=iteration_loop_module.logger,
             has_converged=False,
             iteration=5,
             max_iter=5,
@@ -535,9 +537,10 @@ def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
     )
 
     monkeypatch.setenv(env_name, "1")
-    assert iteration_loop_module._final_all_data_after_max_iter_enabled() is True
+    assert finalization_policy._final_all_data_after_max_iter_enabled(logger=iteration_loop_module.logger) is True
     assert (
-        iteration_loop_module._should_run_final_all_data_iteration(
+        finalization_policy._should_run_final_all_data_iteration(
+            logger=iteration_loop_module.logger,
             has_converged=False,
             iteration=5,
             max_iter=5,
@@ -547,7 +550,8 @@ def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
         is True
     )
     assert (
-        iteration_loop_module._should_run_final_all_data_iteration(
+        finalization_policy._should_run_final_all_data_iteration(
+            logger=iteration_loop_module.logger,
             has_converged=False,
             iteration=5,
             max_iter=5,
@@ -557,7 +561,8 @@ def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
         is False
     )
     assert (
-        iteration_loop_module._should_run_final_all_data_iteration(
+        finalization_policy._should_run_final_all_data_iteration(
+            logger=iteration_loop_module.logger,
             has_converged=True,
             iteration=5,
             max_iter=5,
@@ -568,7 +573,8 @@ def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
     )
 
     assert (
-        iteration_loop_module._should_run_final_all_data_iteration(
+        finalization_policy._should_run_final_all_data_iteration(
+            logger=iteration_loop_module.logger,
             has_converged=False,
             iteration=4,
             max_iter=5,
@@ -577,7 +583,8 @@ def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
         is False
     )
     assert (
-        iteration_loop_module._should_run_final_all_data_iteration(
+        finalization_policy._should_run_final_all_data_iteration(
+            logger=iteration_loop_module.logger,
             has_converged=False,
             iteration=5,
             max_iter=5,
