@@ -66,6 +66,7 @@ Replay and finalization have separate selection and mutation boundaries:
 | Final-pass admission and gridding selector | [`finalization_policy.py`](../../recovar/em/dense_single_volume/finalization_policy.py) | Receives convergence/cap state and the controller logger. Reads diagnostic flags when called; does not mutate refinement state. |
 | Replay numbering and cutoff | [`relion_replay.py`](../../recovar/em/dense_single_volume/relion_replay.py) | `_numbered_relion_iteration` maps restart-local indices; `_native_sampling_boundary_for_iteration` checks cutoff and sealed state. The controller retains scheduling. |
 | Final override selection | `relion_replay._select_final_replay_override` | Receives the requested index, explicit override, recorded history and its already-computed presence flag. Returns an index and the original override object; no copying or state updates. |
+| Final reference substitution | `relion_replay._prepare_final_replay_references` | Validates source iteration, K1 restriction, two-map count and shapes in order; casts each map to its half's dtype. With no maps, returns the original reference list. |
 | Applying selected state | [`iteration_loop.py`](../../recovar/em/dense_single_volume/iteration_loop.py) | Retains sigma, pose, corrections, noise and direction-prior updates in their original order, including casts and half-set handling. |
 
 Read `_should_run_final_all_data_iteration` in decision order: forced-cap mode

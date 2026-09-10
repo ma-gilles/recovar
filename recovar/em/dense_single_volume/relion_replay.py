@@ -96,6 +96,57 @@ def _native_sampling_boundary_for_iteration(
     return not replay_active and sealed_sampling_state is None
 
 
+def _prepare_final_replay_references(
+    *,
+    replay,
+    diagnostic_override,
+    numbered_iteration_count,
+    means,
+    final_join_means,
+    k_class_enabled,
+    logger,
+):
+    """Validate the final-only substitution boundary and prepare half references.
+
+    Without supplied reference maps, return the existing reference list itself.
+    Supplied maps retain each half's current dtype. Override-state application
+    remains in the controller after this selection and validation boundary.
+    """
+    if (
+        (diagnostic_override is not None or replay.final_replay_reference_maps is not None)
+        and replay.final_replay_source_iteration is not None
+        and numbered_iteration_count != int(replay.final_replay_source_iteration)
+    ):
+        raise RuntimeError(
+            "Diagnostic final-only substitution source does not match autonomous convergence boundary: "
+            f"source_iteration={int(replay.final_replay_source_iteration)} "
+            f"numbered_iteration_count={numbered_iteration_count}"
+        )
+    if replay.final_replay_reference_maps is not None:
+        if k_class_enabled:
+            raise RuntimeError("Diagnostic final-only RELION reference substitution is currently K=1 only")
+        if len(replay.final_replay_reference_maps) != 2:
+            raise ValueError("Diagnostic final-only RELION reference substitution requires exactly two half maps")
+        expected_reference_shape = tuple(np.asarray(means[0]).shape)
+        candidate_reference_shapes = [
+            tuple(np.asarray(reference).shape) for reference in replay.final_replay_reference_maps
+        ]
+        if any(shape != expected_reference_shape for shape in candidate_reference_shapes):
+            raise ValueError(
+                "Diagnostic final-only RELION reference shape mismatch: "
+                f"expected={expected_reference_shape} got={candidate_reference_shapes}"
+            )
+        final_join_means = [
+            jnp.asarray(reference, dtype=means[half_idx].dtype)
+            for half_idx, reference in enumerate(replay.final_replay_reference_maps)
+        ]
+        logger.info(
+            "Diagnostic final-only RELION reference substitution at numbered boundary %d",
+            numbered_iteration_count,
+        )
+    return final_join_means
+
+
 def _select_final_replay_override(*, requested_index, diagnostic_override, replay_overrides, has_overrides, logger):
     """Select a final-pass state without copying it or applying its fields.
 

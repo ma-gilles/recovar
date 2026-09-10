@@ -4096,46 +4096,15 @@ def _run_relion_iteration_loop(
         replay.replay_iteration_overrides
     )
     diagnostic_final_replay_override = final_replay_override
-    if (
-        (
-            diagnostic_final_replay_override is not None
-            or replay.final_replay_reference_maps is not None
-        )
-        and replay.final_replay_source_iteration is not None
-        and int(len(history.current_sizes)) != int(replay.final_replay_source_iteration)
-    ):
-        raise RuntimeError(
-            "Diagnostic final-only substitution source does not match autonomous convergence boundary: "
-            f"source_iteration={int(replay.final_replay_source_iteration)} "
-            f"numbered_iteration_count={int(len(history.current_sizes))}"
-        )
-    if replay.final_replay_reference_maps is not None:
-        if k_class_enabled:
-            raise RuntimeError(
-                "Diagnostic final-only RELION reference substitution is currently K=1 only"
-            )
-        if len(replay.final_replay_reference_maps) != 2:
-            raise ValueError(
-                "Diagnostic final-only RELION reference substitution requires exactly two half maps"
-            )
-        expected_reference_shape = tuple(np.asarray(means[0]).shape)
-        candidate_reference_shapes = [
-            tuple(np.asarray(reference).shape)
-            for reference in replay.final_replay_reference_maps
-        ]
-        if any(shape != expected_reference_shape for shape in candidate_reference_shapes):
-            raise ValueError(
-                "Diagnostic final-only RELION reference shape mismatch: "
-                f"expected={expected_reference_shape} got={candidate_reference_shapes}"
-            )
-        final_join_means = [
-            jnp.asarray(reference, dtype=means[half_idx].dtype)
-            for half_idx, reference in enumerate(replay.final_replay_reference_maps)
-        ]
-        logger.info(
-            "Diagnostic final-only RELION reference substitution at numbered boundary %d",
-            int(len(history.current_sizes)),
-        )
+    final_join_means = replay_policy._prepare_final_replay_references(
+        replay=replay,
+        diagnostic_override=diagnostic_final_replay_override,
+        numbered_iteration_count=int(len(history.current_sizes)),
+        means=means,
+        final_join_means=final_join_means,
+        k_class_enabled=k_class_enabled,
+        logger=logger,
+    )
     final_replay_last_numbered_state = (
         diagnostic_final_replay_override is not None
         or (

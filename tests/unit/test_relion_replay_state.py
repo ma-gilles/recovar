@@ -382,3 +382,61 @@ def test_final_replay_missing_recorded_slot_fails_with_requested_index(history):
             has_overrides=True,
             logger=relion_replay_module.logger,
         )
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64, np.complex64, np.complex128])
+def test_final_reference_substitution_preserves_each_half_dtype(dtype):
+    means = [jnp.zeros(4, dtype=dtype), jnp.zeros(4, dtype=np.float64)]
+    refs = [np.arange(4, dtype=np.float64) + 0.125, np.arange(4, dtype=np.float32)]
+    result = relion_replay_module._prepare_final_replay_references(
+        replay=SimpleNamespace(final_replay_reference_maps=refs, final_replay_source_iteration=2),
+        diagnostic_override=None,
+        numbered_iteration_count=2,
+        means=means,
+        final_join_means=means,
+        k_class_enabled=False,
+        logger=relion_replay_module.logger,
+    )
+    for index in range(2):
+        assert result[index].dtype == means[index].dtype
+        np.testing.assert_array_equal(result[index], refs[index].astype(means[index].dtype))
+
+
+def test_absent_final_reference_substitution_preserves_list_identity():
+    means = [jnp.zeros(4), jnp.ones(4)]
+    assert (
+        relion_replay_module._prepare_final_replay_references(
+            replay=SimpleNamespace(final_replay_reference_maps=None, final_replay_source_iteration=99),
+            diagnostic_override=None,
+            numbered_iteration_count=2,
+            means=means,
+            final_join_means=means,
+            k_class_enabled=True,
+            logger=relion_replay_module.logger,
+        )
+        is means
+    )
+
+
+@pytest.mark.parametrize(
+    "refs,source,diagnostic,kclass,error,match",
+    [
+        (None, 1, {}, False, RuntimeError, "source does not match"),
+        ([np.zeros(4), np.zeros(4)], 1, None, True, RuntimeError, "source does not match"),
+        ([np.zeros(4), np.zeros(4)], 2, None, True, RuntimeError, "K=1 only"),
+        ([np.zeros(4)], 2, None, False, ValueError, "exactly two half maps"),
+        ([np.zeros(4), np.zeros(3)], 2, None, False, ValueError, "shape mismatch"),
+    ],
+)
+def test_final_reference_substitution_rejects_invalid_boundary_and_maps(refs, source, diagnostic, kclass, error, match):
+    means = [jnp.zeros(4), jnp.zeros(4)]
+    with pytest.raises(error, match=match):
+        relion_replay_module._prepare_final_replay_references(
+            replay=SimpleNamespace(final_replay_reference_maps=refs, final_replay_source_iteration=source),
+            diagnostic_override=diagnostic,
+            numbered_iteration_count=2,
+            means=means,
+            final_join_means=means,
+            k_class_enabled=kclass,
+            logger=relion_replay_module.logger,
+        )
