@@ -7740,20 +7740,8 @@ def compute_pass2_stats_sparse_bucketed(
         )
     )
     use_half_volume_mstep = bool(relion_half_volume_mstep) or use_relion_x_half_mstep
-    compact_pair_mstep_mode_requested = _compact_pair_mstep_mode_for_pass()
-    compact_pair_pair_sparse_requested = compact_pair_mstep_mode_requested == "pair_sparse"
-    # RELION x-half M-step parity depends on the dense probability tensor plus
-    # the same GPU matmul order as rectangular pass-2. Sparse pair-order image
-    # reductions are mathematically equivalent but not arithmetic-equivalent
-    # enough for the strict x-half guard.
-    compact_pair_pair_sparse_effective = bool(
-        compact_pair_pair_sparse_requested
-        and not use_relion_x_half_mstep
-    )
-    compact_pair_pair_sparse_xhalf_fallback = bool(
-        compact_pair_pair_sparse_requested
-        and use_relion_x_half_mstep
-    )
+    # Preserve early mode validation; compact-pair dispatch is owned by the K-class path.
+    _compact_pair_mstep_mode_for_pass()
     recon_accum_shape = half_volume_accumulator_shape(recon_volume_shape) if use_half_volume_mstep else recon_volume_shape
     recon_volume_size = int(np.prod(recon_accum_shape))
     if use_relion_x_half_mstep:

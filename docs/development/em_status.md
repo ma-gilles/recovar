@@ -54,6 +54,11 @@ Batch-plan adjustment logging now belongs to the immutable batch-plan type;
 the controller retains estimator inputs and scheduling.100 affected CPU cases
 and the CPU guard pass;48 log and108 controller comparisons are exact.
 Controller −20 lines, net production +14; no numerical or performance claim.
+The single-class sparse scorer also sheds12 net lines of unused compact-pair
+mode flags, retaining early environment validation and the live K-class flags.
+Four focused CPU cases and16 exact validation comparisons pass; the remaining
+module AST is unchanged.
+[Dead-state receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/sparse_dead_mode_flags_20260910/result.json).
 [Batch reporting receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/batch_report_owner_20260910/result.json).
 
 Final sampling-file admission/selection now belongs to the replay owner,
