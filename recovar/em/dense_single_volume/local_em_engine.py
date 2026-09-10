@@ -35,7 +35,10 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_maybe_windowed as _adjoint_slice_volume_maybe_windowed,
 )
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
-from recovar.em.dense_single_volume.helpers.deterministic_reduce import add_segment_sum
+from recovar.em.dense_single_volume.helpers.deterministic_reduce import (
+    add_segment_sum,
+    deterministic_reductions_enabled,
+)
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.env_flags import (
     parse_env_binary_flag,
@@ -2015,6 +2018,12 @@ def _exact_local_effective_max_hypotheses_per_microbatch(
     if not score_only:
         return effective_cap
 
+    if deterministic_reductions_enabled():
+        # The live-memory probe below makes the microbatch cap depend on the
+        # allocator state of this process, which changes the accumulation
+        # grouping between otherwise identical runs.  Under the opt-in keep
+        # the profiled base cap, which is memory-safe and process independent.
+        return cap
     if runtime_free_memory_bytes is None:
         runtime_free_memory_bytes = _exact_local_runtime_free_memory_bytes()
     if runtime_free_memory_bytes is None:

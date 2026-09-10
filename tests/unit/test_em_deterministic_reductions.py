@@ -167,3 +167,22 @@ def test_mstep_fixed_order_shell_sums_match_scatter_rule():
     got = np.asarray(fixed_order_shell_sums(jnp.asarray(flat), lists, jnp.float32))
     ref = np.bincount(np.where(shells < n_shells, shells, n_shells), weights=flat.astype(np.float64), minlength=n_shells + 1)[:n_shells]
     np.testing.assert_allclose(got, ref, rtol=2e-6)
+
+
+def test_score_only_microbatch_cap_ignores_live_memory_under_opt_in(monkeypatch):
+    from recovar.em.dense_single_volume import local_em_engine as le
+
+    calls = []
+    monkeypatch.setattr(le, "_exact_local_runtime_free_memory_bytes", lambda: calls.append(1) or (1 << 20))
+    monkeypatch.setattr(le, "_exact_local_planned_hypotheses_floor", lambda *a, **k: 4096)
+    monkeypatch.setattr(le, "_exact_local_max_hypotheses_per_microbatch", lambda *a, **k: 2048)
+    monkeypatch.setattr(le, "_exact_local_microbatch_env_overridden", lambda: False)
+    monkeypatch.setattr(le, "_exact_local_auto_microbatch_boost", lambda: 2.0)
+    kw = dict(n_trans=8, n_recon_windowed=None, local_layout=None, image_batch_size=8, rotation_block_size=8, score_only=True)
+    monkeypatch.delenv(dr.DETERMINISTIC_REDUCTIONS_ENV, raising=False)
+    probed = le._exact_local_effective_max_hypotheses_per_microbatch(None, 512, **kw)
+    assert calls and probed <= 4096
+    monkeypatch.setenv(dr.DETERMINISTIC_REDUCTIONS_ENV, "1")
+    calls.clear()
+    fixed = le._exact_local_effective_max_hypotheses_per_microbatch(None, 512, **kw)
+    assert fixed == 2048 and not calls
