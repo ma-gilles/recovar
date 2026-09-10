@@ -1942,13 +1942,7 @@ def run_local_ppca_fused_em_iteration(
     sparse_pass2 = sparse_pass2 if sparse_pass2 is not None else SparsePass2Config(enabled=False)
     # Hoist into locals so the rest of the body reads cleanly.
     current_size = geometry.current_size
-    q = geometry.q
-    volume_domain = geometry.volume_domain
-    score_with_masked_images = scoring.score_with_masked_images
-    half_spectrum_scoring = scoring.half_spectrum_scoring
-    square_window = scoring.square_window
     class_log_prior = scoring.class_log_prior
-    image_scale_corrections = scoring.image_scale_corrections
     mstep_chunk_size = schedule.mstep_chunk_size
     image_batch_size = schedule.image_batch_size
     rotation_block_size = schedule.rotation_block_size
