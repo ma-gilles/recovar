@@ -1,0 +1,29 @@
+{
+  "source": "/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_vdam_canonical_pixel_qual_5ca9c8fff_20260909",
+  "source_head": "5ca9c8fff30be6fbdf77471cff793388bffffe00",
+  "job": 13664081,
+  "pins_verified": 2617,
+  "all21_auc_exact": true,
+  "worst_raw_map_curve_exact": true,
+  "initial_map_bytes_exact": true,
+  "minimum_cross_auc": 0.9999968977569093,
+  "worst_iteration": 20,
+  "selected_rows": 4000,
+  "count_disagreements": 57,
+  "first_count_disagreement": 3,
+  "pmax_gaps_ge_1e_3": 294,
+  "first_pmax_ge_1e_3": 13,
+  "accepted_scope": "Frozen5ca9 real10076 10k/256 K1 prefix0..20 cross-map conditions and pixel-repair confirmation",
+  "limits": [
+    "No GT or timing ratio",
+    "Original200 schedule stopped at20, not natural200 completion",
+    "State disagreements retained; no numerical-noise waiver",
+    "Not moving-tip, fullprecision, 100k or K4 acceptance"
+  ],
+  "evidence_pins": {
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_canonical_pixel_integrated_prefix20_20260909/manifest.json": "f03a9e798b761b293e20fd678f9a45e25b73c65eff72dda5bde2407f23d3fe60",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_canonical_pixel_integrated_prefix20_20260909/analysis/results_v1/result.json": "89dbacb226c02d071a0767ab586f9c02feb102161d80da54b30f61488c3402fb",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_canonical_pixel_integrated_prefix20_20260909/analysis/results_v1/shellwise.npz": "35a8c792ca8fe8e13d7999dd00d3cf7fe48495bc47aff55a5d515ce0dc477c4b",
+    "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_canonical_pixel_integrated_prefix20_20260909/parent_analysis_review.json": "bd5cbad8fec1b5a4431daaf600ba194e4781a8d838d9930fa74b7e400500d947"
+  }
+}

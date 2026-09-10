@@ -405,7 +405,20 @@ provide a runtime ratio, final-real/absolute-accuracy or strict-state acceptance
 See [archived timing boundaries](evidence/vdam-full200-4f9-20260909/README.md#state-precision-and-performance-limits)
 and the [earlier performance ledger](em_cleanup_history_20260909_f0a8804e2.md#frozen-jobs-and-representative-performance).
 Real10073 frozen-source evidence remains in the [real-data review](k1_real_window_review_20260909.md).
-Next: VDAM qualifies a frozen copy of the integrated canonical host-pixel repair
-on the bounded real prefix. Keep prior controls and native builds frozen; do not
-duplicate the peer job. Further structural work remains separate from this
-metadata correction and its scientific acceptance.
+The integrated canonical-pixel repair now has a verified real-prefix result:
+[5ca9/job13664081 admission](evidence/vdam-canonical-pixel-prefix20-20260910/README.md).
+All21 cross-map conditions pass (minimum0.9999968977569093 at20), initial maps
+are byte-identical, and the integrator rechecked every saved integral and the
+worst raw-map curve. Strict state still differs:57 coarse-count differences,
+first at3, and294 selected-row Pmax gaps≥1e-3, first at13. No GT/timing ratio;
+original200 schedule stopped at20. This qualifies the frozen5ca9 repair's real
+prefix map behavior, not moving HEAD, strict trajectory or completion gates.
+
+Next evidence review: the peer's overnight real-full200, robustness/case22,
+near-tie explanations and K4 reports. Their summary labels are not integrator
+acceptance. In particular, reported K4 synthetic5k/128 and real10k/256 runs use
+20 iterations; they cannot close the required100k/256 completion gate. Preserve
+per-class failures and the reported large K-class runtime regression during
+review. Start from the live [VDAM status](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/status/vdam.json)
+`overnight_program.receipts`; do not duplicate jobs or adopt a repeat-band waiver
+without checking the actual competing scores and established map conditions.

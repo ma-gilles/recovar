@@ -141,3 +141,9 @@ boundaries and a self-contained read-only audit. Both map conditions pass at all
 checkpoints on one3k/128 K1 natural200 H100 pair; strict state parity still fails.
 The1.4883× wall ratio is one measured pair, not representative speed qualification.
 This is historical evidence, not a baseline replacement or later-tip acceptance.
+
+The [frozen canonical-pixel real-prefix cell at5ca9](evidence/vdam-canonical-pixel-prefix20-20260910/README.md)
+now has integrator-verified source/input pins,21 exact FSC integrals, a worst-cell
+raw-map recheck and initial-map byte equality. All0–20 cross-map conditions pass
+on real10076 10k/256 K1; count/Pmax differences remain. This closes the missing
+integrated-repair prefix measurement, not later-tip or completion qualification.
