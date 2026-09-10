@@ -3,6 +3,30 @@
 RECOVAR estimates conformational heterogeneity from cryo-EM and cryo-ET data.
 Engineering priorities are correctness, GPU performance, then clarity.
 
+## Agent collaboration
+
+- Treat requests for implementation as authorization to complete the work.
+  Resolve routine choices from context and continue independent work while
+  material questions remain open. Prepare a reviewable result before requesting
+  any still-required approval for publication or an external action.
+- Explicit user instructions take precedence over skill guidance. Apply scoped
+  repository requirements to the affected workflow. If an instruction blocks
+  progress, cite its file and exact rule, explaining the unresolved decision.
+- Incorporate corrections and answer side questions while retaining the active
+  objective, completed work and running jobs. Use a concise handoff when moving
+  to a fresh thread; link evidence instead of repeating experiment histories.
+- Delegate only when authorized; for EM, follow `recovar/em/SUBAGENTS.md`.
+  Preserve the user's Terra/Astra workload choices and exclusive source ownership.
+- Report outcomes and limitations in plain, concise prose. Use tables for
+  comparisons and keep required evidence in linked artifacts.
+- Complete the checks required for the affected scope. Repeat or broaden them
+  only for changed behavior, failures, unresolved concerns or required qualification.
+  Documentation/instruction edits use mirror and link checks; numerical fixes
+  still require focused regressions and the applicable scientific ladder.
+
+See [the agent workflow](docs/development/agent_workflow.md) for session-specific
+model/delegation evidence and compact task handoffs.
+
 ## Start and resume
 
 1. Establish the task, checkout, branch and current evidence before editing.
