@@ -13,6 +13,7 @@ import gc
 import logging
 import os
 import time
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
@@ -260,6 +261,76 @@ from recovar.em.dense_single_volume.debug_dumps import (  # noqa: F401
 # RELION's --minres_map default: do not add the Wiener prior term to the
 # lowest Fourier shells during MAP reconstruction.
 RELION_MINRES_MAP = 5
+
+
+class _PerturbedTrialGrid(NamedTuple):
+    """One RELION SamplingPerturbation applied to a trial grid."""
+
+    rotations: np.ndarray
+    rotation_eulers: np.ndarray
+    mstep_rotations: np.ndarray
+    translations: jnp.ndarray
+
+
+def _relion_mstep_source_eulers(rotation_eulers, healpix_order, *, use_grid_eulers: bool = False):
+    """Euler angles that seed the exact RELION M-step rotations of a scoring grid.
+
+    RELION derives its M-step matrices from the sampling grid's native RFLOAT
+    angles. A sealed captured grid supplies its own angles; otherwise RELION's
+    canonical grid at ``healpix_order`` is used, unless its row count differs
+    from the scoring grid (capped orders, subsets), in which case the scoring
+    grid's own angles are used.
+    """
+
+    if use_grid_eulers:
+        return np.asarray(rotation_eulers, dtype=np.float64)
+    source = _get_relion_rotation_grid_eulers_float64(healpix_order)
+    if int(source.shape[0]) != int(rotation_eulers.shape[0]):
+        return np.asarray(rotation_eulers, dtype=np.float64)
+    return source
+
+
+def _perturbed_trial_grid(
+    *,
+    rotation_eulers,
+    mstep_source_eulers,
+    base_translations,
+    translation_step: float,
+    random_perturbation: float,
+    angular_sampling_deg: float,
+    dtype,
+) -> _PerturbedTrialGrid:
+    """Apply RELION's SamplingPerturbation to a trial grid.
+
+    ``healpix_sampling.cpp:1909-1934`` rotates every trial orientation by the
+    same rigid SO(3) perturbation after oversampling and ``1810-1820`` shifts the
+    translation grid; the exact M-step rotations are rebuilt from
+    ``mstep_source_eulers`` with the same perturbation. The regular iterations
+    and the final all-data pass share this rule.
+    """
+
+    rotations, rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
+        rotation_eulers,
+        random_perturbation,
+        angular_sampling_deg,
+        dtype=dtype,
+    )
+    _, _, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+        mstep_source_eulers,
+        random_perturbation,
+        angular_sampling_deg,
+        return_mstep_rotations=True,
+        dtype=dtype,
+    )
+    translations = jnp.asarray(
+        apply_relion_translation_perturbation(
+            np.asarray(base_translations),
+            random_perturbation,
+            translation_step,
+        ),
+        dtype=dtype,
+    )
+    return _PerturbedTrialGrid(rotations, rotation_eulers, mstep_rotations, translations)
 
 
 def _sigma_offset_for_half(current_sigma_offset_angstrom, current_sigma_offset_angstrom_per_half, half_index):
@@ -1547,27 +1618,25 @@ def _run_relion_iteration_loop(
             _angsamp_order = int(_replay_meta["healpix_order"]) if _replay_meta is not None else current_healpix_order
             angsamp_deg = relion_angular_sampling_deg(_angsamp_order, adaptive_oversampling=0)
             if effective_rotation_eulers is not None:
-                mstep_source_eulers = (
-                    np.asarray(effective_rotation_eulers, dtype=np.float64)
-                    if sealed_sampling_state is not None
-                    else _get_relion_rotation_grid_eulers_float64(_angsamp_order)
-                )
-                if int(mstep_source_eulers.shape[0]) != int(effective_rotation_eulers.shape[0]):
-                    mstep_source_eulers = np.asarray(effective_rotation_eulers, dtype=np.float64)
-                effective_rotations, effective_rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
-                    effective_rotation_eulers,
-                    random_perturbation,
-                    angsamp_deg,
+                trial_grid = _perturbed_trial_grid(
+                    rotation_eulers=effective_rotation_eulers,
+                    mstep_source_eulers=_relion_mstep_source_eulers(
+                        effective_rotation_eulers,
+                        _angsamp_order,
+                        use_grid_eulers=sealed_sampling_state is not None,
+                    ),
+                    base_translations=base_translations,
+                    translation_step=float(state.translation_step),
+                    random_perturbation=random_perturbation,
+                    angular_sampling_deg=angsamp_deg,
                     dtype=_dense_global_scoring_dtype(),
                 )
-                _, _, effective_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-                    mstep_source_eulers,
-                    random_perturbation,
-                    angsamp_deg,
-                    return_mstep_rotations=True,
-                    dtype=_dense_global_scoring_dtype(),
-                )
+                effective_rotations = trial_grid.rotations
+                effective_rotation_eulers = trial_grid.rotation_eulers
+                effective_mstep_rotations = trial_grid.mstep_rotations
+                current_translations = trial_grid.translations
             else:
+                # Matrix-only compatibility path: no source Euler angles are available.
                 effective_rotations = apply_relion_rotation_perturbation(
                     np.asarray(effective_rotations),
                     random_perturbation,
@@ -1576,15 +1645,14 @@ def _run_relion_iteration_loop(
                 effective_rotation_eulers = utils.R_to_relion(np.asarray(effective_rotations), degrees=True).astype(
                     _dense_global_scoring_dtype()
                 )
-            _perturbed_translations = apply_relion_translation_perturbation(
-                np.asarray(base_translations),
-                random_perturbation,
-                float(state.translation_step),
-            )
-            current_translations = jnp.asarray(
-                _perturbed_translations,
-                dtype=_dense_global_scoring_dtype(),
-            )
+                current_translations = jnp.asarray(
+                    apply_relion_translation_perturbation(
+                        np.asarray(base_translations),
+                        random_perturbation,
+                        float(state.translation_step),
+                    ),
+                    dtype=_dense_global_scoring_dtype(),
+                )
         if not use_local and int(state.adaptive_oversampling) > 0:
             adaptive_pass1_order = (
                 int(_replay_meta["healpix_order"])
@@ -1729,11 +1797,8 @@ def _run_relion_iteration_loop(
                 if effective_mstep_rotations is not None:
                     local_search_mstep_rotations = effective_mstep_rotations
                 else:
-                    mstep_source_eulers = _get_relion_rotation_grid_eulers_float64(local_search_order)
-                    if int(mstep_source_eulers.shape[0]) != int(effective_rotation_eulers.shape[0]):
-                        mstep_source_eulers = np.asarray(effective_rotation_eulers, dtype=np.float64)
                     _, _, local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-                        mstep_source_eulers,
+                        _relion_mstep_source_eulers(effective_rotation_eulers, local_search_order),
                         0.0,
                         relion_angular_sampling_deg(local_search_order, adaptive_oversampling=0),
                         return_mstep_rotations=True,
@@ -4253,32 +4318,22 @@ def _run_relion_iteration_loop(
             final_perturbation_healpix_order,
             adaptive_oversampling=0,
         )
-        final_mstep_source_eulers = _get_relion_rotation_grid_eulers_float64(
-            final_perturbation_healpix_order
-        )
-        if int(final_mstep_source_eulers.shape[0]) != int(final_effective_rotation_eulers.shape[0]):
-            final_mstep_source_eulers = np.asarray(final_effective_rotation_eulers, dtype=np.float64)
-        final_effective_rotations, final_effective_rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
-            final_effective_rotation_eulers,
-            final_random_perturbation,
-            final_angsamp_deg,
-            dtype=_dense_global_scoring_dtype(),
-        )
-        _, _, final_effective_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-            final_mstep_source_eulers,
-            final_random_perturbation,
-            final_angsamp_deg,
-            return_mstep_rotations=True,
-            dtype=_dense_global_scoring_dtype(),
-        )
-        final_current_translations = jnp.asarray(
-            apply_relion_translation_perturbation(
-                np.asarray(final_base_translations),
-                final_random_perturbation,
-                final_translation_step,
+        final_trial_grid = _perturbed_trial_grid(
+            rotation_eulers=final_effective_rotation_eulers,
+            mstep_source_eulers=_relion_mstep_source_eulers(
+                final_effective_rotation_eulers,
+                final_perturbation_healpix_order,
             ),
+            base_translations=final_base_translations,
+            translation_step=final_translation_step,
+            random_perturbation=final_random_perturbation,
+            angular_sampling_deg=final_angsamp_deg,
             dtype=_dense_global_scoring_dtype(),
         )
+        final_effective_rotations = final_trial_grid.rotations
+        final_effective_rotation_eulers = final_trial_grid.rotation_eulers
+        final_effective_mstep_rotations = final_trial_grid.mstep_rotations
+        final_current_translations = final_trial_grid.translations
         final_perturbation_applied = True
     final_use_local = bool(
         (not k_class_enabled)
@@ -4379,11 +4434,8 @@ def _run_relion_iteration_loop(
             if final_effective_mstep_rotations is not None:
                 final_local_search_mstep_rotations = final_effective_mstep_rotations
             else:
-                final_mstep_source_eulers = _get_relion_rotation_grid_eulers_float64(final_local_search_order)
-                if int(final_mstep_source_eulers.shape[0]) != int(final_effective_rotation_eulers.shape[0]):
-                    final_mstep_source_eulers = np.asarray(final_effective_rotation_eulers, dtype=np.float64)
                 _, _, final_local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-                    final_mstep_source_eulers,
+                    _relion_mstep_source_eulers(final_effective_rotation_eulers, final_local_search_order),
                     0.0,
                     relion_angular_sampling_deg(final_local_search_order, adaptive_oversampling=0),
                     return_mstep_rotations=True,
