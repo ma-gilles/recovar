@@ -221,6 +221,26 @@ def _class_weights_from_posterior(class_posterior_per_half, n_classes: int, prev
     return weights / float(np.sum(weights))
 
 
+def _relion_pmax_normalization_mass_per_half(*, k_class_enabled: bool, class_posterior_per_half, noise_stats_per_half):
+    """Per-half normalization mass for :func:`_relion_optimizer_average_pmax`.
+
+    Class3D divides half 1's Pmax sum by that half's retained M-step posterior
+    mass, the sum of ``wsum_model.pdf_class``; K=1 divides by the half's noise
+    ``sumw`` particle mass. Both are float64 host scalars; a missing K=1 noise
+    statistic stays ``None``.
+    """
+
+    if k_class_enabled:
+        return [
+            float(np.sum(np.asarray(mass, dtype=np.float64), dtype=np.float64))
+            for mass in class_posterior_per_half
+        ]
+    return [
+        None if stats is None else float(np.asarray(stats.sumw, dtype=np.float64))
+        for stats in noise_stats_per_half
+    ]
+
+
 def _relion_optimizer_average_pmax(max_posterior_per_half, normalization_mass_per_half=None):
     """Return RELION's optimizer Pmax scalar and its normalization mass.
 

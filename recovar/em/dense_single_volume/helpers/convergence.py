@@ -87,6 +87,27 @@ def concatenate_pose_stacks_or_none(stacks, *, trailing_shape, label, dtype, log
     return np.concatenate(arrays, axis=0)
 
 
+def concatenate_assignments(assignments_per_half):
+    """Concatenate both half-sets' per-image assignment indices as one int32 array.
+
+    Convergence tracking compares assignments across iterations over all
+    particles, so the halves are joined in half order. A missing half is an
+    error here; use :func:`concatenate_assignments_or_none` when a previous
+    iteration may not have recorded assignments yet.
+    """
+    return np.concatenate(
+        [np.asarray(assignments, dtype=np.int32) for assignments in assignments_per_half],
+        axis=0,
+    )
+
+
+def concatenate_assignments_or_none(assignments_per_half):
+    """Concatenate half-set assignment indices, or return None when any half is missing."""
+    if all(assignments is not None for assignments in assignments_per_half):
+        return concatenate_assignments(assignments_per_half)
+    return None
+
+
 def healpix_angular_step(order: int) -> float:
     """Return approximate angular step in degrees for a HEALPix order.
 

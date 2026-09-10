@@ -54,6 +54,8 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     healpix_angular_step,
     update_angular_sampling,
     update_refinement_state,
+    concatenate_assignments,
+    concatenate_assignments_or_none,
 )
 from recovar.em.dense_single_volume.helpers.dtype_policy import _local_search_precision_flags
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_flag_or_false
@@ -118,6 +120,7 @@ from recovar.em.dense_single_volume.mean_helpers import (
     _reconstruct_and_postprocess_means,
     _reconstruct_volume_eager,
     _relion_optimizer_average_pmax,
+    _relion_pmax_normalization_mass_per_half,
     _stack_class_tau2_update_details,
     _updated_mean_variance_per_half,
     compute_unregularized_halfmaps_and_align_signs,
@@ -3212,19 +3215,13 @@ def _run_relion_iteration_loop(
             raise RuntimeError(
                 "RELION mode expected per-image posterior maxima from the EM engine",
             )
-        if k_class_enabled:
-            pmax_normalization_mass_per_half = [
-                float(np.sum(np.asarray(mass, dtype=np.float64), dtype=np.float64))
-                for mass in class_posterior_per_half
-            ]
-        else:
-            pmax_normalization_mass_per_half = [
-                None if stats is None else float(np.asarray(stats.sumw, dtype=np.float64))
-                for stats in noise_stats_per_half
-            ]
         combined_max_posterior, ave_pmax, ave_pmax_denominator = _relion_optimizer_average_pmax(
             max_posterior_per_half,
-            pmax_normalization_mass_per_half,
+            _relion_pmax_normalization_mass_per_half(
+                k_class_enabled=k_class_enabled,
+                class_posterior_per_half=class_posterior_per_half,
+                noise_stats_per_half=noise_stats_per_half,
+            ),
         )
         if k_class_enabled:
             logger.info(
@@ -3241,30 +3238,12 @@ def _run_relion_iteration_loop(
         # Combine both half-sets' assignments into a single array for
         # update_refinement_state.  Use coarse_ha (indexed into
         # effective_rotations) for consistent convergence tracking.
-        current_combined_ha = np.concatenate(
-            [np.asarray(ha, dtype=np.int32) for ha in coarse_ha],
-            axis=0,
-        )
-        if all(ha is not None for ha in previous_assignments):
-            previous_combined_ha = np.concatenate(
-                [np.asarray(ha, dtype=np.int32) for ha in previous_assignments],
-                axis=0,
-            )
-        else:
-            previous_combined_ha = None
+        current_combined_ha = concatenate_assignments(coarse_ha)
+        previous_combined_ha = concatenate_assignments_or_none(previous_assignments)
         if k_class_enabled:
-            current_combined_classes = np.concatenate(
-                [np.asarray(cls, dtype=np.int32) for cls in class_assignments],
-                axis=0,
-            )
+            current_combined_classes = concatenate_assignments(class_assignments)
             history.record_class_assignment(current_combined_classes.copy())
-            if all(cls is not None for cls in previous_class_assignments):
-                previous_combined_classes = np.concatenate(
-                    [np.asarray(cls, dtype=np.int32) for cls in previous_class_assignments],
-                    axis=0,
-                )
-            else:
-                previous_combined_classes = None
+            previous_combined_classes = concatenate_assignments_or_none(previous_class_assignments)
         else:
             current_combined_classes = None
             previous_combined_classes = None

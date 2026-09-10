@@ -17,6 +17,13 @@ The completed state also owns `fraction_changed`; the controller reuses it for
 history instead of repeating the assignment reduction after replay overrides.
 The assignment metric takes only the two index stacks and translation count;
 it compares decoded rotation indices, with no angular-distance threshold.
+`convergence.concatenate_assignments` and `concatenate_assignments_or_none` join
+both half-sets' int32 assignment indices for that comparison; the strict form
+is used for the current iteration and the tolerant form for a previous
+iteration that may not have recorded assignments. The optimizer Pmax
+normalization mass comes from `mean_helpers._relion_pmax_normalization_mass_per_half`:
+Class3D uses each half's retained M-step posterior mass, K=1 the half's noise
+`sumw`, and `_relion_optimizer_average_pmax` divides half 1's Pmax sum by it.
 
 Learned direction priors belong to
 [`mean_helpers.update_learned_direction_priors`](../../recovar/em/dense_single_volume/mean_helpers.py).
