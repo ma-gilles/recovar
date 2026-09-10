@@ -778,8 +778,13 @@ def test_final_all_data_iteration_stays_on_shared_dense_scoring_path():
     assert solvent_fsc_block.count("use_spherical_mask=True") == 1
     assert '"unfiltered_means": final_unfiltered_means_for_output' in final_reconstruct_block
     prejoin_save = source.index("final_unfiltered_Ft_y_0 = final_Ft_y_0")
-    lowres_join = source.index("regularization.join_halves_at_low_resolution(", prejoin_save)
+    lowres_join = source.index("join_half_accumulators_at_low_resolution(", prejoin_save)
     assert prejoin_save < lowres_join
+    # The join itself has one owner; the controller only selects its inputs.
+    assert "regularization.join_halves_at_low_resolution(" not in source
+    join_owner_source = inspect.getsource(mean_helpers.join_half_accumulators_at_low_resolution)
+    assert "regularization.join_halves_at_low_resolution(" in join_owner_source
+    assert "current_resolution_angstrom=previous_resolution_angstrom" in join_owner_source
     unfiltered_start = final_reconstruct_block.index("final_unfiltered_means_for_output = [")
     unfiltered_block = final_reconstruct_block[unfiltered_start:]
     assert "final_unfiltered_Ft_ctf_0" in unfiltered_block
@@ -815,13 +820,27 @@ def test_kclass_final_all_data_recomputes_tau2_from_iref_and_returns_final_means
         final_block.index(kclass_marker) : final_block.index("    else:", final_block.index(kclass_marker))
     ]
 
-    assert "regularization.compute_relion_tau2_from_iref_power_spectrum(" in kclass_tau2_block
+    assert "_class_tau2_from_iref_power_spectrum(" in kclass_tau2_block
     assert "final_join_means[0][class_idx]" in kclass_tau2_block
     assert "current_size=final_current_size" in kclass_tau2_block
-    assert "regularization.compute_data_vs_prior(" in kclass_tau2_block
+    assert "_class_tau2_update_details(" in kclass_tau2_block
     assert "full_half_axis=final_mstep_full_half_axis" in kclass_tau2_block
     assert "accumulator_volume_shape=final_mstep_accumulator_shape" in kclass_tau2_block
     assert "final_mean_variance = jnp.stack(final_mean_variance_per_class, axis=0)" in kclass_tau2_block
+    assert "_stack_class_tau2_update_details(final_tau2_update_details_per_class)" in kclass_tau2_block
+    # The per-class tau2 arithmetic has one owner shared with the regular iterations.
+    assert "regularization.compute_relion_tau2_from_iref_power_spectrum(" not in source
+    assert "regularization.compute_data_vs_prior(" not in source
+    iref_owner_source = inspect.getsource(mean_helpers._class_tau2_from_iref_power_spectrum)
+    assert "regularization.compute_relion_tau2_from_iref_power_spectrum(" in iref_owner_source
+    assert "return_details=True" in iref_owner_source
+    details_owner_source = inspect.getsource(mean_helpers._class_tau2_update_details)
+    assert "regularization.compute_data_vs_prior(" in details_owner_source
+    assert '"fsc_shells": None' in details_owner_source
+    assert source.count("_class_tau2_from_iref_power_spectrum(") == 2
+    assert source.count("data_vs_prior_k, class_tau2_details_k = _class_tau2_update_details(") == 2
+    assert source.count("_stack_class_tau2_update_details(") == 2
+    assert source.count("join_half_accumulators_at_low_resolution(") == 2
 
     reconstruct_marker = "if k_class_enabled:"
     reconstruct_block = final_block[final_block.rindex(reconstruct_marker) :]

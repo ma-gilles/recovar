@@ -107,6 +107,8 @@ from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_
 from recovar.em.dense_single_volume.local_layout import _selected_rotation_matrices
 from recovar.em.dense_single_volume.local_search_iteration import _precompute_exact_local_fine_grid_enabled
 from recovar.em.dense_single_volume.mean_helpers import (
+    _class_tau2_from_iref_power_spectrum,
+    _class_tau2_update_details,
     _class_weights_from_posterior,
     _combined_class_direction_prior_from_halves,
     _initialize_class_log_priors,
@@ -119,8 +121,10 @@ from recovar.em.dense_single_volume.mean_helpers import (
     _reconstruct_and_postprocess_means,
     _reconstruct_volume_eager,
     _relion_optimizer_average_pmax,
+    _stack_class_tau2_update_details,
     _updated_mean_variance_per_half,
     compute_unregularized_halfmaps_and_align_signs,
+    join_half_accumulators_at_low_resolution,
     prepare_initial_mean_variance,
     update_c1_sigma_offset_from_posterior,
     update_posterior_noise_variance,
@@ -2655,48 +2659,24 @@ def _run_relion_iteration_loop(
                 Ft_ctf_1=Ft_ctf_1,
             )
 
-        # --- RELION's --low_resol_join_halves: average the low-resolution
-        # shells of the per-half Fourier accumulators between the two halves
-        # BEFORE the Wiener solve. This forces the two half-maps to share
-        # their low-frequency content, preventing them from diverging in
-        # orientation space at SNR-poor low shells. RELION mirrors this in
-        # ml_optimiser_mpi.cpp::joinTwoHalvesAtLowResolution; without it
-        # recovar's iter-N FSC drops gradually from shell ~2 while RELION's
-        # stays at 1.0 through shell 13 (= 40 A for a 128/4.25 dataset),
-        # which directly translates to a ~5-shell deficit in
-        # ``first_shell_below_0.5`` and a ~10-pixel/iter deficit in
-        # ``current_size`` growth (the dominant convergence-speed gap
-        # observed in the 2026-04 5k normalized parity benchmark).
-        #
-        # Use the previous iteration's resolution to cap the join radius
-        # (so we never join shells beyond the actual resolution of the
-        # map). Mirrors the ``XMIPP_MAX(low_resol_join_halves,
-        # 1./mymodel.current_resolution)`` in RELION's source.
+        # RELION's --low_resol_join_halves averages the low-resolution shells of
+        # the K=1 half accumulators before the Wiener solve; see
+        # join_half_accumulators_at_low_resolution for the rationale and cap.
         if k_class_enabled:
             Ft_y_combined = _combine_optional_half_accumulators(Ft_y_0, Ft_y_1, label="Ft_y")
             Ft_ctf_combined = _combine_optional_half_accumulators(Ft_ctf_0, Ft_ctf_1, label="Ft_ctf")
         elif parity.low_resol_join_halves_angstrom is not None and parity.low_resol_join_halves_angstrom > 0:
-            prev_res_angstrom = None
-            if history.pixel_resolutions:
-                prev_pixel_res = history.pixel_resolutions[-1]
-                if prev_pixel_res > 0:
-                    prev_res_angstrom = shell_index_to_resolution_angstrom(
-                        prev_pixel_res,
-                        grid_size,
-                        cryo.voxel_size,
-                    )
-            elif np.isfinite(float(getattr(state, "current_resolution", float("inf")))):
-                prev_res_angstrom = float(state.current_resolution)
-            Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1 = regularization.join_halves_at_low_resolution(
+            Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1 = join_half_accumulators_at_low_resolution(
                 Ft_y_0,
                 Ft_y_1,
                 Ft_ctf_0,
                 Ft_ctf_1,
-                mstep_accumulator_shape,
-                cryo.voxel_size,
-                grid_size,
-                parity.low_resol_join_halves_angstrom,
-                current_resolution_angstrom=prev_res_angstrom,
+                accumulator_volume_shape=mstep_accumulator_shape,
+                grid_size=grid_size,
+                voxel_size=cryo.voxel_size,
+                low_resol_join_halves_angstrom=parity.low_resol_join_halves_angstrom,
+                pixel_resolutions=history.pixel_resolutions,
+                current_resolution=getattr(state, "current_resolution", float("inf")),
                 padding_factor=PADDING_FACTOR,
             )
 
@@ -2819,26 +2799,16 @@ def _run_relion_iteration_loop(
                         dtype=tau2_shells_recovar_frame_k.dtype,
                     )
                 else:
-                    mean_signal_variance_relion_k, tau2_update_details_k = (
-                        regularization.compute_relion_tau2_from_iref_power_spectrum(
-                            previous_means[0][class_idx],
-                            volume_shape,
-                            padding_factor=PADDING_FACTOR,
-                            current_size=current_size,
-                            return_details=True,
-                        )
-                    )
-                    mean_signal_variance_k = mean_signal_variance_relion_k * jnp.asarray(
-                        kclass_tau2_frame_scale,
-                        dtype=mean_signal_variance_relion_k.dtype,
-                    )
-                    tau2_shells_relion_frame_k = jnp.asarray(
-                        tau2_update_details_k["tau2_shells"],
-                        dtype=mean_signal_variance_k.dtype,
-                    )
-                    tau2_shells_recovar_frame_k = tau2_shells_relion_frame_k * jnp.asarray(
-                        kclass_tau2_frame_scale,
-                        dtype=mean_signal_variance_k.dtype,
+                    (
+                        mean_signal_variance_k,
+                        tau2_shells_relion_frame_k,
+                        tau2_shells_recovar_frame_k,
+                    ) = _class_tau2_from_iref_power_spectrum(
+                        previous_means[0][class_idx],
+                        volume_shape,
+                        padding_factor=PADDING_FACTOR,
+                        current_size=current_size,
+                        frame_scale=kclass_tau2_frame_scale,
                     )
                 shell_stats_k = regularization._compute_relion_weight_shell_stats(
                     Ft_ctf_combined[class_idx],
@@ -2858,9 +2828,10 @@ def _run_relion_iteration_loop(
                     full_half_axis=mstep_full_half_axis,
                     accumulator_volume_shape=mstep_accumulator_shape,
                 )
-                data_vs_prior_k = regularization.compute_data_vs_prior(
+                data_vs_prior_k, class_tau2_details_k = _class_tau2_update_details(
                     Ft_ctf_combined[class_idx],
                     tau2_shells_recovar_frame_k,
+                    shell_stats_k,
                     volume_shape,
                     padding_factor=PADDING_FACTOR,
                     tau2_fudge=tau2_fudge,
@@ -2871,24 +2842,7 @@ def _run_relion_iteration_loop(
                 mean_signal_variance_per_class.append(mean_signal_variance_k)
                 mean_signal_variance_shells_per_class.append(tau2_shells_recovar_frame_k)
                 data_vs_prior_per_class.append(data_vs_prior_k)
-                tau2_update_details_per_class.append(
-                    {
-                        "prior_shells": np.asarray(tau2_shells_recovar_frame_k, dtype=np.float64),
-                        "sigma2_shells": np.asarray(
-                            jnp.where(
-                                shell_stats_k["avg_weight_shells"] > 0,
-                                1.0 / (PADDING_FACTOR**3 * shell_stats_k["avg_weight_shells"]),
-                                0.0,
-                            ),
-                            dtype=np.float64,
-                        ),
-                        "avg_weight_shells": np.asarray(shell_stats_k["avg_weight_shells"], dtype=np.float64),
-                        "shell_sum": np.asarray(shell_stats_k["shell_sum"], dtype=np.float64),
-                        "shell_count": np.asarray(shell_stats_k["shell_count"], dtype=np.float64),
-                        "fsc_shells": None,
-                        "ssnr_shells": np.asarray(data_vs_prior_k, dtype=np.float64),
-                    }
-                )
+                tau2_update_details_per_class.append(class_tau2_details_k)
                 _kclass_dump_dir = os.environ.get("RECOVAR_KCLASS_DUMP_DIR")
                 if _kclass_dump_dir:
                     reconstruction_diagnostics.write_kclass_mstep(
@@ -2929,20 +2883,7 @@ def _run_relion_iteration_loop(
             )
             history.record_data_vs_prior(data_vs_prior_iter)
             previous_data_vs_prior_for_scheduling = data_vs_prior_iter
-            tau2_update_details = {
-                key: np.stack([detail[key] for detail in tau2_update_details_per_class], axis=0)
-                if key not in {"fsc_shells"}
-                else None
-                for key in [
-                    "prior_shells",
-                    "sigma2_shells",
-                    "avg_weight_shells",
-                    "shell_sum",
-                    "shell_count",
-                    "fsc_shells",
-                    "ssnr_shells",
-                ]
-            }
+            tau2_update_details = _stack_class_tau2_update_details(tau2_update_details_per_class)
             logger.info(
                 "Computed iter-%d Class3D tau2 from %s: %.1fs",
                 iteration + 1,
@@ -4962,27 +4903,17 @@ def _run_relion_iteration_loop(
         padded_volume_shape,
     )
     if not k_class_enabled and parity.low_resol_join_halves_angstrom is not None and parity.low_resol_join_halves_angstrom > 0:
-        final_prev_res_angstrom = None
-        if history.pixel_resolutions:
-            final_prev_pixel_res = history.pixel_resolutions[-1]
-            if final_prev_pixel_res > 0:
-                final_prev_res_angstrom = shell_index_to_resolution_angstrom(
-                    final_prev_pixel_res,
-                    grid_size,
-                    cryo.voxel_size,
-                )
-        elif np.isfinite(float(getattr(state, "current_resolution", float("inf")))):
-            final_prev_res_angstrom = float(state.current_resolution)
-        final_Ft_y_0, final_Ft_y_1, final_Ft_ctf_0, final_Ft_ctf_1 = regularization.join_halves_at_low_resolution(
+        final_Ft_y_0, final_Ft_y_1, final_Ft_ctf_0, final_Ft_ctf_1 = join_half_accumulators_at_low_resolution(
             final_Ft_y_0,
             final_Ft_y_1,
             final_Ft_ctf_0,
             final_Ft_ctf_1,
-            final_mstep_accumulator_shape,
-            cryo.voxel_size,
-            grid_size,
-            parity.low_resol_join_halves_angstrom,
-            current_resolution_angstrom=final_prev_res_angstrom,
+            accumulator_volume_shape=final_mstep_accumulator_shape,
+            grid_size=grid_size,
+            voxel_size=cryo.voxel_size,
+            low_resol_join_halves_angstrom=parity.low_resol_join_halves_angstrom,
+            pixel_resolutions=history.pixel_resolutions,
+            current_resolution=getattr(state, "current_resolution", float("inf")),
             padding_factor=PADDING_FACTOR,
         )
 
@@ -5018,26 +4949,16 @@ def _run_relion_iteration_loop(
         final_data_vs_prior_per_class = []
         final_tau2_update_details_per_class = []
         for class_idx in range(n_classes):
-            mean_signal_variance_relion_k, tau2_update_details_k = (
-                regularization.compute_relion_tau2_from_iref_power_spectrum(
-                    final_join_means[0][class_idx],
-                    volume_shape,
-                    padding_factor=PADDING_FACTOR,
-                    current_size=final_current_size,
-                    return_details=True,
-                )
-            )
-            mean_signal_variance_k = mean_signal_variance_relion_k * jnp.asarray(
-                kclass_tau2_frame_scale,
-                dtype=mean_signal_variance_relion_k.dtype,
-            )
-            tau2_shells_relion_frame_k = jnp.asarray(
-                tau2_update_details_k["tau2_shells"],
-                dtype=mean_signal_variance_k.dtype,
-            )
-            tau2_shells_recovar_frame_k = tau2_shells_relion_frame_k * jnp.asarray(
-                kclass_tau2_frame_scale,
-                dtype=mean_signal_variance_k.dtype,
+            (
+                mean_signal_variance_k,
+                tau2_shells_relion_frame_k,
+                tau2_shells_recovar_frame_k,
+            ) = _class_tau2_from_iref_power_spectrum(
+                final_join_means[0][class_idx],
+                volume_shape,
+                padding_factor=PADDING_FACTOR,
+                current_size=final_current_size,
+                frame_scale=kclass_tau2_frame_scale,
             )
             shell_stats_k = regularization._compute_relion_weight_shell_stats(
                 final_ft_ctf[class_idx],
@@ -5048,9 +4969,10 @@ def _run_relion_iteration_loop(
                 full_half_axis=final_mstep_full_half_axis,
                 accumulator_volume_shape=final_mstep_accumulator_shape,
             )
-            data_vs_prior_k = regularization.compute_data_vs_prior(
+            data_vs_prior_k, class_tau2_details_k = _class_tau2_update_details(
                 final_ft_ctf[class_idx],
                 tau2_shells_recovar_frame_k,
+                shell_stats_k,
                 volume_shape,
                 padding_factor=PADDING_FACTOR,
                 tau2_fudge=tau2_fudge,
@@ -5061,46 +4983,14 @@ def _run_relion_iteration_loop(
             final_mean_variance_per_class.append(mean_signal_variance_k)
             final_mean_variance_shells_per_class.append(tau2_shells_recovar_frame_k)
             final_data_vs_prior_per_class.append(data_vs_prior_k)
-            final_tau2_update_details_per_class.append(
-                {
-                    "prior_shells": np.asarray(tau2_shells_recovar_frame_k, dtype=np.float64),
-                    "sigma2_shells": np.asarray(
-                        jnp.where(
-                            shell_stats_k["avg_weight_shells"] > 0,
-                            1.0 / (PADDING_FACTOR**3 * shell_stats_k["avg_weight_shells"]),
-                            0.0,
-                        ),
-                        dtype=np.float64,
-                    ),
-                    "avg_weight_shells": np.asarray(shell_stats_k["avg_weight_shells"], dtype=np.float64),
-                    "shell_sum": np.asarray(shell_stats_k["shell_sum"], dtype=np.float64),
-                    "shell_count": np.asarray(shell_stats_k["shell_count"], dtype=np.float64),
-                    "fsc_shells": None,
-                    "ssnr_shells": np.asarray(data_vs_prior_k, dtype=np.float64),
-                }
-            )
+            final_tau2_update_details_per_class.append(class_tau2_details_k)
         final_mean_variance = jnp.stack(final_mean_variance_per_class, axis=0)
         final_mean_variance_shells = jnp.stack(final_mean_variance_shells_per_class, axis=0)
         final_data_vs_prior = np.stack(
             [np.asarray(dvp, dtype=np.float32) for dvp in final_data_vs_prior_per_class],
             axis=0,
         )
-        final_tau2_update_details = {
-            key: (
-                None
-                if key == "fsc_shells"
-                else np.stack([detail[key] for detail in final_tau2_update_details_per_class], axis=0)
-            )
-            for key in [
-                "prior_shells",
-                "sigma2_shells",
-                "avg_weight_shells",
-                "shell_sum",
-                "shell_count",
-                "fsc_shells",
-                "ssnr_shells",
-            ]
-        }
+        final_tau2_update_details = _stack_class_tau2_update_details(final_tau2_update_details_per_class)
         tau2_update_details = final_tau2_update_details
         logger.info(
             "RELION final all-data Class3D tau2 from Iref power spectra: old_max=%.4e new_max=%.4e "

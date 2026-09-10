@@ -19,8 +19,10 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     class_weights_from_direction_prior,
     collapse_rotation_posterior_to_direction_prior,
 )
+from recovar.em.dense_single_volume.helpers.resolution import shell_index_to_resolution_angstrom
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats
 from recovar.em.dense_single_volume.scoring_policy import _dense_global_scoring_dtype
+from recovar.reconstruction import regularization
 
 logger = logging.getLogger(__name__)
 
@@ -316,6 +318,178 @@ def _combined_class_direction_prior_from_halves(
             collapse_rotation_posterior_to_direction_prior(combined, healpix_order, dtype=dtype)
         )
     return np.stack(combined_priors, axis=0)
+
+
+def _previous_resolution_angstrom_for_half_join(
+    pixel_resolutions, current_resolution, *, grid_size: int, voxel_size: float
+):
+    """Previous-iteration resolution in Å that caps the low-resolution half join.
+
+    The last recorded shell resolution wins when the history has one; a
+    non-positive recorded shell leaves the join uncapped. Without history, a
+    finite state resolution is used. Mirrors RELION's
+    ``XMIPP_MAX(low_resol_join_halves, 1./mymodel.current_resolution)``.
+    """
+
+    if pixel_resolutions:
+        previous_shell = pixel_resolutions[-1]
+        if previous_shell > 0:
+            return shell_index_to_resolution_angstrom(previous_shell, grid_size, voxel_size)
+        return None
+    if np.isfinite(float(current_resolution)):
+        return float(current_resolution)
+    return None
+
+
+def join_half_accumulators_at_low_resolution(
+    Ft_y_0,
+    Ft_y_1,
+    Ft_ctf_0,
+    Ft_ctf_1,
+    *,
+    accumulator_volume_shape,
+    grid_size: int,
+    voxel_size: float,
+    low_resol_join_halves_angstrom: float,
+    pixel_resolutions,
+    current_resolution,
+    padding_factor,
+):
+    """Apply RELION's ``--low_resol_join_halves`` to K=1 half accumulators before the Wiener solve.
+
+    Averaging the low-resolution shells of the two half accumulators forces
+    both half-maps to share their low-frequency content, as in
+    ``MlOptimiserMpi::joinTwoHalvesAtLowResolution``; without it the half-map
+    FSC drifts below 1 at SNR-poor low shells and current-size growth lags.
+    The join radius is capped by the previous iteration's resolution so shells
+    beyond the map's actual resolution are never joined. The regular and final
+    all-data passes call this with their own accumulators. Returns the four
+    joined arrays in input order; refinement state is not mutated.
+    """
+
+    previous_resolution_angstrom = _previous_resolution_angstrom_for_half_join(
+        pixel_resolutions,
+        current_resolution,
+        grid_size=grid_size,
+        voxel_size=voxel_size,
+    )
+    return regularization.join_halves_at_low_resolution(
+        Ft_y_0,
+        Ft_y_1,
+        Ft_ctf_0,
+        Ft_ctf_1,
+        accumulator_volume_shape,
+        voxel_size,
+        grid_size,
+        low_resol_join_halves_angstrom,
+        current_resolution_angstrom=previous_resolution_angstrom,
+        padding_factor=padding_factor,
+    )
+
+
+_CLASS_TAU2_DETAIL_KEYS = (
+    "prior_shells",
+    "sigma2_shells",
+    "avg_weight_shells",
+    "shell_sum",
+    "shell_count",
+    "fsc_shells",
+    "ssnr_shells",
+)
+
+
+def _class_tau2_from_iref_power_spectrum(
+    iref_fourier, volume_shape, *, padding_factor, current_size: int, frame_scale: float
+):
+    """Class3D tau2 for one class from its previous ``Iref`` power spectrum.
+
+    Dense RECOVAR accumulators live in the historical unnormalised image frame
+    (RELION BPref weight = ``Ft_ctf * N^4``), so the RELION-frame tau2 is
+    scaled by ``frame_scale`` before the Wiener solve. Returns the
+    RECOVAR-frame tau2 volume, the RELION-frame radial shells and the
+    RECOVAR-frame radial shells, all in the RELION result dtype.
+    """
+
+    mean_signal_variance_relion, details = regularization.compute_relion_tau2_from_iref_power_spectrum(
+        iref_fourier,
+        volume_shape,
+        padding_factor=padding_factor,
+        current_size=current_size,
+        return_details=True,
+    )
+    mean_signal_variance = mean_signal_variance_relion * jnp.asarray(
+        frame_scale,
+        dtype=mean_signal_variance_relion.dtype,
+    )
+    tau2_shells_relion_frame = jnp.asarray(
+        details["tau2_shells"],
+        dtype=mean_signal_variance.dtype,
+    )
+    tau2_shells_recovar_frame = tau2_shells_relion_frame * jnp.asarray(
+        frame_scale,
+        dtype=mean_signal_variance.dtype,
+    )
+    return mean_signal_variance, tau2_shells_relion_frame, tau2_shells_recovar_frame
+
+
+def _class_tau2_update_details(
+    Ft_ctf_class,
+    tau2_shells_recovar_frame,
+    shell_stats,
+    volume_shape,
+    *,
+    padding_factor,
+    tau2_fudge,
+    current_size: int,
+    full_half_axis,
+    accumulator_volume_shape,
+):
+    """Data-vs-prior and the host tau2 detail record for one class.
+
+    ``shell_stats`` are the round-shell weight statistics of ``Ft_ctf_class``.
+    The record uses the K=1 per-half key layout with ``fsc_shells`` set to
+    ``None``. Returns ``(data_vs_prior, details)``.
+    """
+
+    data_vs_prior = regularization.compute_data_vs_prior(
+        Ft_ctf_class,
+        tau2_shells_recovar_frame,
+        volume_shape,
+        padding_factor=padding_factor,
+        tau2_fudge=tau2_fudge,
+        current_size=current_size,
+        full_half_axis=full_half_axis,
+        accumulator_volume_shape=accumulator_volume_shape,
+    )
+    details = {
+        "prior_shells": np.asarray(tau2_shells_recovar_frame, dtype=np.float64),
+        "sigma2_shells": np.asarray(
+            jnp.where(
+                shell_stats["avg_weight_shells"] > 0,
+                1.0 / (padding_factor**3 * shell_stats["avg_weight_shells"]),
+                0.0,
+            ),
+            dtype=np.float64,
+        ),
+        "avg_weight_shells": np.asarray(shell_stats["avg_weight_shells"], dtype=np.float64),
+        "shell_sum": np.asarray(shell_stats["shell_sum"], dtype=np.float64),
+        "shell_count": np.asarray(shell_stats["shell_count"], dtype=np.float64),
+        "fsc_shells": None,
+        "ssnr_shells": np.asarray(data_vs_prior, dtype=np.float64),
+    }
+    return data_vs_prior, details
+
+
+def _stack_class_tau2_update_details(details_per_class):
+    """Stack per-class tau2 detail records along a leading class axis.
+
+    ``fsc_shells`` stays ``None``: Class3D has no half-set FSC.
+    """
+
+    return {
+        key: None if key == "fsc_shells" else np.stack([details[key] for details in details_per_class], axis=0)
+        for key in _CLASS_TAU2_DETAIL_KEYS
+    }
 
 
 def _merged_mean_from_halves(means, class_weights=None):

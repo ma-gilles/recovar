@@ -62,6 +62,25 @@ module's logger. Review [replay-state tests](../../tests/unit/test_relion_replay
 and [controller tests](../../tests/unit/test_refine_relion_mode.py) for selection
 identity, missing-slot errors, cutoff behavior and cold-start finalization.
 
+[`mean_helpers`](../../recovar/em/dense_single_volume/mean_helpers.py) owns two
+M-step boundaries that the regular iterations and the final all-data pass used
+to repeat inline. `join_half_accumulators_at_low_resolution` applies RELION's
+`--low_resol_join_halves` to the K=1 half accumulators before the Wiener solve;
+the join radius is capped by the last recorded shell resolution, a non-positive
+recorded shell leaves it uncapped, and without history a finite state resolution
+is used. `_class_tau2_from_iref_power_spectrum`, `_class_tau2_update_details`
+and `_stack_class_tau2_update_details` produce the Class3D per-class tau2
+volume, the RELION- and RECOVAR-frame shells, data-vs-prior and the stacked host
+detail record with `fsc_shells` left `None`. The controller keeps the enabling
+conditions, the replay `class_tau2` branch, the round/floor weight statistics
+and the dump calls, and passes the regular or final accumulators, current size
+and layout explicitly. Both owners reach `regularization` through the module
+attribute, so monkeypatched controller tests keep working. Source guards in
+[`test_dense_iteration_loop_merge_guards.py`](../../tests/unit/test_dense_iteration_loop_merge_guards.py)
+check that the controller no longer calls those regularization functions
+directly; [`test_class_tau2_lowres_join_owner.py`](../../tests/unit/test_class_tau2_lowres_join_owner.py)
+pins the argument layout, dtypes and record layout.
+
 The local kernel returns `LocalEMResult` from
 [`helpers.types`](../../recovar/em/dense_single_volume/helpers/types.py):
 `Ft_y`, `Ft_ctf`, `hard_assignments`, `stats`, optional best-pose fields,
