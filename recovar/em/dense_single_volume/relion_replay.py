@@ -96,6 +96,43 @@ def _native_sampling_boundary_for_iteration(
     return not replay_active and sealed_sampling_state is None
 
 
+def _select_final_replay_override(*, requested_index, diagnostic_override, replay_overrides, has_overrides, logger):
+    """Select a final-pass state without copying it or applying its fields.
+
+    Explicit diagnostic state wins, including an empty dictionary. Otherwise
+    clamp to the last recorded slot; a missing slot in a nonempty history is
+    an error. The caller retains replay admission and mutation ordering.
+    """
+    override_index = requested_index
+    if diagnostic_override is not None:
+        override = diagnostic_override
+        logger.info(
+            "Diagnostic final-only RELION state substitution at previous-state index %d (fields=%s)",
+            requested_index,
+            ",".join(sorted(override)) or "<none>",
+        )
+    else:
+        override = None
+    if diagnostic_override is None and has_overrides:
+        override_index = min(requested_index, int(len(replay_overrides)) - 1)
+        override = replay_overrides[override_index]
+        if override_index != requested_index:
+            logger.info(
+                "RELION replay: final all-data requested previous-state index %d, using last available numbered replay override index %d",
+                requested_index,
+                override_index,
+            )
+    if override is None:
+        if has_overrides:
+            raise RuntimeError(
+                f"Strict RELION final all-data replay is missing the requested previous-state override at index {requested_index}"
+            )
+        logger.info(
+            "RELION replay: final all-data requested last numbered state replay, but no replay override exists for previous-state index %d",
+            requested_index,
+        )
+    return override_index, override
+
 
 def _has_numbered_replay_iteration_overrides(replay_iteration_overrides) -> bool:
     """Return whether replay contains state beyond the cold-start boundary.

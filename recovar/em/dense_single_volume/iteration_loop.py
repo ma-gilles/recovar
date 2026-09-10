@@ -4144,42 +4144,14 @@ def _run_relion_iteration_loop(
         )
     )
     if final_replay_last_numbered_state:
-        final_replay_requested_index = int(len(history.current_sizes))
-        final_replay_override_index = final_replay_requested_index
-        if diagnostic_final_replay_override is not None:
-            final_replay_override = diagnostic_final_replay_override
-            logger.info(
-                "Diagnostic final-only RELION state substitution at previous-state index %d (fields=%s)",
-                final_replay_requested_index,
-                ",".join(sorted(final_replay_override)) or "<none>",
-            )
-        else:
-            final_replay_override = None
-        if diagnostic_final_replay_override is None and final_replay_has_overrides:
-            final_replay_override_index = min(
-                final_replay_requested_index,
-                int(len(replay.replay_iteration_overrides)) - 1,
-            )
-            final_replay_override = replay.replay_iteration_overrides[final_replay_override_index]
-            if final_replay_override_index != final_replay_requested_index:
-                logger.info(
-                    "RELION replay: final all-data requested previous-state index %d, "
-                    "using last available numbered replay override index %d",
-                    final_replay_requested_index,
-                    final_replay_override_index,
-                )
-        if final_replay_override is None:
-            if final_replay_has_overrides:
-                raise RuntimeError(
-                    "Strict RELION final all-data replay is missing the requested "
-                    f"previous-state override at index {final_replay_requested_index}"
-                )
-            logger.info(
-                "RELION replay: final all-data requested last numbered state replay, "
-                "but no replay override exists for previous-state index %d",
-                final_replay_requested_index,
-            )
-        else:
+        final_replay_override_index, final_replay_override = replay_policy._select_final_replay_override(
+            requested_index=int(len(history.current_sizes)),
+            diagnostic_override=diagnostic_final_replay_override,
+            replay_overrides=replay.replay_iteration_overrides,
+            has_overrides=final_replay_has_overrides,
+            logger=logger,
+        )
+        if final_replay_override is not None:
             _final_replay_fields = []
             _final_replay_sigma_per_half = final_replay_override.get("translation_sigma_angstrom_per_half")
             if _final_replay_sigma_per_half is not None:

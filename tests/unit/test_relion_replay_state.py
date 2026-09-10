@@ -340,3 +340,45 @@ def test_final_numbered_sampling_does_not_bypass_required_final_state(tmp_path, 
             str(tmp_path), "run", final_iteration=21, previous_iteration=20,
             require_final_state=True,
         )
+
+
+@pytest.mark.parametrize(
+    "requested,diagnostic,history,expected_index,expected",
+    [
+        (5, {}, [None], 5, {}),
+        (2, {"x": 1}, [{"x": 2}], 2, {"x": 1}),
+        (0, None, [{"x": 2}], 0, {"x": 2}),
+        (5, None, [{"x": 2}, {"x": 3}], 1, {"x": 3}),
+        (1, None, [None, {}], 1, {}),
+        (5, None, None, 5, None),
+        (5, None, [], 5, None),
+    ],
+)
+def test_final_replay_selection_preserves_explicit_state_and_history_identity(
+    requested, diagnostic, history, expected_index, expected
+):
+    index, selected = relion_replay_module._select_final_replay_override(
+        requested_index=requested,
+        diagnostic_override=diagnostic,
+        replay_overrides=history,
+        has_overrides=history is not None and len(history) > 0,
+        logger=relion_replay_module.logger,
+    )
+    assert index == expected_index
+    assert selected == expected
+    if diagnostic is not None:
+        assert selected is diagnostic
+    elif history:
+        assert selected is history[expected_index]
+
+
+@pytest.mark.parametrize("history", [[None], [{"x": 1}, None]])
+def test_final_replay_missing_recorded_slot_fails_with_requested_index(history):
+    with pytest.raises(RuntimeError, match="previous-state override at index 5"):
+        relion_replay_module._select_final_replay_override(
+            requested_index=5,
+            diagnostic_override=None,
+            replay_overrides=history,
+            has_overrides=True,
+            logger=relion_replay_module.logger,
+        )
