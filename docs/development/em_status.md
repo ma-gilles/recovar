@@ -38,6 +38,19 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+The pre-Wiener low-resolution half join and the Class3D per-class tau2 statistics
+now have one owner each in `mean_helpers`; the regular iterations and the final
+all-data pass call them with their own accumulators, current size and layout.
+The controller keeps the enabling conditions, replay `class_tau2` branch,
+round/floor weight statistics and dumps. 24 exact old/new cases (both passes,
+all previous-resolution branches, K=1/2/4 at two current sizes) match bytes,
+dtypes, key order and `fsc_shells=None`; inverse substitution of the eight
+replaced blocks reproduces the parent controller byte-for-byte. 166 CPU guard
+cases and 66 affected controller cases pass with zero skips, using the verified
+CPU native binding whose 1,529 source pins and library hash were rechecked.
+Structural checkpoint only; no numerical, GPU or trajectory qualification.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/class_tau2_lowres_join_owner_20260910/result.json).
+
 Frozen5ca9 K4 cache diagnostic13687592 has reviewed profiled wall times
 799.98→204.62s (74.4% reduction), with40 saved iteration timings and45 evidence
 files checked. This is candidate-only, not direct compile-time attribution or
