@@ -73,6 +73,7 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
 from recovar.em.dense_single_volume.helpers.iteration_history import RefinementHistory
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
     infer_direction_prior_healpix_order,
+    initial_direction_priors_from_snapshot,
     make_relion_translation_log_prior,
     relion_direction_log_priors_for_half,
     normalize_class_direction_prior_per_half,
@@ -741,49 +742,20 @@ def _run_relion_iteration_loop(
     if relion_incr_size <= 0:
         raise ValueError("init_relion_incr_size must be positive")
     relion_has_high_fsc_at_limit = bool(schedule.init_has_high_fsc_at_limit) if schedule.init_has_high_fsc_at_limit is not None else False
-    global_direction_prior_per_half = [None, None]
-    global_direction_prior_order_per_half = [None, None]
-    class_direction_prior_per_half = [None, None]
-    class_direction_prior_order_per_half = [None, None]
 
     # --- Direction prior from snapshot ---
-    # When starting from a RELION snapshot, the previous iteration's
-    # pdf_orientation is a non-uniform prior over HEALPix directions.
-    # RELION applies this in the next E-step.  recovar must do the same.
-    if replay.init_direction_prior is not None and k_class_enabled:
-        class_direction_prior_per_half = normalize_class_direction_prior_per_half(
-            replay.init_direction_prior, n_classes, dtype=_dense_global_scoring_dtype()
-        )
-        for k in range(2):
-            if class_direction_prior_per_half[k] is None:
-                continue
-            prior_k = np.asarray(class_direction_prior_per_half[k], dtype=_dense_global_scoring_dtype())
-            class_direction_prior_per_half[k] = prior_k
-            class_direction_prior_order_per_half[k] = infer_direction_prior_healpix_order(prior_k[0])
-            logger.info(
-                "RELION mode: loaded init class direction priors half-%d: %d classes, %d directions",
-                k + 1,
-                prior_k.shape[0],
-                prior_k.shape[1],
-            )
-    elif replay.init_direction_prior is not None:
-        global_direction_prior_per_half = normalize_direction_prior_per_half(
-            replay.init_direction_prior, dtype=_dense_global_scoring_dtype()
-        )
-        for k in range(2):
-            if global_direction_prior_per_half[k] is None:
-                continue
-            prior_k = np.asarray(global_direction_prior_per_half[k], dtype=_dense_global_scoring_dtype())
-            global_direction_prior_per_half[k] = prior_k
-            global_direction_prior_order_per_half[k] = infer_direction_prior_healpix_order(prior_k)
-            logger.info(
-                "RELION mode: loaded init direction prior half-%d: %d directions, range=[%.6f, %.6f], %d zero-probability",
-                k + 1,
-                len(prior_k),
-                prior_k.min(),
-                prior_k.max(),
-                int(np.sum(prior_k == 0)),
-            )
+    (
+        global_direction_prior_per_half,
+        global_direction_prior_order_per_half,
+        class_direction_prior_per_half,
+        class_direction_prior_order_per_half,
+    ) = initial_direction_priors_from_snapshot(
+        replay.init_direction_prior,
+        k_class_enabled=k_class_enabled,
+        n_classes=n_classes,
+        dtype=_dense_global_scoring_dtype(),
+        log=logger,
+    )
     _mark_setup_phase("direction_prior")
 
     # Extract per-shell radial profiles from the input pixel-array noise

@@ -219,6 +219,58 @@ def relion_half_translation_prior_inputs(
     )
 
 
+def initial_direction_priors_from_snapshot(init_direction_prior, *, k_class_enabled: bool, n_classes: int, dtype: np.dtype, log):
+    """Initialize per-half direction priors from a RELION snapshot.
+
+    A restart from a RELION model carries the previous iteration's
+    ``pdf_direction`` as a non-uniform prior that RELION applies in its next
+    E-step. K-class snapshots yield one ``(n_classes, n_pixels)`` prior per
+    half, K=1 snapshots one vector per half; both keep RELION's per-half
+    models. Returns the four caller-owned lists
+    ``(global_prior, global_order, class_prior, class_order)``, each with one
+    entry per half, all ``None`` without a snapshot prior. Orders are inferred
+    from the prior length.
+    """
+
+    global_prior_per_half = [None, None]
+    global_order_per_half = [None, None]
+    class_prior_per_half = [None, None]
+    class_order_per_half = [None, None]
+    if init_direction_prior is None:
+        return global_prior_per_half, global_order_per_half, class_prior_per_half, class_order_per_half
+    if k_class_enabled:
+        class_prior_per_half = normalize_class_direction_prior_per_half(init_direction_prior, n_classes, dtype=dtype)
+        for k in range(2):
+            if class_prior_per_half[k] is None:
+                continue
+            prior_k = np.asarray(class_prior_per_half[k], dtype=dtype)
+            class_prior_per_half[k] = prior_k
+            class_order_per_half[k] = infer_direction_prior_healpix_order(prior_k[0])
+            log.info(
+                "RELION mode: loaded init class direction priors half-%d: %d classes, %d directions",
+                k + 1,
+                prior_k.shape[0],
+                prior_k.shape[1],
+            )
+        return global_prior_per_half, global_order_per_half, class_prior_per_half, class_order_per_half
+    global_prior_per_half = normalize_direction_prior_per_half(init_direction_prior, dtype=dtype)
+    for k in range(2):
+        if global_prior_per_half[k] is None:
+            continue
+        prior_k = np.asarray(global_prior_per_half[k], dtype=dtype)
+        global_prior_per_half[k] = prior_k
+        global_order_per_half[k] = infer_direction_prior_healpix_order(prior_k)
+        log.info(
+            "RELION mode: loaded init direction prior half-%d: %d directions, range=[%.6f, %.6f], %d zero-probability",
+            k + 1,
+            len(prior_k),
+            prior_k.min(),
+            prior_k.max(),
+            int(np.sum(prior_k == 0)),
+        )
+    return global_prior_per_half, global_order_per_half, class_prior_per_half, class_order_per_half
+
+
 def _sealed_direction_log_prior(direction_prior, sealed_sampling_state, *, dtype: np.dtype = np.float32):
     """Expand a full direction prior onto the exact captured direction rows."""
 

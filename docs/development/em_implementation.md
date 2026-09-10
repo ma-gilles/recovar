@@ -38,6 +38,10 @@ owns the float64 snapshot copies of the rotation posteriors and of the learned
 priors (class 0 per half for K-class); the controller passes the live lists.
 Controller tests that stub the collapse step patch `mean_helpers`.
 
+Snapshot initialization of those priors belongs to
+`orientation_priors.initial_direction_priors_from_snapshot`: a RELION restart
+carries the previous iteration's `pdf_direction` per half (per class for K-class),
+normalized to the scoring dtype with the HEALPix order inferred from its length.
 Scoring with those priors follows RELION through one owner,
 [`orientation_priors.relion_direction_log_priors_for_half`](../../recovar/em/dense_single_volume/helpers/orientation_priors.py),
 which both the regular iterations and the final all-data pass call per half.
