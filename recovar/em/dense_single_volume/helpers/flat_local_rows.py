@@ -5,6 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import jax.numpy as jnp
+
+from recovar.em.dense_single_volume.helpers.deterministic_reduce import (
+    deterministic_reductions_enabled,
+)
 import numpy as np
 
 from recovar.em.dense_single_volume.local_layout import _exact_bucket_rotation_size
@@ -254,12 +258,30 @@ def scatter_flat_local_rows(
     dense_row_count = int(batch_size) * int(dense_rotation_count)
     dense_indices = image_indices * int(dense_rotation_count) + rotation_rows
     scatter_indices = jnp.where(present_mask, dense_indices, dense_row_count)
-    dense = jnp.full(
-        (dense_row_count,) + flat_values.shape[1:],
-        jnp.asarray(fill_value, dtype=flat_values.dtype),
-        dtype=flat_values.dtype,
-    )
-    dense = dense.at[scatter_indices].set(flat_values, mode="drop")
+    if deterministic_reductions_enabled():
+        # ``.at[].set`` lowers to an XLA scatter whose writer order is not
+        # fixed when two packed rows address one dense row.  Pick the winner
+        # with an order-independent integer scatter-max on the packed row id
+        # and gather it; identical to the set whenever present rows are unique.
+        flat_ids = jnp.arange(int(flat_values.shape[0]), dtype=jnp.int32)
+        winner = jnp.full((dense_row_count,), -1, dtype=jnp.int32).at[scatter_indices].max(
+            jnp.where(present_mask, flat_ids, jnp.int32(-1)), mode="drop"
+        )
+        has_row = winner >= 0
+        gathered = flat_values[jnp.maximum(winner, 0)]
+        fill = jnp.asarray(fill_value, dtype=flat_values.dtype)
+        dense = jnp.where(
+            has_row.reshape((dense_row_count,) + (1,) * (flat_values.ndim - 1)),
+            gathered,
+            fill,
+        )
+    else:
+        dense = jnp.full(
+            (dense_row_count,) + flat_values.shape[1:],
+            jnp.asarray(fill_value, dtype=flat_values.dtype),
+            dtype=flat_values.dtype,
+        )
+        dense = dense.at[scatter_indices].set(flat_values, mode="drop")
     return dense.reshape(
         (int(batch_size), int(dense_rotation_count)) + flat_values.shape[1:],
     )
