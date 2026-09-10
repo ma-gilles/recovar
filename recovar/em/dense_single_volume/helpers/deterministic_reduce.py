@@ -14,6 +14,7 @@ the association order changes.  Diagnostic opt-in, see
 from __future__ import annotations
 
 import jax.numpy as jnp
+import numpy as np
 
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 
@@ -55,3 +56,33 @@ def add_segment_sum(accumulator, segment_ids, values):
     return accumulator + fixed_order_segment_sum(
         jnp.asarray(values, dtype=accumulator.dtype), segment_ids, accumulator.shape[0]
     )
+
+
+def static_shell_voxel_lists(capacity: int, padding_factor: int, n_shells: int, *, clamp_to_last: bool = False):
+    """Host voxel index lists per RELION shell on the padded half-Fourier grid.
+
+    Shell rule ``floor(sqrt(z^2 + y^2 + x^2) / padding + 0.5)`` on centred (z, y)
+    and non-negative x axes of a ``(capacity, capacity, capacity // 2 + 1)`` grid.
+    With ``clamp_to_last`` shells beyond the last bin are folded into it (the
+    projector-setup rule); otherwise they are left out (the M-step rule).
+    """
+
+    coord = np.arange(int(capacity), dtype=np.int64) - int(capacity) // 2
+    x = np.arange(int(capacity) // 2 + 1, dtype=np.int64)
+    r2 = coord[:, None, None] ** 2 + coord[None, :, None] ** 2 + x[None, None, :] ** 2
+    shells = np.floor(np.sqrt(r2.astype(np.float64)) / float(padding_factor) + 0.5).astype(np.int64)
+    if clamp_to_last:
+        shells = np.minimum(shells, int(n_shells) - 1)
+    shells = shells.reshape(-1)
+    return tuple(np.flatnonzero(shells == s).astype(np.int32) for s in range(int(n_shells)))
+
+
+def fixed_order_shell_sums(flat_values, shell_lists, dtype):
+    """Per-shell sums as one fixed-order XLA reduction per shell (no scatter atomics)."""
+
+    flat_values = jnp.asarray(flat_values, dtype)
+    sums = [
+        jnp.sum(flat_values[jnp.asarray(idx)], dtype=dtype) if idx.size else jnp.zeros((), dtype)
+        for idx in shell_lists
+    ]
+    return jnp.stack(sums)

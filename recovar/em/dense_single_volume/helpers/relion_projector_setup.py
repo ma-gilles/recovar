@@ -17,6 +17,11 @@ import jax
 import jax.numpy as jnp
 
 from recovar.core import fourier_transform_utils as ftu
+from recovar.em.dense_single_volume.helpers.deterministic_reduce import (
+    deterministic_reductions_enabled,
+    fixed_order_shell_sums,
+    static_shell_voxel_lists,
+)
 from recovar.core.relion_project import gridding_correct_volume_real
 
 
@@ -126,9 +131,16 @@ def _project_reference(reference, r_max, ori_size, padding_factor):
     shells = jnp.minimum(shells, ori_size // 2)
     # Native uses norm(complex)/2 rather than abs(complex)**2/2.
     power = (projector.real * projector.real + projector.imag * projector.imag) / 2.0
-    sums = jnp.bincount(shells.reshape(-1), weights=power.reshape(-1), length=ori_size // 2 + 1)
-    counts = jnp.bincount(
-        shells.reshape(-1), weights=valid.reshape(-1).astype(reference.dtype), length=ori_size // 2 + 1
-    )
+    if deterministic_reductions_enabled():
+        # ``bincount`` lowers to a scatter-add with duplicate shells (float
+        # atomics); use static per-shell gathers with fixed-order reductions.
+        shell_lists = static_shell_voxel_lists(capacity, padding_factor, ori_size // 2 + 1, clamp_to_last=True)
+        sums = fixed_order_shell_sums(power.reshape(-1), shell_lists, reference.dtype)
+        counts = fixed_order_shell_sums(valid.reshape(-1).astype(reference.dtype), shell_lists, reference.dtype)
+    else:
+        sums = jnp.bincount(shells.reshape(-1), weights=power.reshape(-1), length=ori_size // 2 + 1)
+        counts = jnp.bincount(
+            shells.reshape(-1), weights=valid.reshape(-1).astype(reference.dtype), length=ori_size // 2 + 1
+        )
     spectrum = jnp.where(counts >= 1, sums / jnp.maximum(counts, 1), jnp.zeros((), dtype=reference.dtype))
     return projector, spectrum

@@ -147,3 +147,23 @@ def test_powerclass_spectrum_flagged_path_matches_host_binning(monkeypatch):
     power = (rel.real.astype(np.float64) ** 2 + rel.imag.astype(np.float64) ** 2)
     ref = np.stack([np.bincount(shell[valid], weights=power[i][valid], minlength=half)[:half] for i in range(3)]) * float(n * n) ** 2
     np.testing.assert_allclose(got, ref, rtol=2e-6, atol=0)
+
+
+def test_mstep_fixed_order_shell_sums_match_scatter_rule():
+    from recovar.em.dense_single_volume.helpers.deterministic_reduce import (
+        fixed_order_shell_sums,
+        static_shell_voxel_lists,
+    )
+
+    capacity, pf, n_shells = 19, 1, 9  # ori_size 16, padding 1 -> capacity 19
+    lists = static_shell_voxel_lists(capacity, pf, n_shells)
+    clamped = static_shell_voxel_lists(capacity, pf, n_shells, clamp_to_last=True)
+    assert sum(len(l) for l in clamped) == capacity * capacity * (capacity // 2 + 1)
+    coord = np.arange(capacity) - capacity // 2; x = np.arange(capacity // 2 + 1)
+    r2 = coord[:, None, None] ** 2 + coord[None, :, None] ** 2 + x[None, None, :] ** 2
+    shells = np.floor(np.sqrt(r2.astype(np.float64)) / pf + 0.5).astype(int).reshape(-1)
+    assert sum(len(l) for l in lists) == int((shells < n_shells).sum())
+    rng = np.random.default_rng(4); flat = rng.random(shells.size).astype(np.float32)
+    got = np.asarray(fixed_order_shell_sums(jnp.asarray(flat), lists, jnp.float32))
+    ref = np.bincount(np.where(shells < n_shells, shells, n_shells), weights=flat.astype(np.float64), minlength=n_shells + 1)[:n_shells]
+    np.testing.assert_allclose(got, ref, rtol=2e-6)
