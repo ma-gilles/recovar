@@ -8,6 +8,7 @@ import pytest
 
 import recovar.em.dense_single_volume.projector_preparation as projector_preparation
 import recovar.em.dense_single_volume.relion_replay as relion_replay_module
+import recovar.em.dense_single_volume.helpers.orientation_priors as orientation_priors_module
 
 pytestmark = pytest.mark.unit
 IMAGE_SIZE = 64
@@ -76,7 +77,7 @@ def test_sealed_sampling_directly_materializes_restricted_eulers_and_translation
         np.tile(direction_prior[np.asarray([7, 19, 503])], 2)
     ).astype(np.float32)
     np.testing.assert_array_equal(
-        relion_replay_module._sealed_direction_log_prior(direction_prior, sampling),
+        orientation_priors_module._sealed_direction_log_prior(direction_prior, sampling),
         expected_prior,
     )
 

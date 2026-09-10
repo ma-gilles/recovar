@@ -922,18 +922,6 @@ def _sealed_sampling_rotation_ids(sealed_sampling_state):
     ).astype(np.int64, copy=False)
 
 
-def _sealed_direction_log_prior(direction_prior, sealed_sampling_state, *, dtype: np.dtype = np.float32):
-    """Expand a full direction prior onto the exact captured direction rows."""
-
-    prior = np.asarray(direction_prior, dtype=dtype).reshape(-1)
-    direction_ids = np.asarray(sealed_sampling_state["directions_ipix"], dtype=np.int64)
-    n_psi = int(np.asarray(sealed_sampling_state["psi_angles_deg"]).size)
-    selected = np.tile(prior[direction_ids], n_psi)
-    result = np.full(selected.shape, -np.inf, dtype=dtype)
-    positive = selected > 0.0
-    result[positive] = np.log(selected[positive]).astype(dtype)
-    return result
-
 def _restore_convergence_state_from_replay_restart(state, options: RefinementOptions) -> None:
     """Restore convergence counters from a RELION optimiser/model STAR at a
     perturbation-replay restart iteration.

@@ -25,6 +25,7 @@ import recovar.em.dense_single_volume.helpers.expected_accuracy as expected_accu
 from recovar.em.dense_single_volume import finalization_policy
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
+import recovar.em.dense_single_volume.helpers.orientation_priors as orientation_priors_module
 from recovar.em.dense_single_volume import half_scoring, local_search_iteration, scoring_policy
 from recovar.em.dense_single_volume import score_outputs
 import recovar.em.dense_single_volume.local_layout as local_layout_module
@@ -10801,8 +10802,8 @@ class TestRelionModeSmokeTest:
                 custom_eulers,
             ),
         )
-        # The learned-prior update lives in mean_helpers; the controller still
-        # expands the learned prior for scoring.
+        # The learned-prior update lives in mean_helpers; scoring expansion is
+        # owned by orientation_priors.relion_direction_log_priors_for_half.
         monkeypatch.setattr(
             mean_helpers_module,
             "collapse_rotation_posterior_to_direction_prior",
@@ -10814,7 +10815,7 @@ class TestRelionModeSmokeTest:
             fake_make_relion_direction_log_prior,
         )
         monkeypatch.setattr(
-            iteration_loop_module,
+            orientation_priors_module,
             "make_relion_direction_log_prior",
             fake_make_relion_direction_log_prior,
         )

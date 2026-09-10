@@ -72,8 +72,8 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
 from recovar.em.dense_single_volume.helpers.iteration_history import RefinementHistory
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
     infer_direction_prior_healpix_order,
-    make_relion_direction_log_prior,
     make_relion_translation_log_prior,
+    relion_direction_log_priors_for_half,
     normalize_class_direction_prior_per_half,
     normalize_direction_prior_per_half,
     relion_half_translation_prior_inputs,
@@ -153,7 +153,6 @@ from recovar.em.dense_single_volume.relion_replay import (
     _RelionHalfInputState,
     _resolve_replay_random_perturbation,
     _restore_convergence_state_from_replay_restart,
-    _sealed_direction_log_prior,
     _sealed_sampling_base_grids,
     _sealed_sampling_rotation_ids,
     _validate_bpref_particle_order_scope,
@@ -1767,56 +1766,22 @@ def _run_relion_iteration_loop(
             )
 
         for _half_idx in range(2):
-            if use_local:
-                continue
-            if k_class_enabled:
-                class_prior_k = class_direction_prior_per_half[_half_idx]
-                class_prior_order_k = class_direction_prior_order_per_half[_half_idx]
-                if class_prior_k is None and global_direction_prior_per_half[_half_idx] is not None:
-                    shared_prior = np.asarray(
-                        global_direction_prior_per_half[_half_idx], dtype=_dense_global_scoring_dtype()
-                    )
-                    class_prior_k = np.broadcast_to(shared_prior[None, :], (n_classes, shared_prior.size)).copy()
-                    class_prior_order_k = global_direction_prior_order_per_half[_half_idx]
-                if class_prior_k is not None and class_prior_order_k == direction_prior_healpix_order:
-                    class_rotation_log_prior_per_half[_half_idx] = np.stack(
-                        [
-                            make_relion_direction_log_prior(
-                                class_prior_k[class_idx],
-                                direction_prior_healpix_order,
-                                dtype=_dense_global_scoring_dtype(),
-                            )
-                            for class_idx in range(n_classes)
-                        ],
-                        axis=0,
-                    )
-                    logger.info(
-                        "Using learned per-class global direction prior half-%d: %d classes, %d directions at healpix_order=%d",
-                        _half_idx + 1,
-                        n_classes,
-                        class_prior_k.shape[1],
-                        direction_prior_healpix_order,
-                    )
-                    continue
-            prior_k = global_direction_prior_per_half[_half_idx]
-            prior_order_k = global_direction_prior_order_per_half[_half_idx]
-            if prior_k is None or prior_order_k != direction_prior_healpix_order:
-                continue
-            rotation_log_prior_per_half[_half_idx] = (
-                _sealed_direction_log_prior(prior_k, sealed_sampling_state, dtype=_dense_global_scoring_dtype())
-                if sealed_sampling_state is not None
-                else make_relion_direction_log_prior(
-                    prior_k,
-                    direction_prior_healpix_order,
-                    dtype=_dense_global_scoring_dtype(),
-                )
+            half_direction_priors = relion_direction_log_priors_for_half(
+                use_local=use_local,
+                scoring_healpix_order=direction_prior_healpix_order,
+                k_class_enabled=k_class_enabled,
+                n_classes=n_classes,
+                class_direction_prior=class_direction_prior_per_half[_half_idx],
+                class_direction_prior_order=class_direction_prior_order_per_half[_half_idx],
+                global_direction_prior=global_direction_prior_per_half[_half_idx],
+                global_direction_prior_order=global_direction_prior_order_per_half[_half_idx],
+                sealed_sampling_state=sealed_sampling_state,
+                dtype=_dense_global_scoring_dtype(),
+                log=logger,
+                half_index=_half_idx,
             )
-            logger.info(
-                "Using learned global direction prior half-%d: %d directions at healpix_order=%d",
-                _half_idx + 1,
-                prior_k.shape[0],
-                direction_prior_healpix_order,
-            )
+            rotation_log_prior_per_half[_half_idx] = half_direction_priors.rotation_log_prior
+            class_rotation_log_prior_per_half[_half_idx] = half_direction_priors.class_rotation_log_prior
 
         # --- Run E+M on each half-set ---
         # Two modes: single-pass (adaptive_oversampling=0) or two-pass
@@ -4538,8 +4503,6 @@ def _run_relion_iteration_loop(
             offset_range_pixels=None,
             dtype=_dense_global_scoring_dtype(),
         )
-        final_rotation_log_prior_k = None
-        final_class_rotation_log_prior_k = None
         final_direction_prior_healpix_order = None
         if not final_use_local:
             final_direction_prior_healpix_order = _direction_prior_healpix_order_for_scoring(
@@ -4549,36 +4512,26 @@ def _run_relion_iteration_loop(
                 adaptive_oversampling=final_local_parent_oversampling_order,
                 local_search_order=None,
             )
-        if (
-            not final_use_local
-            and final_direction_prior_healpix_order is not None
-            and k_class_enabled
-            and class_direction_prior_per_half[k] is not None
-            and class_direction_prior_order_per_half[k] == final_direction_prior_healpix_order
-        ):
-            final_class_rotation_log_prior_k = np.stack(
-                [
-                    make_relion_direction_log_prior(
-                        class_direction_prior_per_half[k][class_idx],
-                        final_direction_prior_healpix_order,
-                        dtype=_dense_global_scoring_dtype(),
-                    )
-                    for class_idx in range(n_classes)
-                ],
-                axis=0,
-            )
-        elif (
-            not final_use_local
-            and final_direction_prior_healpix_order is not None
-            and not k_class_enabled
-            and global_direction_prior_per_half[k] is not None
-            and global_direction_prior_order_per_half[k] == final_direction_prior_healpix_order
-        ):
-            final_rotation_log_prior_k = make_relion_direction_log_prior(
-                global_direction_prior_per_half[k],
-                final_direction_prior_healpix_order,
-                dtype=_dense_global_scoring_dtype(),
-            )
+        # The final pass scores each half with its own priors on the grid rows it
+        # actually uses; sealed rows apply only when the sealed grid is reused.
+        final_half_direction_priors = relion_direction_log_priors_for_half(
+            use_local=final_use_local,
+            scoring_healpix_order=final_direction_prior_healpix_order,
+            k_class_enabled=k_class_enabled,
+            n_classes=n_classes,
+            class_direction_prior=class_direction_prior_per_half[k],
+            class_direction_prior_order=class_direction_prior_order_per_half[k],
+            global_direction_prior=global_direction_prior_per_half[k],
+            global_direction_prior_order=global_direction_prior_order_per_half[k],
+            sealed_sampling_state=(
+                sealed_sampling_state if final_current_rotations is current_rotations else None
+            ),
+            dtype=_dense_global_scoring_dtype(),
+            log=logger,
+            half_index=k,
+        )
+        final_rotation_log_prior_k = final_half_direction_priors.rotation_log_prior
+        final_class_rotation_log_prior_k = final_half_direction_priors.class_rotation_log_prior
         if final_use_local:
             final_result = _score_half_local_in_bpref_scope(
                 bpref_device_signature_active=False,

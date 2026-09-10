@@ -36,9 +36,28 @@ order from its sampling state and supplies the grid sizes, so the controller's
 sampling policy stays the only source of grid geometry. `RefinementHistory`
 owns the float64 snapshot copies of the rotation posteriors and of the learned
 priors (class 0 per half for K-class); the controller passes the live lists.
-Controller tests that stub the collapse step patch `mean_helpers`, while the
-controller still expands learned priors for scoring with its own
-`make_relion_direction_log_prior` binding.
+Controller tests that stub the collapse step patch `mean_helpers`.
+
+Scoring with those priors follows RELION through one owner,
+[`orientation_priors.relion_direction_log_priors_for_half`](../../recovar/em/dense_single_volume/helpers/orientation_priors.py),
+which both the regular iterations and the final all-data pass call per half.
+RELION (`ml_optimiser.cpp`) multiplies orientation weights by the class's
+`pdf_direction` value at the sampled direction only in `NOPRIOR` mode, so local searches
+get no direction prior; `initialisePdfDirection` resets every class to an even
+distribution on a sampling change, so a prior at another HEALPix order is not
+used; RELION keeps one prior per class and copies class 0 to all classes when
+seeding K references, so a K-class run that only holds a shared prior applies
+it to every class; and each half scores with its own model, including the
+joined final iteration. Sealed captured sampling expands the prior onto the
+captured direction rows the scorer uses (`_sealed_direction_log_prior`, now
+also owned here); otherwise the canonical sample ordering is used. The controller
+supplies the scoring order, the sealed state only when the scored grid is the
+sealed grid, and its logger. Adopting one rule changed three edge cases that
+previously differed between the passes: the final pass now applies a shared prior
+to every class, K-class priors follow sealed rows, and a stale class prior with a
+matching shared prior now yields identical per-class rows instead of one shared
+vector. [`test_direction_log_prior_owner.py`](../../tests/unit/test_direction_log_prior_owner.py)
+pins each rule.
 
 The [refinement controller](../../recovar/em/dense_single_volume/iteration_loop.py)
 owns iteration history, half-set dispatch, sampling updates, convergence and

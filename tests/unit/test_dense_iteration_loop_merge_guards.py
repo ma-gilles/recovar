@@ -29,6 +29,7 @@ from recovar.em.dense_single_volume import (
     scoring_policy,
 )
 from recovar.em.dense_single_volume.helpers import reconstruction_diagnostics
+from recovar.em.dense_single_volume.helpers import orientation_priors
 from recovar.em.dense_single_volume.helpers.convergence import _native_final_perturbation_healpix_order
 from recovar.em.dense_single_volume.local_search_iteration import _LocalSearchIterationResult
 from recovar.em.initial_model.iteration_loop import run_vdam_iterations
@@ -408,19 +409,22 @@ def test_k1_local_search_does_not_score_learned_global_direction_prior():
     assert "rotation_log_prior=relion_local_rotation_log_prior_k" in source
     assert "else relion_local_rotation_log_prior_k" in source
 
+    # Both passes build their pdf_direction log priors through one RELION-semantics
+    # owner; local searches yield no direction prior there.
     loop_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    assert loop_source.count("relion_direction_log_priors_for_half(") == 2
+    assert "make_relion_direction_log_prior(" not in loop_source
     prior_loop = loop_source[
         loop_source.index("for _half_idx in range(2):") : loop_source.index("# --- Run E+M on each half-set ---")
     ]
-    assert "if use_local:" in prior_loop
-    assert "continue" in prior_loop
-
-    final_prior_start = loop_source.index("final_rotation_log_prior_k = None")
-    final_prior_block = loop_source[
-        final_prior_start : loop_source.index("if final_use_local:", final_prior_start)
-    ]
-    assert "if not final_use_local:" in final_prior_block
-    assert "use_local=False" in final_prior_block
+    assert "use_local=use_local," in prior_loop
+    final_prior_start = loop_source.index("final_half_direction_priors = relion_direction_log_priors_for_half(")
+    final_prior_block = loop_source[final_prior_start : loop_source.index("if final_use_local:", final_prior_start)]
+    assert "use_local=final_use_local," in final_prior_block
+    assert "sealed_sampling_state if final_current_rotations is current_rotations else None" in final_prior_block
+    owner_source = inspect.getsource(orientation_priors.relion_direction_log_priors_for_half)
+    assert "if use_local:" in owner_source
+    assert "return HalfDirectionLogPriors(rotation_log_prior=None, class_rotation_log_prior=None)" in owner_source
 
 
 def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
