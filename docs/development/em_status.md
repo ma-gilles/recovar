@@ -72,6 +72,12 @@ apply only to their frozen source and fixture; strict state is a separate gate.
 | [K4 saved comparisons](benchmarks.md#k4-audit-integrity-and-reviewed-saved-comparisons--september-10), reported5ca9, 20 iterations | 3,200 saved curves/classes rechecked. Original synthetic minimum .99768012 and real .64899880 fail. Synthetic repeat passes; closest real repeat .99833338 still fails at20. Source/build and raw-map admission incomplete; native variation is not a waiver |
 | [Robustness screening](benchmarks.md#robustness-gt-curve-review--september-10) | 64 GT integrals rechecked; original13/100,22/200,32/200 fail −.002 screening. Case22 fails8/12 repeat comparisons. Independent per-map alignments are not the prespecified shared-transform GT gate; source/build admission remains open |
 
+[E6 row942 coarse-cap review](evidence/vdam-coarse-cap-tie-20260910/README.md)
+confirms measured0–3 ULP competing scores and exact threshold/support agreement
+in six instrumented candidate histories. This local near-tie evidence does not
+establish the incoming-state cause, native matched-input parity or a trajectory
+waiver; six-digit scalar equality in the producer report is corrected.
+
 Rejected explanations: canonical pixel narrowing was a demonstrated metadata bug
 ([scalar causal gate](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10076_pixel_prefix4_20260909/RESULTS.md)),
 not a reason to promote arithmetic to double. Case22 candidate repeats are **not
