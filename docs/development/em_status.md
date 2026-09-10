@@ -38,6 +38,12 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+Snapshot direction-prior initialization belongs to
+; 16 exact old/new
+cases including log text match, 173 CPU guard cases and the 502-case controller
+panel pass (one GPU-only skip). Structural checkpoint only.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/snapshot_direction_prior_owner_20260910/result.json).
+
 The trial-grid SamplingPerturbation and the M-step source-angle rule now have
 one implementation each in the controller module, shared by the regular
 iterations and the final all-data pass (four inline sites before). 40 exact
