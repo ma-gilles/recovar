@@ -38,6 +38,20 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+Direction log priors for scoring now follow RELION through one owner,
+`orientation_priors.relion_direction_log_priors_for_half`, in both the regular
+iterations and the final all-data pass (user decision: reproduce RELION, clean
+as much as possible). Rules from `ml_optimiser.cpp`: `pdf_direction` is used
+only in global (`NOPRIOR`) scoring, reset to uniform on a sampling change,
+copied from class 0 to every class when seeding K references, and each half
+scores with its own model. 64 of 72 synthetic cases match the previous inline
+code byte-for-byte; the 8 intentional differences (final-pass shared prior for
+K classes, K-class sealed rows, stale-class representation) are classified in
+the receipt. 176 CPU guard cases and the 502-case controller panel pass (one
+GPU-only skip). This is a semantic alignment with RELION in edge cases, not a
+trajectory qualification.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/direction_log_prior_owner_20260910/result.json).
+
 Convergence inputs now have owners: `convergence.concatenate_assignments` /
 `concatenate_assignments_or_none` join the half-set assignment stacks and
 `mean_helpers._relion_pmax_normalization_mass_per_half` selects the optimizer
