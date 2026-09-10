@@ -267,11 +267,6 @@ def make_frequency_radius_map_half(image_shape):
     return jnp.sqrt(jnp.sum(coords**2, axis=-1))
 
 
-def make_frequency_coords_half(image_shape):
-    """Return packed-half integer frequency coordinates as a JAX array."""
-    return jnp.asarray(make_frequency_coords_half_np(image_shape))
-
-
 def make_frequency_coords_half_np(image_shape):
     """Return cached packed-half coordinates from the host geometry planner."""
     return ftu.get_k_coordinate_of_each_pixel_half_np(image_shape, voxel_size=1, scaled=False)
@@ -321,71 +316,8 @@ def _relion_half_layout_mask(coords, current_size, *, square=False, include_dc=F
     return mask
 
 
-def _max_window_size(image_shape, current_size, *, square=False, include_dc=False, exact_radius=False):
-    """Exact count of gathered half-spectrum pixels for a RELION-style window."""
-    coords_np = make_frequency_coords_half_np(image_shape)
-    mask = _relion_half_layout_mask(
-        coords_np,
-        current_size,
-        square=square,
-        include_dc=include_dc,
-        exact_radius=exact_radius,
-    )
-    return int(np.count_nonzero(mask))
-
-
-def make_fourier_window_indices(image_shape, current_size, *, square=False, include_dc=False, exact_radius=False):
-    """Return sorted 1D integer indices into the half-spectrum that select
-    frequencies within the current resolution shell.
-
-    Parameters
-    ----------
-    image_shape : tuple (H, W)
-        Original real-space image shape.
-    current_size : int
-        Diameter in pixels (like RELION's rlnCurrentImageSize).
-        Frequencies with RELION shell index <= current_size // 2 are selected.
-    square : bool, optional
-        Use RELION's cropped square current-size layout instead of the default
-        radial support on that cropped layout.
-    include_dc : bool, optional
-        Include the DC pixel. RELION excludes DC from likelihood scoring but
-        includes it in reconstruction/noise accumulation.
-    exact_radius : bool, optional
-        Use RELION BackProjector's squared-radius insertion support instead
-        of rounded shell labels. Use this for M-step reconstruction windows.
-
-    Returns
-    -------
-    indices : jnp.ndarray of int32
-        Sorted indices into the (N_half,) flat half-spectrum array.
-        Length varies with current_size.
-    """
-    coords = make_frequency_coords_half(image_shape)
-    mask = jnp.asarray(
-        _relion_half_layout_mask(
-            coords,
-            current_size,
-            square=square,
-            include_dc=include_dc,
-            exact_radius=exact_radius,
-        )
-    )
-    return jnp.where(
-        mask,
-        size=_max_window_size(
-            image_shape,
-            current_size,
-            square=square,
-            include_dc=include_dc,
-            exact_radius=exact_radius,
-        ),
-        fill_value=0,
-    )[0]
-
-
 def make_fourier_window_indices_np(image_shape, current_size, square=False, include_dc=False, exact_radius=False):
-    """NumPy version of make_fourier_window_indices for host-side precomputation.
+    """Return half-spectrum window indices and their count for host precomputation.
 
     This avoids JIT compilation overhead and is suitable for precomputing
     the window indices once before the EM loop.
