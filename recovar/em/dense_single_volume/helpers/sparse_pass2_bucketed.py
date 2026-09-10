@@ -18067,7 +18067,11 @@ def compute_k_class_pass2_stats_sparse_fused(
             for class_index in range(n_classes):
                 cache_t0 = time.time()
                 if use_window:
-                    projection_kwargs = window_spec.projection_kwargs(return_abs2=False)
+                    projection_kwargs = _projection_kwargs_for_relion_score_window(
+                        window_spec.projection_kwargs(return_abs2=False),
+                        use_relion_projector=use_relion_projector,
+                        current_size=current_size,
+                    )
                     score_cache, recon_cache, recon_abs2_cache = _compute_sparse_pass2_windowed_projections_block(
                         mean_for_proj_by_class[class_index],
                         jnp.asarray(fine_rotations_override, dtype=jnp.float32),
@@ -18694,6 +18698,11 @@ def compute_k_class_pass2_stats_sparse_fused(
             else:
                 projection_kwargs = window_spec.projection_kwargs(return_abs2=False if use_window else None)
                 if use_window:
+                    projection_kwargs = _projection_kwargs_for_relion_score_window(
+                        projection_kwargs,
+                        use_relion_projector=use_relion_projector,
+                        current_size=current_size,
+                    )
                     retained_window_projection_bytes = (
                         int(flat_rotations.shape[0])
                         * (int(n_windowed) + int(n_recon_windowed))
