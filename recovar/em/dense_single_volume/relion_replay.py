@@ -25,7 +25,7 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     normalize_class_direction_prior,
     normalize_class_direction_prior_per_half,
     normalize_direction_prior_per_half,
-    remap_direction_prior_to_healpix_order,
+    remap_half_direction_prior_to_healpix_order,
 )
 from recovar.em.dense_single_volume.mean_helpers import (
     _mean_noise_variance,
@@ -1289,24 +1289,12 @@ def apply_iter_replay_overrides(
                             _relion_direction_prior_order,
                             state.healpix_order,
                         )
-                        if k_class_enabled:
-                            _relion_direction_prior = np.stack(
-                                [
-                                    remap_direction_prior_to_healpix_order(
-                                        _relion_direction_prior[class_idx],
-                                        _relion_direction_prior_order,
-                                        state.healpix_order,
-                                    )
-                                    for class_idx in range(n_classes)
-                                ],
-                                axis=0,
-                            )
-                        else:
-                            _relion_direction_prior = remap_direction_prior_to_healpix_order(
-                                _relion_direction_prior,
-                                _relion_direction_prior_order,
-                                state.healpix_order,
-                            )
+                        _relion_direction_prior = remap_half_direction_prior_to_healpix_order(
+                            _relion_direction_prior,
+                            _relion_direction_prior_order,
+                            state.healpix_order,
+                            n_classes=n_classes if k_class_enabled else None,
+                        )
                         _relion_direction_prior_order = state.healpix_order
                     if k_class_enabled:
                         class_direction_prior_per_half[_half_idx] = normalize_class_direction_prior_per_half(
@@ -1441,26 +1429,13 @@ def apply_iter_replay_overrides(
                         prior_order_k,
                         state.healpix_order,
                     )
-                    if k_class_enabled:
-                        prior_k = np.stack(
-                            [
-                                remap_direction_prior_to_healpix_order(
-                                    prior_k[class_idx],
-                                    prior_order_k,
-                                    state.healpix_order,
-                                    dtype=runtime_dtype,
-                                )
-                                for class_idx in range(n_classes)
-                            ],
-                            axis=0,
-                        )
-                    else:
-                        prior_k = remap_direction_prior_to_healpix_order(
-                            prior_k,
-                            prior_order_k,
-                            state.healpix_order,
-                            dtype=runtime_dtype,
-                        )
+                    prior_k = remap_half_direction_prior_to_healpix_order(
+                        prior_k,
+                        prior_order_k,
+                        state.healpix_order,
+                        n_classes=n_classes if k_class_enabled else None,
+                        dtype=runtime_dtype,
+                    )
                     prior_order_k = state.healpix_order
                 if k_class_enabled:
                     class_direction_prior_per_half[_half_idx] = normalize_class_direction_prior(

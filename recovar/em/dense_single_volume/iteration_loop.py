@@ -79,7 +79,7 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     relion_sigma_offset_prior_center,
     relion_translation_prior_center,
     relion_translation_search_base,
-    remap_direction_prior_to_healpix_order,
+    remap_half_direction_prior_to_healpix_order,
 )
 from recovar.em.dense_single_volume.helpers.resolution import (
     _bootstrap_current_size_relion,
@@ -4572,26 +4572,13 @@ def _run_relion_iteration_loop(
                         _prior_k[0] if k_class_enabled else _prior_k
                     )
                     if _prior_order_k != state.healpix_order:
-                        if k_class_enabled:
-                            _prior_k = np.stack(
-                                [
-                                    remap_direction_prior_to_healpix_order(
-                                        _prior_k[class_idx],
-                                        _prior_order_k,
-                                        state.healpix_order,
-                                        dtype=_final_replay_prior_dtype,
-                                    )
-                                    for class_idx in range(n_classes)
-                                ],
-                                axis=0,
-                            )
-                        else:
-                            _prior_k = remap_direction_prior_to_healpix_order(
-                                _prior_k,
-                                _prior_order_k,
-                                state.healpix_order,
-                                dtype=_final_replay_prior_dtype,
-                            )
+                        _prior_k = remap_half_direction_prior_to_healpix_order(
+                            _prior_k,
+                            _prior_order_k,
+                            state.healpix_order,
+                            n_classes=n_classes if k_class_enabled else None,
+                            dtype=_final_replay_prior_dtype,
+                        )
                         _prior_order_k = state.healpix_order
                     if k_class_enabled:
                         class_direction_prior_per_half[_half_idx] = normalize_class_direction_prior_per_half(

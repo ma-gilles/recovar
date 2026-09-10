@@ -51,6 +51,16 @@ No automatic model polling/wakeup promise.
 
 ## Engineering work and recent evidence
 
+Replay direction-prior remapping now has one owner in `orientation_priors` for
+both global vectors and class rows, replacing three duplicated controller/replay
+branches. Existing file-default and explicit runtime dtypes remain distinct;
+class order, normalization and call order are preserved. All 240 old/new branch
+comparisons are byte-exact. The 39 focused, 64 combined CPU guard and 46 final
+publication CPU cases pass with no failures/skips. Production is 17 lines shorter.
+The final panel also covers the preceding offload and preprocessing-test changes.
+This is structural equivalence, not trajectory or K4 completion qualification.
+[Exact commands, source hashes and limits](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/direction_prior_remap_owner_20260910/result.json).
+
 Accumulator host offload now belongs to `score_outputs` beside `HalfScoreResult`;
 the controller retains the same scheduling call and supplies its existing logger.
 Moved helper bodies and remaining controller logic match by AST after the explicit

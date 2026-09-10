@@ -328,6 +328,27 @@ def remap_direction_prior_to_healpix_order(direction_prior, src_order, dst_order
     return out.astype(dtype)
 
 
+def remap_half_direction_prior_to_healpix_order(
+    direction_prior, src_order, dst_order, *, n_classes=None, dtype: np.dtype = np.float32
+):
+    """Remap one half's global vector or class rows without mixing class mass.
+
+    ``n_classes=None`` selects the global-prior path. Otherwise remap each class
+    in its original order and stack the results along the existing class axis.
+    Preserve the scalar remapper's dtype default: file replay and explicit
+    runtime-dtype replay deliberately remain distinct at their call sites.
+    """
+    if n_classes is None:
+        return remap_direction_prior_to_healpix_order(direction_prior, src_order, dst_order, dtype=dtype)
+    return np.stack(
+        [
+            remap_direction_prior_to_healpix_order(direction_prior[class_idx], src_order, dst_order, dtype=dtype)
+            for class_idx in range(n_classes)
+        ],
+        axis=0,
+    )
+
+
 def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=None, *, dtype: np.dtype = np.float32):
     """Expand RELION's learned ``pdf_direction`` onto a rotation grid.
 
