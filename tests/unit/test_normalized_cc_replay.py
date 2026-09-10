@@ -305,8 +305,7 @@ def test_relion_coarse_native_texture_rescore_exposes_reduced_components():
 def test_jax_relion_coarse_rescore_preserves_double_accelerator_precision():
     pytest.importorskip("jax")
     import jax.numpy as jnp
-
-    from recovar.em.dense_single_volume.helpers.scoring import (
+    from helpers.score_diagnostics import (
         _relion_coarse_normalized_cc_rescore_f64,
     )
 

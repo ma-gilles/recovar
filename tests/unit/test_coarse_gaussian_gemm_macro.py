@@ -8,6 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from helpers import score_diagnostics
 
 from recovar.em.dense_single_volume.helpers import coarse_score_diagnostics, relion_ctf, scoring, significance
 from recovar.em.dense_single_volume.helpers.coarse_gemm_streaming import (
@@ -858,7 +859,7 @@ def test_coarse_gaussian_gemm_direct_square_cancellation_stress_equal_operands(
                 "negative_implied_diff2_count": int(np.count_nonzero(macro > 0.0)),
             }
         )
-    scale_panel = coarse_score_diagnostics._coarse_gaussian_scale_panel_diagnostics(
+    scale_panel = score_diagnostics._coarse_gaussian_scale_panel_diagnostics(
         [1.0, 100.0, 1.0e4],
         np.stack(score_deltas, axis=0),
         precision_bits=np.dtype(real_dtype).itemsize * 8,
@@ -1018,7 +1019,7 @@ def test_coarse_gaussian_diagnostics_report_exact_ulp_and_repeat_spread():
         ],
         axis=0,
     )
-    repeat = coarse_score_diagnostics._coarse_gaussian_repeat_spread_diagnostics(repeat_deltas)
+    repeat = score_diagnostics._coarse_gaussian_repeat_spread_diagnostics(repeat_deltas)
     assert int(repeat["repeat_count"]) == 3
     np.testing.assert_array_equal(
         repeat["elementwise_delta_repeat_spread"],

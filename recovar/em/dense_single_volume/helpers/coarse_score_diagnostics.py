@@ -155,88 +155,8 @@ def _coarse_gaussian_direct_macro_diagnostics(
     return diagnostics
 
 
-def _coarse_gaussian_repeat_spread_diagnostics(score_delta_repeats):
-    """Report repeat-to-repeat drift without defining an acceptance epsilon.
-
-    ``score_delta_repeats`` has layout
-    ``[repeat,image,class,rotation,translation]`` and should be assembled from
-    immutable same-hardware paired captures.  The caller must compare this raw
-    spread with native/direct repeats, scale panels, discrete outcomes, and
-    final quality; this helper cannot promote the GEMM path by itself.
-    """
-
-    deltas = np.asarray(score_delta_repeats, dtype=np.float64)
-    if deltas.ndim != 5 or deltas.shape[0] < 2:
-        raise ValueError(
-            "coarse GEMM repeat diagnostics require at least two "
-            "[repeat,image,class,rotation,translation] score-delta surfaces",
-        )
-    flattened = deltas.reshape(deltas.shape[0], deltas.shape[1], -1)
-    signed_mean_per_repeat_image = np.mean(flattened, axis=2)
-    max_abs_per_repeat_image = np.max(np.abs(flattened), axis=2)
-    return {
-        "repeat_count": np.asarray(deltas.shape[0], dtype=np.int64),
-        "signed_mean_delta_per_repeat_image": signed_mean_per_repeat_image,
-        "max_abs_delta_per_repeat_image": max_abs_per_repeat_image,
-        "signed_mean_repeat_spread_per_image": np.ptp(
-            signed_mean_per_repeat_image,
-            axis=0,
-        ),
-        "max_abs_repeat_spread_per_image": np.ptp(
-            max_abs_per_repeat_image,
-            axis=0,
-        ),
-        "elementwise_delta_repeat_spread": np.ptp(deltas, axis=0),
-        "qualification_status": np.asarray(
-            "NO_GO_raw_repeat_spread_requires_native_scale_discrete_quality_runtime_context"
-        ),
-    }
 
 
-def _coarse_gaussian_scale_panel_diagnostics(
-    operand_scales,
-    score_deltas_by_scale,
-    *,
-    precision_bits: int,
-):
-    """Classify strictly growing multiscale cancellation drift as NO-GO.
-
-    This is an ordering test over raw observations, not an epsilon threshold.
-    A non-growing panel remains unqualified until same-hardware repeats,
-    discrete outcomes, final quality, and clean runtime all pass.
-    """
-
-    scales = np.asarray(operand_scales, dtype=np.float64).reshape(-1)
-    deltas = np.asarray(score_deltas_by_scale, dtype=np.float64)
-    if scales.size < 2 or deltas.ndim != 5 or deltas.shape[0] != scales.size:
-        raise ValueError(
-            "coarse GEMM scale diagnostics require matching scale and "
-            "[scale,image,class,rotation,translation] arrays with at least two scales",
-        )
-    if np.any(~np.isfinite(scales)) or np.any(scales <= 0.0) or np.any(np.diff(scales) <= 0.0):
-        raise ValueError("coarse GEMM operand scales must be finite, positive, and increasing")
-    if int(precision_bits) not in (32, 64):
-        raise ValueError("coarse GEMM precision_bits must be 32 or 64")
-    flattened = deltas.reshape(scales.size, -1)
-    max_abs_by_scale = np.max(np.abs(flattened), axis=1)
-    signed_mean_by_scale = np.mean(flattened, axis=1)
-    growing_steps = max_abs_by_scale[1:] > max_abs_by_scale[:-1]
-    scale_amplified = bool(np.any(growing_steps))
-    return {
-        "operand_scales": scales,
-        "precision_bits": np.asarray(precision_bits, dtype=np.int64),
-        "signed_mean_delta_by_scale": signed_mean_by_scale,
-        "max_abs_delta_by_scale": max_abs_by_scale,
-        "scale_growth_steps": growing_steps,
-        "scale_amplified": np.asarray(scale_amplified),
-        "qualification_status": np.asarray(
-            (
-                "NO_GO_scale-amplified_drift"
-                if scale_amplified
-                else "NO_GO_unqualified_non-growing_scale_panel"
-            )
-        ),
-    }
 
 
 def _coarse_gaussian_qualification_decision(

@@ -51,6 +51,14 @@ No automatic model polling/wakeup promise.
 
 ## Engineering work and recent evidence
 
+Three score diagnostics with only test callers now live under
+`tests/helpers/score_diagnostics.py`: repeat spread, scale-panel classification
+and the float64 normalized-CC lane replay. Runtime copies and imports are gone
+(123 production lines removed); function/decorator ASTs and test assertions are
+unchanged. All four affected cases and the 38-case CPU guard pass. Double remains
+a diagnostic reference; these checks do not establish scientific acceptance.
+[Caller inventory, commands and source proof](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/test_only_score_diagnostics_20260910/result.json).
+
 Reconstruction captures now have an explicit `helpers.reconstruction_diagnostics`
 owner: K-class current-size decisions, K-class M-step operands, tau2 reporting
 and final BPref accumulators. The controller retains the environment gates and
