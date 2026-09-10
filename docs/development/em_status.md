@@ -23,8 +23,8 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 ## Source and ownership
 
 - Primary: `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907`,
-  branch `codex/integrate-pr180`. This snapshot follows published `8d157f7651ca44a7d625a4c50e1b763bf79298b8`;
-  runtime source is unchanged from `a433707b6`. Recheck HEAD, diff and untracked files.
+  branch `codex/integrate-pr180`. Sampling/initialization cleanup follows reviewed `8d157f7651ca44a7d625a4c50e1b763bf79298b8`.
+  Recheck HEAD, diff and untracked files; earlier trajectories do not qualify it.
 - **em_clean is sole integrator/publisher**, [draft PR179](https://github.com/ma-gilles/recovar/pull/179)
   on pinned PR158 base `44d770de3f9336ab2f3f6a34203394bae8d1aeed`.
   [Compact handoff](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/CURRENT_TASK.md)
@@ -37,7 +37,14 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
-The latest runtime batch gives follower state one owner, moves reconstruction
+The current sampling/initialization batch consolidates coarse sizing, initial
+resolution seeding and explicit schedule validation in their existing owners.
+Duplicate checks/calculations are removed; defaults and state order are preserved.
+All105 combined CPU cases pass; exact old/new scalar, validation and state traces
+are recorded in the [batch receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/initial_resolution_owner_20260910/result.json).
+This remains structural qualification only.
+
+An earlier runtime batch gives follower state one owner, moves reconstruction
 captures to their owner and removes three test-only diagnostics from runtime.
 Controller −126 lines, net production +59; **95 combined CPU cases pass**, with
 12 exact paired follower updates and 64 exact capture comparisons. This is

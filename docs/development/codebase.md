@@ -460,6 +460,9 @@ K1 scheduling, the initial high-resolution cutoff, and the tau2 reporting taper.
 It also owns expectation-boundary coarse sizing: replay selects the incoming
 HEALPix order, and local pass 1 sizes its Fourier window from that order while
 child expansion retains the updated order. Callers import these policies directly.
+Initial FSC/low-pass resolution seeding also lives here, with explicit FSC dtype
+and the shared ini_high shell calculation. The controller retains replay/FSC/
+low-pass precedence; seeding preserves input copies and state-assignment order.
 The controller retains their timing within the refinement loop. The pure
 scheduling cases live in `tests/unit/test_resolution_scheduling.py`; the
 reconstruction/taper ordering check remains with the controller tests.

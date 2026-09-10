@@ -5,6 +5,10 @@ boundaries, and first-iteration resolution and tau2-reporting rules. The
 iteration controller selects when to apply these rules.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
 import jax.numpy as jnp
 import numpy as np
 
@@ -12,7 +16,15 @@ from recovar.em.dense_single_volume.helpers.convergence import healpix_angular_s
 
 # Re-import so callers can get it from this module.
 from recovar.em.dense_single_volume.helpers.fourier_window import quantize_current_size
-from recovar.reconstruction.regularization import compute_current_size_relion, fsc_to_relion_ssnr
+from recovar.reconstruction.regularization import (
+    compute_current_size_relion,
+    fsc_to_relion_ssnr,
+    resolution_from_data_vs_prior,
+)
+
+if TYPE_CHECKING:
+    from recovar.em.dense_single_volume.helpers.convergence import RefinementState
+    from recovar.em.dense_single_volume.refinement_options import RefinementOptions
 
 
 def relion_local_pass1_current_size(
@@ -314,6 +326,35 @@ def _truncate_fsc_for_current_size_growth(fsc, *, current_size, grid_size, dtype
         first_unavailable_shell = min(len(truncated), int(current_size) // 2 + 1)
         truncated[first_unavailable_shell:] = 0.0
     return truncated
+
+
+def initialize_resolution_from_fsc(
+    state: RefinementState, options: RefinementOptions, *, grid_size: int, voxel_size: float, dtype
+) -> None:
+    """Seed current/previous resolution from a caller-provided initial FSC curve."""
+    schedule = options.schedule
+    fsc = np.asarray(schedule.init_fsc, dtype=dtype).copy()
+    previous_current_size = int(schedule.init_current_size)
+    if previous_current_size < grid_size:
+        fsc[min(len(fsc), previous_current_size // 2) :] = 0.0
+    data_vs_prior = np.asarray(fsc_to_relion_ssnr(fsc, tau2_fudge=options.parity.tau2_fudge))
+    resolution_shell = resolution_from_data_vs_prior(data_vs_prior, allow_high_res_recovery=True)
+    resolution_angstrom = shell_index_to_resolution_angstrom(resolution_shell, grid_size, voxel_size)
+    if np.isfinite(resolution_angstrom) and resolution_angstrom > 0.0:
+        state.current_resolution = float(resolution_angstrom)
+        state.previous_resolution = float(resolution_angstrom)
+
+
+def initialize_resolution_from_firstiter_ini_high(
+    state: RefinementState, options: RefinementOptions, *, grid_size: int, voxel_size: float
+) -> None:
+    """Seed current/previous resolution from the first-iteration ini_high lowpass."""
+    ini_high_angstrom = options.parity.relion_firstiter_ini_high_angstrom
+    pixel_size = float(voxel_size if voxel_size > 0 else 1.0)
+    shell = _firstiter_cc_ini_high_resolution_shell(grid_size, pixel_size, ini_high_angstrom)
+    resolution_angstrom = shell_index_to_resolution_angstrom(shell, grid_size, pixel_size)
+    state.current_resolution = float(resolution_angstrom)
+    state.previous_resolution = float(resolution_angstrom)
 
 
 def _firstiter_cc_ini_high_resolution_shell(grid_size, voxel_size, ini_high_angstrom):

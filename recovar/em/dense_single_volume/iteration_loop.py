@@ -89,6 +89,8 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     bootstrap_current_size_from_ini_high_relion,
     clamp_relion_coarse_image_size,
     compute_coarse_image_size,
+    initialize_resolution_from_firstiter_ini_high,
+    initialize_resolution_from_fsc,
     relion_expectation_coarse_size_order,
     relion_local_pass1_current_size,
     relion_optics_image_current_sizes,
@@ -324,36 +326,6 @@ def _sigma_offset_for_half(current_sigma_offset_angstrom, current_sigma_offset_a
     if current_sigma_offset_angstrom_per_half is None:
         return float(current_sigma_offset_angstrom)
     return float(current_sigma_offset_angstrom_per_half[int(half_index)])
-
-
-def _init_resolution_from_fsc(
-    state: RefinementState, options: RefinementOptions, *, grid_size: int, voxel_size: float
-) -> None:
-    """Seed current/previous resolution from a caller-provided initial FSC curve."""
-    schedule = options.schedule
-    fsc = np.asarray(schedule.init_fsc, dtype=_dense_global_scoring_dtype()).copy()
-    previous_current_size = int(schedule.init_current_size)
-    if previous_current_size < grid_size:
-        fsc[min(len(fsc), previous_current_size // 2) :] = 0.0
-    data_vs_prior = np.asarray(fsc_to_relion_ssnr(fsc, tau2_fudge=options.parity.tau2_fudge))
-    resolution_shell = resolution_from_data_vs_prior(data_vs_prior, allow_high_res_recovery=True)
-    resolution_angstrom = shell_index_to_resolution_angstrom(resolution_shell, grid_size, voxel_size)
-    if np.isfinite(resolution_angstrom) and resolution_angstrom > 0.0:
-        state.current_resolution = float(resolution_angstrom)
-        state.previous_resolution = float(resolution_angstrom)
-
-
-def _init_resolution_from_firstiter_ini_high(
-    state: RefinementState, options: RefinementOptions, *, grid_size: int, voxel_size: float
-) -> None:
-    """Seed current/previous resolution from the first-iteration ini_high lowpass."""
-    ini_high_angstrom = options.parity.relion_firstiter_ini_high_angstrom
-    pixel_size = float(voxel_size if voxel_size > 0 else 1.0)
-    shell = int(np.floor(grid_size * pixel_size / float(ini_high_angstrom) + 0.5))
-    shell = max(1, min(grid_size // 2, shell))
-    resolution_angstrom = shell_index_to_resolution_angstrom(shell, grid_size, pixel_size)
-    state.current_resolution = float(resolution_angstrom)
-    state.previous_resolution = float(resolution_angstrom)
 
 
 def refine_single_volume(
@@ -635,9 +607,12 @@ def _run_relion_iteration_loop(
     ):
         _restore_convergence_state_from_replay_restart(state, options)
     elif schedule.init_fsc is not None:
-        _init_resolution_from_fsc(state, options, grid_size=grid_size, voxel_size=cryo.voxel_size)
+        initialize_resolution_from_fsc(
+            state, options, grid_size=grid_size, voxel_size=cryo.voxel_size,
+            dtype=_dense_global_scoring_dtype(),
+        )
     elif init_relion_iteration == 0 and parity.relion_firstiter_ini_high_angstrom is not None:
-        _init_resolution_from_firstiter_ini_high(state, options, grid_size=grid_size, voxel_size=cryo.voxel_size)
+        initialize_resolution_from_firstiter_ini_high(state, options, grid_size=grid_size, voxel_size=cryo.voxel_size)
     if replay.init_refinement_state_fields is not None:
         _restore_diagnostic_frozen_boundary_state(state, options)
     _mark_setup_phase("state_init")
