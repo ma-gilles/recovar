@@ -38,6 +38,14 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+Frozen5ca9 K4 cache diagnostic13687592 has reviewed profiled wall times
+799.98→204.62s (74.4% reduction), with40 saved iteration timings and45 evidence
+files checked. This is candidate-only, not direct compile-time attribution or
+quality acceptance. Cache entries include primitive specializations; shape
+unification remains separately qualified performance work. Full200 K4 job13687409
+was running when checked; no duplicate run.
+[Review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_cache_timing_review_20260910/RESULTS.md).
+
 Replay numbering and cutoff helpers now live in `relion_replay.py`, with direct
 controller/test callers. Moved helper ASTs and remaining controller AST match
 the parent after ownership normalization; 147 CPU guard/affected cases pass.
