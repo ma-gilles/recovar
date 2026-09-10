@@ -5,6 +5,7 @@ from recovar.em.dense_single_volume.helpers.env_flags import parse_env_flag_or_f
 _FINAL_ALL_DATA_GRID_CORRECT_ENV = "RECOVAR_FINAL_ALL_DATA_GRID_CORRECT"
 _FINAL_ALL_DATA_AFTER_MAX_ITER_ENV = "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER"
 
+
 def _final_all_data_grid_correct_enabled(*, logger) -> bool:
     """Return whether final all-data output applies RELION gridding correction.
 
@@ -38,10 +39,7 @@ def _should_run_final_all_data_iteration(
         return False
     if bool(has_converged):
         return True
-    if not (
-        _final_all_data_after_max_iter_enabled(logger=logger)
-        and int(iteration) >= int(max_iter)
-    ):
+    if not (_final_all_data_after_max_iter_enabled(logger=logger) and int(iteration) >= int(max_iter)):
         return False
     if bool(k_class_enabled):
         logger.warning(
@@ -51,4 +49,3 @@ def _should_run_final_all_data_iteration(
         )
         return False
     return True
-

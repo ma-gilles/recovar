@@ -49,9 +49,15 @@ import recovar.em.dense_single_volume.helpers.score_constraints as score_constra
 import recovar.em.dense_single_volume.helpers.significance as sig_mod
 import recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed as sparse_pass2_mod
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop
-from recovar.em.dense_single_volume import relion_replay
 import recovar.em.dense_single_volume.k_class as k_class_mod
-from recovar.em.dense_single_volume import debug_dumps, half_scoring, k_class_results, score_outputs, scoring_policy
+from recovar.em.dense_single_volume import (
+    debug_dumps,
+    half_scoring,
+    k_class_results,
+    relion_replay,
+    score_outputs,
+    scoring_policy,
+)
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 
 pytestmark = pytest.mark.unit

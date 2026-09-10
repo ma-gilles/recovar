@@ -15,10 +15,10 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import finalization_policy
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop
 import recovar.em.dense_single_volume.local_search_iteration as local_search_iteration
 from recovar.em.dense_single_volume import (
+    finalization_policy,
     half_scoring,
     local_debug,
     mean_helpers,
