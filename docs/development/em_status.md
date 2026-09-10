@@ -39,7 +39,7 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 ## Engineering work and recent evidence
 
 Snapshot direction-prior initialization belongs to
-; 16 exact old/new
+`orientation_priors.initial_direction_priors_from_snapshot`; 16 exact old/new
 cases including log text match, 173 CPU guard cases and the 502-case controller
 panel pass (one GPU-only skip). Structural checkpoint only.
 [Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/snapshot_direction_prior_owner_20260910/result.json).
