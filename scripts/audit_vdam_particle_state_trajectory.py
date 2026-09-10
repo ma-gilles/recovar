@@ -18,9 +18,17 @@ import numpy as np
 from recovar.data_io.starfile import read_star
 
 if __package__:
-    from scripts.audit_em_particle_state_distribution import _angular_error_deg
+    from scripts.audit_em_particle_state_distribution import (
+        AuditError as ParticleStateAuditError,
+        _angular_error_deg,
+        _identity_array,
+    )
 else:
-    from audit_em_particle_state_distribution import _angular_error_deg
+    from audit_em_particle_state_distribution import (
+        AuditError as ParticleStateAuditError,
+        _angular_error_deg,
+        _identity_array,
+    )
 
 SCHEMA = "recovar.vdam_particle_state_trajectory_audit.v1"
 DEFAULT_ITERATIONS = (1, 2, 3, 4, 8)
@@ -82,14 +90,13 @@ def compare_particle_tables(
 ) -> dict[str, Any]:
     """Compare two particle tables after exact ``rlnImageName`` alignment."""
 
-    recovar_identity_column = _column(recovar_table, IDENTITY_NAMES, label="RECOVAR table")
-    relion_identity_column = _column(relion_table, IDENTITY_NAMES, label="RELION table")
-    recovar_identities = recovar_table[recovar_identity_column].astype(str).to_numpy()
-    relion_identities = relion_table[relion_identity_column].astype(str).to_numpy()
-    if len(set(recovar_identities.tolist())) != recovar_identities.size:
-        raise AuditError("RECOVAR table contains duplicate image identities")
-    if len(set(relion_identities.tolist())) != relion_identities.size:
-        raise AuditError("RELION table contains duplicate image identities")
+    _column(recovar_table, IDENTITY_NAMES, label="RECOVAR table")
+    _column(relion_table, IDENTITY_NAMES, label="RELION table")
+    try:
+        recovar_identities = _identity_array(recovar_table, source="RECOVAR table")
+        relion_identities = _identity_array(relion_table, source="RELION table")
+    except ParticleStateAuditError as exc:
+        raise AuditError(str(exc)) from exc
     relion_by_identity = {identity: idx for idx, identity in enumerate(relion_identities.tolist())}
     missing = [identity for identity in recovar_identities.tolist() if identity not in relion_by_identity]
     extras = sorted(set(relion_identities.tolist()).difference(recovar_identities.tolist()))

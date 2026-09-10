@@ -37,6 +37,11 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+Particle-state reporting now rejects null/blank image IDs before alignment and
+shares its identity validator. Eight malformed cases failed before the fix;
+69 affected CPU tests pass and30 valid reports are unchanged. No engine or gate
+changes. [Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/particle_identity_admission_20260910/result.json).
+
 Final sampling-file admission/selection now belongs to the replay owner,
 including searched-path provenance for the missing-file diagnostic. All111 final
 CPU guard/controller cases pass;162 old/new file-state comparisons are exact.
@@ -93,6 +98,13 @@ in six instrumented candidate histories. This local near-tie evidence does not
 establish the incoming-state cause, native matched-input parity or a trajectory
 waiver; six-digit scalar equality in the producer report is corrected.
 
+[Saved-state repeat audit](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/same_state_admission_20260910/result.json)
+independently checks nine candidate metadata comparisons from reported5ca9/job13665172.
+All200 support counts match in each comparison; t12 row2765 differs in Pmax by
+1.3709068e-6, and saved noise/power/BPref summaries differ. This is not exact
+full-state agreement or proof of an M-step-only cause; native inputs/maps and
+complete build provenance are outside this audit.
+
 Rejected explanations: canonical pixel narrowing was a demonstrated metadata bug
 ([scalar causal gate](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10076_pixel_prefix4_20260909/RESULTS.md)),
 not a reason to promote arithmetic to double. Case22 candidate repeats are **not
@@ -105,6 +117,10 @@ not an ordinary auto-refine/K4 waiver; four native adaptive fields are uncapture
 The dense/local fast guard now rejects undefined names before JAX startup.
 A broader static scan found existing `picked_frequencies` use-before-assignment
 in `recovar/em/heterogeneity.py:971`; outside this guard's scope, unfixed.
+A [caller audit](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/legacy_pca_callers_20260910/result.json)
+finds no repository caller of that78-line legacy function and no package export.
+The main PCA pipeline uses a distinct implementation. An unapplied removal
+candidate is preserved; external/dynamic uses remain unverified.
 [Guard check and exact finding](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/undefined_name_guard_20260910/result.json).
 
 Historical failures stay open: API13641893 has6 failures (older13634313:12),

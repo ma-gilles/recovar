@@ -64,3 +64,13 @@ def test_particle_state_audit_rejects_identity_set_drift():
             pose_tolerance_deg=1e-3,
             translation_tolerance_angst=1e-4,
         )
+
+
+@pytest.mark.parametrize("identity", [None, float("nan"), pd.NA, "", "  "])
+def test_particle_state_audit_rejects_matching_missing_identities(identity):
+    table = _table([(identity, 0, 0, 0, 0, 0, 0.5)])
+    with pytest.raises(AuditError, match="identities"):
+        compare_particle_tables(
+            table, table.copy(), iteration=1,
+            pose_tolerance_deg=1e-3, translation_tolerance_angst=1e-4,
+        )
