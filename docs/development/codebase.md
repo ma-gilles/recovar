@@ -46,6 +46,8 @@ four current/previous rotation/translation call sites. Empty half-sets, missing
 poses, malformed-shape warnings and concatenation ownership are preserved.
 The completed state also owns `fraction_changed`; the controller reuses it for
 history instead of repeating the assignment reduction after replay overrides.
+The assignment metric takes only the two index stacks and translation count;
+it compares decoded rotation indices, with no angular-distance threshold.
 
 The [refinement controller](../../recovar/em/dense_single_volume/iteration_loop.py)
 owns iteration history, half-set dispatch, sampling updates, convergence and

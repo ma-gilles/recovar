@@ -3,8 +3,8 @@
 Implements RELION-style convergence criteria for the dense single-volume
 EM refinement loop:
 
-- **Assignment tracking**: fraction of images whose hard assignment changed
-  by more than one HEALPix step between iterations.
+- **Assignment tracking**: fraction of images whose decoded rotation index
+  changed between iterations, excluding translation-only changes.
 - **Average Pmax**: mean of per-image maximum posterior probability.
 - **Resolution stall**: count of iterations without resolution improvement.
 - **Auto-termination**: when angular sampling is at finest level, resolution
@@ -509,34 +509,14 @@ def _direction_prior_healpix_order_for_scoring(
 def compute_assignment_changes(
     current_assignments: np.ndarray,
     previous_assignments: np.ndarray,
-    n_rotations: int,
     n_translations: int,
-    healpix_order: int,
 ) -> float:
-    """Compute fraction of images whose rotation assignment changed significantly.
+    """Fraction of particles whose decoded rotation index changed.
 
-    "Significantly" means the new best rotation is more than one HEALPix step
-    away from the previous best.  We compare rotation indices (not the full
-    assignment that includes translation).
-
-    Parameters
-    ----------
-    current_assignments : np.ndarray, shape (n_images,)
-        Current hard assignments (rot_idx * n_trans + trans_idx).
-    previous_assignments : np.ndarray, shape (n_images,)
-        Previous hard assignments.
-    n_rotations : int
-        Number of rotations in the grid.
-    n_translations : int
-        Number of translations in the grid.
-    healpix_order : int
-        Current HEALPix order (used only for logging context).
-
-    Returns
-    -------
-    float
-        Fraction of images that changed rotation assignment.
-        Value in [0, 1].
+    Assignments encode ``rotation_index * n_translations + translation_index``.
+    Translation-only changes do not count. This is an index comparison, not
+    an angular-distance test; exact orientation changes are computed separately.
+    Missing or differently shaped stacks return 1.0; empty stacks return 0.0.
     """
     if current_assignments is None or previous_assignments is None:
         return 1.0
@@ -1262,7 +1242,6 @@ def update_refinement_state(
     state: RefinementState,
     current_assignments: np.ndarray,
     previous_assignments: Optional[np.ndarray],
-    n_rotations: int,
     n_translations: int,
     translations: np.ndarray,
     new_resolution: float,
@@ -1294,8 +1273,6 @@ def update_refinement_state(
         Hard assignments from this iteration.
     previous_assignments : np.ndarray or None
         Hard assignments from the previous iteration (None for iter 0).
-    n_rotations : int
-        Number of rotations in the current grid.
     n_translations : int
         Number of translations in the current grid.
     translations : np.ndarray, shape (n_trans, 2)
@@ -1349,9 +1326,7 @@ def update_refinement_state(
     frac_changed = compute_assignment_changes(
         current_assignments,
         previous_assignments,
-        n_rotations,
         n_translations,
-        state.healpix_order,
     )
 
     trans_changes = compute_translation_changes(

@@ -150,7 +150,6 @@ class PPCAKClassScheduleBridge:
             self.state,
             current_assignments=best,
             previous_assignments=self.previous_assignments,
-            n_rotations=self.n_rotations,
             n_translations=self.n_translations,
             translations=self.translations,
             new_resolution=new_resolution,

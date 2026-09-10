@@ -3829,7 +3829,6 @@ def _run_relion_iteration_loop(
         # --- Update convergence state ---
         # This checks assignment changes, resolution stalls, and may trigger
         # angular step refinement or convergence.
-        n_rot_current = rotation_grid_size(local_search_order) if use_local else effective_rotations.shape[0]
         n_trans_current = current_translations.shape[0]
 
         # ``update_refinement_state`` expects ``new_resolution`` in
@@ -3910,7 +3909,6 @@ def _run_relion_iteration_loop(
             state,
             current_assignments=current_combined_ha,
             previous_assignments=previous_combined_ha,
-            n_rotations=n_rot_current,
             n_translations=n_trans_current,
             translations=np.asarray(current_translations),
             new_resolution=new_res_angstrom,

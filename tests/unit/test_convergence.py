@@ -188,51 +188,49 @@ class TestAngularStepFunctions:
 
 class TestAssignmentChanges:
     def test_identical_assignments_zero_change(self):
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.arange(50) * n_trans + 2  # 50 images
-        frac = compute_assignment_changes(assignments, assignments, n_rot, n_trans, 3)
+        frac = compute_assignment_changes(assignments, assignments, n_trans)
         assert frac == 0.0
 
     def test_all_different_assignments(self):
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         current = np.arange(50) * n_trans
         previous = (np.arange(50) + 1) * n_trans
-        frac = compute_assignment_changes(current, previous, n_rot, n_trans, 3)
+        frac = compute_assignment_changes(current, previous, n_trans)
         assert frac == 1.0
 
     def test_half_changed(self):
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         n_images = 100
         current = np.arange(n_images) * n_trans
         previous = current.copy()
         # Change first 50
         previous[:50] = (np.arange(50) + 50) * n_trans
-        frac = compute_assignment_changes(current, previous, n_rot, n_trans, 3)
+        frac = compute_assignment_changes(current, previous, n_trans)
         assert abs(frac - 0.5) < 1e-10
 
     def test_translation_only_change_not_counted(self):
         """If only translation changed but rotation is same, fraction = 0."""
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         current = np.array([0, 5, 10, 15])  # rot indices 0, 1, 2, 3
         previous = np.array([1, 6, 11, 16])  # same rot indices, different trans
-        frac = compute_assignment_changes(current, previous, n_rot, n_trans, 3)
+        frac = compute_assignment_changes(current, previous, n_trans)
         assert frac == 0.0
 
     def test_none_assignments_return_one(self):
-        frac = compute_assignment_changes(None, np.array([1, 2, 3]), 10, 5, 3)
+        frac = compute_assignment_changes(None, np.array([1, 2, 3]), 5)
         assert frac == 1.0
 
     def test_mismatched_shapes_return_one(self):
-        frac = compute_assignment_changes(np.array([1, 2]), np.array([1, 2, 3]), 10, 5, 3)
+        frac = compute_assignment_changes(np.array([1, 2]), np.array([1, 2, 3]), 5)
         assert frac == 1.0
 
     def test_empty_assignments_return_zero(self):
         frac = compute_assignment_changes(
             np.array([], dtype=np.int32),
             np.array([], dtype=np.int32),
-            10,
             5,
-            3,
         )
         assert frac == 0.0
 
@@ -628,7 +626,7 @@ class TestUpdateRefinementState:
 
     def test_iteration_increments(self):
         state = self._make_base_state()
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.zeros(50, dtype=np.int32)
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -636,7 +634,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             None,
-            n_rot,
             n_trans,
             translations,
             new_resolution=4.5,
@@ -651,7 +648,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             None,
-            10,
             1,
             np.zeros((1, 2), dtype=np.float32),
             new_resolution=4.5,
@@ -666,7 +662,7 @@ class TestUpdateRefinementState:
             current_resolution=5.0,
             nr_iter_wo_resol_gain=3,
         )
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.zeros(50, dtype=np.int32)
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -674,7 +670,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             None,
-            n_rot,
             n_trans,
             translations,
             new_resolution=4.0,  # better than 5.0
@@ -686,7 +681,7 @@ class TestUpdateRefinementState:
             current_resolution=5.0,
             nr_iter_wo_resol_gain=0,
         )
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.zeros(50, dtype=np.int32)
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -694,7 +689,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             None,
-            n_rot,
             n_trans,
             translations,
             new_resolution=5.5,  # worse than 5.0
@@ -713,7 +707,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             None,
-            100,
             5,
             translations,
             new_resolution=4.999,
@@ -727,7 +720,7 @@ class TestUpdateRefinementState:
         # Use improving resolution so angular refinement is NOT triggered
         # (refinement requires both stalls to be >= 1)
         state = self._make_base_state(current_resolution=5.0)
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         # All assignments identical -> fraction_changed = 0
         assignments = np.arange(50) * n_trans
         translations = np.zeros((n_trans, 2), dtype=np.float32)
@@ -736,7 +729,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            n_rot,
             n_trans,
             translations,
             new_resolution=4.0,  # improving -> no resol stall -> no refinement
@@ -747,7 +739,7 @@ class TestUpdateRefinementState:
 
     def test_unstable_assignments_reset_counter(self):
         state = self._make_base_state(nr_iter_wo_assignment_changes=5)
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         current = np.arange(50) * n_trans
         previous = (np.arange(50) + 50) * n_trans  # all different
         translations = np.zeros((n_trans, 2), dtype=np.float32)
@@ -756,7 +748,6 @@ class TestUpdateRefinementState:
             state,
             current,
             previous,
-            n_rot,
             n_trans,
             translations,
             new_resolution=5.0,
@@ -771,7 +762,7 @@ class TestUpdateRefinementState:
             nr_iter_wo_resol_gain=0,  # will become 1 after this iter
             nr_iter_wo_assignment_changes=0,  # will become 1
         )
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.arange(50) * n_trans
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -779,7 +770,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            n_rot,
             n_trans,
             translations,
             new_resolution=5.5,  # stall
@@ -798,7 +788,7 @@ class TestUpdateRefinementState:
             nr_iter_wo_resol_gain=0,
             nr_iter_wo_assignment_changes=0,
         )
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.arange(50) * n_trans
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -806,7 +796,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            n_rot,
             n_trans,
             translations,
             new_resolution=5.5,
@@ -822,7 +811,7 @@ class TestUpdateRefinementState:
             nr_iter_wo_assignment_changes=0,
             acc_rot=1.0,
         )
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.arange(50) * n_trans
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -830,7 +819,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            n_rot,
             n_trans,
             translations,
             new_resolution=5.5,
@@ -852,7 +840,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            100,
             5,
             translations,
             new_resolution=5.5,
@@ -889,7 +876,7 @@ class TestUpdateRefinementState:
 
     def test_pmax_tracking(self):
         state = self._make_base_state()
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.zeros(50, dtype=np.int32)
         translations = np.zeros((n_trans, 2), dtype=np.float32)
         pmax = np.ones(50) * 0.42
@@ -898,7 +885,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             None,
-            n_rot,
             n_trans,
             translations,
             new_resolution=4.0,
@@ -908,7 +894,7 @@ class TestUpdateRefinementState:
 
     def test_k_class_change_tracking_counts_hard_class_changes(self):
         state = self._make_base_state()
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.zeros(5, dtype=np.int32)
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -916,7 +902,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            n_rot,
             n_trans,
             translations,
             new_resolution=4.0,
@@ -928,7 +913,7 @@ class TestUpdateRefinementState:
 
     def test_single_class_change_tracking_remains_zero_when_classes_omitted(self):
         state = self._make_base_state()
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.zeros(5, dtype=np.int32)
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -936,7 +921,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            n_rot,
             n_trans,
             translations,
             new_resolution=4.0,
@@ -954,7 +938,7 @@ class TestUpdateRefinementState:
             smallest_changes_optimal_offsets_angstrom=999.0,
             nr_iter_wo_large_hidden_variable_changes=0,
         )
-        n_rot, n_trans = 100, 1
+        n_trans = 1
         assignments = np.zeros(5, dtype=np.int32)
         translations = np.zeros((n_trans, 2), dtype=np.float32)
         rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 5, axis=0)
@@ -970,7 +954,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            n_rot,
             n_trans,
             translations,
             new_resolution=9.0,
@@ -1049,7 +1032,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            n_rotations=1,
             n_translations=1,
             translations=zeros[:1],
             new_resolution=22.6667,
@@ -1255,7 +1237,7 @@ class TestMultiIterationWorkflow:
         Iter 2: at max order but without RELION fine-enough acc_rot -> no convergence
         Iter 3: at max order with fine-enough acc_rot, stalls -> converge
         """
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         n_images = 50
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -1272,7 +1254,6 @@ class TestMultiIterationWorkflow:
             state,
             ha0,
             None,
-            n_rot,
             n_trans,
             translations,
             new_resolution=8.0,
@@ -1286,7 +1267,6 @@ class TestMultiIterationWorkflow:
             state,
             ha0,
             ha0,
-            n_rot,
             n_trans,
             translations,
             new_resolution=9.0,  # worse
@@ -1313,7 +1293,6 @@ class TestMultiIterationWorkflow:
             state2,
             ha0,
             ha0,
-            n_rot,
             n_trans,
             translations,
             new_resolution=9.5,
@@ -1335,7 +1314,6 @@ class TestMultiIterationWorkflow:
             state3,
             ha0,
             ha0,
-            n_rot,
             n_trans,
             translations,
             new_resolution=10.0,
@@ -1582,7 +1560,7 @@ def test_computed_assignment_fraction_survives_sampling_transition(update_sampli
     updated = update_refinement_state(
         state, current_assignments=np.array([0, 1, 4, 6]),
         previous_assignments=np.array([0, 0, 2, 6]),
-        n_rotations=10, n_translations=2, translations=np.zeros((2, 2)),
+        n_translations=2, translations=np.zeros((2, 2)),
         new_resolution=8.0, update_sampling=update_sampling,
         current_rotation_matrices=np.tile(np.eye(3), (4, 1, 1)),
         previous_rotation_matrices=np.tile(np.eye(3), (4, 1, 1)),
