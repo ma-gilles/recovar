@@ -111,6 +111,7 @@ from recovar.em.dense_single_volume.mean_helpers import (
     _combined_class_direction_prior_from_halves,
     _initialize_class_log_priors,
     _mean_noise_variance,
+    _noise_radial_history,
     _mean_variance_for_scoring_half,
     _merged_mean_from_halves,
     _normalize_initial_means,
@@ -131,7 +132,6 @@ from recovar.em.dense_single_volume.projector_preparation import (
 )
 from recovar.em.dense_single_volume.refinement_options import RefinementOptions, with_validated_sampling_schedule
 from recovar.em.dense_single_volume.relion_metadata import (
-    _radial_profile_from_noise_variance,
     _relion_metadata_translations,
     _relion_rotation_grid_float32,
 )
@@ -713,12 +713,8 @@ def _run_relion_iteration_loop(
 
     # Extract per-shell radial profiles from the input pixel-array noise
     # variances for diagnostic logging ("noise update per shell: old=... new=...").
-    previous_noise_radial_per_half = [
-        _radial_profile_from_noise_variance(noise_k, cryo.image_shape) for noise_k in noise_variance_per_half
-    ]
-    previous_noise_radial = jnp.asarray(
-        np.mean(np.stack(previous_noise_radial_per_half, axis=0), axis=0),
-        dtype=_dense_global_scoring_dtype(),
+    previous_noise_radial_per_half, previous_noise_radial = _noise_radial_history(
+        noise_variance_per_half, cryo.image_shape, dtype=_dense_global_scoring_dtype(),
     )
     _mark_setup_phase("noise_radial_init")
 
@@ -4159,13 +4155,8 @@ def _run_relion_iteration_loop(
                     n_halves=2,
                 )
                 noise_variance = _mean_noise_variance(noise_variance_per_half)
-                previous_noise_radial_per_half = [
-                    _radial_profile_from_noise_variance(noise_k, cryo.image_shape)
-                    for noise_k in noise_variance_per_half
-                ]
-                previous_noise_radial = jnp.asarray(
-                    np.mean(np.stack(previous_noise_radial_per_half, axis=0), axis=0),
-                    dtype=_dense_global_scoring_dtype(),
+                previous_noise_radial_per_half, previous_noise_radial = _noise_radial_history(
+                    noise_variance_per_half, cryo.image_shape, dtype=_dense_global_scoring_dtype(),
                 )
                 _final_replay_fields.append("noise_variance")
             _final_replay_dir_prior = final_replay_override.get("direction_prior")

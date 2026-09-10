@@ -29,12 +29,10 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
 )
 from recovar.em.dense_single_volume.mean_helpers import (
     _mean_noise_variance,
+    _noise_radial_history,
     _normalize_noise_variance_per_half,
 )
 from recovar.em.dense_single_volume.refinement_options import RefinementOptions
-from recovar.em.dense_single_volume.relion_metadata import (
-    _radial_profile_from_noise_variance,
-)
 
 from recovar.em.sampling import (
     _translation_grid_for_class_count,
@@ -1527,12 +1525,8 @@ def apply_iter_replay_overrides(
         if _replay_noise is not None:
             noise_variance_per_half = _normalize_noise_variance_per_half(_replay_noise, n_halves=2)
             noise_variance = _mean_noise_variance(noise_variance_per_half)
-            previous_noise_radial_per_half = [
-                _radial_profile_from_noise_variance(noise_k, cryo.image_shape) for noise_k in noise_variance_per_half
-            ]
-            previous_noise_radial = jnp.asarray(
-                np.mean(np.stack(previous_noise_radial_per_half, axis=0), axis=0),
-                dtype=runtime_dtype,
+            previous_noise_radial_per_half, previous_noise_radial = _noise_radial_history(
+                noise_variance_per_half, cryo.image_shape, dtype=runtime_dtype,
             )
             logger.info("Replay override: sigma2_noise <- per-half model.star arrays")
         _replay_dir_prior = iter_replay_override.get("direction_prior")

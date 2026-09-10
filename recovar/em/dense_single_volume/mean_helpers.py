@@ -127,6 +127,19 @@ def _mean_noise_variance(noise_variance_per_half):
     )
 
 
+def _noise_radial_history(noise_variance_per_half, image_shape, *, dtype):
+    """Build fresh per-half shell profiles and their mean in the requested dtype.
+
+    Pixel-array normalization and noise estimation remain with the caller.
+    Preserve the float64 host shell reduction before the final JAX cast.
+    """
+    from recovar.em.dense_single_volume.relion_metadata import _radial_profile_from_noise_variance
+
+    per_half = [_radial_profile_from_noise_variance(noise_k, image_shape) for noise_k in noise_variance_per_half]
+    mean = jnp.asarray(np.mean(np.stack(per_half, axis=0), axis=0), dtype=dtype)
+    return per_half, mean
+
+
 def _normalize_class_log_priors(n_classes: int, class_log_priors=None) -> np.ndarray:
     """Return normalized log priors for the class axis."""
 
