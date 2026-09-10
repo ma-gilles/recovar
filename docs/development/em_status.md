@@ -432,3 +432,13 @@ labels;26 CPU cases pass and80 original STAR results are unchanged.
 [Per-comparison values, evidence limits and reproduction](benchmarks.md#k4-audit-integrity-and-reviewed-saved-comparisons--september-10).
 Next: review robustness/case22 and remaining source/build admission, retaining
 current100k/exactK4 and strict-state gates. No new jobs are implied.
+
+The [robustness FSC review](benchmarks.md#robustness-gt-curve-review--september-10)
+reintegrates64 saved GT curves and rejects correlation-based closure. Original
+case13/it100, case22/it200 and case32/it200 deltas fall below−0.002. Case22
+fails8/12 repeat pairings under the same screening threshold. Its two candidate
+final arrays differ at97,376 voxels, contradicting the bit-identical-repeat
+claim. These are independently aligned saved-curve measurements, not complete
+registered-GT/source admission. Actual score/support records are required before
+attributing differences or proposing deterministic accumulation; keep that
+numerical work outside structural cleanup.

@@ -181,3 +181,46 @@ ratios also remain an open performance concern, not a qualified comparison here.
 [All comparisons and pinned saved artifacts](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/kclass_audit_identity_guard_20260910/saved_review.json);
 [reproducible CPU review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/kclass_audit_identity_guard_20260910/review_saved.py);
 [red/green test commands, source hashes and limits](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/kclass_audit_identity_guard_20260910/result.json).
+
+## Robustness GT-curve review — September 10
+
+The10-case synthetic K1 InitialModel matrix reports frozen5ca9, 128²,
+natural200, seed29. Its original GT reports contain independently aligned
+FSC curves at100 and200, not one prespecified shared rigid transform across
+all201 checkpoints. The integrator recomputed all40 original GT integrals and
+24 repeat integrals from these saved curves. Original40 values match exactly;
+registration, raw GT curves and full source/build closure were not requalified.
+Treat these as screening measurements, not full registered-GT admission.
+
+| Original-control cell | Candidate minus native GT FSC-AUC |
+| --- | ---: |
+| Case13, iteration100 |−0.0022288483325973926|
+| Case22, iteration200 |−0.01213269735834411|
+| Case32, iteration200 |−0.008132623310265132|
+
+These three cells fall below the existing−0.002 screening threshold. Do not
+replace that threshold with the peer summary's±0.003 “equal quality” interval,
+or use correlation to declare other cases closed. Other sampled cells are
+above−0.002; unsampled GT checkpoints remain unmeasured. All10 reported
+cross-engine AUC series include values below0.999; repeat variability alone
+is not a waiver of their original controls.
+
+For case22 final maps, the six saved native GT AUCs span
+0.06039478833224346–0.07195972826887516. The two candidate AUCs are
+0.05973366118166213 and0.05973931223337803. Eight of12 cross-engine pairings
+fall below−0.002, four do not. Correlation values0.280 versus0.286–0.304
+must not be substituted for these FSC-based comparisons.
+
+The claim of bit-identical candidate repeats is contradicted by the two final
+MRC arrays:97,376 of128³ voxels differ, maximum absolute difference
+0.027517318725585938. This is a byte/value comparison, not a map-quality gate
+or an attribution to numerical noise. The reported case22 fixed-state35→36
+replay also retains coarse support10 versus7, so “all discrete outputs exact”
+is not established. Neither these summaries nor double contraction justifies
+a deterministic-accumulation rewrite during structural cleanup.
+
+[All full-precision values and input hashes](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/robustness_fsc_review_20260910/result.json);
+[reproducible CPU audit](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/robustness_fsc_review_20260910/review.py);
+[execution/source receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/robustness_fsc_review_20260910/verification/receipt.json).
+Next scientific review requires the actual first-divergence score/support
+records and registration/source admission; no kernel change or rerun is implied.
