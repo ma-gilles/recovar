@@ -51,6 +51,17 @@ No automatic model polling/wakeup promise.
 
 ## Engineering work and recent evidence
 
+Reconstruction captures now have an explicit `helpers.reconstruction_diagnostics`
+owner: K-class current-size decisions, K-class M-step operands, tau2 reporting
+and final BPref accumulators. The controller retains the environment gates and
+scheduling; all 64 old/new comparisons preserve 1,216 saved fields exactly,
+including order, shape, dtype, bytes, filenames and log messages. Inlining the
+writers reproduces the original controller AST. The controller is 115 lines
+shorter; explicit interfaces add 193 net production lines, so this is ownership
+cleanup rather than code deletion. All 13 focused and 51 combined CPU cases pass.
+No trajectory, K4 or speed acceptance is implied.
+[Commands and pinned evidence](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/reconstruction_capture_owner_20260910/result.json).
+
 Replay direction-prior remapping now has one owner in `orientation_priors` for
 both global vectors and class rows, replacing three duplicated controller/replay
 branches. Existing file-default and explicit runtime dtypes remain distinct;

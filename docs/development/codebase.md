@@ -221,6 +221,11 @@ completion/stop control. Selector errors and log messages are unchanged; their
 logger namespace follows `debug_dumps`. Capture state and counters belong to the
 separate diagnostic owner below.
 
+[`helpers.reconstruction_diagnostics`](../../recovar/em/dense_single_volume/helpers/reconstruction_diagnostics.py)
+serializes the K-class current-size/M-step, tau2-update and final BPref NPZ
+captures. The refinement controller retains the environment gates and call
+boundaries; writers preserve historical fields, casts and optional entries.
+
 [`helpers.coarse_score_diagnostics`](../../recovar/em/dense_single_volume/helpers/coarse_score_diagnostics.py)
 owns host NumPy summaries of direct/GEMM score deltas, ULPs, winner margins,
 support changes, repeated runs and scale panels, plus the qualification decision.
