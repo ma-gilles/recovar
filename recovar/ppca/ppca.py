@@ -26,28 +26,6 @@ def _materialize_halfsets(dataset):
     raise TypeError(f"Expected a CryoEMDataset with halfset support, got {type(dataset).__name__}")
 
 
-def _iter_processed_batches(experiment_dataset, batch_size):
-    for (
-        batch,
-        rotation_matrices,
-        translations,
-        ctf_params,
-        _noise_variance,
-        _particle_indices,
-        image_indices,
-    ) in experiment_dataset.iter_batches(
-        batch_size,
-        by_image=not getattr(experiment_dataset, "tilt_series_flag", False),
-    ):
-        yield (
-            experiment_dataset.process_images(batch, apply_image_mask=False),
-            ctf_params,
-            rotation_matrices,
-            translations,
-            image_indices,
-        )
-
-
 def _prepare_mean_estimate_for_slicing(mean_estimate, mean_estimate_raw, volume_shape, disc_type_mean):
     """Return the mean representation expected by ``slice_volume``.
 
@@ -519,36 +497,10 @@ def _mstep_apply_fourier_op(V_real, lhs_tri, reg_diag, q, vs, unpack_fn, G):
     return G[None] * result
 
 
-def _mstep_cg(matvec, b, x0, maxiter, tol, precond):
-    """Preconditioned CG, real-flat vectors. Returns ``x`` at convergence/maxiter."""
-    x = x0
-    r = b - matvec(x)
-    z = precond(r) if precond is not None else r
-    p = z
-    rz = float(jnp.sum(r * z))
-    b2 = max(float(jnp.sum(b * b)), 1e-30)
-    for _ in range(maxiter):
-        Ap = matvec(p)
-        pAp = float(jnp.sum(p * Ap))
-        if pAp < 1e-30:
-            break
-        alpha = rz / pAp
-        x = x + alpha * p
-        r = r - alpha * Ap
-        rr = float(jnp.sum(r * r))
-        if jnp.sqrt(rr / b2) < tol:
-            break
-        z = precond(r) if precond is not None else r
-        rz_new = float(jnp.sum(r * z))
-        p = z + (rz_new / max(abs(rz), 1e-30)) * p
-        rz = rz_new
-    return x
-
-
 def _mstep_cg_projected(matvec, b, x0, maxiter, tol, precond, project):
     """Projected preconditioned CG for multi-mask M-step.
 
-    Like ``_mstep_cg`` but applies ``project`` after each update to enforce
+    Applies ``project`` after each update to enforce
     per-PC support constraints. When ``project`` is identity this reduces to
     standard PCG.
     """
@@ -706,7 +658,7 @@ def _pcg_hard_mstep(
 
 
 def _iter_processed_batches_half(experiment_dataset, batch_size):
-    """Like _iter_processed_batches but yields half-spectrum images and noise."""
+    """Yield processed half-spectrum images, CTF parameters, poses and image indices."""
     for (
         batch,
         rotation_matrices,
