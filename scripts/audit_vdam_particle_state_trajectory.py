@@ -90,6 +90,13 @@ def compare_particle_tables(
 ) -> dict[str, Any]:
     """Compare two particle tables after exact ``rlnImageName`` alignment."""
 
+    for name, tolerance in (
+        ("pose_tolerance_deg", pose_tolerance_deg),
+        ("translation_tolerance_angst", translation_tolerance_angst),
+    ):
+        if not np.isfinite(float(tolerance)) or float(tolerance) < 0:
+            raise AuditError(f"{name} must be finite and nonnegative")
+
     _column(recovar_table, IDENTITY_NAMES, label="RECOVAR table")
     _column(relion_table, IDENTITY_NAMES, label="RELION table")
     try:

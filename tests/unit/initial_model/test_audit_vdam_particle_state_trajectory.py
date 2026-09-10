@@ -74,3 +74,25 @@ def test_particle_state_audit_rejects_matching_missing_identities(identity):
             table, table.copy(), iteration=1,
             pose_tolerance_deg=1e-3, translation_tolerance_angst=1e-4,
         )
+
+
+@pytest.mark.parametrize("name", ["pose_tolerance_deg", "translation_tolerance_angst"])
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), -0.1])
+def test_particle_state_audit_rejects_invalid_tolerances(name, value):
+    recovar = _table([("1@stack.mrcs", 0, 0, 0, 0, 0, 0.5)])
+    relion = recovar.copy()
+    column = "_rlnAngleTilt" if name == "pose_tolerance_deg" else "_rlnOriginYAngst"
+    relion.loc[0, column] = 5.0
+    kwargs = dict(pose_tolerance_deg=1e-3, translation_tolerance_angst=1e-4)
+    kwargs[name] = value
+    with pytest.raises(AuditError, match=name):
+        compare_particle_tables(recovar, relion, iteration=1, **kwargs)
+
+
+def test_particle_state_audit_accepts_zero_tolerances():
+    table = _table([("1@stack.mrcs", 0, 0, 0, 0, 0, 0.5)])
+    report = compare_particle_tables(
+        table, table.copy(), iteration=1,
+        pose_tolerance_deg=0.0, translation_tolerance_angst=0.0,
+    )
+    assert report["divergent_particle_count"] == 0

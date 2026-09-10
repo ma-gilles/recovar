@@ -38,9 +38,12 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 ## Engineering work and recent evidence
 
 Particle-state reporting now rejects null/blank image IDs before alignment and
-shares its identity validator. Eight malformed cases failed before the fix;
-69 affected CPU tests pass and30 valid reports are unchanged. No engine or gate
-changes. [Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/particle_identity_admission_20260910/result.json).
+shares its identity validator. Non-finite or negative comparison tolerances also
+fail explicitly; zero and established finite defaults are preserved. Sixteen
+malformed cases exposed missing validation;80 reporting CPU tests pass and30
+valid reports are unchanged. No engine or gate changes.
+[Identity receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/particle_identity_admission_20260910/result.json),
+[threshold receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/particle_tolerance_admission_20260910/result.json).
 
 Final sampling-file admission/selection now belongs to the replay owner,
 including searched-path provenance for the missing-file diagnostic. All111 final
