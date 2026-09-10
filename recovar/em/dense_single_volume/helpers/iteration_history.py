@@ -97,16 +97,33 @@ class RefinementHistory:
     def record_data_vs_prior(self, data_vs_prior) -> None:
         self.data_vs_prior_trajectory.append(data_vs_prior)
 
-    def record_direction_prior(self, snapshot_per_half) -> None:
-        self.direction_prior_trajectory_per_half.append(snapshot_per_half)
+    def record_direction_prior(
+        self, class_direction_prior_per_half, global_direction_prior_per_half, *, k_class_enabled: bool
+    ) -> None:
+        """Record float64 copies of each half's learned direction prior.
 
-    def record_rotation_posterior(self, snapshot_per_half) -> None:
-        """Record the pre-collapse orientation posterior for one iteration.
+        K-class runs record class 0 of each half's ``(n_classes, n_pixels)``
+        prior; K=1 records the half's global prior. Missing priors stay ``None``.
+        """
+        source = class_direction_prior_per_half if k_class_enabled else global_direction_prior_per_half
+        self.direction_prior_trajectory_per_half.append(
+            [
+                None
+                if prior_k is None
+                else np.asarray(prior_k[0] if k_class_enabled else prior_k, dtype=np.float64).copy()
+                for prior_k in source
+            ]
+        )
+
+    def record_rotation_posterior(self, rotation_posterior_per_half) -> None:
+        """Record float64 copies of the pre-collapse orientation posterior.
 
         Kept separate from ``record_direction_prior`` so a direction-prior
         mismatch can be localized to posterior aggregation versus collapse.
         """
-        self.rotation_posterior_trajectory_per_half.append(snapshot_per_half)
+        self.rotation_posterior_trajectory_per_half.append(
+            [None if value is None else np.asarray(value, dtype=np.float64).copy() for value in rotation_posterior_per_half]
+        )
 
     def record_fsc(self, fsc, fsc_for_growth) -> None:
         self.fsc_history.append(fsc)

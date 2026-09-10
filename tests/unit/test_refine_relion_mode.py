@@ -24,6 +24,7 @@ import recovar.core.fourier_transform_utils as ftu
 import recovar.em.dense_single_volume.helpers.expected_accuracy as expected_accuracy_module
 from recovar.em.dense_single_volume import finalization_policy
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
+from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
 from recovar.em.dense_single_volume import half_scoring, local_search_iteration, scoring_policy
 from recovar.em.dense_single_volume import score_outputs
 import recovar.em.dense_single_volume.local_layout as local_layout_module
@@ -93,13 +94,13 @@ from recovar.em.dense_single_volume.helpers.significance import (
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.iteration_loop import (
-    _combined_class_direction_prior_from_halves,
     _estimate_relion_em_batch_sizes,
     _normalize_noise_variance_per_half,
     refine_single_volume,
 )
 from recovar.em.dense_single_volume.mean_helpers import (
     _align_fourier_volume_sign_to_reference,
+    _combined_class_direction_prior_from_halves,
     _combined_noise_stats,
 )
 from recovar.em.dense_single_volume.relion_replay import _replay_control_model_iteration
@@ -10800,10 +10801,17 @@ class TestRelionModeSmokeTest:
                 custom_eulers,
             ),
         )
+        # The learned-prior update lives in mean_helpers; the controller still
+        # expands the learned prior for scoring.
         monkeypatch.setattr(
-            iteration_loop_module,
+            mean_helpers_module,
             "collapse_rotation_posterior_to_direction_prior",
             fake_collapse_rotation_posterior_to_direction_prior,
+        )
+        monkeypatch.setattr(
+            mean_helpers_module,
+            "make_relion_direction_log_prior",
+            fake_make_relion_direction_log_prior,
         )
         monkeypatch.setattr(
             iteration_loop_module,
@@ -14508,7 +14516,7 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
     )
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
-        refine_mod,
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
         lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(
@@ -14738,7 +14746,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
     monkeypatch.setattr(refine_mod.utils, "R_to_relion", fake_r_to_relion)
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
-        refine_mod,
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
         lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(12 * (2 ** int(healpix_order)) ** 2, dtype=np.float64)
@@ -14917,7 +14925,7 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
     monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
-        refine_mod,
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
         lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(
@@ -15091,7 +15099,7 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
     monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
-        refine_mod,
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
         lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(12 * (2 ** int(healpix_order)) ** 2, dtype=np.float64)
@@ -15202,7 +15210,7 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
     monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_local_search)
     monkeypatch.setattr(
-        refine_mod,
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
         lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(max(1, fake_rotation_grid_size(healpix_order)), dtype=np.float64)
@@ -15300,7 +15308,7 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
     monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_local_search)
     monkeypatch.setattr(
-        refine_mod,
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
         lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(max(1, fake_rotation_grid_size(healpix_order)), dtype=np.float64)
@@ -15480,7 +15488,7 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
     monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
-        refine_mod,
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
         lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(max(1, fake_rotation_grid_size(healpix_order)), dtype=np.float64)
@@ -15663,7 +15671,7 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
     monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
-        refine_mod,
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
         lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(
@@ -15827,7 +15835,7 @@ def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
     monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
-        refine_mod,
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
         lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(
@@ -16448,7 +16456,7 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
     monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
-        refine_mod,
+        mean_helpers_module,
         "collapse_rotation_posterior_to_direction_prior",
         lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
             np.ones(

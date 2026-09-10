@@ -69,7 +69,6 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
 )
 from recovar.em.dense_single_volume.helpers.iteration_history import RefinementHistory
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
-    collapse_rotation_posterior_to_direction_prior,
     infer_direction_prior_healpix_order,
     make_relion_direction_log_prior,
     make_relion_translation_log_prior,
@@ -109,7 +108,6 @@ from recovar.em.dense_single_volume.mean_helpers import (
     _class_tau2_from_iref_power_spectrum,
     _class_tau2_update_details,
     _class_weights_from_posterior,
-    _combined_class_direction_prior_from_halves,
     _initialize_class_log_priors,
     _mean_noise_variance,
     _noise_radial_history,
@@ -126,6 +124,7 @@ from recovar.em.dense_single_volume.mean_helpers import (
     join_half_accumulators_at_low_resolution,
     prepare_initial_mean_variance,
     update_c1_sigma_offset_from_posterior,
+    update_learned_direction_priors,
     update_posterior_noise_variance,
 )
 from recovar.em.dense_single_volume.projector_preparation import (
@@ -3102,75 +3101,38 @@ def _run_relion_iteration_loop(
 
         history.record_significant_counts(iter_recorded_sig_counts)
 
-        history.record_rotation_posterior(
-            [
-                None if value is None else np.asarray(value, dtype=np.float64).copy()
-                for value in rotation_posterior_per_half
-            ]
-        )
+        history.record_rotation_posterior(rotation_posterior_per_half)
         if all(rot_sum is not None for rot_sum in rotation_posterior_per_half):
-            k1_direction_prior_order = current_healpix_order
-            if use_local:
-                k1_direction_prior_order = (
-                    int(state.healpix_order)
-                    if int(state.adaptive_oversampling) > 0
-                    else int(local_search_order)
-                )
-            k1_direction_prior_size = rotation_grid_size(k1_direction_prior_order)
-            if (
-                not k_class_enabled
-                and all(np.asarray(rot_sum).shape[0] == k1_direction_prior_size for rot_sum in rotation_posterior_per_half)
-            ):
-                for k in range(2):
-                    direction_prior_k = collapse_rotation_posterior_to_direction_prior(
-                        np.asarray(rotation_posterior_per_half[k], dtype=np.float64),
-                        k1_direction_prior_order,
-                        dtype=_dense_global_scoring_dtype(),
-                    )
-                    try:
-                        make_relion_direction_log_prior(direction_prior_k, k1_direction_prior_order)
-                    except ValueError as exc:
-                        logger.warning(
-                            "Skipping K=1 direction prior update for half-%d at healpix_order=%d: "
-                            "%s",
-                            k + 1,
-                            k1_direction_prior_order,
-                            exc,
-                        )
-                        continue
-                    global_direction_prior_per_half[k] = direction_prior_k
-                    global_direction_prior_order_per_half[k] = k1_direction_prior_order
-            elif (
-                not use_local
-                and k_class_enabled
-                and effective_rotations.shape[0] == rotation_grid_size(current_healpix_order)
-                and all(rot_sum is not None for rot_sum in class_rotation_posterior_per_half)
-            ):
-                combined_class_direction_prior = _combined_class_direction_prior_from_halves(
-                    class_rotation_posterior_per_half,
-                    n_classes,
-                    current_healpix_order,
-                    dtype=_dense_global_scoring_dtype(),
-                )
-                for k in range(2):
-                    class_direction_prior_per_half[k] = combined_class_direction_prior.copy()
-                    class_direction_prior_order_per_half[k] = current_healpix_order
-
-        if k_class_enabled:
-            direction_prior_snapshot = [
-                None
-                if class_direction_prior_per_half[k] is None
-                else np.asarray(class_direction_prior_per_half[k][0], dtype=np.float64).copy()
-                for k in range(2)
-            ]
-        else:
-            direction_prior_snapshot = [
-                None
-                if global_direction_prior_per_half[k] is None
-                else np.asarray(global_direction_prior_per_half[k], dtype=np.float64).copy()
-                for k in range(2)
-            ]
-        history.record_direction_prior(direction_prior_snapshot)
+            k1_direction_prior_order = _direction_prior_healpix_order_for_scoring(
+                use_local=use_local,
+                current_healpix_order=current_healpix_order,
+                state_healpix_order=state.healpix_order,
+                adaptive_oversampling=state.adaptive_oversampling,
+                local_search_order=local_search_order,
+            )
+            update_learned_direction_priors(
+                rotation_posterior_per_half=rotation_posterior_per_half,
+                class_rotation_posterior_per_half=class_rotation_posterior_per_half,
+                global_direction_prior_per_half=global_direction_prior_per_half,
+                global_direction_prior_order_per_half=global_direction_prior_order_per_half,
+                class_direction_prior_per_half=class_direction_prior_per_half,
+                class_direction_prior_order_per_half=class_direction_prior_order_per_half,
+                k_class_enabled=k_class_enabled,
+                n_classes=n_classes,
+                use_local=use_local,
+                k1_direction_prior_order=k1_direction_prior_order,
+                k1_direction_prior_size=rotation_grid_size(k1_direction_prior_order),
+                current_healpix_order=current_healpix_order,
+                exhaustive_grid_size=rotation_grid_size(current_healpix_order),
+                n_effective_rotations=effective_rotations.shape[0],
+                dtype=_dense_global_scoring_dtype(),
+                log=logger,
+            )
+        history.record_direction_prior(
+            class_direction_prior_per_half,
+            global_direction_prior_per_half,
+            k_class_enabled=k_class_enabled,
+        )
 
         # --- Compute unregularized half-maps only when diagnostics need them ---
         # K=1 FSC was already computed above directly from the BackProjector

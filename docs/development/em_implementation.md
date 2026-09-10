@@ -18,6 +18,21 @@ history instead of repeating the assignment reduction after replay overrides.
 The assignment metric takes only the two index stacks and translation count;
 it compares decoded rotation indices, with no angular-distance threshold.
 
+Learned direction priors belong to
+[`mean_helpers.update_learned_direction_priors`](../../recovar/em/dense_single_volume/mean_helpers.py).
+K=1 collapses each half's rotation posterior at the order used for scoring and
+skips a half whose prior cannot form a RELION log prior, with the warning routed
+through the controller logger; K-class combines both halves' per-class posteriors
+on the exhaustive grid for global scoring only and stores an independent copy per
+half. The controller decides when both posteriors are present, derives the K=1
+order from its sampling state and supplies the grid sizes, so the controller's
+sampling policy stays the only source of grid geometry. `RefinementHistory`
+owns the float64 snapshot copies of the rotation posteriors and of the learned
+priors (class 0 per half for K-class); the controller passes the live lists.
+Controller tests that stub the collapse step patch `mean_helpers`, while the
+controller still expands learned priors for scoring with its own
+`make_relion_direction_log_prior` binding.
+
 The [refinement controller](../../recovar/em/dense_single_volume/iteration_loop.py)
 owns iteration history, half-set dispatch, sampling updates, convergence and
 finalization scheduling/state mutation. Its exact local-search stage is implemented in

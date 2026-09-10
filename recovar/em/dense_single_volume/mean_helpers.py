@@ -18,6 +18,7 @@ from recovar.core import fourier_transform_utils, mask
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
     class_weights_from_direction_prior,
     collapse_rotation_posterior_to_direction_prior,
+    make_relion_direction_log_prior,
 )
 from recovar.em.dense_single_volume.helpers.resolution import shell_index_to_resolution_angstrom
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats
@@ -490,6 +491,76 @@ def _stack_class_tau2_update_details(details_per_class):
         key: None if key == "fsc_shells" else np.stack([details[key] for details in details_per_class], axis=0)
         for key in _CLASS_TAU2_DETAIL_KEYS
     }
+
+
+def update_learned_direction_priors(
+    *,
+    rotation_posterior_per_half,
+    class_rotation_posterior_per_half,
+    global_direction_prior_per_half,
+    global_direction_prior_order_per_half,
+    class_direction_prior_per_half,
+    class_direction_prior_order_per_half,
+    k_class_enabled: bool,
+    n_classes: int,
+    use_local: bool,
+    k1_direction_prior_order: int,
+    k1_direction_prior_size: int,
+    current_healpix_order: int,
+    exhaustive_grid_size: int,
+    n_effective_rotations: int,
+    dtype,
+    log,
+) -> None:
+    """Learn the next iteration's direction priors from this iteration's posteriors.
+
+    Mutates the four caller-owned per-half lists in place. K=1 collapses each
+    half's rotation posterior at ``k1_direction_prior_order`` when both halves
+    report posteriors of ``k1_direction_prior_size`` rotations; a half whose
+    collapsed prior cannot form a RELION log prior is skipped with a warning
+    on ``log``. K-class combines both halves' per-class posteriors on the
+    exhaustive grid only for global scoring whose scorer grid has
+    ``exhaustive_grid_size`` rotations, and stores an independent copy per
+    half. The caller supplies the grid sizes so its sampling policy stays the
+    single source of grid geometry.
+    """
+
+    if not k_class_enabled and all(
+        np.asarray(rot_sum).shape[0] == k1_direction_prior_size for rot_sum in rotation_posterior_per_half
+    ):
+        for k in range(2):
+            direction_prior_k = collapse_rotation_posterior_to_direction_prior(
+                np.asarray(rotation_posterior_per_half[k], dtype=np.float64),
+                k1_direction_prior_order,
+                dtype=dtype,
+            )
+            try:
+                make_relion_direction_log_prior(direction_prior_k, k1_direction_prior_order)
+            except ValueError as exc:
+                log.warning(
+                    "Skipping K=1 direction prior update for half-%d at healpix_order=%d: %s",
+                    k + 1,
+                    k1_direction_prior_order,
+                    exc,
+                )
+                continue
+            global_direction_prior_per_half[k] = direction_prior_k
+            global_direction_prior_order_per_half[k] = k1_direction_prior_order
+    elif (
+        not use_local
+        and k_class_enabled
+        and n_effective_rotations == exhaustive_grid_size
+        and all(rot_sum is not None for rot_sum in class_rotation_posterior_per_half)
+    ):
+        combined_class_direction_prior = _combined_class_direction_prior_from_halves(
+            class_rotation_posterior_per_half,
+            n_classes,
+            current_healpix_order,
+            dtype=dtype,
+        )
+        for k in range(2):
+            class_direction_prior_per_half[k] = combined_class_direction_prior.copy()
+            class_direction_prior_order_per_half[k] = current_healpix_order
 
 
 def _merged_mean_from_halves(means, class_weights=None):
