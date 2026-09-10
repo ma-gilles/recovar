@@ -20,6 +20,11 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.core import fourier_transform_utils as ftu
+from recovar.em.dense_single_volume.helpers.deterministic_reduce import (
+    deterministic_reductions_enabled,
+    fixed_order_shell_sums,
+    static_shell_voxel_lists,
+)
 from recovar.core import mask
 from recovar.reconstruction.relion_functions import _relion_window_centered_half_fourier
 
@@ -141,13 +146,24 @@ def relion_vdam_m_step_device(
     shell_indices = jnp.where(valid, shells, n_shells).reshape(-1)
     shell_lookup = jnp.minimum(shells, n_shells - 1)
 
-    def shell_sum(values):
-        # Invalid elements are dropped, rather than contending on a final bin.
-        return (
-            jnp.zeros(n_shells, real_dtype)
-            .at[shell_indices]
-            .add(jnp.where(valid, values, 0.0).reshape(-1), mode="drop")
-        )
+    if deterministic_reductions_enabled():
+        # Static per-shell voxel lists (shell membership depends only on the
+        # static grid); the traced radius mask is applied before gathering.
+        shell_lists = static_shell_voxel_lists(capacity, padding_factor, n_shells)
+
+        def shell_sum(values):
+            flat = jnp.where(valid, values, 0.0).reshape(-1)
+            return fixed_order_shell_sums(flat, shell_lists, real_dtype)
+
+    else:
+
+        def shell_sum(values):
+            # Invalid elements are dropped, rather than contending on a final bin.
+            return (
+                jnp.zeros(n_shells, real_dtype)
+                .at[shell_indices]
+                .add(jnp.where(valid, values, 0.0).reshape(-1), mode="drop")
+            )
 
     counts = shell_sum(jnp.ones(half_shape, real_dtype))
     safe_counts = jnp.maximum(counts, 1.0)
