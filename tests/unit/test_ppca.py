@@ -202,8 +202,10 @@ def test_unpack_tri_to_full_roundtrip():
     np.testing.assert_allclose(recovered, A, atol=1e-6)
 
 
-def test_E_M_step_batch_half_shapes():
-    """Verify E_M_step_batch_half returns correct shapes."""
+@pytest.mark.gpu
+def test_E_M_step_batch_half_shapes(gpu_device):
+    """Verify shapes through the CUDA per-image backprojection path."""
+    assert jax.devices()[0] == gpu_device, "Run this native test with a GPU default backend"
     from recovar.ppca.ppca import E_M_step_batch_half, _tri_size
 
     rng = np.random.default_rng(123)
@@ -296,8 +298,10 @@ def test_prepare_mean_estimate_for_slicing_keeps_precomputed_cubic_coefficients(
     np.testing.assert_allclose(np.asarray(prepared), np.asarray(coeffs), atol=1e-6, rtol=1e-6)
 
 
-def test_E_M_step_batch_half_contrast_rhs_uses_basis_adjoint(monkeypatch):
+@pytest.mark.gpu
+def test_E_M_step_batch_half_contrast_rhs_uses_basis_adjoint(monkeypatch, gpu_device):
     """Contrast RHS backprojection must use the basis adjoint exactly once."""
+    assert jax.devices()[0] == gpu_device, "Run this native test with a GPU default backend"
     import recovar.core.fourier_transform_utils as ftu
     from recovar import core
     from recovar.ppca import ppca as ppca_mod
