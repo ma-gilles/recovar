@@ -24,6 +24,10 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 from recovar.em.dense_single_volume.helpers.flat_local_rows import scatter_flat_local_rows
+from recovar.em.dense_single_volume.helpers.deterministic_reduce import (
+    add_segment_sum,
+    deterministic_reductions_enabled,
+)
 from recovar.em.dense_single_volume.helpers.half_spectrum import bin_shell_values_jax
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     half_image_phase_factors,
@@ -425,7 +429,10 @@ def _relion_wavg_direct_triplet_shells(
             reconstruction_probs,
             exact_positions,
         )
-        if parse_env_binary_flag(RELION_WAVG_DETERMINISTIC_ROTATION_SUM_ENV):
+        if (
+            parse_env_binary_flag(RELION_WAVG_DETERMINISTIC_ROTATION_SUM_ENV)
+            or deterministic_reductions_enabled()
+        ):
             # Same float32 operands as the atomic FFI, reduced over the
             # rotation axis in XLA's fixed order.  Pixels at or beyond the
             # logical rectangle count stay zero, as with the runtime kernel.
@@ -861,8 +868,8 @@ def compute_local_exact_noise(
             pixel_valid_image_mask, scale_aa_per_image, 0.0
         )
         pixel_group_ids = group_ids[:pixel_batch_size]
-        noise_scale_xa = noise_scale_xa.at[pixel_group_ids].add(scale_xa_per_image.astype(noise_scale_xa.dtype))
-        noise_scale_aa = noise_scale_aa.at[pixel_group_ids].add(scale_aa_per_image.astype(noise_scale_aa.dtype))
+        noise_scale_xa = add_segment_sum(noise_scale_xa, pixel_group_ids, scale_xa_per_image.astype(noise_scale_xa.dtype))
+        noise_scale_aa = add_segment_sum(noise_scale_aa, pixel_group_ids, scale_aa_per_image.astype(noise_scale_aa.dtype))
     noise_sigma2_offset = noise_sigma2_offset + noise_sumw_offset
     if not native_residual_statistics:
         norm_residual = _compute_norm_residual_per_image(

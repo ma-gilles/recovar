@@ -71,6 +71,7 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
     make_fourier_window_spec,
     relion_fftw_order_for_square_score_window,
 )
+from recovar.em.dense_single_volume.helpers.deterministic_reduce import add_segment_sum
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     bin_shell_values_jax,
     make_half_image_weights,
@@ -2527,8 +2528,10 @@ def _compute_noise_block_and_norm_residual_from_flat_rows(
     noise_shells = bin_shell_values_jax(block_noise, shell_indices, shell_count)
 
     residual_per_row = a2_per_row - 2.0 * xa_per_row
-    norm_residual = jnp.zeros(int(batch_size), dtype=residual_per_row.dtype).at[flat_image_indices].add(
-        residual_per_row
+    norm_residual = add_segment_sum(
+        jnp.zeros(int(batch_size), dtype=residual_per_row.dtype),
+        flat_image_indices,
+        residual_per_row,
     )
     return noise_shells, norm_residual
 
@@ -2561,8 +2564,10 @@ def _compute_noise_block_and_norm_residual_from_flat_rows_residual_terms(
     noise_shells = bin_shell_values_jax(block_noise, shell_indices, shell_count)
 
     residual_per_row = jnp.sum(residual_terms, axis=1)
-    norm_residual = jnp.zeros(int(batch_size), dtype=residual_per_row.dtype).at[flat_image_indices].add(
-        residual_per_row
+    norm_residual = add_segment_sum(
+        jnp.zeros(int(batch_size), dtype=residual_per_row.dtype),
+        flat_image_indices,
+        residual_per_row,
     )
     return noise_shells, norm_residual
 
