@@ -165,12 +165,18 @@ Per-half dispatch belongs to
 [`half_scoring`](../../recovar/em/dense_single_volume/half_scoring.py).
 Its dense and local adapters prepare engine arguments, retain adaptive/first-CC
 routing, and write class/pose fields into the caller-owned `PerHalfOutputs`.
-`_k1_dense_uses_adaptive_engine` states the K=1 engine rule: RELION's
-`storeWeightedSums` accumulates the group-scale `XA`/`AA` sums in every pass, so K=1
-scoring with RELION scale groups uses the adaptive/sparse engine at the requested
-oversampling order, including 0, where its single coarse pass on the current grid
-is RELION's single pass; the direct dense engine serves only runs without scale
-groups at oversampling 0.
+`_dense_uses_adaptive_engine` states the engine rule for K=1 and K-class scoring:
+RELION's `storeWeightedSums` accumulates the group-scale `XA`/`AA` sums and the
+norm-correction residuals in every pass, so scoring with RELION scale groups uses
+the adaptive/sparse engine at the requested oversampling order, including 0, where
+its single coarse pass on the current grid is RELION's single pass; the direct
+dense engine serves only runs without scale groups at oversampling 0
+([`test_dense_scale_group_routing.py`](../../tests/unit/test_dense_scale_group_routing.py)).
+In [`significance`](../../recovar/em/dense_single_volume/helpers/significance.py),
+`_coarse_gaussian_ffi_default` applies the fresh-InitialModel coarse Gaussian FFI
+default only when the supplied RELION projector operands exist; a dense pass
+without a projector keeps the JAX coarse path and an explicit environment request
+still fails closed.
 The controller calls its two BPref-scoped entry points and retains iteration
 scheduling, state transitions, reconstruction and device-buffer lifetime.
 [`scoring_policy`](../../recovar/em/dense_single_volume/scoring_policy.py)

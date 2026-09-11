@@ -38,6 +38,19 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+Two fast-tier repairs (own commits) follow the tier rerun on frozen
+`d9a23ceb1` (job 13711329: 4 of 7 pass). K-class dense scoring with RELION scale
+groups now takes the adaptive engine at oversampling 0 as K=1 already did
+(`half_scoring._dense_uses_adaptive_engine`), because the direct engine
+produces no norm/scale statistics and the strict follower-scale topology
+requires them at every numbered M-step; and the fresh-InitialModel coarse
+Gaussian FFI default applies only when the RELION projector operands it scores
+from are supplied (`significance._coarse_gaussian_ffi_default`), so a K=1 cold
+start on the host-NumPy backend keeps the JAX coarse path instead of failing.
+The K-class replay case keeps its known |ΔPmax| failure. Qualification of both
+repairs is the fast-tier rerun on the next frozen tip.
+[Evidence](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/fast_tier_repairs_20260910/result.json).
+
 The exact fine local-search grid, its M-step reuse fallback and the final
 pass-1 size rule now have one implementation each in the controller module:
 `_exact_local_fine_grid` (RELION SamplingPerturbation of the materialized fine

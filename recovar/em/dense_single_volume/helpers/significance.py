@@ -490,6 +490,29 @@ def _k1_coarse_gaussian_ffi_enabled(*, default: bool = False) -> bool:
     raise ValueError(f"Unsupported {_K1_COARSE_GAUSSIAN_FFI_ENV}={token!r}")
 
 
+def _coarse_gaussian_ffi_default(
+    relion_coarse_gaussian_default: bool,
+    *,
+    use_relion_projector: bool,
+    use_float64_scoring: bool,
+    coarse_texture_interp: bool,
+) -> bool:
+    """Whether the fresh-InitialModel coarse Gaussian FFI default applies.
+
+    The FFI scores from the supplied RELION projector with texture
+    interpolation (or float64 operands), so the guarded default is active only
+    when those operands exist; a dense pass without a supplied projector keeps
+    the JAX coarse path. An explicit environment request still fails closed at
+    the operand check.
+    """
+
+    return bool(
+        relion_coarse_gaussian_default
+        and use_relion_projector
+        and (use_float64_scoring or coarse_texture_interp)
+    )
+
+
 def _k1_coarse_gaussian_sincosf_enabled(*, default: bool = False) -> bool:
     """Return whether exact RELION coarse score translation is active."""
 
@@ -4024,7 +4047,12 @@ def _compute_k_class_significance_batched(
     # Gaussian coarse passes. Keep the flag dormant for the CC call instead of
     # rejecting the process before it reaches the intended boundary.
     coarse_gaussian_ffi_requested = _k1_coarse_gaussian_ffi_enabled(
-        default=relion_coarse_gaussian_default,
+        default=_coarse_gaussian_ffi_default(
+            relion_coarse_gaussian_default,
+            use_relion_projector=use_relion_projector,
+            use_float64_scoring=use_float64_scoring,
+            coarse_texture_interp=coarse_texture_interp,
+        ),
     )
     coarse_gaussian_ffi_enabled = (
         coarse_gaussian_ffi_requested and score_mode == "gaussian"
