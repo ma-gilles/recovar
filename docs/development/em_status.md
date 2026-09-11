@@ -49,6 +49,7 @@ case counts, provenance and limits.
 
 | Commit | Change | Kind | Receipt |
 | --- | --- | --- | --- |
+| see receipt | remove eighteen unused local assignments (ruff F841) across the EM package, including two windowed translation-phase tables the single-class sparse scorer computed at setup and never read | dead code | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/unused_locals_20260911/result.json) |
 | see receipt | remove the unused `convergence.SIGMA_CUTOFF` and seven unreferenced helpers in EM parity/diagnostic scripts; records the pre-existing sealed static-argument drift in `run_local_mstep_donation_ab.py` | dead code, token scan | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/dead_script_helpers_20260911/result.json) |
 | see receipt | `preprocessing.uses_relion_cuda_image_preprocessing` / `relion_preprocess_backend` own the RELION CUDA preprocessing detection (local engine and InitialModel adapter shared two inline copies); the controller fails closed at setup when the fresh K=1 defaults run without it; the fast tier's K1 cold start uses the production `relion_cuda` backend | fix (fast tier K1 cold start) + structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_cuda_preprocess_owner_20260911/result.json) |
 | see receipt | remove unused EM APIs whose only callers were their own tests: `oversampling.compute_pass2_stats` (296 lines), `sampling.get_healpix_children`/`get_oversampled_rotation_grid`, `shape_buckets.ShapeBucket`/`dense_shape_bucket`/`local_shape_bucket`, `resolution.should_skip_adaptive_pass2`, `fourier_window.make_frequency_radius_map_half`, `flat_local_rows.gather_flat_local_rows`, with their tests | dead code, reference scan | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/dead_em_apis_20260911/result.json) |
@@ -217,7 +218,8 @@ and returned by `local_big_jit` (design change at the hottest kernel boundary),
 unifying the K=1 and K-class adaptive routes in `half_scoring`, the diagnostic
 capture keyword lists in `local_em_engine`, seven forwarding aliases found by
 the wrapper scan (`sampling.get_rotation_grid_at_order` has 44 callers), and
-the kept test-facing helpers listed in the dead-API receipt. Each package keeps
+the kept test-facing helpers listed in the dead-API receipt; the seven forwarding
+aliases turned out to be intentional public names or test patch points and stay. Each package keeps
 an exact old/new comparison,
 the CPU guard, the controller panel when the controller path changes, and one
 combined validation/publication per package. Keep first-divergence numerical

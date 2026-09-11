@@ -237,7 +237,6 @@ def align_volume_to_reference(
             )
             if r_score > best_score:
                 best_score = r_score
-                best_corr = r_corr
                 best_rotation_matrix = np.asarray(local_rotations[r_idx_local], dtype=np.float64)
 
     full_base = vol[::-1, :, :] if best_mirror else vol

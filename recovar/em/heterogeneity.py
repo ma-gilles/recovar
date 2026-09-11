@@ -57,12 +57,6 @@ def compute_little_H_b(
 
     # u_projections is n_rotations x n_principal_components  x image_size
 
-    # Often we would n_principal_components ~ 10
-    # n_rotations depends how much we can allocate at once, but hopefully 100s
-    n_principal_components = u_projections.shape[1]
-    n_rotations = u_projections.shape[0]
-    n_images = batch.shape[0]
-    n_translations = translations.shape[0]
 
     CTF = ctf(CTF_params, image_shape, voxel_size)
     H = compute_UPLambdainvPU(u_projections, CTF, noise_variance)
@@ -187,7 +181,6 @@ def sum_up_images_fixed_rots_covariance_with_precompute_eqx(
     n_rotations = rotations.shape[0]
     n_translations = shifted_CTFed_images.shape[1]
     n_images = shifted_CTFed_images.shape[0]
-    n_shifted_images = n_images * n_translations
     image_size = shifted_CTFed_images.shape[-1]
 
     from recovar.heterogeneity import covariance_core
@@ -323,7 +316,6 @@ def compute_H_B(
     gpu_memory = utils.get_gpu_memory_total()
     # *10: slicing is cheap per image, use larger batches for mean projection precomputation
     batch_size = utils.safe_batch_size(utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) * 10)
-    n_batches = utils.get_number_of_index_batch(n_rotations, batch_size)
 
     mean_projections = np.zeros((rotations.shape[0], image_size), dtype=np.complex64)
     for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
@@ -436,7 +428,6 @@ def sum_up_images_fixed_rots_covariance_with_precompute(
     n_rotations = rotations.shape[0]
     n_translations = shifted_CTFed_images.shape[1]
     n_images = shifted_CTFed_images.shape[0]
-    n_shifted_images = n_images * n_translations
     image_size = shifted_CTFed_images.shape[-1]
 
     from recovar.heterogeneity import covariance_core

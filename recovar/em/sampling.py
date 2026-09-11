@@ -1486,14 +1486,12 @@ def get_local_rotation_grid_fast(
     elif prior_rotation_indices.ndim == 2 and prior_rotation_indices.shape[-1] == 3:
         prior_eulers = np.asarray(prior_rotation_indices, dtype=np.float64).reshape(-1, 3)
         prior_rot_deg = prior_eulers[:, 0]
-        prior_tilt_deg = prior_eulers[:, 1]
         prior_psi_deg = prior_eulers[:, 2]
         prior_rotations = utils.R_from_relion(prior_eulers, degrees=True)
     else:
         prior_rotations = np.asarray(prior_rotation_indices, dtype=np.float64).reshape(-1, 3, 3)
         prior_eulers = utils.R_to_relion(prior_rotations, degrees=True)
         prior_rot_deg = prior_eulers[:, 0]
-        prior_tilt_deg = prior_eulers[:, 1]
         prior_psi_deg = prior_eulers[:, 2]
 
     prior_dir_vecs = np.asarray(prior_rotations[:, 2, :], dtype=np.float64)

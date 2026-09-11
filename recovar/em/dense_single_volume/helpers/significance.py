@@ -6829,7 +6829,6 @@ def _compute_k_class_significance_batched(
 
         if tree_rescore_enabled:
             tree_score_dtype = np.float64 if use_float64_scoring else np.float32
-            tree_complex_dtype = jnp.complex128 if use_float64_scoring else jnp.complex64
             best_scores_np = np.asarray(class_best_scores[0], dtype=tree_score_dtype)
             second_scores_np = np.asarray(class_second_best_scores[0], dtype=tree_score_dtype)
             score_margins = best_scores_np - second_scores_np

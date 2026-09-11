@@ -7057,7 +7057,6 @@ def _prepare_bucket_io(
 
     image_shape = config.image_shape
     use_normalized_cc = score_mode == "normalized_cc"
-    batch_size = int(batch.shape[0])
     (
         relion_cuda_preprocess,
         integer_pre_shifts,
@@ -8450,28 +8449,6 @@ def compute_pass2_stats_sparse_bucketed(
         )
     )
     translation_phases_half = None if windowed_prepare else half_translation_phase_table(fine_translations, image_shape)
-    score_translation_phases = None
-    recon_translation_phases = None
-    if windowed_prepare:
-        score_translation_phases = _translation_phase_table_for_indices(
-            fine_translations,
-            image_shape,
-            window_indices,
-            None,
-        )
-        recon_translation_phases = _translation_phase_table_for_indices(
-            fine_translations,
-            image_shape,
-            recon_window_indices,
-            None,
-        )
-        logger.info(
-            "Sparse pass-2 windowed translation phases cached "
-            "(score_pixels=%d recon_pixels=%d translations=%d)",
-            int(n_windowed),
-            int(n_recon_windowed),
-            int(n_fine_trans),
-        )
 
     exact_raw_diff2_cache_limit_bytes = 0
     exact_raw_diff2_cache_admission_logged = False

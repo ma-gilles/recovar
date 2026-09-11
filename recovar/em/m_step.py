@@ -203,16 +203,12 @@ def M_with_precompute(
         translations.shape[0],
         rotations.shape[0] * translations.shape[0],
     )
-    projections = np.zeros((rotations.shape[0], experiment_dataset.image_size), dtype=np.complex64)
-
-    image_shape = experiment_dataset.image_shape
     n_rotations = rotations.shape[0]
     n_translations = translations.shape[0]
     if n_rotations <= 0:
         raise ValueError("M_with_precompute requires at least one rotation")
     if n_translations <= 0:
         raise ValueError("M_with_precompute requires at least one translation")
-    n_images = experiment_dataset.n_images if image_indices is None else len(image_indices)
 
     config = ForwardModelConfig.from_dataset(
         experiment_dataset,

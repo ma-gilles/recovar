@@ -2091,7 +2091,6 @@ def run_local_bucket_big_jit(
         else:
             shifted_half_with_dc = shifted_half
             if not score_only:
-                ctf2_over_nv_score_half_with_dc = ctf2_over_nv_score_half
                 ctf2_over_nv_recon_half_with_dc = ctf2_over_nv_recon_half
             shifted_half = jnp.where(dc_mask[None, :], 0.0, shifted_half)
             ctf2_over_nv_score_half = jnp.where(
@@ -2105,7 +2104,6 @@ def run_local_bucket_big_jit(
         if not half_spectrum_scoring:
             shifted_half_with_dc = shifted_half
             if not score_only:
-                ctf2_over_nv_score_half_with_dc = ctf2_over_nv_score_half
                 ctf2_over_nv_recon_half_with_dc = ctf2_over_nv_recon_half
         shifted_score = shifted_half
         ctf2_over_nv_score = ctf2_over_nv_score_half
