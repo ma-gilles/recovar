@@ -521,6 +521,22 @@ def _estimate_half1_expected_accuracy(
     )
 
 
+def _advance_relion_perturbation(random_perturbation, *, perturb_factor, perturb_seed, relion_iteration, rng):
+    """Advance RELION's SamplingPerturbation to ``relion_iteration``.
+
+    With an explicit seed RELION draws the iteration's perturbation from
+    ``random_seed + iteration``; without one the run's generator draws it.
+    Returns ``(random_perturbation, seed)`` with ``seed`` ``None`` on the
+    generator path. The regular iterations and the final all-data pass share
+    this rule.
+    """
+
+    if perturb_seed is not None:
+        seed = int(perturb_seed) + int(relion_iteration)
+        return advance_relion_perturbation_from_seed(random_perturbation, perturb_factor, seed=seed), seed
+    return advance_relion_perturbation(random_perturbation, perturb_factor, rng), None
+
+
 def _sigma_offset_for_half(current_sigma_offset_angstrom, current_sigma_offset_angstrom_per_half, half_index):
     if current_sigma_offset_angstrom_per_half is None:
         return float(current_sigma_offset_angstrom)
@@ -1732,13 +1748,14 @@ def _run_relion_iteration_loop(
             )
         elif parity.perturb_factor > 0:
             relion_iter = int(init_relion_iteration) + iteration + 1
-            if parity.perturb_seed is not None:
-                seed = int(parity.perturb_seed) + relion_iter
-                random_perturbation = advance_relion_perturbation_from_seed(
-                    random_perturbation,
-                    parity.perturb_factor,
-                    seed=seed,
-                )
+            random_perturbation, seed = _advance_relion_perturbation(
+                random_perturbation,
+                perturb_factor=parity.perturb_factor,
+                perturb_seed=parity.perturb_seed,
+                relion_iteration=relion_iter,
+                rng=perturb_rng,
+            )
+            if seed is not None:
                 logger.info(
                     "Perturbation advance: iter=%d relion_iter=%d seed=%d rp=%+.5f",
                     iteration + 1,
@@ -1747,7 +1764,6 @@ def _run_relion_iteration_loop(
                     random_perturbation,
                 )
             else:
-                random_perturbation = advance_relion_perturbation(random_perturbation, parity.perturb_factor, perturb_rng)
                 logger.info("Perturbation advance: iter=%d rp=%+.5f", iteration + 1, random_perturbation)
         if _replay_meta is not None or parity.perturb_factor > 0:
             # Use RELION's actual hp_order when replaying (recovar's current
@@ -4405,13 +4421,14 @@ def _run_relion_iteration_loop(
             )
             final_sampling_star = None
     elif parity.perturb_factor > 0:
-        if parity.perturb_seed is not None:
-            seed = int(parity.perturb_seed) + final_sampling_relion_iteration
-            final_random_perturbation = advance_relion_perturbation_from_seed(
-                random_perturbation,
-                parity.perturb_factor,
-                seed=seed,
-            )
+        final_random_perturbation, seed = _advance_relion_perturbation(
+            random_perturbation,
+            perturb_factor=parity.perturb_factor,
+            perturb_seed=parity.perturb_seed,
+            relion_iteration=final_sampling_relion_iteration,
+            rng=perturb_rng,
+        )
+        if seed is not None:
             logger.info(
                 "Perturbation advance: final all-data relion_iter=%d seed=%d rp=%+.5f",
                 final_sampling_relion_iteration,
@@ -4419,11 +4436,6 @@ def _run_relion_iteration_loop(
                 final_random_perturbation,
             )
         else:
-            final_random_perturbation = advance_relion_perturbation(
-                random_perturbation,
-                parity.perturb_factor,
-                perturb_rng,
-            )
             logger.info(
                 "Perturbation advance: final all-data relion_iter=%d rp=%+.5f",
                 final_sampling_relion_iteration,

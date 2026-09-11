@@ -82,7 +82,10 @@ construction in the controller; [`test_initial_coarse_grid_owner.py`](../../test
 pins both. `_ExpectedAccuracyInputs` bundles the run-constant inputs of RELION's
 expected-accuracy estimation, `_expected_accuracy_class_ids` gives the half-1 class
 labels, and `_estimate_half1_expected_accuracy` is the one call site shared by both
-passes ([`test_expected_accuracy_inputs_owner.py`](../../tests/unit/test_expected_accuracy_inputs_owner.py)). `_exact_local_fine_grid` materializes RELION's fine local-search grid
+passes ([`test_expected_accuracy_inputs_owner.py`](../../tests/unit/test_expected_accuracy_inputs_owner.py)).
+`_advance_relion_perturbation` advances RELION's SamplingPerturbation to an iteration
+(seeded `random_seed + iteration`, or the run's generator) for both passes
+([`test_perturbation_advance_owner.py`](../../tests/unit/test_perturbation_advance_owner.py)). `_exact_local_fine_grid` materializes RELION's fine local-search grid
 once with its perturbation and exact M-step rotations, and
 `_local_search_mstep_rotations` reuses or rebuilds the M-step matrices of a
 scoring grid; the final pass sizes its parent pass with
