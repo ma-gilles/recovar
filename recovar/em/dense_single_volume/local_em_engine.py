@@ -1149,6 +1149,24 @@ def _packed_reconstruction_rows(values, take_indices, pack_mask):
     return jnp.where(pack_mask[:, :, None], packed, 0.0)
 
 
+def _packed_bucket_rotations(bucket, reconstruction_take_indices, reconstruction_pack_mask_np, batch_rows=None, rotations_dtype=None):
+    """Device copies of the packed take indices and pack mask, and the host rotations gathered along them.
+
+    ``batch_rows`` limits the bucket rows to the unpadded batch (``None`` keeps
+    every row); ``rotations_dtype`` casts the scoring rotations the way the
+    source-VDAM path does (``None`` keeps their dtype).  Both the scoring and
+    the M-step rotations are gathered.
+    """
+
+    take = reconstruction_take_indices[:, :, None, None]
+    return (
+        jnp.asarray(reconstruction_take_indices, dtype=jnp.int32),
+        jnp.asarray(reconstruction_pack_mask_np),
+        np.take_along_axis(np.asarray(bucket.local_rotations[:batch_rows], dtype=rotations_dtype), take, axis=1),
+        np.take_along_axis(_local_mstep_rotations(bucket)[:batch_rows], take, axis=1),
+    )
+
+
 def _project_local_bucket(
     *,
     mean_for_proj,
@@ -4605,18 +4623,12 @@ def run_local_em_exact(
                     total_packed_final_noise_rows += int(
                         reconstruction_pack_mask_np.size
                     )
-                reconstruction_take_indices_jnp = jnp.asarray(reconstruction_take_indices, dtype=jnp.int32)
-                reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
-                packed_rotations_np = np.take_along_axis(
-                    np.asarray(bucket.local_rotations[:unpadded_batch_size]),
-                    reconstruction_take_indices[:, :, None, None],
-                    axis=1,
-                )
-                packed_mstep_rotations_np = np.take_along_axis(
-                    _local_mstep_rotations(bucket)[:unpadded_batch_size],
-                    reconstruction_take_indices[:, :, None, None],
-                    axis=1,
-                )
+                (
+                    reconstruction_take_indices_jnp,
+                    reconstruction_pack_mask_jnp,
+                    packed_rotations_np,
+                    packed_mstep_rotations_np,
+                ) = _packed_bucket_rotations(bucket, reconstruction_take_indices, reconstruction_pack_mask_np, batch_rows=unpadded_batch_size)
                 if not host_plan_pack_enabled:
                     packed_reconstruction_probs = _packed_reconstruction_rows(reconstruction_probs[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
                     packed_reconstruction_probs_sum_t = jnp.take_along_axis(
@@ -4773,21 +4785,12 @@ def run_local_em_exact(
                         rotation_block_size,
                         exact_local_bucket_radix=resolved_exact_local_bucket_radix,
                     )
-                reconstruction_take_indices_jnp = jnp.asarray(
-                    reconstruction_take_indices,
-                    dtype=jnp.int32,
-                )
-                reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
-                packed_rotations_np = np.take_along_axis(
-                    np.asarray(bucket.local_rotations[:unpadded_batch_size], dtype=np.float32),
-                    reconstruction_take_indices[:, :, None, None],
-                    axis=1,
-                )
-                packed_mstep_rotations_np = np.take_along_axis(
-                    _local_mstep_rotations(bucket)[:unpadded_batch_size],
-                    reconstruction_take_indices[:, :, None, None],
-                    axis=1,
-                )
+                (
+                    reconstruction_take_indices_jnp,
+                    reconstruction_pack_mask_jnp,
+                    packed_rotations_np,
+                    packed_mstep_rotations_np,
+                ) = _packed_bucket_rotations(bucket, reconstruction_take_indices, reconstruction_pack_mask_np, batch_rows=unpadded_batch_size, rotations_dtype=np.float32)
                 packed_source_vdam_images = source_vdam_images[:unpadded_batch_size]
                 packed_source_vdam_ctf = source_vdam_ctf[:unpadded_batch_size]
                 packed_source_vdam_minvsigma2 = source_vdam_minvsigma2[:unpadded_batch_size]
@@ -4810,18 +4813,12 @@ def run_local_em_exact(
                     rotation_block_size,
                     exact_local_bucket_radix=resolved_exact_local_bucket_radix,
                 )
-                reconstruction_take_indices_jnp = jnp.asarray(reconstruction_take_indices, dtype=jnp.int32)
-                reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
-                packed_rotations_np = np.take_along_axis(
-                    np.asarray(bucket.local_rotations[:unpadded_batch_size]),
-                    reconstruction_take_indices[:, :, None, None],
-                    axis=1,
-                )
-                packed_mstep_rotations_np = np.take_along_axis(
-                    _local_mstep_rotations(bucket)[:unpadded_batch_size],
-                    reconstruction_take_indices[:, :, None, None],
-                    axis=1,
-                )
+                (
+                    reconstruction_take_indices_jnp,
+                    reconstruction_pack_mask_jnp,
+                    packed_rotations_np,
+                    packed_mstep_rotations_np,
+                ) = _packed_bucket_rotations(bucket, reconstruction_take_indices, reconstruction_pack_mask_np, batch_rows=unpadded_batch_size)
                 packed_summed = _packed_reconstruction_rows(summed[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
                 packed_ctf_probs = _packed_reconstruction_rows(ctf_probs[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
                 packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_mstep_rotations_np))
@@ -6687,18 +6684,12 @@ def run_local_em_exact(
             rotation_block_size,
             exact_local_bucket_radix=resolved_exact_local_bucket_radix,
         )
-        reconstruction_take_indices_jnp = jnp.asarray(reconstruction_take_indices, dtype=jnp.int32)
-        reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
-        packed_rotations_np = np.take_along_axis(
-            np.asarray(bucket.local_rotations),
-            reconstruction_take_indices[:, :, None, None],
-            axis=1,
-        )
-        packed_mstep_rotations_np = np.take_along_axis(
-            _local_mstep_rotations(bucket),
-            reconstruction_take_indices[:, :, None, None],
-            axis=1,
-        )
+        (
+            reconstruction_take_indices_jnp,
+            reconstruction_pack_mask_jnp,
+            packed_rotations_np,
+            packed_mstep_rotations_np,
+        ) = _packed_bucket_rotations(bucket, reconstruction_take_indices, reconstruction_pack_mask_np)
         packed_reconstruction_probs = None
         if score_only:
             packed_summed = None
