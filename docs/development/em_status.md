@@ -49,6 +49,7 @@ case counts, provenance and limits.
 
 | Commit | Change | Kind | Receipt |
 | --- | --- | --- | --- |
+| see receipt | `k_class._override_class_assignments_with_coarse_winner` replaces pass-2 class assignments with the coarse global winner for both adaptive K-class pass-2 paths | structural, 8 replace-kwargs cases | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/kclass_coarse_override_owner_20260911/result.json) |
 | see receipt | the fused abs2-on-demand local score pass derives its reconstruction support through the existing `_support_from_local_probs` owner instead of an inline copy | structural, bitwise on CPU | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/local_support_owner_20260911/result.json) |
 | see receipt | the adaptive and single-pass dense half-scoring calls share one keyword set (`dense_half_kwargs`, 41 shared, 8 adaptive-only) with one post-call block and the single-pass manifest dump | structural, exec-equivalent branches incl. manifest bytes | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/dense_half_kwargs_owner_20260910/result.json) |
 | see receipt | `_advance_relion_perturbation` advances RELION's SamplingPerturbation (seeded `random_seed + iteration` or generator path) for both passes | structural, 36 value/type/log-identical | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/perturbation_advance_owner_20260910/result.json) |

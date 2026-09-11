@@ -117,6 +117,11 @@ In [`local_score_pass`](../../recovar/em/dense_single_volume/local_score_pass.py
 `_support_from_local_probs` is the one reconstruction-support rule (full-sort
 significance or per-image threshold, else the rotation mask) used by every fused
 score pass ([`test_local_support_owner.py`](../../tests/unit/test_local_support_owner.py)).
+In [`k_class`](../../recovar/em/dense_single_volume/k_class.py),
+`_override_class_assignments_with_coarse_winner` applies RELION's coarse-grid
+binarization to a pass-2 result (winning class, that class's fine pose, decoded
+best-pose details) for both adaptive pass-2 paths
+([`test_kclass_coarse_override_owner.py`](../../tests/unit/test_kclass_coarse_override_owner.py)).
 
 Replay and finalization have separate selection and mutation boundaries:
 

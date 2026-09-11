@@ -630,6 +630,48 @@ def _reject_kwargs(kwargs: dict, names: tuple[str, ...], caller: str) -> None:
         raise ValueError(f"{caller} controls these arguments directly: {', '.join(present)}")
 
 
+def _override_class_assignments_with_coarse_winner(
+    result,
+    coarse_class_assignments,
+    *,
+    return_best_pose_details: bool,
+    fine_rotations_np: np.ndarray,
+    fine_translations_np: np.ndarray,
+):
+    """Replace a pass-2 result's class assignments with the coarse global winner.
+
+    RELION binarization picks the global-best (class, pose) on the coarse grid;
+    the fine refinement only repositions the pose within the winning class.
+    The per-class hard assignments supply that class's fine pose, and the
+    best-pose details are decoded from it when requested; the per-class
+    M-step accumulators are untouched.
+    """
+
+    coarse_assn = jnp.asarray(coarse_class_assignments, dtype=jnp.int32)
+    n_imgs = int(coarse_assn.shape[0])
+    image_indices = jnp.arange(n_imgs)
+    per_class_hard = result.per_class_hard_assignments
+    new_pose_assn = per_class_hard[coarse_assn, image_indices]
+    replace_kwargs = dict(
+        class_assignments=coarse_assn,
+        pose_assignments=new_pose_assn,
+    )
+    if return_best_pose_details:
+        best_rots, best_trans, best_rot_ids = _decode_dense_best_pose_details(
+            np.asarray(new_pose_assn, dtype=np.int64),
+            fine_rotations_np,
+            fine_translations_np,
+        )
+        replace_kwargs.update(
+            best_pose_rotations=best_rots,
+            best_pose_translations=best_trans,
+            best_pose_rotation_ids=best_rot_ids,
+            best_pose_eulers_deg=None,
+            per_class_best_pose_eulers_deg=None,
+        )
+    return result._replace(**replace_kwargs)
+
+
 def _decode_dense_best_pose_details(hard_assignment, rotations: np.ndarray, translations: np.ndarray):
     """Decode dense flat pose IDs into the pose fields expected by RELION state.
 
@@ -3167,29 +3209,13 @@ def run_dense_k_class_em_adaptive(
                     pass2_kwargs=pass2_kwargs,
                 )
                 pass2_s = time.time() - pass2_t0
-        coarse_assn = jnp.asarray(global_winner, dtype=jnp.int32)
-        n_imgs = int(coarse_assn.shape[0])
-        image_indices = jnp.arange(n_imgs)
-        per_class_hard = result.per_class_hard_assignments
-        new_pose_assn = per_class_hard[coarse_assn, image_indices]
-        replace_kwargs = dict(
-            class_assignments=coarse_assn,
-            pose_assignments=new_pose_assn,
+        result = _override_class_assignments_with_coarse_winner(
+            result,
+            global_winner,
+            return_best_pose_details=return_best_pose_details,
+            fine_rotations_np=fine_rotations_np,
+            fine_translations_np=fine_translations_np,
         )
-        if return_best_pose_details:
-            best_rots, best_trans, best_rot_ids = _decode_dense_best_pose_details(
-                np.asarray(new_pose_assn, dtype=np.int64),
-                fine_rotations_np,
-                fine_translations_np,
-            )
-            replace_kwargs.update(
-                best_pose_rotations=best_rots,
-                best_pose_translations=best_trans,
-                best_pose_rotation_ids=best_rot_ids,
-                best_pose_eulers_deg=None,
-                per_class_best_pose_eulers_deg=None,
-            )
-        result = result._replace(**replace_kwargs)
         logger.info(
             "Adaptive K-class EM profile: classes=%d images=%d coarse=(rot=%d,trans=%d) fine_subset=(rot=%d,trans=%d) pass1=%.1fs mask=%.1fs pass2=%.1fs total=%.1fs",
             n_classes,
@@ -3244,29 +3270,13 @@ def run_dense_k_class_em_adaptive(
         # ``class_assignments`` with the coarse-pass argmax. The per-class
         # M-step accumulators already encode each class's fine-refined best
         # pose, so reconstruction quality is preserved.
-        coarse_assn = jnp.asarray(coarse_class_assignments_for_override, dtype=jnp.int32)
-        n_imgs = int(coarse_assn.shape[0])
-        image_indices = jnp.arange(n_imgs)
-        per_class_hard = result.per_class_hard_assignments
-        new_pose_assn = per_class_hard[coarse_assn, image_indices]
-        replace_kwargs = dict(
-            class_assignments=coarse_assn,
-            pose_assignments=new_pose_assn,
+        result = _override_class_assignments_with_coarse_winner(
+            result,
+            coarse_class_assignments_for_override,
+            return_best_pose_details=return_best_pose_details,
+            fine_rotations_np=fine_rotations_np,
+            fine_translations_np=fine_translations_np,
         )
-        if return_best_pose_details:
-            best_rots, best_trans, best_rot_ids = _decode_dense_best_pose_details(
-                np.asarray(new_pose_assn, dtype=np.int64),
-                fine_rotations_np,
-                fine_translations_np,
-            )
-            replace_kwargs.update(
-                best_pose_rotations=best_rots,
-                best_pose_translations=best_trans,
-                best_pose_rotation_ids=best_rot_ids,
-                best_pose_eulers_deg=None,
-                per_class_best_pose_eulers_deg=None,
-            )
-        result = result._replace(**replace_kwargs)
     logger.info(
         "Adaptive K-class EM profile: classes=%d images=%d coarse=(rot=%d,trans=%d) fine=(rot=%d,trans=%d) pass1=%.1fs mask=%.1fs pass2=%.1fs total=%.1fs",
         n_classes,
