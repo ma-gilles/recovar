@@ -4447,20 +4447,23 @@ def _run_relion_iteration_loop(
                 if final_perturbation_applied:
                     final_local_search_random_perturbation = float(final_random_perturbation)
                 if use_parent_expanded_final_local:
+                    # RELION sizes the parent pass from the parent order only
+                    # under adaptive oversampling; without it coarse_size is
+                    # current_size (ml_optimiser.cpp, updateImageSizeAndResolutionPointers).
                     parent_order = final_local_parent_order
                     parent_step_deg = healpix_angular_step(parent_order)
                     local_coarse_size = compute_coarse_image_size(
                         parent_step_deg,
-                    cryo.voxel_size if cryo.voxel_size > 0 else 1.0,
-                    grid_size,
-                    particle_diameter=particle_diameter_ang,
-                )
-                local_coarse_size = clamp_relion_coarse_image_size(
-                    local_coarse_size,
-                    final_current_size,
-                    grid_size,
-                )
-                final_local_pass1_current_size = local_coarse_size if local_coarse_size < grid_size else None
+                        cryo.voxel_size if cryo.voxel_size > 0 else 1.0,
+                        grid_size,
+                        particle_diameter=particle_diameter_ang,
+                    )
+                    local_coarse_size = clamp_relion_coarse_image_size(
+                        local_coarse_size,
+                        final_current_size,
+                        grid_size,
+                    )
+                    final_local_pass1_current_size = local_coarse_size if local_coarse_size < grid_size else None
         else:
             final_local_search_rotations = final_effective_rotations
             final_local_search_rotation_eulers = final_effective_rotation_eulers

@@ -38,6 +38,16 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+The final all-data pass now computes a local pass-1 image size only for
+parent-expanded (adaptive-oversampling) local search. Its coarse-size clamp sat
+outside that branch, so a lazy (large-order) final local search without
+oversampling raised `UnboundLocalError`; RELION keeps `coarse_size ==
+current_size` when `adaptive_oversampling` is 0
+(`updateImageSizeAndResolutionPointers`). The old and new blocks agree on every
+parent-expanded case and the new block keeps the full current size otherwise; an
+AST guard pins the assignment structure. Correctness fix in its own commit.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/final_local_pass1_size_fix_20260910/result.json).
+
 The controller's coarse trial grids now come from two owners in
 `iteration_loop`: `_initial_coarse_grids` materializes the first exhaustive grid
 (sealed capture, caller translation table, or RELION translation grid) and
