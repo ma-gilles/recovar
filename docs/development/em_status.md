@@ -2,8 +2,9 @@
 
 Current decisions belong here; update this page when a decision changes, not for
 every test or publication. Detailed receipts belong behind links. The
-[previous page is preserved byte-for-byte](em_cleanup_history_20260910_8d157f765.md)
-at `8d157f765`; its historical next actions are superseded here.
+[previous page is preserved byte-for-byte](em_cleanup_history_20260910_a2ab056cb.md)
+at `a2ab056cb`, including one paragraph per earlier checkpoint; its historical
+next actions are superseded here.
 
 ## Milestone and invariants
 
@@ -23,7 +24,7 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 ## Source and ownership
 
 - Primary: `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907`,
-  branch `codex/integrate-pr180`. Sampling/initialization cleanup follows reviewed `8d157f7651ca44a7d625a4c50e1b763bf79298b8`.
+  branch `codex/integrate-pr180`, published tip `a2ab056cb5dfac9b1152692f15a4ce683f9fc9b2` (2026-09-10).
   Recheck HEAD, diff and untracked files; earlier trajectories do not qualify it.
 - **em_clean is sole integrator/publisher**, [draft PR179](https://github.com/ma-gilles/recovar/pull/179)
   on pinned PR158 base `44d770de3f9336ab2f3f6a34203394bae8d1aeed`.
@@ -32,329 +33,78 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
   govern assignments. Consult peer status for current numerical work and jobs;
   historical paused states do not establish current ownership or availability.
 - Preserve frozen checkouts, jobs, inputs and binaries. No shared RELION writer
-  lock is granted here. No active em_clean job; peer job state must be checked
-  before acting, not inferred from historical records. Never duplicate peer work.
+  lock is granted here. em_clean jobs are listed in
+  [status/em_clean.json](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/status/em_clean.json);
+  peer job state must be checked before acting, not inferred from historical
+  records. Never duplicate peer work.
   Leave local GPU0 free; only immediately idle GPUs1–3 by UUID; respect Slurm visibility.
 
 ## Engineering work and recent evidence
 
-The K=1 and K-class dense routes now materialize RELION's two-pass trial
-grids through one owner, `half_scoring._adaptive_pass2_grids` (perturbed coarse
-grid, oversampled children with parent maps, fine M-step rotations and the
-host-double coarse translation phase source), replacing two identical blocks
-and the iteration-1 pose-grid rebuild. 8 route cases and 4 pose-grid cases
-match the previous calls bit-for-bit with a byte-exact inverse substitution;
-the pose-grid site now also builds the fine M-step rotations it does not
-consume (iteration-1 CC path only). Structural checkpoint only.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/adaptive_pass2_grids_owner_20260910/result.json).
+Each row is one commit on draft PR179 with an exact old/new comparison, the CPU
+fast guard and, where the controller path changed, the 502-case controller
+panel (one GPU-only skip). "Structural" rows change no arithmetic; "fix" and
+"semantics" rows are labeled and kept in their own commits. Receipts hold the
+case counts, provenance and limits.
 
-The two sparse pass-2 scorers (`compute_pass2_stats_sparse_bucketed` and
-`compute_k_class_pass2_stats_sparse_fused`) now select their RELION
-`powerClass` noise terms through one owner,
-`sparse_pass2_bucketed._relion_powerclass_noise_terms` (block-tree
-`highres_Xi2` for exact fine scoring; atomically binned spectrum or converted
-`highres_Xi2` for norm correction), replacing two copies of the selection
-logic. 16 wiring cases match the previous blocks in outputs and call order
-with a byte-exact inverse substitution. Structural checkpoint only.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/powerclass_noise_terms_owner_20260910/result.json).
+| Commit | Change | Kind | Receipt |
+| --- | --- | --- | --- |
+| `a2ab056cb` | `half_scoring._adaptive_pass2_grids` builds RELION's two-pass trial grids for the K=1/K-class routes and the pose-grid rebuild (3 sites) | structural, 8+4 bit-exact | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/adaptive_pass2_grids_owner_20260910/result.json) |
+| `05227488b` | `sparse_pass2_bucketed._relion_powerclass_noise_terms` selects `highres_Xi2`/norm terms for both sparse scorers | structural, 16 wiring | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/powerclass_noise_terms_owner_20260910/result.json) |
+| `583d8bd37` | `local_em_engine._accumulate_packed_noise_chunk` owns per-chunk noise/norm/scale accumulation (two 42-line bodies) | structural, 8 wiring | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/packed_noise_chunk_owner_20260910/result.json) |
+| `5618216f3` | one operand owner for the four RELION `powerClass` reproductions (`_relion_powerclass_packed_image`, `_operands`, `_native_spectrum_highres`) | structural, 56 bit-exact + 6 error paths | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/powerclass_operand_owner_20260910/result.json) |
+| `e5dbad66d` | remove three unreferenced helpers; records the pre-existing `picked_frequencies` undefined name | dead code | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/dead_em_helpers_20260910/result.json) |
+| `4ec1778cf` | K-class scoring at positive oversampling always keeps RELION's two-pass expectation (no direct-engine fallback at full coarse size) | semantics, 4 decision rows | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/kclass_adaptive_two_pass_20260910/result.json) |
+| `f5b624f35` | `orientation_priors.relion_local_search_sigmas` owns local-search prior widths for both passes | structural, 144 exact | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/local_search_sigma_owner_20260910/result.json) |
+| `bd602096a` | fresh-InitialModel coarse Gaussian FFI default only with its RELION projector operands (`_coarse_gaussian_ffi_default`) | fix (fast tier K1 cold start) | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/fast_tier_repairs_20260910/result.json) |
+| `b6db2f8ef` | K-class scale groups route through the accumulating engine at oversampling 0 (`_dense_uses_adaptive_engine`) | fix (fast tier strict K-class) | same receipt |
+| `da7222f08` | `_exact_local_fine_grid`, `_local_search_mstep_rotations`, final-pass `relion_local_pass1_current_size` shared by both passes | structural, 37 exact | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/local_fine_grid_owner_20260910/result.json) |
+| `67ee54ab1` | final-pass local pass-1 size only under parent expansion (previously `UnboundLocalError`; RELION keeps `coarse_size == current_size`) | fix, AST guard | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/final_local_pass1_size_fix_20260910/result.json) |
+| `593b6adda` | `_initial_coarse_grids` and `_relion_base_translation_grid` own the controller's coarse trial grids (7 sites) | structural, 40+64 exact | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/initial_coarse_grid_owner_20260910/result.json) |
+| `d9a23ceb1` | fast tier K4 cases take a dispatch-capable oracle/schedule through `EM_PARITY_FAST_K4_*`; 5k/128 dispatch oracle 13711156 | fixture | [note](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k4_5k128_dispatch_oracle_20260910/NOTE.md) |
+| `56bf027a4` | K=1 scale groups route through the adaptive engine at oversampling 0 instead of raising | fix (user-delegated) | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k1_scale_group_routing_20260910/result.json) |
+| `9870438cd`, `b8e97709b` | `_relion_cuda_corr_img_from_native_noise_variance` accepts `output_dtype`; K1 completion launcher uses `relion_cuda` images | fix | [K1 run](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_completion_k1_9870438cd_h100_20260910) |
+| `cd119c900` | `orientation_priors.initial_direction_priors_from_snapshot` | structural, 16 exact | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/snapshot_direction_prior_owner_20260910/result.json) |
+| `40f4ec622` | `_relion_mstep_source_eulers`, `_perturbed_trial_grid` shared by both passes | structural, 40 exact | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/trial_grid_perturbation_owner_20260910/result.json) |
+| `ebf607858` | `orientation_priors.relion_direction_log_priors_for_half` (RELION `pdf_direction` rules; user decision) | semantics, 64/72 exact + 8 classified | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/direction_log_prior_owner_20260910/result.json) |
+| `4a2a33de6` | `convergence.concatenate_assignments*`, `mean_helpers._relion_pmax_normalization_mass_per_half` | structural, 48 exact | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/convergence_input_owners_20260910/result.json), [asymmetry review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/convergence_input_owners_20260910/prescoring_direction_prior_asymmetry_review.md) |
+| `2a81aeafb` | `mean_helpers.update_learned_direction_priors`; history owns snapshot copies | structural, 768 exact | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/direction_prior_learning_owner_20260910/result.json) |
+| `50b4986e0` | half join + Class3D tau2 (`mean_helpers`), `relion_replay.read_optimiser_accuracy_replay`, `orientation_priors.relion_half_translation_prior_inputs` | structural, 24/240/576 exact | [receipts](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/class_tau2_lowres_join_owner_20260910/result.json) |
 
-The exact local M-step's packed-chunk noise accumulation has one owner,
-`local_em_engine._accumulate_packed_noise_chunk` (posterior-weighted noise
-shells, norm-correction residual and group-scale XA/AA sums of one packed
-rotation chunk, from deferred or precomputed packed sums), shared by the
-deferred-projection and cached-projection sources that previously carried two
-identical 42-line bodies. 8 wiring cases (deferred/precomputed sums, with and
-without scale groups, two chunk windows) match the previous body in outputs
-and kernel call order with a byte-exact inverse substitution; the single-pass
-and unpadded-chunk variants keep their own inline accumulation. Structural
-checkpoint only.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/packed_noise_chunk_owner_20260910/result.json).
+Earlier batches (reference/alias cleanup, dead Fourier chain, replay selection,
+finalization policy, PPCA helper removal, particle-state reporting, batch-plan
+logging, convergence and sampling/initialization batches, canonical Euler/pixel
+repairs) keep their paragraphs in the
+[preserved page](em_cleanup_history_20260910_a2ab056cb.md#engineering-work-and-recent-evidence).
 
-The four RELION `powerClass` reproductions in `sparse_pass2_bucketed` (JAX
-block-tree `highres_Xi2`, JAX high-shell spectrum sum, and the two native CUDA
-wrappers) now share one operand owner: `_relion_powerclass_packed_image`
-(RELION's unshifted `Faux` layout and amplitude convention),
-`_relion_powerclass_operands` (adds the CUDA shell map and pixel validity) and
-`_relion_powerclass_native_spectrum_highres` (native atomics on complex64),
-replacing four copies of the same preamble. The two JAX reproductions match the
-previous code bit-for-bit on CPU across 56 cases (complex64/128, static and
-traced resolution limits) plus six identical error messages; the native
-wrappers are covered by byte-exact inverse substitution and by the GPU fast
-tier. Three unreferenced helpers were removed in the preceding commit
-(`e5dbad66d`), and a pre-existing undefined name in
-`heterogeneity.estimate_principal_components` is recorded there. Structural
-checkpoint only.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/powerclass_operand_owner_20260910/result.json).
+### Qualification state (frozen checkpoints, H100)
 
-K-class dense scoring at positive adaptive oversampling now always keeps
-RELION's two-pass expectation. It previously fell to the single-pass direct
-engine (no oversampled candidates, no norm/scale statistics) whenever the
-computed coarse size reached the full box; RELION clamps `coarse_size` to
-`current_size` and still runs pass 2 (`updateImageSizeAndResolutionPointers`),
-and the K=1 route already behaved that way. The routing decision table changes
-only in the positive-oversampling rows without a reduced coarse size; the fast
-parity tier on the next frozen tip is the GPU check (its 5k/128 K-class cases
-have reduced coarse sizes, so this row is exercised only at fine angular steps).
-Semantics alignment in its own commit.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/kclass_adaptive_two_pass_20260910/result.json).
-
-RELION's local-search orientational prior widths now come from one owner,
-`orientation_priors.relion_local_search_sigmas` (configured widths kept, psi
-falling back to rot, twice the oversampled angular step when unset under local
-search, `ml_optimiser.cpp` `updateAngularSampling`), shared by the regular
-iterations and the final all-data pass. 144 exact old/new cases match with a
-byte-exact inverse substitution. Structural checkpoint only.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/local_search_sigma_owner_20260910/result.json).
-
-Two fast-tier repairs (own commits) follow the tier rerun on frozen
-`d9a23ceb1` (job 13711329: 4 of 7 pass). K-class dense scoring with RELION scale
-groups now takes the adaptive engine at oversampling 0 as K=1 already did
-(`half_scoring._dense_uses_adaptive_engine`), because the direct engine
-produces no norm/scale statistics and the strict follower-scale topology
-requires them at every numbered M-step; and the fresh-InitialModel coarse
-Gaussian FFI default applies only when the RELION projector operands it scores
-from are supplied (`significance._coarse_gaussian_ffi_default`), so a K=1 cold
-start on the host-NumPy backend keeps the JAX coarse path instead of failing.
-The K-class replay case keeps its known |ΔPmax| failure. Qualification of both
-repairs is the fast-tier rerun on the next frozen tip.
-[Evidence](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/fast_tier_repairs_20260910/result.json).
-
-The exact fine local-search grid, its M-step reuse fallback and the final
-pass-1 size rule now have one implementation each in the controller module:
-`_exact_local_fine_grid` (RELION SamplingPerturbation of the materialized fine
-grid plus the exact M-step rotations; `None` keeps the unperturbed grid for a
-pass that drew no perturbation), `_local_search_mstep_rotations`, and
-`relion_local_pass1_current_size` in the final pass. 37 exact old/new cases
-(both passes, perturbation on/off, float32/float64 flags, matching and
-mismatching row counts, parent-expanded sizes) match byte-for-byte with a
-byte-exact inverse substitution. Structural checkpoint only; the two passes'
-remaining input differences (the main loop sizes pass 1 from the pre-update
-order with optics-group geometry, the final pass from its parent order with the
-model voxel size) are preserved, not resolved.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/local_fine_grid_owner_20260910/result.json).
-
-The final all-data pass now computes a local pass-1 image size only for
-parent-expanded (adaptive-oversampling) local search. Its coarse-size clamp sat
-outside that branch, so a lazy (large-order) final local search without
-oversampling raised `UnboundLocalError`; RELION keeps `coarse_size ==
-current_size` when `adaptive_oversampling` is 0
-(`updateImageSizeAndResolutionPointers`). The old and new blocks agree on every
-parent-expanded case and the new block keeps the full current size otherwise; an
-AST guard pins the assignment structure. Correctness fix in its own commit.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/final_local_pass1_size_fix_20260910/result.json).
-
-The controller's coarse trial grids now come from two owners in
-`iteration_loop`: `_initial_coarse_grids` materializes the first exhaustive grid
-(sealed capture, caller translation table, or RELION translation grid) and
-`_relion_base_translation_grid` is the only unperturbed RELION translation-grid
-construction (seven inline sites before). 40 exact old/new initial-grid cases
-including the sealed-order error and log text, 64 translation-grid site cases
-and the byte-exact inverse substitution match; CPU guard and the controller
-panel are recorded in the receipt. Structural checkpoint only.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/initial_coarse_grid_owner_20260910/result.json).
-
-K=1 dense scoring with RELION scale groups now routes through the
-adaptive/sparse engine at the requested oversampling order, including 0
-(RELION accumulates group XA/AA in every pass; the direct dense engine does
-not), instead of raising. This is the repair for the fast parity tier's K=1
-cases (user delegated the decision). 153 CPU guard cases and the 502-case
-controller panel pass; the GPU fast tier rerun is recorded separately. The
-tier's K4 cases take a dispatch-capable oracle and schema-3 schedule through
-`EM_PARITY_FAST_K4_RELION_DIR` / `EM_PARITY_FAST_K4_DISPATCH_SCHEDULE`; a
-schema-v2 MPI rerun of the 5k/128 K4 oracle with its schedule build is job
-13711156 under `em_k4_5k128_dispatch_oracle_20260910` (SAFE_TO_DELETE); the
-curated fixture directory is untouched.
-
-Qualification of frozen `400ad81e4` on H100 (immutable worktree): the GPU fast
-parity tier failed 6 of 7 cases for pre-existing reasons (direct dense K=1 path
-rejected under default native group-scale correction since `1d84d63e0`; K-class
-fixtures predate dispatch capture); the K1 100k/256 completion failed at start
-because the launcher used the `host_numpy` image backend while the K1
-`firstiter_cc` defaults (since `59430e5aa`) require RELION CUDA image
-preprocessing. The launcher now passes `--image-fourier-backend relion_cuda`
-for K1. The resubmitted K1 run (13709226) then failed in the exact-BPref sparse
-pass-2 path: since `199904546` the bucket I/O passed `output_dtype` to
-`_relion_cuda_corr_img_from_native_noise_variance`, which did not accept it
-(`TypeError`), so the fresh-K1 RELION-CUDA path was unrunnable on the shared branch.
-The helper now takes the score dtype (float32 default, unchanged output); a
-regression test pins the call-site keyword. K1 is relaunched from a new frozen
-worktree at the fixed tip. A first RELION K4 oracle rerun used a legacy
-dispatch-log build and is preserved as failed; the schema-v2 oracle (13708102)
-is running with the chained RECOVAR exactly-K4 launch (13708103). No gate has
-moved. [Fast-tier review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_completion_k1_fast_400ad81e4_h100_20260910/fast_tier_review.md).
-
-Snapshot direction-prior initialization belongs to
-`orientation_priors.initial_direction_priors_from_snapshot`; 16 exact old/new
-cases including log text match, 173 CPU guard cases and the 502-case controller
-panel pass (one GPU-only skip). Structural checkpoint only.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/snapshot_direction_prior_owner_20260910/result.json).
-
-The trial-grid SamplingPerturbation and the M-step source-angle rule now have
-one implementation each in the controller module, shared by the regular
-iterations and the final all-data pass (four inline sites before). 40 exact
-old/new cases with recorded grid-call order match; 154 CPU guard cases and the
-502-case controller panel pass (one GPU-only skip). Structural checkpoint only.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/trial_grid_perturbation_owner_20260910/result.json).
-
-Direction log priors for scoring now follow RELION through one owner,
-`orientation_priors.relion_direction_log_priors_for_half`, in both the regular
-iterations and the final all-data pass (user decision: reproduce RELION, clean
-as much as possible). Rules from `ml_optimiser.cpp`: `pdf_direction` is used
-only in global (`NOPRIOR`) scoring, reset to uniform on a sampling change,
-copied from class 0 to every class when seeding K references, and each half
-scores with its own model. 64 of 72 synthetic cases match the previous inline
-code byte-for-byte; the 8 intentional differences (final-pass shared prior for
-K classes, K-class sealed rows, stale-class representation) are classified in
-the receipt. 176 CPU guard cases and the 502-case controller panel pass (one
-GPU-only skip). This is a semantic alignment with RELION in edge cases, not a
-trajectory qualification.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/direction_log_prior_owner_20260910/result.json).
-
-Convergence inputs now have owners: `convergence.concatenate_assignments` /
-`concatenate_assignments_or_none` join the half-set assignment stacks and
-`mean_helpers._relion_pmax_normalization_mass_per_half` selects the optimizer
-Pmax mass. 48 exact old/new cases including error paths match; 247 CPU guard
-cases and the whole controller test module plus override tests (501 pass, one
-GPU-only skip) pass. A read-only review of the main-loop versus final-pass
-direction log-prior construction records three behavioral asymmetries for a
-decision, not a silent consolidation.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/convergence_input_owners_20260910/result.json),
-[asymmetry review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/convergence_input_owners_20260910/prescoring_direction_prior_asymmetry_review.md).
-
-Qualification of frozen `400ad81e4` is queued from the immutable worktree
-`/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_qual_400ad81e4_20260910`:
-fast GPU parity tier and K1 100k/256 completion on exclusive H100 against the
-stored H100 RELION baseline (jobs 13704244/13704245, summary 13704246), and a
-dispatch-logging RELION K4 100k/256 oracle (13704399, H100) chained to a
-schema-v3 schedule build and the RECOVAR exactly-K4 completion launch (13704408).
-No result is observed yet; these jobs qualify only that frozen commit.
-
-Learned direction-prior updates now belong to
-`mean_helpers.update_learned_direction_priors`, with `RefinementHistory` owning
-the rotation-posterior and learned-prior snapshot copies; the controller keeps
-the admission decision and supplies grid geometry. 768 exact old/new cases and
-byte-exact inverse substitution match; 155 CPU guard cases pass and the whole
-controller test module plus override tests pass 501 cases with one GPU-only
-skip. Eleven controller-test monkeypatch sites moved to the owner. Structural
-checkpoint only.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/direction_prior_learning_owner_20260910/result.json).
-
-Two further owners follow in the same batch. `relion_replay.read_optimiser_accuracy_replay`
-owns the numbered optimiser accuracy override (selection, finite substitution,
-warnings on read/parse failure); 240 exact old/new cases, 149 guard and 153
-replay-affected controller cases pass, zero skips.
-`orientation_priors.relion_half_translation_prior_inputs` owns the per-half
-score/sigma-offset prior centers, cold-start engine center and prior grid for
-both passes; 576 exact cases, 171 guard cases pass. The batch panel over the
-whole controller test module and override tests ran 502 cases: 500 pass, one
-GPU-only skip, and one pre-existing failure reproduced on published `48de9d9d1`
-(an oversampling test fake predating the source-Euler return) is repaired in a
-separate test-only commit. Structural checkpoints only; no numerical, GPU or
-trajectory qualification.
-[Replay receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/optimiser_accuracy_replay_owner_20260910/result.json),
-[translation-prior receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/half_translation_prior_inputs_owner_20260910/result.json).
-
-The pre-Wiener low-resolution half join and the Class3D per-class tau2 statistics
-now have one owner each in `mean_helpers`; the regular iterations and the final
-all-data pass call them with their own accumulators, current size and layout.
-The controller keeps the enabling conditions, replay `class_tau2` branch,
-round/floor weight statistics and dumps. 24 exact old/new cases (both passes,
-all previous-resolution branches, K=1/2/4 at two current sizes) match bytes,
-dtypes, key order and `fsc_shells=None`; inverse substitution of the eight
-replaced blocks reproduces the parent controller byte-for-byte. 166 CPU guard
-cases and 66 affected controller cases pass with zero skips, using the verified
-CPU native binding whose 1,529 source pins and library hash were rechecked.
-Structural checkpoint only; no numerical, GPU or trajectory qualification.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/class_tau2_lowres_join_owner_20260910/result.json).
-
-Frozen5ca9 K4 cache diagnostic13687592 has reviewed profiled wall times
-799.98→204.62s (74.4% reduction), with40 saved iteration timings and45 evidence
-files checked. This is candidate-only, not direct compile-time attribution or
-quality acceptance. Cache entries include primitive specializations; shape
-unification remains separately qualified performance work. Full200 K4 job13687409
-was running when checked; no duplicate run.
-[Review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k4_cache_timing_review_20260910/RESULTS.md).
-
-Replay numbering and cutoff helpers now live in `relion_replay.py`, with direct
-controller/test callers. Moved helper ASTs and remaining controller AST match
-the parent after ownership normalization; 147 CPU guard/affected cases pass.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/replay_boundary_owner_20260910/result.json).
-
-Final-pass admission and gridding selectors now belong to `finalization_policy.py`;
-the controller passes its logger explicitly. All168 old/new decision and warning
-comparisons match, and the remaining controller AST is unchanged after owner
-migration. The combined CPU guard/affected panel passes 113 cases. Defaults and
-K-class convergence requirements are preserved; no new trajectory qualification.
-[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/finalization_policy_owner_20260910/result.json).
-
-PPCA cleanup removes59 net lines of unused private helpers across refinement
-postprocessing and shared PPCA; remaining live arithmetic and public exports
-are unchanged. Two native-dependent PPCA tests now declare GPU requirements.
-CPU companion:11 pass,3 GPU skipped. On clean9b09516ce, all3 GPU cases execute
-and pass on local A100 GPU1 with an explicitly built, sealed sm80 library;
-source/binary/header hashes remain unchanged. The earlier CPU auto-build attempts
-were stopped and preserved; no dispatch repair or full-pipeline acceptance.
-[GPU qualification and commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/ppca_gpu_9b09516ce_20260910/result.json).
-
-Particle-state reporting now rejects null/blank image IDs before alignment and
-shares its identity validator. Non-finite or negative comparison tolerances also
-fail explicitly; zero and established finite defaults are preserved. Sixteen
-malformed cases exposed missing validation;80 reporting CPU tests pass and30
-valid reports are unchanged. Empty trajectory requests now fail explicitly;
-reverse-ordered requests report the earliest checked divergence while preserving
-row order. Two reproduced failures are fixed, with51 affected CPU cases passing;
-this does not establish behavior at unsampled iterations. No engine or gate changes.
-[Iteration receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/trajectory_iteration_admission_20260910/result.json).
-[Identity receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/particle_identity_admission_20260910/result.json),
-[threshold receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/particle_tolerance_admission_20260910/result.json).
-
-Batch-plan adjustment logging now belongs to the immutable batch-plan type;
-the controller retains estimator inputs and scheduling.100 affected CPU cases
-and the CPU guard pass;48 log and108 controller comparisons are exact.
-Controller −20 lines, net production +14; no numerical or performance claim.
-The single-class sparse scorer also sheds12 net lines of unused compact-pair
-mode flags, retaining early environment validation and the live K-class flags.
-Four focused CPU cases and16 exact validation comparisons pass; the remaining
-module AST is unchanged.
-[Dead-state receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/sparse_dead_mode_flags_20260910/result.json).
-[Batch reporting receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/batch_report_owner_20260910/result.json).
-
-Final sampling-file admission/selection now belongs to the replay owner,
-including searched-path provenance for the missing-file diagnostic. All111 final
-CPU guard/controller cases pass;162 old/new file-state comparisons are exact.
-The initial private extraction missed that diagnostic consumer; a real-branch
-regression now covers it. [Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/final_sampling_owner_20260910/result.json).
-
-The current convergence batch gives pose-stack preparation one owner, reuses
-`state.fraction_changed`, and removes unused rotation-count/HEALPix parameters
-from the assignment API and its controller/PPCA callers. The metric is documented
-as an index comparison, not an angular-distance threshold. All209 combined CPU
-cases pass; the numerical bodies are AST-identical after argument migration.
-The earlier200 pose-stack and48 fraction comparisons remain recorded. Local
-checkpoint, not trajectory/performance qualification.
-[Latest receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/assignment_api_20260910/result.json).
-
-The current sampling/initialization batch consolidates coarse sizing, initial
-resolution seeding and explicit schedule validation in their existing owners.
-Duplicate checks/calculations are removed; defaults and state order are preserved.
-All105 combined CPU cases pass; exact old/new scalar, validation and state traces
-are recorded in the [batch receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/initial_resolution_owner_20260910/result.json).
-This remains structural qualification only.
-
-An earlier runtime batch gives follower state one owner, moves reconstruction
-captures to their owner and removes three test-only diagnostics from runtime.
-Controller −126 lines, net production +59; **95 combined CPU cases pass**, with
-12 exact paired follower updates and 64 exact capture comparisons. This is
-structural evidence, not trajectory qualification.
-[Receipt and commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/follower_state_single_owner_20260910/result.json).
-The subsequent benchmark admission fix rejects invalid particle IDs/class labels:
-26 CPU cases pass, 80 valid STAR results unchanged. [K4 audit](benchmarks.md#k4-audit-integrity-and-reviewed-saved-comparisons--september-10).
-
-Canonical Euler/pixel repairs, compact CTF, rigid reporting and opt-in F32 M/DC/CLI
-capability are integrated. **Private precision907 remains unmerged**; inherited
-F64/C128 M defaults and other higher-precision stages remain disclosed.
-[Precision review](vdam_precision_review_20260909.md).
-All earlier cleanup receipts and line counts remain in the archive above.
+- **Fast parity tier** on frozen `d9a23ceb1` (job 13711329, with the 5k/128
+  dispatch-oracle K4 fixture): 4 of 7 pass. K1 replay and perturbation replay
+  pass (the K=1 routing repair holds); K-class cold start and strict oversampled
+  cold start pass with the new fixture. K-class replay keeps its known |ΔPmax|
+  0.999999 failure. K1 cold start and strict K-class cold start failed on the
+  two gaps repaired in `bd602096a` and `b6db2f8ef`; the rerun on frozen
+  `bd602096a` (worktree `recovar_qual_bd602096a_20260910`, jobs
+  13713499/13713500/13713501) is queued. Earlier tier runs 13704244
+  (`400ad81e4`, 6 of 7 failed) remain preserved.
+- **K1 100k/256 completion** on frozen `9870438cd` (job 13709837, exclusive
+  H100, `relion_cuda` images) is running: iterations 1-4 took 368, 3562, 2985
+  and 2972 s (resolution 30.2, 12.1, 10.9, 10.9 Å; average Pmax 1.00, 0.66,
+  0.89, 0.93). The stored RELION baseline (job 8314160) finished 15 iterations
+  plus the final pass in 3 h 31 min on the same GPU class, so this checkpoint
+  is far outside the runtime bound; no quality result yet. Attempts 13704245
+  (`host_numpy` backend) and 13709226 (`output_dtype` TypeError) are preserved
+  as failed.
+- **Exactly-K4 100k/256**: the dispatch-logging RELION oracle 13708102 completed
+  (1 h 15 min, schema-2 log with 1.5 M rows); the schema-3 schedule
+  (oracle_id `a220abb55f4`) was built by 13711316, whose launcher step could not
+  resolve the RELION GPU module on a CPU node and was re-run from the login
+  node. The RECOVAR run (13712371/13712372/13712373, frozen `400ad81e4`) is
+  queued. Attempt 13704399 (legacy dispatch log) is preserved as failed.
+- No gate has moved. Moving HEAD is qualified only by CPU comparisons and the
+  controller panel; production-F32 quality, convergence/finalization and
+  matched-GPU runtime remain open (next section).
 
 ## Unresolved validation gates
 
@@ -421,17 +171,25 @@ final-grid-correction default; its strict-target discrepancy needs separate qual
 Frozen4f9 full200 H100: 452.295/303.905s = **1.4883×**, one3k/128 pair with asymmetric
 harness/I/O and unmeasured contention/memory. Older8ab100k A100 paired ratio **1.831839×**
 predates compact CTF and is quality-unqualified. Reported K4 slowdowns (~20× synthetic,
-~8.9× real) need source-closed timing review. None establishes moving-tip performance.
+~8.9× real) need source-closed timing review. The running K1 100k/256 completion on
+frozen `9870438cd` (H100) spends about 50 minutes per iteration against RELION's
+3 h 31 min for the whole auto-refinement; this is a measurement in progress, not a
+qualified ratio. None establishes moving-tip performance.
 For newer pending evidence consult [VDAM status](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/status/vdam.json);
 this page does not schedule or authorize duplicate runs.
 
 ## Next action and efficient execution
 
-Resume one bounded structural package from the cleanup plan: inventory remaining
-controller/helper duplication, select a behavior-preserving simplification with
-clear callers and focused checks, then implement/review one cohesive batch.
-Keep first-divergence numerical diagnosis and remaining real-full200/source/build
-admission separate; peer summary labels are not acceptance.
+Admit the queued fast-tier rerun (13713500), the K1 completion (13709837) and the
+exactly-K4 completion (13712372) against the [benchmark contract](benchmarks.md)
+when they finish, recording every result including failures. Between results,
+continue one bounded structural package at a time from the cleanup plan
+(remaining duplication is small: diagnostic capture keyword lists, expected
+accuracy inputs, perturbation-advance logging), with an exact old/new comparison,
+the CPU guard, the controller panel when the controller path changes, and one
+combined validation/publication per package. Keep first-divergence numerical
+diagnosis and remaining real-full200/source/build admission separate; peer
+summary labels are not acceptance.
 
 Use [the workflow](agent_workflow.md), existing `scripts/em_work_package.py` receipts,
 focused CPU tests and one combined validation/publication per package. Reuse the
