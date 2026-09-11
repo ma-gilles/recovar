@@ -61,6 +61,7 @@ from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
 )
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.env_flags import (
+    parse_env_binary_flag,
     parse_env_flag,
     parse_env_int_set,
     parse_env_nonnegative_int,
@@ -274,6 +275,7 @@ _RELION_X_HALF_BP_PARTICLE_POOL_SIZE_ENV = (
 )
 _RELION_POWERCLASS_SPECTRUM_NORM_ENV = "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM"
 _RELION_EXACT_BPREF_OPERANDS_ENV = "RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS"
+_SPARSE_PASS2_F64_NOISE_OPERANDS_ENV = "RECOVAR_SPARSE_PASS2_F64_NOISE_OPERANDS"
 _RELION_TRANSLATED_WAVG_NORM_ENV = "RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM"
 _RELION_WAVG_SEQUENTIAL_CUDA_ENV = "RECOVAR_K1_RELION_WAVG_SEQUENTIAL_CUDA"
 _BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV = "RECOVAR_K1_BPREF_EXECUTION_ORDER_LOCAL_FILE"
@@ -7420,6 +7422,28 @@ def _ctf_over_noise_weighted_pair(processed_score_half_raw, processed_recon_half
 
 
 @jax.jit
+def _weighted_ctf_pair(processed_score_half_raw, processed_recon_half_raw, weighted_ctf_half):
+    """Weight score and reconstruction images by ``CTF * Minvsigma2`` in one program."""
+
+    return (
+        processed_score_half_raw * weighted_ctf_half,
+        processed_recon_half_raw * weighted_ctf_half,
+    )
+
+
+def _generic_inverse_noise_operands(noise_variance_half) -> bool:
+    """Use the XFLOAT-reciprocal noise operand on the generic (non-exact) path.
+
+    Only the shared one-dimensional spectrum layout is handled here; per-image
+    noise keeps the historical division so its broadcasting is unchanged.
+    """
+
+    if parse_env_binary_flag(_SPARSE_PASS2_F64_NOISE_OPERANDS_ENV):
+        return False
+    return int(jnp.ndim(noise_variance_half)) == 1
+
+
+@jax.jit
 def _divide_by_safe_ctf(sparse_score_input_half, ctf_half):
     """Divide by the CTF where it is safely non-zero, else pass through."""
 
@@ -7538,10 +7562,26 @@ def _prepare_bucket_io(
             output_dtype=acc_real_dtype,
         )
         ctf2_score_half = ctf_half**2
+    elif _generic_inverse_noise_operands(noise_variance_half):
+        # Production precision is float32 (recovar/em/CLAUDE.md). The generic
+        # path used to divide by the float64 sigma2 spectrum, which promoted the
+        # score/reconstruction operands, the translated rows and the M-step
+        # backprojection rows of every K-class bucket to float64/complex128.
+        # Form the same XFLOAT reciprocal as the exact-operand path (RELION:
+        # binary64 sigma2 -> XFLOAT Minvsigma2, then multiply) so all operands
+        # stay in the accumulation dtype. RECOVAR_SPARSE_PASS2_F64_NOISE_OPERANDS=1
+        # restores the historical promotion for A/B runs.
+        inverse_noise_half = jnp.reciprocal(
+            jnp.asarray(noise_variance_half, dtype=jnp.float64)
+        ).astype(acc_real_dtype)
+        weighted_ctf_half = ctf_half * inverse_noise_half[None, :]
+        ctf2_over_nv_half = weighted_ctf_half * ctf_half
+        ctf2_score_half = ctf_half**2
     else:
         inverse_noise_half = None
         weighted_ctf_half = None
         ctf2_over_nv_half, ctf2_score_half = _ctf2_over_noise_and_ctf2(ctf_half, noise_variance_half)
+    generic_inverse_noise = inverse_noise_half is not None and not relion_exact_bpref_operands
 
     # Raw processed half-spectrum images (BEFORE any per-image correction).
     # The score path uses masked images iff ``score_with_masked_images`` is True,
@@ -7584,15 +7624,22 @@ def _prepare_bucket_io(
         norm_half_weights = make_half_image_weights(image_shape)
         batch_norm = _gaussian_batch_norm(
             processed_score_half_raw,
-            inverse_noise_half if relion_exact_bpref_operands else noise_variance_half,
+            inverse_noise_half if inverse_noise_half is not None else noise_variance_half,
             norm_half_weights,
-            multiply_inverse_noise=bool(relion_exact_bpref_operands),
+            multiply_inverse_noise=inverse_noise_half is not None,
         )
 
     if relion_exact_bpref_operands:
         score_weighted_half = processed_score_half_raw * weighted_ctf_half
         recon_weighted_half = processed_recon_half_raw * weighted_ctf_half
         recon_bpref_input_half = processed_recon_half_raw
+    elif generic_inverse_noise:
+        score_weighted_half, recon_weighted_half = _weighted_ctf_pair(
+            processed_score_half_raw,
+            processed_recon_half_raw,
+            weighted_ctf_half,
+        )
+        recon_bpref_input_half = None
     else:
         score_weighted_half, recon_weighted_half = _ctf_over_noise_weighted_pair(
             processed_score_half_raw,
