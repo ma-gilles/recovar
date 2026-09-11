@@ -7872,6 +7872,21 @@ def subtract_projected_reference_from_sparse_mstep_rotation_sums(
     return summed - projected_reference_delta
 
 
+def _pass2_half_weights(image_shape, window_spec, *, half_spectrum_scoring: bool, relion_firstiter_score_mode, use_float64_scoring: bool):
+    """Scoring half-image weights of a pass 2, full and windowed, in the scoring precision."""
+
+    half_weights = make_scoring_half_image_weights(
+        image_shape,
+        relion_half_sum=half_spectrum_scoring,
+        exclude_relion_redundant_x0=relion_firstiter_score_mode != "normalized_cc",
+    )
+    half_weights_windowed = window_spec.score_values(half_weights)
+    if use_float64_scoring:
+        half_weights = half_weights.astype(jnp.float64)
+        half_weights_windowed = window_spec.score_values(half_weights)
+    return half_weights, half_weights_windowed
+
+
 def _pass2_projection_budget(
     mean_dtype,
     precision_policy: DensePrecisionPolicy,
@@ -8640,15 +8655,13 @@ def compute_pass2_stats_sparse_bucketed(
     n_windowed = window_setup.n_windowed
     n_recon_windowed = window_setup.n_recon_windowed
 
-    half_weights = make_scoring_half_image_weights(
+    half_weights, half_weights_windowed = _pass2_half_weights(
         image_shape,
-        relion_half_sum=half_spectrum_scoring,
-        exclude_relion_redundant_x0=relion_firstiter_score_mode != "normalized_cc",
+        window_spec,
+        half_spectrum_scoring=half_spectrum_scoring,
+        relion_firstiter_score_mode=relion_firstiter_score_mode,
+        use_float64_scoring=use_float64_scoring,
     )
-    half_weights_windowed = window_spec.score_values(half_weights)
-    if use_float64_scoring:
-        half_weights = half_weights.astype(jnp.float64)
-        half_weights_windowed = window_spec.score_values(half_weights)
     relion_score_full_to_compact = jnp.asarray(
         _relion_cuda_fine_full_to_compact_lookup(
             image_shape,
@@ -12947,15 +12960,13 @@ def compute_k_class_pass2_stats_sparse_fused(
     n_windowed = window_setup.n_windowed
     n_recon_windowed = window_setup.n_recon_windowed
 
-    half_weights = make_scoring_half_image_weights(
+    half_weights, half_weights_windowed = _pass2_half_weights(
         image_shape,
-        relion_half_sum=half_spectrum_scoring,
-        exclude_relion_redundant_x0=relion_firstiter_score_mode != "normalized_cc",
+        window_spec,
+        half_spectrum_scoring=half_spectrum_scoring,
+        relion_firstiter_score_mode=relion_firstiter_score_mode,
+        use_float64_scoring=use_float64_scoring,
     )
-    half_weights_windowed = window_spec.score_values(half_weights)
-    if use_float64_scoring:
-        half_weights = half_weights.astype(jnp.float64)
-        half_weights_windowed = window_spec.score_values(half_weights)
     direct_half_weights = half_weights_windowed if use_window else half_weights
     relion_score_full_to_compact = jnp.asarray(
         _relion_cuda_fine_full_to_compact_lookup(
