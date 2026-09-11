@@ -277,6 +277,11 @@ operands the caller did not supply as absent (empty arrays of the capture dtype,
 the per-image normalization factor and batch corrections); the selected-rows and
 effective-grid schemas both write these fields
 ([`test_pass2_dump_operand_fields_owner.py`](../../tests/unit/test_pass2_dump_operand_fields_owner.py)).
+[`sparse_pass2_bucketed._gaussian_algebraic_score_terms`](../../recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py)
+computes the historical algebraic Gaussian scores of one bucket before candidate masking
+(HIGHEST-precision weighted cross einsum and projection norm, prior-free and prior-added
+scores); the production algebraic scorer and its components variant only apply their masks
+([`test_gaussian_algebraic_terms_owner.py`](../../tests/unit/test_gaussian_algebraic_terms_owner.py)).
 In [`significance`](../../recovar/em/dense_single_volume/helpers/significance.py),
 `_coarse_gaussian_ffi_default` applies the fresh-InitialModel coarse Gaussian FFI
 default only when the supplied RELION projector operands exist; a dense pass

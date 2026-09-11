@@ -4088,20 +4088,21 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
 _RELION_CUDA_FINE_REF3D_BLOCK_SIZE = 256
 
 
-@jax.jit
-def _score_pass2_bucket_gaussian_algebraic_components(
-    shifted_corrected,  # (B, T, N) complex, image operand divided by score weight factors
-    corr_img_score,  # (B, N) real, Gaussian projection-norm score weight
-    proj_half,  # (B, R, N) complex
-    half_weights,  # (N,) real
-    rotation_log_prior,  # (B, R) real
-    translation_log_prior,  # (B, T) real
-    candidate_mask,  # (B, R, T) bool
+def _gaussian_algebraic_score_terms(
+    shifted_corrected,
+    corr_img_score,
+    proj_half,
+    half_weights,
+    rotation_log_prior,
+    translation_log_prior,
 ):
-    """Return historical algebraic Gaussian scores and their pre-prior terms.
+    """Historical algebraic Gaussian scores of one bucket, before candidate masking.
 
-    The extra output is used only by scoped BPref diagnostics. Production exact
-    RELION scoring uses the direct ``diff2`` tree below.
+    ``cross[b, r, t] = Re(conj(shifted[b, t]) . (corr_img_score[b] * half_weights) . proj[b, r])``
+    and ``proj_norm[b, r] = 0.5 * (corr_img_score[b] * half_weights) . |proj[b, r]|^2`` in
+    HIGHEST precision; the prior-free score is ``cross - proj_norm`` and the score adds the
+    rotation and translation log priors. Shared by the production algebraic scorer and its
+    components variant, which mask the results differently.
     """
 
     weights = corr_img_score * half_weights[None, :]
@@ -4121,6 +4122,33 @@ def _score_pass2_bucket_gaussian_algebraic_components(
     )
     preprior_scores = cross - proj_norm[:, :, None]
     scores = preprior_scores + rotation_log_prior[:, :, None] + translation_log_prior[:, None, :]
+    return preprior_scores, scores
+
+
+@jax.jit
+def _score_pass2_bucket_gaussian_algebraic_components(
+    shifted_corrected,  # (B, T, N) complex, image operand divided by score weight factors
+    corr_img_score,  # (B, N) real, Gaussian projection-norm score weight
+    proj_half,  # (B, R, N) complex
+    half_weights,  # (N,) real
+    rotation_log_prior,  # (B, R) real
+    translation_log_prior,  # (B, T) real
+    candidate_mask,  # (B, R, T) bool
+):
+    """Return historical algebraic Gaussian scores and their pre-prior terms.
+
+    The extra output is used only by scoped BPref diagnostics. Production exact
+    RELION scoring uses the direct ``diff2`` tree below.
+    """
+
+    preprior_scores, scores = _gaussian_algebraic_score_terms(
+        shifted_corrected,
+        corr_img_score,
+        proj_half,
+        half_weights,
+        rotation_log_prior,
+        translation_log_prior,
+    )
     scores = jnp.where(candidate_mask, scores, -jnp.inf)
     scores = jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
     preprior_scores = jnp.where(candidate_mask & jnp.isfinite(preprior_scores), preprior_scores, -jnp.inf)
@@ -4139,26 +4167,13 @@ def _score_pass2_bucket_gaussian_algebraic(
 ):
     """Historical algebraic Gaussian scorer used outside exact CUDA mode."""
 
-    weights = corr_img_score * half_weights[None, :]
-    cross = jnp.einsum(
-        "btn,bn,brn->brt",
-        jnp.conj(shifted_corrected),
-        weights,
+    _, scores = _gaussian_algebraic_score_terms(
+        shifted_corrected,
+        corr_img_score,
         proj_half,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
-    proj_abs2 = proj_half.real * proj_half.real + proj_half.imag * proj_half.imag
-    proj_norm = 0.5 * jnp.einsum(
-        "bn,brn->br",
-        weights,
-        proj_abs2,
-        precision=jax.lax.Precision.HIGHEST,
-    )
-    scores = (
-        cross
-        - proj_norm[:, :, None]
-        + rotation_log_prior[:, :, None]
-        + translation_log_prior[:, None, :]
+        half_weights,
+        rotation_log_prior,
+        translation_log_prior,
     )
     scores = jnp.where(candidate_mask, scores, -jnp.inf)
     return jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
