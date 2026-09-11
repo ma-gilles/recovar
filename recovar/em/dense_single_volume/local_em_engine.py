@@ -5440,6 +5440,23 @@ def run_local_em_exact(
                         norm_capacity=noise_norm_correction.shape[0],
                         cuda_packing=noise_pixel_cuda_enabled,
                     )
+                deferred_noise_shared_kwargs = dict(
+                    image_shape=image_shape,
+                    shell_count=n_shells,
+                    norm_current_size=(
+                        physical_current_size
+                        if stable_window_active
+                        else current_size
+                    ),
+                    stable_fourier_window_shapes=stable_window_active,
+                    include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
+                    use_relion_cuda_powerclass_spectrum=bool(
+                        relion_exact_fine_diff2
+                        and return_deferred_source_vdam_operands
+                    ),
+                    source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                    unweighted_high_shell_image_power=unweighted_high_shell_image_power,
+                )
                 if noise_stable_core_enabled:
                     prepared_noise_core = run_deferred_local_exact_noise_core_jit(
                         reconstruction_probs,
@@ -5449,21 +5466,7 @@ def run_local_em_exact(
                         valid_image_mask,
                         shell_indices_half,
                         jnp.asarray(logical_current_size, dtype=jnp.int32),
-                        image_shape=image_shape,
-                        shell_count=n_shells,
-                        norm_current_size=(
-                            physical_current_size
-                            if stable_window_active
-                            else current_size
-                        ),
-                        stable_fourier_window_shapes=stable_window_active,
-                        include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
-                        use_relion_cuda_powerclass_spectrum=bool(
-                            relion_exact_fine_diff2
-                            and return_deferred_source_vdam_operands
-                        ),
-                        source_faithful_spectrum_norm=source_faithful_spectrum_norm,
-                        unweighted_high_shell_image_power=unweighted_high_shell_image_power,
+                        **deferred_noise_shared_kwargs,
                     )
                 (
                     noise_wsum,
@@ -5508,20 +5511,7 @@ def run_local_em_exact(
                     big_jit_recon_window_indices_arg,
                     noise_image_indices,
                     jnp.asarray(logical_current_size, dtype=jnp.int32),
-                    image_shape=image_shape,
-                    shell_count=n_shells,
-                    norm_current_size=(
-                        physical_current_size
-                        if stable_window_active
-                        else current_size
-                    ),
-                    stable_fourier_window_shapes=stable_window_active,
-                    include_unweighted_norm_high_shell=include_unweighted_norm_high_shell,
-                    use_relion_cuda_powerclass_spectrum=bool(
-                        relion_exact_fine_diff2
-                        and return_deferred_source_vdam_operands
-                    ),
-                    source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+                    **deferred_noise_shared_kwargs,
                     accumulate_scale_correction=group_ids_np is not None,
                     return_noise_split=return_noise_split,
                     use_relion_wavg_cutoff=bool(
@@ -5532,7 +5522,6 @@ def run_local_em_exact(
                     relion_wavg_sequential_cuda=relion_wavg_sequential_cuda,
                     prepared_core=prepared_noise_core,
                     native_residual_statistics=noise_native_residual_enabled,
-                    unweighted_high_shell_image_power=unweighted_high_shell_image_power,
                 )
                 if noise_scale_xa is not None:
                     noise_scale_xa = packed_noise_scale_xa
