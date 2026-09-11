@@ -53,6 +53,7 @@ case counts, provenance and limits.
 | see receipt | `types.sparse_pass2_result` owns the sparse pass-2 return tuple and the order of its optional entries (statistics, score log-Z, noise, source Eulers); the two pass-2 functions had four branches building it by concatenation, and the historical rule that the score log-Z rides with the statistics is now stated once | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/sparse_pass2_result_tuple_owner_20260911/result.json) |
 | see receipt | `local_big_jit._LocalBigJitCore` names the 22-value core that every big-JIT result carries; the four producer sites build it and `local_em_engine` unpacks it once (core, then the deferred / source-VDAM / M-step-tensor extras per layout) instead of four positional 22-name unpacks; the wire format stays a plain tuple for the fixed-capacity scan carry window and the BPref transaction queue | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/local_big_jit_result_layout_owner_20260911/result.json) |
 | see receipt | `types.read_sparse_pass2_result` reads the positional sparse pass-2 tuple next to its builder and returns `SparsePass2Output` (absent optional entries `None`); the two index-walking consumers in `k_class` now use it | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/sparse_pass2_result_reader_owner_20260911/result.json) |
+| see receipt | `k_class._PerClassResults` collects the per-class outputs of the dense and local full-image K-class runners (accumulators, int32 assignments, statistics, noise, best poses, Euler angles/profiles, new means) in class order, replacing two hand-maintained sets of eight parallel lists | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/kclass_per_class_results_owner_20260911/result.json) |
 | see receipt | `sparse_pass2_bucketed._gaussian_algebraic_score_terms` owns the batched algebraic Gaussian score terms (weighted cross einsum, projection norm, prior-free and prior-added scores) shared by the production algebraic scorer and its components variant; traced programs identical | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/gaussian_algebraic_terms_owner_20260911/result.json) |
 | see receipt | `pass2_diagnostics._optional_operand_row_fields` owns the ten optional RELION operand captures of the K=1 pass-2 dump (absent operands recorded as empty arrays or NaN); the selected-rows and effective-grid schemas shared two 57-line blocks | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pass2_dump_operand_fields_owner_20260911/result.json) |
 | see receipt | the dense engine binds its per-batch score-block keywords once (`score_block_kwargs`) after the last scoring-operand rebinding and passes them to both the pass-1 and pass-2 `_score_rotation_block` calls, which keep only their block projections | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_engine_score_block_kwargs_20260911/result.json) |
@@ -331,11 +332,9 @@ continue one bounded structural package at a time from the cleanup plan.
 Remaining candidates after the September 10–11 packages (J through UU; the big-JIT
 core layout and the sparse pass-2 tuple reader landed as TT and UU): the 35-line bucket-pipeline blocks repeated inside
 `sparse_pass2_bucketed` and the 33-line blocks inside `local_big_jit` (hot paths,
-exact comparison would need GPU-shaped fixtures); the per-row optional operand
-fields repeated by the two pass-2 diagnostic dump writers; the pass-1/pass-2
-`_score_rotation_block` keyword sets in `em_engine`; the per-class result lists of
-`run_dense_k_class_em` and `run_local_k_class_em` (different expansion semantics
-from the subset passes); and the K=1/K-class route asymmetries recorded in the
+exact comparison would need GPU-shaped fixtures; the dump-writer operand fields,
+the `_score_rotation_block` keyword sets and the K-class per-class lists landed as
+QQ, PP and VV); and the K=1/K-class route asymmetries recorded in the
 adaptive-engine-call receipt (coarse translation phases, significance skipping and
 the diagnostic float64 pass 2 are K=1-only). The global-winner summary writer and
 its analysis validator repeat the semantics contract on purpose (independent

@@ -1442,6 +1442,51 @@ def _full_group_count_from_kwargs(kwargs: dict) -> int | None:
     return group_count or None
 
 
+class _PerClassResults:
+    """Per-class outputs of a full-image K-class M-step, in class order.
+
+    Both the dense and the local runner append one engine output per class:
+    accumulators, int32 hard assignments, statistics, noise when accumulated,
+    best-pose details when requested (the local runner also carries Euler
+    angles and per-class profile summaries), and the dense runner its new means.
+    """
+
+    def __init__(self, *, accumulate_noise, return_best_pose_details, return_profile=False, keep_means=False):
+        self.new_means = [] if keep_means else None
+        self.Ft_y = []
+        self.Ft_ctf = []
+        self.hard_assignments = []
+        self.per_class_stats = []
+        self.per_class_noise = [] if accumulate_noise else None
+        self.best_pose_eulers_deg = [] if return_best_pose_details else None
+        self.best_pose_rotations = [] if return_best_pose_details else None
+        self.best_pose_translations = [] if return_best_pose_details else None
+        self.best_pose_rotation_ids = [] if return_best_pose_details else None
+        self.profile_summaries = [] if return_profile else None
+        self.return_best_pose_details = bool(return_best_pose_details)
+
+    def append(self, *, Ft_y, Ft_ctf, hard_assignment, stats, noise, best_pose=None, best_pose_eulers_deg=None, mean=None, profile_summary=None):
+        if self.new_means is not None:
+            self.new_means.append(mean)
+        self.Ft_y.append(Ft_y)
+        self.Ft_ctf.append(Ft_ctf)
+        self.hard_assignments.append(np.asarray(hard_assignment, dtype=np.int32))
+        self.per_class_stats.append(stats)
+        if self.per_class_noise is not None:
+            self.per_class_noise.append(noise)
+        if self.return_best_pose_details:
+            best_rots, best_trans, best_rot_ids = best_pose
+            self.best_pose_eulers_deg.append(best_pose_eulers_deg)
+            self.best_pose_rotations.append(best_rots)
+            self.best_pose_translations.append(best_trans)
+            self.best_pose_rotation_ids.append(best_rot_ids)
+        if self.profile_summaries is not None:
+            self.profile_summaries.append(profile_summary)
+
+    def noise_tuple(self):
+        return None if self.per_class_noise is None else tuple(self.per_class_noise)
+
+
 class _PerClassSubsetResults:
     """Per-class outputs of a firstiter-CC global-winner subset pass, in class order.
 
@@ -1997,15 +2042,9 @@ def run_dense_k_class_em(
     class_log_evidence_np = score_probe.class_log_evidence
     global_log_evidence = _logsumexp_np(class_log_evidence_np, axis=0)
 
-    new_means = []
-    Ft_y = []
-    Ft_ctf = []
-    hard_assignments = []
-    per_class_stats = []
-    per_class_noise = [] if accumulate_noise else None
-    per_class_best_pose_rotations = [] if return_best_pose_details else None
-    per_class_best_pose_translations = [] if return_best_pose_details else None
-    per_class_best_pose_rotation_ids = [] if return_best_pose_details else None
+    results = _PerClassResults(
+        accumulate_noise=accumulate_noise, return_best_pose_details=return_best_pose_details, keep_means=True
+    )
     mstep_engine_kwargs = dict(base_engine_kwargs)
     logger.info(
         "Dense K-class EM M-step: using %s accumulator layout",
@@ -2032,28 +2071,19 @@ def run_dense_k_class_em(
                 normalization_log_evidence=global_log_evidence,
                 **class_engine_kwargs,
             )
-        new_mean = output.mean
-        hard_assignment = output.hard_assignments
-        class_Ft_y = output.Ft_y
-        class_Ft_ctf = output.Ft_ctf
-        stats = output.stats
-        noise = output.noise_stats
-        new_means.append(new_mean)
-        Ft_y.append(class_Ft_y)
-        Ft_ctf.append(class_Ft_ctf)
-        hard_assignments.append(np.asarray(hard_assignment, dtype=np.int32))
-        per_class_stats.append(stats)
-        if per_class_noise is not None:
-            per_class_noise.append(noise)
-        if return_best_pose_details:
-            best_rots, best_trans, best_rot_ids = _decode_dense_best_pose_details(
-                hard_assignment,
-                rotations_np,
-                translations_np,
-            )
-            per_class_best_pose_rotations.append(best_rots)
-            per_class_best_pose_translations.append(best_trans)
-            per_class_best_pose_rotation_ids.append(best_rot_ids)
+        results.append(
+            mean=output.mean,
+            Ft_y=output.Ft_y,
+            Ft_ctf=output.Ft_ctf,
+            hard_assignment=output.hard_assignments,
+            stats=output.stats,
+            noise=output.noise_stats,
+            best_pose=(
+                _decode_dense_best_pose_details(output.hard_assignments, rotations_np, translations_np)
+                if return_best_pose_details
+                else None
+            ),
+        )
     mstep_s = time.time() - mstep_t0
     logger.info(
         "Dense K-class EM profile: classes=%d images=%d rotations=%d translations=%d probe=%.1fs mstep=%.1fs total=%.1fs",
@@ -2068,15 +2098,15 @@ def run_dense_k_class_em(
 
     return _assemble_result(
         class_log_evidence=class_log_evidence_np,
-        new_means=new_means,
-        Ft_y=Ft_y,
-        Ft_ctf=Ft_ctf,
-        per_class_hard_assignments=np.stack(hard_assignments, axis=0),
-        per_class_stats=tuple(per_class_stats),
-        noise_stats=None if per_class_noise is None else tuple(per_class_noise),
-        per_class_best_pose_rotations=per_class_best_pose_rotations,
-        per_class_best_pose_translations=per_class_best_pose_translations,
-        per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
+        new_means=results.new_means,
+        Ft_y=results.Ft_y,
+        Ft_ctf=results.Ft_ctf,
+        per_class_hard_assignments=np.stack(results.hard_assignments, axis=0),
+        per_class_stats=tuple(results.per_class_stats),
+        noise_stats=results.noise_tuple(),
+        per_class_best_pose_rotations=results.best_pose_rotations,
+        per_class_best_pose_translations=results.best_pose_translations,
+        per_class_best_pose_rotation_ids=results.best_pose_rotation_ids,
         host_accumulators=keep_half_accumulators,
     )
 
@@ -2271,16 +2301,11 @@ def run_local_k_class_em(
     if normalization_log_evidence_np is not None:
         global_log_evidence = normalization_log_evidence_np
 
-    Ft_y = []
-    Ft_ctf = []
-    hard_assignments = []
-    per_class_stats = []
-    per_class_noise = [] if accumulate_noise else None
-    per_class_best_pose_eulers_deg = [] if return_best_pose_details else None
-    per_class_best_pose_rotations = [] if return_best_pose_details else None
-    per_class_best_pose_translations = [] if return_best_pose_details else None
-    per_class_best_pose_rotation_ids = [] if return_best_pose_details else None
-    per_class_profile_summaries = [] if return_profile else None
+    results = _PerClassResults(
+        accumulate_noise=accumulate_noise,
+        return_best_pose_details=return_best_pose_details,
+        return_profile=return_profile,
+    )
     for class_index in range(n_classes):
         class_layout = _select_local_layout_for_class(
             local_layout,
@@ -2310,37 +2335,25 @@ def run_local_k_class_em(
                 **normalization_kwargs,
                 **class_engine_kwargs,
             )
-        class_Ft_y = output.Ft_y
-        class_Ft_ctf = output.Ft_ctf
-        hard_assignment = output.hard_assignments
-        best_pose_rotations = output.best_pose_rotations
-        best_pose_translations = output.best_pose_translations
-        best_pose_rotation_ids = output.best_pose_rotation_ids
-        stats = output.stats
-        noise = output.noise_stats
-        profile_summary = output.profile if return_profile else None
-        Ft_y.append(class_Ft_y)
-        Ft_ctf.append(class_Ft_ctf)
-        hard_assignments.append(np.asarray(hard_assignment, dtype=np.int32))
-        per_class_stats.append(stats)
-        if per_class_noise is not None:
-            per_class_noise.append(noise)
-        if return_best_pose_details:
-            per_class_best_pose_eulers_deg.append(output.best_pose_eulers_deg)
-            per_class_best_pose_rotations.append(best_pose_rotations)
-            per_class_best_pose_translations.append(best_pose_translations)
-            per_class_best_pose_rotation_ids.append(best_pose_rotation_ids)
-        if per_class_profile_summaries is not None:
-            per_class_profile_summaries.append(profile_summary)
+        results.append(
+            Ft_y=output.Ft_y,
+            Ft_ctf=output.Ft_ctf,
+            hard_assignment=output.hard_assignments,
+            stats=output.stats,
+            noise=output.noise_stats,
+            best_pose=(output.best_pose_rotations, output.best_pose_translations, output.best_pose_rotation_ids),
+            best_pose_eulers_deg=output.best_pose_eulers_deg if return_best_pose_details else None,
+            profile_summary=output.profile if return_profile else None,
+        )
 
     profile_summary = None
-    if per_class_profile_summaries is not None:
+    if results.profile_summaries is not None:
         profile_summary = {
-            "per_class_profile_summary": tuple(per_class_profile_summaries),
+            "per_class_profile_summary": tuple(results.profile_summaries),
             "em_time_s": np.float64(
                 sum(
                     float(summary.get("em_time_s", 0.0))
-                    for summary in per_class_profile_summaries
+                    for summary in results.profile_summaries
                     if summary is not None
                 )
             ),
@@ -2349,21 +2362,19 @@ def run_local_k_class_em(
     return _assemble_result(
         class_log_evidence=class_log_evidence_np,
         new_means=None,
-        Ft_y=Ft_y,
-        Ft_ctf=Ft_ctf,
-        per_class_hard_assignments=np.stack(hard_assignments, axis=0),
-        per_class_stats=tuple(per_class_stats),
-        noise_stats=None if per_class_noise is None else tuple(per_class_noise),
-        per_class_best_pose_eulers_deg=per_class_best_pose_eulers_deg,
-        per_class_best_pose_rotations=per_class_best_pose_rotations,
-        per_class_best_pose_translations=per_class_best_pose_translations,
-        per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
+        Ft_y=results.Ft_y,
+        Ft_ctf=results.Ft_ctf,
+        per_class_hard_assignments=np.stack(results.hard_assignments, axis=0),
+        per_class_stats=tuple(results.per_class_stats),
+        noise_stats=results.noise_tuple(),
+        per_class_best_pose_eulers_deg=results.best_pose_eulers_deg,
+        per_class_best_pose_rotations=results.best_pose_rotations,
+        per_class_best_pose_translations=results.best_pose_translations,
+        per_class_best_pose_rotation_ids=results.best_pose_rotation_ids,
         profile_summary=profile_summary,
         host_accumulators=publish_host_result,
         host_stats_publication=publish_host_result,
-        class_posterior_sums_override=_class_posterior_sums_override(
-            None if per_class_noise is None else tuple(per_class_noise),
-        ),
+        class_posterior_sums_override=_class_posterior_sums_override(results.noise_tuple()),
     )
 
 
