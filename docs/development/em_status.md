@@ -49,6 +49,7 @@ case counts, provenance and limits.
 
 | Commit | Change | Kind | Receipt |
 | --- | --- | --- | --- |
+| see receipt | `local_em_engine._exact_local_bpref_capture_static_kwargs` owns the twenty-eight fixed operands of the exact-local BPref contribution capture (absent raw data/CTF/mask fields and the run's M-step geometry, bound once when capture is active) and `_bpref_capture_priors` owns the candidate mask and prior-free scores; the fused and big-JIT capture sites keep only their per-bucket operands | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/bpref_capture_static_kwargs_owner_20260911/result.json) |
 | see receipt | one owner for the adaptive engine call shared by the K=1 and K-class dense routes (`_adaptive_engine_shared_kwargs`), the sparse/dense pass-2 environment switch (`k_class._sparse_pass2_selected`, three inline reads) and the coarse pose collapse (`_coarse_pose_assignments`); six duplicated grid locals removed; route-specific keywords stay explicit | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/adaptive_engine_call_owner_20260911/result.json) |
 | see receipt | remove the uncalled legacy `heterogeneity.estimate_principal_components` (with its undefined `picked_frequencies`), a shadowing re-import, two unused `e_step` imports and two unused package re-exports; the EM package outside PPCA refinement is now free of ruff F findings | dead code | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/legacy_pca_removal_20260911/result.json) |
 | see receipt | remove eighteen unused local assignments (ruff F841) across the EM package, including two windowed translation-phase tables the single-class sparse scorer computed at setup and never read | dead code | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/unused_locals_20260911/result.json) |
@@ -220,8 +221,9 @@ for the four positional big-JIT output layouts unpacked in `local_em_engine`
 and returned by `local_big_jit` (design change at the hottest kernel boundary),
 the remaining K=1/K-class route asymmetries in `half_scoring` recorded in the
 adaptive-engine-call receipt (coarse translation phases, significance skipping and
-the diagnostic float64 pass 2 are K=1-only), the diagnostic
-capture keyword lists in `local_em_engine`, seven forwarding aliases found by
+the diagnostic float64 pass 2 are K=1-only), the remaining diagnostic dump
+call sites in `local_em_engine` (fused-posterior and score dumps repeat their
+target/current-size keywords), seven forwarding aliases found by
 the wrapper scan (`sampling.get_rotation_grid_at_order` has 44 callers), and
 the kept test-facing helpers listed in the dead-API receipt; the seven forwarding
 aliases turned out to be intentional public names or test patch points and stay. Each package keeps

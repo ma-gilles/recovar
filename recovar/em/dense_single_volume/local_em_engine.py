@@ -215,6 +215,95 @@ def _relion_exact_fine_full_to_compact_lookup(
     )
 
 
+def _exact_local_bpref_capture_static_kwargs(
+    *,
+    experiment_dataset,
+    score_with_masked_images,
+    disc_type,
+    projection_padding_factor,
+    reconstruction_padding_factor,
+    mstep_relion_x_half,
+    mstep_adjoint_max_r,
+    mstep_recon_window_indices,
+    image_shape,
+    recon_volume_shape,
+) -> dict:
+    """Capture fields the exact-local route fixes for every bucket.
+
+    Both the fused and the big-JIT exact-local M-step reach the reusable
+    contribution schema without raw batch data, CTF parameters, image masks or
+    shadow comparisons, so those operands are recorded as absent
+    (``None``/``False``/``"not-captured"``) rather than guessed, and the
+    geometry (padding factors, x-half M-step layout, adjoint radius, window
+    indices, image and volume shapes) is the run's M-step geometry.
+    """
+
+    return dict(
+        high_precision_operand_bundle=False,
+        raw_batch_data=None,
+        ctf_params=None,
+        noise_variance_half=None,
+        integer_pre_shifts=None,
+        batch_image_corrections=None,
+        batch_scale_corrections=None,
+        relion_preprocess_normalization_factors=None,
+        relion_cuda_preprocess=False,
+        score_with_masked_images=score_with_masked_images,
+        image_mask=None,
+        image_mask_mode="not-captured",
+        voxel_size=experiment_dataset.voxel_size,
+        ctf_mode="not-captured",
+        ctf_dose_per_tilt=0.0,
+        ctf_angle_per_tilt=0.0,
+        disc_type=disc_type,
+        projection_padding_factor=projection_padding_factor,
+        reconstruction_padding_factor=reconstruction_padding_factor,
+        use_relion_x_half_mstep=mstep_relion_x_half,
+        winner_take_all=False,
+        max_r=mstep_adjoint_max_r,
+        window_indices=mstep_recon_window_indices,
+        image_shape=image_shape,
+        volume_shape=recon_volume_shape,
+        shadow_only_mode=False,
+        shadow_score_bitwise_equal=True,
+        shadow_reduction_agreement=None,
+    )
+
+
+@dataclass(frozen=True)
+class _BprefCapturePriors:
+    """Candidate mask, priors and prior-free scores of one captured bucket."""
+
+    candidate_mask: jnp.ndarray
+    rotation_log_prior: jnp.ndarray
+    translation_log_prior: jnp.ndarray
+    preprior_scores: jnp.ndarray
+
+
+def _bpref_capture_priors(scores, probs_shape, *, bucket, rotation_log_prior) -> _BprefCapturePriors:
+    """Remove the pose priors from a bucket's scores for the contribution capture.
+
+    The candidate mask covers the bucket's real rotation rows and, when the
+    bucket carries one, its per-sample mask; prior-free scores outside the mask
+    or non-finite are recorded as ``-inf``.
+    """
+
+    candidate_mask = jnp.broadcast_to(
+        jnp.asarray(bucket.local_rotation_mask)[:, :, None],
+        probs_shape,
+    )
+    if bucket.local_sample_mask is not None:
+        candidate_mask = candidate_mask & jnp.asarray(bucket.local_sample_mask)
+    translation_log_prior = jnp.asarray(bucket.translation_log_prior)
+    preprior_scores = scores - rotation_log_prior[:, :, None] - translation_log_prior[:, None, :]
+    preprior_scores = jnp.where(
+        candidate_mask & jnp.isfinite(preprior_scores),
+        preprior_scores,
+        -jnp.inf,
+    )
+    return _BprefCapturePriors(candidate_mask, rotation_log_prior, translation_log_prior, preprior_scores)
+
+
 def _maybe_dump_exact_local_bpref_contribution_rows(**kwargs) -> None:
     """Write exact-local pre-scatter rows without claiming device geometry.
 
@@ -2494,6 +2583,22 @@ def run_local_em_exact(
         recon_window_indices=recon_window_indices,
         mstep_relion_x_half=bool(mstep_relion_x_half),
     )
+    capture_static_kwargs = (
+        _exact_local_bpref_capture_static_kwargs(
+            experiment_dataset=experiment_dataset,
+            score_with_masked_images=score_with_masked_images,
+            disc_type=disc_type,
+            projection_padding_factor=projection_padding_factor,
+            reconstruction_padding_factor=reconstruction_padding_factor,
+            mstep_relion_x_half=mstep_relion_x_half,
+            mstep_adjoint_max_r=mstep_adjoint_max_r,
+            mstep_recon_window_indices=mstep_recon_window_indices,
+            image_shape=image_shape,
+            recon_volume_shape=recon_volume_shape,
+        )
+        if bpref_contribution_capture_active
+        else None
+    )
     n_windowed = window_spec.n_score
     projection_kwargs = window_spec.projection_kwargs()
     projection_kwargs["relion_texture_interp"] = projection_relion_texture_interp
@@ -4323,25 +4428,11 @@ def run_local_em_exact(
                                 inline_weight_parts,
                                 axis=0,
                             )
-                    candidate_mask = jnp.broadcast_to(
-                        jnp.asarray(unpadded_bucket.local_rotation_mask)[:, :, None],
+                    capture_priors = _bpref_capture_priors(
+                        debug_scores_unpadded,
                         debug_probs_unpadded.shape,
-                    )
-                    if unpadded_bucket.local_sample_mask is not None:
-                        candidate_mask = candidate_mask & jnp.asarray(
-                            unpadded_bucket.local_sample_mask
-                        )
-                    rotation_prior = local_rotation_log_prior_arg[:unpadded_batch_size]
-                    translation_prior = jnp.asarray(unpadded_bucket.translation_log_prior)
-                    preprior_scores = (
-                        debug_scores_unpadded
-                        - rotation_prior[:, :, None]
-                        - translation_prior[:, None, :]
-                    )
-                    preprior_scores = jnp.where(
-                        candidate_mask & jnp.isfinite(preprior_scores),
-                        preprior_scores,
-                        -jnp.inf,
+                        bucket=unpadded_bucket,
+                        rotation_log_prior=local_rotation_log_prior_arg[:unpadded_batch_size],
                     )
                     reconstruction_probs_for_dump = (
                         _exact_local_bpref_reconstruction_probs_for_capture(
@@ -4376,10 +4467,10 @@ def run_local_em_exact(
                         rotation_indices=unpadded_bucket.local_rotation_ids,
                         fine_translations=local_layout.translation_grid,
                         scores=debug_scores_unpadded,
-                        preprior_scores=preprior_scores,
+                        preprior_scores=capture_priors.preprior_scores,
                         probs=debug_probs_unpadded,
-                        rotation_log_prior=rotation_prior,
-                        translation_log_prior=translation_prior,
+                        rotation_log_prior=capture_priors.rotation_log_prior,
+                        translation_log_prior=capture_priors.translation_log_prior,
                         log_z=log_Z_unpadded,
                         best_log_score=best_log_score_unpadded,
                         reconstruction_probs=reconstruction_probs_for_dump,
@@ -4388,35 +4479,8 @@ def run_local_em_exact(
                             reconstruction_probs_for_dump, axis=(1, 2)
                         ),
                         reconstruction_threshold=reconstruction_threshold_for_dump,
-                        candidate_mask=candidate_mask,
-                        high_precision_operand_bundle=False,
-                        raw_batch_data=None,
-                        ctf_params=None,
-                        noise_variance_half=None,
-                        integer_pre_shifts=None,
-                        batch_image_corrections=None,
-                        batch_scale_corrections=None,
-                        relion_preprocess_normalization_factors=None,
-                        relion_cuda_preprocess=False,
-                        score_with_masked_images=score_with_masked_images,
-                        image_mask=None,
-                        image_mask_mode="not-captured",
-                        voxel_size=experiment_dataset.voxel_size,
-                        ctf_mode="not-captured",
-                        ctf_dose_per_tilt=0.0,
-                        ctf_angle_per_tilt=0.0,
-                        disc_type=disc_type,
-                        projection_padding_factor=projection_padding_factor,
-                        reconstruction_padding_factor=reconstruction_padding_factor,
-                        use_relion_x_half_mstep=mstep_relion_x_half,
-                        winner_take_all=False,
-                        max_r=mstep_adjoint_max_r,
-                        window_indices=mstep_recon_window_indices,
-                        image_shape=image_shape,
-                        volume_shape=recon_volume_shape,
-                        shadow_only_mode=False,
-                        shadow_score_bitwise_equal=True,
-                        shadow_reduction_agreement=None,
+                        candidate_mask=capture_priors.candidate_mask,
+                        **capture_static_kwargs,
                         inline_projector_data_volumes=inline_projector_data_volumes,
                         inline_projector_weight_volumes=inline_projector_weight_volumes,
                         reconstruction_group_ids=(
@@ -6527,19 +6591,11 @@ def run_local_em_exact(
             timing.mstep_s += time.time() - mstep_t0
 
             if bpref_contribution_capture_active and not score_only:
-                candidate_mask = jnp.broadcast_to(
-                    jnp.asarray(bucket.local_rotation_mask)[:, :, None],
+                capture_priors = _bpref_capture_priors(
+                    scores,
                     probs.shape,
-                )
-                if bucket.local_sample_mask is not None:
-                    candidate_mask = candidate_mask & jnp.asarray(bucket.local_sample_mask)
-                rotation_prior = local_rotation_log_prior
-                translation_prior = jnp.asarray(bucket.translation_log_prior)
-                preprior_scores = scores - rotation_prior[:, :, None] - translation_prior[:, None, :]
-                preprior_scores = jnp.where(
-                    candidate_mask & jnp.isfinite(preprior_scores),
-                    preprior_scores,
-                    -jnp.inf,
+                    bucket=bucket,
+                    rotation_log_prior=local_rotation_log_prior,
                 )
                 reconstruction_threshold_for_dump = (
                     jnp.zeros((batch_size,), dtype=jnp.float64)
@@ -6557,45 +6613,18 @@ def run_local_em_exact(
                     rotation_indices=bucket.local_rotation_ids,
                     fine_translations=local_layout.translation_grid,
                     scores=scores,
-                    preprior_scores=preprior_scores,
+                    preprior_scores=capture_priors.preprior_scores,
                     probs=probs,
-                    rotation_log_prior=rotation_prior,
-                    translation_log_prior=translation_prior,
+                    rotation_log_prior=capture_priors.rotation_log_prior,
+                    translation_log_prior=capture_priors.translation_log_prior,
                     log_z=log_Z,
                     best_log_score=best_log_score,
                     reconstruction_probs=reconstruction_probs,
                     reconstruction_mask=reconstruction_sample_mask,
                     reconstruction_sum_weight=jnp.sum(reconstruction_probs, axis=(1, 2)),
                     reconstruction_threshold=reconstruction_threshold_for_dump,
-                    candidate_mask=candidate_mask,
-                    high_precision_operand_bundle=False,
-                    raw_batch_data=None,
-                    ctf_params=None,
-                    noise_variance_half=None,
-                    integer_pre_shifts=None,
-                    batch_image_corrections=None,
-                    batch_scale_corrections=None,
-                    relion_preprocess_normalization_factors=None,
-                    relion_cuda_preprocess=False,
-                    score_with_masked_images=score_with_masked_images,
-                    image_mask=None,
-                    image_mask_mode="not-captured",
-                    voxel_size=experiment_dataset.voxel_size,
-                    ctf_mode="not-captured",
-                    ctf_dose_per_tilt=0.0,
-                    ctf_angle_per_tilt=0.0,
-                    disc_type=disc_type,
-                    projection_padding_factor=projection_padding_factor,
-                    reconstruction_padding_factor=reconstruction_padding_factor,
-                    use_relion_x_half_mstep=mstep_relion_x_half,
-                    winner_take_all=False,
-                    max_r=mstep_adjoint_max_r,
-                    window_indices=mstep_recon_window_indices,
-                    image_shape=image_shape,
-                    volume_shape=recon_volume_shape,
-                    shadow_only_mode=False,
-                    shadow_score_bitwise_equal=True,
-                    shadow_reduction_agreement=None,
+                    candidate_mask=capture_priors.candidate_mask,
+                    **capture_static_kwargs,
                     reconstruction_group_ids=bucket_reconstruction_group_ids,
                 )
             scores = None

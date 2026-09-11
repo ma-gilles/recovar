@@ -224,6 +224,14 @@ reads the `RECOVAR_K1_DENSE_PASS2` / `RECOVAR_K_CLASS_DENSE_PASS2` diagnostic sw
 for the three adaptive call sites, and `_coarse_pose_assignments` collapses fine pose
 assignments onto the coarse grid when a fine pass ran
 ([`test_adaptive_engine_call_owner.py`](../../tests/unit/test_adaptive_engine_call_owner.py)).
+In [`local_em_engine`](../../recovar/em/dense_single_volume/local_em_engine.py), the
+exact-local BPref contribution capture binds its fixed operands once per run through
+`_exact_local_bpref_capture_static_kwargs` (raw batch data, CTF parameters, image masks
+and shadow comparisons recorded as absent; padding factors, x-half layout, adjoint radius,
+window indices and shapes from the M-step geometry) and derives each captured bucket's
+candidate mask and prior-free scores through `_bpref_capture_priors`; the fused and big-JIT
+capture sites pass only their per-bucket operands
+([`test_bpref_capture_operands_owner.py`](../../tests/unit/test_bpref_capture_operands_owner.py)).
 In [`significance`](../../recovar/em/dense_single_volume/helpers/significance.py),
 `_coarse_gaussian_ffi_default` applies the fresh-InitialModel coarse Gaussian FFI
 default only when the supplied RELION projector operands exist; a dense pass
