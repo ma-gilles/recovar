@@ -286,9 +286,13 @@ def test_fresh_k1_spectrum_norm_reaches_local_noise_update_only():
     assert "fresh K=1-only" in wrapper_source
     assert "source_faithful_spectrum_norm=source_faithful_spectrum_norm" in wrapper_source
     local_dispatch = loop_source[
-        loop_source.index("if use_local:") : loop_source.index("elif use_adaptive:")
+        loop_source.index("if use_local:") : loop_source.index("dense_half_kwargs = dict(")
     ]
     assert "source_faithful_spectrum_norm=source_faithful_spectrum_norm" in local_dispatch
+    dense_keywords = loop_source[
+        loop_source.index("dense_half_kwargs = dict(") : loop_source.index("if use_adaptive:\n                    dense_result")
+    ]
+    assert dense_keywords.count("source_faithful_spectrum_norm=source_faithful_spectrum_norm") == 1
 
 
 @pytest.mark.parametrize(
