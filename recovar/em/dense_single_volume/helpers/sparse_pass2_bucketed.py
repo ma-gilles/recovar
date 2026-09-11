@@ -7872,6 +7872,87 @@ def subtract_projected_reference_from_sparse_mstep_rotation_sums(
     return summed - projected_reference_delta
 
 
+class _Pass2WindowSetup(NamedTuple):
+    """Window, memory and precision setup shared by both bucketed pass-2 entry points."""
+
+    mstep_current_size: int | None
+    n_half: int
+    window_spec_kwargs: dict
+    budget_window_spec: object
+    device_memory_bytes: int | None
+    precision_policy: DensePrecisionPolicy
+
+
+def _pass2_window_setup(
+    image_shape,
+    *,
+    current_size,
+    reconstruction_current_size,
+    half_spectrum_scoring: bool,
+    square_window: bool,
+    relion_firstiter_score_mode,
+    use_exact_relion_gaussian: bool,
+    use_float64_scoring: bool,
+) -> _Pass2WindowSetup:
+    """Resolve the M-step current size, the score/recon window and the precision policy of a pass 2."""
+
+    H, W = image_shape
+    mstep_current_size = (
+        current_size
+        if reconstruction_current_size is None
+        else int(reconstruction_current_size)
+    )
+    if (
+        use_exact_relion_gaussian
+        and current_size is not None
+        and int(current_size) < int(W)
+        and (not half_spectrum_scoring or square_window)
+    ):
+        raise NotImplementedError(
+            "exact RELION fine Gaussian high-resolution scoring requires "
+            "half_spectrum_scoring=True and square_window=False"
+        )
+    n_half = H * (W // 2 + 1)
+    window_spec_kwargs = {}
+    if relion_firstiter_score_mode == "normalized_cc":
+        window_spec_kwargs = {
+            "score_square": True,
+            "score_include_dc": True,
+        }
+    budget_window_spec = make_fourier_window_spec(
+        image_shape,
+        current_size,
+        n_half,
+        reconstruction_current_size=mstep_current_size,
+        square=square_window,
+        include_recon_window=True,
+        **window_spec_kwargs,
+    )
+    return _Pass2WindowSetup(
+        mstep_current_size=mstep_current_size,
+        n_half=n_half,
+        window_spec_kwargs=window_spec_kwargs,
+        budget_window_spec=budget_window_spec,
+        device_memory_bytes=_device_memory_limit_bytes(),
+        precision_policy=DensePrecisionPolicy(use_float64_scoring=use_float64_scoring),
+    )
+
+
+def _fine_translation_prior_2d(translation_log_prior, fine_translation_parent, *, n_images, n_fine_trans, dtype):
+    """Expand the coarse translation log-prior onto the fine translation grid, or ``None`` without a prior."""
+
+    if translation_log_prior is None:
+        return None
+    translation_log_prior_np = np.asarray(translation_log_prior, dtype=dtype)
+    return expand_fine_translation_prior(
+        translation_log_prior_np,
+        fine_translation_parent,
+        n_images=n_images,
+        n_fine_trans=n_fine_trans,
+        dtype=dtype,
+    )
+
+
 def compute_pass2_stats_sparse_bucketed(
     experiment_dataset,
     volume,
@@ -8087,39 +8168,23 @@ def compute_pass2_stats_sparse_bucketed(
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
     H, W = image_shape
-    mstep_current_size = (
-        current_size
-        if reconstruction_current_size is None
-        else int(reconstruction_current_size)
-    )
-    if (
-        use_exact_relion_gaussian
-        and current_size is not None
-        and int(current_size) < int(W)
-        and (not half_spectrum_scoring or square_window)
-    ):
-        raise NotImplementedError(
-            "exact RELION fine Gaussian high-resolution scoring requires "
-            "half_spectrum_scoring=True and square_window=False"
-        )
-    n_half = H * (W // 2 + 1)
-    window_spec_kwargs = {}
-    if relion_firstiter_score_mode == "normalized_cc":
-        window_spec_kwargs = {
-            "score_square": True,
-            "score_include_dc": True,
-        }
-    budget_window_spec = make_fourier_window_spec(
-        image_shape,
-        current_size,
+    (
+        mstep_current_size,
         n_half,
-        reconstruction_current_size=mstep_current_size,
-        square=square_window,
-        include_recon_window=True,
-        **window_spec_kwargs,
+        window_spec_kwargs,
+        budget_window_spec,
+        device_memory_bytes,
+        precision_policy,
+    ) = _pass2_window_setup(
+        image_shape,
+        current_size=current_size,
+        reconstruction_current_size=reconstruction_current_size,
+        half_spectrum_scoring=half_spectrum_scoring,
+        square_window=square_window,
+        relion_firstiter_score_mode=relion_firstiter_score_mode,
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        use_float64_scoring=use_float64_scoring,
     )
-    device_memory_bytes = _device_memory_limit_bytes()
-    precision_policy = DensePrecisionPolicy(use_float64_scoring=use_float64_scoring)
 
     if bool(relion_x_half_mstep):
         # RELION BPref::initZeros(current_size) sizes the accumulator from the
@@ -8226,17 +8291,13 @@ def compute_pass2_stats_sparse_bucketed(
     )
 
     # Translation prior in the fine grid
-    if translation_log_prior is None:
-        fine_translation_prior_2d = None
-    else:
-        translation_log_prior_np = np.asarray(translation_log_prior, dtype=precision_policy.score_real_dtype)
-        fine_translation_prior_2d = expand_fine_translation_prior(
-            translation_log_prior_np,
-            fine_translation_parent,
-            n_images=n_images,
-            n_fine_trans=n_fine_trans,
-            dtype=precision_policy.score_real_dtype,
-        )
+    fine_translation_prior_2d = _fine_translation_prior_2d(
+        translation_log_prior,
+        fine_translation_parent,
+        n_images=n_images,
+        n_fine_trans=n_fine_trans,
+        dtype=precision_policy.score_real_dtype,
+    )
 
     # Per-image hypothesis prep
     prep_t0 = time.time()
@@ -12139,40 +12200,24 @@ def compute_k_class_pass2_stats_sparse_fused(
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
     H, W = image_shape
-    mstep_current_size = (
-        current_size
-        if reconstruction_current_size is None
-        else int(reconstruction_current_size)
-    )
-    if (
-        use_exact_relion_gaussian
-        and current_size is not None
-        and int(current_size) < int(W)
-        and (not half_spectrum_scoring or square_window)
-    ):
-        raise NotImplementedError(
-            "exact RELION fine Gaussian high-resolution scoring requires "
-            "half_spectrum_scoring=True and square_window=False"
-        )
-    n_half = H * (W // 2 + 1)
-    winner_take_all = bool(relion_firstiter_winner_take_all)
-    window_spec_kwargs = {}
-    if relion_firstiter_score_mode == "normalized_cc":
-        window_spec_kwargs = {
-            "score_square": True,
-            "score_include_dc": True,
-        }
-    budget_window_spec = make_fourier_window_spec(
-        image_shape,
-        current_size,
+    (
+        mstep_current_size,
         n_half,
-        reconstruction_current_size=mstep_current_size,
-        square=square_window,
-        include_recon_window=True,
-        **window_spec_kwargs,
+        window_spec_kwargs,
+        budget_window_spec,
+        device_memory_bytes,
+        precision_policy,
+    ) = _pass2_window_setup(
+        image_shape,
+        current_size=current_size,
+        reconstruction_current_size=reconstruction_current_size,
+        half_spectrum_scoring=half_spectrum_scoring,
+        square_window=square_window,
+        relion_firstiter_score_mode=relion_firstiter_score_mode,
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        use_float64_scoring=use_float64_scoring,
     )
-    device_memory_bytes = _device_memory_limit_bytes()
-    precision_policy = DensePrecisionPolicy(use_float64_scoring=use_float64_scoring)
+    winner_take_all = bool(relion_firstiter_winner_take_all)
     # The fused K-class route deliberately excludes the K=1-only
     # source-faithful spectrum-normalization option at its caller boundary.
     source_faithful_spectrum_norm = False
@@ -12279,17 +12324,13 @@ def compute_k_class_pass2_stats_sparse_fused(
         n_images=n_images,
         n_dims=translations_np.shape[1],
     )
-    if translation_log_prior is None:
-        fine_translation_prior_2d = None
-    else:
-        translation_log_prior_np = np.asarray(translation_log_prior, dtype=precision_policy.score_real_dtype)
-        fine_translation_prior_2d = expand_fine_translation_prior(
-            translation_log_prior_np,
-            fine_translation_parent,
-            n_images=n_images,
-            n_fine_trans=n_fine_trans,
-            dtype=precision_policy.score_real_dtype,
-        )
+    fine_translation_prior_2d = _fine_translation_prior_2d(
+        translation_log_prior,
+        fine_translation_parent,
+        n_images=n_images,
+        n_fine_trans=n_fine_trans,
+        dtype=precision_policy.score_real_dtype,
+    )
 
     prep_t0 = time.time()
     per_image_inputs_by_class = [
