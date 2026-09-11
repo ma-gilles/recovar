@@ -1384,6 +1384,24 @@ def _local_projection_mode(window_spec, projection_kwargs: dict, relion_projecto
     return "windowed_indexed_cuda"
 
 
+def _unpadded_bucket_rows(bucket, unpadded_batch_size: int) -> dict:
+    """The bucket's rotation ids, mask, rotations, source Euler angles and posterior ids limited to the unpadded batch."""
+
+    return dict(
+        local_rotation_ids=bucket.local_rotation_ids[:unpadded_batch_size],
+        local_rotation_mask=bucket.local_rotation_mask[:unpadded_batch_size],
+        local_rotations=bucket.local_rotations[:unpadded_batch_size],
+        local_source_eulers=(
+            None if bucket.local_source_eulers is None else bucket.local_source_eulers[:unpadded_batch_size]
+        ),
+        local_rotation_posterior_ids=(
+            None
+            if bucket.local_rotation_posterior_ids is None
+            else bucket.local_rotation_posterior_ids[:unpadded_batch_size]
+        ),
+    )
+
+
 def _postprocess_local_bucket(
     *,
     image_indices,
@@ -1609,17 +1627,7 @@ def _postprocess_fixed_capacity_whole_score_calls(
         )
         significant_sample_count, reconstruction_row_count = _postprocess_local_bucket(
             image_indices=unpadded_bucket.image_indices,
-            local_rotation_ids=bucket.local_rotation_ids[:unpadded_batch_size],
-            local_rotation_mask=bucket.local_rotation_mask[:unpadded_batch_size],
-            local_rotations=bucket.local_rotations[:unpadded_batch_size],
-            local_source_eulers=(
-                None if bucket.local_source_eulers is None else bucket.local_source_eulers[:unpadded_batch_size]
-            ),
-            local_rotation_posterior_ids=(
-                None
-                if bucket.local_rotation_posterior_ids is None
-                else bucket.local_rotation_posterior_ids[:unpadded_batch_size]
-            ),
+            **_unpadded_bucket_rows(bucket, unpadded_batch_size),
             translation_grid=translation_grid,
             n_trans=n_trans,
             best_argmax=best_argmax[:unpadded_batch_size],
@@ -5963,17 +5971,7 @@ def run_local_em_exact(
             )
             significant_sample_count, reconstruction_row_count = _postprocess_local_bucket(
                 image_indices=unpadded_bucket.image_indices,
-                local_rotation_ids=bucket.local_rotation_ids[:unpadded_batch_size],
-                local_rotation_mask=bucket.local_rotation_mask[:unpadded_batch_size],
-                local_rotations=bucket.local_rotations[:unpadded_batch_size],
-                local_source_eulers=(
-                    None if bucket.local_source_eulers is None else bucket.local_source_eulers[:unpadded_batch_size]
-                ),
-                local_rotation_posterior_ids=(
-                    None
-                    if bucket.local_rotation_posterior_ids is None
-                    else bucket.local_rotation_posterior_ids[:unpadded_batch_size]
-                ),
+                **_unpadded_bucket_rows(bucket, unpadded_batch_size),
                 translation_grid=local_layout.translation_grid,
                 n_trans=n_trans,
                 best_argmax=postprocess_rows(best_argmax),
