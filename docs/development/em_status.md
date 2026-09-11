@@ -38,6 +38,14 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+K=1 dense scoring with RELION scale groups now routes through the
+adaptive/sparse engine at the requested oversampling order, including 0
+(RELION accumulates group XA/AA in every pass; the direct dense engine does
+not), instead of raising. This is the repair for the fast parity tier's K=1
+cases (user delegated the decision). 153 CPU guard cases and the 502-case
+controller panel pass; the GPU fast tier rerun is recorded separately. The
+tier's K-class cases still need a dispatch-capable 5k/128 oracle fixture.
+
 Qualification of frozen `400ad81e4` on H100 (immutable worktree): the GPU fast
 parity tier failed 6 of 7 cases for pre-existing reasons (direct dense K=1 path
 rejected under default native group-scale correction since `1d84d63e0`; K-class
