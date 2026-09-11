@@ -11,7 +11,6 @@ from __future__ import annotations
 import numpy as np
 
 from recovar.em.dense_single_volume.batch_planning import _plan_consecutive_padded_batches
-from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 from recovar.em.dense_single_volume.helpers.compact_candidates import (
     SparseCandidateMask,
     _candidate_mask_to_dense,
@@ -24,52 +23,6 @@ from recovar.em.dense_single_volume.local_layout import _exact_bucket_rotation_s
 _DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH = 1_000_000
 _DEFAULT_TAIL_BUCKET_COALESCE_MAX_INFLATION = 2.0
 _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE = 4096
-
-
-LADDER_CHUNKS_ENV = "RECOVAR_SPARSE_PASS2_LADDER_CHUNKS"
-LADDER_CHUNK_FLOOR = 16
-
-
-def ladder_chunks_enabled() -> bool:
-    """Return whether bucket image lists are split into power-of-two chunks.
-
-    Fused K-class pass 2 compiles one XLA program per helper and bucket shape.
-    Without the ladder each rotation/pair bucket holds however many images
-    fall into it (a different count every iteration), so every bucket of every
-    iteration is a new shape. With the ladder the image axis takes only
-    power-of-two sizes at or above :data:`LADDER_CHUNK_FLOOR` plus one
-    remainder below the floor, so bucket shapes repeat across iterations.
-    Per-image results are unchanged; only the grouping of per-bucket
-    reductions differs.
-    """
-
-    return parse_env_binary_flag(LADDER_CHUNKS_ENV)
-
-
-def bucket_chunk_bounds(n_images: int, max_per_chunk: int, *, ladder: bool | None = None):
-    """Return ``(start, stop)`` chunk bounds for one bucket's image list.
-
-    Default: consecutive chunks of ``max_per_chunk``. Ladder: greedy powers of
-    two no larger than ``max_per_chunk`` while at least
-    :data:`LADDER_CHUNK_FLOOR` images remain, then one remainder chunk.
-    """
-
-    n_images = int(n_images)
-    max_per_chunk = max(1, int(max_per_chunk))
-    if ladder is None:
-        ladder = ladder_chunks_enabled()
-    if not ladder:
-        return [(start, min(start + max_per_chunk, n_images)) for start in range(0, n_images, max_per_chunk)]
-    largest_power = 1 << (max_per_chunk.bit_length() - 1)
-    bounds = []
-    start = 0
-    while n_images - start >= LADDER_CHUNK_FLOOR:
-        size = min(largest_power, 1 << ((n_images - start).bit_length() - 1))
-        bounds.append((start, start + size))
-        start += size
-    if start < n_images:
-        bounds.append((start, n_images))
-    return bounds
 
 
 def _bucket_pass2_inputs(
@@ -196,8 +149,8 @@ def _bucket_pass2_inputs(
             int(max_hypotheses_per_microbatch) // max(1, bucket_size * int(n_fine_trans)),
         )
         max_per_chunk = max(1, min(int(max_images_per_microbatch), cap_by_hypotheses))
-        for start, stop in bucket_chunk_bounds(bucket_image_indices.shape[0], max_per_chunk):
-            chunk = bucket_image_indices[start:stop]
+        for start in range(0, bucket_image_indices.shape[0], max_per_chunk):
+            chunk = bucket_image_indices[start : start + max_per_chunk]
             buckets.append(
                 {
                     "bucket_size": bucket_size,
@@ -285,12 +238,12 @@ def _bucket_sparse_k_class_pass2_inputs(
                 cap_by_hypotheses,
             ),
         )
-        for start, stop in bucket_chunk_bounds(bucket_image_indices.shape[0], max_per_chunk):
+        for start in range(0, bucket_image_indices.shape[0], max_per_chunk):
             buckets.append(
                 {
                     "bucket_size": bucket_size,
                     "image_indices": np.asarray(
-                        bucket_image_indices[start:stop],
+                        bucket_image_indices[start : start + max_per_chunk],
                         dtype=np.int64,
                     ),
                 }
