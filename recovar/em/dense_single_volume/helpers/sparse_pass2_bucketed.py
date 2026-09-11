@@ -38,13 +38,14 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.normalization_inputs import optional_normalization_vector
-from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_correction_groups
-
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.helpers import relion_ctf
-from recovar.em.dense_single_volume.helpers import bpref_diagnostics, norm_scale_diagnostics, pass2_diagnostics
+from recovar.em.dense_single_volume.helpers import (
+    bpref_diagnostics,
+    norm_scale_diagnostics,
+    pass2_diagnostics,
+    relion_ctf,
+)
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
 )
@@ -59,6 +60,15 @@ from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
     maybe_capture_k1_production_bucket_chunked,
     require_chunked_capture_capacity,
 )
+from recovar.em.dense_single_volume.helpers.compact_candidates import (
+    SparseCandidateMask,
+    _candidate_mask_count,
+    _candidate_mask_is_full,
+)
+from recovar.em.dense_single_volume.helpers.deterministic_reduce import (
+    add_segment_sum,
+    deterministic_reductions_enabled,
+)
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.env_flags import (
     parse_env_flag,
@@ -70,10 +80,6 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
     make_fourier_window_indices_np,
     make_fourier_window_spec,
     relion_fftw_order_for_square_score_window,
-)
-from recovar.em.dense_single_volume.helpers.deterministic_reduce import (
-    add_segment_sum,
-    deterministic_reductions_enabled,
 )
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     bin_shell_values_jax,
@@ -95,6 +101,7 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
     half_image_phase_factors,
 )
+from recovar.em.dense_single_volume.helpers.normalization_inputs import optional_normalization_vector
 from recovar.em.dense_single_volume.helpers.oversampling import (
     _find_significant_mask_full_sort,
     _relion_cuda_f32_tail_target,
@@ -123,27 +130,23 @@ from recovar.em.dense_single_volume.helpers.projection import (
 from recovar.em.dense_single_volume.helpers.projection import (
     relion_scale_correction_pixel_mask as _relion_scale_correction_pixel_mask,
 )
-from recovar.em.dense_single_volume.helpers.compact_candidates import (
-    SparseCandidateMask,
-    _candidate_mask_count,
-    _candidate_mask_is_full,
-)
+from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_correction_groups
 from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
-    _compact_pair_counts_from_inputs,
-    _compact_pair_image_mask_for_threshold,
-    _bucket_sparse_k_class_compact_pair_counts,
     _DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH,
     _DEFAULT_TAIL_BUCKET_COALESCE_MAX_INFLATION,
     _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE,
     _bucket_pass2_inputs,
+    _bucket_sparse_k_class_compact_pair_counts,
     _bucket_sparse_k_class_pass2_inputs,
-    _prepare_per_image_compact_candidate_pairs,
-    _prepare_per_image_pass2_inputs,
+    _build_bucket_arrays,
     _build_compact_pair_bucket_arrays,
     _build_compact_pair_bucket_arrays_from_per_image_inputs,
-    _build_bucket_arrays,
-    _compact_bucket_size_for_class,
     _build_k_class_bucket_arrays,
+    _compact_bucket_size_for_class,
+    _compact_pair_counts_from_inputs,
+    _compact_pair_image_mask_for_threshold,
+    _prepare_per_image_compact_candidate_pairs,
+    _prepare_per_image_pass2_inputs,
 )
 from recovar.em.dense_single_volume.helpers.translation_prior import (
     expand_fine_translation_prior,
@@ -158,12 +161,12 @@ from recovar.em.dense_single_volume.helpers.types import (
     sparse_pass2_result,
 )
 from recovar.em.dense_single_volume.local_backprojection import (
-    relion_x_half_sequential_translation_reduction_enabled,
     compute_local_ctf_sums_from_probs_sum_t,
     compute_local_mstep_sums,
     compute_local_weighted_sums,
     flatten_bucket_rotations,
     flatten_bucket_rows,
+    relion_x_half_sequential_translation_reduction_enabled,
 )
 from recovar.em.dense_single_volume.local_layout import _exact_bucket_rotation_size
 from recovar.reconstruction import noise as noise_utils

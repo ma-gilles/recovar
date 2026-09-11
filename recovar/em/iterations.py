@@ -1,10 +1,12 @@
 """High-level EM loop orchestration and convergence tracking."""
 
+import logging
+
+import jax.numpy as jnp
+import numpy as np
+
 from recovar import utils
 from recovar.em.core import hard_assignment_idx_to_pose
-import numpy as np
-import jax.numpy as jnp
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +73,8 @@ def split_E_M_v2(
         state_objs[i].finish_up_M_step(experiment_dataset, disc_type)
 
     ## Update prior and estimate resolution
-    from recovar.reconstruction import regularization
     from recovar.heterogeneity import locres
+    from recovar.reconstruction import regularization
 
     cryo = experiment_datasets[0]
 

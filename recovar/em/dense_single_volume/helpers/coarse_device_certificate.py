@@ -6,8 +6,8 @@ and interval-state carries inside one executable. Exact rescoring still owns
 published scores. The significance engine does not use this module yet.
 """
 
-from functools import partial
 import operator
+from functools import partial
 
 import jax
 import jax.numpy as jnp

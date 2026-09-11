@@ -1,15 +1,18 @@
 """EM state containers: EMState, SGDState, HeterogeneousEMState."""
 
 import logging
-import numpy as np
+
 import jax
-from recovar import utils, jax_config
-from recovar.reconstruction import relion_functions
+import numpy as np
+
+from recovar import jax_config, utils
 from recovar.core import mask as mask_fn
 from recovar.heterogeneity import principal_components
+from recovar.reconstruction import relion_functions
+
 from .e_step import E_with_precompute
-from .m_step import M_with_precompute
 from .heterogeneity import compute_H_B, compute_projected_covariance_rhs_lhs, solve_covariance
+from .m_step import M_with_precompute
 
 logger = logging.getLogger(__name__)
 

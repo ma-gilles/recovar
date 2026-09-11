@@ -25,7 +25,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from typing import Iterable
 
 import jax.numpy as jnp
 import numpy as np

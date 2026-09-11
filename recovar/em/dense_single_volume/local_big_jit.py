@@ -21,13 +21,13 @@ from recovar.core import mask as core_mask
 from recovar.em.dense_single_volume.helpers.adjoint import (
     batch_adjoint_slice_volume_maybe_windowed as _batch_adjoint_slice_volume_maybe_windowed,
 )
-from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
-from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
-from recovar.em.dense_single_volume.helpers.flat_local_rows import scatter_flat_local_rows
 from recovar.em.dense_single_volume.helpers.deterministic_reduce import (
     add_segment_sum,
     deterministic_reductions_enabled,
 )
+from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
+from recovar.em.dense_single_volume.helpers.flat_local_rows import scatter_flat_local_rows
 from recovar.em.dense_single_volume.helpers.half_spectrum import bin_shell_values_jax
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     half_image_phase_factors,

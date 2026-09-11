@@ -26,7 +26,6 @@ from recovar.em.ppca_refinement.config import (
 )
 from recovar.em.ppca_refinement.dense_dataset import (
     coerce_augmented_half_volumes,
-    combine_halfset_scoring_model,
     compute_dense_ppca_adaptive_significance,
     run_dense_ppca_halfset_fused_em_iteration,
 )

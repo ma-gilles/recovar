@@ -2,21 +2,24 @@
 
 import functools
 import logging
-import numpy as np
+
 import jax
 import jax.numpy as jnp
+import numpy as np
+
 from recovar import core, utils
 from recovar.core.configs import ForwardModelConfig
+
 from .core import (
-    batch_vol_slice_volume,
-    batch_vol_rot_slice_volume,
-    compute_dot_products_eqx,
-    compute_CTFed_proj_norms_eqx,
-    norm_squared_residuals_from_ft,
     NORM_FFT,
+    batch_vol_rot_slice_volume,
+    batch_vol_slice_volume,
+    compute_CTFed_proj_norms_eqx,
+    compute_dot_products_eqx,
+    norm_squared_residuals_from_ft,
 )
-from .sampling import translations_to_indices
 from .heterogeneity import compute_bHb_terms
+from .sampling import translations_to_indices
 
 logger = logging.getLogger(__name__)
 

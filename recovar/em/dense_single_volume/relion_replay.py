@@ -33,14 +33,13 @@ from recovar.em.dense_single_volume.mean_helpers import (
     _normalize_noise_variance_per_half,
 )
 from recovar.em.dense_single_volume.refinement_options import RefinementOptions
-
 from recovar.em.sampling import (
     _translation_grid_for_class_count,
-    read_relion_sampling_metadata,
-    read_relion_model_metadata,
     read_relion_direction_prior,
     read_relion_direction_priors,
+    read_relion_model_metadata,
     read_relion_optimiser_metadata,
+    read_relion_sampling_metadata,
     relion_sampling_perturbation_for_iteration,
 )
 

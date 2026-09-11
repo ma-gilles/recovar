@@ -1,17 +1,20 @@
 import functools
 import logging
 from typing import NamedTuple
-import numpy as np
+
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import equinox as eqx
-from recovar import core, utils, jax_config
+import numpy as np
+
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar.reconstruction import relion_functions, noise
-from recovar.heterogeneity import covariance_estimation, principal_components
+from recovar import core, jax_config, utils
 from recovar.core.configs import ForwardModelConfig
-from .core import batch_vol_slice_volume
+from recovar.heterogeneity import covariance_estimation, principal_components
 from recovar.heterogeneity.covariance_estimation import compute_both_H_B, compute_covariance_regularization_relion_style
+from recovar.reconstruction import noise, relion_functions
+
+from .core import batch_vol_slice_volume
 
 logger = logging.getLogger(__name__)
 

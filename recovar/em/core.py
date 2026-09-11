@@ -1,14 +1,16 @@
 """Core EM iteration logic: cross-correlation, residual computation."""
 
 import functools
+import logging
+
+import equinox as eqx
 import jax
 import jax.numpy as jnp
-import equinox as eqx
+import numpy as np
+from scipy.spatial.transform import Rotation as R
+
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-import numpy as np
-import logging
-from scipy.spatial.transform import Rotation as R
 
 logger = logging.getLogger(__name__)
 

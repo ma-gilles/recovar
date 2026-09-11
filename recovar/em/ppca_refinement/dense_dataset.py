@@ -51,13 +51,13 @@ from recovar.em.ppca_refinement.mean_regularization import (
     MeanRegularizationConfig,
     resolve_mean_precision,
 )
-from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 from recovar.em.ppca_refinement.pose_selection import (
     merge_top_p_pose_scores,
     select_distinct_top_poses,
     top_p_from_score_block,
     top_pose_candidate_count,
 )
+from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
 from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
 from recovar.ppca.triangular import _tri_size

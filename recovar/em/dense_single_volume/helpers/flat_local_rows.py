@@ -5,12 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import jax.numpy as jnp
+import numpy as np
 
 from recovar.em.dense_single_volume.helpers.deterministic_reduce import (
     deterministic_reductions_enabled,
 )
-import numpy as np
-
 from recovar.em.dense_single_volume.local_layout import _exact_bucket_rotation_size
 
 

@@ -16,7 +16,6 @@ from recovar.em.dense_single_volume.relion_worker_scale import (
 )
 from recovar.em.global_winner_summary import MAX_SUPPORTED_BYTES, SCHEMA, sha256_file
 
-
 RELION_DISPATCH_CAPTURE_PENDING = "capture_pending_v1"
 
 

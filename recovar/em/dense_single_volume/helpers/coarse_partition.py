@@ -6,8 +6,8 @@ No engine selects this path. Callers must include certificate, grouping and
 posterior/publication work when measuring its cost.
 """
 
-from functools import partial
 import operator
+from functools import partial
 from typing import NamedTuple
 
 import jax

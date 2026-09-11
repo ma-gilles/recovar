@@ -26,22 +26,22 @@ from recovar.em.ppca_refinement.config import (
     SparsePass2Config,
 )
 from recovar.em.ppca_refinement.dense_dataset import prepare_dense_ppca_dataset_inputs
+from recovar.em.ppca_refinement.diagnostics import build_iteration_diagnostics, resolve_image_scale_range
 from recovar.em.ppca_refinement.engine import (
     DensePPCAFusedBlock,
     DensePPCAFusedEMResult,
     PosteriorDiagnostics,
     _enforce_augmented_x0,
 )
-from recovar.em.ppca_refinement.diagnostics import build_iteration_diagnostics, resolve_image_scale_range
 from recovar.em.ppca_refinement.mean_regularization import (
     MeanRegularizationConfig,
     resolve_mean_precision,
 )
-from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 from recovar.em.ppca_refinement.pose_selection import (
     select_distinct_top_poses,
     top_pose_candidate_count,
 )
+from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
 from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
 from recovar.ppca.pose_marginal import compute_ppca_pose_scores_and_moments_no_contrast

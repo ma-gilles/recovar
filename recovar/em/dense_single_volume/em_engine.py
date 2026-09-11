@@ -52,6 +52,9 @@ from .helpers.image_shifts import (
 from .helpers.jax_runtime import block_until_ready as _block_until_ready
 from .helpers.preprocessing import (
     image_preprocess_backend,
+    process_half_image,
+)
+from .helpers.preprocessing import (
     prepare_reconstruction_batch as _prepare_reconstruction_batch,
 )
 from .helpers.preprocessing import (
@@ -59,9 +62,6 @@ from .helpers.preprocessing import (
 )
 from .helpers.preprocessing import (
     preprocess_batch_firstiter_cc as _preprocess_batch_firstiter_cc,
-)
-from .helpers.preprocessing import (
-    process_half_image,
 )
 from .helpers.projection import (
     compute_noise_block as _compute_noise_block,

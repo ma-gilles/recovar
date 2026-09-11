@@ -22,7 +22,9 @@ import numpy as np
 from recovar import utils
 from recovar.core import fourier_transform_utils
 from recovar.data_io import cryoem_dataset
+from recovar.em.dense_single_volume import finalization_policy
 from recovar.em.dense_single_volume import parity_dump as _parity_dump
+from recovar.em.dense_single_volume import relion_replay as replay_policy
 from recovar.em.dense_single_volume.batch_planning import (
     _estimate_relion_em_batch_sizes,
     _image_backend,
@@ -50,13 +52,13 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     _final_local_sampling_orders,
     _native_final_perturbation_healpix_order,
     calculate_expected_angular_errors,
-    concatenate_pose_stacks_or_none,
     check_convergence,
+    concatenate_assignments,
+    concatenate_assignments_or_none,
+    concatenate_pose_stacks_or_none,
     healpix_angular_step,
     update_angular_sampling,
     update_refinement_state,
-    concatenate_assignments,
-    concatenate_assignments_or_none,
 )
 from recovar.em.dense_single_volume.helpers.dtype_policy import _local_search_precision_flags
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_flag_or_false
@@ -75,9 +77,9 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     infer_direction_prior_healpix_order,
     initial_direction_priors_from_snapshot,
     make_relion_translation_log_prior,
-    relion_direction_log_priors_for_half,
     normalize_class_direction_prior_per_half,
     normalize_direction_prior_per_half,
+    relion_direction_log_priors_for_half,
     relion_half_translation_prior_inputs,
     relion_local_search_sigmas,
     relion_translation_search_base,
@@ -115,9 +117,9 @@ from recovar.em.dense_single_volume.mean_helpers import (
     _class_weights_from_posterior,
     _initialize_class_log_priors,
     _mean_noise_variance,
-    _noise_radial_history,
     _mean_variance_for_scoring_half,
     _merged_mean_from_halves,
+    _noise_radial_history,
     _normalize_initial_means,
     _normalize_noise_variance_per_half,
     _reconstruct_and_postprocess_means,
@@ -145,7 +147,6 @@ from recovar.em.dense_single_volume.relion_metadata import (
 )
 from recovar.em.dense_single_volume.relion_normalization import update_relion_norm_scale_corrections
 from recovar.em.dense_single_volume.relion_replay import (
-    select_final_sampling_star,
     _apply_replay_correction_overrides,
     _as_sigma_offset_half_pair,
     _has_numbered_replay_iteration_overrides,
@@ -162,6 +163,7 @@ from recovar.em.dense_single_volume.relion_replay import (
     apply_iter_replay_overrides,
     apply_optimiser_convergence_replay,
     read_optimiser_accuracy_replay,
+    select_final_sampling_star,
 )
 from recovar.em.dense_single_volume.relion_worker_scale import (
     _dispatch_relion_follower_scale_for_final_all_data,
@@ -209,9 +211,6 @@ from recovar.reconstruction.regularization import (
     resolution_from_data_vs_prior,
     update_relion_growth_state_from_fsc,
 )
-
-from recovar.em.dense_single_volume import finalization_policy
-from recovar.em.dense_single_volume import relion_replay as replay_policy
 
 logger = logging.getLogger(__name__)
 

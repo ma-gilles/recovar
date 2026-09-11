@@ -9,10 +9,10 @@ by the ownership boundary.
 
 import logging
 import os
+from typing import NamedTuple
 
 import jax.numpy as jnp
 import numpy as np
-from typing import NamedTuple
 
 from recovar import cuda_backproject as _cuda_backproject_diagnostics
 from recovar import utils

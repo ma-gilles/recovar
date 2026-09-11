@@ -13,32 +13,20 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from .local_batch_planning import (
-    _exact_local_effective_max_hypotheses_per_microbatch,
-    _exact_local_microbatch_env_overridden,
-    _exact_local_xhalf_auto_microbatch_boost,
-    _exact_local_xhalf_projection_microbatch_cap,
-    _exact_local_xhalf_projection_target_row_pixels,
-    _exact_local_xhalf_tail_microbatch_cap,
-)
-
-
-from recovar.em.dense_single_volume.helpers import compact_candidates
-from recovar.em.dense_single_volume.helpers.normalization_inputs import prepare_local_normalization_inputs
-from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_correction_groups
-
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.dense_single_volume import fixed_capacity_local, local_preprocessing
-from recovar.em.dense_single_volume.projector_preparation import prepare_local_projector_slab
 from recovar.em.dense_single_volume import local_projection_cache as projection_cache
-from recovar.em.dense_single_volume.helpers import relion_ctf
-from recovar.em.dense_single_volume.helpers import vdam_replay
-from recovar.em.dense_single_volume.helpers import bpref_diagnostics
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
 from recovar.em.dense_single_volume.deferred_noise_pack import pack_noise_pixel_capacity
 from recovar.em.dense_single_volume.fixed_capacity_local import (
     _FixedCapacityLocalExecutionBundle,
+)
+from recovar.em.dense_single_volume.helpers import (
+    bpref_diagnostics,
+    compact_candidates,
+    relion_ctf,
+    sparse_pass2_bucketed,
+    vdam_replay,
 )
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_maybe_windowed as _adjoint_slice_volume_maybe_windowed,
@@ -46,7 +34,6 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.deterministic_reduce import (
     add_segment_sum,
-    deterministic_reductions_enabled,
 )
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.env_flags import (
@@ -90,25 +77,43 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
     tiled_half_image_phase_factors,
 )
 from recovar.em.dense_single_volume.helpers.jax_runtime import block_until_ready as _block_until_ready
-from recovar.em.dense_single_volume.helpers.preprocessing import (
-    resolve_image_mask_for_half_preprocess,
-    relion_preprocess_backend,
-    uses_relion_cuda_image_preprocessing,
-)
+from recovar.em.dense_single_volume.helpers.normalization_inputs import prepare_local_normalization_inputs
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     half_translation_phase_table as _half_translation_phase_table,
 )
+from recovar.em.dense_single_volume.helpers.preprocessing import (
+    relion_preprocess_backend,
+    resolve_image_mask_for_half_preprocess,
+    uses_relion_cuda_image_preprocessing,
+)
 from recovar.em.dense_single_volume.helpers.projection import (
     _validate_centered_relion_projector_pixel_indices,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     compute_noise_block as _compute_noise_block,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     compute_norm_residual_per_image as _compute_norm_residual_per_image,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     compute_projections_block as _compute_projections_block,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     compute_relion_projector_projections_block as _compute_relion_projector_projections_block,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     compute_scale_correction_terms_per_image as _compute_scale_correction_terms_per_image,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     indexed_projection_available as _indexed_projection_available,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     project_indexed_half_spectrum as _project_indexed_half_spectrum,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
     relion_scale_correction_pixel_mask as _relion_scale_correction_pixel_mask,
 )
+from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_correction_groups
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _make_relion_wavg_rectangle,
     _make_stable_relion_wavg_rectangle,
@@ -129,10 +134,10 @@ from recovar.em.dense_single_volume.local_backprojection import (
     flatten_bucket_rows,
 )
 from recovar.em.dense_single_volume.local_big_jit import (
+    _LocalBigJitCore,
     _noise_image_power_shells_and_per_image,
     _partition_uniform_fixed_capacity_calls,
     _prepare_fixed_capacity_local_call,
-    _LocalBigJitCore,
     _reconstruct_fixed_capacity_score_only_result,
     _relion_wavg_direct_triplet_shells,
     run_deferred_local_exact_noise_core_jit,
@@ -163,8 +168,8 @@ from recovar.em.dense_single_volume.local_debug import (
 from recovar.em.dense_single_volume.local_layout import (
     LocalBucketSpec,
     LocalHypothesisLayout,
-    _local_mstep_rotations,
     _exact_bucket_rotation_size,
+    _local_mstep_rotations,
     _resolve_exact_local_bucket_radix,
     bucket_local_hypothesis_layout,
 )
@@ -190,9 +195,19 @@ from recovar.em.dense_single_volume.local_timing import (
     _new_local_transfer_timer,
     _prefixed_timer_profile,
 )
+from recovar.em.dense_single_volume.projector_preparation import prepare_local_projector_slab
 from recovar.em.dense_single_volume.shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
 from recovar.reconstruction import noise as noise_utils
 from recovar.utils.nvtx_shim import nvtx
+
+from .local_batch_planning import (
+    _exact_local_effective_max_hypotheses_per_microbatch,
+    _exact_local_microbatch_env_overridden,
+    _exact_local_xhalf_auto_microbatch_boost,
+    _exact_local_xhalf_projection_microbatch_cap,
+    _exact_local_xhalf_projection_target_row_pixels,
+    _exact_local_xhalf_tail_microbatch_cap,
+)
 
 logger = logging.getLogger(__name__)
 

@@ -4,8 +4,8 @@ Used only by explicitly opted-in routes. Only the mature CUDA scorer produces
 published scores; the certificate is used solely to select ordered source blocks.
 """
 
-from functools import partial
 import operator
+from functools import partial
 from typing import NamedTuple
 
 import jax
@@ -13,15 +13,16 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar import cuda_backproject
+
 from .coarse_device_certificate import (
     _certify_coarse_rotation_blocks_jit,
     _prepare_coarse_certificate_inputs,
 )
-from .coarse_device_selection import DeviceCoarseBlockSelection, SELECTION_REASONS
+from .coarse_device_selection import SELECTION_REASONS, DeviceCoarseBlockSelection
 from .coarse_gemm_hybrid import (
-    CoarseGemmHybridCompactScores,
     DEFAULT_ROTATION_BLOCK_CAPACITY,
     SOURCE_ROTATION_BLOCK_SIZE,
+    CoarseGemmHybridCompactScores,
     _assemble_coarse_gemm_hybrid_compact_scores_f32_jit,
 )
 

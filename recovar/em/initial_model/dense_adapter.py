@@ -7,9 +7,6 @@ duplicated while the VDAM M-step still gets independent halfset BackProjectors.
 
 from __future__ import annotations
 
-from recovar.em.dense_single_volume.helpers.preprocessing import uses_relion_cuda_image_preprocessing
-from recovar.em.dense_single_volume.helpers import bpref_diagnostics
-
 import hashlib
 import logging
 import os
@@ -21,7 +18,13 @@ from typing import Any, Callable, Literal
 import numpy as np
 
 from recovar.em.dense_single_volume.batch_planning import RELION_SCORE_TENSOR_FLOAT_BUDGET
+from recovar.em.dense_single_volume.helpers import bpref_diagnostics
+from recovar.em.dense_single_volume.helpers.coarse_score_diagnostics import (
+    _coarse_selector_audit_from_full_stats,
+    _with_coarse_significance_diagnostics,
+)
 from recovar.em.dense_single_volume.helpers.convergence import healpix_angular_step
+from recovar.em.dense_single_volume.helpers.preprocessing import uses_relion_cuda_image_preprocessing
 from recovar.em.dense_single_volume.helpers.resolution import compute_coarse_image_size
 from recovar.em.dense_single_volume.helpers.significance import (
     CoarseGaussianGemmDiagnosticScope,
@@ -31,10 +34,6 @@ from recovar.em.dense_single_volume.k_class import (
     _run_sparse_k_class_adaptive_pass2,
     run_dense_k_class_em,
     run_local_k_class_em,
-)
-from recovar.em.dense_single_volume.helpers.coarse_score_diagnostics import (
-    _coarse_selector_audit_from_full_stats,
-    _with_coarse_significance_diagnostics,
 )
 from recovar.em.dense_single_volume.local_layout import build_pass2_hypothesis_layout
 from recovar.em.sampling import (

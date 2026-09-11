@@ -11,7 +11,6 @@ import numpy as np
 import recovar.core.fourier_transform_utils as ftu
 from recovar.utils import helpers as utils
 
-
 VolumeAligner = Callable[[np.ndarray, np.ndarray], np.ndarray]
 
 

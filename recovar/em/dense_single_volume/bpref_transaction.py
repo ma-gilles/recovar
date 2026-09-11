@@ -5,7 +5,6 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-
 _POSITIONAL = (
     "data_volume",
     "weight_volume",

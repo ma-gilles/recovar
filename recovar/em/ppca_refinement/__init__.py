@@ -1,5 +1,12 @@
 """Pose-marginal PPCA refinement scaffolding for EM."""
 
+from .dense_dataset import (
+    DensePPCADatasetBlockInputs,
+    combine_halfset_scoring_model,
+    iter_dense_ppca_dataset_blocks,
+    run_dense_ppca_fused_em_iteration,
+    run_dense_ppca_halfset_fused_em_iteration,
+)
 from .engine import (
     DenseImageStats,
     DensePPCAFusedBlock,
@@ -8,22 +15,6 @@ from .engine import (
     dense_pose_ppca_E_step_blocked,
     fused_dense_pose_ppca_block,
     run_dense_ppca_fused_refinement_blocks,
-)
-from .dense_dataset import (
-    DensePPCADatasetBlockInputs,
-    combine_halfset_scoring_model,
-    iter_dense_ppca_dataset_blocks,
-    run_dense_ppca_fused_em_iteration,
-    run_dense_ppca_halfset_fused_em_iteration,
-)
-from .initialization import (
-    PPCAInitialization,
-    covariance_from_loading_matrix,
-    empirical_weighted_covariance,
-    initialize_ppca_from_gt_volumes,
-    initialize_ppca_from_kclass_volumes,
-    real_volume_to_centered_fourier,
-    real_volume_to_centered_fourier_half,
 )
 from .fixture_validation import KClassPPCAFixtureValidation, validate_kclass_to_ppca_initialization
 from .highres_refinement import (
@@ -35,12 +26,29 @@ from .highres_refinement import (
     run_highres_ppca_refinement_from_pipeline_ppca,
     run_highres_ppca_refinement_with_kclass_pose_hierarchy,
 )
+from .initialization import (
+    PPCAInitialization,
+    covariance_from_loading_matrix,
+    empirical_weighted_covariance,
+    initialize_ppca_from_gt_volumes,
+    initialize_ppca_from_kclass_volumes,
+    real_volume_to_centered_fourier,
+    real_volume_to_centered_fourier_half,
+)
 from .local_dataset import (
     iter_local_ppca_dataset_blocks,
     run_local_ppca_fused_em_iteration,
     run_local_ppca_halfset_fused_em_iteration,
     run_local_ppca_halfset_pose_scoring_iteration,
     run_local_ppca_pose_scoring_iteration,
+)
+from .pose_selection import (
+    TopPoseSelection,
+    merge_top_p_pose_scores,
+    pack_pose_ids,
+    select_distinct_top_poses,
+    top_p_from_score_block,
+    top_pose_candidate_count,
 )
 from .refinement_loop import (
     HalfsetMeanComparison,
@@ -56,14 +64,6 @@ from .schedule import (
     compute_pose_change_fraction,
     evaluate_halfset_resolution_gate,
     loading_subspace_agreement,
-)
-from .pose_selection import (
-    TopPoseSelection,
-    merge_top_p_pose_scores,
-    pack_pose_ids,
-    select_distinct_top_poses,
-    top_p_from_score_block,
-    top_pose_candidate_count,
 )
 from .state import PoseMarginalPPCAEMState
 
