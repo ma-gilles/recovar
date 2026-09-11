@@ -38,6 +38,16 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+The controller's coarse trial grids now come from two owners in
+`iteration_loop`: `_initial_coarse_grids` materializes the first exhaustive grid
+(sealed capture, caller translation table, or RELION translation grid) and
+`_relion_base_translation_grid` is the only unperturbed RELION translation-grid
+construction (seven inline sites before). 40 exact old/new initial-grid cases
+including the sealed-order error and log text, 64 translation-grid site cases
+and the byte-exact inverse substitution match; CPU guard and the controller
+panel are recorded in the receipt. Structural checkpoint only.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/initial_coarse_grid_owner_20260910/result.json).
+
 K=1 dense scoring with RELION scale groups now routes through the
 adaptive/sparse engine at the requested oversampling order, including 0
 (RELION accumulates group XA/AA in every pass; the direct dense engine does

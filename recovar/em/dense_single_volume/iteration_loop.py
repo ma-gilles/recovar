@@ -334,6 +334,89 @@ def _perturbed_trial_grid(
     return _PerturbedTrialGrid(rotations, rotation_eulers, mstep_rotations, translations)
 
 
+class _CoarseGrids(NamedTuple):
+    """Exhaustive coarse trial grid of one RELION iteration."""
+
+    rotations: np.ndarray
+    rotation_eulers: np.ndarray
+    base_translations: np.ndarray
+    translations: jnp.ndarray
+    healpix_order: int
+
+
+def _relion_base_translation_grid(translation_range, translation_step, *, n_classes, voxel_size):
+    """Unperturbed RELION translation grid in pixels as a host float64 array.
+
+    ``voxel_size`` (Angstrom) supplies the source units of the K=1 exact
+    enumeration; a non-positive value falls back to pixel units.  The grid is
+    kept in host double precision so every SamplingPerturbation starts from
+    the unrounded coordinates (see ``_perturbed_trial_grid``).
+    """
+
+    return _translation_grid_for_class_count(
+        translation_range,
+        translation_step,
+        n_classes=n_classes,
+        source_units_per_pixel=(voxel_size if voxel_size > 0 else 1.0),
+    ).astype(np.float64, copy=False)
+
+
+def _initial_coarse_grids(
+    *,
+    healpix_order: int,
+    sealed_sampling_state,
+    translations,
+    init_healpix_order: int,
+    init_translation_range: float,
+    init_translation_step: float,
+    n_classes: int,
+    voxel_size: float,
+    log,
+) -> _CoarseGrids:
+    """Materialize the first exhaustive coarse grid of a RELION refinement.
+
+    A schema-v3 sealed sampling state supplies its own restricted Euler rows
+    and translations and must sit at the initialized HEALPix order.  Otherwise
+    RELION's canonical grid at ``healpix_order`` is paired with the caller's
+    translation table or, when none is given, with the RELION translation grid
+    of the initial offset range and step.
+    """
+
+    dtype = _dense_global_scoring_dtype()
+    if sealed_sampling_state is not None:
+        rotations, rotation_eulers, current_translations = _sealed_sampling_base_grids(
+            sealed_sampling_state,
+            voxel_size_angstrom=voxel_size,
+            dtype=dtype,
+        )
+        base_translations = np.asarray(current_translations, dtype=np.float64)
+        healpix_order = int(sealed_sampling_state["healpix_order_original"])
+        if healpix_order != int(init_healpix_order):
+            raise ValueError(
+                "sealed sampling HEALPix order does not match initialized boundary: "
+                f"sealed={healpix_order} init={init_healpix_order}"
+            )
+        log.info(
+            "Frozen-boundary v3 directly materialized %d Euler rows and %d translations",
+            int(rotation_eulers.shape[0]),
+            int(current_translations.shape[0]),
+        )
+    elif translations is None:
+        rotations, rotation_eulers = _relion_rotation_grid_float32(healpix_order, dtype=dtype)
+        base_translations = _relion_base_translation_grid(
+            init_translation_range,
+            init_translation_step,
+            n_classes=n_classes,
+            voxel_size=voxel_size,
+        )
+        current_translations = jnp.asarray(base_translations, dtype=dtype)
+    else:
+        rotations, rotation_eulers = _relion_rotation_grid_float32(healpix_order, dtype=dtype)
+        base_translations = np.asarray(translations, dtype=np.float64)
+        current_translations = jnp.asarray(translations, dtype=dtype)
+    return _CoarseGrids(rotations, rotation_eulers, base_translations, current_translations, int(healpix_order))
+
+
 def _sigma_offset_for_half(current_sigma_offset_angstrom, current_sigma_offset_angstrom_per_half, half_index):
     if current_sigma_offset_angstrom_per_half is None:
         return float(current_sigma_offset_angstrom)
@@ -603,44 +686,22 @@ def _run_relion_iteration_loop(
             "RELION mode: ignoring caller-provided rotation table and regenerating initial coarse grid at healpix_order=%d",
             current_healpix_order,
         )
-    if sealed_sampling_state is not None:
-        current_rotations, current_rotation_eulers, current_translations = _sealed_sampling_base_grids(
-            sealed_sampling_state,
-            voxel_size_angstrom=cryo.voxel_size,
-            dtype=_dense_global_scoring_dtype(),
-        )
-        base_translations = np.asarray(current_translations, dtype=np.float64)
-        current_healpix_order = int(sealed_sampling_state["healpix_order_original"])
-        if current_healpix_order != int(schedule.init_healpix_order):
-            raise ValueError(
-                "sealed sampling HEALPix order does not match initialized boundary: "
-                f"sealed={current_healpix_order} init={schedule.init_healpix_order}"
-            )
-        logger.info(
-            "Frozen-boundary v3 directly materialized %d Euler rows and %d translations",
-            int(current_rotation_eulers.shape[0]),
-            int(current_translations.shape[0]),
-        )
-    elif translations is None:
-        current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(
-            current_healpix_order, dtype=_dense_global_scoring_dtype()
-        )
-        base_translations = _translation_grid_for_class_count(
-            schedule.init_translation_range,
-            schedule.init_translation_step,
-            n_classes=n_classes,
-            source_units_per_pixel=(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
-        ).astype(np.float64, copy=False)
-        current_translations = jnp.asarray(
-            base_translations,
-            dtype=_dense_global_scoring_dtype(),
-        )
-    else:
-        current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(
-            current_healpix_order, dtype=_dense_global_scoring_dtype()
-        )
-        base_translations = np.asarray(translations, dtype=np.float64)
-        current_translations = jnp.asarray(translations, dtype=_dense_global_scoring_dtype())
+    initial_grids = _initial_coarse_grids(
+        healpix_order=current_healpix_order,
+        sealed_sampling_state=sealed_sampling_state,
+        translations=translations,
+        init_healpix_order=schedule.init_healpix_order,
+        init_translation_range=schedule.init_translation_range,
+        init_translation_step=schedule.init_translation_step,
+        n_classes=n_classes,
+        voxel_size=cryo.voxel_size,
+        log=logger,
+    )
+    current_rotations = initial_grids.rotations
+    current_rotation_eulers = initial_grids.rotation_eulers
+    base_translations = initial_grids.base_translations
+    current_translations = initial_grids.translations
+    current_healpix_order = initial_grids.healpix_order
     # Unperturbed base grid — `current_translations` may be replaced per-iter by
     # a perturbed copy (SamplingPerturbation). Keep the base so each iter
     # perturbs a fresh copy rather than compounding prior perturbations.
@@ -1470,12 +1531,12 @@ def _run_relion_iteration_loop(
                 )
 
             # Regenerate translation grid based on updated parameters
-            base_translations = _translation_grid_for_class_count(
+            base_translations = _relion_base_translation_grid(
                 state.translation_range,
                 state.translation_step,
                 n_classes=n_classes,
-                source_units_per_pixel=(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
-            ).astype(np.float64, copy=False)
+                voxel_size=cryo.voxel_size,
+            )
             current_translations = jnp.asarray(base_translations, dtype=_dense_global_scoring_dtype())
             logger.info(
                 "New grid: %d rotations, %d translations (range=%.1f, step=%.1f)",
@@ -1487,12 +1548,12 @@ def _run_relion_iteration_loop(
         elif perturb_replay_relion_dir is not None and sealed_sampling_state is None:
             # Translation params may have changed under replay without an
             # hp_order bump. Regenerate the translation grid to match RELION.
-            _new_t_source = _translation_grid_for_class_count(
+            _new_t_source = _relion_base_translation_grid(
                 state.translation_range,
                 state.translation_step,
                 n_classes=n_classes,
-                source_units_per_pixel=(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
-            ).astype(np.float64, copy=False)
+                voxel_size=cryo.voxel_size,
+            )
             _new_t = jnp.asarray(_new_t_source, dtype=_dense_global_scoring_dtype())
             if _new_t.shape != base_translations.shape or not jnp.allclose(
                 _new_t,
@@ -4115,12 +4176,12 @@ def _run_relion_iteration_loop(
     )
     final_effective_mstep_rotations = None
     final_base_translations = jnp.asarray(
-        _translation_grid_for_class_count(
+        _relion_base_translation_grid(
             state.translation_range,
             state.translation_step,
             n_classes=n_classes,
-            source_units_per_pixel=(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
-        ).astype(_dense_global_scoring_dtype(), copy=False),
+            voxel_size=cryo.voxel_size,
+        ),
         dtype=_dense_global_scoring_dtype(),
     )
     final_current_translations = final_base_translations
@@ -4191,17 +4252,17 @@ def _run_relion_iteration_loop(
                 numbered_meta = read_relion_sampling_metadata(numbered_sampling_path)
                 numbered_range = float(numbered_meta["offset_range"]) / px
                 numbered_step = float(numbered_meta["offset_step"]) / px
-                numbered_grid = _translation_grid_for_class_count(
+                numbered_grid = _relion_base_translation_grid(
                     numbered_range,
                     numbered_step,
                     n_classes=n_classes,
-                    source_units_per_pixel=px,
+                    voxel_size=px,
                 ).astype(np.float32)
-                final_grid_preview = _translation_grid_for_class_count(
+                final_grid_preview = _relion_base_translation_grid(
                     final_translation_range,
                     final_translation_step,
                     n_classes=n_classes,
-                    source_units_per_pixel=px,
+                    voxel_size=px,
                 ).astype(np.float32)
                 same_shape = numbered_grid.shape == final_grid_preview.shape
                 same_grid = bool(
@@ -4227,12 +4288,12 @@ def _run_relion_iteration_loop(
                         final_perturbation_healpix_order,
                     )
             final_base_translations = jnp.asarray(
-                _translation_grid_for_class_count(
+                _relion_base_translation_grid(
                     final_translation_range,
                     final_translation_step,
                     n_classes=n_classes,
-                    source_units_per_pixel=px,
-                ).astype(_dense_global_scoring_dtype(), copy=False),
+                    voxel_size=px,
+                ),
                 dtype=_dense_global_scoring_dtype(),
             )
             final_current_translations = final_base_translations

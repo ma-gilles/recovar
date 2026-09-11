@@ -71,7 +71,11 @@ both passes share: the exact M-step rotations are seeded from the sealed grid's 
 angles or RELION's canonical grid at the perturbation order (the scoring grid's
 angles when the row counts differ), and one RELION `SamplingPerturbation` rotates
 the trial orientations, rebuilds the M-step rotations and shifts the translation
-grid. They stay in the controller module because the sampling primitives they
+grid. `_initial_coarse_grids` materializes the first exhaustive grid from a
+sealed capture, a caller translation table or the RELION translation grid, and
+`_relion_base_translation_grid` is the only unperturbed translation-grid
+construction in the controller; [`test_initial_coarse_grid_owner.py`](../../tests/unit/test_initial_coarse_grid_owner.py)
+pins both. They stay in the controller module because the sampling primitives they
 call are the ones controller tests substitute. Its exact local-search stage is implemented in
 [`local_search_iteration`](../../recovar/em/dense_single_volume/local_search_iteration.py).
 That module builds local pose neighborhoods, asks
