@@ -240,6 +240,11 @@ convert to half images and back-project. In [`initial_model.layout`](../../recov
 dense and the RELION-x-half BPref converters, and `_bpref_slab_outputs` applies RELION's
 double-precision cast and denormal-weight clamp
 ([`test_covariance_rhs_and_bpref_source_owner.py`](../../tests/unit/test_covariance_rhs_and_bpref_source_owner.py)).
+[`local_debug._requested_dump_rows`](../../recovar/em/dense_single_volume/local_debug.py) decides once
+whether a local debug dump writes anything (dump directory, pending original image ids,
+requested current sizes and iterations) and which bucket rows it covers; the fused-posterior,
+score and noise-component dump writers only serialize the selected rows
+([`test_debug_dump_rows_owner.py`](../../tests/unit/test_debug_dump_rows_owner.py)).
 In [`significance`](../../recovar/em/dense_single_volume/helpers/significance.py),
 `_coarse_gaussian_ffi_default` applies the fresh-InitialModel coarse Gaussian FFI
 default only when the supplied RELION projector operands exist; a dense pass

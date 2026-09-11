@@ -371,24 +371,19 @@ def maybe_write_debug_noise_component_dump(
 ):
     """Dump per-particle RELION-style noise components for selected images."""
 
-    if dump_dir is None or not pending_targets:
-        return pending_targets
-    if not current_size_matches_request(requested_current_sizes, current_size):
-        return pending_targets
-    if requested_iterations is not None and int(debug_iteration or -1) not in requested_iterations:
-        return pending_targets
-
-    original_image_indices = np.asarray(
-        experiment_dataset.original_image_indices_from_local(bucket.image_indices),
-        dtype=np.int64,
+    selected = _requested_dump_rows(
+        experiment_dataset,
+        bucket,
+        current_size=current_size,
+        debug_iteration=debug_iteration,
+        dump_dir=dump_dir,
+        pending_targets=pending_targets,
+        requested_current_sizes=requested_current_sizes,
+        requested_iterations=requested_iterations,
     )
-    target_rows = [
-        row
-        for row, original_idx in enumerate(original_image_indices.tolist())
-        if int(original_idx) in pending_targets
-    ]
-    if not target_rows:
+    if selected is None:
         return pending_targets
+    original_image_indices, target_rows = selected
 
     support_mass_np = np.asarray(support_mass, dtype=np.float64)
     processed_noise_power_np = np.asarray(processed_noise_power_half)
@@ -555,6 +550,48 @@ def _local_candidate_metadata(
     }
 
 
+def _requested_dump_rows(
+    experiment_dataset,
+    bucket,
+    *,
+    current_size,
+    debug_iteration,
+    dump_dir,
+    pending_targets,
+    requested_current_sizes,
+    requested_iterations,
+):
+    """Select the bucket rows a local debug dump must write, or ``None`` to write nothing.
+
+    Nothing is written without a dump directory or pending original image ids,
+    when the current size or iteration is outside the request, or when none of
+    the pending ids sits in this bucket; the caller then keeps its pending set
+    unchanged. Otherwise the bucket's original image ids and the matching row
+    positions are returned for the fused-posterior, score and noise-component
+    dump writers.
+    """
+
+    if dump_dir is None or not pending_targets:
+        return None
+    if not current_size_matches_request(requested_current_sizes, current_size):
+        return None
+    if not iteration_matches_request(requested_iterations, debug_iteration):
+        return None
+
+    original_image_indices = np.asarray(
+        experiment_dataset.original_image_indices_from_local(bucket.image_indices),
+        dtype=np.int64,
+    )
+    target_rows = [
+        row
+        for row, original_idx in enumerate(original_image_indices.tolist())
+        if int(original_idx) in pending_targets
+    ]
+    if not target_rows:
+        return None
+    return original_image_indices, target_rows
+
+
 def maybe_write_debug_fused_posterior_dump(
     *,
     experiment_dataset,
@@ -579,24 +616,19 @@ def maybe_write_debug_fused_posterior_dump(
 ):
     """Dump production fused-path posterior tensors for requested images."""
 
-    if dump_dir is None or not pending_targets:
-        return pending_targets
-    if not current_size_matches_request(requested_current_sizes, current_size):
-        return pending_targets
-    if not iteration_matches_request(requested_iterations, debug_iteration):
-        return pending_targets
-
-    original_image_indices = np.asarray(
-        experiment_dataset.original_image_indices_from_local(bucket.image_indices),
-        dtype=np.int64,
+    selected = _requested_dump_rows(
+        experiment_dataset,
+        bucket,
+        current_size=current_size,
+        debug_iteration=debug_iteration,
+        dump_dir=dump_dir,
+        pending_targets=pending_targets,
+        requested_current_sizes=requested_current_sizes,
+        requested_iterations=requested_iterations,
     )
-    target_rows = [
-        row
-        for row, original_idx in enumerate(original_image_indices.tolist())
-        if int(original_idx) in pending_targets
-    ]
-    if not target_rows:
+    if selected is None:
         return pending_targets
+    original_image_indices, target_rows = selected
 
     probs_np = _target_rows_to_numpy(probs, target_rows, np.float32)
     scores_np = (
@@ -829,24 +861,19 @@ def maybe_write_debug_score_dump(
     earlier one at the same path.
     """
 
-    if dump_dir is None or not pending_targets:
-        return pending_targets
-    if not current_size_matches_request(requested_current_sizes, current_size):
-        return pending_targets
-    if not iteration_matches_request(requested_iterations, debug_iteration):
-        return pending_targets
-
-    original_image_indices = np.asarray(
-        experiment_dataset.original_image_indices_from_local(bucket.image_indices),
-        dtype=np.int64,
+    selected = _requested_dump_rows(
+        experiment_dataset,
+        bucket,
+        current_size=current_size,
+        debug_iteration=debug_iteration,
+        dump_dir=dump_dir,
+        pending_targets=pending_targets,
+        requested_current_sizes=requested_current_sizes,
+        requested_iterations=requested_iterations,
     )
-    target_rows = [
-        row
-        for row, original_idx in enumerate(original_image_indices.tolist())
-        if int(original_idx) in pending_targets
-    ]
-    if not target_rows:
+    if selected is None:
         return pending_targets
+    original_image_indices, target_rows = selected
 
     score_dtype = _debug_capture_dtype(scores)
     probability_dtype = _debug_capture_dtype(probs)
