@@ -1036,7 +1036,8 @@ static py::array_t<long> auto_refine_randomise_half_order(
 static py::tuple auto_refine_randomise_half_orders(
     long nr_particles_half1,
     long nr_particles_half2,
-    int seed
+    int seed,
+    bool use_mt19937
 ) {
     if (nr_particles_half1 < 0 || nr_particles_half2 < 0)
         throw std::runtime_error("half particle counts must be non-negative");
@@ -1048,9 +1049,17 @@ static py::tuple auto_refine_randomise_half_orders(
     for (long i = 0; i < nr_particles_half2; i++)
         order_half2[(size_t)i] = i;
 
-    std::srand(seed);
-    std::random_shuffle(order_half1.begin(), order_half1.end());
-    std::random_shuffle(order_half2.begin(), order_half2.end());
+    if (use_mt19937) {
+        // RELION f2c1a384 Experiment::randomiseParticlesOrder; both halves
+        // consume one generator. Preserve the older oracle as a separate API.
+        std::mt19937 rng(seed);
+        std::shuffle(order_half1.begin(), order_half1.end(), rng);
+        std::shuffle(order_half2.begin(), order_half2.end(), rng);
+    } else {
+        std::srand(seed);
+        std::random_shuffle(order_half1.begin(), order_half1.end());
+        std::random_shuffle(order_half2.begin(), order_half2.end());
+    }
 
     py::array_t<long> out_half1((py::ssize_t)nr_particles_half1);
     py::array_t<long> out_half2((py::ssize_t)nr_particles_half2);
@@ -1737,9 +1746,17 @@ Returns -1 when subset should span all particles.
           py::arg("nr_particles"), py::arg("seed"),
           "AutoRefine's one-time libc-rand/std::random_shuffle order for half 1.");
 
-    m.def("auto_refine_randomise_half_orders", &auto_refine_randomise_half_orders,
+    m.def("auto_refine_randomise_half_orders", [](long n1, long n2, int seed) {
+              return auto_refine_randomise_half_orders(n1, n2, seed, false);
+          },
           py::arg("nr_particles_half1"), py::arg("nr_particles_half2"), py::arg("seed"),
           "AutoRefine's paired one-time half orders with libc rand state preserved.");
+
+    m.def("auto_refine_randomise_half_orders_mt19937", [](long n1, long n2, int seed) {
+              return auto_refine_randomise_half_orders(n1, n2, seed, true);
+          },
+          py::arg("nr_particles_half1"), py::arg("nr_particles_half2"), py::arg("seed"),
+          "RELION f2c1a384 paired std::shuffle orders with one continued mt19937 generator.");
 
     m.def("vdam_rnd_unif_sequence", &vdam_rnd_unif_sequence,
           py::arg("seed"), py::arg("n_draws"),
