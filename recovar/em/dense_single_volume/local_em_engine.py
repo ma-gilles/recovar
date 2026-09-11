@@ -6171,6 +6171,9 @@ def run_local_em_exact(
         shifted_score_split = shifted_score.reshape(batch_size, n_trans, -1)
         shifted_recon_split = shifted_recon.reshape(batch_size, n_trans, -1)
         local_rotation_log_prior = jnp.asarray(bucket.local_rotation_log_prior)
+        bucket_translation_log_prior = jnp.asarray(bucket.translation_log_prior)
+        bucket_local_rotation_mask = jnp.asarray(bucket.local_rotation_mask)
+        bucket_local_sample_mask = None if bucket.local_sample_mask is None else jnp.asarray(bucket.local_sample_mask)
         if class_log_prior != 0.0:
             local_rotation_log_prior = local_rotation_log_prior + jnp.asarray(
                 class_log_prior,
@@ -6215,9 +6218,9 @@ def run_local_em_exact(
                 proj_weighted,
                 half_weights_windowed if use_window else half_weights,
                 local_rotation_log_prior,
-                jnp.asarray(bucket.translation_log_prior),
-                jnp.asarray(bucket.local_rotation_mask),
-                None if bucket.local_sample_mask is None else jnp.asarray(bucket.local_sample_mask),
+                bucket_translation_log_prior,
+                bucket_local_rotation_mask,
+                bucket_local_sample_mask,
                 None,
                 half_spectrum_scoring=half_spectrum_scoring,
                 use_float64_normalization=use_float64_normalization,
@@ -6259,9 +6262,9 @@ def run_local_em_exact(
                 proj_weighted,
                 half_weights_windowed if use_window else half_weights,
                 local_rotation_log_prior,
-                jnp.asarray(bucket.translation_log_prior),
-                jnp.asarray(bucket.local_rotation_mask),
-                None if bucket.local_sample_mask is None else jnp.asarray(bucket.local_sample_mask),
+                bucket_translation_log_prior,
+                bucket_local_rotation_mask,
+                bucket_local_sample_mask,
                 None,
                 half_spectrum_scoring=half_spectrum_scoring,
                 use_float64_normalization=use_float64_normalization,
@@ -6306,9 +6309,9 @@ def run_local_em_exact(
                 proj_weighted,
                 half_weights_windowed if use_window else half_weights,
                 local_rotation_log_prior,
-                jnp.asarray(bucket.translation_log_prior),
-                jnp.asarray(bucket.local_rotation_mask),
-                None if bucket.local_sample_mask is None else jnp.asarray(bucket.local_sample_mask),
+                bucket_translation_log_prior,
+                bucket_local_rotation_mask,
+                bucket_local_sample_mask,
                 shifted_recon_split,
                 ctf2_over_nv_recon,
                 None,
@@ -6374,9 +6377,9 @@ def run_local_em_exact(
                 proj_weighted,
                 half_weights_windowed if use_window else half_weights,
                 local_rotation_log_prior,
-                jnp.asarray(bucket.translation_log_prior),
-                jnp.asarray(bucket.local_rotation_mask),
-                None if bucket.local_sample_mask is None else jnp.asarray(bucket.local_sample_mask),
+                bucket_translation_log_prior,
+                bucket_local_rotation_mask,
+                bucket_local_sample_mask,
                 bucket_log_z,
                 half_spectrum_scoring=half_spectrum_scoring,
                 reconstruct_significant_only=reconstruct_significant_only,
@@ -6407,9 +6410,9 @@ def run_local_em_exact(
                     ctf2_over_nv_score,
                     proj_weighted,
                     local_rotation_log_prior,
-                    jnp.asarray(bucket.translation_log_prior),
-                    jnp.asarray(bucket.local_rotation_mask),
-                    None if bucket.local_sample_mask is None else jnp.asarray(bucket.local_sample_mask),
+                    bucket_translation_log_prior,
+                    bucket_local_rotation_mask,
+                    bucket_local_sample_mask,
                 )
             else:
                 score_half_weights = half_weights_windowed if use_window else half_weights
@@ -6419,9 +6422,9 @@ def run_local_em_exact(
                     proj_weighted,
                     score_half_weights,
                     local_rotation_log_prior,
-                    jnp.asarray(bucket.translation_log_prior),
-                    jnp.asarray(bucket.local_rotation_mask),
-                    None if bucket.local_sample_mask is None else jnp.asarray(bucket.local_sample_mask),
+                    bucket_translation_log_prior,
+                    bucket_local_rotation_mask,
+                    bucket_local_sample_mask,
                 )
             if return_profile:
                 _block_until_ready(scores)
@@ -6522,7 +6525,7 @@ def run_local_em_exact(
                     )
                 reconstruction_probs = jnp.where(reconstruction_sample_mask, probs, 0.0)
             else:
-                reconstruction_rotation_mask = jnp.asarray(bucket.local_rotation_mask)
+                reconstruction_rotation_mask = bucket_local_rotation_mask
                 reconstruction_sample_mask = jnp.broadcast_to(
                     reconstruction_rotation_mask[:, :, None],
                     probs.shape,
