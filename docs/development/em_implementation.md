@@ -85,7 +85,10 @@ labels, and `_estimate_half1_expected_accuracy` is the one call site shared by b
 passes ([`test_expected_accuracy_inputs_owner.py`](../../tests/unit/test_expected_accuracy_inputs_owner.py)).
 `_advance_relion_perturbation` advances RELION's SamplingPerturbation to an iteration
 (seeded `random_seed + iteration`, or the run's generator) for both passes
-([`test_perturbation_advance_owner.py`](../../tests/unit/test_perturbation_advance_owner.py)). `_exact_local_fine_grid` materializes RELION's fine local-search grid
+([`test_perturbation_advance_owner.py`](../../tests/unit/test_perturbation_advance_owner.py)).
+The controller's adaptive and single-pass dense half-scoring calls share one keyword
+set (`dense_half_kwargs`); only the adaptive branch adds its pass-1 grid and
+batch/size overrides ([`test_dense_half_kwargs_owner.py`](../../tests/unit/test_dense_half_kwargs_owner.py)). `_exact_local_fine_grid` materializes RELION's fine local-search grid
 once with its perturbation and exact M-step rotations, and
 `_local_search_mstep_rotations` reuses or rebuilds the M-step matrices of a
 scoring grid; the final pass sizes its parent pass with

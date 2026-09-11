@@ -2428,19 +2428,16 @@ def _run_relion_iteration_loop(
                 coarse_ha[k] = ha_k
                 score_result = local_result
 
-            elif use_adaptive:
-                adaptive_result = _score_half_dense_in_bpref_scope(
+            else:
+                # Shared dense half-scoring operands; the adaptive branch adds its
+                # pass-1 grid and batch/size overrides.
+                dense_half_kwargs = dict(
                     bpref_device_signature_active=bpref_device_signature_active,
                     k=k,
                     experiment_dataset=experiment_datasets[k],
                     means_k=means[k],
                     mean_variance=mean_variance_k,
                     noise_variance_k=noise_variance_k,
-                    effective_rotations=(
-                        adaptive_pass1_rotations
-                        if adaptive_pass1_rotations is not None
-                        else effective_rotations
-                    ),
                     current_translations=current_translations,
                     base_translations=base_translations,
                     current_healpix_order=current_healpix_order,
@@ -2470,96 +2467,57 @@ def _run_relion_iteration_loop(
                     safe_batch_sizes=_safe_batch_sizes,
                     max_significants=adaptive.max_significants,
                     outputs=per_half,
-                    # Adaptive-specific:
-                    k_class_image_batch_size_override=k_class_image_batch_size,
-                    k_class_rotation_block_size_override=dense_k_class_rotation_block_size,
-                    significance_image_batch_size_override=significance_image_batch_size,
-                    significance_rotation_block_size_override=significance_rotation_block_size,
-                    firstiter_coarse_current_size=coarse_cs,
-                    firstiter_fine_current_size=cs_for_engine,
-                    firstiter_log_label="",
-                    firstiter_updates_em_kwargs_ibs=True,
+                    preserve_bpref_particle_order=parity.preserve_bpref_particle_order,
+                    source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                     relion_projector_half=relion_projector_half_by_half[k],
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
                     debug_iteration=numbered_relion_iteration,
                     coarse_rotation_ids=coarse_rotation_ids_for_scoring,
-                    preserve_bpref_particle_order=parity.preserve_bpref_particle_order,
-                    source_faithful_spectrum_norm=source_faithful_spectrum_norm,
                 )
-                ha_k = adaptive_result.ha
-                Ft_y_k = adaptive_result.Ft_y
-                Ft_ctf_k = adaptive_result.Ft_ctf
-                em_stats_k = adaptive_result.em_stats
-                noise_stats_k = adaptive_result.noise_stats
+                if use_adaptive:
+                    dense_result = _score_half_dense_in_bpref_scope(
+                        effective_rotations=(
+                            adaptive_pass1_rotations
+                            if adaptive_pass1_rotations is not None
+                            else effective_rotations
+                        ),
+                        k_class_image_batch_size_override=k_class_image_batch_size,
+                        k_class_rotation_block_size_override=dense_k_class_rotation_block_size,
+                        significance_image_batch_size_override=significance_image_batch_size,
+                        significance_rotation_block_size_override=significance_rotation_block_size,
+                        firstiter_coarse_current_size=coarse_cs,
+                        firstiter_fine_current_size=cs_for_engine,
+                        firstiter_log_label="",
+                        firstiter_updates_em_kwargs_ibs=True,
+                        **dense_half_kwargs,
+                    )
+                else:
+                    # --- SINGLE-PASS E+M (no adaptive oversampling) ---
+                    dense_result = _score_half_dense_in_bpref_scope(
+                        effective_rotations=effective_rotations,
+                        **dense_half_kwargs,
+                    )
+                ha_k = dense_result.ha
+                Ft_y_k = dense_result.Ft_y
+                Ft_ctf_k = dense_result.Ft_ctf
+                em_stats_k = dense_result.em_stats
+                noise_stats_k = dense_result.noise_stats
                 noise_stats_per_half[k] = noise_stats_k
-                if adaptive_result.pose_rotations is not None:
-                    pose_rotations[k] = adaptive_result.pose_rotations
-                    pose_rotation_eulers[k] = adaptive_result.pose_rotation_eulers
+                if use_adaptive and dense_result.pose_rotations is not None:
+                    pose_rotations[k] = dense_result.pose_rotations
+                    pose_rotation_eulers[k] = dense_result.pose_rotation_eulers
                 else:
                     pose_rotations[k] = effective_rotations
                     pose_rotation_eulers[k] = effective_rotation_eulers
-                coarse_ha[k] = adaptive_result.coarse_ha if adaptive_result.coarse_ha is not None else ha_k
-                score_result = adaptive_result
-
-            else:
-                # --- SINGLE-PASS E+M (no adaptive oversampling) ---
-                single_pass_result = _score_half_dense_in_bpref_scope(
-                    bpref_device_signature_active=bpref_device_signature_active,
-                    k=k,
-                    experiment_dataset=experiment_datasets[k],
-                    means_k=means[k],
-                    mean_variance=mean_variance_k,
-                    noise_variance_k=noise_variance_k,
-                    effective_rotations=effective_rotations,
-                    current_translations=current_translations,
-                    base_translations=base_translations,
-                    current_healpix_order=current_healpix_order,
-                    state=state,
-                    random_perturbation=random_perturbation,
-                    disc_type=options.disc_type,
-                    image_batch_size=batching.image_batch_size,
-                    rotation_log_prior_k=rotation_log_prior_k,
-                    class_rotation_log_prior_k=class_rotation_log_prior_k,
-                    translation_log_prior=translation_log_prior,
-                    translation_search_base=translation_search_base,
-                    trans_prior_center_for_engine=trans_prior_center_for_engine,
-                    image_corrections_k=relion_half_inputs.image_corrections[k],
-                    scale_corrections_k=relion_half_inputs.scale_corrections[k],
-                    group_ids_k=follower_setup.scale_stats_group_ids_per_half[k],
-                    group_count_k=follower_setup.scale_stats_group_count_per_half[k],
-                    scale_correction_data_vs_prior=scale_correction_data_vs_prior_this_iter,
-                    firstiter_score_mode_this_iter=firstiter_score_mode_this_iter,
-                    firstiter_winner_take_all_this_iter=firstiter_winner_take_all_this_iter,
-                    cs_for_engine=cs_for_engine,
-                    model_current_size_for_engine=model_current_size_for_engine,
-                    class_log_priors=class_log_priors,
-                    k_class_enabled=k_class_enabled,
-                    relion_firstiter_cc_this_iter=relion_firstiter_cc_this_iter,
-                    disable_adjoint_y=debug.disable_adjoint_y,
-                    disable_adjoint_ctf=debug.disable_adjoint_ctf,
-                    safe_batch_sizes=_safe_batch_sizes,
-                    max_significants=adaptive.max_significants,
-                    outputs=per_half,
-                    preserve_bpref_particle_order=parity.preserve_bpref_particle_order,
-                    source_faithful_spectrum_norm=source_faithful_spectrum_norm,
-                    relion_projector_half=relion_projector_half_by_half[k],
-                    relion_projector_r_max=relion_projector_r_max_by_half[k],
-                    debug_iteration=numbered_relion_iteration,
-                    coarse_rotation_ids=coarse_rotation_ids_for_scoring,
+                coarse_ha[k] = (
+                    dense_result.coarse_ha
+                    if use_adaptive and dense_result.coarse_ha is not None
+                    else ha_k  # single pass: same grid, no oversampling
                 )
-                ha_k = single_pass_result.ha
-                Ft_y_k = single_pass_result.Ft_y
-                Ft_ctf_k = single_pass_result.Ft_ctf
-                em_stats_k = single_pass_result.em_stats
-                noise_stats_k = single_pass_result.noise_stats
-                noise_stats_per_half[k] = noise_stats_k
-                pose_rotations[k] = effective_rotations
-                pose_rotation_eulers[k] = effective_rotation_eulers
-                coarse_ha[k] = ha_k  # same grid, no oversampling
-                score_result = single_pass_result
+                score_result = dense_result
 
                 # --- Manifest dump for deterministic replay (Phase 0.1) ---
-                if debug.save_intermediates_dir is not None:
+                if not use_adaptive and debug.save_intermediates_dir is not None:
                     _manifest_path = os.path.join(
                         debug.save_intermediates_dir,
                         f"manifest_iter{iteration}_half{k}.npz",

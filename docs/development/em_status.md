@@ -49,6 +49,7 @@ case counts, provenance and limits.
 
 | Commit | Change | Kind | Receipt |
 | --- | --- | --- | --- |
+| see receipt | the adaptive and single-pass dense half-scoring calls share one keyword set (`dense_half_kwargs`, 41 shared, 8 adaptive-only) with one post-call block and the single-pass manifest dump | structural, exec-equivalent branches incl. manifest bytes | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/dense_half_kwargs_owner_20260910/result.json) |
 | see receipt | `_advance_relion_perturbation` advances RELION's SamplingPerturbation (seeded `random_seed + iteration` or generator path) for both passes | structural, 36 value/type/log-identical | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/perturbation_advance_owner_20260910/result.json) |
 | see receipt | `_ExpectedAccuracyInputs`, `_expected_accuracy_class_ids`, `_estimate_half1_expected_accuracy` share RELION's expected-accuracy inputs and half-1 class labels between both passes | structural, 32 kwargs-identical | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/expected_accuracy_inputs_owner_20260910/result.json) |
 | `a2ab056cb` | `half_scoring._adaptive_pass2_grids` builds RELION's two-pass trial grids for the K=1/K-class routes and the pose-grid rebuild (3 sites) | structural, 8+4 bit-exact | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/adaptive_pass2_grids_owner_20260910/result.json) |
