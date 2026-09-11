@@ -137,20 +137,6 @@ def parse_relion_model(path):
     return data
 
 
-def get_field(d, *names):
-    """Get the first matching field from a dict (multiple possible names)."""
-    if d is None:
-        return None
-    for name in names:
-        if name in d:
-            return d[name]
-        # Try with underscore-name removed
-        for k in d:
-            if k.endswith(name) or k == name:
-                return d[k]
-    return None
-
-
 def _safe_float(value):
     try:
         return float(value)
@@ -491,18 +477,6 @@ def compare_direction_priors(relion_arr, recovar_arr):
         "mass_diff": float(np.sum(recovar_arr) - np.sum(relion_arr)),
         "corr_auxiliary": corr,
     }
-
-
-def fsc_resolution_angstrom(fsc, voxel_size, grid_size, threshold=0.143):
-    """Convert FSC curve to resolution in A using gold-std 0.143 threshold."""
-    fsc = np.asarray(fsc)
-    below = np.where(fsc < threshold)[0]
-    if len(below) == 0:
-        return float("nan")
-    shell = int(below[0])
-    if shell == 0:
-        return float("inf")
-    return float(grid_size) * float(voxel_size) / shell
 
 
 def summarize_metric(arr):

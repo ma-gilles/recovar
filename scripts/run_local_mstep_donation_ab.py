@@ -506,45 +506,6 @@ def gf46_input_manifest_payload(
     return _input_manifest_payload_from_named_paths(named_paths)
 
 
-def write_gf46_input_manifest(
-    output: Path,
-    checkpoint_optimiser: Path,
-    input_star: Path,
-    data_dir: Path,
-    expected_particle_stacks: Sequence[Path],
-    *,
-    resolved_output: Path | None = None,
-) -> str:
-    named_paths, resolved_contract = _resolve_gf46_consumed_inputs(
-        checkpoint_optimiser,
-        input_star,
-        data_dir,
-        expected_particle_stacks,
-    )
-    payload = _input_manifest_payload_from_named_paths(named_paths)
-    encoded = _canonical_json_bytes(payload)
-    output.write_bytes(encoded)
-    if resolved_output is not None:
-        # Include hashes here as path-specific provenance without making the
-        # reviewed content manifest depend on one filesystem root.
-        resolved_by_role = {
-            role: {
-                "path": str(path.resolve(strict=True)),
-                "sha256": _sha256(path.resolve(strict=True)),
-            }
-            for role, path in named_paths
-        }
-        resolved_output.write_bytes(
-            _canonical_json_bytes(
-                {
-                    **resolved_contract,
-                    "resolved_by_role": resolved_by_role,
-                }
-            )
-        )
-    return hashlib.sha256(encoded).hexdigest()
-
-
 def _verify_input_manifest(
     manifest_path: Path,
     *,

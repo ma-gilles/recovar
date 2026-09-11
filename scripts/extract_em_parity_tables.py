@@ -289,14 +289,6 @@ def _emit_tier(tier: str, ledgers: dict) -> int:
     return rendered
 
 
-def emit_fast_tier(ledger_root: Path | None = None) -> int:
-    return _emit_tier("fast", _read_tier("fast", ledger_root))
-
-
-def emit_long_tier(ledger_root: Path | None = None) -> int:
-    return _emit_tier("long", _read_tier("long", ledger_root))
-
-
 def _emit_metric(key: str, ledger: dict, baseline: dict, lower_is_better: bool, fmt: str) -> int:
     cur = ledger.get(key)
     base = baseline.get(key)

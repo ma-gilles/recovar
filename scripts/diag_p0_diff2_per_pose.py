@@ -28,7 +28,6 @@ We compare recovar's diff² and RELION's recovered diff² on:
 
 from __future__ import annotations
 
-import re
 import struct
 from pathlib import Path
 
@@ -67,20 +66,6 @@ def read_meta(p: Path) -> dict:
         k, v = line.split("=")
         out[k] = v
     return out
-
-
-def read_iter0_sigma2(n: int) -> np.ndarray:
-    txt = (FIXTURE_DIR / "run_it000_model.star").read_text()
-    m = re.search(r"data_model_optics_group_1\n(.*?)(?:\ndata_)", txt, re.DOTALL)
-    v = np.zeros(n, dtype=np.float64)
-    for line in m.group(1).strip().split("\n"):
-        toks = line.split()
-        if len(toks) == 3:
-            try:
-                v[int(toks[0])] = float(toks[2])
-            except ValueError:
-                pass
-    return v
 
 
 def euler_to_R(rot_d, tilt_d, psi_d):
