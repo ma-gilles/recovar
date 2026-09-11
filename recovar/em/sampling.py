@@ -1480,7 +1480,6 @@ def get_local_rotation_grid_fast(
         else:
             prior_eulers = rotation_indices_to_relion_eulers(prior_rotation_indices.astype(np.int64), healpix_order)
         prior_rot_deg = prior_eulers[:, 0]
-        prior_tilt_deg = prior_eulers[:, 1]
         prior_psi_deg = prior_eulers[:, 2]
         prior_rotations = utils.R_from_relion(prior_eulers, degrees=True)
     elif prior_rotation_indices.ndim == 2 and prior_rotation_indices.shape[-1] == 3:
