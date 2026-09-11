@@ -81,13 +81,18 @@ class DensePerPoseScoreDumpRequest:
         return self.dump_dir is not None and self.target is not None
 
 
-def parse_debug_score_dump_request():
-    """Return the optional debug score-dump request from the environment."""
+def _parse_dump_request(env_prefix: str):
+    """Resolve a local debug dump request from ``<env_prefix>_DIR/_GLOBAL_INDICES/_CURRENT_SIZE/_ITERATION``.
 
-    dump_dir = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_DIR")
-    dump_indices = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES")
-    dump_current_size = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_CURRENT_SIZE")
-    dump_iterations = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_ITERATION")
+    Returns ``(dump_path, targets, requested_current_sizes, requested_iterations)``,
+    or ``(None, set(), None, None)`` when no directory or no target particle is
+    requested; the dump directory is created on request.
+    """
+
+    dump_dir = os.environ.get(f"{env_prefix}_DIR")
+    dump_indices = os.environ.get(f"{env_prefix}_GLOBAL_INDICES")
+    dump_current_size = os.environ.get(f"{env_prefix}_CURRENT_SIZE")
+    dump_iterations = os.environ.get(f"{env_prefix}_ITERATION")
     if not dump_dir or not dump_indices:
         return None, set(), None, None
     targets = parse_int_set(dump_indices) or set()
@@ -98,6 +103,12 @@ def parse_debug_score_dump_request():
     dump_path = Path(dump_dir)
     dump_path.mkdir(parents=True, exist_ok=True)
     return dump_path, targets, requested_current_sizes, requested_iterations
+
+
+def parse_debug_score_dump_request():
+    """Return the optional debug score-dump request from the environment."""
+
+    return _parse_dump_request("RECOVAR_LOCAL_SCORE_DUMP")
 
 
 def parse_debug_fused_posterior_dump_request():
@@ -108,39 +119,13 @@ def parse_debug_fused_posterior_dump_request():
     non-fused path, while this hook records the actual production fused path.
     """
 
-    dump_dir = os.environ.get("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_DIR")
-    dump_indices = os.environ.get("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_GLOBAL_INDICES")
-    dump_current_size = os.environ.get("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_CURRENT_SIZE")
-    dump_iterations = os.environ.get("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_ITERATION")
-    if not dump_dir or not dump_indices:
-        return None, set(), None, None
-    targets = parse_int_set(dump_indices) or set()
-    if not targets:
-        return None, set(), None, None
-    requested_current_sizes = parse_int_set(dump_current_size)
-    requested_iterations = parse_int_set(dump_iterations)
-    dump_path = Path(dump_dir)
-    dump_path.mkdir(parents=True, exist_ok=True)
-    return dump_path, targets, requested_current_sizes, requested_iterations
+    return _parse_dump_request("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP")
 
 
 def parse_debug_noise_component_dump_request():
     """Return optional per-particle local noise component dump settings."""
 
-    dump_dir = os.environ.get("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP_DIR")
-    dump_indices = os.environ.get("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP_GLOBAL_INDICES")
-    dump_current_size = os.environ.get("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP_CURRENT_SIZE")
-    dump_iterations = os.environ.get("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP_ITERATION")
-    if not dump_dir or not dump_indices:
-        return None, set(), None, None
-    targets = parse_int_set(dump_indices) or set()
-    if not targets:
-        return None, set(), None, None
-    requested_current_sizes = parse_int_set(dump_current_size)
-    requested_iterations = parse_int_set(dump_iterations)
-    dump_path = Path(dump_dir)
-    dump_path.mkdir(parents=True, exist_ok=True)
-    return dump_path, targets, requested_current_sizes, requested_iterations
+    return _parse_dump_request("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP")
 
 
 def current_size_matches_request(requested_current_sizes: set[int] | None, current_size) -> bool:
