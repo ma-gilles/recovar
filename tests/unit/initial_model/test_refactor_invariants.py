@@ -20,8 +20,10 @@ import numpy as np
 import pytest
 
 import recovar.em.initial_model as init_model
+from recovar.em.dense_single_volume.helpers.expected_accuracy import (
+    estimate_relion_expected_accuracy_from_prepared_inputs,
+)
 from recovar.em.initial_model import (
-from recovar.em.dense_single_volume.helpers.expected_accuracy import estimate_relion_expected_accuracy_from_prepared_inputs
     __all__ as INIT_MODEL_ALL,
 )
 from recovar.em.initial_model import (
@@ -153,7 +155,7 @@ def test_initial_model_estep_reuses_shared_dense_em_engine():
     """
     from recovar.em.dense_single_volume import k_class, local_layout
     from recovar.em.dense_single_volume.helpers import expected_accuracy, significance
-    from recovar.em.initial_model import dense_adapter, driver
+    from recovar.em.initial_model import dense_adapter
 
     shared_callables = {
         "_compute_k_class_significance_batched": (

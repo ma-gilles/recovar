@@ -2838,7 +2838,7 @@ def _run_transition_arm(
 ) -> dict[str, Any]:
     import recovar.em.initial_model.driver as driver
     from recovar.data_io.starfile import read_star
-    from recovar.em.initial_model import star_io
+    from recovar.em.initial_model import native_sampling, star_io
     from recovar.em.initial_model.schedules import (
         default_subset_sizes_for_3d_initial_model,
         phase_lengths_from_effective_fractions,
