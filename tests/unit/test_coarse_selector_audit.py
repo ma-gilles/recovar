@@ -12,8 +12,10 @@ from recovar.em.dense_single_volume.helpers.coarse_score_diagnostics import (
     _with_coarse_selector_audit,
     _with_coarse_significance_diagnostics,
 )
-from recovar.em.initial_model.dense_adapter import (
+from recovar.em.initial_model.estep_common import (
     _estep_meta,
+)
+from recovar.em.initial_model.sparse_pass2_estep import (
     _sparse_pass2_estep_meta,
 )
 

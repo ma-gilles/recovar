@@ -9,6 +9,7 @@ import pytest
 from recovar.em.dense_single_volume import k_class_results
 from recovar.em.initial_model import dense_adapter, driver, native_sampling, star_io
 from recovar.utils.helpers import R_from_relion, R_to_relion
+from recovar.em.initial_model import sparse_pass2_estep
 
 pytestmark = pytest.mark.unit
 
@@ -91,7 +92,7 @@ def test_invalid_restored_source_metadata_rejected(fault):
 def test_mixed_halfset_rows_keep_identity_and_validity():
     source = np.array([[2.0 + 2**-40, 30.0, 4.0]])
     results = {1: SimpleNamespace(best_pose_eulers_deg=source), 0: SimpleNamespace()}
-    meta = dense_adapter._sparse_pass2_estep_meta(results, {1: np.array([2]), 0: np.array([1, 0])})
+    meta = sparse_pass2_estep._sparse_pass2_estep_meta(results, {1: np.array([2]), 0: np.array([1, 0])})
     np.testing.assert_array_equal(meta["selected_particle_ids"], [1, 0, 2])
     np.testing.assert_array_equal(meta["best_pose_eulers_valid"], [False, False, True])
     np.testing.assert_array_equal(meta["best_pose_eulers_deg"][2], source[0])
@@ -129,9 +130,9 @@ def test_coarse_winner_replaces_or_invalidates_fine_source_metadata():
         coarse_rotations=np.tile(np.eye(3, dtype=np.float32), (2, 1, 1)),
         coarse_translations=np.zeros((1, 2), np.float32),
     )
-    legacy = dense_adapter._restore_zero_oversampling_coarse_metadata(result, **kwargs)
+    legacy = sparse_pass2_estep._restore_zero_oversampling_coarse_metadata(result, **kwargs)
     assert legacy.best_pose_eulers_deg is None and legacy.per_class_best_pose_eulers_deg is None
     source = np.array([[0.0, 0.0, 0.0], [17.0 + 2**-40, 22.0, 31.0]])
-    exact = dense_adapter._restore_zero_oversampling_coarse_metadata(result, coarse_source_eulers=source, **kwargs)
+    exact = sparse_pass2_estep._restore_zero_oversampling_coarse_metadata(result, coarse_source_eulers=source, **kwargs)
     np.testing.assert_array_equal(exact.best_pose_eulers_deg, source[1:2])
     np.testing.assert_array_equal(exact.best_pose_rotations, legacy.best_pose_rotations)

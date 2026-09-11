@@ -15,6 +15,12 @@ from scripts.run_vdam_abinitio_merge_guard import _default_output_root, build_gu
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+def _initial_model_package_source() -> str:
+    """Every module of the native InitialModel package; the guarded wiring may live in any owner."""
+    return "\n".join(path.read_text() for path in sorted((REPO_ROOT / "recovar/em/initial_model").glob("*.py")))
+
+
+
 def _load_long_guard_module():
     sys.path.insert(0, str(REPO_ROOT / "tests"))
     module_path = REPO_ROOT / "tests/long_test/test_em_parity_long.py"
@@ -891,14 +897,11 @@ def test_native_vdam_tau2_refresh_and_ssnr_diagnostics_are_merge_guarded():
     write sigma2/coverage diagnostics so DVP/current-size regressions are
     visible in model.star.
     """
-    driver = (REPO_ROOT / "recovar/em/initial_model/driver.py").read_text()
-    iteration_loop = (REPO_ROOT / "recovar/em/initial_model/iteration_loop.py").read_text()
-    m_step = (REPO_ROOT / "recovar/em/initial_model/m_step.py").read_text()
-    state = (REPO_ROOT / "recovar/em/initial_model/state.py").read_text()
+    package = _initial_model_package_source()
     bind = (REPO_ROOT / "recovar/relion_bind/initialmodel_bind.cpp").read_text()
     tests = (REPO_ROOT / "tests/unit/initial_model/test_iteration_loop.py").read_text()
 
-    haystack = "\n".join([driver, iteration_loop, m_step, state, bind, tests])
+    haystack = "\n".join([package, bind, tests])
     expected_tokens = [
         "def refresh_tau2_from_projector_power",
         "vdam_projector_power_spectrum",
@@ -925,11 +928,7 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
     conflict mistakes fail early when branches touch the same InitialModel,
     dense K-class, or RELION binding code.
     """
-    driver = (REPO_ROOT / "recovar/em/initial_model/driver.py").read_text()
-    dense_adapter = (REPO_ROOT / "recovar/em/initial_model/dense_adapter.py").read_text()
-    iteration_loop = (REPO_ROOT / "recovar/em/initial_model/iteration_loop.py").read_text()
-    state = (REPO_ROOT / "recovar/em/initial_model/state.py").read_text()
-    init = (REPO_ROOT / "recovar/em/initial_model/init.py").read_text()
+    package = _initial_model_package_source()
     k_class = (REPO_ROOT / "recovar/em/dense_single_volume/k_class.py").read_text()
     local_em = (REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py").read_text()
     bind = (REPO_ROOT / "recovar/relion_bind/initialmodel_bind.cpp").read_text()
@@ -1003,7 +1002,7 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
         ],
     }
     haystack = "\n".join(
-        [driver, dense_adapter, iteration_loop, state, init, k_class, local_em, bind, unit_tests, guard_scripts]
+        [package, k_class, local_em, bind, unit_tests, guard_scripts]
     )
     missing = {
         area: [token for token in tokens if token not in haystack]

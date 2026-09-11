@@ -340,7 +340,9 @@ def _build_config(args, ds, fixture_dir: Path, estep_dump_dir: Path, current_siz
     from recovar.core import fourier_transform_utils as ftu
     from recovar.em.dense_single_volume.helpers.orientation_priors import make_relion_translation_log_prior
     from recovar.em.sampling import get_translation_grid
-    from recovar.em.initial_model.dense_adapter import DenseInitialModelEstepConfig
+    from recovar.em.initial_model.estep_common import (
+        DenseInitialModelEstepConfig,
+    )
     from recovar.reconstruction.noise import make_radial_noise
     from recovar.reconstruction.relion_functions import griddingCorrect
     from recovar.utils.helpers import load_relion_volume, relion_volume_to_recovar

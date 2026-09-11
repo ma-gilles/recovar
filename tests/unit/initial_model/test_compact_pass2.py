@@ -17,7 +17,7 @@ from recovar.em.dense_single_volume.helpers.types import make_relion_stats
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_relion_f32_sequential_mstep_sums,
 )
-from recovar.em.initial_model.dense_adapter import (
+from recovar.em.initial_model.sparse_pass2_estep import (
     _collapse_compact_pass2_rotation_stats_to_directions,
     _compact_sparse_pass2_enabled,
 )

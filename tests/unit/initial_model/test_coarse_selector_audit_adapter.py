@@ -13,6 +13,7 @@ from recovar.em.dense_single_volume.helpers.coarse_score_diagnostics import (
     _with_coarse_selector_audit,
 )
 from recovar.em.initial_model import dense_adapter
+from recovar.em.initial_model import sparse_pass2_estep
 
 pytestmark = pytest.mark.unit
 
@@ -61,7 +62,7 @@ def test_sparse_adapter_propagates_each_selector_topology(workers, atomic):
     audit = _active_audit(workers=workers, atomic=atomic)
     result = _ProfileResult(profile_summary={"pass2_time_s": 1.25})
 
-    validated = dense_adapter._coarse_selector_audit_from_full_stats({"coarse_selector_audit": audit})
+    validated = sparse_pass2_estep._coarse_selector_audit_from_full_stats({"coarse_selector_audit": audit})
     sealed = _with_coarse_selector_audit(result, validated)
     meta = dense_adapter._estep_meta({0: SimpleNamespace(profile_summary=sealed.profile_summary)})
 
@@ -94,12 +95,12 @@ def test_sparse_adapter_fails_closed_on_invalid_selector_topology(
     corrupt(audit)
 
     with pytest.raises(RuntimeError, match="invalid coarse selector audit"):
-        dense_adapter._coarse_selector_audit_from_full_stats({"coarse_selector_audit": audit})
+        sparse_pass2_estep._coarse_selector_audit_from_full_stats({"coarse_selector_audit": audit})
 
 
 def test_sparse_adapter_fails_closed_when_selector_audit_is_missing():
     with pytest.raises(RuntimeError, match="did not return.*execution audit"):
-        dense_adapter._coarse_selector_audit_from_full_stats({})
+        sparse_pass2_estep._coarse_selector_audit_from_full_stats({})
 
 
 def test_sparse_adapter_propagates_real_coarse_support_hybrid_and_counts():
@@ -122,7 +123,7 @@ def test_sparse_adapter_propagates_real_coarse_support_hybrid_and_counts():
         pose_assignments=np.asarray([3, 7], dtype=np.int32),
     )
 
-    sealed = dense_adapter._with_initial_model_coarse_diagnostics(
+    sealed = sparse_pass2_estep._with_initial_model_coarse_diagnostics(
         result,
         full_stats={
             "significant_cutoff_counts": np.asarray([17, 23], dtype=np.int32),
@@ -151,7 +152,7 @@ def test_sparse_adapter_rejects_coarse_count_shape_drift():
     )
 
     with pytest.raises(RuntimeError, match="significant counts.*pass-2 images"):
-        dense_adapter._with_initial_model_coarse_diagnostics(
+        sparse_pass2_estep._with_initial_model_coarse_diagnostics(
             result,
             full_stats={"significant_cutoff_counts": np.asarray([17], dtype=np.int32)},
             selector_audit=None,

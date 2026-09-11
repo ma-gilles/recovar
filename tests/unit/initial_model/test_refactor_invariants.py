@@ -156,22 +156,23 @@ def test_initial_model_estep_reuses_shared_dense_em_engine():
     from recovar.em.dense_single_volume import k_class, local_layout
     from recovar.em.dense_single_volume.helpers import expected_accuracy, significance
     from recovar.em.initial_model import dense_adapter
+    from recovar.em.initial_model import sparse_pass2_estep
 
     shared_callables = {
         "_compute_k_class_significance_batched": (
-            dense_adapter._compute_k_class_significance_batched,
+            sparse_pass2_estep._compute_k_class_significance_batched,
             significance._compute_k_class_significance_batched,
         ),
         "_run_sparse_k_class_adaptive_pass2": (
-            dense_adapter._run_sparse_k_class_adaptive_pass2,
+            sparse_pass2_estep._run_sparse_k_class_adaptive_pass2,
             k_class._run_sparse_k_class_adaptive_pass2,
         ),
         "run_local_k_class_em": (
-            dense_adapter.run_local_k_class_em,
+            sparse_pass2_estep.run_local_k_class_em,
             k_class.run_local_k_class_em,
         ),
         "build_pass2_hypothesis_layout": (
-            dense_adapter.build_pass2_hypothesis_layout,
+            sparse_pass2_estep.build_pass2_hypothesis_layout,
             local_layout.build_pass2_hypothesis_layout,
         ),
         "estimate_relion_expected_accuracy_from_prepared_inputs": (
@@ -301,7 +302,9 @@ def test_sparse_pass2_result_fields_is_tuple_of_typed_attrs():
     """``_SPARSE_PASS2_RESULT_FIELDS`` is the single source of truth for which
     estep meta attributes get concatenated across sparse pass-2 batches.
     """
-    from recovar.em.initial_model.dense_adapter import _SPARSE_PASS2_RESULT_FIELDS
+    from recovar.em.initial_model.sparse_pass2_estep import (
+        _SPARSE_PASS2_RESULT_FIELDS,
+    )
 
     assert isinstance(_SPARSE_PASS2_RESULT_FIELDS, tuple)
     assert all(isinstance(item, tuple) and len(item) == 2 for item in _SPARSE_PASS2_RESULT_FIELDS)

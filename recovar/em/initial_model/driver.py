@@ -28,6 +28,14 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     relion_sigma_offset_prior_center,
     relion_translation_prior_center,
 )
+from recovar.em.initial_model.dense_adapter import (
+    prepare_relion_projector_class_inputs,
+    prepare_relion_projector_class_inputs_and_power,
+    run_dense_initial_model_estep,
+)
+from recovar.em.initial_model.estep_common import (
+    DenseInitialModelEstepConfig,
+)
 from recovar.em.initial_model.native_options import (
     NativeInitialModelOptions,
 )
@@ -65,12 +73,6 @@ from recovar.utils.helpers import (
 
 from .avg_unaligned import compute_avg_unaligned_and_sigma2
 from .bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstrap_iref_via_cpp
-from .dense_adapter import (
-    DenseInitialModelEstepConfig,
-    prepare_relion_projector_class_inputs,
-    prepare_relion_projector_class_inputs_and_power,
-    run_dense_initial_model_estep,
-)
 from .init import initialise_data_vs_prior_from_references, initialise_denovo_state, seed_noise_from_mavg
 from .iteration_loop import (
     relion_solvent_flatten_state,

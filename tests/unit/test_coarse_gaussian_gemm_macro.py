@@ -511,18 +511,19 @@ def test_coarse_gaussian_gemm_resource_gate_records_full_transient_and_host_sync
 
 def test_initial_model_multigroup_diagnostic_scopes_are_deterministic_and_unique():
     from recovar.em.initial_model import dense_adapter
+    from recovar.em.initial_model import sparse_pass2_estep
 
     groups = [
         (0, np.asarray([0, 2], dtype=np.int64), None),
         (1, np.asarray([1], dtype=np.int64), None),
     ]
-    first = dense_adapter._initial_model_coarse_gemm_diagnostic_scopes(
+    first = sparse_pass2_estep._initial_model_coarse_gemm_diagnostic_scopes(
         groups,
         debug_iteration=3,
         current_size=8,
         n_classes=2,
     )
-    second = dense_adapter._initial_model_coarse_gemm_diagnostic_scopes(
+    second = sparse_pass2_estep._initial_model_coarse_gemm_diagnostic_scopes(
         groups,
         debug_iteration=3,
         current_size=8,
@@ -1144,9 +1145,10 @@ def test_coarse_gaussian_gemm_macro_projects_once_and_binds_all_image_lanes(
 def test_coarse_gaussian_gemm_macro_is_shared_by_em_and_initial_model():
     from recovar.em.dense_single_volume import k_class
     from recovar.em.initial_model import dense_adapter
+    from recovar.em.initial_model import sparse_pass2_estep
 
     assert (
-        dense_adapter._compute_k_class_significance_batched
+        sparse_pass2_estep._compute_k_class_significance_batched
         is significance._compute_k_class_significance_batched
     )
     assert (

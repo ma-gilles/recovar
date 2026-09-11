@@ -11,6 +11,7 @@ import recovar.em.dense_single_volume.iteration_loop as iteration_loop
 import recovar.em.dense_single_volume.local_em_engine as local_em_engine
 import recovar.em.initial_model.dense_adapter as dense_adapter
 from recovar.em.dense_single_volume.helpers import preprocessing
+from recovar.em.initial_model import sparse_pass2_estep
 
 pytestmark = pytest.mark.unit
 
@@ -36,7 +37,7 @@ def test_datasets_without_a_backend_are_not_cuda():
 
 
 def test_initial_model_patch_point_is_the_owner():
-    assert dense_adapter._uses_relion_cuda_image_preprocessing is preprocessing.uses_relion_cuda_image_preprocessing
+    assert sparse_pass2_estep._uses_relion_cuda_image_preprocessing is preprocessing.uses_relion_cuda_image_preprocessing
 
 
 def test_local_engine_and_controller_use_the_owner():

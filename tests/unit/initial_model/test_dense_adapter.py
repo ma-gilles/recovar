@@ -10,21 +10,25 @@ import pytest
 from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
 from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.dense_adapter import (
-    DenseInitialModelEstepConfig,
-    _arrays_to_accumulators,
-    _estep_meta,
-    _initial_model_pass2_layout,
-    _initial_model_relion_f32_coarse_tie_ulps,
-    _initial_model_relion_f32_fine_posterior_enabled,
     _relion_projector_to_dense_volume,
     _resolve_class_inputs,
-    _resolve_sparse_pass1_current_size,
-    _safe_coarse_significance_image_batch_size,
     class_log_priors_from_state,
     reference_to_dense_means,
     reference_to_relion_projector_dense_means,
     run_dense_initial_model_estep,
     split_pseudo_halfset_particle_ids,
+)
+from recovar.em.initial_model.estep_common import (
+    DenseInitialModelEstepConfig,
+    _arrays_to_accumulators,
+    _estep_meta,
+)
+from recovar.em.initial_model.sparse_pass2_estep import (
+    _initial_model_pass2_layout,
+    _initial_model_relion_f32_coarse_tie_ulps,
+    _initial_model_relion_f32_fine_posterior_enabled,
+    _resolve_sparse_pass1_current_size,
+    _safe_coarse_significance_image_batch_size,
 )
 
 pytestmark = pytest.mark.unit
@@ -299,6 +303,7 @@ def test_class_log_priors_from_state_allows_inactive_class():
 
 def test_dense_initial_model_estep_runs_separate_k_class_calls_for_pseudo_halfsets(monkeypatch):
     from recovar.em.initial_model import dense_adapter
+    from recovar.em.initial_model import sparse_pass2_estep
 
     calls = []
     conversions = []
@@ -1075,19 +1080,19 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         return _fake_result(n_classes=1, n=8, n_images=int(dataset.n_units), n_groups=1)
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._compute_k_class_significance_batched",
+        "recovar.em.initial_model.sparse_pass2_estep._compute_k_class_significance_batched",
         fake_significance,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._safe_coarse_significance_image_batch_size",
+        "recovar.em.initial_model.sparse_pass2_estep._safe_coarse_significance_image_batch_size",
         lambda *_args, **_kwargs: 7,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.build_pass2_hypothesis_layout",
+        "recovar.em.initial_model.sparse_pass2_estep.build_pass2_hypothesis_layout",
         fake_build_layout,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.run_local_k_class_em",
+        "recovar.em.initial_model.sparse_pass2_estep.run_local_k_class_em",
         fake_run_local,
     )
     monkeypatch.setattr(
@@ -1100,7 +1105,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         ),
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._uses_relion_cuda_image_preprocessing",
+        "recovar.em.initial_model.sparse_pass2_estep._uses_relion_cuda_image_preprocessing",
         lambda dataset: True,
     )
     monkeypatch.setattr(
@@ -1244,7 +1249,9 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
 
 
 def test_exact_relion_fine_diff2_can_be_disabled(monkeypatch):
-    from recovar.em.initial_model.dense_adapter import _exact_relion_fine_diff2_enabled
+    from recovar.em.initial_model.sparse_pass2_estep import (
+        _exact_relion_fine_diff2_enabled,
+    )
 
     for value in ("0", "false", "NO", "Off"):
         monkeypatch.setenv("RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2", value)
@@ -1252,7 +1259,9 @@ def test_exact_relion_fine_diff2_can_be_disabled(monkeypatch):
 
 
 def test_initial_model_flat_local_rows_are_explicit_opt_in(monkeypatch):
-    from recovar.em.initial_model.dense_adapter import _flat_local_rows_enabled
+    from recovar.em.initial_model.sparse_pass2_estep import (
+        _flat_local_rows_enabled,
+    )
 
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS", raising=False)
     assert _flat_local_rows_enabled() is False
@@ -1265,7 +1274,7 @@ def test_initial_model_flat_local_rows_are_explicit_opt_in(monkeypatch):
 
 
 def test_initial_model_stable_flat_row_capacity_is_explicit_opt_in(monkeypatch):
-    from recovar.em.initial_model.dense_adapter import (
+    from recovar.em.initial_model.sparse_pass2_estep import (
         _stable_flat_row_capacity_enabled,
     )
 
@@ -1281,7 +1290,9 @@ def test_initial_model_stable_flat_row_capacity_is_explicit_opt_in(monkeypatch):
 
 
 def test_initial_model_packed_local_projection_is_explicit_opt_in(monkeypatch):
-    from recovar.em.initial_model.dense_adapter import _packed_local_projection_enabled
+    from recovar.em.initial_model.sparse_pass2_estep import (
+        _packed_local_projection_enabled,
+    )
 
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION", raising=False)
     assert _packed_local_projection_enabled() is False
@@ -1294,7 +1305,7 @@ def test_initial_model_packed_local_projection_is_explicit_opt_in(monkeypatch):
 
 
 def test_shared_fused_pair_fine_score_is_explicit_opt_in(monkeypatch):
-    from recovar.em.initial_model.dense_adapter import (
+    from recovar.em.initial_model.sparse_pass2_estep import (
         _fused_pair_fine_score_enabled,
     )
 
@@ -1310,7 +1321,9 @@ def test_shared_fused_pair_fine_score_is_explicit_opt_in(monkeypatch):
 
 
 def test_initial_model_deferred_packed_vdam_is_explicit_opt_in(monkeypatch):
-    from recovar.em.initial_model.dense_adapter import _defer_packed_vdam_enabled
+    from recovar.em.initial_model.sparse_pass2_estep import (
+        _defer_packed_vdam_enabled,
+    )
 
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM", raising=False)
     assert _defer_packed_vdam_enabled() is False
@@ -1323,7 +1336,9 @@ def test_initial_model_deferred_packed_vdam_is_explicit_opt_in(monkeypatch):
 
 
 def test_initial_model_packed_final_noise_is_explicit_opt_in(monkeypatch):
-    from recovar.em.initial_model.dense_adapter import _packed_final_noise_enabled
+    from recovar.em.initial_model.sparse_pass2_estep import (
+        _packed_final_noise_enabled,
+    )
 
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE", raising=False)
     assert _packed_final_noise_enabled() is False
@@ -1360,7 +1375,7 @@ def test_dense_initial_model_estep_os0_uses_device_coarse_rotations(monkeypatch)
         fake_device_coarse,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._compute_k_class_significance_batched",
+        "recovar.em.initial_model.sparse_pass2_estep._compute_k_class_significance_batched",
         fake_significance,
     )
     monkeypatch.setattr(
@@ -1373,7 +1388,7 @@ def test_dense_initial_model_estep_os0_uses_device_coarse_rotations(monkeypatch)
         ),
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._uses_relion_cuda_image_preprocessing",
+        "recovar.em.initial_model.sparse_pass2_estep._uses_relion_cuda_image_preprocessing",
         lambda _dataset: True,
     )
 
@@ -1416,7 +1431,9 @@ def test_dense_initial_model_estep_os0_uses_device_coarse_rotations(monkeypatch)
 
 
 def test_initial_model_local_bucket_unification_can_be_disabled(monkeypatch):
-    from recovar.em.initial_model.dense_adapter import _unify_local_bucket_sizes_enabled
+    from recovar.em.initial_model.sparse_pass2_estep import (
+        _unify_local_bucket_sizes_enabled,
+    )
 
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES", raising=False)
     assert _unify_local_bucket_sizes_enabled() is True
@@ -1508,15 +1525,15 @@ def test_dense_initial_model_estep_os0_keeps_coarse_normalization_pose_and_suppo
         )
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._compute_k_class_significance_batched",
+        "recovar.em.initial_model.sparse_pass2_estep._compute_k_class_significance_batched",
         fake_significance,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.build_pass2_hypothesis_layout",
+        "recovar.em.initial_model.sparse_pass2_estep.build_pass2_hypothesis_layout",
         fake_build_layout,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.run_local_k_class_em",
+        "recovar.em.initial_model.sparse_pass2_estep.run_local_k_class_em",
         fake_run_local,
     )
 
@@ -1598,19 +1615,19 @@ def test_dense_initial_model_estep_compact_os0_reuses_coarse_normalization_and_s
         )
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._compute_k_class_significance_batched",
+        "recovar.em.initial_model.sparse_pass2_estep._compute_k_class_significance_batched",
         fake_significance,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._run_sparse_k_class_adaptive_pass2",
+        "recovar.em.initial_model.sparse_pass2_estep._run_sparse_k_class_adaptive_pass2",
         fake_run_compact,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._collapse_compact_pass2_rotation_stats_to_directions",
+        "recovar.em.initial_model.sparse_pass2_estep._collapse_compact_pass2_rotation_stats_to_directions",
         lambda result, _n_psi: result,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._restore_zero_oversampling_coarse_metadata",
+        "recovar.em.initial_model.sparse_pass2_estep._restore_zero_oversampling_coarse_metadata",
         lambda result, **_kwargs: result,
     )
 
@@ -1662,7 +1679,7 @@ def test_dense_initial_model_estep_compact_os0_reuses_coarse_normalization_and_s
 def test_zero_oversampling_restores_k_class_coarse_argmax_metadata():
     from recovar.em.dense_single_volume.helpers.types import make_relion_stats
     from recovar.em.dense_single_volume.k_class_results import KClassEMResult
-    from recovar.em.initial_model.dense_adapter import (
+    from recovar.em.initial_model.sparse_pass2_estep import (
         _restore_zero_oversampling_coarse_metadata,
     )
 
@@ -1784,15 +1801,15 @@ def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypa
         return _fake_result(n_classes=2, n=8, n_images=int(dataset.n_units), n_groups=1)
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._compute_k_class_significance_batched",
+        "recovar.em.initial_model.sparse_pass2_estep._compute_k_class_significance_batched",
         fake_significance,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.build_pass2_hypothesis_layout",
+        "recovar.em.initial_model.sparse_pass2_estep.build_pass2_hypothesis_layout",
         fake_build_layout,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.run_local_k_class_em",
+        "recovar.em.initial_model.sparse_pass2_estep.run_local_k_class_em",
         fake_run_local,
     )
 
@@ -1922,15 +1939,15 @@ def test_dense_initial_model_estep_sparse_pass2_pseudo_halfsets_use_separate_loc
         return _fake_result(n_classes=1, n=8, n_images=int(dataset.n_images), n_groups=1)
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._compute_k_class_significance_batched",
+        "recovar.em.initial_model.sparse_pass2_estep._compute_k_class_significance_batched",
         fake_significance,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.build_pass2_hypothesis_layout",
+        "recovar.em.initial_model.sparse_pass2_estep.build_pass2_hypothesis_layout",
         fake_build_layout,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.run_local_k_class_em",
+        "recovar.em.initial_model.sparse_pass2_estep.run_local_k_class_em",
         fake_run_local,
     )
 
@@ -2069,19 +2086,19 @@ def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypat
         return result
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._compute_k_class_significance_batched",
+        "recovar.em.initial_model.sparse_pass2_estep._compute_k_class_significance_batched",
         fake_significance,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.build_pass2_hypothesis_layout",
+        "recovar.em.initial_model.sparse_pass2_estep.build_pass2_hypothesis_layout",
         fake_build_layout,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.run_local_k_class_em",
+        "recovar.em.initial_model.sparse_pass2_estep.run_local_k_class_em",
         fake_run_local,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._uses_relion_cuda_image_preprocessing",
+        "recovar.em.initial_model.sparse_pass2_estep._uses_relion_cuda_image_preprocessing",
         lambda dataset: True,
     )
     monkeypatch.setattr(
