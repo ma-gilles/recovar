@@ -2698,6 +2698,61 @@ def _weighted_image_power_shells_and_per_image(
 ):
     """Accumulate image power for noise shells and per-image norm correction.
 
+    Resolves the environment-controlled reduction policy on the host and runs
+    the arithmetic in :func:`_weighted_image_power_shells_and_per_image_core`.
+    """
+
+    if source_faithful_spectrum_norm is None:
+        source_faithful_spectrum_norm = parse_env_flag(
+            _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
+            default=False,
+        )
+    source_faithful_spectrum_norm = bool(source_faithful_spectrum_norm)
+    deterministic_norm_reduction = source_faithful_spectrum_norm or parse_env_flag(
+        "RECOVAR_K1_RELION_DETERMINISTIC_NORM_REDUCTION",
+        default=False,
+    )
+    return _weighted_image_power_shells_and_per_image_core(
+        processed_half,
+        shell_indices_half,
+        support_mass,
+        norm_unweighted_high_shell,
+        valid_image_mask,
+        shell_count=int(shell_count),
+        norm_unweighted_shell_cutoff=(
+            None if norm_unweighted_shell_cutoff is None else int(norm_unweighted_shell_cutoff)
+        ),
+        include_unweighted_high_shell=bool(include_unweighted_high_shell),
+        disable_cuda_binning=parse_env_flag("RECOVAR_DISABLE_CUDA", default=False),
+        deterministic_norm_reduction=bool(deterministic_norm_reduction),
+    )
+
+
+@partial(
+    jax.jit,
+    static_argnames=(
+        "shell_count",
+        "norm_unweighted_shell_cutoff",
+        "include_unweighted_high_shell",
+        "disable_cuda_binning",
+        "deterministic_norm_reduction",
+    ),
+)
+def _weighted_image_power_shells_and_per_image_core(
+    processed_half,
+    shell_indices_half,
+    support_mass,
+    norm_unweighted_high_shell,
+    valid_image_mask,
+    *,
+    shell_count: int,
+    norm_unweighted_shell_cutoff: int | None,
+    include_unweighted_high_shell: bool,
+    disable_cuda_binning: bool,
+    deterministic_norm_reduction: bool,
+):
+    """Accumulate image power for noise shells and per-image norm correction.
+
     Inside the current model size, shell sums use the same significant-support
     mass as the A2/XA residual terms.  Above it, RELION adds ``power_img`` once
     per particle outside the class/posterior loop, so both the noise spectrum
@@ -2727,7 +2782,7 @@ def _weighted_image_power_shells_and_per_image(
     # here perturbs both the shell noise statistics and the per-image norm
     # correction before either is accumulated into the host float64 totals.
     weighted_half = jnp.sum(weighted_pixel_power, axis=0)
-    if parse_env_flag("RECOVAR_DISABLE_CUDA", default=False):
+    if disable_cuda_binning:
         # ``bins.at[indices].add`` lowers to unordered GPU atomics even when
         # RECOVAR's custom CUDA path is explicitly disabled.  Keep this
         # fallback repeatable by reducing each shell independently instead.
@@ -2742,16 +2797,6 @@ def _weighted_image_power_shells_and_per_image(
         )
     else:
         weighted_shells = bin_shell_values_jax(weighted_half, shell_indices_half, shell_count)
-    if source_faithful_spectrum_norm is None:
-        source_faithful_spectrum_norm = parse_env_flag(
-            _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
-            default=False,
-        )
-    source_faithful_spectrum_norm = bool(source_faithful_spectrum_norm)
-    deterministic_norm_reduction = source_faithful_spectrum_norm or parse_env_flag(
-        "RECOVAR_K1_RELION_DETERMINISTIC_NORM_REDUCTION",
-        default=False,
-    )
     norm_reduction_dtype = jnp.float64 if deterministic_norm_reduction else pixel_power.dtype
     weighted_per_image = jnp.sum(
         (pixel_power * norm_mass).astype(norm_reduction_dtype),
@@ -5018,6 +5063,7 @@ def _relion_powerclass_noise_terms(
     return relion_highres_xi2_half, relion_norm_high_shell
 
 
+@jax.jit
 def _relion_cuda_fine_diff2_min(diff2, candidate_mask):
     """Return one finite XFLOAT minimum per image over a raw diff2 tensor."""
 
@@ -5029,6 +5075,7 @@ def _relion_cuda_fine_diff2_min(diff2, candidate_mask):
     )
 
 
+@jax.jit
 def _relion_cuda_fine_partition_diff2_min_or_inf(diff2, candidate_mask):
     """Reduce one partition, retaining ``+inf`` for all-invalid images."""
 
@@ -5070,6 +5117,13 @@ def _relion_cuda_fine_global_diff2_min(raw_diff2_by_partition, masks_by_partitio
             partition_minimum = jax.block_until_ready(partition_minimum)
         partition_minima.append(partition_minimum)
         del raw_diff2_device
+    return _relion_cuda_fine_finite_common_min(tuple(partition_minima))
+
+
+@jax.jit
+def _relion_cuda_fine_finite_common_min(partition_minima):
+    """Reduce per-partition minima to one finite per-image common minimum."""
+
     common_min = jnp.min(jnp.stack(partition_minima, axis=0), axis=0)
     return jnp.where(
         jnp.isfinite(common_min),
@@ -5084,6 +5138,7 @@ def _relion_cuda_fine_log_evidence_offset(min_diff2):
     return -jnp.asarray(min_diff2)
 
 
+@jax.jit
 def _relion_cuda_fine_diff2_to_scores(
     diff2,
     rotation_log_prior,
@@ -5391,6 +5446,29 @@ def _score_pass2_pairs_gaussian_algebraic(
     scores = cross - proj_norm + pair_rotation_log_prior + translation_prior
     scores = jnp.where(pair_mask, scores, -jnp.inf)
     return jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
+
+
+@partial(jax.jit, static_argnames=("dtype",))
+def _gather_pair_translation_log_prior(bucket_translation_prior, translation_idx, pair_mask, *, dtype):
+    """Gather each compact pair's translation log prior in one compiled program.
+
+    Masked pairs read translation 0; callers mask their scores separately.
+    """
+
+    row = jnp.arange(translation_idx.shape[0])[:, None]
+    safe_translation_idx = jnp.where(pair_mask, translation_idx, 0).astype(jnp.int32)
+    return jnp.asarray(bucket_translation_prior[row, safe_translation_idx], dtype=dtype)
+
+
+@jax.jit
+def _gather_projection_cache_rows(cache_score, cache_recon, cache_recon_abs2, rotation_indices):
+    """Gather one bucket's score/recon/abs2 projection-cache rows in one program."""
+
+    return (
+        cache_score[rotation_indices],
+        cache_recon[rotation_indices],
+        cache_recon_abs2[rotation_indices],
+    )
 
 
 @partial(jax.jit, static_argnames=("use_fused_ffi",))
@@ -6971,11 +7049,33 @@ def _relion_pass2_reconstruction_joint_masks(flat_probs_by_class, *, adaptive_fr
     return list(jnp.split(joint_mask, split_points, axis=1))
 
 
-def _relion_joint_winner_take_all_masks(flat_scores_by_class):
-    """Return one global class x pose winner mask per image."""
+def _relion_joint_winner_take_all_masks(scores_by_class, masks_by_class=None):
+    """Return one global class x pose winner mask per image.
 
-    if not flat_scores_by_class:
+    ``scores_by_class`` may hold rectangular ``(B, R, T)`` or compact ``(B, P)``
+    scores; ``masks_by_class`` optionally masks compact pairs to ``-inf`` first.
+    Returns one flat ``(B, R * T)`` / ``(B, P)`` mask per class.
+    """
+
+    if not scores_by_class:
         return []
+    if masks_by_class is None:
+        masks_by_class = [None] * len(scores_by_class)
+    return _relion_joint_winner_take_all_masks_jit(tuple(scores_by_class), tuple(masks_by_class))
+
+
+def _flatten_joint_class_scores(scores_by_class, masks_by_class):
+    flat_scores = []
+    for scores, mask in zip(scores_by_class, masks_by_class, strict=True):
+        if mask is not None:
+            scores = jnp.where(mask, scores, -jnp.inf)
+        flat_scores.append(scores.reshape(scores.shape[0], -1))
+    return flat_scores
+
+
+@jax.jit
+def _relion_joint_winner_take_all_masks_jit(scores_by_class, masks_by_class):
+    flat_scores_by_class = _flatten_joint_class_scores(scores_by_class, masks_by_class)
     flat_sizes = [int(scores.shape[1]) for scores in flat_scores_by_class]
     joint_scores = jnp.concatenate(flat_scores_by_class, axis=1)
     finite = jnp.isfinite(joint_scores)
@@ -6985,6 +7085,44 @@ def _relion_joint_winner_take_all_masks(flat_scores_by_class):
     joint_mask = (jnp.arange(joint_scores.shape[1])[None, :] == best_idx[:, None]) & valid[:, None]
     split_points = np.cumsum(flat_sizes[:-1], dtype=np.int64).tolist()
     return list(jnp.split(joint_mask, split_points, axis=1))
+
+
+@partial(jax.jit, static_argnames=("adaptive_fraction", "keep_all"))
+def _relion_f32_fine_posterior_by_class(
+    scores_by_class,
+    masks_by_class,
+    *,
+    adaptive_fraction: float,
+    normalization_sum_weight=None,
+    keep_all: bool = False,
+):
+    """Run the joint RELION float32 fine posterior over one bucket's classes.
+
+    Concatenates the per-class scores (compact pairs masked to ``-inf``), runs
+    :func:`_relion_f32_fine_posterior`, and splits the mask, full and
+    reconstruction probabilities back into each class's score shape inside one
+    compiled program instead of one XLA program per concatenate/split/reshape.
+    """
+
+    flat_scores_by_class = _flatten_joint_class_scores(scores_by_class, masks_by_class)
+    flat_sizes = [int(scores.shape[1]) for scores in flat_scores_by_class]
+    joint_scores = jnp.concatenate(flat_scores_by_class, axis=1)
+    joint_full_probs, joint_reconstruction_probs, joint_mask, *_diagnostics = _relion_f32_fine_posterior(
+        joint_scores,
+        adaptive_fraction=adaptive_fraction,
+        normalization_sum_weight=normalization_sum_weight,
+        keep_all=keep_all,
+    )
+    split_points = np.cumsum(flat_sizes[:-1], dtype=np.int64).tolist()
+    shapes = [scores.shape for scores in scores_by_class]
+
+    def _split(joint):
+        return [
+            part.reshape(shape)
+            for part, shape in zip(jnp.split(joint, split_points, axis=1), shapes, strict=True)
+        ]
+
+    return _split(joint_mask), _split(joint_full_probs), _split(joint_reconstruction_probs)
 
 
 # ---------------------------------------------------------------------------
@@ -7622,6 +7760,7 @@ def _prepare_bucket_io(
     )
 
 
+@jax.jit
 def subtract_projected_reference_from_sparse_mstep_sums(
     summed,
     reconstruction_probs,
@@ -7639,6 +7778,7 @@ def subtract_projected_reference_from_sparse_mstep_sums(
     )
 
 
+@jax.jit
 def subtract_projected_reference_from_sparse_mstep_rotation_sums(
     summed,
     posterior_mass_by_rotation,
@@ -13357,10 +13497,12 @@ def compute_k_class_pass2_stats_sparse_fused(
                     proj_for_noise = cache_recon[jnp.newaxis, :, :]
                     proj_abs2_for_noise = cache_recon_abs2[jnp.newaxis, :, :]
                 else:
-                    rotation_indices_jax = jnp.asarray(rotation_indices_np, dtype=jnp.int32)
-                    proj_half = cache_score[rotation_indices_jax]
-                    proj_for_noise = cache_recon[rotation_indices_jax]
-                    proj_abs2_for_noise = cache_recon_abs2[rotation_indices_jax]
+                    proj_half, proj_for_noise, proj_abs2_for_noise = _gather_projection_cache_rows(
+                        cache_score,
+                        cache_recon,
+                        cache_recon_abs2,
+                        jnp.asarray(rotation_indices_np, dtype=jnp.int32),
+                    )
             else:
                 projection_kwargs = window_spec.projection_kwargs(return_abs2=False if use_window else None)
                 projection_kwargs["mask_current_image_disk"] = bool(
@@ -13474,8 +13616,6 @@ def compute_k_class_pass2_stats_sparse_fused(
                         relion_highres_xi2_half,
                         use_fused_ffi=use_relion_fine_diff2_fused_ffi,
                     )
-                    row = jnp.arange(batch)[:, None]
-                    safe_translation_idx = jnp.where(pair_mask, translation_idx, 0).astype(jnp.int32)
                     # The joint minimum is not known until every class has
                     # scored. Offload each raw partition immediately so K
                     # device-resident raw tensors cannot overlap the K score
@@ -13493,8 +13633,10 @@ def compute_k_class_pass2_stats_sparse_fused(
                         )
                     )
                     raw_diff2_translation_priors_by_class.append(
-                        jnp.asarray(
-                            bucket_translation_prior[row, safe_translation_idx],
+                        _gather_pair_translation_log_prior(
+                            bucket_translation_prior,
+                            translation_idx,
+                            pair_mask,
                             dtype=precision_policy.score_real_dtype,
                         )
                     )
@@ -13804,16 +13946,16 @@ def compute_k_class_pass2_stats_sparse_fused(
                         relion_highres_xi2_half,
                         use_fused_ffi=use_relion_fine_diff2_fused_ffi,
                     )
-                    row = jnp.arange(batch)[:, None]
-                    safe_translation_idx = jnp.where(pair_mask, translation_idx, 0).astype(jnp.int32)
                     compact_scores = _relion_cuda_fine_diff2_to_scores(
                         compact_raw_diff2,
                         jnp.asarray(
                             compact_arrays["log_prior"],
                             dtype=precision_policy.score_real_dtype,
                         ),
-                        jnp.asarray(
-                            bucket_translation_prior[row, safe_translation_idx],
+                        _gather_pair_translation_log_prior(
+                            bucket_translation_prior,
+                            translation_idx,
+                            pair_mask,
                             dtype=precision_policy.score_real_dtype,
                         ),
                         pair_mask,
@@ -13879,7 +14021,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         joint_full_probs_by_class = None
         if relion_fine_mstep_joint:
             flat_joint_probs_by_class = []
-            flat_joint_scores_by_class = []
+            joint_masks_by_class = []
             joint_prob_shapes = []
             for class_index, arrays in enumerate(class_bucket_arrays):
                 if bucket_uses_compact_pairs:
@@ -13914,9 +14056,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                     if pair_probs is not None:
                         pair_probs = jnp.where(pair_mask, pair_probs, 0.0)
                         flat_joint_probs_by_class.append(pair_probs.reshape(batch, -1))
-                    flat_joint_scores_by_class.append(
-                        jnp.where(pair_mask, scores_by_class[class_index], -jnp.inf).reshape(batch, -1)
-                    )
+                    joint_masks_by_class.append(pair_mask)
                     joint_prob_shapes.append(scores_by_class[class_index].shape)
                 else:
                     if use_relion_f32_fine_posterior and not winner_take_all:
@@ -13940,66 +14080,43 @@ def compute_k_class_pass2_stats_sparse_fused(
                         )
                     if probs is not None:
                         flat_joint_probs_by_class.append(probs.reshape(batch, -1))
-                    flat_joint_scores_by_class.append(scores_by_class[class_index].reshape(batch, -1))
+                    joint_masks_by_class.append(None)
                     joint_prob_shapes.append(scores_by_class[class_index].shape)
             if winner_take_all:
-                flat_joint_masks = _relion_joint_winner_take_all_masks(flat_joint_scores_by_class)
+                flat_joint_masks = _relion_joint_winner_take_all_masks(
+                    scores_by_class,
+                    joint_masks_by_class,
+                )
             elif use_relion_f32_fine_posterior:
-                flat_sizes = [int(scores.shape[1]) for scores in flat_joint_scores_by_class]
-                joint_scores = jnp.concatenate(flat_joint_scores_by_class, axis=1)
                 (
-                    joint_full_probs,
-                    joint_reconstruction_probs,
-                    joint_mask,
-                    *_diagnostics,
-                ) = (
-                    _relion_f32_fine_posterior(
-                        joint_scores,
-                        adaptive_fraction=float(adaptive_fraction),
-                        normalization_sum_weight=(
-                            None
-                            if relion_f32_normalization_sum_weight_np is None
-                            else jnp.asarray(
-                                relion_f32_normalization_sum_weight_np[image_indices],
-                                dtype=jnp.float32,
-                            )
-                        ),
-                        keep_all=relion_fine_mstep_prune_mode == "joint_keep_all",
-                    )
+                    joint_mstep_masks_by_class,
+                    joint_full_probs_by_class,
+                    joint_mstep_probs_by_class,
+                ) = _relion_f32_fine_posterior_by_class(
+                    tuple(scores_by_class),
+                    tuple(joint_masks_by_class),
+                    adaptive_fraction=float(adaptive_fraction),
+                    normalization_sum_weight=(
+                        None
+                        if relion_f32_normalization_sum_weight_np is None
+                        else jnp.asarray(
+                            relion_f32_normalization_sum_weight_np[image_indices],
+                            dtype=jnp.float32,
+                        )
+                    ),
+                    keep_all=relion_fine_mstep_prune_mode == "joint_keep_all",
                 )
-                split_points = np.cumsum(flat_sizes[:-1], dtype=np.int64).tolist()
-                flat_joint_masks = list(jnp.split(joint_mask, split_points, axis=1))
-                flat_joint_full_probs = list(
-                    jnp.split(joint_full_probs, split_points, axis=1)
-                )
-                flat_joint_reconstruction_probs = list(
-                    jnp.split(joint_reconstruction_probs, split_points, axis=1)
-                )
-                joint_full_probs_by_class = [
-                    flat_probs.reshape(shape)
-                    for flat_probs, shape in zip(
-                        flat_joint_full_probs,
-                        joint_prob_shapes,
-                        strict=True,
-                    )
-                ]
-                joint_mstep_probs_by_class = [
-                    flat_probs.reshape(shape)
-                    for flat_probs, shape in zip(
-                        flat_joint_reconstruction_probs,
-                        joint_prob_shapes,
-                        strict=True,
-                    )
-                ]
+                flat_joint_masks = None
             else:
                 flat_joint_masks = _relion_pass2_reconstruction_joint_masks(
                     flat_joint_probs_by_class,
                     adaptive_fraction=float(adaptive_fraction),
                 )
-            joint_mstep_masks_by_class = [
-                flat_mask.reshape(shape)
-                for flat_mask, shape in zip(flat_joint_masks, joint_prob_shapes, strict=True)
-            ]
+            if flat_joint_masks is not None:
+                joint_mstep_masks_by_class = [
+                    flat_mask.reshape(shape)
+                    for flat_mask, shape in zip(flat_joint_masks, joint_prob_shapes, strict=True)
+                ]
         if dump_pass2_operands and parse_env_flag(_PASS2_DUMP_STOP_AFTER_TARGET_ENV, default=False):
             bucket_dump_count = 0
             for class_index, arrays in enumerate(class_bucket_arrays):

@@ -101,8 +101,15 @@ def _selected_by_class(per_class_values, class_assignments: np.ndarray, *, direc
     stacked = _stack_or_none(per_class_values)
     if stacked is None:
         return None
+    return _select_stacked_rows_by_class(stacked, np.asarray(class_assignments, dtype=np.int32))
+
+
+@jax.jit
+def _select_stacked_rows_by_class(stacked, class_assignments):
+    """Pick each image's row from its assigned class in one compiled program."""
+
     image_indices = jnp.arange(class_assignments.shape[0])
-    return stacked[jnp.asarray(class_assignments, dtype=jnp.int32), image_indices]
+    return stacked[class_assignments, image_indices]
 
 
 
