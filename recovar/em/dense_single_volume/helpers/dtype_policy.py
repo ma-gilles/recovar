@@ -2,11 +2,82 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
 import jax.numpy as jnp
+import numpy as np
+
+logger = logging.getLogger(__name__)
+
+OPERAND_PRECISION_CHECK_ENV = "RECOVAR_EM_OPERAND_PRECISION_CHECK"
+_REPORTED_PRECISION_VIOLATIONS: set[tuple[str, tuple[str, ...]]] = set()
+
+
+def operand_precision_check_mode() -> str:
+    """Return ``warn`` (default), ``raise`` or ``off`` for the operand dtype audit."""
+
+    mode = os.environ.get(OPERAND_PRECISION_CHECK_ENV, "warn").strip().lower()
+    if mode not in {"warn", "raise", "off"}:
+        raise ValueError(f"{OPERAND_PRECISION_CHECK_ENV} must be warn, raise or off, got {mode!r}")
+    return mode
+
+
+def _real_component_bytes(dtype) -> int | None:
+    """Return the width of one real component, or None for non-floating dtypes."""
+
+    dtype = np.dtype(dtype)
+    if dtype.kind == "c":
+        return dtype.itemsize // 2
+    if dtype.kind == "f":
+        return dtype.itemsize
+    return None
+
+
+def audit_operand_precision(policy, operands: Mapping[str, object], *, where: str, mode: str | None = None):
+    """Report operands carried wider than the precision policy allows.
+
+    Production EM precision is float32 (``recovar/em/CLAUDE.md``). The ``cast_*``
+    helpers above narrow the score operands unconditionally but narrow the
+    reconstruction operands only when float64 scoring is *on*, so a single
+    float64 factor upstream -- a binary64 sigma2 spectrum, say -- silently
+    promotes reconstruction and M-step rows to complex128 under a float32
+    policy. That costs bandwidth everywhere and is invisible in results.
+
+    This audit reads dtypes only (no device synchronisation) and is meant to sit
+    at operand boundaries. It warns once per distinct violation by default;
+    ``RECOVAR_EM_OPERAND_PRECISION_CHECK=raise`` turns it into an error for tests
+    and ``off`` disables it.
+    """
+
+    mode = operand_precision_check_mode() if mode is None else mode
+    if mode == "off":
+        return ()
+    limit = 8 if policy.use_float64_scoring else 4
+    offenders = tuple(
+        f"{name}={np.dtype(value.dtype).name}"
+        for name, value in operands.items()
+        if value is not None
+        and getattr(value, "dtype", None) is not None
+        and (_real_component_bytes(value.dtype) or 0) > limit
+    )
+    if not offenders:
+        return ()
+    message = (
+        f"EM operand precision: {where} returned {len(offenders)} operand(s) wider than the "
+        f"{'float64' if policy.use_float64_scoring else 'float32'} precision policy: "
+        f"{', '.join(offenders)}. Production EM precision is float32; a float64 factor upstream "
+        f"promotes these rows and every consumer of them. Set {OPERAND_PRECISION_CHECK_ENV}=off to silence."
+    )
+    if mode == "raise":
+        raise ValueError(message)
+    key = (where, offenders)
+    if key not in _REPORTED_PRECISION_VIOLATIONS:
+        _REPORTED_PRECISION_VIOLATIONS.add(key)
+        logger.warning("%s", message)
+    return offenders
 
 
 @dataclass(frozen=True)

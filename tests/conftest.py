@@ -212,6 +212,20 @@ def _set_deterministic_seed():
     np.random.seed(0)
 
 
+@pytest.fixture(autouse=True)
+def _strict_em_operand_precision(monkeypatch):
+    """Fail tests that carry EM operands wider than the precision policy.
+
+    Production EM precision is float32; a single float64 factor upstream can
+    silently promote reconstruction and M-step rows with no visible effect on
+    results. Production only warns (see
+    ``recovar.em.dense_single_volume.helpers.dtype_policy``); tests are strict
+    unless a test opts out by setting the variable itself.
+    """
+
+    monkeypatch.setenv("RECOVAR_EM_OPERAND_PRECISION_CHECK", "raise")
+
+
 def _first_gpu_or_skip():
     """Return the first available GPU device or skip the test."""
     jax = pytest.importorskip("jax")

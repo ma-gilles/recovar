@@ -59,7 +59,10 @@ from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
     maybe_capture_k1_production_bucket_chunked,
     require_chunked_capture_capacity,
 )
-from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
+from recovar.em.dense_single_volume.helpers.dtype_policy import (
+    DensePrecisionPolicy,
+    audit_operand_precision,
+)
 from recovar.em.dense_single_volume.helpers.env_flags import (
     parse_env_binary_flag,
     parse_env_flag,
@@ -8006,6 +8009,24 @@ def _prepare_bucket_io(
         shifted_corrected_score_half = shifted_corrected_score_half.astype(
             precision_policy.score_complex_dtype,
         )
+
+    # The casts above narrow the score operands unconditionally but the
+    # reconstruction operands only under float64 scoring, so one float64 factor
+    # upstream silently promotes the reconstruction and M-step rows. Audit the
+    # boundary rather than trusting the casts.
+    audit_operand_precision(
+        precision_policy,
+        {
+            "shifted_score_half": shifted_score_half,
+            "shifted_recon_half": shifted_recon_half,
+            "ctf2_over_nv_half": ctf2_over_nv_half,
+            "ctf2_over_nv_half_with_dc": ctf2_over_nv_half_with_dc,
+            "shifted_score_half_with_dc": shifted_score_half_with_dc,
+            "shifted_corrected_score_half": shifted_corrected_score_half,
+            "direct_score_input": direct_score_input,
+        },
+        where="_prepare_bucket_io",
+    )
 
     return (
         shifted_score_half,
