@@ -44,7 +44,11 @@ adaptive/sparse engine at the requested oversampling order, including 0
 not), instead of raising. This is the repair for the fast parity tier's K=1
 cases (user delegated the decision). 153 CPU guard cases and the 502-case
 controller panel pass; the GPU fast tier rerun is recorded separately. The
-tier's K-class cases still need a dispatch-capable 5k/128 oracle fixture.
+tier's K4 cases take a dispatch-capable oracle and schema-3 schedule through
+`EM_PARITY_FAST_K4_RELION_DIR` / `EM_PARITY_FAST_K4_DISPATCH_SCHEDULE`; a
+schema-v2 MPI rerun of the 5k/128 K4 oracle with its schedule build is job
+13711156 under `em_k4_5k128_dispatch_oracle_20260910` (SAFE_TO_DELETE); the
+curated fixture directory is untouched.
 
 Qualification of frozen `400ad81e4` on H100 (immutable worktree): the GPU fast
 parity tier failed 6 of 7 cases for pre-existing reasons (direct dense K=1 path

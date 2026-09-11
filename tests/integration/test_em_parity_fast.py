@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -61,7 +62,21 @@ K2_RELION_DIR = K2_FIXTURE_DIR / "relion_pdb_k2_os0_ref"
 K2_DATA_STAR = K2_FIXTURE_DIR / "particles.star"
 
 K4_FIXTURE_DIR = FIXTURE_BASE / "data_pdb_k4_5k_128"
-K4_RELION_DIR = K4_FIXTURE_DIR / "relion_pdb_k4_os0_ref"
+# The shipped K4 oracle was a single-process RELION run captured before dispatch
+# logging existed, so strict K>1 replay cannot use it. Point these at a
+# dispatch-capable oracle rerun (RELION MPI with RELION_DISPATCH_LOG) and its
+# schema-3 schedule to run the K4 cases; unset, the tests report the fixture gap.
+K4_RELION_DIR = Path(os.environ.get("EM_PARITY_FAST_K4_RELION_DIR", str(K4_FIXTURE_DIR / "relion_pdb_k4_os0_ref")))
+K4_DISPATCH_SCHEDULE = os.environ.get("EM_PARITY_FAST_K4_DISPATCH_SCHEDULE") or None
+
+
+def _k4_dispatch_schedule_args() -> list[str]:
+    """Strict K>1 replay needs the dispatch schedule captured with the oracle."""
+
+    if K4_DISPATCH_SCHEDULE is None:
+        return []
+    _require_fixture(Path(K4_DISPATCH_SCHEDULE))
+    return ["--relion-dispatch-schedule", K4_DISPATCH_SCHEDULE]
 K4_DATA_STAR = K4_FIXTURE_DIR / "particles.star"
 
 
@@ -668,6 +683,7 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
         "0.5",
         "--perturb_replay_relion_dir",
         str(K4_RELION_DIR),
+        *_k4_dispatch_schedule_args(),
         "--firstiter_cc",
         "--init_resolution",
         "30.0",
@@ -811,6 +827,7 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
         str(relion_dir),
         "--relion_init_dir",
         str(relion_dir),
+        *_k4_dispatch_schedule_args(),
         "--firstiter_cc",
         "--init_resolution",
         "30.0",
@@ -976,6 +993,7 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
         str(relion_dir),
         "--relion_init_dir",
         str(relion_dir),
+        *_k4_dispatch_schedule_args(),
         "--firstiter_cc",
         "--init_resolution",
         "30.0",
