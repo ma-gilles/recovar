@@ -7,6 +7,7 @@ duplicated while the VDAM M-step still gets independent halfset BackProjectors.
 
 from __future__ import annotations
 
+from recovar.em.dense_single_volume.helpers.preprocessing import uses_relion_cuda_image_preprocessing
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 
 import hashlib
@@ -506,14 +507,8 @@ def _translation_step_from_grid(translations: np.ndarray) -> float:
     return float(diffs.min()) if diffs.size else 1.0
 
 
-def _uses_relion_cuda_image_preprocessing(experiment_dataset) -> bool:
-    """Return whether a dataset uses the strict RELION CUDA image path."""
-
-    image_source = getattr(experiment_dataset, "image_source", None)
-    while hasattr(image_source, "parent"):
-        image_source = image_source.parent
-    backend = getattr(image_source, "backend", image_source)
-    return getattr(backend, "relion_fourier_backend", None) == "relion_cuda"
+# Kept as this module's patch point for tests; the rule lives with the preprocessing helpers.
+_uses_relion_cuda_image_preprocessing = uses_relion_cuda_image_preprocessing
 
 
 def _resolve_sparse_pass1_current_size(

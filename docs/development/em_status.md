@@ -49,6 +49,8 @@ case counts, provenance and limits.
 
 | Commit | Change | Kind | Receipt |
 | --- | --- | --- | --- |
+| see receipt | remove the unused `convergence.SIGMA_CUTOFF` and seven unreferenced helpers in EM parity/diagnostic scripts; records the pre-existing sealed static-argument drift in `run_local_mstep_donation_ab.py` | dead code, token scan | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/dead_script_helpers_20260911/result.json) |
+| see receipt | `preprocessing.uses_relion_cuda_image_preprocessing` / `relion_preprocess_backend` own the RELION CUDA preprocessing detection (local engine and InitialModel adapter shared two inline copies); the controller fails closed at setup when the fresh K=1 defaults run without it; the fast tier's K1 cold start uses the production `relion_cuda` backend | fix (fast tier K1 cold start) + structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_cuda_preprocess_owner_20260911/result.json) |
 | see receipt | remove unused EM APIs whose only callers were their own tests: `oversampling.compute_pass2_stats` (296 lines), `sampling.get_healpix_children`/`get_oversampled_rotation_grid`, `shape_buckets.ShapeBucket`/`dense_shape_bucket`/`local_shape_bucket`, `resolution.should_skip_adaptive_pass2`, `fourier_window.make_frequency_radius_map_half`, `flat_local_rows.gather_flat_local_rows`, with their tests | dead code, reference scan | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/dead_em_apis_20260911/result.json) |
 | see receipt | `sparse_pass2_bucketed._sparse_pass2_window_setup` builds the forward model, Fourier windows, x-half reconstruction indices and windowed-prepare decision for both sparse pass-2 scorers | structural, 32 output/call/log-identical | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/sparse_pass2_window_setup_owner_20260911/result.json) |
 | see receipt | `k_class._override_class_assignments_with_coarse_winner` replaces pass-2 class assignments with the coarse global winner for both adaptive K-class pass-2 paths | structural, 8 replace-kwargs cases | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/kclass_coarse_override_owner_20260911/result.json) |
@@ -91,9 +93,14 @@ repairs) keep their paragraphs in the
   pass (the K=1 routing repair holds); K-class cold start and strict oversampled
   cold start pass with the new fixture. K-class replay keeps its known |ΔPmax|
   0.999999 failure. K1 cold start and strict K-class cold start failed on the
-  two gaps repaired in `bd602096a` and `b6db2f8ef`; the rerun on frozen
-  `bd602096a` (worktree `recovar_qual_bd602096a_20260910`, jobs
-  13713499/13713500/13713501) is queued. Earlier tier runs 13704244
+  two gaps repaired in `bd602096a` and `b6db2f8ef`. The rerun on frozen
+  `bd602096a` (job 13713500) passes 5 of 7: both strict K-class cold starts now
+  pass, so the K-class routing repair is validated on the GPU; the K-class
+  replay case keeps its known failure; the K1 cold start now fails deeper, in
+  the sparse pass-2 bucket preparation ("exact RELION BPref operands require
+  RELION CUDA preprocessing"), because the K=1 fresh-refinement defaults assume
+  the `relion_cuda` image backend while the test uses the script's `host_numpy`
+  default (the K1 completion launcher already passes `relion_cuda`). Earlier tier runs 13704244
   (`400ad81e4`, 6 of 7 failed) remain preserved.
 - **K1 100k/256 completion** on frozen `9870438cd` (job 13709837, exclusive
   H100, `relion_cuda` images) **completed without qualifying**: 17 iterations
@@ -203,9 +210,15 @@ this page does not schedule or authorize duplicate runs.
 Admit the queued fast-tier rerun (13713500), the K1 completion (13709837) and the
 exactly-K4 completion (13712372) against the [benchmark contract](benchmarks.md)
 when they finish, recording every result including failures. Between results,
-continue one bounded structural package at a time from the cleanup plan
-(remaining duplication is small: diagnostic capture keyword lists, expected
-accuracy inputs, perturbation-advance logging), with an exact old/new comparison,
+continue one bounded structural package at a time from the cleanup plan.
+Remaining candidates after the September 10–11 packages: a named result type
+for the four positional big-JIT output layouts unpacked in `local_em_engine`
+and returned by `local_big_jit` (design change at the hottest kernel boundary),
+unifying the K=1 and K-class adaptive routes in `half_scoring`, the diagnostic
+capture keyword lists in `local_em_engine`, seven forwarding aliases found by
+the wrapper scan (`sampling.get_rotation_grid_at_order` has 44 callers), and
+the kept test-facing helpers listed in the dead-API receipt. Each package keeps
+an exact old/new comparison,
 the CPU guard, the controller panel when the controller path changes, and one
 combined validation/publication per package. Keep first-divergence numerical
 diagnosis and remaining real-full200/source/build admission separate; peer

@@ -303,6 +303,26 @@ def image_preprocess_backend(experiment_dataset):
     return getattr(image_source, "backend", image_source)
 
 
+def relion_preprocess_backend(experiment_dataset):
+    """Root image backend of a dataset, following subset ``parent`` links."""
+
+    image_source = getattr(experiment_dataset, "image_source", None)
+    while hasattr(image_source, "parent"):
+        image_source = image_source.parent
+    return getattr(image_source, "backend", image_source)
+
+
+def uses_relion_cuda_image_preprocessing(experiment_dataset) -> bool:
+    """Whether the dataset's root backend runs RELION's CUDA image preprocessing.
+
+    The fresh K=1 refinement defaults (source-faithful powerClass
+    normalization, exact BPref operands, exact coarse operands) score from
+    that preprocessing and fail closed without it.
+    """
+
+    return getattr(relion_preprocess_backend(experiment_dataset), "relion_fourier_backend", None) == "relion_cuda"
+
+
 def prepare_batch_preprocess_operands(
     experiment_dataset,
     batch,

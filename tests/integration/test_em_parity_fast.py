@@ -407,6 +407,11 @@ def test_em_parity_fast_k1_coldstart(tmp_path):
         # half-2 vs RELION's half-1 — meaningless for parity).
         "--relion_half_sets",
         str(K1_FIXTURE_DIR / "particles_with_halfsets.star"),
+        # The fresh K=1 defaults (source-faithful powerClass normalization, exact
+        # BPref operands) score from RELION's CUDA image preprocessing, as the
+        # K1 completion launcher does.
+        "--image-fourier-backend",
+        "relion_cuda",
     ]
     logger.info("K=1 cold-start cmd: %s", " ".join(cmd))
     t0 = time.time()

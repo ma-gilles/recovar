@@ -88,6 +88,8 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
 from recovar.em.dense_single_volume.helpers.jax_runtime import block_until_ready as _block_until_ready
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     resolve_image_mask_for_half_preprocess,
+    relion_preprocess_backend,
+    uses_relion_cuda_image_preprocessing,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     half_translation_phase_table as _half_translation_phase_table,
@@ -2967,13 +2969,9 @@ def run_local_em_exact(
     relion_cuda_preprocess_radius = 0.0
     relion_cuda_preprocess_cosine_width = 0.0
     if relion_exact_bpref_operands:
-        image_source = getattr(experiment_dataset, "image_source", None)
-        while hasattr(image_source, "parent"):
-            image_source = image_source.parent
-        preprocess_backend = getattr(image_source, "backend", image_source)
-        if getattr(preprocess_backend, "relion_fourier_backend", None) != "relion_cuda":
+        if not uses_relion_cuda_image_preprocessing(experiment_dataset):
             raise ValueError("exact RELION BPref operands require RELION CUDA image preprocessing")
-        preprocess_params = getattr(preprocess_backend, "_relion_image_mask_params", None)
+        preprocess_params = getattr(relion_preprocess_backend(experiment_dataset), "_relion_image_mask_params", None)
         if preprocess_params is None:
             raise ValueError("RELION CUDA image preprocessing requires explicit image-mask parameters")
         pixel_size, particle_diameter_ang, cosine_width = preprocess_params

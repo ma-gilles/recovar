@@ -220,6 +220,10 @@ In [`significance`](../../recovar/em/dense_single_volume/helpers/significance.py
 default only when the supplied RELION projector operands exist; a dense pass
 without a projector keeps the JAX coarse path and an explicit environment request
 still fails closed.
+`preprocessing.uses_relion_cuda_image_preprocessing` (with `relion_preprocess_backend`,
+which follows subset parents) is the one detection of RELION's CUDA image path; the
+local engine, the InitialModel adapter and the controller's early fresh-K=1 check use
+it ([`test_relion_cuda_preprocess_owner.py`](../../tests/unit/test_relion_cuda_preprocess_owner.py)).
 The controller calls its two BPref-scoped entry points and retains iteration
 scheduling, state transitions, reconstruction and device-buffer lifetime.
 [`scoring_policy`](../../recovar/em/dense_single_volume/scoring_policy.py)

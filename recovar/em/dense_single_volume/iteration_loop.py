@@ -741,6 +741,14 @@ def _run_relion_iteration_loop(
             continue
         if hasattr(backend, "set_relion_fourier_backend"):
             backend.set_relion_fourier_backend(parity.image_fourier_backend)
+        if source_faithful_spectrum_norm and getattr(backend, "relion_fourier_backend", None) not in (None, "relion_cuda"):
+            # The fresh K=1 defaults score from RELION's CUDA image preprocessing;
+            # fail here instead of inside the first sparse pass 2.
+            raise ValueError(
+                "fresh K=1 refinement defaults (source-faithful powerClass normalization and "
+                "exact RELION BPref operands) require RELION CUDA image preprocessing; pass "
+                "--image-fourier-backend relion_cuda or disable the fresh particle order"
+            )
         if particle_diameter_ang is not None and particle_diameter_ang > 0:
             backend.set_relion_image_mask(
                 pixel_size=cryo.voxel_size,
