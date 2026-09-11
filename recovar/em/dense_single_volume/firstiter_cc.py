@@ -6,7 +6,6 @@ Batch budgets and adaptive pass plans are owned by ``batch_planning``.
 from __future__ import annotations
 
 import logging
-import os
 
 import numpy as np
 
@@ -16,7 +15,7 @@ from recovar.em.dense_single_volume.batch_planning import (
     _safe_firstiter_cc_image_batch_size,
 )
 from recovar.em.dense_single_volume.helpers.oversampling import build_adaptive_pass2_grids
-from recovar.em.dense_single_volume.k_class import run_dense_k_class_em_adaptive
+from recovar.em.dense_single_volume.k_class import _sparse_pass2_selected, run_dense_k_class_em_adaptive
 from recovar.em.sampling import (
     apply_relion_translation_perturbation,
 )
@@ -96,10 +95,7 @@ def _score_kclass_firstiter_cc_pass2(
     n_classes = int(np.asarray(mean).shape[0]) if np.asarray(mean).ndim >= 2 else 1
     firstiter_significance_image_batch_size = None
     firstiter_significance_rotation_block_size = None
-    firstiter_sparse_pass2 = not bool(
-        os.environ.get("RECOVAR_K_CLASS_DENSE_PASS2", "0").strip().lower()
-        in {"1", "true", "yes", "on"}
-    )
+    firstiter_sparse_pass2 = _sparse_pass2_selected("RECOVAR_K_CLASS_DENSE_PASS2")
     if safe_batch_sizes is not None:
         batch_plan = _plan_kclass_adaptive_grid_batch_sizes(
             coarse_rotations=coarse_rot,

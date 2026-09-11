@@ -482,6 +482,20 @@ def test_kclass_significance_dump_threads_one_based_iteration():
         and any(isinstance(target, ast.Name) and target.id == "firstiter_kwargs" for target in node.targets)
     )
     shared_keywords = {key.value: value for key, value in zip(firstiter_inputs.keys, firstiter_inputs.values)}
+    # The adaptive engine calls thread it through the shared keyword owner.
+    owner_calls = [
+        node.value for node in ast.walk(score_tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "shared_kwargs" for target in node.targets)
+    ]
+    assert len(owner_calls) == 2
+    owner_keywords = [{keyword.arg: keyword.value for keyword in call.keywords} for call in owner_calls]
+    assert all(call.func.id == "_adaptive_engine_shared_kwargs" for call in owner_calls)
+    assert all(
+        isinstance(keywords["debug_iteration"], ast.Name) and keywords["debug_iteration"].id == "debug_iteration"
+        for keywords in owner_keywords
+    )
+    assert "debug_iteration=debug_iteration," in inspect.getsource(half_scoring._adaptive_engine_shared_kwargs)
     scoring_calls = [
         node for node in ast.walk(score_tree)
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
@@ -495,6 +509,8 @@ def test_kclass_significance_dump_threads_one_based_iteration():
                 keywords[keyword.arg] = keyword.value
             elif isinstance(keyword.value, ast.Name) and keyword.value.id == "firstiter_kwargs":
                 keywords.update(shared_keywords)
+            elif isinstance(keyword.value, ast.Name) and keyword.value.id == "shared_kwargs":
+                keywords.update(owner_keywords[0])
         assert isinstance(keywords["debug_iteration"], ast.Name)
         assert keywords["debug_iteration"].id == "debug_iteration"
     assert adaptive_source.count("debug_iteration=debug_iteration") >= 1

@@ -28,7 +28,11 @@ from recovar.em.dense_single_volume.helpers.dtype_policy import (
 )
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import relion_backprojector_volume_shape
 from recovar.em.dense_single_volume.helpers.oversampling import build_adaptive_pass2_grids
-from recovar.em.dense_single_volume.k_class import run_dense_k_class_em, run_dense_k_class_em_adaptive
+from recovar.em.dense_single_volume.k_class import (
+    _sparse_pass2_selected,
+    run_dense_k_class_em,
+    run_dense_k_class_em_adaptive,
+)
 from recovar.em.dense_single_volume.local_debug import (
     log_local_adaptive_support,
     log_local_denominator_support,
@@ -192,6 +196,64 @@ def _dense_uses_adaptive_engine(adaptive_oversampling, group_ids) -> bool:
     """
 
     return int(adaptive_oversampling) > 0 or group_ids is not None
+
+
+def _adaptive_engine_shared_kwargs(
+    pass2_grids: _AdaptivePass2Grids,
+    *,
+    class_log_priors,
+    max_significants,
+    sparse_pass2: bool,
+    significance_image_batch_size,
+    significance_rotation_block_size,
+    coarse_current_size,
+    fine_current_size,
+    coarse_healpix_order,
+    oversampling_order,
+    return_best_pose_details: bool,
+    bpref_device_signature_active: bool,
+    debug_iteration,
+) -> dict:
+    """Keywords the K=1 and K-class routes pass identically to ``run_dense_k_class_em_adaptive``.
+
+    Both routes accumulate noise, keep RELION's adaptive significance fraction
+    and prune the fine M-step rotations only when pass 2 is sparse. Route-specific
+    keywords stay at the call sites: K=1 adds significance skipping, the
+    diagnostic float64 pass 2 and the host-double coarse translation phases;
+    K-class plans its own pass-1/pass-2 batches from the grids.
+    """
+
+    return dict(
+        class_log_priors=class_log_priors,
+        accumulate_noise=True,
+        adaptive_fraction=RELION_ADAPTIVE_FRACTION,
+        max_significants=-1 if max_significants is None else int(max_significants),
+        relion_fine_mstep_prune=bool(sparse_pass2),
+        significance_image_batch_size=significance_image_batch_size,
+        significance_rotation_block_size=significance_rotation_block_size,
+        coarse_current_size=coarse_current_size,
+        fine_current_size=fine_current_size,
+        coarse_healpix_order=int(coarse_healpix_order),
+        oversampling_order=int(oversampling_order),
+        fine_mstep_rotations_override=(pass2_grids.fine_mstep_rotations if sparse_pass2 else None),
+        return_best_pose_details=return_best_pose_details,
+        bpref_device_signature_active=bpref_device_signature_active,
+        debug_iteration=debug_iteration,
+    )
+
+
+def _coarse_pose_assignments(ha, *, rot_parent_map, trans_parent_map, n_trans_coarse, n_trans_fine):
+    """Collapse fine pose assignments onto the coarse grid; ``None`` when no fine pass ran."""
+
+    if trans_parent_map is None or n_trans_fine is None:
+        return None
+    return _collapse_fine_pose_assignments_to_coarse(
+        ha,
+        rot_parent_map=rot_parent_map,
+        trans_parent_map=trans_parent_map,
+        n_trans_coarse=n_trans_coarse,
+        n_trans_fine=n_trans_fine,
+    )
 
 
 def _score_half_dense(
@@ -420,22 +482,16 @@ def _score_half_dense(
                 random_perturbation=random_perturbation,
                 coarse_rotation_ids=coarse_rotation_ids,
             )
-            coarse_rot = pass2_grids.coarse_rotations
-            coarse_trans = pass2_grids.coarse_translations
-            fine_rot = pass2_grids.fine_rotations
-            fine_trans = pass2_grids.fine_translations
             rot_pmap_for_collapse = pass2_grids.rotation_parent_map
             trans_pmap_for_collapse = pass2_grids.translation_parent_map
-            fine_mstep_rot = pass2_grids.fine_mstep_rotations
-            coarse_translation_phase_source = pass2_grids.coarse_translation_phase_source
             n_trans_fine_for_collapse = pass2_grids.n_fine_translations
             adaptive_em_kwargs = dict(em_kwargs)
             n_classes_local = int(np.asarray(means_k).shape[0]) if np.asarray(means_k).ndim >= 2 else 1
             grid_batch_plan = _plan_kclass_adaptive_grid_batch_sizes(
-                coarse_rotations=coarse_rot,
-                coarse_translations=coarse_trans,
-                fine_rotations=fine_rot,
-                fine_translations=fine_trans,
+                coarse_rotations=pass2_grids.coarse_rotations,
+                coarse_translations=pass2_grids.coarse_translations,
+                fine_rotations=pass2_grids.fine_rotations,
+                fine_translations=pass2_grids.fine_translations,
                 n_classes=n_classes_local,
                 image_shape=experiment_dataset.image_shape,
                 coarse_current_size=firstiter_coarse_current_size,
@@ -455,14 +511,7 @@ def _score_half_dense(
                 adaptive_em_kwargs["image_batch_size"],
                 adaptive_em_kwargs["rotation_block_size"],
             )
-            # ``RECOVAR_K_CLASS_DENSE_PASS2=1`` swaps K-class adaptive
-            # oversampling from sparse-bucketed pass-2 to dense pass-2.
-            # Diagnostic: tests whether the sparse-bucket reduction order
-            # carries a structural bias vs the dense in-place reduction.
-            kclass_sparse_pass2 = not bool(
-                os.environ.get("RECOVAR_K_CLASS_DENSE_PASS2", "0").strip().lower()
-                in {"1", "true", "yes", "on"}
-            )
+            kclass_sparse_pass2 = _sparse_pass2_selected("RECOVAR_K_CLASS_DENSE_PASS2")
             adaptive_em_kwargs["sparse_pass2"] = kclass_sparse_pass2
             logger.info(
                 "RELION adaptive K-class routing through run_dense_k_class_em_adaptive "
@@ -471,33 +520,34 @@ def _score_half_dense(
                 "sparse" if kclass_sparse_pass2 else "dense",
                 bool(kclass_sparse_pass2),
             )
+            shared_kwargs = _adaptive_engine_shared_kwargs(
+                pass2_grids,
+                class_log_priors=class_log_priors,
+                max_significants=max_significants,
+                sparse_pass2=kclass_sparse_pass2,
+                significance_image_batch_size=significance_image_batch_size_override,
+                significance_rotation_block_size=significance_rotation_block_size_override,
+                coarse_current_size=firstiter_coarse_current_size,
+                fine_current_size=firstiter_fine_current_size,
+                coarse_healpix_order=current_healpix_order,
+                oversampling_order=adaptive_os_local,
+                return_best_pose_details=return_best_pose_details,
+                bpref_device_signature_active=bpref_device_signature_active,
+                debug_iteration=debug_iteration,
+            )
             k_class_result = run_dense_k_class_em_adaptive(
                 experiment_dataset,
                 means_k,
                 mean_variance,
                 noise_variance_k,
-                coarse_rot,
-                coarse_trans,
-                fine_rot,
-                fine_trans,
+                pass2_grids.coarse_rotations,
+                pass2_grids.coarse_translations,
+                pass2_grids.fine_rotations,
+                pass2_grids.fine_translations,
                 rot_pmap_for_collapse,
                 trans_pmap_for_collapse,
                 disc_type,
-                class_log_priors=class_log_priors,
-                accumulate_noise=True,
-                adaptive_fraction=RELION_ADAPTIVE_FRACTION,
-                max_significants=-1 if max_significants is None else int(max_significants),
-                relion_fine_mstep_prune=bool(kclass_sparse_pass2),
-                significance_image_batch_size=significance_image_batch_size_override,
-                significance_rotation_block_size=significance_rotation_block_size_override,
-                coarse_current_size=firstiter_coarse_current_size,
-                fine_current_size=firstiter_fine_current_size,
-                coarse_healpix_order=int(current_healpix_order),
-                oversampling_order=int(adaptive_os_local),
-                fine_mstep_rotations_override=(fine_mstep_rot if kclass_sparse_pass2 else None),
-                return_best_pose_details=return_best_pose_details,
-                bpref_device_signature_active=bpref_device_signature_active,
-                debug_iteration=debug_iteration,
+                **shared_kwargs,
                 **adaptive_em_kwargs,
             )
             k_class_mstep_full_half_axis_this_score = k_class_result.mstep_full_half_axis
@@ -539,15 +589,13 @@ def _score_half_dense(
             require_best_pose_details=return_best_pose_details,
             pose_dtype=_dense_global_scoring_dtype(),
         )
-        coarse_ha_k = None
-        if trans_pmap_for_collapse is not None and n_trans_fine_for_collapse is not None:
-            coarse_ha_k = _collapse_fine_pose_assignments_to_coarse(
-                ha_k,
-                rot_parent_map=rot_pmap_for_collapse,
-                trans_parent_map=trans_pmap_for_collapse,
-                n_trans_coarse=current_translations.shape[0],
-                n_trans_fine=n_trans_fine_for_collapse,
-            )
+        coarse_ha_k = _coarse_pose_assignments(
+            ha_k,
+            rot_parent_map=rot_pmap_for_collapse,
+            trans_parent_map=trans_pmap_for_collapse,
+            n_trans_coarse=current_translations.shape[0],
+            n_trans_fine=n_trans_fine_for_collapse,
+        )
         return HalfScoreResult(
             ha=ha_k,
             Ft_y=Ft_y_k,
@@ -614,21 +662,12 @@ def _score_half_dense(
                 random_perturbation=random_perturbation,
                 coarse_rotation_ids=coarse_rotation_ids,
             )
-            coarse_rot = pass2_grids.coarse_rotations
-            coarse_trans = pass2_grids.coarse_translations
-            fine_rot = pass2_grids.fine_rotations
-            fine_trans = pass2_grids.fine_translations
             rot_pmap_for_collapse = pass2_grids.rotation_parent_map
             trans_pmap_for_collapse = pass2_grids.translation_parent_map
-            fine_mstep_rot = pass2_grids.fine_mstep_rotations
-            coarse_translation_phase_source = pass2_grids.coarse_translation_phase_source
             n_trans_fine_for_collapse = pass2_grids.n_fine_translations
-            fine_rotations_for_pose = fine_rot
+            fine_rotations_for_pose = pass2_grids.fine_rotations
             adaptive_em_kwargs = dict(em_kwargs)
-            k1_sparse_pass2 = not bool(
-                os.environ.get("RECOVAR_K1_DENSE_PASS2", "0").strip().lower()
-                in {"1", "true", "yes", "on"}
-            )
+            k1_sparse_pass2 = _sparse_pass2_selected("RECOVAR_K1_DENSE_PASS2")
             k1_skip_significance_pruning = _k1_skip_significance_pruning_enabled()
             adaptive_em_kwargs["sparse_pass2"] = k1_sparse_pass2
             if group_ids_k is not None:
@@ -648,37 +687,38 @@ def _score_half_dense(
                 relion_projector_half is not None,
                 adaptive_em_kwargs.get("relion_projector_half") is not None,
             )
+            shared_kwargs = _adaptive_engine_shared_kwargs(
+                pass2_grids,
+                class_log_priors=class_log_priors,
+                max_significants=max_significants,
+                sparse_pass2=k1_sparse_pass2,
+                significance_image_batch_size=significance_image_batch_size_override,
+                significance_rotation_block_size=significance_rotation_block_size_override,
+                coarse_current_size=firstiter_coarse_current_size,
+                fine_current_size=firstiter_fine_current_size,
+                coarse_healpix_order=current_healpix_order,
+                oversampling_order=adaptive_os_local,
+                return_best_pose_details=return_best_pose_details,
+                bpref_device_signature_active=bpref_device_signature_active,
+                debug_iteration=debug_iteration,
+            )
             k1_adaptive_result = run_dense_k_class_em_adaptive(
                 experiment_dataset,
                 means_single,
                 mean_variance,
                 noise_variance_k,
-                coarse_rot,
-                coarse_trans,
-                fine_rot,
-                fine_trans,
+                pass2_grids.coarse_rotations,
+                pass2_grids.coarse_translations,
+                pass2_grids.fine_rotations,
+                pass2_grids.fine_translations,
                 rot_pmap_for_collapse,
                 trans_pmap_for_collapse,
                 disc_type,
-                class_log_priors=class_log_priors,
-                accumulate_noise=True,
-                adaptive_fraction=RELION_ADAPTIVE_FRACTION,
-                max_significants=-1 if max_significants is None else int(max_significants),
                 skip_significance_pruning=k1_skip_significance_pruning,
-                relion_fine_mstep_prune=bool(k1_sparse_pass2),
-                significance_image_batch_size=significance_image_batch_size_override,
-                significance_rotation_block_size=significance_rotation_block_size_override,
-                coarse_current_size=firstiter_coarse_current_size,
-                fine_current_size=firstiter_fine_current_size,
-                coarse_healpix_order=int(current_healpix_order),
-                oversampling_order=int(adaptive_os_local),
-                fine_mstep_rotations_override=(fine_mstep_rot if k1_sparse_pass2 else None),
-                return_best_pose_details=return_best_pose_details,
-                bpref_device_signature_active=bpref_device_signature_active,
-                debug_iteration=debug_iteration,
                 pass2_use_float64_scoring=True if diagnostic_float64_pass2 else None,
                 pass2_use_float64_projections=True if diagnostic_float64_pass2 else None,
-                coarse_translation_phase_source=coarse_translation_phase_source,
+                coarse_translation_phase_source=pass2_grids.coarse_translation_phase_source,
+                **shared_kwargs,
                 **adaptive_em_kwargs,
             )
         ha_k = np.asarray(k1_adaptive_result.pose_assignments, dtype=np.int32)
@@ -695,15 +735,13 @@ def _score_half_dense(
             noise_stats_k = k1_adaptive_result.noise_stats[0]
         if noise_stats_k is None:
             raise RuntimeError("K=1 adaptive path did not return noise statistics")
-        coarse_ha_k = None
-        if trans_pmap_for_collapse is not None and n_trans_fine_for_collapse is not None:
-            coarse_ha_k = _collapse_fine_pose_assignments_to_coarse(
-                ha_k,
-                rot_parent_map=rot_pmap_for_collapse,
-                trans_parent_map=trans_pmap_for_collapse,
-                n_trans_coarse=current_translations.shape[0],
-                n_trans_fine=n_trans_fine_for_collapse,
-            )
+        coarse_ha_k = _coarse_pose_assignments(
+            ha_k,
+            rot_parent_map=rot_pmap_for_collapse,
+            trans_parent_map=trans_pmap_for_collapse,
+            n_trans_coarse=current_translations.shape[0],
+            n_trans_fine=n_trans_fine_for_collapse,
+        )
         if return_best_pose_details:
             if (
                 k1_adaptive_result.best_pose_rotations is None

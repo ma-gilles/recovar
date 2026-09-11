@@ -196,6 +196,19 @@ def _env_value_or_none(name: str) -> str | None:
     return value if value else None
 
 
+def _sparse_pass2_selected(env_name: str) -> bool:
+    """Whether an adaptive route keeps the sparse-bucketed pass 2.
+
+    ``RECOVAR_K1_DENSE_PASS2=1`` and ``RECOVAR_K_CLASS_DENSE_PASS2=1`` swap the
+    K=1 and K-class adaptive pass 2 from the sparse-bucketed engine to the dense
+    in-place reduction. Diagnostic only: it tests whether the sparse-bucket
+    reduction order carries a structural bias versus the dense reduction. Only
+    ``1``/``true``/``yes``/``on`` (case-insensitive, stripped) select dense.
+    """
+
+    return os.environ.get(env_name, "0").strip().lower() not in {"1", "true", "yes", "on"}
+
+
 def _parse_diagnostic_firstiter_class_overrides(value: str, *, n_classes: int) -> dict[int, int]:
     """Parse ``original_image_index:zero_based_class`` diagnostic overrides."""
 

@@ -215,6 +215,15 @@ only runs without scale groups at oversampling 0
 oversampled children with parent maps, the fine M-step rotations and the coarse
 translation phase source for both routes
 ([`test_adaptive_pass2_grids_owner.py`](../../tests/unit/test_adaptive_pass2_grids_owner.py)).
+`half_scoring._adaptive_engine_shared_kwargs` holds the keywords both routes pass
+identically to `run_dense_k_class_em_adaptive` (noise accumulation, RELION's adaptive
+fraction, the fine M-step rotations pruned only for sparse pass 2); the K=1 call adds
+significance skipping, the diagnostic float64 pass 2 and the host-double coarse
+translation phases, and the K-class call plans its own batches. `k_class._sparse_pass2_selected`
+reads the `RECOVAR_K1_DENSE_PASS2` / `RECOVAR_K_CLASS_DENSE_PASS2` diagnostic switches
+for the three adaptive call sites, and `_coarse_pose_assignments` collapses fine pose
+assignments onto the coarse grid when a fine pass ran
+([`test_adaptive_engine_call_owner.py`](../../tests/unit/test_adaptive_engine_call_owner.py)).
 In [`significance`](../../recovar/em/dense_single_volume/helpers/significance.py),
 `_coarse_gaussian_ffi_default` applies the fresh-InitialModel coarse Gaussian FFI
 default only when the supplied RELION projector operands exist; a dense pass
