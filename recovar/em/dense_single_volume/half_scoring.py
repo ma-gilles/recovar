@@ -316,11 +316,12 @@ def _score_half_dense(
                 **firstiter_kwargs,
             )
             k_class_mstep_full_half_axis_this_score = k_class_result.mstep_full_half_axis
-        elif _dense_uses_adaptive_engine(state.adaptive_oversampling, group_ids_k) and (
-            int(state.adaptive_oversampling) <= 0 or firstiter_coarse_current_size is not None
-        ):
-            # A positive order without a reduced coarse size keeps its historical
-            # direct-engine branch below. Scale groups at oversampling 0 take the
+        elif _dense_uses_adaptive_engine(state.adaptive_oversampling, group_ids_k):
+            # RELION keeps its two-pass adaptive expectation whenever
+            # adaptive_oversampling > 0, with coarse_size clamped to current_size
+            # (updateImageSizeAndResolutionPointers); a coarse size equal to the
+            # box therefore means pass 1 at the current size, not a single
+            # non-oversampled pass. Scale groups at oversampling 0 take the
             # adaptive engine's single pass on the current grid so group XA/AA and
             # norm corrections are accumulated (the strict follower-scale topology
             # requires them at every numbered M-step).

@@ -173,8 +173,10 @@ routing, and write class/pose fields into the caller-owned `PerHalfOutputs`.
 RELION's `storeWeightedSums` accumulates the group-scale `XA`/`AA` sums and the
 norm-correction residuals in every pass, so scoring with RELION scale groups uses
 the adaptive/sparse engine at the requested oversampling order, including 0, where
-its single coarse pass on the current grid is RELION's single pass; the direct
-dense engine serves only runs without scale groups at oversampling 0
+its single coarse pass on the current grid is RELION's single pass; positive
+oversampling always keeps the two-pass adaptive expectation (pass 1 at the
+current size when no reduced coarse size exists); the direct dense engine serves
+only runs without scale groups at oversampling 0
 ([`test_dense_scale_group_routing.py`](../../tests/unit/test_dense_scale_group_routing.py)).
 In [`significance`](../../recovar/em/dense_single_volume/helpers/significance.py),
 `_coarse_gaussian_ffi_default` applies the fresh-InitialModel coarse Gaussian FFI

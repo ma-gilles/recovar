@@ -46,10 +46,18 @@ def test_k1_dense_scorer_uses_the_routing_rule_and_no_longer_rejects_scale_group
 
 def test_k_class_dense_scorer_routes_scale_groups_at_oversampling_zero():
     source = inspect.getsource(half_scoring._score_half_dense)
-    gate = "elif _dense_uses_adaptive_engine(state.adaptive_oversampling, group_ids_k) and ("
+    gate = "elif _dense_uses_adaptive_engine(state.adaptive_oversampling, group_ids_k):"
     assert source.count(gate) == 1
     routed = _routed_block(source, gate, "build_adaptive_pass2_grids(")
-    assert "int(state.adaptive_oversampling) <= 0 or firstiter_coarse_current_size is not None" in routed
     assert "firstiter_coarse_current_size = cs_for_engine" in routed
     assert "firstiter_fine_current_size = cs_for_engine" in routed
     assert "elif firstiter_coarse_current_size is not None and int(state.adaptive_oversampling) > 0:" not in source
+
+
+def test_k_class_positive_oversampling_never_drops_to_the_direct_engine():
+    """RELION keeps two passes under adaptive oversampling even when coarse_size == current_size."""
+    source = inspect.getsource(half_scoring._score_half_dense)
+    gate = "elif _dense_uses_adaptive_engine(state.adaptive_oversampling, group_ids_k):"
+    assert "firstiter_coarse_current_size is not None" not in _routed_block(source, "if k_class_enabled:", gate)
+    assert "or firstiter_coarse_current_size is not None" not in source
+    assert half_scoring._dense_uses_adaptive_engine(1, None) is True

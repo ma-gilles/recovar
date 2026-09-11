@@ -38,6 +38,18 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+K-class dense scoring at positive adaptive oversampling now always keeps
+RELION's two-pass expectation. It previously fell to the single-pass direct
+engine (no oversampled candidates, no norm/scale statistics) whenever the
+computed coarse size reached the full box; RELION clamps `coarse_size` to
+`current_size` and still runs pass 2 (`updateImageSizeAndResolutionPointers`),
+and the K=1 route already behaved that way. The routing decision table changes
+only in the positive-oversampling rows without a reduced coarse size; the fast
+parity tier on the next frozen tip is the GPU check (its 5k/128 K-class cases
+have reduced coarse sizes, so this row is exercised only at fine angular steps).
+Semantics alignment in its own commit.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/kclass_adaptive_two_pass_20260910/result.json).
+
 RELION's local-search orientational prior widths now come from one owner,
 `orientation_priors.relion_local_search_sigmas` (configured widths kept, psi
 falling back to rot, twice the oversampled angular step when unset under local
