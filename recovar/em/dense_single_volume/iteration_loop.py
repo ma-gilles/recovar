@@ -463,6 +463,64 @@ def _local_search_mstep_rotations(effective_mstep_rotations, rotation_eulers, he
     return mstep_rotations
 
 
+class _ExpectedAccuracyInputs(NamedTuple):
+    """Run-constant inputs of RELION's expected-accuracy estimation on half 1."""
+
+    trial_order_local: object
+    dataset: object
+    volume_shape: tuple
+    padding_factor: float
+    tau2_fudge: float
+    optimizer_random_seed: object
+    expected_accuracy: object
+
+
+def _expected_accuracy_class_ids(class_assignments_half1, *, k_class_enabled, n_units):
+    """Half-1 class labels of the accuracy trials: K-class assignments when present, else class 0."""
+
+    if k_class_enabled and class_assignments_half1 is not None:
+        return class_assignments_half1
+    return np.zeros(int(n_units), dtype=np.int32)
+
+
+def _estimate_half1_expected_accuracy(
+    inputs: _ExpectedAccuracyInputs,
+    *,
+    reference_fourier,
+    best_eulers_deg,
+    class_ids,
+    class_weights,
+    sigma2_noise_native,
+    current_image_size,
+):
+    """RELION's expected angular/translational accuracy of half 1 at one image size.
+
+    ``calculateExpectedAngularErrors`` samples trial particles of half 1 from the
+    run's optimizer seed and scores them against the current reference; the
+    regular iterations and the final all-data pass supply the reference, the
+    previous best angles, class labels, class weights, half-1 noise and the
+    image size, and share the run-constant inputs.
+    """
+
+    return estimate_relion_expected_accuracy(
+        reference_fourier=reference_fourier,
+        volume_shape=tuple(inputs.volume_shape),
+        best_eulers_deg=best_eulers_deg,
+        class_ids=class_ids,
+        class_weights=class_weights,
+        sigma2_noise_native=sigma2_noise_native,
+        dataset=inputs.dataset,
+        trial_order_local=inputs.trial_order_local,
+        current_image_size=int(current_image_size),
+        padding_factor=inputs.padding_factor,
+        sigma2_fudge=float(inputs.tau2_fudge),
+        random_seed=int(inputs.optimizer_random_seed),
+        random_seed_particle_ids=inputs.expected_accuracy.half1_particle_ids,
+        ctf_params_override=inputs.expected_accuracy.half1_ctf_params,
+        do_ctf_correction=inputs.expected_accuracy.do_ctf_correction,
+    )
+
+
 def _sigma_offset_for_half(current_sigma_offset_angstrom, current_sigma_offset_angstrom_per_half, half_index):
     if current_sigma_offset_angstrom_per_half is None:
         return float(current_sigma_offset_angstrom)
@@ -888,6 +946,15 @@ def _run_relion_iteration_loop(
         optimizer_random_seed=effective_optimizer_random_seed,
         init_relion_iteration=init_relion_iteration,
         log=logger,
+    )
+    expected_accuracy_inputs = _ExpectedAccuracyInputs(
+        trial_order_local=expected_accuracy_trial_order,
+        dataset=experiment_datasets[0],
+        volume_shape=volume_shape,
+        padding_factor=PROJECTION_PADDING_FACTOR,
+        tau2_fudge=tau2_fudge,
+        optimizer_random_seed=effective_optimizer_random_seed,
+        expected_accuracy=expected_accuracy,
     )
 
     follower_setup = setup_relion_follower_scale_state(
@@ -1446,29 +1513,20 @@ def _run_relion_iteration_loop(
                     iteration + 1,
                 )
             else:
-                if k_class_enabled:
-                    accuracy_class_ids = class_assignments[0]
-                    if accuracy_class_ids is None:
-                        accuracy_class_ids = np.zeros(int(experiment_datasets[0].n_units), dtype=np.int32)
-                else:
-                    accuracy_class_ids = np.zeros(int(experiment_datasets[0].n_units), dtype=np.int32)
+                accuracy_class_ids = _expected_accuracy_class_ids(
+                    class_assignments[0],
+                    k_class_enabled=k_class_enabled,
+                    n_units=experiment_datasets[0].n_units,
+                )
                 try:
-                    accuracy = estimate_relion_expected_accuracy(
+                    accuracy = _estimate_half1_expected_accuracy(
+                        expected_accuracy_inputs,
                         reference_fourier=means[0],
-                        volume_shape=tuple(volume_shape),
                         best_eulers_deg=previous_eulers_half1,
                         class_ids=accuracy_class_ids,
                         class_weights=class_weights,
                         sigma2_noise_native=previous_noise_radial_per_half[0],
-                        dataset=experiment_datasets[0],
-                        trial_order_local=expected_accuracy_trial_order,
-                        current_image_size=int(current_size),
-                        padding_factor=PROJECTION_PADDING_FACTOR,
-                        sigma2_fudge=float(tau2_fudge),
-                        random_seed=int(effective_optimizer_random_seed),
-                        random_seed_particle_ids=expected_accuracy.half1_particle_ids,
-                        ctf_params_override=expected_accuracy.half1_ctf_params,
-                        do_ctf_correction=expected_accuracy.do_ctf_correction,
+                        current_image_size=current_size,
                     )
                     exact_acc_rot_this_iter = float(accuracy.acc_rot)
                     exact_acc_trans_this_iter = float(accuracy.acc_trans_angstrom)
@@ -4156,28 +4214,20 @@ def _run_relion_iteration_loop(
                 "final expectation remains fail-closed",
             )
         else:
-            final_accuracy_class_ids = (
-                class_assignments[0]
-                if k_class_enabled and class_assignments[0] is not None
-                else np.zeros(int(experiment_datasets[0].n_units), dtype=np.int32)
+            final_accuracy_class_ids = _expected_accuracy_class_ids(
+                class_assignments[0],
+                k_class_enabled=k_class_enabled,
+                n_units=experiment_datasets[0].n_units,
             )
             try:
-                final_expected_accuracy = estimate_relion_expected_accuracy(
+                final_expected_accuracy = _estimate_half1_expected_accuracy(
+                    expected_accuracy_inputs,
                     reference_fourier=final_join_means[0],
-                    volume_shape=tuple(volume_shape),
                     best_eulers_deg=final_eulers_half1,
                     class_ids=final_accuracy_class_ids,
                     class_weights=class_weights,
                     sigma2_noise_native=previous_noise_radial_per_half[0],
-                    dataset=experiment_datasets[0],
-                    trial_order_local=expected_accuracy_trial_order,
                     current_image_size=final_current_size,
-                    padding_factor=PROJECTION_PADDING_FACTOR,
-                    sigma2_fudge=float(tau2_fudge),
-                    random_seed=int(effective_optimizer_random_seed),
-                    random_seed_particle_ids=expected_accuracy.half1_particle_ids,
-                    ctf_params_override=expected_accuracy.half1_ctf_params,
-                    do_ctf_correction=expected_accuracy.do_ctf_correction,
                 )
                 state.acc_rot = float(final_expected_accuracy.acc_rot)
                 state.acc_trans = float(final_expected_accuracy.acc_trans_angstrom)

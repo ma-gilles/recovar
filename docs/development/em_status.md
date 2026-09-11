@@ -49,6 +49,7 @@ case counts, provenance and limits.
 
 | Commit | Change | Kind | Receipt |
 | --- | --- | --- | --- |
+| see receipt | `_ExpectedAccuracyInputs`, `_expected_accuracy_class_ids`, `_estimate_half1_expected_accuracy` share RELION's expected-accuracy inputs and half-1 class labels between both passes | structural, 32 kwargs-identical | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/expected_accuracy_inputs_owner_20260910/result.json) |
 | `a2ab056cb` | `half_scoring._adaptive_pass2_grids` builds RELION's two-pass trial grids for the K=1/K-class routes and the pose-grid rebuild (3 sites) | structural, 8+4 bit-exact | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/adaptive_pass2_grids_owner_20260910/result.json) |
 | `05227488b` | `sparse_pass2_bucketed._relion_powerclass_noise_terms` selects `highres_Xi2`/norm terms for both sparse scorers | structural, 16 wiring | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/powerclass_noise_terms_owner_20260910/result.json) |
 | `583d8bd37` | `local_em_engine._accumulate_packed_noise_chunk` owns per-chunk noise/norm/scale accumulation (two 42-line bodies) | structural, 8 wiring | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/packed_noise_chunk_owner_20260910/result.json) |
