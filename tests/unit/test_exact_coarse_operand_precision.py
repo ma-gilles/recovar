@@ -114,3 +114,29 @@ def test_exact_coarse_assembly_precision_and_padding(
     )
     assert result.pixel_weight.shape == (batch_size, len(score_indices))
     assert bool(jnp.all(jnp.isfinite(result.pixel_weight)))
+
+
+@pytest.mark.parametrize("output_dtype", [jnp.float32, jnp.float64])
+def test_native_noise_variance_corr_img_accepts_the_score_dtype_used_by_bucket_io(output_dtype):
+    """The sparse pass-2 bucket I/O passes its score dtype; float32 output is unchanged."""
+
+    import inspect
+
+    call_site = inspect.getsource(sparse_pass2_bucketed._prepare_bucket_io)
+    assert "_relion_cuda_corr_img_from_native_noise_variance(" in call_site
+    assert "output_dtype=acc_real_dtype" in call_site
+    noise_variance = jnp.asarray([[2.0, 3.0, 5.0, 7.0]], dtype=jnp.float64)
+    ctf = jnp.asarray([[0.5, -0.25, 1.0, 0.125]], dtype=jnp.float64)
+    default = sparse_pass2_bucketed._relion_cuda_corr_img_from_native_noise_variance(noise_variance, ctf, (2, 2))
+    typed = sparse_pass2_bucketed._relion_cuda_corr_img_from_native_noise_variance(
+        noise_variance, ctf, (2, 2), output_dtype=output_dtype
+    )
+    assert default.dtype == jnp.float32 and typed.dtype == output_dtype
+    if output_dtype == jnp.float32:
+        assert np.asarray(typed).tobytes() == np.asarray(default).tobytes()
+    else:
+        np.testing.assert_array_equal(np.asarray(typed, dtype=np.float32), np.asarray(default))
+    with pytest.raises(TypeError, match="output_dtype must be float32 or float64"):
+        sparse_pass2_bucketed._relion_cuda_corr_img_from_native_noise_variance(
+            noise_variance, ctf, (2, 2), output_dtype=jnp.int32
+        )

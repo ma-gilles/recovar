@@ -45,8 +45,13 @@ fixtures predate dispatch capture); the K1 100k/256 completion failed at start
 because the launcher used the `host_numpy` image backend while the K1
 `firstiter_cc` defaults (since `59430e5aa`) require RELION CUDA image
 preprocessing. The launcher now passes `--image-fourier-backend relion_cuda`
-for K1; the K1 run was resubmitted from the frozen worktree with that flag
-(job 13709226, summary 13709227). A first RELION K4 oracle rerun used a legacy
+for K1. The resubmitted K1 run (13709226) then failed in the exact-BPref sparse
+pass-2 path: since `199904546` the bucket I/O passed `output_dtype` to
+`_relion_cuda_corr_img_from_native_noise_variance`, which did not accept it
+(`TypeError`), so the fresh-K1 RELION-CUDA path was unrunnable on the shared branch.
+The helper now takes the score dtype (float32 default, unchanged output); a
+regression test pins the call-site keyword. K1 is relaunched from a new frozen
+worktree at the fixed tip. A first RELION K4 oracle rerun used a legacy
 dispatch-log build and is preserved as failed; the schema-v2 oracle (13708102)
 is running with the chained RECOVAR exactly-K4 launch (13708103). No gate has
 moved. [Fast-tier review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_completion_k1_fast_400ad81e4_h100_20260910/fast_tier_review.md).

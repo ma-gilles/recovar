@@ -4450,6 +4450,8 @@ def _relion_cuda_corr_img_from_native_noise_variance(
     ctf_rfloat,
     image_shape,
     scale=None,
+    *,
+    output_dtype=jnp.float32,
 ):
     """Form score-unit ``corr_img`` with RELION's native-FFT cast order.
 
@@ -4459,9 +4461,14 @@ def _relion_cuda_corr_img_from_native_noise_variance(
     changes ``Minvsigma2`` by one ULP on real parity fixtures.  RELION first
     reciprocates its native-unit binary64 variance into XFLOAT, forms the
     CTF-square product, and only then does RECOVAR need to convert the completed
-    XFLOAT operand back to normalized-FFT score units.
+    XFLOAT operand back to normalized-FFT score units. ``output_dtype`` selects
+    the score dtype of that final conversion (float32 production, float64 for
+    double-precision scoring); the RELION-side casts above it are unchanged.
     """
 
+    output_dtype = jnp.dtype(output_dtype)
+    if output_dtype not in (jnp.dtype(jnp.float32), jnp.dtype(jnp.float64)):
+        raise TypeError(f"output_dtype must be float32 or float64, got {output_dtype}")
     image_size = int(image_shape[0])
     if tuple(image_shape) != (image_size, image_size):
         raise ValueError(f"RELION corr_img requires a square image, got {image_shape}")
@@ -4482,7 +4489,7 @@ def _relion_cuda_corr_img_from_native_noise_variance(
     # native XFLOAT operand under RECOVAR's Fourier normalization.
     return (
         native_corr_img.astype(jnp.float64) / native_fourier_scale_rfloat
-    ).astype(jnp.float32)
+    ).astype(output_dtype)
 
 
 def _relion_cuda_pixel_correction_from_rfloat_ctf(
