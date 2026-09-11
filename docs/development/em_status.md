@@ -221,6 +221,37 @@ results, convergence/finalization and shared downstream checks. Keep
 [quantitative gates](../math/em_parity_program.md) unchanged. Preserve the reviewed
 final-grid-correction default; its strict-target discrepancy needs separate qualification.
 
+## VDAM end-to-end status (carried from the VDAM workstream)
+
+Integrated on September 11 from the VDAM handoff
+([document](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/handoffs/vdam_to_em_clean_integration_and_em_port_20260911.md)):
+six determinism opt-ins, two K4 fused pass-2 compile-glue rounds and the host-memory
+particle preread, cherry-picked in the order the handoff gives and reconciled with the
+cleanup owners ([receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_integration_20260911/result.json)).
+The four ladder commits the handoff marks as reverted were skipped. The table below is the
+VDAM workstream's own end-to-end evidence, reproduced verbatim and refreshed on every
+publish; its rows are VDAM results, not EM-path results, and the EM path's own rows stay
+in the sections above.
+
+Gate = "inside the RELION run-to-run band" (RELION ×2 / recovar ×2, same seed, same GPU class) unless a fixed rule is stated; both engines are chaotic after
+iteration ~30–70 so fixed map tolerances are not meaningful. All rows at source 5ca9c8fff unless noted; K4 GT-AUC is population-weighted (plain means are
+dominated by empty classes).
+
+| test (end to end) | metric | gate | current value | status | receipt / jobs |
+|---|---|---|---|---|---|
+| K1 synthetic, 20 library cells (5k/128, one 256²; 2 no-CTF cells excluded: RELION rejects the fixture CTF) | it000 map exact; GT FSC-AUC it100/it200 vs RELION; cross-AUC | exact; inside band (seed sweep if single pair ambiguous) | 20/20 exact; 17 within ±0.003, 3 inside band, case 22 by seed sweep | pass | `em_work/codex/vdam_synthetic_k1_matrix_5ca9c8fff_20260910/RESULTS.md` |
+| K1 real 10k/256 (EMPIAR-10076 subset), natural 200 | cross-AUC vs RELION, 4-arm band | inside band | in band | pass | `vdam_k1_10k_cachewarm_5ca9c8fff_20260910`, integrated_full200 roots |
+| K1 real 100k/256, natural 200 | cross-AUC it200 vs RELION ×2; min over checkpoints | inside band (RELION-vs-RELION 0.9945 / 0.9222 min) | 0.9931–0.9953 / 0.9217 min | pass | `vdam_real10076_100k_repeat_5ca9c8fff_20260910`, `vdam_k1_100k_preread_20260910` (jobs 13683192, 13688031/2, 13712451) |
+| K1 fixed-state replays (real 10k, t=20…58; 100k t30/t31) | Pmax gap, significant counts, pose flips | ≤1.6e-4, 0, 0 | ≤1.6e-4, 0, 0 | pass | `vdam_real100k_onestep_replay_…`, case22_replays |
+| exactly-K4 5k/128, existing fixture, natural 200 | Hungarian matched class AUC, assignment agreement, populations, weighted GT-AUC vs 4-arm band | inside band | 70 % class 0.63/0.70 vs RELION (band 0.35–0.94); populations 0.707/0.293 (band 0.70/0.30) | pass | `vdam_k4_synthetic_full200_repeat_5ca9c8fff_20260910`, `vdam_k4_full200_glue_cf8778730_20260910` |
+| exactly-K4, 5 new fixtures (noise 3, radial noise, Kent, head-heavy, Kent+offsets), 2 pairs each | same | inside band; seed sweep if ambiguous | recovar-vs-RELION distances = RELION-vs-RELION in 5/5; weighted GT-AUC in band 4/5; radial fixture: behind at seed 29, equal/ahead at seeds 30–32 | pass | `vdam_k4_fixture_matrix_5ca9c8fff_20260910/RESULTS.md` (jobs 13710571–8, 13711152/3, 13717088–97, 13723830–7) |
+| **perf** K1 real 100k/256 wall | recovar / RELION, same H100 class, shared nodes | ≤2× provisional; goal ≈1× | **3874 s / 3524–3589 s = 1.08–1.10×** with preread (was 2.15–2.54×) | pass | `vdam_k1_100k_preread_20260910/RESULTS.md` (8f348b05a) |
+| **perf** K1 real 10k/256 wall | same | ≤2× | 676 s warm cache / 608–662 s = 1.1× (850 s cold) | pass | `vdam_k1_10k_cachewarm_5ca9c8fff_20260910` |
+| **perf** exactly-K4 5k/128 nr_iter 20 wall | same | ≤2× | cold 800 s / 39 s (5ca9c8fff); warm cache 205 s (5.2×); glue rounds: 20 cold iterations 545 s vs 800 s | **fail** (compile-bound; design item below) | `vdam_k4_synthetic_cachewarm_…`, `vdam_k4glue_20260910/RESULTS.md` |
+| **perf** exactly-K4 5k/128 natural 200 wall | same | ≤2× | 6108 s (glue) / 932–1086 s = 5.6–6.6× (was 6900–9725 s) | **fail** | `vdam_k4_full200_glue_cf8778730_20260910/RESULTS.md` |
+| determinism (K1 same-state, opt-ins) | bitwise map repeat | bitwise | bitwise ×2 (122 s; 77 s with fusion autotuner off) | pass | `vdam_detred_samestate_t3_4e5407be_20260910` |
+| determinism (K4 same-state) | bitwise map repeat | bitwise | not bitwise (x-half BPref atomics not covered), Δ 1.5e-8 | open | `vdam_k4glue_20260910/RESULTS.md` (job 13713415) |
+
 ## Frozen jobs and representative performance
 
 Frozen4f9 full200 H100: 452.295/303.905s = **1.4883×**, one3k/128 pair with asymmetric
