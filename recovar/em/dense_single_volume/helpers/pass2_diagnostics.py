@@ -114,6 +114,59 @@ def _pass2_dump_context(current_size):
     return dump_dir, target_original_indices, context_iteration, context_half
 
 
+def _optional_operand_row_fields(
+    row,
+    *,
+    shifted_corrected,
+    direct_score_input,
+    direct_preprocessed_score_input,
+    direct_pixel_correction,
+    direct_inverse_noise_score,
+    direct_ctf_rfloat_score,
+    direct_preprocess_normalization_factors,
+    direct_integer_pre_shifts,
+    direct_batch_image_corrections,
+    direct_batch_scale_corrections,
+) -> dict:
+    """Capture one image's optional RELION score operands for the pass-2 dump.
+
+    Operands the caller did not supply are recorded as absent rather than
+    guessed: per-image arrays as empty arrays of their capture dtype, the
+    per-image normalization factor and batch corrections as NaN. The inverse
+    noise curve is shared by the batch and stored whole. Both dump schemas
+    (selected rotation rows and the effective fine grid) use these fields.
+    """
+
+    def per_row(values, empty_dtype, dtype=None):
+        if values is None:
+            return np.empty((0,), dtype=empty_dtype)
+        return np.asarray(values[row], dtype=dtype) if dtype is not None else np.asarray(values[row])
+
+    def nan_default(values):
+        return np.asarray(values)[row] if values is not None else np.float32(np.nan)
+
+    return dict(
+        shifted_corrected=per_row(shifted_corrected, np.complex64),
+        direct_score_input=per_row(direct_score_input, np.complex64),
+        direct_preprocessed_score_input=per_row(direct_preprocessed_score_input, np.complex64),
+        direct_pixel_correction=per_row(direct_pixel_correction, np.float32),
+        direct_inverse_noise_score=(
+            np.asarray(direct_inverse_noise_score)
+            if direct_inverse_noise_score is not None
+            else np.empty((0,), dtype=np.float32)
+        ),
+        direct_ctf_rfloat_score=per_row(direct_ctf_rfloat_score, np.float64, dtype=np.float64),
+        relion_preprocess_normalization_factor=nan_default(direct_preprocess_normalization_factors),
+        relion_integer_pre_shift=(
+            np.asarray(direct_integer_pre_shifts, dtype=np.int32)[row]
+            if direct_integer_pre_shifts is not None
+            else np.empty((0,), dtype=np.int32)
+        ),
+        batch_image_correction=nan_default(direct_batch_image_corrections),
+        batch_scale_correction=nan_default(direct_batch_scale_corrections),
+    )
+
+
 def _maybe_dump_pass2_bucket(
     *,
     experiment_dataset,
@@ -350,55 +403,18 @@ def _maybe_dump_pass2_bucket(
                 ),
                 rotation_log_prior=selected_rotation_prior,
                 translation_log_prior=translation_prior,
-                shifted_corrected=(
-                    np.asarray(shifted_corrected_score_split[row])
-                    if shifted_corrected_score_split is not None
-                    else np.empty((0,), dtype=np.complex64)
-                ),
-                direct_score_input=(
-                    np.asarray(direct_score_input[row])
-                    if direct_score_input is not None
-                    else np.empty((0,), dtype=np.complex64)
-                ),
-                direct_preprocessed_score_input=(
-                    np.asarray(direct_preprocessed_score_input[row])
-                    if direct_preprocessed_score_input is not None
-                    else np.empty((0,), dtype=np.complex64)
-                ),
-                direct_pixel_correction=(
-                    np.asarray(direct_pixel_correction[row])
-                    if direct_pixel_correction is not None
-                    else np.empty((0,), dtype=np.float32)
-                ),
-                direct_inverse_noise_score=(
-                    np.asarray(direct_inverse_noise_score)
-                    if direct_inverse_noise_score is not None
-                    else np.empty((0,), dtype=np.float32)
-                ),
-                direct_ctf_rfloat_score=(
-                    np.asarray(direct_ctf_rfloat_score[row], dtype=np.float64)
-                    if direct_ctf_rfloat_score is not None
-                    else np.empty((0,), dtype=np.float64)
-                ),
-                relion_preprocess_normalization_factor=(
-                    np.asarray(direct_preprocess_normalization_factors)[row]
-                    if direct_preprocess_normalization_factors is not None
-                    else np.float32(np.nan)
-                ),
-                relion_integer_pre_shift=(
-                    np.asarray(direct_integer_pre_shifts, dtype=np.int32)[row]
-                    if direct_integer_pre_shifts is not None
-                    else np.empty((0,), dtype=np.int32)
-                ),
-                batch_image_correction=(
-                    np.asarray(direct_batch_image_corrections)[row]
-                    if direct_batch_image_corrections is not None
-                    else np.float32(np.nan)
-                ),
-                batch_scale_correction=(
-                    np.asarray(direct_batch_scale_corrections)[row]
-                    if direct_batch_scale_corrections is not None
-                    else np.float32(np.nan)
+                **_optional_operand_row_fields(
+                    row,
+                    shifted_corrected=shifted_corrected_score_split,
+                    direct_score_input=direct_score_input,
+                    direct_preprocessed_score_input=direct_preprocessed_score_input,
+                    direct_pixel_correction=direct_pixel_correction,
+                    direct_inverse_noise_score=direct_inverse_noise_score,
+                    direct_ctf_rfloat_score=direct_ctf_rfloat_score,
+                    direct_preprocess_normalization_factors=direct_preprocess_normalization_factors,
+                    direct_integer_pre_shifts=direct_integer_pre_shifts,
+                    direct_batch_image_corrections=direct_batch_image_corrections,
+                    direct_batch_scale_corrections=direct_batch_scale_corrections,
                 ),
                 ctf2_over_nv_score=np.asarray(ctf2_over_nv_score[row], dtype=np.float64),
                 shifted_recon=(
@@ -534,53 +550,18 @@ def _maybe_dump_pass2_bucket(
             probs=probs_np[row, :cnt, :],
             rotation_log_prior=rot_prior_np[row, :cnt],
             translation_log_prior=trans_prior_np[row],
-            shifted_corrected=(
-                shifted_corrected_np[row] if shifted_corrected_np is not None else np.empty((0,), dtype=np.complex64)
-            ),
-            direct_score_input=(
-                direct_score_input_np[row]
-                if direct_score_input_np is not None
-                else np.empty((0,), dtype=np.complex64)
-            ),
-            direct_preprocessed_score_input=(
-                direct_preprocessed_score_input_np[row]
-                if direct_preprocessed_score_input_np is not None
-                else np.empty((0,), dtype=np.complex64)
-            ),
-            direct_pixel_correction=(
-                direct_pixel_correction_np[row]
-                if direct_pixel_correction_np is not None
-                else np.empty((0,), dtype=np.float32)
-            ),
-            direct_inverse_noise_score=(
-                direct_inverse_noise_score_np
-                if direct_inverse_noise_score_np is not None
-                else np.empty((0,), dtype=np.float32)
-            ),
-            direct_ctf_rfloat_score=(
-                direct_ctf_rfloat_score_np[row]
-                if direct_ctf_rfloat_score_np is not None
-                else np.empty((0,), dtype=np.float64)
-            ),
-            relion_preprocess_normalization_factor=(
-                np.asarray(direct_preprocess_normalization_factors)[row]
-                if direct_preprocess_normalization_factors is not None
-                else np.float32(np.nan)
-            ),
-            relion_integer_pre_shift=(
-                np.asarray(direct_integer_pre_shifts, dtype=np.int32)[row]
-                if direct_integer_pre_shifts is not None
-                else np.empty((0,), dtype=np.int32)
-            ),
-            batch_image_correction=(
-                np.asarray(direct_batch_image_corrections)[row]
-                if direct_batch_image_corrections is not None
-                else np.float32(np.nan)
-            ),
-            batch_scale_correction=(
-                np.asarray(direct_batch_scale_corrections)[row]
-                if direct_batch_scale_corrections is not None
-                else np.float32(np.nan)
+            **_optional_operand_row_fields(
+                row,
+                shifted_corrected=shifted_corrected_np,
+                direct_score_input=direct_score_input_np,
+                direct_preprocessed_score_input=direct_preprocessed_score_input_np,
+                direct_pixel_correction=direct_pixel_correction_np,
+                direct_inverse_noise_score=direct_inverse_noise_score_np,
+                direct_ctf_rfloat_score=direct_ctf_rfloat_score_np,
+                direct_preprocess_normalization_factors=direct_preprocess_normalization_factors,
+                direct_integer_pre_shifts=direct_integer_pre_shifts,
+                direct_batch_image_corrections=direct_batch_image_corrections,
+                direct_batch_scale_corrections=direct_batch_scale_corrections,
             ),
             ctf2_over_nv_score=ctf2_np[row],
             shifted_recon=(

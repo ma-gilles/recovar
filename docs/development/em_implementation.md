@@ -271,6 +271,12 @@ operands (windowed shifted images and weights, batch norm, half weights, batch a
 translation counts, shapes, score mode and precision policy) are bound once per batch as
 `score_block_kwargs`; the pass-1 and pass-2 rotation-block scorers add only their block's
 projections ([`test_em_engine_score_block_kwargs.py`](../../tests/unit/test_em_engine_score_block_kwargs.py)).
+[`pass2_diagnostics._optional_operand_row_fields`](../../recovar/em/dense_single_volume/helpers/pass2_diagnostics.py)
+captures one image's optional RELION score operands for the K=1 pass-2 dump, recording
+operands the caller did not supply as absent (empty arrays of the capture dtype, or NaN for
+the per-image normalization factor and batch corrections); the selected-rows and
+effective-grid schemas both write these fields
+([`test_pass2_dump_operand_fields_owner.py`](../../tests/unit/test_pass2_dump_operand_fields_owner.py)).
 In [`significance`](../../recovar/em/dense_single_volume/helpers/significance.py),
 `_coarse_gaussian_ffi_default` applies the fresh-InitialModel coarse Gaussian FFI
 default only when the supplied RELION projector operands exist; a dense pass
