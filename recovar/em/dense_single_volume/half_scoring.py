@@ -102,6 +102,21 @@ def _expand_significant_samples_to_full_parent_translations(
     return expanded
 
 
+def _k1_dense_uses_adaptive_engine(adaptive_oversampling, group_ids) -> bool:
+    """Whether K=1 dense scoring runs through the adaptive/sparse engine.
+
+    RELION accumulates the group-scale sufficient statistics (``XA``/``AA``,
+    ``ml_optimiser.cpp`` ``storeWeightedSums``) in every expectation pass,
+    whatever the oversampling order. Only RECOVAR's adaptive/sparse engine
+    accumulates them, so K=1 scoring with RELION scale groups uses that engine
+    at the requested oversampling order, including 0, where its single coarse
+    pass on the current grid is RELION's single pass with significance pruning.
+    Without scale groups, oversampling 0 keeps the direct dense engine.
+    """
+
+    return int(adaptive_oversampling) > 0 or group_ids is not None
+
+
 def _score_half_dense(
     *,
     k: int,
@@ -467,10 +482,20 @@ def _score_half_dense(
             mstep_accumulator_shape=getattr(k_class_result, "mstep_accumulator_shape", None),
         )
 
-    if int(state.adaptive_oversampling) > 0:
+    if _k1_dense_uses_adaptive_engine(state.adaptive_oversampling, group_ids_k):
         if disable_adjoint_y or disable_adjoint_ctf:
             raise NotImplementedError("K=1 adaptive oversampling does not support adjoint ablation flags")
         adaptive_os_local = int(state.adaptive_oversampling)
+        if adaptive_os_local <= 0:
+            # RELION scale groups at oversampling 0: single pass on the current
+            # grid through the adaptive engine so group XA/AA are accumulated.
+            firstiter_coarse_current_size = cs_for_engine
+            firstiter_fine_current_size = cs_for_engine
+            logger.info(
+                "RELION K=1 scale groups at oversampling 0: routing the single pass through the "
+                "adaptive engine (current_size=%s)",
+                cs_for_engine,
+            )
         k1_relion_x_half_mstep = _k1_relion_x_half_mstep_enabled()
         means_single = jnp.asarray(means_k)[None, :]
         rot_pmap_for_collapse = None
@@ -664,11 +689,7 @@ def _score_half_dense(
             mstep_accumulator_shape=getattr(k1_adaptive_result, "mstep_accumulator_shape", None),
         )
 
-    if group_ids_k is not None:
-        raise RuntimeError(
-            "RELION native group-scale correction requires the sparse/adaptive or local "
-            "M-step; direct dense K=1 does not accumulate group XA/AA statistics"
-        )
+    # Scale groups never reach the direct dense engine: see _k1_dense_uses_adaptive_engine.
     direct_em_kwargs = dict(em_kwargs)
     direct_em_kwargs.pop("group_ids", None)
     direct_em_kwargs.pop("scale_correction_group_count", None)
