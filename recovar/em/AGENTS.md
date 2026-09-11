@@ -90,6 +90,10 @@ GUI excluded**, before new-engine development. Root instructions also apply.
   CRYOEM/gilleslab/em_work/codex with SAFE_TO_DELETE. Preserve curated fixtures.
 - Before RELION comparisons, captures or builds read the
   [oracle rules](../../docs/development/em_parity_runbook.md#relion-oracle-rules).
+  The oracle is RELION 5.0.1 throughout; that section pins the source commit,
+  the dump build and the reference binaries. Any comparison against it must use
+  `--relion-particle-shuffle mt19937`, because the CLI default reproduces the
+  older half-set ordering and silently breaks per-particle correspondence.
   Coordinate the shared RELION source/build; never rebuild pinned binaries or
   create another clone. Pin source, patched build, command, metadata, seed,
   subset/MPI layout and hardware. Restarted per-half captures fail closed unless
