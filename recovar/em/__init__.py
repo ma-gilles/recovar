@@ -52,11 +52,7 @@ from .m_step import (
 )
 
 # Core utilities and batch orchestration
-from .sampling import (
-    get_rotation_grid,
-    get_translation_grid,
-    translations_to_indices,
-)
+from .sampling import translations_to_indices
 from .states import EMState, HeterogeneousEMState, SGDState
 
 __all__ = [

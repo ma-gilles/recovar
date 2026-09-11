@@ -10,7 +10,6 @@ from recovar.reconstruction import relion_functions, noise
 from recovar.heterogeneity import covariance_estimation, principal_components
 from recovar.core.configs import ForwardModelConfig
 from .core import batch_vol_slice_volume
-from recovar.heterogeneity.principal_components import get_cov_svds, pca_by_projected_covariance
 from recovar.heterogeneity.covariance_estimation import compute_both_H_B, compute_covariance_regularization_relion_style
 
 logger = logging.getLogger(__name__)
@@ -474,9 +473,6 @@ def sum_up_images_fixed_rots_covariance_with_precompute(
     return H, B
 
 
-from recovar.heterogeneity import covariance_estimation
-
-
 def compute_projected_covariance(
     experiment_datasets,
     mean,
@@ -891,86 +887,6 @@ def estimate_principal_components_halfset(
         ss[cryo_idx] = np.where(s > 0, s, np.ones_like(s) * jax_config.EPSILON)
 
     return us, ss
-
-
-def estimate_principal_components(
-    cryos,
-    options,
-    means,
-    mean_signal_variance,
-    cov_noise,
-    volume_mask,
-    dilated_volume_mask,
-    valid_idx,
-    batch_size,
-    gpu_memory_to_use,
-    noise_model,
-    covariance_options=None,
-    variance_estimate=None,
-):
-
-    covariance_options = (
-        covariance_estimation.get_default_covariance_computation_options()
-        if covariance_options is None
-        else covariance_options
-    )
-
-    volume_shape = cryos[0].volume_shape
-    vol_batch_size = utils.get_vol_batch_size(cryos[0].grid_size, gpu_memory_to_use)
-
-    covariance_cols, picked_frequencies, column_fscs = (
-        covariance_estimation.compute_regularized_covariance_columns_in_batch(
-            cryos,
-            means,
-            mean_signal_variance,
-            cov_noise,
-            volume_mask,
-            dilated_volume_mask,
-            valid_idx,
-            gpu_memory_to_use,
-            noise_model,
-            covariance_options,
-            picked_frequencies,
-        )
-    )
-    logger.info("memory after covariance estimation")
-    utils.report_memory_device(logger=logger)
-
-    # First approximation of eigenvalue decomposition
-    u, s = get_cov_svds(
-        covariance_cols,
-        picked_frequencies,
-        volume_mask,
-        volume_shape,
-        vol_batch_size,
-        gpu_memory_to_use,
-        options.ignore_zero_frequency,
-        covariance_options["randomized_sketch_size"],
-    )
-
-    if not options.keep_intermediate:
-        for key in covariance_cols.keys():
-            covariance_cols[key] = None
-    image_cov_noise = np.asarray(noise.make_radial_noise(cov_noise, cryos[0].image_shape))
-
-    u["rescaled"], s["rescaled"] = pca_by_projected_covariance(
-        cryos,
-        u["real"],
-        means.combined,
-        image_cov_noise,
-        dilated_volume_mask,
-        disc_type=covariance_options["disc_type"],
-        disc_type_u=covariance_options["disc_type_u"],
-        gpu_memory_to_use=gpu_memory_to_use,
-        use_mask=covariance_options["mask_images_in_proj"],
-        ignore_zero_frequency=False,
-        n_pcs_to_compute=covariance_options["n_pcs_to_compute"],
-    )
-
-    if not options.keep_intermediate:
-        u["real"] = None
-
-    return u, s, covariance_cols, picked_frequencies, column_fscs
 
 
 def compute_regularized_covariance_columns(

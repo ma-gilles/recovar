@@ -10,9 +10,7 @@ from recovar.core.configs import ForwardModelConfig
 from .core import (
     batch_vol_slice_volume,
     batch_vol_rot_slice_volume,
-    compute_dot_products,
     compute_dot_products_eqx,
-    compute_CTFed_proj_norms,
     compute_CTFed_proj_norms_eqx,
     norm_squared_residuals_from_ft,
     NORM_FFT,

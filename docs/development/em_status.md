@@ -49,6 +49,7 @@ case counts, provenance and limits.
 
 | Commit | Change | Kind | Receipt |
 | --- | --- | --- | --- |
+| see receipt | remove the uncalled legacy `heterogeneity.estimate_principal_components` (with its undefined `picked_frequencies`), a shadowing re-import, two unused `e_step` imports and two unused package re-exports; the EM package outside PPCA refinement is now free of ruff F findings | dead code | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/legacy_pca_removal_20260911/result.json) |
 | see receipt | remove eighteen unused local assignments (ruff F841) across the EM package, including two windowed translation-phase tables the single-class sparse scorer computed at setup and never read | dead code | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/unused_locals_20260911/result.json) |
 | see receipt | remove the unused `convergence.SIGMA_CUTOFF` and seven unreferenced helpers in EM parity/diagnostic scripts; records the pre-existing sealed static-argument drift in `run_local_mstep_donation_ab.py` | dead code, token scan | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/dead_script_helpers_20260911/result.json) |
 | see receipt | `preprocessing.uses_relion_cuda_image_preprocessing` / `relion_preprocess_backend` own the RELION CUDA preprocessing detection (local engine and InitialModel adapter shared two inline copies); the controller fails closed at setup when the fresh K=1 defaults run without it; the fast tier's K1 cold start uses the production `relion_cuda` backend | fix (fast tier K1 cold start) + structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/relion_cuda_preprocess_owner_20260911/result.json) |
@@ -168,13 +169,14 @@ without actual score/support evidence. Counter187 is
 [monitor-only in fixed200 InitialModel](evidence/vdam-full200-4f9-20260909/late_counter_scope.md),
 not an ordinary auto-refine/K4 waiver; four native adaptive fields are uncaptured.
 
-The dense/local fast guard now rejects undefined names before JAX startup.
-A broader static scan found existing `picked_frequencies` use-before-assignment
-in `recovar/em/heterogeneity.py:971`; outside this guard's scope, unfixed.
-A [caller audit](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/legacy_pca_callers_20260910/result.json)
-finds no repository caller of that78-line legacy function and no package export.
-The main PCA pipeline uses a distinct implementation. An unapplied removal
-candidate is preserved; external/dynamic uses remain unverified.
+The dense/local fast guard rejects undefined names before JAX startup. The
+`picked_frequencies` use-before-assignment that a broader scan found in
+`recovar/em/heterogeneity.py` lived in the uncalled legacy
+`estimate_principal_components`; after the
+[caller audit](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/legacy_pca_callers_20260910/result.json)
+and a fresh token scan found no caller, that function was removed on
+September 11 ([receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/legacy_pca_removal_20260911/result.json)).
+The main PCA pipeline uses a distinct implementation.
 [Guard check and exact finding](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/undefined_name_guard_20260910/result.json).
 
 Historical failures stay open: API13641893 has6 failures (older13634313:12),
