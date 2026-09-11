@@ -469,7 +469,12 @@ def test_kclass_significance_dump_threads_one_based_iteration():
     assert relion_replay._numbered_relion_iteration(1, 0) == 2
     assert relion_replay._numbered_relion_iteration(11, 2) == 14
     assert "numbered_relion_iteration = replay_policy._numbered_relion_iteration(" in loop_source
-    assert loop_source.count("debug_iteration=numbered_relion_iteration") >= 3
+    # The local call and the shared dense keyword set (adaptive and single pass) thread it.
+    assert loop_source.count("debug_iteration=numbered_relion_iteration") >= 2
+    dense_keywords = loop_source[
+        loop_source.index("dense_half_kwargs = dict(") : loop_source.index("if use_adaptive:\n                    dense_result")
+    ]
+    assert dense_keywords.count("debug_iteration=numbered_relion_iteration") == 1
     score_tree = ast.parse(score_source)
     firstiter_inputs = next(
         node.value for node in ast.walk(score_tree)
