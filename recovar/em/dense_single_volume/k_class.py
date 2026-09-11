@@ -2481,6 +2481,40 @@ class _ClassFineGridSignificanceMask:
 
 
 @nvtx.annotate("kclass.run_dense_k_class_em_adaptive", color="red", domain=NVTX_DOMAIN_EM)
+def _pass2_support_log_args(support_stats, *, n_rot_fine, n_trans_fine, dense_support_threshold, mean_threshold_text, small_threshold_text):
+    """The 21 values every adaptive pass-2 routing log prints after its own leading arguments.
+
+    Order: median/mean/max fine rotation support as count, grid size and fraction
+    (with the median, mean and small-dataset thresholds interleaved as RELION's log
+    shows them), then median/mean/max fine pose support against the full pose grid.
+    """
+
+    n_pose = n_rot_fine * n_trans_fine
+    return (
+        support_stats["rotation_median"],
+        n_rot_fine,
+        support_stats["rotation_median_fraction"],
+        dense_support_threshold,
+        support_stats["rotation_mean"],
+        n_rot_fine,
+        support_stats["rotation_mean_fraction"],
+        mean_threshold_text,
+        small_threshold_text,
+        support_stats["rotation_max"],
+        n_rot_fine,
+        support_stats["rotation_max_fraction"],
+        support_stats["pose_median"],
+        n_pose,
+        support_stats["pose_median_fraction"],
+        support_stats["pose_mean"],
+        n_pose,
+        support_stats["pose_mean_fraction"],
+        support_stats["pose_max"],
+        n_pose,
+        support_stats["pose_max_fraction"],
+    )
+
+
 def run_dense_k_class_em_adaptive(
     experiment_dataset,
     means,
@@ -3014,6 +3048,14 @@ def run_dense_k_class_em_adaptive(
             if dense_small_n_threshold is None or dense_small_mean_threshold is None
             else f"n<={dense_small_n_threshold}, mean>={dense_small_mean_threshold:.3f}"
         )
+        support_log_args = _pass2_support_log_args(
+            support_stats,
+            n_rot_fine=n_rot_fine,
+            n_trans_fine=n_trans_fine,
+            dense_support_threshold=dense_support_threshold,
+            mean_threshold_text=mean_threshold_text,
+            small_threshold_text=small_threshold_text,
+        )
         if dense_by_median or dense_by_mean or dense_by_small_dataset:
             sparse_pass2_requested = False
             dense_reasons = []
@@ -3041,27 +3083,7 @@ def run_dense_k_class_em_adaptive(
                 "mean=%.0f/%d (%.3f, threshold %s, small threshold %s) max=%.0f/%d (%.3f); "
                 "fine pose support median=%.0f/%d (%.3f) mean=%.0f/%d (%.3f) max=%.0f/%d (%.3f)",
                 "; ".join(dense_reasons),
-                support_stats["rotation_median"],
-                n_rot_fine,
-                support_stats["rotation_median_fraction"],
-                dense_support_threshold,
-                support_stats["rotation_mean"],
-                n_rot_fine,
-                support_stats["rotation_mean_fraction"],
-                mean_threshold_text,
-                small_threshold_text,
-                support_stats["rotation_max"],
-                n_rot_fine,
-                support_stats["rotation_max_fraction"],
-                support_stats["pose_median"],
-                n_rot_fine * n_trans_fine,
-                support_stats["pose_median_fraction"],
-                support_stats["pose_mean"],
-                n_rot_fine * n_trans_fine,
-                support_stats["pose_mean_fraction"],
-                support_stats["pose_max"],
-                n_rot_fine * n_trans_fine,
-                support_stats["pose_max_fraction"],
+                *support_log_args,
             )
         elif compact_sparse_preferred:
             logger.info(
@@ -3072,27 +3094,7 @@ def run_dense_k_class_em_adaptive(
                 "(%.3f) mean=%.0f/%d (%.3f) max=%.0f/%d (%.3f)",
                 n_images,
                 -1 if compact_sparse_min_images is None else compact_sparse_min_images,
-                support_stats["rotation_median"],
-                n_rot_fine,
-                support_stats["rotation_median_fraction"],
-                dense_support_threshold,
-                support_stats["rotation_mean"],
-                n_rot_fine,
-                support_stats["rotation_mean_fraction"],
-                mean_threshold_text,
-                small_threshold_text,
-                support_stats["rotation_max"],
-                n_rot_fine,
-                support_stats["rotation_max_fraction"],
-                support_stats["pose_median"],
-                n_rot_fine * n_trans_fine,
-                support_stats["pose_median_fraction"],
-                support_stats["pose_mean"],
-                n_rot_fine * n_trans_fine,
-                support_stats["pose_mean_fraction"],
-                support_stats["pose_max"],
-                n_rot_fine * n_trans_fine,
-                support_stats["pose_max_fraction"],
+                *support_log_args,
             )
         else:
             logger.info(
@@ -3101,27 +3103,7 @@ def run_dense_k_class_em_adaptive(
                 "(small threshold %s); "
                 "max=%.0f/%d (%.3f); "
                 "fine pose support median=%.0f/%d (%.3f) mean=%.0f/%d (%.3f) max=%.0f/%d (%.3f)",
-                support_stats["rotation_median"],
-                n_rot_fine,
-                support_stats["rotation_median_fraction"],
-                dense_support_threshold,
-                support_stats["rotation_mean"],
-                n_rot_fine,
-                support_stats["rotation_mean_fraction"],
-                mean_threshold_text,
-                small_threshold_text,
-                support_stats["rotation_max"],
-                n_rot_fine,
-                support_stats["rotation_max_fraction"],
-                support_stats["pose_median"],
-                n_rot_fine * n_trans_fine,
-                support_stats["pose_median_fraction"],
-                support_stats["pose_mean"],
-                n_rot_fine * n_trans_fine,
-                support_stats["pose_mean_fraction"],
-                support_stats["pose_max"],
-                n_rot_fine * n_trans_fine,
-                support_stats["pose_max_fraction"],
+                *support_log_args,
             )
 
     if sparse_pass2_requested and not firstiter_cc_pass2_only_best_coarse and not skip_significance_pruning:
