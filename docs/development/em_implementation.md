@@ -113,6 +113,10 @@ shared by the JAX reproductions and the native wrappers
 `_relion_powerclass_noise_terms` selects the `highres_Xi2` and high-shell norm
 terms a sparse pass-2 batch needs for both sparse scorers
 ([`test_powerclass_noise_terms_owner.py`](../../tests/unit/test_powerclass_noise_terms_owner.py)).
+In [`local_score_pass`](../../recovar/em/dense_single_volume/local_score_pass.py),
+`_support_from_local_probs` is the one reconstruction-support rule (full-sort
+significance or per-image threshold, else the rotation mask) used by every fused
+score pass ([`test_local_support_owner.py`](../../tests/unit/test_local_support_owner.py)).
 
 Replay and finalization have separate selection and mutation boundaries:
 

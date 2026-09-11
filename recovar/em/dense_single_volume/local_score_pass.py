@@ -290,36 +290,19 @@ def _fused_score_normalize_support_abs2_on_demand_impl(
         scores,
         use_float64=use_float64_normalization,
     )
-
-    if reconstruct_significant_only:
-        if reconstruction_probability_threshold is None:
-            (
-                reconstruction_sample_mask,
-                reconstruction_rotation_mask,
-                n_significant_samples,
-            ) = _compute_reconstruction_support_full_sort_jit(
-                probs,
-                adaptive_fraction=adaptive_fraction,
-                max_significants=max_significants,
-            )
-        else:
-            (
-                reconstruction_sample_mask,
-                reconstruction_rotation_mask,
-                n_significant_samples,
-            ) = compute_reconstruction_support_from_threshold(
-                probs,
-                reconstruction_probability_threshold,
-            )
-        reconstruction_probs = jnp.where(reconstruction_sample_mask, probs, 0.0)
-    else:
-        reconstruction_rotation_mask = rotation_mask
-        reconstruction_sample_mask = jnp.broadcast_to(
-            reconstruction_rotation_mask[:, :, None],
-            probs.shape,
-        )
-        n_significant_samples = jnp.sum(reconstruction_rotation_mask, axis=1).astype(jnp.int32) * probs.shape[-1]
-        reconstruction_probs = probs
+    (
+        reconstruction_sample_mask,
+        reconstruction_rotation_mask,
+        n_significant_samples,
+        reconstruction_probs,
+    ) = _support_from_local_probs(
+        probs,
+        rotation_mask,
+        reconstruction_probability_threshold,
+        reconstruct_significant_only=reconstruct_significant_only,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
+    )
 
     probs_sum_t = jnp.sum(probs, axis=-1)
     reconstruction_probs_sum_t = jnp.sum(reconstruction_probs, axis=-1)
