@@ -38,6 +38,18 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+The exact local M-step's packed-chunk noise accumulation has one owner,
+`local_em_engine._accumulate_packed_noise_chunk` (posterior-weighted noise
+shells, norm-correction residual and group-scale XA/AA sums of one packed
+rotation chunk, from deferred or precomputed packed sums), shared by the
+deferred-projection and cached-projection sources that previously carried two
+identical 42-line bodies. 8 wiring cases (deferred/precomputed sums, with and
+without scale groups, two chunk windows) match the previous body in outputs
+and kernel call order with a byte-exact inverse substitution; the single-pass
+and unpadded-chunk variants keep their own inline accumulation. Structural
+checkpoint only.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/packed_noise_chunk_owner_20260910/result.json).
+
 The four RELION `powerClass` reproductions in `sparse_pass2_bucketed` (JAX
 block-tree `highres_Xi2`, JAX high-shell spectrum sum, and the two native CUDA
 wrappers) now share one operand owner: `_relion_powerclass_packed_image`

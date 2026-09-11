@@ -270,6 +270,10 @@ from shared result assembly. RELION/indexed compact rows use the same score and
 reconstruction gathers; full outputs use the existing window selectors. Weighting
 and precision conversion have one call site. Optional reconstruction and native
 projection arguments remain explicit, with no additional result wrapper.
+`local_em_engine._accumulate_packed_noise_chunk` owns the per-chunk noise shell,
+norm-residual and group-scale accumulation of the exact local M-step for both
+packed projection sources
+([`test_packed_noise_chunk_owner.py`](../../tests/unit/test_packed_noise_chunk_owner.py)).
 
 Sealed VDAM worker and block-chronology replay lives in
 [`helpers/vdam_replay.py`](../../recovar/em/dense_single_volume/helpers/vdam_replay.py).

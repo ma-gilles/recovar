@@ -1860,6 +1860,88 @@ def _return_local_big_jit_mstep_tensors(
 
 
 @nvtx.annotate("local.run_local_em_exact", color="purple", domain=NVTX_DOMAIN_EM)
+def _accumulate_packed_noise_chunk(
+    chunk_proj_for_noise,
+    *,
+    chunk_start,
+    chunk_stop,
+    defer_packed_mstep_reduction,
+    packed_reconstruction_probs,
+    shifted_noise_split,
+    ctf2_over_nv_recon,
+    packed_summed_masked_noise,
+    packed_ctf_probs,
+    noise_variance_for_noise,
+    shell_indices_noise,
+    n_shells,
+    return_noise_split,
+    batch_scale,
+    scale_correction_pixel_mask,
+    bucket_group_ids,
+    block_noise_shells,
+    block_a2_shells,
+    block_xa_shells,
+    block_norm_residual,
+    noise_scale_xa,
+    noise_scale_aa,
+):
+    """Add one packed rotation chunk to the exact local noise statistics.
+
+    RELION's ``storeWeightedSums`` accumulates, per particle, the posterior
+    weighted noise residual shells, the norm-correction residual and the
+    group-scale ``XA``/``AA`` sums from the same projections. The chunk's
+    weighted sums come from the packed posteriors when the M-step reduction
+    is deferred, otherwise from the precomputed packed sums. Both projection
+    sources of the exact local engine (deferred projection and cached
+    projection rows) accumulate through this function. Returns the six
+    updated accumulators.
+    """
+
+    if defer_packed_mstep_reduction:
+        chunk_probs = packed_reconstruction_probs[:, chunk_start:chunk_stop]
+        chunk_summed_masked_noise = compute_local_weighted_sums(chunk_probs, shifted_noise_split)
+        chunk_ctf_probs = compute_local_ctf_sums(chunk_probs, ctf2_over_nv_recon)
+    else:
+        chunk_summed_masked_noise = packed_summed_masked_noise[:, chunk_start:chunk_stop]
+        chunk_ctf_probs = packed_ctf_probs[:, chunk_start:chunk_stop]
+    flat_proj_for_noise = flatten_bucket_rows(chunk_proj_for_noise)
+    flat_proj_abs2_for_noise = jnp.abs(flat_proj_for_noise) ** 2
+    chunk_noise_shells, chunk_a2_shells, chunk_xa_shells = _compute_noise_block(
+        flat_proj_for_noise,
+        flat_proj_abs2_for_noise,
+        flatten_bucket_rows(chunk_summed_masked_noise),
+        flatten_bucket_rows(chunk_ctf_probs),
+        noise_variance_for_noise,
+        shell_indices_noise,
+        n_shells,
+        return_noise_split,
+    )
+    block_noise_shells = block_noise_shells + chunk_noise_shells
+    block_a2_shells = block_a2_shells + chunk_a2_shells
+    block_xa_shells = block_xa_shells + chunk_xa_shells
+    chunk_proj_abs2_for_norm = flat_proj_abs2_for_noise.reshape(chunk_proj_for_noise.shape)
+    block_norm_residual = block_norm_residual + _compute_norm_residual_per_image(
+        chunk_proj_for_noise,
+        chunk_proj_abs2_for_norm,
+        chunk_summed_masked_noise,
+        chunk_ctf_probs,
+        noise_variance_for_noise,
+    )
+    if noise_scale_xa is not None:
+        scale_xa_per_image, scale_aa_per_image = _compute_scale_correction_terms_per_image(
+            chunk_proj_for_noise,
+            chunk_proj_abs2_for_norm,
+            chunk_summed_masked_noise,
+            chunk_ctf_probs,
+            noise_variance_for_noise,
+            batch_scale,
+            scale_correction_pixel_mask,
+        )
+        noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(scale_xa_per_image.astype(noise_scale_xa.dtype))
+        noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(scale_aa_per_image.astype(noise_scale_aa.dtype))
+    return block_noise_shells, block_a2_shells, block_xa_shells, block_norm_residual, noise_scale_xa, noise_scale_aa
+
+
 def run_local_em_exact(
     experiment_dataset,
     mean,
@@ -6942,48 +7024,37 @@ def run_local_em_exact(
                         relion_projector_r_max=relion_projector_r_max,
                         projection_padding_factor=projection_padding_factor,
                     )
-                    if defer_packed_mstep_reduction:
-                        chunk_probs = packed_reconstruction_probs[:, chunk_start:chunk_stop]
-                        chunk_summed_masked_noise = compute_local_weighted_sums(chunk_probs, shifted_noise_split)
-                        chunk_ctf_probs = compute_local_ctf_sums(chunk_probs, ctf2_over_nv_recon)
-                    else:
-                        chunk_summed_masked_noise = packed_summed_masked_noise[:, chunk_start:chunk_stop]
-                        chunk_ctf_probs = packed_ctf_probs[:, chunk_start:chunk_stop]
-                    flat_proj_for_noise = flatten_bucket_rows(chunk_proj_for_noise)
-                    flat_proj_abs2_for_noise = jnp.abs(flat_proj_for_noise) ** 2
-                    chunk_noise_shells, chunk_a2_shells, chunk_xa_shells = _compute_noise_block(
-                        flat_proj_for_noise,
-                        flat_proj_abs2_for_noise,
-                        flatten_bucket_rows(chunk_summed_masked_noise),
-                        flatten_bucket_rows(chunk_ctf_probs),
-                        noise_variance_for_noise,
-                        shell_indices_noise,
-                        n_shells,
-                        return_noise_split,
-                    )
-                    block_noise_shells = block_noise_shells + chunk_noise_shells
-                    block_a2_shells = block_a2_shells + chunk_a2_shells
-                    block_xa_shells = block_xa_shells + chunk_xa_shells
-                    chunk_proj_abs2_for_norm = flat_proj_abs2_for_noise.reshape(chunk_proj_for_noise.shape)
-                    block_norm_residual = block_norm_residual + _compute_norm_residual_per_image(
+                    (
+                        block_noise_shells,
+                        block_a2_shells,
+                        block_xa_shells,
+                        block_norm_residual,
+                        noise_scale_xa,
+                        noise_scale_aa,
+                    ) = _accumulate_packed_noise_chunk(
                         chunk_proj_for_noise,
-                        chunk_proj_abs2_for_norm,
-                        chunk_summed_masked_noise,
-                        chunk_ctf_probs,
-                        noise_variance_for_noise,
+                        chunk_start=chunk_start,
+                        chunk_stop=chunk_stop,
+                        defer_packed_mstep_reduction=defer_packed_mstep_reduction,
+                        packed_reconstruction_probs=packed_reconstruction_probs,
+                        shifted_noise_split=shifted_noise_split,
+                        ctf2_over_nv_recon=ctf2_over_nv_recon,
+                        packed_summed_masked_noise=packed_summed_masked_noise,
+                        packed_ctf_probs=packed_ctf_probs,
+                        noise_variance_for_noise=noise_variance_for_noise,
+                        shell_indices_noise=shell_indices_noise,
+                        n_shells=n_shells,
+                        return_noise_split=return_noise_split,
+                        batch_scale=batch_scale,
+                        scale_correction_pixel_mask=scale_correction_pixel_mask,
+                        bucket_group_ids=bucket_group_ids,
+                        block_noise_shells=block_noise_shells,
+                        block_a2_shells=block_a2_shells,
+                        block_xa_shells=block_xa_shells,
+                        block_norm_residual=block_norm_residual,
+                        noise_scale_xa=noise_scale_xa,
+                        noise_scale_aa=noise_scale_aa,
                     )
-                    if noise_scale_xa is not None:
-                        scale_xa_per_image, scale_aa_per_image = _compute_scale_correction_terms_per_image(
-                            chunk_proj_for_noise,
-                            chunk_proj_abs2_for_norm,
-                            chunk_summed_masked_noise,
-                            chunk_ctf_probs,
-                            noise_variance_for_noise,
-                            batch_scale,
-                            scale_correction_pixel_mask,
-                        )
-                        noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(scale_xa_per_image.astype(noise_scale_xa.dtype))
-                        noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(scale_aa_per_image.astype(noise_scale_aa.dtype))
             else:
                 packed_rotation_count = int(reconstruction_take_indices_jnp.shape[1])
                 noise_projection_pixels = int(proj_for_noise.shape[-1])
@@ -7014,48 +7085,37 @@ def run_local_em_exact(
                         chunk_proj_for_noise,
                         0.0,
                     )
-                    if defer_packed_mstep_reduction:
-                        chunk_probs = packed_reconstruction_probs[:, chunk_start:chunk_stop]
-                        chunk_summed_masked_noise = compute_local_weighted_sums(chunk_probs, shifted_noise_split)
-                        chunk_ctf_probs = compute_local_ctf_sums(chunk_probs, ctf2_over_nv_recon)
-                    else:
-                        chunk_summed_masked_noise = packed_summed_masked_noise[:, chunk_start:chunk_stop]
-                        chunk_ctf_probs = packed_ctf_probs[:, chunk_start:chunk_stop]
-                    flat_proj_for_noise = flatten_bucket_rows(chunk_proj_for_noise)
-                    flat_proj_abs2_for_noise = jnp.abs(flat_proj_for_noise) ** 2
-                    chunk_noise_shells, chunk_a2_shells, chunk_xa_shells = _compute_noise_block(
-                        flat_proj_for_noise,
-                        flat_proj_abs2_for_noise,
-                        flatten_bucket_rows(chunk_summed_masked_noise),
-                        flatten_bucket_rows(chunk_ctf_probs),
-                        noise_variance_for_noise,
-                        shell_indices_noise,
-                        n_shells,
-                        return_noise_split,
-                    )
-                    block_noise_shells = block_noise_shells + chunk_noise_shells
-                    block_a2_shells = block_a2_shells + chunk_a2_shells
-                    block_xa_shells = block_xa_shells + chunk_xa_shells
-                    chunk_proj_abs2_for_norm = flat_proj_abs2_for_noise.reshape(chunk_proj_for_noise.shape)
-                    block_norm_residual = block_norm_residual + _compute_norm_residual_per_image(
+                    (
+                        block_noise_shells,
+                        block_a2_shells,
+                        block_xa_shells,
+                        block_norm_residual,
+                        noise_scale_xa,
+                        noise_scale_aa,
+                    ) = _accumulate_packed_noise_chunk(
                         chunk_proj_for_noise,
-                        chunk_proj_abs2_for_norm,
-                        chunk_summed_masked_noise,
-                        chunk_ctf_probs,
-                        noise_variance_for_noise,
+                        chunk_start=chunk_start,
+                        chunk_stop=chunk_stop,
+                        defer_packed_mstep_reduction=defer_packed_mstep_reduction,
+                        packed_reconstruction_probs=packed_reconstruction_probs,
+                        shifted_noise_split=shifted_noise_split,
+                        ctf2_over_nv_recon=ctf2_over_nv_recon,
+                        packed_summed_masked_noise=packed_summed_masked_noise,
+                        packed_ctf_probs=packed_ctf_probs,
+                        noise_variance_for_noise=noise_variance_for_noise,
+                        shell_indices_noise=shell_indices_noise,
+                        n_shells=n_shells,
+                        return_noise_split=return_noise_split,
+                        batch_scale=batch_scale,
+                        scale_correction_pixel_mask=scale_correction_pixel_mask,
+                        bucket_group_ids=bucket_group_ids,
+                        block_noise_shells=block_noise_shells,
+                        block_a2_shells=block_a2_shells,
+                        block_xa_shells=block_xa_shells,
+                        block_norm_residual=block_norm_residual,
+                        noise_scale_xa=noise_scale_xa,
+                        noise_scale_aa=noise_scale_aa,
                     )
-                    if noise_scale_xa is not None:
-                        scale_xa_per_image, scale_aa_per_image = _compute_scale_correction_terms_per_image(
-                            chunk_proj_for_noise,
-                            chunk_proj_abs2_for_norm,
-                            chunk_summed_masked_noise,
-                            chunk_ctf_probs,
-                            noise_variance_for_noise,
-                            batch_scale,
-                            scale_correction_pixel_mask,
-                        )
-                        noise_scale_xa = noise_scale_xa.at[bucket_group_ids].add(scale_xa_per_image.astype(noise_scale_xa.dtype))
-                        noise_scale_aa = noise_scale_aa.at[bucket_group_ids].add(scale_aa_per_image.astype(noise_scale_aa.dtype))
             if return_profile:
                 _block_until_ready(block_noise_shells, block_norm_residual)
             noise_wsum = noise_wsum + block_noise_shells
