@@ -6,7 +6,7 @@ import logging
 import multiprocessing
 import traceback
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -180,12 +180,16 @@ def relion_auto_refine_half_orders(
     first_iteration: int = 1,
     *,
     optics_group_ids=None,
+    shuffle_algorithm: Literal["legacy", "mt19937"] = "legacy",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return RELION's fresh AutoRefine particle-row order for both halves.
 
-    RELION seeds libc ``rand`` once, shuffles half 1 and then half 2 without
-    reseeding, and finally stable-sorts each half by numeric optics group.
-    Returned values index the supplied full particle table.
+    Legacy RELION uses libc ``rand``/``random_shuffle``; f2c1a384 instead
+    uses ``mt19937``/``shuffle``. Both shuffle half 1 and then half 2 without
+    reseeding, and stable-sort each half by numeric optics group. The legacy
+    default preserves existing pinned fixtures during modern-oracle validation.
+    Returned values index the supplied full particle table, including the
+    first 100 trials consumed by the expected-accuracy estimator.
     """
     from recovar.relion_bind import _relion_bind_core as bind
 
@@ -196,11 +200,18 @@ def relion_auto_refine_half_orders(
         np.flatnonzero(subsets == 1).astype(np.int64),
         np.flatnonzero(subsets == 2).astype(np.int64),
     )
-    if not hasattr(bind, "auto_refine_randomise_half_orders"):
+    binding_names = {
+        "legacy": "auto_refine_randomise_half_orders",
+        "mt19937": "auto_refine_randomise_half_orders_mt19937",
+    }
+    if shuffle_algorithm not in binding_names:
+        raise ValueError(f"unknown shuffle_algorithm: {shuffle_algorithm!r}")
+    shuffle = getattr(bind, binding_names[shuffle_algorithm], None)
+    if shuffle is None:
         raise RuntimeError(
-            "RELION binding lacks auto_refine_randomise_half_orders; rebuild recovar/relion_bind"
+            f"RELION binding lacks {binding_names[shuffle_algorithm]}; rebuild recovar/relion_bind"
         )
-    positions = bind.auto_refine_randomise_half_orders(
+    positions = shuffle(
         int(base_orders[0].size),
         int(base_orders[1].size),
         int(random_seed) + int(first_iteration),

@@ -1115,11 +1115,12 @@ def _relion_halfset_and_accuracy_layout(
     *,
     random_seed=None,
     first_iteration=1,
+    shuffle_algorithm="legacy",
 ):
     """Map RELION particle rows onto RECOVAR's half-local ordering.
 
     Supplying ``random_seed`` selects fresh AutoRefine semantics: one paired
-    half shuffle under a continued libc-rand stream, followed by a stable
+    half shuffle using the selected oracle's RNG, followed by a stable
     numeric optics-group sort. Continuation and replay callers omit the seed
     and retain their existing row order.
     """
@@ -1175,6 +1176,7 @@ def _relion_halfset_and_accuracy_layout(
             int(random_seed),
             int(first_iteration),
             optics_group_ids=relion_optics,
+            shuffle_algorithm=shuffle_algorithm,
         )
         half1_idx, half2_idx = (
             np.asarray(
@@ -2570,6 +2572,14 @@ def main():
         "Use a negative value for the legacy non-reproducible NumPy path.",
     )
     parser.add_argument(
+        "--relion-particle-shuffle",
+        choices=("legacy", "mt19937"),
+        default="legacy",
+        help="Fresh K=1 AutoRefine particle order: legacy libc random_shuffle "
+        "or mt19937/std::shuffle (RELION f2c1a384). Also selects the accuracy "
+        "trial particles. Legacy remains default while the correction is qualified.",
+    )
+    parser.add_argument(
         "--perturb_replay_relion_dir",
         default=None,
         help="Controlled RELION trajectory replay: read SamplingPerturbInstance "
@@ -3342,6 +3352,7 @@ def main():
             our_particles,
             relion_particles,
             random_seed=args.seed if use_fresh_auto_refine_order else None,
+            shuffle_algorithm=args.relion_particle_shuffle,
         )
         if use_fresh_auto_refine_order:
             expected_accuracy_half1_trial_order_local = np.arange(
@@ -3380,8 +3391,9 @@ def main():
         logger.info("Using RELION half-set split: %d (subset=1) + %d (subset=2)", len(half1_idx), len(half2_idx))
         if use_fresh_auto_refine_order:
             logger.info(
-                "Applied RELION fresh paired AutoRefine particle order with effective seed %d; "
+                "Applied RELION fresh paired AutoRefine particle order (%s) with effective seed %d; "
                 "BPref will preserve this physical order",
+                args.relion_particle_shuffle,
                 int(args.seed) + 1,
             )
     else:
@@ -3391,6 +3403,9 @@ def main():
                 "Using RELION Class3D all-data split: %d particles + empty second accumulator",
                 len(half1_idx),
             )
+
+    if args.relion_particle_shuffle != "legacy" and not use_fresh_auto_refine_order:
+        raise ValueError("--relion-particle-shuffle requires fresh K=1 AutoRefine ordering")
 
     local_stop_requested = (
         bool(args.stop_after_local_search_profile)
@@ -4947,6 +4962,8 @@ def main():
 
     # ---- Save results ----
     save_dict = {
+        "relion_particle_shuffle": np.asarray(args.relion_particle_shuffle),
+        "relion_fresh_particle_order_applied": np.bool_(use_fresh_auto_refine_order),
         "current_sizes": np.array(result["current_sizes"]),
         "pixel_resolutions": np.array(result["pixel_resolutions"]),
         "wall_times": np.array(result["wall_times"]),
