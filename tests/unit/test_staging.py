@@ -7,6 +7,7 @@ import mrcfile
 import numpy as np
 import pytest
 
+from recovar.data_io import staging
 from recovar.data_io.staging import _cache_key, get_cache_dir, stage_mrc
 
 
@@ -39,6 +40,29 @@ class TestGetCacheDir:
         monkeypatch.delenv("RECOVAR_CACHE_DIR", raising=False)
         monkeypatch.setenv("TMPDIR", "/tmp/slurm_job123")
         assert get_cache_dir() == "/tmp/slurm_job123"
+
+    def test_network_tmpdir_is_not_staged_to(self, monkeypatch):
+        monkeypatch.delenv("RECOVAR_CACHE_DIR", raising=False)
+        monkeypatch.setenv("TMPDIR", "/network/job123/tmp")
+        monkeypatch.setattr(staging, "filesystem_type", lambda path: "gpfs")
+        assert get_cache_dir() is None
+
+    def test_explicit_cache_dir_on_a_network_filesystem_is_honored(self, monkeypatch):
+        monkeypatch.setenv("RECOVAR_CACHE_DIR", "/network/job123/tmp")
+        monkeypatch.setattr(staging, "filesystem_type", lambda path: "gpfs")
+        assert get_cache_dir() == "/network/job123/tmp"
+
+    def test_local_tmpdir_types_still_stage(self, monkeypatch):
+        monkeypatch.delenv("RECOVAR_CACHE_DIR", raising=False)
+        monkeypatch.setenv("TMPDIR", "/scratch/local/job123")
+        for local_type in ("ext4", "xfs", "tmpfs", "btrfs", "overlay"):
+            monkeypatch.setattr(staging, "filesystem_type", lambda path, t=local_type: t)
+            assert get_cache_dir() == "/scratch/local/job123"
+
+    def test_filesystem_type_resolves_the_nearest_existing_ancestor(self, tmp_path):
+        missing = tmp_path / "not" / "created" / "yet"
+        assert staging.filesystem_type(str(missing)) == staging.filesystem_type(str(tmp_path))
+        assert staging.filesystem_type(str(tmp_path)) is not None
 
     def test_recovar_cache_dir_takes_precedence_over_tmpdir(self, monkeypatch):
         monkeypatch.setenv("RECOVAR_CACHE_DIR", "/fast")
