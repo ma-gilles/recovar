@@ -325,3 +325,51 @@ def test_kclass_eval_compare_with_produces_delta_table(tmp_path):
     )
     # Side-by-side delta table is printed to stdout.
     assert "[delta] primary vs RELION" in proc.stdout
+
+
+def test_population_weighted_means_follow_the_class_populations():
+    """A near-empty class must not carry the same weight as a full one.
+
+    The plain mean over Hungarian-matched classes is what the K=4 reports used;
+    with a 95/5 population split the weighted mean follows the class the
+    particles are actually in.
+    """
+    score_matrix = np.array([[0.9, 0.1], [0.1, 0.3]])
+    perm, plain_mean = evaluator._best_permutation_from_score_matrix(score_matrix)
+    assert perm == (0, 1) and plain_mean == pytest.approx(0.6)
+
+    weights = evaluator._normalized_class_weights([950.0, 50.0], 2)
+    assert weights.tolist() == pytest.approx([0.95, 0.05])
+    assert evaluator._weighted_score_for_perm(score_matrix, perm, weights) == pytest.approx(0.87)
+
+    # equal populations reproduce the plain mean
+    equal = evaluator._normalized_class_weights([7.0, 7.0], 2)
+    assert evaluator._weighted_score_for_perm(score_matrix, perm, equal) == pytest.approx(plain_mean)
+
+    # an empty class contributes nothing
+    empty = evaluator._normalized_class_weights([1.0, 0.0], 2)
+    assert evaluator._weighted_score_for_perm(score_matrix, perm, empty) == pytest.approx(0.9)
+
+    assert evaluator._normalized_class_weights(None, 2) is None
+    for bad in ([1.0], [1.0, -1.0], [0.0, 0.0]):
+        with pytest.raises(ValueError):
+            evaluator._normalized_class_weights(bad, 2)
+
+
+def test_assignment_summary_reports_weighted_means_only_when_asked():
+    fsc_table = [
+        [np.linspace(1.0, 0.0, 12), np.linspace(0.3, 0.0, 12)],
+        [np.linspace(0.2, 0.0, 12), np.linspace(0.8, 0.0, 12)],
+    ]
+    plain = evaluator._assignment_summary_from_fsc_table(fsc_table)
+    assert plain["class_weights"] is None
+    assert plain["best_weighted_mean_fsc_auc"] is None
+    assert plain["best_weighted_mean_fsc_1_8"] is None
+
+    weighted = evaluator._assignment_summary_from_fsc_table(
+        fsc_table, evaluator._normalized_class_weights([9.0, 1.0], 2)
+    )
+    assert weighted["best_perm"] == plain["best_perm"]
+    assert weighted["best_mean_fsc_auc"] == pytest.approx(plain["best_mean_fsc_auc"])
+    assert weighted["class_weights"] == pytest.approx([0.9, 0.1])
+    assert weighted["best_weighted_mean_fsc_auc"] > weighted["best_mean_fsc_auc"]
