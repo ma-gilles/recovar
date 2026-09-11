@@ -7872,6 +7872,28 @@ def subtract_projected_reference_from_sparse_mstep_rotation_sums(
     return summed - projected_reference_delta
 
 
+def _pass2_relion_flags(*, relion_exact_fine_gaussian, relion_firstiter_score_mode, relion_fine_diff2_fused_ffi, relion_f32_fine_posterior):
+    """The three RELION fine-scoring flags of a pass 2: exact Gaussian scoring, fused-FFI diff2, float32 fine posterior.
+
+    The fused-FFI and float32-posterior flags may also be switched on by their
+    environment variables, read here in the same order as before.
+    """
+
+    use_exact_relion_gaussian = bool(
+        relion_exact_fine_gaussian
+        and relion_firstiter_score_mode == "gaussian"
+    )
+    use_relion_fine_diff2_fused_ffi = bool(
+        relion_fine_diff2_fused_ffi
+        or parse_env_flag(_RELION_FINE_DIFF2_FUSED_FFI_ENV, default=False)
+    )
+    use_relion_f32_fine_posterior = bool(
+        relion_f32_fine_posterior
+        or relion_x_half_f32_fine_posterior_enabled()
+    )
+    return use_exact_relion_gaussian, use_relion_fine_diff2_fused_ffi, use_relion_f32_fine_posterior
+
+
 def _pass2_half_weights(image_shape, window_spec, *, half_spectrum_scoring: bool, relion_firstiter_score_mode, use_float64_scoring: bool):
     """Scoring half-image weights of a pass 2, full and windowed, in the scoring precision."""
 
@@ -8141,17 +8163,15 @@ def compute_pass2_stats_sparse_bucketed(
             "relion_firstiter_score_mode must be 'gaussian' or 'normalized_cc', "
             f"got {relion_firstiter_score_mode!r}",
         )
-    use_exact_relion_gaussian = bool(
-        relion_exact_fine_gaussian
-        and relion_firstiter_score_mode == "gaussian"
-    )
-    use_relion_fine_diff2_fused_ffi = bool(
-        relion_fine_diff2_fused_ffi
-        or parse_env_flag(_RELION_FINE_DIFF2_FUSED_FFI_ENV, default=False)
-    )
-    use_relion_f32_fine_posterior = bool(
-        relion_f32_fine_posterior
-        or relion_x_half_f32_fine_posterior_enabled()
+    (
+        use_exact_relion_gaussian,
+        use_relion_fine_diff2_fused_ffi,
+        use_relion_f32_fine_posterior,
+    ) = _pass2_relion_flags(
+        relion_exact_fine_gaussian=relion_exact_fine_gaussian,
+        relion_firstiter_score_mode=relion_firstiter_score_mode,
+        relion_fine_diff2_fused_ffi=relion_fine_diff2_fused_ffi,
+        relion_f32_fine_posterior=relion_f32_fine_posterior,
     )
     winner_take_all = bool(relion_firstiter_winner_take_all)
     if bool(disable_adjoint_y) != bool(disable_adjoint_ctf):
@@ -12162,17 +12182,15 @@ def compute_k_class_pass2_stats_sparse_fused(
             "relion_firstiter_score_mode must be 'gaussian' or 'normalized_cc', "
             f"got {relion_firstiter_score_mode!r}",
         )
-    use_exact_relion_gaussian = bool(
-        relion_exact_fine_gaussian
-        and relion_firstiter_score_mode == "gaussian"
-    )
-    use_relion_fine_diff2_fused_ffi = bool(
-        relion_fine_diff2_fused_ffi
-        or parse_env_flag(_RELION_FINE_DIFF2_FUSED_FFI_ENV, default=False)
-    )
-    use_relion_f32_fine_posterior = bool(
-        relion_f32_fine_posterior
-        or relion_x_half_f32_fine_posterior_enabled()
+    (
+        use_exact_relion_gaussian,
+        use_relion_fine_diff2_fused_ffi,
+        use_relion_f32_fine_posterior,
+    ) = _pass2_relion_flags(
+        relion_exact_fine_gaussian=relion_exact_fine_gaussian,
+        relion_firstiter_score_mode=relion_firstiter_score_mode,
+        relion_fine_diff2_fused_ffi=relion_fine_diff2_fused_ffi,
+        relion_f32_fine_posterior=relion_f32_fine_posterior,
     )
     relion_exact_bpref_operands = parse_env_flag(
         "RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS",
