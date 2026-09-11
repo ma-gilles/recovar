@@ -4568,7 +4568,6 @@ def test_local_relion_projection_cache_forwards_texture_selection(monkeypatch):
         projection_pixel_indices=None,
         projector_output_size=4,
         cache_row_capacity=2,
-        max_global_rotation_id=1,
         group_index=0,
         n_groups=1,
     )

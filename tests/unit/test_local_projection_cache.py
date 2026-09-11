@@ -94,14 +94,19 @@ def test_builder_preserves_first_rotation_for_id_and_chunk_arguments(monkeypatch
         projection_relion_acc_double_floorf_quirk=True,
         projector_output_size=4,
         cache_row_capacity=4,
-        max_global_rotation_id=10,
         group_index=0,
         n_groups=1,
         projection_mask_current_image_disk=mask_disk,
     )
-    assert result.enabled and result.row_count == 3 and result.id_map_row_count == 11
+    # The id map is an identity over the compact cache rows; buckets translate their
+    # global rotation ids to rows on the host through rows_for_bucket, so the cache
+    # no longer grows with the largest global id (int64 ids at high sampling orders).
+    assert result.enabled and result.row_count == 3 and result.id_map_row_count == result.row_count
     assert result.projections.shape == (4, 3) and result.projections.dtype == np.complex64
-    np.testing.assert_array_equal(np.asarray(result.id_map)[[2, 5, 8]], [0, 1, 2])
+    np.testing.assert_array_equal(np.asarray(result.id_map), [0, 1, 2])
+    np.testing.assert_array_equal(cache.rows_for_bucket(result, [[2, 5, 8], [8, -1, 2]]), [[0, 1, 2], [2, 0, 0]])
+    with pytest.raises(RuntimeError, match="missing from the RELION projection cache"):
+        cache.rows_for_bucket(result, [[2, 6]])
     # Only defined rows are read; padding remains uninitialized by contract.
     np.testing.assert_array_equal(np.asarray(result.projections)[:3], np.repeat([[11], [10], [21]], 3, axis=1))
     assert barriers == [1, 1, 1, 2]
@@ -128,7 +133,6 @@ def test_builder_disabled_and_oversized_groups_do_not_project(monkeypatch):
         projection_relion_texture_interp=None,
         projection_pixel_indices=None,
         projector_output_size=0,
-        max_global_rotation_id=2,
         group_index=0,
         n_groups=1,
     )
