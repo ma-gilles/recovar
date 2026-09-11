@@ -96,13 +96,24 @@ repairs) keep their paragraphs in the
   13713499/13713500/13713501) is queued. Earlier tier runs 13704244
   (`400ad81e4`, 6 of 7 failed) remain preserved.
 - **K1 100k/256 completion** on frozen `9870438cd` (job 13709837, exclusive
-  H100, `relion_cuda` images) is running: iterations 1-4 took 368, 3562, 2985
-  and 2972 s (resolution 30.2, 12.1, 10.9, 10.9 Å; average Pmax 1.00, 0.66,
-  0.89, 0.93). The stored RELION baseline (job 8314160) finished 15 iterations
-  plus the final pass in 3 h 31 min on the same GPU class, so this checkpoint
-  is far outside the runtime bound; no quality result yet. Attempts 13704245
-  (`host_numpy` backend) and 13709226 (`output_dtype` TypeError) are preserved
-  as failed.
+  H100, `relion_cuda` images) **completed without qualifying**: 17 iterations
+  in 24,147 s against RELION's 12,695 s (1.90× wall; 4.14 vs 7.88 images/s),
+  never converged (RELION converged at iteration 15), so the final all-data
+  pass was skipped and the summarizer (job 13709838) reports `failed` with no
+  RECOVAR-vs-GT FSC. Resolution stalled at 8.77 Å from iteration 14 while the
+  average Pmax fell to 0.12 at HEALPix order 7; global iterations 2–7 took
+  45–60 min each (E-step dominated), local iterations 7–14 min. This is a
+  quality failure and a runtime failure of that frozen checkpoint; the
+  trajectory diagnosis belongs to the numerical workstream. A diagnostic
+  comparison of the pre-final maps with the summarizer's own metrics gives
+  RECOVAR merged-vs-GT FSC AUC 0.403 and mean FSC over shells 1–8 of 0.77,
+  against RELION's final map at 0.491 and 0.996, and RECOVAR-vs-RELION low-shell
+  FSC 0.78: the maps differ already at low resolution, consistent with the
+  collapsing Pmax, so this is not a final-pass artifact.
+  [Summary](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_completion_k1_9870438cd_h100_20260910/summary.md),
+  [diagnostic FSC](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_completion_k1_9870438cd_h100_20260910/diagnostic_prefinal_fsc.json).
+  Attempts 13704245 (`host_numpy` backend) and 13709226 (`output_dtype`
+  TypeError) are preserved as failed.
 - **Exactly-K4 100k/256**: the dispatch-logging RELION oracle 13708102 completed
   (1 h 15 min, schema-2 log with 1.5 M rows); the schema-3 schedule
   (oracle_id `a220abb55f4`) was built by 13711316, whose launcher step could not
@@ -178,9 +189,11 @@ final-grid-correction default; its strict-target discrepancy needs separate qual
 Frozen4f9 full200 H100: 452.295/303.905s = **1.4883×**, one3k/128 pair with asymmetric
 harness/I/O and unmeasured contention/memory. Older8ab100k A100 paired ratio **1.831839×**
 predates compact CTF and is quality-unqualified. Reported K4 slowdowns (~20× synthetic,
-~8.9× real) need source-closed timing review. The running K1 100k/256 completion on
-frozen `9870438cd` (H100) spends about 50 minutes per iteration against RELION's
-3 h 31 min for the whole auto-refinement; this is a measurement in progress, not a
+~8.9× real) need source-closed timing review. The completed K1 100k/256 run on
+frozen `9870438cd` (H100, job 13709837) took 24,147 s for 17 non-converging
+iterations against RELION's 12,695 s for its converged auto-refinement
+(1.90× wall, 4.14 vs 7.88 images/s; global iterations 45–60 min, local 7–14 min);
+it is a runtime measurement of a run that failed quality admission, not a
 qualified ratio. None establishes moving-tip performance.
 For newer pending evidence consult [VDAM status](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/status/vdam.json);
 this page does not schedule or authorize duplicate runs.
