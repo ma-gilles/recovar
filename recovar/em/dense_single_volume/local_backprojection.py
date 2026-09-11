@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 
+from functools import partial
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -195,6 +197,14 @@ def flatten_bucket_rotations(rotations):
 def enforce_relion_half_volume_x0_hermitian(volume_flat, full_volume_shape):
     """Match RELION BackProjector::enforceHermitianSymmetry on x=0 plane."""
 
+    return _enforce_relion_half_volume_x0_hermitian_jit(
+        volume_flat,
+        tuple(int(value) for value in full_volume_shape),
+    )
+
+
+@partial(jax.jit, static_argnames=("full_volume_shape",))
+def _enforce_relion_half_volume_x0_hermitian_jit(volume_flat, full_volume_shape):
     half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(full_volume_shape)
     vol = jnp.asarray(volume_flat).reshape(half_shape)
     n0, n1, _ = half_shape
