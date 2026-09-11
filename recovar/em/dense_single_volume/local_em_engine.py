@@ -132,6 +132,7 @@ from recovar.em.dense_single_volume.local_big_jit import (
     _noise_image_power_shells_and_per_image,
     _partition_uniform_fixed_capacity_calls,
     _prepare_fixed_capacity_local_call,
+    _LocalBigJitCore,
     _reconstruct_fixed_capacity_score_only_result,
     _relion_wavg_direct_triplet_shells,
     run_deferred_local_exact_noise_core_jit,
@@ -4190,30 +4191,36 @@ def run_local_em_exact(
                         debug_wavg_cutoff_triplet = None
                 else:
                     *big_jit_result, debug_scores, debug_probs = big_jit_result
+            big_jit_core = _LocalBigJitCore._make(big_jit_result[: len(_LocalBigJitCore._fields)])
+            big_jit_extras = tuple(big_jit_result[len(_LocalBigJitCore._fields) :])
+            (
+                Ft_y,
+                Ft_ctf,
+                noise_wsum,
+                noise_img_power,
+                noise_a2,
+                noise_xa,
+                noise_scale_xa,
+                noise_scale_aa,
+                bucket_norm_correction,
+                noise_sigma2_offset,
+                noise_sumw,
+                batch_norm,
+                log_Z,
+                best_log_score,
+                best_argmax,
+                max_posterior,
+                probs_sum_t,
+                reconstruction_probs_sum_t,
+                n_significant_samples,
+                reconstruction_sample_mask,
+                reconstruction_rotation_mask,
+                reconstruction_row_count_jax,
+            ) = big_jit_core
+            summed = None
+            ctf_probs = None
             if return_big_jit_deferred_mstep_inputs:
                 (
-                    Ft_y,
-                    Ft_ctf,
-                    noise_wsum,
-                    noise_img_power,
-                    noise_a2,
-                    noise_xa,
-                    noise_scale_xa,
-                    noise_scale_aa,
-                    bucket_norm_correction,
-                    noise_sigma2_offset,
-                    noise_sumw,
-                    batch_norm,
-                    log_Z,
-                    best_log_score,
-                    best_argmax,
-                    max_posterior,
-                    probs_sum_t,
-                    reconstruction_probs_sum_t,
-                    n_significant_samples,
-                    reconstruction_sample_mask,
-                    reconstruction_rotation_mask,
-                    reconstruction_row_count_jax,
                     reconstruction_probs,
                     shifted_recon_split,
                     ctf2_over_nv_recon,
@@ -4224,41 +4231,16 @@ def run_local_em_exact(
                     deferred_source_vdam_ctf,
                     deferred_source_vdam_minvsigma2,
                     deferred_source_vdam_ctf_probs,
-                ) = big_jit_result
-                summed = None
-                ctf_probs = None
+                ) = big_jit_extras
             elif return_big_jit_mstep_tensors and return_source_vdam_operands:
                 (
-                    Ft_y,
-                    Ft_ctf,
-                    noise_wsum,
-                    noise_img_power,
-                    noise_a2,
-                    noise_xa,
-                    noise_scale_xa,
-                    noise_scale_aa,
-                    bucket_norm_correction,
-                    noise_sigma2_offset,
-                    noise_sumw,
-                    batch_norm,
-                    log_Z,
-                    best_log_score,
-                    best_argmax,
-                    max_posterior,
-                    probs_sum_t,
-                    reconstruction_probs_sum_t,
-                    n_significant_samples,
-                    reconstruction_sample_mask,
-                    reconstruction_rotation_mask,
-                    reconstruction_row_count_jax,
                     source_vdam_images,
                     source_vdam_ctf,
                     source_vdam_minvsigma2,
                     source_vdam_posterior,
                     source_vdam_reference,
                     ctf_probs,
-                ) = big_jit_result
-                summed = None
+                ) = big_jit_extras
                 if bpref_contribution_capture_active:
                     # The source-faithful production route deliberately avoids
                     # materializing the large (particle, rotation, pixel)
@@ -4280,59 +4262,11 @@ def run_local_em_exact(
                         image_shape,
                     )
             elif return_big_jit_mstep_tensors:
-                (
-                    Ft_y,
-                    Ft_ctf,
-                    noise_wsum,
-                    noise_img_power,
-                    noise_a2,
-                    noise_xa,
-                    noise_scale_xa,
-                    noise_scale_aa,
-                    bucket_norm_correction,
-                    noise_sigma2_offset,
-                    noise_sumw,
-                    batch_norm,
-                    log_Z,
-                    best_log_score,
-                    best_argmax,
-                    max_posterior,
-                    probs_sum_t,
-                    reconstruction_probs_sum_t,
-                    n_significant_samples,
-                    reconstruction_sample_mask,
-                    reconstruction_rotation_mask,
-                    reconstruction_row_count_jax,
-                    summed,
-                    ctf_probs,
-                ) = big_jit_result
-            else:
-                (
-                    Ft_y,
-                    Ft_ctf,
-                    noise_wsum,
-                    noise_img_power,
-                    noise_a2,
-                    noise_xa,
-                    noise_scale_xa,
-                    noise_scale_aa,
-                    bucket_norm_correction,
-                    noise_sigma2_offset,
-                    noise_sumw,
-                    batch_norm,
-                    log_Z,
-                    best_log_score,
-                    best_argmax,
-                    max_posterior,
-                    probs_sum_t,
-                    reconstruction_probs_sum_t,
-                    n_significant_samples,
-                    reconstruction_sample_mask,
-                    reconstruction_rotation_mask,
-                    reconstruction_row_count_jax,
-                ) = big_jit_result
-                summed = None
-                ctf_probs = None
+                summed, ctf_probs = big_jit_extras
+            elif big_jit_extras:
+                raise ValueError(
+                    f"big-JIT result carries {len(big_jit_extras)} values past the {len(_LocalBigJitCore._fields)}-value core"
+                )
             if group_ids_np is None:
                 noise_scale_xa = None
                 noise_scale_aa = None

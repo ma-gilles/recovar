@@ -1526,6 +1526,38 @@ def _project_local_half_spectrum(
     )
 
 
+class _LocalBigJitCore(NamedTuple):
+    """The 22 leading values of every ``run_local_bucket_big_jit`` result.
+
+    Results stay plain tuples ``(*core, *extras)``: the fixed-capacity scan
+    slices carry positions out of them and the BPref transaction queue indexes
+    the M-step slots, so this type owns only the layout and its names.
+    """
+
+    Ft_y: jax.Array
+    Ft_ctf: jax.Array
+    noise_wsum: jax.Array
+    noise_img_power: jax.Array
+    noise_a2: jax.Array
+    noise_xa: jax.Array
+    noise_scale_xa: jax.Array
+    noise_scale_aa: jax.Array
+    bucket_norm_correction: jax.Array
+    noise_sigma2_offset: jax.Array
+    noise_sumw: jax.Array
+    batch_norm: jax.Array
+    log_Z: jax.Array
+    best_log_score: jax.Array
+    best_argmax: jax.Array
+    max_posterior: jax.Array
+    probs_sum_t: jax.Array
+    reconstruction_probs_sum_t: jax.Array
+    n_significant_samples: jax.Array
+    reconstruction_sample_mask: jax.Array
+    reconstruction_rotation_mask: jax.Array
+    reconstruction_row_count: jax.Array
+
+
 @partial(
     jax.jit,
     # Ft_y and Ft_ctf are loop-carried M-step accumulators.  Donating them
@@ -2579,28 +2611,30 @@ def run_local_bucket_big_jit(
         )
         reconstruction_row_count = jnp.sum(reconstruction_rotation_mask & rotation_mask).astype(jnp.int32)
         result = (
-            Ft_y,
-            Ft_ctf,
-            noise_wsum,
-            noise_img_power,
-            noise_a2,
-            noise_xa,
-            noise_scale_xa,
-            noise_scale_aa,
-            jnp.zeros((batch_size,), dtype=jnp.float32),
-            noise_sigma2_offset,
-            noise_sumw,
-            batch_norm,
-            log_Z,
-            best_log_score,
-            best_argmax,
-            max_posterior,
-            probs_sum_t,
-            reconstruction_probs_sum_t,
-            n_significant_samples,
-            reconstruction_sample_mask,
-            reconstruction_rotation_mask,
-            reconstruction_row_count,
+            *_LocalBigJitCore(
+                Ft_y,
+                Ft_ctf,
+                noise_wsum,
+                noise_img_power,
+                noise_a2,
+                noise_xa,
+                noise_scale_xa,
+                noise_scale_aa,
+                jnp.zeros((batch_size,), dtype=jnp.float32),
+                noise_sigma2_offset,
+                noise_sumw,
+                batch_norm,
+                log_Z,
+                best_log_score,
+                best_argmax,
+                max_posterior,
+                probs_sum_t,
+                reconstruction_probs_sum_t,
+                n_significant_samples,
+                reconstruction_sample_mask,
+                reconstruction_rotation_mask,
+                reconstruction_row_count,
+            ),
         )
         return _append_debug_outputs(
             result,
@@ -2760,28 +2794,30 @@ def run_local_bucket_big_jit(
                 dtype=jnp.complex64,
             )
         result = (
-            Ft_y,
-            Ft_ctf,
-            noise_wsum,
-            noise_img_power,
-            noise_a2,
-            noise_xa,
-            noise_scale_xa,
-            noise_scale_aa,
-            jnp.zeros((batch_size,), dtype=jnp.float32),
-            noise_sigma2_offset,
-            noise_sumw,
-            batch_norm,
-            log_Z,
-            best_log_score,
-            best_argmax,
-            max_posterior,
-            probs_sum_t,
-            reconstruction_probs_sum_t,
-            n_significant_samples,
-            reconstruction_sample_mask,
-            reconstruction_rotation_mask,
-            reconstruction_row_count,
+            *_LocalBigJitCore(
+                Ft_y,
+                Ft_ctf,
+                noise_wsum,
+                noise_img_power,
+                noise_a2,
+                noise_xa,
+                noise_scale_xa,
+                noise_scale_aa,
+                jnp.zeros((batch_size,), dtype=jnp.float32),
+                noise_sigma2_offset,
+                noise_sumw,
+                batch_norm,
+                log_Z,
+                best_log_score,
+                best_argmax,
+                max_posterior,
+                probs_sum_t,
+                reconstruction_probs_sum_t,
+                n_significant_samples,
+                reconstruction_sample_mask,
+                reconstruction_rotation_mask,
+                reconstruction_row_count,
+            ),
             reconstruction_probs,
             shifted_recon_split,
             ctf2_over_nv_recon,
@@ -3027,28 +3063,30 @@ def run_local_bucket_big_jit(
     reconstruction_row_count = jnp.sum(reconstruction_rotation_mask & rotation_mask).astype(jnp.int32)
     if return_mstep_tensors:
         result = (
-            Ft_y,
-            Ft_ctf,
-            noise_wsum,
-            noise_img_power,
-            noise_a2,
-            noise_xa,
-            noise_scale_xa,
-            noise_scale_aa,
-            bucket_norm_correction,
-            noise_sigma2_offset,
-            noise_sumw,
-            batch_norm,
-            log_Z,
-            best_log_score,
-            best_argmax,
-            max_posterior,
-            probs_sum_t,
-            reconstruction_probs_sum_t,
-            n_significant_samples,
-            reconstruction_sample_mask,
-            reconstruction_rotation_mask,
-            reconstruction_row_count,
+            *_LocalBigJitCore(
+                Ft_y,
+                Ft_ctf,
+                noise_wsum,
+                noise_img_power,
+                noise_a2,
+                noise_xa,
+                noise_scale_xa,
+                noise_scale_aa,
+                bucket_norm_correction,
+                noise_sigma2_offset,
+                noise_sumw,
+                batch_norm,
+                log_Z,
+                best_log_score,
+                best_argmax,
+                max_posterior,
+                probs_sum_t,
+                reconstruction_probs_sum_t,
+                n_significant_samples,
+                reconstruction_sample_mask,
+                reconstruction_rotation_mask,
+                reconstruction_row_count,
+            ),
         )
         if return_source_vdam_operands:
             result = result + (
@@ -3077,28 +3115,30 @@ def run_local_bucket_big_jit(
             wavg_cutoff_triplet=debug_wavg_cutoff_triplet,
         )
     result = (
-        Ft_y,
-        Ft_ctf,
-        noise_wsum,
-        noise_img_power,
-        noise_a2,
-        noise_xa,
-        noise_scale_xa,
-        noise_scale_aa,
-        bucket_norm_correction,
-        noise_sigma2_offset,
-        noise_sumw,
-        batch_norm,
-        log_Z,
-        best_log_score,
-        best_argmax,
-        max_posterior,
-        probs_sum_t,
-        reconstruction_probs_sum_t,
-        n_significant_samples,
-        reconstruction_sample_mask,
-        reconstruction_rotation_mask,
-        reconstruction_row_count,
+        *_LocalBigJitCore(
+            Ft_y,
+            Ft_ctf,
+            noise_wsum,
+            noise_img_power,
+            noise_a2,
+            noise_xa,
+            noise_scale_xa,
+            noise_scale_aa,
+            bucket_norm_correction,
+            noise_sigma2_offset,
+            noise_sumw,
+            batch_norm,
+            log_Z,
+            best_log_score,
+            best_argmax,
+            max_posterior,
+            probs_sum_t,
+            reconstruction_probs_sum_t,
+            n_significant_samples,
+            reconstruction_sample_mask,
+            reconstruction_rotation_mask,
+            reconstruction_row_count,
+        ),
     )
     return _append_debug_outputs(
         result,

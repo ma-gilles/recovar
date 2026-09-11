@@ -51,6 +51,7 @@ case counts, provenance and limits.
 | --- | --- | --- | --- |
 | see receipt | EM handoff integrated: the RELION projector crop is sized from the particle-image window (not the model sphere) and local-search rotation ids and hard assignments are int64; a numerical fix that is a no-op when the optics pixel equals the model pixel (all synthetic fixtures unchanged); three projection-cache test callers migrated to the peer's `rows_for_bucket` contract | peer numerical fix | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_crop_fix_integration_20260911/result.json) |
 | see receipt | `types.sparse_pass2_result` owns the sparse pass-2 return tuple and the order of its optional entries (statistics, score log-Z, noise, source Eulers); the two pass-2 functions had four branches building it by concatenation, and the historical rule that the score log-Z rides with the statistics is now stated once | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/sparse_pass2_result_tuple_owner_20260911/result.json) |
+| see receipt | `local_big_jit._LocalBigJitCore` names the 22-value core that every big-JIT result carries; the four producer sites build it and `local_em_engine` unpacks it once (core, then the deferred / source-VDAM / M-step-tensor extras per layout) instead of four positional 22-name unpacks; the wire format stays a plain tuple for the fixed-capacity scan carry window and the BPref transaction queue | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/local_big_jit_result_layout_owner_20260911/result.json) |
 | see receipt | `sparse_pass2_bucketed._gaussian_algebraic_score_terms` owns the batched algebraic Gaussian score terms (weighted cross einsum, projection norm, prior-free and prior-added scores) shared by the production algebraic scorer and its components variant; traced programs identical | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/gaussian_algebraic_terms_owner_20260911/result.json) |
 | see receipt | `pass2_diagnostics._optional_operand_row_fields` owns the ten optional RELION operand captures of the K=1 pass-2 dump (absent operands recorded as empty arrays or NaN); the selected-rows and effective-grid schemas shared two 57-line blocks | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pass2_dump_operand_fields_owner_20260911/result.json) |
 | see receipt | the dense engine binds its per-batch score-block keywords once (`score_block_kwargs`) after the last scoring-operand rebinding and passes them to both the pass-1 and pass-2 `_score_rotation_block` calls, which keep only their block projections | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_engine_score_block_kwargs_20260911/result.json) |
@@ -131,6 +132,13 @@ repairs) keep their paragraphs in the
   (passing on `bd602096a`) was cut off. Not admitted; the K1 cold-start quality and
   runtime gap joins the K1 completion failure in the numerical workstream's hand-off
   ([record](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_fast_tier_dd7d9b218_h100_20260911/admission_record.json)).
+  The rerun on frozen `11bc4f0c2` (job 13737449, della-h21g4 H100) completed all seven
+  cases in 3537 s: 5 pass (K1 replay 0.999944/|ΔPmax| 1.9e-4, K1 perturbation replay,
+  K-class cold start, strict K-class cold start, strict oversampled K-class cold start
+  worst class 0.99997 in 190 s), K-class replay keeps its known failure (|ΔPmax| 1.0,
+  class correlation 0.991), and the K1 cold start fails the same gates as on
+  `dd7d9b218` (half correlations 0.994696/0.994417 vs 0.999; Pmax 0.8866 vs 0.9647;
+  2294 s). Not admitted; unchanged from the numerical hand-off.
   Earlier tier runs 13704244 (`400ad81e4`, 6 of 7 failed) remain preserved.
 - **K1 100k/256 completion** on frozen `9870438cd` (job 13709837, exclusive
   H100, `relion_cuda` images) **completed without qualifying**: 17 iterations
@@ -178,8 +186,8 @@ repairs) keep their paragraphs in the
 - **EM workstream A/B on the crop fixes** (13735554 base `a0b0a8141`, 13735555
   `7a3fdb665`; `pr179_crop_fixes_validation_20260911`): both jobs spent their
   60-minute limit in the per-job CUDA build and ended FAILED before any parity
-  case ran; no A/B result exists yet. The fast tier on frozen `11bc4f0c2`
-  (13737448/13737449/13737450) is queued.
+  case ran; no A/B result exists yet (resubmitted as 13737347). The fast tier on
+  frozen `11bc4f0c2` (13737449) is recorded above.
 - No gate has moved. Moving HEAD is qualified only by CPU comparisons and the
   controller panel; production-F32 quality, convergence/finalization and
   matched-GPU runtime remain open (next section).
@@ -315,8 +323,9 @@ this page does not schedule or authorize duplicate runs.
 
 The fast-tier rerun on frozen `dd7d9b218` (job 13726940) and the exactly-K4
 completion (13712372: GT FSC-AUC gate failed by -0.000519, 6.20x RELION wall)
-are recorded above; record the fast tier on frozen `11bc4f0c2`
-(13737448/13737449/13737450) when it finishes. Between results,
+and the fast tier on frozen `11bc4f0c2` (13737449: 5 pass, 2 known failures)
+are recorded above; the VDAM-handoff GPU validation pair on the published source
+(`vdam_port_gpu_validation_97f6d6b33_20260911`) is pending. Between results,
 continue one bounded structural package at a time from the cleanup plan.
 Remaining candidates after the September 10–11 packages (J through OO): a named
 result type for the four positional big-JIT output layouts unpacked in
