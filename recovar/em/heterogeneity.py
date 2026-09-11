@@ -157,35 +157,6 @@ def compute_bLambdainvPU_terms(
 
 
 @eqx.filter_jit
-def compute_bHb_terms_eqx(
-    config: ForwardModelConfig, mean_projections, u_projections, s, batch, translations, ctf_params, noise_variance
-):
-    """Equinox version of compute_bHb_terms (11 → 8 params)."""
-    H, b = compute_little_H_b(
-        mean_projections,
-        u_projections,
-        s,
-        batch,
-        translations,
-        ctf_params,
-        config.ctf,
-        noise_variance,
-        config.voxel_size,
-        config.image_shape,
-        config.process_fn,
-    )
-    H_chol, low = jax.scipy.linalg.cho_factor(H, lower=True)
-    Hinvb = jax.scipy.linalg.cho_solve((H_chol, low), b, overwrite_b=False, check_finite=True)
-    bHinvb = jnp.sum(jnp.conj(b) * Hinvb, axis=-2)
-    log_det = 2 * jnp.sum(jnp.log(jnp.abs(batch_batch_diag(H_chol))), axis=-1)
-    half_inv_logdet = -0.5 * log_det * 2
-    log_det_H = half_inv_logdet
-    logger.warning("Make sure this is correct...")
-    summed = bHinvb + log_det_H[..., None]
-    return summed.transpose(1, 0, 2)
-
-
-@eqx.filter_jit
 def sum_up_images_fixed_rots_covariance_precompute_eqx(config: ForwardModelConfig, batch, translations, ctf_params):
     """Equinox version of sum_up_images_fixed_rots_covariance_precompute (7 → 4 params)."""
     CTF = config.compute_ctf(ctf_params)

@@ -620,9 +620,6 @@ def read_dispatch_records(path: str | Path, *, iteration: int) -> dict[int, tupl
     return records
 
 
-def read_dispatch_owners(path: str | Path, *, iteration: int) -> dict[int, int]:
-    return {part: rank for part, (rank, _position) in read_dispatch_records(path, iteration=iteration).items()}
-
 
 def read_dispatch_schedule_records(path: str | Path, *, iteration: int) -> dict[int, tuple[int, int]]:
     with np.load(path, allow_pickle=False) as payload:
@@ -651,9 +648,6 @@ def read_dispatch_schedule_records(path: str | Path, *, iteration: int) -> dict[
         for position, (part, owner) in enumerate(zip(part_ids, owners_zero_based, strict=True))
     }
 
-
-def read_dispatch_schedule_owners(path: str | Path, *, iteration: int) -> dict[int, int]:
-    return {part: rank for part, (rank, _position) in read_dispatch_schedule_records(path, iteration=iteration).items()}
 
 
 def analyze_summaries(summaries: list[WinnerSummary]) -> dict:
