@@ -130,9 +130,6 @@ def relion_optics_image_current_sizes(
 
 
 # Default threshold for when adaptive pass 2 is skipped.
-ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION = 0.5
-
-
 def compute_coarse_image_size(
     angular_step_deg,
     pixel_size,
@@ -192,28 +189,6 @@ def clamp_relion_coarse_image_size(coarse_size, current_size, ori_size):
     if current_size is None:
         return coarse_size
     return min(int(current_size), coarse_size)
-
-
-def should_skip_adaptive_pass2(
-    significant_counts,
-    n_rotations,
-    n_translations,
-    *,
-    threshold=ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION,
-):
-    """Return whether adaptive pass 2 should be skipped for this batch.
-
-    RELION's two-pass search only helps when significance pruning is actually
-    selective. If most coarse samples remain significant, the fine pass is pure
-    overhead. We therefore disable pass 2 whenever the mean fraction of
-    significant coarse samples is at least ``threshold``.
-    """
-    if threshold is None or float(threshold) < 0.0:
-        return False, 0.0
-    total_samples = max(int(n_rotations) * int(n_translations), 1)
-    sig_counts = np.asarray(significant_counts, dtype=np.float32)
-    mean_fraction = float(np.mean(sig_counts) / total_samples)
-    return mean_fraction >= float(threshold), mean_fraction
 
 
 def _bootstrap_current_size_relion(init_current_size: int, ori_size: int, incr_size: int = 10) -> int:

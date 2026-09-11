@@ -1024,31 +1024,6 @@ def read_relion_direction_priors(model_star_path, n_classes=None, *, dtype=np.fl
     return np.stack(priors, axis=0)
 
 
-def get_healpix_children(parent_pixels, parent_nside_level):
-    """Return the 4 child HEALPix pixel indices for each parent pixel.
-
-    Uses the NESTED pixel ordering property that each pixel p at nside N
-    has exactly 4 children at nside 2N: 4p, 4p+1, 4p+2, 4p+3 (in NESTED).
-
-    Args:
-        parent_pixels: array-like of RING-ordered pixel indices at nside level
-            ``parent_nside_level``.
-        parent_nside_level: int, HEALPix level of the parent pixels
-            (nside = 2**parent_nside_level).
-
-    Returns:
-        children: int array of length 4 * len(parent_pixels) with RING-ordered
-            child pixel indices at level ``parent_nside_level + 1``.
-            Children of ``parent_pixels[i]`` are at positions ``4*i:4*(i+1)``.
-    """
-    parent_pixels = np.asarray(parent_pixels)
-    nside_parent = 2**parent_nside_level
-    nside_child = 2 * nside_parent
-    parent_nested = hp.ring2nest(nside_parent, parent_pixels)
-    children_nested = 4 * np.repeat(parent_nested, 4) + np.tile(np.arange(4), len(parent_pixels))
-    return hp.nest2ring(nside_child, children_nested)
-
-
 @functools.lru_cache(maxsize=None)
 def _relion_nested_child_offsets(oversampling_order: int) -> np.ndarray:
     """Fine NEST offsets inside one parent pixel in RELION's enumeration order.
@@ -1075,56 +1050,6 @@ def _relion_nested_child_offsets(oversampling_order: int) -> np.ndarray:
             offsets[pos] = nested
             pos += 1
     return offsets
-
-
-def get_oversampled_rotation_grid(parent_pixels, parent_nside_level, oversampling_order=1):
-    """Generate rotation matrices for HEALPix children of the given parent pixels.
-
-    Subdivides each parent pixel ``oversampling_order`` times and returns
-    rotation matrices for all resulting child pixels at all in-plane angles.
-
-    Args:
-        parent_pixels: array-like of RING-ordered pixel indices at level
-            ``parent_nside_level``.
-        parent_nside_level: int, HEALPix level of ``parent_pixels``.
-        oversampling_order: int, number of subdivision levels (default 1).
-
-    Returns:
-        matrices: float64 (N, 3, 3) rotation matrices.
-        parent_map: int (N,) index into ``parent_pixels`` for each rotation.
-    """
-    parent_pixels = np.asarray(parent_pixels)
-    current_pixels = parent_pixels.copy()
-    parent_map = np.arange(len(parent_pixels))
-
-    if int(oversampling_order) > 0:
-        nside_parent = 2**parent_nside_level
-        parent_nested = hp.ring2nest(nside_parent, current_pixels)
-        offsets = _relion_nested_child_offsets(int(oversampling_order))
-        current_pixels = hp.nest2ring(
-            2 ** (parent_nside_level + int(oversampling_order)),
-            parent_nested[:, None] * (4 ** int(oversampling_order)) + offsets[None, :],
-        ).reshape(-1)
-        parent_map = np.repeat(parent_map, offsets.size)
-
-    fine_nside_level = parent_nside_level + oversampling_order
-    fine_nside = 2**fine_nside_level
-    theta, phi = hp.pix2ang(fine_nside, current_pixels)
-
-    angle_res = 360 / (6 * 2**fine_nside_level)
-    n_in_planes = int(np.round(360 / angle_res))
-    in_plane_angles = np.linspace(0, 2 * np.pi, n_in_planes, endpoint=False)
-
-    pix_idx, ip_idx = np.meshgrid(np.arange(len(current_pixels)), np.arange(n_in_planes))
-    pix_idx_flat = pix_idx.ravel()
-
-    euler_angles = np.stack(
-        [phi[pix_idx_flat], theta[pix_idx_flat], in_plane_angles[ip_idx.ravel()]],
-        axis=-1,
-    )
-    euler_angles = euler_angles / (2 * np.pi) * 360  # radians → degrees
-    matrices = utils.R_from_relion(euler_angles)
-    return matrices, parent_map[pix_idx_flat]
 
 
 def get_oversampled_rotation_grid_from_samples(

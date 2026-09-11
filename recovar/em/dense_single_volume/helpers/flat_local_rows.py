@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -230,13 +229,6 @@ def build_pool_flat_local_row_plan(
         dense_rotation_count=dense_rotation_count,
         packed_row_count=packed_row_count,
     )
-
-
-@jax.jit
-def gather_flat_local_rows(values, image_indices, rotation_rows):
-    """Gather ``(image, rotation, ...)`` values in a flat-row plan."""
-
-    return values[image_indices, rotation_rows]
 
 
 def scatter_flat_local_rows(

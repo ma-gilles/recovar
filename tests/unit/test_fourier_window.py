@@ -42,7 +42,6 @@ from recovar.em.dense_single_volume.helpers.scoring import (
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     ALLOWED_CURRENT_SIZES,
     make_frequency_coords_half_np,
-    make_frequency_radius_map_half,
     make_fourier_window_indices_np,
     make_fourier_window_spec,
     quantize_current_size,
@@ -1150,35 +1149,6 @@ class TestQuantizeCurrentSize:
     def test_allowed_sizes_match_module(self):
         """Sanity: module constant matches expected set."""
         assert ALLOWED_CURRENT_SIZES == [16, 24, 32, 48, 64, 80, 96, 104, 112, 120, 128, 160, 192, 224, 256]
-
-
-# ===========================================================================
-# Test 8: Frequency radius map
-# ===========================================================================
-
-
-class TestFrequencyRadiusMap:
-    """Test make_frequency_radius_map_half."""
-
-    def test_dc_at_zero(self):
-        """DC frequency should have radius 0."""
-        radii = make_frequency_radius_map_half(IMAGE_SHAPE)
-        # DC is at the frequency coordinate (0, 0)
-        # Find it: in half-spectrum, the DC pixel should exist
-        coords = ftu.get_k_coordinate_of_each_pixel_half(IMAGE_SHAPE, voxel_size=1, scaled=False)
-        dc_mask = jnp.all(coords == 0, axis=-1)
-        dc_radii = radii[dc_mask]
-        assert len(dc_radii) == 1, "Should have exactly one DC pixel"
-        np.testing.assert_allclose(float(dc_radii[0]), 0.0, atol=1e-6)
-
-    def test_shape(self):
-        radii = make_frequency_radius_map_half(IMAGE_SHAPE)
-        assert radii.shape == (N_HALF,)
-
-    def test_positive(self):
-        """All radii should be non-negative."""
-        radii = make_frequency_radius_map_half(IMAGE_SHAPE)
-        assert jnp.all(radii >= 0)
 
 
 # ===========================================================================

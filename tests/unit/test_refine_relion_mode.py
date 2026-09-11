@@ -86,7 +86,6 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     relion_local_pass1_current_size,
     relion_optics_image_current_sizes,
     shell_index_to_resolution_angstrom,
-    should_skip_adaptive_pass2,
 )
 from recovar.em.dense_single_volume.helpers.score_constraints import DenseScoreConstraints
 from recovar.em.dense_single_volume.helpers.significance import (
@@ -13571,33 +13570,6 @@ class TestRelionModeSmokeTest:
         assert len(result["ave_Pmax_trajectory"]) == n_iters
         # data_vs_prior is populated starting from iteration 1
         assert len(result["data_vs_prior_trajectory"]) <= n_iters
-
-    def test_should_skip_adaptive_pass2_threshold(self):
-        """Adaptive pass 2 should be skipped when mean significant fraction >= 0.5."""
-        skip, frac = should_skip_adaptive_pass2(
-            np.array([60, 60], dtype=np.int32),
-            n_rotations=20,
-            n_translations=3,
-        )
-        assert skip is True
-        assert frac == pytest.approx(1.0)
-
-        skip, frac = should_skip_adaptive_pass2(
-            np.array([12, 18], dtype=np.int32),
-            n_rotations=20,
-            n_translations=3,
-        )
-        assert skip is False
-        assert frac == pytest.approx(0.25)
-
-        skip, frac = should_skip_adaptive_pass2(
-            np.array([60, 60], dtype=np.int32),
-            n_rotations=20,
-            n_translations=3,
-            threshold=-1.0,
-        )
-        assert skip is False
-        assert frac == pytest.approx(0.0)
 
     def test_relion_mode_updates_sigma_offset_from_posterior_noise_stats(
         self,

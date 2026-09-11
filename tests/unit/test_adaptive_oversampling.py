@@ -5,8 +5,8 @@ Tests:
 2. test_significance_mask_cap: Verify max_significants cap is respected.
 3. test_significant_counts_reasonable: Run pass 1 on synthetic data, verify
    per-image significant counts are in range [1, n_samples] (not all-zero or all-selected).
-4. test_oversampled_grid_generation: Verify get_oversampled_rotation_grid produces
-   4x more rotations than input parent pixels.
+4. test_oversampled_grid_generation: Verify get_oversampled_rotation_grid_from_samples
+   produces 4x more rotations than input parent samples.
 5. test_refine_with_adaptive: Run 3 iterations with adaptive_oversampling=1.
    Verify it completes, produces valid output, resolution does not collapse.
 """
@@ -19,7 +19,6 @@ import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
 from helpers.dense_posterior_reference import compute_e_step_weights
-from recovar.em.dense_single_volume.helpers.types import DenseEMResult
 from recovar.em.dense_single_volume.em_engine import run_em
 from recovar.em.dense_single_volume.helpers.oversampling import (
     _find_significant_mask_full_sort,
@@ -790,57 +789,6 @@ class TestSignificantCountsReasonable:
 class TestOversampledGridGeneration:
     """Verify oversampled rotation and translation grid generation."""
 
-    def test_healpix_children_count(self):
-        """get_healpix_children should produce 4 children per parent pixel."""
-        from recovar.em.sampling import get_healpix_children
-
-        parent_pixels = np.array([0, 1, 5, 10])
-        nside_level = 2
-
-        children = get_healpix_children(parent_pixels, nside_level)
-
-        assert len(children) == 4 * len(parent_pixels), (
-            f"Expected {4 * len(parent_pixels)} children, got {len(children)}"
-        )
-
-    def test_oversampled_rotation_grid_size(self):
-        """get_oversampled_rotation_grid should produce the right number of matrices."""
-
-        from recovar.em.sampling import get_oversampled_rotation_grid
-
-        nside_level = 2
-        parent_pixels = np.array([0, 5, 10])
-
-        matrices, parent_map = get_oversampled_rotation_grid(parent_pixels, nside_level, oversampling_order=1)
-
-        # At order 1: 4 children per pixel, each with n_in_planes in-plane angles
-        fine_nside_level = nside_level + 1
-        angle_res = 360 / (6 * 2**fine_nside_level)
-        n_in_planes = int(np.round(360 / angle_res))
-        expected_n = 4 * len(parent_pixels) * n_in_planes
-
-        assert matrices.shape[0] == expected_n, f"Expected {expected_n} oversampled rotations, got {matrices.shape[0]}"
-        assert matrices.shape == (expected_n, 3, 3)
-        assert parent_map.shape == (expected_n,)
-
-    def test_oversampled_rotation_grid_parent_map(self):
-        """parent_map should correctly map children back to parents."""
-        from recovar.em.sampling import get_oversampled_rotation_grid
-
-        nside_level = 2
-        parent_pixels = np.array([0, 3, 7])
-
-        matrices, parent_map = get_oversampled_rotation_grid(parent_pixels, nside_level, oversampling_order=1)
-
-        # parent_map values should be in [0, len(parent_pixels))
-        assert np.all(parent_map >= 0)
-        assert np.all(parent_map < len(parent_pixels))
-
-        # Each parent should appear multiple times (4 children * n_in_planes)
-        for p_idx in range(len(parent_pixels)):
-            n_children = np.sum(parent_map == p_idx)
-            assert n_children > 0, f"Parent {p_idx} has no children in parent_map"
-
     def test_oversampled_rotation_grid_from_samples_size(self):
         """Each coarse orientation sample should expand to 8 children at order 1."""
         from recovar.em.sampling import get_oversampled_rotation_grid_from_samples
@@ -1415,169 +1363,3 @@ class TestMaskedCartesianGrid:
             atol=1e-5,
             rtol=1e-5,
         )
-
-
-# ===========================================================================
-# Test 7: Union cap in compute_pass2_stats
-# ===========================================================================
-
-
-class TestUnionCap:
-    """Verify that compute_pass2_stats respects max_union_pixels cap."""
-
-    def test_returns_none_when_union_exceeds_cap(self):
-        """When the union of significant rotations exceeds max_union_pixels,
-        compute_pass2_stats should return (None, None, None, None)."""
-        from recovar.em.dense_single_volume.helpers.oversampling import compute_pass2_stats
-        from recovar.em.sampling import get_rotation_grid
-
-        # Use a proper HEALPix grid so the pixel/in-plane decomposition works
-        nside_level = 1  # 48 pixels at level 1
-        rotations = get_rotation_grid(nside_level, matrices=True).astype(np.float32)
-        n_rot = rotations.shape[0]
-
-        n_images = 4
-        ds = MockDataset(n_images=n_images, seed=42)
-        volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
-        mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
-        noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
-        translations = jnp.array([[0.0, 0.0]], dtype=jnp.float32)
-
-        # Mask that marks ALL rotations as significant (union covers all pixels)
-        sig_rot_mask = np.ones(n_rot, dtype=bool)
-
-        Ft_y, Ft_ctf, ha, oversampled = compute_pass2_stats(
-            ds,
-            volume,
-            mean_variance,
-            noise_variance,
-            np.asarray(rotations),
-            translations,
-            sig_rot_mask,
-            nside_level=nside_level,
-            disc_type="linear_interp",
-            oversampling_order=1,
-            current_size=None,
-            image_batch_size=n_images,
-            max_union_pixels=5,  # 48 pixels > 5, should trigger fallback
-        )
-
-        assert Ft_y is None, "Expected None when union exceeds cap"
-        assert Ft_ctf is None, "Expected None when union exceeds cap"
-        assert ha is None, "Expected None when union exceeds cap"
-        assert oversampled is None, "Expected None when union exceeds cap"
-
-    def test_proceeds_when_within_cap(self):
-        """When the union is within the cap, pass 2 should proceed normally."""
-        from recovar.em.dense_single_volume.helpers.oversampling import compute_pass2_stats
-        from recovar.em.sampling import get_rotation_grid
-
-        nside_level = 1
-        rotations = get_rotation_grid(nside_level, matrices=True).astype(np.float32)
-        n_rot = rotations.shape[0]
-
-        n_images = 4
-        ds = MockDataset(n_images=n_images, seed=42)
-        volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
-        mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
-        noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
-        translations = jnp.array([[0.0, 0.0]], dtype=jnp.float32)
-
-        # Only mark a few rotations as significant
-        sig_rot_mask = np.zeros(n_rot, dtype=bool)
-        sig_rot_mask[:3] = True  # just 3 rotations
-
-        Ft_y, Ft_ctf, ha, oversampled = compute_pass2_stats(
-            ds,
-            volume,
-            mean_variance,
-            noise_variance,
-            np.asarray(rotations),
-            translations,
-            sig_rot_mask,
-            nside_level=nside_level,
-            disc_type="linear_interp",
-            oversampling_order=1,
-            current_size=None,
-            image_batch_size=n_images,
-            max_union_pixels=1000,  # high cap, should not trigger
-        )
-
-        assert Ft_y is not None, "Expected non-None when within cap"
-        assert Ft_ctf is not None, "Expected non-None when within cap"
-        assert ha is not None, "Expected non-None when within cap"
-        assert oversampled is not None, "Expected non-None when within cap"
-
-    def test_pass2_oversamples_translation_grid(self, monkeypatch):
-        """Pass 2 should evaluate on oversampled translations, not the coarse grid."""
-        from recovar.em.dense_single_volume import em_engine as engine_mod
-        from recovar.em.dense_single_volume.helpers import oversampling as adaptive_mod
-        from recovar.em.sampling import get_rotation_grid
-
-        nside_level = 1
-        rotations = get_rotation_grid(nside_level, matrices=True).astype(np.float32)
-        n_rot = rotations.shape[0]
-
-        ds = MockDataset(n_images=2, seed=42)
-        volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
-        mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
-        noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
-        translations = jnp.array(
-            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
-            dtype=jnp.float32,
-        )
-        sig_rot_mask = np.zeros(n_rot, dtype=bool)
-        sig_rot_mask[:2] = True
-        captured = {}
-
-        def fake_run_em(
-            experiment_dataset,
-            mean,
-            mean_variance,
-            noise_variance,
-            rotations,
-            translations,
-            disc_type,
-            **kwargs,
-        ):
-            _ = (
-                experiment_dataset,
-                mean,
-                mean_variance,
-                noise_variance,
-                rotations,
-                disc_type,
-                kwargs,
-            )
-            captured["translations"] = np.asarray(translations)
-            n_images = ds.n_units
-            ha = np.zeros(n_images, dtype=np.int32)
-            Ft_y = jnp.zeros(ds.volume_size, dtype=ds.dtype)
-            Ft_ctf = jnp.zeros(ds.volume_size, dtype=ds.dtype)
-            return DenseEMResult(mean=jnp.zeros(ds.volume_size, dtype=ds.dtype), hard_assignments=ha, Ft_y=Ft_y, Ft_ctf=Ft_ctf)
-
-        monkeypatch.setattr(engine_mod, "run_em", fake_run_em)
-
-        Ft_y, Ft_ctf, ha, oversampled = adaptive_mod.compute_pass2_stats(
-            ds,
-            volume,
-            mean_variance,
-            noise_variance,
-            np.asarray(rotations),
-            translations,
-            sig_rot_mask,
-            nside_level=nside_level,
-            disc_type="linear_interp",
-            oversampling_order=1,
-            current_size=None,
-            image_batch_size=ds.n_units,
-            max_union_pixels=1000,
-            translation_step=1.0,
-        )
-
-        assert Ft_y is not None
-        assert Ft_ctf is not None
-        assert ha is not None
-        assert oversampled is not None
-        assert "translations" in captured
-        assert captured["translations"].shape[0] == 4 * translations.shape[0]

@@ -7,23 +7,7 @@ set of padded shape classes and pass masks/counts for the valid rows.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
-
-
-@dataclass(frozen=True)
-class ShapeBucket:
-    """A compile-cache shape class for one padded EM bucket."""
-
-    image_batch_size: int
-    rotation_count: int
-    translation_count: int
-    half_pixel_count: int
-
-    @property
-    def pose_count(self) -> int:
-        return int(self.rotation_count) * int(self.translation_count)
 
 
 def round_up_to_multiple(value: int, multiple: int) -> int:
@@ -76,54 +60,6 @@ def coarse_bucket(value: int, *, small_power2_max: int, large_multiple: int, min
     if value <= int(small_power2_max):
         return power_of_two_bucket(value, minimum=minimum, maximum=small_power2_max)
     return round_up_to_multiple(value, large_multiple)
-
-
-def dense_shape_bucket(
-    *,
-    image_batch_size: int,
-    rotation_count: int,
-    translation_count: int,
-    half_pixel_count: int,
-    image_batch_multiple: int = 8,
-    rotation_multiple: int = 64,
-    translation_multiple: int = 1,
-    half_pixel_multiple: int = 256,
-) -> ShapeBucket:
-    """Return the padded shape class for a dense/global EM bucket."""
-
-    return ShapeBucket(
-        image_batch_size=round_up_to_multiple(image_batch_size, image_batch_multiple),
-        rotation_count=round_up_to_multiple(rotation_count, rotation_multiple),
-        translation_count=round_up_to_multiple(translation_count, translation_multiple),
-        half_pixel_count=round_up_to_multiple(half_pixel_count, half_pixel_multiple),
-    )
-
-
-def local_shape_bucket(
-    *,
-    image_batch_size: int,
-    local_rotation_count: int,
-    translation_count: int,
-    half_pixel_count: int,
-    image_batch_multiple: int = 8,
-    local_rotation_small_max: int = 4096,
-    local_rotation_large_multiple: int = 512,
-    translation_multiple: int = 1,
-    half_pixel_multiple: int = 256,
-) -> ShapeBucket:
-    """Return the padded shape class for an exact-local EM bucket."""
-
-    return ShapeBucket(
-        image_batch_size=round_up_to_multiple(image_batch_size, image_batch_multiple),
-        rotation_count=coarse_bucket(
-            local_rotation_count,
-            small_power2_max=local_rotation_small_max,
-            large_multiple=local_rotation_large_multiple,
-            minimum=16,
-        ),
-        translation_count=round_up_to_multiple(translation_count, translation_multiple),
-        half_pixel_count=round_up_to_multiple(half_pixel_count, half_pixel_multiple),
-    )
 
 
 def pad_axis(array, axis: int, size: int, *, value=0):

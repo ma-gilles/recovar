@@ -3,8 +3,6 @@ import pytest
 
 from recovar.em.dense_single_volume.shape_buckets import (
     coarse_bucket,
-    dense_shape_bucket,
-    local_shape_bucket,
     pad_axis,
     power_bucket,
     power_of_two_bucket,
@@ -35,41 +33,6 @@ def test_coarse_bucket():
     assert coarse_bucket(1, small_power2_max=64, large_multiple=16, minimum=16) == 16
     assert coarse_bucket(33, small_power2_max=64, large_multiple=16) == 64
     assert coarse_bucket(65, small_power2_max=64, large_multiple=16) == 80
-
-
-def test_dense_shape_bucket_rounds_axes_independently():
-    bucket = dense_shape_bucket(
-        image_batch_size=9,
-        rotation_count=65,
-        translation_count=3,
-        half_pixel_count=513,
-    )
-    assert bucket.image_batch_size == 16
-    assert bucket.rotation_count == 128
-    assert bucket.translation_count == 3
-    assert bucket.half_pixel_count == 768
-    assert bucket.pose_count == 384
-
-
-def test_local_shape_bucket_uses_coarse_rotation_classes():
-    small = local_shape_bucket(
-        image_batch_size=1,
-        local_rotation_count=65,
-        translation_count=2,
-        half_pixel_count=129,
-        local_rotation_small_max=128,
-        local_rotation_large_multiple=64,
-    )
-    large = local_shape_bucket(
-        image_batch_size=1,
-        local_rotation_count=129,
-        translation_count=2,
-        half_pixel_count=129,
-        local_rotation_small_max=128,
-        local_rotation_large_multiple=64,
-    )
-    assert small.rotation_count == 128
-    assert large.rotation_count == 192
 
 
 def test_pad_axis_preserves_values_and_fills_constant():

@@ -244,29 +244,6 @@ class StableFourierWindowShapePlan:
         )
 
 
-def make_frequency_radius_map_half(image_shape):
-    """Return (N_half,) array of frequency radius at each pixel of the half-spectrum.
-
-    Uses the same coordinate system as ``ftu.get_k_coordinate_of_each_pixel_half``:
-    unscaled integer frequency indices in the packed half-spectrum layout.
-
-    Parameters
-    ----------
-    image_shape : tuple (H, W)
-        Original real-space image shape.
-
-    Returns
-    -------
-    radii : jnp.ndarray, shape (N_half,), dtype float32
-        Euclidean distance from DC for each half-spectrum pixel.
-    """
-    # Get (N_half, 2) frequency coordinates in unscaled integer units
-    coords = ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False)
-    # coords[:, 0] is x (col direction), coords[:, 1] is y (row direction)
-    # due to indexing="xy" in meshgrid
-    return jnp.sqrt(jnp.sum(coords**2, axis=-1))
-
-
 def make_frequency_coords_half_np(image_shape):
     """Return cached packed-half coordinates from the host geometry planner."""
     return ftu.get_k_coordinate_of_each_pixel_half_np(image_shape, voxel_size=1, scaled=False)

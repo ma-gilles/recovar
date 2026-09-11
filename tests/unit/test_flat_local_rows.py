@@ -10,7 +10,6 @@ from recovar.em.dense_single_volume.helpers.flat_local_rows import (
     build_dense_to_flat_local_row_lookup,
     build_pool_flat_local_row_plan,
     encode_flat_local_row_plan,
-    gather_flat_local_rows,
     map_dense_local_rows_to_flat_rows,
     scatter_flat_local_rows,
 )
@@ -72,11 +71,7 @@ def test_flat_row_gather_and_scatter_restore_present_dense_rows_exactly():
         packed_row_count=712,
     )
     dense = np.arange(5 * dense_rotation_count * 2, dtype=np.float32).reshape(5, dense_rotation_count, 2)
-    gathered = gather_flat_local_rows(
-        jnp.asarray(dense),
-        jnp.asarray(plan.image_indices),
-        jnp.asarray(plan.rotation_rows),
-    )
+    gathered = jnp.asarray(dense)[jnp.asarray(plan.image_indices), jnp.asarray(plan.rotation_rows)]
     gathered = gathered.at[jnp.logical_not(jnp.asarray(plan.present_mask))].set(
         jnp.nan,
     )
