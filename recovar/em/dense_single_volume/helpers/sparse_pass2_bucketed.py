@@ -4515,6 +4515,133 @@ def _relion_cuda_pixel_correction_from_rfloat_ctf(
 _RELION_CUDA_POWERCLASS_BLOCK_SIZE = 128
 
 
+class _RelionPowerClassOperands(NamedTuple):
+    """RELION ``powerClass`` operands of one flattened centred rfft image batch."""
+
+    relion_image: jnp.ndarray
+    real_dtype: object
+    image_height: int
+    image_width: int
+    half_width: int
+    resolution_limit: object
+    shell: np.ndarray
+    valid: np.ndarray
+
+
+def _relion_powerclass_resolution_limit(current_size, runtime_current_size, *, image_width):
+    """RELION's first high-resolution shell, ``current_size / 2 + 1`` (static or traced)."""
+
+    if runtime_current_size is None:
+        if current_size is None:
+            current_size = image_width
+        return int(current_size) // 2 + 1
+    return jnp.asarray(runtime_current_size, dtype=jnp.int32) // 2 + 1
+
+
+def _relion_powerclass_packed_image(processed_score_half, *, image_shape, dtype=None):
+    """Repack centred rfft images into RELION's unshifted ``Faux`` layout.
+
+    RELION's packed rows are ``0, +1, ..., +Nyquist, -Nyquist+1, ..., -1`` and
+    its FFT amplitudes are smaller than RECOVAR's by the real-space pixel
+    count. ``dtype`` forces the complex working precision (the native kernels
+    take complex64); otherwise complex128 inputs keep double precision.
+    Returns ``(relion_image, real_dtype, image_height, image_width, half_width)``.
+    """
+
+    image_height = int(image_shape[0])
+    image_width = int(image_shape[1])
+    if image_height != image_width:
+        raise ValueError(f"RELION powerClass parity requires square images, got {image_shape}")
+    half_width = image_width // 2 + 1
+    if dtype is None:
+        processed_score_half = jnp.asarray(processed_score_half)
+        complex_dtype = (
+            jnp.complex128
+            if processed_score_half.dtype == jnp.dtype(jnp.complex128)
+            else jnp.complex64
+        )
+        processed_score_half = processed_score_half.astype(complex_dtype)
+    else:
+        complex_dtype = dtype
+        processed_score_half = jnp.asarray(processed_score_half, dtype=complex_dtype)
+    real_dtype = jnp.float64 if complex_dtype == jnp.complex128 else jnp.float32
+    if processed_score_half.ndim != 2 or processed_score_half.shape[-1] != image_height * half_width:
+        raise ValueError(
+            "RELION powerClass input must be flattened centred rfft images, got "
+            f"{processed_score_half.shape} for image_shape={image_shape}"
+        )
+    relion_image = jnp.roll(
+        processed_score_half.reshape((-1, image_height, half_width)),
+        -(image_height // 2),
+        axis=1,
+    ).reshape((processed_score_half.shape[0], -1))
+    relion_image = relion_image / jnp.asarray(image_height * image_width, dtype=real_dtype)
+    return relion_image, real_dtype, image_height, image_width, half_width
+
+
+def _relion_powerclass_operands(processed_score_half, *, image_shape, current_size, runtime_current_size):
+    """RELION ``powerClass`` operands for the JAX reproductions.
+
+    Besides the packed image this supplies the integer shell of every packed
+    pixel (CUDA ``__float2int_rn(sqrtf(...))``, or the double variant under
+    ``ACC_DOUBLE_PRECISION``) and the kernel's pixel validity: shells 1 to
+    ``half_width - 1`` excluding the redundant negative-row DC column.
+    """
+
+    relion_image, real_dtype, image_height, image_width, half_width = _relion_powerclass_packed_image(
+        processed_score_half, image_shape=image_shape
+    )
+    resolution_limit = _relion_powerclass_resolution_limit(
+        current_size, runtime_current_size, image_width=image_width
+    )
+    rows = np.arange(image_height, dtype=np.int32)[:, None]
+    columns = np.arange(half_width, dtype=np.int32)[None, :]
+    signed_rows = np.where(rows < half_width, rows, rows - image_height)
+    radius_squared = columns * columns + signed_rows * signed_rows
+    shell_real_dtype = np.float64 if real_dtype == jnp.float64 else np.float32
+    shell = np.rint(np.sqrt(radius_squared.astype(shell_real_dtype))).astype(np.int32)
+    valid = (
+        (shell > 0)
+        & (shell < half_width)
+        & ~((columns == 0) & (signed_rows < 0))
+    ).reshape(-1)
+    return _RelionPowerClassOperands(
+        relion_image, real_dtype, image_height, image_width, half_width, resolution_limit, shell, valid
+    )
+
+
+def _relion_powerclass_native_spectrum_highres(processed_score_half, *, image_shape, current_size, runtime_current_size):
+    """Run the native CUDA ``powerClass`` atomics on complex64 packed images.
+
+    Returns the per-image spectrum with the block-tree ``highres_Xi2`` scalar
+    appended, together with ``(image_height, image_width, half_width)``.
+    """
+
+    from recovar import cuda_backproject
+
+    relion_image, _real_dtype, image_height, image_width, half_width = _relion_powerclass_packed_image(
+        processed_score_half, image_shape=image_shape, dtype=jnp.complex64
+    )
+    relion_image = relion_image.astype(jnp.complex64)
+    if runtime_current_size is None:
+        spectrum_and_highres = cuda_backproject.relion_powerclass_spectrum_highres_f32(
+            relion_image,
+            xdim=half_width,
+            ydim=image_height,
+            resolution_limit=int(current_size) // 2 + 1,
+        )
+    else:
+        spectrum_and_highres = (
+            cuda_backproject.relion_powerclass_spectrum_highres_runtime_f32(
+                relion_image,
+                jnp.asarray(runtime_current_size, dtype=jnp.int32) // 2 + 1,
+                xdim=half_width,
+                ydim=image_height,
+            )
+        )
+    return spectrum_and_highres, image_height, image_width, half_width
+
+
 @partial(jax.jit, static_argnames=("image_shape", "current_size"))
 def _relion_cuda_powerclass_highres_xi2_half(
     processed_score_half,
@@ -4540,55 +4667,16 @@ def _relion_cuda_powerclass_highres_xi2_half(
     per-block arithmetic is fixed.
     """
 
-    image_height = int(image_shape[0])
-    image_width = int(image_shape[1])
-    if image_height != image_width:
-        raise ValueError(f"RELION powerClass parity requires square images, got {image_shape}")
-    half_width = image_width // 2 + 1
-    processed_score_half = jnp.asarray(processed_score_half)
-    complex_dtype = (
-        jnp.complex128
-        if processed_score_half.dtype == jnp.dtype(jnp.complex128)
-        else jnp.complex64
+    operands = _relion_powerclass_operands(
+        processed_score_half,
+        image_shape=image_shape,
+        current_size=current_size,
+        runtime_current_size=runtime_current_size,
     )
-    real_dtype = jnp.float64 if complex_dtype == jnp.complex128 else jnp.float32
-    processed_score_half = processed_score_half.astype(complex_dtype)
-    if processed_score_half.ndim != 2 or processed_score_half.shape[-1] != image_height * half_width:
-        raise ValueError(
-            "RELION powerClass input must be flattened centred rfft images, got "
-            f"{processed_score_half.shape} for image_shape={image_shape}"
-        )
-    if runtime_current_size is None:
-        if current_size is None:
-            current_size = image_width
-        resolution_limit = int(current_size) // 2 + 1
-    else:
-        resolution_limit = jnp.asarray(runtime_current_size, dtype=jnp.int32) // 2 + 1
-
-    # RELION's packed rows are 0,+1,...,+Nyquist,-Nyquist+1,...,-1. RECOVAR's
-    # rows are fftshift-centred, so move the first non-negative row to index 0.
-    relion_image = jnp.roll(
-        processed_score_half.reshape((-1, image_height, half_width)),
-        -(image_height // 2),
-        axis=1,
-    ).reshape((processed_score_half.shape[0], -1))
-    relion_image = relion_image / jnp.asarray(image_height * image_width, dtype=real_dtype)
-
-    rows = np.arange(image_height, dtype=np.int32)[:, None]
-    columns = np.arange(half_width, dtype=np.int32)[None, :]
-    signed_rows = np.where(rows < half_width, rows, rows - image_height)
-    radius_squared = columns * columns + signed_rows * signed_rows
-    # CUDA uses __float2int_rn(sqrtf(...)) normally and
-    # __double2int_rn(sqrt(...)) under ACC_DOUBLE_PRECISION.
-    shell_real_dtype = np.float64 if real_dtype == jnp.float64 else np.float32
-    shell = np.rint(np.sqrt(radius_squared.astype(shell_real_dtype))).astype(np.int32)
-    valid_base = (
-        (shell > 0)
-        & (shell < half_width)
-        & ~((columns == 0) & (signed_rows < 0))
-    ).reshape(-1)
-    valid = jnp.asarray(valid_base) & (
-        jnp.asarray(shell.reshape(-1), dtype=jnp.int32) >= resolution_limit
+    relion_image = operands.relion_image
+    real_dtype = operands.real_dtype
+    valid = jnp.asarray(operands.valid) & (
+        jnp.asarray(operands.shell.reshape(-1), dtype=jnp.int32) >= operands.resolution_limit
     )
 
     power = relion_image.real * relion_image.real
@@ -4613,7 +4701,7 @@ def _relion_cuda_powerclass_highres_xi2_half(
         0,
         n_blocks,
         add_block,
-        jnp.zeros((processed_score_half.shape[0],), dtype=real_dtype),
+        jnp.zeros((relion_image.shape[0],), dtype=real_dtype),
     )
     return highres_xi2 * jnp.asarray(0.5, dtype=real_dtype)
 
@@ -4628,43 +4716,12 @@ def _relion_cuda_powerclass_highres_xi2_half_atomic(
 ):
     """Run the native CUDA powerClass atomics used by exact fine scoring."""
 
-    from recovar import cuda_backproject
-
-    image_height = int(image_shape[0])
-    image_width = int(image_shape[1])
-    if image_height != image_width:
-        raise ValueError(f"RELION powerClass parity requires square images, got {image_shape}")
-    half_width = image_width // 2 + 1
-    processed_score_half = jnp.asarray(processed_score_half, dtype=jnp.complex64)
-    if processed_score_half.ndim != 2 or processed_score_half.shape[-1] != image_height * half_width:
-        raise ValueError(
-            "RELION powerClass input must be flattened centred rfft images, got "
-            f"{processed_score_half.shape} for image_shape={image_shape}"
-        )
-    relion_image = jnp.roll(
-        processed_score_half.reshape((-1, image_height, half_width)),
-        -(image_height // 2),
-        axis=1,
-    ).reshape((processed_score_half.shape[0], -1))
-    relion_image = (
-        relion_image / jnp.asarray(image_height * image_width, dtype=jnp.float32)
-    ).astype(jnp.complex64)
-    if runtime_current_size is None:
-        spectrum_and_highres = cuda_backproject.relion_powerclass_spectrum_highres_f32(
-            relion_image,
-            xdim=half_width,
-            ydim=image_height,
-            resolution_limit=int(current_size) // 2 + 1,
-        )
-    else:
-        spectrum_and_highres = (
-            cuda_backproject.relion_powerclass_spectrum_highres_runtime_f32(
-                relion_image,
-                jnp.asarray(runtime_current_size, dtype=jnp.int32) // 2 + 1,
-                xdim=half_width,
-                ydim=image_height,
-            )
-        )
+    spectrum_and_highres, _image_height, _image_width, _half_width = _relion_powerclass_native_spectrum_highres(
+        processed_score_half,
+        image_shape=image_shape,
+        current_size=current_size,
+        runtime_current_size=runtime_current_size,
+    )
     return spectrum_and_highres[:, -1] * jnp.asarray(0.5, dtype=jnp.float32)
 
 
@@ -4717,49 +4774,16 @@ def _relion_cuda_powerclass_spectrum_highres_norm_units(
     numerically distinct, so the fine-score scalar cannot be reused here.
     """
 
-    image_height = int(image_shape[0])
-    image_width = int(image_shape[1])
-    if image_height != image_width:
-        raise ValueError(f"RELION powerClass parity requires square images, got {image_shape}")
-    half_width = image_width // 2 + 1
-    processed_score_half = jnp.asarray(processed_score_half)
-    complex_dtype = (
-        jnp.complex128
-        if processed_score_half.dtype == jnp.dtype(jnp.complex128)
-        else jnp.complex64
+    operands = _relion_powerclass_operands(
+        processed_score_half,
+        image_shape=image_shape,
+        current_size=current_size,
+        runtime_current_size=runtime_current_size,
     )
-    real_dtype = jnp.float64 if complex_dtype == jnp.complex128 else jnp.float32
-    processed_score_half = processed_score_half.astype(complex_dtype)
-    if processed_score_half.ndim != 2 or processed_score_half.shape[-1] != image_height * half_width:
-        raise ValueError(
-            "RELION powerClass input must be flattened centred rfft images, got "
-            f"{processed_score_half.shape} for image_shape={image_shape}"
-        )
-    if runtime_current_size is None:
-        if current_size is None:
-            current_size = image_width
-        resolution_limit = int(current_size) // 2 + 1
-    else:
-        resolution_limit = jnp.asarray(runtime_current_size, dtype=jnp.int32) // 2 + 1
-    relion_image = jnp.roll(
-        processed_score_half.reshape((-1, image_height, half_width)),
-        -(image_height // 2),
-        axis=1,
-    ).reshape((processed_score_half.shape[0], -1))
-    relion_image = relion_image / jnp.asarray(image_height * image_width, dtype=real_dtype)
-
-    rows = np.arange(image_height, dtype=np.int32)[:, None]
-    columns = np.arange(half_width, dtype=np.int32)[None, :]
-    signed_rows = np.where(rows < half_width, rows, rows - image_height)
-    radius_squared = columns * columns + signed_rows * signed_rows
-    shell_real_dtype = np.float64 if real_dtype == jnp.float64 else np.float32
-    shell = np.rint(np.sqrt(radius_squared.astype(shell_real_dtype))).astype(np.int32)
-    valid = (
-        (shell > 0)
-        & (shell < half_width)
-        & ~((columns == 0) & (signed_rows < 0))
-    ).reshape(-1)
-    shell = np.where(valid, shell.reshape(-1), half_width).astype(np.int32)
+    relion_image = operands.relion_image
+    image_height, image_width, half_width = operands.image_height, operands.image_width, operands.half_width
+    resolution_limit = operands.resolution_limit
+    shell = np.where(operands.valid, operands.shell.reshape(-1), half_width).astype(np.int32)
 
     power = relion_image.real * relion_image.real
     power = jax.lax.optimization_barrier(power)
@@ -4777,7 +4801,7 @@ def _relion_cuda_powerclass_spectrum_highres_norm_units(
         resolution_limit,
         half_width,
         add_shell,
-        jnp.zeros((processed_score_half.shape[0],), dtype=jnp.float64),
+        jnp.zeros((relion_image.shape[0],), dtype=jnp.float64),
     )
     return high_shell * jnp.asarray((image_height * image_width) ** 2, dtype=jnp.float64)
 
@@ -4792,43 +4816,12 @@ def _relion_cuda_powerclass_spectrum_norm_units(
 ):
     """Return RELION's atomically binned per-image power spectrum in N^4 units."""
 
-    from recovar import cuda_backproject
-
-    image_height = int(image_shape[0])
-    image_width = int(image_shape[1])
-    if image_height != image_width:
-        raise ValueError(f"RELION powerClass parity requires square images, got {image_shape}")
-    half_width = image_width // 2 + 1
-    processed_score_half = jnp.asarray(processed_score_half, dtype=jnp.complex64)
-    if processed_score_half.ndim != 2 or processed_score_half.shape[-1] != image_height * half_width:
-        raise ValueError(
-            "RELION powerClass input must be flattened centred rfft images, got "
-            f"{processed_score_half.shape} for image_shape={image_shape}"
-        )
-    relion_image = jnp.roll(
-        processed_score_half.reshape((-1, image_height, half_width)),
-        -(image_height // 2),
-        axis=1,
-    ).reshape((processed_score_half.shape[0], -1))
-    relion_image = (
-        relion_image / jnp.asarray(image_height * image_width, dtype=jnp.float32)
-    ).astype(jnp.complex64)
-    if runtime_current_size is None:
-        spectrum_and_highres = cuda_backproject.relion_powerclass_spectrum_highres_f32(
-            relion_image,
-            xdim=half_width,
-            ydim=image_height,
-            resolution_limit=int(current_size) // 2 + 1,
-        )
-    else:
-        spectrum_and_highres = (
-            cuda_backproject.relion_powerclass_spectrum_highres_runtime_f32(
-                relion_image,
-                jnp.asarray(runtime_current_size, dtype=jnp.int32) // 2 + 1,
-                xdim=half_width,
-                ydim=image_height,
-            )
-        )
+    spectrum_and_highres, image_height, image_width, half_width = _relion_powerclass_native_spectrum_highres(
+        processed_score_half,
+        image_shape=image_shape,
+        current_size=current_size,
+        runtime_current_size=runtime_current_size,
+    )
     return spectrum_and_highres[:, :half_width] * jnp.asarray(
         (image_height * image_width) ** 2,
         dtype=jnp.float32,

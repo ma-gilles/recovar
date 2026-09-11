@@ -93,6 +93,14 @@ That module builds local pose neighborhoods, asks
 batch sizes, calls the selected kernel and returns `_LocalSearchIterationResult`
 with named accumulators, pose fields, statistics and optional class summaries.
 The controller reads those fields directly.
+The exact sparse pass-2 kernels in
+[`sparse_pass2_bucketed`](../../recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py)
+reproduce RELION's CUDA `powerClass` through one operand owner:
+`_relion_powerclass_packed_image` (RELION's unshifted `Faux` layout and
+amplitude convention), `_relion_powerclass_operands` (CUDA shell map and pixel
+validity) and `_relion_powerclass_native_spectrum_highres` (native atomics),
+shared by the JAX reproductions and the native wrappers
+([`test_powerclass_operand_owner.py`](../../tests/unit/test_powerclass_operand_owner.py)).
 
 Replay and finalization have separate selection and mutation boundaries:
 

@@ -38,6 +38,22 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+The four RELION `powerClass` reproductions in `sparse_pass2_bucketed` (JAX
+block-tree `highres_Xi2`, JAX high-shell spectrum sum, and the two native CUDA
+wrappers) now share one operand owner: `_relion_powerclass_packed_image`
+(RELION's unshifted `Faux` layout and amplitude convention),
+`_relion_powerclass_operands` (adds the CUDA shell map and pixel validity) and
+`_relion_powerclass_native_spectrum_highres` (native atomics on complex64),
+replacing four copies of the same preamble. The two JAX reproductions match the
+previous code bit-for-bit on CPU across 56 cases (complex64/128, static and
+traced resolution limits) plus six identical error messages; the native
+wrappers are covered by byte-exact inverse substitution and by the GPU fast
+tier. Three unreferenced helpers were removed in the preceding commit
+(`e5dbad66d`), and a pre-existing undefined name in
+`heterogeneity.estimate_principal_components` is recorded there. Structural
+checkpoint only.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/powerclass_operand_owner_20260910/result.json).
+
 K-class dense scoring at positive adaptive oversampling now always keeps
 RELION's two-pass expectation. It previously fell to the single-pass direct
 engine (no oversampled candidates, no norm/scale statistics) whenever the
