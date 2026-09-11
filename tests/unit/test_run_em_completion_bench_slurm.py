@@ -8,6 +8,30 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = REPO_ROOT / "scripts" / "run_em_completion_bench_slurm.sh"
 
 
+def _launcher_env(tmp_path, scratch):
+    """Launcher environment shared by the dry-run tests."""
+    env = os.environ.copy()
+    env.update(
+        {
+            "EM_COMPLETION_SCRATCH_DIR": str(scratch),
+            "EM_COMPLETION_RUNTIME_ROOT": str(tmp_path / "runtime"),
+            "SBATCH_ACCOUNT": "gilles",
+            "SBATCH_PARTITION": "cryoem",
+            "SBATCH_CONSTRAINT": "",
+            "EM_COMPLETION_SETUP_PARTITION": "cpu",
+            "EM_COMPLETION_SETUP_CONSTRAINT": "",
+            "EM_COMPLETION_SUMMARY_PARTITION": "cpu",
+            "EM_COMPLETION_SUMMARY_CONSTRAINT": "",
+            "EM_COMPLETION_SUMMARY_GRES": "",
+            "K1_MEM": "128G",
+            "K1_TIME_LIMIT": "04:00:00",
+            "RELION_SRC_DIR": str(tmp_path / "relion_src"),
+            "RELION_REFINE_MPI": "/bin/true",
+        }
+    )
+    return env
+
+
 def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
     scratch = tmp_path / "scratch"
     runtime = tmp_path / "runtime"
@@ -175,6 +199,29 @@ def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
         f"SUBMISSION_GIT_WORKTREE_FINGERPRINT_SHA256={submission_fingerprint}"
         in submission_env_text
     )
+
+
+def test_completion_jobs_preread_stacks_and_record_io_placement(tmp_path):
+    """Particle stacks are read into host memory once, and every job says so.
+
+    Without the preread each iteration re-reads its subset from the shared
+    filesystem, which the VDAM workstream measured as roughly half the K=1
+    100k/256 wall. The loader caps the per-file allocation, so leaving the flag
+    on is safe for stacks above the cap.
+    """
+    scratch = tmp_path / "scratch"
+    env = _launcher_env(tmp_path, scratch)
+    proc = subprocess.run(
+        ["bash", str(LAUNCHER), "--dry-run", "--k1-only"],
+        cwd=REPO_ROOT, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+    )
+    assert proc.returncode == 0, proc.stdout
+    k1_text = (scratch / "jobs" / "em_completion_k1_100k256.sh").read_text()
+    assert 'export RECOVAR_PREREAD_IMAGES="${RECOVAR_PREREAD_IMAGES:-1}"' in k1_text
+    assert 'export RECOVAR_PREREAD_MAX_GB="${RECOVAR_PREREAD_MAX_GB:-64}"' in k1_text
+    assert 'echo "RECOVAR_PREREAD_IMAGES=${RECOVAR_PREREAD_IMAGES} RECOVAR_PREREAD_MAX_GB=${RECOVAR_PREREAD_MAX_GB}"' in k1_text
+    assert 'echo "RECOVAR_CACHE_DIR=${RECOVAR_CACHE_DIR:-<staging disabled>}"' in k1_text
+    assert 'echo "JAX_COMPILATION_CACHE_DIR=${JAX_COMPILATION_CACHE_DIR}"' in k1_text
 
 
 def test_completion_k1_relion_replay_mode_is_explicit(tmp_path):

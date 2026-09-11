@@ -487,6 +487,13 @@ export JAX_COMPILATION_CACHE_DIR="\${RECOVAR_JAX_CACHE_DIR}"
 # stack staging disabled unless the submitter explicitly points RECOVAR_CACHE_DIR
 # at a fast local path such as /dev/shm or node-local NVMe.
 export RECOVAR_CACHE_DIR="\${RECOVAR_CACHE_DIR-}"
+# RELION's --preread_images equivalent. Without it every iteration re-reads its
+# subset from GPFS, which the VDAM workstream measured as roughly half the K=1
+# 100k/256 wall (7701 s -> 3874 s). The loader caps the per-file host allocation
+# at RECOVAR_PREREAD_MAX_GB and leaves larger stacks lazy, so this is safe to
+# leave on: the 100k/256 completion stacks are about 26 GB.
+export RECOVAR_PREREAD_IMAGES="\${RECOVAR_PREREAD_IMAGES:-1}"
+export RECOVAR_PREREAD_MAX_GB="\${RECOVAR_PREREAD_MAX_GB:-64}"
 export RECOVAR_CUDA_LIB="${CUDA_LIB}"
 export RECOVAR_CUDA_CACHE_DIR="${SCRATCH_DIR}/cuda_cache/${job_name}_\${SLURM_JOB_ID}"
 export RECOVAR_RELION_BIND_BUILD_DIR="${SCRATCH_DIR}/relion_bind_build/shared"
@@ -585,6 +592,10 @@ echo "SLURM_JOB_GPUS=\${SLURM_JOB_GPUS:-}"
 echo "SLURM_STEP_GPUS=\${SLURM_STEP_GPUS:-}"
 echo "CUDA_VISIBLE_DEVICES=\${CUDA_VISIBLE_DEVICES:-}"
 echo "TMPDIR=\${TMPDIR}"
+# I/O placement belongs next to every wall this job reports (VDAM insight l).
+echo "RECOVAR_CACHE_DIR=\${RECOVAR_CACHE_DIR:-<staging disabled>}"
+echo "RECOVAR_PREREAD_IMAGES=\${RECOVAR_PREREAD_IMAGES} RECOVAR_PREREAD_MAX_GB=\${RECOVAR_PREREAD_MAX_GB}"
+echo "JAX_COMPILATION_CACHE_DIR=\${JAX_COMPILATION_CACHE_DIR}"
 echo "PYTHONFAULTHANDLER=\${PYTHONFAULTHANDLER}"
 echo "RECOVAR_CUDA_LIB=\${RECOVAR_CUDA_LIB}"
 echo "RECOVAR_RELION_BIND_BUILD_DIR=\${RECOVAR_RELION_BIND_BUILD_DIR}"
