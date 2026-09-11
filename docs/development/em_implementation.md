@@ -232,6 +232,14 @@ window indices and shapes from the M-step geometry) and derives each captured bu
 candidate mask and prior-free scores through `_bpref_capture_priors`; the fused and big-JIT
 capture sites pass only their per-bucket operands
 ([`test_bpref_capture_operands_owner.py`](../../tests/unit/test_bpref_capture_operands_owner.py)).
+[`heterogeneity._fixed_rotation_covariance_images`](../../recovar/em/heterogeneity.py) accumulates the
+fixed-rotation covariance-column update in image space (right-hand side and normal
+operator per rotation) for both the Equinox and the classic accumulator, which only
+convert to half images and back-project. In [`initial_model.layout`](../../recovar/em/initial_model/layout.py),
+`_centered_bpref_sources` validates and centers the data/weight cubes once for the
+dense and the RELION-x-half BPref converters, and `_bpref_slab_outputs` applies RELION's
+double-precision cast and denormal-weight clamp
+([`test_covariance_rhs_and_bpref_source_owner.py`](../../tests/unit/test_covariance_rhs_and_bpref_source_owner.py)).
 In [`significance`](../../recovar/em/dense_single_volume/helpers/significance.py),
 `_coarse_gaussian_ffi_default` applies the fresh-InitialModel coarse Gaussian FFI
 default only when the supplied RELION projector operands exist; a dense pass

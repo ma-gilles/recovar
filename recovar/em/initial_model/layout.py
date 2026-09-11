@@ -47,14 +47,11 @@ def _as_centered_bpref_source(
     )
 
 
-def run_em_output_to_bpref(
-    Ft_y: np.ndarray,
-    Ft_ctf: np.ndarray,
-    ori_size: int,
-    r_max: int,
-    padding_factor: int = 1,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Convert dense EM accumulators ``(N,N,N)`` to RELION BPref slab (full half-complex or low-freq crop)."""
+def _centered_bpref_sources(Ft_y, Ft_ctf, *, ori_size: int, r_max: int, padding_factor: int):
+    """Return ``(data cube, weight cube, center, radius)`` for the dense and RELION-x-half BPref converters.
+
+    Both accumulators must encode the same centered support; the converters differ only in axis order.
+    """
     if padding_factor not in (1, 2):
         raise NotImplementedError(f"padding_factor must be 1 or 2, got {padding_factor}")
     if r_max < 0:
@@ -74,13 +71,32 @@ def run_em_output_to_bpref(
     )
     if (data_center, data_radius) != (weight_center, weight_radius):
         raise ValueError("data and weight accumulators use different centered layouts")
-    bp_data = _bp_slab(data_cube, data_radius, data_center)
-    bp_weight = _bp_slab(weight_cube, weight_radius, weight_center)
+    return data_cube, weight_cube, data_center, data_radius
 
-    # Clamp denormal weights to 0 (RELION ``updateSSNRarrays`` aborts on (0, 1e-20]).
+
+def _bpref_slab_outputs(bp_data: np.ndarray, bp_weight: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Cast a BPref slab pair to RELION double precision; clamp denormal weights (``updateSSNRarrays`` aborts on (0, 1e-20])."""
     bp_weight_f64 = np.asarray(bp_weight.real, dtype=np.float64).copy()
     bp_weight_f64[np.abs(bp_weight_f64) < 1e-15] = 0.0
     return np.asarray(bp_data, dtype=np.complex128).copy(), bp_weight_f64
+
+
+def run_em_output_to_bpref(
+    Ft_y: np.ndarray,
+    Ft_ctf: np.ndarray,
+    ori_size: int,
+    r_max: int,
+    padding_factor: int = 1,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Convert dense EM accumulators ``(N,N,N)`` to RELION BPref slab (full half-complex or low-freq crop)."""
+    data_cube, weight_cube, center, radius = _centered_bpref_sources(
+        Ft_y,
+        Ft_ctf,
+        ori_size=ori_size,
+        r_max=r_max,
+        padding_factor=padding_factor,
+    )
+    return _bpref_slab_outputs(_bp_slab(data_cube, radius, center), _bp_slab(weight_cube, radius, center))
 
 
 def bpref_to_run_em_output(

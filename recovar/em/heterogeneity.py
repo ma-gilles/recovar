@@ -1,5 +1,6 @@
 import functools
 import logging
+from typing import NamedTuple
 import numpy as np
 import jax
 import jax.numpy as jnp
@@ -149,35 +150,34 @@ def compute_bLambdainvPU_terms(
 # ============================================================================
 
 
-@eqx.filter_jit
-def sum_up_images_fixed_rots_covariance_precompute_eqx(config: ForwardModelConfig, batch, translations, ctf_params):
-    """Equinox version of sum_up_images_fixed_rots_covariance_precompute (7 → 4 params)."""
-    CTF = config.compute_ctf(ctf_params)
-    batch = config.process_fn(batch, apply_image_mask=False) * CTF
-    shifted_CTFed_images = core.batch_trans_translate_images(
-        batch, jnp.repeat(translations[None], batch.shape[0], axis=0), config.image_shape
-    )
-    return shifted_CTFed_images, CTF
+class _FixedRotationCovarianceImages(NamedTuple):
+    """Per-rotation right-hand-side and normal-operator images before the adjoint slice."""
+
+    before_adj_B2: jnp.ndarray
+    H_before_adj: jnp.ndarray
 
 
-@eqx.filter_jit
-def sum_up_images_fixed_rots_covariance_with_precompute_eqx(
-    config: ForwardModelConfig,
+def _fixed_rotation_covariance_images(
     shifted_CTFed_images,
     mean_projections,
     CTF,
     gridpoints,
     probabilities,
-    rotations,
+    n_rotations,
     noise_variance,
     gridpoint_target,
-    H=0,
-    B=0,
-    right_kernel_width=2,
-    right_kernel="triangular",
-):
-    """Equinox version of sum_up_images_fixed_rots_covariance_with_precompute (14 → 13 params)."""
-    n_rotations = rotations.shape[0]
+    *,
+    right_kernel,
+    right_kernel_width,
+) -> _FixedRotationCovarianceImages:
+    """Accumulate the fixed-rotation covariance-column update in image space.
+
+    Shared by the Equinox and the classic ``sum_up_images_fixed_rots_covariance_with_precompute``:
+    the right-hand side ``B2 = sum_t gamma_2 (y_t - CTF mu) - noise`` and the
+    normal operator ``H = gamma_3 CTF^2`` per rotation, both as full images
+    that the callers convert to half images and back-project.
+    """
+
     n_translations = shifted_CTFed_images.shape[1]
     n_images = shifted_CTFed_images.shape[0]
     image_size = shifted_CTFed_images.shape[-1]
@@ -209,7 +209,54 @@ def sum_up_images_fixed_rots_covariance_with_precompute_eqx(
     noise_piece = CTF_squared_times_noise.T * kernel_vals
     before_adj_B2 -= noise_piece
 
-    before_adj_B2_half = fourier_transform_utils.full_image_to_half_image(before_adj_B2, config.image_shape)
+    CTF_squared = CTF**2
+    CTF_squared_kernel_vals = kernel_vals @ CTF_squared.T
+    gamma_3 = probabilties_summed_over_translations.T * CTF_squared_kernel_vals
+    H_before_adj = gamma_3 @ CTF_squared
+    return _FixedRotationCovarianceImages(before_adj_B2, H_before_adj)
+
+
+@eqx.filter_jit
+def sum_up_images_fixed_rots_covariance_precompute_eqx(config: ForwardModelConfig, batch, translations, ctf_params):
+    """Equinox version of sum_up_images_fixed_rots_covariance_precompute (7 → 4 params)."""
+    CTF = config.compute_ctf(ctf_params)
+    batch = config.process_fn(batch, apply_image_mask=False) * CTF
+    shifted_CTFed_images = core.batch_trans_translate_images(
+        batch, jnp.repeat(translations[None], batch.shape[0], axis=0), config.image_shape
+    )
+    return shifted_CTFed_images, CTF
+
+
+@eqx.filter_jit
+def sum_up_images_fixed_rots_covariance_with_precompute_eqx(
+    config: ForwardModelConfig,
+    shifted_CTFed_images,
+    mean_projections,
+    CTF,
+    gridpoints,
+    probabilities,
+    rotations,
+    noise_variance,
+    gridpoint_target,
+    H=0,
+    B=0,
+    right_kernel_width=2,
+    right_kernel="triangular",
+):
+    """Equinox version of sum_up_images_fixed_rots_covariance_with_precompute (14 → 13 params)."""
+    images = _fixed_rotation_covariance_images(
+        shifted_CTFed_images,
+        mean_projections,
+        CTF,
+        gridpoints,
+        probabilities,
+        rotations.shape[0],
+        noise_variance,
+        gridpoint_target,
+        right_kernel=right_kernel,
+        right_kernel_width=right_kernel_width,
+    )
+    before_adj_B2_half = fourier_transform_utils.full_image_to_half_image(images.before_adj_B2, config.image_shape)
     B = core.adjoint_slice_volume(
         before_adj_B2_half,
         rotations,
@@ -220,11 +267,7 @@ def sum_up_images_fixed_rots_covariance_with_precompute_eqx(
         half_image=True,
     )
 
-    CTF_squared = CTF**2
-    CTF_squared_kernel_vals = kernel_vals @ CTF_squared.T
-    gamma_3 = probabilties_summed_over_translations.T * CTF_squared_kernel_vals
-    H_before_adj = gamma_3 @ CTF_squared
-    H_before_adj_half = fourier_transform_utils.full_image_to_half_image(H_before_adj, config.image_shape)
+    H_before_adj_half = fourier_transform_utils.full_image_to_half_image(images.H_before_adj, config.image_shape)
     H = core.adjoint_slice_volume(
         H_before_adj_half,
         rotations,
@@ -423,50 +466,24 @@ def sum_up_images_fixed_rots_covariance_with_precompute(
     right_kernel_width=2,
     right_kernel="triangular",
 ):
-
-    n_rotations = rotations.shape[0]
-    n_translations = shifted_CTFed_images.shape[1]
-    n_images = shifted_CTFed_images.shape[0]
-    image_size = shifted_CTFed_images.shape[-1]
-
-    from recovar.heterogeneity import covariance_core
-
-    kernel_vals = covariance_core.evaluate_kernel_on_grid(
-        gridpoints, gridpoint_target, kernel=right_kernel, kernel_width=right_kernel_width
+    images = _fixed_rotation_covariance_images(
+        shifted_CTFed_images,
+        mean_projections,
+        CTF,
+        gridpoints,
+        probabilities,
+        rotations.shape[0],
+        noise_variance,
+        gridpoint_target,
+        right_kernel=right_kernel,
+        right_kernel_width=right_kernel_width,
     )
-
-    e2_p1 = shifted_CTFed_images @ kernel_vals.T
-    e2_p2 = (CTF**2) @ (kernel_vals * mean_projections).T
-    e2 = e2_p1 - e2_p2[:, None, :]
-    e2 = e2.swapaxes(1, 2)
-    e2 = jnp.conj(e2)
-
-    gamma_2 = probabilities * e2
-    gamma_2_summed_over_translations = jnp.sum(gamma_2, axis=-1)
-    summed_CTF_squared_gamma2 = (CTF**2).T @ gamma_2_summed_over_translations
-    summed_CTF_squared_gamma2 = summed_CTF_squared_gamma2.T
-    before_adj_B2 = -summed_CTF_squared_gamma2 * mean_projections
-
-    gamma_2 = gamma_2.swapaxes(1, 2).reshape(n_images * n_translations, n_rotations)
-    shifted_CTFed_images = shifted_CTFed_images.reshape(n_images * n_translations, image_size)
-    before_adj_B2 += gamma_2.T @ shifted_CTFed_images
-
-    probabilties_summed_over_translations = jnp.sum(probabilities, axis=-1)
-    CTF_squared_times_noise = (CTF**2 * noise_variance).T @ probabilties_summed_over_translations
-    noise_piece = CTF_squared_times_noise.T * kernel_vals
-    before_adj_B2 -= noise_piece
-
-    before_adj_B2_half = fourier_transform_utils.full_image_to_half_image(before_adj_B2, image_shape)
+    before_adj_B2_half = fourier_transform_utils.full_image_to_half_image(images.before_adj_B2, image_shape)
     B = core.adjoint_slice_volume(
         before_adj_B2_half, rotations, image_shape, volume_shape, "linear_interp", volume=B, half_image=True
     )
 
-    CTF_squared = CTF**2
-    CTF_squared_kernel_vals = kernel_vals @ CTF_squared.T
-    gamma_3 = probabilties_summed_over_translations.T * CTF_squared_kernel_vals
-    H_before_adj = gamma_3 @ CTF_squared
-
-    H_before_adj_half = fourier_transform_utils.full_image_to_half_image(H_before_adj, image_shape)
+    H_before_adj_half = fourier_transform_utils.full_image_to_half_image(images.H_before_adj, image_shape)
     H = core.adjoint_slice_volume(
         H_before_adj_half, rotations, image_shape, volume_shape, "linear_interp", volume=H, half_image=True
     )
