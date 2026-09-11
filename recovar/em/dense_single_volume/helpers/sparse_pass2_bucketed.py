@@ -141,7 +141,6 @@ from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
     _prepare_per_image_pass2_inputs,
     _build_compact_pair_bucket_arrays,
     _build_compact_pair_bucket_arrays_from_per_image_inputs,
-    per_class_pair_size_enabled,
     _build_bucket_arrays,
     _compact_bucket_size_for_class,
     _build_k_class_bucket_arrays,
@@ -13431,8 +13430,6 @@ def compute_k_class_pass2_stats_sparse_fused(
     overall_t0 = time.time()
     rectangular_rotation_slots = 0
     compact_rotation_slots = 0
-    compact_pair_padded_slots = 0
-    fused_pair_padded_slots = 0
     compact_mstep_active_rows = 0
     compact_mstep_padded_active_rows = 0
     compact_mstep_rectangular_rows = 0
@@ -13576,11 +13573,6 @@ def compute_k_class_pass2_stats_sparse_fused(
         else:
             rectangular_rotation_slots += int(n_classes) * int(bucket_size) * batch
         compact_rotation_slots += sum(int(arrays["bucket_size"]) for arrays in class_bucket_arrays) * batch
-        if compact_pair_arrays_by_class is not None:
-            compact_pair_padded_slots += (
-                sum(int(arrays["pair_bucket_size"]) for arrays in compact_pair_arrays_by_class) * batch
-            )
-            fused_pair_padded_slots += int(n_classes) * int(bucket_meta["pair_bucket_size"]) * batch
         stage_t0 = time.time()
         batch_data, ctf_params, fetched_indices = fetch_indexed_batch(experiment_dataset, image_indices)
         batch_data = jnp.asarray(batch_data)
@@ -16200,9 +16192,6 @@ def compute_k_class_pass2_stats_sparse_fused(
         "sparse_kclass_compact_buckets": bool(compact_buckets),
         "sparse_kclass_compact_rotation_slots": np.int64(compact_rotation_slots),
         "sparse_kclass_rectangular_rotation_slots": np.int64(rectangular_rotation_slots),
-        "sparse_kclass_executed_pair_slots": np.int64(compact_pair_padded_slots),
-        "sparse_kclass_shared_width_pair_slots": np.int64(fused_pair_padded_slots),
-        "sparse_kclass_per_class_pair_size": np.int64(int(per_class_pair_size_enabled())),
         "sparse_kclass_compact_slot_ratio": np.float64(compact_slot_ratio),
         "sparse_kclass_compact_mstep_active_rows": np.int64(compact_mstep_active_rows),
         "sparse_kclass_compact_mstep_padded_active_rows": np.int64(compact_mstep_padded_active_rows),
