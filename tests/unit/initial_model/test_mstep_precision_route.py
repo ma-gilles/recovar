@@ -8,6 +8,8 @@ import pandas as pd
 import pytest
 
 from recovar.em.initial_model import driver, initialise_denovo_state, iteration_loop, m_step, native_options
+
+from recovar.em.initial_model import mstep_single_class
 from recovar.em.initial_model.subset import numpy_rnd_unif_factory
 from scripts import run_ab_initio
 
@@ -22,11 +24,11 @@ F32_STATE = {
     "fourier_coverage_class": np.float32,
 }
 REPLAYS = [
-    m_step.VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV,
-    m_step.VDAM_NATIVE_FIRST_MOMENT_REPLAY_ENV,
-    m_step.VDAM_NATIVE_BPREF_DATA_REPLAY_ENV,
-    m_step.VDAM_NATIVE_BPREF_WEIGHT_REPLAY_ENV,
-    m_step.VDAM_NATIVE_IREF_INPUT_REPLAY_ENV,
+    mstep_single_class.VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV,
+    mstep_single_class.VDAM_NATIVE_FIRST_MOMENT_REPLAY_ENV,
+    mstep_single_class.VDAM_NATIVE_BPREF_DATA_REPLAY_ENV,
+    mstep_single_class.VDAM_NATIVE_BPREF_WEIGHT_REPLAY_ENV,
+    mstep_single_class.VDAM_NATIVE_IREF_INPUT_REPLAY_ENV,
     "RECOVAR_MSTEP_DUMP_DIR",
 ]
 
@@ -175,7 +177,7 @@ def _call(state, **kwargs):
 def test_float32_rejects_diagnostics_before_replay_consumption(monkeypatch, env):
     monkeypatch.setenv(env, "missing")
     monkeypatch.setattr(
-        m_step, "_maybe_replay_native_bpref_accumulators", lambda *a, **k: pytest.fail("consumed replay")
+        mstep_single_class, "_maybe_replay_native_bpref_accumulators", lambda *a, **k: pytest.fail("consumed replay")
     )
     with pytest.raises(ValueError, match=env):
         _call(driver._prepare_mstep_state_precision(_state(), "float32"))
@@ -183,7 +185,7 @@ def test_float32_rejects_diagnostics_before_replay_consumption(monkeypatch, env)
 
 def test_float32_rejects_primitive_route_before_overrides(monkeypatch):
     monkeypatch.setattr(
-        m_step, "_maybe_replay_native_bpref_accumulators", lambda *a, **k: pytest.fail("consumed replay")
+        mstep_single_class, "_maybe_replay_native_bpref_accumulators", lambda *a, **k: pytest.fail("consumed replay")
     )
     with pytest.raises(ValueError, match="transaction"):
         _call(driver._prepare_mstep_state_precision(_state(), "float32"), use_native_transaction=False)
@@ -194,7 +196,7 @@ def test_float32_rejects_mixed_publication_state_before_execution(monkeypatch, f
     state = driver._prepare_mstep_state_precision(_state(), "float32")
     value = getattr(state, field)
     setattr(state, field, value.astype(np.complex128 if np.iscomplexobj(value) else np.float64))
-    monkeypatch.setattr(m_step, "_get_bindings", lambda: pytest.fail("entered transaction"))
+    monkeypatch.setattr(mstep_single_class, "_get_bindings", lambda: pytest.fail("entered transaction"))
     with pytest.raises(ValueError, match=field):
         _call(state)
 
@@ -209,7 +211,7 @@ def test_real_host_device_transaction_publishes_f32_and_preserves_k4_other_slots
     bind = SimpleNamespace(
         vdam_m_step_transaction=lambda *a: pytest.fail("native executed"), vdam_first_moment_initializes=lambda *_: True
     )
-    monkeypatch.setattr(m_step, "_get_bindings", lambda: bind)
+    monkeypatch.setattr(mstep_single_class, "_get_bindings", lambda: bind)
     from recovar.relion_bind import _relion_bind_core
 
     monkeypatch.setattr(_relion_bind_core, "vdam_first_moment_initializes", bind.vdam_first_moment_initializes)
@@ -242,7 +244,7 @@ def test_publication_rejects_wrong_result_dtype_or_rounded_prior(bad_field):
         np.float32 if bad_field == "tau2" else np.complex128 if "mom" in bad_field else np.float64
     )
     with pytest.raises(ValueError, match="output|authoritative tau2"):
-        m_step._run_m_step_transaction(
+        mstep_single_class._run_m_step_transaction(
             lambda *a: result,
             state,
             0,
@@ -310,6 +312,6 @@ def test_float32_missing_native_certificate_capability_never_falls_back(monkeypa
         "vdam_first_moment_initializes": lambda *a: True,
     }
     del bindings[missing]
-    monkeypatch.setattr(m_step, "_get_bindings", lambda: SimpleNamespace(**bindings))
+    monkeypatch.setattr(mstep_single_class, "_get_bindings", lambda: SimpleNamespace(**bindings))
     with pytest.raises(RuntimeError, match="requires"):
         _call(driver._prepare_mstep_state_precision(_state(), "float32"))

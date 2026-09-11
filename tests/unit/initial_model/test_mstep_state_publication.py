@@ -6,6 +6,8 @@ import numpy as np
 import pytest
 
 from recovar.em.initial_model import m_step
+
+from recovar.em.initial_model import mstep_single_class
 from recovar.em.initial_model.state import InitialModelState, half_slot_index
 
 pytestmark = pytest.mark.unit
@@ -47,7 +49,7 @@ def _case(K, pseudo, order):
 
 def _call(state, k, transaction):
     accum = m_step.VdamAccumulator(np.zeros((4, 4, 3), dtype=np.complex128), np.ones((4, 4, 3)), k, 0)
-    return m_step._run_m_step_transaction(
+    return mstep_single_class._run_m_step_transaction(
         transaction,
         state,
         k,
@@ -95,13 +97,13 @@ def test_publication_matches_full_copy_and_preserves_ownership(monkeypatch, K, k
     expected = _call(state, k, transaction)
     monkeypatch.setenv(SELECTOR, "1")
     slots = []
-    original = m_step._copy_mstep_untouched_slots
+    original = mstep_single_class._copy_mstep_untouched_slots
 
     def observe(values, updated):
         slots.append(updated)
         return original(values, updated)
 
-    monkeypatch.setattr(m_step, "_copy_mstep_untouched_slots", observe)
+    monkeypatch.setattr(mstep_single_class, "_copy_mstep_untouched_slots", observe)
     actual = _call(state, k, transaction)
     assert calls[0] == calls[1]
     h1 = half_slot_index(k, 1, K, True) if pseudo else None
@@ -140,7 +142,7 @@ def test_selector_defaults_to_existing_copy_path(monkeypatch):
     def forbidden(*args):
         raise AssertionError("default enabled new publication helper")
 
-    monkeypatch.setattr(m_step, "_copy_mstep_untouched_slots", forbidden)
+    monkeypatch.setattr(mstep_single_class, "_copy_mstep_untouched_slots", forbidden)
     state = _case(1, False, "C")
     result = {
         "iref": state.Iref[0],

@@ -27,12 +27,14 @@ from recovar.em.initial_model.estep_common import (
     _group_local_kwargs,
     _relion_projector_dense_rotations,
 )
+from recovar.em.initial_model.mstep_accumulator import (
+    VdamAccumulator,
+)
 from recovar.em.initial_model.sparse_pass2_estep import (
     _SPARSE_PASS2_RESULT_FIELDS,
     _run_sparse_pass2_initial_model_estep,
 )
 
-from .m_step import VdamAccumulator
 from .state import InitialModelState
 
 _ENGINE_DEFAULTS: dict[str, Any] = {

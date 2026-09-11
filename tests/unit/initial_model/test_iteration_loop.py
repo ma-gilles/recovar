@@ -25,7 +25,9 @@ from recovar.em.initial_model.iteration_loop import (
     update_noise_from_estep_meta,
     update_probabilities_from_estep_meta,
 )
-from recovar.em.initial_model.m_step import VdamAccumulator
+from recovar.em.initial_model.mstep_accumulator import (
+    VdamAccumulator,
+)
 from recovar.em.initial_model.subset import numpy_rnd_unif_factory
 
 pytestmark = pytest.mark.unit

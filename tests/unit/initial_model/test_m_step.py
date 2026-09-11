@@ -20,16 +20,22 @@ import numpy as np
 import pytest
 
 import recovar.em.initial_model.m_step as m_step
+
+from recovar.em.initial_model import mstep_single_class
 from recovar.em.initial_model import (
     initialise_denovo_state,
 )
 from recovar.em.initial_model.init import initialise_data_vs_prior_from_references, seed_noise_from_mavg
 from recovar.em.initial_model.m_step import (
+    vdam_m_step,
+)
+from recovar.em.initial_model.mstep_accumulator import (
     VdamAccumulator,
+)
+from recovar.em.initial_model.mstep_single_class import (
     _grad_min_resol_shell_from_state,
     _has_relion_reconstruction_weight,
     _maybe_replay_native_second_moment,
-    vdam_m_step,
     vdam_m_step_single_class,
 )
 
@@ -94,10 +100,10 @@ def test_relion_weight_guard_keeps_tiny_nonzero_class_support():
         halfset_idx=0,
     )
 
-    accumulator.weight.flat[0] = 2.0 * m_step.XMIPP_EQUAL_ACCURACY
+    accumulator.weight.flat[0] = 2.0 * mstep_single_class.XMIPP_EQUAL_ACCURACY
     assert _has_relion_reconstruction_weight(state, 0, accumulator)
 
-    accumulator.weight.flat[0] = 0.5 * m_step.XMIPP_EQUAL_ACCURACY
+    accumulator.weight.flat[0] = 0.5 * mstep_single_class.XMIPP_EQUAL_ACCURACY
     assert not _has_relion_reconstruction_weight(state, 0, accumulator)
 
 
@@ -112,8 +118,8 @@ def test_native_second_moment_replay_is_explicit_iteration_gated_and_exact(tmp_p
         np.asarray(replay.shape, dtype=np.int64).tofile(stream)
         replay.reshape(-1).view(np.float64).tofile(stream)
 
-    monkeypatch.setenv(m_step.VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV, str(replay_path))
-    monkeypatch.setenv(m_step.VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV, "2")
+    monkeypatch.setenv(mstep_single_class.VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV, str(replay_path))
+    monkeypatch.setenv(mstep_single_class.VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV, "2")
 
     assert _maybe_replay_native_second_moment(
         computed, iteration=1, class_idx=0
@@ -129,8 +135,8 @@ def test_native_second_moment_replay_is_explicit_iteration_gated_and_exact(tmp_p
         with path.open("wb") as stream:
             np.asarray(replay.shape, dtype=np.int64).tofile(stream)
             (replay * iteration).reshape(-1).view(np.float64).tofile(stream)
-    monkeypatch.setenv(m_step.VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV, str(replay_all_path))
-    monkeypatch.setenv(m_step.VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV, "all")
+    monkeypatch.setenv(mstep_single_class.VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV, str(replay_all_path))
+    monkeypatch.setenv(mstep_single_class.VDAM_NATIVE_SECOND_MOMENT_REPLAY_ITER_ENV, "all")
     for iteration in (1, 2):
         np.testing.assert_array_equal(
             _maybe_replay_native_second_moment(
@@ -154,10 +160,10 @@ def test_native_first_moment_replay_supports_all_iterations_and_halfsets(
                 np.asarray(replay.shape, dtype=np.int64).tofile(stream)
                 replay.reshape(-1).view(np.float64).tofile(stream)
 
-    monkeypatch.setenv(m_step.VDAM_NATIVE_FIRST_MOMENT_REPLAY_ENV, str(template))
-    monkeypatch.setenv(m_step.VDAM_NATIVE_FIRST_MOMENT_REPLAY_ITER_ENV, "all")
+    monkeypatch.setenv(mstep_single_class.VDAM_NATIVE_FIRST_MOMENT_REPLAY_ENV, str(template))
+    monkeypatch.setenv(mstep_single_class.VDAM_NATIVE_FIRST_MOMENT_REPLAY_ITER_ENV, "all")
     for iteration in (1, 2):
-        replay_h0, replay_h1 = m_step._maybe_replay_native_first_moments(
+        replay_h0, replay_h1 = mstep_single_class._maybe_replay_native_first_moments(
             computed, computed, iteration=iteration, class_idx=0
         )
         np.testing.assert_array_equal(replay_h0, expected[iteration, 0])
@@ -194,11 +200,11 @@ def test_native_bpref_replay_supports_all_iterations_and_halfsets(tmp_path, monk
                 np.asarray(shape, dtype=np.int64).tofile(stream)
                 weight.tofile(stream)
 
-    monkeypatch.setenv(m_step.VDAM_NATIVE_BPREF_DATA_REPLAY_ENV, str(data_template))
-    monkeypatch.setenv(m_step.VDAM_NATIVE_BPREF_WEIGHT_REPLAY_ENV, str(weight_template))
-    monkeypatch.setenv(m_step.VDAM_NATIVE_BPREF_REPLAY_ITER_ENV, "all")
+    monkeypatch.setenv(mstep_single_class.VDAM_NATIVE_BPREF_DATA_REPLAY_ENV, str(data_template))
+    monkeypatch.setenv(mstep_single_class.VDAM_NATIVE_BPREF_WEIGHT_REPLAY_ENV, str(weight_template))
+    monkeypatch.setenv(mstep_single_class.VDAM_NATIVE_BPREF_REPLAY_ITER_ENV, "all")
     for iteration in (1, 2):
-        replay_h0, replay_h1 = m_step._maybe_replay_native_bpref_accumulators(
+        replay_h0, replay_h1 = mstep_single_class._maybe_replay_native_bpref_accumulators(
             *accumulators, iteration=iteration, class_idx=0
         )
         for halfset, replay in enumerate((replay_h0, replay_h1)):
@@ -216,13 +222,13 @@ def test_native_reference_input_replay_is_explicit_iteration_gated_and_exact(
         np.asarray(replay.shape, dtype=np.int64).tofile(stream)
         replay.tofile(stream)
 
-    monkeypatch.setenv(m_step.VDAM_NATIVE_IREF_INPUT_REPLAY_ENV, str(replay_path))
-    monkeypatch.setenv(m_step.VDAM_NATIVE_IREF_INPUT_REPLAY_ITER_ENV, "2")
-    assert m_step._maybe_replay_native_reference_input(
+    monkeypatch.setenv(mstep_single_class.VDAM_NATIVE_IREF_INPUT_REPLAY_ENV, str(replay_path))
+    monkeypatch.setenv(mstep_single_class.VDAM_NATIVE_IREF_INPUT_REPLAY_ITER_ENV, "2")
+    assert mstep_single_class._maybe_replay_native_reference_input(
         computed, iteration=1, class_idx=0
     ) is computed
     np.testing.assert_array_equal(
-        m_step._maybe_replay_native_reference_input(
+        mstep_single_class._maybe_replay_native_reference_input(
             computed, iteration=2, class_idx=0
         ),
         replay,
@@ -273,7 +279,7 @@ def test_m_step_matches_relion_fsc_routing_for_ssnr_and_reconstruct(monkeypatch)
             captured["reconstruct_fsc"] = np.asarray(fsc, dtype=np.float64).copy()
             return np.asarray(iref_relion)
 
-    monkeypatch.setattr(m_step, "_get_bindings", lambda: FakeBindings)
+    monkeypatch.setattr(mstep_single_class, "_get_bindings", lambda: FakeBindings)
     accum = _make_accumulator(k=1, h=0, ori_size=ori, seed=4)
 
     vdam_m_step_single_class(

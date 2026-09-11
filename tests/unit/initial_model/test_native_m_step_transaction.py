@@ -7,7 +7,12 @@ import numpy as np
 import pytest
 
 from recovar.em.initial_model import initialise_denovo_state
-from recovar.em.initial_model.m_step import VdamAccumulator, vdam_m_step_single_class
+from recovar.em.initial_model.mstep_accumulator import (
+    VdamAccumulator,
+)
+from recovar.em.initial_model.mstep_single_class import (
+    vdam_m_step_single_class,
+)
 
 pytestmark = pytest.mark.unit
 

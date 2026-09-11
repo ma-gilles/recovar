@@ -1531,7 +1531,9 @@ def _prepare_mstep_state_precision(state, mstep_compute_dtype):
     FSC, authoritative tau2, noise and priors retain their existing precision.
     Bootstrap and projector refresh are not part of this F32 transaction route.
     """
-    from .m_step import _MSTEP_F32_STATE_DTYPES
+    from recovar.em.initial_model.mstep_single_class import (
+        _MSTEP_F32_STATE_DTYPES,
+    )
 
     if mstep_compute_dtype == "float64":
         return state
@@ -1562,7 +1564,9 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         driver_profile[f"{name}_time_s"] = float(now - stage_started)
         stage_started = now
 
-    from .m_step import _validate_mstep_precision_route
+    from recovar.em.initial_model.mstep_single_class import (
+        _validate_mstep_precision_route,
+    )
 
     _validate_mstep_precision_route(opts.mstep_compute_dtype, opts.mstep_backend)
     if opts.mstep_compute_dtype == "float32" and os.environ.get(

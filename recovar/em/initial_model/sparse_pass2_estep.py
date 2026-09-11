@@ -42,6 +42,9 @@ from recovar.em.initial_model.estep_common import (
     _relion_projector_dense_rotations,
     _select_image_rows,
 )
+from recovar.em.initial_model.mstep_accumulator import (
+    VdamAccumulator,
+)
 from recovar.em.sampling import (
     get_oversampled_rotation_grid_from_samples,
     get_oversampled_translation_grid,
@@ -51,7 +54,6 @@ from recovar.em.sampling import (
     rotation_grid_size,
 )
 
-from .m_step import VdamAccumulator
 from .state import InitialModelState
 
 logger = logging.getLogger(__name__)

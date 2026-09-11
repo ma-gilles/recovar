@@ -14,8 +14,11 @@ from typing import Any, Literal
 
 import numpy as np
 
+from recovar.em.initial_model.mstep_accumulator import (
+    VdamAccumulator,
+)
+
 from .layout import relion_bpref_frame_scales, run_em_output_to_bpref
-from .m_step import VdamAccumulator
 from .relion_layout import relion_x_public_output_to_bpref
 from .state import InitialModelState
 
