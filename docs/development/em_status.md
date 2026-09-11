@@ -108,8 +108,23 @@ repairs) keep their paragraphs in the
   the sparse pass-2 bucket preparation ("exact RELION BPref operands require
   RELION CUDA preprocessing"), because the K=1 fresh-refinement defaults assume
   the `relion_cuda` image backend while the test uses the script's `host_numpy`
-  default (the K1 completion launcher already passes `relion_cuda`). Earlier tier runs 13704244
-  (`400ad81e4`, 6 of 7 failed) remain preserved.
+  default (the K1 completion launcher already passes `relion_cuda`). The rerun on frozen
+  `dd7d9b218` (job 13726940, della-h20g2 H100) ran six cases before the 60-minute job
+  limit killed it (TIMEOUT at 1:05:30) during the strict oversampled K-class cold
+  start: K1 replay passes (half correlation 0.99994, |ΔPmax| 1.9e-4, 63 s), K1
+  perturbation replay passes (0.99963/0.99957, |ΔPmax| 0.003, 567 s), the K-class cold
+  start (worst Hungarian class correlation 0.99984, 241 s) and the strict K-class cold
+  start pass again, K-class replay keeps its known failure (|ΔPmax| 1.0,
+  class-assignment accuracy 0.545, per-class map correlation 0.991/0.991), and the K1
+  cold start now reaches its quality gates and fails them: half correlations
+  0.9947/0.9944 against the 0.999 gate, iteration-3 average Pmax 0.887 against RELION's
+  0.965 (gap 0.078, gate 0.01), sigma-offset carry-over passes (4.50 Å at iteration 2),
+  and the run took 2444 s against the test's ~5-minute budget with the production
+  `relion_cuda` fresh-K=1 bundle, which is why the strict oversampled K-class cold start
+  (passing on `bd602096a`) was cut off. Not admitted; the K1 cold-start quality and
+  runtime gap joins the K1 completion failure in the numerical workstream's hand-off
+  ([record](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_fast_tier_dd7d9b218_h100_20260911/admission_record.json)).
+  Earlier tier runs 13704244 (`400ad81e4`, 6 of 7 failed) remain preserved.
 - **K1 100k/256 completion** on frozen `9870438cd` (job 13709837, exclusive
   H100, `relion_cuda` images) **completed without qualifying**: 17 iterations
   in 24,147 s against RELION's 12,695 s (1.90× wall; 4.14 vs 7.88 images/s),
@@ -216,9 +231,10 @@ this page does not schedule or authorize duplicate runs.
 
 ## Next action and efficient execution
 
-Admit the queued fast-tier rerun (13713500), the K1 completion (13709837) and the
-exactly-K4 completion (13712372) against the [benchmark contract](benchmarks.md)
-when they finish, recording every result including failures. Between results,
+The fast-tier rerun on frozen `dd7d9b218` (job 13726940, della-h20g2 H100) is
+recorded below; admit the exactly-K4 completion (13712372) against the
+[benchmark contract](benchmarks.md) when it finishes, recording every result
+including failures. Between results,
 continue one bounded structural package at a time from the cleanup plan.
 Remaining candidates after the September 10–11 packages: a named result type
 for the four positional big-JIT output layouts unpacked in `local_em_engine`
