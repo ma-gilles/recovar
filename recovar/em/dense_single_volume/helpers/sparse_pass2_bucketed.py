@@ -135,6 +135,7 @@ from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
     _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE,
     _bucket_pass2_inputs,
     _bucket_sparse_k_class_pass2_inputs,
+    bucket_chunk_bounds,
     _coalesce_tail_bucket_sizes,
     _prepare_per_image_compact_candidate_pairs,
     _prepare_per_image_pass2_inputs,
@@ -707,12 +708,12 @@ def _bucket_sparse_k_class_compact_pair_counts(
             int(max_pair_candidates_per_microbatch) // max(1, int(n_classes) * pair_bucket_size),
         )
         max_per_chunk = max(1, min(int(max_images_per_microbatch), cap_by_pairs))
-        for start in range(0, bucket_image_indices.shape[0], max_per_chunk):
+        for start, stop in bucket_chunk_bounds(bucket_image_indices.shape[0], max_per_chunk):
             buckets.append(
                 {
                     "pair_bucket_size": pair_bucket_size,
                     "image_indices": np.asarray(
-                        bucket_image_indices[start : start + max_per_chunk],
+                        bucket_image_indices[start:stop],
                         dtype=np.int64,
                     ),
                 }
