@@ -155,8 +155,23 @@ repairs) keep their paragraphs in the
   (1 h 15 min, schema-2 log with 1.5 M rows); the schema-3 schedule
   (oracle_id `a220abb55f4`) was built by 13711316, whose launcher step could not
   resolve the RELION GPU module on a CPU node and was re-run from the login
-  node. The RECOVAR run (13712371/13712372/13712373, frozen `400ad81e4`) is
-  queued. Attempt 13704399 (legacy dispatch log) is preserved as failed.
+  node. The RECOVAR run (13712371/13712372/13712373, frozen `400ad81e4`,
+  same H100 node as the oracle) completed 15 iterations in 28037 s and is
+  **not accepted**: mean class GT FSC-AUC 0.265754 vs RELION 0.266272
+  (delta -0.000519, gate tolerance 0.0001; all four Hungarian-matched classes
+  0.00015-0.00101 behind with identical FSC 0.5/0.143 shells), while
+  particle-level parity is the best recorded (class agreement 0.990, poses
+  within 1 deg 0.978, translations within 1 px 0.980, map corr vs RELION
+  >= 0.9998) and wall is 6.20x RELION (4525 s; target <= 2x; sparse K-class
+  pass-2 is 85 % of iteration wall). Full record in
+  [em_parity_best_metrics.md](../math/em_parity_best_metrics.md#2026-09-11-k4-structural-cleanup-400ad81e4-100k256)
+  and `em_completion_k4_400ad81e4_h100_20260910/{summary.md,admission_record.json}`.
+  Attempt 13704399 (legacy dispatch log) is preserved as failed.
+- **EM workstream A/B on the crop fixes** (13735554 base `a0b0a8141`, 13735555
+  `7a3fdb665`; `pr179_crop_fixes_validation_20260911`): both jobs spent their
+  60-minute limit in the per-job CUDA build and ended FAILED before any parity
+  case ran; no A/B result exists yet. The fast tier on frozen `11bc4f0c2`
+  (13737448/13737449/13737450) is queued.
 - No gate has moved. Moving HEAD is qualified only by CPU comparisons and the
   controller panel; production-F32 quality, convergence/finalization and
   matched-GPU runtime remain open (next section).
@@ -290,10 +305,10 @@ this page does not schedule or authorize duplicate runs.
 
 ## Next action and efficient execution
 
-The fast-tier rerun on frozen `dd7d9b218` (job 13726940, della-h20g2 H100) is
-recorded below; admit the exactly-K4 completion (13712372) against the
-[benchmark contract](benchmarks.md) when it finishes, recording every result
-including failures. Between results,
+The fast-tier rerun on frozen `dd7d9b218` (job 13726940) and the exactly-K4
+completion (13712372: GT FSC-AUC gate failed by -0.000519, 6.20x RELION wall)
+are recorded above; record the fast tier on frozen `11bc4f0c2`
+(13737448/13737449/13737450) when it finishes. Between results,
 continue one bounded structural package at a time from the cleanup plan.
 Remaining candidates after the September 10–11 packages (J through OO): a named
 result type for the four positional big-JIT output layouts unpacked in
