@@ -213,9 +213,9 @@ def test_ensure_field_helper_exists_in_driver():
     assert out2 is pre, "_ensure_field must return the input when already correct"
 
 
-def test_stack_star_pair_helper_exists_in_driver():
+def test_stack_star_pair_helper_exists_in_star_io():
     """``_stack_star_pair`` dedup'd the X/Y origin column reads in ``_write_data_star``."""
-    from recovar.em.initial_model.driver import _stack_star_pair
+    from recovar.em.initial_model.star_io import _stack_star_pair
 
     assert callable(_stack_star_pair)
     assert list(inspect.signature(_stack_star_pair).parameters) == [

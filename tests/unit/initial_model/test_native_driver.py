@@ -14,8 +14,9 @@ import pytest
 import recovar.em.initial_model.driver as driver
 from recovar.data_io.starfile import read_star
 from recovar.em.dense_single_volume.batch_planning import maybe_cache_raw_image_loaders
-from recovar.em.initial_model import initialise_denovo_state
+from recovar.em.initial_model import initialise_denovo_state, star_io
 from recovar.em.initial_model.iteration_loop import select_subset_for_iter
+from recovar.utils.helpers import R_from_relion, write_relion_mrc
 
 SCRIPT_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_ab_initio.py"
 
@@ -44,7 +45,7 @@ def test_micrograph_sort_order_matches_relion_experiment_order():
         }
     )
 
-    assert driver._micrograph_sort_order(main).tolist() == [0, 2, 3, 4, 1]
+    assert star_io._micrograph_sort_order(main).tolist() == [0, 2, 3, 4, 1]
 
 
 def test_noise_variance_preserves_relion_rfloat_shell_values():
@@ -351,7 +352,7 @@ def test_iteration_reference_replay_expands_iteration_and_class(monkeypatch, tmp
     for class_index in (1, 2):
         volume = np.full((8, 8, 8), 10.0 + class_index, dtype=np.float64)
         path = tmp_path / f"run_it003_class{class_index:03d}.mrc"
-        driver.write_relion_mrc(path, volume, voxel_size=1.5)
+        write_relion_mrc(path, volume, voxel_size=1.5)
         paths.append(path)
         expected.append(volume)
     monkeypatch.setenv(
@@ -390,7 +391,7 @@ def test_experiment_read_order_uses_micrograph_lexicographic_order():
         }
     )
 
-    assert driver._experiment_read_order(main).tolist() == [0, 2, 3, 4, 1]
+    assert star_io._experiment_read_order(main).tolist() == [0, 2, 3, 4, 1]
 
 
 def test_seed_zero_halfsets_use_relion_experiment_position_parity():
@@ -421,7 +422,7 @@ def test_seed_zero_halfsets_use_relion_experiment_position_parity():
         rnd_unif_factory=fail_if_called,
         random_seed=0,
         do_grad=True,
-        particle_order=driver._experiment_read_order(main),
+        particle_order=star_io._experiment_read_order(main),
     )
 
     np.testing.assert_array_equal(out.subset_particle_ids, [0, 2, 3, 4, 1])
@@ -456,7 +457,7 @@ def test_image_pre_shifts_from_star_converts_angstrom_origins_to_rounded_pixels(
         }
     )
 
-    raw = driver._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
+    raw = star_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
     shifts = driver._image_pre_shifts_from_star(main, SimpleNamespace(voxel_size=2.0))
 
     np.testing.assert_allclose(
@@ -509,7 +510,7 @@ def test_particle_state_from_star_preserves_class_and_pmax_columns():
         }
     )
 
-    state = driver._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=2))
+    state = star_io._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=2))
 
     np.testing.assert_array_equal(state.translation_offsets, np.zeros((2, 2), dtype=np.float32))
     np.testing.assert_array_equal(state.class_assignments, [1, 0])
@@ -529,7 +530,7 @@ def test_particle_state_from_star_keeps_class_zero_strict_for_fresh_inputs():
     )
 
     with pytest.raises(ValueError, match="one-indexed positive class ids"):
-        driver._particle_state_from_star(
+        star_io._particle_state_from_star(
             main,
             SimpleNamespace(voxel_size=1.0, n_images=2),
         )
@@ -545,7 +546,7 @@ def test_particle_state_from_star_normalizes_verified_k1_restart_sentinels():
         }
     )
 
-    state = driver._particle_state_from_star(
+    state = star_io._particle_state_from_star(
         main,
         SimpleNamespace(voxel_size=1.0, n_images=3),
         allow_unvisited_class_zero=True,
@@ -578,7 +579,7 @@ def test_particle_state_from_star_rejects_visited_class_zero_restart_rows(
     )
 
     with pytest.raises(ValueError, match="sentinels disagree with unvisited particle state"):
-        driver._particle_state_from_star(
+        star_io._particle_state_from_star(
             main,
             SimpleNamespace(voxel_size=1.0, n_images=2),
             allow_unvisited_class_zero=True,
@@ -597,7 +598,7 @@ def test_particle_state_from_star_rejects_positive_class_for_unvisited_restart_r
     )
 
     with pytest.raises(ValueError, match="sentinels disagree with unvisited particle state"):
-        driver._particle_state_from_star(
+        star_io._particle_state_from_star(
             main,
             SimpleNamespace(voxel_size=1.0, n_images=2),
             allow_unvisited_class_zero=True,
@@ -616,7 +617,7 @@ def test_particle_state_from_star_rejects_class_zero_for_k_greater_than_one():
     )
 
     with pytest.raises(ValueError, match="only for a verified K=1"):
-        driver._particle_state_from_star(
+        star_io._particle_state_from_star(
             main,
             SimpleNamespace(voxel_size=1.0, n_images=2),
             allow_unvisited_class_zero=True,
@@ -634,12 +635,12 @@ def test_particle_state_from_star_seeds_input_euler_orientations_for_all_particl
         }
     )
 
-    state = driver._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=3))
+    state = star_io._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=3))
 
     expected_eulers = main[["_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi"]].to_numpy(dtype=np.float64)
     np.testing.assert_array_equal(
         state.best_pose_rotations,
-        driver.R_from_relion(expected_eulers, degrees=True).astype(np.float32),
+        R_from_relion(expected_eulers, degrees=True).astype(np.float32),
     )
     np.testing.assert_array_equal(state.visited, np.zeros(3, dtype=bool))
     assert driver._best_eulers_from_particle_state(
@@ -679,7 +680,7 @@ def test_sampling_accuracy_uses_seeded_star_eulers_before_particles_are_visited(
             "_rlnAnglePsi": [-20.0, 45.0, 91.0],
         }
     )
-    particle_state = driver._particle_state_from_star(main, SimpleNamespace(voxel_size=2.0, n_images=3))
+    particle_state = star_io._particle_state_from_star(main, SimpleNamespace(voxel_size=2.0, n_images=3))
     state = initialise_denovo_state(ori_size=8, pixel_size=2.0, K=1, nr_iter=200, n_directions=1)
     state.Iref[:] = 1.0
     optics_state = driver.NativeOpticsState(
@@ -726,7 +727,7 @@ def test_particle_state_from_star_rejects_partial_euler_triplet(missing_name):
     ).drop(columns=missing_name)
 
     with pytest.raises(ValueError, match="all Euler-angle columns"):
-        driver._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=1))
+        star_io._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=1))
 
 
 @pytest.mark.parametrize("angle_name", ["_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi"])
@@ -742,7 +743,7 @@ def test_particle_state_from_star_rejects_nonfinite_euler_angles(angle_name):
     main.loc[0, angle_name] = np.nan
 
     with pytest.raises(ValueError, match="Euler angles must be finite"):
-        driver._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=1))
+        star_io._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=1))
 
 
 def test_sampling_plan_oversamples_relion_grid():
@@ -787,7 +788,7 @@ def test_native_expectation_step_uses_rfloat_metadata_translations(monkeypatch):
 
     monkeypatch.setattr(driver, "_build_sampling_plan", fake_build_sampling_plan)
     monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
-    particle_state = driver.NativeParticleState(
+    particle_state = star_io.NativeParticleState(
         translation_offsets=np.zeros((1, 2), dtype=np.float64),
         class_assignments=np.zeros(1, dtype=np.int32),
         max_posterior=np.zeros(1, dtype=np.float32),
@@ -1616,7 +1617,7 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
     monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
     dataset = SimpleNamespace(voxel_size=1.0, n_images=2)
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=2, n_directions=1)
-    particle_state = driver.NativeParticleState(
+    particle_state = star_io.NativeParticleState(
         translation_offsets=np.asarray([[0.0, 0.0], [1.1, -1.0]], dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
         max_posterior=np.zeros(2, dtype=np.float32),
@@ -1669,7 +1670,7 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
 
 
 def test_update_particle_state_preserves_best_pose_metadata():
-    particle_state = driver.NativeParticleState(
+    particle_state = star_io.NativeParticleState(
         translation_offsets=np.zeros((3, 2), dtype=np.float32),
         class_assignments=np.zeros(3, dtype=np.int32),
         max_posterior=np.zeros(3, dtype=np.float32),
@@ -1728,7 +1729,7 @@ def test_best_eulers_from_particle_state_prefers_stored_rotation_matrices():
     grid_rotations = driver.sampling.get_relion_rotation_grid(1, rotation_index_order="relion")
     perturbed_euler = np.asarray([[33.0, 44.0, 55.0]], dtype=np.float64)
     perturbed_rotation = driver.sampling._relion_euler_angles_to_matrix(perturbed_euler)[0].astype(np.float32)
-    particle_state = driver.NativeParticleState(
+    particle_state = star_io.NativeParticleState(
         translation_offsets=np.zeros((2, 2), dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
         max_posterior=np.ones(2, dtype=np.float32),
@@ -1786,7 +1787,7 @@ def test_native_expectation_step_uses_autosampling_state_at_iteration_ten(monkey
 
     opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200)
     sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
-    particle_state = driver.NativeParticleState(
+    particle_state = star_io.NativeParticleState(
         translation_offsets=np.zeros((1, 2), dtype=np.float32),
         class_assignments=np.zeros(1, dtype=np.int32),
         max_posterior=np.zeros(1, dtype=np.float32),
@@ -1897,7 +1898,7 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
     opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200, random_seed=17, padding_factor=2, projector_setup_backend=backend)
     sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
     sampling_state.current_changes_optimal_offsets_angstrom = 10.366644 / 5.0
-    particle_state = driver.NativeParticleState(
+    particle_state = star_io.NativeParticleState(
         translation_offsets=np.zeros((2, 2), dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
         max_posterior=np.zeros(2, dtype=np.float32),
@@ -2010,7 +2011,7 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
     best_rotations = driver.sampling._relion_euler_angles_to_matrix(
         np.asarray([[10.0, 30.0, 20.0], [40.0, 60.0, 50.0]])
     )
-    particle_state = driver.NativeParticleState(
+    particle_state = star_io.NativeParticleState(
         translation_offsets=np.zeros((2, 2), dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
         max_posterior=np.ones(2, dtype=np.float32),
@@ -2094,7 +2095,7 @@ def test_native_expectation_step_records_sampling_changes_each_gradient_iteratio
 
     opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200, oversampling=0)
     sampling_state = driver._initial_sampling_state(opts, pixel_size=2.0)
-    particle_state = driver.NativeParticleState(
+    particle_state = star_io.NativeParticleState(
         translation_offsets=np.zeros((2, 2), dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
         max_posterior=np.zeros(2, dtype=np.float32),
@@ -2177,7 +2178,7 @@ def test_native_expectation_step_expands_class_rotation_prior_for_dense_fallback
     monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
 
     opts = driver.NativeInitialModelOptions(fn_img="particles.star", oversampling=1)
-    particle_state = driver.NativeParticleState(
+    particle_state = star_io.NativeParticleState(
         translation_offsets=np.zeros((2, 2), dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
         max_posterior=np.zeros(2, dtype=np.float32),
@@ -2319,7 +2320,7 @@ def test_dense_estep_config_keeps_zero_oversampling_on_exact_adaptive_route():
 
 
 def test_driver_output_mrc_path_matches_relion_snapshot():
-    assert driver._initial_model_mrc_from_prefix("ab_initio/run") == "ab_initio/initial_model.mrc"
+    assert star_io._initial_model_mrc_from_prefix("ab_initio/run") == "ab_initio/initial_model.mrc"
 
 
 def test_model_star_uses_relion_model_blocks(tmp_path):
@@ -2339,7 +2340,7 @@ def test_model_star_uses_relion_model_blocks(tmp_path):
     )
     out = tmp_path / "run_it001_model.star"
 
-    driver._write_model_star(str(out), state, ("run_it001_class001.mrc", "run_it001_class002.mrc"))
+    star_io._write_model_star(str(out), state, ("run_it001_class001.mrc", "run_it001_class002.mrc"))
 
     text = out.read_text()
     assert "data_model_general" in text
@@ -2376,7 +2377,7 @@ def test_iteration_zero_artifacts_use_the_normal_iteration_writer(monkeypatch, t
             "_rlnOpticsGroup": ["1", "1"],
         }
     )
-    particle_state = driver.NativeParticleState(
+    particle_state = star_io.NativeParticleState(
         translation_offsets=np.zeros((2, 2), dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
         max_posterior=np.zeros(2, dtype=np.float32),
@@ -2387,10 +2388,10 @@ def test_iteration_zero_artifacts_use_the_normal_iteration_writer(monkeypatch, t
         assert voxel_size == 1.5
         Path(path).write_bytes(b"iteration-zero-map")
 
-    monkeypatch.setattr(driver, "write_relion_mrc", fake_write_mrc)
+    monkeypatch.setattr(star_io, "write_relion_mrc", fake_write_mrc)  # the artifact writer resolves the name in star_io
     monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PROFILE", "1")
     prefix = str(tmp_path / "run")
-    driver._write_iteration_artifacts(
+    star_io._write_iteration_artifacts(
         prefix,
         state,
         0,
@@ -2441,14 +2442,14 @@ def test_data_star_preserves_optics_and_updates_particle_metadata(tmp_path, monk
         }
     )
     optics = pd.DataFrame({"_rlnOpticsGroup": ["1"], "_rlnImageSize": ["8"]})
-    particle_state = driver.NativeParticleState(
+    particle_state = star_io.NativeParticleState(
         translation_offsets=np.asarray([[2.0, -1.0], [0.5, 1.25]], dtype=np.float32),
         class_assignments=np.asarray([1, 0], dtype=np.int32),
         max_posterior=np.asarray([0.875, 0.25], dtype=np.float32),
     )
     out = tmp_path / "run_it001_data.star"
 
-    driver._write_data_star(
+    star_io._write_data_star(
         str(out),
         main,
         optics,
@@ -2486,7 +2487,7 @@ def test_data_star_zeros_unvisited_rows_and_writes_best_pose_eulers(tmp_path, mo
             "_rlnMaxValueProbDistribution": ["0.5", "0.0", "0.0"],
         }
     )
-    particle_state = driver.NativeParticleState(
+    particle_state = star_io.NativeParticleState(
         translation_offsets=np.zeros((3, 2), dtype=np.float32),
         class_assignments=np.asarray([0, 0, 0], dtype=np.int32),
         max_posterior=np.asarray([0.75, 0.0, 0.625], dtype=np.float32),
@@ -2496,7 +2497,7 @@ def test_data_star_zeros_unvisited_rows_and_writes_best_pose_eulers(tmp_path, mo
     )
     out = tmp_path / "run_it010_data.star"
 
-    driver._write_data_star(
+    star_io._write_data_star(
         str(out),
         main,
         None,

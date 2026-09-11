@@ -11,12 +11,12 @@ import mrcfile
 import numpy as np
 import starfile
 
+from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.em.initial_model.driver import (
-    _micrograph_sort_order,
     _native_optics_state,
     read_star,
 )
-from recovar.data_io.cryoem_dataset import load_dataset
+from recovar.em.initial_model.star_io import _micrograph_sort_order
 from recovar.relion_bind import _relion_bind_core as bind
 
 
