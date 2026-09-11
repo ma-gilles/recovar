@@ -132,6 +132,22 @@ repairs) keep their paragraphs in the
   runtime gap joins the K1 completion failure in the numerical workstream's hand-off
   ([record](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_fast_tier_dd7d9b218_h100_20260911/admission_record.json)).
   Earlier tier runs 13704244 (`400ad81e4`, 6 of 7 failed) remain preserved.
+- **Exactly-K4 100k/256 completion** on frozen `400ad81e4` (job 13712372, exclusive
+  H100, 7 h 54 m) **completed without qualifying**. Quality: the ground-truth FSC-AUC
+  class mean is 0.265754 against RELION's 0.266272, a deficit of 5.2e-4 against the
+  1e-4 gate, and RECOVAR is behind in all four Hungarian-matched classes
+  (0.2673/0.2633/0.2622/0.2702 versus 0.2679/0.2637/0.2632/0.2704). The classes are
+  near balanced, so a population-weighted mean would not change that. Agreement with
+  RELION's class assignment is 99.046 % of 100,000 particles and the Pmax correlation
+  is 0.911 (median |Δ| 3.8e-4, max 0.64). Runtime: 27,999 s of iterations, 28,422 s
+  job wall, against RELION's 4,525 s, so 6.19× to 6.28×. Neither engine converged by
+  iteration 15, so neither has a final all-data pass and that optional FSC is missing
+  on both sides. The summarizer (job 13712373) exits 2 for the failed quality gate;
+  its K=1 "missing" fields are an artifact of a K4-only launch, not a K=1 result. Not
+  admitted; the quality deficit goes to the numerical workstream and the runtime to the
+  performance workstream, where the integrated K4 compile-glue rounds (absent from this
+  frozen source) and the stable-shape design item both apply
+  ([record](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_completion_k4_400ad81e4_h100_20260910/admission_record.json)).
 - **K1 100k/256 completion** on frozen `9870438cd` (job 13709837, exclusive
   H100, `relion_cuda` images) **completed without qualifying**: 17 iterations
   in 24,147 s against RELION's 12,695 s (1.90× wall; 4.14 vs 7.88 images/s),
