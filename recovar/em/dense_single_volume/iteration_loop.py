@@ -1032,6 +1032,28 @@ def _run_relion_iteration_loop(
     )
     frozen_initial_scoring_state = None
     frozen_initial_scoring_state_sha256 = None
+    def _state_swap_inputs():
+        """The scoring-state values a state-swap probe snapshots and later swaps, as bound right now."""
+
+        return dict(
+            state=state,
+            cs=current_size,
+            means=means,
+            mean_variance=mean_variance,
+            noise_variance_per_half=noise_variance_per_half,
+            noise_variance=noise_variance,
+            previous_noise_radial_per_half=previous_noise_radial_per_half,
+            previous_noise_radial=previous_noise_radial,
+            relion_half_inputs=relion_half_inputs,
+            previous_best_rotations=previous_best_rotations,
+            current_sigma_offset_angstrom=current_sigma_offset_angstrom,
+            current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
+            class_direction_prior_per_half=class_direction_prior_per_half,
+            class_direction_prior_order_per_half=class_direction_prior_order_per_half,
+            global_direction_prior_per_half=global_direction_prior_per_half,
+            global_direction_prior_order_per_half=global_direction_prior_order_per_half,
+        )
+
     def _frozen_scoring_state_now():
         """The scoring-state arrays as bound right now; the loop re-binds several of them per iteration."""
 
@@ -1352,24 +1374,7 @@ def _run_relion_iteration_loop(
             and int(debug.state_swap_probe.get("iteration", -1)) == int(iteration)
         )
         if state_swap_target_this_iteration:
-            recovar_state_swap_snapshot = _snapshot_state_swap_inputs(
-                state=state,
-                cs=current_size,
-                means=means,
-                mean_variance=mean_variance,
-                noise_variance_per_half=noise_variance_per_half,
-                noise_variance=noise_variance,
-                previous_noise_radial_per_half=previous_noise_radial_per_half,
-                previous_noise_radial=previous_noise_radial,
-                relion_half_inputs=relion_half_inputs,
-                previous_best_rotations=previous_best_rotations,
-                current_sigma_offset_angstrom=current_sigma_offset_angstrom,
-                current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
-                class_direction_prior_per_half=class_direction_prior_per_half,
-                class_direction_prior_order_per_half=class_direction_prior_order_per_half,
-                global_direction_prior_per_half=global_direction_prior_per_half,
-                global_direction_prior_order_per_half=global_direction_prior_order_per_half,
-            )
+            recovar_state_swap_snapshot = _snapshot_state_swap_inputs(**_state_swap_inputs())
         replay_result = apply_iter_replay_overrides(
             iter_replay_override=iter_replay_override,
             perturb_replay_relion_dir=perturb_replay_relion_dir,
@@ -1472,23 +1477,8 @@ def _run_relion_iteration_loop(
             probe=debug.state_swap_probe,
             iteration=iteration,
             recovar_snapshot=recovar_state_swap_snapshot,
-            state=state,
-            cs=current_size,
             volume_shape=volume_shape,
-            means=means,
-            mean_variance=mean_variance,
-            noise_variance_per_half=noise_variance_per_half,
-            noise_variance=noise_variance,
-            previous_noise_radial_per_half=previous_noise_radial_per_half,
-            previous_noise_radial=previous_noise_radial,
-            relion_half_inputs=relion_half_inputs,
-            previous_best_rotations=previous_best_rotations,
-            current_sigma_offset_angstrom=current_sigma_offset_angstrom,
-            current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
-            class_direction_prior_per_half=class_direction_prior_per_half,
-            class_direction_prior_order_per_half=class_direction_prior_order_per_half,
-            global_direction_prior_per_half=global_direction_prior_per_half,
-            global_direction_prior_order_per_half=global_direction_prior_order_per_half,
+            **_state_swap_inputs(),
         )
         if not parity.use_per_half_mean_variance:
             # State-swap diagnostics historically replace the one shared tau2.
