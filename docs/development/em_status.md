@@ -221,6 +221,27 @@ results, convergence/finalization and shared downstream checks. Keep
 [quantitative gates](../math/em_parity_program.md) unchanged. Preserve the reviewed
 final-grid-correction default; its strict-target discrepancy needs separate qualification.
 
+## VDAM insight port to the EM path
+
+Disposition of the twelve insights in the September 11 VDAM handoff. "Lands with
+the commits" means the shared code came in with the cherry-picks and needs no
+separate EM change.
+
+| # | insight | disposition |
+| --- | --- | --- |
+| a | staging copies every stack to a GPFS `TMPDIR`, network to network, and leaves it behind | **Ported.** `data_io.staging` now declines the `TMPDIR` fallback on a network filesystem and logs why; an explicit `RECOVAR_CACHE_DIR` is still honored anywhere. Verified here: the EM work runtime root reports gpfs and is refused, `/tmp` (xfs) and `/dev/shm` (tmpfs) still stage. The completion harness already disabled staging for this reason. |
+| b | `RECOVAR_PREREAD_IMAGES` removes per-iteration subset re-reads | **Ported.** The completion harness sets it by default with the loader's 64 GB per-file cap; the 100k/256 stacks are about 26 GB. The EM K1 100k pair will be measured with it. |
+| c | the local engine fetches each subset a second time after pass 1 | **Recorded, not changed.** The handoff rates it about 2 s per iteration once the preread is on; it stays on the cleanup candidate list rather than being folded into this batch. |
+| d | per-bucket eager glue costs ~137 XLA programs per bucket shape | **Lands with the commits** (both glue rounds). EM K4 cold and warm walls are being re-measured. |
+| e | remaining K4 compile cost: current-size changes and per-iteration bucket shapes recompile every pixel-dimensioned program | **Design item, not started.** Extending `--stable-fourier-window-shapes` to K>1 and stabilizing shapes in every K-class bucket planner is a separate change with its own qualification; recorded here as the next performance step for K4. |
+| f | determinism opt-ins give bitwise same-state K1 maps | **Lands with the commits.** Use `RECOVAR_EM_DETERMINISTIC_REDUCTIONS=1` with `RECOVAR_RELION_WAVG_DETERMINISTIC_ROTATION_SUM=1` for EM same-state bitwise checks. |
+| g | K4 base runs are not bitwise-repeatable even with the opt-ins | **Recorded.** Any K4 equivalence claim in this workstream is band-level, never bitwise, until the x-half BPref atomics are covered. |
+| h | the fixture generator writes a CTF block RELION rejects for no-CTF cells | **Already handled here, no change.** The K=1 robustness matrix writes a sanitized identity-CTF STAR through `scripts/make_relion_identity_ctf_star.py` (gated by `EM_K1_NOCTF_RELION_USE_CTF`, default on) and the K-class matrix drops `--ctf` for those cases. Both predate the handoff's source, so the VDAM runner can reuse either instead of excluding the cells. |
+| i | the K-class GT scorer reports a plain mean over classes | **Ported.** `evaluate_kclass_gt.py` takes `--class_population` per class and reports population-weighted means beside the plain ones. |
+| j | `test_relion_cuda_powerclass_norm_units_preserve_divide_before_square` fails on CPU-only environments | **Did not reproduce; not marked GPU-only.** It passes on this branch under `JAX_PLATFORMS=cpu` with `CUDA_VISIBLE_DEVICES` empty, with and without the prebuilt native binding. Handed back rather than weakening the test. |
+| k | a fresh worktree's source mtimes are newer than a copied CUDA library, so the loader rebuilds it in place | **Adopted as practice.** The validation runners `touch` the pinned library before each arm and record its sha256. A loader guard that refuses to overwrite a pinned `RECOVAR_CUDA_LIB` remains an open suggestion. |
+| l | late-phase per-iteration times were bimodal purely from I/O | **Ported.** Completion jobs now echo staging, preread and compilation-cache state with the other provenance, so a wall is read together with its I/O placement. |
+
 ## VDAM end-to-end status (carried from the VDAM workstream)
 
 Integrated on September 11 from the VDAM handoff
