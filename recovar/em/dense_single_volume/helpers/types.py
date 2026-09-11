@@ -154,6 +154,55 @@ def sparse_pass2_result(
     ) + tuple(value for value in optional if value is not OMITTED)
 
 
+class SparsePass2Output(NamedTuple):
+    """A sparse pass-2 result read back by position; absent optional entries are ``None``."""
+
+    Ft_y: object
+    Ft_ctf: object
+    hard_assignment: object
+    best_rotations: object
+    best_translations: object
+    best_rotation_indices: object
+    relion_stats: object
+    score_log_z: object
+    noise_stats: object
+    source_eulers: object
+
+
+def read_sparse_pass2_result(
+    output,
+    *,
+    includes_score_log_z: bool,
+    accumulate_noise: bool,
+    return_source_eulers: bool,
+) -> SparsePass2Output:
+    """Read a :func:`sparse_pass2_result` tuple whose statistics were requested.
+
+    The optional entries follow the six fixed values in the builder's order, so
+    the score log-Z (when carried) sits at index 7, the noise statistics right
+    after it, and the source Euler angles are always the last entry.
+    """
+
+    Ft_y, Ft_ctf, hard_assignment, best_rotations, best_translations, best_rotation_indices, relion_stats = output[:7]
+    next_index = 7
+    score_log_z = None
+    if includes_score_log_z:
+        score_log_z = output[next_index]
+        next_index += 1
+    return SparsePass2Output(
+        Ft_y=Ft_y,
+        Ft_ctf=Ft_ctf,
+        hard_assignment=hard_assignment,
+        best_rotations=best_rotations,
+        best_translations=best_translations,
+        best_rotation_indices=best_rotation_indices,
+        relion_stats=relion_stats,
+        score_log_z=score_log_z,
+        noise_stats=output[next_index] if accumulate_noise else None,
+        source_eulers=output[-1] if return_source_eulers else None,
+    )
+
+
 def make_relion_stats(
     *,
     log_evidence_per_image,

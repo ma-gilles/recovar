@@ -27,7 +27,7 @@ from .helpers.significant_samples import (
     ComplementSignificantSampleIndices,
     significant_sample_count,
 )
-from .helpers.types import NoiseStats, RelionStats, make_relion_stats
+from .helpers.types import NoiseStats, RelionStats, make_relion_stats, read_sparse_pass2_result
 from .k_class_inputs import (
     _as_class_means,
     _class_log_priors,
@@ -1090,25 +1090,27 @@ def _run_sparse_k_class_adaptive_pass2(
     per_class_best_pose_rotation_ids = [None] * n_classes if return_best_pose_details else None
 
     def _store_mstep_output(class_index: int, output, *, includes_score_log_z: bool = False):
-        class_Ft_y, class_Ft_ctf, hard_assignment, best_rots, best_trans, best_rot_ids, stats = output[:7]
-        next_index = 7
-        score_log_z = None
-        if includes_score_log_z:
-            score_log_z = np.asarray(output[next_index], dtype=np.float64)
-            next_index += 1
-        noise = output[next_index] if accumulate_noise else None
-        Ft_y[class_index] = _as_host_accumulator(class_Ft_y)
-        Ft_ctf[class_index] = _as_host_accumulator(class_Ft_ctf)
-        hard_assignments[class_index] = _sparse_pose_ids_to_fine_grid(hard_assignment, best_rot_ids, n_fine_trans)
-        per_class_stats[class_index] = stats
+        result = read_sparse_pass2_result(
+            output,
+            includes_score_log_z=includes_score_log_z,
+            accumulate_noise=accumulate_noise,
+            return_source_eulers=return_best_pose_details,
+        )
+        score_log_z = None if result.score_log_z is None else np.asarray(result.score_log_z, dtype=np.float64)
+        Ft_y[class_index] = _as_host_accumulator(result.Ft_y)
+        Ft_ctf[class_index] = _as_host_accumulator(result.Ft_ctf)
+        hard_assignments[class_index] = _sparse_pose_ids_to_fine_grid(
+            result.hard_assignment, result.best_rotation_indices, n_fine_trans
+        )
+        per_class_stats[class_index] = result.relion_stats
         if per_class_noise is not None:
-            per_class_noise[class_index] = noise
+            per_class_noise[class_index] = result.noise_stats
         if return_best_pose_details:
-            per_class_best_pose_eulers_deg[class_index] = output[-1]
-            per_class_best_pose_rotations[class_index] = best_rots
-            per_class_best_pose_translations[class_index] = best_trans
-            per_class_best_pose_rotation_ids[class_index] = best_rot_ids
-        return stats, score_log_z
+            per_class_best_pose_eulers_deg[class_index] = result.source_eulers
+            per_class_best_pose_rotations[class_index] = result.best_rotations
+            per_class_best_pose_translations[class_index] = result.best_translations
+            per_class_best_pose_rotation_ids[class_index] = result.best_rotation_indices
+        return result.relion_stats, score_log_z
 
     mstep_t0 = time.time()
     output = compute_pass2_stats_sparse(
@@ -1832,19 +1834,26 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
             bpref_class_index=class_index,
             **common,
         )
-        class_Ft_y, class_Ft_ctf, hard_subset, best_rots, best_trans, best_rot_ids, stats_subset = output[:7]
-        noise = output[7] if accumulate_noise else None
+        result = read_sparse_pass2_result(
+            output, includes_score_log_z=False, accumulate_noise=accumulate_noise, return_source_eulers=False
+        )
         hard_full = np.zeros(n_images, dtype=np.int32)
-        hard_full[image_indices] = _sparse_pose_ids_to_fine_grid(hard_subset, best_rot_ids, n_fine_trans)
+        hard_full[image_indices] = _sparse_pose_ids_to_fine_grid(
+            result.hard_assignment, result.best_rotation_indices, n_fine_trans
+        )
         results.append_class(
             image_indices=image_indices,
-            Ft_y=class_Ft_y,
-            Ft_ctf=class_Ft_ctf,
+            Ft_y=result.Ft_y,
+            Ft_ctf=result.Ft_ctf,
             hard_full=hard_full,
-            stats_subset=stats_subset,
+            stats_subset=result.relion_stats,
             class_log_evidence=coarse_result.class_log_evidence[class_index],
-            noise=noise,
-            best_pose=(best_rots, best_trans, best_rot_ids) if return_best_pose_details else None,
+            noise=result.noise_stats,
+            best_pose=(
+                (result.best_rotations, result.best_translations, result.best_rotation_indices)
+                if return_best_pose_details
+                else None
+            ),
             host_accumulators=True,
         )
 

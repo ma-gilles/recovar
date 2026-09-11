@@ -52,6 +52,7 @@ case counts, provenance and limits.
 | see receipt | EM handoff integrated: the RELION projector crop is sized from the particle-image window (not the model sphere) and local-search rotation ids and hard assignments are int64; a numerical fix that is a no-op when the optics pixel equals the model pixel (all synthetic fixtures unchanged); three projection-cache test callers migrated to the peer's `rows_for_bucket` contract | peer numerical fix | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_crop_fix_integration_20260911/result.json) |
 | see receipt | `types.sparse_pass2_result` owns the sparse pass-2 return tuple and the order of its optional entries (statistics, score log-Z, noise, source Eulers); the two pass-2 functions had four branches building it by concatenation, and the historical rule that the score log-Z rides with the statistics is now stated once | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/sparse_pass2_result_tuple_owner_20260911/result.json) |
 | see receipt | `local_big_jit._LocalBigJitCore` names the 22-value core that every big-JIT result carries; the four producer sites build it and `local_em_engine` unpacks it once (core, then the deferred / source-VDAM / M-step-tensor extras per layout) instead of four positional 22-name unpacks; the wire format stays a plain tuple for the fixed-capacity scan carry window and the BPref transaction queue | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/local_big_jit_result_layout_owner_20260911/result.json) |
+| see receipt | `types.read_sparse_pass2_result` reads the positional sparse pass-2 tuple next to its builder and returns `SparsePass2Output` (absent optional entries `None`); the two index-walking consumers in `k_class` now use it | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/sparse_pass2_result_reader_owner_20260911/result.json) |
 | see receipt | `sparse_pass2_bucketed._gaussian_algebraic_score_terms` owns the batched algebraic Gaussian score terms (weighted cross einsum, projection norm, prior-free and prior-added scores) shared by the production algebraic scorer and its components variant; traced programs identical | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/gaussian_algebraic_terms_owner_20260911/result.json) |
 | see receipt | `pass2_diagnostics._optional_operand_row_fields` owns the ten optional RELION operand captures of the K=1 pass-2 dump (absent operands recorded as empty arrays or NaN); the selected-rows and effective-grid schemas shared two 57-line blocks | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pass2_dump_operand_fields_owner_20260911/result.json) |
 | see receipt | the dense engine binds its per-batch score-block keywords once (`score_block_kwargs`) after the last scoring-operand rebinding and passes them to both the pass-1 and pass-2 `_score_rotation_block` calls, which keep only their block projections | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_engine_score_block_kwargs_20260911/result.json) |
@@ -327,12 +328,8 @@ and the fast tier on frozen `11bc4f0c2` (13737449: 5 pass, 2 known failures)
 are recorded above; the VDAM-handoff GPU validation pair on the published source
 (`vdam_port_gpu_validation_97f6d6b33_20260911`) is pending. Between results,
 continue one bounded structural package at a time from the cleanup plan.
-Remaining candidates after the September 10–11 packages (J through OO): a named
-result type for the four positional big-JIT output layouts unpacked in
-`local_em_engine` and returned by `local_big_jit`, and a named result for the
-seven-plus-optional positional tuple that `compute_pass2_stats_sparse` and its
-bucketed variant return and `k_class` unpacks by index (both are design changes at
-hot kernel boundaries); the 35-line bucket-pipeline blocks repeated inside
+Remaining candidates after the September 10–11 packages (J through UU; the big-JIT
+core layout and the sparse pass-2 tuple reader landed as TT and UU): the 35-line bucket-pipeline blocks repeated inside
 `sparse_pass2_bucketed` and the 33-line blocks inside `local_big_jit` (hot paths,
 exact comparison would need GPU-shaped fixtures); the per-row optional operand
 fields repeated by the two pass-2 diagnostic dump writers; the pass-1/pass-2
