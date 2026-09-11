@@ -1394,6 +1394,20 @@ def run_em(
                 ready_values.append(shifted_masked_for_noise)
             _block_until_ready(*ready_values)
         timing.score_prep_s += time.time() - score_prep_t0
+        # Per-batch scoring operands shared by the pass-1 and pass-2 rotation blocks;
+        # only the block's projections vary.
+        score_block_kwargs = dict(
+            shifted_score=shifted_windowed,
+            batch_norm=batch_norm,
+            score_weight=ctf2_over_nv_windowed,
+            half_weights=half_weights,
+            n_images=batch_size,
+            n_trans=n_trans,
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            score_mode=relion_firstiter_score_mode,
+            precision_policy=precision_policy,
+        )
         batch_score_constraint_blocks = (
             lambda r0, r1, start, end, batch_count, _rows=batch_rows_np: _dense_score_constraint_blocks(
                 r0,
@@ -1493,18 +1507,9 @@ def run_em(
             score_t0 = time.time()
             scores = _score_rotation_block(
                 window_spec,
-                shifted_score=shifted_windowed,
-                batch_norm=batch_norm,
-                score_weight=ctf2_over_nv_windowed,
                 proj_half=proj_half_b,
                 proj_abs2_half=proj_abs2_half_b,
-                half_weights=half_weights,
-                n_images=batch_size,
-                n_trans=n_trans,
-                image_shape=image_shape,
-                volume_shape=volume_shape,
-                score_mode=relion_firstiter_score_mode,
-                precision_policy=precision_policy,
+                **score_block_kwargs,
             )
 
             if sync_timers:
@@ -1804,18 +1809,9 @@ def run_em(
             score_t0 = time.time()
             scores = _score_rotation_block(
                 window_spec,
-                shifted_score=shifted_windowed,
-                batch_norm=batch_norm,
-                score_weight=ctf2_over_nv_windowed,
                 proj_half=proj_half_b,
                 proj_abs2_half=proj_abs2_half_b,
-                half_weights=half_weights,
-                n_images=batch_size,
-                n_trans=n_trans,
-                image_shape=image_shape,
-                volume_shape=volume_shape,
-                score_mode=relion_firstiter_score_mode,
-                precision_policy=precision_policy,
+                **score_block_kwargs,
             )
 
             if sync_timers:
