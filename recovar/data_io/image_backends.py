@@ -115,6 +115,13 @@ def _centered_rfft2_jax(images):
     images_jax = jnp.asarray(images, dtype=jnp.float32)
     if images_jax.ndim == 2:
         images_jax = images_jax[None, ...]
+    return _centered_rfft2_jax_batched(images_jax)
+
+
+@jax.jit
+def _centered_rfft2_jax_batched(images_jax):
+    """One compiled shift/rFFT/shift program per batch shape."""
+
     shifted = jnp.fft.fftshift(images_jax, axes=(-2, -1))
     transformed = jnp.fft.rfft2(shifted, axes=(-2, -1))
     return jnp.fft.fftshift(transformed, axes=(-2,))
