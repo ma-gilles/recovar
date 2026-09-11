@@ -12,7 +12,9 @@ def test_bucket_operands_are_converted_once_before_the_fused_score_chain():
     assert chain.count("jnp.asarray(bucket.translation_log_prior)") == 1
     assert chain.count("jnp.asarray(bucket.local_rotation_mask)") == 1
     assert chain.count("jnp.asarray(bucket.local_sample_mask)") == 1
-    assert chain.count("bucket_local_sample_mask,") == 6 and chain.count("bucket_translation_log_prior,") == 6
+    # one bound operand tuple for the four fused-score variants plus the two plain scorers
+    assert chain.count("bucket_local_sample_mask,") == 3 and chain.count("bucket_translation_log_prior,") == 3
+    assert chain.count("*fused_score_operands,") == 4
     assert start < src.index("used_fused_score_mstep = True")
     # the deferred reconstruction mask reuses the same bound array
     assert src.count("reconstruction_rotation_mask = bucket_local_rotation_mask") == 1

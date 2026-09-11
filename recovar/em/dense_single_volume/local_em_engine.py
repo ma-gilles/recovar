@@ -6164,6 +6164,16 @@ def run_local_em_exact(
             else jnp.asarray(reconstruction_probability_threshold_np[np.asarray(bucket.image_indices)], dtype=jnp.float64)
         )
         used_fused_score_mstep = True
+        fused_score_operands = (
+            shifted_score_split,
+            ctf2_over_nv_score,
+            proj_weighted,
+            half_weights_windowed if use_window else half_weights,
+            local_rotation_log_prior,
+            bucket_translation_log_prior,
+            bucket_local_rotation_mask,
+            bucket_local_sample_mask,
+        )
         if can_use_fused_score_mstep and score_only and not has_external_normalization:
             fused_t0 = time.time()
             (
@@ -6178,14 +6188,7 @@ def run_local_em_exact(
                 probs_sum_t,
                 reconstruction_probs_sum_t,
             ) = fused_score_normalize_support_abs2_on_demand(
-                shifted_score_split,
-                ctf2_over_nv_score,
-                proj_weighted,
-                half_weights_windowed if use_window else half_weights,
-                local_rotation_log_prior,
-                bucket_translation_log_prior,
-                bucket_local_rotation_mask,
-                bucket_local_sample_mask,
+                *fused_score_operands,
                 None,
                 half_spectrum_scoring=half_spectrum_scoring,
                 use_float64_normalization=use_float64_normalization,
@@ -6222,14 +6225,7 @@ def run_local_em_exact(
                 probs_sum_t,
                 reconstruction_probs_sum_t,
             ) = fused_score_normalize_support_probs_abs2_on_demand(
-                shifted_score_split,
-                ctf2_over_nv_score,
-                proj_weighted,
-                half_weights_windowed if use_window else half_weights,
-                local_rotation_log_prior,
-                bucket_translation_log_prior,
-                bucket_local_rotation_mask,
-                bucket_local_sample_mask,
+                *fused_score_operands,
                 None,
                 half_spectrum_scoring=half_spectrum_scoring,
                 use_float64_normalization=use_float64_normalization,
@@ -6269,14 +6265,7 @@ def run_local_em_exact(
                 summed,
                 ctf_probs,
             ) = fused_score_normalize_mstep_abs2_on_demand(
-                shifted_score_split,
-                ctf2_over_nv_score,
-                proj_weighted,
-                half_weights_windowed if use_window else half_weights,
-                local_rotation_log_prior,
-                bucket_translation_log_prior,
-                bucket_local_rotation_mask,
-                bucket_local_sample_mask,
+                *fused_score_operands,
                 shifted_recon_split,
                 ctf2_over_nv_recon,
                 None,
@@ -6337,14 +6326,7 @@ def run_local_em_exact(
                 probs_sum_t,
                 reconstruction_probs_sum_t,
             ) = fused_score_normalize_support_probs_abs2_with_log_z_on_demand(
-                shifted_score_split,
-                ctf2_over_nv_score,
-                proj_weighted,
-                half_weights_windowed if use_window else half_weights,
-                local_rotation_log_prior,
-                bucket_translation_log_prior,
-                bucket_local_rotation_mask,
-                bucket_local_sample_mask,
+                *fused_score_operands,
                 bucket_log_z,
                 half_spectrum_scoring=half_spectrum_scoring,
                 reconstruct_significant_only=reconstruct_significant_only,
