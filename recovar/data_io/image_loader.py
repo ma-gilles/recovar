@@ -13,6 +13,7 @@ interface for indexing, batching, and caching.
 
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Iterator, Optional, Tuple
 
@@ -23,6 +24,25 @@ from recovar.data_io._index_utils import normalize_indices
 from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
+
+PREREAD_IMAGES_ENV = "RECOVAR_PREREAD_IMAGES"
+PREREAD_MAX_GB_ENV = "RECOVAR_PREREAD_MAX_GB"
+DEFAULT_PREREAD_MAX_GB = 64.0
+
+
+def preread_images_requested() -> bool:
+    """Return whether ``RECOVAR_PREREAD_IMAGES=1`` asks for host-memory particle stacks.
+
+    Mirrors RELION ``--preread_images``: every selected image of an MRC stack is
+    read once at loader construction so per-iteration subset fetches never touch
+    the (network) file system again. ``RECOVAR_PREREAD_MAX_GB`` (default 64)
+    caps the per-file host allocation; larger stacks stay lazy with a warning.
+    """
+
+    token = os.environ.get(PREREAD_IMAGES_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{PREREAD_IMAGES_ENV} must be 0 or 1, got {token!r}")
+    return token == "1"
 
 NVTX_DOMAIN_DATA_IO = "data_io"
 
@@ -463,9 +483,36 @@ class MRCLoader(ImageLoader):
 
         if not lazy:
             self.load_all()
+        elif preread_images_requested():
+            self._preread_into_memory()
 
     def __repr__(self) -> str:
         return f"MRCLoader(filepath={self._filepath!r}, n={self._num_images}, D={self._image_size})"
+
+    def _preread_into_memory(self) -> None:
+        """Read every selected image into host memory once (``RECOVAR_PREREAD_IMAGES=1``)."""
+
+        n_bytes = int(self._num_images) * int(self._bytes_per_image)
+        max_gb = float(os.environ.get(PREREAD_MAX_GB_ENV, DEFAULT_PREREAD_MAX_GB))
+        if n_bytes / 1e9 > max_gb:
+            logger.warning(
+                "%s=1 but %s needs %.2f GB in host memory, above %s=%.1f GB; reading lazily",
+                PREREAD_IMAGES_ENV,
+                os.path.basename(self._filepath),
+                n_bytes / 1e9,
+                PREREAD_MAX_GB_ENV,
+                max_gb,
+            )
+            return
+        t0 = time.monotonic()
+        self.load_all()
+        logger.info(
+            "Preread %d images (%.2f GB) from %s into host memory in %.1fs",
+            int(self._num_images),
+            n_bytes / 1e9,
+            os.path.basename(self._filepath),
+            time.monotonic() - t0,
+        )
 
     # -- Memory-mapped access ------------------------------------------------
 
@@ -514,6 +561,9 @@ class MRCLoader(ImageLoader):
     @nvtx.annotate("MRCLoader._load", color="blue", domain=NVTX_DOMAIN_DATA_IO)
     def _load(self, indices: np.ndarray) -> np.ndarray:
         """Load images from MRC file."""
+        if self._cached is not None:
+            # Multi-file wrappers call ``_load`` directly; serve preread stacks here too.
+            return self._cached[np.asarray(indices)]
         file_idx = self._file_indices[indices]
         if len(file_idx) == 0:
             return np.empty((0, self._image_size, self._image_size), dtype=self._file_dtype)
