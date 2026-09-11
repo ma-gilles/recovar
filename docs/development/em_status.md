@@ -38,6 +38,16 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+The K=1 and K-class dense routes now materialize RELION's two-pass trial
+grids through one owner, `half_scoring._adaptive_pass2_grids` (perturbed coarse
+grid, oversampled children with parent maps, fine M-step rotations and the
+host-double coarse translation phase source), replacing two identical blocks
+and the iteration-1 pose-grid rebuild. 8 route cases and 4 pose-grid cases
+match the previous calls bit-for-bit with a byte-exact inverse substitution;
+the pose-grid site now also builds the fine M-step rotations it does not
+consume (iteration-1 CC path only). Structural checkpoint only.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/adaptive_pass2_grids_owner_20260910/result.json).
+
 The two sparse pass-2 scorers (`compute_pass2_stats_sparse_bucketed` and
 `compute_k_class_pass2_stats_sparse_fused`) now select their RELION
 `powerClass` noise terms through one owner,

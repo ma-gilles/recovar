@@ -12,6 +12,7 @@ import os
 
 import jax.numpy as jnp
 import numpy as np
+from typing import NamedTuple
 
 from recovar import cuda_backproject as _cuda_backproject_diagnostics
 from recovar import utils
@@ -100,6 +101,81 @@ def _expand_significant_samples_to_full_parent_translations(
         )
         expanded.append(expanded_samples.astype(np.int64, copy=False))
     return expanded
+
+
+class _AdaptivePass2Grids(NamedTuple):
+    """Coarse/fine trial grids of one adaptive-oversampling expectation."""
+
+    coarse_rotations: np.ndarray
+    coarse_translations: np.ndarray
+    fine_rotations: np.ndarray
+    fine_translations: np.ndarray
+    rotation_parent_map: np.ndarray
+    translation_parent_map: np.ndarray
+    fine_mstep_rotations: np.ndarray
+    coarse_translation_phase_source: np.ndarray
+    n_fine_translations: int
+
+
+def _adaptive_pass2_grids(
+    effective_rotations,
+    current_translations,
+    base_translations,
+    *,
+    healpix_order,
+    adaptive_oversampling,
+    translation_step,
+    random_perturbation,
+    coarse_rotation_ids,
+) -> _AdaptivePass2Grids:
+    """Materialize RELION's two-pass trial grids for the dense adaptive engine.
+
+    Pass 1 scores the perturbed coarse grid; pass 2 scores the oversampled
+    children of the significant coarse candidates with parent maps back to
+    the coarse grid, and the exact M-step rotations of the fine grid. The
+    coarse translation phases come from the host-double base grid under the
+    same SamplingPerturbation. The K=1 and K-class dense routes share this rule.
+    """
+
+    (
+        coarse_rot,
+        coarse_trans,
+        fine_rot,
+        fine_trans,
+        rot_pmap,
+        trans_pmap,
+        fine_mstep_rot,
+    ) = build_adaptive_pass2_grids(
+        effective_rotations,
+        current_translations,
+        base_translations,
+        int(healpix_order),
+        adaptive_oversampling,
+        float(translation_step),
+        random_perturbation,
+        return_mstep_rotations=True,
+        **(
+            {"coarse_rotation_ids": coarse_rotation_ids}
+            if coarse_rotation_ids is not None
+            else {}
+        ),
+    )
+    coarse_translation_phase_source = apply_relion_translation_perturbation(
+        np.asarray(base_translations, dtype=np.float64),
+        float(random_perturbation),
+        float(translation_step),
+    )
+    return _AdaptivePass2Grids(
+        coarse_rot,
+        coarse_trans,
+        fine_rot,
+        fine_trans,
+        rot_pmap,
+        trans_pmap,
+        fine_mstep_rot,
+        coarse_translation_phase_source,
+        int(fine_trans.shape[0]),
+    )
 
 
 def _dense_uses_adaptive_engine(adaptive_oversampling, group_ids) -> bool:
@@ -334,35 +410,25 @@ def _score_half_dense(
                     "adaptive engine (current_size=%s)",
                     cs_for_engine,
                 )
-            (
-                coarse_rot,
-                coarse_trans,
-                fine_rot,
-                fine_trans,
-                rot_pmap_for_collapse,
-                trans_pmap_for_collapse,
-                fine_mstep_rot,
-            ) = build_adaptive_pass2_grids(
+            pass2_grids = _adaptive_pass2_grids(
                 effective_rotations,
                 current_translations,
                 base_translations,
-                int(current_healpix_order),
-                adaptive_os_local,
-                float(state.translation_step),
-                random_perturbation,
-                return_mstep_rotations=True,
-                **(
-                    {"coarse_rotation_ids": coarse_rotation_ids}
-                    if coarse_rotation_ids is not None
-                    else {}
-                ),
+                healpix_order=current_healpix_order,
+                adaptive_oversampling=adaptive_os_local,
+                translation_step=state.translation_step,
+                random_perturbation=random_perturbation,
+                coarse_rotation_ids=coarse_rotation_ids,
             )
-            coarse_translation_phase_source = apply_relion_translation_perturbation(
-                np.asarray(base_translations, dtype=np.float64),
-                float(random_perturbation),
-                float(state.translation_step),
-            )
-            n_trans_fine_for_collapse = int(fine_trans.shape[0])
+            coarse_rot = pass2_grids.coarse_rotations
+            coarse_trans = pass2_grids.coarse_translations
+            fine_rot = pass2_grids.fine_rotations
+            fine_trans = pass2_grids.fine_translations
+            rot_pmap_for_collapse = pass2_grids.rotation_parent_map
+            trans_pmap_for_collapse = pass2_grids.translation_parent_map
+            fine_mstep_rot = pass2_grids.fine_mstep_rotations
+            coarse_translation_phase_source = pass2_grids.coarse_translation_phase_source
+            n_trans_fine_for_collapse = pass2_grids.n_fine_translations
             adaptive_em_kwargs = dict(em_kwargs)
             n_classes_local = int(np.asarray(means_k).shape[0]) if np.asarray(means_k).ndim >= 2 else 1
             grid_batch_plan = _plan_kclass_adaptive_grid_batch_sizes(
@@ -538,35 +604,25 @@ def _score_half_dense(
                 **firstiter_kwargs,
             )
         else:
-            (
-                coarse_rot,
-                coarse_trans,
-                fine_rot,
-                fine_trans,
-                rot_pmap_for_collapse,
-                trans_pmap_for_collapse,
-                fine_mstep_rot,
-            ) = build_adaptive_pass2_grids(
+            pass2_grids = _adaptive_pass2_grids(
                 effective_rotations,
                 current_translations,
                 base_translations,
-                int(current_healpix_order),
-                adaptive_os_local,
-                float(state.translation_step),
-                random_perturbation,
-                return_mstep_rotations=True,
-                **(
-                    {"coarse_rotation_ids": coarse_rotation_ids}
-                    if coarse_rotation_ids is not None
-                    else {}
-                ),
+                healpix_order=current_healpix_order,
+                adaptive_oversampling=adaptive_os_local,
+                translation_step=state.translation_step,
+                random_perturbation=random_perturbation,
+                coarse_rotation_ids=coarse_rotation_ids,
             )
-            coarse_translation_phase_source = apply_relion_translation_perturbation(
-                np.asarray(base_translations, dtype=np.float64),
-                float(random_perturbation),
-                float(state.translation_step),
-            )
-            n_trans_fine_for_collapse = int(fine_trans.shape[0])
+            coarse_rot = pass2_grids.coarse_rotations
+            coarse_trans = pass2_grids.coarse_translations
+            fine_rot = pass2_grids.fine_rotations
+            fine_trans = pass2_grids.fine_translations
+            rot_pmap_for_collapse = pass2_grids.rotation_parent_map
+            trans_pmap_for_collapse = pass2_grids.translation_parent_map
+            fine_mstep_rot = pass2_grids.fine_mstep_rotations
+            coarse_translation_phase_source = pass2_grids.coarse_translation_phase_source
+            n_trans_fine_for_collapse = pass2_grids.n_fine_translations
             fine_rotations_for_pose = fine_rot
             adaptive_em_kwargs = dict(em_kwargs)
             k1_sparse_pass2 = not bool(
@@ -664,20 +720,16 @@ def _score_half_dense(
             )
             outputs.best_pose_translations[k] = np.asarray(k1_adaptive_result.best_pose_translations, dtype=pose_dtype)
         if fine_rotations_for_pose is None and rot_pmap_for_collapse is not None:
-            fine_rotations_for_pose = build_adaptive_pass2_grids(
+            fine_rotations_for_pose = _adaptive_pass2_grids(
                 effective_rotations,
                 current_translations,
                 base_translations,
-                int(current_healpix_order),
-                adaptive_os_local,
-                float(state.translation_step),
-                random_perturbation,
-                **(
-                    {"coarse_rotation_ids": coarse_rotation_ids}
-                    if coarse_rotation_ids is not None
-                    else {}
-                ),
-            )[2]
+                healpix_order=current_healpix_order,
+                adaptive_oversampling=adaptive_os_local,
+                translation_step=state.translation_step,
+                random_perturbation=random_perturbation,
+                coarse_rotation_ids=coarse_rotation_ids,
+            ).fine_rotations
         fine_rotation_eulers_for_pose = None
         if fine_rotations_for_pose is not None and _parity_dump.is_active():
             fine_rotation_eulers_for_pose = utils.R_to_relion(

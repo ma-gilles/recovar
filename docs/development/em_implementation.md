@@ -189,6 +189,10 @@ oversampling always keeps the two-pass adaptive expectation (pass 1 at the
 current size when no reduced coarse size exists); the direct dense engine serves
 only runs without scale groups at oversampling 0
 ([`test_dense_scale_group_routing.py`](../../tests/unit/test_dense_scale_group_routing.py)).
+`half_scoring._adaptive_pass2_grids` materializes the perturbed coarse grid, the
+oversampled children with parent maps, the fine M-step rotations and the coarse
+translation phase source for both routes
+([`test_adaptive_pass2_grids_owner.py`](../../tests/unit/test_adaptive_pass2_grids_owner.py)).
 In [`significance`](../../recovar/em/dense_single_volume/helpers/significance.py),
 `_coarse_gaussian_ffi_default` applies the fresh-InitialModel coarse Gaussian FFI
 default only when the supplied RELION projector operands exist; a dense pass

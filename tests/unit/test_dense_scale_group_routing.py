@@ -48,7 +48,7 @@ def test_k_class_dense_scorer_routes_scale_groups_at_oversampling_zero():
     source = inspect.getsource(half_scoring._score_half_dense)
     gate = "elif _dense_uses_adaptive_engine(state.adaptive_oversampling, group_ids_k):"
     assert source.count(gate) == 1
-    routed = _routed_block(source, gate, "build_adaptive_pass2_grids(")
+    routed = _routed_block(source, gate, "pass2_grids = _adaptive_pass2_grids(")
     assert "firstiter_coarse_current_size = cs_for_engine" in routed
     assert "firstiter_fine_current_size = cs_for_engine" in routed
     assert "elif firstiter_coarse_current_size is not None and int(state.adaptive_oversampling) > 0:" not in source
