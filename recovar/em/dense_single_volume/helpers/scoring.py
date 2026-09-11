@@ -406,50 +406,50 @@ def _e_step_block_scores(
 
     The norm-term similarly uses half-weighted |proj|^2.
     """
-    rot_block_size = proj_half_weighted.shape[0]
-    cross = (
-        -2.0
-        * jnp.matmul(
-            jnp.conj(shifted_half),
-            proj_half_weighted.T,
-            precision=jax.lax.Precision.HIGHEST,
-        ).real
-    )
-    cross = cross.reshape(n_images, n_trans, rot_block_size)
-    cross = cross.swapaxes(1, 2)
-    norms = jnp.matmul(
+    cross, norms = _e_step_block_score_components(
+        shifted_half,
         ctf2_over_nv_half,
-        proj_abs2_half.T,
-        precision=jax.lax.Precision.HIGHEST,
+        proj_half_weighted,
+        proj_abs2_half,
+        n_images,
+        n_trans,
     )
     residuals = cross + norms[..., None]
     return -0.5 * residuals
 
 
-def _e_step_block_score_components_windowed(
-    shifted_windowed,
-    ctf2_over_nv_windowed,
-    proj_windowed_weighted,
-    proj_abs2_windowed,
+def _e_step_block_score_components(
+    shifted,
+    ctf2_over_nv,
+    proj_weighted,
+    proj_abs2,
     n_images,
     n_trans,
 ):
-    """Return the mature cross and model-energy GEMM components."""
+    """Return the cross and model-energy GEMM components of one rotation block.
 
-    rot_block_size = proj_windowed_weighted.shape[0]
+    ``cross[i, r, t] = -2 Re(conj(shifted[i, t]) . proj_weighted[r])`` recovers
+    the full inner product from half-spectrum pixels (the half weights are
+    absorbed into the projections once per block), and
+    ``norms[i, r] = ctf2_over_nv[i] . proj_abs2[r]`` is the model energy. Every
+    dense scorer (residual, windowed, normalized-CC and the coarse Gaussian
+    GEMM) builds its score from these two HIGHEST-precision GEMMs.
+    """
+
+    rot_block_size = proj_weighted.shape[0]
     cross = (
         -2.0
         * jnp.matmul(
-            jnp.conj(shifted_windowed),
-            proj_windowed_weighted.T,
+            jnp.conj(shifted),
+            proj_weighted.T,
             precision=jax.lax.Precision.HIGHEST,
         ).real
     )
     cross = cross.reshape(n_images, n_trans, rot_block_size)
     cross = cross.swapaxes(1, 2)
     norms = jnp.matmul(
-        ctf2_over_nv_windowed,
-        proj_abs2_windowed.T,
+        ctf2_over_nv,
+        proj_abs2.T,
         precision=jax.lax.Precision.HIGHEST,
     )
     return cross, norms
@@ -472,7 +472,7 @@ def _e_step_block_scores_windowed(
     """E-step for one rotation block using windowed half-spectrum GEMMs."""
 
     del batch_norm, half_weights_windowed, n_windowed, image_shape, volume_shape
-    cross, norms = _e_step_block_score_components_windowed(
+    cross, norms = _e_step_block_score_components(
         shifted_windowed,
         ctf2_over_nv_windowed,
         proj_windowed_weighted,
@@ -670,7 +670,7 @@ def _relion_coarse_gaussian_gemm_certificate_from_prepared_jit(
                 image_batch.pixel_weight, projected_abs2.T, precision=jax.lax.Precision.HIGHEST
             )
         else:
-            cross, reference_energy = _e_step_block_score_components_windowed(
+            cross, reference_energy = _e_step_block_score_components(
                 image_batch.weighted_shifted,
                 image_batch.pixel_weight,
                 projected,
@@ -1128,21 +1128,13 @@ def _e_step_block_scores_normalized_cc(
 ):
     """RELION iter-1 normalized cross-correlation score."""
     del batch_norm, image_shape, volume_shape
-    rot_block_size = proj_half_weighted.shape[0]
-    cross = (
-        -2.0
-        * jnp.matmul(
-            jnp.conj(shifted_half),
-            proj_half_weighted.T,
-            precision=jax.lax.Precision.HIGHEST,
-        ).real
-    )
-    cross = cross.reshape(n_images, n_trans, rot_block_size)
-    cross = cross.swapaxes(1, 2)
-    norms = jnp.matmul(
+    cross, norms = _e_step_block_score_components(
+        shifted_half,
         ctf2_over_nv_half,
-        proj_abs2_half.T,
-        precision=jax.lax.Precision.HIGHEST,
+        proj_half_weighted,
+        proj_abs2_half,
+        n_images,
+        n_trans,
     )
     denom = jnp.sqrt(jnp.maximum(norms, jnp.asarray(1e-30, dtype=norms.dtype)))
     return (-0.5 * cross) / denom[..., None]
@@ -1163,21 +1155,13 @@ def _e_step_block_scores_windowed_normalized_cc(
 ):
     """Windowed RELION iter-1 normalized cross-correlation score."""
     del batch_norm, n_windowed, image_shape, volume_shape
-    rot_block_size = proj_windowed_weighted.shape[0]
-    cross = (
-        -2.0
-        * jnp.matmul(
-            jnp.conj(shifted_windowed),
-            proj_windowed_weighted.T,
-            precision=jax.lax.Precision.HIGHEST,
-        ).real
-    )
-    cross = cross.reshape(n_images, n_trans, rot_block_size)
-    cross = cross.swapaxes(1, 2)
-    norms = jnp.matmul(
+    cross, norms = _e_step_block_score_components(
+        shifted_windowed,
         ctf2_over_nv_windowed,
-        proj_abs2_windowed.T,
-        precision=jax.lax.Precision.HIGHEST,
+        proj_windowed_weighted,
+        proj_abs2_windowed,
+        n_images,
+        n_trans,
     )
     denom = jnp.sqrt(jnp.maximum(norms, jnp.asarray(1e-30, dtype=norms.dtype)))
     return (-0.5 * cross) / denom[..., None]

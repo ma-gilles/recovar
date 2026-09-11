@@ -256,6 +256,11 @@ order: a class without images gets zero accumulators, `-inf` best scores and zer
 and a scored class has its subset accumulators, statistics, noise and best poses expanded to
 the full image axis. Each route states whether it hosts the appended accumulators
 ([`test_kclass_subset_results_owner.py`](../../tests/unit/test_kclass_subset_results_owner.py)).
+[`scoring._e_step_block_score_components`](../../recovar/em/dense_single_volume/helpers/scoring.py)
+computes the two HIGHEST-precision GEMMs every dense scorer is built from (the cross term
+`-2 Re(conj(shifted) . proj_weighted)` and the model energy `ctf2_over_nv . proj_abs2`);
+the residual, windowed, normalized-CC and coarse Gaussian scorers only combine them
+([`test_score_components_owner.py`](../../tests/unit/test_score_components_owner.py)).
 In [`significance`](../../recovar/em/dense_single_volume/helpers/significance.py),
 `_coarse_gaussian_ffi_default` applies the fresh-InitialModel coarse Gaussian FFI
 default only when the supplied RELION projector operands exist; a dense pass
