@@ -1032,12 +1032,10 @@ def _run_relion_iteration_loop(
     )
     frozen_initial_scoring_state = None
     frozen_initial_scoring_state_sha256 = None
-    if debug.assert_initial_scoring_state_immutable:
-        if k_class_enabled:
-            raise RuntimeError(
-                "Frozen scoring-state immutability assertion currently supports K=1 only"
-            )
-        frozen_initial_scoring_state = _frozen_scoring_state_arrays(
+    def _frozen_scoring_state_now():
+        """The scoring-state arrays as bound right now; the loop re-binds several of them per iteration."""
+
+        return _frozen_scoring_state_arrays(
             means=means,
             mean_variance=mean_variance,
             mean_variance_per_half=(
@@ -1051,6 +1049,13 @@ def _run_relion_iteration_loop(
             sealed_sampling_state=sealed_sampling_state,
             sealed_scoring_context=debug.sealed_scoring_context,
         )
+
+    if debug.assert_initial_scoring_state_immutable:
+        if k_class_enabled:
+            raise RuntimeError(
+                "Frozen scoring-state immutability assertion currently supports K=1 only"
+            )
+        frozen_initial_scoring_state = _frozen_scoring_state_now()
     while (schedule.force_max_iter_after_convergence or not state.has_converged) and iteration < schedule.max_iter:
         if perturb_replay_relion_dir is not None and replay_policy._past_perturb_replay_max_iter(
             iteration, perturb_replay_max_iter
@@ -1498,20 +1503,7 @@ def _run_relion_iteration_loop(
         if frozen_initial_scoring_state is not None and iteration == 0:
             frozen_initial_scoring_state_sha256 = _assert_frozen_scoring_state_unchanged(
                 frozen_initial_scoring_state,
-                _frozen_scoring_state_arrays(
-                    means=means,
-                    mean_variance=mean_variance,
-                    mean_variance_per_half=(
-                        mean_variance_per_half if parity.use_per_half_mean_variance else None
-                    ),
-                    relion_half_inputs=relion_half_inputs,
-                    noise_variance_per_half=noise_variance_per_half,
-                    current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
-                    global_direction_prior_per_half=global_direction_prior_per_half,
-                    experiment_datasets=experiment_datasets,
-                    sealed_sampling_state=sealed_sampling_state,
-                    sealed_scoring_context=debug.sealed_scoring_context,
-                ),
+                _frozen_scoring_state_now(),
             )
             logger.info(
                 "Frozen scoring-state ownership verified immediately before physical iteration %d scoring",
