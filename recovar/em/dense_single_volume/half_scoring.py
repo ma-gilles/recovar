@@ -102,16 +102,17 @@ def _expand_significant_samples_to_full_parent_translations(
     return expanded
 
 
-def _k1_dense_uses_adaptive_engine(adaptive_oversampling, group_ids) -> bool:
-    """Whether K=1 dense scoring runs through the adaptive/sparse engine.
+def _dense_uses_adaptive_engine(adaptive_oversampling, group_ids) -> bool:
+    """Whether dense scoring (K=1 or K-class) runs through the adaptive/sparse engine.
 
-    RELION accumulates the group-scale sufficient statistics (``XA``/``AA``,
-    ``ml_optimiser.cpp`` ``storeWeightedSums``) in every expectation pass,
-    whatever the oversampling order. Only RECOVAR's adaptive/sparse engine
-    accumulates them, so K=1 scoring with RELION scale groups uses that engine
-    at the requested oversampling order, including 0, where its single coarse
-    pass on the current grid is RELION's single pass with significance pruning.
-    Without scale groups, oversampling 0 keeps the direct dense engine.
+    RELION accumulates the group-scale sufficient statistics (``XA``/``AA``)
+    and the per-particle norm-correction residuals (``ml_optimiser.cpp``
+    ``storeWeightedSums``) in every expectation pass, whatever the oversampling
+    order. Only RECOVAR's adaptive/sparse engine accumulates them, so scoring
+    with RELION scale groups uses that engine at the requested oversampling
+    order, including 0, where its single coarse pass on the current grid is
+    RELION's single pass with significance pruning. Without scale groups,
+    oversampling 0 keeps the direct dense engine.
     """
 
     return int(adaptive_oversampling) > 0 or group_ids is not None
@@ -315,8 +316,23 @@ def _score_half_dense(
                 **firstiter_kwargs,
             )
             k_class_mstep_full_half_axis_this_score = k_class_result.mstep_full_half_axis
-        elif firstiter_coarse_current_size is not None and int(state.adaptive_oversampling) > 0:
+        elif _dense_uses_adaptive_engine(state.adaptive_oversampling, group_ids_k) and (
+            int(state.adaptive_oversampling) <= 0 or firstiter_coarse_current_size is not None
+        ):
+            # A positive order without a reduced coarse size keeps its historical
+            # direct-engine branch below. Scale groups at oversampling 0 take the
+            # adaptive engine's single pass on the current grid so group XA/AA and
+            # norm corrections are accumulated (the strict follower-scale topology
+            # requires them at every numbered M-step).
             adaptive_os_local = int(state.adaptive_oversampling)
+            if adaptive_os_local <= 0:
+                firstiter_coarse_current_size = cs_for_engine
+                firstiter_fine_current_size = cs_for_engine
+                logger.info(
+                    "RELION K-class scale groups at oversampling 0: routing the single pass through the "
+                    "adaptive engine (current_size=%s)",
+                    cs_for_engine,
+                )
             (
                 coarse_rot,
                 coarse_trans,
@@ -482,7 +498,7 @@ def _score_half_dense(
             mstep_accumulator_shape=getattr(k_class_result, "mstep_accumulator_shape", None),
         )
 
-    if _k1_dense_uses_adaptive_engine(state.adaptive_oversampling, group_ids_k):
+    if _dense_uses_adaptive_engine(state.adaptive_oversampling, group_ids_k):
         if disable_adjoint_y or disable_adjoint_ctf:
             raise NotImplementedError("K=1 adaptive oversampling does not support adjoint ablation flags")
         adaptive_os_local = int(state.adaptive_oversampling)
@@ -689,7 +705,7 @@ def _score_half_dense(
             mstep_accumulator_shape=getattr(k1_adaptive_result, "mstep_accumulator_shape", None),
         )
 
-    # Scale groups never reach the direct dense engine: see _k1_dense_uses_adaptive_engine.
+    # Scale groups never reach the direct dense engine: see _dense_uses_adaptive_engine.
     direct_em_kwargs = dict(em_kwargs)
     direct_em_kwargs.pop("group_ids", None)
     direct_em_kwargs.pop("scale_correction_group_count", None)
