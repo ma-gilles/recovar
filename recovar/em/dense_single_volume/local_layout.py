@@ -848,7 +848,7 @@ def _build_factorized_local_entries(
                     dtype=dtype,
                 )
 
-            local_ids = (psi_indices[:, None] * n_pixels + dir_indices[None, :]).reshape(-1).astype(np.int32)
+            local_ids = (psi_indices[:, None] * n_pixels + dir_indices[None, :]).reshape(-1).astype(np.int64)
             local_log_prior = (psi_log_prior[:, None] + dir_log_prior[None, :]).reshape(-1).astype(dtype)
             counts[image_idx] = int(local_ids.shape[0])
             running_offset += int(local_ids.shape[0])
@@ -857,7 +857,7 @@ def _build_factorized_local_entries(
             log_prior_parts.append(local_log_prior)
 
     rotation_ids_flat = (
-        np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
+        np.concatenate(rotation_ids_parts, axis=0).astype(np.int64, copy=False) if rotation_ids_parts else np.zeros(0, dtype=np.int64)
     )
     rotation_log_priors_flat = (
         np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=dtype)
@@ -948,7 +948,7 @@ def _build_parent_expanded_local_entries(
         child_rotations, parent_map, child_ids = oversampled[:3]
         child_mstep_rotations = oversampled[3] if bool(generate_relion_mstep_rotations) else None
         parent_map = np.asarray(parent_map, dtype=np.int64)
-        child_ids = np.asarray(child_ids, dtype=np.int32)
+        child_ids = np.asarray(child_ids, dtype=np.int64)
         child_log_prior = parent_log_prior[parent_map].astype(dtype, copy=False)
 
         counts[image_idx] = int(child_ids.shape[0])
@@ -961,7 +961,7 @@ def _build_parent_expanded_local_entries(
             mstep_rotations_parts.append(np.asarray(child_mstep_rotations, dtype=dtype))
 
     rotation_ids_flat = (
-        np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
+        np.concatenate(rotation_ids_parts, axis=0).astype(np.int64, copy=False) if rotation_ids_parts else np.zeros(0, dtype=np.int64)
     )
     rotation_log_priors_flat = (
         np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=dtype)
@@ -1199,7 +1199,7 @@ def build_local_hypothesis_layout(
                 per_image=True,
                 grid_metadata=grid_metadata,
             )
-            local_ids = np.asarray(local_ids, dtype=np.int32).reshape(-1)
+            local_ids = np.asarray(local_ids, dtype=np.int64).reshape(-1)
             local_log_prior = np.asarray(local_log_prior[0], dtype=dtype).reshape(-1)
             counts[image_idx] = int(local_ids.shape[0])
             offsets[image_idx + 1] = offsets[image_idx] + local_ids.shape[0]
@@ -1207,7 +1207,7 @@ def build_local_hypothesis_layout(
             log_prior_parts.append(local_log_prior)
 
         rotation_ids_flat = (
-            np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
+            np.concatenate(rotation_ids_parts, axis=0).astype(np.int64, copy=False) if rotation_ids_parts else np.zeros(0, dtype=np.int64)
         )
         rotation_log_priors_flat = (
             np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=dtype)
@@ -1377,7 +1377,7 @@ def build_local_adaptive_pass2_hypothesis_layout(
     for image_idx, sig_samples in enumerate(significant_sample_indices):
         parent_start = int(parent_layout.rotation_offsets[image_idx])
         parent_stop = int(parent_layout.rotation_offsets[image_idx + 1])
-        local_parent_ids = np.asarray(parent_layout.rotation_ids_flat[parent_start:parent_stop], dtype=np.int32)
+        local_parent_ids = np.asarray(parent_layout.rotation_ids_flat[parent_start:parent_stop], dtype=np.int64)
         local_parent_log_prior = np.asarray(
             parent_layout.rotation_log_priors_flat[parent_start:parent_stop],
             dtype=dtype,
@@ -1469,7 +1469,7 @@ def build_local_adaptive_pass2_hypothesis_layout(
         else np.zeros((0, 3, 3), dtype=dtype)
     )
     rotation_ids_flat = (
-        np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
+        np.concatenate(rotation_ids_parts, axis=0).astype(np.int64, copy=False) if rotation_ids_parts else np.zeros(0, dtype=np.int64)
     )
     posterior_ids_flat = (
         np.concatenate(posterior_ids_parts, axis=0) if posterior_ids_parts else np.zeros(0, dtype=np.int32)
@@ -1731,7 +1731,7 @@ def build_pass2_hypothesis_layout(
         shared_positions = np.searchsorted(shared_parent_ids, unique_rot)
         rows = (shared_positions[:, None] * children_per_parent + child_offsets).reshape(-1)
         oversampled_rots = np.asarray(shared_rotations[rows], dtype=dtype)
-        oversampled_rot_indices = np.asarray(shared_rotation_ids[rows], dtype=np.int32)
+        oversampled_rot_indices = np.asarray(shared_rotation_ids[rows], dtype=np.int64)
         parent_map = np.repeat(np.arange(unique_rot.size, dtype=np.int32), children_per_parent)
         coarse_parent_ids = unique_rot[parent_map].astype(np.int32, copy=False)
 
@@ -1776,7 +1776,7 @@ def build_pass2_hypothesis_layout(
         np.concatenate(rotations_parts, axis=0) if rotations_parts else np.zeros((0, 3, 3), dtype=dtype)
     )
     rotation_ids_flat = (
-        np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
+        np.concatenate(rotation_ids_parts, axis=0).astype(np.int64, copy=False) if rotation_ids_parts else np.zeros(0, dtype=np.int64)
     )
     posterior_ids_flat = (
         np.concatenate(posterior_ids_parts, axis=0) if posterior_ids_parts else np.zeros(0, dtype=np.int32)
@@ -1953,7 +1953,7 @@ def bucket_local_hypothesis_layout(
             np.eye(3, dtype=mstep_rotations_flat.dtype),
             (batch_size, int(bucket_size), 3, 3),
         ).copy()
-        padded_rotation_ids = np.full((batch_size, int(bucket_size)), -1, dtype=np.int32)
+        padded_rotation_ids = np.full((batch_size, int(bucket_size)), -1, dtype=np.int64)
         padded_log_prior = np.full((batch_size, int(bucket_size)), -1e30, dtype=np.asarray(layout.rotation_log_priors_flat).dtype)
         padded_mask = np.zeros((batch_size, int(bucket_size)), dtype=bool)
         padded_posterior_ids = (

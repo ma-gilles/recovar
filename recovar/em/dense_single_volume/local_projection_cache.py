@@ -42,6 +42,11 @@ class LocalRelionProjectionCache:
     enabled: bool
     row_count: int = 0
     id_map_row_count: int = 0
+    # Sorted global rotation ids (int64) of the cached rows.  Buckets translate
+    # their ids to rows with ``rows_for_bucket`` on the host, so ids beyond the
+    # int32 range never reach the device and the map does not scale with the id
+    # space (about 9.7e9 entries at fine HEALPix order 9).
+    unique_ids: "np.ndarray | None" = None
     n_projection_pixels: int = 0
     estimated_gb: float = 0.0
     build_s: float = 0.0
@@ -135,6 +140,22 @@ def _projection_chunk_rows(n_projection_pixels: int) -> int:
     if target <= 0:
         raise ValueError(f"{EXACT_LOCAL_RELION_PROJECTION_CACHE_TARGET_ROW_PIXELS_ENV} must be positive")
     return max(1, int(target) // max(1, int(n_projection_pixels)))
+
+
+def rows_for_bucket(cache: LocalRelionProjectionCache, local_rotation_ids) -> np.ndarray:
+    """Map a bucket's global rotation ids to compact cache rows (padding -> row 0)."""
+
+    ids = np.asarray(local_rotation_ids, dtype=np.int64)
+    if not cache.enabled or cache.unique_ids is None:
+        return np.zeros(ids.shape, dtype=np.int32)
+    unique_ids = np.asarray(cache.unique_ids, dtype=np.int64)
+    valid = ids >= 0
+    probe = np.where(valid, ids, unique_ids[0])
+    rows = np.minimum(np.searchsorted(unique_ids, probe), unique_ids.size - 1)
+    if not np.all(unique_ids[rows] == probe):
+        missing = ids[valid & (unique_ids[rows] != probe)][:5].tolist()
+        raise RuntimeError(f"local rotation ids missing from the RELION projection cache: {missing}")
+    return np.where(valid, rows, 0).astype(np.int32)
 
 
 def disabled_cache() -> LocalRelionProjectionCache:
@@ -242,7 +263,6 @@ def build_cache(
     projection_relion_acc_double_floorf_quirk: bool = False,
     projector_output_size: int,
     cache_row_capacity: int,
-    max_global_rotation_id: int,
     group_index: int,
     n_groups: int,
     projection_mask_current_image_disk: bool = True,
@@ -273,13 +293,14 @@ def build_cache(
             "internal projection-cache planner error: group has "
             f"{row_count} rows but capacity is {int(cache_row_capacity)}"
         )
-    id_map_row_count = int(max(max_global_rotation_id + 1, int(np.max(valid_ids)) + 1))
+    id_map_row_count = row_count
     estimated_gb = float(cache_row_capacity * n_projection_pixels * np.dtype(np.complex64).itemsize / 1e9)
 
     cache_t0 = time.time()
     cache_rotations = valid_rotations[first_positions]
-    id_map = np.zeros(id_map_row_count, dtype=np.int32)
-    id_map[unique_ids] = np.arange(row_count, dtype=np.int32)
+    # Identity over the compact cache rows; callers translate global rotation
+    # ids to rows with ``rows_for_bucket``.
+    id_map = np.arange(row_count, dtype=np.int32)
 
     chunk_rows = _projection_chunk_rows(n_projection_pixels)
     host_cache = np.empty((cache_row_capacity, n_projection_pixels), dtype=np.complex64)
@@ -342,6 +363,7 @@ def build_cache(
         enabled=True,
         row_count=row_count,
         id_map_row_count=id_map_row_count,
+        unique_ids=np.asarray(unique_ids, dtype=np.int64),
         n_projection_pixels=n_projection_pixels,
         estimated_gb=estimated_gb,
         build_s=build_s,

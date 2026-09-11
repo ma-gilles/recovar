@@ -1051,6 +1051,17 @@ def _adjoint_slice_volume_maybe_windowed_row_chunks(
     return updated, n_chunks
 
 
+def encode_hard_assignment(rotation_ids, translation_indices, n_trans: int) -> np.ndarray:
+    """Return ``rotation_id * n_trans + translation`` in int64.
+
+    Fine local grids at high sampling orders carry rotation ids beyond the
+    int32 range (fine HEALPix order 9 is about 3e3 psi steps times 3e6 pixels),
+    so the flattened pose index must not be formed or stored in int32.
+    """
+
+    return np.asarray(rotation_ids, dtype=np.int64) * int(n_trans) + np.asarray(translation_indices, dtype=np.int64)
+
+
 def validate_local_relion_projector_window(window_spec, image_shape) -> int | None:
     """Host-side check that every windowed index fits the local RELION projector crop.
 
@@ -1369,7 +1380,7 @@ def _postprocess_local_bucket(
     """
 
     image_indices_np = np.asarray(image_indices, dtype=np.int32)
-    local_rotation_ids_np = np.asarray(local_rotation_ids, dtype=np.int32)
+    local_rotation_ids_np = np.asarray(local_rotation_ids, dtype=np.int64)
     local_mask_np = np.asarray(local_rotation_mask, dtype=bool)
 
     def host_array(value, dtype=None):
@@ -1389,8 +1400,17 @@ def _postprocess_local_bucket(
         axis=1,
     ).reshape(-1)
     if np.any(best_rotation_ids < 0):
-        raise RuntimeError("exact local engine selected padded local rotation")
-    buffers.hard_assignment[image_indices_np] = (best_rotation_ids * n_trans + best_trans_idx).astype(np.int32)
+        bad = np.flatnonzero(best_rotation_ids < 0)
+        row = int(bad[0])
+        ids_row = local_rotation_ids_np[row]
+        raise RuntimeError(
+            "exact local engine selected padded local rotation: "
+            f"n_bad={int(bad.size)} of {int(best_rotation_ids.shape[0])} images; first image_index="
+            f"{int(image_indices_np[row])} best_rot_slot={int(best_rot_idx[row])} n_slots={int(ids_row.shape[0])} "
+            f"n_real_ids={int(np.count_nonzero(ids_row >= 0))} n_mask_true={int(np.count_nonzero(local_mask_np[row]))} "
+            f"ids_min_max=({int(ids_row.min())}, {int(ids_row.max())})"
+        )
+    buffers.hard_assignment[image_indices_np] = encode_hard_assignment(best_rotation_ids, best_trans_idx, n_trans)
 
     transfer_t0 = time.time()
     log_score_offset = -0.5 * (
@@ -1458,7 +1478,7 @@ def _postprocess_local_bucket(
             axis=1,
         ).reshape(-1, 3, 3)
         buffers.best_pose_translations[image_indices_np] = np.asarray(translation_grid)[best_trans_idx]
-        buffers.best_pose_rotation_ids[image_indices_np] = best_rotation_ids.astype(np.int32, copy=False)
+        buffers.best_pose_rotation_ids[image_indices_np] = best_rotation_ids.astype(np.int64, copy=False)
 
     if buffers.best_pose_eulers_deg is not None:
         if local_source_eulers is None:
@@ -2665,7 +2685,7 @@ def run_local_em_exact(
     )
     Ft_y = jnp.zeros(accumulator_shape, dtype=recon_y_accum_dtype)
     Ft_ctf = jnp.zeros(accumulator_shape, dtype=recon_ctf_accum_dtype)
-    hard_assignment = np.empty(n_images, dtype=np.int32)
+    hard_assignment = np.empty(n_images, dtype=np.int64)
     log_evidence_per_image = np.empty(n_images, dtype=precision_policy.score_real_dtype)
     best_log_score_per_image = np.empty(n_images, dtype=precision_policy.score_real_dtype)
     max_posterior_per_image = np.empty(n_images, dtype=precision_policy.score_real_dtype)
@@ -2684,7 +2704,7 @@ def run_local_em_exact(
         if return_best_pose_details and local_layout.source_eulers_flat is not None
         else None
     )
-    best_pose_rotation_ids = np.empty(n_images, dtype=np.int32) if return_best_pose_details else None
+    best_pose_rotation_ids = np.empty(n_images, dtype=np.int64) if return_best_pose_details else None
 
     noise_wsum = None
     noise_img_power = None
@@ -3305,9 +3325,7 @@ def run_local_em_exact(
         if projection_cache_plan.groups:
             valid_layout_ids = np.asarray(local_layout.rotation_ids_flat, dtype=np.int64)
             valid_layout_ids = valid_layout_ids[valid_layout_ids >= 0]
-            relion_projection_cache_id_map_rows = (
-                int(np.max(valid_layout_ids)) + 1 if valid_layout_ids.size else 1
-            )
+            relion_projection_cache_id_map_rows = int(np.unique(valid_layout_ids).size)
             projection_cache_plan.log_enabled(relion_projection_cache_id_map_rows)
     if use_big_jit_buckets and not use_relion_projector and not projection_relion_texture_interp:
         mean_for_proj_big_jit = fourier_transform_utils.full_volume_to_half_volume(
@@ -3365,7 +3383,6 @@ def run_local_em_exact(
                 projection_pixel_indices=big_jit_projection_pixel_indices_arg,
                 projector_output_size=int(big_jit_relion_projector_output_size),
                 cache_row_capacity=int(projection_cache_plan.capacity_rows),
-                max_global_rotation_id=max(relion_projection_cache_id_map_rows - 1, 0),
                 group_index=relion_projection_cache_group_cursor,
                 n_groups=len(projection_cache_plan.groups),
             )
@@ -3972,7 +3989,10 @@ def run_local_em_exact(
                 big_jit_projection_recon_take_arg,
                 relion_projection_cache.projections,
                 relion_projection_cache.id_map,
-                jnp.asarray(bucket.local_rotation_ids, dtype=jnp.int32),
+                jnp.asarray(
+                    projection_cache.rows_for_bucket(relion_projection_cache, bucket.local_rotation_ids),
+                    dtype=jnp.int32,
+                ),
                 jnp.asarray(bucket.local_rotations),
                 jnp.asarray(_local_mstep_rotations(bucket)),
                 jnp.asarray(flat_local_row_argument, dtype=jnp.int32),
