@@ -250,6 +250,12 @@ returns a `_StateSwapValues` named tuple (current size, maps, tau2, noise, poses
 direction priors in the controller's unpacking order); the unchanged value is built once from the
 inputs and returned by both early exits
 ([`test_state_swap_values_owner.py`](../../tests/unit/test_state_swap_values_owner.py)).
+[`k_class._PerClassSubsetResults`](../../recovar/em/dense_single_volume/k_class.py) collects the
+per-class outputs of the dense and sparse firstiter-CC global-winner subset passes in class
+order: a class without images gets zero accumulators, `-inf` best scores and zero posteriors,
+and a scored class has its subset accumulators, statistics, noise and best poses expanded to
+the full image axis. Each route states whether it hosts the appended accumulators
+([`test_kclass_subset_results_owner.py`](../../tests/unit/test_kclass_subset_results_owner.py)).
 In [`significance`](../../recovar/em/dense_single_volume/helpers/significance.py),
 `_coarse_gaussian_ffi_default` applies the fresh-InitialModel coarse Gaussian FFI
 default only when the supplied RELION projector operands exist; a dense pass

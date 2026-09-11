@@ -1440,6 +1440,93 @@ def _full_group_count_from_kwargs(kwargs: dict) -> int | None:
     return group_count or None
 
 
+class _PerClassSubsetResults:
+    """Per-class outputs of a firstiter-CC global-winner subset pass, in class order.
+
+    Every image belongs to exactly one winning class, so each class contributes
+    accumulators, assignments, statistics, noise and best poses over its own
+    image subset, expanded back to the full image axis. A class without images
+    contributes zero accumulators, ``-inf`` best scores and zero posteriors.
+    ``host_accumulators`` says whether the appended M-step accumulators are moved
+    to the host; the dense route hosts its empty-class zeros and keeps engine
+    outputs as returned, the sparse route hosts engine outputs and keeps its
+    empty-class zeros on the device.
+    """
+
+    def __init__(self, *, n_images, accumulate_noise, return_best_pose_details, full_group_count, pose_dtype, score_dtype):
+        self.Ft_y = []
+        self.Ft_ctf = []
+        self.hard_assignments = []
+        self.per_class_stats = []
+        self.per_class_noise = [] if accumulate_noise else None
+        self.best_pose_rotations = [] if return_best_pose_details else None
+        self.best_pose_translations = [] if return_best_pose_details else None
+        self.best_pose_rotation_ids = [] if return_best_pose_details else None
+        self.subset_counts = []
+        self.n_images = int(n_images)
+        self.full_group_count = full_group_count
+        self.pose_dtype = pose_dtype
+        self.score_dtype = score_dtype
+        self.return_best_pose_details = bool(return_best_pose_details)
+
+    def append_empty_class(self, *, mean, class_log_evidence, noise_variance, class_index, n_classes, n_rot, host_accumulators):
+        zero = jnp.zeros_like(mean)
+        zero_ctf = jnp.zeros_like(jnp.real(mean))
+        self.Ft_y.append(_as_host_accumulator(zero) if host_accumulators else zero)
+        self.Ft_ctf.append(_as_host_accumulator(zero_ctf) if host_accumulators else zero_ctf)
+        self.hard_assignments.append(np.zeros(self.n_images, dtype=np.int32))
+        self.per_class_stats.append(
+            make_relion_stats(
+                log_evidence_per_image=np.asarray(class_log_evidence, dtype=self.score_dtype),
+                best_log_score_per_image=np.full(self.n_images, -np.inf, dtype=self.score_dtype),
+                max_posterior_per_image=np.zeros(self.n_images, dtype=self.score_dtype),
+                rotation_posterior_sums=np.zeros(n_rot, dtype=self.score_dtype),
+            ),
+        )
+        if self.per_class_noise is not None:
+            self.per_class_noise.append(
+                _zero_subset_noise_stats(
+                    _select_class_value(noise_variance, class_index, n_classes),
+                    n_images=self.n_images,
+                    full_group_count=self.full_group_count,
+                ),
+            )
+        if self.return_best_pose_details:
+            self.best_pose_rotations.append(np.zeros((self.n_images, 3, 3), dtype=self.pose_dtype))
+            self.best_pose_translations.append(np.zeros((self.n_images, 2), dtype=self.pose_dtype))
+            self.best_pose_rotation_ids.append(np.zeros(self.n_images, dtype=np.int32))
+
+    def append_class(self, *, image_indices, Ft_y, Ft_ctf, hard_full, stats_subset, class_log_evidence, noise, best_pose, host_accumulators):
+        self.Ft_y.append(_as_host_accumulator(Ft_y) if host_accumulators else Ft_y)
+        self.Ft_ctf.append(_as_host_accumulator(Ft_ctf) if host_accumulators else Ft_ctf)
+        self.hard_assignments.append(hard_full)
+        self.per_class_stats.append(
+            _full_stats_from_subset(
+                stats_subset,
+                image_indices,
+                self.n_images,
+                class_log_evidence=class_log_evidence,
+            ),
+        )
+        if self.per_class_noise is not None:
+            self.per_class_noise.append(
+                _expand_subset_noise_stats(
+                    noise,
+                    image_indices,
+                    self.n_images,
+                    full_group_count=self.full_group_count,
+                ),
+            )
+        if self.return_best_pose_details:
+            best_rots, best_trans, best_rot_ids = best_pose
+            best_rots_full, best_trans_full, best_rot_ids_full = _expand_subset_pose_details(
+                best_rots, best_trans, best_rot_ids, image_indices, self.n_images
+            )
+            self.best_pose_rotations.append(best_rots_full)
+            self.best_pose_translations.append(best_trans_full)
+            self.best_pose_rotation_ids.append(best_rot_ids_full)
+
+
 def _run_firstiter_global_winner_subset_pass2(
     experiment_dataset,
     means_array,
@@ -1485,46 +1572,28 @@ def _run_firstiter_global_winner_subset_pass2(
     rotations_np = np.asarray(fine_rotations_np, dtype=pose_dtype)
     translations_np = np.asarray(fine_translations_np, dtype=pose_dtype)
 
-    Ft_y = []
-    Ft_ctf = []
-    hard_assignments = []
-    per_class_stats = []
-    per_class_noise = [] if accumulate_noise else None
-    per_class_best_pose_rotations = [] if return_best_pose_details else None
-    per_class_best_pose_translations = [] if return_best_pose_details else None
-    per_class_best_pose_rotation_ids = [] if return_best_pose_details else None
-
-    full_group_count = _full_group_count_from_kwargs(pass2_kwargs)
-    subset_counts = []
+    results = _PerClassSubsetResults(
+        n_images=n_images,
+        accumulate_noise=accumulate_noise,
+        return_best_pose_details=return_best_pose_details,
+        full_group_count=_full_group_count_from_kwargs(pass2_kwargs),
+        pose_dtype=pose_dtype,
+        score_dtype=score_dtype,
+    )
     t0 = time.time()
     for class_index in range(n_classes):
         image_indices = np.nonzero(coarse_class_assignments == class_index)[0].astype(np.int64, copy=False)
-        subset_counts.append(int(image_indices.size))
+        results.subset_counts.append(int(image_indices.size))
         if image_indices.size == 0:
-            zero = jnp.zeros_like(means_array[class_index])
-            Ft_y.append(_as_host_accumulator(zero))
-            Ft_ctf.append(_as_host_accumulator(jnp.zeros_like(jnp.real(means_array[class_index]))))
-            hard_assignments.append(np.zeros(n_images, dtype=np.int32))
-            per_class_stats.append(
-                make_relion_stats(
-                    log_evidence_per_image=np.asarray(coarse_result.class_log_evidence[class_index], dtype=score_dtype),
-                    best_log_score_per_image=np.full(n_images, -np.inf, dtype=score_dtype),
-                    max_posterior_per_image=np.zeros(n_images, dtype=score_dtype),
-                    rotation_posterior_sums=np.zeros(n_rot_fine, dtype=score_dtype),
-                ),
+            results.append_empty_class(
+                mean=means_array[class_index],
+                class_log_evidence=coarse_result.class_log_evidence[class_index],
+                noise_variance=noise_variance,
+                class_index=class_index,
+                n_classes=n_classes,
+                n_rot=n_rot_fine,
+                host_accumulators=True,
             )
-            if per_class_noise is not None:
-                per_class_noise.append(
-                    _zero_subset_noise_stats(
-                        _select_class_value(noise_variance, class_index, n_classes),
-                        n_images=n_images,
-                        full_group_count=full_group_count,
-                    ),
-                )
-            if return_best_pose_details:
-                per_class_best_pose_rotations.append(np.zeros((n_images, 3, 3), dtype=pose_dtype))
-                per_class_best_pose_translations.append(np.zeros((n_images, 2), dtype=pose_dtype))
-                per_class_best_pose_rotation_ids.append(np.zeros(n_images, dtype=np.int32))
             continue
 
         subset_dataset = experiment_dataset.subset(image_indices)
@@ -1565,58 +1634,41 @@ def _run_firstiter_global_winner_subset_pass2(
         noise = output.noise_stats
         hard_full = np.zeros(n_images, dtype=np.int32)
         hard_full[image_indices] = np.asarray(hard_subset, dtype=np.int32)
-        Ft_y.append(class_Ft_y)
-        Ft_ctf.append(class_Ft_ctf)
-        hard_assignments.append(hard_full)
-        per_class_stats.append(
-            _full_stats_from_subset(
-                stats_subset,
-                image_indices,
-                n_images,
-                class_log_evidence=coarse_result.class_log_evidence[class_index],
+        results.append_class(
+            image_indices=image_indices,
+            Ft_y=class_Ft_y,
+            Ft_ctf=class_Ft_ctf,
+            hard_full=hard_full,
+            stats_subset=stats_subset,
+            class_log_evidence=coarse_result.class_log_evidence[class_index],
+            noise=noise,
+            best_pose=(
+                _decode_dense_best_pose_details(hard_subset, rotations_np, translations_np)
+                if return_best_pose_details
+                else None
             ),
+            host_accumulators=False,
         )
-        if per_class_noise is not None:
-            per_class_noise.append(
-                _expand_subset_noise_stats(
-                    noise,
-                    image_indices,
-                    n_images,
-                    full_group_count=full_group_count,
-                ),
-            )
-        if return_best_pose_details:
-            best_rots, best_trans, best_rot_ids = _decode_dense_best_pose_details(
-                hard_subset,
-                rotations_np,
-                translations_np,
-            )
-            best_rots_full, best_trans_full, best_rot_ids_full = _expand_subset_pose_details(
-                best_rots, best_trans, best_rot_ids, image_indices, n_images
-            )
-            per_class_best_pose_rotations.append(best_rots_full)
-            per_class_best_pose_translations.append(best_trans_full)
-            per_class_best_pose_rotation_ids.append(best_rot_ids_full)
 
     logger.info(
         "Firstiter-CC global-winner subset pass2: classes=%d images=%d subset_counts=%s total=%.1fs",
         n_classes,
         n_images,
-        subset_counts,
+        results.subset_counts,
         time.time() - t0,
     )
     return _assemble_result(
         class_log_evidence=coarse_result.class_log_evidence,
         new_means=None,
-        Ft_y=Ft_y,
-        Ft_ctf=Ft_ctf,
-        per_class_hard_assignments=np.stack(hard_assignments, axis=0),
-        per_class_stats=tuple(per_class_stats),
-        noise_stats=None if per_class_noise is None else tuple(per_class_noise),
-        per_class_best_pose_rotations=per_class_best_pose_rotations,
-        per_class_best_pose_translations=per_class_best_pose_translations,
-        per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
-        class_posterior_sums_override=np.asarray(subset_counts, dtype=np.float64),
+        Ft_y=results.Ft_y,
+        Ft_ctf=results.Ft_ctf,
+        per_class_hard_assignments=np.stack(results.hard_assignments, axis=0),
+        per_class_stats=tuple(results.per_class_stats),
+        noise_stats=None if results.per_class_noise is None else tuple(results.per_class_noise),
+        per_class_best_pose_rotations=results.best_pose_rotations,
+        per_class_best_pose_translations=results.best_pose_translations,
+        per_class_best_pose_rotation_ids=results.best_pose_rotation_ids,
+        class_posterior_sums_override=np.asarray(results.subset_counts, dtype=np.float64),
         firstiter_winner_take_all=True,
         profile_summary={"firstiter_subset_pass2_s": np.float64(time.time() - t0)},
     )
@@ -1726,46 +1778,28 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         else None
     )
 
-    Ft_y = []
-    Ft_ctf = []
-    hard_assignments = []
-    per_class_stats = []
-    per_class_noise = [] if accumulate_noise else None
-    per_class_best_pose_rotations = [] if return_best_pose_details else None
-    per_class_best_pose_translations = [] if return_best_pose_details else None
-    per_class_best_pose_rotation_ids = [] if return_best_pose_details else None
-
-    full_group_count = _full_group_count_from_kwargs(pass2_kwargs)
-    subset_counts = []
+    results = _PerClassSubsetResults(
+        n_images=n_images,
+        accumulate_noise=accumulate_noise,
+        return_best_pose_details=return_best_pose_details,
+        full_group_count=_full_group_count_from_kwargs(pass2_kwargs),
+        pose_dtype=pose_dtype,
+        score_dtype=score_dtype,
+    )
     t0 = time.time()
     for class_index in range(n_classes):
         image_indices = np.nonzero(coarse_class_assignments == class_index)[0].astype(np.int64, copy=False)
-        subset_counts.append(int(image_indices.size))
+        results.subset_counts.append(int(image_indices.size))
         if image_indices.size == 0:
-            zero = jnp.zeros_like(means_array[class_index])
-            Ft_y.append(zero)
-            Ft_ctf.append(jnp.zeros_like(jnp.real(means_array[class_index])))
-            hard_assignments.append(np.zeros(n_images, dtype=np.int32))
-            per_class_stats.append(
-                make_relion_stats(
-                    log_evidence_per_image=np.asarray(coarse_result.class_log_evidence[class_index], dtype=score_dtype),
-                    best_log_score_per_image=np.full(n_images, -np.inf, dtype=score_dtype),
-                    max_posterior_per_image=np.zeros(n_images, dtype=score_dtype),
-                    rotation_posterior_sums=np.zeros(n_rot_coarse, dtype=score_dtype),
-                ),
+            results.append_empty_class(
+                mean=means_array[class_index],
+                class_log_evidence=coarse_result.class_log_evidence[class_index],
+                noise_variance=noise_variance,
+                class_index=class_index,
+                n_classes=n_classes,
+                n_rot=n_rot_coarse,
+                host_accumulators=False,
             )
-            if per_class_noise is not None:
-                per_class_noise.append(
-                    _zero_subset_noise_stats(
-                        _select_class_value(noise_variance, class_index, n_classes),
-                        n_images=n_images,
-                        full_group_count=full_group_count,
-                    ),
-                )
-            if return_best_pose_details:
-                per_class_best_pose_rotations.append(np.zeros((n_images, 3, 3), dtype=pose_dtype))
-                per_class_best_pose_translations.append(np.zeros((n_images, 2), dtype=pose_dtype))
-                per_class_best_pose_rotation_ids.append(np.zeros(n_images, dtype=np.int32))
             continue
 
         subset_dataset = experiment_dataset.subset(image_indices)
@@ -1802,53 +1836,37 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         noise = output[7] if accumulate_noise else None
         hard_full = np.zeros(n_images, dtype=np.int32)
         hard_full[image_indices] = _sparse_pose_ids_to_fine_grid(hard_subset, best_rot_ids, n_fine_trans)
-        Ft_y.append(_as_host_accumulator(class_Ft_y))
-        Ft_ctf.append(_as_host_accumulator(class_Ft_ctf))
-        hard_assignments.append(hard_full)
-        per_class_stats.append(
-            _full_stats_from_subset(
-                stats_subset,
-                image_indices,
-                n_images,
-                class_log_evidence=coarse_result.class_log_evidence[class_index],
-            ),
+        results.append_class(
+            image_indices=image_indices,
+            Ft_y=class_Ft_y,
+            Ft_ctf=class_Ft_ctf,
+            hard_full=hard_full,
+            stats_subset=stats_subset,
+            class_log_evidence=coarse_result.class_log_evidence[class_index],
+            noise=noise,
+            best_pose=(best_rots, best_trans, best_rot_ids) if return_best_pose_details else None,
+            host_accumulators=True,
         )
-        if per_class_noise is not None:
-            per_class_noise.append(
-                _expand_subset_noise_stats(
-                    noise,
-                    image_indices,
-                    n_images,
-                    full_group_count=full_group_count,
-                ),
-            )
-        if return_best_pose_details:
-            best_rots_full, best_trans_full, best_rot_ids_full = _expand_subset_pose_details(
-                best_rots, best_trans, best_rot_ids, image_indices, n_images
-            )
-            per_class_best_pose_rotations.append(best_rots_full)
-            per_class_best_pose_translations.append(best_trans_full)
-            per_class_best_pose_rotation_ids.append(best_rot_ids_full)
 
     logger.info(
         "Sparse firstiter-CC global-winner subset pass2: classes=%d images=%d subset_counts=%s total=%.1fs",
         n_classes,
         n_images,
-        subset_counts,
+        results.subset_counts,
         time.time() - t0,
     )
     return _assemble_result(
         class_log_evidence=coarse_result.class_log_evidence,
         new_means=None,
-        Ft_y=Ft_y,
-        Ft_ctf=Ft_ctf,
-        per_class_hard_assignments=np.stack(hard_assignments, axis=0),
-        per_class_stats=tuple(per_class_stats),
-        noise_stats=None if per_class_noise is None else tuple(per_class_noise),
-        per_class_best_pose_rotations=per_class_best_pose_rotations,
-        per_class_best_pose_translations=per_class_best_pose_translations,
-        per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
-        class_posterior_sums_override=np.asarray(subset_counts, dtype=np.float64),
+        Ft_y=results.Ft_y,
+        Ft_ctf=results.Ft_ctf,
+        per_class_hard_assignments=np.stack(results.hard_assignments, axis=0),
+        per_class_stats=tuple(results.per_class_stats),
+        noise_stats=None if results.per_class_noise is None else tuple(results.per_class_noise),
+        per_class_best_pose_rotations=results.best_pose_rotations,
+        per_class_best_pose_translations=results.best_pose_translations,
+        per_class_best_pose_rotation_ids=results.best_pose_rotation_ids,
+        class_posterior_sums_override=np.asarray(results.subset_counts, dtype=np.float64),
         firstiter_winner_take_all=True,
         profile_summary={"sparse_firstiter_subset_pass2_s": np.float64(time.time() - t0)},
         host_accumulators=True,
