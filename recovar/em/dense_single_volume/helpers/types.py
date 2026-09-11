@@ -109,6 +109,51 @@ class NoiseStats(NamedTuple):
     wsum_scale_correction_aa: jax.Array | np.ndarray | None = None
 
 
+class _Omitted:
+    """Marker for a sparse pass-2 result entry the caller did not request."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return "OMITTED"
+
+
+OMITTED = _Omitted()
+
+
+def sparse_pass2_result(
+    Ft_y,
+    Ft_ctf,
+    hard_assignment,
+    best_rotations,
+    best_translations,
+    best_rotation_indices,
+    *,
+    relion_stats=OMITTED,
+    score_log_z=OMITTED,
+    noise_stats=OMITTED,
+    source_eulers=OMITTED,
+):
+    """Assemble a sparse pass-2 return tuple in its fixed positional order.
+
+    Callers unpack these results by position, so the six accumulators and pose
+    outputs always come first and each requested optional entry follows in this
+    order: RELION statistics, the score-only log partition function, merged noise
+    statistics, and the source Euler angles. Entries left at ``OMITTED`` are not
+    part of the tuple, which is what shifts the positions of the later ones.
+    """
+
+    optional = (relion_stats, score_log_z, noise_stats, source_eulers)
+    return (
+        Ft_y,
+        Ft_ctf,
+        hard_assignment,
+        best_rotations,
+        best_translations,
+        best_rotation_indices,
+    ) + tuple(value for value in optional if value is not OMITTED)
+
+
 def make_relion_stats(
     *,
     log_evidence_per_image,

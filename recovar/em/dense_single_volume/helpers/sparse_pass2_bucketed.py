@@ -147,7 +147,12 @@ from recovar.em.dense_single_volume.helpers.translation_prior import (
     translation_sqdist_angstrom,
     validate_translation_prior_centers,
 )
-from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
+from recovar.em.dense_single_volume.helpers.types import (
+    OMITTED,
+    make_noise_stats,
+    make_relion_stats,
+    sparse_pass2_result,
+)
 from recovar.em.dense_single_volume.local_backprojection import (
     relion_x_half_sequential_translation_reduction_enabled,
     compute_local_ctf_sums_from_probs_sum_t,
@@ -11658,6 +11663,7 @@ def compute_pass2_stats_sparse_bucketed(
             wsum_scale_correction_aa=noise_scale_correction_aa_total,
         )
 
+    relion_stats = OMITTED
     if return_stats:
         relion_stats = make_relion_stats(
             log_evidence_per_image=log_evidence,
@@ -11665,32 +11671,20 @@ def compute_pass2_stats_sparse_bucketed(
             max_posterior_per_image=max_posterior,
             rotation_posterior_sums=rotation_posterior_sums,
         )
-        result = (
-            Ft_y_total,
-            Ft_ctf_total,
-            hard_assignment,
-            best_rotations,
-            best_translations,
-            best_rotation_indices,
-            relion_stats,
-        )
-        if return_score_log_z:
-            result = result + (score_log_z,)
-        if accumulate_noise:
-            result = result + (merged_noise_stats,)
-        return result + (best_eulers,) if return_source_eulers else result
-
-    result = (
+    return sparse_pass2_result(
         Ft_y_total,
         Ft_ctf_total,
         hard_assignment,
         best_rotations,
         best_translations,
         best_rotation_indices,
+        relion_stats=relion_stats,
+        # RELION's score-only log partition function rides with the statistics:
+        # without them the historical tuple never carried it.
+        score_log_z=score_log_z if (return_stats and return_score_log_z) else OMITTED,
+        noise_stats=merged_noise_stats if accumulate_noise else OMITTED,
+        source_eulers=best_eulers if return_source_eulers else OMITTED,
     )
-    if accumulate_noise:
-        result = result + (merged_noise_stats,)
-    return result + (best_eulers,) if return_source_eulers else result
 
 
 def _shared_k_class_noise_variance(noise_variance, n_classes: int):

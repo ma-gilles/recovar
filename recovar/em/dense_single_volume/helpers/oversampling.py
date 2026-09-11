@@ -28,7 +28,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from .types import make_noise_stats, make_relion_stats
+from .types import OMITTED, make_noise_stats, make_relion_stats, sparse_pass2_result
 
 logger = logging.getLogger(__name__)
 _FAST_SIGNIFICANCE_TOPK = 64
@@ -1160,6 +1160,7 @@ def _compute_pass2_stats_sparse_perimage_reference(
             sumw=noise_sumw_total,
         )
 
+    relion_stats = OMITTED
     if return_stats:
         relion_stats = make_relion_stats(
             log_evidence_per_image=log_evidence,
@@ -1167,27 +1168,13 @@ def _compute_pass2_stats_sparse_perimage_reference(
             max_posterior_per_image=max_posterior,
             rotation_posterior_sums=rotation_posterior_sums,
         )
-        result = (
-            Ft_y_total,
-            Ft_ctf_total,
-            hard_assignment,
-            best_rotations,
-            best_translations,
-            best_rotation_indices,
-            relion_stats,
-        )
-        if accumulate_noise:
-            result = result + (merged_noise_stats,)
-        return result
-
-    result = (
+    return sparse_pass2_result(
         Ft_y_total,
         Ft_ctf_total,
         hard_assignment,
         best_rotations,
         best_translations,
         best_rotation_indices,
+        relion_stats=relion_stats,
+        noise_stats=merged_noise_stats if accumulate_noise else OMITTED,
     )
-    if accumulate_noise:
-        result = result + (merged_noise_stats,)
-    return result
