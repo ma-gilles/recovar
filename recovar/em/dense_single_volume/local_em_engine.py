@@ -1142,6 +1142,13 @@ def _relion_local_projector_flat(
     return proj_relion_flat
 
 
+def _packed_reconstruction_rows(values, take_indices, pack_mask):
+    """Gather the packed reconstruction rows of ``values`` (batch, rotation, ...) and zero the padding rows."""
+
+    packed = jnp.take_along_axis(values, take_indices[:, :, None], axis=1)
+    return jnp.where(pack_mask[:, :, None], packed, 0.0)
+
+
 def _project_local_bucket(
     *,
     mean_for_proj,
@@ -4611,16 +4618,7 @@ def run_local_em_exact(
                     axis=1,
                 )
                 if not host_plan_pack_enabled:
-                    packed_reconstruction_probs = jnp.take_along_axis(
-                        reconstruction_probs[:unpadded_batch_size],
-                        reconstruction_take_indices_jnp[:, :, None],
-                        axis=1,
-                    )
-                    packed_reconstruction_probs = jnp.where(
-                        reconstruction_pack_mask_jnp[:, :, None],
-                        packed_reconstruction_probs,
-                        0.0,
-                    )
+                    packed_reconstruction_probs = _packed_reconstruction_rows(reconstruction_probs[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
                     packed_reconstruction_probs_sum_t = jnp.take_along_axis(
                         reconstruction_probs_sum_t[:unpadded_batch_size],
                         reconstruction_take_indices_jnp,
@@ -4793,26 +4791,8 @@ def run_local_em_exact(
                 packed_source_vdam_images = source_vdam_images[:unpadded_batch_size]
                 packed_source_vdam_ctf = source_vdam_ctf[:unpadded_batch_size]
                 packed_source_vdam_minvsigma2 = source_vdam_minvsigma2[:unpadded_batch_size]
-                packed_source_vdam_posterior = jnp.take_along_axis(
-                    source_vdam_posterior[:unpadded_batch_size],
-                    reconstruction_take_indices_jnp[:, :, None],
-                    axis=1,
-                )
-                packed_source_vdam_posterior = jnp.where(
-                    reconstruction_pack_mask_jnp[:, :, None],
-                    packed_source_vdam_posterior,
-                    0.0,
-                )
-                packed_source_vdam_reference = jnp.take_along_axis(
-                    source_vdam_reference[:unpadded_batch_size],
-                    reconstruction_take_indices_jnp[:, :, None],
-                    axis=1,
-                )
-                packed_source_vdam_reference = jnp.where(
-                    reconstruction_pack_mask_jnp[:, :, None],
-                    packed_source_vdam_reference,
-                    0.0,
-                )
+                packed_source_vdam_posterior = _packed_reconstruction_rows(source_vdam_posterior[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
+                packed_source_vdam_reference = _packed_reconstruction_rows(source_vdam_reference[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
                 packed_summed = None
                 packed_ctf_probs = None
                 packed_flat_rotations = None
@@ -4842,18 +4822,8 @@ def run_local_em_exact(
                     reconstruction_take_indices[:, :, None, None],
                     axis=1,
                 )
-                packed_summed = jnp.take_along_axis(
-                    summed[:unpadded_batch_size],
-                    reconstruction_take_indices_jnp[:, :, None],
-                    axis=1,
-                )
-                packed_summed = jnp.where(reconstruction_pack_mask_jnp[:, :, None], packed_summed, 0.0)
-                packed_ctf_probs = jnp.take_along_axis(
-                    ctf_probs[:unpadded_batch_size],
-                    reconstruction_take_indices_jnp[:, :, None],
-                    axis=1,
-                )
-                packed_ctf_probs = jnp.where(reconstruction_pack_mask_jnp[:, :, None], packed_ctf_probs, 0.0)
+                packed_summed = _packed_reconstruction_rows(summed[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
+                packed_ctf_probs = _packed_reconstruction_rows(ctf_probs[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
                 packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_mstep_rotations_np))
             else:
                 probs_sum_t_np = None
@@ -6734,16 +6704,7 @@ def run_local_em_exact(
             packed_summed = None
             packed_ctf_probs = None
         elif defer_packed_mstep_reduction:
-            packed_reconstruction_probs = jnp.take_along_axis(
-                reconstruction_probs,
-                reconstruction_take_indices_jnp[:, :, None],
-                axis=1,
-            )
-            packed_reconstruction_probs = jnp.where(
-                reconstruction_pack_mask_jnp[:, :, None],
-                packed_reconstruction_probs,
-                0.0,
-            )
+            packed_reconstruction_probs = _packed_reconstruction_rows(reconstruction_probs, reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
             if mstep_subtract_ctf_projection:
                 # RELION's VDAM/--grad path backprojects the residual image,
                 # not the raw unmasked image: Fimg_store = Fimg - Frefctf.
@@ -6752,10 +6713,8 @@ def run_local_em_exact(
             packed_summed = None
             packed_ctf_probs = None
         else:
-            packed_summed = jnp.take_along_axis(summed, reconstruction_take_indices_jnp[:, :, None], axis=1)
-            packed_summed = jnp.where(reconstruction_pack_mask_jnp[:, :, None], packed_summed, 0.0)
-            packed_ctf_probs = jnp.take_along_axis(ctf_probs, reconstruction_take_indices_jnp[:, :, None], axis=1)
-            packed_ctf_probs = jnp.where(reconstruction_pack_mask_jnp[:, :, None], packed_ctf_probs, 0.0)
+            packed_summed = _packed_reconstruction_rows(summed, reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
+            packed_ctf_probs = _packed_reconstruction_rows(ctf_probs, reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
         packed_flat_rotations = None
         if (not defer_packed_mstep_reduction) and (
             not disable_adjoint_y or not disable_adjoint_ctf or (accumulate_noise and proj_for_noise is None)
@@ -6813,16 +6772,7 @@ def run_local_em_exact(
                     if mstep_subtract_ctf_projection:
                         chunk_take_indices = reconstruction_take_indices_jnp[:, chunk_start:chunk_stop]
                         chunk_pack_mask = reconstruction_pack_mask_jnp[:, chunk_start:chunk_stop]
-                        chunk_proj_for_residual = jnp.take_along_axis(
-                            proj_for_noise,
-                            chunk_take_indices[:, :, None],
-                            axis=1,
-                        )
-                        chunk_proj_for_residual = jnp.where(
-                            chunk_pack_mask[:, :, None],
-                            chunk_proj_for_residual,
-                            0.0,
-                        )
+                        chunk_proj_for_residual = _packed_reconstruction_rows(proj_for_noise, chunk_take_indices, chunk_pack_mask)
                         chunk_probs_sum_t = jnp.sum(chunk_probs, axis=-1)
                         frefctf_weighted = chunk_proj_for_residual * ctf2_over_nv_recon[:, None, :]
                         chunk_summed = chunk_summed - chunk_probs_sum_t[..., None] * frefctf_weighted
@@ -7008,16 +6958,7 @@ def run_local_em_exact(
                     requested_current_sizes=debug_noise_dump_current_sizes,
                     requested_iterations=debug_noise_dump_iterations,
                 )
-                packed_summed_masked_noise = jnp.take_along_axis(
-                    summed_masked_noise,
-                    reconstruction_take_indices_jnp[:, :, None],
-                    axis=1,
-                )
-                packed_summed_masked_noise = jnp.where(
-                    reconstruction_pack_mask_jnp[:, :, None],
-                    packed_summed_masked_noise,
-                    0.0,
-                )
+                packed_summed_masked_noise = _packed_reconstruction_rows(summed_masked_noise, reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
             block_noise_shells = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
             block_a2_shells = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
             block_xa_shells = jnp.zeros(n_shells, dtype=precision_policy.score_real_dtype)
@@ -7111,16 +7052,7 @@ def run_local_em_exact(
                     chunk_stop = min(packed_rotation_count, chunk_start + chunk_rows)
                     chunk_take_indices = reconstruction_take_indices_jnp[:, chunk_start:chunk_stop]
                     chunk_pack_mask = reconstruction_pack_mask_jnp[:, chunk_start:chunk_stop]
-                    chunk_proj_for_noise = jnp.take_along_axis(
-                        proj_for_noise,
-                        chunk_take_indices[:, :, None],
-                        axis=1,
-                    )
-                    chunk_proj_for_noise = jnp.where(
-                        chunk_pack_mask[:, :, None],
-                        chunk_proj_for_noise,
-                        0.0,
-                    )
+                    chunk_proj_for_noise = _packed_reconstruction_rows(proj_for_noise, chunk_take_indices, chunk_pack_mask)
                     (
                         block_noise_shells,
                         block_a2_shells,
