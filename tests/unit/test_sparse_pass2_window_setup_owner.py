@@ -46,6 +46,11 @@ def test_both_sparse_scorers_use_the_owner():
         assert source.count("_sparse_pass2_window_setup(") == 1
         # The scorers keep only their separate budget-planning window; the scoring/reconstruction window lives in the owner.
         assert re.search(r"^\s*window_spec = make_fourier_window_spec\(", source, re.MULTILINE) is None
-        assert source.count("budget_window_spec = make_fourier_window_spec(") == 1
+        # The budget-planning window is resolved by the shared pass-2 window setup owner.
+        assert source.count("= _pass2_window_setup(") == 1
+        assert "budget_window_spec = make_fourier_window_spec(" not in source
         assert "ForwardModelConfig.from_dataset(" not in source
         assert "centered_half_indices_to_fftw_half_indices(" not in source
+
+def test_pass2_window_setup_owner_builds_the_budget_window():
+    assert inspect.getsource(sp._pass2_window_setup).count("budget_window_spec = make_fourier_window_spec(") == 1

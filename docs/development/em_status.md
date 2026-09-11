@@ -323,17 +323,25 @@ wall, warm cache 143 s, 5964 cached programs, cold-vs-warm iteration-20 class ma
 within 1e-6 (float32 band) — better than the table's 800 s / 205 s at `5ca9c8fff`
 and level with the glue rounds' 545 s, still 13.7×/3.7× RELION's 39 s (fail, the
 compile-bound design item stands). K1 real 10k/256 natural 200 with
-`RECOVAR_PREREAD_IMAGES=1` (job 13740476): fill 1302 s, warm cache 967 s, 201 maps
-each, fill-vs-warm map correlation 0.9963 at it100 / 0.9985 at it200 (chaotic band) —
-**worse** than the table's 850 s / 676 s and 2.0×/1.5× RELION's 608–662 s, with
-5142 compiled programs against 2401 at `5ca9c8fff`. The doubled program count is
-the lead: an attribution pair with the per-iteration profile runs the same fill arm
-on `97f6d6b33` (13742057) and on `4d569d27a` (13742058, VDAM integrated, before the
-EM projector-crop port) to separate the crop port from the VDAM integration.
-Earlier attempts of this pair (13735912…13739747) failed on environment only:
-missing RELION binding / FFTW CMake paths, the CUDA 12.8 toolkit's `nvlink` against
-pixi's 12.9 `ptxas`, and `JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES=all` breaking warm
-arms at kernel launch; all archived under `attempt*` in the root.
+`RECOVAR_PREREAD_IMAGES=1`: a first pair (job 13740476) measured fill 1302 s / warm
+967 s with 5142 compiled programs against the table's 850 s / 676 s and 2401, and
+an attribution set (13742057/13742058/13745309) showed the same slow profile on
+`97f6d6b33`, on `4d569d27a` (before the EM projector-crop port) and on the VDAM
+commit `5ca9c8fff` itself — the driver copied from the parallel em_clean session
+carried the VDAM candidate CLI but none of the gate contract's candidate
+environment (`native_noise_full200_8ab1a44be_13628018/gf43/candidate_1/environment.json`:
+62 `RECOVAR_*`/`JAX_*` K1 opt-ins such as the coarse GEMM hybrid and projection
+cache, exact-local BPref packing/capacity/transaction, host-plan CUDA, noise pixel
+capacity/CUDA, packed local projection and stable flat rows), so every arm ran the
+engine at defaults. With that environment applied (`vdam_candidate_env.json`, job
+13746584) the published source measures fill 827 s / warm cache 627 s, 2427 programs,
+expectation 576 s over 200 iterations — level with the table's 850 s / 676 s, 2401
+programs, 582 s at `5ca9c8fff`. Verdict: parity with the carried table; the opt-ins
+are environment-only forks the VDAM workstream owns. Earlier attempts of the pair
+(13735912…13739747) failed on environment only: missing RELION binding / FFTW CMake
+paths, the CUDA 12.8 toolkit's `nvlink` against pixi's 12.9 `ptxas`, and
+`JAX_PERSISTENT_CACHE_ENABLE_XLA_CACHES=all` breaking warm arms at kernel launch;
+all archived under `attempt*` in the root.
 
 ## Frozen jobs and representative performance
 
@@ -355,9 +363,8 @@ The fast-tier rerun on frozen `dd7d9b218` (job 13726940) and the exactly-K4
 completion (13712372: GT FSC-AUC gate failed by -0.000519, 6.20x RELION wall)
 and the fast tier on frozen `11bc4f0c2` (13737449: 5 pass, 2 known failures)
 and the VDAM-handoff GPU validation pair on the published source (K4 20-iteration
-cold 533 s / warm 143 s; K1 10k/256 preread 1302 s / 967 s with 5142 programs vs
-2401 at `5ca9c8fff` — attribution pair 13742057/13742058 running) are recorded
-above. Between results,
+cold 533 s / warm 143 s; K1 10k/256 preread 827 s / warm cache 627 s with the VDAM candidate
+environment, at parity with the carried table) are recorded above. Between results,
 continue one bounded structural package at a time from the cleanup plan.
 Remaining candidates after the September 10–11 packages (J through UU; the big-JIT
 core layout and the sparse pass-2 tuple reader landed as TT and UU): the 35-line bucket-pipeline blocks repeated inside

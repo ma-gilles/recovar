@@ -7872,6 +7872,42 @@ def subtract_projected_reference_from_sparse_mstep_rotation_sums(
     return summed - projected_reference_delta
 
 
+def _pass2_projection_budget(
+    mean_dtype,
+    precision_policy: DensePrecisionPolicy,
+    *,
+    n_half: int,
+    use_relion_projector: bool,
+    budget_window_spec,
+    device_memory_bytes,
+    include_abs2: bool,
+):
+    """Projection cache dtype, budget pixels and rotations per projection call of a pass 2.
+
+    ``include_abs2`` says whether the projection call also materializes the
+    squared magnitudes; the single-volume route skips them for score-only
+    passes, the fused K-class route only under a window.
+    """
+
+    projection_complex_dtype = _projection_cache_budget_complex_dtype(
+        mean_dtype,
+        precision_policy.score_complex_dtype,
+        use_relion_projector=use_relion_projector,
+    )
+    projection_budget_pixels = _projection_budget_pixels_for_pass(
+        n_half,
+        use_window=budget_window_spec.use_window,
+        use_relion_projector=use_relion_projector,
+    )
+    max_projected_rotations_per_projection_call = _max_projected_rotations_per_call_for_pass(
+        device_memory_bytes=device_memory_bytes,
+        n_projection_pixels=projection_budget_pixels,
+        projection_complex_dtype=projection_complex_dtype,
+        include_abs2=include_abs2,
+    )
+    return projection_complex_dtype, projection_budget_pixels, max_projected_rotations_per_projection_call
+
+
 class _Pass2WindowSetup(NamedTuple):
     """Window, memory and precision setup shared by both bucketed pass-2 entry points."""
 
@@ -8367,20 +8403,17 @@ def compute_pass2_stats_sparse_bucketed(
         tail_bucket_coalesce_max_inflation,
         tail_bucket_coalesce_min_bucket_size,
     ) = _tail_bucket_coalesce_params_for_pass(fused_k_class=False)
-    projection_complex_dtype = _projection_cache_budget_complex_dtype(
+    (
+        projection_complex_dtype,
+        projection_budget_pixels,
+        max_projected_rotations_per_projection_call,
+    ) = _pass2_projection_budget(
         jnp.asarray(mean_for_proj).dtype,
-        precision_policy.score_complex_dtype,
+        precision_policy,
+        n_half=n_half,
         use_relion_projector=use_relion_projector,
-    )
-    projection_budget_pixels = _projection_budget_pixels_for_pass(
-        n_half,
-        use_window=budget_window_spec.use_window,
-        use_relion_projector=use_relion_projector,
-    )
-    max_projected_rotations_per_projection_call = _max_projected_rotations_per_call_for_pass(
+        budget_window_spec=budget_window_spec,
         device_memory_bytes=device_memory_bytes,
-        n_projection_pixels=projection_budget_pixels,
-        projection_complex_dtype=projection_complex_dtype,
         include_abs2=not (budget_window_spec.use_window or score_only),
     )
     max_projection_gather_bytes = _max_projection_gather_bytes_for_pass(device_memory_bytes)
@@ -12423,20 +12456,17 @@ def compute_k_class_pass2_stats_sparse_fused(
             complex_dtype=precision_policy.score_complex_dtype,
             n_half_pixels=translation_tile_half_pixels,
         )
-    projection_complex_dtype = _projection_cache_budget_complex_dtype(
+    (
+        projection_complex_dtype,
+        projection_budget_pixels,
+        max_projected_rotations_per_projection_call,
+    ) = _pass2_projection_budget(
         jnp.asarray(mean_for_proj_by_class[0]).dtype,
-        precision_policy.score_complex_dtype,
+        precision_policy,
+        n_half=n_half,
         use_relion_projector=use_relion_projector,
-    )
-    projection_budget_pixels = _projection_budget_pixels_for_pass(
-        n_half,
-        use_window=budget_window_spec.use_window,
-        use_relion_projector=use_relion_projector,
-    )
-    max_projected_rotations_per_projection_call = _max_projected_rotations_per_call_for_pass(
+        budget_window_spec=budget_window_spec,
         device_memory_bytes=device_memory_bytes,
-        n_projection_pixels=projection_budget_pixels,
-        projection_complex_dtype=projection_complex_dtype,
         include_abs2=not budget_window_spec.use_window,
     )
     bucket_t0 = time.time()
