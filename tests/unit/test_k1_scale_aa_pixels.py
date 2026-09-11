@@ -11,18 +11,20 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     RelionWavgRectangle,
-    _fresh_k1_direct_noise_default,
     _make_relion_wavg_rectangle,
     _prioritize_stopped_pass2_dump_buckets,
-    _relion_exact_bpref_operands_enabled,
-    _relion_powerclass_spectrum_norm_enabled,
     _relion_wavg_atomic_triplet_terms,
-    _relion_wavg_direct_modes,
     _relion_wavg_direct_norm_per_image,
     _relion_wavg_rectangle_triplet_terms,
     _relion_wavg_sequential_triplet_terms,
     _replace_low_shell_noise_with_relion_wavg_direct_residual,
     _select_optional_wavg_exact_pixels,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_policy import (
+    _fresh_k1_direct_noise_default,
+    _relion_exact_bpref_operands_enabled,
+    _relion_powerclass_spectrum_norm_enabled,
+    _relion_wavg_direct_modes,
 )
 from scripts.analyze_k1_scale_aa_pixels import analyze
 

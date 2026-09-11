@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import logging
 import os
-import subprocess
 import time
 from functools import partial
 from pathlib import Path
@@ -133,8 +132,6 @@ from recovar.em.dense_single_volume.helpers.projection import (
 from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_correction_groups
 from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
     _DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH,
-    _DEFAULT_TAIL_BUCKET_COALESCE_MAX_INFLATION,
-    _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE,
     _bucket_pass2_inputs,
     _bucket_sparse_k_class_compact_pair_counts,
     _bucket_sparse_k_class_pass2_inputs,
@@ -147,6 +144,75 @@ from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
     _compact_pair_image_mask_for_threshold,
     _prepare_per_image_compact_candidate_pairs,
     _prepare_per_image_pass2_inputs,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_budget import (
+    _EXACT_RAW_DIFF2_CACHE_MAX_BYTES,
+    _MAX_PROJECTED_ROTATIONS_ENV,
+    _compact_pair_dense_mstep_max_bytes_for_pass,
+    _complex_counterpart_real_dtype,
+    _device_free_memory_bytes,
+    _device_memory_limit_bytes,
+    _dtype_itemsize,
+    _exact_raw_diff2_cache_estimated_bytes,
+    _exact_raw_diff2_cache_fits_budget,
+    _exact_raw_diff2_cache_limit_bytes,
+    _jax_allocator_free_memory_bytes,
+    _max_adjoint_block_bytes_for_pass,
+    _max_hypotheses_per_microbatch_for_pass,
+    _max_images_for_translation_tile,
+    _max_noise_block_bytes_for_pass,
+    _max_projected_rotations_per_call_for_pass,
+    _max_projection_gather_bytes_for_pass,
+    _max_translation_tile_bytes_for_pass,
+    _optional_positive_float_env,
+    _optional_positive_int_env,
+    _projection_budget_pixels_for_pass,
+    _projection_cache_budget_complex_dtype,
+    _projection_cache_fits_budget,
+    _projection_cache_max_bytes_for_pass,
+    _projection_cache_transient_bytes,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_policy import (
+    _BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV,
+    _BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV,
+    _BPREF_REVERSE_PHYSICAL_ORDER_ENV,
+    _COMPACT_KCLASS_PAIRS_CHECK_ENV,
+    _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
+    _RELION_WAVG_ATOMIC_SCALE_AA_ENV,
+    _SPARSE_KCLASS_ACTIVE_ROW_PAD_MULTIPLE_ENV,
+    _SPARSE_KCLASS_COMPACT_PAIR_MSTEP_ENV,
+    _SPARSE_KCLASS_COMPACT_PAIRS_ENV,
+    _SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE_ENV,
+    _SPARSE_KCLASS_FUSED_MSTEP_NOISE_ENV,
+    _SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS_ENV,
+    _SPARSE_KCLASS_RESIDUAL_TERMS_FUSED_ENV,
+    _SPARSE_PASS2_WINDOWED_PREPARE_ENV,
+    _active_row_pad_multiple_for_pass,
+    _cached_score_rotation_chunk_size_for_pass,
+    _compact_pair_execution_enabled_for_pass,
+    _compact_pair_max_images_per_microbatch_for_pass,
+    _compact_pair_min_bucket_size_for_pass,
+    _compact_pair_mstep_mode_for_pass,
+    _compact_pair_pair_sparse_mstep_enabled_for_pass,
+    _compact_pair_prepare_max_images_per_microbatch,
+    _compact_pair_tail_bucket_coalesce_params_for_pass,
+    _fresh_k1_direct_noise_default,
+    _fused_mstep_noise_enabled_for_pass,
+    _max_images_for_sparse_pass2_translation_tile,
+    _native_dual_weighted_sums_enabled_for_pass,
+    _pass2_conservative_dump_execution_enabled,
+    _pass2_dump_enabled,
+    _projection_cache_enabled_for_pass,
+    _relion_exact_bpref_operands_enabled,
+    _relion_powerclass_spectrum_norm_enabled,
+    _relion_wavg_direct_modes,
+    _resolve_bpref_execution_bucket_policy,
+    _resolve_bpref_processing_order,
+    _small_bucket_coalesce_size_for_pass,
+    _tail_bucket_coalesce_params_for_pass,
+    _translation_tile_half_pixels_for_budget,
+    _windowed_prepare_enabled_for_pass,
+    _windowed_translation_tile_cap_enabled_for_pass,
 )
 from recovar.em.dense_single_volume.helpers.translation_prior import (
     expand_fine_translation_prior,
@@ -173,80 +239,23 @@ from recovar.reconstruction import noise as noise_utils
 
 logger = logging.getLogger(__name__)
 
-_RELION_WAVG_ATOMIC_SCALE_AA_ENV = "RECOVAR_RELION_WAVG_ATOMIC_SCALE_AA"
-_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL_ENV = (
-    "RECOVAR_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL"
-)
-_RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY_ENV = (
-    "RECOVAR_RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY"
-)
 _RELION_FINE_ROTATION_EXECUTION_ORDER_ENV = (
     "RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER"
 )
-_DEFAULT_SCORE_ONLY_MAX_HYPOTHESES_PER_MICROBATCH = 1_250_000
-_DEFAULT_MAX_TRANSLATION_TILE_BYTES = 384 * 1024**2
 # Scale sparse pass-2 bucket sizes from physical GPU memory and active score
 # pixels. The fused K-class path is launch-bound at 100k/256 unless it uses
 # larger chunks; these fractions still scale down on smaller GPUs.
-_AUTO_SCORE_ONLY_HYPOTHESIS_DEVICE_FRACTION = 0.640
-_AUTO_FULL_HYPOTHESIS_DEVICE_FRACTION = 0.305
 # Compact K-class scoring materializes two complex candidate-by-pixel gathers
 # for one class at a time while projections and M-step operands remain live.
 # Keep those two gathers within 10% of physical memory.  A K=4 cap that allowed
 # 6,587,373 total candidates formed two 8 GiB gathers and requested a 17.04 GiB
 # compiled temporary on the 100k/256 fixture after earlier JIT fragmentation.
-_AUTO_FUSED_KCLASS_SCORE_GATHER_DEVICE_FRACTION = 0.100
-_AUTO_FUSED_KCLASS_LIVE_COMPLEX_GATHERS = 2
-_AUTO_TRANSLATION_TILE_DEVICE_FRACTION = 0.020
-_AUTO_EXTERNAL_NORMALIZATION_TRANSLATION_TILE_DEVICE_FRACTION = 0.014
-_AUTO_FUSED_KCLASS_TRANSLATION_TILE_DEVICE_FRACTION = 0.007
-_AUTO_PROJECTION_CACHE_DEVICE_FRACTION = 0.100
-_AUTO_PROJECTED_ROTATIONS_DEVICE_FRACTION = 0.040
-_AUTO_PROJECTION_GATHER_DEVICE_FRACTION = 0.020
-_AUTO_NOISE_BLOCK_DEVICE_FRACTION = 0.0125
-_AUTO_ADJOINT_BLOCK_DEVICE_FRACTION = 0.006
-_DEFAULT_SMALL_BUCKET_COALESCE_SIZE = 128
-_DEFAULT_AUTO_SMALL_BUCKET_COALESCE_MAX_IMAGES = 5_000
-_DEFAULT_TAIL_BUCKET_COALESCE_MAX_IMAGES_FUSED_KCLASS = 0
-_DEFAULT_PROJECTION_GATHER_MAX_BYTES = 1024 * 1024**2
-_DEFAULT_NOISE_BLOCK_MAX_BYTES = 512 * 1024**2
-_DEFAULT_ADJOINT_BLOCK_MAX_BYTES = 512 * 1024**2
-_EXACT_RAW_DIFF2_CACHE_MAX_BYTES = 512 * 1024**2
-_EXACT_RAW_DIFF2_CACHE_DEVICE_FRACTION = 0.01
-_EXACT_RAW_DIFF2_CACHE_FREE_FRACTION = 0.25
 _EXACT_RAW_DIFF2_CACHE_MAX_BYTES_ENV = "RECOVAR_SPARSE_PASS2_EXACT_RAW_DIFF2_CACHE_MAX_BYTES"
-_MAX_HYPOTHESES_ENV = "RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES"
-_SCORE_ONLY_MAX_HYPOTHESES_ENV = "RECOVAR_SPARSE_PASS2_SCORE_ONLY_MAX_HYPOTHESES"
-_MAX_TRANSLATION_TILE_BYTES_ENV = "RECOVAR_SPARSE_PASS2_MAX_TRANSLATION_TILE_BYTES"
-_MAX_PROJECTION_GATHER_BYTES_ENV = "RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES"
-_MAX_NOISE_BLOCK_BYTES_ENV = "RECOVAR_SPARSE_PASS2_MAX_NOISE_BLOCK_BYTES"
-_MAX_ADJOINT_BLOCK_BYTES_ENV = "RECOVAR_SPARSE_PASS2_MAX_ADJOINT_BLOCK_BYTES"
-_COMPACT_PAIR_DENSE_MSTEP_MAX_BYTES_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_DENSE_MSTEP_MAX_BYTES"
 _SMALL_BUCKET_MAX_TRANSLATION_TILE_BYTES_ENV = "RECOVAR_SPARSE_PASS2_SMALL_BUCKET_MAX_TRANSLATION_TILE_BYTES"
 _SMALL_BUCKET_THRESHOLD_ENV = "RECOVAR_SPARSE_PASS2_SMALL_BUCKET_THRESHOLD"
-_SMALL_BUCKET_COALESCE_SIZE_ENV = "RECOVAR_SPARSE_PASS2_SMALL_BUCKET_COALESCE_SIZE"
-_AUTO_SMALL_BUCKET_COALESCE_MAX_IMAGES_ENV = "RECOVAR_SPARSE_PASS2_AUTO_SMALL_BUCKET_COALESCE_MAX_IMAGES"
-_TAIL_BUCKET_COALESCE_MAX_IMAGES_ENV = "RECOVAR_SPARSE_PASS2_TAIL_BUCKET_COALESCE_MAX_IMAGES"
-_TAIL_BUCKET_COALESCE_MAX_INFLATION_ENV = "RECOVAR_SPARSE_PASS2_TAIL_BUCKET_COALESCE_MAX_INFLATION"
-_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE_ENV = "RECOVAR_SPARSE_PASS2_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE"
-_MAX_PROJECTED_ROTATIONS_ENV = "RECOVAR_SPARSE_PASS2_MAX_PROJECTED_ROTATIONS"
-_PROJECTION_CACHE_MAX_BYTES_ENV = "RECOVAR_SPARSE_PASS2_PROJECTION_CACHE_MAX_BYTES"
 _COMPACT_KCLASS_PAIR_STATS_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_STATS"
-_COMPACT_KCLASS_PAIRS_CHECK_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK"
-_SPARSE_KCLASS_COMPACT_PAIRS_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS"
 _SPARSE_KCLASS_COMPACT_ACTIVE_ROWS_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_ACTIVE_ROWS"
 _SPARSE_KCLASS_COMPACT_BUCKETS_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_BUCKETS"
-_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH"
-_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE"
-_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MAX_IMAGES_ENV = (
-    "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MAX_IMAGES"
-)
-_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MAX_INFLATION_ENV = (
-    "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MAX_INFLATION"
-)
-_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MIN_BUCKET_SIZE_ENV = (
-    "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MIN_BUCKET_SIZE"
-)
 _SPARSE_KCLASS_REUSE_COMPACT_NOISE_SUMS_ENV = "RECOVAR_SPARSE_KCLASS_REUSE_COMPACT_NOISE_SUMS"
 _SPARSE_KCLASS_COMPACT_PAIRS_THRESHOLD_REPORT_ENV = (
     "RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_THRESHOLD_REPORT"
@@ -266,67 +275,31 @@ _SPARSE_KCLASS_RECTANGULAR_ACTIVE_PREMATMUL_ENV = "RECOVAR_SPARSE_KCLASS_RECTANG
 _SPARSE_KCLASS_RECTANGULAR_ACTIVE_PREMATMUL_MAX_GROUPED_DENSE_RATIO_ENV = (
     "RECOVAR_SPARSE_KCLASS_RECTANGULAR_ACTIVE_PREMATMUL_MAX_GROUPED_DENSE_RATIO"
 )
-_SPARSE_KCLASS_ACTIVE_ROW_PAD_MULTIPLE_ENV = "RECOVAR_SPARSE_KCLASS_ACTIVE_ROW_PAD_MULTIPLE"
 _SPARSE_KCLASS_FUSED_NOISE_NORM_ENV = "RECOVAR_SPARSE_KCLASS_FUSED_NOISE_NORM"
-_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED_ENV = "RECOVAR_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED"
 _SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS_ENV = "RECOVAR_SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS"
-_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS_ENV = (
-    "RECOVAR_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS"
-)
-_SPARSE_KCLASS_FUSED_MSTEP_NOISE_ENV = "RECOVAR_SPARSE_KCLASS_FUSED_MSTEP_NOISE"
-_SPARSE_KCLASS_COMPACT_PAIR_MSTEP_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MSTEP"
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE"
 _RELION_X_HALF_F32_FINE_POSTERIOR_ENV = "RECOVAR_RELION_X_HALF_F32_FINE_POSTERIOR"
 _RELION_FINE_DIFF2_FUSED_FFI_ENV = "RECOVAR_RELION_FINE_DIFF2_FUSED_FFI"
 _RELION_X_HALF_BP_PARTICLE_POOL_SIZE_ENV = (
     "RECOVAR_K1_RELION_X_HALF_BP_PARTICLE_POOL_SIZE"
 )
-_RELION_POWERCLASS_SPECTRUM_NORM_ENV = "RECOVAR_K1_RELION_POWERCLASS_SPECTRUM_NORM"
-_RELION_EXACT_BPREF_OPERANDS_ENV = "RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS"
 _RELION_TRANSLATED_WAVG_NORM_ENV = "RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM"
 _RELION_WAVG_SEQUENTIAL_CUDA_ENV = "RECOVAR_K1_RELION_WAVG_SEQUENTIAL_CUDA"
-_BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV = "RECOVAR_K1_BPREF_EXECUTION_ORDER_LOCAL_FILE"
-_BPREF_REVERSE_PHYSICAL_ORDER_ENV = "RECOVAR_K1_BPREF_REVERSE_PHYSICAL_ORDER"
-_BPREF_EXECUTION_ORDER_CHUNK_SIZE_ENV = "RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE"
-_BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT_ENV = (
-    "RECOVAR_K1_BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT"
-)
-_BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV = (
-    "RECOVAR_K1_BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE"
-)
-_DEFAULT_FRESH_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE = 220
-_PASS2_DUMP_CONSERVATIVE_EXECUTION_ENV = "RECOVAR_PASS2_DUMP_CONSERVATIVE_EXECUTION"
 _PASS2_DUMP_STOP_AFTER_TARGET_ENV = "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"
 _NORM_RESIDUAL_DUMP_STOP_AFTER_TARGET_ENV = (
     "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_STOP_AFTER_TARGET"
 )
-_NORM_RESIDUAL_DUMP_ONLY_ENV = "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_ONLY"
-_SPARSE_PASS2_PROJECTION_CACHE_ENV = "RECOVAR_SPARSE_PASS2_PROJECTION_CACHE"
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_JOINT_MODES = {"joint", "global", "class_pose", "class-pose"}
-_SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK_ENV = "RECOVAR_SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK"
 _SPARSE_PASS2_GROUP_PROGRESS_CHUNKS_ENV = "RECOVAR_SPARSE_PASS2_GROUP_PROGRESS_CHUNKS"
 _SPARSE_PASS2_GROUP_PROGRESS_SECONDS_ENV = "RECOVAR_SPARSE_PASS2_GROUP_PROGRESS_SECONDS"
-_SPARSE_PASS2_WINDOWED_PREPARE_ENV = "RECOVAR_SPARSE_PASS2_WINDOWED_PREPARE"
-_SPARSE_KCLASS_WINDOWED_TRANSLATION_TILE_CAP_ENV = (
-    "RECOVAR_SPARSE_KCLASS_WINDOWED_TRANSLATION_TILE_CAP"
-)
 _SPARSE_KCLASS_RAW_HOST_STAGING_MAX_BYTES_ENV = (
     "RECOVAR_SPARSE_KCLASS_RAW_HOST_STAGING_MAX_BYTES"
 )
-_SPARSE_PASS2_WINDOWED_TRANSLATION_TILE_MAX_MULTIPLIER_ENV = (
-    "RECOVAR_SPARSE_PASS2_WINDOWED_TRANSLATION_TILE_MAX_MULTIPLIER"
-)
-_DEFAULT_PROJECTION_CACHE_MAX_BYTES = 3 * 1024**3
 _DEFAULT_COMPACT_PAIR_THRESHOLD_REPORT = (8192, 16384, 32768, 65536, 131072)
-_DEFAULT_COMPACT_PAIR_MIN_BUCKET_SIZE = 512
-_DEFAULT_COMPACT_PAIR_TAIL_BUCKET_COALESCE_MAX_IMAGES = 19
 _DEFAULT_RECTANGULAR_ACTIVE_ROWS_MIN_BUCKET_SIZE = 4096
 _DEFAULT_RECTANGULAR_ACTIVE_PREMATMUL_MAX_GROUPED_DENSE_RATIO = 0.05
-_DEFAULT_ACTIVE_ROW_PAD_MULTIPLE = 1024
-_DEFAULT_CACHED_SCORE_ROT_CHUNK_SIZE = 8192
 _DEFAULT_PASS2_GROUP_PROGRESS_CHUNKS = 1000
 _DEFAULT_PASS2_GROUP_PROGRESS_SECONDS = 300
-_DEFAULT_WINDOWED_TRANSLATION_TILE_MAX_MULTIPLIER = 4
 _DEFAULT_KCLASS_RAW_HOST_STAGING_MAX_BYTES = 8 * 1024**3
 
 
@@ -742,266 +715,6 @@ def _maybe_prepare_sparse_k_class_compact_pair_plan(
 # ---------------------------------------------------------------------------
 
 
-def _load_bpref_execution_order_local_override(n_images: int) -> np.ndarray | None:
-    """Load a fail-closed diagnostic K=1 particle execution permutation."""
-
-    raw_path = os.environ.get(_BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV)
-    if raw_path is None or not raw_path.strip():
-        return None
-    path = Path(raw_path).expanduser()
-    if not path.is_absolute() or not path.is_file():
-        raise ValueError(
-            f"{_BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV} must name an existing absolute file",
-        )
-    order = np.asarray(np.loadtxt(path, dtype=np.int64, ndmin=1), dtype=np.int64).reshape(-1)
-    if order.shape != (int(n_images),):
-        raise ValueError(
-            f"{_BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV} must contain {int(n_images)} rows, "
-            f"got {order.shape[0]}",
-        )
-    if not np.array_equal(np.sort(order), np.arange(int(n_images), dtype=np.int64)):
-        raise ValueError(f"{_BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV} must contain a permutation")
-    return order
-
-
-def _resolve_bpref_processing_order(
-    n_images: int,
-    *,
-    preserve_bpref_particle_order: bool,
-) -> np.ndarray | None:
-    """Resolve production or diagnostic K=1 BPref execution ordering."""
-
-    diagnostic_order = _load_bpref_execution_order_local_override(n_images)
-    reverse_physical_order = parse_env_flag(
-        _BPREF_REVERSE_PHYSICAL_ORDER_ENV,
-        default=False,
-    )
-    if reverse_physical_order and not preserve_bpref_particle_order:
-        raise ValueError(
-            f"{_BPREF_REVERSE_PHYSICAL_ORDER_ENV}=1 requires the guarded fresh "
-            "K=1 physical-order path"
-        )
-    if reverse_physical_order and diagnostic_order is not None:
-        raise ValueError(
-            f"{_BPREF_REVERSE_PHYSICAL_ORDER_ENV}=1 cannot be combined with "
-            f"{_BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV}"
-        )
-    if preserve_bpref_particle_order and diagnostic_order is not None:
-        raise ValueError(
-            "preserve_bpref_particle_order cannot be combined with "
-            f"{_BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV}"
-        )
-    if preserve_bpref_particle_order:
-        order = np.arange(int(n_images), dtype=np.int64)
-        return order[::-1].copy() if reverse_physical_order else order
-    return diagnostic_order
-
-
-def _optional_positive_int_env(name: str) -> int | None:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return None
-    try:
-        value = int(raw)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be a positive integer, got {raw!r}") from exc
-    if value <= 0:
-        raise ValueError(f"{name} must be a positive integer, got {raw!r}")
-    return value
-
-
-def _resolve_bpref_execution_bucket_policy(
-    *,
-    preserve_bpref_particle_order: bool,
-    processing_order_group_by_bucket_size: bool,
-) -> tuple[int, bool]:
-    """Resolve strict-order batching for the fresh-K=1 physical sequence.
-
-    The production default pads consecutive mixed-support particles in bounded
-    chunks.  An explicit chunk size overrides that bound.  The older adjacent
-    equal-support batching remains available only as an explicit diagnostic.
-    Every mode in this helper retains the exact particle sequence.
-    """
-
-    explicit_chunk_size = _optional_positive_int_env(
-        _BPREF_EXECUTION_ORDER_CHUNK_SIZE_ENV,
-    )
-    batch_consecutive_requested = parse_env_flag(
-        _BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT_ENV,
-        default=False,
-    )
-    if batch_consecutive_requested and explicit_chunk_size is not None:
-        raise ValueError(
-            f"{_BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT_ENV} cannot be "
-            f"combined with {_BPREF_EXECUTION_ORDER_CHUNK_SIZE_ENV}"
-        )
-    if batch_consecutive_requested and not preserve_bpref_particle_order:
-        raise ValueError(
-            f"{_BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT_ENV} requires "
-            "the guarded fresh K=1 physical particle order"
-        )
-    if batch_consecutive_requested and processing_order_group_by_bucket_size:
-        raise ValueError(
-            f"{_BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT_ENV} cannot be "
-            f"combined with {_BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV}"
-        )
-    batch_consecutive_bucket_sizes = bool(
-        batch_consecutive_requested
-        and preserve_bpref_particle_order
-        and not processing_order_group_by_bucket_size
-    )
-    processing_order_chunk_size = explicit_chunk_size or (
-        _DEFAULT_FRESH_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE
-        if preserve_bpref_particle_order
-        and not processing_order_group_by_bucket_size
-        and not batch_consecutive_bucket_sizes
-        else 1
-    )
-    return processing_order_chunk_size, batch_consecutive_bucket_sizes
-
-
-def _optional_positive_float_env(name: str) -> float | None:
-    raw = os.environ.get(name)
-    if raw is None or raw == "":
-        return None
-    try:
-        value = float(raw)
-    except ValueError as exc:
-        raise ValueError(f"{name} must be a positive float, got {raw!r}") from exc
-    if value <= 0:
-        raise ValueError(f"{name} must be a positive float, got {raw!r}")
-    return value
-
-
-def _native_dual_weighted_sums_enabled_for_pass(
-    *,
-    use_exact_relion_gaussian: bool,
-    use_relion_x_half_mstep: bool,
-    accumulate_noise: bool,
-) -> bool:
-    """Select the qualified native reduction only on its exact GPU contract."""
-
-    if os.environ.get(_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS_ENV) is not None:
-        return parse_env_flag(
-            _SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS_ENV,
-            default=False,
-        )
-    if not (use_exact_relion_gaussian and use_relion_x_half_mstep and accumulate_noise):
-        return False
-    from recovar.cuda_backproject import custom_cuda_requested
-
-    return bool(jax.default_backend() == "gpu" and custom_cuda_requested())
-
-
-def _fused_mstep_noise_enabled_for_pass(
-    *,
-    native_dual_weighted_sums: bool,
-    use_exact_relion_gaussian: bool,
-    use_relion_x_half_mstep: bool,
-    accumulate_noise: bool,
-    compact_noise_sums_match_mstep: bool,
-) -> bool:
-    """Select the fused reduction only on its qualified exact-GPU contract."""
-
-    if not (
-        native_dual_weighted_sums
-        and use_exact_relion_gaussian
-        and use_relion_x_half_mstep
-        and accumulate_noise
-        and not compact_noise_sums_match_mstep
-        and parse_env_flag(_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED_ENV, default=True)
-    ):
-        return False
-    return parse_env_flag(_SPARSE_KCLASS_FUSED_MSTEP_NOISE_ENV, default=True)
-
-
-def _fresh_k1_direct_noise_default(
-    *,
-    preserve_bpref_particle_order: bool,
-    relion_exact_bpref_operands: bool,
-) -> bool:
-    """Enable the accepted noise path only inside the fresh K=1 guard."""
-
-    return bool(preserve_bpref_particle_order and relion_exact_bpref_operands)
-
-
-def _relion_powerclass_spectrum_norm_enabled(
-    *,
-    fresh_k1_guard: bool,
-) -> bool:
-    """Use RELION's shell spectrum by default only in the fresh K=1 guard."""
-
-    return parse_env_flag(
-        _RELION_POWERCLASS_SPECTRUM_NORM_ENV,
-        default=bool(fresh_k1_guard),
-    )
-
-
-def _relion_exact_bpref_operands_enabled(
-    *,
-    fresh_k1_guard: bool,
-    source_faithful_spectrum_norm: bool,
-) -> bool:
-    """Pair exact BPref with the qualified fresh-K=1 spectrum path."""
-
-    return parse_env_flag(
-        _RELION_EXACT_BPREF_OPERANDS_ENV,
-        default=bool(fresh_k1_guard and source_faithful_spectrum_norm),
-    )
-
-
-def _relion_wavg_direct_modes(
-    *,
-    accumulate_noise: bool,
-    scale_groups_available: bool,
-    scale_aa_enabled: bool,
-    direct_noise_only_default: bool = False,
-) -> tuple[bool, bool]:
-    """Resolve the stopped direct-Wavg noise/norm factorial arms.
-
-    ``DIRECT_RESIDUAL`` preserves the existing coupled treatment: the native
-    Wavg ``diff2`` stream supplies both shell noise and per-particle norm.
-    ``DIRECT_NOISE_ONLY`` supplies only shell noise, leaving normalization on
-    the production algebraic path.  The latter isolates the already-localized
-    radial-noise boundary without silently changing a second state variable.
-    """
-
-    direct_residual_requested = bool(
-        accumulate_noise
-        and parse_env_flag(
-            _RELION_WAVG_ATOMIC_DIRECT_RESIDUAL_ENV,
-            default=False,
-        )
-    )
-    direct_noise_only_requested = bool(
-        accumulate_noise
-        and parse_env_flag(
-            _RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY_ENV,
-            default=direct_noise_only_default,
-        )
-    )
-    if direct_residual_requested and direct_noise_only_requested:
-        raise ValueError(
-            f"{_RELION_WAVG_ATOMIC_DIRECT_RESIDUAL_ENV}=1 and "
-            f"{_RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY_ENV}=1 are mutually exclusive"
-        )
-    direct_noise = direct_residual_requested or direct_noise_only_requested
-    # Fresh iteration 1 intentionally has no scale-group accumulator.  The
-    # established coupled diagnostic is dormant there and activates once the
-    # scale state exists; preserve that lifecycle for the isolated arm.
-    if direct_noise and not scale_groups_available:
-        return False, False
-    if direct_noise and not scale_aa_enabled:
-        requested_name = (
-            _RELION_WAVG_ATOMIC_DIRECT_RESIDUAL_ENV
-            if direct_residual_requested
-            else _RELION_WAVG_ATOMIC_DIRECT_NOISE_ONLY_ENV
-        )
-        raise ValueError(
-            f"{requested_name}=1 requires "
-            f"{_RELION_WAVG_ATOMIC_SCALE_AA_ENV}=1 and scale groups"
-        )
-    return direct_noise, direct_residual_requested
 _PASS2_TOP2_DEBUG_INDICES_ENV = "RECOVAR_PASS2_TOP2_DEBUG_INDICES"
 
 
@@ -1085,84 +798,6 @@ def _log_pass2_top2_debug(scores, image_indices, targets: tuple[int, ...], *, da
             second_flat_id // n_row_trans if second_flat_id >= 0 else -1,
             second_flat_id % n_row_trans if second_flat_id >= 0 else -1,
         )
-
-
-def _pass2_dump_enabled() -> bool:
-    return bool(os.environ.get(pass2_diagnostics._PASS2_DUMP_DIR_ENV)) and not parse_env_flag(
-        _NORM_RESIDUAL_DUMP_ONLY_ENV,
-        default=False,
-    )
-
-
-def _pass2_conservative_dump_execution_enabled() -> bool:
-    """Keep dump-only planner changes behind an explicit diagnostic opt-in."""
-
-    return _pass2_dump_enabled() and parse_env_flag(
-        _PASS2_DUMP_CONSERVATIVE_EXECUTION_ENV,
-        default=False,
-    )
-
-
-def _projection_cache_enabled_for_pass(
-    *,
-    fine_rotations_override,
-    dump_pass2_operands: bool,
-) -> bool:
-    """Resolve the diagnostic projection-cache override without changing defaults."""
-
-    if fine_rotations_override is None:
-        return False
-    raw = os.environ.get(_SPARSE_PASS2_PROJECTION_CACHE_ENV)
-    mode = "auto" if raw is None or raw.strip() == "" else raw.strip().lower()
-    if mode == "auto":
-        # Preserve the currently qualified paths while cache-on/cache-off is
-        # adjudicated: production uses the cache and operand dumps do not.
-        return not bool(dump_pass2_operands)
-    if mode in {"1", "true", "yes", "on"}:
-        return True
-    if mode in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(
-        f"{_SPARSE_PASS2_PROJECTION_CACHE_ENV} must be 'auto', 'on', or 'off', got {raw!r}",
-    )
-
-
-def _cached_score_rotation_chunk_size_for_pass(bucket_size: int) -> int:
-    override = _optional_positive_int_env(_SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK_ENV)
-    chunk_size = _DEFAULT_CACHED_SCORE_ROT_CHUNK_SIZE if override is None else int(override)
-    return max(1, min(int(bucket_size), int(chunk_size)))
-
-
-def _compact_pair_mstep_mode_for_pass() -> str:
-    """Return the compact-pair M-step reduction mode for this process."""
-
-    raw = os.environ.get(_SPARSE_KCLASS_COMPACT_PAIR_MSTEP_ENV)
-    if raw is None or raw.strip() == "":
-        return "dense"
-    mode = raw.strip().lower()
-    if mode in {"dense", "default"}:
-        return "dense"
-    if mode == "pair_sparse":
-        return mode
-    raise ValueError(
-        f"{_SPARSE_KCLASS_COMPACT_PAIR_MSTEP_ENV} must be 'dense' or 'pair_sparse', got {raw!r}",
-    )
-
-
-def _compact_pair_pair_sparse_mstep_enabled_for_pass(*, allow_pair_sparse: bool = True) -> bool:
-    return bool(allow_pair_sparse) and _compact_pair_mstep_mode_for_pass() == "pair_sparse"
-
-
-def _windowed_prepare_enabled_for_pass(use_window: bool) -> bool:
-    """Return whether sparse pass-2 should materialize only active Fourier windows."""
-
-    return bool(
-        use_window
-        and parse_env_flag(
-            _SPARSE_PASS2_WINDOWED_PREPARE_ENV,
-            default=True,
-        )
-    )
 
 
 class _SparsePass2WindowSetup(NamedTuple):
@@ -1254,583 +889,6 @@ def _sparse_pass2_window_setup(
         n_windowed,
         n_recon_windowed,
     )
-
-
-def _windowed_translation_tile_cap_enabled_for_pass() -> bool:
-    """Return whether K-class sparse pass-2 should budget translation tiles on active windows."""
-
-    return parse_env_flag(
-        _SPARSE_KCLASS_WINDOWED_TRANSLATION_TILE_CAP_ENV,
-        default=True,
-    )
-
-
-def _translation_tile_half_pixels_for_budget(
-    *,
-    use_window: bool,
-    n_score_pixels: int,
-    n_recon_pixels: int,
-) -> int | None:
-    """Return active half-pixel count for translation-tile budgeting."""
-
-    if not _windowed_prepare_enabled_for_pass(bool(use_window)):
-        return None
-    if not _windowed_translation_tile_cap_enabled_for_pass():
-        return None
-    return max(int(n_score_pixels), int(n_recon_pixels))
-
-
-def _windowed_translation_tile_max_multiplier_for_pass() -> int:
-    explicit = _optional_positive_int_env(_SPARSE_PASS2_WINDOWED_TRANSLATION_TILE_MAX_MULTIPLIER_ENV)
-    if explicit is not None:
-        return int(explicit)
-    return int(_DEFAULT_WINDOWED_TRANSLATION_TILE_MAX_MULTIPLIER)
-
-
-def _max_images_for_sparse_pass2_translation_tile(
-    image_shape,
-    n_fine_trans,
-    *,
-    max_tile_bytes: int,
-    complex_dtype,
-    translation_tile_half_pixels: int | None,
-) -> tuple[int, int, int | None, int | None]:
-    full_cap = _max_images_for_translation_tile(
-        image_shape,
-        n_fine_trans,
-        max_tile_bytes=max_tile_bytes,
-        complex_dtype=complex_dtype,
-    )
-    if translation_tile_half_pixels is None:
-        return full_cap, full_cap, None, None
-    window_cap = _max_images_for_translation_tile(
-        image_shape,
-        n_fine_trans,
-        max_tile_bytes=max_tile_bytes,
-        complex_dtype=complex_dtype,
-        n_half_pixels=translation_tile_half_pixels,
-    )
-    multiplier = _windowed_translation_tile_max_multiplier_for_pass()
-    bounded_window_cap = max(full_cap, int(full_cap) * int(multiplier))
-    return min(window_cap, bounded_window_cap), full_cap, window_cap, multiplier
-
-
-def _compact_pair_execution_enabled_for_pass() -> bool:
-    """Return whether fused K-class pass-2 should use compact-pair execution."""
-
-    compact_pair_check = parse_env_flag(_COMPACT_KCLASS_PAIRS_CHECK_ENV, default=False)
-    return parse_env_flag(
-        _SPARSE_KCLASS_COMPACT_PAIRS_ENV,
-        default=not compact_pair_check,
-    )
-
-
-def _compact_pair_min_bucket_size_for_pass(default_value: int | None = None) -> int:
-    """Return the hybrid threshold for compact-pair execution buckets.
-
-    An explicit environment setting wins over a caller-specific default so
-    benchmark and diagnostic jobs retain their existing override behavior.
-    """
-
-    explicit = _optional_positive_int_env(_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE_ENV)
-    if explicit is not None:
-        return int(explicit)
-    if default_value is not None:
-        if int(default_value) <= 0:
-            raise ValueError("compact-pair minimum bucket size must be positive")
-        return int(default_value)
-    return _DEFAULT_COMPACT_PAIR_MIN_BUCKET_SIZE
-
-
-def _compact_pair_max_images_per_microbatch_for_pass(default_max_images_per_microbatch: int) -> int:
-    """Return the compact-pair chunk cap, guarded by an explicit env override."""
-
-    explicit = _optional_positive_int_env(_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_ENV)
-    if explicit is not None:
-        return explicit
-    return max(1, int(default_max_images_per_microbatch))
-
-
-def _compact_pair_prepare_max_images_per_microbatch(
-    *,
-    dense_max_images_per_microbatch: int,
-    compact_pair_max_images_per_microbatch: int,
-) -> int:
-    """Return the compact-pair prepare cap used for execution bucket splitting."""
-
-    return max(
-        1,
-        min(
-            int(dense_max_images_per_microbatch),
-            int(compact_pair_max_images_per_microbatch),
-        ),
-    )
-
-
-def _active_row_pad_multiple_for_pass() -> int:
-    """Return active-row gather padding multiple for stable JIT shapes."""
-
-    explicit = _optional_positive_int_env(_SPARSE_KCLASS_ACTIVE_ROW_PAD_MULTIPLE_ENV)
-    if explicit is not None:
-        return int(explicit)
-    return _DEFAULT_ACTIVE_ROW_PAD_MULTIPLE
-
-
-def _small_bucket_coalesce_size_for_pass(n_images: int) -> int | None:
-    explicit = _optional_positive_int_env(_SMALL_BUCKET_COALESCE_SIZE_ENV)
-    if explicit is not None:
-        return explicit
-    max_images = parse_env_nonnegative_int(_AUTO_SMALL_BUCKET_COALESCE_MAX_IMAGES_ENV)
-    if max_images is None:
-        max_images = _DEFAULT_AUTO_SMALL_BUCKET_COALESCE_MAX_IMAGES
-    if int(n_images) > int(max_images):
-        return None
-    return _DEFAULT_SMALL_BUCKET_COALESCE_SIZE
-
-
-def _tail_bucket_coalesce_params_for_pass(*, fused_k_class: bool) -> tuple[int | None, float | None, int | None]:
-    """Return conservative tail-coalescing controls for sparse pass-2 buckets.
-
-    Tail coalescing stays opt-in because the fused K-class 100k/256 probe
-    showed that the old fused default could merge too many medium tail groups
-    into 4096-row buckets and slow the sparse pass-2 path. Explicit env
-    settings keep the diagnostic behavior available when a dataset has a true
-    tiny high-rotation tail.
-    """
-
-    explicit_max_images = parse_env_nonnegative_int(_TAIL_BUCKET_COALESCE_MAX_IMAGES_ENV)
-    if explicit_max_images is None:
-        max_images = _DEFAULT_TAIL_BUCKET_COALESCE_MAX_IMAGES_FUSED_KCLASS if fused_k_class else 0
-    else:
-        max_images = explicit_max_images
-    if max_images <= 1:
-        return None, None, None
-
-    max_inflation = _optional_positive_float_env(_TAIL_BUCKET_COALESCE_MAX_INFLATION_ENV)
-    if max_inflation is None:
-        max_inflation = _DEFAULT_TAIL_BUCKET_COALESCE_MAX_INFLATION
-
-    min_bucket_size = _optional_positive_int_env(_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE_ENV)
-    if min_bucket_size is None:
-        min_bucket_size = _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE
-    return int(max_images), float(max_inflation), int(min_bucket_size)
-
-
-def _compact_pair_tail_bucket_coalesce_params_for_pass(
-    *,
-    default_max_images: int | None = None,
-    default_max_inflation: float | None = None,
-    default_min_bucket_size: int | None = None,
-) -> tuple[int | None, float | None, int | None]:
-    """Return bounded tail-coalescing controls for compact-pair K-class buckets."""
-
-    max_images = parse_env_nonnegative_int(_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MAX_IMAGES_ENV)
-    if max_images is None:
-        max_images = parse_env_nonnegative_int(_TAIL_BUCKET_COALESCE_MAX_IMAGES_ENV)
-    if max_images is None:
-        max_images = (
-            _DEFAULT_COMPACT_PAIR_TAIL_BUCKET_COALESCE_MAX_IMAGES
-            if default_max_images is None
-            else int(default_max_images)
-        )
-    if int(max_images) <= 1:
-        return None, None, None
-
-    max_inflation = _optional_positive_float_env(_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MAX_INFLATION_ENV)
-    if max_inflation is None:
-        max_inflation = _optional_positive_float_env(_TAIL_BUCKET_COALESCE_MAX_INFLATION_ENV)
-    if max_inflation is None:
-        max_inflation = (
-            _DEFAULT_TAIL_BUCKET_COALESCE_MAX_INFLATION
-            if default_max_inflation is None
-            else float(default_max_inflation)
-        )
-    if float(max_inflation) <= 0.0:
-        raise ValueError("compact-pair tail coalescing inflation must be positive")
-
-    min_bucket_size = _optional_positive_int_env(_SPARSE_KCLASS_COMPACT_PAIR_TAIL_COALESCE_MIN_BUCKET_SIZE_ENV)
-    if min_bucket_size is None:
-        min_bucket_size = _optional_positive_int_env(_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE_ENV)
-    if min_bucket_size is None:
-        min_bucket_size = (
-            _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE
-            if default_min_bucket_size is None
-            else int(default_min_bucket_size)
-        )
-    if int(min_bucket_size) <= 0:
-        raise ValueError("compact-pair tail coalescing minimum bucket size must be positive")
-    return int(max_images), float(max_inflation), int(min_bucket_size)
-
-
-def _parse_nvidia_smi_memory_rows(output: str) -> dict[str, int]:
-    rows: dict[str, int] = {}
-    for line in output.splitlines():
-        parts = [part.strip() for part in line.split(",")]
-        if len(parts) < 3:
-            continue
-        index, uuid, memory_mib = parts[:3]
-        try:
-            memory_bytes = int(memory_mib.split()[0]) * 1024**2
-        except (ValueError, IndexError):
-            continue
-        if memory_bytes <= 0:
-            continue
-        rows[index] = memory_bytes
-        rows[uuid] = memory_bytes
-        if uuid.startswith("GPU-"):
-            rows[uuid[4:]] = memory_bytes
-    return rows
-
-
-def _nvidia_smi_visible_device_memory_bytes(output: str, visible_devices: str | None) -> int | None:
-    rows = _parse_nvidia_smi_memory_rows(output)
-    if not rows:
-        return None
-    if visible_devices:
-        tokens = [
-            part.strip()
-            for part in visible_devices.split(",")
-            if part.strip() and part.strip() not in {"-1", "none", "NoDevFiles"}
-        ]
-        if not tokens:
-            return None
-        for token in tokens:
-            if token in rows:
-                return rows[token]
-        return None
-    return next(iter(rows.values()))
-
-
-def _device_memory_limit_bytes() -> int | None:
-    """Return selected accelerator memory, preferring physical GPU memory."""
-
-    # ``RECOVAR_SPARSE_PASS2_DEVICE_MEMORY_GB`` overrides the nvidia-smi probe.
-    # Keep this as a manual escape hatch for reserving headroom on shared GPUs
-    # or working around inaccurate allocator/device probes.
-    _override = os.environ.get("RECOVAR_SPARSE_PASS2_DEVICE_MEMORY_GB")
-    if _override is not None:
-        try:
-            override_gb = float(_override.strip())
-            if override_gb > 0:
-                return int(override_gb * (1024 ** 3))
-        except ValueError:
-            pass
-
-    try:
-        query = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=index,uuid,memory.total",
-                "--format=csv,noheader,nounits",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=2.0,
-        )
-        if query.returncode == 0:
-            memory_bytes = _nvidia_smi_visible_device_memory_bytes(
-                query.stdout,
-                os.environ.get("CUDA_VISIBLE_DEVICES"),
-            )
-            if memory_bytes is not None:
-                return memory_bytes
-    except Exception:
-        pass
-    try:
-        devices = [device for device in jax.devices() if getattr(device, "platform", "") in {"gpu", "cuda"}]
-        if not devices:
-            return None
-        stats = devices[0].memory_stats()
-    except Exception:
-        return None
-    if not stats:
-        return None
-    for key in ("bytes_limit", "bytesLimit", "memory_limit", "total_memory"):
-        value = stats.get(key)
-        if value is not None and int(value) > 0:
-            return int(value)
-    return None
-
-
-def _device_free_memory_bytes() -> int | None:
-    """Return current free memory for the selected physical GPU, if known."""
-
-    try:
-        query = subprocess.run(
-            [
-                "nvidia-smi",
-                "--query-gpu=index,uuid,memory.free",
-                "--format=csv,noheader,nounits",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=2.0,
-        )
-        if query.returncode == 0:
-            return _nvidia_smi_visible_device_memory_bytes(
-                query.stdout,
-                os.environ.get("CUDA_VISIBLE_DEVICES"),
-            )
-    except Exception:
-        pass
-    return None
-
-
-def _jax_allocator_free_memory_bytes() -> int | None:
-    """Return unused bytes in the active JAX GPU allocator, if reported."""
-
-    try:
-        devices = [device for device in jax.devices() if getattr(device, "platform", "") in {"gpu", "cuda"}]
-        if not devices:
-            return None
-        stats = devices[0].memory_stats()
-    except Exception:
-        return None
-    if not stats:
-        return None
-
-    limit = next(
-        (
-            int(stats[key])
-            for key in ("bytes_limit", "bytesLimit", "memory_limit", "total_memory")
-            if stats.get(key) is not None and int(stats[key]) > 0
-        ),
-        None,
-    )
-    bytes_in_use = next(
-        (
-            int(stats[key])
-            for key in ("bytes_in_use", "bytesInUse", "memory_in_use")
-            if stats.get(key) is not None and int(stats[key]) >= 0
-        ),
-        None,
-    )
-    if limit is None or bytes_in_use is None:
-        return None
-    return max(0, limit - bytes_in_use)
-
-
-def _exact_raw_diff2_cache_limit_bytes(
-    device_memory_bytes: int | None,
-    free_device_memory_bytes: int | None,
-    allocator_free_memory_bytes: int | None,
-    *,
-    max_cache_bytes: int = _EXACT_RAW_DIFF2_CACHE_MAX_BYTES,
-) -> int:
-    """Return the strict per-bucket cap for exact fine-score reuse."""
-
-    if (
-        device_memory_bytes is None
-        or free_device_memory_bytes is None
-        or allocator_free_memory_bytes is None
-        or int(device_memory_bytes) <= 0
-        or int(free_device_memory_bytes) <= 0
-        or int(allocator_free_memory_bytes) <= 0
-        or int(max_cache_bytes) <= 0
-    ):
-        return 0
-    return min(
-        int(max_cache_bytes),
-        int(int(device_memory_bytes) * _EXACT_RAW_DIFF2_CACHE_DEVICE_FRACTION),
-        int(int(free_device_memory_bytes) * _EXACT_RAW_DIFF2_CACHE_FREE_FRACTION),
-        int(int(allocator_free_memory_bytes) * _EXACT_RAW_DIFF2_CACHE_FREE_FRACTION),
-    )
-
-
-def _exact_raw_diff2_cache_estimated_bytes(
-    batch_size: int,
-    bucket_size: int,
-    n_fine_translations: int,
-    dtype=np.float32,
-) -> int:
-    return (
-        int(batch_size)
-        * int(bucket_size)
-        * int(n_fine_translations)
-        * np.dtype(dtype).itemsize
-    )
-
-
-def _exact_raw_diff2_cache_fits_budget(estimated_bytes: int, cache_limit_bytes: int) -> bool:
-    return int(estimated_bytes) > 0 and int(estimated_bytes) <= int(cache_limit_bytes)
-
-
-def _dtype_itemsize(dtype) -> int:
-    return int(np.dtype(dtype).itemsize)
-
-
-def _complex_counterpart_real_dtype(complex_dtype):
-    complex_dtype = np.dtype(complex_dtype)
-    if complex_dtype.itemsize <= np.dtype(np.complex64).itemsize:
-        return np.float32
-    return np.float64
-
-
-def _auto_hypotheses_per_microbatch(
-    *,
-    score_only: bool,
-    fused_k_class: bool = False,
-    fused_k_class_count: int | None = None,
-    n_score_pixels: int | None,
-    device_memory_bytes: int | None,
-    score_complex_dtype=np.complex64,
-) -> int | None:
-    if device_memory_bytes is None or n_score_pixels is None or int(n_score_pixels) <= 0:
-        return None
-    if score_only:
-        fraction = _AUTO_SCORE_ONLY_HYPOTHESIS_DEVICE_FRACTION
-    elif fused_k_class:
-        if fused_k_class_count is None or int(fused_k_class_count) <= 0:
-            raise ValueError("fused_k_class_count must be positive for fused K-class planning")
-        bytes_per_score_pixel = _dtype_itemsize(score_complex_dtype)
-        return max(
-            1,
-            int(
-                float(device_memory_bytes)
-                * _AUTO_FUSED_KCLASS_SCORE_GATHER_DEVICE_FRACTION
-                * int(fused_k_class_count)
-                / (
-                    int(n_score_pixels)
-                    * bytes_per_score_pixel
-                    * _AUTO_FUSED_KCLASS_LIVE_COMPLEX_GATHERS
-                )
-            ),
-        )
-    else:
-        fraction = _AUTO_FULL_HYPOTHESIS_DEVICE_FRACTION
-    # The score kernel's dominant live block scales with candidate count times
-    # active Fourier pixels. This keeps larger windows and smaller GPUs from
-    # inheriting the same candidate cap as low-resolution H100 runs.
-    bytes_per_score_pixel = _dtype_itemsize(score_complex_dtype)
-    return max(1, int(float(device_memory_bytes) * fraction / (int(n_score_pixels) * bytes_per_score_pixel)))
-
-
-def _max_hypotheses_per_microbatch_for_pass(
-    *,
-    score_only: bool,
-    use_window: bool,
-    has_external_normalization: bool,
-    conservative_dump_execution: bool,
-    fused_k_class: bool = False,
-    fused_k_class_count: int | None = None,
-    n_score_pixels: int | None = None,
-    device_memory_bytes: int | None = None,
-    score_complex_dtype=np.complex64,
-) -> int:
-    if score_only and use_window and not has_external_normalization and not conservative_dump_execution:
-        override = _optional_positive_int_env(_SCORE_ONLY_MAX_HYPOTHESES_ENV)
-        auto = _auto_hypotheses_per_microbatch(
-            score_only=True,
-            fused_k_class=False,
-            n_score_pixels=n_score_pixels,
-            device_memory_bytes=device_memory_bytes,
-            score_complex_dtype=score_complex_dtype,
-        )
-        if override is not None:
-            if auto is not None and int(override) < int(auto):
-                logger.warning(
-                    "%s=%d is below the auto sparse pass-2 score-only cap %d; "
-                    "this can fragment buckets and slow pass-2.",
-                    _SCORE_ONLY_MAX_HYPOTHESES_ENV,
-                    int(override),
-                    int(auto),
-                )
-            return override
-        return int(auto) if auto is not None else _DEFAULT_SCORE_ONLY_MAX_HYPOTHESES_PER_MICROBATCH
-    override = _optional_positive_int_env(_MAX_HYPOTHESES_ENV)
-    auto = _auto_hypotheses_per_microbatch(
-        score_only=False,
-        fused_k_class=fused_k_class,
-        fused_k_class_count=fused_k_class_count,
-        n_score_pixels=n_score_pixels,
-        device_memory_bytes=device_memory_bytes,
-        score_complex_dtype=score_complex_dtype,
-    )
-    if override is not None:
-        if auto is not None and int(override) < int(auto):
-            logger.warning(
-                "%s=%d is below the auto sparse pass-2 cap %d; "
-                "this can fragment buckets and slow pass-2.",
-                _MAX_HYPOTHESES_ENV,
-                int(override),
-                int(auto),
-            )
-        return override
-    return int(auto) if auto is not None else _DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH
-
-
-def _max_translation_tile_bytes_for_pass(
-    device_memory_bytes: int | None = None,
-    *,
-    has_external_normalization: bool = False,
-    fused_k_class: bool = False,
-) -> int:
-    override = _optional_positive_int_env(_MAX_TRANSLATION_TILE_BYTES_ENV)
-    if override is not None:
-        return override
-    if device_memory_bytes is None:
-        return _DEFAULT_MAX_TRANSLATION_TILE_BYTES
-    if fused_k_class:
-        fraction = _AUTO_FUSED_KCLASS_TRANSLATION_TILE_DEVICE_FRACTION
-    elif has_external_normalization:
-        fraction = _AUTO_EXTERNAL_NORMALIZATION_TRANSLATION_TILE_DEVICE_FRACTION
-    else:
-        fraction = _AUTO_TRANSLATION_TILE_DEVICE_FRACTION
-    return max(1, int(float(device_memory_bytes) * fraction))
-
-
-def _max_projection_gather_bytes_for_pass(device_memory_bytes: int | None = None) -> int:
-    override = _optional_positive_int_env(_MAX_PROJECTION_GATHER_BYTES_ENV)
-    if override is not None:
-        return int(override)
-    if device_memory_bytes is None:
-        return _DEFAULT_PROJECTION_GATHER_MAX_BYTES
-    return max(1, int(float(device_memory_bytes) * _AUTO_PROJECTION_GATHER_DEVICE_FRACTION))
-
-
-def _max_noise_block_bytes_for_pass(device_memory_bytes: int | None = None) -> int:
-    override = _optional_positive_int_env(_MAX_NOISE_BLOCK_BYTES_ENV)
-    if override is not None:
-        return int(override)
-    if device_memory_bytes is None:
-        return _DEFAULT_NOISE_BLOCK_MAX_BYTES
-    return max(1, int(float(device_memory_bytes) * _AUTO_NOISE_BLOCK_DEVICE_FRACTION))
-
-
-def _max_adjoint_block_bytes_for_pass(device_memory_bytes: int | None = None) -> int:
-    override = _optional_positive_int_env(_MAX_ADJOINT_BLOCK_BYTES_ENV)
-    if override is not None:
-        return int(override)
-    if device_memory_bytes is None:
-        return _DEFAULT_ADJOINT_BLOCK_MAX_BYTES
-    return max(1, int(float(device_memory_bytes) * _AUTO_ADJOINT_BLOCK_DEVICE_FRACTION))
-
-
-def _compact_pair_dense_mstep_max_bytes_for_pass(device_memory_bytes: int | None = None) -> int:
-    override = _optional_positive_int_env(_COMPACT_PAIR_DENSE_MSTEP_MAX_BYTES_ENV)
-    if override is not None:
-        return int(override)
-    return _max_adjoint_block_bytes_for_pass(device_memory_bytes)
-
-
-def _projection_cache_max_bytes_for_pass(device_memory_bytes: int | None = None) -> int:
-    override = parse_env_nonnegative_int(_PROJECTION_CACHE_MAX_BYTES_ENV)
-    if override is not None:
-        return override
-    if device_memory_bytes is None:
-        return _DEFAULT_PROJECTION_CACHE_MAX_BYTES
-    return max(1, int(float(device_memory_bytes) * _AUTO_PROJECTION_CACHE_DEVICE_FRACTION))
-
-
-def _projection_call_max_bytes_for_pass(device_memory_bytes: int | None = None) -> int:
-    override = parse_env_nonnegative_int(_PROJECTION_CACHE_MAX_BYTES_ENV)
-    if override is not None:
-        return override
-    if device_memory_bytes is None:
-        return _DEFAULT_PROJECTION_CACHE_MAX_BYTES
-    return max(1, int(float(device_memory_bytes) * _AUTO_PROJECTED_ROTATIONS_DEVICE_FRACTION))
 
 
 def _bucket_summary(buckets, size_key: str = "bucket_size") -> str:
@@ -2108,105 +1166,6 @@ def _log_sparse_kclass_group_timing(
         total_profiled_s,
         float(wall_s),
     )
-
-
-def _max_images_for_translation_tile(
-    image_shape,
-    n_fine_trans,
-    *,
-    max_tile_bytes=384 * 1024**2,
-    complex_dtype=np.complex64,
-    n_half_pixels: int | None = None,
-):
-    """Limit one translated-image tile allocation to a bounded size."""
-    half_image_size = (
-        max(1, int(n_half_pixels))
-        if n_half_pixels is not None
-        else int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
-    )
-    bytes_per_complex_value = _dtype_itemsize(complex_dtype)
-    bytes_per_image = int(n_fine_trans) * half_image_size * bytes_per_complex_value
-    return max(1, int(max_tile_bytes) // max(1, bytes_per_image))
-
-
-def _projection_cache_transient_bytes(
-    n_rotations: int,
-    n_half_pixels: int,
-    *,
-    projection_complex_dtype=np.complex64,
-    include_abs2: bool,
-) -> int:
-    complex_bytes = _dtype_itemsize(projection_complex_dtype)
-    total = int(n_rotations) * int(n_half_pixels) * complex_bytes
-    if include_abs2:
-        real_dtype = _complex_counterpart_real_dtype(projection_complex_dtype)
-        total += int(n_rotations) * int(n_half_pixels) * _dtype_itemsize(real_dtype)
-    return int(total)
-
-
-def _projection_cache_budget_complex_dtype(
-    projection_source_dtype,
-    score_complex_dtype,
-    *,
-    use_relion_projector: bool = False,
-):
-    dtype = np.promote_types(np.dtype(projection_source_dtype), np.dtype(score_complex_dtype))
-    if use_relion_projector:
-        # RELION Projector parity uses float64 interpolation weights, which
-        # promotes complex64 projector data to complex128 before the caller's
-        # output cast. Budget the transient allocation, not the retained cache.
-        dtype = np.promote_types(dtype, np.dtype(np.complex128))
-    return dtype
-
-
-def _projection_cache_fits_budget(transient_bytes: int, max_bytes: int, *, n_classes: int = 1) -> bool:
-    return int(transient_bytes) * max(1, int(n_classes)) <= int(max_bytes)
-
-
-def _max_projected_rotations_per_call_for_pass(
-    *,
-    device_memory_bytes: int | None,
-    n_projection_pixels: int,
-    projection_complex_dtype,
-    include_abs2: bool,
-) -> int | None:
-    override = _optional_positive_int_env(_MAX_PROJECTED_ROTATIONS_ENV)
-    if override is not None:
-        return int(override)
-    if device_memory_bytes is None or int(n_projection_pixels) <= 0:
-        return None
-    max_bytes = _projection_call_max_bytes_for_pass(device_memory_bytes)
-    bytes_per_rotation = _projection_cache_transient_bytes(
-        1,
-        int(n_projection_pixels),
-        projection_complex_dtype=projection_complex_dtype,
-        include_abs2=bool(include_abs2),
-    )
-    if max_bytes <= 0 or bytes_per_rotation <= 0:
-        return None
-    return max(1, int(max_bytes) // int(bytes_per_rotation))
-
-
-def _projection_budget_pixels_for_pass(
-    n_half_pixels: int,
-    *,
-    use_window: bool,
-    use_relion_projector: bool,
-) -> int:
-    """Effective projection pixels for the sparse pass-2 projection cap.
-
-    Windowed sparse pass-2 only keeps score/reconstruction rows after
-    projection, but RELION's centered Projector handoff currently materializes
-    full-half intermediates before gathering the requested windows. Budget that
-    path with extra headroom for the centered-row scatter, dense scaling, and
-    other live pass-2 buffers so huge one-image compact-pair buckets still split
-    before the projection helper allocates.
-    """
-
-    pixels = int(n_half_pixels)
-    if bool(use_window) and bool(use_relion_projector):
-        return max(1, 8 * pixels)
-    return max(1, pixels)
 
 
 def _compute_sparse_pass2_projections_block(
