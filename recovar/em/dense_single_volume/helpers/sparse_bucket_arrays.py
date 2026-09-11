@@ -11,6 +11,7 @@ from __future__ import annotations
 import numpy as np
 
 from recovar.em.dense_single_volume.batch_planning import _plan_consecutive_padded_batches
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 from recovar.em.dense_single_volume.helpers.compact_candidates import (
     SparseCandidateMask,
     _candidate_mask_to_dense,
@@ -761,14 +762,55 @@ def _build_compact_pair_bucket_arrays(bucket, compact_inputs):
     }
 
 
-def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_inputs):
+PER_CLASS_PAIR_SIZE_ENV = "RECOVAR_SPARSE_PASS2_PER_CLASS_PAIR_SIZE"
+
+
+def per_class_pair_size_enabled() -> bool:
+    """Return whether each K class sizes its own compact pair axis.
+
+    Bucket membership groups images by the pair count of the *largest* class
+    (``_compact_pair_fused_bucket_sizes`` takes a max over classes), and every
+    class is then padded to that shared width. RELION instead gives each class
+    its own candidate count -- its accelerated weight array is the sum over
+    classes of ``orientation_num[iclass] * nr_trans`` -- so a class that fits a
+    particle badly costs almost nothing. Under this opt-in each class's pair
+    axis is quantized from its own valid-pair count, which is never larger than
+    the shared width. Padding slots are inert (``pair_mask`` false, ``-1``
+    indices, ``-1e30`` prior), so only the padded width changes.
+    """
+
+    return parse_env_binary_flag(PER_CLASS_PAIR_SIZE_ENV)
+
+
+def _build_compact_pair_bucket_arrays_from_per_image_inputs(
+    bucket,
+    per_image_inputs,
+    *,
+    per_class_pair_size: bool | None = None,
+    pair_block_size_for_quantization: int = 5000,
+):
     """Stack/pad compact candidate pairs for one class and bucket on demand."""
 
-    pair_bucket_size = int(bucket["pair_bucket_size"])
+    fused_pair_bucket_size = int(bucket["pair_bucket_size"])
+    if per_class_pair_size is None:
+        per_class_pair_size = per_class_pair_size_enabled()
     image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
+    candidate_masks = [per_image_inputs["candidate_mask"][int(image_idx)] for image_idx in image_indices]
+    pair_bucket_size = fused_pair_bucket_size
+    if per_class_pair_size:
+        # Callers may hand in a shared width below the quantizer's floor, so
+        # clamp: never wider than the shared width, never narrower than this
+        # class's own valid-pair prefix.
+        required = max((int(np.count_nonzero(mask)) for mask in candidate_masks), default=0)
+        pair_bucket_size = min(
+            fused_pair_bucket_size,
+            _exact_bucket_rotation_size(required, pair_block_size_for_quantization),
+        )
+        pair_bucket_size = max(pair_bucket_size, required, 1)
     index_arrays = build_compact_pair_index_arrays(
-        (per_image_inputs["candidate_mask"][int(image_idx)] for image_idx in image_indices),
+        candidate_masks,
         pair_bucket_size=pair_bucket_size,
+        pair_block_size_for_quantization=pair_block_size_for_quantization,
     )
     batch = int(image_indices.shape[0])
     padded_rotation_index = np.zeros((batch, pair_bucket_size), dtype=np.int64)
