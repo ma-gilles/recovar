@@ -4828,6 +4828,50 @@ def _relion_cuda_powerclass_spectrum_norm_units(
     )
 
 
+def _relion_powerclass_noise_terms(
+    processed_score_half_for_noise,
+    *,
+    image_shape,
+    current_size,
+    use_exact_relion_gaussian,
+    accumulate_noise,
+    source_faithful_spectrum_norm,
+):
+    """RELION ``powerClass`` terms one sparse pass-2 batch needs.
+
+    Exact fine Gaussian scoring adds half of the block-tree ``highres_Xi2``
+    to every hypothesis, and norm correction at a current size consumes the
+    high-shell power: the atomically binned spectrum in source-faithful mode,
+    otherwise the same ``highres_Xi2`` converted to RECOVAR's N^4 units
+    (``ml_optimiser.cpp`` ``storeWeightedSums``). Returns
+    ``(highres_xi2_half, norm_high_shell)`` with ``None`` for terms the batch
+    does not need.
+    """
+
+    relion_highres_xi2_half = None
+    if use_exact_relion_gaussian or (accumulate_noise and current_size is not None):
+        relion_highres_xi2_half = _relion_cuda_powerclass_highres_xi2_half(
+            processed_score_half_for_noise,
+            image_shape=image_shape,
+            current_size=current_size,
+        )
+    if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None:
+        if source_faithful_spectrum_norm:
+            relion_norm_high_shell = _relion_cuda_powerclass_spectrum_highres_norm_units(
+                processed_score_half_for_noise,
+                image_shape=image_shape,
+                current_size=current_size,
+            )
+        else:
+            relion_norm_high_shell = _relion_powerclass_highres_xi2_half_to_norm_units(
+                relion_highres_xi2_half,
+                image_shape,
+            )
+    else:
+        relion_norm_high_shell = None
+    return relion_highres_xi2_half, relion_norm_high_shell
+
+
 def _relion_cuda_fine_diff2_min(diff2, candidate_mask):
     """Return one finite XFLOAT minimum per image over a raw diff2 tensor."""
 
@@ -8674,30 +8718,14 @@ def compute_pass2_stats_sparse_bucketed(
             direct_inverse_noise_score = direct_inverse_noise_half
             direct_ctf_rfloat_score = direct_ctf_rfloat_half
             direct_ctf_rfloat_recon = direct_ctf_rfloat_half
-        relion_highres_xi2_half = None
-        if (
-            use_exact_relion_gaussian
-            or (accumulate_noise and current_size is not None)
-        ):
-            relion_highres_xi2_half = _relion_cuda_powerclass_highres_xi2_half(
-                processed_score_half_for_noise,
-                image_shape=image_shape,
-                current_size=current_size,
-            )
-        if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None:
-            if source_faithful_spectrum_norm:
-                relion_norm_high_shell = _relion_cuda_powerclass_spectrum_highres_norm_units(
-                    processed_score_half_for_noise,
-                    image_shape=image_shape,
-                    current_size=current_size,
-                )
-            else:
-                relion_norm_high_shell = _relion_powerclass_highres_xi2_half_to_norm_units(
-                    relion_highres_xi2_half,
-                    image_shape,
-                )
-        else:
-            relion_norm_high_shell = None
+        relion_highres_xi2_half, relion_norm_high_shell = _relion_powerclass_noise_terms(
+            processed_score_half_for_noise,
+            image_shape=image_shape,
+            current_size=current_size,
+            use_exact_relion_gaussian=use_exact_relion_gaussian,
+            accumulate_noise=accumulate_noise,
+            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+        )
         translated_wavg_norm = bool(
             accumulate_noise
             and current_size is not None
@@ -13178,27 +13206,14 @@ def compute_k_class_pass2_stats_sparse_fused(
             return_shifted_score=not half_spectrum_scoring,
             relion_exact_bpref_operands=relion_exact_bpref_operands,
         )
-        relion_highres_xi2_half = None
-        if use_exact_relion_gaussian or (accumulate_noise and current_size is not None):
-            relion_highres_xi2_half = _relion_cuda_powerclass_highres_xi2_half(
-                processed_score_half_for_noise,
-                image_shape=image_shape,
-                current_size=current_size,
-            )
-        if accumulate_noise and current_size is not None and relion_highres_xi2_half is not None:
-            if source_faithful_spectrum_norm:
-                relion_norm_high_shell = _relion_cuda_powerclass_spectrum_highres_norm_units(
-                    processed_score_half_for_noise,
-                    image_shape=image_shape,
-                    current_size=current_size,
-                )
-            else:
-                relion_norm_high_shell = _relion_powerclass_highres_xi2_half_to_norm_units(
-                    relion_highres_xi2_half,
-                    image_shape,
-                )
-        else:
-            relion_norm_high_shell = None
+        relion_highres_xi2_half, relion_norm_high_shell = _relion_powerclass_noise_terms(
+            processed_score_half_for_noise,
+            image_shape=image_shape,
+            current_size=current_size,
+            use_exact_relion_gaussian=use_exact_relion_gaussian,
+            accumulate_noise=accumulate_noise,
+            source_faithful_spectrum_norm=source_faithful_spectrum_norm,
+        )
         if use_window:
             ctf2_over_nv_score = ctf2_over_nv_half if windowed_prepare else ctf2_over_nv_half[:, window_indices]
             shifted_corrected_score = (

@@ -38,6 +38,16 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+The two sparse pass-2 scorers (`compute_pass2_stats_sparse_bucketed` and
+`compute_k_class_pass2_stats_sparse_fused`) now select their RELION
+`powerClass` noise terms through one owner,
+`sparse_pass2_bucketed._relion_powerclass_noise_terms` (block-tree
+`highres_Xi2` for exact fine scoring; atomically binned spectrum or converted
+`highres_Xi2` for norm correction), replacing two copies of the selection
+logic. 16 wiring cases match the previous blocks in outputs and call order
+with a byte-exact inverse substitution. Structural checkpoint only.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/powerclass_noise_terms_owner_20260910/result.json).
+
 The exact local M-step's packed-chunk noise accumulation has one owner,
 `local_em_engine._accumulate_packed_noise_chunk` (posterior-weighted noise
 shells, norm-correction residual and group-scale XA/AA sums of one packed

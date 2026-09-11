@@ -101,6 +101,9 @@ amplitude convention), `_relion_powerclass_operands` (CUDA shell map and pixel
 validity) and `_relion_powerclass_native_spectrum_highres` (native atomics),
 shared by the JAX reproductions and the native wrappers
 ([`test_powerclass_operand_owner.py`](../../tests/unit/test_powerclass_operand_owner.py)).
+`_relion_powerclass_noise_terms` selects the `highres_Xi2` and high-shell norm
+terms a sparse pass-2 batch needs for both sparse scorers
+([`test_powerclass_noise_terms_owner.py`](../../tests/unit/test_powerclass_noise_terms_owner.py)).
 
 Replay and finalization have separate selection and mutation boundaries:
 
