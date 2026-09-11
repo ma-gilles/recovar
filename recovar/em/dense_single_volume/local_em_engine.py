@@ -1095,6 +1095,53 @@ def validate_local_relion_projector_window(window_spec, image_shape) -> int | No
     return int(projector_output_size)
 
 
+def _relion_local_projector_flat(
+    relion_projector_half,
+    flat_rotations,
+    *,
+    image_shape,
+    relion_projector_r_max,
+    projection_padding_factor,
+    projection_kwargs: dict,
+    window_spec,
+    projection_indices,
+):
+    """Project flat local rotations through the RELION projector slab at the window's pixel selection.
+
+    ``projection_indices`` is the caller's window selection (``None`` without a
+    window); the projector output size, the disk mask and the texture/floorf
+    quirks come from ``projection_kwargs`` exactly as before.
+    """
+
+    if relion_projector_r_max is None:
+        raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
+    relion_projector_half = prepare_local_projector_slab(relion_projector_half)
+    relion_texture_interp = projection_kwargs.get("relion_texture_interp")
+    relion_acc_double_floorf_quirk = bool(projection_kwargs.get("relion_acc_double_floorf_quirk", False))
+    mask_current_image_disk = bool(projection_kwargs.get("mask_current_image_disk", True))
+    projector_kwargs = {}
+    if window_spec.use_window and window_spec.max_r is not None:
+        projector_kwargs["projector_output_size"] = int(window_spec.relion_projector_output_size())
+    if projection_indices is not None:
+        projector_kwargs["pixel_indices"] = projection_indices
+    if not mask_current_image_disk:
+        projector_kwargs["mask_current_image_disk"] = False
+    proj_relion_flat, _ = _compute_relion_projector_projections_block(
+        relion_projector_half,
+        flat_rotations,
+        image_shape,
+        r_max=int(relion_projector_r_max),
+        padding_factor=int(projection_padding_factor),
+        return_abs2=False,
+        centered_rows=True,
+        dense_scale=True,
+        relion_texture_interp=relion_texture_interp,
+        relion_acc_double_floorf_quirk=relion_acc_double_floorf_quirk,
+        **projector_kwargs,
+    )
+    return proj_relion_flat
+
+
 def _project_local_bucket(
     *,
     mean_for_proj,
@@ -1121,39 +1168,21 @@ def _project_local_bucket(
     # from ~76.7s to ~126.9s when duplicate factor was only ~1.004-1.005.
     flat_rotations = flatten_bucket_rotations(jnp.asarray(bucket.local_rotations))
     if relion_projector_half is not None:
-        if relion_projector_r_max is None:
-            raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
-        relion_projector_half = prepare_local_projector_slab(relion_projector_half)
-        relion_texture_interp = projection_kwargs.get("relion_texture_interp")
-        relion_acc_double_floorf_quirk = bool(projection_kwargs.get("relion_acc_double_floorf_quirk", False))
-        mask_current_image_disk = bool(projection_kwargs.get("mask_current_image_disk", True))
-        projector_kwargs = {}
-        if window_spec.use_window and window_spec.max_r is not None:
-            projector_kwargs["projector_output_size"] = int(window_spec.relion_projector_output_size())
-        projection_indices = None
-        if window_spec.use_window:
-            projection_indices = (
-                window_spec.projection_indices if materialize_recon_projection else window_spec.score_indices
-            )
-        if projection_indices is not None:
-            projector_kwargs["pixel_indices"] = projection_indices
-        if not mask_current_image_disk:
-            projector_kwargs["mask_current_image_disk"] = False
-        proj_relion_flat, _ = _compute_relion_projector_projections_block(
+        proj_half_flat = _relion_local_projector_flat(
             relion_projector_half,
             flat_rotations,
-            image_shape,
-            r_max=int(relion_projector_r_max),
-            padding_factor=int(projection_padding_factor),
-            return_abs2=False,
-            centered_rows=True,
-            dense_scale=True,
-            relion_texture_interp=relion_texture_interp,
-            relion_acc_double_floorf_quirk=relion_acc_double_floorf_quirk,
-            **projector_kwargs,
+            image_shape=image_shape,
+            relion_projector_r_max=relion_projector_r_max,
+            projection_padding_factor=projection_padding_factor,
+            projection_kwargs=projection_kwargs,
+            window_spec=window_spec,
+            projection_indices=(
+                (window_spec.projection_indices if materialize_recon_projection else window_spec.score_indices)
+                if window_spec.use_window
+                else None
+            ),
         )
         compact_projection = window_spec.use_window
-        proj_half_flat = proj_relion_flat
     elif (
         window_spec.use_window
         and not bool(projection_kwargs.get("relion_texture_interp", False))
@@ -1256,38 +1285,20 @@ def _project_packed_noise_rows(
     """Project only packed reconstruction rows for local noise accumulation."""
 
     if relion_projector_half is not None:
-        if relion_projector_r_max is None:
-            raise ValueError("relion_projector_r_max is required when relion_projector_half is provided")
-        relion_projector_half = prepare_local_projector_slab(relion_projector_half)
-        relion_texture_interp = projection_kwargs.get("relion_texture_interp")
-        relion_acc_double_floorf_quirk = bool(projection_kwargs.get("relion_acc_double_floorf_quirk", False))
-        mask_current_image_disk = bool(projection_kwargs.get("mask_current_image_disk", True))
-        projector_kwargs = {}
-        if window_spec.use_window and window_spec.max_r is not None:
-            projector_kwargs["projector_output_size"] = int(window_spec.relion_projector_output_size())
-        projection_indices = None
-        if window_spec.use_window:
-            projection_indices = (
-                window_spec.recon_indices if window_spec.recon_indices is not None else window_spec.score_indices
-            )
-        if projection_indices is not None:
-            projector_kwargs["pixel_indices"] = projection_indices
-        if not mask_current_image_disk:
-            projector_kwargs["mask_current_image_disk"] = False
-        proj_relion_flat, _ = _compute_relion_projector_projections_block(
+        flat_proj_for_noise = _relion_local_projector_flat(
             relion_projector_half,
             packed_flat_rotations,
-            image_shape,
-            r_max=int(relion_projector_r_max),
-            padding_factor=int(projection_padding_factor),
-            return_abs2=False,
-            centered_rows=True,
-            dense_scale=True,
-            relion_texture_interp=relion_texture_interp,
-            relion_acc_double_floorf_quirk=relion_acc_double_floorf_quirk,
-            **projector_kwargs,
+            image_shape=image_shape,
+            relion_projector_r_max=relion_projector_r_max,
+            projection_padding_factor=projection_padding_factor,
+            projection_kwargs=projection_kwargs,
+            window_spec=window_spec,
+            projection_indices=(
+                (window_spec.recon_indices if window_spec.recon_indices is not None else window_spec.score_indices)
+                if window_spec.use_window
+                else None
+            ),
         )
-        flat_proj_for_noise = proj_relion_flat
     elif (
         window_spec.use_window
         and not bool(projection_kwargs.get("relion_texture_interp", False))
