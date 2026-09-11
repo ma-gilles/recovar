@@ -7,6 +7,7 @@ ordered return tuple retain the controller's existing semantics.
 """
 
 import logging
+from typing import NamedTuple
 
 import jax.numpy as jnp
 import numpy as np
@@ -144,38 +145,29 @@ def _snapshot_state_swap_inputs(
     }
 
 
-def _state_swap_return_tuple(
-    cs,
-    means,
-    mean_variance,
-    noise_variance_per_half,
-    noise_variance,
-    previous_noise_radial_per_half,
-    previous_noise_radial,
-    previous_best_rotations,
-    current_sigma_offset_angstrom,
-    current_sigma_offset_angstrom_per_half,
-    class_direction_prior_per_half,
-    class_direction_prior_order_per_half,
-    global_direction_prior_per_half,
-    global_direction_prior_order_per_half,
-):
-    return (
-        cs,
-        means,
-        mean_variance,
-        noise_variance_per_half,
-        noise_variance,
-        previous_noise_radial_per_half,
-        previous_noise_radial,
-        previous_best_rotations,
-        current_sigma_offset_angstrom,
-        current_sigma_offset_angstrom_per_half,
-        class_direction_prior_per_half,
-        class_direction_prior_order_per_half,
-        global_direction_prior_per_half,
-        global_direction_prior_order_per_half,
-    )
+class _StateSwapValues(NamedTuple):
+    """Iteration state the RELION replay override may hand back to the controller.
+
+    The controller unpacks it positionally in this order; the state-swap probe
+    returns the inputs unchanged unless a diagnostic variant restores RECOVAR
+    components at its target iteration.
+    """
+
+    cs: object
+    means: object
+    mean_variance: object
+    noise_variance_per_half: object
+    noise_variance: object
+    previous_noise_radial_per_half: object
+    previous_noise_radial: object
+    previous_best_rotations: object
+    current_sigma_offset_angstrom: object
+    current_sigma_offset_angstrom_per_half: object
+    class_direction_prior_per_half: object
+    class_direction_prior_order_per_half: object
+    global_direction_prior_per_half: object
+    global_direction_prior_order_per_half: object
+
 
 
 def _state_swap_map_shell_labels(volume_shape):
@@ -304,41 +296,27 @@ def _apply_state_swap_probe(
 ):
     """Restore selected RECOVAR-produced state after RELION replay override."""
 
+    unchanged = _StateSwapValues(
+        cs,
+        means,
+        mean_variance,
+        noise_variance_per_half,
+        noise_variance,
+        previous_noise_radial_per_half,
+        previous_noise_radial,
+        previous_best_rotations,
+        current_sigma_offset_angstrom,
+        current_sigma_offset_angstrom_per_half,
+        class_direction_prior_per_half,
+        class_direction_prior_order_per_half,
+        global_direction_prior_per_half,
+        global_direction_prior_order_per_half,
+    )
     if not probe or recovar_snapshot is None:
-        return _state_swap_return_tuple(
-            cs,
-            means,
-            mean_variance,
-            noise_variance_per_half,
-            noise_variance,
-            previous_noise_radial_per_half,
-            previous_noise_radial,
-            previous_best_rotations,
-            current_sigma_offset_angstrom,
-            current_sigma_offset_angstrom_per_half,
-            class_direction_prior_per_half,
-            class_direction_prior_order_per_half,
-            global_direction_prior_per_half,
-            global_direction_prior_order_per_half,
-        )
+        return unchanged
     target_iteration = int(probe.get("iteration", 1))
     if int(iteration) != target_iteration:
-        return _state_swap_return_tuple(
-            cs,
-            means,
-            mean_variance,
-            noise_variance_per_half,
-            noise_variance,
-            previous_noise_radial_per_half,
-            previous_noise_radial,
-            previous_best_rotations,
-            current_sigma_offset_angstrom,
-            current_sigma_offset_angstrom_per_half,
-            class_direction_prior_per_half,
-            class_direction_prior_order_per_half,
-            global_direction_prior_per_half,
-            global_direction_prior_order_per_half,
-        )
+        return unchanged
 
     variant = str(probe.get("variant", "all_relion"))
     components = _STATE_SWAP_VARIANT_COMPONENTS.get(variant)
@@ -443,7 +421,7 @@ def _apply_state_swap_probe(
     if "current_size" in components:
         cs = int(recovar_snapshot["cs"])
 
-    return _state_swap_return_tuple(
+    return _StateSwapValues(
         cs,
         means,
         mean_variance,

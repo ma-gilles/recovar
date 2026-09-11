@@ -245,6 +245,11 @@ whether a local debug dump writes anything (dump directory, pending original ima
 requested current sizes and iterations) and which bucket rows it covers; the fused-posterior,
 score and noise-component dump writers only serialize the selected rows
 ([`test_debug_dump_rows_owner.py`](../../tests/unit/test_debug_dump_rows_owner.py)).
+[`state_swap_runtime._apply_state_swap_probe`](../../recovar/em/dense_single_volume/helpers/state_swap_runtime.py)
+returns a `_StateSwapValues` named tuple (current size, maps, tau2, noise, poses, sigma offset and
+direction priors in the controller's unpacking order); the unchanged value is built once from the
+inputs and returned by both early exits
+([`test_state_swap_values_owner.py`](../../tests/unit/test_state_swap_values_owner.py)).
 In [`significance`](../../recovar/em/dense_single_volume/helpers/significance.py),
 `_coarse_gaussian_ffi_default` applies the fresh-InitialModel coarse Gaussian FFI
 default only when the supplied RELION projector operands exist; a dense pass
