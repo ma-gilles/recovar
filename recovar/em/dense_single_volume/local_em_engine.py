@@ -531,6 +531,9 @@ class _LocalRelionProjectionCache:
     enabled: bool
     row_count: int = 0
     id_map_row_count: int = 0
+    # Sorted global rotation ids (int64) of the cached rows; buckets gather by
+    # ``searchsorted`` position, so ids beyond the int32 range never reach the device.
+    unique_ids: np.ndarray | None = None
     n_projection_pixels: int = 0
     estimated_gb: float = 0.0
     build_s: float = 0.0
@@ -744,6 +747,33 @@ def _exact_local_relion_projection_cache_chunk_rows(n_projection_pixels: int) ->
     return max(1, int(target) // max(1, int(n_projection_pixels)))
 
 
+def encode_hard_assignment(rotation_ids, translation_indices, n_trans: int) -> np.ndarray:
+    """Return ``rotation_id * n_trans + translation`` in int64.
+
+    Fine local grids at high sampling orders carry rotation ids beyond the
+    int32 range (order 9: about 3e3 psi steps times 3e6 HEALPix pixels), so the
+    flattened pose index must not be formed or stored in int32.
+    """
+
+    return np.asarray(rotation_ids, dtype=np.int64) * int(n_trans) + np.asarray(translation_indices, dtype=np.int64)
+
+
+def _relion_projection_cache_rows_for_bucket(cache: _LocalRelionProjectionCache, local_rotation_ids) -> np.ndarray:
+    """Map a bucket's global rotation ids to compact cache rows (padding -> row 0)."""
+
+    ids = np.asarray(local_rotation_ids, dtype=np.int64)
+    if not cache.enabled or cache.unique_ids is None:
+        return np.zeros(ids.shape, dtype=np.int32)
+    unique_ids = np.asarray(cache.unique_ids, dtype=np.int64)
+    valid = ids >= 0
+    probe = np.where(valid, ids, unique_ids[0])
+    rows = np.minimum(np.searchsorted(unique_ids, probe), unique_ids.size - 1)
+    if not np.all(unique_ids[rows] == probe):
+        missing = ids[valid & (unique_ids[rows] != probe)][:5].tolist()
+        raise RuntimeError(f"local rotation ids missing from the RELION projection cache: {missing}")
+    return np.where(valid, rows, 0).astype(np.int32)
+
+
 def _disabled_relion_projection_cache() -> _LocalRelionProjectionCache:
     return _LocalRelionProjectionCache(
         projections=jnp.zeros((1, 1), dtype=jnp.complex64),
@@ -848,7 +878,6 @@ def _build_exact_local_relion_projection_cache_for_buckets(
     projection_pixel_indices,
     projector_output_size: int,
     cache_row_capacity: int,
-    max_global_rotation_id: int,
     group_index: int,
     n_groups: int,
 ) -> _LocalRelionProjectionCache:
@@ -878,13 +907,14 @@ def _build_exact_local_relion_projection_cache_for_buckets(
             "internal projection-cache planner error: group has "
             f"{row_count} rows but capacity is {int(cache_row_capacity)}"
         )
-    id_map_row_count = int(max(max_global_rotation_id + 1, int(np.max(valid_ids)) + 1))
+    id_map_row_count = row_count
     estimated_gb = float(cache_row_capacity * n_projection_pixels * np.dtype(np.complex64).itemsize / 1e9)
 
     cache_t0 = time.time()
     cache_rotations = valid_rotations[first_positions]
-    id_map = np.zeros(id_map_row_count, dtype=np.int32)
-    id_map[unique_ids] = np.arange(row_count, dtype=np.int32)
+    # Identity map over compact cache rows: callers translate global rotation
+    # ids to rows with ``_relion_projection_cache_rows_for_bucket`` on the host.
+    id_map = np.arange(row_count, dtype=np.int32)
 
     chunk_rows = _exact_local_relion_projection_cache_chunk_rows(n_projection_pixels)
     host_cache = np.empty((cache_row_capacity, n_projection_pixels), dtype=np.complex64)
@@ -942,6 +972,7 @@ def _build_exact_local_relion_projection_cache_for_buckets(
         enabled=True,
         row_count=row_count,
         id_map_row_count=id_map_row_count,
+        unique_ids=np.asarray(unique_ids, dtype=np.int64),
         n_projection_pixels=n_projection_pixels,
         estimated_gb=estimated_gb,
         build_s=build_s,
@@ -1401,7 +1432,7 @@ def _postprocess_local_bucket(
     """Scatter one local bucket's host-side pose, posterior, and profile stats."""
 
     image_indices_np = np.asarray(image_indices, dtype=np.int32)
-    local_rotation_ids_np = np.asarray(local_rotation_ids, dtype=np.int32)
+    local_rotation_ids_np = np.asarray(local_rotation_ids, dtype=np.int64)
     local_mask_np = np.asarray(local_rotation_mask, dtype=bool)
 
     transfer_t0 = time.time()
@@ -1415,8 +1446,18 @@ def _postprocess_local_bucket(
         axis=1,
     ).reshape(-1)
     if np.any(best_rotation_ids < 0):
-        raise RuntimeError("exact local engine selected padded local rotation")
-    buffers.hard_assignment[image_indices_np] = (best_rotation_ids * n_trans + best_trans_idx).astype(np.int32)
+        bad = np.flatnonzero(best_rotation_ids < 0)
+        row = int(bad[0])
+        ids_row = local_rotation_ids_np[row]
+        raise RuntimeError(
+            "exact local engine selected padded local rotation: "
+            f"n_bad={int(bad.size)} of {int(best_rotation_ids.shape[0])} images; first image_index="
+            f"{int(image_indices_np[row])} best_rot_slot={int(best_rot_idx[row])} n_slots={int(ids_row.shape[0])} "
+            f"n_real_ids={int(np.count_nonzero(ids_row >= 0))} n_mask_true={int(np.count_nonzero(local_mask_np[row]))} "
+            f"ids_min_max=({int(ids_row.min())}, {int(ids_row.max())}) "
+            f"best_log_score={float(np.asarray(best_log_score)[row])!r}"
+        )
+    buffers.hard_assignment[image_indices_np] = encode_hard_assignment(best_rotation_ids, best_trans_idx, n_trans)
 
     transfer_t0 = time.time()
     log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
@@ -1495,7 +1536,7 @@ def _postprocess_local_bucket(
         buffers.best_pose_translations[image_indices_np] = np.asarray(translation_grid, dtype=np.float32)[
             best_trans_idx
         ]
-        buffers.best_pose_rotation_ids[image_indices_np] = best_rotation_ids.astype(np.int32, copy=False)
+        buffers.best_pose_rotation_ids[image_indices_np] = best_rotation_ids.astype(np.int64, copy=False)
 
     return significant_sample_count, int(reconstruction_row_count)
 
@@ -1522,7 +1563,7 @@ def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_param
         bucket_image_count=padded_batch_size,
         bucket_rotation_count=int(bucket.bucket_rotation_count),
         actual_rotation_counts=pad_axis(bucket.actual_rotation_counts, 0, padded_batch_size, value=0).astype(np.int32),
-        local_rotation_ids=pad_axis(bucket.local_rotation_ids, 0, padded_batch_size, value=-1).astype(np.int32),
+        local_rotation_ids=pad_axis(bucket.local_rotation_ids, 0, padded_batch_size, value=-1).astype(np.int64),
         local_rotations=padded_rotations,
         local_mstep_rotations=padded_mstep_rotations,
         local_rotation_log_prior=pad_axis(
@@ -1858,7 +1899,7 @@ def _reorder_bucket_to_indices(bucket: LocalBucketSpec, returned_indices: np.nda
         bucket_image_count=int(bucket.bucket_image_count),
         bucket_rotation_count=int(bucket.bucket_rotation_count),
         actual_rotation_counts=np.asarray(bucket.actual_rotation_counts[order], dtype=np.int32),
-        local_rotation_ids=np.asarray(bucket.local_rotation_ids[order], dtype=np.int32),
+        local_rotation_ids=np.asarray(bucket.local_rotation_ids[order], dtype=np.int64),
         local_rotations=np.asarray(bucket.local_rotations[order], dtype=np.float32),
         local_mstep_rotations=np.asarray(_local_mstep_rotations(bucket)[order], dtype=np.float32),
         local_rotation_log_prior=np.asarray(bucket.local_rotation_log_prior[order], dtype=np.float32),
@@ -2452,7 +2493,7 @@ def run_local_em_exact(
     )
     Ft_y = jnp.zeros(score_only_accumulator_size, dtype=recon_y_accum_dtype)
     Ft_ctf = jnp.zeros(score_only_accumulator_size, dtype=recon_ctf_accum_dtype)
-    hard_assignment = np.empty(n_images, dtype=np.int32)
+    hard_assignment = np.empty(n_images, dtype=np.int64)
     log_evidence_per_image = np.empty(n_images, dtype=np.float32)
     best_log_score_per_image = np.empty(n_images, dtype=np.float32)
     max_posterior_per_image = np.empty(n_images, dtype=np.float32)
@@ -2464,7 +2505,7 @@ def run_local_em_exact(
         if return_best_pose_details
         else None
     )
-    best_pose_rotation_ids = np.empty(n_images, dtype=np.int32) if return_best_pose_details else None
+    best_pose_rotation_ids = np.empty(n_images, dtype=np.int64) if return_best_pose_details else None
 
     noise_wsum = None
     noise_img_power = None
@@ -3014,9 +3055,7 @@ def run_local_em_exact(
             relion_projection_cache_n_projection_pixels = int(window_spec.n_projection)
             valid_layout_ids = np.asarray(local_layout.rotation_ids_flat, dtype=np.int64)
             valid_layout_ids = valid_layout_ids[valid_layout_ids >= 0]
-            relion_projection_cache_id_map_rows = (
-                int(np.max(valid_layout_ids)) + 1 if valid_layout_ids.size else 1
-            )
+            relion_projection_cache_id_map_rows = int(np.unique(valid_layout_ids).size)
             logger.info(
                 "Exact local RELION projection cache groups enabled: groups=%d capacity_rows=%d "
                 "requested_rows=%d cap=%.2f GB projection_pixels=%d id_map_rows=%d",
@@ -3076,7 +3115,6 @@ def run_local_em_exact(
                 projection_pixel_indices=jnp.asarray(window_spec.projection_indices, dtype=jnp.int32),
                 projector_output_size=int(big_jit_relion_projector_output_size),
                 cache_row_capacity=int(relion_projection_cache_capacity_rows),
-                max_global_rotation_id=max(relion_projection_cache_id_map_rows - 1, 0),
                 group_index=relion_projection_cache_group_cursor,
                 n_groups=len(relion_projection_cache_groups),
             )
@@ -3437,7 +3475,10 @@ def run_local_em_exact(
                 big_jit_projection_recon_take_arg,
                 relion_projection_cache.projections,
                 relion_projection_cache.id_map,
-                jnp.asarray(bucket.local_rotation_ids, dtype=jnp.int32),
+                jnp.asarray(
+                    _relion_projection_cache_rows_for_bucket(relion_projection_cache, bucket.local_rotation_ids),
+                    dtype=jnp.int32,
+                ),
                 jnp.asarray(bucket.local_rotations),
                 jnp.asarray(_local_mstep_rotations(bucket)),
                 local_rotation_log_prior_arg,
