@@ -38,6 +38,14 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+RELION's local-search orientational prior widths now come from one owner,
+`orientation_priors.relion_local_search_sigmas` (configured widths kept, psi
+falling back to rot, twice the oversampled angular step when unset under local
+search, `ml_optimiser.cpp` `updateAngularSampling`), shared by the regular
+iterations and the final all-data pass. 144 exact old/new cases match with a
+byte-exact inverse substitution. Structural checkpoint only.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/local_search_sigma_owner_20260910/result.json).
+
 Two fast-tier repairs (own commits) follow the tier rerun on frozen
 `d9a23ceb1` (job 13711329: 4 of 7 pass). K-class dense scoring with RELION scale
 groups now takes the adaptive engine at oversampling 0 as K=1 already did

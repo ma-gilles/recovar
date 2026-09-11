@@ -79,6 +79,7 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     normalize_class_direction_prior_per_half,
     normalize_direction_prior_per_half,
     relion_half_translation_prior_inputs,
+    relion_local_search_sigmas,
     relion_translation_search_base,
     remap_half_direction_prior_to_healpix_order,
 )
@@ -1797,12 +1798,13 @@ def _run_relion_iteration_loop(
                 image_current_size,
                 model_pixel_size,
             )
-        sigma_rot = state.sigma_rot
-        sigma_psi = state.sigma_psi if state.sigma_psi > 0 else sigma_rot
-        if use_local and sigma_rot <= 0:
-            step_rad = np.deg2rad(healpix_angular_step(state.healpix_order) / (2**state.adaptive_oversampling))
-            sigma_rot = np.sqrt(2.0 * 2.0) * step_rad
-            sigma_psi = sigma_rot
+        sigma_rot, sigma_psi = relion_local_search_sigmas(
+            state.sigma_rot,
+            state.sigma_psi,
+            use_local=use_local,
+            healpix_order=state.healpix_order,
+            adaptive_oversampling=state.adaptive_oversampling,
+        )
 
         if use_local:
             local_search_order = state.healpix_order + state.adaptive_oversampling
@@ -4418,13 +4420,14 @@ def _run_relion_iteration_loop(
     final_local_pass1_current_size = final_current_size
     final_adaptive_pass1_current_size = None
     final_adaptive_pass2_current_size = None
-    final_sigma_rot = state.sigma_rot
-    final_sigma_psi = state.sigma_psi if state.sigma_psi > 0 else final_sigma_rot
+    final_sigma_rot, final_sigma_psi = relion_local_search_sigmas(
+        state.sigma_rot,
+        state.sigma_psi,
+        use_local=final_use_local,
+        healpix_order=state.healpix_order,
+        adaptive_oversampling=state.adaptive_oversampling,
+    )
     if final_use_local:
-        if final_sigma_rot <= 0:
-            step_rad = np.deg2rad(healpix_angular_step(state.healpix_order) / (2**state.adaptive_oversampling))
-            final_sigma_rot = np.sqrt(2.0 * 2.0) * step_rad
-            final_sigma_psi = final_sigma_rot
         final_local_parent_order, final_local_search_order = _final_local_sampling_orders(
             state_healpix_order=int(state.healpix_order),
             adaptive_oversampling=int(state.adaptive_oversampling),

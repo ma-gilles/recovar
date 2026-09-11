@@ -11,6 +11,7 @@ from dataclasses import dataclass
 import healpy as hp
 import numpy as np
 
+from recovar.em.dense_single_volume.helpers.convergence import healpix_angular_step
 from recovar.em.sampling import rotation_grid_n_in_planes, rotation_grid_size
 
 
@@ -623,3 +624,22 @@ def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=No
     positive = prior_for_rotations > 0.0
     log_prior[positive] = np.log(prior_for_rotations[positive]).astype(dtype)
     return log_prior
+
+
+def relion_local_search_sigmas(sigma_rot, sigma_psi, *, use_local, healpix_order, adaptive_oversampling):
+    """Orientational prior widths (radians) of a RELION local angular search.
+
+    A configured ``sigma_rot`` is kept and ``sigma_psi`` falls back to it when
+    unset. Without a configured width, a local search uses twice the
+    oversampled angular step, RELION's ``sigma2_rot = sigma2_tilt = sigma2_psi
+    = 2 * 2 * step * step`` from ``ml_optimiser.cpp`` ``updateAngularSampling``;
+    global searches keep the configured values. The regular iterations and the
+    final all-data pass share this rule.
+    """
+
+    sigma_psi = sigma_psi if sigma_psi > 0 else sigma_rot
+    if use_local and sigma_rot <= 0:
+        step_rad = np.deg2rad(healpix_angular_step(healpix_order) / (2**adaptive_oversampling))
+        sigma_rot = np.sqrt(2.0 * 2.0) * step_rad
+        sigma_psi = sigma_rot
+    return sigma_rot, sigma_psi

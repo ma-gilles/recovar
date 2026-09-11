@@ -62,6 +62,10 @@ to every class, K-class priors follow sealed rows, and a stale class prior with 
 matching shared prior now yields identical per-class rows instead of one shared
 vector. [`test_direction_log_prior_owner.py`](../../tests/unit/test_direction_log_prior_owner.py)
 pins each rule.
+`orientation_priors.relion_local_search_sigmas` owns the local-search
+orientational prior widths (configured widths kept, psi falling back to rot,
+twice the oversampled angular step when unset; `updateAngularSampling`) for
+both passes ([`test_local_search_sigma_owner.py`](../../tests/unit/test_local_search_sigma_owner.py)).
 
 The [refinement controller](../../recovar/em/dense_single_volume/iteration_loop.py)
 owns iteration history, half-set dispatch, sampling updates, convergence and
