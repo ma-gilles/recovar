@@ -30,6 +30,29 @@ class ProjectorLoadError(RuntimeError):
     pass
 
 
+def _captured_rank_prefixes(dump_dir: Path, iteration) -> dict[int, Path]:
+    """Map each MPI rank to the file prefix of its captured projector state for ``iteration``.
+
+    One captured device per rank is expected; a rank captured twice or no
+    captured rank at all raises :class:`ProjectorLoadError`.
+    """
+
+    rank_prefixes = {}
+    for schema_path in dump_dir.glob(
+        f"state_iter{int(iteration)}_rank*_device*_class0_state_schema_version.bin"
+    ):
+        match = STATE_RE.match(schema_path.name)
+        if match is None:
+            continue
+        rank = int(match.group("rank"))
+        if rank in rank_prefixes:
+            raise ProjectorLoadError(f"multiple captured devices for MPI rank {rank}")
+        rank_prefixes[rank] = Path(str(schema_path).removesuffix("state_schema_version.bin"))
+    if not rank_prefixes:
+        raise ProjectorLoadError("no captured rank-local projector state found")
+    return rank_prefixes
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with Path(path).open("rb") as stream:
@@ -132,19 +155,7 @@ def build_relion_projector_replay_state(
     if int(iteration) <= 0 or int(current_size) <= 0 or int(n_classes) <= 0:
         raise ProjectorLoadError("iteration/current_size/n_classes must be positive")
 
-    rank_prefixes = {}
-    for schema_path in dump_dir.glob(
-        f"state_iter{int(iteration)}_rank*_device*_class0_state_schema_version.bin"
-    ):
-        match = STATE_RE.match(schema_path.name)
-        if match is None:
-            continue
-        rank = int(match.group("rank"))
-        if rank in rank_prefixes:
-            raise ProjectorLoadError(f"multiple captured devices for MPI rank {rank}")
-        rank_prefixes[rank] = Path(str(schema_path).removesuffix("state_schema_version.bin"))
-    if not rank_prefixes:
-        raise ProjectorLoadError("no captured rank-local projector state found")
+    rank_prefixes = _captured_rank_prefixes(dump_dir, iteration)
 
     observed_topology = set()
     for path in dump_dir.glob(f"state_iter{int(iteration)}_rank*_device*_class*_*.bin"):
@@ -307,19 +318,7 @@ def load_relion_projector_iref_state(
     if int(iteration) <= 0 or int(n_classes) <= 0:
         raise ProjectorLoadError("iteration/n_classes must be positive")
 
-    rank_prefixes = {}
-    for schema_path in dump_dir.glob(
-        f"state_iter{int(iteration)}_rank*_device*_class0_state_schema_version.bin"
-    ):
-        match = STATE_RE.match(schema_path.name)
-        if match is None:
-            continue
-        rank = int(match.group("rank"))
-        if rank in rank_prefixes:
-            raise ProjectorLoadError(f"multiple captured devices for MPI rank {rank}")
-        rank_prefixes[rank] = Path(str(schema_path).removesuffix("state_schema_version.bin"))
-    if not rank_prefixes:
-        raise ProjectorLoadError("no captured rank-local projector state found")
+    rank_prefixes = _captured_rank_prefixes(dump_dir, iteration)
 
     half_to_rank_device = {}
     for rank, prefix in rank_prefixes.items():
