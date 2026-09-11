@@ -297,7 +297,28 @@ def _texture_centered_crop_to_full(
 ):
     """Scatter a centered even-size CUDA projection into the full image box."""
 
-    image_size = int(image_shape[0])
+    return _texture_centered_crop_to_full_jit(
+        projection_crop,
+        None if current_image_mask_size is None else jnp.asarray(current_image_mask_size, dtype=jnp.int32),
+        image_size=int(image_shape[0]),
+        projector_output_size=int(projector_output_size),
+        mask_current_image_disk=bool(mask_current_image_disk),
+    )
+
+
+@partial(
+    jax.jit,
+    static_argnames=("image_size", "projector_output_size", "mask_current_image_disk"),
+)
+def _texture_centered_crop_to_full_jit(
+    projection_crop,
+    current_image_mask_size,
+    *,
+    image_size: int,
+    projector_output_size: int,
+    mask_current_image_disk: bool,
+):
+    image_size = int(image_size)
     crop_size = int(projector_output_size)
     crop = projection_crop.reshape((projection_crop.shape[0], crop_size, crop_size // 2 + 1))
     crop_rows = jnp.arange(crop_size, dtype=jnp.int32)

@@ -2377,20 +2377,46 @@ def _compute_sparse_pass2_windowed_projections_block(
             projection_padding_factor=projection_padding_factor,
             **projection_kwargs,
         )
-        score_chunk = proj_chunk[:, score_indices]
-        if output_complex_dtype is not None:
-            score_chunk = score_chunk.astype(output_complex_dtype)
+        score_chunk, recon_chunk = _window_projection_chunk(
+            proj_chunk,
+            score_indices,
+            recon_indices,
+            output_complex_dtype=output_complex_dtype,
+        )
         score_chunks.append(score_chunk)
         if recon_indices is not None:
-            recon_chunk = proj_chunk[:, recon_indices]
-            if output_complex_dtype is not None:
-                recon_chunk = recon_chunk.astype(output_complex_dtype)
             recon_chunks.append(recon_chunk)
         del proj_chunk
 
-    score_proj = jnp.concatenate(score_chunks, axis=0)
     if recon_indices is None:
-        return score_proj, None, None
+        return jnp.concatenate(score_chunks, axis=0), None, None
+    return _finalize_windowed_projection_chunks(
+        tuple(score_chunks),
+        tuple(recon_chunks),
+        output_abs2_dtype=output_abs2_dtype,
+    )
+
+
+@partial(jax.jit, static_argnames=("output_complex_dtype",))
+def _window_projection_chunk(proj_chunk, score_indices, recon_indices, *, output_complex_dtype):
+    """Select the score and reconstruction windows of one projection chunk."""
+
+    score_chunk = proj_chunk[:, score_indices]
+    if output_complex_dtype is not None:
+        score_chunk = score_chunk.astype(output_complex_dtype)
+    if recon_indices is None:
+        return score_chunk, None
+    recon_chunk = proj_chunk[:, recon_indices]
+    if output_complex_dtype is not None:
+        recon_chunk = recon_chunk.astype(output_complex_dtype)
+    return score_chunk, recon_chunk
+
+
+@partial(jax.jit, static_argnames=("output_abs2_dtype",))
+def _finalize_windowed_projection_chunks(score_chunks, recon_chunks, *, output_abs2_dtype):
+    """Concatenate projection chunks and form |recon|^2 in one program."""
+
+    score_proj = jnp.concatenate(score_chunks, axis=0)
     recon_proj = jnp.concatenate(recon_chunks, axis=0)
     recon_abs2 = jnp.abs(recon_proj) ** 2
     if output_abs2_dtype is not None:
@@ -7205,6 +7231,58 @@ def _prioritize_stopped_pass2_dump_buckets(
     return requested + remaining
 
 
+@jax.jit
+def _take_columns(values, column_indices):
+    """Gather Fourier-window columns in one compiled program per shape."""
+
+    return values[:, column_indices]
+
+
+@jax.jit
+def _ctf2_over_noise_and_ctf2(ctf_half, noise_variance_half):
+    """Return ``CTF^2 / sigma2`` and ``CTF^2`` for the generic bucket path."""
+
+    return ctf_half**2 / noise_variance_half, ctf_half**2
+
+
+@partial(jax.jit, static_argnames=("multiply_inverse_noise",))
+def _gaussian_batch_norm(processed_score_half_raw, noise_operand, norm_half_weights, *, multiply_inverse_noise: bool):
+    """Dense ``run_em`` image-norm term: weighted |image|^2 / sigma2 summed per image."""
+
+    power = jnp.abs(processed_score_half_raw) ** 2
+    if multiply_inverse_noise:
+        score_power_over_noise = power * noise_operand[None, :]
+    else:
+        score_power_over_noise = power / noise_operand
+    return jnp.sum(
+        score_power_over_noise * norm_half_weights[None, :],
+        axis=-1,
+        keepdims=True,
+    ).real
+
+
+@jax.jit
+def _ctf_over_noise_weighted_pair(processed_score_half_raw, processed_recon_half_raw, ctf_half, noise_variance_half):
+    """Weight score and reconstruction images by ``CTF / sigma2`` in one program."""
+
+    return (
+        processed_score_half_raw * ctf_half / noise_variance_half,
+        processed_recon_half_raw * ctf_half / noise_variance_half,
+    )
+
+
+@jax.jit
+def _divide_by_safe_ctf(sparse_score_input_half, ctf_half):
+    """Divide by the CTF where it is safely non-zero, else pass through."""
+
+    ctf_safe = jnp.abs(ctf_half) > 1e-8
+    return jnp.where(
+        ctf_safe,
+        sparse_score_input_half / ctf_half,
+        sparse_score_input_half,
+    )
+
+
 def _prepare_bucket_io(
     experiment_dataset,
     batch,
@@ -7310,11 +7388,11 @@ def _prepare_bucket_io(
             batch_scale[:, None] if scale_corrections is not None else None,
             output_dtype=acc_real_dtype,
         )
+        ctf2_score_half = ctf_half**2
     else:
         inverse_noise_half = None
         weighted_ctf_half = None
-        ctf2_over_nv_half = ctf_half**2 / noise_variance_half
-    ctf2_score_half = ctf_half**2
+        ctf2_over_nv_half, ctf2_score_half = _ctf2_over_noise_and_ctf2(ctf_half, noise_variance_half)
 
     # Raw processed half-spectrum images (BEFORE any per-image correction).
     # The score path uses masked images iff ``score_with_masked_images`` is True,
@@ -7355,24 +7433,24 @@ def _prepare_bucket_io(
         # batch_norm starts from raw processed-score images, then follows dense
         # run_em's image-only correction convention below.
         norm_half_weights = make_half_image_weights(image_shape)
-        score_power_over_noise = (
-            jnp.abs(processed_score_half_raw) ** 2 * inverse_noise_half[None, :]
-            if relion_exact_bpref_operands
-            else jnp.abs(processed_score_half_raw) ** 2 / noise_variance_half
+        batch_norm = _gaussian_batch_norm(
+            processed_score_half_raw,
+            inverse_noise_half if relion_exact_bpref_operands else noise_variance_half,
+            norm_half_weights,
+            multiply_inverse_noise=bool(relion_exact_bpref_operands),
         )
-        batch_norm = jnp.sum(
-            score_power_over_noise * norm_half_weights[None, :],
-            axis=-1,
-            keepdims=True,
-        ).real
 
     if relion_exact_bpref_operands:
         score_weighted_half = processed_score_half_raw * weighted_ctf_half
         recon_weighted_half = processed_recon_half_raw * weighted_ctf_half
         recon_bpref_input_half = processed_recon_half_raw
     else:
-        score_weighted_half = processed_score_half_raw * ctf_half / noise_variance_half
-        recon_weighted_half = processed_recon_half_raw * ctf_half / noise_variance_half
+        score_weighted_half, recon_weighted_half = _ctf_over_noise_weighted_pair(
+            processed_score_half_raw,
+            processed_recon_half_raw,
+            ctf_half,
+            noise_variance_half,
+        )
         recon_bpref_input_half = None
     folded_normalized_cc_operands = (
         use_normalized_cc and not relion_exact_normalized_cc_operands
@@ -7430,12 +7508,7 @@ def _prepare_bucket_io(
             direct_pixel_correction_full = pixel_correction
             sparse_score_input_half = sparse_score_input_half * pixel_correction
         else:
-            ctf_safe = jnp.abs(ctf_half) > 1e-8
-            sparse_score_input_half = jnp.where(
-                ctf_safe,
-                sparse_score_input_half / ctf_half,
-                sparse_score_input_half,
-            )
+            sparse_score_input_half = _divide_by_safe_ctf(sparse_score_input_half, ctf_half)
     if score_only and not return_direct_scoring_io:
         raise ValueError("score-only sparse pass-2 requires direct scoring I/O")
 
@@ -7507,13 +7580,14 @@ def _prepare_bucket_io(
             )
             shifted_score_half = None
             if return_shifted_score:
+                score_weighted_window = _take_columns(score_weighted_half_for_score, score_indices)
                 shifted_score_half = _cuda_translate_score(
-                    score_weighted_half_for_score[:, score_indices],
+                    score_weighted_window,
                     score_indices,
                 )
                 if shifted_score_half is None:
                     shifted_score_half = apply_half_translation_phases(
-                        score_weighted_half_for_score[:, score_indices],
+                        score_weighted_window,
                         score_phase,
                     )
             if relion_exact_bpref_operands:
@@ -7537,23 +7611,25 @@ def _prepare_bucket_io(
                     image_shape,
                 )
             else:
+                recon_weighted_window = _take_columns(recon_weighted_half, recon_indices)
                 shifted_recon_half = _cuda_translate_score(
-                    recon_weighted_half[:, recon_indices],
+                    recon_weighted_window,
                     recon_indices,
                 )
                 if shifted_recon_half is None:
                     shifted_recon_half = apply_half_translation_phases(
-                        recon_weighted_half[:, recon_indices],
+                        recon_weighted_window,
                         recon_phase,
                     )
             if score_with_masked_images:
+                score_weighted_recon_window = _take_columns(score_weighted_half, recon_indices)
                 shifted_score_half_with_dc = _cuda_translate_score(
-                    score_weighted_half[:, recon_indices],
+                    score_weighted_recon_window,
                     recon_indices,
                 )
                 if shifted_score_half_with_dc is None:
                     shifted_score_half_with_dc = apply_half_translation_phases(
-                        score_weighted_half[:, recon_indices],
+                        score_weighted_recon_window,
                         recon_phase,
                     )
             else:
@@ -7640,10 +7716,10 @@ def _prepare_bucket_io(
     if return_direct_scoring_io:
         if return_windowed_shifted:
             score_indices = jnp.asarray(window_indices, dtype=jnp.int32)
-            direct_score_input = sparse_score_input_half[:, score_indices]
-            direct_preprocessed_score_input = processed_score_half_raw[:, score_indices]
+            direct_score_input = _take_columns(sparse_score_input_half, score_indices)
+            direct_preprocessed_score_input = _take_columns(processed_score_half_raw, score_indices)
             if direct_pixel_correction_full is not None:
-                direct_pixel_correction = direct_pixel_correction_full[:, score_indices]
+                direct_pixel_correction = _take_columns(direct_pixel_correction_full, score_indices)
             direct_score_pixel_indices = score_indices
         else:
             direct_score_input = sparse_score_input_half
@@ -7716,10 +7792,10 @@ def _prepare_bucket_io(
             )
     if return_windowed_shifted:
         score_indices = jnp.asarray(window_indices, dtype=jnp.int32)
-        ctf2_over_nv_half = ctf2_over_nv_half[:, score_indices]
+        ctf2_over_nv_half = _take_columns(ctf2_over_nv_half, score_indices)
         if ctf2_over_nv_half_with_dc is not None:
             recon_indices = jnp.asarray(recon_window_indices, dtype=jnp.int32)
-            ctf2_over_nv_half_with_dc = ctf2_over_nv_half_with_dc[:, recon_indices]
+            ctf2_over_nv_half_with_dc = _take_columns(ctf2_over_nv_half_with_dc, recon_indices)
     if score_only:
         ctf2_over_nv_half = ctf2_over_nv_half.astype(precision_policy.score_real_dtype)
     else:
