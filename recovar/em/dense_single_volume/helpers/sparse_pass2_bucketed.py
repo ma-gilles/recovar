@@ -1153,6 +1153,97 @@ def _windowed_prepare_enabled_for_pass(use_window: bool) -> bool:
     )
 
 
+class _SparsePass2WindowSetup(NamedTuple):
+    """Forward-model configuration and Fourier windows of one sparse pass-2 scorer."""
+
+    config: object
+    window_spec: object
+    use_window: bool
+    window_indices_np: object
+    window_indices: object
+    recon_window_indices: object
+    relion_x_half_recon_indices: object
+    windowed_prepare: bool
+    n_windowed: int
+    n_recon_windowed: int
+
+
+def _sparse_pass2_window_setup(
+    experiment_dataset,
+    *,
+    disc_type,
+    image_shape,
+    current_size,
+    n_half,
+    mstep_current_size,
+    square_window,
+    window_spec_kwargs,
+    use_relion_x_half_mstep,
+    log_label,
+) -> _SparsePass2WindowSetup:
+    """Build the forward model and score/reconstruction windows of a sparse pass 2.
+
+    The RELION x-half M-step addresses its reconstruction window in FFTW half
+    order, so the centred reconstruction indices are converted when that
+    layout is active. Windowed prepare is logged once per pass with the
+    caller's label. The single-class and fused K-class sparse scorers share
+    this setup.
+    """
+
+    config = ForwardModelConfig.from_dataset(
+        experiment_dataset,
+        disc_type=disc_type,
+        process_fn=experiment_dataset.process_images,
+    )
+    window_spec = make_fourier_window_spec(
+        image_shape,
+        current_size,
+        n_half,
+        reconstruction_current_size=mstep_current_size,
+        square=square_window,
+        include_recon_window=True,
+        **window_spec_kwargs,
+    )
+    use_window = window_spec.use_window
+    recon_window_indices = window_spec.recon_indices
+    relion_x_half_recon_indices = None
+    if use_relion_x_half_mstep:
+        centered_recon_indices = (
+            recon_window_indices
+            if recon_window_indices is not None
+            else jnp.arange(int(n_half), dtype=jnp.int32)
+        )
+        relion_x_half_recon_indices = centered_half_indices_to_fftw_half_indices(
+            image_shape,
+            centered_recon_indices,
+        )
+    windowed_prepare = _windowed_prepare_enabled_for_pass(use_window)
+    n_windowed = window_spec.n_score
+    n_recon_windowed = window_spec.n_recon
+    if windowed_prepare:
+        logger.info(
+            "%s windowed prepare enabled; set %s=0 to disable "
+            "(score_pixels=%d recon_pixels=%d full_half_pixels=%d)",
+            log_label,
+            _SPARSE_PASS2_WINDOWED_PREPARE_ENV,
+            int(n_windowed),
+            int(n_recon_windowed),
+            int(n_half),
+        )
+    return _SparsePass2WindowSetup(
+        config,
+        window_spec,
+        use_window,
+        window_spec.score_indices_np,
+        window_spec.score_indices,
+        recon_window_indices,
+        relion_x_half_recon_indices,
+        windowed_prepare,
+        n_windowed,
+        n_recon_windowed,
+    )
+
+
 def _windowed_translation_tile_cap_enabled_for_pass() -> bool:
     """Return whether K-class sparse pass-2 should budget translation tiles on active windows."""
 
@@ -8162,47 +8253,28 @@ def compute_pass2_stats_sparse_bucketed(
         noise_wavg_direct_norm_high_total = np.zeros(n_images, dtype=np.float64)
 
     # Forward-model config & half/window precomputes
-    config = ForwardModelConfig.from_dataset(
+    window_setup = _sparse_pass2_window_setup(
         experiment_dataset,
         disc_type=disc_type,
-        process_fn=experiment_dataset.process_images,
+        image_shape=image_shape,
+        current_size=current_size,
+        n_half=n_half,
+        mstep_current_size=mstep_current_size,
+        square_window=square_window,
+        window_spec_kwargs=window_spec_kwargs,
+        use_relion_x_half_mstep=use_relion_x_half_mstep,
+        log_label="Sparse pass-2",
     )
-    window_spec = make_fourier_window_spec(
-        image_shape,
-        current_size,
-        n_half,
-        reconstruction_current_size=mstep_current_size,
-        square=square_window,
-        include_recon_window=True,
-        **window_spec_kwargs,
-    )
-    use_window = window_spec.use_window
-    window_indices_np = window_spec.score_indices_np
-    window_indices = window_spec.score_indices
-    recon_window_indices = window_spec.recon_indices
-    relion_x_half_recon_indices = None
-    if use_relion_x_half_mstep:
-        centered_recon_indices = (
-            recon_window_indices
-            if recon_window_indices is not None
-            else jnp.arange(int(n_half), dtype=jnp.int32)
-        )
-        relion_x_half_recon_indices = centered_half_indices_to_fftw_half_indices(
-            image_shape,
-            centered_recon_indices,
-        )
-    windowed_prepare = _windowed_prepare_enabled_for_pass(use_window)
-    n_windowed = window_spec.n_score
-    n_recon_windowed = window_spec.n_recon
-    if windowed_prepare:
-        logger.info(
-            "Sparse pass-2 windowed prepare enabled; set %s=0 to disable "
-            "(score_pixels=%d recon_pixels=%d full_half_pixels=%d)",
-            _SPARSE_PASS2_WINDOWED_PREPARE_ENV,
-            int(n_windowed),
-            int(n_recon_windowed),
-            int(n_half),
-        )
+    config = window_setup.config
+    window_spec = window_setup.window_spec
+    use_window = window_setup.use_window
+    window_indices_np = window_setup.window_indices_np
+    window_indices = window_setup.window_indices
+    recon_window_indices = window_setup.recon_window_indices
+    relion_x_half_recon_indices = window_setup.relion_x_half_recon_indices
+    windowed_prepare = window_setup.windowed_prepare
+    n_windowed = window_setup.n_windowed
+    n_recon_windowed = window_setup.n_recon_windowed
 
     half_weights = make_scoring_half_image_weights(
         image_shape,
@@ -12544,47 +12616,28 @@ def compute_k_class_pass2_stats_sparse_fused(
         noise_img_power_total = [np.zeros(n_shells, dtype=np.float64) for _ in range(n_classes)]
         noise_norm_correction_total = [np.zeros(n_images, dtype=np.float64) for _ in range(n_classes)]
 
-    config = ForwardModelConfig.from_dataset(
+    window_setup = _sparse_pass2_window_setup(
         experiment_dataset,
         disc_type=disc_type,
-        process_fn=experiment_dataset.process_images,
+        image_shape=image_shape,
+        current_size=current_size,
+        n_half=n_half,
+        mstep_current_size=mstep_current_size,
+        square_window=square_window,
+        window_spec_kwargs=window_spec_kwargs,
+        use_relion_x_half_mstep=use_relion_x_half_mstep,
+        log_label="Sparse fused K-class pass-2",
     )
-    window_spec = make_fourier_window_spec(
-        image_shape,
-        current_size,
-        n_half,
-        reconstruction_current_size=mstep_current_size,
-        square=square_window,
-        include_recon_window=True,
-        **window_spec_kwargs,
-    )
-    use_window = window_spec.use_window
-    window_indices_np = window_spec.score_indices_np
-    window_indices = window_spec.score_indices
-    recon_window_indices = window_spec.recon_indices
-    relion_x_half_recon_indices = None
-    if use_relion_x_half_mstep:
-        centered_recon_indices = (
-            recon_window_indices
-            if recon_window_indices is not None
-            else jnp.arange(int(n_half), dtype=jnp.int32)
-        )
-        relion_x_half_recon_indices = centered_half_indices_to_fftw_half_indices(
-            image_shape,
-            centered_recon_indices,
-        )
-    windowed_prepare = _windowed_prepare_enabled_for_pass(use_window)
-    n_windowed = window_spec.n_score
-    n_recon_windowed = window_spec.n_recon
-    if windowed_prepare:
-        logger.info(
-            "Sparse fused K-class pass-2 windowed prepare enabled; set %s=0 to disable "
-            "(score_pixels=%d recon_pixels=%d full_half_pixels=%d)",
-            _SPARSE_PASS2_WINDOWED_PREPARE_ENV,
-            int(n_windowed),
-            int(n_recon_windowed),
-            int(n_half),
-        )
+    config = window_setup.config
+    window_spec = window_setup.window_spec
+    use_window = window_setup.use_window
+    window_indices_np = window_setup.window_indices_np
+    window_indices = window_setup.window_indices
+    recon_window_indices = window_setup.recon_window_indices
+    relion_x_half_recon_indices = window_setup.relion_x_half_recon_indices
+    windowed_prepare = window_setup.windowed_prepare
+    n_windowed = window_setup.n_windowed
+    n_recon_windowed = window_setup.n_recon_windowed
 
     half_weights = make_scoring_half_image_weights(
         image_shape,
