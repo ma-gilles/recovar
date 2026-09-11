@@ -176,19 +176,19 @@ def test_cs_scaling_preserves_serialized_pixel_value(tmp_path):
 
 def test_initial_model_consumers_receive_one_loaded_scalar(tmp_path, monkeypatch):
     from recovar.em.dense_single_volume.helpers.resolution import shell_index_to_resolution_angstrom
-    from recovar.em.initial_model import driver
+    from recovar.em.initial_model import driver, native_options, native_sampling
 
     path = _star(tmp_path)
     sf = StarFile.load(path)
     ds = cryoem_dataset.load_dataset(path)
-    opts = driver.NativeInitialModelOptions(fn_img=path, particle_diameter=10, offset_range_px=6, offset_step_px=2)
+    opts = native_options.NativeInitialModelOptions(fn_img=path, particle_diameter=10, offset_range_px=6, offset_step_px=2)
     seen = {}
     backend = ds.image_source.backend
     monkeypatch.setattr(backend, "set_relion_image_mask", lambda **kwargs: seen.update(mask=kwargs))
     driver._configure_relion_image_mask(ds, opts)
     assert seen["mask"]["pixel_size"] == PIXEL
     assert driver._single_optics_scalars(sf.df, sf.data_optics, ds)[-1] == PIXEL
-    sampling = driver._initial_sampling_state(opts, pixel_size=ds.voxel_size)
+    sampling = native_sampling._initial_sampling_state(opts, pixel_size=ds.voxel_size)
     assert sampling.offset_range_angstrom == 6 * PIXEL
     assert sampling.offset_step_angstrom == 2 * PIXEL
     assert shell_index_to_resolution_angstrom(2, 8, ds.voxel_size) == 4 * PIXEL

@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from recovar.em.initial_model import driver, initialise_denovo_state, iteration_loop, m_step
+from recovar.em.initial_model import driver, initialise_denovo_state, iteration_loop, m_step, native_options
 from recovar.em.initial_model.subset import numpy_rnd_unif_factory
 from scripts import run_ab_initio
 
@@ -127,7 +127,7 @@ def test_driver_converts_before_initial_artifact_and_forwards_loop(monkeypatch, 
     monkeypatch.setattr(driver, "run_vdam_iterations", at_loop)
     with pytest.raises(AtLoop):
         driver.run_native_initial_model(
-            driver.NativeInitialModelOptions(
+            native_options.NativeInitialModelOptions(
                 fn_img="missing.star",
                 outputname=str(tmp_path / "run"),
                 nr_iter=2,
@@ -141,7 +141,7 @@ def test_driver_converts_before_initial_artifact_and_forwards_loop(monkeypatch, 
 def test_driver_invalid_precision_rejected_before_io(dtype, backend):
     with pytest.raises(ValueError, match="M-step|mstep_compute_dtype"):
         driver.run_native_initial_model(
-            driver.NativeInitialModelOptions(fn_img="missing.star", mstep_backend=backend, mstep_compute_dtype=dtype)
+            native_options.NativeInitialModelOptions(fn_img="missing.star", mstep_backend=backend, mstep_compute_dtype=dtype)
         )
 
 
@@ -149,7 +149,7 @@ def test_driver_reference_replay_rejected_before_io(monkeypatch):
     monkeypatch.setenv(driver.INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV, "missing_{iteration}.mrc")
     with pytest.raises(ValueError, match="reference replay"):
         driver.run_native_initial_model(
-            driver.NativeInitialModelOptions(fn_img="missing.star", mstep_backend="jax", mstep_compute_dtype="float32")
+            native_options.NativeInitialModelOptions(fn_img="missing.star", mstep_backend="jax", mstep_compute_dtype="float32")
         )
 
 

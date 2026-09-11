@@ -11,14 +11,14 @@ import pytest
 
 import recovar
 from recovar.commands import initial_model
-from recovar.em.initial_model import driver
+from recovar.em.initial_model import driver, native_options
 from recovar.em.initial_model.schedules import GuiInitialModelDefaults
 
 
 @pytest.mark.unit
 def test_public_defaults_match_native_option_defaults():
     defaults = initial_model.initial_model_defaults_dict()
-    native = driver.NativeInitialModelOptions(fn_img="particles.star")
+    native = native_options.NativeInitialModelOptions(fn_img="particles.star")
 
     assert defaults == {
         field.name: getattr(GuiInitialModelDefaults(), field.name) for field in fields(GuiInitialModelDefaults)

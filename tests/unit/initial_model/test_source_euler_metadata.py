@@ -7,8 +7,8 @@ import pandas as pd
 import pytest
 
 from recovar.em.dense_single_volume import k_class_results
-from recovar.em.initial_model import dense_adapter, driver, star_io
-from recovar.utils.helpers import R_from_relion
+from recovar.em.initial_model import dense_adapter, driver, native_sampling, star_io
+from recovar.utils.helpers import R_from_relion, R_to_relion
 
 pytestmark = pytest.mark.unit
 
@@ -32,10 +32,10 @@ def test_subset_source_validity_and_mixed_legacy_rows():
     )
     np.testing.assert_array_equal(value.best_pose_eulers_valid, [False, False, True])
     value.best_pose_rotations[0] = R_from_relion(eulers[1:], degrees=True).astype(np.float32)[0]
-    got = driver._best_eulers_from_particle_state(value, np.array([2, 0]), rotation_grid_order=0)
+    got = native_sampling._best_eulers_from_particle_state(value, np.array([2, 0]), rotation_grid_order=0)
     np.testing.assert_array_equal(got[0], eulers[0])
     np.testing.assert_array_equal(
-        got[1], driver.R_to_relion(value.best_pose_rotations[[0]].astype(np.float64), degrees=True)[0]
+        got[1], R_to_relion(value.best_pose_rotations[[0]].astype(np.float64), degrees=True)[0]
     )
     # A matrix-only replacement invalidates that row, never a different particle.
     driver._update_particle_state_from_estep_meta(
@@ -65,7 +65,7 @@ def test_input_star_source_is_valid_before_first_visit():
     )
     value = star_io._particle_state_from_star(frame, SimpleNamespace(voxel_size=1.0, n_images=1))
     assert not value.visited[0] and value.best_pose_eulers_valid[0]
-    np.testing.assert_array_equal(driver._best_eulers_from_particle_state(value, [0], rotation_grid_order=0), eulers)
+    np.testing.assert_array_equal(native_sampling._best_eulers_from_particle_state(value, [0], rotation_grid_order=0), eulers)
     assert value.best_pose_rotations.dtype == np.float32
 
 
@@ -85,7 +85,7 @@ def test_invalid_restored_source_metadata_rejected(fault):
     else:
         value.best_pose_eulers_valid = np.ones(1, np.int32)
     with pytest.raises(ValueError, match="Euler"):
-        driver._best_eulers_from_particle_state(value, [0], rotation_grid_order=0)
+        native_sampling._best_eulers_from_particle_state(value, [0], rotation_grid_order=0)
 
 
 def test_mixed_halfset_rows_keep_identity_and_validity():

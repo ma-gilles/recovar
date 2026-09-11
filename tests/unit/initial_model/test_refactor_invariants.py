@@ -21,6 +21,7 @@ import pytest
 
 import recovar.em.initial_model as init_model
 from recovar.em.initial_model import (
+from recovar.em.dense_single_volume.helpers.expected_accuracy import estimate_relion_expected_accuracy_from_prepared_inputs
     __all__ as INIT_MODEL_ALL,
 )
 from recovar.em.initial_model import (
@@ -172,7 +173,7 @@ def test_initial_model_estep_reuses_shared_dense_em_engine():
             local_layout.build_pass2_hypothesis_layout,
         ),
         "estimate_relion_expected_accuracy_from_prepared_inputs": (
-            driver.estimate_relion_expected_accuracy_from_prepared_inputs,
+            estimate_relion_expected_accuracy_from_prepared_inputs,
             expected_accuracy.estimate_relion_expected_accuracy_from_prepared_inputs,
         ),
     }

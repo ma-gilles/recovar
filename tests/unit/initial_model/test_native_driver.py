@@ -14,7 +14,7 @@ import pytest
 import recovar.em.initial_model.driver as driver
 from recovar.data_io.starfile import read_star
 from recovar.em.dense_single_volume.batch_planning import maybe_cache_raw_image_loaders
-from recovar.em.initial_model import initialise_denovo_state, star_io
+from recovar.em.initial_model import initialise_denovo_state, native_options, native_sampling, star_io
 from recovar.em.initial_model.iteration_loop import select_subset_for_iter
 from recovar.utils.helpers import R_from_relion, write_relion_mrc
 
@@ -250,7 +250,7 @@ _rlnBestResolutionThusFar 0.125
 
 def test_native_vdam_diagnostic_continuation_loads_complete_gradient_state(tmp_path):
     optimiser, data, expected = _write_native_vdam_checkpoint(tmp_path)
-    opts = driver.NativeInitialModelOptions(
+    opts = native_options.NativeInitialModelOptions(
         fn_img=str(data),
         nr_iter=200,
         random_seed=29,
@@ -295,7 +295,7 @@ def test_native_vdam_diagnostic_continuation_loads_complete_gradient_state(tmp_p
 def test_native_vdam_diagnostic_continuation_fails_without_second_pseudo_half(tmp_path):
     optimiser, data, _expected = _write_native_vdam_checkpoint(tmp_path)
     (tmp_path / "run_it180_1moment002.mrc").unlink()
-    opts = driver.NativeInitialModelOptions(
+    opts = native_options.NativeInitialModelOptions(
         fn_img=str(data),
         nr_iter=200,
         random_seed=29,
@@ -643,7 +643,7 @@ def test_particle_state_from_star_seeds_input_euler_orientations_for_all_particl
         R_from_relion(expected_eulers, degrees=True).astype(np.float32),
     )
     np.testing.assert_array_equal(state.visited, np.zeros(3, dtype=bool))
-    assert driver._best_eulers_from_particle_state(
+    assert native_sampling._best_eulers_from_particle_state(
         state,
         np.asarray([2, 0, 1], dtype=np.int64),
         rotation_grid_order=1,
@@ -683,7 +683,7 @@ def test_sampling_accuracy_uses_seeded_star_eulers_before_particles_are_visited(
     particle_state = star_io._particle_state_from_star(main, SimpleNamespace(voxel_size=2.0, n_images=3))
     state = initialise_denovo_state(ori_size=8, pixel_size=2.0, K=1, nr_iter=200, n_directions=1)
     state.Iref[:] = 1.0
-    optics_state = driver.NativeOpticsState(
+    optics_state = native_sampling.NativeOpticsState(
         voltage=300.0,
         Cs=2.7,
         Q0=0.07,
@@ -694,8 +694,8 @@ def test_sampling_accuracy_uses_seeded_star_eulers_before_particles_are_visited(
         phase_shift=np.zeros(3),
     )
 
-    meta = driver._estimate_native_sampling_accuracy(
-        driver._initial_sampling_state(driver.NativeInitialModelOptions(fn_img="particles.star"), pixel_size=2.0),
+    meta = native_sampling._estimate_native_sampling_accuracy(
+        native_sampling._initial_sampling_state(native_options.NativeInitialModelOptions(fn_img="particles.star"), pixel_size=2.0),
         state,
         particle_state,
         optics_state,
@@ -747,14 +747,14 @@ def test_particle_state_from_star_rejects_nonfinite_euler_angles(angle_name):
 
 
 def test_sampling_plan_oversamples_relion_grid():
-    opts = driver.NativeInitialModelOptions(
+    opts = native_options.NativeInitialModelOptions(
         fn_img="particles.star",
         healpix_order=1,
         oversampling=1,
         random_perturbation=0.0,
     )
 
-    plan = driver._build_sampling_plan(opts)
+    plan = native_sampling._build_sampling_plan(opts)
 
     assert plan.rotations.shape == (4608, 3, 3)
     assert plan.translations.shape == (116, 2)
@@ -768,7 +768,7 @@ def test_native_expectation_step_uses_rfloat_metadata_translations(monkeypatch):
     metadata_translation = np.float64(1.00000006)
 
     def fake_build_sampling_plan(opts, *, iteration):
-        return driver.NativeSamplingPlan(
+        return native_sampling.NativeSamplingPlan(
             rotations=np.zeros((1, 3, 3), dtype=np.float32),
             translations=np.asarray([[0.0, 0.0], [metadata_translation, 0.0]], dtype=np.float32),
             metadata_translations=np.asarray([[0.0, 0.0], [metadata_translation, 0.0]], dtype=np.float64),
@@ -798,7 +798,7 @@ def test_native_expectation_step_uses_rfloat_metadata_translations(monkeypatch):
 
     expectation_step = driver._native_expectation_step(
         SimpleNamespace(voxel_size=1.0, n_images=1),
-        driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=1),
+        native_options.NativeInitialModelOptions(fn_img="particles.star", nr_iter=1),
         np.ones(5, dtype=np.float32),
         particle_state,
     )
@@ -809,7 +809,7 @@ def test_native_expectation_step_uses_rfloat_metadata_translations(monkeypatch):
 
 
 def test_native_driver_rejects_unimplemented_direct_symmetry_before_io():
-    opts = driver.NativeInitialModelOptions(
+    opts = native_options.NativeInitialModelOptions(
         fn_img="missing.star",
         sym_name="C2",
         do_run_C1=False,
@@ -823,7 +823,7 @@ def test_native_driver_rejects_unimplemented_direct_symmetry_before_io():
 def test_native_driver_rejects_physical_order_chunks_that_cannot_hold_a_pool_before_io(
     chunk_size,
 ):
-    opts = driver.NativeInitialModelOptions(
+    opts = native_options.NativeInitialModelOptions(
         fn_img="missing.star",
         exact_local_physical_order_chunk_size=chunk_size,
     )
@@ -850,7 +850,7 @@ def test_native_driver_caches_dataset_immediately_after_loading(monkeypatch):
     monkeypatch.setattr(driver, "read_star", lambda path: (pd.DataFrame(index=[0]), None))
     monkeypatch.setattr(driver, "load_dataset", fake_load_dataset)
     monkeypatch.setattr(driver, "maybe_cache_raw_image_loaders", fake_cache)
-    opts = driver.NativeInitialModelOptions(
+    opts = native_options.NativeInitialModelOptions(
         fn_img="particles.star",
         lazy=True,
         datadir="particles",
@@ -881,7 +881,7 @@ def test_native_driver_rejects_tilt_series_before_eager_cache(monkeypatch):
     monkeypatch.setattr(driver, "maybe_cache_raw_image_loaders", fail_if_cached)
 
     with pytest.raises(NotImplementedError, match="not tilt-series"):
-        driver.run_native_initial_model(driver.NativeInitialModelOptions(fn_img="particles.star"))
+        driver.run_native_initial_model(native_options.NativeInitialModelOptions(fn_img="particles.star"))
 
 
 class _PersistentRawLoader:
@@ -963,7 +963,7 @@ def test_configure_relion_image_mask_forwards_image_backend():
         grid_size=128,
         voxel_size=2.125,
     )
-    opts = driver.NativeInitialModelOptions(
+    opts = native_options.NativeInitialModelOptions(
         fn_img="particles.star",
         particle_diameter=200.0,
         image_fourier_backend="relion_cuda",
@@ -980,7 +980,7 @@ def test_configure_relion_image_mask_forwards_image_backend():
 
 
 def test_initial_sampling_state_uses_relion_angstrom_internal_units():
-    opts = driver.NativeInitialModelOptions(
+    opts = native_options.NativeInitialModelOptions(
         fn_img="particles.star",
         healpix_order=1,
         oversampling=1,
@@ -989,8 +989,8 @@ def test_initial_sampling_state_uses_relion_angstrom_internal_units():
         random_perturbation=0.0,
     )
 
-    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
-    plan = driver._build_sampling_plan(opts, iteration=1, sampling_state=sampling_state)
+    sampling_state = native_sampling._initial_sampling_state(opts, pixel_size=2.125)
+    plan = native_sampling._build_sampling_plan(opts, iteration=1, sampling_state=sampling_state)
 
     assert sampling_state.offset_range_angstrom == pytest.approx(12.75)
     assert sampling_state.offset_step_angstrom == pytest.approx(4.25)
@@ -1004,13 +1004,13 @@ def test_initial_sampling_state_uses_relion_angstrom_internal_units():
 
 
 def test_sampling_plan_applies_relion_radius_tolerance_in_angstroms():
-    opts = driver.NativeInitialModelOptions(
+    opts = native_options.NativeInitialModelOptions(
         fn_img="particles.star",
         healpix_order=3,
         oversampling=1,
         random_perturbation=0.0,
     )
-    sampling_state = driver.NativeSamplingState(
+    sampling_state = native_sampling.NativeSamplingState(
         healpix_order=3,
         adaptive_oversampling=1,
         offset_range_angstrom=6.707714,
@@ -1020,7 +1020,7 @@ def test_sampling_plan_applies_relion_radius_tolerance_in_angstroms():
         pixel_size=4.25,
     )
 
-    plan = driver._build_sampling_plan(
+    plan = native_sampling._build_sampling_plan(
         opts,
         iteration=20,
         sampling_state=sampling_state,
@@ -1031,7 +1031,7 @@ def test_sampling_plan_applies_relion_radius_tolerance_in_angstroms():
 
 
 def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
-    opts = driver.NativeInitialModelOptions(
+    opts = native_options.NativeInitialModelOptions(
         fn_img="particles.star",
         nr_iter=200,
         healpix_order=1,
@@ -1039,32 +1039,32 @@ def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
         offset_range_px=6.0,
         offset_step_px=2.0,
     )
-    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
+    sampling_state = native_sampling._initial_sampling_state(opts, pixel_size=2.125)
     state = initialise_denovo_state(ori_size=256, pixel_size=2.125, K=1, nr_iter=200, n_directions=1)
     state.current_resolution = 1.0 / 108.8
 
-    assert driver._prepare_native_sampling_for_iteration(
+    assert native_sampling._prepare_native_sampling_for_iteration(
         sampling_state,
         state,
         iteration=9,
         do_grad=True,
     ) is False
     assert sampling_state.healpix_order == 1
-    assert sampling_state.orientational_prior_mode == driver.RELION_ORIENTATIONAL_PRIOR_NOPRIOR
+    assert sampling_state.orientational_prior_mode == native_sampling.RELION_ORIENTATIONAL_PRIOR_NOPRIOR
     assert sampling_state.uniform_local_orientation_prior is False
     assert sampling_state.offset_range_angstrom == pytest.approx(12.75)
     assert sampling_state.offset_step_angstrom == pytest.approx(4.25)
 
     sampling_state.nr_iter_wo_resol_gain = 1
     sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
-    assert driver._prepare_native_sampling_for_iteration(
+    assert native_sampling._prepare_native_sampling_for_iteration(
         sampling_state,
         state,
         iteration=10,
         do_grad=True,
     ) is True
     assert sampling_state.healpix_order == 2
-    assert sampling_state.orientational_prior_mode == driver.RELION_ORIENTATIONAL_PRIOR_NOPRIOR
+    assert sampling_state.orientational_prior_mode == native_sampling.RELION_ORIENTATIONAL_PRIOR_NOPRIOR
     assert sampling_state.offset_range_angstrom == pytest.approx(8.2875)
     assert sampling_state.offset_step_angstrom == pytest.approx(3.0)
     assert sampling_state.effective_offset_step_angstrom == pytest.approx(1.5)
@@ -1072,21 +1072,21 @@ def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
     sampling_state.current_changes_optimal_offsets_angstrom = 2.614243
     sampling_state.nr_iter_wo_resol_gain = 1
     sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
-    assert driver._prepare_native_sampling_for_iteration(
+    assert native_sampling._prepare_native_sampling_for_iteration(
         sampling_state,
         state,
         iteration=20,
         do_grad=True,
     ) is True
     assert sampling_state.healpix_order == 3
-    assert sampling_state.orientational_prior_mode == driver.RELION_ORIENTATIONAL_PRIOR_NOPRIOR
+    assert sampling_state.orientational_prior_mode == native_sampling.RELION_ORIENTATIONAL_PRIOR_NOPRIOR
     assert sampling_state.offset_range_angstrom == pytest.approx(10.77375)
     assert sampling_state.offset_step_angstrom == pytest.approx(3.0)
 
     sampling_state.current_changes_optimal_offsets_angstrom = 2.0
     sampling_state.nr_iter_wo_resol_gain = 1
     sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
-    assert driver._prepare_native_sampling_for_iteration(
+    assert native_sampling._prepare_native_sampling_for_iteration(
         sampling_state,
         state,
         iteration=30,
@@ -1095,7 +1095,7 @@ def test_native_sampling_updates_like_relion_gradient_initialmodel_default():
     assert sampling_state.healpix_order == 3
     assert sampling_state.offset_range_angstrom == pytest.approx(10.0)
     assert sampling_state.offset_step_angstrom == pytest.approx(3.0)
-    assert sampling_state.orientational_prior_mode == driver.RELION_ORIENTATIONAL_PRIOR_ROTTILT_PSI
+    assert sampling_state.orientational_prior_mode == native_sampling.RELION_ORIENTATIONAL_PRIOR_ROTTILT_PSI
     assert sampling_state.uniform_local_orientation_prior is True
 
 
@@ -1104,7 +1104,7 @@ def test_native_sampling_refreshes_gf46_translation_grid_without_stable_assignme
     # GF46's completed iteration 59 has resolution-stall=2 but assignment-
     # stall=0. RELION's gradient_refine initialization sets auto_ignore_angles
     # permanently, including the later EM phase, so iteration 60 still updates.
-    sampling_state = driver.NativeSamplingState(
+    sampling_state = native_sampling.NativeSamplingState(
         healpix_order=3,
         adaptive_oversampling=1,
         offset_range_angstrom=5.4232808710042635,
@@ -1120,7 +1120,7 @@ def test_native_sampling_refreshes_gf46_translation_grid_without_stable_assignme
     )
     state = initialise_denovo_state(ori_size=8, pixel_size=4.25, K=1, nr_iter=200, n_directions=1)
 
-    assert driver._prepare_native_sampling_for_iteration(sampling_state, state, iteration=60, do_grad=do_grad) is True
+    assert native_sampling._prepare_native_sampling_for_iteration(sampling_state, state, iteration=60, do_grad=do_grad) is True
     assert sampling_state.healpix_order == expected_order
     assert sampling_state.offset_step_angstrom == 0.75 * 0.8075 * 2
     assert sampling_state.offset_range_angstrom == 5 * 0.7050266
@@ -1131,8 +1131,8 @@ def test_native_sampling_refreshes_gf46_translation_grid_without_stable_assignme
 
 
 def test_native_sampling_still_waits_for_resolution_stall():
-    opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200)
-    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
+    opts = native_options.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200)
+    sampling_state = native_sampling._initial_sampling_state(opts, pixel_size=2.125)
     state = initialise_denovo_state(
         ori_size=128,
         pixel_size=2.125,
@@ -1142,7 +1142,7 @@ def test_native_sampling_still_waits_for_resolution_stall():
     )
     sampling_state.nr_iter_wo_resol_gain = 0
 
-    assert driver._prepare_native_sampling_for_iteration(
+    assert native_sampling._prepare_native_sampling_for_iteration(
         sampling_state,
         state,
         iteration=10,
@@ -1152,7 +1152,7 @@ def test_native_sampling_still_waits_for_resolution_stall():
     assert sampling_state.healpix_order == 1
 
     sampling_state.nr_iter_wo_resol_gain = 1
-    assert driver._prepare_native_sampling_for_iteration(
+    assert native_sampling._prepare_native_sampling_for_iteration(
         sampling_state,
         state,
         iteration=20,
@@ -1164,8 +1164,8 @@ def test_native_sampling_still_waits_for_resolution_stall():
 
 
 def test_native_sampling_uses_previous_completed_resolution_counter():
-    opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200)
-    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
+    opts = native_options.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200)
+    sampling_state = native_sampling._initial_sampling_state(opts, pixel_size=2.125)
     state = initialise_denovo_state(
         ori_size=128,
         pixel_size=2.125,
@@ -1181,7 +1181,7 @@ def test_native_sampling_uses_previous_completed_resolution_counter():
     # therefore stays at HEALPix 2 even though its completed M-step will be the
     # first no-gain observation.
     sampling_state.healpix_order = 2
-    assert driver._prepare_native_sampling_for_iteration(
+    assert native_sampling._prepare_native_sampling_for_iteration(
         sampling_state,
         state,
         iteration=40,
@@ -1191,7 +1191,7 @@ def test_native_sampling_uses_previous_completed_resolution_counter():
 
     state.current_resolution = 0.045956
     meta = {}
-    driver._record_native_sampling_post_iteration(
+    native_sampling._record_native_sampling_post_iteration(
         sampling_state,
         state,
         iteration=40,
@@ -1205,7 +1205,7 @@ def test_native_sampling_uses_previous_completed_resolution_counter():
     sampling_state.nr_iter_wo_resol_gain = 2
     sampling_state.nr_iter_wo_large_hidden_variable_changes = 9
     sampling_state.acc_rot = 0.768
-    assert driver._prepare_native_sampling_for_iteration(
+    assert native_sampling._prepare_native_sampling_for_iteration(
         sampling_state,
         state,
         iteration=50,
@@ -1215,8 +1215,8 @@ def test_native_sampling_uses_previous_completed_resolution_counter():
 
 
 def test_native_sampling_burnin_resets_before_decision_then_records_checkpoint():
-    opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200)
-    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
+    opts = native_options.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200)
+    sampling_state = native_sampling._initial_sampling_state(opts, pixel_size=2.125)
     state = initialise_denovo_state(
         ori_size=128,
         pixel_size=2.125,
@@ -1228,7 +1228,7 @@ def test_native_sampling_burnin_resets_before_decision_then_records_checkpoint()
     sampling_state.nr_iter_wo_resol_gain = 4
     sampling_state.nr_iter_wo_large_hidden_variable_changes = 3
 
-    assert driver._prepare_native_sampling_for_iteration(
+    assert native_sampling._prepare_native_sampling_for_iteration(
         sampling_state,
         state,
         iteration=9,
@@ -1237,7 +1237,7 @@ def test_native_sampling_burnin_resets_before_decision_then_records_checkpoint()
     assert sampling_state.nr_iter_wo_resol_gain == 0
     assert sampling_state.nr_iter_wo_large_hidden_variable_changes == 0
 
-    driver._record_native_sampling_post_iteration(
+    native_sampling._record_native_sampling_post_iteration(
         sampling_state,
         state,
         iteration=9,
@@ -1247,7 +1247,7 @@ def test_native_sampling_burnin_resets_before_decision_then_records_checkpoint()
 
 
 def test_native_sampling_change_monitor_reuses_relion_em_predicate():
-    sampling_state = driver.NativeSamplingState(
+    sampling_state = native_sampling.NativeSamplingState(
         healpix_order=1,
         adaptive_oversampling=1,
         offset_range_angstrom=12.75,
@@ -1265,7 +1265,7 @@ def test_native_sampling_change_monitor_reuses_relion_em_predicate():
     # those minima.  Consequently the first complete observation seeds the
     # trackers and the second identical observation increments the counter.
     for expected_counter in (0, 1):
-        driver._record_native_sampling_assignment_changes(
+        native_sampling._record_native_sampling_assignment_changes(
             sampling_state,
             particle_ids=particle_ids,
             previous_translations=translations,
@@ -1289,7 +1289,7 @@ def test_native_sampling_change_monitor_reuses_relion_em_predicate():
 
 
 def test_native_sampling_change_monitor_records_relion_orientation_distance():
-    sampling_state = driver.NativeSamplingState(
+    sampling_state = native_sampling.NativeSamplingState(
         healpix_order=1,
         adaptive_oversampling=1,
         offset_range_angstrom=12.0,
@@ -1313,7 +1313,7 @@ def test_native_sampling_change_monitor_records_relion_orientation_distance():
     previous_translations = np.zeros((2, 2), dtype=np.float64)
     current_translations = np.asarray([[0.0, 0.0], [1.0, 0.0]])
 
-    driver._record_native_sampling_assignment_changes(
+    native_sampling._record_native_sampling_assignment_changes(
         sampling_state,
         particle_ids=np.asarray([0, 1]),
         previous_translations=previous_translations,
@@ -1336,7 +1336,7 @@ def test_native_sampling_change_monitor_records_relion_orientation_distance():
 def test_uniform_local_orientation_prior_replaces_learned_direction_prior():
     state = initialise_denovo_state(ori_size=8, pixel_size=2.0, K=1, nr_iter=200, n_directions=12)
     state.pdf_direction = np.linspace(1.0, 12.0, 12, dtype=np.float64)[None, :]
-    sampling_state = driver.NativeSamplingState(
+    sampling_state = native_sampling.NativeSamplingState(
         healpix_order=0,
         adaptive_oversampling=1,
         offset_range_angstrom=12.0,
@@ -1344,7 +1344,7 @@ def test_uniform_local_orientation_prior_replaces_learned_direction_prior():
         offset_range_ori_angstrom=12.0,
         offset_step_ori_angstrom=4.0,
         pixel_size=2.0,
-        orientational_prior_mode=driver.RELION_ORIENTATIONAL_PRIOR_ROTTILT_PSI,
+        orientational_prior_mode=native_sampling.RELION_ORIENTATIONAL_PRIOR_ROTTILT_PSI,
         uniform_local_orientation_prior=True,
     )
 
@@ -1357,7 +1357,7 @@ def test_uniform_local_orientation_prior_replaces_learned_direction_prior():
 def test_noprior_sampling_uses_learned_direction_prior(monkeypatch):
     expected = np.asarray([[0.0, 1.0]], dtype=np.float32)
     state = initialise_denovo_state(ori_size=8, pixel_size=2.0, K=1, nr_iter=200, n_directions=12)
-    sampling_state = driver.NativeSamplingState(
+    sampling_state = native_sampling.NativeSamplingState(
         healpix_order=0,
         adaptive_oversampling=1,
         offset_range_angstrom=12.0,
@@ -1418,32 +1418,32 @@ def test_native_initialmodel_do_grad_honors_terminal_em_iterations():
 
 
 def test_random_perturbation_override_is_fixed():
-    opts = driver.NativeInitialModelOptions(
+    opts = native_options.NativeInitialModelOptions(
         fn_img="particles.star",
         random_perturbation=-0.125,
     )
 
-    assert driver._random_perturbation_for_iteration(opts, 1) == -0.125
-    assert driver._random_perturbation_for_iteration(opts, 7) == -0.125
+    assert native_sampling._random_perturbation_for_iteration(opts, 1) == -0.125
+    assert native_sampling._random_perturbation_for_iteration(opts, 7) == -0.125
 
 
 def test_random_perturbation_sequence_matches_relion_initialmodel_fixture():
-    opts = driver.NativeInitialModelOptions(
+    opts = native_options.NativeInitialModelOptions(
         fn_img="particles.star",
         random_seed=1776701668,
         perturbation_factor=0.5,
     )
 
-    assert driver._random_perturbation_for_iteration(opts, 1) == pytest.approx(-0.25278, abs=5e-6)
-    assert driver._random_perturbation_for_iteration(opts, 2) == pytest.approx(0.125066, abs=5e-6)
+    assert native_sampling._random_perturbation_for_iteration(opts, 1) == pytest.approx(-0.25278, abs=5e-6)
+    assert native_sampling._random_perturbation_for_iteration(opts, 2) == pytest.approx(0.125066, abs=5e-6)
 
-    seed_zero = driver.NativeInitialModelOptions(
+    seed_zero = native_options.NativeInitialModelOptions(
         fn_img="particles.star",
         random_seed=0,
         perturbation_factor=0.5,
     )
-    assert driver._random_perturbation_for_iteration(seed_zero, 1) == -0.07990610599517822
-    assert driver._random_perturbation_for_iteration(seed_zero, 2) == 0.34533798694610596
+    assert native_sampling._random_perturbation_for_iteration(seed_zero, 1) == -0.07990610599517822
+    assert native_sampling._random_perturbation_for_iteration(seed_zero, 2) == 0.34533798694610596
 
 
 def test_initial_state_applies_relion_bootstrap_postprocess(monkeypatch, capsys):
@@ -1495,7 +1495,7 @@ def test_initial_state_applies_relion_bootstrap_postprocess(monkeypatch, capsys)
         }
     )
     dataset = SimpleNamespace(grid_size=8, voxel_size=2.0, n_images=2)
-    opts = driver.NativeInitialModelOptions(
+    opts = native_options.NativeInitialModelOptions(
         fn_img="particles.star",
         nr_classes=1,
         nr_iter=1,
@@ -1549,7 +1549,7 @@ def test_native_expectation_step_rebuilds_sampling_per_iteration(monkeypatch):
 
     def fake_build_sampling_plan(opts, *, iteration):
         calls.append(iteration)
-        return driver.NativeSamplingPlan(
+        return native_sampling.NativeSamplingPlan(
             rotations=np.zeros((iteration, 3, 3), dtype=np.float32),
             translations=np.zeros((iteration + 1, 2), dtype=np.float32),
             random_perturbation=0.125,
@@ -1573,7 +1573,7 @@ def test_native_expectation_step_rebuilds_sampling_per_iteration(monkeypatch):
 
     expectation_step = driver._native_expectation_step(
         dataset,
-        driver.NativeInitialModelOptions(fn_img="particles.star"),
+        native_options.NativeInitialModelOptions(fn_img="particles.star"),
         np.ones(33, dtype=np.float32),
         np.asarray([[1.0, -1.0], [0.0, 2.0]], dtype=np.float32),
     )
@@ -1590,7 +1590,7 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
     calls = []
 
     def fake_build_sampling_plan(opts, *, iteration):
-        return driver.NativeSamplingPlan(
+        return native_sampling.NativeSamplingPlan(
             rotations=np.zeros((1, 3, 3), dtype=np.float32),
             translations=np.asarray([[0.0, 0.0], [2.0, -1.0], [4.0, 0.0]], dtype=np.float32),
             random_perturbation=0.0,
@@ -1624,7 +1624,7 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
     )
     expectation_step = driver._native_expectation_step(
         dataset,
-        driver.NativeInitialModelOptions(fn_img="particles.star", translation_sigma_angstrom=2.0),
+        native_options.NativeInitialModelOptions(fn_img="particles.star", translation_sigma_angstrom=2.0),
         np.ones(33, dtype=np.float32),
         particle_state,
     )
@@ -1737,7 +1737,7 @@ def test_best_eulers_from_particle_state_prefers_stored_rotation_matrices():
         best_pose_rotation_ids=np.asarray([5, 7], dtype=np.int32),
     )
 
-    eulers = driver._best_eulers_from_particle_state(
+    eulers = native_sampling._best_eulers_from_particle_state(
         particle_state,
         np.asarray([0, 1], dtype=np.int64),
         rotation_grid_order=1,
@@ -1758,7 +1758,7 @@ def test_native_expectation_step_uses_autosampling_state_at_iteration_ten(monkey
     def fake_build_sampling_plan(opts, *, iteration, sampling_state=None):
         assert sampling_state is not None
         build_calls.append((iteration, sampling_state.healpix_order, sampling_state.offset_range_angstrom))
-        return driver.NativeSamplingPlan(
+        return native_sampling.NativeSamplingPlan(
             rotations=np.zeros((2, 3, 3), dtype=np.float32),
             translations=np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32),
             random_perturbation=0.0,
@@ -1785,8 +1785,8 @@ def test_native_expectation_step_uses_autosampling_state_at_iteration_ten(monkey
     monkeypatch.setattr(driver, "_build_sampling_plan", fake_build_sampling_plan)
     monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
 
-    opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200)
-    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
+    opts = native_options.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200)
+    sampling_state = native_sampling._initial_sampling_state(opts, pixel_size=2.125)
     particle_state = star_io.NativeParticleState(
         translation_offsets=np.zeros((1, 2), dtype=np.float32),
         class_assignments=np.zeros(1, dtype=np.int32),
@@ -1859,7 +1859,7 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
     def fake_build_sampling_plan(opts, *, iteration, sampling_state=None):
         assert sampling_state is not None
         build_calls.append((iteration, sampling_state.healpix_order, sampling_state.offset_range_angstrom))
-        return driver.NativeSamplingPlan(
+        return native_sampling.NativeSamplingPlan(
             rotations=np.zeros((2, 3, 3), dtype=np.float32),
             translations=np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32),
             random_perturbation=0.0,
@@ -1895,8 +1895,8 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
     monkeypatch.setattr(driver, "_build_sampling_plan", fake_build_sampling_plan)
     monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
 
-    opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200, random_seed=17, padding_factor=2, projector_setup_backend=backend)
-    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.125)
+    opts = native_options.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200, random_seed=17, padding_factor=2, projector_setup_backend=backend)
+    sampling_state = native_sampling._initial_sampling_state(opts, pixel_size=2.125)
     sampling_state.current_changes_optimal_offsets_angstrom = 10.366644 / 5.0
     particle_state = star_io.NativeParticleState(
         translation_offsets=np.zeros((2, 2), dtype=np.float32),
@@ -1911,7 +1911,7 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
     sampling_state.nr_iter_wo_resol_gain = 1
     sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
 
-    optics_state = driver.NativeOpticsState(
+    optics_state = native_sampling.NativeOpticsState(
         voltage=300.0,
         Cs=2.7,
         Q0=0.07,
@@ -1962,15 +1962,15 @@ def test_expected_accuracy_skip_diagnostic_is_explicit_and_strict(monkeypatch):
 
 
 def test_expected_accuracy_subprocess_diagnostic_is_explicit_and_strict(monkeypatch):
-    monkeypatch.delenv(driver.INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV, raising=False)
-    assert driver._isolate_native_sampling_accuracy_diagnostic() is False
+    monkeypatch.delenv(native_sampling.INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV, raising=False)
+    assert native_sampling._isolate_native_sampling_accuracy_diagnostic() is False
 
-    monkeypatch.setenv(driver.INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV, "1")
-    assert driver._isolate_native_sampling_accuracy_diagnostic() is True
+    monkeypatch.setenv(native_sampling.INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV, "1")
+    assert native_sampling._isolate_native_sampling_accuracy_diagnostic() is True
 
-    monkeypatch.setenv(driver.INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV, "yes")
+    monkeypatch.setenv(native_sampling.INITIAL_MODEL_ISOLATE_EXPECTED_ACCURACY_ENV, "yes")
     with pytest.raises(ValueError, match="must be 0 or 1"):
-        driver._isolate_native_sampling_accuracy_diagnostic()
+        native_sampling._isolate_native_sampling_accuracy_diagnostic()
 
 
 def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatch, tmp_path):
@@ -2017,7 +2017,7 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
         max_posterior=np.ones(2, dtype=np.float32),
         best_pose_rotations=best_rotations,
     )
-    optics_state = driver.NativeOpticsState(
+    optics_state = native_sampling.NativeOpticsState(
         voltage=300.0,
         Cs=2.7,
         Q0=0.07,
@@ -2030,9 +2030,9 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
 
     monkeypatch.setenv("RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_DIR", str(tmp_path))
     monkeypatch.setenv("RECOVAR_INITIALMODEL_EXPECTED_ACCURACY_DUMP_ITERATIONS", "80,90")
-    meta = driver._estimate_native_sampling_accuracy(
-        driver._initial_sampling_state(
-            driver.NativeInitialModelOptions(fn_img="particles.star"),
+    meta = native_sampling._estimate_native_sampling_accuracy(
+        native_sampling._initial_sampling_state(
+            native_options.NativeInitialModelOptions(fn_img="particles.star"),
             pixel_size=2.125,
         ),
         state,
@@ -2067,7 +2067,7 @@ def test_native_expectation_step_records_sampling_changes_each_gradient_iteratio
 
     def fake_build_sampling_plan(opts, *, iteration, sampling_state=None):
         build_calls.append(iteration)
-        return driver.NativeSamplingPlan(
+        return native_sampling.NativeSamplingPlan(
             rotations=np.zeros((2, 3, 3), dtype=np.float32),
             translations=np.asarray([[0.0, 0.0], [2.0, 0.0]], dtype=np.float32),
             random_perturbation=0.0,
@@ -2093,8 +2093,8 @@ def test_native_expectation_step_records_sampling_changes_each_gradient_iteratio
     monkeypatch.setattr(driver, "_build_sampling_plan", fake_build_sampling_plan)
     monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
 
-    opts = driver.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200, oversampling=0)
-    sampling_state = driver._initial_sampling_state(opts, pixel_size=2.0)
+    opts = native_options.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200, oversampling=0)
+    sampling_state = native_sampling._initial_sampling_state(opts, pixel_size=2.0)
     particle_state = star_io.NativeParticleState(
         translation_offsets=np.zeros((2, 2), dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
@@ -2137,7 +2137,7 @@ def test_native_expectation_step_expands_class_rotation_prior_for_dense_fallback
     monkeypatch.setenv("RECOVAR_DISABLE_SPARSE_PASS2", "1")
 
     def fake_build_sampling_plan(opts, *, iteration, sampling_state=None):
-        return driver.NativeSamplingPlan(
+        return native_sampling.NativeSamplingPlan(
             rotations=np.zeros((4, 3, 3), dtype=np.float32),
             translations=np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32),
             random_perturbation=0.0,
@@ -2177,7 +2177,7 @@ def test_native_expectation_step_expands_class_rotation_prior_for_dense_fallback
     monkeypatch.setattr(driver, "_expand_class_rotation_log_prior_for_dense_fine_grid", fake_expand)
     monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
 
-    opts = driver.NativeInitialModelOptions(fn_img="particles.star", oversampling=1)
+    opts = native_options.NativeInitialModelOptions(fn_img="particles.star", oversampling=1)
     particle_state = star_io.NativeParticleState(
         translation_offsets=np.zeros((2, 2), dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
@@ -2219,7 +2219,7 @@ def test_expand_class_rotation_prior_for_dense_fine_grid_uses_parent_map(monkeyp
         fake_oversampled,
     )
 
-    plan = driver.NativeSamplingPlan(
+    plan = native_sampling.NativeSamplingPlan(
         rotations=np.zeros((6, 3, 3), dtype=np.float32),
         translations=np.zeros((1, 2), dtype=np.float32),
         random_perturbation=0.125,
@@ -2234,12 +2234,12 @@ def test_expand_class_rotation_prior_for_dense_fine_grid_uses_parent_map(monkeyp
 
 def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
     dataset = SimpleNamespace(voxel_size=2.0, n_images=1, image_shape=(8, 8))
-    opts = driver.NativeInitialModelOptions(
+    opts = native_options.NativeInitialModelOptions(
         fn_img="particles.star",
         oversampling=1,
         translation_sigma_angstrom=4.0,
     )
-    plan = driver.NativeSamplingPlan(
+    plan = native_sampling.NativeSamplingPlan(
         rotations=np.zeros((1, 3, 3), dtype=np.float32),
         translations=np.asarray([[0.5, 0.0], [1.5, 0.0]], dtype=np.float32),
         random_perturbation=0.0,
@@ -2264,7 +2264,7 @@ def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
 
 def test_dense_estep_config_propagates_public_pass2_engine():
     dataset = SimpleNamespace(voxel_size=2.0, n_images=1, image_shape=(8, 8))
-    opts = driver.NativeInitialModelOptions(
+    opts = native_options.NativeInitialModelOptions(
         fn_img="particles.star",
         pass2_engine="compact",
         relion_wavg_sequential_cuda=False,
@@ -2272,7 +2272,7 @@ def test_dense_estep_config_propagates_public_pass2_engine():
         exact_local_physical_order_chunk_size=220,
         stable_fourier_window_shapes=True,
     )
-    plan = driver.NativeSamplingPlan(
+    plan = native_sampling.NativeSamplingPlan(
         rotations=np.zeros((1, 3, 3), dtype=np.float32),
         translations=np.asarray([[0.0, 0.0]], dtype=np.float32),
         random_perturbation=0.0,
@@ -2295,8 +2295,8 @@ def test_dense_estep_config_propagates_public_pass2_engine():
 
 def test_dense_estep_config_keeps_zero_oversampling_on_exact_adaptive_route():
     dataset = SimpleNamespace(voxel_size=2.0, n_images=1, image_shape=(8, 8))
-    opts = driver.NativeInitialModelOptions(fn_img="particles.star", oversampling=0)
-    plan = driver.NativeSamplingPlan(
+    opts = native_options.NativeInitialModelOptions(fn_img="particles.star", oversampling=0)
+    plan = native_sampling.NativeSamplingPlan(
         rotations=np.zeros((72, 3, 3), dtype=np.float32),
         translations=np.asarray([[0.0, 0.0], [2.0, 0.0]], dtype=np.float32),
         random_perturbation=0.0,

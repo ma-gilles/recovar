@@ -2897,7 +2897,7 @@ def _run_transition_arm(
 
     def capture_artifact(_current, _iteration, meta):
         captured["post_iteration_meta"] = copy.deepcopy(meta)
-        driver._record_native_sampling_post_iteration(
+        native_sampling._record_native_sampling_post_iteration(
             sampling_state,
             _current,
             iteration=int(_iteration),
@@ -3029,7 +3029,7 @@ def _run_transition_arm(
             tau2_fudge_arg=float(opts.tau2_fudge),
             grad_em_iters=int(opts.grad_em_iters),
             random_seed=int(opts.random_seed),
-            rnd_unif_factory=driver._relion_rnd_unif_factory,
+            rnd_unif_factory=native_sampling._relion_rnd_unif_factory,
             expectation_step=capture_expectation,
             iter_artifact_sink=capture_artifact,
             post_mstep_update=post_mstep_update,
