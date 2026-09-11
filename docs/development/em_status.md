@@ -71,6 +71,7 @@ case counts, provenance and limits.
 | see receipt | the dense iteration loop's frozen scoring-state snapshot (ten-keyword `_frozen_scoring_state_arrays` call taken before the loop and before the first physical scoring) has one late-binding closure owner; AST keywords identical | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/frozen_scoring_state_closure_owner_20260911/result.json) |
 | see receipt | `local_debug._parse_dump_request` owns the environment parsing (directory, target particles, optional current sizes and iterations, directory creation) that the score, fused-posterior and noise-component dump parsers repeated verbatim | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/local_debug_dump_request_owner_20260911/result.json) |
 | see receipt | `relion_projector_capture._captured_rank_prefixes` owns the captured rank-local projector-state discovery (one device per rank, none is an error) that both capture loaders repeated | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/projector_capture_rank_prefixes_owner_20260911/result.json) |
+| see receipt | `local_layout._flat_parts` owns the concatenate-or-typed-empty of per-image layout parts (with the rotation ids' int64 recast) that seventeen sites across the layout builders wrote out | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/local_layout_flat_parts_owner_20260911/result.json) |
 | `3a3adc0f8` | `sparse_pass2_bucketed._gaussian_algebraic_score_terms` owns the batched algebraic Gaussian score terms (weighted cross einsum, projection norm, prior-free and prior-added scores) shared by the production algebraic scorer and its components variant; traced programs identical | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/gaussian_algebraic_terms_owner_20260911/result.json) |
 | `a0b0a8141` | `pass2_diagnostics._optional_operand_row_fields` owns the ten optional RELION operand captures of the K=1 pass-2 dump (absent operands recorded as empty arrays or NaN); the selected-rows and effective-grid schemas shared two 57-line blocks | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pass2_dump_operand_fields_owner_20260911/result.json) |
 | `4e025b481` | the dense engine binds its per-batch score-block keywords once (`score_block_kwargs`) after the last scoring-operand rebinding and passes them to both the pass-1 and pass-2 `_score_rotation_block` calls, which keep only their block projections | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_engine_score_block_kwargs_20260911/result.json) |
@@ -376,14 +377,17 @@ and the VDAM-handoff GPU validation pair on the published source (K4 20-iteratio
 cold 533 s / warm 143 s; K1 10k/256 preread 827 s / warm cache 627 s with the VDAM candidate
 environment, at parity with the carried table) are recorded above. Between results,
 continue one bounded structural package at a time from the cleanup plan.
-Remaining candidates after the September 10–11 packages (J through UU; the big-JIT
-core layout and the sparse pass-2 tuple reader landed as TT and UU): the 35-line bucket-pipeline blocks repeated inside
-`sparse_pass2_bucketed` and the 33-line blocks inside `local_big_jit` (hot paths,
-exact comparison would need GPU-shaped fixtures; the dump-writer operand fields,
-the `_score_rotation_block` keyword sets and the K-class per-class lists landed as
-QQ, PP and VV); and the K=1/K-class route asymmetries recorded in the
-adaptive-engine-call receipt (coarse translation phases, significance skipping and
-the diagnostic float64 pass 2 are K=1-only). Two findings from the duplicate scan are deliberately not packages. The long
+Remaining candidates after the September 10–11 packages (J through NNN): the
+duplicate-block scan of the EM modules is nearly exhausted — what remains is at
+most thirteen lines (the global-winner subset-pass loops, the `local_score_pass`
+fused-wrapper argument lists, the K=1/K-class adaptive-route preparation in
+`half_scoring`) or numerical rather than structural (the K=1/K-class route
+asymmetries recorded in the adaptive-engine-call receipt: coarse translation phases,
+significance skipping and the diagnostic float64 pass 2 are K=1-only). The larger
+structural debt is size, not duplication: `initial_model` is 9146 lines against its
+6100-line budget (`dense_adapter.py` 2196/1500, `driver.py` 3104/2400, `m_step.py`
+758/450; `test_refactor_invariants` fails on these today), so splitting `driver.py`
+and `dense_adapter.py` into owners is the natural next phase. Two findings from the duplicate scan are deliberately not packages. The long
 positional parameter lists shared by the big-JIT kernels in `local_big_jit` are a
 JIT boundary, not duplicated logic; collapsing them into containers would change
 the static/dynamic argument structure of the hottest kernels and is out of scope

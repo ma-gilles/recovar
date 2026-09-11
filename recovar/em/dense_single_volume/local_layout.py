@@ -856,12 +856,8 @@ def _build_factorized_local_entries(
             rotation_ids_parts.append(local_ids)
             log_prior_parts.append(local_log_prior)
 
-    rotation_ids_flat = (
-        np.concatenate(rotation_ids_parts, axis=0).astype(np.int64, copy=False) if rotation_ids_parts else np.zeros(0, dtype=np.int64)
-    )
-    rotation_log_priors_flat = (
-        np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=dtype)
-    )
+    rotation_ids_flat = _flat_parts(rotation_ids_parts, empty_shape=0, dtype=np.int64, cast=np.int64)
+    rotation_log_priors_flat = _flat_parts(log_prior_parts, empty_shape=0, dtype=dtype)
     return offsets, counts, rotation_ids_flat, rotation_log_priors_flat
 
 
@@ -960,15 +956,9 @@ def _build_parent_expanded_local_entries(
         if child_mstep_rotations is not None:
             mstep_rotations_parts.append(np.asarray(child_mstep_rotations, dtype=dtype))
 
-    rotation_ids_flat = (
-        np.concatenate(rotation_ids_parts, axis=0).astype(np.int64, copy=False) if rotation_ids_parts else np.zeros(0, dtype=np.int64)
-    )
-    rotation_log_priors_flat = (
-        np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=dtype)
-    )
-    rotations_flat = (
-        np.concatenate(rotations_parts, axis=0) if rotations_parts else np.zeros((0, 3, 3), dtype=dtype)
-    )
+    rotation_ids_flat = _flat_parts(rotation_ids_parts, empty_shape=0, dtype=np.int64, cast=np.int64)
+    rotation_log_priors_flat = _flat_parts(log_prior_parts, empty_shape=0, dtype=dtype)
+    rotations_flat = _flat_parts(rotations_parts, empty_shape=(0, 3, 3), dtype=dtype)
     mstep_rotations_flat = (
         np.concatenate(mstep_rotations_parts, axis=0)
         if mstep_rotations_parts
@@ -1096,6 +1086,18 @@ def _selected_mstep_rotation_matrices(
     return np.asarray(mstep_rotations, dtype=dtype)[inverse]
 
 
+def _flat_parts(parts, *, empty_shape, dtype, cast=None):
+    """Concatenate per-image layout parts along axis 0, or the typed empty array when no image contributed.
+
+    ``cast`` recasts the concatenation (the rotation ids are carried as int64).
+    """
+
+    if not parts:
+        return np.zeros(empty_shape, dtype=dtype)
+    flat = np.concatenate(parts, axis=0)
+    return flat if cast is None else flat.astype(cast, copy=False)
+
+
 def build_local_hypothesis_layout(
     prior_rotations: np.ndarray,
     rotation_grid_rotations: np.ndarray | None,
@@ -1206,12 +1208,8 @@ def build_local_hypothesis_layout(
             rotation_ids_parts.append(local_ids)
             log_prior_parts.append(local_log_prior)
 
-        rotation_ids_flat = (
-            np.concatenate(rotation_ids_parts, axis=0).astype(np.int64, copy=False) if rotation_ids_parts else np.zeros(0, dtype=np.int64)
-        )
-        rotation_log_priors_flat = (
-            np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=dtype)
-        )
+        rotation_ids_flat = _flat_parts(rotation_ids_parts, empty_shape=0, dtype=np.int64, cast=np.int64)
+        rotation_log_priors_flat = _flat_parts(log_prior_parts, empty_shape=0, dtype=dtype)
     if rotation_log_prior_np is not None and int(local_parent_oversampling_order) <= 0:
         if rotation_log_prior_np.shape[0] != int(grid_metadata["n_pixels"]) * int(grid_metadata["n_psi"]):
             raise ValueError(
@@ -1460,23 +1458,11 @@ def build_local_adaptive_pass2_hypothesis_layout(
         sample_mask_parts.append(sample_mask)
 
     fine_metadata = build_local_search_grid_metadata(fine_healpix_order)
-    rotations_flat = (
-        np.concatenate(rotations_parts, axis=0) if rotations_parts else np.zeros((0, 3, 3), dtype=dtype)
-    )
-    mstep_rotations_flat = (
-        np.concatenate(mstep_rotations_parts, axis=0)
-        if mstep_rotations_parts
-        else np.zeros((0, 3, 3), dtype=dtype)
-    )
-    rotation_ids_flat = (
-        np.concatenate(rotation_ids_parts, axis=0).astype(np.int64, copy=False) if rotation_ids_parts else np.zeros(0, dtype=np.int64)
-    )
-    posterior_ids_flat = (
-        np.concatenate(posterior_ids_parts, axis=0) if posterior_ids_parts else np.zeros(0, dtype=np.int32)
-    )
-    rotation_log_priors_flat = (
-        np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=dtype)
-    )
+    rotations_flat = _flat_parts(rotations_parts, empty_shape=(0, 3, 3), dtype=dtype)
+    mstep_rotations_flat = _flat_parts(mstep_rotations_parts, empty_shape=(0, 3, 3), dtype=dtype)
+    rotation_ids_flat = _flat_parts(rotation_ids_parts, empty_shape=0, dtype=np.int64, cast=np.int64)
+    posterior_ids_flat = _flat_parts(posterior_ids_parts, empty_shape=0, dtype=np.int32)
+    rotation_log_priors_flat = _flat_parts(log_prior_parts, empty_shape=0, dtype=dtype)
     if not sample_mask_parts:
         sample_mask_flat = np.zeros((0, n_fine_trans), dtype=bool)
     elif all(sample_mask is None for sample_mask in sample_mask_parts):
@@ -1772,23 +1758,11 @@ def build_pass2_hypothesis_layout(
         log_prior_parts.append(local_rotation_log_prior)
         sample_mask_parts.append(sample_mask)
 
-    rotations_flat = (
-        np.concatenate(rotations_parts, axis=0) if rotations_parts else np.zeros((0, 3, 3), dtype=dtype)
-    )
-    rotation_ids_flat = (
-        np.concatenate(rotation_ids_parts, axis=0).astype(np.int64, copy=False) if rotation_ids_parts else np.zeros(0, dtype=np.int64)
-    )
-    posterior_ids_flat = (
-        np.concatenate(posterior_ids_parts, axis=0) if posterior_ids_parts else np.zeros(0, dtype=np.int32)
-    )
-    rotation_log_priors_flat = (
-        np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=dtype)
-    )
-    sample_mask_flat = (
-        np.concatenate(sample_mask_parts, axis=0)
-        if sample_mask_parts
-        else np.zeros((0, n_fine_translations), dtype=bool)
-    )
+    rotations_flat = _flat_parts(rotations_parts, empty_shape=(0, 3, 3), dtype=dtype)
+    rotation_ids_flat = _flat_parts(rotation_ids_parts, empty_shape=0, dtype=np.int64, cast=np.int64)
+    posterior_ids_flat = _flat_parts(posterior_ids_parts, empty_shape=0, dtype=np.int32)
+    rotation_log_priors_flat = _flat_parts(log_prior_parts, empty_shape=0, dtype=dtype)
+    sample_mask_flat = _flat_parts(sample_mask_parts, empty_shape=(0, n_fine_translations), dtype=bool)
     n_pixels = 12 * (2 ** int(nside_level)) ** 2
 
     return LocalHypothesisLayout(
