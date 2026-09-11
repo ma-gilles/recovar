@@ -75,7 +75,13 @@ grid. `_initial_coarse_grids` materializes the first exhaustive grid from a
 sealed capture, a caller translation table or the RELION translation grid, and
 `_relion_base_translation_grid` is the only unperturbed translation-grid
 construction in the controller; [`test_initial_coarse_grid_owner.py`](../../tests/unit/test_initial_coarse_grid_owner.py)
-pins both. They stay in the controller module because the sampling primitives they
+pins both. `_exact_local_fine_grid` materializes RELION's fine local-search grid
+once with its perturbation and exact M-step rotations, and
+`_local_search_mstep_rotations` reuses or rebuilds the M-step matrices of a
+scoring grid; the final pass sizes its parent pass with
+`resolution.relion_local_pass1_current_size` only under adaptive oversampling
+([`test_local_fine_grid_owner.py`](../../tests/unit/test_local_fine_grid_owner.py)).
+They stay in the controller module because the sampling primitives they
 call are the ones controller tests substitute. Its exact local-search stage is implemented in
 [`local_search_iteration`](../../recovar/em/dense_single_volume/local_search_iteration.py).
 That module builds local pose neighborhoods, asks

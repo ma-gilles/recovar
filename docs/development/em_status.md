@@ -38,6 +38,20 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 
 ## Engineering work and recent evidence
 
+The exact fine local-search grid, its M-step reuse fallback and the final
+pass-1 size rule now have one implementation each in the controller module:
+`_exact_local_fine_grid` (RELION SamplingPerturbation of the materialized fine
+grid plus the exact M-step rotations; `None` keeps the unperturbed grid for a
+pass that drew no perturbation), `_local_search_mstep_rotations`, and
+`relion_local_pass1_current_size` in the final pass. 37 exact old/new cases
+(both passes, perturbation on/off, float32/float64 flags, matching and
+mismatching row counts, parent-expanded sizes) match byte-for-byte with a
+byte-exact inverse substitution. Structural checkpoint only; the two passes'
+remaining input differences (the main loop sizes pass 1 from the pre-update
+order with optics-group geometry, the final pass from its parent order with the
+model voxel size) are preserved, not resolved.
+[Receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/local_fine_grid_owner_20260910/result.json).
+
 The final all-data pass now computes a local pass-1 image size only for
 parent-expanded (adaptive-oversampling) local search. Its coarse-size clamp sat
 outside that branch, so a lazy (large-order) final local search without

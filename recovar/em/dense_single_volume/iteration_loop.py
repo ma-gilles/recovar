@@ -417,6 +417,51 @@ def _initial_coarse_grids(
     return _CoarseGrids(rotations, rotation_eulers, base_translations, current_translations, int(healpix_order))
 
 
+def _exact_local_fine_grid(*, healpix_order, angular_sampling_deg, random_perturbation, dtype=np.float32):
+    """Materialize RELION's fine local-search grid once, with its SamplingPerturbation.
+
+    RELION rotates every fine orientation by the iteration's perturbation
+    (``healpix_sampling.cpp:1909-1934``) and rebuilds the exact M-step matrices
+    from the canonical RFLOAT angles with the same perturbation.  ``None`` keeps
+    the unperturbed grid matrices for a pass that drew no perturbation.
+    Returns ``(rotations, rotation_eulers, mstep_rotations)``.
+    """
+
+    rotations, rotation_eulers = _relion_rotation_grid_float32(healpix_order, dtype=dtype)
+    if random_perturbation is not None:
+        rotations, rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
+            rotation_eulers,
+            float(random_perturbation),
+            angular_sampling_deg,
+        )
+    _, _, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+        _get_relion_rotation_grid_eulers_float64(healpix_order),
+        0.0 if random_perturbation is None else float(random_perturbation),
+        angular_sampling_deg,
+        return_mstep_rotations=True,
+    )
+    return rotations, rotation_eulers, mstep_rotations
+
+
+def _local_search_mstep_rotations(effective_mstep_rotations, rotation_eulers, healpix_order):
+    """Exact M-step rotations of a local search that reuses the scoring grid.
+
+    The perturbed trial grid already carries its M-step matrices; a grid
+    without them rebuilds RELION's host-inverse matrices from the M-step
+    source angles at ``healpix_order`` (no further perturbation).
+    """
+
+    if effective_mstep_rotations is not None:
+        return effective_mstep_rotations
+    _, _, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+        _relion_mstep_source_eulers(rotation_eulers, healpix_order),
+        0.0,
+        relion_angular_sampling_deg(healpix_order, adaptive_oversampling=0),
+        return_mstep_rotations=True,
+    )
+    return mstep_rotations
+
+
 def _sigma_offset_for_half(current_sigma_offset_angstrom, current_sigma_offset_angstrom_per_half, half_index):
     if current_sigma_offset_angstrom_per_half is None:
         return float(current_sigma_offset_angstrom)
@@ -1777,17 +1822,12 @@ def _run_relion_iteration_loop(
                     adaptive_oversampling=0,
                 )
                 if (not use_parent_expanded_local) and _precompute_exact_local_fine_grid_enabled(local_search_order):
-                    _, local_search_rotation_eulers = _relion_rotation_grid_float32(local_search_order)
-                    local_search_rotations, local_search_rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
-                        local_search_rotation_eulers,
-                        float(random_perturbation),
-                        local_search_angular_sampling_deg,
-                    )
-                    _, _, local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-                        _get_relion_rotation_grid_eulers_float64(local_search_order),
-                        float(random_perturbation),
-                        local_search_angular_sampling_deg,
-                        return_mstep_rotations=True,
+                    local_search_rotations, local_search_rotation_eulers, local_search_mstep_rotations = (
+                        _exact_local_fine_grid(
+                            healpix_order=local_search_order,
+                            angular_sampling_deg=local_search_angular_sampling_deg,
+                            random_perturbation=float(random_perturbation),
+                        )
                     )
                     local_search_random_perturbation = 0.0
                 else:
@@ -1827,15 +1867,9 @@ def _run_relion_iteration_loop(
             else:
                 local_search_rotations = effective_rotations
                 local_search_rotation_eulers = None
-                if effective_mstep_rotations is not None:
-                    local_search_mstep_rotations = effective_mstep_rotations
-                else:
-                    _, _, local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-                        _relion_mstep_source_eulers(effective_rotation_eulers, local_search_order),
-                        0.0,
-                        relion_angular_sampling_deg(local_search_order, adaptive_oversampling=0),
-                        return_mstep_rotations=True,
-                    )
+                local_search_mstep_rotations = _local_search_mstep_rotations(
+                    effective_mstep_rotations, effective_rotation_eulers, local_search_order
+                )
             logger.info(
                 "Local search (batched exact): fine_order=%d, sigma_rot=%.4f rad (%.2f deg), sigma_psi=%.4f rad",
                 local_search_order,
@@ -4412,35 +4446,18 @@ def _run_relion_iteration_loop(
                 _final_local_search_use_float64_scoring, _final_local_search_use_float64_projections = (
                     _local_search_precision_flags(final_sampling_relion_iteration, pass_index=2)
                 )
-                final_local_search_rotations, final_local_search_rotation_eulers = _relion_rotation_grid_float32(
-                    final_local_search_order,
-                    dtype=(
-                        np.float64
-                        if (_final_local_search_use_float64_scoring or _final_local_search_use_float64_projections)
-                        else np.float32
-                    ),
+                final_local_search_rotations, final_local_search_rotation_eulers, final_local_search_mstep_rotations = (
+                    _exact_local_fine_grid(
+                        healpix_order=final_local_search_order,
+                        angular_sampling_deg=final_local_search_angular_sampling_deg,
+                        random_perturbation=(final_random_perturbation if final_perturbation_applied else None),
+                        dtype=(
+                            np.float64
+                            if (_final_local_search_use_float64_scoring or _final_local_search_use_float64_projections)
+                            else np.float32
+                        ),
+                    )
                 )
-                if final_perturbation_applied:
-                    final_local_search_rotations, final_local_search_rotation_eulers = (
-                        apply_relion_rotation_perturbation_to_eulers(
-                            final_local_search_rotation_eulers,
-                            final_random_perturbation,
-                            final_local_search_angular_sampling_deg,
-                        )
-                    )
-                    _, _, final_local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-                        _get_relion_rotation_grid_eulers_float64(final_local_search_order),
-                        final_random_perturbation,
-                        final_local_search_angular_sampling_deg,
-                        return_mstep_rotations=True,
-                    )
-                else:
-                    _, _, final_local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-                        _get_relion_rotation_grid_eulers_float64(final_local_search_order),
-                        0.0,
-                        final_local_search_angular_sampling_deg,
-                        return_mstep_rotations=True,
-                    )
             else:
                 final_local_search_rotations = None
                 final_local_search_rotation_eulers = None
@@ -4450,32 +4467,19 @@ def _run_relion_iteration_loop(
                     # RELION sizes the parent pass from the parent order only
                     # under adaptive oversampling; without it coarse_size is
                     # current_size (ml_optimiser.cpp, updateImageSizeAndResolutionPointers).
-                    parent_order = final_local_parent_order
-                    parent_step_deg = healpix_angular_step(parent_order)
-                    local_coarse_size = compute_coarse_image_size(
-                        parent_step_deg,
-                        cryo.voxel_size if cryo.voxel_size > 0 else 1.0,
-                        grid_size,
+                    final_local_pass1_current_size = relion_local_pass1_current_size(
+                        pre_update_healpix_order=final_local_parent_order,
+                        pixel_size=cryo.voxel_size if cryo.voxel_size > 0 else 1.0,
+                        ori_size=grid_size,
                         particle_diameter=particle_diameter_ang,
+                        current_size=final_current_size,
                     )
-                    local_coarse_size = clamp_relion_coarse_image_size(
-                        local_coarse_size,
-                        final_current_size,
-                        grid_size,
-                    )
-                    final_local_pass1_current_size = local_coarse_size if local_coarse_size < grid_size else None
         else:
             final_local_search_rotations = final_effective_rotations
             final_local_search_rotation_eulers = final_effective_rotation_eulers
-            if final_effective_mstep_rotations is not None:
-                final_local_search_mstep_rotations = final_effective_mstep_rotations
-            else:
-                _, _, final_local_search_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-                    _relion_mstep_source_eulers(final_effective_rotation_eulers, final_local_search_order),
-                    0.0,
-                    relion_angular_sampling_deg(final_local_search_order, adaptive_oversampling=0),
-                    return_mstep_rotations=True,
-                )
+            final_local_search_mstep_rotations = _local_search_mstep_rotations(
+                final_effective_mstep_rotations, final_effective_rotation_eulers, final_local_search_order
+            )
         logger.info(
             "RELION final all-data iteration using local search: parent_order=%d fine_order=%d, "
             "sigma_rot=%.4f rad (%.2f deg), sigma_psi=%.4f rad, perturbation=%+.5f",
