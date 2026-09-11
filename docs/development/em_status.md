@@ -49,6 +49,7 @@ case counts, provenance and limits.
 
 | Commit | Change | Kind | Receipt |
 | --- | --- | --- | --- |
+| see receipt | `projection._relion_projector_fftw_block` owns the RELION Projector call shared by the centered-row and indexed centered-row projectors (projector size clamp, scorer-rotation transpose, FFTW-row block); traced programs identical | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/projector_fftw_block_owner_20260911/result.json) |
 | see receipt | `scoring._e_step_block_score_components` is the one owner of the cross/model-energy GEMM pair; the half residual scorer and both normalized-CC scorers no longer re-derive it (traced programs identical, ten HIGHEST-precision GEMM sites become four) | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/score_components_owner_20260911/result.json) |
 | see receipt | `k_class._PerClassSubsetResults` assembles the per-class accumulators, assignments, statistics, noise and best poses of the dense and sparse firstiter-CC global-winner subset passes (empty-class zero fill and subset expansion were two 40-line pairs); the routes' host/device placement of empty-class zeros and engine outputs is recorded and unchanged | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/kclass_subset_results_owner_20260911/result.json) |
 | see receipt | `state_swap_runtime._StateSwapValues` names the fourteen iteration-state values the RELION replay override hands back; the probe builds the unchanged value once and returns it from both early exits (three positional 14-value returns and their helper removed) | structural | [receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/state_swap_values_owner_20260911/result.json) |
@@ -237,17 +238,23 @@ recorded below; admit the exactly-K4 completion (13712372) against the
 [benchmark contract](benchmarks.md) when it finishes, recording every result
 including failures. Between results,
 continue one bounded structural package at a time from the cleanup plan.
-Remaining candidates after the September 10–11 packages: a named result type
-for the four positional big-JIT output layouts unpacked in `local_em_engine`
-and returned by `local_big_jit` (design change at the hottest kernel boundary),
-the remaining K=1/K-class route asymmetries in `half_scoring` recorded in the
+Remaining candidates after the September 10–11 packages (J through OO): a named
+result type for the four positional big-JIT output layouts unpacked in
+`local_em_engine` and returned by `local_big_jit`, and a named result for the
+seven-plus-optional positional tuple that `compute_pass2_stats_sparse` and its
+bucketed variant return and `k_class` unpacks by index (both are design changes at
+hot kernel boundaries); the 35-line bucket-pipeline blocks repeated inside
+`sparse_pass2_bucketed` and the 33-line blocks inside `local_big_jit` (hot paths,
+exact comparison would need GPU-shaped fixtures); the per-row optional operand
+fields repeated by the two pass-2 diagnostic dump writers; the pass-1/pass-2
+`_score_rotation_block` keyword sets in `em_engine`; the per-class result lists of
+`run_dense_k_class_em` and `run_local_k_class_em` (different expansion semantics
+from the subset passes); and the K=1/K-class route asymmetries recorded in the
 adaptive-engine-call receipt (coarse translation phases, significance skipping and
-the diagnostic float64 pass 2 are K=1-only), the remaining diagnostic dump
-call sites in `local_em_engine` (fused-posterior and score dumps repeat their
-target/current-size keywords), seven forwarding aliases found by
-the wrapper scan (`sampling.get_rotation_grid_at_order` has 44 callers), and
-the kept test-facing helpers listed in the dead-API receipt; the seven forwarding
-aliases turned out to be intentional public names or test patch points and stay. Each package keeps
+the diagnostic float64 pass 2 are K=1-only). The global-winner summary writer and
+its analysis validator repeat the semantics contract on purpose (independent
+check) and stay; the seven forwarding aliases found by the wrapper scan are
+intentional public names or test patch points and stay. Each package keeps
 an exact old/new comparison,
 the CPU guard, the controller panel when the controller path changes, and one
 combined validation/publication per package. Keep first-divergence numerical

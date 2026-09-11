@@ -55,6 +55,38 @@ def project_relion_projector_half_spectrum(
     return proj_fftw.reshape((rotations_block.shape[0], -1))
 
 
+def _relion_projector_fftw_block(
+    volume_relion_half,
+    rotations_block,
+    image_size: int,
+    r_max: int,
+    padding_factor: int,
+    projector_output_size: int | None,
+    relion_acc_double_floorf_quirk: bool,
+):
+    """Project one rotation block through RELION's Projector in FFTW row order.
+
+    RELION projects onto a ``2 * r_max`` (or the requested) square that never
+    exceeds the image; the scorer's rotation matrices are transposed at this
+    handoff. Returns the ``(rotations, rows, x_half)`` FFTW-ordered block and
+    the projector image size the centered-row and indexed projectors map from.
+    """
+
+    projector_image_size = int(r_max) * 2 if projector_output_size is None else int(projector_output_size)
+    if projector_image_size <= 0 or projector_image_size > image_size:
+        projector_image_size = image_size
+    projector_rotations = jnp.swapaxes(rotations_block, -1, -2)
+    proj_fftw = project_relion_projector_half_spectrum(
+        volume_relion_half,
+        projector_rotations,
+        (projector_image_size, projector_image_size),
+        int(r_max),
+        int(padding_factor),
+        relion_acc_double_floorf_quirk,
+    ).reshape((rotations_block.shape[0], projector_image_size, projector_image_size // 2 + 1))
+    return proj_fftw, projector_image_size
+
+
 @partial(jax.jit, static_argnums=(2, 3, 4, 5, 6))
 def project_relion_projector_half_spectrum_centered_rows(
     volume_relion_half,
@@ -76,18 +108,15 @@ def project_relion_projector_half_spectrum_centered_rows(
     """
 
     image_size = int(image_shape[0])
-    projector_image_size = int(r_max) * 2 if projector_output_size is None else int(projector_output_size)
-    if projector_image_size <= 0 or projector_image_size > image_size:
-        projector_image_size = image_size
-    projector_rotations = jnp.swapaxes(rotations_block, -1, -2)
-    proj_fftw = project_relion_projector_half_spectrum(
+    proj_fftw, projector_image_size = _relion_projector_fftw_block(
         volume_relion_half,
-        projector_rotations,
-        (projector_image_size, projector_image_size),
-        int(r_max),
-        int(padding_factor),
+        rotations_block,
+        image_size,
+        r_max,
+        padding_factor,
+        projector_output_size,
         relion_acc_double_floorf_quirk,
-    ).reshape((rotations_block.shape[0], projector_image_size, projector_image_size // 2 + 1))
+    )
     if projector_image_size == image_size:
         row_order = jnp.fft.fftshift(jnp.arange(image_size, dtype=jnp.int32))
         return proj_fftw[:, row_order, :].reshape((rotations_block.shape[0], -1))
@@ -127,19 +156,15 @@ def project_relion_projector_half_spectrum_centered_rows_at_indices(
     """
 
     image_size = int(image_shape[0])
-    projector_image_size = int(r_max) * 2 if projector_output_size is None else int(projector_output_size)
-    if projector_image_size <= 0 or projector_image_size > image_size:
-        projector_image_size = image_size
-
-    projector_rotations = jnp.swapaxes(rotations_block, -1, -2)
-    proj_fftw = project_relion_projector_half_spectrum(
+    proj_fftw, projector_image_size = _relion_projector_fftw_block(
         volume_relion_half,
-        projector_rotations,
-        (projector_image_size, projector_image_size),
-        int(r_max),
-        int(padding_factor),
+        rotations_block,
+        image_size,
+        r_max,
+        padding_factor,
+        projector_output_size,
         relion_acc_double_floorf_quirk,
-    ).reshape((rotations_block.shape[0], projector_image_size, projector_image_size // 2 + 1))
+    )
 
     indices = jnp.asarray(pixel_indices, dtype=jnp.int32)
     full_x_half = image_size // 2 + 1

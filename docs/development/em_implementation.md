@@ -261,6 +261,11 @@ computes the two HIGHEST-precision GEMMs every dense scorer is built from (the c
 `-2 Re(conj(shifted) . proj_weighted)` and the model energy `ctf2_over_nv . proj_abs2`);
 the residual, windowed, normalized-CC and coarse Gaussian scorers only combine them
 ([`test_score_components_owner.py`](../../tests/unit/test_score_components_owner.py)).
+[`projection._relion_projector_fftw_block`](../../recovar/em/dense_single_volume/helpers/projection.py)
+projects one rotation block through RELION's Projector onto the clamped `2 r_max` (or
+requested) square with the scorer rotations transposed at the handoff; the centered-row
+projector reorders its rows and the indexed projector gathers its pixels from that block
+([`test_projector_fftw_block_owner.py`](../../tests/unit/test_projector_fftw_block_owner.py)).
 In [`significance`](../../recovar/em/dense_single_volume/helpers/significance.py),
 `_coarse_gaussian_ffi_default` applies the fresh-InitialModel coarse Gaussian FFI
 default only when the supplied RELION projector operands exist; a dense pass
