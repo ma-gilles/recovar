@@ -170,7 +170,8 @@ def test_mstep_fixed_order_shell_sums_match_scatter_rule():
 
 
 def test_score_only_microbatch_cap_ignores_live_memory_under_opt_in(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine as le
+    # the cap lives in the batch planner on this branch, not in the engine module
+    from recovar.em.dense_single_volume import local_batch_planning as le
 
     calls = []
     monkeypatch.setattr(le, "_exact_local_runtime_free_memory_bytes", lambda: calls.append(1) or (1 << 20))
