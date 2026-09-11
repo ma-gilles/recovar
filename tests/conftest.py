@@ -213,6 +213,19 @@ def _set_deterministic_seed():
 
 
 @pytest.fixture(autouse=True)
+def _default_sparse_pass2_bucket_chunking(monkeypatch):
+    """Pin the production default for bucket chunking.
+
+    ``RECOVAR_SPARSE_PASS2_LADDER_CHUNKS`` changes the chunk partition (power-of-two
+    sizes under the caller's cap instead of filling to it), so budget-splitter tests
+    that assert an exact partition describe the default policy. Tests that want the
+    ladder set the variable themselves or pass ``ladder=True``.
+    """
+
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_LADDER_CHUNKS", "0")
+
+
+@pytest.fixture(autouse=True)
 def _strict_em_operand_precision(monkeypatch):
     """Fail tests that carry EM operands wider than the precision policy.
 

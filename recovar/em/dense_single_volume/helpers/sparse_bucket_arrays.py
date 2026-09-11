@@ -67,8 +67,13 @@ def bucket_chunk_bounds(n_images: int, max_per_chunk: int, *, ladder: bool | Non
         size = min(largest_power, 1 << ((n_images - start).bit_length() - 1))
         bounds.append((start, start + size))
         start += size
-    if start < n_images:
-        bounds.append((start, n_images))
+    # The remainder must still respect the caller's cap: it is derived from
+    # gather/prepare/dense-M-step byte budgets, so emitting the tail as one
+    # chunk would overshoot them (a cap of 1 image would yield a chunk of 15).
+    while start < n_images:
+        stop = min(start + max_per_chunk, n_images)
+        bounds.append((start, stop))
+        start = stop
     return bounds
 
 

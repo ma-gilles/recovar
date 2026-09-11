@@ -49,3 +49,13 @@ def test_k_class_planner_uses_ladder(monkeypatch):
     for b in buckets:
         size = int(b["image_indices"].shape[0])
         assert size < sba.LADDER_CHUNK_FLOOR or size & (size - 1) == 0
+
+
+@pytest.mark.parametrize("cap", [1, 2, 7, 15, 16, 100, 2048])
+@pytest.mark.parametrize("n_images", [1, 15, 16, 17, 31, 100, 443, 639, 2049])
+def test_ladder_never_exceeds_the_callers_cap(n_images, cap):
+    """The cap comes from gather / prepare / dense-M-step byte budgets, so exceeding it overshoots memory."""
+    bounds = sba.bucket_chunk_bounds(n_images, cap, ladder=True)
+    covered = [i for start, stop in bounds for i in range(start, stop)]
+    assert covered == list(range(n_images))
+    assert all(stop - start <= cap for start, stop in bounds)
