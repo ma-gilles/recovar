@@ -1950,3 +1950,47 @@ def test_iteration_loop_threads_fmask_edge_through_to_postprocess():
     assert "relion_fmask_edge=RELION_WIDTH_FMASK_EDGE" in source, (
         "iteration_loop must forward RELION_WIDTH_FMASK_EDGE to _reconstruct_and_postprocess_means"
     )
+
+
+def test_kclass_fused_pass2_sizes_relion_projector_crop_from_score_window():
+    """Every windowed K-class pass-2 projection must size the RELION crop from the image window.
+
+    Under RELION's per-optics-group remap the particle-image window
+    (``image_current_size``) can exceed the model window (``2 * max_r``); a
+    crop inferred from ``2 * max_r`` aliases the outermost score indices onto
+    the wrong row.  The K=1 bucketed path routes every windowed projection
+    through ``_projection_kwargs_for_relion_score_window``; the fused K-class
+    path must do the same (regression for the local pass-2 defect fixed in
+    9216a1b8f, extended to the class-fused site).
+    """
+
+    source = inspect.getsource(sparse_pass2_mod.compute_k_class_pass2_stats_sparse_fused)
+    needle = "_compute_sparse_pass2_windowed_projections_block("
+    starts = [i for i in range(len(source)) if source.startswith(needle, i)]
+    assert starts, "fused K-class pass-2 lost its windowed projection calls"
+    for idx in starts:
+        assignment = source.rfind("projection_kwargs = ", 0, idx)
+        assert assignment >= 0, "windowed K-class pass-2 projection call has no projection_kwargs assignment"
+        window = source[assignment:idx]
+        assert "_projection_kwargs_for_relion_score_window(" in window, (
+            "windowed K-class pass-2 projection call does not size the RELION projector crop "
+            "from the particle-image score window"
+        )
+
+
+def test_relion_score_window_projection_kwargs_use_image_window_not_model_window():
+    """The score-window helper must hand the projector the image window size."""
+
+    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+
+    spec = make_fourier_window_spec(
+        (64, 64), 34, 64 * 33, reconstruction_current_size=32, square=False, include_recon_window=True
+    )
+    assert int(2 * spec.max_r) == 32
+    kwargs = sparse_pass2_mod._projection_kwargs_for_relion_score_window(
+        spec.projection_kwargs(return_abs2=False),
+        use_relion_projector=True,
+        current_size=34,
+    )
+    assert kwargs["projector_output_size"] == 34
+    assert kwargs["projector_output_size"] != int(2 * spec.max_r)

@@ -78,6 +78,33 @@ class FourierWindowSpec:
     n_projection: int
     max_r: float | None
     projection_max_r: float | None
+    # Particle-image score window size (RELION's per-optics remapped
+    # ``current_size``).  ``max_r`` describes the model/reconstruction sphere
+    # and can be smaller than this window when the optics remap applies.
+    image_current_size: int | None = None
+
+    def relion_projector_output_size(self) -> int | None:
+        """Return the crop RELION projects into for this window.
+
+        RELION projects references into the particle-image box
+        (``image_current_size``) and clips samples to the model sphere
+        separately.  Sizing the projector crop from ``2 * max_r`` instead uses
+        the reconstruction size, which is smaller than the particle window
+        whenever the optics pixel size differs from the model pixel size (for
+        example 200 versus 202 on EMPIAR-10073 at model current size 200).
+        Score/projection indices outside that smaller crop then alias onto
+        other pixels of the projection (the ``kx = crop/2 + 1`` column reads
+        the next row's ``kx = 0`` value), corrupting fine scores.  Callers that
+        gather projections at ``score_indices`` or ``projection_indices`` must
+        use this size, as the global sparse pass-2 path already does through
+        ``_projection_kwargs_for_relion_score_window``.
+        """
+
+        if not self.use_window:
+            return None
+        if self.image_current_size is not None:
+            return int(self.image_current_size)
+        return int(2 * self.max_r) if self.max_r is not None else None
 
     def projection_kwargs(self, *, return_abs2=None) -> dict:
         kwargs = {}
@@ -444,6 +471,7 @@ def make_fourier_window_spec(
             n_projection=int(n_half),
             max_r=None,
             projection_max_r=None,
+            image_current_size=None,
         )
 
     if score_square is None:
@@ -509,6 +537,7 @@ def make_fourier_window_spec(
         n_projection=int(projection_indices_np.shape[0]),
         max_r=resolved_max_r,
         projection_max_r=resolved_projection_max_r,
+        image_current_size=int(current_size),
     )
 
 

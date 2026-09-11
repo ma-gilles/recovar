@@ -99,6 +99,7 @@ from recovar.em.dense_single_volume.helpers.preprocessing import (
     half_translation_phase_table as _half_translation_phase_table,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
+    _validate_centered_relion_projector_pixel_indices,
     compute_noise_block as _compute_noise_block,
     compute_norm_residual_per_image as _compute_norm_residual_per_image,
     compute_projections_block as _compute_projections_block,
@@ -1050,6 +1051,38 @@ def _adjoint_slice_volume_maybe_windowed_row_chunks(
     return updated, n_chunks
 
 
+def validate_local_relion_projector_window(window_spec, image_shape) -> int | None:
+    """Host-side check that every windowed index fits the local RELION projector crop.
+
+    The local pass-2 sites gather ``score_indices``, ``projection_indices`` and
+    ``recon_indices`` from a projector cropped to
+    ``window_spec.relion_projector_output_size()``.  Inside the big-JIT path
+    those indices are tracers, so the trace-time validation in
+    ``compute_relion_projector_projections_block`` is skipped; the aliasing
+    fixed in 9216a1b8f went undetected for that reason.  Validate the concrete
+    NumPy copies once per call instead, and return the crop size used.
+    """
+
+    if not window_spec.use_window:
+        return None
+    projector_output_size = window_spec.relion_projector_output_size()
+    if projector_output_size is None:
+        return None
+    for indices_np in (
+        window_spec.score_indices_np,
+        window_spec.projection_indices_np,
+        window_spec.recon_indices_np,
+    ):
+        if indices_np is None:
+            continue
+        _validate_centered_relion_projector_pixel_indices(
+            indices_np,
+            image_shape=image_shape,
+            projector_output_size=int(projector_output_size),
+        )
+    return int(projector_output_size)
+
+
 def _project_local_bucket(
     *,
     mean_for_proj,
@@ -1084,7 +1117,7 @@ def _project_local_bucket(
         mask_current_image_disk = bool(projection_kwargs.get("mask_current_image_disk", True))
         projector_kwargs = {}
         if window_spec.use_window and window_spec.max_r is not None:
-            projector_kwargs["projector_output_size"] = int(2 * window_spec.max_r)
+            projector_kwargs["projector_output_size"] = int(window_spec.relion_projector_output_size())
         projection_indices = None
         if window_spec.use_window:
             projection_indices = (
@@ -1219,7 +1252,7 @@ def _project_packed_noise_rows(
         mask_current_image_disk = bool(projection_kwargs.get("mask_current_image_disk", True))
         projector_kwargs = {}
         if window_spec.use_window and window_spec.max_r is not None:
-            projector_kwargs["projector_output_size"] = int(2 * window_spec.max_r)
+            projector_kwargs["projector_output_size"] = int(window_spec.relion_projector_output_size())
         projection_indices = None
         if window_spec.use_window:
             projection_indices = (
@@ -2610,6 +2643,8 @@ def run_local_em_exact(
     projection_kwargs["force_jax"] = bool(projection_force_jax)
     projection_kwargs["mask_current_image_disk"] = bool(projection_mask_current_image_disk)
     projection_mode = _local_projection_mode(window_spec, projection_kwargs, relion_projector_half)
+    if relion_projector_half is not None:
+        validate_local_relion_projector_window(window_spec, image_shape)
 
     half_weights = make_scoring_half_image_weights(
         image_shape,
@@ -3218,9 +3253,7 @@ def run_local_em_exact(
         )
         relion_projector_r_max_big_jit = int(relion_projector_r_max)
         if compact_relion_projector_big_jit:
-            big_jit_relion_projector_output_size = (
-                int(2 * window_spec.max_r) if window_spec.max_r is not None else 0
-            )
+            big_jit_relion_projector_output_size = int(window_spec.relion_projector_output_size() or 0)
             if score_only:
                 big_jit_projection_pixel_indices_arg = jnp.asarray(window_spec.score_indices, dtype=jnp.int32)
                 big_jit_projection_score_take_arg = jnp.arange(window_spec.n_score, dtype=jnp.int32)

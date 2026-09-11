@@ -12965,7 +12965,11 @@ def compute_k_class_pass2_stats_sparse_fused(
             for class_index in range(n_classes):
                 cache_t0 = time.time()
                 if use_window:
-                    projection_kwargs = window_spec.projection_kwargs(return_abs2=False)
+                    projection_kwargs = _projection_kwargs_for_relion_score_window(
+                        window_spec.projection_kwargs(return_abs2=False),
+                        use_relion_projector=use_relion_projector,
+                        current_size=current_size,
+                    )
                     projection_kwargs["mask_current_image_disk"] = bool(
                         projection_mask_current_image_disk
                     )
@@ -13585,6 +13589,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                     projection_mask_current_image_disk
                 )
                 if use_window:
+                    projection_kwargs = _projection_kwargs_for_relion_score_window(
+                        projection_kwargs,
+                        use_relion_projector=use_relion_projector,
+                        current_size=current_size,
+                    )
                     retained_window_projection_bytes = (
                         int(flat_rotations.shape[0])
                         * (int(n_windowed) + int(n_recon_windowed))
