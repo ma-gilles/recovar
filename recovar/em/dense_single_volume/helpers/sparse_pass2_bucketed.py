@@ -4029,6 +4029,23 @@ def _projection_rotation_chunk_size(
     return max_rows
 
 
+def _ladder_rechunk_buckets(buckets):
+    """Re-chunk bucket image lists through :func:`bucket_chunk_bounds` (identity unless the ladder is on)."""
+
+    out = []
+    for bucket in buckets:
+        image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
+        bounds = bucket_chunk_bounds(int(image_indices.size), max(1, int(image_indices.size)))
+        if len(bounds) <= 1:
+            out.append(bucket)
+            continue
+        for start, stop in bounds:
+            chunk_bucket = dict(bucket)
+            chunk_bucket["image_indices"] = np.asarray(image_indices[start:stop], dtype=np.int64)
+            out.append(chunk_bucket)
+    return out
+
+
 def _split_compact_pair_buckets_by_projection_gather_budget(
     compact_buckets,
     per_image_inputs_by_class,
@@ -4055,7 +4072,7 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
         and max_prepare_images_per_microbatch is None
         and max_dense_mstep_bytes is None
     ):
-        return list(compact_buckets)
+        return _ladder_rechunk_buckets(list(compact_buckets))
     ungrouped_bucket_count = len(compact_buckets)
     original_pair_bucket_max_images: dict[int, int] = {}
     for bucket in compact_buckets:
@@ -4143,7 +4160,7 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
         else max(1, int(max_prepare_images_per_microbatch))
     )
     if max_gather_bytes is None and max_prepare_images is None and max_dense_mstep_bytes is None:
-        return list(compact_buckets)
+        return _ladder_rechunk_buckets(list(compact_buckets))
     row_bytes = _projection_gather_bytes_per_rotation_row(
         n_score_pixels=n_score_pixels,
         n_recon_pixels=n_recon_pixels,
@@ -4190,13 +4207,14 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
             max_images = min(max_images, max(1, max_dense_mstep_bytes // dense_bytes_per_image))
         if max_prepare_images is not None:
             max_images = min(max_images, max_prepare_images)
-        if image_indices.size <= max_images:
+        chunk_bounds = bucket_chunk_bounds(int(image_indices.size), max_images)
+        if len(chunk_bounds) <= 1:
             split_buckets.append(bucket)
             split_max_images = max(split_max_images, int(image_indices.size))
             continue
         split_bucket_count += 1
-        for start in range(0, image_indices.size, max_images):
-            chunk = image_indices[start : start + max_images]
+        for start, stop in chunk_bounds:
+            chunk = image_indices[start:stop]
             chunk_bucket = dict(bucket)
             chunk_bucket["image_indices"] = np.asarray(chunk, dtype=np.int64)
             split_buckets.append(chunk_bucket)
