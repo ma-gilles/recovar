@@ -1385,7 +1385,7 @@ def _run_dense_k_class_joint_firstiter_score_probe(
 
     class_log_evidence = np.asarray(full_stats["class_log_evidence_per_image"], dtype=np.float64)
     per_class_hard = np.asarray(full_stats["class_hard_assignments"], dtype=np.int32)
-    score_dtype = np.float64 if engine_kwargs.get("use_float64_scoring", False) else np.float32
+    score_dtype = _score_dtype_from_kwargs(engine_kwargs)
     class_best_log_score = np.asarray(full_stats["class_best_log_score_per_image"], dtype=score_dtype)
     class_assignments = np.asarray(full_stats["class_assignments"], dtype=np.int32)
     per_class_stats = tuple(
@@ -1433,6 +1433,18 @@ def _subset_image_axis_engine_kwargs(kwargs: dict, image_indices: np.ndarray, n_
         if array.ndim > 0 and int(array.shape[0]) == int(n_images):
             out[name] = array[image_indices]
     return out
+
+
+def _pose_dtype_from_kwargs(kwargs: dict):
+    """Host pose dtype: float64 when scoring or projections run in double, else float32."""
+
+    return np.float64 if kwargs.get("use_float64_scoring", False) or kwargs.get("use_float64_projections", False) else np.float32
+
+
+def _score_dtype_from_kwargs(kwargs: dict):
+    """Host score dtype: float64 when scoring runs in double, else float32."""
+
+    return np.float64 if kwargs.get("use_float64_scoring", False) else np.float32
 
 
 def _full_group_count_from_kwargs(kwargs: dict) -> int | None:
@@ -1573,6 +1585,26 @@ class _PerClassSubsetResults:
             self.best_pose_translations.append(best_trans_full)
             self.best_pose_rotation_ids.append(best_rot_ids_full)
 
+    def assemble(self, class_log_evidence, *, profile_summary, **assemble_kwargs):
+        """The winner-take-all K-class result of a subset pass; the subset counts are its class posterior sums."""
+
+        return _assemble_result(
+            class_log_evidence=class_log_evidence,
+            new_means=None,
+            Ft_y=self.Ft_y,
+            Ft_ctf=self.Ft_ctf,
+            per_class_hard_assignments=np.stack(self.hard_assignments, axis=0),
+            per_class_stats=tuple(self.per_class_stats),
+            noise_stats=None if self.per_class_noise is None else tuple(self.per_class_noise),
+            per_class_best_pose_rotations=self.best_pose_rotations,
+            per_class_best_pose_translations=self.best_pose_translations,
+            per_class_best_pose_rotation_ids=self.best_pose_rotation_ids,
+            class_posterior_sums_override=np.asarray(self.subset_counts, dtype=np.float64),
+            firstiter_winner_take_all=True,
+            profile_summary=profile_summary,
+            **assemble_kwargs,
+        )
+
 
 def _run_firstiter_global_winner_subset_pass2(
     experiment_dataset,
@@ -1609,13 +1641,8 @@ def _run_firstiter_global_winner_subset_pass2(
     n_classes = int(means_array.shape[0])
     n_images = int(coarse_class_assignments.shape[0])
     log_priors = _class_log_priors(n_classes, class_log_priors)
-    pose_dtype = (
-        np.float64
-        if pass2_kwargs.get("use_float64_scoring", False)
-        or pass2_kwargs.get("use_float64_projections", False)
-        else np.float32
-    )
-    score_dtype = np.float64 if pass2_kwargs.get("use_float64_scoring", False) else np.float32
+    pose_dtype = _pose_dtype_from_kwargs(pass2_kwargs)
+    score_dtype = _score_dtype_from_kwargs(pass2_kwargs)
     rotations_np = np.asarray(fine_rotations_np, dtype=pose_dtype)
     translations_np = np.asarray(fine_translations_np, dtype=pose_dtype)
 
@@ -1704,19 +1731,8 @@ def _run_firstiter_global_winner_subset_pass2(
         results.subset_counts,
         time.time() - t0,
     )
-    return _assemble_result(
-        class_log_evidence=coarse_result.class_log_evidence,
-        new_means=None,
-        Ft_y=results.Ft_y,
-        Ft_ctf=results.Ft_ctf,
-        per_class_hard_assignments=np.stack(results.hard_assignments, axis=0),
-        per_class_stats=tuple(results.per_class_stats),
-        noise_stats=None if results.per_class_noise is None else tuple(results.per_class_noise),
-        per_class_best_pose_rotations=results.best_pose_rotations,
-        per_class_best_pose_translations=results.best_pose_translations,
-        per_class_best_pose_rotation_ids=results.best_pose_rotation_ids,
-        class_posterior_sums_override=np.asarray(results.subset_counts, dtype=np.float64),
-        firstiter_winner_take_all=True,
+    return results.assemble(
+        coarse_result.class_log_evidence,
         profile_summary={"firstiter_subset_pass2_s": np.float64(time.time() - t0)},
     )
 
@@ -1758,13 +1774,8 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
     )
     if source_faithful_spectrum_norm and n_classes != 1:
         raise ValueError("source-faithful powerClass normalization is K=1-only")
-    score_dtype = np.float64 if pass2_kwargs.get("use_float64_scoring", False) else np.float32
-    pose_dtype = (
-        np.float64
-        if pass2_kwargs.get("use_float64_scoring", False)
-        or pass2_kwargs.get("use_float64_projections", False)
-        else np.float32
-    )
+    score_dtype = _score_dtype_from_kwargs(pass2_kwargs)
+    pose_dtype = _pose_dtype_from_kwargs(pass2_kwargs)
 
     def _class_rotation_prior(class_index: int):
         del class_index
@@ -1909,19 +1920,8 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         results.subset_counts,
         time.time() - t0,
     )
-    return _assemble_result(
-        class_log_evidence=coarse_result.class_log_evidence,
-        new_means=None,
-        Ft_y=results.Ft_y,
-        Ft_ctf=results.Ft_ctf,
-        per_class_hard_assignments=np.stack(results.hard_assignments, axis=0),
-        per_class_stats=tuple(results.per_class_stats),
-        noise_stats=None if results.per_class_noise is None else tuple(results.per_class_noise),
-        per_class_best_pose_rotations=results.best_pose_rotations,
-        per_class_best_pose_translations=results.best_pose_translations,
-        per_class_best_pose_rotation_ids=results.best_pose_rotation_ids,
-        class_posterior_sums_override=np.asarray(results.subset_counts, dtype=np.float64),
-        firstiter_winner_take_all=True,
+    return results.assemble(
+        coarse_result.class_log_evidence,
         profile_summary={"sparse_firstiter_subset_pass2_s": np.float64(time.time() - t0)},
         host_accumulators=True,
         mstep_full_half_axis=0 if common["relion_x_half_mstep"] else None,
@@ -1965,12 +1965,7 @@ def run_dense_k_class_em(
     log_priors = _class_log_priors(n_classes, class_log_priors)
     base_engine_kwargs = dict(engine_kwargs)
     keep_half_accumulators = n_classes > 1 and bool(base_engine_kwargs.get("relion_half_volume_mstep", False))
-    pose_dtype = (
-        np.float64
-        if base_engine_kwargs.get("use_float64_scoring", False)
-        or base_engine_kwargs.get("use_float64_projections", False)
-        else np.float32
-    )
+    pose_dtype = _pose_dtype_from_kwargs(base_engine_kwargs)
     rotations_np = np.asarray(rotations, dtype=pose_dtype)
     translations_np = np.asarray(translations, dtype=pose_dtype)
 

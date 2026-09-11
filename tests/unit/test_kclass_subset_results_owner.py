@@ -75,4 +75,7 @@ def test_subset_passes_use_the_owner():
         assert f"host_accumulators={host_class},\n        )" in source
         assert "per_class_best_pose_rotations.append(" not in source
         assert "Ft_y = []" not in source
-        assert "class_posterior_sums_override=np.asarray(results.subset_counts, dtype=np.float64)" in source
+        assert "results.assemble(" in source and "_assemble_result(" not in source
+    assert "class_posterior_sums_override=np.asarray(self.subset_counts, dtype=np.float64)" in inspect.getsource(
+        k_class._PerClassSubsetResults.assemble
+    )

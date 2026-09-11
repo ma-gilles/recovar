@@ -169,8 +169,10 @@ def test_kclass_fused_pass2_accepts_reconstruction_current_size():
     source = inspect.getsource(
         sparse_pass2_mod.compute_k_class_pass2_stats_sparse_fused,
     )
-    assert "reconstruction_current_size=mstep_current_size" in source
+    # The M-step window is resolved by the shared pass-2 window setup owner.
+    assert "reconstruction_current_size=reconstruction_current_size" in source
     assert "current_size=mstep_current_size" in source
+    assert "reconstruction_current_size=mstep_current_size" in inspect.getsource(sparse_pass2_mod._pass2_window_setup)
 
 
 def test_kclass_adaptive_wires_relion_x_half_without_mislabeling_dense_branch():
