@@ -84,6 +84,36 @@ GILLES project filesystem. Preserve curated fixtures in place.
 
 ## RELION Oracle Rules
 
+### The pinned oracle: RELION 5.0.1
+
+Every RELION reference, dump and score in this program comes from RELION
+**5.0.1**. There is no pre-5 build in play anywhere, and none should be
+introduced.
+
+| Role | Identity |
+| --- | --- |
+| Source read when checking RELION behaviour | `/scratch/gpfs/GILLES/mg6942/relion`, version 5.0.1, git `f2c1a38` (2026-02-27) |
+| Env-gated dump build (`RELION_DUMP_*`) | `/scratch/gpfs/GILLES/mg6942/relion/build_patched/`, compiled from that source |
+| Reference refinements | module `relion/5.0.1/gcc-11.5.0-gpu`, and `/projects/MOLBIO/local/relion-5.0.1-gcc-11.5.0-cuda-12.6-rhel9-arch80/bin/relion_refine_mpi` |
+| Sealed `relion_postprocess` used for every scored FSC | 5.0.1 |
+
+The dump build prints a "RELION 3.1." line in some messages. That is legacy
+text about column names renamed in 3.1, from `motioncorr_runner.cpp` and
+`local_symmetry.cpp`, not a version stamp.
+
+**Particle ordering must be the modern one.** 5.0.1 randomises the two
+half-set orders in `Experiment::randomiseParticlesOrder` (`src/exp_model.cpp`)
+with `std::mt19937` seeded by `random_seed + iter`, followed by a stable sort
+on numeric optics group. Commit `f2c1a38` is where that replaced the older
+libc `rand` / `std::random_shuffle` path. RECOVAR reproduces both, selected by
+`--relion-particle-shuffle {legacy,mt19937}`, and `legacy` is still the CLI
+default for compatibility. Any run compared against the 5.0.1 oracle must pass
+`mt19937`: with `legacy` the half-set split differs from the oracle's, so
+per-particle and half-map comparisons against it do not mean what they appear
+to. This is measurable, not theoretical. On EMPIAR-10073 the legacy ordering
+gives an unmasked resolution of 6.650052 A while the modern ordering gives
+6.567953 A, which is exactly RELION's value on both of its repeats.
+
 - Pin and record the RELION source commit, patched-build identity, complete
   command, STAR metadata, GPU model, MPI layout, and seed. Do not trust help
   text for GUI defaults; inspect `pipeline_jobs.cpp` and output model STARs.
