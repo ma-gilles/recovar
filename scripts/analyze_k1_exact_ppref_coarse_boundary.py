@@ -17,8 +17,10 @@ from recovar.em.dense_single_volume.helpers.projection import (
 )
 from recovar.em.dense_single_volume.helpers.significance import _dense_projection_scale
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-    _relion_cuda_fine_full_to_compact_lookup,
     _relion_translation_angles_f32,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
+    _relion_cuda_fine_full_to_compact_lookup,
 )
 from recovar.utils.file_hash import sha256_file
 from scripts.analyze_em_k1_coarse_pass1_boundary import (

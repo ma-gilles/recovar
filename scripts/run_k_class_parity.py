@@ -612,6 +612,8 @@ def _relion_bpref_maps_from_sparse_support(
         _normalize_pass2_bucket_with_log_z,
         _prepare_bucket_io,
         _reorder_to_indices,
+    )
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
         _score_pass2_bucket_relion_gpu_diff2,
     )
     from recovar.em.dense_single_volume.local_backprojection import (

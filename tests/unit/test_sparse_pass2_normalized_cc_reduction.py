@@ -11,7 +11,7 @@ from helpers.sparse_pass2_test_support import (
     _score_pass2_pairs_relion_gpu_normalized_cc,
 )
 
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
     _score_pass2_bucket_normalized_cc,
     _score_pass2_bucket_relion_gpu_normalized_cc,
 )

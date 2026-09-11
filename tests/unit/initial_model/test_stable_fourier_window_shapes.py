@@ -29,6 +29,8 @@ from recovar.em.dense_single_volume.helpers.significance import (
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _make_relion_wavg_rectangle,
     _make_stable_relion_wavg_rectangle,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
     _relion_cuda_fine_full_to_compact_lookup,
 )
 from recovar.em.dense_single_volume.shape_buckets import pad_axis

@@ -128,7 +128,7 @@ def test_scatter_flat_local_rows_flagged_path_matches_set_and_fixes_duplicates(m
 
 def test_powerclass_spectrum_flagged_path_matches_host_binning(monkeypatch):
     """Under the opt-in the RELION powerClass spectrum is binned in XLA with the kernel's shell rule."""
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
         _relion_cuda_powerclass_spectrum_norm_units,
     )
 

@@ -3321,7 +3321,7 @@ def test_sparse_pass2_fused_flag_routes_supported_operand_layouts(
     expected_shape,
 ):
     import recovar.cuda_backproject as cuda_backproject
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
         _relion_cuda_fine_diff2_sum,
     )
 
@@ -3376,7 +3376,7 @@ def test_sparse_pass2_fused_flag_routes_supported_operand_layouts(
 
 def test_sparse_pass2_fused_flag_routes_float64_to_f64_ffi(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
         _relion_cuda_fine_diff2_sum,
     )
 

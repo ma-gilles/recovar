@@ -15,14 +15,14 @@ from helpers.sparse_pass2_test_support import (
     _score_pass2_bucket_relion_gpu_diff2_single_cached,
 )
 
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
     _RELION_CUDA_FINE_REF3D_BLOCK_SIZE,
     _RELION_CUDA_POWERCLASS_BLOCK_SIZE,
     _relion_cuda_fine_diff2_min,
     _relion_cuda_fine_diff2_sum,
     _relion_cuda_fine_diff2_to_scores,
-    _relion_cuda_fine_global_diff2_min,
     _relion_cuda_fine_full_to_compact_lookup,
+    _relion_cuda_fine_global_diff2_min,
     _relion_cuda_fine_log_evidence_offset,
     _relion_cuda_fine_pixel_weights,
     _relion_cuda_powerclass_highres_norm_units,
@@ -550,8 +550,7 @@ def test_relion_cuda_fine_common_min_ignores_invalid_partitions_and_nonfinite_pa
 
 
 def test_relion_cuda_fine_host_staged_common_min_serializes_raw_device_uploads(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
-
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_scoring as bucketed_mod
     original_partition_min = bucketed_mod._relion_cuda_fine_partition_diff2_min_or_inf
     raw_device_refs = []
     max_prior_raw_uploads_alive = 0

@@ -55,7 +55,7 @@ def test_recovar_logical_replay_matches_production_normalized_cc_score():
     pytest.importorskip("jax")
     import jax.numpy as jnp
 
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
         _score_pass2_pairs_normalized_cc,
     )
 

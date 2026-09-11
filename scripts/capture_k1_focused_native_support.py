@@ -21,7 +21,7 @@ import numpy as np
 from recovar.core import fourier_transform_utils as ftu
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+from recovar.em.dense_single_volume.helpers import sparse_pass2_scoring
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     make_fourier_window_spec,
 )
@@ -711,14 +711,14 @@ def main() -> None:
         half=args.half,
     )
     original_pixel_correction = (
-        sparse_pass2_bucketed._relion_cuda_pixel_correction_from_rfloat_ctf
+        sparse_pass2_scoring._relion_cuda_pixel_correction_from_rfloat_ctf
     )
     if native_fine_image_override:
         def unit_pixel_correction(scale, ctf_rfloat):
             del scale
             return jax.numpy.ones_like(ctf_rfloat, dtype=jax.numpy.float32)
 
-        sparse_pass2_bucketed._relion_cuda_pixel_correction_from_rfloat_ctf = (
+        sparse_pass2_scoring._relion_cuda_pixel_correction_from_rfloat_ctf = (
             unit_pixel_correction
         )
     try:
@@ -766,7 +766,7 @@ def main() -> None:
             adaptive_fraction=0.999,
         )
     finally:
-        sparse_pass2_bucketed._relion_cuda_pixel_correction_from_rfloat_ctf = (
+        sparse_pass2_scoring._relion_cuda_pixel_correction_from_rfloat_ctf = (
             original_pixel_correction
         )
         bpref_diagnostics.clear_bpref_contribution_dump_context()

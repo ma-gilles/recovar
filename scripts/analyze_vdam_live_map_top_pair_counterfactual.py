@@ -77,7 +77,7 @@ def analyze(
     from recovar.em.dense_single_volume.helpers.projection import (
         compute_relion_projector_projections_block,
     )
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
         _relion_cuda_fine_full_to_compact_lookup,
     )
     from recovar.em.initial_model.dense_adapter import (

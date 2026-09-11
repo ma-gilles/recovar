@@ -17,8 +17,10 @@ from recovar.em.dense_single_volume.helpers.projection import (
     relion_projector_half_to_texture_full,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-    _relion_cuda_fine_full_to_compact_lookup,
     _relion_translation_angles_f32,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
+    _relion_cuda_fine_full_to_compact_lookup,
 )
 from recovar.em.dense_single_volume.helpers.significance import _dense_projection_scale
 from recovar.em.initial_model.dense_adapter import (

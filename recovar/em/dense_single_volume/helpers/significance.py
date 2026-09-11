@@ -288,7 +288,7 @@ def _plan_coarse_gaussian_square_layout(
         stable_fourier_window_current_size,
         stable_fourier_window_quantum,
     )
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
         _relion_cuda_fine_full_to_compact_lookup,
     )
 
@@ -2720,11 +2720,13 @@ def _assemble_relion_exact_coarse_gaussian_operands(
         _relion_exact_ctf_half_from_source_star_host,
     )
     from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        _relion_translation_angles_f32,
+        _relion_translation_angles_f64,
+    )
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
         _relion_cuda_corr_img_from_native_noise_variance,
         _relion_cuda_corr_img_from_rfloat_ctf,
         _relion_cuda_pixel_correction_from_rfloat_ctf,
-        _relion_translation_angles_f32,
-        _relion_translation_angles_f64,
     )
 
     real_dtype = jnp.float64 if use_float64_scoring else jnp.float32
@@ -4554,10 +4556,12 @@ def _compute_k_class_significance_batched(
             _relion_exact_ctf_half_from_source_star,
         )
         from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+            _relion_translation_angles_f32,
+        )
+        from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
             _relion_cuda_corr_img_from_rfloat_ctf,
             _relion_cuda_pixel_correction_from_rfloat_ctf,
             _relion_cuda_powerclass_highres_xi2_half,
-            _relion_translation_angles_f32,
         )
 
         if jax.default_backend() != "gpu" or not cuda_backproject.cuda_available():
@@ -4890,9 +4894,11 @@ def _compute_k_class_significance_batched(
             _relion_exact_ctf_half_from_source_star,
         )
         from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+            _relion_translation_angles_f32,
+        )
+        from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
             _relion_cuda_corr_img_from_rfloat_ctf,
             _relion_cuda_pixel_correction_from_rfloat_ctf,
-            _relion_translation_angles_f32,
         )
 
         if (

@@ -8,14 +8,16 @@ import pytest
 
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sp
 
+from recovar.em.dense_single_volume.helpers import sparse_pass2_scoring
+
 pytestmark = pytest.mark.unit
 
 
 def _with_fakes(monkeypatch):
     calls = []
-    monkeypatch.setattr(sp, "_relion_cuda_powerclass_highres_xi2_half", lambda x, **kw: calls.append("xi2") or "xi2")
-    monkeypatch.setattr(sp, "_relion_cuda_powerclass_spectrum_highres_norm_units", lambda x, **kw: calls.append("spectrum") or "spectrum")
-    monkeypatch.setattr(sp, "_relion_powerclass_highres_xi2_half_to_norm_units", lambda v, shape: calls.append("convert") or ("norm", v))
+    monkeypatch.setattr(sparse_pass2_scoring, "_relion_cuda_powerclass_highres_xi2_half", lambda x, **kw: calls.append("xi2") or "xi2")
+    monkeypatch.setattr(sparse_pass2_scoring, "_relion_cuda_powerclass_spectrum_highres_norm_units", lambda x, **kw: calls.append("spectrum") or "spectrum")
+    monkeypatch.setattr(sparse_pass2_scoring, "_relion_powerclass_highres_xi2_half_to_norm_units", lambda v, shape: calls.append("convert") or ("norm", v))
     return calls
 
 

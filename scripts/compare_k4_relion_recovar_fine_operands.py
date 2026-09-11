@@ -29,6 +29,8 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _half_translation_phase_table_for_indices,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
     _relion_cuda_fine_diff2_sum,
     _relion_cuda_fine_full_to_compact_lookup,
     _relion_cuda_fine_pixel_weights,

@@ -6,9 +6,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sp
-
-
+from recovar.em.dense_single_volume.helpers import sparse_pass2_scoring as sp
 def test_score_terms_match_the_documented_algebra():
     rng = np.random.default_rng(0); B, T, R, N = 2, 2, 3, 5
     shifted = jnp.asarray((rng.standard_normal((B, T, N)) + 1j * rng.standard_normal((B, T, N))).astype(np.complex64))

@@ -241,7 +241,7 @@ def test_actual_significance_engine_publishes_identical_complete_state(
     """Exercise the engine boundary on fixed scores, including all host outputs."""
     from recovar import cuda_backproject
     from recovar.em.dense_single_volume.helpers import coarse_partition, oversampling, projection, significance
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_scoring as sparse
     from recovar.em.dense_single_volume.helpers.coarse_partition import CoarseRowGroup, CoarseRowPlan
     import runpy
     from pathlib import Path

@@ -20,8 +20,10 @@ from recovar.em.dense_single_volume.helpers.flat_local_rows import (
     scatter_flat_local_rows,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-    _relion_cuda_fine_diff2_to_scores,
     _relion_f32_fine_posterior,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
+    _relion_cuda_fine_diff2_to_scores,
 )
 
 

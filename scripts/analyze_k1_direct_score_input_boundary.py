@@ -18,8 +18,10 @@ if str(REPO_ROOT) not in sys.path:
 
 from recovar import cuda_backproject
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-    _relion_cuda_fine_full_to_compact_lookup,
     _relion_translation_angles_f32,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
+    _relion_cuda_fine_full_to_compact_lookup,
 )
 from recovar.utils.file_hash import sha256_file  # noqa: E402 - follows repository path setup
 from scripts.analyze_k1_exact_ppref_operand_tuple import _float32_ulp_stats

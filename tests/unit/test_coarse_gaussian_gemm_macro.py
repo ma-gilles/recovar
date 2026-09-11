@@ -1269,8 +1269,7 @@ def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
 
     from recovar import cuda_backproject
     from recovar.em.dense_single_volume.helpers import projection as projection_helpers
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
-
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_scoring
     for name, value in {
         "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE": "0",
@@ -1314,7 +1313,7 @@ def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
         ),
     )
     monkeypatch.setattr(
-        sparse_pass2_bucketed,
+        sparse_pass2_scoring,
         "_relion_cuda_powerclass_highres_xi2_half",
         lambda processed, **_kwargs: jnp.zeros(
             processed.shape[0],
@@ -1476,7 +1475,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     from recovar.em.dense_single_volume.helpers import (
         oversampling,
         preprocessing,
-        sparse_pass2_bucketed,
+        sparse_pass2_scoring,
     )
     from recovar.em.dense_single_volume.helpers import projection as projection_helpers
     from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
@@ -1585,7 +1584,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         ),
     )
     monkeypatch.setattr(
-        sparse_pass2_bucketed,
+        sparse_pass2_scoring,
         "_relion_cuda_powerclass_highres_xi2_half",
         lambda processed, **_kwargs: jnp.zeros(
             processed.shape[0],
@@ -2309,8 +2308,7 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
 
     from recovar import cuda_backproject
     from recovar.em.dense_single_volume.helpers import projection as projection_helpers
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
-
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_scoring
     for name, value in {
         "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE": "0",
@@ -2350,7 +2348,7 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
         ),
     )
     monkeypatch.setattr(
-        sparse_pass2_bucketed,
+        sparse_pass2_scoring,
         "_relion_cuda_powerclass_highres_xi2_half",
         lambda processed, **_kwargs: jnp.zeros(processed.shape[0], dtype=jnp.float32),
     )

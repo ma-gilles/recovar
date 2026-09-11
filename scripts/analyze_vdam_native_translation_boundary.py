@@ -28,10 +28,12 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_scoring_half_image_weights,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _relion_translation_angles_f32,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
     _relion_cuda_fine_full_to_compact_lookup,
     _relion_cuda_pixel_correction_from_rfloat_ctf,
     _relion_cuda_powerclass_highres_xi2_half,
-    _relion_translation_angles_f32,
 )
 from scripts.analyze_em_k1_native_fine_operands import (
     _center,
