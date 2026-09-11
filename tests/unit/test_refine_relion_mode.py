@@ -4645,7 +4645,10 @@ def test_exact_local_cached_noise_projection_chunks_packed_tail():
     cached_chunk_src = cached_chunk_src[: cached_chunk_src.index("if return_profile:")]
     assert "for chunk_start in range(0, packed_rotation_count, chunk_rows)" in cached_chunk_src
     assert "chunk_take_indices = reconstruction_take_indices_jnp[:, chunk_start:chunk_stop]" in cached_chunk_src
-    assert "jnp.take_along_axis(" in cached_chunk_src
+    assert (
+        "chunk_proj_for_noise = _packed_reconstruction_rows(proj_for_noise, chunk_take_indices, chunk_pack_mask)"
+        in cached_chunk_src
+    )
 
 
 def test_exact_local_relion_projector_noise_projection_materializes_once():
