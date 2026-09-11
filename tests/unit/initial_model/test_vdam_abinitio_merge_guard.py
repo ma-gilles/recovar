@@ -160,7 +160,7 @@ def test_long_native_quality_guard_uses_relion_initialmodel_reference():
 
 def test_native_vdam_subset_order_uses_relion_sorted_idx_base_order():
     driver = (REPO_ROOT / "recovar/em/initial_model/driver.py").read_text()
-    iteration_loop = (REPO_ROOT / "recovar/em/initial_model/iteration_loop.py").read_text()
+    iteration_loop = _initial_model_package_source()  # the subset draw lives in its owner module
 
     expected_driver_tokens = [
         "_micrograph_sort_order(main_star)",

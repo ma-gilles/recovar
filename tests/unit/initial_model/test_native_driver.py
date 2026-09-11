@@ -15,7 +15,9 @@ import recovar.em.initial_model.driver as driver
 from recovar.data_io.starfile import read_star
 from recovar.em.dense_single_volume.batch_planning import maybe_cache_raw_image_loaders
 from recovar.em.initial_model import initialise_denovo_state, native_options, native_sampling, star_io
-from recovar.em.initial_model.iteration_loop import select_subset_for_iter
+from recovar.em.initial_model.subset_schedule import (
+    select_subset_for_iter,
+)
 from recovar.utils.helpers import R_from_relion, write_relion_mrc
 
 SCRIPT_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_ab_initio.py"

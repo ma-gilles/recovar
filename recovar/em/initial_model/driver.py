@@ -36,6 +36,11 @@ from recovar.em.initial_model.dense_adapter import (
 from recovar.em.initial_model.estep_common import (
     DenseInitialModelEstepConfig,
 )
+from recovar.em.initial_model.iteration_loop import (
+    relion_solvent_flatten_state,
+    relion_solvent_mask,
+    run_vdam_iterations,
+)
 from recovar.em.initial_model.native_options import (
     NativeInitialModelOptions,
 )
@@ -66,6 +71,9 @@ from recovar.em.initial_model.star_io import (
     _write_iteration_artifacts,
     _write_model_star,
 )
+from recovar.em.initial_model.subset_schedule import (
+    restore_subset_order_for_continuation,
+)
 from recovar.reconstruction.noise import make_radial_noise
 from recovar.utils.helpers import (
     get_gpu_memory_total,
@@ -74,12 +82,6 @@ from recovar.utils.helpers import (
 from .avg_unaligned import compute_avg_unaligned_and_sigma2
 from .bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstrap_iref_via_cpp
 from .init import initialise_data_vs_prior_from_references, initialise_denovo_state, seed_noise_from_mavg
-from .iteration_loop import (
-    relion_solvent_flatten_state,
-    relion_solvent_mask,
-    restore_subset_order_for_continuation,
-    run_vdam_iterations,
-)
 from .schedules import (
     DEFAULT_GRAD_EM_ITERS,
     DEFAULT_SIGMA2_FUDGE,

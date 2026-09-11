@@ -17,13 +17,17 @@ from recovar.em.initial_model.iteration_loop import (
     refresh_tau2_from_projector_power,
     relion_solvent_flatten_state,
     relion_solvent_mask,
-    restore_subset_order_for_continuation,
     run_vdam_iterations,
-    select_subset_for_iter,
     update_current_resolution_from_data_vs_prior,
     update_image_size_and_resolution_pointers,
+)
+from recovar.em.initial_model.estep_meta_updates import (
     update_noise_from_estep_meta,
     update_probabilities_from_estep_meta,
+)
+from recovar.em.initial_model.subset_schedule import (
+    restore_subset_order_for_continuation,
+    select_subset_for_iter,
 )
 from recovar.em.initial_model.mstep_accumulator import (
     VdamAccumulator,
