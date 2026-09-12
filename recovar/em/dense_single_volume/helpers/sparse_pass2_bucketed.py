@@ -314,6 +314,8 @@ _SPARSE_KCLASS_WINDOWED_TRANSLATION_TILE_CAP_ENV = (
 _SPARSE_KCLASS_RAW_HOST_STAGING_MAX_BYTES_ENV = (
     "RECOVAR_SPARSE_KCLASS_RAW_HOST_STAGING_MAX_BYTES"
 )
+_SPARSE_KCLASS_RAW_DIFF2_DEVICE_RESIDENT_ENV = "RECOVAR_SPARSE_KCLASS_RAW_DIFF2_DEVICE_RESIDENT"
+_SPARSE_KCLASS_DEFERRED_HOST_STATS_ENV = "RECOVAR_SPARSE_KCLASS_DEFERRED_HOST_STATS"
 _SPARSE_PASS2_WINDOWED_TRANSLATION_TILE_MAX_MULTIPLIER_ENV = (
     "RECOVAR_SPARSE_PASS2_WINDOWED_TRANSLATION_TILE_MAX_MULTIPLIER"
 )
@@ -13562,6 +13564,138 @@ def compute_k_class_pass2_stats_sparse_fused(
     raw_host_staging_total_bytes = 0
     raw_host_staging_peak_bytes = 0
     raw_host_staging_s = 0.0
+    # Keep each class's raw diff2 on the device instead of staging it to the host
+    # between scoring and the joint minimum. Measured 2026-09-12 on 100k/256 K=4:
+    # the host staging was 29% of all device->host time (~45 GB over two
+    # iterations) and the arrays are ~3 MB per class per bucket, so the memory
+    # guard it implements protects against a few tens of MB. The joint-minimum and
+    # score-conversion helpers already accept device arrays, so nothing numerical
+    # changes; only the copies disappear. Opt-in until qualified at real size.
+    raw_diff2_device_resident = parse_env_binary_flag(_SPARSE_KCLASS_RAW_DIFF2_DEVICE_RESIDENT_ENV)
+    # Defer every per-class, per-bucket device->host pull of the noise/statistics
+    # accumulators to one transfer after the bucket loop, then replay the identical
+    # host arithmetic in the identical order. Measured 2026-09-12 on 100k/256 K=4:
+    # 347k such pulls in two iterations; the first one after each class's GPU work
+    # blocks on the whole device queue (a 109-byte pull costing 13 ms), so the GPU
+    # sits at ~40%. Nothing numerical moves: the same NumPy statements run on the
+    # same values in the same sequence, only later. Opt-in until qualified.
+    defer_host_stats = parse_env_binary_flag(_SPARSE_KCLASS_DEFERRED_HOST_STATS_ENV)
+    deferred_host_records: list[tuple] = []
+
+    def _apply_noise_power_host(class_index, image_indices, support_mass_np, shells_np, per_image_np):
+        noise_img_power_total[class_index] += shells_np
+        noise_norm_correction_total[class_index][image_indices] += per_image_np
+        noise_sumw_total[class_index] += float(np.sum(support_mass_np, dtype=np.float64))
+
+    def _apply_scale_host(class_index, group_ids_np, xa_np, aa_np):
+        np.add.at(noise_scale_correction_xa_total[class_index], group_ids_np, xa_np)
+        np.add.at(noise_scale_correction_aa_total[class_index], group_ids_np, aa_np)
+
+    def _apply_wsum_host(class_index, image_indices, shells_np, residual_np):
+        noise_wsum_total[class_index] += shells_np
+        noise_norm_correction_total[class_index][image_indices] += residual_np
+
+    def _apply_stats_host(
+        class_index,
+        arrays,
+        pair_arrays,
+        bucket_uses_compact_pairs,
+        image_indices,
+        n_real_images,
+        best_argmax_host,
+        best_log_score_host,
+        max_posterior_host,
+        class_log_z_host,
+        probs_sum_t_host,
+        log_score_offset,
+    ):
+        """Per-bucket, per-class statistics on host values. Called immediately when
+        the pull is not deferred, or replayed in bucket order after one transfer."""
+        actual_counts_arr = np.asarray(arrays["actual_counts"], dtype=np.int64)
+        best_argmax_np = np.asarray(best_argmax_host, dtype=np.int64)
+        best_log_score_np = np.asarray(best_log_score_host, dtype=np.float64)
+        has_best_pose_np = np.isfinite(best_log_score_np)
+        if bucket_uses_compact_pairs:
+            safe_best_argmax_np = np.where(has_best_pose_np, best_argmax_np, 0)
+            row_index_np = np.arange(batch, dtype=np.int64)
+            pair_local_rotation_row = np.asarray(pair_arrays["local_rotation_row"], dtype=np.int32)
+            pair_translation_idx = np.asarray(pair_arrays["translation_idx"], dtype=np.int32)
+            pair_rotation_index = np.asarray(pair_arrays["rotation_index"], dtype=np.int64)
+            best_rot_idx = np.where(
+                has_best_pose_np,
+                pair_local_rotation_row[row_index_np, safe_best_argmax_np],
+                0,
+            ).astype(np.int64, copy=False)
+            best_trans_idx = np.where(
+                has_best_pose_np,
+                pair_translation_idx[row_index_np, safe_best_argmax_np],
+                0,
+            ).astype(np.int64, copy=False)
+            best_fine_rot_idx = np.where(
+                has_best_pose_np,
+                pair_rotation_index[row_index_np, safe_best_argmax_np],
+                np.asarray(arrays["rotation_indices"], dtype=np.int64)[:, 0],
+            ).astype(np.int64, copy=False)
+        else:
+            best_rot_idx = best_argmax_np // n_fine_trans
+            best_trans_idx = best_argmax_np % n_fine_trans
+            row_index_np = np.arange(batch, dtype=np.int64)
+            best_fine_rot_idx = np.asarray(arrays["rotation_indices"], dtype=np.int64)[
+                row_index_np,
+                best_rot_idx,
+            ]
+        # Padded image rows exist only to keep the bucket shape repeatable; they
+        # carry actual_counts zero and must not be checked or written back.
+        real_rows = slice(0, n_real_images)
+        if np.any(best_rot_idx[real_rows] >= actual_counts_arr[real_rows]):
+            bad = np.flatnonzero(best_rot_idx[real_rows] >= actual_counts_arr[real_rows])
+            raise RuntimeError(
+                "Fused sparse K-class pass-2: best rotation index points into padding for "
+                f"class {class_index + 1}, images {bad.tolist()}",
+            )
+        max_posterior_np = np.asarray(
+            max_posterior_host,
+            dtype=precision_policy.score_real_dtype,
+        )
+        class_log_z_np = np.asarray(class_log_z_host, dtype=np.float64)
+        probs_sum_t = np.asarray(probs_sum_t_host, dtype=np.float64)
+        for row, image_idx in enumerate(image_indices[:n_real_images].tolist()):
+            r = int(best_rot_idx[row])
+            t = int(best_trans_idx[row])
+            fine_rot_idx = int(best_fine_rot_idx[row])
+            class_hard_assignments[class_index, image_idx] = fine_rot_idx * n_fine_trans + t
+            best_rotations[class_index][image_idx] = per_image_inputs_by_class[class_index]["oversampled_rots"][
+                image_idx
+            ][r]
+            if best_eulers is not None:
+                best_eulers[class_index][image_idx] = per_image_inputs_by_class[class_index]["source_eulers"][
+                    image_idx
+                ][r]
+            best_rotation_indices[class_index][image_idx] = fine_rot_idx
+            if np.isfinite(class_log_z_np[row]):
+                class_log_evidence[class_index, image_idx] = float(class_log_z_np[row] + log_score_offset[row])
+                class_score_log_z[class_index, image_idx] = float(
+                    class_log_z_np[row] + log_score_offset[row]
+                    if use_exact_relion_gaussian
+                    else class_log_z_np[row]
+                )
+            else:
+                class_log_evidence[class_index, image_idx] = -np.inf
+                class_score_log_z[class_index, image_idx] = -np.inf
+            best_log_score[class_index, image_idx] = float(best_log_score_np[row] + log_score_offset[row])
+            max_posterior[class_index, image_idx] = float(max_posterior_np[row])
+            cnt = int(actual_counts_arr[row])
+            if cnt == 0:
+                continue
+            unique_rot_image = per_image_inputs_by_class[class_index]["unique_rot"][image_idx]
+            parent_map_image = per_image_inputs_by_class[class_index]["parent_map"][image_idx]
+            coarse_rot_indices = unique_rot_image[parent_map_image]
+            np.add.at(
+                rotation_posterior_sums[class_index],
+                coarse_rot_indices,
+                probs_sum_t[row, :cnt],
+            )
+
     raw_host_staging_dtype = np.dtype(
         np.float64 if precision_policy.use_float64_scoring else np.float32
     )
@@ -13581,7 +13715,10 @@ def compute_k_class_pass2_stats_sparse_fused(
                 "sparse pass-2 hypothesis microbatch cap."
             )
         stage_t0 = time.time()
-        raw_host = np.asarray(raw_diff2, dtype=raw_host_staging_dtype)
+        if raw_diff2_device_resident:
+            raw_host = jnp.asarray(raw_diff2, dtype=raw_host_staging_dtype)
+        else:
+            raw_host = np.asarray(raw_diff2, dtype=raw_host_staging_dtype)
         raw_host_staging_s += time.time() - stage_t0
         raw_host_staging_total_bytes += raw_nbytes
         raw_host_staging_peak_bytes = max(raw_host_staging_peak_bytes, next_bucket_bytes)
@@ -15590,9 +15727,12 @@ def compute_k_class_pass2_stats_sparse_fused(
                     log_label=f"kclass{class_index + 1}-ctf-half",
                 )
             _add_sparse_group_timing(group_timing, "mstep_adjoint", time.time() - substage_t0)
-            class_posterior_sums_mstep[class_index] += float(
-                np.sum(np.asarray(probs_sum_t_jax, dtype=np.float64))
-            )
+            if defer_host_stats:
+                deferred_host_records.append(("posterior", class_index, probs_sum_t_jax))
+            else:
+                class_posterior_sums_mstep[class_index] += float(
+                    np.sum(np.asarray(probs_sum_t_jax, dtype=np.float64))
+                )
             if (
                 accumulate_noise
                 and bucket_uses_compact_pairs
@@ -15689,13 +15829,18 @@ def compute_k_class_pass2_stats_sparse_fused(
                     norm_unweighted_high_shell=relion_norm_high_shell,
                     include_unweighted_high_shell=class_index == 0,
                 )
-                support_mass_np = np.asarray(support_mass, dtype=np.float64)
-                noise_img_power_total[class_index] += np.asarray(weighted_img_shells, dtype=np.float64)
-                noise_norm_correction_total[class_index][image_indices] += np.asarray(
-                    weighted_img_per_image,
-                    dtype=np.float64,
-                )
-                noise_sumw_total[class_index] += float(np.sum(support_mass_np, dtype=np.float64))
+                if defer_host_stats:
+                    deferred_host_records.append(
+                        ("power", class_index, image_indices, support_mass, weighted_img_shells, weighted_img_per_image)
+                    )
+                else:
+                    _apply_noise_power_host(
+                        class_index,
+                        image_indices,
+                        np.asarray(support_mass, dtype=np.float64),
+                        np.asarray(weighted_img_shells, dtype=np.float64),
+                        np.asarray(weighted_img_per_image, dtype=np.float64),
+                    )
                 _add_sparse_group_timing(group_timing, "noise_power_shells", time.time() - noise_sub_t0)
                 noise_sub_t0 = time.time()
                 if noise_scale_correction_xa_total is not None:
@@ -15717,16 +15862,17 @@ def compute_k_class_pass2_stats_sparse_fused(
                         bucket_scale_for_stats,
                         scale_correction_pixel_masks[class_index],
                     )
-                    np.add.at(
-                        noise_scale_correction_xa_total[class_index],
-                        np.asarray(bucket_group_ids, dtype=np.int64),
-                        np.asarray(scale_xa_per_image, dtype=np.float64),
-                    )
-                    np.add.at(
-                        noise_scale_correction_aa_total[class_index],
-                        np.asarray(bucket_group_ids, dtype=np.int64),
-                        np.asarray(scale_aa_per_image, dtype=np.float64),
-                    )
+                    if defer_host_stats:
+                        deferred_host_records.append(
+                            ("scale", class_index, bucket_group_ids, scale_xa_per_image, scale_aa_per_image)
+                        )
+                    else:
+                        _apply_scale_host(
+                            class_index,
+                            np.asarray(bucket_group_ids, dtype=np.int64),
+                            np.asarray(scale_xa_per_image, dtype=np.float64),
+                            np.asarray(scale_aa_per_image, dtype=np.float64),
+                        )
                 if block_noise_shells_precomputed is not None:
                     flat_proj_for_noise = None
                     flat_proj_abs2_for_noise = None
@@ -15843,11 +15989,17 @@ def compute_k_class_pass2_stats_sparse_fused(
                             "RECOVAR_NOISE_DTYPE_DEBUG(fused): block_noise_shells=%s",
                             block_noise_shells.dtype,
                         )
-                    noise_wsum_total[class_index] += np.asarray(block_noise_shells, dtype=np.float64)
-                    noise_norm_correction_total[class_index][image_indices] += np.asarray(
-                        block_norm_residual,
-                        dtype=np.float64,
-                    )
+                    if defer_host_stats:
+                        deferred_host_records.append(
+                            ("wsum", class_index, image_indices, block_noise_shells, block_norm_residual)
+                        )
+                    else:
+                        _apply_wsum_host(
+                            class_index,
+                            image_indices,
+                            np.asarray(block_noise_shells, dtype=np.float64),
+                            np.asarray(block_norm_residual, dtype=np.float64),
+                        )
                 elif flat_summed_masked_noise is not None:
                     if bucket_uses_active_rows:
                         if flat_image_indices is None:
@@ -15912,100 +16064,55 @@ def compute_k_class_pass2_stats_sparse_fused(
                             "RECOVAR_NOISE_DTYPE_DEBUG(fused): block_noise_shells=%s",
                             block_noise_shells.dtype,
                         )
-                    noise_wsum_total[class_index] += np.asarray(block_noise_shells, dtype=np.float64)
-                    noise_norm_correction_total[class_index][image_indices] += np.asarray(
-                        block_norm_residual,
-                        dtype=np.float64,
-                    )
+                    if defer_host_stats:
+                        deferred_host_records.append(
+                            ("wsum", class_index, image_indices, block_noise_shells, block_norm_residual)
+                        )
+                    else:
+                        _apply_wsum_host(
+                            class_index,
+                            image_indices,
+                            np.asarray(block_noise_shells, dtype=np.float64),
+                            np.asarray(block_norm_residual, dtype=np.float64),
+                        )
                 _add_sparse_group_timing(
                     group_timing, "noise_scale_correction", time.time() - noise_sub_t0
                 )
                 _add_sparse_group_timing(group_timing, "noise", time.time() - substage_t0)
 
             substage_t0 = time.time()
-            actual_counts_arr = np.asarray(arrays["actual_counts"], dtype=np.int64)
-            best_argmax_np = np.asarray(best_argmax, dtype=np.int64)
-            best_log_score_np = np.asarray(best_log_score_bucket, dtype=np.float64)
-            has_best_pose_np = np.isfinite(best_log_score_np)
-            if bucket_uses_compact_pairs:
-                safe_best_argmax_np = np.where(has_best_pose_np, best_argmax_np, 0)
-                row_index_np = np.arange(batch, dtype=np.int64)
-                pair_local_rotation_row = np.asarray(pair_arrays["local_rotation_row"], dtype=np.int32)
-                pair_translation_idx = np.asarray(pair_arrays["translation_idx"], dtype=np.int32)
-                pair_rotation_index = np.asarray(pair_arrays["rotation_index"], dtype=np.int64)
-                best_rot_idx = np.where(
-                    has_best_pose_np,
-                    pair_local_rotation_row[row_index_np, safe_best_argmax_np],
-                    0,
-                ).astype(np.int64, copy=False)
-                best_trans_idx = np.where(
-                    has_best_pose_np,
-                    pair_translation_idx[row_index_np, safe_best_argmax_np],
-                    0,
-                ).astype(np.int64, copy=False)
-                best_fine_rot_idx = np.where(
-                    has_best_pose_np,
-                    pair_rotation_index[row_index_np, safe_best_argmax_np],
-                    np.asarray(arrays["rotation_indices"], dtype=np.int64)[:, 0],
-                ).astype(np.int64, copy=False)
-            else:
-                best_rot_idx = best_argmax_np // n_fine_trans
-                best_trans_idx = best_argmax_np % n_fine_trans
-                row_index_np = np.arange(batch, dtype=np.int64)
-                best_fine_rot_idx = np.asarray(arrays["rotation_indices"], dtype=np.int64)[
-                    row_index_np,
-                    best_rot_idx,
-                ]
-            # Padded image rows exist only to keep the bucket shape repeatable; they
-            # carry actual_counts zero and must not be checked or written back.
-            real_rows = slice(0, n_real_images)
-            if np.any(best_rot_idx[real_rows] >= actual_counts_arr[real_rows]):
-                bad = np.flatnonzero(best_rot_idx[real_rows] >= actual_counts_arr[real_rows])
-                raise RuntimeError(
-                    "Fused sparse K-class pass-2: best rotation index points into padding for "
-                    f"class {class_index + 1}, images {bad.tolist()}",
-                )
-            max_posterior_np = np.asarray(
-                max_posterior_bucket,
-                dtype=precision_policy.score_real_dtype,
-            )
-            class_log_z_np = np.asarray(class_score_log_z_bucket[class_index], dtype=np.float64)
-            probs_sum_t = np.asarray(probs_sum_t_jax, dtype=np.float64)
-            for row, image_idx in enumerate(image_indices[:n_real_images].tolist()):
-                r = int(best_rot_idx[row])
-                t = int(best_trans_idx[row])
-                fine_rot_idx = int(best_fine_rot_idx[row])
-                class_hard_assignments[class_index, image_idx] = fine_rot_idx * n_fine_trans + t
-                best_rotations[class_index][image_idx] = per_image_inputs_by_class[class_index]["oversampled_rots"][
-                    image_idx
-                ][r]
-                if best_eulers is not None:
-                    best_eulers[class_index][image_idx] = per_image_inputs_by_class[class_index]["source_eulers"][
-                        image_idx
-                    ][r]
-                best_rotation_indices[class_index][image_idx] = fine_rot_idx
-                if np.isfinite(class_log_z_np[row]):
-                    class_log_evidence[class_index, image_idx] = float(class_log_z_np[row] + log_score_offset[row])
-                    class_score_log_z[class_index, image_idx] = float(
-                        class_log_z_np[row] + log_score_offset[row]
-                        if use_exact_relion_gaussian
-                        else class_log_z_np[row]
+            if defer_host_stats:
+                deferred_host_records.append(
+                    (
+                        "stats",
+                        class_index,
+                        arrays,
+                        pair_arrays if bucket_uses_compact_pairs else None,
+                        bucket_uses_compact_pairs,
+                        image_indices,
+                        n_real_images,
+                        best_argmax,
+                        best_log_score_bucket,
+                        max_posterior_bucket,
+                        class_score_log_z_bucket[class_index],
+                        probs_sum_t_jax,
+                        log_score_offset,
                     )
-                else:
-                    class_log_evidence[class_index, image_idx] = -np.inf
-                    class_score_log_z[class_index, image_idx] = -np.inf
-                best_log_score[class_index, image_idx] = float(best_log_score_np[row] + log_score_offset[row])
-                max_posterior[class_index, image_idx] = float(max_posterior_np[row])
-                cnt = int(actual_counts_arr[row])
-                if cnt == 0:
-                    continue
-                unique_rot_image = per_image_inputs_by_class[class_index]["unique_rot"][image_idx]
-                parent_map_image = per_image_inputs_by_class[class_index]["parent_map"][image_idx]
-                coarse_rot_indices = unique_rot_image[parent_map_image]
-                np.add.at(
-                    rotation_posterior_sums[class_index],
-                    coarse_rot_indices,
-                    probs_sum_t[row, :cnt],
+                )
+            else:
+                _apply_stats_host(
+                    class_index,
+                    arrays,
+                    pair_arrays if bucket_uses_compact_pairs else None,
+                    bucket_uses_compact_pairs,
+                    image_indices,
+                    n_real_images,
+                    best_argmax,
+                    best_log_score_bucket,
+                    max_posterior_bucket,
+                    class_score_log_z_bucket[class_index],
+                    probs_sum_t_jax,
+                    log_score_offset,
                 )
             _add_sparse_group_timing(group_timing, "stats", time.time() - substage_t0)
         _add_sparse_group_timing(group_timing, "mstep_noise_stats", time.time() - stage_t0)
@@ -16059,6 +16166,55 @@ def compute_k_class_pass2_stats_sparse_fused(
         rectangular_rotation_slots,
         compact_slot_ratio,
     )
+    if deferred_host_records:
+        # One transfer for everything the loop deferred, then the same host
+        # statements in the same order the loop would have run them.
+        replay_t0 = time.time()
+        device_leaves = []
+        for record in deferred_host_records:
+            kind = record[0]
+            if kind == "posterior":
+                device_leaves.append(record[2])
+            elif kind in ("power",):
+                device_leaves.extend(record[3:6])
+            elif kind in ("scale", "wsum"):
+                device_leaves.extend(record[3:5])
+            elif kind == "stats":
+                device_leaves.extend(record[7:12])
+        host_leaves = iter(jax.device_get(device_leaves))
+        for record in deferred_host_records:
+            kind = record[0]
+            if kind == "posterior":
+                class_posterior_sums_mstep[record[1]] += float(
+                    np.sum(np.asarray(next(host_leaves), dtype=np.float64))
+                )
+            elif kind == "power":
+                _apply_noise_power_host(
+                    record[1], record[2],
+                    np.asarray(next(host_leaves), dtype=np.float64),
+                    np.asarray(next(host_leaves), dtype=np.float64),
+                    np.asarray(next(host_leaves), dtype=np.float64),
+                )
+            elif kind == "scale":
+                _apply_scale_host(
+                    record[1], np.asarray(record[2], dtype=np.int64),
+                    np.asarray(next(host_leaves), dtype=np.float64),
+                    np.asarray(next(host_leaves), dtype=np.float64),
+                )
+            elif kind == "wsum":
+                _apply_wsum_host(
+                    record[1], record[2],
+                    np.asarray(next(host_leaves), dtype=np.float64),
+                    np.asarray(next(host_leaves), dtype=np.float64),
+                )
+            elif kind == "stats":
+                pulled = [next(host_leaves) for _ in range(5)]
+                _apply_stats_host(*record[1:7], *pulled, record[12])
+        deferred_host_records.clear()
+        logger.info(
+            "Sparse fused K-class pass-2 deferred host statistics: replayed in %.2fs",
+            time.time() - replay_t0,
+        )
     if image_capacity_padded_buckets:
         logger.info(
             "Sparse fused K-class pass-2 image-axis capacity: padded %d of %d buckets, "

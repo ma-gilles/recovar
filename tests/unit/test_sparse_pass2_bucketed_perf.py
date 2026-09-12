@@ -10086,3 +10086,93 @@ def test_image_axis_capacity_pads_a_small_bucket(monkeypatch):
 
     # The fixture has three images, so the capacity must round them up to the floor.
     assert quantized_image_capacity(3) == 16
+
+
+def _fused_kclass_pull_count(monkeypatch, env, bucketed_mod):
+    """Run the fixture under ``env`` and count device->host pulls it performs."""
+    import jax._src.array as jax_array_mod
+
+    counts = {"array": 0, "device_get": 0, "largest_device_get": 0}
+    orig_array = jax_array_mod.ArrayImpl.__array__
+    orig_device_get = jax.device_get
+
+    def counting_array(self, *a, **kw):
+        counts["array"] += 1
+        return orig_array(self, *a, **kw)
+
+    def counting_device_get(x):
+        counts["device_get"] += 1
+        if isinstance(x, (list, tuple)):
+            counts["largest_device_get"] = max(counts["largest_device_get"], len(x))
+        return orig_device_get(x)
+
+    monkeypatch.setattr(jax_array_mod.ArrayImpl, "__array__", counting_array)
+    monkeypatch.setattr(jax, "device_get", counting_device_get)
+    monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    result = bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**_fused_kclass_capacity_fixture())
+    monkeypatch.setattr(jax_array_mod.ArrayImpl, "__array__", orig_array)
+    monkeypatch.setattr(jax, "device_get", orig_device_get)
+    return _fused_kclass_result_arrays(result), counts
+
+
+def _assert_fused_arrays_identical(baseline, candidate, label):
+    assert baseline and set(baseline) == set(candidate)
+    mismatched = [
+        name for name, expected in baseline.items()
+        if expected.shape != candidate[name].shape
+        or not np.array_equal(
+            np.nan_to_num(expected, nan=0.0, posinf=1e30, neginf=-1e30),
+            np.nan_to_num(candidate[name], nan=0.0, posinf=1e30, neginf=-1e30),
+        )
+    ]
+    assert not mismatched, f"{label} changed: {mismatched}"
+
+
+def test_deferred_host_statistics_are_bit_identical_and_pull_less(monkeypatch, caplog):
+    """Deferring the per-class host pulls must change nothing but when they happen.
+
+    On the 100k/256 K=4 fixture the first pull after each class's GPU work blocked on
+    the whole device queue (a 109-byte pull costing 13 ms, 48% of all transfer time),
+    so the accumulators are collected and replayed after the loop. Same NumPy
+    statements, same values, same order -- so every result array must be identical,
+    and the run must issue fewer device->host pulls.
+    """
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    baseline, immediate = _fused_kclass_pull_count(
+        monkeypatch, {"RECOVAR_SPARSE_KCLASS_DEFERRED_HOST_STATS": "0"}, bucketed_mod
+    )
+    with caplog.at_level(logging.INFO, logger=bucketed_mod.__name__):
+        deferred, later = _fused_kclass_pull_count(
+            monkeypatch, {"RECOVAR_SPARSE_KCLASS_DEFERRED_HOST_STATS": "1"}, bucketed_mod
+        )
+    _assert_fused_arrays_identical(baseline, deferred, "deferred host statistics")
+    assert any("deferred host statistics: replayed" in r.getMessage() for r in caplog.records), \
+        "the deferred path must actually replay -- otherwise this test proves nothing"
+    # The point of deferral is one transfer after the loop instead of a pull per class
+    # per bucket. jax.device_get over a list still invokes __array__ once per leaf, so a
+    # raw pull count is the wrong proxy; what must hold is that a single device_get call
+    # carried every deferred leaf. Unconditionally per class: one posterior sum and five
+    # statistics arrays (the noise-stage leaves only exist when noise is accumulated,
+    # which this fixture does not do).
+    n_classes = 2
+    assert later["largest_device_get"] >= 6 * n_classes, later
+    assert immediate["largest_device_get"] < 6 * n_classes, immediate
+
+
+def test_device_resident_raw_diff2_is_bit_identical(monkeypatch):
+    """Keeping raw diff2 on device removes ~45 GB of copies per two real-size iterations;
+    the joint-minimum and score helpers already accept device arrays, so nothing may change."""
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    baseline, _ = _fused_kclass_pull_count(
+        monkeypatch, {"RECOVAR_SPARSE_KCLASS_RAW_DIFF2_DEVICE_RESIDENT": "0"}, bucketed_mod
+    )
+    resident, _ = _fused_kclass_pull_count(
+        monkeypatch, {"RECOVAR_SPARSE_KCLASS_RAW_DIFF2_DEVICE_RESIDENT": "1"}, bucketed_mod
+    )
+    _assert_fused_arrays_identical(baseline, resident, "device-resident raw diff2")
