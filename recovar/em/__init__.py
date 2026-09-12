@@ -35,8 +35,6 @@ from .heterogeneity import (
     compute_projected_covariance,
     compute_projected_covariance_rhs_lhs,
     compute_UPLambdainvPU,
-    estimate_principal_components_halfset,
-    estimate_principal_components_simple,
     solve_covariance,
     sum_up_images_fixed_rots_covariance_precompute,
     sum_up_images_fixed_rots_covariance_with_precompute,
@@ -94,6 +92,4 @@ __all__ = [
     "compute_projected_covariance",
     "compute_projected_covariance_rhs_lhs",
     "solve_covariance",
-    "estimate_principal_components_simple",
-    "estimate_principal_components_halfset",
 ]
