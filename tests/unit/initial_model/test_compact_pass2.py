@@ -9,9 +9,11 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-    _compact_pair_weighted_rotation_sums,
     subtract_projected_reference_from_sparse_mstep_rotation_sums,
     subtract_projected_reference_from_sparse_mstep_sums,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_compact_pair_sums import (
+    _compact_pair_weighted_rotation_sums,
 )
 from recovar.em.dense_single_volume.helpers.types import make_relion_stats
 from recovar.em.dense_single_volume.local_backprojection import (

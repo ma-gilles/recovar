@@ -92,6 +92,7 @@ def test_compact_weighted_sums_and_noise_wrapper_matches_composed_boundaries(
 ):
     import recovar.cuda_backproject as cuda_backproject
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_noise_blocks
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -160,7 +161,7 @@ def test_compact_weighted_sums_and_noise_wrapper_matches_composed_boundaries(
             jnp.arange(batch, dtype=jnp.int32)[:, None],
             (batch, rotation_count),
         ).reshape(-1)
-        expected_noise = sparse_pass2_bucketed._compute_noise_block_and_norm_residual_from_flat_rows_residual_terms(
+        expected_noise = sparse_pass2_noise_blocks._compute_noise_block_and_norm_residual_from_flat_rows_residual_terms(
             jnp.asarray(proj_for_noise).reshape((-1, noise_pixels)),
             jnp.asarray(proj_abs2_for_noise).reshape((-1, noise_pixels)),
             expected_sums[1].reshape((-1, noise_pixels)),
