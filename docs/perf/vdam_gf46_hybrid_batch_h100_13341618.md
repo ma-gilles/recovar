@@ -97,7 +97,7 @@ with this synthetic qualification to claim an end-to-end speedup.
 
 From clean commit `b611aeff15004a07d6d2a1ec590bc5b97180cb5b`, compute the
 source-manifest digest and submit
-`scripts/run_vdam_gf46_hybrid_batch_h100.sbatch` with the exact commit, tree,
+[run_vdam_gf46_hybrid_batch_h100.sbatch](https://github.com/ma-gilles/recovar/blob/4e3e5396d8c5fee4e207b9df3acb7f9987e17473/scripts/run_vdam_gf46_hybrid_batch_h100.sbatch) with the exact commit, tree,
 manifest, pixi interpreter, and repository root exported. The runner selects
 the single cgroup-visible H100, rebuilds the custom CUDA library externally,
 pins cuSPARSE, verifies both required CUDA symbols, and seals every artifact.

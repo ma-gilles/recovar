@@ -109,7 +109,6 @@
       "scripts/vdam_coarse_combined_true200_acceptance.json",
       "scripts/vdam_gpu_selection.sh",
       "tests/unit/initial_model/test_vdam_coarse_combined_true200_analyzer.py",
-      "tests/unit/initial_model/test_vdam_gf46_hybrid_transition.py",
       "tests/unit/test_coarse_selector_audit.py"
     ]
   },

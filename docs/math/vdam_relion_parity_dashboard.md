@@ -347,5 +347,5 @@ and are marked `SAFE_TO_DELETE`.
 - `recovar/em/vdam/dense_adapter.py:_initial_model_coarse_gemm_diagnostic_scopes`
 - `recovar/cuda_backproject.py:relion_coarse_diff2_rotation_blocks_f32`
 - `recovar/cuda/cuda_backproject.cu:launch_relion_coarse_diff2_rotation_blocks_f32`
-- `scripts/run_vdam_coarse_gemm_gf46_streaming_selector.sbatch`
+- [run_vdam_coarse_gemm_gf46_streaming_selector.sbatch](https://github.com/ma-gilles/recovar/blob/4e3e5396d8c5fee4e207b9df3acb7f9987e17473/scripts/run_vdam_coarse_gemm_gf46_streaming_selector.sbatch)
 - `scripts/run_vdam_coarse_rotation_blocks_primitive_gate.sbatch`
