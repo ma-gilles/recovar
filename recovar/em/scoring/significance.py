@@ -102,9 +102,6 @@ from recovar.em.scoring.coarse_gemm_streaming import (
     write_coarse_gemm_streaming_summary,
 )
 from recovar.em.scoring.scoring import _e_step_block_scores, _e_step_block_scores_windowed, _update_logsumexp
-from recovar.em.scoring.significant_samples import (
-    ComplementSignificantSampleIndices as ComplementSignificantSampleIndices,  # noqa: F401 - ComplementSignificantSampleIndices.__module__ is pinned to this module, so legacy pickles resolve it here
-)
 from recovar.em.scoring.significant_samples import compact_significant_sample_indices_from_mask
 from recovar.utils.nvtx_shim import nvtx
 

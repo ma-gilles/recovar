@@ -95,10 +95,7 @@ from recovar.em.local.local_backprojection import (
     flatten_bucket_rotations,
     flatten_bucket_rows,
 )
-from recovar.em.scoring.compact_candidates import (  # noqa: F401 - SparseCandidateMask.__module__ is pinned to this module, so legacy pickles resolve it here
-    SparseCandidateMask,
-    _candidate_mask_count,
-)
+from recovar.em.scoring.compact_candidates import _candidate_mask_count
 from recovar.em.scoring.sparse_bucket_arrays import (
     _bucket_pass2_inputs,
     _bucket_sparse_k_class_pass2_inputs,

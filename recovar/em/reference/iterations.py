@@ -6,7 +6,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar import utils
-from recovar.em.core import hard_assignment_idx_to_pose
+from recovar.em.reference.core import hard_assignment_idx_to_pose
 
 logger = logging.getLogger(__name__)
 

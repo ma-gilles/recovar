@@ -330,7 +330,7 @@ not an ordinary auto-refine/K4 waiver; four native adaptive fields are uncapture
 
 The dense/local fast guard rejects undefined names before JAX startup. The
 `picked_frequencies` use-before-assignment that a broader scan found in
-`recovar/em/heterogeneity.py` lived in the uncalled legacy
+`recovar/em/reference/heterogeneity.py` lived in the uncalled legacy
 `estimate_principal_components`; after the
 [caller audit](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/legacy_pca_callers_20260910/result.json)
 and a fresh token scan found no caller, that function was removed on

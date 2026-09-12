@@ -232,7 +232,7 @@ window indices and shapes from the M-step geometry) and derives each captured bu
 candidate mask and prior-free scores through `_bpref_capture_priors`; the fused and big-JIT
 capture sites pass only their per-bucket operands
 ([`test_bpref_capture_operands_owner.py`](../../tests/unit/test_bpref_capture_operands_owner.py)).
-[`heterogeneity._fixed_rotation_covariance_images`](../../recovar/em/heterogeneity.py) accumulates the
+[`heterogeneity._fixed_rotation_covariance_images`](../../recovar/em/reference/heterogeneity.py) accumulates the
 fixed-rotation covariance-column update in image space (right-hand side and normal
 operator per rotation) for both the Equinox and the classic accumulator, which only
 convert to half images and back-project. In [`initial_model.layout`](../../recovar/em/vdam/layout.py),

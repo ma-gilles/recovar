@@ -921,12 +921,6 @@ class SigmaOffsetUpdateResult:
     current_sigma_offset_angstrom_per_half: list[float]
     per_class_sigma_offset_angstrom: np.ndarray | None
 
-    @property
-    def per_half_sigma_offset_angstrom(self):
-        """Backward-compatible alias for pre-PR157 callers."""
-
-        return np.asarray(self.current_sigma_offset_angstrom_per_half, dtype=np.float64)
-
 
 def _sigma_offset_from_moment(
     wsum: float,

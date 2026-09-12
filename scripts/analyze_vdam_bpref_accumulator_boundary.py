@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.bpref_contribution_replay import (
+from recovar.em.diagnostics.bpref_contribution_replay import (
     BPrefAccumulatorReplay,
     accumulator_replay_metrics,
     load_bpref_contribution_bundle,

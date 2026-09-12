@@ -3,11 +3,11 @@
 Reviewed against `ma-gilles/recovar`, branch `dev`, on 2026-03-31.
 
 Primary files reviewed:
-- `recovar/em/e_step.py`
-- `recovar/em/m_step.py`
-- `recovar/em/core.py`
-- `recovar/em/iterations.py`
-- `recovar/em/states.py`
+- `recovar/em/reference/e_step.py`
+- `recovar/em/reference/m_step.py`
+- `recovar/em/reference/core.py`
+- `recovar/em/reference/iterations.py`
+- `recovar/em/reference/states.py`
 - `recovar/em/sampling.py`
 - `recovar/core/configs.py`
 - `recovar/core/slicing.py`

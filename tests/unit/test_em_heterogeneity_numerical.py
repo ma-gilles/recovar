@@ -1,4 +1,4 @@
-"""Numerical unit tests for recovar.em.heterogeneity pure functions.
+"""Numerical unit tests for recovar.em.reference.heterogeneity pure functions.
 
 Tests functions that require NO experiment_dataset mock:
   - compute_UPLambdainvPU
@@ -15,7 +15,7 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
-import recovar.em.heterogeneity as hetero
+import recovar.em.reference.heterogeneity as hetero
 
 pytestmark = pytest.mark.unit
 

@@ -14,7 +14,7 @@ The [development contract](../../AGENTS.md) defines change scope and validation.
 | RELION-style K1/K-class refinement | [`scripts/run_full_refinement.py`](../../scripts/run_full_refinement.py) resolves inputs and options | [`iteration_loop.refine_single_volume`](../../recovar/em/refinement/iteration_loop.py); despite the name, this controller also handles K-class refinement |
 | Pose-marginal PPCA refinement | [`refinement_loop`](../../recovar/em/ppca_refinement/refinement_loop.py) exposes dense and local refinement loops | [`dense_dataset`](../../recovar/em/ppca_refinement/dense_dataset.py), [`local_dataset`](../../recovar/em/ppca_refinement/local_dataset.py), and their fused kernels |
 | InitialModel/VDAM | [`initial_model.iteration_loop.run_vdam_iterations`](../../recovar/em/vdam/iteration_loop.py) | Initial-model schedules, subset selection, state and reconstruction |
-| Earlier EM API | [`recovar.em`](../../recovar/em/__init__.py) exports `EMState`, `SGDState`, `HeterogeneousEMState` and batch routines | [`states`](../../recovar/em/states.py), [`iterations`](../../recovar/em/iterations.py), E-step/M-step and heterogeneity modules; the tracked [`em_test` notebook](../../recovar/em/em_test.ipynb) still uses this API |
+| Earlier EM reference routines | Import directly from the owning module; `recovar.em` performs no workflow imports | [`states`](../../recovar/em/reference/states.py), [`iterations`](../../recovar/em/reference/iterations.py), E-step/M-step and heterogeneity modules; the tracked [`em_test` notebook](../../recovar/em/reference/em_test.ipynb) uses these routines directly |
 
 Pipeline PPCA and pose-marginal PPCA have different entry points and state
 contracts. Choose the implementation reached by the actual command. The
@@ -38,6 +38,7 @@ their semantics already match:
 | `helpers/` | Shared array layouts, operators, batching, precision and statistics |
 | `relion/` | Runtime RELION metadata, normalization, CTF and native adapters |
 | `diagnostics/` | Optional capture writers, replay and intervention tools |
+| `reference/` | Independent earlier EM/covariance formulations and their example notebook |
 | `ppca_refinement/` | Pose-marginal PPCA workflow and its K-class bridge |
 
 There is no second EM stack for VDAM. Its adapters supply the existing shared

@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from recovar.em.k1_coarse_boundary_audit import (
+from recovar.em.diagnostics.k1_coarse_boundary_audit import (
     align_relion_surface,
     rotation_bijection,
     translation_bijection,

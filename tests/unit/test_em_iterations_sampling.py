@@ -7,7 +7,7 @@ import pytest
 pytest.importorskip("jax")
 pytest.importorskip("healpy")
 
-import recovar.em.iterations as em_iterations
+import recovar.em.reference.iterations as em_iterations
 import recovar.em.sampling as em_sampling
 
 pytestmark = pytest.mark.unit

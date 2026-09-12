@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from recovar.em.normalized_cc_replay import (
+from recovar.em.diagnostics.normalized_cc_replay import (
     RELION_COARSE_REDUCTION_LANES,
     RELION_FINE_REDUCTION_LANES,
     REPLAY_SCHEMA,

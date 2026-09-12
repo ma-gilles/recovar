@@ -4394,7 +4394,7 @@ its audit root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/canonical_bpref_hardened_validation_20260715_175600/`.
 
 Coarse Gaussian score reductions have a separate fail-closed replay in
-`recovar/em/gaussian_reduction_replay.py`.  Its v1 schema is deliberately
+`recovar/em/diagnostics/gaussian_reduction_replay.py`.  Its v1 schema is deliberately
 pinned to the frozen K=1 row-7881 RELION boundary, including source and
 executable hashes, GPU UUID, scientific inputs, candidate geometry, and the
 exact CUDA lane layout.  It distinguishes production float32, reordered

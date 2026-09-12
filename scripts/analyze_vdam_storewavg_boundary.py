@@ -405,7 +405,7 @@ def _scatter_relion_rows(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Scatter pre-StoreWavg rows through RELION's CPU BackProjector binding."""
 
-    from recovar.em.bpref_contribution_replay import dense_fftw_half_rows
+    from recovar.em.diagnostics.bpref_contribution_replay import dense_fftw_half_rows
 
     image_shape = (physical_image_size, physical_image_size)
     dense_data = dense_fftw_half_rows(

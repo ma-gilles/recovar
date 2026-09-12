@@ -13,7 +13,7 @@ from recovar import core, utils
 from recovar.core.configs import ForwardModelConfig
 
 from .core import VOL_AXIS
-from .sampling import translations_to_indices
+from recovar.em.sampling import translations_to_indices
 
 logger = logging.getLogger(__name__)
 

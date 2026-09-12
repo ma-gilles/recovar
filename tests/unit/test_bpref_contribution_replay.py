@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from recovar.em.bpref_contribution_replay import (
+from recovar.em.diagnostics.bpref_contribution_replay import (
     BPrefAccumulatorReplay,
     accumulator_replay_metrics,
     dense_fftw_half_rows,

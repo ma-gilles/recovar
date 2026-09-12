@@ -5,7 +5,7 @@ import jax.numpy as jnp
 pytest.importorskip("jax")
 pytest.importorskip("healpy")
 
-import recovar.em.heterogeneity as hetero
+import recovar.em.reference.heterogeneity as hetero
 
 pytestmark = pytest.mark.unit
 

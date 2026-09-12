@@ -189,7 +189,7 @@ def test_noise_shell_accumulation_uses_sentinel_safe_binning_helper():
     # bin shells by scatter, and the family must still reach the sentinel-safe helper.
     pass2_sources = {
         path.name: path.read_text()
-        for path in sorted((repo_root / "recovar/em/helpers").glob("sparse_pass2*.py"))
+        for path in sorted((repo_root / "recovar/em/sparse_pass2").glob("sparse_pass2*.py"))
     }
     assert pass2_sources
     for name, source in pass2_sources.items():
@@ -511,7 +511,7 @@ class TestEStepHalfMatchesFull:
         ctf_params = jnp.asarray(ds.CTF_params)
 
         # === FULL-SPECTRUM reference (from em.core) ===
-        from recovar.em import core as em_core
+        from recovar.em.reference import core as em_core
 
         # Full-spectrum projections
         proj_full = core.slice_volume(volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp", half_image=False)
@@ -583,7 +583,7 @@ class TestEStepHalfMatchesFull:
         ctf_params = jnp.asarray(ds.CTF_params)
 
         # Full-spectrum scores
-        from recovar.em import core as em_core
+        from recovar.em.reference import core as em_core
 
         proj_full = core.slice_volume(volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp", half_image=False)
         proj_abs2_full = jnp.abs(proj_full) ** 2

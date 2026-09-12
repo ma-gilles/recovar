@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.bpref_contribution_replay import BPrefAccumulatorReplay
+from recovar.em.diagnostics.bpref_contribution_replay import BPrefAccumulatorReplay
 from recovar.em.diagnostics.bpref_diagnostics import _bpref_contribution_target_rows
 from scripts.analyze_vdam_bpref_accumulator_boundary import (
     _geometry,
@@ -158,7 +158,7 @@ def test_big_jit_bpref_capture_observes_production_tensors_without_disabling_pat
     # the capture is driven from the engine and recorded by its owner
     source = "\n".join(
         (REPO_ROOT / "recovar/em" / name).read_text()
-        for name in ("local_em_engine.py", "local_bpref_capture.py")
+        for name in ("local/local_em_engine.py", "diagnostics/local_bpref_capture.py")
     )
 
     use_big_jit_block = source.split("use_big_jit_buckets = (", 1)[1].split(")\n", 1)[0]

@@ -1324,7 +1324,7 @@ def _run_dense_k_class_joint_firstiter_score_probe(
             n_translations=int(np.asarray(translations).shape[0]),
         )
 
-    from recovar.em.global_winner_summary import maybe_dump_global_winner_summary
+    from recovar.em.diagnostics.global_winner_summary import maybe_dump_global_winner_summary
 
     maybe_dump_global_winner_summary(
         experiment_dataset=experiment_dataset,

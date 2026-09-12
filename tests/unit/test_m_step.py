@@ -9,7 +9,7 @@ import jax
 import jax.numpy as jnp
 
 from recovar.em.sampling import translations_to_indices, get_translation_grid
-from recovar.em.m_step import sum_up_translate_one_image
+from recovar.em.reference.m_step import sum_up_translate_one_image
 
 pytestmark = pytest.mark.unit
 

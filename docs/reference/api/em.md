@@ -7,7 +7,7 @@ heterogeneous reconstruction.
 
 EM state containers: EMState, SGDState, HeterogeneousEMState.
 
-::: recovar.em.states
+::: recovar.em.reference.states
     options:
       members_order: source
 
@@ -15,7 +15,7 @@ EM state containers: EMState, SGDState, HeterogeneousEMState.
 
 High-level EM loop orchestration and convergence tracking.
 
-::: recovar.em.iterations
+::: recovar.em.reference.iterations
     options:
       members_order: source
 
@@ -23,7 +23,7 @@ High-level EM loop orchestration and convergence tracking.
 
 Core EM iteration logic: cross-correlation, residual computation.
 
-::: recovar.em.core
+::: recovar.em.reference.core
     options:
       members_order: source
 
@@ -31,7 +31,7 @@ Core EM iteration logic: cross-correlation, residual computation.
 
 E-step: posterior probability computation over poses and translations.
 
-::: recovar.em.e_step
+::: recovar.em.reference.e_step
     options:
       members_order: source
 
@@ -39,6 +39,6 @@ E-step: posterior probability computation over poses and translations.
 
 M-step: volume update via weighted backprojection.
 
-::: recovar.em.m_step
+::: recovar.em.reference.m_step
     options:
       members_order: source

@@ -5,7 +5,7 @@ import inspect
 import numpy as np
 import pytest
 
-import recovar.em.heterogeneity as hetero
+import recovar.em.reference.heterogeneity as hetero
 from recovar.em.vdam import layout, relion_layout
 
 

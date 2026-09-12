@@ -29,6 +29,8 @@ GUI excluded**, before new-engine development. Root instructions also apply.
   scoring. EM/VDAM APIs, CLIs and historical Python object names have no backward
   compatibility requirement; migrate maintained callers to current owners.
   Preserve the main heterogeneity pipeline APIs and saved formats.
+  Earlier independent EM/covariance formulations belong in `reference/`;
+  replay and score-audit modules belong in `diagnostics/`.
 
 ## Scientific rules — never waived by cleanup or cost reduction
 
