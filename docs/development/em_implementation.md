@@ -282,13 +282,13 @@ computes the historical algebraic Gaussian scores of one bucket before candidate
 (HIGHEST-precision weighted cross einsum and projection norm, prior-free and prior-added
 scores); the production algebraic scorer and its components variant only apply their masks
 ([`test_gaussian_algebraic_terms_owner.py`](../../tests/unit/test_gaussian_algebraic_terms_owner.py)).
-[`types.sparse_pass2_result`](../../recovar/em/helpers/types.py) assembles the
-sparse pass-2 return tuple: the six accumulator and pose outputs first, then each requested
-optional entry in a fixed order (RELION statistics, the score-only log partition function,
-merged noise statistics, source Euler angles). Callers unpack by position, so an omitted
-entry shifts the ones after it; the bucketed pass keeps the historical rule that the score
-log-Z is emitted only alongside the statistics
-([`test_sparse_pass2_result_tuple_owner.py`](../../tests/unit/test_sparse_pass2_result_tuple_owner.py)).
+[`types.SparsePass2Output`](../../recovar/em/helpers/types.py) carries sparse
+pass-2 accumulators, poses and optional diagnostics in named fields. The bucketed
+and per-image reference paths construct it directly; K-class callers no longer
+need a positional decoder or flags to locate fields. Unrequested diagnostics are
+`None`. Score log-Z still requires statistics, and the normalizer-only probe
+retains its separate two-value result. Independent bucketed/reference comparisons
+remain in [`test_sparse_pass2_bucketed_parity.py`](../../tests/unit/test_sparse_pass2_bucketed_parity.py).
 In [`significance`](../../recovar/em/scoring/significance.py),
 `_coarse_gaussian_ffi_default` applies the fresh-InitialModel coarse Gaussian FFI
 default only when the supplied RELION projector operands exist; a dense pass

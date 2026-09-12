@@ -747,15 +747,7 @@ class TestSignificantCountsReasonable:
             dtype=jnp.float32,
         )
 
-        (
-            Ft_y,
-            Ft_ctf,
-            hard_assignment,
-            best_rotations,
-            best_translations,
-            best_rotation_indices,
-            relion_stats,
-        ) = compute_pass2_stats_sparse(
+        output = compute_pass2_stats_sparse(
             ds,
             volume,
             mean_variance,
@@ -768,6 +760,13 @@ class TestSignificantCountsReasonable:
             current_size=None,
             return_stats=True,
         )
+        Ft_y = output.Ft_y
+        Ft_ctf = output.Ft_ctf
+        hard_assignment = output.hard_assignment
+        best_rotations = output.best_rotations
+        best_translations = output.best_translations
+        best_rotation_indices = output.best_rotation_indices
+        relion_stats = output.relion_stats
 
         assert Ft_y.shape == (VOLUME_SIZE,)
         assert Ft_ctf.shape == (VOLUME_SIZE,)

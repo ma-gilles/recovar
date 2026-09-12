@@ -174,24 +174,20 @@ def _compare_outputs(
     accumulator_scaled_rtol=None,
 ):
     """Compare per-image and accumulated outputs with tight tolerance."""
-    (
-        Ft_y_ref,
-        Ft_ctf_ref,
-        ha_ref,
-        best_rot_ref,
-        best_tr_ref,
-        best_idx_ref,
-        stats_ref,
-    ) = out_ref[:7]
-    (
-        Ft_y_b,
-        Ft_ctf_b,
-        ha_b,
-        best_rot_b,
-        best_tr_b,
-        best_idx_b,
-        stats_b,
-    ) = out_bucket[:7]
+    Ft_y_ref = out_ref.Ft_y
+    Ft_ctf_ref = out_ref.Ft_ctf
+    ha_ref = out_ref.hard_assignment
+    best_rot_ref = out_ref.best_rotations
+    best_tr_ref = out_ref.best_translations
+    best_idx_ref = out_ref.best_rotation_indices
+    stats_ref = out_ref.relion_stats
+    Ft_y_b = out_bucket.Ft_y
+    Ft_ctf_b = out_bucket.Ft_ctf
+    ha_b = out_bucket.hard_assignment
+    best_rot_b = out_bucket.best_rotations
+    best_tr_b = out_bucket.best_translations
+    best_idx_b = out_bucket.best_rotation_indices
+    stats_b = out_bucket.relion_stats
 
     # M-step accumulators must be very close. Some float32 winner-take-all
     # routes sum identical selected rows in different batch/reduction orders;
@@ -246,9 +242,10 @@ def _compare_outputs(
     )
 
     # Noise stats (when present)
-    if len(out_ref) == 8 and len(out_bucket) == 8:
-        ns_ref = out_ref[7]
-        ns_b = out_bucket[7]
+    assert (out_ref.noise_stats is None) == (out_bucket.noise_stats is None)
+    if out_ref.noise_stats is not None:
+        ns_ref = out_ref.noise_stats
+        ns_b = out_bucket.noise_stats
         np.testing.assert_allclose(
             np.asarray(ns_ref.wsum_sigma2_noise),
             np.asarray(ns_b.wsum_sigma2_noise),
@@ -623,16 +620,16 @@ def test_sparse_pass2_distinct_mstep_rotations_do_not_change_score_path(monkeypa
         **common,
     )
 
-    np.testing.assert_array_equal(overridden[2], baseline[2])
-    np.testing.assert_array_equal(overridden[3], baseline[3])
-    np.testing.assert_array_equal(overridden[5], baseline[5])
+    np.testing.assert_array_equal(overridden.hard_assignment, baseline.hard_assignment)
+    np.testing.assert_array_equal(overridden.best_rotations, baseline.best_rotations)
+    np.testing.assert_array_equal(overridden.best_rotation_indices, baseline.best_rotation_indices)
     np.testing.assert_array_equal(
-        np.asarray(overridden[6].best_log_score_per_image),
-        np.asarray(baseline[6].best_log_score_per_image),
+        np.asarray(overridden.relion_stats.best_log_score_per_image),
+        np.asarray(baseline.relion_stats.best_log_score_per_image),
     )
     np.testing.assert_array_equal(
-        np.asarray(overridden[6].max_posterior_per_image),
-        np.asarray(baseline[6].max_posterior_per_image),
+        np.asarray(overridden.relion_stats.max_posterior_per_image),
+        np.asarray(baseline.relion_stats.max_posterior_per_image),
     )
 
     assert len(fetched_orders) == 1
@@ -896,7 +893,7 @@ class TestSparsePass2Bucketed:
             use_float64_scoring=True,
             translation_prior_centers=translation_prior_centers,
         )
-        assert out_ref[7].wsum_sigma2_offset > 0.0
+        assert out_ref.noise_stats.wsum_sigma2_offset > 0.0
         _compare_outputs(
             out_ref,
             out_bucket,
@@ -975,8 +972,8 @@ class TestSparsePass2Bucketed:
             atol=1e-4,
             rtol=1e-4,
         )
-        assert np.asarray(out_bucket[6].log_evidence_per_image).dtype == np.float64
-        assert np.asarray(out_bucket[6].best_log_score_per_image).dtype == np.float64
+        assert np.asarray(out_bucket.relion_stats.log_evidence_per_image).dtype == np.float64
+        assert np.asarray(out_bucket.relion_stats.best_log_score_per_image).dtype == np.float64
 
     def test_with_image_corrections_match(self):
         """Per-image image_corrections + scale_corrections + pre_shifts must match.

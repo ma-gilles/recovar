@@ -1650,7 +1650,7 @@ def main() -> None:
             sparse_Ft_y = []
             sparse_Ft_ctf = []
             for class_index in range(n_classes):
-                class_Ft_y, class_Ft_ctf = compute_pass2_stats_sparse(
+                class_output = compute_pass2_stats_sparse(
                     ds,
                     means[class_index],
                     mean_variance_prev[class_index],
@@ -1681,9 +1681,9 @@ def main() -> None:
                     normalization_score_mode="gaussian",
                     relion_projector_half=relion_projector_half_by_class[class_index],
                     relion_projector_r_max=relion_projector_r_max,
-                )[:2]
-                sparse_Ft_y.append(class_Ft_y)
-                sparse_Ft_ctf.append(class_Ft_ctf)
+                )
+                sparse_Ft_y.append(class_output.Ft_y)
+                sparse_Ft_ctf.append(class_output.Ft_ctf)
 
             result = result._replace(
                 Ft_y=jnp.stack([jnp.asarray(value) for value in sparse_Ft_y], axis=0),

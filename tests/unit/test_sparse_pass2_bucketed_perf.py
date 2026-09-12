@@ -5197,7 +5197,7 @@ def test_k1_relion_fine_mstep_prune_keeps_unweighted_high_shell_image_power(monk
         relion_fine_mstep_prune=True,
         adaptive_fraction=0.5,
     )
-    pruned_noise = pruned[-1]
+    pruned_noise = pruned.noise_stats
 
     assert pruned_noise.sumw == pytest.approx(0.0)
     assert pruned_noise.wsum_sigma2_offset == pytest.approx(0.0)
@@ -7119,15 +7119,15 @@ def test_sparse_pass2_full_support_projection_cache_chunks_scores(monkeypatch):
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK", "4")
     chunked = compute_pass2_stats_sparse(**kwargs)
 
-    np.testing.assert_allclose(np.asarray(chunked[0]), np.asarray(unchunked[0]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(np.asarray(chunked[1]), np.asarray(unchunked[1]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_array_equal(np.asarray(chunked[2]), np.asarray(unchunked[2]))
-    np.testing.assert_allclose(np.asarray(chunked[3]), np.asarray(unchunked[3]), rtol=0, atol=0)
-    np.testing.assert_allclose(np.asarray(chunked[4]), np.asarray(unchunked[4]), rtol=0, atol=0)
-    np.testing.assert_array_equal(np.asarray(chunked[5]), np.asarray(unchunked[5]))
-    _assert_relion_stats_close(chunked[6], unchunked[6], rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(np.asarray(chunked[7]), np.asarray(unchunked[7]), rtol=1e-6, atol=1e-6)
-    _assert_noise_stats_close((chunked[8],), (unchunked[8],), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(chunked.Ft_y), np.asarray(unchunked.Ft_y), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(chunked.Ft_ctf), np.asarray(unchunked.Ft_ctf), rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(np.asarray(chunked.hard_assignment), np.asarray(unchunked.hard_assignment))
+    np.testing.assert_allclose(np.asarray(chunked.best_rotations), np.asarray(unchunked.best_rotations), rtol=0, atol=0)
+    np.testing.assert_allclose(np.asarray(chunked.best_translations), np.asarray(unchunked.best_translations), rtol=0, atol=0)
+    np.testing.assert_array_equal(np.asarray(chunked.best_rotation_indices), np.asarray(unchunked.best_rotation_indices))
+    _assert_relion_stats_close(chunked.relion_stats, unchunked.relion_stats, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(chunked.score_log_z), np.asarray(unchunked.score_log_z), rtol=1e-6, atol=1e-6)
+    _assert_noise_stats_close((chunked.noise_stats,), (unchunked.noise_stats,), rtol=1e-5, atol=1e-5)
     # Exact-Gaussian scoring invokes the full scorer once per chunk to build
     # the fine M-step pruning support, then once per chunk again while
     # accumulating the final M-step/noise statistics.  The initial raw-diff2
@@ -7228,15 +7228,15 @@ def test_sparse_pass2_projection_cache_chunks_non_identity_indices(monkeypatch):
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK", "4")
     chunked = compute_pass2_stats_sparse(**kwargs)
 
-    np.testing.assert_allclose(np.asarray(chunked[0]), np.asarray(unchunked[0]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(np.asarray(chunked[1]), np.asarray(unchunked[1]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_array_equal(np.asarray(chunked[2]), np.asarray(unchunked[2]))
-    np.testing.assert_allclose(np.asarray(chunked[3]), np.asarray(unchunked[3]), rtol=0, atol=0)
-    np.testing.assert_allclose(np.asarray(chunked[4]), np.asarray(unchunked[4]), rtol=0, atol=0)
-    np.testing.assert_array_equal(np.asarray(chunked[5]), np.asarray(unchunked[5]))
-    _assert_relion_stats_close(chunked[6], unchunked[6], rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(np.asarray(chunked[7]), np.asarray(unchunked[7]), rtol=1e-6, atol=1e-6)
-    _assert_noise_stats_close((chunked[8],), (unchunked[8],), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(chunked.Ft_y), np.asarray(unchunked.Ft_y), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(chunked.Ft_ctf), np.asarray(unchunked.Ft_ctf), rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(np.asarray(chunked.hard_assignment), np.asarray(unchunked.hard_assignment))
+    np.testing.assert_allclose(np.asarray(chunked.best_rotations), np.asarray(unchunked.best_rotations), rtol=0, atol=0)
+    np.testing.assert_allclose(np.asarray(chunked.best_translations), np.asarray(unchunked.best_translations), rtol=0, atol=0)
+    np.testing.assert_array_equal(np.asarray(chunked.best_rotation_indices), np.asarray(unchunked.best_rotation_indices))
+    _assert_relion_stats_close(chunked.relion_stats, unchunked.relion_stats, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(chunked.score_log_z), np.asarray(unchunked.score_log_z), rtol=1e-6, atol=1e-6)
+    _assert_noise_stats_close((chunked.noise_stats,), (unchunked.noise_stats,), rtol=1e-5, atol=1e-5)
     assert score_chunk_sizes
     assert max(score_chunk_sizes) <= 4
     assert sum(score_chunk_sizes) > len(score_chunk_sizes)
@@ -7306,12 +7306,12 @@ def test_score_log_z_only_matches_full_score_probe(monkeypatch):
         fine_translation_parent_override=fine_translation_parent,
     )
 
-    np.testing.assert_allclose(np.asarray(log_evidence), np.asarray(full[6].log_evidence_per_image), rtol=0, atol=0)
-    np.testing.assert_allclose(np.asarray(score_log_z), np.asarray(full[7]), rtol=0, atol=0)
+    np.testing.assert_allclose(np.asarray(log_evidence), np.asarray(full.relion_stats.log_evidence_per_image), rtol=0, atol=0)
+    np.testing.assert_allclose(np.asarray(score_log_z), np.asarray(full.score_log_z), rtol=0, atol=0)
     # Gaussian score logZ is absolute (the common diff2 minimum has been
     # removed), so it is directly commensurate across independent calls.
     np.testing.assert_allclose(np.asarray(score_log_z), np.asarray(log_evidence), rtol=0, atol=0)
-    assert np.all(np.asarray(full[6].best_log_score_per_image) <= np.asarray(log_evidence))
+    assert np.all(np.asarray(full.relion_stats.best_log_score_per_image) <= np.asarray(log_evidence))
 
     cc_kwargs = dict(
         experiment_dataset=ds,
@@ -7346,11 +7346,11 @@ def test_score_log_z_only_matches_full_score_probe(monkeypatch):
     )
     np.testing.assert_allclose(
         np.asarray(cc_log_evidence),
-        np.asarray(cc_full[6].log_evidence_per_image),
+        np.asarray(cc_full.relion_stats.log_evidence_per_image),
         rtol=0,
         atol=0,
     )
-    np.testing.assert_allclose(np.asarray(cc_score_log_z), np.asarray(cc_full[7]), rtol=0, atol=0)
+    np.testing.assert_allclose(np.asarray(cc_score_log_z), np.asarray(cc_full.score_log_z), rtol=0, atol=0)
     assert np.any(np.asarray(cc_score_log_z) != np.asarray(cc_log_evidence))
 
 
@@ -7438,24 +7438,24 @@ def test_fused_other_class_log_z_matches_two_pass_normalization(monkeypatch):
         **common,
     )
 
-    np.testing.assert_allclose(np.asarray(fused[0]), np.asarray(two_pass[0]), rtol=1e-6, atol=1e-6)
-    np.testing.assert_allclose(np.asarray(fused[1]), np.asarray(two_pass[1]), rtol=1e-6, atol=1e-6)
-    np.testing.assert_array_equal(np.asarray(fused[2]), np.asarray(two_pass[2]))
-    np.testing.assert_array_equal(np.asarray(fused[5]), np.asarray(two_pass[5]))
+    np.testing.assert_allclose(np.asarray(fused.Ft_y), np.asarray(two_pass.Ft_y), rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(fused.Ft_ctf), np.asarray(two_pass.Ft_ctf), rtol=1e-6, atol=1e-6)
+    np.testing.assert_array_equal(np.asarray(fused.hard_assignment), np.asarray(two_pass.hard_assignment))
+    np.testing.assert_array_equal(np.asarray(fused.best_rotation_indices), np.asarray(two_pass.best_rotation_indices))
     np.testing.assert_allclose(
-        np.asarray(fused[6].best_log_score_per_image),
-        np.asarray(two_pass[6].best_log_score_per_image),
+        np.asarray(fused.relion_stats.best_log_score_per_image),
+        np.asarray(two_pass.relion_stats.best_log_score_per_image),
     )
     np.testing.assert_allclose(
-        np.asarray(fused[6].max_posterior_per_image),
-        np.asarray(two_pass[6].max_posterior_per_image),
+        np.asarray(fused.relion_stats.max_posterior_per_image),
+        np.asarray(two_pass.relion_stats.max_posterior_per_image),
     )
     np.testing.assert_allclose(
-        np.asarray(fused[6].rotation_posterior_sums),
-        np.asarray(two_pass[6].rotation_posterior_sums),
+        np.asarray(fused.relion_stats.rotation_posterior_sums),
+        np.asarray(two_pass.relion_stats.rotation_posterior_sums),
     )
-    np.testing.assert_allclose(np.asarray(fused[6].log_evidence_per_image), np.asarray(log_evidence_b), rtol=0, atol=0)
-    np.testing.assert_allclose(np.asarray(fused[7]), np.asarray(score_b), rtol=0, atol=0)
+    np.testing.assert_allclose(np.asarray(fused.relion_stats.log_evidence_per_image), np.asarray(log_evidence_b), rtol=0, atol=0)
+    np.testing.assert_allclose(np.asarray(fused.score_log_z), np.asarray(score_b), rtol=0, atol=0)
     np.testing.assert_allclose(np.asarray(score_b), np.asarray(log_evidence_b), rtol=0, atol=0)
 
 
@@ -7617,83 +7617,83 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
         assert np.all(chunked_capture["pmax"] == 1)
         assert np.all(chunked_capture["significant_count"] == 1)
         assert np.all(chunked_capture["significant_threshold"] == 1)
-        assert np.all(np.asarray(chunked[6].max_posterior_per_image) == 1)
+        assert np.all(np.asarray(chunked.relion_stats.max_posterior_per_image) == 1)
 
     if disabled_unchunked is not None:
-        np.testing.assert_array_equal(np.asarray(disabled_unchunked[0]), np.asarray(unchunked[0]))
-        np.testing.assert_array_equal(np.asarray(disabled_unchunked[1]), np.asarray(unchunked[1]))
+        np.testing.assert_array_equal(np.asarray(disabled_unchunked.Ft_y), np.asarray(unchunked.Ft_y))
+        np.testing.assert_array_equal(np.asarray(disabled_unchunked.Ft_ctf), np.asarray(unchunked.Ft_ctf))
         np.testing.assert_array_equal(
-            np.asarray(disabled_unchunked[6].max_posterior_per_image),
-            np.asarray(unchunked[6].max_posterior_per_image),
+            np.asarray(disabled_unchunked.relion_stats.max_posterior_per_image),
+            np.asarray(unchunked.relion_stats.max_posterior_per_image),
         )
 
-    np.testing.assert_allclose(np.asarray(chunked[0]), np.asarray(unchunked[0]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(np.asarray(chunked[1]), np.asarray(unchunked[1]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_array_equal(np.asarray(chunked[2]), np.asarray(unchunked[2]))
-    np.testing.assert_array_equal(np.asarray(chunked[5]), np.asarray(unchunked[5]))
+    np.testing.assert_allclose(np.asarray(chunked.Ft_y), np.asarray(unchunked.Ft_y), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(chunked.Ft_ctf), np.asarray(unchunked.Ft_ctf), rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(np.asarray(chunked.hard_assignment), np.asarray(unchunked.hard_assignment))
+    np.testing.assert_array_equal(np.asarray(chunked.best_rotation_indices), np.asarray(unchunked.best_rotation_indices))
     np.testing.assert_allclose(
-        np.asarray(chunked[6].log_evidence_per_image),
-        np.asarray(unchunked[6].log_evidence_per_image),
+        np.asarray(chunked.relion_stats.log_evidence_per_image),
+        np.asarray(unchunked.relion_stats.log_evidence_per_image),
         rtol=1e-6,
         atol=1e-6,
     )
     np.testing.assert_allclose(
-        np.asarray(chunked[6].best_log_score_per_image),
-        np.asarray(unchunked[6].best_log_score_per_image),
+        np.asarray(chunked.relion_stats.best_log_score_per_image),
+        np.asarray(unchunked.relion_stats.best_log_score_per_image),
         rtol=1e-6,
         atol=1e-6,
     )
     np.testing.assert_allclose(
-        np.asarray(chunked[6].max_posterior_per_image),
-        np.asarray(unchunked[6].max_posterior_per_image),
+        np.asarray(chunked.relion_stats.max_posterior_per_image),
+        np.asarray(unchunked.relion_stats.max_posterior_per_image),
         rtol=1e-6,
         atol=1e-6,
     )
     np.testing.assert_allclose(
-        np.asarray(chunked[6].rotation_posterior_sums),
-        np.asarray(unchunked[6].rotation_posterior_sums),
+        np.asarray(chunked.relion_stats.rotation_posterior_sums),
+        np.asarray(unchunked.relion_stats.rotation_posterior_sums),
         rtol=1e-6,
         atol=1e-6,
     )
-    np.testing.assert_allclose(np.asarray(chunked[7]), np.asarray(unchunked[7]), rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(chunked.score_log_z), np.asarray(unchunked.score_log_z), rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(
-        np.asarray(chunked[8].wsum_sigma2_noise),
-        np.asarray(unchunked[8].wsum_sigma2_noise),
+        np.asarray(chunked.noise_stats.wsum_sigma2_noise),
+        np.asarray(unchunked.noise_stats.wsum_sigma2_noise),
         rtol=1e-5,
         atol=1e-5,
     )
     np.testing.assert_allclose(
-        np.asarray(chunked[8].wsum_img_power),
-        np.asarray(unchunked[8].wsum_img_power),
+        np.asarray(chunked.noise_stats.wsum_img_power),
+        np.asarray(unchunked.noise_stats.wsum_img_power),
         rtol=1e-6,
         atol=1e-6,
     )
-    assert chunked[8].wsum_norm_correction is not None
-    assert unchunked[8].wsum_norm_correction is not None
+    assert chunked.noise_stats.wsum_norm_correction is not None
+    assert unchunked.noise_stats.wsum_norm_correction is not None
     np.testing.assert_allclose(
-        np.asarray(chunked[8].wsum_norm_correction),
-        np.asarray(unchunked[8].wsum_norm_correction),
+        np.asarray(chunked.noise_stats.wsum_norm_correction),
+        np.asarray(unchunked.noise_stats.wsum_norm_correction),
         rtol=1e-5,
         atol=1e-5,
     )
-    assert chunked[8].wsum_scale_correction_xa is not None
-    assert chunked[8].wsum_scale_correction_aa is not None
-    assert np.asarray(chunked[8].wsum_scale_correction_xa).shape == (5,)
-    np.testing.assert_array_equal(np.asarray(chunked[8].wsum_scale_correction_xa)[2:], 0.0)
-    np.testing.assert_array_equal(np.asarray(chunked[8].wsum_scale_correction_aa)[2:], 0.0)
+    assert chunked.noise_stats.wsum_scale_correction_xa is not None
+    assert chunked.noise_stats.wsum_scale_correction_aa is not None
+    assert np.asarray(chunked.noise_stats.wsum_scale_correction_xa).shape == (5,)
+    np.testing.assert_array_equal(np.asarray(chunked.noise_stats.wsum_scale_correction_xa)[2:], 0.0)
+    np.testing.assert_array_equal(np.asarray(chunked.noise_stats.wsum_scale_correction_aa)[2:], 0.0)
     np.testing.assert_allclose(
-        np.asarray(chunked[8].wsum_scale_correction_xa),
-        np.asarray(unchunked[8].wsum_scale_correction_xa),
+        np.asarray(chunked.noise_stats.wsum_scale_correction_xa),
+        np.asarray(unchunked.noise_stats.wsum_scale_correction_xa),
         rtol=1e-5,
         atol=1e-5,
     )
     np.testing.assert_allclose(
-        np.asarray(chunked[8].wsum_scale_correction_aa),
-        np.asarray(unchunked[8].wsum_scale_correction_aa),
+        np.asarray(chunked.noise_stats.wsum_scale_correction_aa),
+        np.asarray(unchunked.noise_stats.wsum_scale_correction_aa),
         rtol=1e-5,
         atol=1e-5,
     )
-    assert chunked[8].sumw == pytest.approx(unchunked[8].sumw, abs=1e-6)
+    assert chunked.noise_stats.sumw == pytest.approx(unchunked.noise_stats.sumw, abs=1e-6)
 
     no_scale_shells = compute_pass2_stats_sparse(
         **{
@@ -7701,11 +7701,11 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
             "scale_correction_data_vs_prior": np.zeros(IMAGE_SHAPE[0] // 2 + 1, dtype=np.float32),
         }
     )
-    np.testing.assert_array_equal(np.asarray(no_scale_shells[8].wsum_scale_correction_xa), 0.0)
-    np.testing.assert_array_equal(np.asarray(no_scale_shells[8].wsum_scale_correction_aa), 0.0)
+    np.testing.assert_array_equal(np.asarray(no_scale_shells.noise_stats.wsum_scale_correction_xa), 0.0)
+    np.testing.assert_array_equal(np.asarray(no_scale_shells.noise_stats.wsum_scale_correction_aa), 0.0)
     np.testing.assert_allclose(
-        np.asarray(no_scale_shells[8].wsum_norm_correction),
-        np.asarray(chunked[8].wsum_norm_correction),
+        np.asarray(no_scale_shells.noise_stats.wsum_norm_correction),
+        np.asarray(chunked.noise_stats.wsum_norm_correction),
         rtol=1e-5,
         atol=1e-5,
     )
@@ -7717,18 +7717,18 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
     unchunked_pruned = compute_pass2_stats_sparse(**common_pruned)
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", "512")
     chunked_pruned = compute_pass2_stats_sparse(**common_pruned)
-    _assert_noise_stats_close((chunked_pruned[8],), (unchunked_pruned[8],), rtol=1e-5, atol=1e-5)
+    _assert_noise_stats_close((chunked_pruned.noise_stats,), (unchunked_pruned.noise_stats,), rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(
-        np.asarray(chunked_pruned[6].rotation_posterior_sums),
-        np.asarray(unchunked_pruned[6].rotation_posterior_sums),
+        np.asarray(chunked_pruned.relion_stats.rotation_posterior_sums),
+        np.asarray(unchunked_pruned.relion_stats.rotation_posterior_sums),
         rtol=1e-6,
         atol=1e-6,
     )
     pruned_rotation_mass = np.sum(
-        np.asarray(unchunked_pruned[6].rotation_posterior_sums)
+        np.asarray(unchunked_pruned.relion_stats.rotation_posterior_sums)
     )
     unpruned_rotation_mass = np.sum(
-        np.asarray(unchunked[6].rotation_posterior_sums)
+        np.asarray(unchunked.relion_stats.rotation_posterior_sums)
     )
     if winner_take_all:
         # Winner-take-all leaves one unit-weight candidate per image, so
@@ -7742,18 +7742,18 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
     full_prepare = compute_pass2_stats_sparse(**common)
     monkeypatch.delenv("RECOVAR_SPARSE_PASS2_WINDOWED_PREPARE", raising=False)
     windowed_prepare = compute_pass2_stats_sparse(**common)
-    np.testing.assert_allclose(np.asarray(windowed_prepare[0]), np.asarray(full_prepare[0]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_allclose(np.asarray(windowed_prepare[1]), np.asarray(full_prepare[1]), rtol=1e-5, atol=1e-5)
-    np.testing.assert_array_equal(np.asarray(windowed_prepare[2]), np.asarray(full_prepare[2]))
-    np.testing.assert_array_equal(np.asarray(windowed_prepare[5]), np.asarray(full_prepare[5]))
-    _assert_relion_stats_close(windowed_prepare[6], full_prepare[6], rtol=1e-6, atol=1e-6)
-    np.testing.assert_allclose(np.asarray(windowed_prepare[7]), np.asarray(full_prepare[7]), rtol=1e-6, atol=1e-6)
-    _assert_noise_stats_close((windowed_prepare[8],), (full_prepare[8],), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(windowed_prepare.Ft_y), np.asarray(full_prepare.Ft_y), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(windowed_prepare.Ft_ctf), np.asarray(full_prepare.Ft_ctf), rtol=1e-5, atol=1e-5)
+    np.testing.assert_array_equal(np.asarray(windowed_prepare.hard_assignment), np.asarray(full_prepare.hard_assignment))
+    np.testing.assert_array_equal(np.asarray(windowed_prepare.best_rotation_indices), np.asarray(full_prepare.best_rotation_indices))
+    _assert_relion_stats_close(windowed_prepare.relion_stats, full_prepare.relion_stats, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(windowed_prepare.score_log_z), np.asarray(full_prepare.score_log_z), rtol=1e-6, atol=1e-6)
+    _assert_noise_stats_close((windowed_prepare.noise_stats,), (full_prepare.noise_stats,), rtol=1e-5, atol=1e-5)
     monkeypatch.delenv("RECOVAR_SPARSE_PASS2_WINDOWED_PREPARE", raising=False)
 
     common_no_noise = dict(common)
     common_no_noise["accumulate_noise"] = False
-    external_log_z = np.asarray(unchunked[7], dtype=np.float64) + 0.25
+    external_log_z = np.asarray(unchunked.score_log_z, dtype=np.float64) + 0.25
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", str(1024**3))
     unchunked_external = compute_pass2_stats_sparse(
         **common_no_noise,
@@ -7779,21 +7779,21 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
         )
 
     np.testing.assert_allclose(
-        np.asarray(chunked_external[0]),
-        np.asarray(unchunked_external[0]),
+        np.asarray(chunked_external.Ft_y),
+        np.asarray(unchunked_external.Ft_y),
         rtol=5e-4,
         atol=2e-3,
     )
     np.testing.assert_allclose(
-        np.asarray(chunked_external[1]),
-        np.asarray(unchunked_external[1]),
+        np.asarray(chunked_external.Ft_ctf),
+        np.asarray(unchunked_external.Ft_ctf),
         rtol=5e-4,
         atol=2e-3,
     )
-    np.testing.assert_array_equal(np.asarray(chunked_external[2]), np.asarray(unchunked_external[2]))
+    np.testing.assert_array_equal(np.asarray(chunked_external.hard_assignment), np.asarray(unchunked_external.hard_assignment))
     np.testing.assert_allclose(
-        np.asarray(chunked_external[6].rotation_posterior_sums),
-        np.asarray(unchunked_external[6].rotation_posterior_sums),
+        np.asarray(chunked_external.relion_stats.rotation_posterior_sums),
+        np.asarray(unchunked_external.relion_stats.rotation_posterior_sums),
         rtol=1e-4,
         atol=1e-4,
     )

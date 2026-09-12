@@ -40,7 +40,7 @@ from recovar.em.diagnostics.local_debug import score_dump_label
 from recovar.em.helpers.half_volume_mstep import relion_backprojector_volume_shape
 from recovar.em.helpers.normalization_inputs import optional_normalization_vector
 from recovar.em.helpers.scale_groups import prepare_scale_correction_groups
-from recovar.em.helpers.types import NoiseStats, RelionStats, make_relion_stats, read_sparse_pass2_result
+from recovar.em.helpers.types import NoiseStats, RelionStats, make_relion_stats
 from recovar.em.local.local_em_engine import run_local_em_exact
 from recovar.em.local.local_layout import LocalHypothesisLayout
 from recovar.em.scoring.significant_samples import ComplementSignificantSampleIndices, significant_sample_count
@@ -1044,13 +1044,7 @@ def _run_sparse_k_class_adaptive_pass2(
     per_class_best_pose_translations = [None] * n_classes if return_best_pose_details else None
     per_class_best_pose_rotation_ids = [None] * n_classes if return_best_pose_details else None
 
-    def _store_mstep_output(class_index: int, output, *, includes_score_log_z: bool = False):
-        result = read_sparse_pass2_result(
-            output,
-            includes_score_log_z=includes_score_log_z,
-            accumulate_noise=accumulate_noise,
-            return_source_eulers=return_best_pose_details,
-        )
+    def _store_mstep_output(class_index: int, result):
         score_log_z = None if result.score_log_z is None else np.asarray(result.score_log_z, dtype=np.float64)
         Ft_y[class_index] = _as_host_accumulator(result.Ft_y)
         Ft_ctf[class_index] = _as_host_accumulator(result.Ft_ctf)
@@ -1088,7 +1082,7 @@ def _run_sparse_k_class_adaptive_pass2(
         relion_projector_r_max=relion_projector_r_max,
         **_common_for_class(last_class_index),
     )
-    last_stats, last_score_log_z = _store_mstep_output(last_class_index, output, includes_score_log_z=True)
+    last_stats, last_score_log_z = _store_mstep_output(last_class_index, output)
     class_log_evidence[last_class_index] = np.asarray(last_stats.log_evidence_per_image, dtype=np.float64)
     class_score_log_z[last_class_index] = last_score_log_z
     global_score_log_z = np.logaddexp(other_score_log_z, last_score_log_z)
@@ -1818,7 +1812,7 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
         class_kwargs = _dense_engine_kwargs_for_class(pass2_kwargs, class_index, n_classes)
         class_kwargs = _subset_image_axis_engine_kwargs(class_kwargs, image_indices, n_images)
 
-        output = compute_pass2_stats_sparse(
+        result = compute_pass2_stats_sparse(
             subset_dataset,
             means_array[class_index],
             _select_class_value(mean_variance, class_index, n_classes),
@@ -1842,9 +1836,6 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
             relion_projector_r_max=relion_projector_r_max,
             bpref_class_index=class_index,
             **common,
-        )
-        result = read_sparse_pass2_result(
-            output, includes_score_log_z=False, accumulate_noise=accumulate_noise, return_source_eulers=False
         )
         hard_full = np.zeros(n_images, dtype=np.int32)
         hard_full[image_indices] = _sparse_pose_ids_to_fine_grid(

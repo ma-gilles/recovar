@@ -31,7 +31,7 @@ from recovar.em.helpers.orientation_priors import (
     normalize_class_direction_prior_per_half,
 )
 from recovar.em.helpers.oversampling import build_adaptive_pass2_grids
-from recovar.em.helpers.types import DenseEMResult, LocalEMResult, make_noise_stats, make_relion_stats
+from recovar.em.helpers.types import SparsePass2Output, DenseEMResult, LocalEMResult, make_noise_stats, make_relion_stats
 from recovar.em.local.local_layout import LocalHypothesisLayout
 from recovar.em.refinement.mean_helpers import update_c1_sigma_offset_from_posterior
 from recovar.em.sampling import read_relion_direction_priors
@@ -1293,7 +1293,7 @@ def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(
             max_posterior_per_image=np.ones(n_images, dtype=np.float32),
             rotation_posterior_sums=np.zeros(n_coarse_rot, dtype=np.float32),
         )
-        return (
+        return SparsePass2Output(
             jnp.ones_like(volume) * (class_index + 1),
             jnp.ones_like(jnp.real(volume)) * (class_index + 2),
             hard,
@@ -1302,6 +1302,7 @@ def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(
             best_rot_ids,
             stats,
         )
+
 
     monkeypatch.setattr(k_class_module, "run_em", fake_run_em)
     monkeypatch.setattr(oversampling_module, "compute_pass2_stats_sparse", fake_compute_pass2_stats_sparse)
@@ -1388,7 +1389,7 @@ def test_sparse_firstiter_k1_adapter_forwards_exact_cc_and_spectrum_norm(monkeyp
             max_posterior_per_image=np.ones(n_images, dtype=np.float32),
             rotation_posterior_sums=np.zeros(1, dtype=np.float32),
         )
-        return (
+        return SparsePass2Output(
             jnp.zeros_like(volume),
             jnp.zeros_like(jnp.real(volume)),
             np.zeros(n_images, dtype=np.int32),
@@ -1397,6 +1398,7 @@ def test_sparse_firstiter_k1_adapter_forwards_exact_cc_and_spectrum_norm(monkeyp
             np.zeros(n_images, dtype=np.int32),
             stats,
         )
+
 
     monkeypatch.setattr(
         oversampling_module,
@@ -1561,7 +1563,7 @@ def test_sparse_k_class_adaptive_mstep_uses_score_space_log_z(monkeypatch):
             max_posterior_per_image=np.full(n_images, 0.5, dtype=np.float32),
             rotation_posterior_sums=np.zeros(n_coarse_rot, dtype=np.float32),
         )
-        common = (
+        common = SparsePass2Output(
             jnp.zeros_like(volume),
             jnp.zeros_like(volume),
             np.zeros(n_images, dtype=np.int32),
@@ -1571,8 +1573,9 @@ def test_sparse_k_class_adaptive_mstep_uses_score_space_log_z(monkeypatch):
             stats,
         )
         if kwargs.get("return_score_log_z"):
-            return common + (probe_score_log_z[class_index],)
+            return common._replace(score_log_z=probe_score_log_z[class_index])
         return common
+
 
     monkeypatch.setattr(oversampling_module, "compute_pass2_stats_sparse", fake_compute_pass2_stats_sparse)
 
@@ -1661,7 +1664,7 @@ def test_sparse_k_class_adaptive_single_pass_uses_largest_support_class(monkeypa
         )
         if kwargs.get("return_score_log_z_only"):
             return np.full(n_images, float(class_index), dtype=np.float64), score_log_z[class_index]
-        common = (
+        common = SparsePass2Output(
             jnp.zeros_like(volume),
             jnp.zeros_like(volume),
             np.zeros(n_images, dtype=np.int32),
@@ -1671,8 +1674,9 @@ def test_sparse_k_class_adaptive_single_pass_uses_largest_support_class(monkeypa
             stats,
         )
         if kwargs.get("return_score_log_z"):
-            return common + (score_log_z[class_index],)
+            return common._replace(score_log_z=score_log_z[class_index])
         return common
+
 
     monkeypatch.setattr(oversampling_module, "compute_pass2_stats_sparse", fake_compute_pass2_stats_sparse)
 
@@ -1760,7 +1764,7 @@ def test_sparse_k1_adapter_forwards_source_faithful_spectrum_norm(monkeypatch):
             max_posterior_per_image=np.ones(n_images, dtype=np.float32),
             rotation_posterior_sums=np.zeros(n_coarse_rot, dtype=np.float32),
         )
-        return (
+        return SparsePass2Output(
             jnp.zeros_like(volume),
             jnp.zeros_like(jnp.real(volume)),
             np.zeros(n_images, dtype=np.int32),
@@ -1770,6 +1774,7 @@ def test_sparse_k1_adapter_forwards_source_faithful_spectrum_norm(monkeypatch):
             stats,
             np.zeros(n_images, dtype=np.float64),
         )
+
 
     monkeypatch.setattr(
         oversampling_module,

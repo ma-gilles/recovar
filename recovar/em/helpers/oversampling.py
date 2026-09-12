@@ -28,7 +28,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.helpers.types import OMITTED, make_noise_stats, make_relion_stats, sparse_pass2_result
+from recovar.em.helpers.types import SparsePass2Output, make_noise_stats, make_relion_stats
 
 logger = logging.getLogger(__name__)
 _FAST_SIGNIFICANCE_TOPK = 64
@@ -846,7 +846,7 @@ def compute_pass2_stats_sparse(
             "separate score/reconstruction current sizes require the bucketed sparse pass-2 path",
         )
 
-    legacy_result = _compute_pass2_stats_sparse_perimage_reference(
+    return _compute_pass2_stats_sparse_perimage_reference(
         experiment_dataset,
         volume,
         mean_variance,
@@ -883,8 +883,6 @@ def compute_pass2_stats_sparse(
         relion_firstiter_score_mode=relion_firstiter_score_mode,
         relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
     )
-
-    return legacy_result + (None,) if return_source_eulers else legacy_result
 
 
 def _compute_pass2_stats_sparse_perimage_reference(
@@ -1159,7 +1157,7 @@ def _compute_pass2_stats_sparse_perimage_reference(
             sumw=noise_sumw_total,
         )
 
-    relion_stats = OMITTED
+    relion_stats = None
     if return_stats:
         relion_stats = make_relion_stats(
             log_evidence_per_image=log_evidence,
@@ -1167,7 +1165,7 @@ def _compute_pass2_stats_sparse_perimage_reference(
             max_posterior_per_image=max_posterior,
             rotation_posterior_sums=rotation_posterior_sums,
         )
-    return sparse_pass2_result(
+    return SparsePass2Output(
         Ft_y_total,
         Ft_ctf_total,
         hard_assignment,
@@ -1175,5 +1173,5 @@ def _compute_pass2_stats_sparse_perimage_reference(
         best_translations,
         best_rotation_indices,
         relion_stats=relion_stats,
-        noise_stats=merged_noise_stats if accumulate_noise else OMITTED,
+        noise_stats=merged_noise_stats if accumulate_noise else None,
     )
