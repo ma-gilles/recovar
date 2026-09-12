@@ -13600,8 +13600,26 @@ def compute_k_class_pass2_stats_sparse_fused(
     # blocks on the whole device queue (a 109-byte pull costing 13 ms), so the GPU
     # sits at ~40%. Nothing numerical moves: the same NumPy statements run on the
     # same values in the same sequence, only later. Opt-in until qualified.
-    defer_host_stats = parse_env_binary_flag(_SPARSE_KCLASS_DEFERRED_HOST_STATS_ENV)
+    _defer_token = os.environ.get(_SPARSE_KCLASS_DEFERRED_HOST_STATS_ENV, "0").strip().lower()
+    if _defer_token not in {"0", "1", "check"}:
+        raise ValueError(f"{_SPARSE_KCLASS_DEFERRED_HOST_STATS_ENV} must be 0, 1 or check")
+    # "check": apply every record immediately AND replay it after the loop into shadow
+    # copies of the statistics, then compare. Names the first record and field that
+    # diverge, so a real-size failure of the deferral can be localized on the run itself.
+    defer_host_stats_check = _defer_token == "check"
+    defer_host_stats = _defer_token in {"1", "check"}
     deferred_host_records: list[tuple] = []
+    _live_stats = {
+        "class_hard_assignments": class_hard_assignments,
+        "best_rotations": best_rotations,
+        "best_eulers": best_eulers,
+        "best_rotation_indices": best_rotation_indices,
+        "class_log_evidence": class_log_evidence,
+        "class_score_log_z": class_score_log_z,
+        "best_log_score": best_log_score,
+        "max_posterior": max_posterior,
+        "rotation_posterior_sums": rotation_posterior_sums,
+    }
 
     def _apply_noise_power_host(class_index, image_indices, support_mass_np, shells_np, per_image_np):
         noise_img_power_total[class_index] += shells_np
@@ -13629,9 +13647,48 @@ def compute_k_class_pass2_stats_sparse_fused(
         class_log_z_host,
         probs_sum_t_host,
         log_score_offset,
+        targets=None,
     ):
         """Per-bucket, per-class statistics on host values. Called immediately when
-        the pull is not deferred, or replayed in bucket order after one transfer."""
+        the pull is not deferred, or replayed in bucket order after one transfer.
+        ``targets`` redirects the writes (used by the check mode's shadow copies)."""
+        if targets is not None:
+            class_hard_assignments = targets["class_hard_assignments"]
+            best_rotations = targets["best_rotations"]
+            best_eulers = targets["best_eulers"]
+            best_rotation_indices = targets["best_rotation_indices"]
+            class_log_evidence = targets["class_log_evidence"]
+            class_score_log_z = targets["class_score_log_z"]
+            best_log_score = targets["best_log_score"]
+            max_posterior = targets["max_posterior"]
+            rotation_posterior_sums = targets["rotation_posterior_sums"]
+        else:
+            class_hard_assignments = _live_stats["class_hard_assignments"]
+            best_rotations = _live_stats["best_rotations"]
+            best_eulers = _live_stats["best_eulers"]
+            best_rotation_indices = _live_stats["best_rotation_indices"]
+            class_log_evidence = _live_stats["class_log_evidence"]
+            class_score_log_z = _live_stats["class_score_log_z"]
+            best_log_score = _live_stats["best_log_score"]
+            max_posterior = _live_stats["max_posterior"]
+            rotation_posterior_sums = _live_stats["rotation_posterior_sums"]
+        batch_rows = int(np.asarray(image_indices).shape[0])
+        for _name, _value in (
+            ("best_argmax", best_argmax_host),
+            ("best_log_score", best_log_score_host),
+            ("max_posterior", max_posterior_host),
+            ("class_log_z", class_log_z_host),
+        ):
+            if int(np.asarray(_value).shape[0]) != batch_rows:
+                raise RuntimeError(
+                    f"deferred statistics leaf {_name} has {np.asarray(_value).shape[0]} rows "
+                    f"but the bucket has {batch_rows} images (class {class_index + 1})"
+                )
+        if int(np.asarray(probs_sum_t_host).shape[0]) != batch_rows:
+            raise RuntimeError(
+                f"deferred statistics leaf probs_sum_t has {np.asarray(probs_sum_t_host).shape[0]} "
+                f"rows but the bucket has {batch_rows} images (class {class_index + 1})"
+            )
         actual_counts_arr = np.asarray(arrays["actual_counts"], dtype=np.int64)
         best_argmax_np = np.asarray(best_argmax_host, dtype=np.int64)
         best_log_score_np = np.asarray(best_log_score_host, dtype=np.float64)
@@ -15748,7 +15805,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                     log_label=f"kclass{class_index + 1}-ctf-half",
                 )
             _add_sparse_group_timing(group_timing, "mstep_adjoint", time.time() - substage_t0)
-            if defer_host_stats:
+            if defer_host_stats and not defer_host_stats_check:
                 deferred_host_records.append(("posterior", class_index, probs_sum_t_jax))
             else:
                 class_posterior_sums_mstep[class_index] += float(
@@ -15850,7 +15907,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                     norm_unweighted_high_shell=relion_norm_high_shell,
                     include_unweighted_high_shell=class_index == 0,
                 )
-                if defer_host_stats:
+                if defer_host_stats and not defer_host_stats_check:
                     deferred_host_records.append(
                         ("power", class_index, image_indices, support_mass, weighted_img_shells, weighted_img_per_image)
                     )
@@ -15883,7 +15940,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         bucket_scale_for_stats,
                         scale_correction_pixel_masks[class_index],
                     )
-                    if defer_host_stats:
+                    if defer_host_stats and not defer_host_stats_check:
                         deferred_host_records.append(
                             ("scale", class_index, bucket_group_ids, scale_xa_per_image, scale_aa_per_image)
                         )
@@ -16010,7 +16067,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                             "RECOVAR_NOISE_DTYPE_DEBUG(fused): block_noise_shells=%s",
                             block_noise_shells.dtype,
                         )
-                    if defer_host_stats:
+                    if defer_host_stats and not defer_host_stats_check:
                         deferred_host_records.append(
                             ("wsum", class_index, image_indices, block_noise_shells, block_norm_residual)
                         )
@@ -16085,7 +16142,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                             "RECOVAR_NOISE_DTYPE_DEBUG(fused): block_noise_shells=%s",
                             block_noise_shells.dtype,
                         )
-                    if defer_host_stats:
+                    if defer_host_stats and not defer_host_stats_check:
                         deferred_host_records.append(
                             ("wsum", class_index, image_indices, block_noise_shells, block_norm_residual)
                         )
@@ -16102,6 +16159,21 @@ def compute_k_class_pass2_stats_sparse_fused(
                 _add_sparse_group_timing(group_timing, "noise", time.time() - substage_t0)
 
             substage_t0 = time.time()
+            if defer_host_stats_check:
+                _apply_stats_host(
+                    class_index,
+                    arrays,
+                    pair_arrays if bucket_uses_compact_pairs else None,
+                    bucket_uses_compact_pairs,
+                    image_indices,
+                    n_real_images,
+                    best_argmax,
+                    best_log_score_bucket,
+                    max_posterior_bucket,
+                    class_score_log_z_bucket[class_index],
+                    probs_sum_t_jax,
+                    log_score_offset,
+                )
             if defer_host_stats:
                 deferred_host_records.append(
                     (
@@ -16203,8 +16275,29 @@ def compute_k_class_pass2_stats_sparse_fused(
             elif kind == "stats":
                 device_leaves.extend(record[7:12])
         host_leaves = iter(jax.device_get(device_leaves))
+        shadow_stats = None
+        _check_record_index = 0
+        if defer_host_stats_check:
+            shadow_stats = {
+                "class_hard_assignments": _live_stats["class_hard_assignments"].copy(),
+                "best_rotations": [np.array(v, copy=True) for v in _live_stats["best_rotations"]],
+                "best_eulers": (None if _live_stats["best_eulers"] is None
+                                else [np.array(v, copy=True) for v in _live_stats["best_eulers"]]),
+                "best_rotation_indices": [np.array(v, copy=True) for v in _live_stats["best_rotation_indices"]],
+                "class_log_evidence": _live_stats["class_log_evidence"].copy(),
+                "class_score_log_z": _live_stats["class_score_log_z"].copy(),
+                "best_log_score": _live_stats["best_log_score"].copy(),
+                "max_posterior": _live_stats["max_posterior"].copy(),
+                "rotation_posterior_sums": [np.array(v, copy=True) for v in _live_stats["rotation_posterior_sums"]],
+            }
         for record in deferred_host_records:
             kind = record[0]
+            if defer_host_stats_check and kind != "stats":
+                # already applied live in check mode; just consume the leaves
+                n_leaves = {"posterior": 1, "power": 3, "scale": 2, "wsum": 2}[kind]
+                for _ in range(n_leaves):
+                    next(host_leaves)
+                continue
             if kind == "posterior":
                 class_posterior_sums_mstep[record[1]] += float(
                     np.sum(np.asarray(next(host_leaves), dtype=np.float64))
@@ -16230,7 +16323,27 @@ def compute_k_class_pass2_stats_sparse_fused(
                 )
             elif kind == "stats":
                 pulled = [next(host_leaves) for _ in range(5)]
-                _apply_stats_host(*record[1:7], *pulled, record[12])
+                if defer_host_stats_check:
+                    _apply_stats_host(*record[1:7], *pulled, record[12], targets=shadow_stats)
+                    _check_record_index += 1
+                    _cls = record[1]
+                    _rows = np.asarray(record[5])[: int(record[6])]
+                    for _name in ("class_hard_assignments", "class_log_evidence", "class_score_log_z",
+                                  "best_log_score", "max_posterior"):
+                        _live_v = _live_stats[_name][_cls][_rows]
+                        _shadow_v = shadow_stats[_name][_cls][_rows]
+                        if not np.array_equal(np.nan_to_num(_live_v, nan=0.0, posinf=1e30, neginf=-1e30),
+                                              np.nan_to_num(_shadow_v, nan=0.0, posinf=1e30, neginf=-1e30)):
+                            _bad = np.flatnonzero(_live_v != _shadow_v)[:8]
+                            raise RuntimeError(
+                                "deferred host statistics CHECK failed: record "
+                                f"{_check_record_index} class {_cls + 1} field {_name} differs on "
+                                f"{np.count_nonzero(_live_v != _shadow_v)} of {_rows.size} rows "
+                                f"(first rows {_bad.tolist()}; live {_live_v[_bad].tolist()[:4]} vs "
+                                f"replay {_shadow_v[_bad].tolist()[:4]})"
+                            )
+                else:
+                    _apply_stats_host(*record[1:7], *pulled, record[12])
         deferred_host_records.clear()
         logger.info(
             "Sparse fused K-class pass-2 deferred host statistics: replayed in %.2fs",

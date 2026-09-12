@@ -10176,3 +10176,96 @@ def test_device_resident_raw_diff2_is_bit_identical(monkeypatch):
         monkeypatch, {"RECOVAR_SPARSE_KCLASS_RAW_DIFF2_DEVICE_RESIDENT": "1"}, bucketed_mod
     )
     _assert_fused_arrays_identical(baseline, resident, "device-resident raw diff2")
+
+
+def _fused_kclass_multibucket_fixture(n_images=12, seed=5):
+    """Heterogeneous candidate counts so images land in several pair-width buckets.
+
+    The single-bucket fixture cannot see a record/leaf misalignment in the deferred
+    host-statistics replay; at 100k/256 the replay raised the padding guard for class 4
+    in iteration 2 while the immediate path passed (job 13799858).
+    """
+    from recovar.em.sampling import rotation_grid_size
+
+    rng = np.random.default_rng(seed)
+    n_classes = 2
+    rotation_grid_size(0)
+    fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 4, axis=0)
+    fine_parent = np.asarray([0, 1, 2, 3], dtype=np.int64)
+    fine_translations = np.asarray([[0.0, 0.0], [0.25, 0.0], [0.0, 0.25]], dtype=np.float32)
+    fine_translation_parent = np.zeros(3, dtype=np.int32)
+    significant_by_class = [
+        [np.sort(rng.choice(4, size=int(rng.integers(1, 5)), replace=False)).astype(np.int32) for _ in range(n_images)]
+        for _ in range(n_classes)
+    ]
+    volumes = jnp.stack(
+        [_hermitian_volume(VOLUME_SHAPE, seed=2027), _hermitian_volume(VOLUME_SHAPE, seed=2029)]
+    )
+    return dict(
+        experiment_dataset=MockDataset(n_images=n_images, seed=2039),
+        volumes=volumes,
+        mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0,
+        noise_variance=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        translations=np.asarray([[0.0, 0.0]], dtype=np.float32),
+        significant_sample_indices_by_class=significant_by_class,
+        rotation_log_priors_by_class=[None] * n_classes,
+        translation_log_prior=np.array([-0.25], dtype=np.float32),
+        nside_level=0,
+        disc_type="linear_interp",
+        oversampling_order=0,
+        current_size=4,
+        half_spectrum_scoring=True,
+        fine_rotations_override=fine_rotations,
+        fine_rotation_parent_override=fine_parent,
+        fine_translations_override=fine_translations,
+        fine_translation_parent_override=fine_translation_parent,
+        relion_x_half_mstep=False,
+        relion_fine_mstep_prune_mode="joint",
+        adaptive_fraction=0.9,
+    )
+
+
+@pytest.mark.parametrize("defer_flag", ["1", "check"])
+@pytest.mark.parametrize("noise_mode", ["no_noise", "noise", "noise_with_scale_groups"])
+def test_deferred_host_statistics_match_across_several_buckets(monkeypatch, caplog, noise_mode, defer_flag):
+    """Real size (job 13799858) raised the padding guard only in the deferred replay, and
+    only once noise accumulation added the power/scale/wsum record kinds the CPU
+    fixtures never exercised. Cover every record kind across several buckets."""
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    def run(flag):
+        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_DEFERRED_HOST_STATS", flag)
+        # Force chunking so the replay spans several buckets, as it does in production.
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "4")
+        kwargs = _fused_kclass_multibucket_fixture()
+        if noise_mode != "no_noise":
+            kwargs["accumulate_noise"] = True
+        if noise_mode == "noise_with_scale_groups":
+            n_images = kwargs["experiment_dataset"].n_images
+            kwargs["group_ids"] = np.arange(n_images) % 3
+            kwargs["scale_corrections"] = np.linspace(0.9, 1.1, n_images).astype(np.float32)
+        return _fused_kclass_result_arrays(
+            bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs)
+        )
+
+    # "bucket group start" logs once per shape group, so count buckets by spying on
+    # the per-bucket array builder instead.
+    built = []
+    original_build = bucketed_mod._build_k_class_bucket_arrays
+
+    def counting_build(*a, **kw):
+        built.append(1)
+        return original_build(*a, **kw)
+
+    monkeypatch.setattr(bucketed_mod, "_build_k_class_bucket_arrays", counting_build)
+    with caplog.at_level(logging.INFO, logger=bucketed_mod.__name__):
+        baseline = run("0")
+        n_buckets = len(built)
+        caplog.clear()
+        deferred = run(defer_flag)  # "check" applies live AND replays into shadows, raising on any divergence
+    assert n_buckets >= 2, f"fixture produced only {n_buckets} bucket(s); the test would prove nothing"
+    assert any("deferred host statistics: replayed" in r.getMessage() for r in caplog.records)
+    _assert_fused_arrays_identical(baseline, deferred, f"deferred host statistics (multi-bucket, {defer_flag})")
