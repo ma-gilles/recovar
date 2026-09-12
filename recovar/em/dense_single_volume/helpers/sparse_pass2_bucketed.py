@@ -26,6 +26,7 @@ do not perturb the M-step accumulators.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import subprocess
@@ -13609,6 +13610,11 @@ def compute_k_class_pass2_stats_sparse_fused(
     defer_host_stats_check = _defer_token == "check"
     defer_host_stats = _defer_token in {"1", "check"}
     deferred_host_records: list[tuple] = []
+    deferred_check_snapshots: list[tuple] = []
+
+    def _fingerprint(value):
+        arr = np.ascontiguousarray(np.asarray(value))
+        return (arr.shape, str(arr.dtype), hashlib.sha1(arr.view(np.uint8)).hexdigest())
     _live_stats = {
         "class_hard_assignments": class_hard_assignments,
         "best_rotations": best_rotations,
@@ -16192,6 +16198,23 @@ def compute_k_class_pass2_stats_sparse_fused(
                         log_score_offset,
                     )
                 )
+                if defer_host_stats_check:
+                    # Snapshot what the immediate path saw, so the replay can say whether a
+                    # device leaf came back different (stale/misaligned) or a NumPy array in
+                    # the record was mutated in place after the record was taken.
+                    _snap_leaves = [np.array(np.asarray(v), copy=True) for v in
+                                    (best_argmax, best_log_score_bucket, max_posterior_bucket,
+                                     class_score_log_z_bucket[class_index], probs_sum_t_jax)]
+                    _snap_hashes = {
+                        "arrays.actual_counts": _fingerprint(arrays["actual_counts"]),
+                        "arrays.rotation_indices": _fingerprint(arrays["rotation_indices"]),
+                        "image_indices": _fingerprint(image_indices),
+                        "log_score_offset": _fingerprint(log_score_offset),
+                    }
+                    if bucket_uses_compact_pairs:
+                        for _k in ("rotation_index", "local_rotation_row", "translation_idx", "pair_mask"):
+                            _snap_hashes["pair_arrays." + _k] = _fingerprint(pair_arrays[_k])
+                    deferred_check_snapshots.append((_snap_leaves, _snap_hashes))
             else:
                 _apply_stats_host(
                     class_index,
@@ -16324,6 +16347,36 @@ def compute_k_class_pass2_stats_sparse_fused(
             elif kind == "stats":
                 pulled = [next(host_leaves) for _ in range(5)]
                 if defer_host_stats_check:
+                    _snap_leaves, _snap_hashes = deferred_check_snapshots[_check_record_index]
+                    for _name, _live_leaf, _replay_leaf in zip(
+                        ("best_argmax", "best_log_score", "max_posterior", "class_log_z", "probs_sum_t"),
+                        _snap_leaves, pulled,
+                    ):
+                        _a = np.nan_to_num(np.asarray(_live_leaf, dtype=np.float64), nan=-1.0, posinf=1e30, neginf=-1e30)
+                        _b = np.nan_to_num(np.asarray(_replay_leaf, dtype=np.float64), nan=-1.0, posinf=1e30, neginf=-1e30)
+                        if _a.shape != _b.shape or not np.array_equal(_a, _b):
+                            _rows = np.flatnonzero((_a != _b).reshape(_a.shape[0], -1).any(axis=1))[:6] if _a.shape == _b.shape else []
+                            raise RuntimeError(
+                                "deferred host statistics CHECK: DEVICE LEAF differs at replay -- record "
+                                f"{_check_record_index} class {record[1] + 1} leaf {_name} shape live {_a.shape} "
+                                f"replay {_b.shape}, first rows {list(map(int, _rows))}; live {_a.reshape(_a.shape[0], -1)[_rows][:3].tolist() if len(_rows) else '?'} "
+                                f"replay {_b.reshape(_b.shape[0], -1)[_rows][:3].tolist() if len(_rows) else '?'}"
+                            )
+                    _now = {
+                        "arrays.actual_counts": _fingerprint(record[2]["actual_counts"]),
+                        "arrays.rotation_indices": _fingerprint(record[2]["rotation_indices"]),
+                        "image_indices": _fingerprint(record[5]),
+                        "log_score_offset": _fingerprint(record[12]),
+                    }
+                    if record[4]:
+                        for _k in ("rotation_index", "local_rotation_row", "translation_idx", "pair_mask"):
+                            _now["pair_arrays." + _k] = _fingerprint(record[3][_k])
+                    _changed = [k for k in _snap_hashes if _snap_hashes[k] != _now.get(k)]
+                    if _changed:
+                        raise RuntimeError(
+                            "deferred host statistics CHECK: HOST ARRAY MUTATED after the record was taken -- "
+                            f"record {_check_record_index} class {record[1] + 1}: {_changed}"
+                        )
                     _apply_stats_host(*record[1:7], *pulled, record[12], targets=shadow_stats)
                     _check_record_index += 1
                     _cls = record[1]
@@ -16345,6 +16398,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                 else:
                     _apply_stats_host(*record[1:7], *pulled, record[12])
         deferred_host_records.clear()
+        deferred_check_snapshots.clear()
         logger.info(
             "Sparse fused K-class pass-2 deferred host statistics: replayed in %.2fs",
             time.time() - replay_t0,
