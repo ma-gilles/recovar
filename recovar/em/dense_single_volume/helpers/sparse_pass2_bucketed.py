@@ -4068,6 +4068,21 @@ def _ladder_rechunk_buckets(buckets):
     return out
 
 
+def _compact_pair_diff2_gather_bytes_per_image(pair_bucket_size, n_score_pixels, complex_dtype) -> int:
+    """Device bytes one image costs in the compact-pair diff2 gather.
+
+    ``_score_pass2_pairs_relion_gpu_diff2_raw`` gathers ``(batch, pair_width, pixels)``
+    complex rows twice -- projected references and shifted images -- before the
+    diff2 kernel. This is the largest single tensor of the fused pass 2 and the one
+    that reported ``RESOURCE_EXHAUSTED: 16.30 GiB`` on the 100k/256 K=4 fixture as
+    soon as the image axis was padded (jobs 13797141, 13798264). Any image-axis
+    capacity must therefore be bounded by this footprint, not only by the smaller
+    per-rotation-row projection-gather bytes.
+    """
+
+    return max(1, 2 * int(pair_bucket_size) * int(n_score_pixels) * int(_dtype_itemsize(complex_dtype)))
+
+
 def _split_compact_pair_buckets_by_projection_gather_budget(
     compact_buckets,
     per_image_inputs_by_class,
@@ -4234,6 +4249,12 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
         if max_gather_bytes is not None:
             per_image_bytes = max(1, int(max_class_bucket_size) * row_bytes)
             image_byte_budget = _tighten(image_byte_budget, max(1, max_gather_bytes // per_image_bytes))
+            # The diff2 gather is the tensor that actually exhausts memory when the
+            # image axis is padded; bound the capacity budget by it as well.
+            diff2_bytes = _compact_pair_diff2_gather_bytes_per_image(
+                bucket["pair_bucket_size"], n_score_pixels, projection_complex_dtype
+            )
+            image_byte_budget = _tighten(image_byte_budget, max(1, max_gather_bytes // diff2_bytes))
         if max_dense_mstep_bytes is not None:
             dense_bytes_per_image = max(1, int(max_class_bucket_size) * n_fine_trans_int * prob_item_bytes)
             if not single_image_bucket:
