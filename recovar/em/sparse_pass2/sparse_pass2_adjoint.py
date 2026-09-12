@@ -30,7 +30,7 @@ from recovar.em.sparse_pass2.sparse_pass2_compact_pair_sums import (
     _select_active_flat_values,
 )
 
-logger = logging.getLogger("recovar.em.dense_single_volume.helpers.sparse_pass2_adjoint")
+logger = logging.getLogger(__name__)
 
 
 _SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE_ENV = (

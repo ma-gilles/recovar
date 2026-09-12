@@ -51,7 +51,7 @@ from recovar.em.vdam.estep_common import (
 from recovar.em.vdam.mstep_accumulator import VdamAccumulator
 from recovar.em.vdam.state import InitialModelState
 
-logger = logging.getLogger("recovar.em.initial_model.sparse_pass2_estep")
+logger = logging.getLogger(__name__)
 
 
 _EXACT_RELION_FINE_DIFF2_ENV = "RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2"

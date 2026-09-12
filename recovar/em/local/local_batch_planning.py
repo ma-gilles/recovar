@@ -22,7 +22,7 @@ from recovar.em.local.local_layout import (
     _exact_local_large_bucket_quantum,
 )
 
-logger = logging.getLogger("recovar.em.dense_single_volume.local_batch_planning")
+logger = logging.getLogger(__name__)
 
 # Keeps common 256^2 local-search buckets at two images without entering the
 # three-image working set that previously exceeded memory.

@@ -13,7 +13,7 @@ The [development contract](../../AGENTS.md) defines change scope and validation.
 | Pipeline PPCA | The same pipeline with `--use-ppca`; `_run_ppca_refinement` selects the PPCA path | [`recovar.ppca.ppca.EM`](../../recovar/ppca/ppca.py), using the supplied dataset poses |
 | RELION-style K1/K-class refinement | [`scripts/run_full_refinement.py`](../../scripts/run_full_refinement.py) resolves inputs and options | [`iteration_loop.refine_single_volume`](../../recovar/em/refinement/iteration_loop.py); despite the name, this controller also handles K-class refinement |
 | Pose-marginal PPCA refinement | [`refinement_loop`](../../recovar/em/ppca_refinement/refinement_loop.py) exposes dense and local refinement loops | [`dense_dataset`](../../recovar/em/ppca_refinement/dense_dataset.py), [`local_dataset`](../../recovar/em/ppca_refinement/local_dataset.py), and their fused kernels |
-| InitialModel/VDAM | [`initial_model.iteration_loop.run_vdam_iterations`](../../recovar/em/vdam/iteration_loop.py) | Initial-model schedules, subset selection, state and reconstruction |
+| InitialModel/VDAM | [`vdam.iteration_loop.run_vdam_iterations`](../../recovar/em/vdam/iteration_loop.py) | Initial-model schedules, subset selection, state and reconstruction |
 | Earlier EM reference routines | Import directly from the owning module; `recovar.em` performs no workflow imports | [`states`](../../recovar/em/reference/states.py), [`iterations`](../../recovar/em/reference/iterations.py), E-step/M-step and heterogeneity modules; the tracked [`em_test` notebook](../../recovar/em/reference/em_test.ipynb) uses these routines directly |
 
 Pipeline PPCA and pose-marginal PPCA have different entry points and state

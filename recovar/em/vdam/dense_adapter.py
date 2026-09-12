@@ -51,7 +51,7 @@ _EXACT_RELION_PROJECTOR_ENV = "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR"
 _RELION_PROJECTOR_DUMP_DIR_ENV = "RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR"
 
 
-logger = logging.getLogger("recovar.em.initial_model.dense_adapter")
+logger = logging.getLogger(__name__)
 
 
 def split_pseudo_halfset_particle_ids(

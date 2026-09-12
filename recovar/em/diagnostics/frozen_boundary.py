@@ -18,7 +18,7 @@ import numpy as np
 
 from recovar.em.refinement.refinement_options import RefinementOptions
 
-logger = logging.getLogger("recovar.em.dense_single_volume.frozen_boundary")
+logger = logging.getLogger(__name__)
 
 FROZEN_BOUNDARY_SCHEMA_V2 = "recovar.em.frozen_boundary.v2"
 FROZEN_BOUNDARY_SCHEMA_V3 = "recovar.em.frozen_boundary.v3"

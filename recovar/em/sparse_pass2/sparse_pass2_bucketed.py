@@ -291,7 +291,7 @@ from recovar.em.sparse_pass2.sparse_pass2_window import (
 )
 from recovar.reconstruction import noise as noise_utils
 
-logger = logging.getLogger("recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed")
+logger = logging.getLogger(__name__)
 
 # Scale sparse pass-2 bucket sizes from physical GPU memory and active score
 # pixels. The fused K-class path is launch-bound at 100k/256 unless it uses

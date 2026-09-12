@@ -27,7 +27,7 @@ from recovar.em.scoring.coarse_gemm_streaming import (
     aggregate_coarse_gemm_streaming_summaries,
 )
 
-logger = logging.getLogger("recovar.em.dense_single_volume.helpers.coarse_gaussian_diagnostics")
+logger = logging.getLogger(__name__)
 
 
 _COARSE_RUNTIME_PREFIX_DUMP_DIR_ENV = "RECOVAR_COARSE_RUNTIME_PREFIX_DUMP_DIR"

@@ -33,7 +33,7 @@ from recovar.em.sparse_pass2.sparse_pass2_policy import (
     _compact_pair_pair_sparse_mstep_enabled_for_pass,
 )
 
-logger = logging.getLogger("recovar.em.dense_single_volume.helpers.sparse_pass2_compact_pair_sums")
+logger = logging.getLogger(__name__)
 
 
 _SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS_ENV = "RECOVAR_SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS"

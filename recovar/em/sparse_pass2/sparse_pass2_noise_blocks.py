@@ -20,7 +20,7 @@ from recovar.em.helpers.projection import compute_noise_block as _compute_noise_
 from recovar.em.sparse_pass2.sparse_pass2_budget import _dtype_itemsize
 from recovar.em.sparse_pass2.sparse_pass2_policy import _SPARSE_KCLASS_RESIDUAL_TERMS_FUSED_ENV
 
-logger = logging.getLogger("recovar.em.dense_single_volume.helpers.sparse_pass2_noise_blocks")
+logger = logging.getLogger(__name__)
 
 
 _noise_block_chunk_log_keys: set[tuple[int, int, int, int]] = set()

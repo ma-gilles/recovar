@@ -204,7 +204,7 @@ from recovar.reconstruction.regularization import (
     update_relion_growth_state_from_fsc,
 )
 
-logger = logging.getLogger("recovar.em.dense_single_volume.iteration_loop")
+logger = logging.getLogger(__name__)
 
 
 _FINAL_ALL_DATA_USE_MERGED_REFERENCE_ENV = "RECOVAR_FINAL_ALL_DATA_USE_MERGED_REFERENCE"

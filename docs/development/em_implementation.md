@@ -235,7 +235,7 @@ capture sites pass only their per-bucket operands
 [`heterogeneity._fixed_rotation_covariance_images`](../../recovar/em/reference/heterogeneity.py) accumulates the
 fixed-rotation covariance-column update in image space (right-hand side and normal
 operator per rotation) for both the Equinox and the classic accumulator, which only
-convert to half images and back-project. In [`initial_model.layout`](../../recovar/em/vdam/layout.py),
+convert to half images and back-project. In [`vdam.layout`](../../recovar/em/vdam/layout.py),
 `_centered_bpref_sources` validates and centers the data/weight cubes once for the
 dense and the RELION-x-half BPref converters, and `_bpref_slab_outputs` applies RELION's
 double-precision cast and denormal-weight clamp
@@ -438,8 +438,8 @@ location.
 half-selection policy for terminating significance/noise captures and numbered
 BPref device captures, together with iteration dump writers. The controller
 calls those selectors at the same dispatch boundaries and retains diagnostic
-completion/stop control. Selector errors and log messages are unchanged; their
-logger keeps its historical `dense_single_volume.debug_dumps` namespace. Capture state and counters belong to the
+completion/stop control. Selector errors and log messages are unchanged; log records identify the
+module that owns each operation. Capture state and counters belong to the
 separate diagnostic owner below.
 
 [`diagnostics.reconstruction`](../../recovar/em/diagnostics/reconstruction.py)

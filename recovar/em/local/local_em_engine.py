@@ -201,7 +201,7 @@ from recovar.em.sparse_pass2 import sparse_pass2_bucketed
 from recovar.em.sparse_pass2.sparse_pass2_wavg import _make_relion_wavg_rectangle, _make_stable_relion_wavg_rectangle
 from recovar.reconstruction import noise as noise_utils
 
-logger = logging.getLogger("recovar.em.dense_single_volume.local_em_engine")
+logger = logging.getLogger(__name__)
 
 
 # Keep the deferred exact-local noise projection chunks small enough for

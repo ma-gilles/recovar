@@ -140,7 +140,7 @@ _SIGNIFICANCE_DUMP_PASSIVE_CACHE_ENV = (
     "RECOVAR_SIGNIFICANCE_DUMP_PASSIVE_CACHE"
 )
 NVTX_DOMAIN_EM = "recovar_em"
-logger = logging.getLogger("recovar.em.dense_single_volume.helpers.significance")
+logger = logging.getLogger(__name__)
 
 
 def _pad_significance_preprocess_inputs(

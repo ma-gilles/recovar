@@ -27,7 +27,7 @@ import numpy as np
 
 from recovar.em.helpers.env_flags import parse_env_float_or_default, parse_env_int_or_default
 
-logger = logging.getLogger("recovar.em.dense_single_volume.helpers.convergence")
+logger = logging.getLogger(__name__)
 
 # RELION defaults
 MAX_NR_ITER_WO_RESOL_GAIN = 1

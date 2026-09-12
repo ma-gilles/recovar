@@ -46,7 +46,7 @@ from recovar.em.local.local_layout import LocalHypothesisLayout
 from recovar.em.scoring.significant_samples import ComplementSignificantSampleIndices, significant_sample_count
 from recovar.utils.nvtx_shim import nvtx
 
-logger = logging.getLogger("recovar.em.dense_single_volume.k_class")
+logger = logging.getLogger(__name__)
 NVTX_DOMAIN_EM = "recovar_em"
 _RUN_EM_ALLOWED_KWARGS = frozenset(inspect.signature(run_em).parameters)
 _SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE_ENV = "RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE"

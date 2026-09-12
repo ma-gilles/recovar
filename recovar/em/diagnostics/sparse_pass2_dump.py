@@ -18,7 +18,7 @@ from recovar.em.diagnostics import pass2 as pass2_diagnostics
 from recovar.em.helpers.env_flags import parse_env_flag
 from recovar.em.sparse_pass2.sparse_pass2_policy import _pass2_dump_enabled
 
-logger = logging.getLogger("recovar.em.dense_single_volume.helpers.sparse_pass2_dump")
+logger = logging.getLogger(__name__)
 
 
 _PASS2_DUMP_STOP_AFTER_TARGET_ENV = "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"

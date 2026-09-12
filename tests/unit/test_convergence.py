@@ -49,7 +49,7 @@ from recovar.em.sampling import (
 )
 
 # Use the same logger supplied by the refinement controller without importing it.
-_REFINEMENT_LOGGER = logging.getLogger("recovar.em.dense_single_volume.iteration_loop")
+_REFINEMENT_LOGGER = logging.getLogger("recovar.em.refinement.iteration_loop")
 
 
 # =========================================================================

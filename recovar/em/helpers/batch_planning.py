@@ -22,7 +22,7 @@ from numbers import Integral
 
 import numpy as np
 
-logger = logging.getLogger("recovar.em.dense_single_volume.batch_planning")
+logger = logging.getLogger(__name__)
 
 
 # Memory budgets and cache defaults used by this planner.

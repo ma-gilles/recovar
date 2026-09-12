@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from recovar.em.local.local_layout import LocalBucketSpec
 
 # Keep the established category for run collectors.
-logger = logging.getLogger("recovar.em.dense_single_volume.local_em_engine")
+logger = logging.getLogger(__name__)
 
 EXACT_LOCAL_PROGRESS_CHUNKS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS"
 EXACT_LOCAL_PROGRESS_SECONDS_ENV = "RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS"

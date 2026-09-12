@@ -21,7 +21,7 @@ from recovar.em.local.local_em_engine import run_local_em_exact
 from recovar.em.local.local_layout import _local_search_engine_rotation_block_size, build_local_hypothesis_layout
 from recovar.em.sampling import build_local_search_grid_metadata
 
-logger = logging.getLogger("recovar.em.dense_single_volume.local_search_iteration")
+logger = logging.getLogger(__name__)
 
 
 # Mirror iteration_loop's constant locally so the helper has a stable home.

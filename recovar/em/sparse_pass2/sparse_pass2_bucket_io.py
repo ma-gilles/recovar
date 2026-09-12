@@ -31,7 +31,7 @@ from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _relion_cuda_pixel_correction_from_rfloat_ctf,
 )
 
-logger = logging.getLogger("recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io")
+logger = logging.getLogger(__name__)
 
 
 def _half_translation_phase_table_for_indices(translations, image_shape, pixel_indices):

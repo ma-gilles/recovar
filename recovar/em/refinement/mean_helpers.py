@@ -25,7 +25,7 @@ from recovar.em.helpers.resolution import shell_index_to_resolution_angstrom
 from recovar.em.helpers.types import make_noise_stats
 from recovar.reconstruction import regularization
 
-logger = logging.getLogger("recovar.em.dense_single_volume.mean_helpers")
+logger = logging.getLogger(__name__)
 
 
 def prepare_initial_mean_variance(

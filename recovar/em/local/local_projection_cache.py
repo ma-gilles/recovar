@@ -23,7 +23,7 @@ from recovar.em.helpers.timing import block_until_ready as _block_until_ready
 from recovar.em.local.local_layout import LocalBucketSpec
 
 # Keep the established log category for existing run collectors.
-logger = logging.getLogger("recovar.em.dense_single_volume.local_em_engine")
+logger = logging.getLogger(__name__)
 
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB = 0.0
 EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV = "RECOVAR_EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB"

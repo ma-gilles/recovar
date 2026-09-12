@@ -52,7 +52,7 @@ from recovar.em.scoring import compact_candidates
 from recovar.em.sparse_pass2 import sparse_pass2_bucketed
 from recovar.utils.nvtx_shim import nvtx
 
-logger = logging.getLogger("recovar.em.dense_single_volume.local_bucket_stages")
+logger = logging.getLogger(__name__)
 
 
 def _noise_wsum_initial_dtype(*, relion_exact_fine_diff2: bool, use_window: bool):

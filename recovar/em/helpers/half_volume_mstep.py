@@ -179,7 +179,7 @@ def relion_x_half_volume_to_full(volume_flat, recon_volume_shape, *, force_host:
     """
 
     if force_host or _large_relion_x_half_full_host_enabled(int(np.prod(recon_volume_shape))):
-        logging.getLogger("recovar.em.dense_single_volume.helpers.half_volume_mstep").info(
+        logging.getLogger(__name__).info(
             "RELION x-half M-step: expanding large accumulator to public full layout on host "
             "(shape=%s, full_voxels=%d)",
             tuple(recon_volume_shape),
@@ -209,7 +209,7 @@ def relion_x_half_volume_to_public_layout(volume_flat, recon_volume_shape, *, fo
     """
 
     if _large_relion_x_half_to_native_half_enabled(int(np.prod(recon_volume_shape))):
-        logging.getLogger("recovar.em.dense_single_volume.helpers.half_volume_mstep").info(
+        logging.getLogger(__name__).info(
             "RELION x-half M-step: repacking large accumulator to RECOVAR native half layout "
             "(shape=%s, full_voxels=%d)",
             tuple(recon_volume_shape),

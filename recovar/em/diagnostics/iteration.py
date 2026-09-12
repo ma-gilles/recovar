@@ -26,7 +26,7 @@ from recovar.em.helpers.half_spectrum import make_half_image_weights, make_shell
 from recovar.em.relion.relion_metadata import _relion_half_plane_shell_counts
 from recovar.em.sampling import rotation_grid_size
 
-logger = logging.getLogger("recovar.em.dense_single_volume.debug_dumps")
+logger = logging.getLogger(__name__)
 
 
 _SIGNIFICANCE_DUMP_TARGET_HALF_ENV = "RECOVAR_SIGNIFICANCE_DUMP_TARGET_HALF"

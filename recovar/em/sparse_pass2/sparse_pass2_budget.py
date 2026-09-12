@@ -19,7 +19,7 @@ import numpy as np
 from recovar.em.helpers.env_flags import parse_env_nonnegative_int
 from recovar.em.scoring.sparse_bucket_arrays import _DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH
 
-logger = logging.getLogger("recovar.em.dense_single_volume.helpers.sparse_pass2_budget")
+logger = logging.getLogger(__name__)
 
 
 _DEFAULT_SCORE_ONLY_MAX_HYPOTHESES_PER_MICROBATCH = 1_250_000

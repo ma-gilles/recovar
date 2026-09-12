@@ -41,7 +41,7 @@ from recovar.em.sampling import (
     relion_sampling_perturbation_for_iteration,
 )
 
-logger = logging.getLogger("recovar.em.dense_single_volume.relion_replay")
+logger = logging.getLogger(__name__)
 
 
 _DEBUG_REPLAY_RELION_REFERENCES_ENV = "RECOVAR_DEBUG_REPLAY_RELION_REFERENCES"

@@ -17,7 +17,7 @@ import numpy as np
 
 from recovar.em.diagnostics.relion_replay import RelionProjectorReplayState
 
-logger = logging.getLogger("recovar.em.dense_single_volume.projector_preparation")
+logger = logging.getLogger(__name__)
 
 
 def prepare_initial_real_references(init_reference_real, *, volume_shape, n_classes, log):

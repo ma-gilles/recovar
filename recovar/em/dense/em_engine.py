@@ -75,7 +75,7 @@ from recovar.em.scoring.scoring import (
 from recovar.reconstruction import noise as noise_utils
 from recovar.utils.nvtx_shim import nvtx
 
-logger = logging.getLogger("recovar.em.dense_single_volume.em_engine")
+logger = logging.getLogger(__name__)
 NVTX_DOMAIN_EM = "recovar_em"
 
 

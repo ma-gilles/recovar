@@ -35,7 +35,7 @@ from recovar.em.sparse_pass2.sparse_pass2_policy import (
 from recovar.em.sparse_pass2.sparse_pass2_posterior import relion_x_half_f32_fine_posterior_enabled
 from recovar.em.sparse_pass2.sparse_pass2_scoring import _RELION_FINE_DIFF2_FUSED_FFI_ENV
 
-logger = logging.getLogger("recovar.em.dense_single_volume.helpers.sparse_pass2_window")
+logger = logging.getLogger(__name__)
 
 
 class _SparsePass2WindowSetup(NamedTuple):

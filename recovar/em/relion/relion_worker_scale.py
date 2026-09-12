@@ -28,7 +28,7 @@ import numpy as np
 from recovar.em.helpers.iteration_history import RefinementHistory
 from recovar.em.refinement.refinement_options import RefinementOptions
 
-logger = logging.getLogger("recovar.em.dense_single_volume.relion_worker_scale")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)

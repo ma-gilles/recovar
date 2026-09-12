@@ -30,7 +30,7 @@ import numpy as np
 
 from recovar.em.helpers.types import OMITTED, make_noise_stats, make_relion_stats, sparse_pass2_result
 
-logger = logging.getLogger("recovar.em.dense_single_volume.helpers.oversampling")
+logger = logging.getLogger(__name__)
 _FAST_SIGNIFICANCE_TOPK = 64
 
 

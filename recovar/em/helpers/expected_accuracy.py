@@ -12,7 +12,7 @@ import numpy as np
 
 from recovar.core.ctf import CTFParamIndex
 
-logger = logging.getLogger("recovar.em.dense_single_volume.helpers.expected_accuracy")
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)

@@ -66,7 +66,7 @@ from recovar.em.sampling import (
     rotation_grid_size,
 )
 
-logger = logging.getLogger("recovar.em.dense_single_volume.half_scoring")
+logger = logging.getLogger(__name__)
 
 
 def _expand_significant_samples_to_full_parent_translations(

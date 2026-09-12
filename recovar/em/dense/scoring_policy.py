@@ -14,7 +14,7 @@ import numpy as np
 
 from recovar.em.helpers.env_flags import parse_env_flag_or_false
 
-logger = logging.getLogger("recovar.em.dense_single_volume.scoring_policy")
+logger = logging.getLogger(__name__)
 
 # RELION parses ``--adaptive_fraction 0.999`` through ``textToFloat`` and
 # stores that single-precision value in its optimiser state.  Python's literal

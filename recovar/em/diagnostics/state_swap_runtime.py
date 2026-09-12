@@ -15,7 +15,7 @@ import numpy as np
 from recovar.em.diagnostics.state_swap_probe import _STATE_SWAP_VARIANT_COMPONENTS
 
 # Keep the existing diagnostic log namespace for configured handlers/filters.
-logger = logging.getLogger("recovar.em.dense_single_volume.iteration_loop")
+logger = logging.getLogger(__name__)
 
 
 _STATE_SWAP_MAP_SCALE_VARIANTS = {

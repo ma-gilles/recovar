@@ -1387,7 +1387,7 @@ def test_fused_k_class_sparse_pass2_reserves_extra_headroom(monkeypatch):
 def test_sparse_pass2_warns_when_env_cap_is_below_auto(monkeypatch, caplog):
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", "2000000")
 
-    caplog.set_level(logging.WARNING, logger="recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed")
+    caplog.set_level(logging.WARNING, logger="recovar.em.sparse_pass2.sparse_pass2_budget")
     cap = _max_hypotheses_per_microbatch_for_pass(
         score_only=False,
         use_window=True,
