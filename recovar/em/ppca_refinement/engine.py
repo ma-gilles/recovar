@@ -254,45 +254,18 @@ def dense_pose_ppca_E_step_blocked(
     R, P, _ = jnp.asarray(proj_aug).shape
     if pose_log_prior is not None and jnp.asarray(pose_log_prior).shape != (B, R, T):
         raise ValueError(f"pose_log_prior shape {jnp.asarray(pose_log_prior).shape} != ({B}, {R}, {T})")
-    y_stats = _per_pose_stats_block(
+    gamma, alpha, G_tri, diagnostics = _score_gamma_and_moments(
         jnp.asarray(Y1),
         jnp.asarray(proj_aug),
         jnp.asarray(ctf2_over_noise),
         jnp.asarray(y_norm),
-    )
-    score_pre, alpha, G_tri = compute_ppca_pose_scores_and_moments_no_contrast(
-        *y_stats,
-        return_moments=True,
-    )
-    score = _add_pose_log_prior(score_pre, pose_log_prior)
-    score_flat = score.reshape(B, T * R)
-    logZ = jax.scipy.special.logsumexp(score_flat, axis=-1)
-    gamma = jnp.exp(score - logZ[:, None, None])
-    best_flat = jnp.argmax(score_flat, axis=-1)
-    pmax = jnp.max(gamma.reshape(B, T * R), axis=-1)
-    top_rot, top_trans, top_scores, top_prob = _top_pose_diagnostics_from_score_flat(
-        score_flat,
-        logZ,
-        R,
-        top_pose_count,
-    )
-    diagnostics = PosteriorDiagnostics(
-        logZ=logZ,
-        pmax=pmax,
-        best_rotation_idx=(best_flat % R).astype(jnp.int32),
-        best_translation_idx=(best_flat // R).astype(jnp.int32),
-        n_significant_per_image=jnp.sum(gamma > float(significance_threshold), axis=(1, 2)).astype(jnp.int32),
-        best_log_score_per_image=jnp.max(score_flat, axis=-1).astype(jnp.float32),
-        rotation_posterior_sums=jnp.sum(gamma, axis=(0, 1)).astype(jnp.float32),
-        max_posterior_per_image=pmax,
-        top_rotation_idx=top_rot,
-        top_translation_idx=top_trans,
-        top_log_score_per_image=top_scores,
-        top_posterior_per_image=top_prob,
+        pose_log_prior,
+        significance_threshold,
+        top_pose_count=top_pose_count,
     )
     alpha_aug_acc = jnp.einsum("btr,btrp->bp", gamma.astype(alpha.dtype), alpha)
     G_aug_tri_acc = jnp.einsum("btr,btrk->bk", gamma.astype(G_tri.dtype), G_tri)
-    return DenseImageStats(alpha_aug_acc=alpha_aug_acc, G_aug_tri_acc=G_aug_tri_acc, log_evidence=logZ), diagnostics
+    return DenseImageStats(alpha_aug_acc=alpha_aug_acc, G_aug_tri_acc=G_aug_tri_acc, log_evidence=diagnostics.logZ), diagnostics
 
 
 @jax.jit
