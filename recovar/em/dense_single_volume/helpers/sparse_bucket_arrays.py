@@ -8,6 +8,8 @@ they neither execute scoring nor choose scientific or device policies.
 
 from __future__ import annotations
 
+import os
+
 import numpy as np
 
 from recovar.em.dense_single_volume.batch_planning import _plan_consecutive_padded_batches
@@ -31,6 +33,20 @@ LADDER_CHUNK_FLOOR = 16
 
 IMAGE_CAPACITY_ENV = "RECOVAR_SPARSE_PASS2_IMAGE_CAPACITY"
 IMAGE_CAPACITY_FLOOR = 16
+IMAGE_CAPACITY_MAX_GROWTH_ENV = "RECOVAR_SPARSE_PASS2_IMAGE_CAPACITY_MAX_GROWTH"
+DEFAULT_IMAGE_CAPACITY_MAX_GROWTH = 2.0
+
+
+def image_capacity_max_growth() -> float:
+    """Return the largest factor by which the image axis may be padded."""
+
+    raw = os.environ.get(IMAGE_CAPACITY_MAX_GROWTH_ENV)
+    if raw is None or not raw.strip():
+        return DEFAULT_IMAGE_CAPACITY_MAX_GROWTH
+    value = float(raw)
+    if not value >= 1.0:
+        raise ValueError(f"{IMAGE_CAPACITY_MAX_GROWTH_ENV} must be at least 1.0, got {raw!r}")
+    return value
 
 
 def image_capacity_enabled() -> bool:
@@ -44,6 +60,7 @@ def quantized_image_capacity(
     *,
     max_images: int | None = None,
     floor: int = IMAGE_CAPACITY_FLOOR,
+    max_growth: float | None = None,
 ) -> int:
     """Round a bucket's image count up to a power of two so shapes repeat.
 
@@ -66,13 +83,20 @@ def quantized_image_capacity(
     n_images = int(n_images)
     if n_images <= 0:
         return 0
-    cap = None if max_images is None else max(1, int(max_images))
-    if cap is not None and n_images >= cap:
+    floor = max(1, int(floor))
+    if max_growth is None:
+        max_growth = image_capacity_max_growth()
+    candidate = max(floor, 1 << (n_images - 1).bit_length())
+    if candidate <= n_images:
         return n_images
-    candidate = max(int(floor), 1 << (n_images - 1).bit_length())
-    if candidate < n_images:
-        candidate = 1 << (n_images - 1).bit_length()
-    if cap is not None and candidate > cap:
+    # Growth bound. Rounding up to a power of two never more than doubles, so this
+    # only bites for a bucket smaller than the floor, and there the absolute row
+    # count stays at the floor -- a handful of rows, whose memory cost is governed
+    # by ``max_images`` whenever a byte budget is known.
+    growth_limit = max(floor, int(float(max_growth) * n_images))
+    if candidate > growth_limit:
+        return n_images
+    if max_images is not None and candidate > max(1, int(max_images)):
         return n_images
     return candidate
 

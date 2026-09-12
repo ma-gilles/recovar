@@ -4201,9 +4201,16 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
         # padding. Single-image buckets need it too: they are the ones most worth
         # padding, and they are also the ones where padding could blow up memory.
         single_image_bucket = image_indices.size <= 1
-        image_byte_budget = int(
+        # Two different limits, deliberately kept apart.  ``chunk_pair_width_limit`` is
+        # "the largest bucket that already existed at this pair width": a chunking
+        # convention, not a memory fact.  ``image_byte_budget`` is the real memory
+        # constraint and is the only thing capacity quantization may pad towards --
+        # measured 2026-09-12, conflating the two throttled padding to 6 of 169 buckets
+        # because most buckets already sit at their pair width's maximum.
+        chunk_pair_width_limit = int(
             original_pair_bucket_max_images.get(int(bucket["pair_bucket_size"]), int(image_indices.size))
         )
+        image_byte_budget = None
         if max_gather_bytes is not None or max_dense_mstep_bytes is not None:
             if "class_bucket_sizes" in bucket:
                 max_class_bucket_size = max(int(value) for value in bucket["class_bucket_sizes"])
@@ -4216,29 +4223,34 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
                     )
                     for per_image_inputs in per_image_inputs_by_class
                 )
+        def _tighten(budget, limit):
+            return int(limit) if budget is None else min(int(budget), int(limit))
+
         if max_gather_bytes is not None:
             per_image_bytes = max(1, int(max_class_bucket_size) * row_bytes)
-            image_byte_budget = min(image_byte_budget, max(1, max_gather_bytes // per_image_bytes))
+            image_byte_budget = _tighten(image_byte_budget, max(1, max_gather_bytes // per_image_bytes))
         if max_dense_mstep_bytes is not None:
             dense_bytes_per_image = max(1, int(max_class_bucket_size) * n_fine_trans_int * prob_item_bytes)
             if not single_image_bucket:
                 max_dense_bytes_per_image = max(max_dense_bytes_per_image, dense_bytes_per_image)
-            image_byte_budget = min(image_byte_budget, max(1, max_dense_mstep_bytes // dense_bytes_per_image))
+            image_byte_budget = _tighten(image_byte_budget, max(1, max_dense_mstep_bytes // dense_bytes_per_image))
         if max_prepare_images is not None:
-            image_byte_budget = min(image_byte_budget, max_prepare_images)
+            image_byte_budget = _tighten(image_byte_budget, max_prepare_images)
         if single_image_bucket:
             single_bucket = dict(bucket)
-            single_bucket["image_capacity_budget"] = int(image_byte_budget)
+            single_bucket["image_capacity_budget"] = image_byte_budget
             split_buckets.append(single_bucket)
             split_max_images = max(split_max_images, int(image_indices.size))
             continue
-        max_images = min(int(image_indices.size), image_byte_budget)
+        max_images = min(int(image_indices.size), chunk_pair_width_limit)
+        if image_byte_budget is not None:
+            max_images = min(max_images, int(image_byte_budget))
         chunk_bounds = bucket_chunk_bounds(int(image_indices.size), max_images)
         # Record the byte budget this bucket was sized against. Image-axis capacity
         # quantization pads towards it and must never pad past it.
         if len(chunk_bounds) <= 1:
             unsplit_bucket = dict(bucket)
-            unsplit_bucket["image_capacity_budget"] = int(image_byte_budget)
+            unsplit_bucket["image_capacity_budget"] = image_byte_budget
             split_buckets.append(unsplit_bucket)
             split_max_images = max(split_max_images, int(image_indices.size))
             continue
@@ -4247,7 +4259,7 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
             chunk = image_indices[start:stop]
             chunk_bucket = dict(bucket)
             chunk_bucket["image_indices"] = np.asarray(chunk, dtype=np.int64)
-            chunk_bucket["image_capacity_budget"] = int(image_byte_budget)
+            chunk_bucket["image_capacity_budget"] = image_byte_budget
             split_buckets.append(chunk_bucket)
             split_max_images = max(split_max_images, int(chunk.size))
     if split_bucket_count:
