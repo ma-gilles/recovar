@@ -26,6 +26,13 @@ Double is diagnostic, not a production remedy or proof of noise. No tolerance or
 baseline changes. User priority is short-prefix parity then final FSC, with up to
 2× native runtime provisionally; this does not waive accuracy or completion gates.
 
+The CUDA implementation is also in the cleanup scope; it does not replace the
+EM/VDAM implementation and test cleanup. Trace kernel, FFI, test and private
+replay consumers before retirement. Preserve the shared heterogeneity backend
+and diagnostic precision variants. The [CUDA audit inventory](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/cuda_cleanup_audit_20260912/)
+and [first dead-kernel receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/cuda_unused_batch_project_20260912/result.json)
+record the current source-specific evidence.
+
 ## Source and ownership
 
 - Primary: `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907`,
