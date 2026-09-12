@@ -3462,7 +3462,7 @@ def test_relion_wavg_sequential_triplet_matches_jax_loop_bitwise(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_wavg import (
         _relion_wavg_sequential_triplet_terms_jax,
     )
 

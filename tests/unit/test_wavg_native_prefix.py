@@ -10,8 +10,7 @@ import pytest
 
 from recovar import cuda_backproject as cb
 from recovar.em.dense_single_volume import local_big_jit as local
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse
-
+from recovar.em.dense_single_volume.helpers import sparse_pass2_wavg as sparse
 pytestmark = pytest.mark.unit
 
 

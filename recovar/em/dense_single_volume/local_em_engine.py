@@ -114,7 +114,7 @@ from recovar.em.dense_single_volume.helpers.projection import (
     relion_scale_correction_pixel_mask as _relion_scale_correction_pixel_mask,
 )
 from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_correction_groups
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_wavg import (
     _make_relion_wavg_rectangle,
     _make_stable_relion_wavg_rectangle,
 )

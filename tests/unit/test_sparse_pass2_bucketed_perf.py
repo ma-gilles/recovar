@@ -74,24 +74,30 @@ from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
     _prepare_per_image_pass2_inputs,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-    _accumulate_adjoint_block_chunked,
-    _adjoint_block_chunk_rows,
     _compact_k_class_pair_plan_stats,
     _compact_k_class_pair_plan_stats_from_counts,
     _compact_pair_buckets_for_execution_threshold,
     _compact_pair_execution_mask_excluding_full_support,
     _compact_pair_hybrid_threshold_reports,
-    _compute_sparse_pass2_projections_block,
-    _compute_sparse_pass2_windowed_projections_block,
     _half_translation_phase_table_for_indices,
     _hybrid_k_class_compact_pair_execution_buckets,
     _maybe_prepare_sparse_k_class_compact_pair_plan,
     _prepare_bucket_io,
+    _relion_translation_angles_f32,
+    _validate_k_class_execution_bucket_partition,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_adjoint import (
+    _accumulate_adjoint_block_chunked,
+    _adjoint_block_chunk_rows,
     _projection_gather_bytes_per_rotation_row,
     _projection_rotation_chunk_size,
-    _relion_translation_angles_f32,
     _split_compact_pair_buckets_by_projection_gather_budget,
-    _validate_k_class_execution_bucket_partition,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_projection_blocks import (
+    _compute_sparse_pass2_projections_block,
+    _compute_sparse_pass2_windowed_projections_block,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_wavg import (
     _weighted_image_power_shells_and_per_image,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (
@@ -370,6 +376,8 @@ def test_compute_local_ctf_sums_from_probs_sum_t_matches_dense_helper():
 
 def test_k_class_pass2_dump_stop_is_env_gated_diagnostic_only():
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     source = inspect.getsource(sparse_pass2_bucketed)
@@ -716,6 +724,8 @@ def test_rectangular_active_prematmul_guard_rejects_near_dense_grouping() -> Non
 
 def test_active_row_selection_does_not_flatten_full_bucket(monkeypatch) -> None:
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     values = jnp.arange(3 * 4 * 2, dtype=jnp.float32).reshape(3, 4, 2)
@@ -2295,6 +2305,8 @@ def test_sparse_pass2_residual_terms_fused_matches_legacy_nonfinite_masks(monkey
 
 def test_sparse_pass2_adjoint_block_chunking_accumulates_all_rows(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     flat_block = jnp.arange(30, dtype=jnp.float32).reshape(10, 3)
@@ -2316,7 +2328,7 @@ def test_sparse_pass2_adjoint_block_chunking_accumulates_all_rows(monkeypatch):
         calls.append(int(half_block.shape[0]))
         return volume_in + jnp.sum(half_block)
 
-    monkeypatch.setattr(bucketed_mod, "_adjoint_slice_volume_half", fake_adjoint_slice_volume_half)
+    monkeypatch.setattr(sparse_pass2_adjoint, "_adjoint_slice_volume_half", fake_adjoint_slice_volume_half)
 
     row_bytes = flat_block.shape[1] * np.dtype(np.float32).itemsize
     assert _adjoint_block_chunk_rows(flat_block, max_block_bytes=4 * row_bytes + 1) == 4
@@ -2398,6 +2410,8 @@ def test_relion_x_half_bp_fused_atomics_is_off_by_default(monkeypatch):
 
 def test_relion_x_half_bp_per_particle_launch_preserves_ownership_and_order(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     values = jnp.arange(2 * 3 * 2, dtype=jnp.float32).reshape(2, 3, 2).astype(jnp.complex64)
@@ -2424,7 +2438,7 @@ def test_relion_x_half_bp_per_particle_launch_preserves_ownership_and_order(monk
         calls.append((np.asarray(half_block).copy(), np.asarray(rotations_block).copy()))
         return volume_in + jnp.sum(jnp.real(half_block))
 
-    monkeypatch.setattr(bucketed_mod, "_adjoint_slice_volume_windowed", fake_adjoint_slice_volume_windowed)
+    monkeypatch.setattr(sparse_pass2_adjoint, "_adjoint_slice_volume_windowed", fake_adjoint_slice_volume_windowed)
     y_volume, ctf_volume = bucketed_mod._accumulate_relion_x_half_per_particle_launches(
         values,
         ctf_values,
@@ -2456,6 +2470,8 @@ def test_relion_x_half_bp_per_particle_launch_preserves_ownership_and_order(monk
 def test_relion_x_half_bp_fused_atomics_threads_both_accumulators_per_particle(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     values = jnp.arange(2 * 3 * 2, dtype=jnp.float32).reshape(2, 3, 2).astype(jnp.complex64)
@@ -2522,6 +2538,8 @@ def test_relion_x_half_bp_fused_atomics_threads_both_accumulators_per_particle(m
 def test_fresh_k1_particle_pool_preserves_consecutive_particle_order(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     values = jnp.arange(2 * 3 * 2, dtype=jnp.float32).reshape(2, 3, 2).astype(jnp.complex64)
@@ -2586,6 +2604,8 @@ def test_fresh_k1_particle_pool_preserves_consecutive_particle_order(monkeypatch
 
 def test_particle_pool_rejects_non_fresh_k1_path(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     monkeypatch.setenv("RECOVAR_K1_RELION_X_HALF_BP_PARTICLE_POOL_SIZE", "3")
@@ -2610,6 +2630,8 @@ def test_particle_pool_rejects_non_fresh_k1_path(monkeypatch):
 def test_fresh_k1_firstiter_cc_uses_fused_atomics_without_diagnostic_env(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", raising=False)
@@ -2655,6 +2677,8 @@ def test_fresh_k1_firstiter_cc_uses_fused_atomics_without_diagnostic_env(monkeyp
 def test_fresh_k1_firstiter_cc_casts_rows_to_bpref_accumulator_dtype(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", raising=False)
@@ -2697,6 +2721,8 @@ def test_fresh_k1_firstiter_cc_casts_rows_to_bpref_accumulator_dtype(monkeypatch
 def test_relion_x_half_bp_fused_atomics_requires_block_topology(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", "1")
@@ -2733,6 +2759,8 @@ def test_later_soft_posterior_scoped_fused_signature_fixture(
 
     import recovar.cuda_backproject as cuda_backproject
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
@@ -3109,6 +3137,8 @@ def test_later_soft_posterior_scoped_fused_signature_fixture(
 
 def test_sparse_pass2_active_flat_row_gather_chunking_matches_full_gather(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     batch = 3
@@ -3145,6 +3175,7 @@ def test_sparse_pass2_active_flat_row_gather_chunking_matches_full_gather(monkey
         return volume + jnp.sum(flat_block)
 
     monkeypatch.setattr(bucketed_mod, "_accumulate_adjoint_block_chunked", fake_accumulate_adjoint_block_chunked)
+    monkeypatch.setattr(sparse_pass2_adjoint, "_accumulate_adjoint_block_chunked", fake_accumulate_adjoint_block_chunked)
 
     row_bytes = (
         n_pixels * np.dtype(np.float32).itemsize
@@ -3178,6 +3209,8 @@ def test_sparse_pass2_active_flat_row_gather_chunking_matches_full_gather(monkey
 
 def test_sparse_pass2_rotation_chunked_xhalf_uses_relion_recon_indices():
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     source = inspect.getsource(bucketed_mod.compute_pass2_stats_sparse_bucketed)
@@ -4584,6 +4617,8 @@ def test_compact_pair_mstep_pair_sparse_env_matches_dense_cpu_float64(monkeypatc
 
 def test_compact_pair_mstep_default_remains_dense(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     case = _make_compact_pair_sparse_mstep_case(dtype=np.float64)
@@ -5056,6 +5091,8 @@ def test_weighted_image_power_excludes_sentinel_from_normcorr_but_keeps_valid_ou
 
 def test_k1_relion_fine_mstep_prune_keeps_unweighted_high_shell_image_power(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
@@ -5708,6 +5745,8 @@ def test_compact_pair_planner_is_opt_in_and_can_be_disabled(monkeypatch):
 
 def test_sparse_pass2_projection_cap_chunks_projection_calls(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     calls = []
@@ -5722,7 +5761,7 @@ def test_sparse_pass2_projection_cap_chunks_projection_calls(monkeypatch):
         return_abs2 = kwargs.get("return_abs2", None)
         return proj, None if return_abs2 is False else jnp.abs(proj) ** 2
 
-    monkeypatch.setattr(bucketed_mod, "_compute_projections_block", fake_project)
+    monkeypatch.setattr(sparse_pass2_projection_blocks, "_compute_projections_block", fake_project)
     rotations = np.zeros((10, 3, 3), dtype=np.float32)
     rotations[:, 0, 0] = np.arange(10, dtype=np.float32)
 
@@ -5743,6 +5782,8 @@ def test_sparse_pass2_projection_cap_chunks_projection_calls(monkeypatch):
 
 def test_sparse_pass2_windowed_projection_cap_keeps_only_requested_pixels(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     calls = []
@@ -5755,7 +5796,7 @@ def test_sparse_pass2_windowed_projection_cap_keeps_only_requested_pixels(monkey
         proj = rotation_ids[:, None] * 10.0 + jnp.arange(n_half, dtype=jnp.float32)[None, :]
         return proj.astype(jnp.complex64), None
 
-    monkeypatch.setattr(bucketed_mod, "_compute_projections_block", fake_project)
+    monkeypatch.setattr(sparse_pass2_projection_blocks, "_compute_projections_block", fake_project)
     rotations = np.zeros((7, 3, 3), dtype=np.float32)
     rotations[:, 0, 0] = np.arange(7, dtype=np.float32)
 
@@ -5780,6 +5821,8 @@ def test_sparse_pass2_windowed_projection_cap_keeps_only_requested_pixels(monkey
 
 def test_sparse_pass2_windowed_projection_uses_relion_projector_branch(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     calls = []
@@ -5820,7 +5863,7 @@ def test_sparse_pass2_windowed_projection_uses_relion_projector_branch(monkeypat
         proj = proj.astype(jnp.complex64)
         return proj, None if not return_abs2 else jnp.abs(proj) ** 2
 
-    monkeypatch.setattr(bucketed_mod, "_compute_relion_projector_projections_block", fake_relion_projector)
+    monkeypatch.setattr(sparse_pass2_projection_blocks, "_compute_relion_projector_projections_block", fake_relion_projector)
     rotations = np.zeros((7, 3, 3), dtype=np.float32)
     rotations[:, 0, 0] = np.arange(7, dtype=np.float32)
 
@@ -5862,8 +5905,8 @@ def test_sparse_pass2_windowed_projection_uses_relion_projector_branch(monkeypat
 
 
 def test_relion_score_window_keeps_particle_crop_separate_from_model_radius():
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-    _projection_kwargs_for_relion_score_window,
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_projection_blocks import (
+        _projection_kwargs_for_relion_score_window,
     )
 
     kwargs = _projection_kwargs_for_relion_score_window(
@@ -5881,6 +5924,8 @@ def test_relion_score_window_keeps_particle_crop_separate_from_model_radius():
 
 def test_sparse_pass2_windowed_projection_cap_casts_chunks_before_concat(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     def fake_project(volume_block, rotations_block, image_shape, volume_shape, disc_type, **kwargs):
@@ -5890,7 +5935,7 @@ def test_sparse_pass2_windowed_projection_cap_casts_chunks_before_concat(monkeyp
         proj = rotation_ids[:, None] * 10.0 + jnp.arange(n_half, dtype=jnp.float64)[None, :]
         return proj.astype(jnp.complex128), None
 
-    monkeypatch.setattr(bucketed_mod, "_compute_projections_block", fake_project)
+    monkeypatch.setattr(sparse_pass2_projection_blocks, "_compute_projections_block", fake_project)
     rotations = np.zeros((7, 3, 3), dtype=np.float32)
     rotations[:, 0, 0] = np.arange(7, dtype=np.float32)
 
@@ -5917,6 +5962,10 @@ def test_prepare_bucket_io_windowed_shifted_matches_full_half_slice(monkeypatch)
     """Opt-in windowed prepare must match full-half prepare followed by gather."""
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
@@ -6269,6 +6318,10 @@ def test_prepare_bucket_io_windowed_reuses_unmasked_recon_shift_for_noise(monkey
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
+
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     ds = MockDataset(n_images=4, seed=613)
@@ -6349,6 +6402,10 @@ def test_prepare_bucket_io_windowed_shifted_score_modes_match_full_half_slice(
     """Windowed prepare must preserve score-only and normalized-CC modes."""
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
@@ -6492,6 +6549,8 @@ def test_sparse_pass2_device_memory_probe_honors_visible_device():
 
 def test_exact_raw_diff2_cache_budget_admission_and_fallback(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     gib = 1024**3
@@ -6717,6 +6776,8 @@ def test_fine_rotation_override_can_follow_relion_parent_execution_order():
 
 def test_exact_relion_fine_posterior_implies_relion_parent_execution_order(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     monkeypatch.delenv("RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER", raising=False)
@@ -6831,6 +6892,10 @@ def test_sparse_pass2_projection_cache_reuses_fine_grid_projection_chunks(monkey
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
+
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     projection_call_sizes = []
@@ -6843,7 +6908,7 @@ def test_sparse_pass2_projection_cache_reuses_fine_grid_projection_chunks(monkey
         return_abs2 = kwargs.get("return_abs2", None)
         return proj, None if return_abs2 is False else jnp.zeros((rotations_block.shape[0], n_half), dtype=jnp.float32)
 
-    monkeypatch.setattr(bucketed_mod, "_compute_projections_block", fake_project)
+    monkeypatch.setattr(sparse_pass2_projection_blocks, "_compute_projections_block", fake_project)
 
     compute_pass2_stats_sparse(
         ds,
@@ -6893,6 +6958,10 @@ def test_sparse_pass2_full_support_projection_cache_chunks_scores(monkeypatch):
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", "1000000")
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
@@ -7024,6 +7093,10 @@ def test_sparse_pass2_projection_cache_chunks_non_identity_indices(monkeypatch):
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", "1000000")
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
@@ -7316,6 +7389,8 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
     from recovar.em.dense_single_volume.helpers import bpref_diagnostics
     from recovar.em.dense_single_volume.helpers import compact_candidate_capture as capture_mod
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
@@ -7644,6 +7719,8 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
 
 def test_exact_raw_diff2_cache_matches_fallback_bitwise_and_removes_recompute(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
@@ -7738,6 +7815,8 @@ def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonm
 ):
     from recovar.em.dense_single_volume.helpers import bpref_diagnostics
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
@@ -7918,6 +7997,8 @@ def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonm
 
 def test_sparse_pass2_chunked_fine_mstep_prune_is_uncapped(monkeypatch):
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
@@ -7998,6 +8079,10 @@ def test_fused_sparse_k_class_pass2_matches_existing_two_pass_path(monkeypatch):
     """Default fused Class3D pass-2 must preserve the legacy sparse semantics."""
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
     from recovar.em.sampling import rotation_grid_size
@@ -8861,6 +8946,10 @@ def test_fused_sparse_k_class_capture_requires_companion_contribution_dump(monke
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
+
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     signature = inspect.signature(bucketed_mod.compute_k_class_pass2_stats_sparse_fused)
@@ -8936,6 +9025,8 @@ def test_fused_sparse_k_class_capture_is_observational(monkeypatch, tmp_path, tr
 
     from recovar.em.dense_single_volume.helpers import bpref_diagnostics
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
     from recovar.em.sampling import rotation_grid_size
 
@@ -9037,6 +9128,10 @@ def test_compact_pair_half_spectrum_reuses_mstep_sums_for_noise(monkeypatch):
     """Compact-pair noise can reuse M-step sums when score/recon images match."""
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
     from recovar.em.sampling import rotation_grid_size
@@ -9304,6 +9399,10 @@ def test_compact_pair_masked_scoring_reuses_noise_ctf_sums(monkeypatch):
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
+
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
     from recovar.em.sampling import rotation_grid_size
 
@@ -9462,6 +9561,10 @@ def test_fused_sparse_k_class_relion_half_mstep_keeps_half_accumulators(monkeypa
     """K-class sparse fused pass-2 should not expand RELION half accumulators on return."""
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
 
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
     from recovar.em.sampling import rotation_grid_size
@@ -9973,6 +10076,8 @@ def test_bucketed_call_count_bounded_versus_perimage():
 
     # Count score-bucket invocations
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_projection_blocks
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_adjoint
     from recovar.em.dense_single_volume.helpers import sparse_pass2_compact_pair_sums
 
     original_score = bucketed_mod._score_pass2_bucket_relion_gpu_diff2

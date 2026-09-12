@@ -26,7 +26,7 @@ from recovar.em.dense_single_volume.helpers.significance import (
     _coarse_gaussian_fused_logical_lookup,
     _plan_coarse_gaussian_square_layout,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_wavg import (
     _make_relion_wavg_rectangle,
     _make_stable_relion_wavg_rectangle,
 )

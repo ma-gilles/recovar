@@ -221,7 +221,7 @@ def analyze(
         from recovar.em.dense_single_volume.helpers.fourier_window import (
             make_fourier_window_indices_np,
         )
-        from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        from recovar.em.dense_single_volume.helpers.sparse_pass2_wavg import (
             _make_relion_wavg_rectangle,
         )
 

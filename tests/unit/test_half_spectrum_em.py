@@ -189,12 +189,22 @@ def test_noise_shell_accumulation_uses_sentinel_safe_binning_helper():
         "recovar/em/dense_single_volume/local_big_jit.py": "bin_shell_values_jax",
         "recovar/em/dense_single_volume/local_em_engine.py": "_noise_image_power_shells_and_per_image",
         "recovar/em/dense_single_volume/helpers/projection.py": "bin_shell_values_jax",
-        "recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py": "bin_shell_values_jax",
     }
     for rel_path, safe_binning_marker in safe_binning_markers.items():
         source = (repo_root / rel_path).read_text()
         assert ".at[shell_indices" not in source
         assert safe_binning_marker in source
+
+    # The sparse bucketed pass 2 is split across owner modules: no module of the family may
+    # bin shells by scatter, and the family must still reach the sentinel-safe helper.
+    pass2_sources = {
+        path.name: path.read_text()
+        for path in sorted((repo_root / "recovar/em/dense_single_volume/helpers").glob("sparse_pass2*.py"))
+    }
+    assert pass2_sources
+    for name, source in pass2_sources.items():
+        assert ".at[shell_indices" not in source, name
+    assert any("bin_shell_values_jax" in source for source in pass2_sources.values())
 
 
 # ---------------------------------------------------------------------------

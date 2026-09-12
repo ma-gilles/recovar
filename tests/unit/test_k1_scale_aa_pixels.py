@@ -10,9 +10,11 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
     make_frequency_coords_half_np,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    _prioritize_stopped_pass2_dump_buckets,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_wavg import (
     RelionWavgRectangle,
     _make_relion_wavg_rectangle,
-    _prioritize_stopped_pass2_dump_buckets,
     _relion_wavg_atomic_triplet_terms,
     _relion_wavg_direct_norm_per_image,
     _relion_wavg_rectangle_triplet_terms,
@@ -419,6 +421,7 @@ def test_wavg_sequential_triplet_typed_policy_overrides_environment(
 ):
     from recovar import cuda_backproject
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_wavg
 
     projections = jnp.ones((1, 1, 1), dtype=jnp.complex64)
     raw_ctf = jnp.ones((1, 1), dtype=jnp.float32)
@@ -438,7 +441,7 @@ def test_wavg_sequential_triplet_typed_policy_overrides_environment(
         lambda *_: cuda_sentinel,
     )
     monkeypatch.setattr(
-        sparse_pass2_bucketed,
+        sparse_pass2_wavg,
         "_relion_wavg_sequential_triplet_terms_jax",
         lambda *_: jax_sentinel,
     )

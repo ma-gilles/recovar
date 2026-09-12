@@ -200,7 +200,7 @@ def analyze(
             capture = Path(decomposition_row["artifacts"]["capture_directory"])
             part_id = int(decomposition_row["part_id"])
             prefix = f"img0_part{part_id}_storeWavg_"
-            from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+            from recovar.em.dense_single_volume.helpers.sparse_pass2_wavg import (
                 _make_relion_wavg_rectangle,
             )
             from scripts.analyze_vdam_storewavg_boundary import (
