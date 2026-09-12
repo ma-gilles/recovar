@@ -9,9 +9,12 @@ waive a scientific gate.
 | --- | --- | --- |
 | GF46 raw-cache ABBA/BAAB | Runner, analyzer and tests of their sealed input/performance contract | Raw-cache admission, memory bounds and loader instrumentation tests |
 | GF46 coarse GEMM gate, streaming selector, hybrid transition and H100 certificate/hybrid batches | Fixed-geometry runners, analyzers and their exclusive harness tests | Independent coarse GEMM, certificate and hybrid numerical tests |
+| Historical K1 case captures | 88 shell launchers bound to dated external checkouts and fixed experiments | Configurable launchers, reusable capture tools and independent analyzers |
 
-All 19 files are available at [the last retained source](https://github.com/ma-gilles/recovar/tree/4e3e5396d8c5fee4e207b9df3acb7f9987e17473/scripts),
+The 19 GF46/raw-cache files are available at [the last retained source](https://github.com/ma-gilles/recovar/tree/4e3e5396d8c5fee4e207b9df3acb7f9987e17473/scripts),
 with [exact paths, hashes, test inventory and caller audit](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_retired_experiments_20260912/result.json).
+The 88 fixed K1 capture scripts have their own [source/hash inventory and archive](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_fixed_capture_retirement_20260912/result.json).
+
 Their original experiment reports remain in `docs/perf/` and the parity dashboard.
 Restore the recorded experiment source and environment for reproduction; do not
 assume that these historical hardware/binary/input contracts qualify newer code.
