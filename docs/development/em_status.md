@@ -57,6 +57,21 @@ not qualify GPU execution, trajectories, larger synthetic/real/exact-K4 quality
 or performance; the gates below remain open. The prepared K-class production
 split is deferred pending a benefit beyond moving definitions into more files.
 
+The next structural batch consolidates five duplicate K-class threshold parsers
+into one (30 fewer production lines), with 12,635 parser and 5,832 route cases
+matching exact results, errors and environment reads; 126 K-class tests and the
+90-test guard pass. Four optional capture modules now live in
+`recovar/em/diagnostics/`; all 19 function definitions are unchanged, with
+766 affected tests passing and three explicit GPU-related skips. A consumer
+and history audit removed the unused private native `get_ctf_image_resized`
+function/export (66 lines). An isolated CPU rebuild preserves the other exports;
+144 CTF arrays and nine scalar outputs match the prior library exactly. Native
+runtime dependencies and independent numerical references remain in place.
+[Threshold evidence](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/kclass_threshold_cleanup_20260912/result.json),
+[directory migration and coverage](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_diagnostics_directory_20260912/result.json),
+[native deletion, build provenance and checks](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/unused_ctf_binding_cleanup_20260912/result.json).
+These are structural CPU results; the scientific and performance gates remain open.
+
 Each row is one commit on draft PR179 with an exact old/new comparison, the CPU
 fast guard and, where the controller path changed, the 502-case controller
 panel (one GPU-only skip). "Structural" rows change no arithmetic; "fix" and
