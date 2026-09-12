@@ -318,70 +318,31 @@ def _validate_bpref_device_signature_sparse_route(
         raise RuntimeError("active BPref device signature scope requires at least one class")
 
 
-def _dense_pass2_rotation_fraction_threshold(n_classes: int) -> float | None:
+def _positive_k_class_threshold(
+    n_classes: int,
+    env_name: str,
+    default: int | float,
+    *,
+    legacy_disable_env: str | None = None,
+) -> int | float | None:
+    """Read a K-class route threshold with the default's integer/float type.
+
+    K=1 and nonpositive overrides disable the threshold. The mean-support
+    threshold also honors a disabled legacy threshold when its own override
+    is absent; this fallback deliberately retains the legacy float parsing.
+    """
     if int(n_classes) <= 1:
         return None
-    value = _env_value_or_none("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION")
+    value = _env_value_or_none(env_name)
     if value is None:
-        return 0.50
-    threshold = float(value)
-    if not np.isfinite(threshold):
-        raise ValueError("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION must be finite")
-    if threshold <= 0.0:
-        return None
-    return threshold
-
-
-def _dense_pass2_mean_rotation_fraction_threshold(n_classes: int) -> float | None:
-    if int(n_classes) <= 1:
-        return None
-    value = _env_value_or_none("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION")
-    if value is None:
-        legacy_value = _env_value_or_none("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION")
-        if legacy_value is not None and float(legacy_value) <= 0.0:
-            return None
-        return 0.15
-    threshold = float(value)
-    if not np.isfinite(threshold):
-        raise ValueError("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION must be finite")
-    if threshold <= 0.0:
-        return None
-    return threshold
-
-
-def _dense_pass2_small_dataset_image_threshold(n_classes: int) -> int | None:
-    if int(n_classes) <= 1:
-        return None
-    value = _env_value_or_none("RECOVAR_K_CLASS_DENSE_PASS2_SMALL_DATASET_IMAGES")
-    if value is None:
-        return 1500
-    threshold = int(value)
-    if threshold <= 0:
-        return None
-    return threshold
-
-
-def _dense_pass2_small_dataset_mean_rotation_fraction_threshold(n_classes: int) -> float | None:
-    if int(n_classes) <= 1:
-        return None
-    value = _env_value_or_none("RECOVAR_K_CLASS_DENSE_PASS2_SMALL_DATASET_MEAN_SUPPORT_FRACTION")
-    if value is None:
-        return 0.10
-    threshold = float(value)
-    if not np.isfinite(threshold):
-        raise ValueError("RECOVAR_K_CLASS_DENSE_PASS2_SMALL_DATASET_MEAN_SUPPORT_FRACTION must be finite")
-    if threshold <= 0.0:
-        return None
-    return threshold
-
-
-def _compact_sparse_pass2_large_dataset_image_threshold(n_classes: int) -> int | None:
-    if int(n_classes) <= 1:
-        return None
-    value = _env_value_or_none("RECOVAR_K_CLASS_COMPACT_SPARSE_PASS2_MIN_IMAGES")
-    if value is None:
-        return 20_000
-    threshold = int(value)
+        if legacy_disable_env is not None:
+            legacy_value = _env_value_or_none(legacy_disable_env)
+            if legacy_value is not None and float(legacy_value) <= 0.0:
+                return None
+        return default
+    threshold = type(default)(value)
+    if isinstance(default, float) and not np.isfinite(threshold):
+        raise ValueError(f"{env_name} must be finite")
     if threshold <= 0:
         return None
     return threshold
@@ -396,7 +357,7 @@ def _compact_sparse_pass2_preferred_over_dense(n_classes: int, n_images: int) ->
     Explicit dense-threshold env overrides keep their historical meaning.
     """
 
-    min_images = _compact_sparse_pass2_large_dataset_image_threshold(n_classes)
+    min_images = _positive_k_class_threshold(n_classes, "RECOVAR_K_CLASS_COMPACT_SPARSE_PASS2_MIN_IMAGES", 20_000)
     if min_images is None or int(n_images) < min_images:
         return False
     if (
@@ -3002,7 +2963,7 @@ def run_dense_k_class_em_adaptive(
         )
         return _with_significant_counts(result)
 
-    dense_support_threshold = _dense_pass2_rotation_fraction_threshold(n_classes)
+    dense_support_threshold = _positive_k_class_threshold(n_classes, "RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION", 0.50)
     if (
         sparse_pass2_requested
         and engine_kwargs.get("relion_projector_half") is None
@@ -3012,7 +2973,10 @@ def run_dense_k_class_em_adaptive(
         and not skip_significance_pruning
         and not strict_exact_fine_gaussian
     ):
-        dense_mean_support_threshold = _dense_pass2_mean_rotation_fraction_threshold(n_classes)
+        dense_mean_support_threshold = _positive_k_class_threshold(
+            n_classes, "RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION", 0.15,
+            legacy_disable_env="RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION",
+        )
         support_stats = _fine_support_stats(
             sig_sample_indices_by_class,
             n_rot_coarse=n_rot_coarse,
@@ -3023,7 +2987,9 @@ def run_dense_k_class_em_adaptive(
             n_trans_fine=n_trans_fine,
         )
         compact_sparse_preferred = _compact_sparse_pass2_preferred_over_dense(n_classes, n_images)
-        compact_sparse_min_images = _compact_sparse_pass2_large_dataset_image_threshold(n_classes)
+        compact_sparse_min_images = _positive_k_class_threshold(
+            n_classes, "RECOVAR_K_CLASS_COMPACT_SPARSE_PASS2_MIN_IMAGES", 20_000,
+        )
         dense_by_median = (
             not compact_sparse_preferred
             and support_stats["rotation_median_fraction"] >= dense_support_threshold
@@ -3033,8 +2999,12 @@ def run_dense_k_class_em_adaptive(
             and dense_mean_support_threshold is not None
             and support_stats["rotation_mean_fraction"] >= dense_mean_support_threshold
         )
-        dense_small_n_threshold = _dense_pass2_small_dataset_image_threshold(n_classes)
-        dense_small_mean_threshold = _dense_pass2_small_dataset_mean_rotation_fraction_threshold(n_classes)
+        dense_small_n_threshold = _positive_k_class_threshold(
+            n_classes, "RECOVAR_K_CLASS_DENSE_PASS2_SMALL_DATASET_IMAGES", 1500,
+        )
+        dense_small_mean_threshold = _positive_k_class_threshold(
+            n_classes, "RECOVAR_K_CLASS_DENSE_PASS2_SMALL_DATASET_MEAN_SUPPORT_FRACTION", 0.10,
+        )
         dense_by_small_dataset = (
             dense_small_n_threshold is not None
             and dense_small_mean_threshold is not None

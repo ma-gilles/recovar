@@ -229,7 +229,7 @@ def test_adaptive_exact_fine_gaussian_retains_sparse_on_broad_support(monkeypatc
     monkeypatch.setattr(significance_module, "_compute_k_class_significance_batched", fake_significance)
     monkeypatch.setattr(k_class_module, "_run_sparse_k_class_adaptive_pass2", fake_sparse)
     monkeypatch.setattr(k_class_module, "run_dense_k_class_em", fail_dense)
-    monkeypatch.setattr(k_class_module, "_dense_pass2_rotation_fraction_threshold", lambda _n_classes: 0.0)
+    monkeypatch.setattr(k_class_module, "_positive_k_class_threshold", lambda *_args, **_kwargs: 0.0)
 
     result = run_dense_k_class_em_adaptive(
         TinyDataset(),
