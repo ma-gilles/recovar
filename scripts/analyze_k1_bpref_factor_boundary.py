@@ -135,7 +135,7 @@ def _device_sums(
     import jax
     import jax.numpy as jnp
 
-    from recovar.em.dense_single_volume.local_backprojection import compute_local_mstep_sums
+    from recovar.em.local.local_backprojection import compute_local_mstep_sums
 
     devices = jax.devices()
     _require(bool(devices), "JAX reports no devices")

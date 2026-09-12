@@ -2,7 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers import bpref_diagnostics
+from recovar.em.diagnostics import bpref_diagnostics
 from recovar.em.diagnostics import norm_scale as norm_scale_diagnostics
 from scripts.analyze_k1_scale_aa_boundary import analyze
 

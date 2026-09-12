@@ -14,9 +14,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import sparse_pass2_scoring as sp
-
-from recovar.em.dense_single_volume.helpers import sparse_pass2_scoring
+from recovar.em.sparse_pass2 import sparse_pass2_scoring
+from recovar.em.sparse_pass2 import sparse_pass2_scoring as sp
 
 pytestmark = pytest.mark.unit
 

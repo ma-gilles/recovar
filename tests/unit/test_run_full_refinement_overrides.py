@@ -18,17 +18,14 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.frozen_boundary import (
+from recovar.em.diagnostics.frozen_boundary import (
     FROZEN_BOUNDARY_NUMERICAL_CLASSIFICATION_SCOPE,
     FROZEN_BOUNDARY_PROVENANCE_VERIFICATION_SCOPE,
     _assert_frozen_scoring_state_unchanged,
     _frozen_scoring_state_arrays,
 )
-from recovar.em.dense_single_volume.mean_helpers import (
-    _mean_variance_for_scoring_half,
-    _updated_mean_variance_per_half,
-)
-from recovar.em.initial_model.avg_unaligned import compute_avg_unaligned_and_sigma2
+from recovar.em.refinement.mean_helpers import _mean_variance_for_scoring_half, _updated_mean_variance_per_half
+from recovar.em.vdam.avg_unaligned import compute_avg_unaligned_and_sigma2
 from scripts import run_full_refinement
 from scripts.run_full_refinement import (
     _assert_frozen_replay_slots_projector_only,
@@ -93,7 +90,7 @@ def test_full_refinement_supports_stop_after_pass2_operand_dump():
     assert "Pass2DumpComplete" in source
     assert "requested fine-score boundary" in source
 ITERATION_LOOP = (
-    Path(__file__).resolve().parents[2] / "recovar" / "em" / "dense_single_volume" / "iteration_loop.py"
+    Path(__file__).resolve().parents[2] / 'recovar' / 'em' / 'refinement' / 'iteration_loop.py'
 )
 
 
@@ -1379,9 +1376,7 @@ def test_relion_expected_accuracy_layout_supports_repeated_indices_across_stacks
 @pytest.mark.parametrize("shuffle_algorithm", ["legacy", "mt19937"])
 def test_fresh_relion_layout_is_physical_order_with_identity_accuracy_trials(shuffle_algorithm):
     pd = pytest.importorskip("pandas")
-    from recovar.em.dense_single_volume.helpers.expected_accuracy import (
-        relion_auto_refine_half_orders,
-    )
+    from recovar.em.helpers.expected_accuracy import relion_auto_refine_half_orders
 
     relion_particles = pd.DataFrame(
         {

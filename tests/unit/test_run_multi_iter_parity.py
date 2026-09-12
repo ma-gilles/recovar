@@ -8,14 +8,10 @@ import pandas as pd
 import pytest
 import starfile
 
+from recovar.em.diagnostics.relion_replay import _validate_bpref_particle_order_scope
+from recovar.em.refinement.iteration_loop import _fresh_k1_spectrum_norm_default
 from scripts import diff_relion_recovar_per_iter as parity_diff
 from scripts.postprocess_multi_iter_gt import resolve_intermediates_dir
-from recovar.em.dense_single_volume.iteration_loop import (
-    _fresh_k1_spectrum_norm_default,
-)
-from recovar.em.dense_single_volume.relion_replay import (
-    _validate_bpref_particle_order_scope,
-)
 from scripts.run_multi_iter_parity import (
     _normalized_fsc_auc,
     _read_relion_scheduling_average_pmax,
@@ -32,12 +28,12 @@ from scripts.run_multi_iter_parity import (
     map_pose_arrays_to_particle_order,
     map_relion_half_orders_to_dataset_rows,
     map_relion_scale_groups_to_half_order,
+    parity_runtime_real_dtype,
     parse_iteration_normalization_factor_overrides,
     parse_relion_optimiser_cli_flags,
     particle_half_indices,
     read_relion_model_pixel_size,
     read_relion_optics_image_geometry,
-    parity_runtime_real_dtype,
     relion_final_gt_series,
     replay_control_relion_iteration,
     replay_override_is_before_cutoff,
@@ -175,7 +171,7 @@ def test_particle_half_indices_preserve_source_order_and_int64_dtype():
 
 
 def test_particle_half_indices_can_reconstruct_fresh_relion_order(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import expected_accuracy
+    from recovar.em.helpers import expected_accuracy
 
     observed = {}
 

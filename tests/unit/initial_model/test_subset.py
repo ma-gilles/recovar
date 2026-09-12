@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from recovar.em.initial_model.subset import (
+from recovar.em.vdam.subset import (
     assign_pseudo_halfsets,
     assign_pseudo_halfsets_for_particle_ids,
     numpy_rnd_unif_factory,

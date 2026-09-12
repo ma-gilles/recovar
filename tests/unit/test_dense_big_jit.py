@@ -6,25 +6,20 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.dense_big_jit import run_dense_bucket_big_jit
-from recovar.em.dense_single_volume.em_engine import (
+from recovar.em.dense.dense_big_jit import run_dense_bucket_big_jit
+from recovar.em.dense.em_engine import (
     _dense_big_jit_disabled_reason,
     _pad_dense_big_jit_image_axis,
     _relion_image_correction_factors,
 )
-from recovar.em.dense_single_volume.helpers import projection as projection_helpers
-from recovar.em.dense_single_volume.helpers.adjoint import (
-    adjoint_slice_volume_half as _adjoint_slice_volume_half,
-)
-from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
-from recovar.em.dense_single_volume.helpers.half_spectrum import make_relion_noise_shell_indices_half
-from recovar.em.dense_single_volume.helpers.projection import (
-    compute_noise_block as _compute_noise_block,
-)
-from recovar.em.dense_single_volume.helpers.projection import (
-    compute_projections_block as _compute_projections_block,
-)
-from recovar.em.dense_single_volume.helpers.scoring import (
+from recovar.em.diagnostics.local_debug import DensePerPoseScoreDumpRequest, maybe_write_dense_per_pose_score_dump
+from recovar.em.helpers import projection as projection_helpers
+from recovar.em.helpers.adjoint import adjoint_slice_volume_half as _adjoint_slice_volume_half
+from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
+from recovar.em.helpers.half_spectrum import make_relion_noise_shell_indices_half
+from recovar.em.helpers.projection import compute_noise_block as _compute_noise_block
+from recovar.em.helpers.projection import compute_projections_block as _compute_projections_block
+from recovar.em.scoring.scoring import (
     _e_step_block_scores,
     _e_step_block_scores_normalized_cc,
     _e_step_block_scores_windowed,
@@ -33,10 +28,6 @@ from recovar.em.dense_single_volume.helpers.scoring import (
     _merge_block_logsumexp,
     _update_logsumexp,
     _winner_take_all_probs_for_block,
-)
-from recovar.em.dense_single_volume.local_debug import (
-    DensePerPoseScoreDumpRequest,
-    maybe_write_dense_per_pose_score_dump,
 )
 
 pytestmark = pytest.mark.unit

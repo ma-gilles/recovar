@@ -41,9 +41,9 @@ SOURCE_FILES=(
   recovar/cuda/Makefile
   recovar/cuda/cuda_backproject.cu
   recovar/cuda_backproject.py
-  recovar/em/dense_single_volume/helpers/flat_local_rows.py
-  recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py
-  recovar/em/dense_single_volume/local_layout.py
+  recovar/em/local/flat_local_rows.py
+  recovar/em/sparse_pass2/sparse_pass2_bucketed.py
+  recovar/em/local/local_layout.py
   scripts/benchmark_vdam_flat_row_fine_score.py
   scripts/run_vdam_flat_row_score_gate.sbatch
   scripts/vdam_gpu_selection.sh

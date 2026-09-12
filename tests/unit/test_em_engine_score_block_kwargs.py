@@ -3,7 +3,7 @@
 import ast
 import inspect
 
-from recovar.em.dense_single_volume import em_engine
+from recovar.em.dense import em_engine
 
 
 def test_score_block_calls_share_the_per_batch_keywords():

@@ -8,7 +8,7 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.batch_planning import (
+from recovar.em.helpers.batch_planning import (
     _fixed_capacity_plan_descriptor_fingerprint,
     _FixedCapacityLocalCall,
     _pack_fixed_capacity_local_candidate_rows,
@@ -58,7 +58,7 @@ def _plan(*, calls=None, logical_cutoff=70, enabled=True):
 
 
 def test_fixed_capacity_whole_local_seam_is_shared_and_default_off():
-    assert _plan_fixed_capacity_whole_local.__module__ == "recovar.em.dense_single_volume.batch_planning"
+    assert _plan_fixed_capacity_whole_local.__module__ == "recovar.em.helpers.batch_planning"
     assert inspect.signature(_plan_fixed_capacity_whole_local).parameters["enabled"].default is False
     assert _plan(enabled=False) is None
 

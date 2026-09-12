@@ -20,7 +20,7 @@ import jax.numpy as jnp
 
 from recovar.core.configs import ForwardModelConfig
 from recovar.data_io.cryoem_dataset import load_dataset
-from recovar.em.dense_single_volume.helpers.preprocessing import preprocess_batch
+from recovar.em.helpers.preprocessing import preprocess_batch
 from recovar.em.ppca_refinement.dense_dataset import (
     _project_augmented_half_volumes,
     prepare_dense_ppca_dataset_inputs,

@@ -6,9 +6,8 @@ import inspect
 
 import pytest
 
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sp
-
-from recovar.em.dense_single_volume.helpers import sparse_pass2_scoring
+from recovar.em.sparse_pass2 import sparse_pass2_bucketed as sp
+from recovar.em.sparse_pass2 import sparse_pass2_scoring
 
 pytestmark = pytest.mark.unit
 

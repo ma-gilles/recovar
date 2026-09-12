@@ -17,9 +17,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.fourier_window import (
-    make_stable_fourier_window_shape_plan,
-)
+from recovar.em.helpers.fourier_window import make_stable_fourier_window_shape_plan
 from scripts.analyze_vdam_coarse_combined_true200 import (
     GateSetupError,
     _load_json,

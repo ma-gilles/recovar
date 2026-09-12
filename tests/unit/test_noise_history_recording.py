@@ -5,7 +5,7 @@ from dataclasses import fields
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.iteration_history import RefinementHistory
+from recovar.em.helpers.iteration_history import RefinementHistory
 
 pytestmark = pytest.mark.unit
 

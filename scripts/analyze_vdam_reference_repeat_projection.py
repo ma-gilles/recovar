@@ -114,12 +114,8 @@ def analyze(
         }
         decomposition_physical_size = int(decomposition["identity"]["physical_image_size"])
     projectors_by_size: dict[int, dict[str, tuple[np.ndarray, int]]] = {}
-    from recovar.em.dense_single_volume.helpers.fourier_window import (
-        make_fourier_window_indices_np,
-    )
-    from recovar.em.dense_single_volume.helpers.projection import (
-        compute_relion_projector_projections_block,
-    )
+    from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
+    from recovar.em.helpers.projection import compute_relion_projector_projections_block
 
     for score_path in score_dumps:
         with np.load(score_path, allow_pickle=False) as archive:
@@ -200,9 +196,7 @@ def analyze(
             capture = Path(decomposition_row["artifacts"]["capture_directory"])
             part_id = int(decomposition_row["part_id"])
             prefix = f"img0_part{part_id}_storeWavg_"
-            from recovar.em.dense_single_volume.helpers.sparse_pass2_wavg import (
-                _make_relion_wavg_rectangle,
-            )
+            from recovar.em.sparse_pass2.sparse_pass2_wavg import _make_relion_wavg_rectangle
             from scripts.analyze_vdam_storewavg_boundary import (
                 _load_native,
                 _match_rotations,

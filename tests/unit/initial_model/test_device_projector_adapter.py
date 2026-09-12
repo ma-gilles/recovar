@@ -5,8 +5,8 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from recovar.em.initial_model import dense_adapter as adapter
-from recovar.em.initial_model import initialise_denovo_state
+from recovar.em.vdam import dense_adapter as adapter
+from recovar.em.vdam import initialise_denovo_state
 from recovar.utils.helpers import recovar_volume_to_relion
 
 pytestmark = pytest.mark.unit
@@ -41,7 +41,7 @@ def _assert_existing_consumer_policy(control1, candidate1, candidate2, control2)
 @pytest.mark.parametrize("padding", [1, 2])
 @pytest.mark.parametrize("current", ["negative", "zero", "one", "partial_odd", "full", "oversize"])
 def test_adapter_native_radius_layout_frame_and_consumer_policy(size, padding, current, monkeypatch):
-    from recovar.em.dense_single_volume.helpers import relion_projector_setup as setup
+    from recovar.em.relion import relion_projector_setup as setup
     from recovar.relion_bind import _relion_bind_core as bind
 
     current_size = {
@@ -101,7 +101,7 @@ def test_adapter_native_radius_layout_frame_and_consumer_policy(size, padding, c
 
 @pytest.mark.parametrize("size,padding,interpolator", [(8, 1, 0), (8, 3, 1), (9, 1, 1)])
 def test_unsupported_projector_geometry_uses_native(size, padding, interpolator, monkeypatch):
-    from recovar.em.dense_single_volume.helpers import relion_projector_setup as setup
+    from recovar.em.relion import relion_projector_setup as setup
 
     def forbidden(*args, **kwargs):
         raise AssertionError("Unsupported geometry must stay native")

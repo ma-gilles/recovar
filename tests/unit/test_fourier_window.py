@@ -21,32 +21,24 @@ import jax.numpy as jnp
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.em_engine import run_em
-from recovar.em.dense_single_volume.helpers.half_spectrum import (
+from recovar.em.dense.em_engine import run_em
+from recovar.em.helpers.fourier_window import (
+    ALLOWED_CURRENT_SIZES,
+    make_fourier_window_indices_np,
+    make_fourier_window_spec,
+    make_frequency_coords_half_np,
+    quantize_current_size,
+    relion_fftw_order_for_square_score_window,
+)
+from recovar.em.helpers.half_spectrum import (
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
     mask_relion_noise_shell_indices_to_current_window,
 )
-from recovar.em.dense_single_volume.helpers.preprocessing import (
-    preprocess_batch as _preprocess_batch,
-)
-from recovar.em.dense_single_volume.helpers.projection import (
-    compute_projections_block as _compute_projections_block,
-)
-from recovar.em.dense_single_volume.helpers.scoring import (
-    _e_step_block_scores,
-    _e_step_block_scores_windowed,
-    _m_step_block_windowed,
-)
-from recovar.em.dense_single_volume.helpers.fourier_window import (
-    ALLOWED_CURRENT_SIZES,
-    make_frequency_coords_half_np,
-    make_fourier_window_indices_np,
-    make_fourier_window_spec,
-    quantize_current_size,
-    relion_fftw_order_for_square_score_window,
-)
+from recovar.em.helpers.preprocessing import preprocess_batch as _preprocess_batch
+from recovar.em.helpers.projection import compute_projections_block as _compute_projections_block
+from recovar.em.scoring.scoring import _e_step_block_scores, _e_step_block_scores_windowed, _m_step_block_windowed
 
 pytestmark = pytest.mark.unit
 

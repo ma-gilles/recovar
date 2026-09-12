@@ -233,18 +233,18 @@ scontrol show job "${SLURM_JOB_ID}" > "${PROVENANCE}/slurm_job.txt"
 sha256sum \
   "${REPO_ROOT}/scripts/run_vdam_hybrid_same_state_transition.py" \
   "${REPO_ROOT}/scripts/run_vdam_hybrid_same_state_transition.sbatch" \
-  "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/coarse_gemm_hybrid.py" \
-  "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/oversampling.py" \
-  "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/flat_local_rows.py" \
-  "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/fourier_window.py" \
-  "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/significance.py" \
-  "${REPO_ROOT}/recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py" \
-  "${REPO_ROOT}/recovar/em/dense_single_volume/local_backprojection.py" \
-  "${REPO_ROOT}/recovar/em/dense_single_volume/local_big_jit.py" \
-  "${REPO_ROOT}/recovar/em/dense_single_volume/local_em_engine.py" \
-  "${REPO_ROOT}/recovar/em/initial_model/dense_adapter.py" \
-  "${REPO_ROOT}/recovar/em/initial_model/driver.py" \
-  "${REPO_ROOT}/recovar/em/initial_model/iteration_loop.py" \
+  "${REPO_ROOT}/recovar/em/scoring/coarse_gemm_hybrid.py" \
+  "${REPO_ROOT}/recovar/em/helpers/oversampling.py" \
+  "${REPO_ROOT}/recovar/em/local/flat_local_rows.py" \
+  "${REPO_ROOT}/recovar/em/helpers/fourier_window.py" \
+  "${REPO_ROOT}/recovar/em/scoring/significance.py" \
+  "${REPO_ROOT}/recovar/em/sparse_pass2/sparse_pass2_bucketed.py" \
+  "${REPO_ROOT}/recovar/em/local/local_backprojection.py" \
+  "${REPO_ROOT}/recovar/em/local/local_big_jit.py" \
+  "${REPO_ROOT}/recovar/em/local/local_em_engine.py" \
+  "${REPO_ROOT}/recovar/em/vdam/dense_adapter.py" \
+  "${REPO_ROOT}/recovar/em/vdam/driver.py" \
+  "${REPO_ROOT}/recovar/em/vdam/iteration_loop.py" \
   "${REPO_ROOT}/recovar/cuda/cuda_backproject.cu" \
   "${REPO_ROOT}/recovar/cuda_backproject.py" \
   "${ACCEPTANCE}" "${LAUNCH_MANIFEST}" "${PIXI_PY}" "${CUDA_BINARY}" \

@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-import recovar.em.dense_single_volume.iteration_loop as iteration_loop
+import recovar.em.refinement.iteration_loop as iteration_loop
 from recovar.em.sampling import (
     apply_relion_rotation_perturbation_to_eulers,
     apply_relion_translation_perturbation,

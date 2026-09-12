@@ -10,10 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.fourier_window import (
-    make_fourier_window_indices_np,
-    make_frequency_coords_half_np,
-)
+from recovar.em.helpers.fourier_window import make_fourier_window_indices_np, make_frequency_coords_half_np
 from recovar.utils.file_hash import sha256_file
 from scripts.analyze_k1_bpref_contributor_membership import match_rotations
 from scripts.analyze_k1_scale_aa_boundary import _native_aa_shells
@@ -161,9 +158,7 @@ def analyze(
         np.float32(0.0),
     ).astype(np.float32)
 
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
-        _relion_translation_angles_f32,
-    )
+    from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
 
     recovar_translation_angles = np.asarray(
         _relion_translation_angles_f32(fine_translations, (image_size, image_size)),

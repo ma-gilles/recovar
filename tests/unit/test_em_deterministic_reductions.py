@@ -15,11 +15,8 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.helpers import deterministic_reduce as dr
-from recovar.em.dense_single_volume.helpers.half_spectrum import (
-    bin_shell_values_jax,
-    bin_shell_values_np,
-)
+from recovar.em.helpers import deterministic_reduce as dr
+from recovar.em.helpers.half_spectrum import bin_shell_values_jax, bin_shell_values_np
 
 jax.config.update("jax_platform_name", "cpu")
 
@@ -102,7 +99,7 @@ def test_fixed_order_segment_sum_is_bitwise_repeatable_under_jit():
 
 
 def test_scatter_flat_local_rows_flagged_path_matches_set_and_fixes_duplicates(monkeypatch):
-    from recovar.em.dense_single_volume.helpers.flat_local_rows import scatter_flat_local_rows
+    from recovar.em.local.flat_local_rows import scatter_flat_local_rows
 
     rng = np.random.default_rng(11)
     batch, n_rot, n_trans = 3, 5, 4
@@ -128,9 +125,7 @@ def test_scatter_flat_local_rows_flagged_path_matches_set_and_fixes_duplicates(m
 
 def test_powerclass_spectrum_flagged_path_matches_host_binning(monkeypatch):
     """Under the opt-in the RELION powerClass spectrum is binned in XLA with the kernel's shell rule."""
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
-        _relion_cuda_powerclass_spectrum_norm_units,
-    )
+    from recovar.em.sparse_pass2.sparse_pass2_scoring import _relion_cuda_powerclass_spectrum_norm_units
 
     n, half = 16, 9
     rng = np.random.default_rng(2)
@@ -150,10 +145,7 @@ def test_powerclass_spectrum_flagged_path_matches_host_binning(monkeypatch):
 
 
 def test_mstep_fixed_order_shell_sums_match_scatter_rule():
-    from recovar.em.dense_single_volume.helpers.deterministic_reduce import (
-        fixed_order_shell_sums,
-        static_shell_voxel_lists,
-    )
+    from recovar.em.helpers.deterministic_reduce import fixed_order_shell_sums, static_shell_voxel_lists
 
     capacity, pf, n_shells = 19, 1, 9  # ori_size 16, padding 1 -> capacity 19
     lists = static_shell_voxel_lists(capacity, pf, n_shells)
@@ -171,7 +163,7 @@ def test_mstep_fixed_order_shell_sums_match_scatter_rule():
 
 def test_score_only_microbatch_cap_ignores_live_memory_under_opt_in(monkeypatch):
     # the cap lives in the batch planner on this branch, not in the engine module
-    from recovar.em.dense_single_volume import local_batch_planning as le
+    from recovar.em.local import local_batch_planning as le
 
     calls = []
     monkeypatch.setattr(le, "_exact_local_runtime_free_memory_bytes", lambda: calls.append(1) or (1 << 20))

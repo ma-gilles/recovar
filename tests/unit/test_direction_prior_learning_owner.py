@@ -12,11 +12,9 @@ import logging
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import mean_helpers
-from recovar.em.dense_single_volume.helpers.iteration_history import RefinementHistory
-from recovar.em.dense_single_volume.helpers.orientation_priors import (
-    collapse_rotation_posterior_to_direction_prior,
-)
+from recovar.em.helpers.iteration_history import RefinementHistory
+from recovar.em.helpers.orientation_priors import collapse_rotation_posterior_to_direction_prior
+from recovar.em.refinement import mean_helpers
 from recovar.em.sampling import rotation_grid_size
 
 pytestmark = pytest.mark.unit

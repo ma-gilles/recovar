@@ -38,7 +38,7 @@ import numpy as np
 
 from recovar import utils
 from recovar.core import fourier_transform_utils as ftu
-from recovar.em.dense_single_volume.frozen_boundary import (
+from recovar.em.diagnostics.frozen_boundary import (
     FROZEN_BOUNDARY_FIXED_DIAGNOSTIC_ARM,
     FROZEN_BOUNDARY_FIXED_MATH_ENVIRONMENT_CONTRACT,
     FROZEN_BOUNDARY_NUMERICAL_CLASSIFICATION_SCOPE,
@@ -47,22 +47,20 @@ from recovar.em.dense_single_volume.frozen_boundary import (
     validate_fixed_diagnostic_boundary_runtime_config,
     verify_fixed_diagnostic_boundary_sources,
 )
-from recovar.em.dense_single_volume.helpers.relion_projector_capture import (
-    build_relion_projector_replay_state,
+from recovar.em.diagnostics.relion_projector_capture import build_relion_projector_replay_state
+from recovar.em.diagnostics.relion_replay import (
+    read_relion_single_optics_sigma2_noise as _read_relion_single_optics_sigma2_noise,
 )
-from recovar.em.dense_single_volume.helpers.state_swap_probe import (
+from recovar.em.diagnostics.relion_replay import (
+    relion_mpi_process_start_scoring_noise_pair as _relion_mpi_process_start_scoring_noise_pair,
+)
+from recovar.em.diagnostics.state_swap_probe import (
     add_state_swap_probe_arguments,
     build_state_swap_probe,
     state_swap_probe_loop_index,
     validate_state_swap_probe_application,
 )
-from recovar.em.dense_single_volume.relion_replay import (
-    read_relion_single_optics_sigma2_noise as _read_relion_single_optics_sigma2_noise,
-)
-from recovar.em.dense_single_volume.relion_replay import (
-    relion_mpi_process_start_scoring_noise_pair as _relion_mpi_process_start_scoring_noise_pair,
-)
-from recovar.em.dense_single_volume.relion_worker_scale import (
+from recovar.em.relion.relion_worker_scale import (
     load_relion_dispatch_schedule,
     load_relion_follower_scale_replay,
     relion_class3d_follower_owners_from_schedule,
@@ -70,7 +68,7 @@ from recovar.em.dense_single_volume.relion_worker_scale import (
     validate_relion_follower_scale_replay,
     verify_relion_dispatch_schedule_oracle,
 )
-from recovar.em.initial_model.avg_unaligned import compute_avg_unaligned_and_sigma2
+from recovar.em.vdam.avg_unaligned import compute_avg_unaligned_and_sigma2
 from recovar.utils.parity_provenance import _safe_git_commit, git_worktree_provenance
 
 logging.basicConfig(
@@ -83,11 +81,11 @@ logger = logging.getLogger(__name__)
 
 _CONCRETE_RECOVAR_PROVENANCE_MODULES = (
     "recovar",
-    "recovar.em.dense_single_volume.iteration_loop",
-    "recovar.em.dense_single_volume.half_scoring",
-    "recovar.em.dense_single_volume.scoring_policy",
-    "recovar.em.dense_single_volume.k_class",
-    "recovar.em.dense_single_volume.helpers.significance",
+    "recovar.em.refinement.iteration_loop",
+    "recovar.em.dense.half_scoring",
+    "recovar.em.dense.scoring_policy",
+    "recovar.em.classification.k_class",
+    "recovar.em.scoring.significance",
 )
 _INITIAL_PROJECTOR_USE_REAL_REFERENCE_ENV = "RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE"
 _FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV = (
@@ -1162,9 +1160,7 @@ def _relion_halfset_and_accuracy_layout(
             dtype=np.int64,
         )
     else:
-        from recovar.em.dense_single_volume.helpers.expected_accuracy import (
-            relion_auto_refine_half_orders,
-        )
+        from recovar.em.helpers.expected_accuracy import relion_auto_refine_half_orders
 
         relion_optics = (
             np.asarray(relion_particles["rlnOpticsGroup"], dtype=np.int64)
@@ -3803,7 +3799,7 @@ def main():
     _RELION_FMASK_EDGE = 2
 
     def _apply_ini_high_lowpass_real(volume_real, volume_shape, voxel_size, ini_high):
-        from recovar.em.initial_model.bootstrap_iref import initial_low_pass_filter_references
+        from recovar.em.vdam.bootstrap_iref import initial_low_pass_filter_references
 
         filtered = initial_low_pass_filter_references(
             np.asarray(volume_real, dtype=np.float64)[None, ...],
@@ -4286,8 +4282,8 @@ def main():
     logger.info("Initial current_size from resolution %.1f A: %d pixels", args.init_resolution, init_current_size)
 
     # ---- Run refinement ----
-    from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
-    from recovar.em.dense_single_volume.refinement_options import (
+    from recovar.em.refinement.iteration_loop import refine_single_volume
+    from recovar.em.refinement.refinement_options import (
         AdaptiveOptions,
         EngineDebugOptions,
         ExpectedAccuracyOptions,

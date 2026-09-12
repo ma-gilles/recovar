@@ -180,12 +180,12 @@ readonly -a SOURCE_FILES=(
   recovar/cuda/Makefile
   recovar/cuda/cuda_backproject.cu
   recovar/cuda_backproject.py
-  recovar/em/dense_single_volume/local_big_jit.py
-  recovar/em/dense_single_volume/local_em_engine.py
-  recovar/em/initial_model/dense_adapter.py
-  recovar/em/initial_model/driver.py
-  recovar/em/initial_model/iteration_loop.py
-  recovar/em/initial_model/schedules.py
+  recovar/em/local/local_big_jit.py
+  recovar/em/local/local_em_engine.py
+  recovar/em/vdam/dense_adapter.py
+  recovar/em/vdam/driver.py
+  recovar/em/vdam/iteration_loop.py
+  recovar/em/vdam/schedules.py
   recovar/utils/parity_provenance.py
   scripts/run_ab_initio.py
   scripts/run_vdam_late_iteration_profile.py

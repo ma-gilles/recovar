@@ -2,7 +2,7 @@
 
 import inspect
 
-from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.local import local_em_engine
 
 
 def test_deferred_noise_calls_share_one_keyword_binding():

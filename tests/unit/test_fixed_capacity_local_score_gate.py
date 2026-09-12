@@ -10,7 +10,7 @@ import jax
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_big_jit
+from recovar.em.local import local_big_jit
 from scripts import run_fixed_capacity_local_score_gate as score_gate
 
 pytestmark = pytest.mark.unit

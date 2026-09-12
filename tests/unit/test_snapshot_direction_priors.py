@@ -7,7 +7,7 @@ import logging
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import orientation_priors as op
+from recovar.em.helpers import orientation_priors as op
 
 pytestmark = pytest.mark.unit
 

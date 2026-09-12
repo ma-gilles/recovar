@@ -20,41 +20,35 @@ import numpy as np
 
 from recovar.core import fourier_transform_utils as ftu
 from recovar.data_io.cryoem_dataset import load_dataset
-from recovar.em.dense_single_volume.helpers import bpref_diagnostics
-from recovar.em.dense_single_volume.helpers import sparse_pass2_scoring
-from recovar.em.dense_single_volume.helpers.fourier_window import (
-    make_fourier_window_spec,
-)
-from recovar.em.dense_single_volume.helpers.oversampling import (
-    compute_pass2_stats_sparse,
-)
-from recovar.em.dense_single_volume.projector_preparation import (
-    _relion_projector_half_maps_for_scoring,
-)
-from recovar.em.dense_single_volume.relion_metadata import (
-    relion_translation_search_base,
-)
+from recovar.em.diagnostics import bpref_diagnostics
+from recovar.em.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.helpers.oversampling import compute_pass2_stats_sparse
+from recovar.em.refinement.projector_preparation import _relion_projector_half_maps_for_scoring
+from recovar.em.relion.relion_metadata import relion_translation_search_base
+from recovar.em.sparse_pass2 import sparse_pass2_scoring
 from recovar.reconstruction import noise as reconstruction_noise
 from recovar.utils.helpers import load_mrc
-from scripts.analyze_k1_exact_ppref_fine_boundary import _load_ppref
 from scripts.analyze_em_k1_live_reference_counterfactual import (
     relion_values_on_recovar_window,
 )
+from scripts.analyze_k1_exact_ppref_fine_boundary import _load_ppref
 from scripts.run_full_refinement import (
     _build_replay_iteration_overrides,
     _maybe_apply_relion_image_mask,
 )
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
+from scripts.validate_relion_fine_operand_capture import load_fine_operand_capture
 from scripts.validate_relion_fine_score_capture import (
     ACTIVE,
     load_fine_score_capture,
 )
-from scripts.validate_relion_fine_operand_capture import load_fine_operand_capture
 from scripts.validate_relion_preprocess_capture import (
     load_artifact as load_preprocess_capture,
 )
 from scripts.validate_relion_scoring_noise_capture import (
     ScoringNoiseCapture,
+)
+from scripts.validate_relion_scoring_noise_capture import (
     load_capture as load_scoring_noise_capture,
 )
 

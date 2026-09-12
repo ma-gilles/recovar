@@ -3,14 +3,14 @@
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.bpref_transaction import BprefTransactionQueue
+from recovar.em.helpers.bpref_transaction import BprefTransactionQueue
 
 pytestmark = pytest.mark.unit
 
 
 def test_cuda_packing_queue_dispatch_preserves_bucket_boundaries(monkeypatch):
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.bpref_transaction import _pad_particle_fields
+    from recovar.em.helpers.bpref_transaction import _pad_particle_fields
 
     packed_calls = []
 
@@ -41,6 +41,7 @@ def test_cuda_packing_queue_dispatch_preserves_bucket_boundaries(monkeypatch):
 
 def test_deferred_scorer_donation_cannot_replace_pending_accumulators():
     from functools import partial
+
     import jax
     import jax.numpy as jnp
 

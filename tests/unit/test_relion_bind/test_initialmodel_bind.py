@@ -1,7 +1,7 @@
 """Phase-2 parity tests: Python InitialModel schedules / ordering vs the
 RELION C++ bindings.
 
-These tests verify that `recovar.em.initial_model` produces byte-identical
+These tests verify that `recovar.em.vdam` produces byte-identical
 trajectories against the corresponding RELION C++ functions compiled into
 `_relion_bind_core`.
 
@@ -25,12 +25,7 @@ import math
 import numpy as np
 import pytest
 
-from recovar.em.initial_model import (
-    compute_phase_lengths,
-    compute_stepsize,
-    compute_subset_size,
-    compute_tau2_fudge,
-)
+from recovar.em.vdam import compute_phase_lengths, compute_stepsize, compute_subset_size, compute_tau2_fudge
 
 pytestmark = pytest.mark.unit
 
@@ -334,7 +329,7 @@ class TestRandomiseParticlesOrderBinding:
 
 class TestAutoRefineExpectedAccuracyBinding:
     def test_spawned_expected_accuracy_matches_direct_result(self, bind):
-        from recovar.em.dense_single_volume.helpers.expected_accuracy import (
+        from recovar.em.helpers.expected_accuracy import (
             estimate_relion_expected_accuracy_from_prepared_inputs,
             estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs,
         )
@@ -448,7 +443,7 @@ class TestAutoRefineExpectedAccuracyBinding:
     def test_python_order_applies_relion_base_order_and_stable_optics_sort(self, bind):
         if not hasattr(bind, "auto_refine_randomise_half_order"):
             pytest.skip("relion_bind must be rebuilt with AutoRefine half ordering")
-        from recovar.em.dense_single_volume.helpers.expected_accuracy import relion_half1_trial_order
+        from recovar.em.helpers.expected_accuracy import relion_half1_trial_order
 
         base = np.asarray([5, 4, 3, 2, 1, 0], dtype=np.int64)
         optics = np.asarray([2, 1, 2, 1, 2, 1], dtype=np.int64)

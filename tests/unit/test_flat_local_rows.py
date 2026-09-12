@@ -4,25 +4,22 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_bucket_stages
-from recovar.em.dense_single_volume.helpers import compact_candidates
-from recovar.em.dense_single_volume.helpers.flat_local_rows import (
+from recovar.em.helpers.projection import (
+    compute_noise_block,
+    compute_norm_residual_per_image,
+    compute_scale_correction_terms_per_image,
+)
+from recovar.em.local import local_bucket_stages
+from recovar.em.local.flat_local_rows import (
     build_dense_to_flat_local_row_lookup,
     build_pool_flat_local_row_plan,
     encode_flat_local_row_plan,
     map_dense_local_rows_to_flat_rows,
     scatter_flat_local_rows,
 )
-from recovar.em.dense_single_volume.helpers.projection import (
-    compute_noise_block,
-    compute_norm_residual_per_image,
-    compute_scale_correction_terms_per_image,
-)
-from recovar.em.dense_single_volume.local_backprojection import (
-    compute_local_ctf_sums,
-    compute_local_weighted_sums,
-)
-from recovar.em.dense_single_volume.local_layout import LocalBucketSpec
+from recovar.em.local.local_backprojection import compute_local_ctf_sums, compute_local_weighted_sums
+from recovar.em.local.local_layout import LocalBucketSpec
+from recovar.em.scoring import compact_candidates
 
 
 @pytest.mark.unit

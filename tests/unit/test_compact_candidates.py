@@ -5,7 +5,7 @@ import pickle
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.compact_candidates import (
+from recovar.em.scoring.compact_candidates import (
     SparseCandidateMask,
     build_compact_fine_job_plan_from_pair_arrays,
     build_compact_pair_index_arrays,

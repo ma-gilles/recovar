@@ -11,9 +11,9 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject as cuda
-from recovar.em.dense_single_volume import local_em_engine as engine
-from recovar.em.dense_single_volume.helpers import deferred_vdam_host_pack as helper
-from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
+from recovar.em.helpers import deferred_vdam_host_pack as helper
+from recovar.em.helpers.env_flags import parse_env_binary_flag
+from recovar.em.local import local_em_engine as engine
 
 pytestmark = pytest.mark.unit
 
@@ -217,7 +217,7 @@ def _execute(
     monkeypatch.setattr(cuda, "relion_vdam_mstep_denominator_f32", denominator)
     # The packed rotation gather owns the M-step rotation call, so the stand-in has to
     # replace the engine's module attribute, not only the name in the exec environment.
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_bucket_stages
 
     monkeypatch.setattr(local_bucket_stages, "_local_mstep_rotations", mstep_rotations)
 

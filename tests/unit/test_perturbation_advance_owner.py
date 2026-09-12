@@ -7,7 +7,7 @@ import inspect
 import numpy as np
 import pytest
 
-import recovar.em.dense_single_volume.iteration_loop as iteration_loop
+import recovar.em.refinement.iteration_loop as iteration_loop
 from recovar.em.sampling import advance_relion_perturbation, advance_relion_perturbation_from_seed
 
 pytestmark = pytest.mark.unit

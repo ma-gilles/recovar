@@ -7,9 +7,7 @@ separate; the shared complement container only describes input indices.
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.significant_samples import (
-    ComplementSignificantSampleIndices,
-)
+from recovar.em.scoring.significant_samples import ComplementSignificantSampleIndices
 
 
 def _build_fine_grid_significance_mask(

@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import recovar.core.fourier_transform_utils as ftu
 import recovar.core.slicing as slicing
 import recovar.cuda_backproject as cuda_backproject
-from recovar.em.dense_single_volume.helpers import half_volume_mstep
+from recovar.em.helpers import half_volume_mstep
 from recovar.reconstruction import regularization
 
 pytestmark = pytest.mark.unit
@@ -194,7 +194,7 @@ def test_non_relion_mstep_keeps_dataset_accumulator_dtype(monkeypatch):
 
 
 def test_exact_local_mstep_splits_when_accumulator_dtypes_differ():
-    from recovar.em.dense_single_volume.local_big_jit import _exact_local_mstep_should_split_adjoints
+    from recovar.em.local.local_big_jit import _exact_local_mstep_should_split_adjoints
 
     assert _exact_local_mstep_should_split_adjoints(
         (259, 259, 259),
@@ -249,7 +249,7 @@ def test_relion_backprojector_volume_shape_rejects_invalid_inputs():
 
 
 def test_enforce_relion_x0_hermitian_uses_centered_odd_grid_partner():
-    from recovar.em.dense_single_volume.local_backprojection import (
+    from recovar.em.local.local_backprojection import (
         enforce_relion_half_volume_x0_hermitian,
         enforce_relion_half_volume_x0_hermitian_host,
     )
@@ -322,8 +322,8 @@ def test_enforce_half_volume_x0_can_force_host_path(monkeypatch):
 
 
 def test_relion_x_half_sparse_allocators_use_current_size_backprojector_shape():
-    from recovar.em.dense_single_volume import k_class
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+    from recovar.em.classification import k_class
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed
 
     def assert_uses_current_size_shape(fn):
         source = inspect.getsource(fn)

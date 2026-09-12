@@ -18,11 +18,11 @@ from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
+from recovar.em.vdam.gpu_pipeline import run_iter_gpu_vdam
 
 from recovar.core import fourier_transform_utils as ftu
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.data_io.starfile import read_star
-from recovar.em.initial_model.gpu_pipeline import run_iter_gpu_vdam
 from recovar.em.sampling import (
     apply_relion_translation_perturbation,
     get_oversampled_rotation_grid_from_samples,

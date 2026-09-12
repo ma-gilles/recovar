@@ -4,7 +4,8 @@ import inspect
 
 import numpy as np
 
-from recovar.em.dense_single_volume import firstiter_cc, half_scoring, k_class
+from recovar.em.classification import k_class
+from recovar.em.dense import firstiter_cc, half_scoring
 
 
 def test_sparse_pass2_switch_reads_only_positive_values(monkeypatch):

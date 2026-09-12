@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import recovar.core as core
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.core.slicing as core_slicing
-from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
+from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
 
 pytestmark = pytest.mark.unit
 
@@ -230,9 +230,7 @@ def test_slice_volume_max_r_matches_windowed_projection():
     # (ky=-current_size//2) and redundant kx=0 negatives, both of which
     # can still sit inside the sphere ``r ≤ max_r`` and so are not zeroed
     # by ``slice_volume``. Check the true sphere boundary instead.
-    from recovar.em.dense_single_volume.helpers.fourier_window import (
-        make_frequency_coords_half_np,
-    )
+    from recovar.em.helpers.fourier_window import make_frequency_coords_half_np
     coords = make_frequency_coords_half_np(image_shape)
     r2 = (coords ** 2).sum(axis=1)
     outside_sphere = np.where(r2 > (current_size // 2 + 0.5) ** 2)[0].astype(np.int32)

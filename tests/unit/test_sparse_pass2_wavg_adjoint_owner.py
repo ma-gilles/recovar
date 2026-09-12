@@ -2,7 +2,7 @@
 
 import inspect
 
-from recovar.em.dense_single_volume.helpers import (
+from recovar.em.sparse_pass2 import (
     sparse_pass2_adjoint,
     sparse_pass2_bucketed,
     sparse_pass2_projection_blocks,

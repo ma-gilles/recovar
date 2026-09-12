@@ -41,9 +41,7 @@ def test_centered_row_projector_transposes_scorer_rotations():
     import jax.numpy as jnp
 
     from recovar.core.relion_project import relion_project_half
-    from recovar.em.dense_single_volume.helpers.projection import (
-        project_relion_projector_half_spectrum_centered_rows,
-    )
+    from recovar.em.helpers.projection import project_relion_projector_half_spectrum_centered_rows
 
     n = 8
     rng = np.random.default_rng(7)
@@ -99,9 +97,7 @@ def test_centered_row_projector_scatters_cropped_ppref_into_full_box():
     import jax.numpy as jnp
 
     from recovar.core.relion_project import relion_project_half
-    from recovar.em.dense_single_volume.helpers.projection import (
-        project_relion_projector_half_spectrum_centered_rows,
-    )
+    from recovar.em.helpers.projection import project_relion_projector_half_spectrum_centered_rows
 
     full_n = 8
     current_size = 4
@@ -155,9 +151,7 @@ def test_centered_row_projector_can_use_explicit_coarse_output_size():
     import jax.numpy as jnp
 
     from recovar.core.relion_project import relion_project_half
-    from recovar.em.dense_single_volume.helpers.projection import (
-        project_relion_projector_half_spectrum_centered_rows,
-    )
+    from recovar.em.helpers.projection import project_relion_projector_half_spectrum_centered_rows
 
     full_n = 8
     projector_n = 8

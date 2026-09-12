@@ -34,9 +34,9 @@ SOURCE_FILES = (
     "recovar/cuda/Makefile",
     "recovar/cuda/cuda_backproject.cu",
     "recovar/cuda_backproject.py",
-    "recovar/em/dense_single_volume/helpers/coarse_gemm_hybrid.py",
-    "recovar/em/dense_single_volume/helpers/scoring.py",
-    "recovar/em/dense_single_volume/helpers/significance.py",
+    "recovar/em/scoring/coarse_gemm_hybrid.py",
+    "recovar/em/scoring/scoring.py",
+    "recovar/em/scoring/significance.py",
     "scripts/qualify_vdam_gf46_certificate_state_h100.py",
     "scripts/qualify_vdam_gf46_hybrid_batch_h100.py",
     "scripts/run_vdam_gf46_hybrid_batch_h100.sbatch",
@@ -158,9 +158,7 @@ def _posterior_summary(result) -> tuple[dict[str, Any], float]:
     import jax.numpy as jnp
     import numpy as np
 
-    from recovar.em.dense_single_volume.helpers.oversampling import (
-        relion_cuda_f32_coarse_posterior,
-    )
+    from recovar.em.helpers.oversampling import relion_cuda_f32_coarse_posterior
 
     g = GF46_GEOMETRY
     started = time.perf_counter_ns()
@@ -264,10 +262,8 @@ def _execute(timed_runs: int) -> dict[str, Any]:
     import numpy as np
 
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers import significance
-    from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
-        plan_coarse_gemm_certificate_topology,
-    )
+    from recovar.em.scoring import significance
+    from recovar.em.scoring.coarse_gemm_hybrid import plan_coarse_gemm_certificate_topology
 
     _assert_exact_geometry()
     if not cuda_backproject.cuda_available():

@@ -12,12 +12,9 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
-from recovar.em.dense_single_volume.helpers.preprocessing import (
-    prepare_reconstruction_batch,
-    preprocess_batch,
-)
-from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout, bucket_local_hypothesis_layout
+from recovar.em.helpers.batch_fetch import fetch_indexed_batch
+from recovar.em.helpers.preprocessing import prepare_reconstruction_batch, preprocess_batch
+from recovar.em.local.local_layout import LocalHypothesisLayout, bucket_local_hypothesis_layout
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
     PoseSelectionConfig,
@@ -625,7 +622,7 @@ def accumulate_local_pose_ppca_bucket_cached(
 ):
     """Exact local PPCA M-step backprojection from cached score moments."""
 
-    from recovar.em.dense_single_volume.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
+    from recovar.em.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
 
     score = jnp.asarray(score)
     alpha = jnp.asarray(alpha)
@@ -720,7 +717,7 @@ def accumulate_local_pose_ppca_bucket_topk_cached(
 ):
     """Approximate local M-step that backprojects only the top-k posterior poses."""
 
-    from recovar.em.dense_single_volume.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
+    from recovar.em.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
 
     score = jnp.asarray(score)
     alpha = jnp.asarray(alpha)
@@ -836,7 +833,7 @@ def fused_local_pose_ppca_bucket(
     posterior accumulation instead of summing over images before the adjoint.
     """
 
-    from recovar.em.dense_single_volume.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
+    from recovar.em.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
 
     Y1 = jnp.asarray(Y1)
     proj_aug = jnp.asarray(proj_aug)

@@ -12,10 +12,7 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 from recovar import cuda_backproject as cb
-from recovar.em.dense_single_volume.helpers.projection import (
-    prepare_relion_projector_capacity,
-    relion_projector_half_to_texture_full,
-)
+from recovar.em.helpers.projection import prepare_relion_projector_capacity, relion_projector_half_to_texture_full
 
 pytestmark = pytest.mark.unit
 FUNCTION = "relion_vdam_mstep_fused_projector_x_half"

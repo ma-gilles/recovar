@@ -16,11 +16,11 @@ import pytest
 
 pytest.importorskip("jax")
 import jax.numpy as jnp
+from helpers.dense_posterior_reference import compute_e_step_weights
 
 import recovar.core.fourier_transform_utils as ftu
-from helpers.dense_posterior_reference import compute_e_step_weights
-from recovar.em.dense_single_volume.em_engine import run_em
-from recovar.em.dense_single_volume.helpers.oversampling import (
+from recovar.em.dense.em_engine import run_em
+from recovar.em.helpers.oversampling import (
     _find_significant_mask_full_sort,
     _find_significant_mask_topk,
     find_significant_mask,
@@ -666,7 +666,7 @@ class TestSignificantCountsReasonable:
 
     def test_batched_significance_returns_sparse_sample_lists(self):
         """The batched coarse pass should preserve per-image significant samples."""
-        from recovar.em.dense_single_volume.helpers.significance import _compute_k_class_significance_batched
+        from recovar.em.scoring.significance import _compute_k_class_significance_batched
 
         n_images = 6
         n_rot = 12
@@ -733,7 +733,7 @@ class TestSignificantCountsReasonable:
 
     def test_sparse_pass2_runs_with_full_candidate_lists(self):
         """Sparse pass 2 should handle the ``sig_samples is None`` full-grid case."""
-        from recovar.em.dense_single_volume.helpers.oversampling import compute_pass2_stats_sparse
+        from recovar.em.helpers.oversampling import compute_pass2_stats_sparse
 
         n_images = 2
         nside_level = 1
@@ -1009,8 +1009,8 @@ class TestRefineWithAdaptive:
     def test_completes_and_valid_output(self):
         """refine_single_volume with adaptive_oversampling=1 should complete
         and produce valid (finite, non-zero) outputs."""
-        from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
-        from recovar.em.dense_single_volume.refinement_options import (
+        from recovar.em.refinement.iteration_loop import refine_single_volume
+        from recovar.em.refinement.refinement_options import (
             AdaptiveOptions,
             RefinementBatching,
             RefinementOptions,
@@ -1068,8 +1068,8 @@ class TestRefineWithAdaptive:
 
     def test_relion_default_does_not_require_nside_level(self):
         """RELION mode derives the coarse grid from init_healpix_order."""
-        from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
-        from recovar.em.dense_single_volume.refinement_options import (
+        from recovar.em.refinement.iteration_loop import refine_single_volume
+        from recovar.em.refinement.refinement_options import (
             AdaptiveOptions,
             RefinementBatching,
             RefinementOptions,

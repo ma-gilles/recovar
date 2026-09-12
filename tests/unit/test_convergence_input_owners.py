@@ -12,11 +12,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import mean_helpers
-from recovar.em.dense_single_volume.helpers.convergence import (
-    concatenate_assignments,
-    concatenate_assignments_or_none,
-)
+from recovar.em.helpers.convergence import concatenate_assignments, concatenate_assignments_or_none
+from recovar.em.refinement import mean_helpers
 
 pytestmark = pytest.mark.unit
 

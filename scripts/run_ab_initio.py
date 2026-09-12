@@ -16,7 +16,7 @@ Use:
 
 This script handles argument parsing + RELION command composition. Non-dry
 runs execute the native recovar InitialModel path implemented in
-`recovar.em.initial_model.driver`, which uses the dense K-class E-step adapter
+`recovar.em.vdam.driver`, which uses the dense K-class E-step adapter
 with the VDAM iteration loop.
 """
 
@@ -31,15 +31,15 @@ from pathlib import Path
 from typing import List, Optional
 
 from recovar.commands.initial_model import _disabled_or_pool_aligned_chunk_size
-from recovar.em.initial_model.schedules import GuiInitialModelDefaults
+from recovar.em.vdam.schedules import GuiInitialModelDefaults
 
 INITIAL_MODEL_GUI_DEFAULTS = GuiInitialModelDefaults()
 
 _CONCRETE_RECOVAR_PROVENANCE_MODULES = (
-    "recovar.em.initial_model.schedules",
-    "recovar.em.initial_model.driver",
-    "recovar.em.initial_model.iteration_loop",
-    "recovar.em.initial_model.dense_adapter",
+    "recovar.em.vdam.schedules",
+    "recovar.em.vdam.driver",
+    "recovar.em.vdam.iteration_loop",
+    "recovar.em.vdam.dense_adapter",
 )
 
 
@@ -464,7 +464,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.require_custom_cuda:
         _require_custom_cuda_runtime()
 
-    from recovar.em.initial_model.driver import NativeInitialModelOptions, run_native_initial_model
+    from recovar.em.vdam.driver import NativeInitialModelOptions, run_native_initial_model
 
     native_opts = NativeInitialModelOptions(
         fn_img=opts.fn_img,

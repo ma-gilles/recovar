@@ -4,21 +4,17 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import (
-    batch_planning,
-    firstiter_cc,
-    half_scoring,
-    iteration_loop,
-    k_class_results,
-    score_outputs,
-)
-from recovar.em.dense_single_volume.batch_planning import (
+from recovar.em.classification import k_class_results
+from recovar.em.classification.k_class_results import KClassEMResult
+from recovar.em.dense import firstiter_cc, half_scoring, score_outputs
+from recovar.em.helpers import batch_planning
+from recovar.em.helpers.batch_planning import (
     _estimate_relion_em_batch_sizes,
     _safe_dense_k_class_rotation_block_size,
     _safe_firstiter_cc_image_batch_size,
 )
-from recovar.em.dense_single_volume.helpers.types import NoiseStats, make_relion_stats
-from recovar.em.dense_single_volume.k_class_results import KClassEMResult
+from recovar.em.helpers.types import NoiseStats, make_relion_stats
+from recovar.em.refinement import iteration_loop
 
 
 def test_firstiter_winner_take_all_assembly_reports_unit_pmax_across_score_normalizations():

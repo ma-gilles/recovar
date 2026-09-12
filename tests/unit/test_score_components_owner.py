@@ -6,7 +6,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers import scoring
+from recovar.em.scoring import scoring
 
 
 def test_components_match_the_documented_gemms():

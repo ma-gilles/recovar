@@ -83,7 +83,7 @@ def analyze(
     ini_high: float,
     current_size: int,
 ) -> dict[str, object]:
-    from recovar.em.initial_model.dense_adapter import reference_to_relion_projector_half_maps
+    from recovar.em.vdam.dense_adapter import reference_to_relion_projector_half_maps
     from recovar.utils import helpers
     from scripts.run_multi_iter_parity import filter_fresh_initial_reference
 

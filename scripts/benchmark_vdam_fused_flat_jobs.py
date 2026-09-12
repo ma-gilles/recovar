@@ -14,10 +14,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume.helpers.compact_candidates import (
-    build_compact_fine_job_plan,
-    build_compact_pair_index_arrays,
-)
+from recovar.em.scoring.compact_candidates import build_compact_fine_job_plan, build_compact_pair_index_arrays
 
 
 def _git_head() -> str:

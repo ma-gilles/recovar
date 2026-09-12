@@ -6,10 +6,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from recovar.em.dense_single_volume import k_class_results
-from recovar.em.initial_model import dense_adapter, driver, native_sampling, star_io
+from recovar.em.classification import k_class_results
+from recovar.em.vdam import dense_adapter, driver, native_sampling, sparse_pass2_estep, star_io
 from recovar.utils.helpers import R_from_relion, R_to_relion
-from recovar.em.initial_model import sparse_pass2_estep
 
 pytestmark = pytest.mark.unit
 
@@ -103,7 +102,7 @@ def test_mixed_halfset_rows_keep_identity_and_validity():
 
 
 def test_coarse_winner_replaces_or_invalidates_fine_source_metadata():
-    from recovar.em.dense_single_volume.helpers.types import make_relion_stats
+    from recovar.em.helpers.types import make_relion_stats
 
     stats = make_relion_stats(
         log_evidence_per_image=np.zeros(1),

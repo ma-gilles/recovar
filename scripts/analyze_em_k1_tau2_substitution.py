@@ -150,9 +150,7 @@ def _reconstruct_and_flatten(
     particle_diameter_angstrom: float,
 ) -> np.ndarray:
     from recovar.core import fourier_transform_utils, mask
-    from recovar.em.dense_single_volume.mean_helpers import (
-        _reconstruct_volume_eager,
-    )
+    from recovar.em.refinement.mean_helpers import _reconstruct_volume_eager
 
     reconstructed = _reconstruct_volume_eager(
         weight,

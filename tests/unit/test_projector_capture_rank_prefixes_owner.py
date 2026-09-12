@@ -4,7 +4,7 @@ import inspect
 
 import pytest
 
-from recovar.em.dense_single_volume.helpers import relion_projector_capture as cap
+from recovar.em.diagnostics import relion_projector_capture as cap
 
 
 def test_owner_discovers_ranks_and_rejects_duplicates(tmp_path):

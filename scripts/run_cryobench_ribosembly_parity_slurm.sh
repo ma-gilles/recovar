@@ -219,7 +219,7 @@ status = {
     "relion_initial_model_dir": "$IM_DIR",
     "recovar_initial_model_k16_parity": "unsupported",
     "reason": (
-        "recovar.em.initial_model.gpu_pipeline.run_iter_gpu_vdam currently "
+        "recovar.em.vdam.gpu_pipeline.run_iter_gpu_vdam currently "
         "hardcodes K=1 in the VDAM M-step/momenta path; K=16 InitialModel "
         "parity needs a separate multi-class VDAM implementation."
     ),

@@ -1,0 +1,1160 @@
+"""Diagnostic reporting and dump helpers for exact-local RELION refinement."""
+
+from __future__ import annotations
+
+import os
+import re
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+
+from recovar import utils
+from recovar.em.helpers.env_flags import parse_int_set
+from recovar.em.helpers.half_spectrum import bin_shell_values_np
+
+
+def _local_layout_sample_counts(layout):
+    """Count allowed rotation/translation pairs in each image for reporting."""
+    if layout.sample_mask_flat is None:
+        return np.asarray(layout.rotation_counts, dtype=np.int64) * int(layout.translation_grid.shape[0])
+    return np.asarray(
+        [
+            int(np.count_nonzero(layout.sample_mask_flat[start:stop]))
+            for start, stop in zip(layout.rotation_offsets[:-1], layout.rotation_offsets[1:])
+        ],
+        dtype=np.int64,
+    )
+
+
+def log_local_denominator_support(logger, layout, mode, env_name):
+    """Report broad-denominator support without changing its layout."""
+    denominator_valid_samples_per_image = _local_layout_sample_counts(layout)
+    logger.info(
+        "RELION local adaptive pass 2 diagnostic: denominator support mode=%s fine valid candidates median=%d max=%d via %s",
+        mode,
+        int(np.median(denominator_valid_samples_per_image)) if denominator_valid_samples_per_image.size else 0,
+        int(np.max(denominator_valid_samples_per_image)) if denominator_valid_samples_per_image.size else 0,
+        env_name,
+    )
+
+
+def log_local_adaptive_support(logger, parent_layout, significant_sample_indices, current_translations, pass2_layout):
+    """Report retained parent support and available fine candidates."""
+    parent_samples_per_image = np.asarray(
+        [
+            (
+                int(np.count_nonzero(parent_layout.sample_mask_flat[start:stop]))
+                if parent_layout.sample_mask_flat is not None
+                else int(stop - start) * int(current_translations.shape[0])
+            )
+            if sig is None
+            else int(np.asarray(sig).size)
+            for sig, start, stop in zip(
+                significant_sample_indices, parent_layout.rotation_offsets[:-1], parent_layout.rotation_offsets[1:]
+            )
+        ],
+        dtype=np.int64,
+    )
+    valid_samples_per_image = _local_layout_sample_counts(pass2_layout)
+    logger.info(
+        "RELION local adaptive pass 2 mask: parent significant samples median=%d max=%d; fine valid candidates median=%d max=%d",
+        int(np.median(parent_samples_per_image)) if parent_samples_per_image.size else 0,
+        int(np.max(parent_samples_per_image)) if parent_samples_per_image.size else 0,
+        int(np.median(valid_samples_per_image)) if valid_samples_per_image.size else 0,
+        int(np.max(valid_samples_per_image)) if valid_samples_per_image.size else 0,
+    )
+
+
+@dataclass(frozen=True)
+class DensePerPoseScoreDumpRequest:
+    """Dense/global per-pose score dump request parsed from environment."""
+
+    dump_dir: Path | None = None
+    target: int | None = None
+    dump_preprior: bool = False
+    target_is_original: bool = False
+
+    @property
+    def enabled(self) -> bool:
+        return self.dump_dir is not None and self.target is not None
+
+
+def _parse_dump_request(env_prefix: str):
+    """Resolve a local debug dump request from ``<env_prefix>_DIR/_GLOBAL_INDICES/_CURRENT_SIZE/_ITERATION``.
+
+    Returns ``(dump_path, targets, requested_current_sizes, requested_iterations)``,
+    or ``(None, set(), None, None)`` when no directory or no target particle is
+    requested; the dump directory is created on request.
+    """
+
+    dump_dir = os.environ.get(f"{env_prefix}_DIR")
+    dump_indices = os.environ.get(f"{env_prefix}_GLOBAL_INDICES")
+    dump_current_size = os.environ.get(f"{env_prefix}_CURRENT_SIZE")
+    dump_iterations = os.environ.get(f"{env_prefix}_ITERATION")
+    if not dump_dir or not dump_indices:
+        return None, set(), None, None
+    targets = parse_int_set(dump_indices) or set()
+    if not targets:
+        return None, set(), None, None
+    requested_current_sizes = parse_int_set(dump_current_size)
+    requested_iterations = parse_int_set(dump_iterations)
+    dump_path = Path(dump_dir)
+    dump_path.mkdir(parents=True, exist_ok=True)
+    return dump_path, targets, requested_current_sizes, requested_iterations
+
+
+def parse_debug_score_dump_request():
+    """Return the optional debug score-dump request from the environment."""
+
+    return _parse_dump_request("RECOVAR_LOCAL_SCORE_DUMP")
+
+
+def parse_debug_fused_posterior_dump_request():
+    """Return optional fused-path posterior dump settings.
+
+    This is intentionally separate from ``RECOVAR_LOCAL_SCORE_DUMP_*``:
+    score dumps need the materialized score tensor and therefore force the
+    non-fused path, while this hook records the actual production fused path.
+    """
+
+    return _parse_dump_request("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP")
+
+
+def parse_debug_noise_component_dump_request():
+    """Return optional per-particle local noise component dump settings."""
+
+    return _parse_dump_request("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP")
+
+
+def current_size_matches_request(requested_current_sizes: set[int] | None, current_size) -> bool:
+    """Return whether a local debug dump should run for ``current_size``.
+
+    ``-1`` is accepted as a wildcard for final-pass probes whose exact
+    concrete current size is not known when the Slurm job is submitted. It
+    intentionally does not match ``current_size=None`` parent/probe passes,
+    which would otherwise consume one-shot target dumps before fine pass 2.
+    ``-2`` is a diagnostic-only selector for those parent/probe passes.
+    """
+
+    if requested_current_sizes is None:
+        return True
+    if -2 in requested_current_sizes and current_size is None:
+        return True
+    if -1 in requested_current_sizes:
+        return current_size is not None
+    return int(current_size or -1) in requested_current_sizes
+
+
+def iteration_matches_request(requested_iterations: set[int] | None, debug_iteration) -> bool:
+    if requested_iterations is None:
+        return True
+    return int(debug_iteration or -1) in requested_iterations
+
+
+def parse_dense_noise_component_dump_request():
+    """Return optional per-particle dense noise component dump settings."""
+
+    dump_dir = os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_DIR")
+    dump_indices = os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_GLOBAL_INDICES")
+    dump_current_size = os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_CURRENT_SIZE")
+    if not dump_dir or not dump_indices:
+        return None, set(), None
+    targets = parse_int_set(dump_indices) or set()
+    if not targets:
+        return None, set(), None
+    requested_current_sizes = parse_int_set(dump_current_size)
+    dump_path = Path(dump_dir)
+    dump_path.mkdir(parents=True, exist_ok=True)
+    return dump_path, targets, requested_current_sizes
+
+
+def parse_dense_per_pose_score_dump_request() -> DensePerPoseScoreDumpRequest:
+    """Return optional dense/global per-pose score dump settings."""
+
+    dump_dir = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_DIR")
+    dump_target = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_TARGET")
+    if not dump_dir or dump_target is None:
+        return DensePerPoseScoreDumpRequest()
+    try:
+        target = int(dump_target)
+    except ValueError:
+        return DensePerPoseScoreDumpRequest()
+    dump_path = Path(dump_dir)
+    dump_path.mkdir(parents=True, exist_ok=True)
+    dump_preprior = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_PREPRIOR")
+    target_is_original = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_TARGET_IS_ORIGINAL")
+    return DensePerPoseScoreDumpRequest(
+        dump_dir=dump_path,
+        target=target,
+        dump_preprior=bool(dump_preprior and dump_preprior != "0"),
+        target_is_original=bool(target_is_original and target_is_original != "0"),
+    )
+
+
+@contextmanager
+def score_dump_label(label: str, *, local: bool = False):
+    """Append a phase/class label and restore the process environment on exit.
+
+    Local scores and fused posteriors retain their separate caller prefixes.
+    Call sites create a fresh scope for each engine invocation.
+    """
+    names = (
+        ("RECOVAR_LOCAL_SCORE_DUMP_LABEL", "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_LABEL")
+        if local else ("RECOVAR_DEBUG_PER_POSE_DUMP_LABEL",)
+    )
+    previous = {}
+    for name in names:
+        old = os.environ.get(name)
+        previous[name] = old
+        os.environ[name] = f"{old}_{label}" if old else label
+    try:
+        yield
+    finally:
+        for name, old in previous.items():
+            if old is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = old
+
+
+def _dump_label_suffix(label: str | None) -> str:
+    if not label:
+        return ""
+    label = re.sub(r"[^A-Za-z0-9_.-]+", "_", label.strip())
+    return f"_{label}" if label else ""
+
+
+def _local_debug_dump_label_suffix() -> str:
+    """Return a sanitized optional label suffix for local score diagnostics."""
+
+    label = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_LABEL") or os.environ.get(
+        "RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_LABEL",
+    )
+    return _dump_label_suffix(label)
+
+
+def _pass_label_suffix(debug_pass_label: str | None) -> str:
+    """Return a sanitized filename suffix identifying the calling pass.
+
+    Distinct from ``_local_debug_dump_label_suffix`` (a user-supplied,
+    env-driven label): this one is set by the caller in code, one per
+    logical call site, specifically so that two calls sharing the same
+    (image, current_size, debug_iteration) triple in one run -- e.g. local
+    search's pass-1 "parent" probe and its pass-2 fine call -- write to
+    distinct paths instead of the later one silently overwriting the
+    earlier one.
+    """
+
+    if not debug_pass_label:
+        return ""
+    return _dump_label_suffix(str(debug_pass_label))
+
+
+def _local_fused_posterior_dump_label_suffix() -> str:
+    """Return the fused-posterior label without losing its caller prefix.
+
+    K-class execution supplies a phase suffix to both local debug label
+    variables.  A same-state caller can additionally prefix only the fused
+    posterior label with its arm name.  Prefer that more-specific value here;
+    otherwise the generic score label silently collapses every arm onto one
+    output filename.
+    """
+
+    label = os.environ.get("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_LABEL") or os.environ.get(
+        "RECOVAR_LOCAL_SCORE_DUMP_LABEL",
+    )
+    return _dump_label_suffix(label)
+
+
+def _target_rows_to_numpy(array, target_rows: list[int], dtype):
+    rows = np.asarray(target_rows, dtype=np.intp)
+    try:
+        subset = array[rows]
+    except Exception:
+        subset = np.take(array, rows, axis=0)
+    return np.asarray(subset, dtype=dtype)
+
+
+def _debug_capture_dtype(array, *, complex_values: bool = False):
+    """Preserve genuine high-precision diagnostic operands when present."""
+
+    dtype = np.dtype(getattr(array, "dtype", np.complex64 if complex_values else np.float32))
+    if complex_values:
+        return np.complex128 if dtype.itemsize > np.dtype(np.complex64).itemsize else np.complex64
+    return np.float64 if dtype.itemsize > np.dtype(np.float32).itemsize else np.float32
+
+
+def dense_score_dump_label_suffix() -> str:
+    """Return the sanitized optional label suffix shared by dense score dumps."""
+    return _dump_label_suffix(os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_LABEL"))
+
+def maybe_write_dense_per_pose_score_dump(
+    *,
+    request: DensePerPoseScoreDumpRequest,
+    indices,
+    scores,
+    block_index: int,
+    preprior: bool = False,
+    original_indices=None,
+) -> None:
+    """Dump one dense/global score block for a targeted input image."""
+
+    if not request.enabled:
+        return
+    if preprior and not request.dump_preprior:
+        return
+    try:
+        match_indices = original_indices if request.target_is_original else indices
+        hits = np.where(np.asarray(match_indices, dtype=np.int64) == int(request.target))[0]
+        if len(hits) == 0:
+            return
+        row = int(hits[0])
+        suffix = "_preprior" if preprior else ""
+        label_suffix = dense_score_dump_label_suffix()
+        scores_target = np.asarray(scores[row], dtype=np.float64)
+        np.save(
+            request.dump_dir / f"target{int(request.target):06d}{label_suffix}_block{int(block_index):04d}{suffix}.npy",
+            scores_target,
+        )
+    except Exception:
+        return
+
+
+def noise_split_diagnostics_requested() -> bool:
+    """Return whether per-shell A2/XA noise split diagnostics are needed."""
+
+    return bool(
+        os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_DIR")
+        or os.environ.get("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP_DIR")
+    )
+
+
+def maybe_write_debug_noise_component_dump(
+    *,
+    experiment_dataset,
+    bucket,
+    support_mass,
+    processed_noise_power_half,
+    proj_for_noise,
+    proj_abs2_for_noise,
+    summed_masked_noise,
+    ctf_probs,
+    noise_variance_for_noise,
+    shell_indices_half,
+    shell_indices_noise,
+    n_shells,
+    current_size,
+    debug_iteration,
+    reconstruction_sample_mask,
+    n_significant_samples,
+    dump_dir: Path | None,
+    pending_targets: set[int],
+    requested_current_sizes: set[int] | None = None,
+    requested_iterations: set[int] | None = None,
+):
+    """Dump per-particle RELION-style noise components for selected images."""
+
+    selected = _requested_dump_rows(
+        experiment_dataset,
+        bucket,
+        current_size=current_size,
+        debug_iteration=debug_iteration,
+        dump_dir=dump_dir,
+        pending_targets=pending_targets,
+        requested_current_sizes=requested_current_sizes,
+        requested_iterations=requested_iterations,
+    )
+    if selected is None:
+        return pending_targets
+    original_image_indices, target_rows = selected
+
+    support_mass_np = np.asarray(support_mass, dtype=np.float64)
+    processed_noise_power_np = np.asarray(processed_noise_power_half)
+    proj_np = np.asarray(proj_for_noise)
+    proj_abs2_np = (
+        np.abs(proj_np) ** 2
+        if proj_abs2_for_noise is None
+        else np.asarray(proj_abs2_for_noise, dtype=np.float64)
+    )
+    summed_np = np.asarray(summed_masked_noise)
+    ctf_probs_np = np.asarray(ctf_probs, dtype=np.float64)
+    noise_variance_np = np.asarray(noise_variance_for_noise, dtype=np.float64)
+    shell_indices_half_np = np.asarray(shell_indices_half, dtype=np.int64)
+    shell_indices_noise_np = np.asarray(shell_indices_noise, dtype=np.int64)
+    reconstruction_sample_mask_np = np.asarray(reconstruction_sample_mask, dtype=bool)
+    n_significant_samples_np = np.asarray(n_significant_samples, dtype=np.int32)
+
+    for row in target_rows:
+        original_idx = int(original_image_indices[row])
+        local_idx = int(bucket.image_indices[row])
+        p_img_pixel = (np.abs(processed_noise_power_np[row]) ** 2) * support_mass_np[row]
+        p_img_shells = bin_shell_values_np(p_img_pixel, shell_indices_half_np, n_shells)
+
+        ctf_probs_raw = ctf_probs_np[row] * noise_variance_np[None, :]
+        a2_pixel = np.sum(proj_abs2_np[row] * ctf_probs_raw, axis=0)
+        xa_pixel = noise_variance_np * np.real(np.sum(proj_np[row] * np.conj(summed_np[row]), axis=0))
+        a2_shells = bin_shell_values_np(a2_pixel, shell_indices_noise_np, n_shells)
+        xa_shells = bin_shell_values_np(xa_pixel, shell_indices_noise_np, n_shells)
+        total_shells = p_img_shells + a2_shells - 2.0 * xa_shells
+
+        significant = reconstruction_sample_mask_np[row, : int(bucket.actual_rotation_counts[row]), :]
+        dump_path = dump_dir / f"local_noise_components_it{int(debug_iteration or -1):03d}_image_{original_idx}.npz"
+        np.savez_compressed(
+            dump_path,
+            selected_global_image_indices=np.array([original_idx], dtype=np.int64),
+            selected_local_image_indices=np.array([local_idx], dtype=np.int64),
+            current_size=np.array([int(current_size) if current_size is not None else -1], dtype=np.int32),
+            debug_iteration=np.array([int(debug_iteration or -1)], dtype=np.int32),
+            support_mass=np.array([support_mass_np[row]], dtype=np.float64),
+            n_significant_samples=np.array([int(n_significant_samples_np[row])], dtype=np.int32),
+            significant_count=np.array([int(np.sum(significant))], dtype=np.int32),
+            p_img_shells=p_img_shells.astype(np.float64),
+            a2_shells=a2_shells.astype(np.float64),
+            xa_shells=xa_shells.astype(np.float64),
+            total_shells=total_shells.astype(np.float64),
+            shell_indices_half=shell_indices_half_np.astype(np.int32),
+            shell_indices_noise=shell_indices_noise_np.astype(np.int32),
+        )
+        if requested_iterations is None:
+            pending_targets.remove(original_idx)
+
+    return pending_targets
+
+
+def _child_ordinals_from_parent_ids(parent_ids: np.ndarray) -> np.ndarray:
+    """Return RELION-style child ordinal within each repeated parent id."""
+
+    parent_ids = np.asarray(parent_ids, dtype=np.int32).reshape(-1)
+    child_ordinals = np.zeros(parent_ids.shape[0], dtype=np.int32)
+    seen: dict[int, int] = {}
+    for idx, parent_id in enumerate(parent_ids.tolist()):
+        count = seen.get(int(parent_id), 0)
+        child_ordinals[idx] = count
+        seen[int(parent_id)] = count + 1
+    return child_ordinals
+
+
+def _infer_grouped_child_layout(values: np.ndarray) -> tuple[np.ndarray, np.ndarray, int]:
+    """Infer parent/child ids for a parent-major oversampled grid.
+
+    The adaptive RELION translation grid is generated parent-major: every
+    coarse translation contributes a fixed child-offset pattern. Inferring the
+    group size here keeps this helper debug-only instead of adding persistent
+    layout fields to the hot path.
+    """
+
+    values = np.asarray(values, dtype=np.float64)
+    n_values = int(values.shape[0])
+    if n_values <= 0:
+        empty = np.zeros(0, dtype=np.int32)
+        return empty, empty, 1
+
+    candidates = [4**order for order in range(1, 6) if n_values % (4**order) == 0]
+    candidates.sort(reverse=True)
+    for child_count in candidates:
+        grouped = values.reshape(n_values // child_count, child_count, values.shape[-1])
+        offsets = grouped - np.mean(grouped, axis=1, keepdims=True)
+        if np.allclose(offsets, offsets[0:1], rtol=1e-5, atol=1e-5):
+            parent = np.repeat(np.arange(n_values // child_count, dtype=np.int32), child_count)
+            child = np.tile(np.arange(child_count, dtype=np.int32), n_values // child_count)
+            return parent, child, int(child_count)
+
+    parent = np.arange(n_values, dtype=np.int32)
+    child = np.zeros(n_values, dtype=np.int32)
+    return parent, child, 1
+
+
+def _local_candidate_metadata(
+    *,
+    local_layout,
+    bucket,
+    row: int,
+    actual_count: int,
+):
+    """Return local metadata, retaining F64 source angles when available.
+
+    ``local_rotation_eulers_source`` distinguishes these from the legacy
+    F32 matrix-derived Euler fallback. Compute matrices remain unchanged.
+    """
+
+    local_rotation_ids = np.asarray(bucket.local_rotation_ids[row, :actual_count], dtype=np.int32)
+    local_rotation_parent_ids = (
+        np.asarray(bucket.local_rotation_posterior_ids[row, :actual_count], dtype=np.int32)
+        if bucket.local_rotation_posterior_ids is not None
+        else local_rotation_ids
+    )
+    local_rotation_child_indices = _child_ordinals_from_parent_ids(local_rotation_parent_ids)
+    local_rotation_matrices = np.asarray(bucket.local_rotations[row, :actual_count], dtype=np.float32)
+    source_eulers = getattr(bucket, "local_source_eulers", None)
+    if source_eulers is not None:
+        local_rotation_eulers = np.asarray(source_eulers[row, :actual_count], dtype=np.float64)
+        local_rotation_eulers_source = "source_eulers"
+    else:
+        local_rotation_eulers = np.asarray(
+            utils.R_to_relion(local_rotation_matrices, degrees=True),
+            dtype=np.float32,
+        )
+        local_rotation_eulers_source = "matrix_derived"
+    rotation_mask = np.asarray(bucket.local_rotation_mask[row, :actual_count], dtype=bool)
+    translation_grid = np.asarray(local_layout.translation_grid, dtype=np.float32)
+    n_trans = int(translation_grid.shape[0])
+    translation_indices = np.arange(n_trans, dtype=np.int32)
+    translation_parent_indices, translation_child_indices, n_trans_over = _infer_grouped_child_layout(
+        translation_grid,
+    )
+    n_parent_trans = int(np.max(translation_parent_indices) + 1) if translation_parent_indices.size else n_trans
+    n_rot_over = int(np.max(local_rotation_child_indices) + 1) if local_rotation_child_indices.size else 1
+    n_hidden_over = int(n_rot_over * n_trans_over)
+    candidate_hidden_over_indices = (
+        (
+            local_rotation_parent_ids[:, None].astype(np.int64) * np.int64(n_parent_trans)
+            + translation_parent_indices[None, :].astype(np.int64)
+        )
+        * np.int64(n_hidden_over)
+        + local_rotation_child_indices[:, None].astype(np.int64) * np.int64(n_trans_over)
+        + translation_child_indices[None, :].astype(np.int64)
+    )
+    return {
+        "local_rotation_ids": local_rotation_ids,
+        "local_rotation_parent_ids": local_rotation_parent_ids,
+        "local_rotation_child_indices": local_rotation_child_indices,
+        "local_rotation_matrices": local_rotation_matrices,
+        "local_rotation_eulers": local_rotation_eulers,
+        "local_rotation_eulers_source": local_rotation_eulers_source,
+        "rotation_mask": rotation_mask,
+        "translation_grid": translation_grid,
+        "translation_indices": translation_indices,
+        "translation_parent_indices": translation_parent_indices,
+        "translation_child_indices": translation_child_indices,
+        "n_trans_over": int(n_trans_over),
+        "n_rot_over": int(n_rot_over),
+        "n_hidden_over": int(n_hidden_over),
+        "candidate_hidden_over_indices": candidate_hidden_over_indices,
+    }
+
+
+def _requested_dump_rows(
+    experiment_dataset,
+    bucket,
+    *,
+    current_size,
+    debug_iteration,
+    dump_dir,
+    pending_targets,
+    requested_current_sizes,
+    requested_iterations,
+):
+    """Select the bucket rows a local debug dump must write, or ``None`` to write nothing.
+
+    Nothing is written without a dump directory or pending original image ids,
+    when the current size or iteration is outside the request, or when none of
+    the pending ids sits in this bucket; the caller then keeps its pending set
+    unchanged. Otherwise the bucket's original image ids and the matching row
+    positions are returned for the fused-posterior, score and noise-component
+    dump writers.
+    """
+
+    if dump_dir is None or not pending_targets:
+        return None
+    if not current_size_matches_request(requested_current_sizes, current_size):
+        return None
+    if not iteration_matches_request(requested_iterations, debug_iteration):
+        return None
+
+    original_image_indices = np.asarray(
+        experiment_dataset.original_image_indices_from_local(bucket.image_indices),
+        dtype=np.int64,
+    )
+    target_rows = [
+        row
+        for row, original_idx in enumerate(original_image_indices.tolist())
+        if int(original_idx) in pending_targets
+    ]
+    if not target_rows:
+        return None
+    return original_image_indices, target_rows
+
+
+def maybe_write_debug_fused_posterior_dump(
+    *,
+    experiment_dataset,
+    local_layout,
+    bucket,
+    image_pre_shifts,
+    scores=None,
+    probs,
+    log_Z,
+    best_log_score,
+    best_argmax,
+    max_posterior,
+    reconstruction_sample_mask,
+    reconstruction_rotation_mask,
+    n_significant_samples,
+    current_size,
+    debug_iteration,
+    dump_dir: Path | None,
+    pending_targets: set[int],
+    requested_current_sizes: set[int] | None = None,
+    requested_iterations: set[int] | None = None,
+):
+    """Dump production fused-path posterior tensors for requested images."""
+
+    selected = _requested_dump_rows(
+        experiment_dataset,
+        bucket,
+        current_size=current_size,
+        debug_iteration=debug_iteration,
+        dump_dir=dump_dir,
+        pending_targets=pending_targets,
+        requested_current_sizes=requested_current_sizes,
+        requested_iterations=requested_iterations,
+    )
+    if selected is None:
+        return pending_targets
+    original_image_indices, target_rows = selected
+
+    probs_np = _target_rows_to_numpy(probs, target_rows, np.float32)
+    scores_np = (
+        _target_rows_to_numpy(scores, target_rows, np.float32)
+        if scores is not None
+        else None
+    )
+    log_Z_np = _target_rows_to_numpy(log_Z, target_rows, np.float32)
+    best_log_score_np = _target_rows_to_numpy(best_log_score, target_rows, np.float32)
+    best_argmax_np = _target_rows_to_numpy(best_argmax, target_rows, np.int64)
+    max_posterior_np = _target_rows_to_numpy(max_posterior, target_rows, np.float32)
+    reconstruction_sample_mask_np = _target_rows_to_numpy(reconstruction_sample_mask, target_rows, bool)
+    reconstruction_rotation_mask_np = _target_rows_to_numpy(reconstruction_rotation_mask, target_rows, bool)
+    n_significant_samples_np = _target_rows_to_numpy(n_significant_samples, target_rows, np.int32)
+
+    for compact_row, row in enumerate(target_rows):
+        original_idx = int(original_image_indices[row])
+        local_idx = int(bucket.image_indices[row])
+        actual_count = int(bucket.actual_rotation_counts[row])
+        metadata = _local_candidate_metadata(
+            local_layout=local_layout,
+            bucket=bucket,
+            row=row,
+            actual_count=actual_count,
+        )
+        n_trans = int(metadata["translation_grid"].shape[0])
+        posterior = np.asarray(probs_np[compact_row, :actual_count, :], dtype=np.float32)
+        best_flat = int(best_argmax_np[compact_row])
+        best_rotation_index = best_flat // n_trans
+        best_translation_index = best_flat % n_trans
+        best_in_actual = 0 <= best_rotation_index < actual_count
+        best_global_id = (
+            int(metadata["local_rotation_ids"][best_rotation_index])
+            if best_in_actual
+            else -1
+        )
+        best_translation = (
+            metadata["translation_grid"][best_translation_index : best_translation_index + 1]
+            if best_in_actual
+            else np.empty((0, metadata["translation_grid"].shape[1]), dtype=np.float32)
+        )
+        best_posterior_flat = int(np.argmax(posterior))
+        best_posterior_rotation_index, best_posterior_translation_index = np.unravel_index(
+            best_posterior_flat,
+            posterior.shape,
+        )
+        reconstruction_sample_mask_row = np.asarray(
+            reconstruction_sample_mask_np[compact_row, :actual_count, :],
+            dtype=bool,
+        )
+        reconstruction_rotation_mask_row = np.asarray(
+            reconstruction_rotation_mask_np[compact_row, :actual_count],
+            dtype=bool,
+        )
+        iteration_label = int(debug_iteration or -1)
+        label_suffix = _local_fused_posterior_dump_label_suffix()
+        dump_path = (
+            dump_dir
+            / f"local_fused_posterior_it{iteration_label:03d}_image_{original_idx}{label_suffix}.npz"
+        )
+        score_payload = {}
+        if scores_np is not None:
+            rotation_log_prior = np.asarray(
+                bucket.local_rotation_log_prior[row, :actual_count],
+                dtype=np.float32,
+            )
+            translation_log_prior = np.asarray(
+                bucket.translation_log_prior[row],
+                dtype=np.float32,
+            )
+            total_scores = np.asarray(
+                scores_np[compact_row, :actual_count, :],
+                dtype=np.float32,
+            )
+            raw_scores = total_scores - rotation_log_prior[:, None] - translation_log_prior[None, :]
+            raw_scores = np.where(
+                metadata["rotation_mask"][:, None],
+                raw_scores,
+                -np.inf,
+            )
+            score_payload = {
+                "pass2_scores_raw": raw_scores[None, :, :],
+                "pass2_scores_total": total_scores[None, :, :],
+                "rotation_log_prior": rotation_log_prior[None, :],
+                "translation_log_prior": translation_log_prior[None, :],
+            }
+        np.savez_compressed(
+            dump_path,
+            selected_global_image_indices=np.array([original_idx], dtype=np.int64),
+            selected_local_image_indices=np.array([local_idx], dtype=np.int64),
+            local_rotation_indices=metadata["local_rotation_ids"],
+            local_rotation_parent_indices=metadata["local_rotation_parent_ids"],
+            local_rotation_child_indices=metadata["local_rotation_child_indices"],
+            local_rotation_pixel_indices=(
+                metadata["local_rotation_ids"] % int(local_layout.n_pixels)
+            ).astype(np.int64),
+            local_rotation_psi_indices=(
+                metadata["local_rotation_ids"] // int(local_layout.n_pixels)
+            ).astype(np.int64),
+            local_rotation_eulers=metadata["local_rotation_eulers"],
+            local_rotation_eulers_source=np.array([metadata["local_rotation_eulers_source"]]),
+            local_rotation_matrices=metadata["local_rotation_matrices"],
+            rotation_candidate_mask=metadata["rotation_mask"][None, :],
+            translations=metadata["translation_grid"],
+            translation_parent_indices=metadata["translation_parent_indices"],
+            translation_child_indices=metadata["translation_child_indices"],
+            n_translation_children=np.array([metadata["n_trans_over"]], dtype=np.int32),
+            n_rotation_children=np.array([metadata["n_rot_over"]], dtype=np.int32),
+            n_hidden_over=np.array([metadata["n_hidden_over"]], dtype=np.int32),
+            candidate_pose_rotation_indices=np.repeat(
+                metadata["local_rotation_ids"][:, None],
+                n_trans,
+                axis=1,
+            ),
+            candidate_pose_parent_rotation_indices=np.repeat(
+                metadata["local_rotation_parent_ids"][:, None],
+                n_trans,
+                axis=1,
+            ),
+            candidate_pose_rotation_child_indices=np.repeat(
+                metadata["local_rotation_child_indices"][:, None],
+                n_trans,
+                axis=1,
+            ),
+            candidate_pose_translation_indices=np.broadcast_to(
+                metadata["translation_indices"][None, :],
+                (actual_count, n_trans),
+            ),
+            candidate_pose_parent_translation_indices=np.broadcast_to(
+                metadata["translation_parent_indices"][None, :],
+                (actual_count, n_trans),
+            ),
+            candidate_pose_translation_child_indices=np.broadcast_to(
+                metadata["translation_child_indices"][None, :],
+                (actual_count, n_trans),
+            ),
+            candidate_pose_hidden_over_indices=metadata["candidate_hidden_over_indices"].astype(
+                np.int64,
+                copy=False,
+            ),
+            image_pre_shift=(
+                np.asarray(image_pre_shifts[local_idx], dtype=np.float32)
+                if image_pre_shifts is not None
+                else np.array([], dtype=np.float32)
+            ),
+            posterior=posterior[None, :, :],
+            reconstruction_sample_mask=reconstruction_sample_mask_row[None, :, :],
+            reconstruction_rotation_mask=reconstruction_rotation_mask_row[None, :],
+            n_significant_samples=np.array([int(n_significant_samples_np[compact_row])], dtype=np.int32),
+            max_posterior=np.array([float(max_posterior_np[compact_row])], dtype=np.float32),
+            log_Z=np.array([float(log_Z_np[compact_row])], dtype=np.float32),
+            best_score=np.array([float(best_log_score_np[compact_row])], dtype=np.float32),
+            best_argmax_flat=np.array([best_flat], dtype=np.int64),
+            best_argmax_in_actual=np.array([best_in_actual], dtype=bool),
+            best_score_rotation_local_index=np.array([int(best_rotation_index)], dtype=np.int32),
+            best_score_translation_index=np.array([int(best_translation_index)], dtype=np.int32),
+            best_score_rotation_global_id=np.array([best_global_id], dtype=np.int32),
+            best_score_translation=np.asarray(best_translation, dtype=np.float32),
+            best_posterior_rotation_local_index=np.array(
+                [int(best_posterior_rotation_index)],
+                dtype=np.int32,
+            ),
+            best_posterior_translation_index=np.array(
+                [int(best_posterior_translation_index)],
+                dtype=np.int32,
+            ),
+            best_posterior_rotation_global_id=np.array(
+                [int(metadata["local_rotation_ids"][int(best_posterior_rotation_index)])],
+                dtype=np.int32,
+            ),
+            best_posterior_translation=np.asarray(
+                metadata["translation_grid"][
+                    int(best_posterior_translation_index) : int(best_posterior_translation_index) + 1
+                ],
+                dtype=np.float32,
+            ),
+            current_size=np.array([int(current_size) if current_size is not None else -1], dtype=np.int32),
+            debug_iteration=np.array([iteration_label], dtype=np.int32),
+            n_rot=np.array([actual_count], dtype=np.int32),
+            n_trans=np.array([n_trans], dtype=np.int32),
+            grid_n_pixels=np.array([int(local_layout.n_pixels)], dtype=np.int32),
+            grid_n_psi=np.array([int(local_layout.n_psi)], dtype=np.int32),
+            **score_payload,
+        )
+        if requested_iterations is None:
+            pending_targets.remove(original_idx)
+
+    return pending_targets
+
+
+def maybe_write_debug_score_dump(
+    *,
+    experiment_dataset,
+    local_layout,
+    bucket,
+    image_pre_shifts,
+    scores,
+    probs,
+    reconstruction_probs=None,
+    log_Z,
+    best_log_score,
+    max_posterior,
+    reconstruction_sample_mask,
+    reconstruction_rotation_mask,
+    n_significant_samples,
+    current_size,
+    debug_iteration,
+    debug_pass_label: str | None = None,
+    shifted_score_split=None,
+    shifted_recon_split=None,
+    ctf2_over_nv_score=None,
+    ctf2_over_nv_recon=None,
+    proj_weighted=None,
+    proj_for_noise=None,
+    proj_abs2_weighted=None,
+    wavg_cutoff_triplet=None,
+    dump_dir: Path | None,
+    pending_targets: set[int],
+    requested_current_sizes: set[int] | None = None,
+    requested_iterations: set[int] | None = None,
+):
+    """Dump one-image local score tensors for the requested original ids.
+
+    ``debug_pass_label``, when given, is sanitized and appended to the dump
+    filename (and stored in the payload). Pass a distinct label per logical
+    call site (e.g. local search's pass-1 "parent" probe vs. its pass-2 fine
+    call) whenever more than one call can share the same
+    (image, current_size, debug_iteration) triple in one run -- otherwise
+    the later call's ``np.savez_compressed`` silently overwrites the
+    earlier one at the same path.
+    """
+
+    selected = _requested_dump_rows(
+        experiment_dataset,
+        bucket,
+        current_size=current_size,
+        debug_iteration=debug_iteration,
+        dump_dir=dump_dir,
+        pending_targets=pending_targets,
+        requested_current_sizes=requested_current_sizes,
+        requested_iterations=requested_iterations,
+    )
+    if selected is None:
+        return pending_targets
+    original_image_indices, target_rows = selected
+
+    score_dtype = _debug_capture_dtype(scores)
+    probability_dtype = _debug_capture_dtype(probs)
+    reconstruction_probability_dtype = (
+        _debug_capture_dtype(reconstruction_probs)
+        if reconstruction_probs is not None
+        else None
+    )
+    log_z_dtype = _debug_capture_dtype(log_Z)
+    best_score_dtype = _debug_capture_dtype(best_log_score)
+    max_posterior_dtype = _debug_capture_dtype(max_posterior)
+    scores_np = _target_rows_to_numpy(scores, target_rows, score_dtype)
+    probs_np = _target_rows_to_numpy(probs, target_rows, probability_dtype)
+    reconstruction_probs_np = (
+        _target_rows_to_numpy(
+            reconstruction_probs,
+            target_rows,
+            reconstruction_probability_dtype,
+        )
+        if reconstruction_probs is not None
+        else None
+    )
+    log_Z_np = _target_rows_to_numpy(log_Z, target_rows, log_z_dtype)
+    best_log_score_np = _target_rows_to_numpy(best_log_score, target_rows, best_score_dtype)
+    max_posterior_np = _target_rows_to_numpy(max_posterior, target_rows, max_posterior_dtype)
+    reconstruction_sample_mask_np = _target_rows_to_numpy(reconstruction_sample_mask, target_rows, bool)
+    reconstruction_rotation_mask_np = _target_rows_to_numpy(reconstruction_rotation_mask, target_rows, bool)
+    n_significant_samples_np = _target_rows_to_numpy(n_significant_samples, target_rows, np.int32)
+    dump_operands = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_OPERANDS", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    shifted_score_np = (
+        _target_rows_to_numpy(
+            shifted_score_split,
+            target_rows,
+            _debug_capture_dtype(shifted_score_split, complex_values=True),
+        )
+        if dump_operands and shifted_score_split is not None
+        else None
+    )
+    shifted_recon_np = (
+        _target_rows_to_numpy(
+            shifted_recon_split,
+            target_rows,
+            _debug_capture_dtype(shifted_recon_split, complex_values=True),
+        )
+        if dump_operands and shifted_recon_split is not None
+        else None
+    )
+    ctf2_over_nv_np = (
+        _target_rows_to_numpy(ctf2_over_nv_score, target_rows, _debug_capture_dtype(ctf2_over_nv_score))
+        if dump_operands and ctf2_over_nv_score is not None
+        else None
+    )
+    ctf2_over_nv_recon_np = (
+        _target_rows_to_numpy(ctf2_over_nv_recon, target_rows, _debug_capture_dtype(ctf2_over_nv_recon))
+        if dump_operands and ctf2_over_nv_recon is not None
+        else None
+    )
+    proj_weighted_np = (
+        _target_rows_to_numpy(
+            proj_weighted,
+            target_rows,
+            _debug_capture_dtype(proj_weighted, complex_values=True),
+        )
+        if dump_operands and proj_weighted is not None
+        else None
+    )
+    proj_for_noise_np = (
+        _target_rows_to_numpy(
+            proj_for_noise,
+            target_rows,
+            _debug_capture_dtype(proj_for_noise, complex_values=True),
+        )
+        if dump_operands and proj_for_noise is not None
+        else None
+    )
+    proj_abs2_weighted_np = (
+        _target_rows_to_numpy(proj_abs2_weighted, target_rows, _debug_capture_dtype(proj_abs2_weighted))
+        if dump_operands and proj_abs2_weighted is not None
+        else None
+    )
+    wavg_cutoff_triplet_np = (
+        _target_rows_to_numpy(
+            wavg_cutoff_triplet,
+            target_rows,
+            _debug_capture_dtype(wavg_cutoff_triplet),
+        )
+        if dump_operands and wavg_cutoff_triplet is not None
+        else None
+    )
+
+    for compact_row, row in enumerate(target_rows):
+        original_idx = int(original_image_indices[row])
+        local_idx = int(bucket.image_indices[row])
+        actual_count = int(bucket.actual_rotation_counts[row])
+        metadata = _local_candidate_metadata(
+            local_layout=local_layout,
+            bucket=bucket,
+            row=row,
+            actual_count=actual_count,
+        )
+        local_rotation_ids = metadata["local_rotation_ids"]
+        local_rotation_parent_ids = metadata["local_rotation_parent_ids"]
+        local_rotation_child_indices = metadata["local_rotation_child_indices"]
+        local_rotation_matrices = metadata["local_rotation_matrices"]
+        local_rotation_eulers = metadata["local_rotation_eulers"]
+        rotation_mask = metadata["rotation_mask"]
+        rotation_log_prior = np.asarray(bucket.local_rotation_log_prior[row, :actual_count], dtype=np.float32)
+        translation_log_prior = np.asarray(bucket.translation_log_prior[row], dtype=np.float32)
+        total_scores = np.asarray(scores_np[compact_row, :actual_count, :], dtype=score_dtype)
+        raw_scores = total_scores - rotation_log_prior[:, None] - translation_log_prior[None, :]
+        raw_scores = np.where(rotation_mask[:, None], raw_scores, -np.inf)
+        posterior = np.asarray(probs_np[compact_row, :actual_count, :], dtype=probability_dtype)
+        reconstruction_posterior = (
+            np.asarray(
+                reconstruction_probs_np[compact_row, :actual_count, :],
+                dtype=reconstruction_probability_dtype,
+            )
+            if reconstruction_probs_np is not None
+            else np.where(
+                reconstruction_sample_mask_np[compact_row, :actual_count, :],
+                posterior,
+                0.0,
+            )
+        )
+        n_trans = int(translation_log_prior.shape[0])
+        translation_indices = metadata["translation_indices"]
+        translation_parent_indices = metadata["translation_parent_indices"]
+        translation_child_indices = metadata["translation_child_indices"]
+        n_trans_over = metadata["n_trans_over"]
+        n_rot_over = metadata["n_rot_over"]
+        n_hidden_over = metadata["n_hidden_over"]
+        candidate_hidden_over_indices = metadata["candidate_hidden_over_indices"]
+        best_score_flat = int(np.argmax(total_scores))
+        best_score_rotation_index, best_score_translation_index = np.unravel_index(
+            best_score_flat,
+            total_scores.shape,
+        )
+        best_posterior_flat = int(np.argmax(posterior))
+        best_posterior_rotation_index, best_posterior_translation_index = np.unravel_index(
+            best_posterior_flat,
+            posterior.shape,
+        )
+        reconstruction_sample_mask_row = np.asarray(
+            reconstruction_sample_mask_np[compact_row, :actual_count, :],
+            dtype=bool,
+        )
+        reconstruction_rotation_mask_row = np.asarray(
+            reconstruction_rotation_mask_np[compact_row, :actual_count],
+            dtype=bool,
+        )
+
+        iteration_label = int(debug_iteration or -1)
+        label_suffix = _local_debug_dump_label_suffix()
+        pass_suffix = _pass_label_suffix(debug_pass_label)
+        dump_path = (
+            dump_dir / f"local_score_it{iteration_label:03d}_image_{original_idx}{pass_suffix}{label_suffix}.npz"
+        )
+        payload = {
+            "debug_pass_label": np.array([str(debug_pass_label or "")]),
+            "selected_global_image_indices": np.array([original_idx], dtype=np.int64),
+            "selected_local_image_indices": np.array([local_idx], dtype=np.int64),
+            "pass2_scores_raw": raw_scores[None, :, :],
+            "pass2_scores_total": total_scores[None, :, :],
+            "rotation_log_prior": rotation_log_prior[None, :],
+            "translation_log_prior": translation_log_prior[None, :],
+            "rotation_candidate_mask": rotation_mask[None, :],
+            "local_rotation_indices": local_rotation_ids,
+            "local_rotation_parent_indices": local_rotation_parent_ids,
+            "local_rotation_child_indices": local_rotation_child_indices,
+            "local_rotation_pixel_indices": (local_rotation_ids % int(local_layout.n_pixels)).astype(np.int64),
+            "local_rotation_psi_indices": (local_rotation_ids // int(local_layout.n_pixels)).astype(np.int64),
+            "local_rotation_eulers": local_rotation_eulers,
+            "local_rotation_eulers_source": np.array([metadata["local_rotation_eulers_source"]]),
+            "local_rotation_matrices": local_rotation_matrices,
+            "translations": np.asarray(local_layout.translation_grid, dtype=np.float32),
+            "translation_parent_indices": translation_parent_indices,
+            "translation_child_indices": translation_child_indices,
+            "n_translation_children": np.array([int(n_trans_over)], dtype=np.int32),
+            "n_rotation_children": np.array([int(n_rot_over)], dtype=np.int32),
+            "n_hidden_over": np.array([int(n_hidden_over)], dtype=np.int32),
+            "candidate_pose_rotation_indices": np.repeat(local_rotation_ids[:, None], n_trans, axis=1),
+            "candidate_pose_parent_rotation_indices": np.repeat(
+                local_rotation_parent_ids[:, None],
+                n_trans,
+                axis=1,
+            ),
+            "candidate_pose_rotation_child_indices": np.repeat(
+                local_rotation_child_indices[:, None],
+                n_trans,
+                axis=1,
+            ),
+            "candidate_pose_translation_indices": np.broadcast_to(
+                translation_indices[None, :],
+                (actual_count, n_trans),
+            ),
+            "candidate_pose_parent_translation_indices": np.broadcast_to(
+                translation_parent_indices[None, :],
+                (actual_count, n_trans),
+            ),
+            "candidate_pose_translation_child_indices": np.broadcast_to(
+                translation_child_indices[None, :],
+                (actual_count, n_trans),
+            ),
+            "candidate_pose_hidden_over_indices": candidate_hidden_over_indices.astype(np.int64, copy=False),
+            "image_pre_shift": (
+                np.asarray(image_pre_shifts[local_idx], dtype=np.float32)
+                if image_pre_shifts is not None
+                else np.array([], dtype=np.float32)
+            ),
+            "posterior": posterior[None, :, :],
+            "reconstruction_probs": reconstruction_posterior[None, :, :],
+            "reconstruction_sample_mask": reconstruction_sample_mask_row[None, :, :],
+            "reconstruction_rotation_mask": reconstruction_rotation_mask_row[None, :],
+            "n_significant_samples": np.array([int(n_significant_samples_np[compact_row])], dtype=np.int32),
+            "max_posterior": np.array([float(max_posterior_np[compact_row])], dtype=max_posterior_dtype),
+            "log_Z": np.array([float(log_Z_np[compact_row])], dtype=log_z_dtype),
+            "best_score": np.array([float(best_log_score_np[compact_row])], dtype=best_score_dtype),
+            "best_score_rotation_local_index": np.array([int(best_score_rotation_index)], dtype=np.int32),
+            "best_score_translation_index": np.array([int(best_score_translation_index)], dtype=np.int32),
+            "best_score_rotation_global_id": np.array(
+                [int(local_rotation_ids[int(best_score_rotation_index)])],
+                dtype=np.int32,
+            ),
+            "best_score_translation": np.asarray(
+                local_layout.translation_grid[
+                    int(best_score_translation_index) : int(best_score_translation_index) + 1
+                ],
+                dtype=np.float32,
+            ),
+            "best_posterior_rotation_local_index": np.array([int(best_posterior_rotation_index)], dtype=np.int32),
+            "best_posterior_translation_index": np.array([int(best_posterior_translation_index)], dtype=np.int32),
+            "best_posterior_rotation_global_id": np.array(
+                [int(local_rotation_ids[int(best_posterior_rotation_index)])],
+                dtype=np.int32,
+            ),
+            "best_posterior_translation": np.asarray(
+                local_layout.translation_grid[
+                    int(best_posterior_translation_index) : int(best_posterior_translation_index) + 1
+                ],
+                dtype=np.float32,
+            ),
+            "current_size": np.array([int(current_size) if current_size is not None else -1], dtype=np.int32),
+            "debug_iteration": np.array([iteration_label], dtype=np.int32),
+            "n_rot": np.array([actual_count], dtype=np.int32),
+            "n_trans": np.array([n_trans], dtype=np.int32),
+            "grid_n_pixels": np.array([int(local_layout.n_pixels)], dtype=np.int32),
+            "grid_n_psi": np.array([int(local_layout.n_psi)], dtype=np.int32),
+        }
+        if dump_operands:
+            if shifted_score_np is not None:
+                payload["debug_shifted_score"] = np.asarray(
+                    shifted_score_np[compact_row],
+                    dtype=shifted_score_np.dtype,
+                )
+            if shifted_recon_np is not None:
+                payload["debug_shifted_recon"] = np.asarray(
+                    shifted_recon_np[compact_row],
+                    dtype=shifted_recon_np.dtype,
+                )
+            if ctf2_over_nv_np is not None:
+                payload["debug_ctf2_over_nv"] = np.asarray(
+                    ctf2_over_nv_np[compact_row],
+                    dtype=ctf2_over_nv_np.dtype,
+                )
+            if ctf2_over_nv_recon_np is not None:
+                payload["debug_ctf2_over_nv_recon"] = np.asarray(
+                    ctf2_over_nv_recon_np[compact_row],
+                    dtype=ctf2_over_nv_recon_np.dtype,
+                )
+            if proj_weighted_np is not None:
+                payload["debug_proj_weighted"] = np.asarray(
+                    proj_weighted_np[compact_row, :actual_count, :],
+                    dtype=proj_weighted_np.dtype,
+                )
+            if proj_for_noise_np is not None:
+                payload["debug_proj_for_recon"] = np.asarray(
+                    proj_for_noise_np[compact_row, :actual_count, :],
+                    dtype=proj_for_noise_np.dtype,
+                )
+            if proj_abs2_weighted_np is not None:
+                payload["debug_proj_abs2_weighted"] = np.asarray(
+                    proj_abs2_weighted_np[compact_row, :actual_count, :],
+                    dtype=proj_abs2_weighted_np.dtype,
+                )
+            if wavg_cutoff_triplet_np is not None:
+                payload["debug_wavg_cutoff_triplet_xa_aa_diff2"] = np.asarray(
+                    wavg_cutoff_triplet_np[compact_row],
+                    dtype=np.float64,
+                )
+        np.savez_compressed(dump_path, **payload)
+        if requested_iterations is None:
+            pending_targets.remove(original_idx)
+
+    return pending_targets

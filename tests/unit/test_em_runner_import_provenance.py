@@ -7,7 +7,6 @@ import pytest
 
 from scripts import run_full_refinement
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ACTIVE_RUNNERS = (
     REPO_ROOT / "scripts/run_em_completion_bench_slurm.sh",
@@ -50,7 +49,7 @@ def test_concrete_em_imports_reject_unverified_scoring_owner(
 ):
     """A correct controller path must not mask a stale or unlocated scorer."""
     monkeypatch.setenv("RECOVAR_EXPECTED_REPO_ROOT", str(REPO_ROOT))
-    module_name = f"recovar.em.dense_single_volume.{owner}"
+    module_name = f"recovar.em.dense.{owner}"
     module = importlib.import_module(module_name)
     source_file = None if missing_source else str(tmp_path / f"{owner}.py")
     monkeypatch.setattr(module, "__file__", source_file)

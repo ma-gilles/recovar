@@ -4,11 +4,7 @@ import logging
 
 import pytest
 
-from recovar.em.dense_single_volume.helpers.env_flags import (
-    parse_env_binary_flag,
-    parse_env_flag,
-    parse_env_flag_or_false,
-)
+from recovar.em.helpers.env_flags import parse_env_binary_flag, parse_env_flag, parse_env_flag_or_false
 
 pytestmark = pytest.mark.unit
 NAME = "RECOVAR_TEST_FALSE_FLAG"

@@ -7,9 +7,9 @@ import inspect
 import numpy as np
 import pytest
 
-import recovar.em.dense_single_volume.iteration_loop as iteration_loop
-from recovar.em.dense_single_volume.helpers.convergence import healpix_angular_step
-from recovar.em.dense_single_volume.helpers.orientation_priors import relion_local_search_sigmas
+import recovar.em.refinement.iteration_loop as iteration_loop
+from recovar.em.helpers.convergence import healpix_angular_step
+from recovar.em.helpers.orientation_priors import relion_local_search_sigmas
 
 pytestmark = pytest.mark.unit
 

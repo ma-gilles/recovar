@@ -5,7 +5,7 @@ from contextlib import nullcontext
 
 import pytest
 
-from recovar.em.dense_single_volume import local_debug
+from recovar.em.diagnostics import local_debug
 
 pytestmark = pytest.mark.unit
 DENSE = "RECOVAR_DEBUG_PER_POSE_DUMP_LABEL"

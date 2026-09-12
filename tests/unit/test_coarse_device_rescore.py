@@ -6,14 +6,14 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject as cb
-from recovar.em.dense_single_volume.helpers import coarse_device_rescore as module
-from recovar.em.dense_single_volume.helpers.coarse_device_selection import decode_device_coarse_selection
-from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+from recovar.em.scoring import coarse_device_rescore as module
+from recovar.em.scoring import scoring
+from recovar.em.scoring.coarse_device_selection import decode_device_coarse_selection
+from recovar.em.scoring.coarse_gemm_hybrid import (
     assemble_coarse_gemm_hybrid_compact_scores_f32,
     plan_coarse_gemm_certificate_topology,
     select_coarse_gemm_hybrid_rotation_blocks,
 )
-from recovar.em.dense_single_volume.helpers import scoring
 
 pytestmark = pytest.mark.unit
 
@@ -226,7 +226,7 @@ def host_oracle(operands, kwargs, actual, logical):
     # The accepted host loop is deliberately retained as the reference chain.
     reference, shifted, weight, initial = operands
     image_batch = scoring._prepare_relion_coarse_gaussian_gemm_f64_image_batch(shifted, weight, initial, actual)
-    from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import initialize_coarse_gemm_hybrid_interval_state
+    from recovar.em.scoring.coarse_gemm_hybrid import initialize_coarse_gemm_hybrid_interval_state
 
     state = initialize_coarse_gemm_hybrid_interval_state(shifted.shape[0], reference.shape[0])
     for offset in range(0, reference.shape[0], kwargs["chunk_rows"]):

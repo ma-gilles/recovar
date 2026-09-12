@@ -11,9 +11,9 @@ The [development contract](../../AGENTS.md) defines change scope and validation.
 | --- | --- | --- |
 | Covariance pipeline | [`standard_recovar_pipeline`](../../recovar/commands/pipeline.py), the `recovar pipeline` command | [`principal_components`](../../recovar/heterogeneity/principal_components.py), covariance estimation, then embedding |
 | Pipeline PPCA | The same pipeline with `--use-ppca`; `_run_ppca_refinement` selects the PPCA path | [`recovar.ppca.ppca.EM`](../../recovar/ppca/ppca.py), using the supplied dataset poses |
-| RELION-style K1/K-class refinement | [`scripts/run_full_refinement.py`](../../scripts/run_full_refinement.py) resolves inputs and options | [`iteration_loop.refine_single_volume`](../../recovar/em/dense_single_volume/iteration_loop.py); despite the name, this controller also handles K-class refinement |
+| RELION-style K1/K-class refinement | [`scripts/run_full_refinement.py`](../../scripts/run_full_refinement.py) resolves inputs and options | [`iteration_loop.refine_single_volume`](../../recovar/em/refinement/iteration_loop.py); despite the name, this controller also handles K-class refinement |
 | Pose-marginal PPCA refinement | [`refinement_loop`](../../recovar/em/ppca_refinement/refinement_loop.py) exposes dense and local refinement loops | [`dense_dataset`](../../recovar/em/ppca_refinement/dense_dataset.py), [`local_dataset`](../../recovar/em/ppca_refinement/local_dataset.py), and their fused kernels |
-| InitialModel/VDAM | [`initial_model.iteration_loop.run_vdam_iterations`](../../recovar/em/initial_model/iteration_loop.py) | Initial-model schedules, subset selection, state and reconstruction |
+| InitialModel/VDAM | [`initial_model.iteration_loop.run_vdam_iterations`](../../recovar/em/vdam/iteration_loop.py) | Initial-model schedules, subset selection, state and reconstruction |
 | Earlier EM API | [`recovar.em`](../../recovar/em/__init__.py) exports `EMState`, `SGDState`, `HeterogeneousEMState` and batch routines | [`states`](../../recovar/em/states.py), [`iterations`](../../recovar/em/iterations.py), E-step/M-step and heterogeneity modules; the tracked [`em_test` notebook](../../recovar/em/em_test.ipynb) still uses this API |
 
 Pipeline PPCA and pose-marginal PPCA have different entry points and state
@@ -21,6 +21,31 @@ contracts. Choose the implementation reached by the actual command. The
 pipeline PPCA path currently rejects tilt-series input. Consult the
 [PPCA refinement guide](../../recovar/em/ppca_refinement/AGENTS.md) when working
 on pose refinement, and the [paper-data runbook](della.md) for pinned inputs.
+
+## EM package layout
+
+`recovar/em/` is the common implementation package. Standard refinement and
+VDAM have separate controllers and schedules, and share numerical owners where
+their semantics already match:
+
+| Directory | Responsibility |
+| --- | --- |
+| `refinement/` | Standard EM iteration, convergence/finalization, options and map updates |
+| `vdam/` | InitialModel driver, subset schedule, learning rates and VDAM state transitions |
+| `classification/` | K-class routing, inputs and joint result assembly |
+| `dense/`, `local/` | Dense and exact-local execution |
+| `scoring/`, `sparse_pass2/` | Coarse scores/support and sparse second-pass execution |
+| `helpers/` | Shared array layouts, operators, batching, precision and statistics |
+| `relion/` | Runtime RELION metadata, normalization, CTF and native adapters |
+| `diagnostics/` | Optional capture writers, replay and intervention tools |
+| `ppca_refinement/` | Pose-marginal PPCA workflow and its K-class bridge |
+
+There is no second EM stack for VDAM. Its adapters supply the existing shared
+kernels with VDAM-specific inputs. Scheduling and state transitions remain with
+their workflow. The retired `dense_single_volume/` and `initial_model/` source
+directories are gone; `_legacy_pickle.py` supplies lazy historical class lookup
+for saved Python objects, without loading the execution engines at registration.
+New source imports current owners directly. Historical logger names remain stable.
 
 ## Shared data and numerical boundaries
 
@@ -44,12 +69,12 @@ for detailed module contracts. Start with the boundary being changed:
 
 | Boundary | Main owner |
 | --- | --- |
-| Iteration scheduling and state mutation | [`iteration_loop.py`](../../recovar/em/dense_single_volume/iteration_loop.py) |
-| Dense E/M execution | [`em_engine.py`](../../recovar/em/dense_single_volume/em_engine.py) |
-| Local search orchestration and kernels | [`local_search_iteration.py`](../../recovar/em/dense_single_volume/local_search_iteration.py), [`local_em_engine.py`](../../recovar/em/dense_single_volume/local_em_engine.py) |
-| Class routing and joint result assembly | [`k_class.py`](../../recovar/em/dense_single_volume/k_class.py), [`k_class_results.py`](../../recovar/em/dense_single_volume/k_class_results.py) |
-| Replay selection and final-pass admission | [`relion_replay.py`](../../recovar/em/dense_single_volume/relion_replay.py), [`finalization_policy.py`](../../recovar/em/dense_single_volume/finalization_policy.py) |
-| Coarse/sparse scoring | [`helpers/significance.py`](../../recovar/em/dense_single_volume/helpers/significance.py), [`helpers/sparse_pass2_bucketed.py`](../../recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py) |
+| Iteration scheduling and state mutation | [`iteration_loop.py`](../../recovar/em/refinement/iteration_loop.py) |
+| Dense E/M execution | [`em_engine.py`](../../recovar/em/dense/em_engine.py) |
+| Local search orchestration and kernels | [`local_search_iteration.py`](../../recovar/em/local/local_search_iteration.py), [`local_em_engine.py`](../../recovar/em/local/local_em_engine.py) |
+| Class routing and joint result assembly | [`k_class.py`](../../recovar/em/classification/k_class.py), [`k_class_results.py`](../../recovar/em/classification/k_class_results.py) |
+| Replay selection and final-pass admission | [`relion_replay.py`](../../recovar/em/diagnostics/relion_replay.py), [`finalization_policy.py`](../../recovar/em/refinement/finalization_policy.py) |
+| Coarse/sparse scoring | [`helpers/significance.py`](../../recovar/em/scoring/significance.py), [`helpers/sparse_pass2_bucketed.py`](../../recovar/em/sparse_pass2/sparse_pass2_bucketed.py) |
 
 Import execution APIs directly from their defining modules; helpers must not
 initialize controllers or scoring engines. During structural cleanup preserve

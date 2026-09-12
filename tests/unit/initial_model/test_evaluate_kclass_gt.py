@@ -1,6 +1,6 @@
 """Smoke + correctness tests for scripts/evaluate_kclass_gt.py.
 
-The script wraps :func:`recovar.em.initial_model.gt_metrics.align_volume_to_reference`
+The script wraps :func:`recovar.em.vdam.gt_metrics.align_volume_to_reference`
 to do best-permutation per-class FSC for K-class ab-initio outputs. These
 tests pin:
 

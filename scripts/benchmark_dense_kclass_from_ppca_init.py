@@ -11,9 +11,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import pickle
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -21,9 +21,10 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import jax
 import jax.numpy as jnp
+
 from recovar.core import fourier_transform_utils as ftu
 from recovar.data_io.cryoem_dataset import load_dataset
-from recovar.em.dense_single_volume.k_class import run_dense_k_class_em
+from recovar.em.classification.k_class import run_dense_k_class_em
 from recovar.em.sampling import get_rotation_grid_at_order, get_translation_grid
 from recovar.reconstruction import noise as recon_noise
 from recovar.utils.json_utils import to_jsonable

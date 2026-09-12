@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers import vdam_replay
+from recovar.em.diagnostics import vdam_replay
 
 MAGIC = vdam_replay.VDAM_CANDIDATE_BLOCK_MAP_MAGIC
 HEADER_DTYPE = vdam_replay.VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE

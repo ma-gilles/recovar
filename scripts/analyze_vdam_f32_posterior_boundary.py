@@ -18,9 +18,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from recovar import cuda_backproject  # noqa: E402
-from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (
-    _relion_f32_fine_posterior,
-)
+from recovar.em.sparse_pass2.sparse_pass2_posterior import _relion_f32_fine_posterior
 from scripts.analyze_em_k1_native_fine_operands import _flat_memmap  # noqa: E402
 from scripts.analyze_vdam_storewavg_boundary import _scalar  # noqa: E402
 from scripts.compare_relion_recovar_estep_dump import (  # noqa: E402

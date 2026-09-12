@@ -2,9 +2,7 @@
 
 import inspect
 
-from recovar.em.dense_single_volume import local_em_engine
-
-from recovar.em.dense_single_volume import local_bucket_stages
+from recovar.em.local import local_bucket_stages, local_em_engine
 
 
 def test_both_local_projections_share_the_relion_projector_owner():

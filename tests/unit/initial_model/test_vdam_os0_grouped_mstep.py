@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from recovar.em.dense_single_volume.local_bucket_stages import (
-    _return_local_big_jit_mstep_tensors,
-)
+from recovar.em.local.local_bucket_stages import _return_local_big_jit_mstep_tensors
 
 pytestmark = pytest.mark.unit
 

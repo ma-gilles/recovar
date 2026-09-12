@@ -14,9 +14,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers import bpref_diagnostics
-from recovar.em.dense_single_volume.helpers.batch_fetch import original_image_indices
-from recovar.em.dense_single_volume.helpers.env_flags import parse_env_flag, parse_env_int_set
+from recovar.em.diagnostics import bpref_diagnostics
+from recovar.em.helpers.batch_fetch import original_image_indices
+from recovar.em.helpers.env_flags import parse_env_flag, parse_env_int_set
 
 _PASS2_DUMP_DIR_ENV = "RECOVAR_PASS2_DUMP_DIR"
 _PASS2_DUMP_RAW_OPERANDS_ENV = "RECOVAR_PASS2_DUMP_RAW_OPERANDS"

@@ -2,12 +2,8 @@
 
 import inspect
 
-from recovar.em.dense_single_volume import (
-    local_bpref_capture,
-    local_bucket_stages,
-    local_em_engine,
-    local_physical_grid,
-)
+from recovar.em.diagnostics import local_bpref_capture
+from recovar.em.local import local_bucket_stages, local_em_engine, local_physical_grid
 
 
 def test_owners_hold_the_definitions_and_the_engine_routes_to_them():

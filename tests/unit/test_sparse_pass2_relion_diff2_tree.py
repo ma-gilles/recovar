@@ -9,13 +9,15 @@ import pytest
 pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
-
 from helpers.sparse_pass2_test_support import (
     _relion_cuda_fine_tree_sum,
     _score_pass2_bucket_relion_gpu_diff2_single_cached,
 )
 
-from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
+from recovar.em.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.local.local_big_jit import _validate_relion_exact_fine_diff2_preconditions
+from recovar.em.local.local_bucket_stages import _relion_exact_fine_full_to_compact_lookup
+from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _RELION_CUDA_FINE_REF3D_BLOCK_SIZE,
     _RELION_CUDA_POWERCLASS_BLOCK_SIZE,
     _relion_cuda_fine_diff2_min,
@@ -33,13 +35,6 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
     _score_pass2_bucket_relion_gpu_diff2_single_cached_raw,
     _score_pass2_pairs_relion_gpu_diff2,
     _score_pass2_pairs_relion_gpu_diff2_raw,
-)
-from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
-from recovar.em.dense_single_volume.local_bucket_stages import (
-    _relion_exact_fine_full_to_compact_lookup,
-)
-from recovar.em.dense_single_volume.local_big_jit import (
-    _validate_relion_exact_fine_diff2_preconditions,
 )
 
 pytestmark = pytest.mark.unit
@@ -550,7 +545,7 @@ def test_relion_cuda_fine_common_min_ignores_invalid_partitions_and_nonfinite_pa
 
 
 def test_relion_cuda_fine_host_staged_common_min_serializes_raw_device_uploads(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_scoring as bucketed_mod
+    from recovar.em.sparse_pass2 import sparse_pass2_scoring as bucketed_mod
     original_partition_min = bucketed_mod._relion_cuda_fine_partition_diff2_min_or_inf
     raw_device_refs = []
     max_prior_raw_uploads_alive = 0
@@ -685,9 +680,7 @@ def test_relion_cuda_fine_diff2_preserves_full_grid_zero_gap_lane_topology():
 
 
 def test_case20_current_grid_lookup_has_relion_56_by_29_topology():
-    from recovar.em.dense_single_volume.helpers.fourier_window import (
-        make_fourier_window_indices_np,
-    )
+    from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
 
     compact_indices, count = make_fourier_window_indices_np((256, 256), 56)
     lookup = _relion_cuda_fine_full_to_compact_lookup(

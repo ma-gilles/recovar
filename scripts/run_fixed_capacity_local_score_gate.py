@@ -36,24 +36,12 @@ import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as ftu
-from recovar.em.dense_single_volume import local_big_jit, local_em_engine
-from recovar.em.dense_single_volume.batch_planning import (
-    _plan_fixed_capacity_whole_local,
-    _seal_fixed_capacity_physical_order,
-)
-from recovar.em.dense_single_volume.fixed_capacity_local import (
-    _bind_fixed_capacity_local_execution,
-)
-from recovar.em.dense_single_volume.local_caches import (
-    _assemble_fixed_capacity_local_operands_once,
-)
-from recovar.em.dense_single_volume.local_layout import (
-    LocalHypothesisLayout,
-    _fixed_capacity_calls_from_local_buckets,
-    _pack_fixed_capacity_local_hypothesis_program,
-    bucket_local_hypothesis_layout,
-)
-from recovar.em.dense_single_volume import local_bucket_stages
+from recovar.em.local import local_big_jit, local_em_engine
+from recovar.em.helpers.batch_planning import _plan_fixed_capacity_whole_local, _seal_fixed_capacity_physical_order
+from recovar.em.local.fixed_capacity_local import _bind_fixed_capacity_local_execution
+from recovar.em.local.local_caches import _assemble_fixed_capacity_local_operands_once
+from recovar.em.local.local_layout import LocalHypothesisLayout, _fixed_capacity_calls_from_local_buckets, _pack_fixed_capacity_local_hypothesis_program, bucket_local_hypothesis_layout
+from recovar.em.local import local_bucket_stages
 
 
 SCHEMA = "recovar.fixed_capacity_local_score_gate.v7"

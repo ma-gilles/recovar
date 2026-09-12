@@ -19,51 +19,47 @@ import pytest
 pytest.importorskip("jax")
 import healpy as hp
 import jax.numpy as jnp
+from recovar.em.local.local_search_iteration import _LocalSearchIterationResult
 
 import recovar.core.fourier_transform_utils as ftu
-import recovar.em.dense_single_volume.helpers.expected_accuracy as expected_accuracy_module
-from recovar.em.dense_single_volume import finalization_policy
-import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
-from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
-import recovar.em.dense_single_volume.helpers.orientation_priors as orientation_priors_module
-from recovar.em.dense_single_volume import half_scoring, local_search_iteration, scoring_policy
-from recovar.em.dense_single_volume import score_outputs
-import recovar.em.dense_single_volume.local_layout as local_layout_module
-from recovar.em.dense_single_volume.local_projection_cache import EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV
-from recovar.em.dense_single_volume.local_search_iteration import _LocalSearchIterationResult
-import recovar.em.dense_single_volume.relion_metadata as relion_metadata_module
-import recovar.em.dense_single_volume.projector_preparation as projector_preparation
-import recovar.em.dense_single_volume.relion_replay as relion_replay_module
+import recovar.em.diagnostics.relion_replay as relion_replay_module
+import recovar.em.helpers.expected_accuracy as expected_accuracy_module
+import recovar.em.helpers.orientation_priors as orientation_priors_module
+import recovar.em.local.local_layout as local_layout_module
+import recovar.em.refinement.iteration_loop as iteration_loop_module
+import recovar.em.refinement.projector_preparation as projector_preparation
+import recovar.em.relion.relion_metadata as relion_metadata_module
 import recovar.em.sampling as sampling_module
 import recovar.reconstruction.regularization as regularization_module
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.helpers import dtype_policy as dtype_policy_module
-from recovar.em.dense_single_volume.helpers import relion_ctf
-from recovar.em.dense_single_volume.helpers.types import DenseEMResult, LocalEMResult
-from recovar.em.dense_single_volume.em_engine import _batch_parameter_rows, run_em
-from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch as _fetch_indexed_batch
-from recovar.em.dense_single_volume.helpers.convergence import (
-    _final_local_sampling_orders,
-    RefinementState,
-    healpix_angular_step,
+from recovar.em.classification.k_class import run_dense_k_class_em, run_local_k_class_em
+from recovar.em.classification.k_class_results import (
+    KClassEMResult,
+    _resolve_class_mstep_posterior_sums,
+    _sum_noise_stats,
 )
-from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
-from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights
-from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
+from recovar.em.dense import half_scoring, score_outputs, scoring_policy
+from recovar.em.dense.em_engine import _batch_parameter_rows, run_em
+from recovar.em.diagnostics.local_debug import (
+    current_size_matches_request,
+    iteration_matches_request,
+    maybe_write_debug_score_dump,
+)
+from recovar.em.diagnostics.relion_replay import _replay_control_model_iteration
+from recovar.em.helpers import dtype_policy as dtype_policy_module
+from recovar.em.helpers.batch_fetch import fetch_indexed_batch as _fetch_indexed_batch
+from recovar.em.helpers.convergence import RefinementState, _final_local_sampling_orders, healpix_angular_step
+from recovar.em.helpers.env_flags import parse_env_binary_flag
+from recovar.em.helpers.half_spectrum import make_half_image_weights
+from recovar.em.helpers.half_volume_mstep import (
     enforce_half_volume_x0,
     half_volume_accumulator_shape,
     half_volume_accumulators_to_full,
     relion_backprojector_volume_shape,
 )
-from recovar.em.dense_single_volume.helpers.image_shifts import (
-    apply_relion_integer_pre_shifts,
-    integer_pre_shifts_or_none,
-)
-from recovar.em.dense_single_volume.helpers.local_search import (
-    _local_search_engine_rotation_block_size,
-)
-from recovar.em.dense_single_volume.helpers.orientation_priors import (
+from recovar.em.helpers.image_shifts import apply_relion_integer_pre_shifts, integer_pre_shifts_or_none
+from recovar.em.helpers.orientation_priors import (
     collapse_rotation_posterior_to_direction_prior,
     make_relion_direction_log_prior,
     make_relion_translation_log_prior,
@@ -72,12 +68,9 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     relion_translation_prior_center,
     relion_translation_search_base,
 )
-from recovar.em.dense_single_volume.helpers.preprocessing import resolve_image_mask_for_half_preprocess
-from recovar.em.dense_single_volume.helpers.projection import (
-    compute_scale_correction_terms_per_image,
-    relion_scale_correction_pixel_mask,
-)
-from recovar.em.dense_single_volume.helpers.resolution import (
+from recovar.em.helpers.preprocessing import resolve_image_mask_for_half_preprocess
+from recovar.em.helpers.projection import compute_scale_correction_terms_per_image, relion_scale_correction_pixel_mask
+from recovar.em.helpers.resolution import (
     _bootstrap_current_size_relion,
     bootstrap_current_size_from_ini_high_relion,
     clamp_relion_coarse_image_size,
@@ -87,83 +80,15 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     relion_optics_image_current_sizes,
     shell_index_to_resolution_angstrom,
 )
-from recovar.em.dense_single_volume.helpers.score_constraints import DenseScoreConstraints
-from recovar.em.dense_single_volume.helpers.significance import (
-    _capture_offset_free_and_absolute_float32_scores,
-    _compute_k_class_significance_batched,
-)
-from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
-from recovar.em.dense_single_volume.iteration_loop import (
-    _estimate_relion_em_batch_sizes,
-    _normalize_noise_variance_per_half,
-    refine_single_volume,
-)
-from recovar.em.dense_single_volume.mean_helpers import (
-    _align_fourier_volume_sign_to_reference,
-    _combined_class_direction_prior_from_halves,
-    _combined_noise_stats,
-)
-from recovar.em.dense_single_volume.relion_replay import _replay_control_model_iteration
-from recovar.em.dense_single_volume.refinement_options import (
-    AdaptiveOptions,
-    EngineDebugOptions,
-    KClassOptions,
-    LocalSearchOptions,
-    RefinementBatching,
-    RefinementOptions,
-    RefinementSchedule,
-    RelionParityOptions,
-    ReplayState,
-)
-from recovar.em.dense_single_volume.k_class import run_dense_k_class_em, run_local_k_class_em
-from recovar.em.dense_single_volume.k_class_results import (
-    KClassEMResult,
-    _resolve_class_mstep_posterior_sums,
-    _sum_noise_stats,
-)
-from recovar.em.dense_single_volume.local_backprojection import (
+from recovar.em.helpers.types import DenseEMResult, LocalEMResult, NoiseStats, RelionStats
+from recovar.em.local import local_search_iteration
+from recovar.em.local.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_weighted_sums,
     flatten_bucket_rotations,
     flatten_bucket_rows,
 )
-from recovar.em.dense_single_volume.local_debug import (
-    current_size_matches_request,
-    iteration_matches_request,
-    maybe_write_debug_score_dump,
-)
-from recovar.em.dense_single_volume.local_caches import (
-    EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV,
-    EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
-    EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
-)
-from recovar.em.dense_single_volume.local_preprocessing import prepare_local_bucket
-from recovar.em.dense_single_volume.local_em_engine import (
-    EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV,
-    EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV,
-    EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV,
-    EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS_ENV,
-    LOCAL_SCORE_DUMP_TARGET_ONLY_ENV,
-    _local_processed_half_cache_enabled,
-    _local_raw_cache_enabled,
-    run_local_em_exact,
-)
-from recovar.em.dense_single_volume.local_bucket_stages import (
-    EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV,
-    _adjoint_slice_volume_maybe_windowed_row_chunks,
-    _build_reconstruction_pack_indices,
-    _pad_local_big_jit_image_axis,
-    _reorder_bucket_to_indices,
-)
-from recovar.em.dense_single_volume.local_physical_grid import (
-    EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV,
-    _accumulate_relion_physical_particle_grid,
-    _accumulate_relion_vdam_physical_particle_grid,
-    _source_faithful_bpref_particle_chunk_cap,
-    _source_faithful_bpref_particle_chunk_size,
-    _source_faithful_bpref_particle_slices,
-)
-from recovar.em.dense_single_volume.local_batch_planning import (
+from recovar.em.local.local_batch_planning import (
     EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV,
     EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV,
     EXACT_LOCAL_SCORE_TILE_FREE_MEMORY_FRACTION,
@@ -175,18 +100,51 @@ from recovar.em.dense_single_volume.local_batch_planning import (
     _exact_local_xhalf_projection_microbatch_cap,
     _exact_local_xhalf_tail_microbatch_cap,
 )
-from recovar.em.dense_single_volume.local_layout import (
+from recovar.em.local.local_bucket_stages import (
+    EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV,
+    _adjoint_slice_volume_maybe_windowed_row_chunks,
+    _build_reconstruction_pack_indices,
+    _pad_local_big_jit_image_axis,
+    _reorder_bucket_to_indices,
+)
+from recovar.em.local.local_caches import (
+    EXACT_LOCAL_PROCESSED_HALF_CACHE_MAX_GB_ENV,
+    EXACT_LOCAL_RAW_CACHE_MAX_GB_ENV,
+    EXACT_LOCAL_SPARSE_BIG_JIT_MSTEP_MAX_GB_ENV,
+)
+from recovar.em.local.local_em_engine import (
+    EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV,
+    EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV,
+    EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV,
+    EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS_ENV,
+    LOCAL_SCORE_DUMP_TARGET_ONLY_ENV,
+    _local_processed_half_cache_enabled,
+    _local_raw_cache_enabled,
+    run_local_em_exact,
+)
+from recovar.em.local.local_layout import (
     EXACT_LOCAL_BUCKET_RADIX_ENV,
     LocalBucketSpec,
     LocalHypothesisLayout,
     _exact_bucket_rotation_size,
+    _local_search_engine_rotation_block_size,
     _selected_rotation_matrices,
     bucket_local_hypothesis_layout,
     build_local_adaptive_pass2_hypothesis_layout,
     build_local_hypothesis_layout,
     build_pass2_hypothesis_layout,
 )
-from recovar.em.dense_single_volume.local_score_pass import (
+from recovar.em.local.local_physical_grid import (
+    EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV,
+    _accumulate_relion_physical_particle_grid,
+    _accumulate_relion_vdam_physical_particle_grid,
+    _source_faithful_bpref_particle_chunk_cap,
+    _source_faithful_bpref_particle_chunk_size,
+    _source_faithful_bpref_particle_slices,
+)
+from recovar.em.local.local_preprocessing import prepare_local_bucket
+from recovar.em.local.local_projection_cache import EXACT_LOCAL_RELION_PROJECTION_CACHE_MAX_GB_ENV
+from recovar.em.local.local_score_pass import (
     compute_reconstruction_support,
     compute_reconstruction_support_from_threshold,
     fused_score_normalize_support_abs2_on_demand,
@@ -197,6 +155,30 @@ from recovar.em.dense_single_volume.local_score_pass import (
     score_local_bucket,
     score_local_bucket_abs2_weighted_on_demand,
 )
+from recovar.em.refinement import finalization_policy
+from recovar.em.refinement import mean_helpers as mean_helpers_module
+from recovar.em.refinement.iteration_loop import (
+    _estimate_relion_em_batch_sizes,
+    _normalize_noise_variance_per_half,
+    refine_single_volume,
+)
+from recovar.em.refinement.mean_helpers import (
+    _align_fourier_volume_sign_to_reference,
+    _combined_class_direction_prior_from_halves,
+    _combined_noise_stats,
+)
+from recovar.em.refinement.refinement_options import (
+    AdaptiveOptions,
+    EngineDebugOptions,
+    KClassOptions,
+    LocalSearchOptions,
+    RefinementBatching,
+    RefinementOptions,
+    RefinementSchedule,
+    RelionParityOptions,
+    ReplayState,
+)
+from recovar.em.relion import relion_ctf
 from recovar.em.sampling import (
     _get_relion_rotation_grid_eulers_float64,
     apply_relion_rotation_perturbation,
@@ -211,6 +193,11 @@ from recovar.em.sampling import (
     relion_angular_sampling_deg,
     rotation_grid_n_in_planes,
     rotation_grid_size,
+)
+from recovar.em.scoring.score_constraints import DenseScoreConstraints
+from recovar.em.scoring.significance import (
+    _capture_offset_free_and_absolute_float32_scores,
+    _compute_k_class_significance_batched,
 )
 
 pytestmark = pytest.mark.unit
@@ -1436,7 +1423,7 @@ def test_exact_local_processed_half_cache_respects_memory_guard(monkeypatch):
 
 
 def _force_exact_local_standard_gpu_default(monkeypatch):
-    from recovar.em.dense_single_volume import local_batch_planning
+    from recovar.em.local import local_batch_planning
 
     monkeypatch.setattr(local_batch_planning, "_visible_gpu_memory_bytes", lambda: None)
 
@@ -1449,7 +1436,7 @@ def test_exact_local_microbatch_default_matches_profiled_256_window(monkeypatch)
 
 
 def test_exact_local_microbatch_high_memory_gpu_default(monkeypatch):
-    from recovar.em.dense_single_volume import local_batch_planning
+    from recovar.em.local import local_batch_planning
 
     monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
     monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
@@ -1467,7 +1454,7 @@ def test_exact_local_microbatch_high_memory_gpu_default(monkeypatch):
 
 
 def test_exact_local_score_only_cap_covers_100k_parent_tile(monkeypatch):
-    from recovar.em.dense_single_volume import local_batch_planning
+    from recovar.em.local import local_batch_planning
 
     monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
     monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
@@ -1511,7 +1498,7 @@ def test_exact_local_score_only_cap_covers_100k_parent_tile(monkeypatch):
 
 
 def test_exact_local_score_only_cap_preserves_smaller_bucket_shape(monkeypatch):
-    from recovar.em.dense_single_volume import local_batch_planning
+    from recovar.em.local import local_batch_planning
 
     monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
     monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
@@ -1554,7 +1541,7 @@ def test_exact_local_score_only_cap_preserves_smaller_bucket_shape(monkeypatch):
 
 
 def test_exact_local_xhalf_full_bpref_uses_conservative_high_memory_cap(monkeypatch):
-    from recovar.em.dense_single_volume import local_batch_planning
+    from recovar.em.local import local_batch_planning
 
     monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
     monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
@@ -1580,7 +1567,7 @@ def test_exact_local_xhalf_full_bpref_uses_conservative_high_memory_cap(monkeypa
 
 
 def test_exact_local_xhalf_current_bpref_uses_conservative_high_memory_cap(monkeypatch):
-    from recovar.em.dense_single_volume import local_batch_planning
+    from recovar.em.local import local_batch_planning
 
     monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
     monkeypatch.delenv(EXACT_LOCAL_BIG_JIT_MATMUL_MAX_GB_ENV, raising=False)
@@ -2289,7 +2276,7 @@ def test_relion_em_batch_sizing_accounts_for_k_classes():
 
 
 def test_build_local_hypothesis_layout_and_bucketization_preserve_per_image_support(monkeypatch):
-    import recovar.em.dense_single_volume.local_layout as local_layout_mod
+    import recovar.em.local.local_layout as local_layout_mod
 
     call_count = {"value": 0}
 
@@ -4028,10 +4015,9 @@ def test_pad_local_big_jit_image_axis_masks_dummy_rows():
 
 
 def test_project_local_bucket_accepts_singleton_class_relion_projector(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
-    from recovar.em.dense_single_volume import local_bucket_stages
-    from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
-    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
+    from recovar.em.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
     bucket = LocalBucketSpec(
         image_indices=np.array([0], dtype=np.int32),
@@ -4088,8 +4074,8 @@ def test_project_local_bucket_accepts_singleton_class_relion_projector(monkeypat
 
 
 def test_relion_projector_indexed_centered_rows_match_full_window(rng):
-    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
-    from recovar.em.dense_single_volume.helpers.projection import compute_relion_projector_projections_block
+    from recovar.em.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.helpers.projection import compute_relion_projector_projections_block
 
     image_shape = (8, 8)
     n_half = image_shape[0] * (image_shape[1] // 2 + 1)
@@ -4130,7 +4116,7 @@ def test_relion_projector_indexed_centered_rows_match_full_window(rng):
 
 
 def test_relion_projector_texture_full_embeds_positive_x_half():
-    from recovar.em.dense_single_volume.helpers.projection import relion_projector_half_to_texture_full
+    from recovar.em.helpers.projection import relion_projector_half_to_texture_full
 
     projector_half = (
         np.arange(5 * 5 * 3, dtype=np.float32).reshape(5, 5, 3)
@@ -4144,7 +4130,7 @@ def test_relion_projector_texture_full_embeds_positive_x_half():
 
 
 def test_relion_projector_texture_route_defaults_on_and_can_be_disabled(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+    from recovar.em.helpers import projection as projection_helpers
 
     projector_half = jnp.ones((5, 5, 3), dtype=jnp.complex64)
     rotations = jnp.eye(3, dtype=jnp.float32)[None]
@@ -4223,7 +4209,7 @@ def test_relion_projector_texture_route_defaults_on_and_can_be_disabled(monkeypa
 
 
 def test_global_pass1_relion_projector_texture_defaults_to_texture(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import significance
+    from recovar.em.scoring import significance
 
     monkeypatch.delenv("RECOVAR_RELION_GLOBAL_PASS1_PROJECTOR_TEXTURE_INTERP", raising=False)
     monkeypatch.setenv("RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP", "1")
@@ -4238,7 +4224,7 @@ def test_global_pass1_relion_projector_texture_defaults_to_texture(monkeypatch):
 
 
 def test_global_pass1_relion_projector_floorf_quirk_gate(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import significance
+    from recovar.em.scoring import significance
 
     monkeypatch.delenv("RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK", raising=False)
     assert not significance._relion_acc_double_floorf_quirk_enabled()
@@ -4250,7 +4236,7 @@ def test_global_pass1_relion_projector_floorf_quirk_gate(monkeypatch):
 
 
 def test_texture_centered_crop_masks_current_image_disk():
-    from recovar.em.dense_single_volume.helpers.projection import _texture_centered_crop_to_full
+    from recovar.em.helpers.projection import _texture_centered_crop_to_full
 
     crop = jnp.ones((1, 4 * 3), dtype=jnp.complex64)
     got = np.asarray(
@@ -4286,10 +4272,7 @@ def test_texture_centered_crop_direct_indices_match_full_scatter(
     image_size,
     crop_size,
 ):
-    from recovar.em.dense_single_volume.helpers.projection import (
-        _texture_centered_crop_at_indices,
-        _texture_centered_crop_to_full,
-    )
+    from recovar.em.helpers.projection import _texture_centered_crop_at_indices, _texture_centered_crop_to_full
 
     crop_pixels = crop_size * (crop_size // 2 + 1)
     crop = (
@@ -4327,7 +4310,7 @@ def test_texture_centered_crop_direct_indices_match_full_scatter(
 
 
 def test_texture_projector_compact_indices_bypass_full_scatter(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+    from recovar.em.helpers import projection as projection_helpers
 
     requested = jnp.asarray([6, 7, 9], dtype=jnp.int32)
     monkeypatch.setattr(projection_helpers, "_relion_projector_texture_enabled", lambda *args, **kwargs: True)
@@ -4356,7 +4339,7 @@ def test_texture_projector_compact_indices_bypass_full_scatter(monkeypatch):
 
 
 def test_texture_projector_compact_implementation_never_builds_full_box(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+    from recovar.em.helpers import projection as projection_helpers
 
     crop = jnp.asarray([[0.0 + 1.0j, 1.0 + 2.0j, 2.0 + 3.0j, 3.0 + 4.0j]])
     requested = jnp.asarray([6, 7, 9], dtype=jnp.int32)
@@ -4391,8 +4374,8 @@ def test_texture_projector_compact_implementation_never_builds_full_box(monkeypa
 
 
 def test_local_big_jit_relion_projector_matches_helper(rng):
-    from recovar.em.dense_single_volume.helpers.projection import compute_relion_projector_projections_block
-    from recovar.em.dense_single_volume.local_big_jit import _project_local_half_spectrum
+    from recovar.em.helpers.projection import compute_relion_projector_projections_block
+    from recovar.em.local.local_big_jit import _project_local_half_spectrum
 
     image_shape = (8, 8)
     projector_half = (
@@ -4432,10 +4415,9 @@ def test_local_big_jit_relion_projector_matches_helper(rng):
 
 
 def test_project_local_bucket_windowed_relion_projector_uses_compact_indices(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
-    from recovar.em.dense_single_volume import local_bucket_stages
-    from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
-    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
+    from recovar.em.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
     bucket = LocalBucketSpec(
         image_indices=np.array([0], dtype=np.int32),
@@ -4490,10 +4472,9 @@ def test_project_local_bucket_windowed_relion_projector_uses_compact_indices(mon
 
 
 def test_packed_local_noise_projection_accepts_relion_projector(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
-    from recovar.em.dense_single_volume import local_bucket_stages
-    from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
-    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
+    from recovar.em.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
     calls = []
 
@@ -4544,7 +4525,7 @@ def test_packed_local_noise_projection_accepts_relion_projector(monkeypatch):
 
 
 def test_local_relion_projection_cache_forwards_texture_selection(monkeypatch):
-    from recovar.em.dense_single_volume import local_projection_cache
+    from recovar.em.local import local_projection_cache
 
     bucket = LocalBucketSpec(
         image_indices=np.array([0], dtype=np.int32),
@@ -4584,8 +4565,7 @@ def test_local_relion_projection_cache_forwards_texture_selection(monkeypatch):
 
 
 def test_packed_local_noise_projection_chunk_rows_env(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
     monkeypatch.delenv(local_bucket_stages.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, raising=False)
     assert local_em_engine._packed_noise_projection_chunk_rows(12) == (
@@ -4603,8 +4583,7 @@ def test_packed_local_noise_projection_chunk_rows_env(monkeypatch):
 
 
 def test_packed_local_noise_projection_default_cap_is_memory_safe(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
     monkeypatch.delenv(local_bucket_stages.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, raising=False)
     assert local_em_engine._packed_noise_projection_chunk_rows(4096, batch_size=64) <= 256
@@ -4612,9 +4591,8 @@ def test_packed_local_noise_projection_default_cap_is_memory_safe(monkeypatch):
 
 
 def test_exact_local_progress_env_and_hook(monkeypatch):
-    from recovar.em.dense_single_volume import local_em_engine, local_timing
-    from recovar.em.dense_single_volume import local_bucket_stages
-    from recovar.em.dense_single_volume.helpers.env_flags import parse_env_nonnegative_int
+    from recovar.em.helpers.env_flags import parse_env_nonnegative_int
+    from recovar.em.local import local_bucket_stages, local_em_engine, local_timing
 
     monkeypatch.delenv(local_timing.EXACT_LOCAL_PROGRESS_CHUNKS_ENV, raising=False)
     assert parse_env_nonnegative_int(local_timing.EXACT_LOCAL_PROGRESS_CHUNKS_ENV) is None
@@ -4637,8 +4615,7 @@ def test_exact_local_progress_env_and_hook(monkeypatch):
 
 
 def test_exact_local_noise_projection_chunks_packed_tail():
-    from recovar.em.dense_single_volume import local_em_engine
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     assert "_packed_noise_projection_chunk_rows" in src
@@ -4647,8 +4624,7 @@ def test_exact_local_noise_projection_chunks_packed_tail():
 
 
 def test_exact_local_cached_noise_projection_chunks_packed_tail():
-    from recovar.em.dense_single_volume import local_em_engine
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     marker = "Exact local cached noise projection chunking"
@@ -4664,8 +4640,7 @@ def test_exact_local_cached_noise_projection_chunks_packed_tail():
 
 
 def test_exact_local_relion_projector_noise_projection_materializes_once():
-    from recovar.em.dense_single_volume import local_em_engine
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     defer_src = src[src.index("can_defer_local_noise_projection = (") :]
@@ -4680,8 +4655,8 @@ def test_exact_local_relion_projector_noise_projection_materializes_once():
 
 
 def test_dense_and_local_noise_mask_asymmetric_current_crop():
-    from recovar.em.dense_single_volume import em_engine, local_em_engine
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.dense import em_engine
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
     dense_src = inspect.getsource(em_engine.run_em)
     local_src = inspect.getsource(local_em_engine.run_local_em_exact)
@@ -4692,7 +4667,7 @@ def test_dense_and_local_noise_mask_asymmetric_current_crop():
 
 
 def test_relion_projector_cache_reuses_cached_projector_data(monkeypatch, tmp_path):
-    import recovar.em.initial_model.dense_adapter as dense_adapter
+    import recovar.em.vdam.dense_adapter as dense_adapter
 
     calls = []
 
@@ -4729,7 +4704,7 @@ def test_relion_projector_cache_reuses_cached_projector_data(monkeypatch, tmp_pa
 
 
 def test_relion_projector_direct_real_reference_bypasses_fourier_roundtrip(monkeypatch):
-    import recovar.em.initial_model.dense_adapter as dense_adapter
+    import recovar.em.vdam.dense_adapter as dense_adapter
 
     captured_real = []
 
@@ -4809,8 +4784,7 @@ def test_half0_local_relion_accumulator_offload_skips_non_x_half():
 
 
 def test_exact_local_relion_x_half_full_support_mstep_uses_fftw_indices_and_radius():
-    from recovar.em.dense_single_volume import local_em_engine
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
     image_shape = (128, 128)
     half_width = image_shape[1] // 2 + 1
@@ -4830,8 +4804,7 @@ def test_exact_local_relion_x_half_full_support_mstep_uses_fftw_indices_and_radi
 
 
 def test_exact_local_relion_x_half_windowed_mstep_uses_fftw_indices_and_current_radius():
-    from recovar.em.dense_single_volume import local_em_engine
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
     image_shape = (128, 128)
     half_width = image_shape[1] // 2 + 1
@@ -4862,8 +4835,7 @@ def test_exact_local_relion_x_half_windowed_mstep_uses_fftw_indices_and_current_
 
 
 def test_exact_local_fused_posterior_missing_warning_respects_filters():
-    from recovar.em.dense_single_volume import local_em_engine
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_bucket_stages, local_em_engine
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     assert "debug_fused_posterior_dump_filter_matches = (" in src
@@ -4966,7 +4938,7 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path, monkey
 
 
 def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translation_prior(monkeypatch, rng):
-    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
+    from recovar.em.local import local_search_iteration as local_iteration_module
 
     mock_dataset = MockDataset(1, rng)
     captured = {}
@@ -5107,7 +5079,7 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
 
 @pytest.mark.parametrize("k_class_enabled", [False, True])
 def test_run_local_search_iteration_dispatches_aligned_mstep_grid(monkeypatch, rng, k_class_enabled):
-    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
+    from recovar.em.local import local_search_iteration as local_iteration_module
 
     dataset = MockDataset(1, rng)
     score_grid = get_relion_rotation_grid(0).astype(np.float32)
@@ -5186,7 +5158,7 @@ def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
     # suite when the queries return stale or inconsistent values. The 42 GB
     # / 0 GB-used pair is the historical isolation reading that this test
     # was originally calibrated against.
-    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
+    from recovar.em.local import local_search_iteration as local_iteration_module
 
     monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_total", lambda: 42.0)
     monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_used", lambda: 0.0)
@@ -5274,7 +5246,7 @@ def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
 
 
 def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_default(monkeypatch):
-    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
+    from recovar.em.local import local_search_iteration as local_iteration_module
 
     monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_total", lambda: 42.0)
     monkeypatch.setattr(iteration_loop_module.utils, "get_gpu_memory_used", lambda: 0.0)
@@ -5389,7 +5361,7 @@ def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_de
 
 
 def test_run_local_search_iteration_plumbs_score_only_to_exact_engine(monkeypatch, rng):
-    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
+    from recovar.em.local import local_search_iteration as local_iteration_module
 
     mock_dataset = MockDataset(2, rng)
     layout = LocalHypothesisLayout(
@@ -5471,7 +5443,7 @@ def test_local_adaptive_parent_support_probe_is_score_only():
 
 
 def test_run_local_search_iteration_plumbs_normalization_log_evidence(monkeypatch, rng):
-    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
+    from recovar.em.local import local_search_iteration as local_iteration_module
 
     mock_dataset = MockDataset(2, rng)
     layout = LocalHypothesisLayout(
@@ -5544,7 +5516,7 @@ def test_run_local_search_iteration_plumbs_normalization_log_evidence(monkeypatc
 
 
 def test_run_local_search_iteration_plumbs_stats_use_reconstruction_probs(monkeypatch, rng):
-    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
+    from recovar.em.local import local_search_iteration as local_iteration_module
 
     mock_dataset = MockDataset(2, rng)
     layout = LocalHypothesisLayout(
@@ -5662,7 +5634,7 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
     rng,
 ):
     from recovar import utils
-    from recovar.em.dense_single_volume import local_search_iteration as local_iteration_module
+    from recovar.em.local import local_search_iteration as local_iteration_module
 
     mock_dataset = MockDataset(1, rng)
     captured = {}
@@ -5909,7 +5881,7 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     )
     flat_rotations = flatten_bucket_rotations(jnp.asarray(bucket.local_rotations))
     n_half = dataset.image_shape[0] * (dataset.image_shape[1] // 2 + 1)
-    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.helpers.fourier_window import make_fourier_window_spec
 
     window_spec = make_fourier_window_spec(dataset.image_shape, 6, n_half)
     proj_half_flat = core.slice_volume(
@@ -5952,7 +5924,7 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     shifted_recon_split = shifted_recon.reshape(1, 1, -1)
     manual_summed = compute_local_weighted_sums(probs, shifted_recon_split)
     manual_ctf_probs = compute_local_ctf_sums(probs, ctf2_over_nv_recon)
-    from recovar.em.dense_single_volume.helpers.adjoint import adjoint_slice_volume_maybe_windowed
+    from recovar.em.helpers.adjoint import adjoint_slice_volume_maybe_windowed
 
     Ft_y_manual_half = adjoint_slice_volume_maybe_windowed(
         flatten_bucket_rows(manual_summed),
@@ -6086,7 +6058,7 @@ def test_run_local_em_exact_can_return_half_volume_accumulators(rng, monkeypatch
 
 def test_sparse_adjoint_row_chunks_match_single_windowed_adjoint(rng, monkeypatch):
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
-    from recovar.em.dense_single_volume.helpers.adjoint import adjoint_slice_volume_maybe_windowed
+    from recovar.em.helpers.adjoint import adjoint_slice_volume_maybe_windowed
 
     window_indices = jnp.asarray([0, 1, 2, 5, 8, 13, 21, 30], dtype=jnp.int32)
     n_rows = 5
@@ -6957,7 +6929,7 @@ def test_run_local_em_exact_collapses_fine_children_to_parent_posterior_ids(rng)
 
 
 def test_local_k_class_can_report_noise_support_class_sums(monkeypatch):
-    import recovar.em.dense_single_volume.k_class as k_class_module
+    import recovar.em.classification.k_class as k_class_module
 
     dataset = type("Dataset", (), {"n_images": 2, "n_units": 2})()
     means = jnp.zeros((2, 4), dtype=jnp.complex64)
@@ -7051,7 +7023,7 @@ def test_k1_mstep_preserves_retained_pose_support_mass():
 
 
 def test_local_k_class_uses_global_reconstruction_threshold(monkeypatch):
-    import recovar.em.dense_single_volume.k_class as k_class_module
+    import recovar.em.classification.k_class as k_class_module
 
     dataset = type("Dataset", (), {"n_images": 1, "n_units": 1})()
     means = jnp.zeros((2, 4), dtype=jnp.complex64)
@@ -7208,7 +7180,7 @@ def test_local_search_iteration_k_class_returns_class_details(rng):
 def test_local_search_iteration_k_class_keeps_mstep_and_full_class_mass_separate(monkeypatch, rng):
     from types import SimpleNamespace
 
-    import recovar.em.dense_single_volume.local_search_iteration as local_search_iteration
+    import recovar.em.local.local_search_iteration as local_search_iteration
 
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=171)
@@ -7944,9 +7916,7 @@ def test_run_local_em_exact_big_jit_cache_ignores_bound_dataset_process_method(
 ):
     import jax
 
-    from recovar.em.dense_single_volume import local_big_jit, local_em_engine
-
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_big_jit, local_bucket_stages, local_em_engine
 
     for function in (
         local_big_jit.run_local_bucket_big_jit,
@@ -8670,7 +8640,7 @@ def test_local_fused_posterior_debug_requests_scores_only_with_explicit_flag():
 
 
 def test_local_big_jit_windowed_translation_slices_before_tiling():
-    from recovar.em.dense_single_volume import local_big_jit
+    from recovar.em.local import local_big_jit
 
     src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
     assert "def _translate_weighted_half_window" in src
@@ -8681,7 +8651,7 @@ def test_local_big_jit_windowed_translation_slices_before_tiling():
 
 
 def test_local_big_jit_relion_translation_is_scoped_to_score_operand():
-    from recovar.em.dense_single_volume import local_big_jit
+    from recovar.em.local import local_big_jit
 
     src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
     translate_block = src[
@@ -8697,7 +8667,7 @@ def test_local_big_jit_relion_translation_is_scoped_to_score_operand():
 
 
 def test_local_big_jit_float64_relion_translation_covers_mstep_operand():
-    from recovar.em.dense_single_volume import local_big_jit
+    from recovar.em.local import local_big_jit
 
     src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
     assert "cuda_backproject.relion_translate_score_f64" in src
@@ -8705,8 +8675,7 @@ def test_local_big_jit_float64_relion_translation_covers_mstep_operand():
 
 
 def test_local_big_jit_source_ordered_vdam_mstep_is_strictly_guarded():
-    from recovar.em.dense_single_volume import local_big_jit, local_em_engine
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_big_jit, local_bucket_stages, local_em_engine
 
     src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
     source_ordered_block = src[
@@ -9014,8 +8983,8 @@ def _sparse_big_jit_local_case(rng):
 def test_local_bpref_plans_logical_and_physical_shapes(
     monkeypatch, rng, stable, current_size, reconstruction_size, expected_sizes, expected_shapes,
 ):
-    from recovar.em.dense_single_volume import local_em_engine as engine
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_bucket_stages
+    from recovar.em.local import local_em_engine as engine
 
     case = _sparse_big_jit_local_case(rng)
     original = engine.relion_backprojector_volume_shape
@@ -9296,8 +9265,8 @@ def test_run_local_em_exact_over_cap_significant_support_defaults_to_deferred_bi
 @pytest.mark.parametrize("deferred", [False, True], ids=["ordinary", "deferred"])
 @pytest.mark.parametrize("current_size,expected_cutoff", [(None, 4), (6, 3)])
 def test_local_noise_calls_use_logical_cutoff(monkeypatch, rng, deferred, current_size, expected_cutoff):
-    from recovar.em.dense_single_volume import local_em_engine as engine
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_bucket_stages
+    from recovar.em.local import local_em_engine as engine
 
     case = _sparse_big_jit_local_case(rng)
     for key in ("RECOVAR_LOCAL_SCORE_DUMP_DIR", "RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES",
@@ -9335,8 +9304,9 @@ def test_skip_deferred_zero_norm_preserves_real_local_outputs(
     monkeypatch, rng, deferred, spectrum_norm, normalization_float64,
 ):
     import jax
-    from recovar.em.dense_single_volume import local_em_engine as engine
-    from recovar.em.dense_single_volume import local_bucket_stages
+
+    from recovar.em.local import local_bucket_stages
+    from recovar.em.local import local_em_engine as engine
 
     case = _sparse_big_jit_local_case(rng)
     for key in ("RECOVAR_LOCAL_SCORE_DUMP_DIR", "RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES",
@@ -9404,8 +9374,8 @@ def test_skip_deferred_zero_norm_preserves_real_local_outputs(
 
 @pytest.mark.parametrize("token, expected", [(None, False), ("0", False), ("1", True), (" 1 ", True)])
 def test_skip_deferred_zero_norm_selector(monkeypatch, token, expected):
-    from recovar.em.dense_single_volume import local_em_engine as engine
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_bucket_stages
+    from recovar.em.local import local_em_engine as engine
     monkeypatch.delenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, raising=False)
     if token is not None:
         monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, token)
@@ -9414,8 +9384,8 @@ def test_skip_deferred_zero_norm_selector(monkeypatch, token, expected):
 
 @pytest.mark.parametrize("token", ["", "2", "true", "false", "-1"])
 def test_skip_deferred_zero_norm_rejects_invalid_selector(monkeypatch, token):
-    from recovar.em.dense_single_volume import local_em_engine as engine
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_bucket_stages
+    from recovar.em.local import local_em_engine as engine
     monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, token)
     with pytest.raises(ValueError, match="RECOVAR_EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM"):
         parse_env_binary_flag(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV)
@@ -9640,9 +9610,9 @@ def test_compute_reconstruction_support_from_global_threshold_drops_low_class_ta
 
 def test_tracked_local_engine_todo_ids_are_resolved():
     repo_root = Path(__file__).resolve().parents[2]
-    iteration_loop_path = repo_root / "recovar" / "em" / "dense_single_volume" / "iteration_loop.py"
-    em_engine_path = repo_root / "recovar" / "em" / "dense_single_volume" / "em_engine.py"
-    half_spectrum_path = repo_root / "recovar" / "em" / "dense_single_volume" / "helpers" / "half_spectrum.py"
+    iteration_loop_path = repo_root / 'recovar' / 'em' / 'refinement' / 'iteration_loop.py'
+    em_engine_path = repo_root / 'recovar' / 'em' / 'dense' / 'em_engine.py'
+    half_spectrum_path = repo_root / 'recovar' / 'em' / 'helpers' / 'half_spectrum.py'
     docs_path = repo_root / "docs" / "relion_local_engine_refactor.md"
 
     iteration_text = iteration_loop_path.read_text(encoding="utf-8")
@@ -10044,7 +10014,7 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """The ini_high tau2 taper changes reported state, not reconstruction."""
-        from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
+        from recovar.em.refinement import mean_helpers as mean_helpers_module
 
         untapered_tau = [7.0, 11.0]
         taper = np.asarray([1.0, 0.5, 0.0, 0.0, 0.0], dtype=np.float64)
@@ -11710,7 +11680,7 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """Adaptive RELION mode should pass the explicit particle diameter through."""
-        import recovar.em.dense_single_volume.iteration_loop as refine_mod
+        import recovar.em.refinement.iteration_loop as refine_mod
 
         recorded = {"particle_diameter": None}
         original_compute_coarse_image_size = refine_mod.compute_coarse_image_size
@@ -12041,7 +12011,7 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """Strict coarse scoring must call the manual PPref leaf directly."""
-        from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+        from recovar.em.helpers import projection as projection_helpers
 
         manual_calls = []
 
@@ -12118,8 +12088,8 @@ class TestRelionModeSmokeTest:
         stable_fourier_window_shapes,
     ):
         """Windowed texture scoring must not materialize full projection rows."""
-        from recovar.em.dense_single_volume.helpers import projection as projection_helpers
-        from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+        from recovar.em.helpers import projection as projection_helpers
+        from recovar.em.helpers.fourier_window import make_fourier_window_spec
 
         calls = []
 
@@ -12757,9 +12727,9 @@ class TestRelionModeSmokeTest:
         """The direct-texture replay replaces every bounded native winner."""
 
         import recovar.cuda_backproject as cuda_backproject
-        import recovar.em.dense_single_volume.helpers.projection as projection_module
-        import recovar.em.dense_single_volume.helpers.scoring as scoring_module
-        import recovar.em.dense_single_volume.helpers.significance as significance_module
+        import recovar.em.helpers.projection as projection_module
+        import recovar.em.scoring.scoring as scoring_module
+        import recovar.em.scoring.significance as significance_module
 
         dataset = half_datasets[0]
         dataset.image_source.backend.relion_fourier_backend = "relion_cuda"
@@ -13329,7 +13299,7 @@ class TestRelionModeSmokeTest:
         """RELION applies iter-1 ini_high low-pass before solvent flatten."""
         from types import SimpleNamespace
 
-        from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
+        from recovar.em.refinement import mean_helpers as mean_helpers_module
 
         events = []
         reconstruct_calls = []
@@ -13393,7 +13363,7 @@ class TestRelionModeSmokeTest:
         """K-class M-step reconstruction should index RELION tau2 as shells."""
         from types import SimpleNamespace
 
-        from recovar.em.dense_single_volume import mean_helpers as mean_helpers_module
+        from recovar.em.refinement import mean_helpers as mean_helpers_module
 
         calls = []
 
@@ -13739,7 +13709,7 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """K=1 adaptive counts remain diagnostic when exact accuracy is unavailable."""
-        import recovar.em.dense_single_volume.iteration_loop as refine_mod
+        import recovar.em.refinement.iteration_loop as refine_mod
 
         monkeypatch.delenv("RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE", raising=False)
         counts_by_half = [
@@ -13894,7 +13864,7 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """The accepted K=1 os=0 path must remain on direct dense EM."""
-        import recovar.em.dense_single_volume.iteration_loop as refine_mod
+        import recovar.em.refinement.iteration_loop as refine_mod
 
         def fail_adaptive(*_args, **_kwargs):
             raise AssertionError("adaptive_oversampling=0 entered the adaptive K-class engine")
@@ -14220,11 +14190,8 @@ class TestRelionDefault:
 def test_fused_score_normalize_mstep_matches_split_path():
     import jax
 
-    from recovar.em.dense_single_volume.local_backprojection import (
-        compute_local_ctf_sums,
-        compute_local_weighted_sums,
-    )
-    from recovar.em.dense_single_volume.local_score_pass import (
+    from recovar.em.local.local_backprojection import compute_local_ctf_sums, compute_local_weighted_sums
+    from recovar.em.local.local_score_pass import (
         compute_reconstruction_support,
         fused_score_normalize_mstep_abs2_on_demand,
         normalize_local_scores,
@@ -14348,7 +14315,7 @@ def test_fused_score_normalize_mstep_matches_split_path():
 def test_local_big_jit_sample_mask_none_matches_full_support():
     import jax
 
-    from recovar.em.dense_single_volume.local_big_jit import _score_normalize_support
+    from recovar.em.local.local_big_jit import _score_normalize_support
 
     rng = np.random.default_rng(123)
     batch_size, n_rot, n_trans, n_score = 2, 4, 3, 5
@@ -14422,7 +14389,7 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
     monkeypatch,
 ):
     """Adaptive local search expands RELION coarse parents without materializing the full fine grid."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
     grid_calls = []
@@ -14571,7 +14538,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
     monkeypatch,
 ):
     """Selected-only fine local grids must carry the RELION perturbation metadata."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
     perturb_calls = []
@@ -14798,7 +14765,7 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
     monkeypatch,
 ):
     """Local-search priors use RELION's pdf_offset units, not pre-shift pixels."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
     prev_h1 = np.array([[0.5, -0.25], [1.0, 0.75]], dtype=np.float32)
@@ -14973,7 +14940,7 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
     translations,
     monkeypatch,
 ):
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
     prev_h1 = np.zeros((half_datasets[0].n_units, 2), dtype=np.float32)
@@ -15144,7 +15111,7 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
     monkeypatch,
 ):
     """RELION os0 local search keeps all fine candidates in storeWeightedSums."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     order_sizes = {4: 4}
     reconstruct_flags = []
@@ -15242,7 +15209,7 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
     translations,
     monkeypatch,
 ):
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     order_sizes = {4: 4}
     image_batch_sizes = []
@@ -15357,7 +15324,7 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
     monkeypatch,
     tmp_path,
 ):
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
     prev_h1 = np.zeros((half_datasets[0].n_units, 2), dtype=np.float32)
@@ -15562,7 +15529,7 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
     monkeypatch,
 ):
     """hp4 should enter local search immediately when previous best rotations exist."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     dense_calls = []
     local_calls = []
@@ -15726,7 +15693,7 @@ def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
     monkeypatch,
 ):
     """Initial previous-best eulers should skip the dense hp4 bootstrap."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     dense_calls = []
     local_calls = []
@@ -16316,7 +16283,7 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
     monkeypatch,
 ):
     """Oversampled local-search assignments must be decoded on the fine grid."""
-    import recovar.em.dense_single_volume.iteration_loop as refine_mod
+    import recovar.em.refinement.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
     fine_idx = order_sizes[5] - 1

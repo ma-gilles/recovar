@@ -11,8 +11,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from recovar.em.initial_model import initialise_denovo_state
-from recovar.em.initial_model.iteration_loop import (
+from recovar.em.vdam import initialise_denovo_state
+from recovar.em.vdam.estep_meta_updates import update_noise_from_estep_meta, update_probabilities_from_estep_meta
+from recovar.em.vdam.iteration_loop import (
     _ave_pmax_from_meta,
     refresh_tau2_from_projector_power,
     relion_solvent_flatten_state,
@@ -21,18 +22,9 @@ from recovar.em.initial_model.iteration_loop import (
     update_current_resolution_from_data_vs_prior,
     update_image_size_and_resolution_pointers,
 )
-from recovar.em.initial_model.estep_meta_updates import (
-    update_noise_from_estep_meta,
-    update_probabilities_from_estep_meta,
-)
-from recovar.em.initial_model.subset_schedule import (
-    restore_subset_order_for_continuation,
-    select_subset_for_iter,
-)
-from recovar.em.initial_model.mstep_accumulator import (
-    VdamAccumulator,
-)
-from recovar.em.initial_model.subset import numpy_rnd_unif_factory
+from recovar.em.vdam.mstep_accumulator import VdamAccumulator
+from recovar.em.vdam.subset import numpy_rnd_unif_factory
+from recovar.em.vdam.subset_schedule import restore_subset_order_for_continuation, select_subset_for_iter
 
 pytestmark = pytest.mark.unit
 
@@ -114,7 +106,7 @@ def _stub_estep_factory(ori_size: int):
 
 
 def test_vdam_iteration_loop_can_execute_exactly_one_absolute_restart_iteration(monkeypatch):
-    import recovar.em.initial_model.iteration_loop as loop
+    import recovar.em.vdam.iteration_loop as loop
 
     state = initialise_denovo_state(
         ori_size=8,
@@ -275,7 +267,7 @@ class TestRunVdamIterations:
         assert out.current_resolution_shell == 20
 
     def test_iteration_loop_feeds_updated_current_size_to_next_estep(self, monkeypatch):
-        import recovar.em.initial_model.iteration_loop as loop
+        import recovar.em.vdam.iteration_loop as loop
 
         state = initialise_denovo_state(
             ori_size=64,
@@ -317,7 +309,7 @@ class TestRunVdamIterations:
         assert final.current_resolution_shell == 20
 
     def test_diagnostic_stop_keeps_full_relion_schedule_denominator(self, monkeypatch):
-        import recovar.em.initial_model.iteration_loop as loop
+        import recovar.em.vdam.iteration_loop as loop
 
         state = initialise_denovo_state(
             ori_size=8,
@@ -379,7 +371,7 @@ class TestRunVdamIterations:
             )
 
     def test_iteration_loop_refreshes_tau2_before_estep(self, monkeypatch):
-        import recovar.em.initial_model.iteration_loop as loop
+        import recovar.em.vdam.iteration_loop as loop
 
         state = initialise_denovo_state(
             ori_size=16,
@@ -428,7 +420,7 @@ class TestRunVdamIterations:
         np.testing.assert_array_equal(seen["estep_tau2"], np.full((1, 9), 7.0))
 
     def test_iteration_loop_passes_projector_padding_to_m_step(self, monkeypatch):
-        import recovar.em.initial_model.iteration_loop as loop
+        import recovar.em.vdam.iteration_loop as loop
 
         state = initialise_denovo_state(
             ori_size=16,
@@ -467,7 +459,7 @@ class TestRunVdamIterations:
         assert seen["padding_factor"] == 2
 
     def test_iteration_profile_reports_stage_times_only_when_enabled(self, monkeypatch, capsys):
-        import recovar.em.initial_model.iteration_loop as loop
+        import recovar.em.vdam.iteration_loop as loop
 
         state = initialise_denovo_state(
             ori_size=8,
@@ -749,7 +741,7 @@ class TestRunVdamIterations:
             np.testing.assert_allclose(payload["half0_sigma2_noise"] / 8**4, out.sigma2_noise[0])
 
     def test_iteration_loop_feeds_updated_sigma2_noise_to_next_estep(self, monkeypatch):
-        import recovar.em.initial_model.iteration_loop as loop
+        import recovar.em.vdam.iteration_loop as loop
 
         state = initialise_denovo_state(
             ori_size=8,

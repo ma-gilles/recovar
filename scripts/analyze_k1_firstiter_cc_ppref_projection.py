@@ -19,7 +19,6 @@ from scripts.analyze_k1_firstiter_cc_native_operands import _rotation_map
 from scripts.analyze_k1_native_cc_translation_tie import _pass_field, _sha256
 from scripts.parse_relion_dump_dir import parse_dump_dir
 
-
 SCHEMA = "recovar.em.k1_firstiter_cc_ppref_projection.v1"
 
 
@@ -50,9 +49,7 @@ def analyze(
     import jax.numpy as jnp
 
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers.projection import (
-        compute_relion_projector_projections_block,
-    )
+    from recovar.em.helpers.projection import compute_relion_projector_projections_block
 
     _require(jax.default_backend() == "gpu", "PPref projection replay requires a GPU")
     _require(cuda_backproject.cuda_available(), "RECOVAR CUDA projector is unavailable")

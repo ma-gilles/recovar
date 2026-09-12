@@ -5,8 +5,8 @@ import numpy as np
 import pytest
 
 from recovar import cuda_noise_residual as nr
-from recovar.em.dense_single_volume.helpers import projection
-from recovar.em.dense_single_volume.helpers.half_spectrum import bin_shell_values_jax
+from recovar.em.helpers import projection
+from recovar.em.helpers.half_spectrum import bin_shell_values_jax
 
 pytestmark = pytest.mark.unit
 

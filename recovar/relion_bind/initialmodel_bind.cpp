@@ -13,7 +13,7 @@
  *     as free C++ functions whose body is copy-verbatim from
  *     `ml_optimiser.cpp` / `exp_model.cpp` so they compile the same C++
  *     code without requiring a full `MlOptimiser` construction. The Python
- *     schedule implementations at `recovar/em/initial_model/schedules.py`
+ *     schedule implementations at `recovar/em/vdam/schedules.py`
  *     are validated against these bindings in
  *     `tests/unit/test_relion_bind/test_initialmodel_bind.py`.
  *

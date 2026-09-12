@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from recovar.em import sampling
-from recovar.em.dense_single_volume import local_layout
+from recovar.em.local import local_layout
 
 pytestmark = pytest.mark.unit
 

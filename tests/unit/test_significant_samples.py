@@ -5,7 +5,7 @@ import pickle
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.significant_samples import (
+from recovar.em.scoring.significant_samples import (
     ComplementSignificantSampleIndices,
     compact_significant_sample_indices_from_mask,
     significant_sample_count,

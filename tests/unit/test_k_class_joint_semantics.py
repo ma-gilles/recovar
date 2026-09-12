@@ -7,18 +7,9 @@ pytest.importorskip("jax")
 import jax.numpy as jnp
 from helpers.fine_grid_significance_reference import _build_fine_grid_significance_mask
 
-import recovar.em.dense_single_volume.k_class as k_class_module
-from recovar.em.dense_single_volume import k_class_results
-from recovar.em.dense_single_volume.helpers.types import DenseEMResult, LocalEMResult
-from recovar.em.dense_single_volume.helpers.orientation_priors import (
-    class_weights_from_direction_prior,
-    normalize_class_direction_prior_per_half,
-)
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
-    _relion_translation_angles_f32,
-)
-from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
-from recovar.em.dense_single_volume.k_class import (
+import recovar.em.classification.k_class as k_class_module
+from recovar.em.classification import k_class_results
+from recovar.em.classification.k_class import (
     _ClassFineGridSignificanceMask,
     _compact_sparse_pass2_preferred_over_dense,
     _dense_engine_kwargs_for_class,
@@ -29,18 +20,22 @@ from recovar.em.dense_single_volume.k_class import (
     run_dense_k_class_em_adaptive,
     run_local_k_class_em,
 )
-from recovar.em.dense_single_volume.k_class_results import (
+from recovar.em.classification.k_class_results import (
     _assemble_result,
     _expand_subset_noise_stats,
     _zero_subset_noise_stats,
 )
-from recovar.em.dense_single_volume.helpers.oversampling import (
-    build_adaptive_pass2_grids,
+from recovar.em.dense.score_outputs import _combine_optional_half_accumulators
+from recovar.em.helpers.orientation_priors import (
+    class_weights_from_direction_prior,
+    normalize_class_direction_prior_per_half,
 )
-from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
-from recovar.em.dense_single_volume.score_outputs import _combine_optional_half_accumulators
-from recovar.em.dense_single_volume.mean_helpers import update_c1_sigma_offset_from_posterior
+from recovar.em.helpers.oversampling import build_adaptive_pass2_grids
+from recovar.em.helpers.types import DenseEMResult, LocalEMResult, make_noise_stats, make_relion_stats
+from recovar.em.local.local_layout import LocalHypothesisLayout
+from recovar.em.refinement.mean_helpers import update_c1_sigma_offset_from_posterior
 from recovar.em.sampling import read_relion_direction_priors
+from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
 
 
 def _stats(log_evidence, best_score, pmax, n_rot=3):
@@ -177,7 +172,7 @@ def test_adaptive_exact_fine_gaussian_rejects_explicit_dense_pass2():
 
 
 def test_adaptive_exact_fine_gaussian_retains_sparse_on_broad_support(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import significance as significance_module
+    from recovar.em.scoring import significance as significance_module
 
     class TinyDataset:
         n_images = 1
@@ -900,7 +895,7 @@ def test_adaptive_k_class_firstiter_override_redecodes_best_pose_details(monkeyp
 
 
 def test_firstiter_score_probe_uses_joint_significance(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import significance as significance_module
+    from recovar.em.scoring import significance as significance_module
 
     calls = []
 
@@ -1220,7 +1215,7 @@ def test_diagnostic_firstiter_class_override_is_inert_when_unset(monkeypatch):
 
 
 def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
+    from recovar.em.helpers import oversampling as oversampling_module
     from recovar.em.sampling import rotation_grid_size
 
     score_calls = []
@@ -1357,7 +1352,7 @@ def test_adaptive_k_class_firstiter_sparse_fine_pass_uses_global_winner_subsets(
 
 
 def test_sparse_firstiter_k1_adapter_forwards_exact_cc_and_spectrum_norm(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
+    from recovar.em.helpers import oversampling as oversampling_module
 
     calls = []
 
@@ -1527,7 +1522,7 @@ def test_sparse_k_class_adaptive_mstep_uses_score_space_log_z(monkeypatch):
     # production default is the joint fused path, covered separately.
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED", "0")
 
-    from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
+    from recovar.em.helpers import oversampling as oversampling_module
     from recovar.em.sampling import rotation_grid_size
 
     calls = []
@@ -1630,7 +1625,7 @@ def test_sparse_k_class_adaptive_single_pass_uses_largest_support_class(monkeypa
     # Largest-support-class reuse is specific to the legacy 2K-1 path.
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED", "0")
 
-    from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
+    from recovar.em.helpers import oversampling as oversampling_module
     from recovar.em.sampling import rotation_grid_size
 
     calls = []
@@ -1738,7 +1733,7 @@ def test_sparse_k1_adapter_forwards_source_faithful_spectrum_norm(monkeypatch):
     """The K=1-through-K-class adapter must not drop the fresh-run guard."""
 
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
+    from recovar.em.helpers import oversampling as oversampling_module
     from recovar.em.sampling import rotation_grid_size
 
     calls = []
@@ -2119,12 +2114,9 @@ def test_class_direction_prior_normalizes_relion_joint_rows():
 def test_class3d_replay_loads_shared_model_direction_prior(tmp_path, monkeypatch):
     """Class3D replay uses run_itNNN_model.star when half-model files are absent."""
 
-    from recovar.em.dense_single_volume import relion_replay
     from recovar.em import sampling
-    from recovar.em.dense_single_volume.relion_replay import (
-        _RelionHalfInputState,
-        apply_iter_replay_overrides,
-    )
+    from recovar.em.diagnostics import relion_replay
+    from recovar.em.diagnostics.relion_replay import _RelionHalfInputState, apply_iter_replay_overrides
 
     (tmp_path / "run_it001_model.star").touch()
     (tmp_path / "run_it002_model.star").touch()
@@ -2242,7 +2234,7 @@ def test_k_class_result_preserves_historical_pickle_global():
     """Old result streams resolve to the sole type at its new source owner."""
     import pickle
 
-    from recovar.em.dense_single_volume import k_class, k_class_results
+    from recovar.em.classification import k_class, k_class_results
 
     historical_global = b"crecovar.em.dense_single_volume.k_class\nKClassEMResult\np0\n."
     assert k_class.KClassEMResult is k_class_results.KClassEMResult

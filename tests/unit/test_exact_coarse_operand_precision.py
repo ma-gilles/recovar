@@ -5,8 +5,8 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume.helpers import relion_ctf, relion_coarse_operands, sparse_pass2_bucketed
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucket_io
+from recovar.em.relion import relion_coarse_operands, relion_ctf
+from recovar.em.sparse_pass2 import sparse_pass2_bucket_io, sparse_pass2_bucketed
 
 pytestmark = pytest.mark.unit
 

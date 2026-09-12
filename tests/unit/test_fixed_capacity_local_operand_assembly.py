@@ -5,15 +5,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.batch_planning import (
+from recovar.em.helpers.batch_planning import (
     _FixedCapacityLocalCall,
     _plan_fixed_capacity_whole_local,
     _seal_fixed_capacity_physical_order,
 )
-from recovar.em.dense_single_volume.local_caches import (
-    _assemble_fixed_capacity_local_operands_once,
-    _build_local_raw_cache,
-)
+from recovar.em.local.local_caches import _assemble_fixed_capacity_local_operands_once, _build_local_raw_cache
 
 pytestmark = pytest.mark.unit
 

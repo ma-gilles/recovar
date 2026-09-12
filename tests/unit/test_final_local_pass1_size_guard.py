@@ -16,7 +16,7 @@ import textwrap
 
 import pytest
 
-import recovar.em.dense_single_volume.iteration_loop as iteration_loop
+import recovar.em.refinement.iteration_loop as iteration_loop
 
 pytestmark = pytest.mark.unit
 

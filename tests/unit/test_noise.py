@@ -80,6 +80,7 @@ def test_variable_radial_noise_model_via_dataset_1d_broadcast():
     """Test the fix: set_variable_radial_noise_model with 1D input
     broadcasts to 2D so VariableRadialNoiseModel.get() doesn't crash."""
     import jax.numpy as jnp
+
     from recovar import core
 
     # Simulate a CryoEMDataset-like object with CTF_params that have
@@ -687,7 +688,7 @@ def test_estimate_initial_noise_spectrum_from_unaligned_images_matches_legacy_lo
 
 
 def test_normalize_wsum_to_sigma2_noise_drops_relion_shell_sentinels(monkeypatch):
-    import recovar.em.dense_single_volume.helpers.half_spectrum as half_spectrum
+    import recovar.em.helpers.half_spectrum as half_spectrum
 
     image_shape = (8, 8)
     n_shells = image_shape[0] // 2 + 1
@@ -729,7 +730,7 @@ def test_normalize_wsum_to_sigma2_noise_preserves_float64_inputs(monkeypatch):
     the caller's own accumulation (compute_noise_block and its callers)
     already achieved.
     """
-    import recovar.em.dense_single_volume.helpers.half_spectrum as half_spectrum
+    import recovar.em.helpers.half_spectrum as half_spectrum
 
     image_shape = (8, 8)
     n_shells = image_shape[0] // 2 + 1
@@ -768,7 +769,7 @@ def test_compute_noise_block_preserves_float64_inputs():
     here compounds error across that whole reduction, unlike RELION's own
     per-particle RFLOAT accumulation.
     """
-    from recovar.em.dense_single_volume.helpers.projection import compute_noise_block
+    from recovar.em.helpers.projection import compute_noise_block
 
     n_rot, n_pix, n_shells = 3, 5, 3
     rng = np.random.default_rng(0)
@@ -802,12 +803,8 @@ def test_compute_noise_block_preserves_float64_inputs():
 
 @pytest.mark.parametrize("box_size", [32, 64, 100, 128, 256])
 def test_relion_noise_shell_indices_include_vertical_nyquist(box_size):
-    from recovar.em.dense_single_volume.helpers.half_spectrum import (
-        make_relion_noise_shell_indices_half,
-    )
-    from recovar.em.dense_single_volume.relion_metadata import (
-        _relion_half_plane_shell_counts,
-    )
+    from recovar.em.helpers.half_spectrum import make_relion_noise_shell_indices_half
+    from recovar.em.relion.relion_metadata import _relion_half_plane_shell_counts
 
     image_shape = (box_size, box_size)
     shell_indices = np.asarray(make_relion_noise_shell_indices_half(image_shape), dtype=np.int32)

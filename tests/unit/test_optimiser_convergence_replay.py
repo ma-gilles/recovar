@@ -5,8 +5,8 @@ from dataclasses import asdict
 
 import pytest
 
-from recovar.em.dense_single_volume import relion_replay
-from recovar.em.dense_single_volume.helpers.convergence import RefinementState
+from recovar.em.diagnostics import relion_replay
+from recovar.em.helpers.convergence import RefinementState
 
 pytestmark = pytest.mark.unit
 

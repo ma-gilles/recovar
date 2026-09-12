@@ -8,14 +8,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import k_class, k_class_results
-from recovar.em.dense_single_volume.helpers.types import (
-    LocalEMResult,
-    _stats_array,
-    make_noise_stats,
-    make_relion_stats,
-)
-from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
+from recovar.em.classification import k_class, k_class_results
+from recovar.em.helpers.types import LocalEMResult, _stats_array, make_noise_stats, make_relion_stats
+from recovar.em.local.local_layout import LocalHypothesisLayout
 
 pytestmark = pytest.mark.unit
 

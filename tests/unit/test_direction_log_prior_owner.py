@@ -14,7 +14,7 @@ import logging
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import orientation_priors as op
+from recovar.em.helpers import orientation_priors as op
 from recovar.em.sampling import rotation_grid_n_in_planes, rotation_grid_size
 
 pytestmark = pytest.mark.unit

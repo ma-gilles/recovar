@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.translation_prior import expand_fine_translation_prior
+from recovar.em.helpers.translation_prior import expand_fine_translation_prior
 
 pytestmark = pytest.mark.unit
 

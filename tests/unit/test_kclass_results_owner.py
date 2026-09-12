@@ -8,8 +8,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import k_class
-from recovar.em.dense_single_volume.k_class_results import make_relion_stats
+from recovar.em.classification import k_class
+from recovar.em.classification.k_class_results import make_relion_stats
 
 pytestmark = pytest.mark.unit
 

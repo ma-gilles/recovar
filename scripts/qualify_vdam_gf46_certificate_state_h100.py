@@ -49,8 +49,8 @@ EXPECTED_DOT_COUNT = 2
 EXPECTED_LOGICAL_ARGUMENT_BYTES = 1_428_827_344
 
 SOURCE_FILES = (
-    "recovar/em/dense_single_volume/helpers/coarse_gemm_hybrid.py",
-    "recovar/em/dense_single_volume/helpers/scoring.py",
+    "recovar/em/scoring/coarse_gemm_hybrid.py",
+    "recovar/em/scoring/scoring.py",
     "scripts/qualify_vdam_gf46_certificate_state_h100.py",
     "scripts/run_vdam_gf46_certificate_state_h100.sbatch",
     "scripts/vdam_gpu_selection.sh",
@@ -380,8 +380,8 @@ def _shape_arguments():
     import jax
     import numpy as np
 
-    from recovar.em.dense_single_volume.helpers import scoring
-    from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+    from recovar.em.scoring import scoring
+    from recovar.em.scoring.coarse_gemm_hybrid import (
         CoarseGemmHybridIntervalState,
         certified_f32_dot_product_gamma,
         certified_f64_expanded_score_gammas,
@@ -434,10 +434,8 @@ def _shape_arguments():
 def _concrete_arguments(coefficients: dict[str, float]):
     import jax.numpy as jnp
 
-    from recovar.em.dense_single_volume.helpers import scoring
-    from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
-        CoarseGemmHybridIntervalState,
-    )
+    from recovar.em.scoring import scoring
+    from recovar.em.scoring.coarse_gemm_hybrid import CoarseGemmHybridIntervalState
 
     g = GF46_GEOMETRY
     blocks = g.total_rotations // g.source_rotation_block
@@ -1011,7 +1009,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except (FileNotFoundError, subprocess.CalledProcessError) as error:
             raise RuntimeError(f"failed to capture GPU/Slurm provenance: {error}") from error
 
-        from recovar.em.dense_single_volume.helpers import scoring
+        from recovar.em.scoring import scoring
 
         stage = "lowering"
         event(stage)

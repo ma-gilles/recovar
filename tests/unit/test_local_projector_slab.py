@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.projector_preparation import prepare_local_projector_slab
+from recovar.em.refinement.projector_preparation import prepare_local_projector_slab
 
 pytestmark = pytest.mark.unit
 

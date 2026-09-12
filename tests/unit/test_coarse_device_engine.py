@@ -7,15 +7,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import significance
-from recovar.em.dense_single_volume.helpers.coarse_device_selection import SELECTION_REASONS
-from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
-    CoarseGemmHybridCompactScores,
-    plan_coarse_gemm_certificate_topology,
-)
+from recovar.em.scoring import significance
+from recovar.em.scoring.coarse_device_selection import SELECTION_REASONS
+from recovar.em.scoring.coarse_gemm_hybrid import CoarseGemmHybridCompactScores, plan_coarse_gemm_certificate_topology
 
 pytestmark = pytest.mark.unit
-MODULE = "recovar.em.dense_single_volume.helpers.coarse_device_rescore"
+MODULE = "recovar.em.scoring.coarse_device_rescore"
 VARIABLE = "RECOVAR_COARSE_GAUSSIAN_GEMM_DEVICE_TRANSACTION"
 
 
@@ -84,7 +81,7 @@ def _fixture(monkeypatch, status=None):
     def forbidden(*args, **kwargs):
         raise AssertionError("device route re-entered host certificate or selected scorer")
 
-    from recovar.em.dense_single_volume.helpers import coarse_gaussian_gemm
+    from recovar.em.scoring import coarse_gaussian_gemm
 
     for name in (
         "_prepare_relion_coarse_gaussian_gemm_f64_image_batch",

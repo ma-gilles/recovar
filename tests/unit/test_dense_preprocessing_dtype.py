@@ -1,11 +1,8 @@
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume.em_engine import normalized_cc_score_inverse_power
-from recovar.em.dense_single_volume.helpers.preprocessing import (
-    preprocess_batch,
-    preprocess_batch_firstiter_cc,
-)
+from recovar.em.dense.em_engine import normalized_cc_score_inverse_power
+from recovar.em.helpers.preprocessing import preprocess_batch, preprocess_batch_firstiter_cc
 
 
 class _Float64CtfConfig:

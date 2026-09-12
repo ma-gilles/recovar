@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from recovar.em.initial_model.dense_adapter import reference_to_relion_projector_half_maps
+from recovar.em.vdam.dense_adapter import reference_to_relion_projector_half_maps
 from recovar.utils import helpers
 from recovar.utils.file_hash import sha256_file  # noqa: E402 - follows repository path setup
 from scripts.analyze_k1_exact_ppref_fine_boundary import _load_ppref

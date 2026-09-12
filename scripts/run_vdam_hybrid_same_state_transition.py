@@ -620,9 +620,7 @@ def _validate_stable_fourier_profiles(
 ) -> dict[str, Any]:
     """Prove logical Fourier support was carried by the requested capacity."""
 
-    from recovar.em.dense_single_volume.helpers.fourier_window import (
-        make_stable_fourier_window_shape_plan,
-    )
+    from recovar.em.helpers.fourier_window import make_stable_fourier_window_shape_plan
 
     image_shape = tuple(int(value) for value in image_shape)
     if len(image_shape) != 2 or image_shape[0] != image_shape[1]:
@@ -722,9 +720,7 @@ def _validate_stable_coarse_square_profiles(
 ) -> dict[str, Any]:
     """Prove coarse significance used the same physical/logical size policy."""
 
-    from recovar.em.dense_single_volume.helpers.fourier_window import (
-        stable_fourier_window_current_size,
-    )
+    from recovar.em.helpers.fourier_window import stable_fourier_window_current_size
 
     profiles: dict[str, Any] = {}
     for key, hybrid in sorted(_coarse_hybrid_profiles(estep_meta).items()):
@@ -1511,9 +1507,7 @@ def _validate_fused_coarse_projector_profiles(
 ) -> dict[str, Any]:
     """Prove that the shared RELION fused projector did or did not execute."""
 
-    from recovar.em.dense_single_volume.helpers.coarse_score_diagnostics import (
-        _validate_coarse_selector_audit,
-    )
+    from recovar.em.diagnostics.coarse_score_diagnostics import _validate_coarse_selector_audit
 
     halfset_profiles = {
         key: value
@@ -2104,7 +2098,7 @@ def _native_checkpoint_file_manifests(
 
     import starfile
 
-    import recovar.em.initial_model.driver as driver
+    import recovar.em.vdam.driver as driver
     from recovar.data_io.starfile import read_star
 
     files: dict[str, Path] = {
@@ -2623,7 +2617,7 @@ def _capture_direct_checkpoint(
     native_checkpoint_data_star: Path | None = None,
     native_data_dir: Path | None = None,
 ) -> dict[str, Any]:
-    import recovar.em.initial_model.driver as driver
+    import recovar.em.vdam.driver as driver
     from scripts import run_ab_initio
     from scripts.run_vdam_relion_parity_case import build_recovar_command
 
@@ -2836,10 +2830,10 @@ def _run_transition_arm(
     fused_posterior_dump_original_index: int | None = None,
     coarse_prefix_dump_original_index: int | None = None,
 ) -> dict[str, Any]:
-    import recovar.em.initial_model.driver as driver
+    import recovar.em.vdam.driver as driver
     from recovar.data_io.starfile import read_star
-    from recovar.em.initial_model import native_sampling, star_io
-    from recovar.em.initial_model.schedules import (
+    from recovar.em.vdam import native_sampling, star_io
+    from recovar.em.vdam.schedules import (
         default_subset_sizes_for_3d_initial_model,
         phase_lengths_from_effective_fractions,
     )

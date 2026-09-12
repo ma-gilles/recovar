@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_correction_groups
-from recovar.em.dense_single_volume.k_class import _full_group_count_from_kwargs
+from recovar.em.classification.k_class import _full_group_count_from_kwargs
+from recovar.em.helpers.scale_groups import prepare_scale_correction_groups
 
 pytestmark = pytest.mark.unit
 

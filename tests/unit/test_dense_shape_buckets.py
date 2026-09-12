@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.shape_buckets import (
+from recovar.em.helpers.shape_buckets import (
     coarse_bucket,
     pad_axis,
     power_bucket,

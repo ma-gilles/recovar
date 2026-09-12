@@ -86,9 +86,7 @@ def _fresh_candidate_row_gathers(
 
     import starfile
 
-    from recovar.em.dense_single_volume.helpers.expected_accuracy import (
-        relion_auto_refine_half_orders,
-    )
+    from recovar.em.helpers.expected_accuracy import relion_auto_refine_half_orders
 
     candidate = starfile.read(candidate_particle_star)
     candidate = candidate["particles"] if isinstance(candidate, dict) else candidate

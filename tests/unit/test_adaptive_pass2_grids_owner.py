@@ -7,8 +7,8 @@ import inspect
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import half_scoring
-from recovar.em.dense_single_volume.helpers.oversampling import build_adaptive_pass2_grids
+from recovar.em.dense import half_scoring
+from recovar.em.helpers.oversampling import build_adaptive_pass2_grids
 from recovar.em.sampling import apply_relion_translation_perturbation, rotation_grid_size
 
 pytestmark = pytest.mark.unit

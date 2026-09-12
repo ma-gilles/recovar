@@ -4,7 +4,7 @@ import inspect
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sp
+from recovar.em.sparse_pass2 import sparse_pass2_bucketed as sp
 
 
 def test_window_setup_owner_rejects_exact_gaussian_below_the_image_size_without_half_spectrum():

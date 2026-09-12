@@ -64,10 +64,10 @@ from pathlib import Path
 import jax
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.oversampling import (
+from recovar.em.helpers.oversampling import (
     relion_cuda_f32_coarse_posterior,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.sparse_pass2.sparse_pass2_bucketed import (
     _relion_f32_fine_reconstruction_probs,
 )
 

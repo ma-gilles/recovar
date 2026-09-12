@@ -12,11 +12,8 @@ import healpy as hp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.batch_planning import (
-    _plan_fixed_capacity_whole_local,
-    _seal_fixed_capacity_physical_order,
-)
-from recovar.em.dense_single_volume.local_layout import (
+from recovar.em.helpers.batch_planning import _plan_fixed_capacity_whole_local, _seal_fixed_capacity_physical_order
+from recovar.em.local.local_layout import (
     LocalBucketSpec,
     _fixed_capacity_calls_from_local_buckets,
     _pack_fixed_capacity_local_hypothesis_program,
@@ -194,7 +191,7 @@ def _assert_program_bitwise_matches_bucket_prefixes(program, buckets):
 
 
 def test_fixed_capacity_hypothesis_packer_is_shared_default_off_and_inert():
-    assert _pack_fixed_capacity_local_hypothesis_program.__module__ == "recovar.em.dense_single_volume.local_layout"
+    assert _pack_fixed_capacity_local_hypothesis_program.__module__ == "recovar.em.local.local_layout"
     assert inspect.signature(_pack_fixed_capacity_local_hypothesis_program).parameters["enabled"].default is False
     assert _pack_fixed_capacity_local_hypothesis_program(None, None, None) is None
 

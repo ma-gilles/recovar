@@ -5,9 +5,7 @@ import logging
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.fourier_window import (
-    stable_fourier_window_current_size,
-)
+from recovar.em.helpers.fourier_window import stable_fourier_window_current_size
 from scripts.prove_vdam_projector_capacity import (
     GF46_IMAGE_SIZE,
     GF46_LOGICAL_CURRENT_SIZES,

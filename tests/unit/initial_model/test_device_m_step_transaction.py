@@ -5,10 +5,7 @@ from copy import deepcopy
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.relion_vdam_mstep import (
-    relion_vdam_m_step_device,
-    relion_vdam_m_step_host,
-)
+from recovar.em.relion.relion_vdam_mstep import relion_vdam_m_step_device, relion_vdam_m_step_host
 
 pytestmark = pytest.mark.unit
 
@@ -190,7 +187,7 @@ def test_physical_hermitian_transaction_native_fp64(bind, size, padding, full, p
 
 @pytest.mark.parametrize("size,padding,expected_backend", [(8, 1, "native"), (8, 2, "device"), (16, 1, "device")])
 def test_host_backend_capability_attestation(bind, monkeypatch, size, padding, expected_backend):
-    from recovar.em.dense_single_volume.helpers import relion_vdam_mstep as helper
+    from recovar.em.relion import relion_vdam_mstep as helper
 
     case = _case(size=size, padding=padding, radius=size // 4)
     expected = _native(bind, case)

@@ -12,12 +12,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
-    _relion_translation_angles_f32,
-)
-from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
-    _relion_cuda_fine_full_to_compact_lookup,
-)
+from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
+from recovar.em.sparse_pass2.sparse_pass2_scoring import _relion_cuda_fine_full_to_compact_lookup
 from recovar.utils.file_hash import sha256_file
 from scripts.analyze_em_k1_coarse_pass1_boundary import (
     _map_relion_table,
@@ -27,10 +23,10 @@ from scripts.analyze_em_k1_live_reference_counterfactual import (
     relion_reference_on_recovar_window,
     relion_values_on_recovar_window,
 )
-from scripts.analyze_k1_native_coarse_boundary import load_native_coarse_capture
 from scripts.analyze_k1_coarse_operand_boundary_v3 import (
     _rotation_key_to_recovar,
 )
+from scripts.analyze_k1_native_coarse_boundary import load_native_coarse_capture
 from scripts.validate_relion_coarse_operand_capture import (
     load_artifact as load_operand,
 )

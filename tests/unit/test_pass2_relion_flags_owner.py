@@ -2,7 +2,7 @@
 
 import inspect
 
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sp
+from recovar.em.sparse_pass2 import sparse_pass2_bucketed as sp
 
 
 def test_both_entry_points_use_the_owner():
@@ -13,7 +13,7 @@ def test_both_entry_points_use_the_owner():
 
 
 def test_owner_rules(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_window
+    from recovar.em.sparse_pass2 import sparse_pass2_window
 
     monkeypatch.setattr(sparse_pass2_window, "parse_env_flag", lambda name, default=False: False)
     monkeypatch.setattr(sparse_pass2_window, "relion_x_half_f32_fine_posterior_enabled", lambda: True)

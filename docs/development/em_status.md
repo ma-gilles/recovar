@@ -72,6 +72,32 @@ runtime dependencies and independent numerical references remain in place.
 [native deletion, build provenance and checks](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/unused_ctf_binding_cleanup_20260912/result.json).
 These are structural CPU results; the scientific and performance gates remain open.
 
+The following package-layout batch makes `recovar/em/` the common implementation
+root: `refinement/` and `vdam/` retain separate controllers/state transitions;
+`classification/`, `dense/`, `local/`, `scoring/`, `sparse_pass2/`, `helpers/`,
+`relion/` and `diagnostics/` own their shared execution or support responsibilities.
+The former `dense_single_volume/` and `initial_model/` implementation directories
+are retired. Lazy historical class lookup preserves saved-object reads, including
+the three explicit pickle GLOBAL pins; logger identities remain unchanged.
+Two tiny helper files are consolidated into timing and local-layout owners with
+identical function bodies. The 135-module structural comparison preserves all
+1,931 definitions apart from imports/module-path references; all 5,981 affected
+tests collect and the 90-test CPU guard passes. Initial collection failures from
+two import-migration mistakes are retained and repaired. Further exact checks,
+source identities and qualification limits are recorded in the
+[layout receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_package_layout_20260912/result.json).
+The owner panel recorded 805 passes/3 failures/1 skip; the workflow panel
+recorded 1371 passes/7 failures/42 skips. Original failures remain in the receipts.
+The moved-directory/source-manifest failures are repaired. SSNR probes now select
+the Python composition they intercept, and the donation profiler inventories the
+nine existing additional JIT keywords; numerical defaults/kernels are unchanged.
+The focused repair check has 75 passes and one retained pre-existing failure:
+VDAM's total LOC exceeds its unchanged 6100-line cap (9400 now, 9458 at the clean
+pre-migration commit). The final CPU guard passes 90 tests; 157 historical class
+lookups pass, and legacy/entry-point checks have 10 passes and two GPU skips.
+These overlapping counts are not a total-suite claim. This layout does not admit
+VDAM's rejected Kent ladder or qualify GPU trajectories.
+
 Each row is one commit on draft PR179 with an exact old/new comparison, the CPU
 fast guard and, where the controller path changed, the 502-case controller
 panel (one GPU-only skip). "Structural" rows change no arithmetic; "fix" and

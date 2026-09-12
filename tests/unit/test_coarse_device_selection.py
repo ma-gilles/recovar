@@ -7,12 +7,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.coarse_device_selection import (
+from recovar.em.scoring.coarse_device_selection import (
     SELECTION_REASONS,
     decode_device_coarse_selection,
     select_coarse_rotation_blocks_device,
 )
-from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+from recovar.em.scoring.coarse_gemm_hybrid import (
     CoarseGemmHybridIntervalState,
     select_coarse_gemm_hybrid_rotation_blocks,
 )

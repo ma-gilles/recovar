@@ -2,7 +2,7 @@
 
 import inspect
 
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed, sparse_pass2_compact_pair_sums, sparse_pass2_noise_blocks
+from recovar.em.sparse_pass2 import sparse_pass2_bucketed, sparse_pass2_compact_pair_sums, sparse_pass2_noise_blocks
 
 
 def test_owner_holds_the_sums_and_the_pass2_module_routes_to_them():

@@ -6,7 +6,7 @@ import jax
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.relion_projector_setup import setup_relion_projector
+from recovar.em.relion.relion_projector_setup import setup_relion_projector
 
 pytestmark = pytest.mark.unit
 

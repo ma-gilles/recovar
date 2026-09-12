@@ -19,20 +19,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import recovar.em.initial_model.m_step as m_step
-
-from recovar.em.initial_model import mstep_single_class
-from recovar.em.initial_model import (
-    initialise_denovo_state,
-)
-from recovar.em.initial_model.init import initialise_data_vs_prior_from_references, seed_noise_from_mavg
-from recovar.em.initial_model.m_step import (
-    vdam_m_step,
-)
-from recovar.em.initial_model.mstep_accumulator import (
-    VdamAccumulator,
-)
-from recovar.em.initial_model.mstep_single_class import (
+import recovar.em.vdam.m_step as m_step
+from recovar.em.vdam import initialise_denovo_state, mstep_single_class
+from recovar.em.vdam.init import initialise_data_vs_prior_from_references, seed_noise_from_mavg
+from recovar.em.vdam.m_step import vdam_m_step
+from recovar.em.vdam.mstep_accumulator import VdamAccumulator
+from recovar.em.vdam.mstep_single_class import (
     _grad_min_resol_shell_from_state,
     _has_relion_reconstruction_weight,
     _maybe_replay_native_second_moment,

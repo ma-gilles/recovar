@@ -9,10 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.fourier_window import (
-    make_fourier_window_indices_np,
-    make_frequency_coords_half_np,
-)
+from recovar.em.helpers.fourier_window import make_fourier_window_indices_np, make_frequency_coords_half_np
 from recovar.utils.file_hash import sha256_file
 
 

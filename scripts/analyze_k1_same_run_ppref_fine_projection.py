@@ -12,9 +12,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.projection import (
-    compute_relion_projector_projections_block,
-)
+from recovar.em.helpers.projection import compute_relion_projector_projections_block
 from recovar.utils.file_hash import sha256_file
 from scripts.analyze_k1_exact_ppref_fine_boundary import _load_ppref
 from scripts.analyze_k1_fine_operand_tuple import _sass_tree_raw_diff2
@@ -23,7 +21,6 @@ from scripts.validate_relion_fine_operand_capture import (
     load_fine_operand_capture,
     validate_capture,
 )
-
 
 SCHEMA = "recovar.em.k1_same_run_ppref_fine_projection.v1"
 

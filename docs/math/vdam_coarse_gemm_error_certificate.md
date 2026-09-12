@@ -13,7 +13,7 @@ rescoring, but total hybrid runtime and science parity still require a gate.
 
 The source anchors for this note are
 `_relion_coarse_gaussian_gemm_scores_jit` in
-`recovar/em/dense_single_volume/helpers/scoring.py`, `_add_priors` and the
+`recovar/em/scoring/scoring.py`, `_add_priors` and the
 coarse block loop in `helpers/significance.py`, and
 `relion_fine_diff2_update_f32` plus
 `relion_coarse_diff2_rectangular_f32_kernel` in
@@ -501,14 +501,14 @@ default-off.
 
 ## Code references
 
-- `recovar/em/dense_single_volume/helpers/coarse_gemm_hybrid.py`:
+- `recovar/em/scoring/coarse_gemm_hybrid.py`:
   `CoarseGemmCertificateTopology`,
   `validate_coarse_gemm_certificate_topology`,
   `certified_f64_expanded_score_gammas`,
   `coarse_gemm_expanded_score_eta_f64`,
   `coarse_gemm_direct_f32_ftz_envelope_and_range`, and
   `coarse_gemm_direct_score_intervals`
-- `recovar/em/dense_single_volume/helpers/scoring.py`:
+- `recovar/em/scoring/scoring.py`:
   `_prepare_relion_coarse_gaussian_gemm_f64_image_batch` and
   `_relion_coarse_gaussian_gemm_update_certificate_state`, and
   `_relion_coarse_diff2_rotation_blocks_from_topology_f32`

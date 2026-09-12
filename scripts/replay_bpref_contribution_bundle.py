@@ -8,8 +8,8 @@ import hashlib
 import json
 import math
 import os
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import numpy as np
 
@@ -132,13 +132,9 @@ def _comparison(replays, left_key, right_key):
 def _reconstruct_unregularized_map(replay, boundary):
     """Transfer one replay through the shared no-prior reconstruction path."""
 
-    from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
-        relion_x_half_volume_to_native_half,
-    )
-    from recovar.em.dense_single_volume.local_backprojection import (
-        enforce_relion_half_volume_x0_hermitian_host,
-    )
-    from recovar.em.dense_single_volume.mean_helpers import _reconstruct_volume_eager
+    from recovar.em.helpers.half_volume_mstep import relion_x_half_volume_to_native_half
+    from recovar.em.local.local_backprojection import enforce_relion_half_volume_x0_hermitian_host
+    from recovar.em.refinement.mean_helpers import _reconstruct_volume_eager
 
     accumulator_shape = tuple(int(value) for value in np.asarray(boundary["volume_shape"]))
     image_shape = tuple(int(value) for value in np.asarray(boundary["image_shape"]))

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import bpref_diagnostics
+from recovar.em.diagnostics import bpref_diagnostics
 from recovar.em.diagnostics import pass2 as pass2_diagnostics
 
 pytestmark = pytest.mark.unit

@@ -2,7 +2,7 @@
 
 import inspect
 
-from recovar.em.dense_single_volume import iteration_loop
+from recovar.em.refinement import iteration_loop
 
 
 def test_state_swap_inputs_have_one_owner():

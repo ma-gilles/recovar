@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject as cuda
-from recovar.em.dense_single_volume.helpers.coarse_publication import _posterior_statistics
+from recovar.em.scoring.coarse_publication import _posterior_statistics
 
 pytestmark = pytest.mark.unit
 

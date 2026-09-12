@@ -90,9 +90,9 @@ def test_source_manifest_covers_hybrid_dispatch_and_cuda_sources() -> None:
     required = {
         "recovar/cuda/cuda_backproject.cu",
         "recovar/cuda_backproject.py",
-        "recovar/em/dense_single_volume/helpers/coarse_gemm_hybrid.py",
-        "recovar/em/dense_single_volume/helpers/scoring.py",
-        "recovar/em/dense_single_volume/helpers/significance.py",
+        "recovar/em/scoring/coarse_gemm_hybrid.py",
+        "recovar/em/scoring/scoring.py",
+        "recovar/em/scoring/significance.py",
         "scripts/qualify_vdam_gf46_hybrid_batch_h100.py",
         "scripts/run_vdam_gf46_hybrid_batch_h100.sbatch",
         "tests/unit/test_coarse_gemm_hybrid_significance.py",

@@ -12,7 +12,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
+from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _RELION_CUDA_FINE_REF3D_BLOCK_SIZE,
     _relion_cuda_fine_diff2_to_scores,
     _relion_cuda_fine_normalized_cc_score,

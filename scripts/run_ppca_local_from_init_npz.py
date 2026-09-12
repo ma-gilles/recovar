@@ -15,6 +15,7 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import jax
 import jax.numpy as jnp
+
 try:
     from run_ppca_dense_from_init_npz import (
         _default_current_size_schedule,
@@ -47,7 +48,7 @@ except ModuleNotFoundError as exc:
     )
 
 from recovar.data_io.cryoem_dataset import load_dataset
-from recovar.em.dense_single_volume.local_layout import build_local_hypothesis_layout
+from recovar.em.local.local_layout import build_local_hypothesis_layout
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
     ScheduleConfig,

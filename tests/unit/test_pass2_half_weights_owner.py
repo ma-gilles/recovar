@@ -4,9 +4,8 @@ import inspect
 
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sp
-
-from recovar.em.dense_single_volume.helpers import sparse_pass2_window
+from recovar.em.sparse_pass2 import sparse_pass2_bucketed as sp
+from recovar.em.sparse_pass2 import sparse_pass2_window
 
 
 def test_both_entry_points_use_the_owner():

@@ -9,7 +9,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
-from recovar.em.initial_model.schedules import GuiInitialModelDefaults
+from recovar.em.vdam.schedules import GuiInitialModelDefaults
 
 DEFAULTS = GuiInitialModelDefaults()
 
@@ -370,7 +370,7 @@ def _configure_jax_compilation_cache(*, enabled: bool, requested_dir: str) -> di
         "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS",
         "0",
     )
-    # Importing ``recovar.em.initial_model.schedules`` executes the package
+    # Importing ``recovar.em.vdam.schedules`` executes the package
     # initializer, which may import JAX before CLI parsing reaches this point.
     # Update the live config as well as the environment so the cache is active
     # for this process, not merely its children.
@@ -480,7 +480,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.require_custom_cuda:
         _require_custom_cuda_runtime()
 
-    from recovar.em.initial_model.driver import NativeInitialModelOptions, run_native_initial_model
+    from recovar.em.vdam.driver import NativeInitialModelOptions, run_native_initial_model
 
     result = run_native_initial_model(NativeInitialModelOptions(**options_dict))
     print(f"recovar InitialModel complete: {result.final_mrc}")

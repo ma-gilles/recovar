@@ -19,7 +19,7 @@ import jax.numpy as jnp
 
 from recovar.core import fourier_transform_utils as ftu
 from recovar.data_io.cryoem_dataset import load_dataset
-from recovar.em.dense_single_volume.k_class import run_dense_k_class_em
+from recovar.em.classification.k_class import run_dense_k_class_em
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
     ScheduleConfig,

@@ -29,12 +29,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from recovar.em.dense_single_volume.helpers.fourier_window import (  # noqa: E402
-    stable_fourier_window_current_size,
-)
-from recovar.em.dense_single_volume.helpers.projection import (  # noqa: E402
-    project_relion_projector_half_spectrum,
-)
+from recovar.em.helpers.fourier_window import stable_fourier_window_current_size  # noqa: E402
+from recovar.em.helpers.projection import project_relion_projector_half_spectrum  # noqa: E402
 
 SCHEMA = "recovar.vdam_projector_capacity_proof.v1"
 GF46_IMAGE_SIZE = 128

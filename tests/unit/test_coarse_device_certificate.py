@@ -5,14 +5,14 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import scoring
-from recovar.em.dense_single_volume.helpers.coarse_device_certificate import (
-    _coarse_certificate_state_jit,
+from recovar.em.scoring import scoring
+from recovar.em.scoring.coarse_device_certificate import (
     _certify_coarse_rotation_blocks_jit,
+    _coarse_certificate_state_jit,
     certify_coarse_rotation_blocks,
     prepare_coarse_certificate_state,
 )
-from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+from recovar.em.scoring.coarse_gemm_hybrid import (
     initialize_coarse_gemm_hybrid_interval_state,
     plan_coarse_gemm_certificate_topology,
     select_coarse_gemm_hybrid_rotation_blocks,
@@ -156,9 +156,7 @@ def test_topology_mismatch_is_rejected():
 @pytest.mark.parametrize("capacity", [1, 5, 8])
 @pytest.mark.parametrize("poison", [False, True])
 def test_complete_device_certificate_selection_matches_host(capacity, poison):
-    from recovar.em.dense_single_volume.helpers.coarse_device_selection import (
-        decode_device_coarse_selection,
-    )
+    from recovar.em.scoring.coarse_device_selection import decode_device_coarse_selection
 
     operands, kwargs = _case(poison=poison)
     with jax.enable_x64(True):
@@ -178,9 +176,7 @@ def test_complete_device_certificate_selection_matches_host(capacity, poison):
 
 
 def test_combined_selection_validates_dynamic_count_without_new_executables():
-    from recovar.em.dense_single_volume.helpers.coarse_device_selection import (
-        decode_device_coarse_selection,
-    )
+    from recovar.em.scoring.coarse_device_selection import decode_device_coarse_selection
 
     operands, kwargs = _case()
     with jax.enable_x64(True):

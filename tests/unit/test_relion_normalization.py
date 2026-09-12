@@ -4,8 +4,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.types import NoiseStats
-from recovar.em.dense_single_volume.relion_normalization import update_relion_norm_scale_corrections
+from recovar.em.helpers.types import NoiseStats
+from recovar.em.relion.relion_normalization import update_relion_norm_scale_corrections
 
 pytestmark = pytest.mark.unit
 

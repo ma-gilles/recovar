@@ -23056,7 +23056,7 @@ unfixed independent init_volume path** -- open for a future session.
 
 ### 2026-08-31 dense single-volume double-precision audit
 
-A complete static/call-chain audit of `recovar/em/dense_single_volume/**`
+A complete static/call-chain audit of `recovar/em/**`
 removed additional live narrowing at shared stats, pass-1 priors,
 correction/pre-shift, global/replay translation, dense/local noise, sparse
 pass-2 geometry/prior/output, and K-class fallback boundaries. CPU fast guard

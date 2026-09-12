@@ -19,8 +19,8 @@ import logging
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import k_class as k_class_module
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_pass2_module
+from recovar.em.classification import k_class as k_class_module
+from recovar.em.sparse_pass2 import sparse_pass2_bucketed as sparse_pass2_module
 
 
 class TestPass1Top2DebugIndices:

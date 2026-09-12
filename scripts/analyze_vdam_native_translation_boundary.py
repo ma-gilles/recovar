@@ -19,18 +19,11 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume.local_big_jit import _centered_rfft2_per_image
-from recovar.em.dense_single_volume.helpers.fourier_window import (
-    make_fourier_window_indices_np,
-)
-from recovar.em.dense_single_volume.helpers.half_spectrum import (
-    make_relion_noise_shell_indices_half,
-    make_scoring_half_image_weights,
-)
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
-    _relion_translation_angles_f32,
-)
-from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
+from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
+from recovar.em.helpers.half_spectrum import make_relion_noise_shell_indices_half, make_scoring_half_image_weights
+from recovar.em.local.local_big_jit import _centered_rfft2_per_image
+from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
+from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _relion_cuda_fine_full_to_compact_lookup,
     _relion_cuda_pixel_correction_from_rfloat_ctf,
     _relion_cuda_powerclass_highres_xi2_half,
@@ -521,12 +514,8 @@ def _projection_source_boundary(
 ) -> dict[str, object]:
     """Locate a projected-reference gap across map, PPref, and texture stages."""
 
-    from recovar.em.dense_single_volume.helpers.projection import (
-        compute_relion_projector_projections_block,
-    )
-    from recovar.em.initial_model.dense_adapter import (
-        reference_to_relion_projector_half_maps,
-    )
+    from recovar.em.helpers.projection import compute_relion_projector_projections_block
+    from recovar.em.vdam.dense_adapter import reference_to_relion_projector_half_maps
     from recovar.utils.helpers import load_relion_volume
     from scripts.analyze_em_k1_fine_ppref_source_boundary import (
         classify_source_boundary,

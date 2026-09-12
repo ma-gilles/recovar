@@ -2,7 +2,7 @@
 
 import inspect
 
-from recovar.em.initial_model import driver, native_options, native_sampling
+from recovar.em.vdam import driver, native_options, native_sampling
 
 SAMPLING = ("NativeOpticsState", "NativeSamplingPlan", "NativeSamplingState", "_build_sampling_plan", "_initial_sampling_state", "_estimate_native_sampling_accuracy", "_relion_update_native_sampling_state", "_prepare_native_sampling_for_iteration", "_random_perturbation_for_iteration")
 
@@ -15,4 +15,4 @@ def test_owners_hold_the_definitions_and_driver_only_imports_them():
     assert inspect.getmodule(native_options.NativeInitialModelOptions) is native_options
     assert "\nclass NativeInitialModelOptions" not in driver_src
     assert driver.NativeInitialModelOptions is native_options.NativeInitialModelOptions
-    assert "import recovar.em.initial_model.driver" not in inspect.getsource(native_sampling)
+    assert "import recovar.em.vdam.driver" not in inspect.getsource(native_sampling)

@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.initial_model.layout import relion_bpref_frame_scales
+from recovar.em.vdam.layout import relion_bpref_frame_scales
 from scripts.analyze_vdam_bpref_accumulator_boundary import _production_names
 from scripts.analyze_vdam_mstep_boundary import _read_relion_array
 from scripts.analyze_vdam_storewavg_boundary import (
@@ -236,9 +236,7 @@ def analyze(
     from recovar.relion_bind._relion_bind_core import get_backprojector_data
 
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers.projection import (
-        compute_relion_projector_projections_block,
-    )
+    from recovar.em.helpers.projection import compute_relion_projector_projections_block
 
     _require(jax.default_backend() == "gpu", "complete StoreWavg panel replay requires a GPU")
     native_by_part, incomplete_native = _native_prefixes(native_directory)

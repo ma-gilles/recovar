@@ -2,7 +2,7 @@
 
 import inspect
 
-from recovar.em.initial_model import dense_adapter, estep_common, sparse_pass2_estep
+from recovar.em.vdam import dense_adapter, estep_common, sparse_pass2_estep
 
 
 def test_owners_hold_the_definitions_and_the_adapter_routes_to_them():

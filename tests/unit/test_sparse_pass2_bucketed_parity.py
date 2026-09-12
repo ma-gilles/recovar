@@ -22,25 +22,17 @@ pytest.importorskip("jax")
 import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
-from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_pass2_module
-from recovar.em.dense_single_volume.helpers.oversampling import (
-    _compute_pass2_stats_sparse_perimage_reference,
-    compute_pass2_stats_sparse,
-)
-from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
-    _build_bucket_arrays,
-    _prepare_per_image_pass2_inputs,
-)
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
-    _reorder_to_indices,
-)
-from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (
+from recovar.em.helpers import oversampling as oversampling_module
+from recovar.em.helpers.oversampling import _compute_pass2_stats_sparse_perimage_reference, compute_pass2_stats_sparse
+from recovar.em.scoring.sparse_bucket_arrays import _build_bucket_arrays, _prepare_per_image_pass2_inputs
+from recovar.em.sparse_pass2 import sparse_pass2_bucketed as sparse_pass2_module
+from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _reorder_to_indices
+from recovar.em.sparse_pass2.sparse_pass2_posterior import (
     _normalize_pass2_bucket,
     _normalize_pass2_bucket_with_log_z,
     _winner_take_all_bucket_probs,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
+from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _score_pass2_bucket_normalized_cc,
     _score_pass2_bucket_relion_gpu_diff2,
 )

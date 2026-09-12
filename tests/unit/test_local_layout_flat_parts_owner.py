@@ -4,7 +4,7 @@ import inspect
 
 import numpy as np
 
-from recovar.em.dense_single_volume import local_layout
+from recovar.em.local import local_layout
 
 
 def test_owner_concatenates_casts_and_returns_typed_empties():

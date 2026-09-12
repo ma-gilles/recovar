@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import bpref_diagnostics
+from recovar.em.diagnostics import bpref_diagnostics
 
 
 def test_k1_bpref_membership_dump_preserves_identity_padding_and_weights(

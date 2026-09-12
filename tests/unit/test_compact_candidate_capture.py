@@ -1,10 +1,8 @@
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import compact_candidate_capture as capture
-from recovar.em.dense_single_volume.helpers.sparse_pass2_dump import (
-    _pass2_dump_requested_for_bucket,
-)
+from recovar.em.diagnostics import compact_candidate_capture as capture
+from recovar.em.diagnostics.sparse_pass2_dump import _pass2_dump_requested_for_bucket
 
 
 class _ArrayConversionForbidden:

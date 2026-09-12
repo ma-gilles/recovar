@@ -6,11 +6,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_em_engine as engine
-
-from recovar.em.dense_single_volume import local_bucket_stages
-from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
-from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
+from recovar.em.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.local import local_bucket_stages
+from recovar.em.local import local_em_engine as engine
 
 pytestmark = pytest.mark.unit
 

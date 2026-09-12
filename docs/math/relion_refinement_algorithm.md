@@ -13,10 +13,10 @@ in code comments refer to the source used for those comparisons.
 
 ## 1. Controller and state
 
-[`refine_single_volume`](../../recovar/em/dense_single_volume/iteration_loop.py)
+[`refine_single_volume`](../../recovar/em/refinement/iteration_loop.py)
 accepts two half-set datasets, initial Fourier volumes, noise and signal priors,
 and refinement settings. Despite its historical name, it supports `n_classes > 1`.
-[`RefinementOptions`](../../recovar/em/dense_single_volume/refinement_options.py)
+[`RefinementOptions`](../../recovar/em/refinement/refinement_options.py)
 groups the settings; supplied option fields override the corresponding individual
 arguments.
 
@@ -33,9 +33,9 @@ The order of individual updates within these stages matters for trajectory
 comparisons. Replay/oracle inputs can replace selected state boundaries;
 results from those modes must remain distinguishable from autonomous refinement.
 Their implementation belongs to
-[`relion_replay.py`](../../recovar/em/dense_single_volume/relion_replay.py).
+[`relion_replay.py`](../../recovar/em/diagnostics/relion_replay.py).
 
-[`score_outputs.py`](../../recovar/em/dense_single_volume/score_outputs.py)
+[`score_outputs.py`](../../recovar/em/dense/score_outputs.py)
 defines the controller's scoring payloads:
 
 - `HalfScoreResult` holds one half's accumulators, assignments and statistics.
@@ -128,11 +128,11 @@ The implementation owners are:
 
 | Work | Owner |
 | --- | --- |
-| Image/CTF/noise preparation and translation phases | [`preprocessing.py`](../../recovar/em/dense_single_volume/helpers/preprocessing.py), `preprocess_batch` and `preprocess_batch_firstiter_cc` |
-| Projection and projection-dependent residual statistics | [`projection.py`](../../recovar/em/dense_single_volume/helpers/projection.py), `compute_projections_block` and `compute_relion_projector_projections_block` |
-| Gaussian and normalized-CC block scores | [`scoring.py`](../../recovar/em/dense_single_volume/helpers/scoring.py), `_score_rotation_block` and `_e_step_block_scores_windowed` |
-| Priors, candidate masks and class/external-normalizer constraints | [`score_constraints.py`](../../recovar/em/dense_single_volume/helpers/score_constraints.py), `DenseScoreConstraints` |
-| Scoring weights for the selected Fourier convention | [`half_spectrum.py`](../../recovar/em/dense_single_volume/helpers/half_spectrum.py), `make_scoring_half_image_weights` |
+| Image/CTF/noise preparation and translation phases | [`preprocessing.py`](../../recovar/em/helpers/preprocessing.py), `preprocess_batch` and `preprocess_batch_firstiter_cc` |
+| Projection and projection-dependent residual statistics | [`projection.py`](../../recovar/em/helpers/projection.py), `compute_projections_block` and `compute_relion_projector_projections_block` |
+| Gaussian and normalized-CC block scores | [`scoring.py`](../../recovar/em/scoring/scoring.py), `_score_rotation_block` and `_e_step_block_scores_windowed` |
+| Priors, candidate masks and class/external-normalizer constraints | [`score_constraints.py`](../../recovar/em/scoring/score_constraints.py), `DenseScoreConstraints` |
+| Scoring weights for the selected Fourier convention | [`half_spectrum.py`](../../recovar/em/helpers/half_spectrum.py), `make_scoring_half_image_weights` |
 
 The half-image layout has `H * (W//2 + 1)` entries. RELION half-sum scoring and
 Hermitian full-image inner-product weights are separate conventions. Gaussian
@@ -146,7 +146,7 @@ There are two different uses of “two pass.” Keep them separate when profilin
 or comparing intermediate results.
 
 **Blockwise normalization within one grid.**
-[`em_engine.run_em`](../../recovar/em/dense_single_volume/em_engine.py) processes
+[`em_engine.run_em`](../../recovar/em/dense/em_engine.py) processes
 image batches and rotation blocks. Its first sweep collects normalization and
 best-pose statistics; its second sweep recomputes scores for accumulation.
 `_update_logsumexp` and `_merge_block_logsumexp` in `helpers/scoring.py` combine
@@ -156,7 +156,7 @@ other options can skip negligible second-sweep blocks or use fused execution.
 The complete image × rotation × translation score tensor is not required.
 
 `run_em` returns `DenseEMResult`, defined in
-[`helpers/types.py`](../../recovar/em/dense_single_volume/helpers/types.py).
+[`helpers/types.py`](../../recovar/em/helpers/types.py).
 Read `mean`, `hard_assignments`, `Ft_y` and `Ft_ctf` by name. Optional `stats`,
 `noise_stats` and `profile` fields are `None` when disabled; the corresponding
 flags still control the same computations. The result container stores existing
@@ -164,18 +164,18 @@ array references. Callers no longer decode a different tuple layout for each
 flag combination.
 
 **Adaptive coarse-to-fine search.**
-[`k_class.py`](../../recovar/em/dense_single_volume/k_class.py) owns
+[`k_class.py`](../../recovar/em/classification/k_class.py) owns
 `run_dense_k_class_em` and `run_dense_k_class_em_adaptive`.
-[`significance.py`](../../recovar/em/dense_single_volume/helpers/significance.py)
+[`significance.py`](../../recovar/em/scoring/significance.py)
 computes joint coarse class/pose evidence and significant support, including
 K=1 routed through the class-aware implementation.
-[`oversampling.py`](../../recovar/em/dense_single_volume/helpers/oversampling.py)
+[`oversampling.py`](../../recovar/em/helpers/oversampling.py)
 owns cumulative-mass selection and coarse/fine mappings. Significance selects
 rotation/translation pairs; it is not simply an independent probability cutoff
 on every orientation.
 
 Fine execution can use dense or sparse routes.
-[`sparse_pass2_bucketed.py`](../../recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py)
+[`sparse_pass2_bucketed.py`](../../recovar/em/sparse_pass2/sparse_pass2_bucketed.py)
 owns bucketed and compact-pair scoring, posterior reconstruction policies and
 accumulation, including `compute_k_class_pass2_stats_sparse_fused`.
 The support representation, execution buckets and float32 posterior policy
@@ -183,10 +183,10 @@ are part of the comparison contract. Preserving only final MAP assignments
 does not establish equivalent soft M-step contributions.
 
 **Exact local search.**
-[`local_search_iteration.py`](../../recovar/em/dense_single_volume/local_search_iteration.py)
+[`local_search_iteration.py`](../../recovar/em/local/local_search_iteration.py)
 constructs per-image neighborhoods, applies the batch budget and dispatches
 `local_em_engine.run_local_em_exact` or `k_class.run_local_k_class_em`.
-[`local_layout.py`](../../recovar/em/dense_single_volume/local_layout.py)
+[`local_layout.py`](../../recovar/em/local/local_layout.py)
 builds the per-image hypothesis layout. This route does not use the retired
 sort-and-split union helper formerly described on this page.
 
@@ -199,7 +199,7 @@ is active. This limits exploration of separated modes; it does not prove that
 a particle can never leave its initial neighborhood over later iterations.
 
 **Fourier windows and performance.**
-[`fourier_window.py`](../../recovar/em/dense_single_volume/helpers/fourier_window.py)
+[`fourier_window.py`](../../recovar/em/helpers/fourier_window.py)
 defines `FourierWindowSpec` and the score/projection window mappings.
 `current_size` is an image diameter in pixels. Window shape, pixel order and
 redundant-axis treatment depend on the scoring route. Smaller windows reduce
@@ -224,12 +224,12 @@ These equations omit layout, interpolation, normalization and padding details.
 routes have their own implementations. `Ft_y` is complex. `Ft_ctf` represents
 real weights, although some return layouts store it in a complex array.
 
-[`half_volume_mstep.py`](../../recovar/em/dense_single_volume/helpers/half_volume_mstep.py)
+[`half_volume_mstep.py`](../../recovar/em/helpers/half_volume_mstep.py)
 owns packed-half conventions, the Hermitian `x=0` plane and conversions to
 public layouts. Do not assume all accumulators have the full native volume
 shape: padding and current-size backprojector grids change their dimensions.
 
-[`mean_helpers.py`](../../recovar/em/dense_single_volume/mean_helpers.py) owns
+[`mean_helpers.py`](../../recovar/em/refinement/mean_helpers.py) owns
 `compute_unregularized_halfmaps_and_align_signs`,
 `_reconstruct_and_postprocess_means`, `update_posterior_noise_variance`,
 and `update_c1_sigma_offset_from_posterior`.
@@ -238,7 +238,7 @@ well as accumulators. The input noise representation can be a per-pixel array
 or separate half-set inputs; radial statistics and group corrections have
 explicit conversion/update paths.
 
-[`relion_normalization.py`](../../recovar/em/dense_single_volume/relion_normalization.py)
+[`relion_normalization.py`](../../recovar/em/relion/relion_normalization.py)
 owns `update_relion_norm_scale_corrections` and its result type. It computes
 per-image normalization and per-group scales from M-step statistics, using
 retained posterior mass for the average normalization. The controller installs
@@ -264,7 +264,7 @@ low Fourier frequency, not spatial wavelengths smaller than 40 Å.
 
 ## 6. Sampling transitions and convergence
 
-[`convergence.py`](../../recovar/em/dense_single_volume/helpers/convergence.py)
+[`convergence.py`](../../recovar/em/helpers/convergence.py)
 owns `RefinementState`, `update_refinement_state`, `update_angular_sampling`,
 `refine_angular_sampling` and `check_convergence`.
 
@@ -282,7 +282,7 @@ translation range/step, resets the change counters and activates local search
 at `auto_local_healpix_order`. Its local sigma is
 `2 * radians(new_angular_step / 2**adaptive_oversampling)`.
 
-[`expected_accuracy.py`](../../recovar/em/dense_single_volume/helpers/expected_accuracy.py)
+[`expected_accuracy.py`](../../recovar/em/helpers/expected_accuracy.py)
 owns the RELION-style accuracy trial calculation. The approximate posterior
 helper `calculate_expected_angular_errors` is a different route. Likewise,
 `mean_helpers._relion_optimizer_average_pmax` uses the split-half optimizer's

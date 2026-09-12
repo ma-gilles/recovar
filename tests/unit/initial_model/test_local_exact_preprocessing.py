@@ -6,10 +6,10 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_preprocessing
-from recovar.em.dense_single_volume.helpers import relion_ctf
-from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights
-from recovar.em.dense_single_volume.local_caches import _LocalProcessedHalfCache
+from recovar.em.helpers.half_spectrum import make_half_image_weights
+from recovar.em.local import local_preprocessing
+from recovar.em.local.local_caches import _LocalProcessedHalfCache
+from recovar.em.relion import relion_ctf
 
 pytestmark = pytest.mark.unit
 

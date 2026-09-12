@@ -3,14 +3,8 @@ import inspect
 
 import pytest
 
-from recovar.em.dense_single_volume.iteration_loop import (
-    _run_relion_iteration_loop,
-    refine_single_volume,
-)
-from recovar.em.dense_single_volume.refinement_options import (
-    RelionParityOptions,
-    ReplayState,
-)
+from recovar.em.refinement.iteration_loop import _run_relion_iteration_loop, refine_single_volume
+from recovar.em.refinement.refinement_options import RelionParityOptions, ReplayState
 from scripts.run_full_refinement import (
     _complete_relion_numbered_state_iterations,
     _resolve_final_replay_source_iteration,

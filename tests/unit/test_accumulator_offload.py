@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import score_outputs
+from recovar.em.dense import score_outputs
 
 pytestmark = pytest.mark.unit
 

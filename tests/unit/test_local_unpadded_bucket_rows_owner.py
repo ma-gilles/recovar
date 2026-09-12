@@ -5,7 +5,7 @@ import types
 
 import numpy as np
 
-from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.local import local_em_engine
 
 
 def test_owner_limits_every_row_array_and_keeps_optional_none():
@@ -17,7 +17,7 @@ def test_owner_limits_every_row_array_and_keeps_optional_none():
 
 
 def test_both_postprocess_calls_use_the_owner():
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_bucket_stages
 
     # one call site is the engine's own, the other is in the bucket stage that owns it
     src = inspect.getsource(local_em_engine) + inspect.getsource(local_bucket_stages)

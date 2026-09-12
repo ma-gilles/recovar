@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers import state_swap_runtime
+from recovar.em.diagnostics import state_swap_runtime
 
 
 def _inputs():

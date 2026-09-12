@@ -13,19 +13,15 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.iteration_loop import (
-    refine_single_volume,
-)
-from recovar.em.dense_single_volume import iteration_loop as iteration_loop_module
-from recovar.em.dense_single_volume.refinement_options import (
+from recovar.em.helpers.fourier_window import quantize_current_size
+from recovar.em.helpers.resolution import fsc_to_current_size
+from recovar.em.refinement import iteration_loop as iteration_loop_module
+from recovar.em.refinement.iteration_loop import refine_single_volume
+from recovar.em.refinement.refinement_options import (
     AdaptiveOptions,
     RefinementBatching,
     RefinementOptions,
     RefinementSchedule,
-)
-from recovar.em.dense_single_volume.helpers.resolution import fsc_to_current_size
-from recovar.em.dense_single_volume.helpers.fourier_window import (
-    quantize_current_size,
 )
 
 pytestmark = pytest.mark.unit
@@ -106,7 +102,7 @@ def _identity_process(batch, apply_image_mask=False):
 def _identity_process_half(batch, apply_image_mask=False):
     """Half-spectrum passthrough: full centered FT → packed Hermitian half.
 
-    Dense-EM's preprocessing (recovar/em/dense_single_volume/helpers/
+    Dense-EM's preprocessing (recovar/em/helpers/
     preprocessing.py:63) reads ``experiment_dataset.process_images_half``
     and expects the packed half-image layout
     ``(batch, H * (W // 2 + 1))``. The mock stores full-spectrum FT images
@@ -139,7 +135,7 @@ class MockDataset:
         self.CTF_params = np.zeros((n_images, 9), dtype=np.float32)
         self.ctf_evaluator = staticmethod(_identity_ctf)
         self.process_images = staticmethod(_identity_process)
-        # Dense-EM preprocessing (recovar/em/dense_single_volume/helpers/
+        # Dense-EM preprocessing (recovar/em/helpers/
         # preprocessing.py:63) now reads ``process_images_half`` rather than
         # ``process_images``. The half-image variant returns the packed
         # half-spectrum layout (H * (W // 2 + 1) pixels per image).

@@ -14,25 +14,19 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import recovar.em.local.local_search_iteration as local_search_iteration
+from recovar.em.local.local_search_iteration import _LocalSearchIterationResult
 
-import recovar.em.dense_single_volume.iteration_loop as iteration_loop
-import recovar.em.dense_single_volume.local_search_iteration as local_search_iteration
-from recovar.em.dense_single_volume import (
-    finalization_policy,
-    half_scoring,
-    local_debug,
-    mean_helpers,
-    ppca_bridge,
-    relion_replay,
-    relion_worker_scale,
-    score_outputs,
-    scoring_policy,
-)
+import recovar.em.refinement.iteration_loop as iteration_loop
+from recovar.em.dense import half_scoring, score_outputs, scoring_policy
+from recovar.em.diagnostics import local_debug, relion_replay
 from recovar.em.diagnostics import reconstruction as reconstruction_diagnostics
-from recovar.em.dense_single_volume.helpers import orientation_priors
-from recovar.em.dense_single_volume.helpers.convergence import _native_final_perturbation_healpix_order
-from recovar.em.dense_single_volume.local_search_iteration import _LocalSearchIterationResult
-from recovar.em.initial_model.iteration_loop import run_vdam_iterations
+from recovar.em.helpers import orientation_priors
+from recovar.em.helpers.convergence import _native_final_perturbation_healpix_order
+from recovar.em.ppca_refinement import ppca_bridge
+from recovar.em.refinement import finalization_policy, mean_helpers
+from recovar.em.relion import relion_worker_scale
+from recovar.em.vdam.iteration_loop import run_vdam_iterations
 
 pytestmark = pytest.mark.unit
 

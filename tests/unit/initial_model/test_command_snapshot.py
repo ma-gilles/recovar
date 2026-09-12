@@ -187,7 +187,7 @@ class TestRecovarRuntimeOptions:
     ):
         from types import SimpleNamespace
 
-        import recovar.em.initial_model.driver as driver
+        import recovar.em.vdam.driver as driver
 
         captured = {}
 
@@ -261,12 +261,9 @@ class TestAlignSymmetryCommand:
 
 class TestAlignSymmetryModule:
     def test_build_tokens_matches_driver(self, run_ab_initio):
-        """The standalone module in recovar.em.initial_model.align_symmetry
+        """The standalone module in recovar.em.vdam.align_symmetry
         must produce the same tokens as the driver script."""
-        from recovar.em.initial_model.align_symmetry import (
-            AlignSymmetrySpec,
-            build_align_symmetry_tokens,
-        )
+        from recovar.em.vdam.align_symmetry import AlignSymmetrySpec, build_align_symmetry_tokens
 
         spec = AlignSymmetrySpec(
             last_model_star="ab_initio/run_it200_model.star",
@@ -283,10 +280,7 @@ class TestAlignSymmetryModule:
         assert module_tokens[module_tokens.index("--sym") + 1] == "C4"
 
     def test_c1_noop(self, run_ab_initio):
-        from recovar.em.initial_model.align_symmetry import (
-            AlignSymmetrySpec,
-            build_align_symmetry_tokens,
-        )
+        from recovar.em.vdam.align_symmetry import AlignSymmetrySpec, build_align_symmetry_tokens
 
         spec = AlignSymmetrySpec(
             last_model_star="a.star",

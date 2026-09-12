@@ -12,10 +12,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
-from recovar.em.dense_single_volume.helpers.projection import (
-    compute_relion_projector_projections_block,
-)
+from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
+from recovar.em.helpers.projection import compute_relion_projector_projections_block
 from recovar.utils.file_hash import sha256_file
 from scripts.analyze_k1_scale_aa_boundary import _native_aa_shells
 

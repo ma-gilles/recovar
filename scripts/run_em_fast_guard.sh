@@ -32,7 +32,7 @@ fi
 
 # Catch incomplete caller migrations before importing JAX or compiling tests.
 # This guard covers the dense/local package; shared/legacy EM has separate gates.
-"$PYTHON_BIN" -m ruff check --select F821 "$ROOT/recovar/em/dense_single_volume" "$ROOT/recovar/em/diagnostics"
+"$PYTHON_BIN" -m ruff check --select F821 "$ROOT/recovar/em"
 
 "$PYTHON_BIN" - <<'PY'
 import pathlib
@@ -49,20 +49,20 @@ pixi_env = (repo / ".pixi" / "envs" / "default").resolve()
 assert str(recovar_file).startswith(str(repo) + "/"), recovar_file
 assert str(jax_file).startswith(str(pixi_env) + "/"), (jax_file, pixi_env)
 for helper in (
-    "relion_replay", "relion_normalization", "projector_preparation",
-    "score_outputs", "local_batch_planning", "k_class_results", "k_class_inputs", "scoring_policy", "helpers.resolution", "helpers.bpref_diagnostics",
-    "helpers.expected_accuracy", "helpers.significant_samples", "helpers.coarse_score_diagnostics", "helpers.sparse_bucket_arrays", "helpers.compact_candidates", "helpers.relion_ctf", "helpers.scale_groups", "helpers.normalization_inputs",
-    "helpers.vdam_replay", "fixed_capacity_local", "local_layout", "local_debug", "local_projection_cache", "local_timing",
+    "diagnostics.relion_replay", "relion.relion_normalization", "refinement.projector_preparation",
+    "dense.score_outputs", "local.local_batch_planning", "classification.k_class_results", "classification.k_class_inputs", "dense.scoring_policy", "helpers.resolution", "diagnostics.bpref_diagnostics",
+    "helpers.expected_accuracy", "scoring.significant_samples", "diagnostics.coarse_score_diagnostics", "scoring.sparse_bucket_arrays", "scoring.compact_candidates", "relion.relion_ctf", "helpers.scale_groups", "helpers.normalization_inputs",
+    "diagnostics.vdam_replay", "local.fixed_capacity_local", "local.local_layout", "diagnostics.local_debug", "local.local_projection_cache", "local.local_timing",
 ):
-    importlib.import_module(f"recovar.em.dense_single_volume.{helper}")
+    importlib.import_module(f"recovar.em.{helper}")
 for diagnostic in ("iteration", "pass2", "norm_scale", "reconstruction"):
     importlib.import_module(f"recovar.em.diagnostics.{diagnostic}")
 execution_modules = (
-    "iteration_loop", "half_scoring", "k_class", "em_engine", "local_em_engine", "local_big_jit",
-    "helpers.significance", "helpers.sparse_pass2_bucketed",
+    "refinement.iteration_loop", "dense.half_scoring", "classification.k_class", "dense.em_engine", "local.local_em_engine", "local.local_big_jit",
+    "scoring.significance", "sparse_pass2.sparse_pass2_bucketed",
 )
 loaded = [name for name in execution_modules
-          if f"recovar.em.dense_single_volume.{name}" in sys.modules]
+          if f"recovar.em.{name}" in sys.modules]
 assert not loaded, f"EM helper imports must not load execution modules: {loaded}"
 print(f"provenance_ok recovar={recovar_file} jax={jax_file}")
 print("helper_import_boundary_ok")

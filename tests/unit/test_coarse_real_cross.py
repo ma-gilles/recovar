@@ -4,10 +4,8 @@ import jax
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import significance
-
-from recovar.em.dense_single_volume.helpers import coarse_gaussian_gemm
-from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import plan_coarse_gemm_certificate_topology
+from recovar.em.scoring import coarse_gaussian_gemm, significance
+from recovar.em.scoring.coarse_gemm_hybrid import plan_coarse_gemm_certificate_topology
 
 pytestmark = [pytest.mark.unit, pytest.mark.gpu]
 

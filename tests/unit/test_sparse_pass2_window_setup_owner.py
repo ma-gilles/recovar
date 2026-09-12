@@ -8,9 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sp
-
-from recovar.em.dense_single_volume.helpers import sparse_pass2_window
+from recovar.em.sparse_pass2 import sparse_pass2_bucketed as sp
+from recovar.em.sparse_pass2 import sparse_pass2_window
 
 pytestmark = pytest.mark.unit
 

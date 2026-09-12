@@ -15,10 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from recovar.em.initial_model.bootstrap_iref import (
-    ParticleCTF,
-    initial_low_pass_filter_references,
-)
+from recovar.em.vdam.bootstrap_iref import ParticleCTF, initial_low_pass_filter_references
 
 FIXTURE_DIR = Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run")
 PARTICLES_STAR = Path(
@@ -123,7 +120,7 @@ def test_bootstrap_iref_matches_relion_iter0_class():
 
     # Use the C++ bootstrap binding with RELION GUI pad=1 and bootstrap
     # current_size=round(0.07*N)=4.
-    from recovar.em.initial_model.bootstrap_iref import compute_bootstrap_iref_via_cpp
+    from recovar.em.vdam.bootstrap_iref import compute_bootstrap_iref_via_cpp
 
     defU = np.array([c.defU for c in ctfs], dtype=np.float64)
     defV = np.array([c.defV for c in ctfs], dtype=np.float64)
@@ -247,11 +244,10 @@ def _read_binary_dump(path: Path) -> np.ndarray:
 @requires_relion_dump
 def test_bootstrap_iref_matches_fresh_relion_dump():
     """F6 machine-precision gate vs same-build RELION dump."""
-    from recovar.em.initial_model.bootstrap_iref import (
-        compute_bootstrap_iref_via_cpp,
-    )
     import mrcfile
+
     from recovar.data_io.starfile import read_star
+    from recovar.em.vdam.bootstrap_iref import compute_bootstrap_iref_via_cpp
 
     with mrcfile.open(PARTICLES_STAR.with_name("particles.64.mrcs"), permissive=True) as m:
         stack = np.ascontiguousarray(np.asarray(m.data, dtype=np.float64))

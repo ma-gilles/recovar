@@ -18,7 +18,7 @@ import math
 
 import pytest
 
-from recovar.em.initial_model import (
+from recovar.em.vdam import (
     GuiInitialModelDefaults,
     compute_phase_lengths,
     compute_stepsize,
@@ -28,11 +28,7 @@ from recovar.em.initial_model import (
     default_subset_sizes_for_3d_initial_model,
     default_tau2_fudge_for_3d_initial_model,
 )
-from recovar.em.initial_model.schedules import (
-    _relion_round,
-    _step_sigmoid_value,
-    phase_lengths_from_effective_fractions,
-)
+from recovar.em.vdam.schedules import _relion_round, _step_sigmoid_value, phase_lengths_from_effective_fractions
 
 pytestmark = pytest.mark.unit
 

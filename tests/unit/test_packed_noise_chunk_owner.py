@@ -6,7 +6,7 @@ import inspect
 
 import pytest
 
-import recovar.em.dense_single_volume.local_em_engine as engine
+import recovar.em.local.local_em_engine as engine
 
 pytestmark = pytest.mark.unit
 

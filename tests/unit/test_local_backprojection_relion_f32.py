@@ -3,7 +3,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.local_backprojection import (
+from recovar.em.local.local_backprojection import (
     compute_local_mstep_sums,
     compute_local_noise_scalar_terms,
     compute_local_weighted_sums,

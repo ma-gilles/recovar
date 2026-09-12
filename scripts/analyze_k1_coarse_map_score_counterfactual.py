@@ -12,20 +12,14 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume.helpers.projection import (
+from recovar.em.helpers.projection import (
     compute_relion_projector_projections_block,
     relion_projector_half_to_texture_full,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
-    _relion_translation_angles_f32,
-)
-from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
-    _relion_cuda_fine_full_to_compact_lookup,
-)
-from recovar.em.dense_single_volume.helpers.significance import _dense_projection_scale
-from recovar.em.initial_model.dense_adapter import (
-    reference_to_relion_projector_half_maps,
-)
+from recovar.em.scoring.significance import _dense_projection_scale
+from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
+from recovar.em.sparse_pass2.sparse_pass2_scoring import _relion_cuda_fine_full_to_compact_lookup
+from recovar.em.vdam.dense_adapter import reference_to_relion_projector_half_maps
 from recovar.utils import helpers
 from recovar.utils.file_hash import sha256_file
 from scripts.analyze_em_k1_coarse_pass1_boundary import _map_relion_table
@@ -62,9 +56,7 @@ def _posterior_summary(
 ) -> tuple[dict[str, object], np.ndarray, np.ndarray]:
     """Run the production RELION-f32 posterior and return a compact audit."""
 
-    from recovar.em.dense_single_volume.helpers.oversampling import (
-        relion_cuda_f32_coarse_posterior,
-    )
+    from recovar.em.helpers.oversampling import relion_cuda_f32_coarse_posterior
 
     shape = np.asarray(scores_with_priors).shape
     if len(shape) != 2:

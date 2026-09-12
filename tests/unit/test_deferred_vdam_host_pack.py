@@ -5,10 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.deferred_vdam_host_pack import (
-    _gather_deferred_vdam_host_plan,
-    pack_deferred_vdam_host_plan,
-)
+from recovar.em.helpers.deferred_vdam_host_pack import _gather_deferred_vdam_host_plan, pack_deferred_vdam_host_plan
 
 pytestmark = pytest.mark.unit
 

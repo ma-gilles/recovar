@@ -4,16 +4,14 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import coarse_publication as pub
-from recovar.em.dense_single_volume.helpers import relion_ctf
-from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+from recovar.em.relion import relion_ctf
+from recovar.em.scoring import coarse_publication as pub
+from recovar.em.scoring.coarse_gaussian_gemm import CoarseGaussianGemmHybridBatchResult
+from recovar.em.scoring.coarse_gemm_hybrid import (
     CoarseGemmHybridBlockSelection,
     assemble_coarse_gemm_hybrid_compact_scores_f32,
 )
-from recovar.em.dense_single_volume.helpers.coarse_partition import CoarseRowResult
-from recovar.em.dense_single_volume.helpers.coarse_gaussian_gemm import (
-    CoarseGaussianGemmHybridBatchResult,
-)
+from recovar.em.scoring.coarse_partition import CoarseRowResult
 
 pytestmark = pytest.mark.unit
 
@@ -134,6 +132,7 @@ def test_nonfinite_actual_statistics_are_not_silently_published(one_winner):
 def packed_one_winner(monkeypatch, one_winner):
     """Mock only CUDA arithmetic; exercise the real packing/publication boundary."""
     import jax
+
     from recovar import cuda_backproject
 
     def transaction(values, raw_max, actual, **policy):
@@ -241,12 +240,14 @@ def test_actual_significance_engine_publishes_identical_complete_state(
     monkeypatch, packed_one_winner, first_group, cuda_posterior
 ):
     """Exercise the engine boundary on fixed scores, including all host outputs."""
-    from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers import coarse_partition, oversampling, projection, significance
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_scoring as sparse
-    from recovar.em.dense_single_volume.helpers.coarse_partition import CoarseRowGroup, CoarseRowPlan
     import runpy
     from pathlib import Path
+
+    from recovar import cuda_backproject
+    from recovar.em.helpers import oversampling, projection
+    from recovar.em.scoring import coarse_partition, significance
+    from recovar.em.scoring.coarse_partition import CoarseRowGroup, CoarseRowPlan
+    from recovar.em.sparse_pass2 import sparse_pass2_scoring as sparse
 
     _MacroIntegrationDataset = runpy.run_path(str(Path(__file__).parents[1] / "test_coarse_gaussian_gemm_macro.py"))[
         "_MacroIntegrationDataset"

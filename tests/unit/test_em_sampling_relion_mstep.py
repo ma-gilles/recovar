@@ -4,7 +4,7 @@ import inspect
 
 import numpy as np
 
-from recovar.em.dense_single_volume import relion_metadata
+from recovar.em.relion import relion_metadata
 from recovar.em.sampling import (
     _relion_adaptive_pass1_rotations,
     _relion_mstep_rotations_from_eulers,

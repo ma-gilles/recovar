@@ -153,7 +153,7 @@ M-step**. Effective precision is stage-specific:
 | --- | --- | --- |
 | Captured coarse scoring/projector operands | float32/complex64 | Captured-path evidence, not a claim about every intermediate or route |
 | Candidate Wavg products | Two `HIGHEST` contraction keywords on float32 products | Same output dtypes; no M-step precision change |
-| JAX VDAM M-step | float64/complex128 numerical computation in both arms | Explicit device casts and host call in [relion_vdam_mstep.py](../../recovar/em/dense_single_volume/helpers/relion_vdam_mstep.py); actual M executed in 13640121 |
+| JAX VDAM M-step | float64/complex128 numerical computation in both arms | Explicit device casts and host call in [relion_vdam_mstep.py](https://github.com/ma-gilles/recovar/blob/b77d0a7bf36677a2fee01f8ce3fe9a938c82d4c4/recovar/em/dense_single_volume/helpers/relion_vdam_mstep.py); actual M executed in 13640121 |
 
 The M helper is byte-identical in shared source and frozen fe847 (SHA-256
 `0ba75b68202380372e0ffbf777e23bf5b1a82145437723a519429b7507524f2c`).

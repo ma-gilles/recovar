@@ -44,7 +44,7 @@ git diff --binary > "${OUTPUT_ROOT}/provenance/git_diff.patch"
 sha256sum \
   recovar/cuda/cuda_backproject.cu \
   recovar/cuda_backproject.py \
-  recovar/em/dense_single_volume/helpers/fourier_window.py \
+  recovar/em/helpers/fourier_window.py \
   tests/unit/test_cuda_relion_fine_diff2.py \
   scripts/benchmark_vdam_stable_fine_window.py \
   scripts/run_vdam_stable_fine_window_gate.sbatch \

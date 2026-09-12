@@ -7,10 +7,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from recovar.em.initial_model import driver, initialise_denovo_state, iteration_loop, m_step, native_options
-
-from recovar.em.initial_model import mstep_single_class
-from recovar.em.initial_model.subset import numpy_rnd_unif_factory
+from recovar.em.vdam import driver, initialise_denovo_state, iteration_loop, m_step, mstep_single_class, native_options
+from recovar.em.vdam.subset import numpy_rnd_unif_factory
 from scripts import run_ab_initio
 
 pytestmark = pytest.mark.unit
@@ -202,7 +200,7 @@ def test_float32_rejects_mixed_publication_state_before_execution(monkeypatch, f
 
 
 def test_real_host_device_transaction_publishes_f32_and_preserves_k4_other_slots(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import relion_vdam_mstep as helper
+    from recovar.em.relion import relion_vdam_mstep as helper
 
     state = driver._prepare_mstep_state_precision(_state(4), "float32")
     state.Iref[:] = np.arange(1, 5, dtype=np.float32)[:, None, None, None]

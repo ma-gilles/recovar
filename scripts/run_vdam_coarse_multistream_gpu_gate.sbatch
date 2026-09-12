@@ -44,7 +44,7 @@ SOURCE_FILES=(
   recovar/cuda/Makefile
   recovar/cuda/cuda_backproject.cu
   recovar/cuda_backproject.py
-  recovar/em/dense_single_volume/helpers/significance.py
+  recovar/em/scoring/significance.py
   scripts/vdam_gpu_selection.sh
   tests/conftest.py
   tests/unit/test_cuda_relion_fine_diff2.py

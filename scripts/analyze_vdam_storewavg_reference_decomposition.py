@@ -218,12 +218,8 @@ def analyze(
         current_size = _current_size_from_rectangle_size(rectangle_size)
         candidate_current_size = int(np.asarray(score["current_size"]).reshape(-1)[0])
         _require(current_size == candidate_current_size, "native/candidate current sizes differ")
-        from recovar.em.dense_single_volume.helpers.fourier_window import (
-            make_fourier_window_indices_np,
-        )
-        from recovar.em.dense_single_volume.helpers.sparse_pass2_wavg import (
-            _make_relion_wavg_rectangle,
-        )
+        from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
+        from recovar.em.sparse_pass2.sparse_pass2_wavg import _make_relion_wavg_rectangle
 
         recon_indices, _ = make_fourier_window_indices_np(
             (physical_image_size, physical_image_size),

@@ -5,7 +5,7 @@ import inspect
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.local import local_em_engine
 
 
 class _Dataset:

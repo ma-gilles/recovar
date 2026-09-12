@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_search_iteration
-from recovar.em.dense_single_volume.helpers.types import LocalEMResult
+from recovar.em.helpers.types import LocalEMResult
+from recovar.em.local import local_search_iteration
 
 pytestmark = pytest.mark.unit
 

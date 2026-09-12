@@ -23,10 +23,8 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
-    enforce_half_volume_x0,
-)
-from recovar.em.initial_model.layout import relion_bpref_frame_scales
+from recovar.em.helpers.half_volume_mstep import enforce_half_volume_x0
+from recovar.em.vdam.layout import relion_bpref_frame_scales
 from scripts import analyze_vdam_mstep_boundary, run_vdam_exact_native_host_replay
 
 SCHEMA = "recovar.vdam_worker_private_host_replay.v6"

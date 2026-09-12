@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from recovar.em.initial_model.gt_metrics import (
+from recovar.em.vdam.gt_metrics import (
     DEFAULT_GT_ALIGN_HEALPIX_ORDER,
     DEFAULT_GT_ALIGN_MAX_SHELL,
     relion_alignment_rotations,
@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 def _initial_model_package_source() -> str:
     """Every module of the native InitialModel package; the guarded wiring may live in any owner."""
-    return "\n".join(path.read_text() for path in sorted((REPO_ROOT / "recovar/em/initial_model").glob("*.py")))
+    return "\n".join(path.read_text() for path in sorted((REPO_ROOT / "recovar/em/vdam").glob("*.py")))
 
 
 
@@ -159,7 +159,7 @@ def test_long_native_quality_guard_uses_relion_initialmodel_reference():
 
 
 def test_native_vdam_subset_order_uses_relion_sorted_idx_base_order():
-    driver = (REPO_ROOT / "recovar/em/initial_model/driver.py").read_text()
+    driver = (REPO_ROOT / "recovar/em/vdam/driver.py").read_text()
     iteration_loop = _initial_model_package_source()  # the subset draw lives in its owner module
 
     expected_driver_tokens = [
@@ -181,8 +181,8 @@ def test_native_vdam_subset_order_uses_relion_sorted_idx_base_order():
 
 
 def test_native_vdam_solvent_flattening_is_separate_from_zero_mask():
-    driver = (REPO_ROOT / "recovar/em/initial_model/driver.py").read_text()
-    iteration_loop = (REPO_ROOT / "recovar/em/initial_model/iteration_loop.py").read_text()
+    driver = (REPO_ROOT / "recovar/em/vdam/driver.py").read_text()
+    iteration_loop = (REPO_ROOT / "recovar/em/vdam/iteration_loop.py").read_text()
     run_ab_initio = (REPO_ROOT / "scripts/run_ab_initio.py").read_text()
 
     expected_tokens = [
@@ -198,7 +198,7 @@ def test_native_vdam_solvent_flattening_is_separate_from_zero_mask():
 
 
 def test_native_vdam_writes_auditable_iteration_zero_checkpoint():
-    driver = (REPO_ROOT / "recovar/em/initial_model/driver.py").read_text()
+    driver = (REPO_ROOT / "recovar/em/vdam/driver.py").read_text()
     tests = (REPO_ROOT / "tests/unit/initial_model/test_native_driver.py").read_text()
     expected_tokens = [
         '{"checkpoint_iteration": 0, "phase": "bootstrap"}',
@@ -929,8 +929,8 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
     dense K-class, or RELION binding code.
     """
     package = _initial_model_package_source()
-    k_class = (REPO_ROOT / "recovar/em/dense_single_volume/k_class.py").read_text()
-    local_em = (REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py").read_text()
+    k_class = (REPO_ROOT / "recovar/em/classification/k_class.py").read_text()
+    local_em = (REPO_ROOT / "recovar/em/local/local_em_engine.py").read_text()
     bind = (REPO_ROOT / "recovar/relion_bind/initialmodel_bind.cpp").read_text()
     unit_tests = "\n".join(
         [
@@ -1015,7 +1015,7 @@ def test_native_vdam_postmerge_parity_fixes_are_merge_guarded():
 def test_deferred_big_jit_backprojects_vdam_residual_images():
     """The memory-deferred path must not silently backproject raw images."""
 
-    source = (REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py").read_text()
+    source = (REPO_ROOT / "recovar/em/local/local_em_engine.py").read_text()
     comment = source.index("# The memory-deferred big-JIT path returns posterior rows")
     start = source.rindex("if mstep_subtract_ctf_projection:", 0, comment)
     stop = source.index("source_vdam_outer_scatter = bool(", start)
@@ -1029,7 +1029,7 @@ def test_deferred_big_jit_backprojects_vdam_residual_images():
 def test_source_faithful_bpref_respects_memory_gate_without_changing_particle_order():
     """Large BPref buckets must defer by particles, never allocate past the cap."""
 
-    source = (REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py").read_text()
+    source = (REPO_ROOT / "recovar/em/local/local_em_engine.py").read_text()
     decision_start = source.index("sparse_big_jit_backprojection = False")
     decision_stop = source.index("can_defer_big_jit_backprojection = (", decision_start)
     decision = source[decision_start:decision_stop]
@@ -1048,10 +1048,10 @@ def test_source_faithful_bpref_respects_memory_gate_without_changing_particle_or
 
 def test_deferred_packed_vdam_keeps_dense_oracle_and_packed_final_noise_lane():
     engine = (
-        REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py"
+        REPO_ROOT / "recovar/em/local/local_em_engine.py"
     ).read_text()
     big_jit = (
-        REPO_ROOT / "recovar/em/dense_single_volume/local_big_jit.py"
+        REPO_ROOT / "recovar/em/local/local_big_jit.py"
     ).read_text()
 
     assert "_defer_packed_vdam_enabled: bool = False" in engine

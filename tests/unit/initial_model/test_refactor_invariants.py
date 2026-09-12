@@ -19,14 +19,10 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-import recovar.em.initial_model as init_model
-from recovar.em.dense_single_volume.helpers.expected_accuracy import (
-    estimate_relion_expected_accuracy_from_prepared_inputs,
-)
-from recovar.em.initial_model import (
-    __all__ as INIT_MODEL_ALL,
-)
-from recovar.em.initial_model import (
+import recovar.em.vdam as init_model
+from recovar.em.helpers.expected_accuracy import estimate_relion_expected_accuracy_from_prepared_inputs
+from recovar.em.vdam import __all__ as INIT_MODEL_ALL
+from recovar.em.vdam import (
     compute_current_size_for_denovo,
     compute_ini_high_angstrom,
     compute_ini_high_shell,
@@ -104,7 +100,7 @@ EXPECTED_PUBLIC_API = frozenset(
 
 
 def test_public_api_is_frozen():
-    """No silent additions or removals from ``recovar.em.initial_model.__all__``.
+    """No silent additions or removals from ``recovar.em.vdam.__all__``.
 
     A merge that adds a symbol must update this frozen set deliberately.
     A merge that removes one likely broke a downstream caller.
@@ -153,10 +149,11 @@ def test_initial_model_estep_reuses_shared_dense_em_engine():
     canonical implementations; the definition scan makes a copied shadow
     implementation fail even if it is not wired in yet.
     """
-    from recovar.em.dense_single_volume import k_class, local_layout
-    from recovar.em.dense_single_volume.helpers import expected_accuracy, significance
-    from recovar.em.initial_model import dense_adapter
-    from recovar.em.initial_model import sparse_pass2_estep
+    from recovar.em.classification import k_class
+    from recovar.em.helpers import expected_accuracy
+    from recovar.em.local import local_layout
+    from recovar.em.scoring import significance
+    from recovar.em.vdam import dense_adapter, sparse_pass2_estep
 
     shared_callables = {
         "_compute_k_class_significance_batched": (
@@ -201,7 +198,7 @@ def test_initial_model_estep_reuses_shared_dense_em_engine():
 
 def test_ensure_field_helper_exists_in_driver():
     """``_ensure_field`` dedup'd 6 lazy-init blocks in ``driver.py``."""
-    from recovar.em.initial_model.driver import _ensure_field
+    from recovar.em.vdam.driver import _ensure_field
 
     sig = inspect.signature(_ensure_field)
     params = list(sig.parameters)
@@ -219,7 +216,7 @@ def test_ensure_field_helper_exists_in_driver():
 
 def test_stack_star_pair_helper_exists_in_star_io():
     """``_stack_star_pair`` dedup'd the X/Y origin column reads in ``_write_data_star``."""
-    from recovar.em.initial_model.star_io import _stack_star_pair
+    from recovar.em.vdam.star_io import _stack_star_pair
 
     assert callable(_stack_star_pair)
     assert list(inspect.signature(_stack_star_pair).parameters) == [
@@ -231,9 +228,7 @@ def test_stack_star_pair_helper_exists_in_star_io():
 
 def test_halfset_values_helper_exists_in_iteration_loop():
     """``_halfset_values`` dedup'd ``_posterior_sums_from_meta`` and ``_scalar_sum_from_meta``."""
-    from recovar.em.initial_model.estep_meta_updates import (
-        _halfset_values,
-    )
+    from recovar.em.vdam.estep_meta_updates import _halfset_values
 
     assert callable(_halfset_values)
     assert list(inspect.signature(_halfset_values).parameters) == ["meta", "key"]
@@ -248,9 +243,7 @@ def test_my_mu_helper_exists_in_iteration_loop():
     """``_my_mu`` was extracted as the validation copy used in both
     ``vdam_iteration`` and ``apply_vdam_momentum_to_state``.
     """
-    from recovar.em.initial_model.estep_meta_updates import (
-        _my_mu,
-    )
+    from recovar.em.vdam.estep_meta_updates import _my_mu
 
     assert callable(_my_mu)
     assert list(inspect.signature(_my_mu).parameters) == ["mu", "do_grad", "subset_size"]
@@ -258,7 +251,7 @@ def test_my_mu_helper_exists_in_iteration_loop():
 
 def test_bp_slab_helper_exists_in_layout():
     """``_bp_slab`` dedup'd the slab-vs-cropped slice between data and weight paths."""
-    from recovar.em.initial_model.layout import _bp_slab
+    from recovar.em.vdam.layout import _bp_slab
 
     assert callable(_bp_slab)
     assert list(inspect.signature(_bp_slab).parameters) == ["arr", "r_max", "c"]
@@ -276,7 +269,7 @@ def test_dense_run_em_reject_is_frozenset_with_pinned_contents():
     pass unsupported kwargs to ``run_em``. A merge that adds entries must
     update this test deliberately.
     """
-    from recovar.em.initial_model.dense_adapter import _DENSE_RUN_EM_REJECT
+    from recovar.em.vdam.dense_adapter import _DENSE_RUN_EM_REJECT
 
     assert isinstance(_DENSE_RUN_EM_REJECT, frozenset)
     expected = frozenset(
@@ -306,9 +299,7 @@ def test_sparse_pass2_result_fields_is_tuple_of_typed_attrs():
     """``_SPARSE_PASS2_RESULT_FIELDS`` is the single source of truth for which
     estep meta attributes get concatenated across sparse pass-2 batches.
     """
-    from recovar.em.initial_model.sparse_pass2_estep import (
-        _SPARSE_PASS2_RESULT_FIELDS,
-    )
+    from recovar.em.vdam.sparse_pass2_estep import _SPARSE_PASS2_RESULT_FIELDS
 
     assert isinstance(_SPARSE_PASS2_RESULT_FIELDS, tuple)
     assert all(isinstance(item, tuple) and len(item) == 2 for item in _SPARSE_PASS2_RESULT_FIELDS)
@@ -372,7 +363,7 @@ class TestScheduleGoldenValues:
         assert default_tau2_fudge_for_3d_initial_model() == 4.0
 
     def test_relion_round_banker_semantics(self):
-        from recovar.em.initial_model.schedules import _relion_round
+        from recovar.em.vdam.schedules import _relion_round
 
         # RELION's ROUND is C-style nearest-int away-from-zero, NOT banker's.
         assert _relion_round(0.5) == 1
@@ -411,7 +402,7 @@ class TestLayoutGoldenValues:
 
     def test_bp_slab_full_half_complex_path(self):
         """``r_max >= c`` returns a roll of the full half-complex slab."""
-        from recovar.em.initial_model.layout import _bp_slab
+        from recovar.em.vdam.layout import _bp_slab
 
         N = 8
         c = N // 2  # 4
@@ -425,7 +416,7 @@ class TestLayoutGoldenValues:
 
     def test_bp_slab_cropped_path(self):
         """``r_max < c`` returns a centered cropped half-spectrum slab."""
-        from recovar.em.initial_model.layout import _bp_slab
+        from recovar.em.vdam.layout import _bp_slab
 
         N = 16
         c = N // 2  # 8
@@ -533,7 +524,7 @@ def test_per_file_loc_ceilings():
 
 
 def test_total_package_loc_within_budget():
-    """Total LOC across all ``recovar/em/initial_model/*.py`` stays under the budget."""
+    """Total LOC across all ``recovar/em/vdam/*.py`` stays under the budget."""
     total = sum(_file_loc(p) for p in PACKAGE_DIR.glob("*.py"))
     assert total <= TOTAL_LOC_CEILING, (
         f"InitialModel total LOC = {total} > ceiling {TOTAL_LOC_CEILING}; "
@@ -563,7 +554,7 @@ t0 = time.perf_counter()
 import recovar.em
 parent_elapsed = time.perf_counter() - t0
 t0 = time.perf_counter()
-import recovar.em.initial_model
+import recovar.em.vdam
 initial_model_elapsed = time.perf_counter() - t0
 print(parent_elapsed, initial_model_elapsed)
 """
@@ -577,6 +568,6 @@ print(parent_elapsed, initial_model_elapsed)
     assert result.returncode == 0, result.stderr
     parent_elapsed, initial_model_elapsed = map(float, result.stdout.split())
     assert initial_model_elapsed < 2.0, (
-        f"recovar.em.initial_model added {initial_model_elapsed:.2f}s after the "
+        f"recovar.em.vdam added {initial_model_elapsed:.2f}s after the "
         f"{parent_elapsed:.2f}s parent import; likely a module-level side effect"
     )

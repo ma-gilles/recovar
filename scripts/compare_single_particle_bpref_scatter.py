@@ -102,9 +102,7 @@ def _fftw_indices(dump: Any, *, ori_size: int) -> np.ndarray:
     if "active_summed" in dump:
         return np.asarray(dump["window_indices"], dtype=np.int32)
 
-    from recovar.em.dense_single_volume.helpers.fourier_window import (
-        centered_half_indices_to_fftw_half_indices,
-    )
+    from recovar.em.helpers.fourier_window import centered_half_indices_to_fftw_half_indices
 
     centered_indices = np.asarray(dump["recon_window_indices"], dtype=np.int32)
     return np.asarray(
@@ -138,7 +136,7 @@ def main() -> int:
 
     from recovar import cuda_backproject
     from recovar.core import fourier_transform_utils as ftu
-    from recovar.em.dense_single_volume.helpers.half_volume_mstep import relion_backprojector_volume_shape
+    from recovar.em.helpers.half_volume_mstep import relion_backprojector_volume_shape
 
     with np.load(args.pass2_dump, allow_pickle=True) as dump:
         current_size = int(np.asarray(dump["current_size"]).item())

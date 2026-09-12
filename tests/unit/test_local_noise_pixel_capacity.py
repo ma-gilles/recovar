@@ -4,14 +4,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
-
-from recovar.em.dense_single_volume import local_em_engine as engine
-from recovar.em.dense_single_volume.deferred_noise_pack import (
-    _pad_noise_pixels,
-    pack_noise_pixel_capacity,
-)
-from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
 from test_shared_local_exact_noise import _call_deferred_wrapper, _make_noise_inputs
+
+from recovar.em.dense.deferred_noise_pack import _pad_noise_pixels, pack_noise_pixel_capacity
+from recovar.em.helpers.env_flags import parse_env_binary_flag
+from recovar.em.local import local_em_engine as engine
 
 pytestmark = pytest.mark.unit
 PIXELS = ("pixel_reconstruction_probs", "pixel_proj_for_noise", "pixel_ctf_probs", "bucket_image_indices")
@@ -109,7 +106,7 @@ def test_actual_noise_outputs_and_norm_prefix_with_nonzero_carry(batch, dtype):
 
 
 def test_small_padding_keys_keep_heavy_noise_key_fixed():
-    from recovar.em.dense_single_volume.local_big_jit import run_deferred_local_exact_noise_jit as noise
+    from recovar.em.local.local_big_jit import run_deferred_local_exact_noise_jit as noise
 
     noise.clear_cache()
     _pad_noise_pixels.clear_cache()

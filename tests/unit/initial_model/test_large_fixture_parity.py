@@ -75,7 +75,7 @@ def test_bootstrap_iref_big_fixture():
     import mrcfile
 
     from recovar.data_io.starfile import read_star
-    from recovar.em.initial_model.bootstrap_iref import reorder_particles_relion_style
+    from recovar.em.vdam.bootstrap_iref import reorder_particles_relion_style
     from recovar.relion_bind import _relion_bind_core as bind
 
     with mrcfile.open(BIG_MRCS, permissive=True) as m:
@@ -483,7 +483,7 @@ def test_layout_converter_roundtrip():
     embed into a zero-filled centered full (N, N, N) spectrum, then crop
     back: must match byte-for-byte.
     """
-    from recovar.em.initial_model.layout import bpref_to_run_em_output, run_em_output_to_bpref
+    from recovar.em.vdam.layout import bpref_to_run_em_output, run_em_output_to_bpref
 
     bp_data = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_bp_data_pre_reweight.bin")
     bp_weight = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_bp_weight.bin")
@@ -507,7 +507,7 @@ def test_layout_converter_vdam_mstep_chain():
     adapter. If the E-step reaches machine-precision parity against RELION,
     this same chain produces the final iter-1 Iref to machine precision.
     """
-    from recovar.em.initial_model.layout import bpref_to_run_em_output, run_em_output_to_bpref
+    from recovar.em.vdam.layout import bpref_to_run_em_output, run_em_output_to_bpref
     from recovar.relion_bind import _relion_bind_core as bind
 
     # Load RELION's per-halfset BP data (pre-reweight)

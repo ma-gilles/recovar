@@ -8,14 +8,10 @@ from typing import Callable
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume.local_layout import (
+from recovar.em.local.local_layout import (
     LocalHypothesisLayout,
     build_local_hypothesis_layout,
     build_pass2_hypothesis_layout,
-)
-from recovar.em.dense_single_volume.ppca_bridge import (
-    PPCAKClassScheduleBridge,
-    make_ppca_kclass_schedule_bridge,
 )
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
@@ -35,6 +31,7 @@ from recovar.em.ppca_refinement.local_dataset import (
 )
 from recovar.em.ppca_refinement.mean_regularization import MeanRegularizationConfig
 from recovar.em.ppca_refinement.postprocess import PostprocessConfig
+from recovar.em.ppca_refinement.ppca_bridge import PPCAKClassScheduleBridge, make_ppca_kclass_schedule_bridge
 from recovar.em.ppca_refinement.refinement_loop import (
     HalfsetMeanComparison,
     PPCARefinementIterationRecord,

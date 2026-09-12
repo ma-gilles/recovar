@@ -7,15 +7,12 @@ from dataclasses import replace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.batch_planning import (
+from recovar.em.helpers.batch_planning import (
     _pack_fixed_capacity_local_candidate_rows,
     _plan_fixed_capacity_whole_local,
     _seal_fixed_capacity_physical_order,
 )
-from recovar.em.dense_single_volume.local_layout import (
-    LocalBucketSpec,
-    _fixed_capacity_calls_from_local_buckets,
-)
+from recovar.em.local.local_layout import LocalBucketSpec, _fixed_capacity_calls_from_local_buckets
 
 pytestmark = pytest.mark.unit
 

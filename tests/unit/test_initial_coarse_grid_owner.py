@@ -15,8 +15,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-import recovar.em.dense_single_volume.iteration_loop as iteration_loop
-from recovar.em.dense_single_volume.relion_replay import _sealed_sampling_base_grids
+import recovar.em.refinement.iteration_loop as iteration_loop
+from recovar.em.diagnostics.relion_replay import _sealed_sampling_base_grids
 from recovar.em.sampling import _translation_grid_for_class_count
 
 pytestmark = pytest.mark.unit

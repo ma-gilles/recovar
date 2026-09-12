@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+from recovar.em.scoring.coarse_gemm_hybrid import (
     CoarseGemmHybridBlockSelection,
     assemble_coarse_gemm_hybrid_compact_scores_f32,
     assemble_coarse_gemm_hybrid_dense_scores_f32,
@@ -687,7 +687,7 @@ def test_selected_ffi_nonfinite_active_or_nonpositive_inf_padding_requests_fallb
 def test_full_logical_scatter_preserves_exact_relion_posterior_and_support(
     monkeypatch,
 ) -> None:
-    from recovar.em.dense_single_volume.helpers import oversampling
+    from recovar.em.helpers import oversampling
 
     cpu_device = jax.devices("cpu")[0]
     monkeypatch.setattr(oversampling.jax, "default_backend", lambda: "cpu")
@@ -776,7 +776,7 @@ def test_full_logical_scatter_preserves_exact_relion_posterior_and_support(
 def test_compacting_exact_zero_weight_candidates_changes_float32_scan_rounding(
     monkeypatch,
 ) -> None:
-    from recovar.em.dense_single_volume.helpers import oversampling
+    from recovar.em.helpers import oversampling
 
     cpu_device = jax.devices("cpu")[0]
     monkeypatch.setattr(oversampling.jax, "default_backend", lambda: "cpu")
@@ -827,7 +827,7 @@ def test_compact_hybrid_gpu_positive_oracle_and_fixed_capacity_support(
     """Compact scores retain dense positive-only support on the live CUB path."""
 
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers import oversampling
+    from recovar.em.helpers import oversampling
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)

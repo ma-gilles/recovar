@@ -5,7 +5,7 @@ import struct
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import vdam_replay
+from recovar.em.diagnostics import vdam_replay
 from scripts.build_vdam_candidate_block_map import INVALID_ROW, load_map
 
 

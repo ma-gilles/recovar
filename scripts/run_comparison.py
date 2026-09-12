@@ -168,8 +168,8 @@ def run_refinement(
 ):
     """Run our refinement and return results dict + wall time."""
     from recovar import utils
-    from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
-    from recovar.em.dense_single_volume.refinement_options import (
+    from recovar.em.refinement.iteration_loop import refine_single_volume
+    from recovar.em.refinement.refinement_options import (
         AdaptiveOptions,
         RefinementBatching,
         RefinementOptions,

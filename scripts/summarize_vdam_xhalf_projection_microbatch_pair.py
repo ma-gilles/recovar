@@ -12,12 +12,8 @@ from typing import Any
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.coarse_score_diagnostics import (
-    _validate_coarse_selector_audit,
-)
-from recovar.em.dense_single_volume.local_batch_planning import (
-    _exact_local_max_hypotheses_per_microbatch,
-)
+from recovar.em.diagnostics.coarse_score_diagnostics import _validate_coarse_selector_audit
+from recovar.em.local.local_batch_planning import _exact_local_max_hypotheses_per_microbatch
 from scripts.summarize_em_completion_bench import (
     _load_relion_volume,
     normalized_fsc_auc,

@@ -2,8 +2,9 @@
 
 import inspect
 
-from recovar.em.dense_single_volume.helpers import oversampling, sparse_pass2_bucketed
-from recovar.em.dense_single_volume.helpers.types import OMITTED, sparse_pass2_result
+from recovar.em.helpers import oversampling
+from recovar.em.helpers.types import OMITTED, sparse_pass2_result
+from recovar.em.sparse_pass2 import sparse_pass2_bucketed
 
 
 def test_optional_entries_follow_one_fixed_order():

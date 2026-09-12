@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.expected_accuracy import relion_auto_refine_half_orders
+from recovar.em.helpers.expected_accuracy import relion_auto_refine_half_orders
 
 pytestmark = pytest.mark.unit
 

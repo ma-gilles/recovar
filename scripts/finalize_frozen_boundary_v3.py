@@ -13,10 +13,10 @@ production restart checkpoint.
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
 import hashlib
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 import jax.numpy as jnp
@@ -25,7 +25,9 @@ import starfile
 
 from recovar import utils
 from recovar.core import fourier_transform_utils as ftu
-from recovar.em.dense_single_volume.frozen_boundary import (
+from recovar.em.diagnostics.frozen_boundary import (
+    _V3_MAP_TRANSFORM_ID,
+    _V3_SCALAR_DTYPES,
     FROZEN_BOUNDARY_FILENAME,
     FROZEN_BOUNDARY_FIXED_DIAGNOSTIC_ARM,
     FROZEN_BOUNDARY_FIXED_MATH_ENVIRONMENT_CONTRACT,
@@ -33,8 +35,6 @@ from recovar.em.dense_single_volume.frozen_boundary import (
     FROZEN_BOUNDARY_SCHEMA_V2,
     FROZEN_BOUNDARY_SCHEMA_V3,
     V3_REQUIRED_FIXED_SOURCE_NAMES,
-    _V3_MAP_TRANSFORM_ID,
-    _V3_SCALAR_DTYPES,
     load_frozen_refinement_boundary,
     v3_source_role,
 )

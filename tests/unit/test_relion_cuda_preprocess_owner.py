@@ -7,11 +7,11 @@ from types import SimpleNamespace
 
 import pytest
 
-import recovar.em.dense_single_volume.iteration_loop as iteration_loop
-import recovar.em.dense_single_volume.local_em_engine as local_em_engine
-import recovar.em.initial_model.dense_adapter as dense_adapter
-from recovar.em.dense_single_volume.helpers import preprocessing
-from recovar.em.initial_model import sparse_pass2_estep
+import recovar.em.local.local_em_engine as local_em_engine
+import recovar.em.refinement.iteration_loop as iteration_loop
+import recovar.em.vdam.dense_adapter as dense_adapter
+from recovar.em.helpers import preprocessing
+from recovar.em.vdam import sparse_pass2_estep
 
 pytestmark = pytest.mark.unit
 

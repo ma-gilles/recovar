@@ -9,15 +9,9 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.helpers.fourier_window import (
-    make_fourier_window_indices_np,
-)
-from recovar.em.dense_single_volume.helpers.oversampling import (
-    relion_cuda_f32_coarse_posterior,
-)
-from recovar.em.dense_single_volume.helpers.significance import (
-    _plan_coarse_gaussian_square_layout,
-)
+from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
+from recovar.em.helpers.oversampling import relion_cuda_f32_coarse_posterior
+from recovar.em.scoring.significance import _plan_coarse_gaussian_square_layout
 
 pytestmark = [pytest.mark.unit, pytest.mark.gpu]
 

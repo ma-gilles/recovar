@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_big_jit as noise
+from recovar.em.local import local_big_jit as noise
 
 pytestmark = pytest.mark.unit
 

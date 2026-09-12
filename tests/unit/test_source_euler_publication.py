@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 
 from recovar import utils
-from recovar.em.dense_single_volume import local_debug, score_outputs
+from recovar.em.dense import score_outputs
+from recovar.em.diagnostics import local_debug
 
 pytestmark = pytest.mark.unit
 

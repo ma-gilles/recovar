@@ -14,9 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from recovar.em.dense_single_volume.helpers.orientation_priors import (
-    make_relion_direction_log_prior,
-)
+from recovar.em.helpers.orientation_priors import make_relion_direction_log_prior
 from recovar.em.sampling import read_relion_direction_prior
 from recovar.utils.file_hash import sha256_file  # noqa: E402 - follows repository path setup
 from scripts.parse_relion_dump_dir import _read_flat_real

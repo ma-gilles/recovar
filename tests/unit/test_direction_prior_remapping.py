@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import orientation_priors as priors
+from recovar.em.helpers import orientation_priors as priors
 
 pytestmark = pytest.mark.unit
 

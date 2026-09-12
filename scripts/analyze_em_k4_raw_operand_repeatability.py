@@ -190,7 +190,7 @@ def _pair_mapping_stats(values: dict[str, np.ndarray]) -> dict[str, object]:
 def _jax_replay(values: dict[str, np.ndarray]) -> np.ndarray:
     import jax.numpy as jnp
 
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
+    from recovar.em.sparse_pass2.sparse_pass2_scoring import (
         _score_pass2_bucket_relion_gpu_diff2_raw,
         _score_pass2_pairs_relion_gpu_diff2_raw,
     )

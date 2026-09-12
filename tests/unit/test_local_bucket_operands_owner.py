@@ -2,7 +2,7 @@
 
 import inspect
 
-from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.local import local_em_engine
 
 
 def test_bucket_operands_are_converted_once_before_the_fused_score_chain():

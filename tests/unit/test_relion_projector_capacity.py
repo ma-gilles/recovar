@@ -9,9 +9,7 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 from recovar import cuda_backproject as cb
-from recovar.em.dense_single_volume.helpers.projection import (
-    relion_projector_half_to_texture_full,
-)
+from recovar.em.helpers.projection import relion_projector_half_to_texture_full
 
 pytestmark = pytest.mark.unit
 

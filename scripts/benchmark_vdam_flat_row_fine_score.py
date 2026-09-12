@@ -15,16 +15,9 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume.helpers.flat_local_rows import (
-    build_pool_flat_local_row_plan,
-    scatter_flat_local_rows,
-)
-from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (
-    _relion_f32_fine_posterior,
-)
-from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
-    _relion_cuda_fine_diff2_to_scores,
-)
+from recovar.em.local.flat_local_rows import build_pool_flat_local_row_plan, scatter_flat_local_rows
+from recovar.em.sparse_pass2.sparse_pass2_posterior import _relion_f32_fine_posterior
+from recovar.em.sparse_pass2.sparse_pass2_scoring import _relion_cuda_fine_diff2_to_scores
 
 
 def _git_head() -> str:

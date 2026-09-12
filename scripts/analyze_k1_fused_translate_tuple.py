@@ -13,9 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
-    _relion_translation_angles_f32,
-)
+from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
 from recovar.utils.file_hash import sha256_file
 from scripts.validate_relion_fine_operand_capture import load_fine_operand_capture
 from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture

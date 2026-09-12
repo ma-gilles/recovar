@@ -5,9 +5,7 @@ import numpy as np
 import pytest
 
 from recovar.em.bpref_contribution_replay import BPrefAccumulatorReplay
-from recovar.em.dense_single_volume.helpers.bpref_diagnostics import (
-    _bpref_contribution_target_rows,
-)
+from recovar.em.diagnostics.bpref_diagnostics import _bpref_contribution_target_rows
 from scripts.analyze_vdam_bpref_accumulator_boundary import (
     _geometry,
     _inline_projector_replays,
@@ -159,7 +157,7 @@ def test_bpref_target_rows_accept_slurm_safe_semicolon_list(monkeypatch):
 def test_big_jit_bpref_capture_observes_production_tensors_without_disabling_path():
     # the capture is driven from the engine and recorded by its owner
     source = "\n".join(
-        (REPO_ROOT / "recovar/em/dense_single_volume" / name).read_text()
+        (REPO_ROOT / "recovar/em" / name).read_text()
         for name in ("local_em_engine.py", "local_bpref_capture.py")
     )
 

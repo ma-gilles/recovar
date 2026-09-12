@@ -2,9 +2,7 @@
 
 import inspect
 
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed, sparse_pass2_budget, sparse_pass2_policy
-
-from recovar.em.dense_single_volume.helpers import sparse_pass2_window
+from recovar.em.sparse_pass2 import sparse_pass2_bucketed, sparse_pass2_budget, sparse_pass2_policy, sparse_pass2_window
 
 
 def test_owners_hold_the_definitions_and_the_pass2_module_routes_to_them():

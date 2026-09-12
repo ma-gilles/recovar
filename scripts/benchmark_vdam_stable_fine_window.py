@@ -13,12 +13,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume.helpers.fourier_window import (
-    make_stable_fourier_window_shape_plan,
-)
-from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
-    _relion_cuda_fine_full_to_compact_lookup,
-)
+from recovar.em.helpers.fourier_window import make_stable_fourier_window_shape_plan
+from recovar.em.sparse_pass2.sparse_pass2_scoring import _relion_cuda_fine_full_to_compact_lookup
 
 
 def _sha256(array) -> str:

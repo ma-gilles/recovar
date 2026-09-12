@@ -43,21 +43,17 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-import recovar.em.dense_single_volume.helpers.oversampling as oversampling_mod
+import recovar.em.classification.k_class as k_class_mod
 import recovar.em.diagnostics.pass2 as pass2_diagnostics
-import recovar.em.dense_single_volume.helpers.score_constraints as score_constraints_mod
-import recovar.em.dense_single_volume.helpers.significance as sig_mod
-import recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed as sparse_pass2_mod
-import recovar.em.dense_single_volume.iteration_loop as iteration_loop
-import recovar.em.dense_single_volume.k_class as k_class_mod
+import recovar.em.helpers.oversampling as oversampling_mod
+import recovar.em.refinement.iteration_loop as iteration_loop
+import recovar.em.scoring.score_constraints as score_constraints_mod
+import recovar.em.scoring.significance as sig_mod
+import recovar.em.sparse_pass2.sparse_pass2_bucketed as sparse_pass2_mod
+from recovar.em.classification import k_class_results
+from recovar.em.dense import half_scoring, score_outputs, scoring_policy
+from recovar.em.diagnostics import bpref_diagnostics, coarse_gaussian_diagnostics, relion_replay
 from recovar.em.diagnostics import iteration as debug_dumps
-from recovar.em.dense_single_volume import half_scoring
-from recovar.em.dense_single_volume import k_class_results
-from recovar.em.dense_single_volume import relion_replay
-from recovar.em.dense_single_volume import score_outputs
-from recovar.em.dense_single_volume import scoring_policy
-from recovar.em.dense_single_volume.helpers import bpref_diagnostics
-from recovar.em.dense_single_volume.helpers import coarse_gaussian_diagnostics
 
 pytestmark = pytest.mark.unit
 
@@ -231,7 +227,7 @@ def test_kclass_scatter_uses_mstep_class_mass_for_relion_priors():
 def test_kclass_weight_trajectories_record_mstep_and_full_posterior_provenance():
     """Full-chain NPZ output must expose the class-mass split used in parity debugging."""
 
-    from recovar.em.dense_single_volume.helpers import iteration_history
+    from recovar.em.helpers import iteration_history
 
     history_source = inspect.getsource(iteration_history.RefinementHistory.record_class_weights)
     assert "self.class_mstep_weight_trajectory.append(mstep_weights)" in history_source
@@ -1864,7 +1860,7 @@ def test_k_class_pass1_priors_follow_scoring_precision():
 
 
 def test_stats_constructors_preserve_double_precision_by_default():
-    from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
+    from recovar.em.helpers.types import make_noise_stats, make_relion_stats
 
     posterior = jnp.asarray([1.0 + 2.0**-40], dtype=jnp.float64)
     relion_stats = make_relion_stats(
@@ -1887,7 +1883,7 @@ def test_stats_constructors_preserve_double_precision_by_default():
 
 
 def test_kclass_subset_helpers_preserve_double_precision():
-    from recovar.em.dense_single_volume.helpers.types import make_relion_stats
+    from recovar.em.helpers.types import make_relion_stats
 
     delta = 2.0**-40
     subset = make_relion_stats(
@@ -1982,7 +1978,7 @@ def test_kclass_fused_pass2_sizes_relion_projector_crop_from_score_window():
 def test_relion_score_window_projection_kwargs_use_image_window_not_model_window():
     """The score-window helper must hand the projector the image window size."""
 
-    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.helpers.fourier_window import make_fourier_window_spec
 
     spec = make_fourier_window_spec(
         (64, 64), 34, 64 * 33, reconstruction_current_size=32, square=False, include_recon_window=True

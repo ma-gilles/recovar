@@ -14,10 +14,8 @@ import numpy as np
 from recovar.core.ctf import _compute_spa_ctf
 from recovar.cuda_backproject import relion_preprocess_real_f32
 from recovar.data_io.image_backends import _centered_rfft2_jax
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
-    _half_translation_phase_table_for_indices,
-)
-from recovar.em.dense_single_volume.local_backprojection import compute_local_mstep_sums
+from recovar.em.local.local_backprojection import compute_local_mstep_sums
+from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _half_translation_phase_table_for_indices
 from recovar.utils.file_hash import sha256_file
 from scripts.recompute_bpref_high_precision import (
     _ctf_float64,

@@ -176,7 +176,11 @@ SEALED_STATIC_ARGNAMES = (
     "projection_mask_current_image_disk",
     "relion_exact_bpref_operands",
     "relion_exact_fine_diff2",
+    "use_flat_local_rows",
+    "use_packed_local_projection",
+    "use_fused_pair_fine_score",
     "relion_wavg_sequential_cuda",
+    "stable_fourier_window_shapes",
     "relion_cuda_preprocess_radius",
     "relion_cuda_preprocess_cosine_width",
     "mstep_subtract_ctf_projection",
@@ -190,10 +194,13 @@ SEALED_STATIC_ARGNAMES = (
     "return_mstep_tensors",
     "return_source_vdam_operands",
     "return_deferred_mstep_inputs",
+    "return_deferred_source_vdam_operands",
+    "packed_deferred_source_vdam_noise",
     "return_deferred_noise_inputs",
     "n_shells",
     "norm_current_size",
     "include_unweighted_norm_high_shell",
+    "source_faithful_spectrum_norm",
     "has_normalization_log_z",
     "has_normalization_log_evidence",
     "has_normalization_max_posterior",
@@ -201,10 +208,12 @@ SEALED_STATIC_ARGNAMES = (
     "score_only",
     "use_relion_projector",
     "relion_projector_r_max",
+    "projector_capacity",
     "projection_padding_factor",
     "return_debug_arrays",
     "return_debug_scores",
     "return_debug_operands",
+    "unweighted_high_shell_image_power",
 )
 
 _MEMORY_ANALYSIS_FIELDS = (
@@ -336,7 +345,7 @@ def _resolve_gf46_consumed_inputs(
     import starfile
 
     from recovar.data_io.image_loader import StarLoader
-    from recovar.em.initial_model.driver import (
+    from recovar.em.vdam.driver import (
         _relion_star_list_value,
         _resolve_relion_checkpoint_path,
         _second_pseudo_half_moment_path,
@@ -885,7 +894,7 @@ class LocalMstepDonationMonitor:
     def __init__(self, arm: str):
         import jax
 
-        from recovar.em.dense_single_volume import local_big_jit
+        from recovar.em.local import local_big_jit
 
         production = local_big_jit.run_local_bucket_big_jit
         info = production._jit_info
@@ -1004,7 +1013,7 @@ class LocalMstepDonationMonitor:
 def installed_local_mstep_donation_arm(
     arm: str,
 ) -> Iterator[LocalMstepDonationMonitor]:
-    from recovar.em.dense_single_volume import local_bucket_stages
+    from recovar.em.local import local_bucket_stages
     original = local_bucket_stages._invoke_local_bucket_big_jit
     monitor = LocalMstepDonationMonitor(arm)
     local_bucket_stages._invoke_local_bucket_big_jit = monitor

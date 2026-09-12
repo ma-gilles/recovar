@@ -22,7 +22,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 DEFAULT_FIXTURE_DIR = Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run")
 DEFAULT_RELION_DUMP_DIR = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_debug_dump")
 DEFAULT_RELION_ESTEP_DUMP = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_dump_small")
@@ -338,11 +337,9 @@ def _build_config(args, ds, fixture_dir: Path, estep_dump_dir: Path, current_siz
     import jax.numpy as jnp
 
     from recovar.core import fourier_transform_utils as ftu
-    from recovar.em.dense_single_volume.helpers.orientation_priors import make_relion_translation_log_prior
+    from recovar.em.helpers.orientation_priors import make_relion_translation_log_prior
     from recovar.em.sampling import get_translation_grid
-    from recovar.em.initial_model.estep_common import (
-        DenseInitialModelEstepConfig,
-    )
+    from recovar.em.vdam.estep_common import DenseInitialModelEstepConfig
     from recovar.reconstruction.noise import make_radial_noise
     from recovar.reconstruction.relion_functions import griddingCorrect
     from recovar.utils.helpers import load_relion_volume, relion_volume_to_recovar
@@ -476,8 +473,8 @@ def _build_config(args, ds, fixture_dir: Path, estep_dump_dir: Path, current_siz
 
 
 def run_mode(args, ds, main_in, relion_sorted_idx, mode: str, out_dir: Path) -> dict[str, object]:
-    from recovar.em.initial_model import initialise_denovo_state
-    from recovar.em.initial_model.dense_adapter import run_dense_initial_model_estep
+    from recovar.em.vdam import initialise_denovo_state
+    from recovar.em.vdam.dense_adapter import run_dense_initial_model_estep
 
     config, config_meta = _build_config(args, ds, args.fixture_dir, args.relion_estep_dump_dir, args.current_size)
     state = initialise_denovo_state(

@@ -1481,9 +1481,7 @@ def _validate_coarse_selector_profile_audits(
 ) -> list[dict[str, Any]]:
     """Prove the sealed direct, legacy selector, or certified hybrid path ran."""
 
-    from recovar.em.dense_single_volume.helpers.coarse_score_diagnostics import (
-        _validate_coarse_selector_audit,
-    )
+    from recovar.em.diagnostics.coarse_score_diagnostics import _validate_coarse_selector_audit
 
     translations = _coarse_translation_count(metadata, f"{label} iteration {iteration}")
     _require(

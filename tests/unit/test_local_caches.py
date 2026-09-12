@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from recovar.em.dense_single_volume import local_caches
+from recovar.em.local import local_caches
 
 pytestmark = pytest.mark.unit
 

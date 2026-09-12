@@ -73,7 +73,7 @@ def test_complete_file_layout_and_timestamp_match(tmp_path, monkeypatch, optics)
 
 
 def test_invalid_initial_model_selector_fails_before_writing(tmp_path, monkeypatch):
-    from recovar.em.initial_model import star_io
+    from recovar.em.vdam import star_io
 
     monkeypatch.setenv("RECOVAR_VDAM_STAR_ARRAY_ROWS", "yes")
     path = tmp_path / "not_written.star"

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-from recovar.em.dense_single_volume import local_debug
+from recovar.em.diagnostics import local_debug
 
 
 def _bucket(ids):

@@ -1,10 +1,7 @@
 import pytest
 
-from recovar.em.dense_single_volume.helpers.convergence import (
-    RefinementState,
-    _apply_relion_healpix_order_oracle,
-)
-from recovar.em.dense_single_volume.refinement_options import (
+from recovar.em.helpers.convergence import RefinementState, _apply_relion_healpix_order_oracle
+from recovar.em.refinement.refinement_options import (
     AdaptiveOptions,
     RefinementOptions,
     RefinementSchedule,
@@ -106,7 +103,7 @@ def test_sampling_validation_runs_at_entry_and_preserves_error_precedence(sizes,
 
 @pytest.mark.parametrize("use_defaults", [False, True])
 def test_refinement_entry_passes_validated_options_to_loop(monkeypatch, use_defaults):
-    from recovar.em.dense_single_volume import iteration_loop
+    from recovar.em.refinement import iteration_loop
 
     received = []
     sentinel = object()
@@ -133,7 +130,7 @@ def test_refinement_entry_passes_validated_options_to_loop(monkeypatch, use_defa
 
 
 def test_invalid_sampling_schedule_never_starts_refinement(monkeypatch):
-    from recovar.em.dense_single_volume import iteration_loop
+    from recovar.em.refinement import iteration_loop
 
     def unexpected_loop(**kwargs):
         pytest.fail("invalid schedule reached refinement")

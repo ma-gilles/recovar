@@ -8,7 +8,7 @@ import pytest
 
 
 def test_k_class_replay_batch_plan_applies_estimator_and_kclass_caps(monkeypatch):
-    from recovar.em.dense_single_volume import batch_planning
+    from recovar.em.helpers import batch_planning
     from scripts.run_k_class_parity import _safe_k_class_replay_batch_plan
 
     captured = {}
@@ -243,7 +243,7 @@ def test_k_class_replay_firstiter_lowpass_uses_exact_relion_helper():
 
 
 def test_k_class_replay_batch_plan_preserves_smaller_estimator_plan(monkeypatch):
-    from recovar.em.dense_single_volume import batch_planning
+    from recovar.em.helpers import batch_planning
     from scripts.run_k_class_parity import _safe_k_class_replay_batch_plan
 
     monkeypatch.setattr(

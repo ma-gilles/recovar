@@ -7,8 +7,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import scoring
-from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+from recovar.em.scoring import scoring
+from recovar.em.scoring.coarse_gemm_hybrid import (
     plan_coarse_gemm_certificate_topology,
     validate_coarse_gemm_certificate_topology,
 )

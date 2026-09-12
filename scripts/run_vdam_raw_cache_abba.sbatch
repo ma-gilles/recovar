@@ -74,14 +74,14 @@ SOURCE_FILES=(
   recovar/cuda_backproject.py
   recovar/data_io/image_loader.py
   recovar/data_io/staging.py
-  recovar/em/dense_single_volume/batch_planning.py
-  recovar/em/dense_single_volume/helpers/significance.py
-  recovar/em/dense_single_volume/k_class.py
-  recovar/em/initial_model/dense_adapter.py
-  recovar/em/initial_model/driver.py
-  recovar/em/initial_model/iteration_loop.py
-  recovar/em/initial_model/m_step.py
-  recovar/em/initial_model/schedules.py
+  recovar/em/helpers/batch_planning.py
+  recovar/em/scoring/significance.py
+  recovar/em/classification/k_class.py
+  recovar/em/vdam/dense_adapter.py
+  recovar/em/vdam/driver.py
+  recovar/em/vdam/iteration_loop.py
+  recovar/em/vdam/m_step.py
+  recovar/em/vdam/schedules.py
   recovar/commands/initial_model.py
   scripts/run_ab_initio.py
   scripts/run_vdam_late_iteration_profile.py
@@ -103,7 +103,7 @@ SOURCE_FILES=(
 
 BENCHMARK_DIFF_ALLOWLIST=(
   recovar/data_io/image_loader.py
-  recovar/em/initial_model/iteration_loop.py
+  recovar/em/vdam/iteration_loop.py
   scripts/analyze_vdam_raw_cache_abba.py
   scripts/probe_vdam_raw_cache_memory.py
   scripts/run_vdam_late_iteration_profile.py
@@ -323,7 +323,7 @@ from pathlib import Path
 import jax
 import recovar
 import recovar.cuda_backproject as cuda_backproject
-from recovar.em.dense_single_volume.batch_planning import _em_raw_image_cache_mode
+from recovar.em.helpers.batch_planning import _em_raw_image_cache_mode
 from recovar.relion_bind import _relion_bind_core as relion_bind_core
 from recovar.utils.parity_provenance import assert_parity_ancestors
 

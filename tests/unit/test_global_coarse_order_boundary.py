@@ -6,11 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from recovar.em.dense_single_volume.helpers.convergence import healpix_angular_step
-from recovar.em.dense_single_volume.helpers.resolution import (
-    clamp_relion_coarse_image_size,
-    compute_coarse_image_size,
-)
+from recovar.em.helpers.convergence import healpix_angular_step
+from recovar.em.helpers.resolution import clamp_relion_coarse_image_size, compute_coarse_image_size
 
 pytestmark = pytest.mark.unit
 
@@ -22,7 +19,7 @@ def _global_window(incoming, updated, *, current=172, sealed=None):
     unique adaptive global-window block structurally, so this CPU regression
     still checks the real caller's choice of pre/post-update order.
     """
-    path = Path(__file__).resolve().parents[2] / "recovar/em/dense_single_volume/iteration_loop.py"
+    path = Path(__file__).resolve().parents[2] / "recovar/em/refinement/iteration_loop.py"
     tree = ast.parse(path.read_text())
     blocks = [
         node for node in ast.walk(tree)

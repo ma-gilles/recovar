@@ -10,13 +10,13 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.em_engine import _iter_dense_rotation_blocks
-from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
-from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
-from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights
-from recovar.em.dense_single_volume.helpers.preprocessing import preprocess_batch as _preprocess_batch
-from recovar.em.dense_single_volume.helpers.projection import compute_projections_block as _compute_projections_block
-from recovar.em.dense_single_volume.helpers.scoring import _score_rotation_block, _update_logsumexp
+from recovar.em.dense.em_engine import _iter_dense_rotation_blocks
+from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
+from recovar.em.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.helpers.half_spectrum import make_half_image_weights
+from recovar.em.helpers.preprocessing import preprocess_batch as _preprocess_batch
+from recovar.em.helpers.projection import compute_projections_block as _compute_projections_block
+from recovar.em.scoring.scoring import _score_rotation_block, _update_logsumexp
 from recovar.reconstruction import noise as noise_utils
 
 

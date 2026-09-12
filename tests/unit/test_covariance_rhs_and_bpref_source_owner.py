@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 import recovar.em.heterogeneity as hetero
-from recovar.em.initial_model import layout, relion_layout
+from recovar.em.vdam import layout, relion_layout
 
 
 def test_covariance_accumulators_share_the_image_owner():

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import resolution as resolution_helpers
+from recovar.em.helpers import resolution as resolution_helpers
 from recovar.reconstruction import regularization as regularization_module
 
 pytestmark = pytest.mark.unit

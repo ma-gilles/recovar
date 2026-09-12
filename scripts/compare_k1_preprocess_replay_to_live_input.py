@@ -9,10 +9,9 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
-    _relion_cuda_fine_full_to_compact_lookup,
-)
+from recovar.em.sparse_pass2.sparse_pass2_scoring import _relion_cuda_fine_full_to_compact_lookup
 from recovar.utils.file_hash import sha256_file
+
 if __package__:
     from scripts.validate_relion_fine_operand_capture import load_fine_operand_capture
     from scripts.validate_relion_preprocess_capture import (

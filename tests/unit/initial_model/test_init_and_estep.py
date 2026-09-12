@@ -24,7 +24,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from recovar.em.initial_model import (
+from recovar.em.vdam import (
     MOM2_INIT_CONSTANT,
     build_posterior_summary,
     compute_current_size_for_denovo,
@@ -254,7 +254,7 @@ class TestInitialiseDataVsPrior:
         np.testing.assert_array_equal(state.data_vs_prior_class, 0.0)
 
     def test_reference_spectrum_uses_relion_volume_frame(self):
-        from recovar.em.initial_model.init import _relion_power_spectrum_3d
+        from recovar.em.vdam.init import _relion_power_spectrum_3d
         from recovar.utils.helpers import recovar_volume_to_relion
 
         state = initialise_denovo_state(

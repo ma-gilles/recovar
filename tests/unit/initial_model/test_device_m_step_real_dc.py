@@ -5,7 +5,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import relion_vdam_mstep as mstep
+from recovar.em.relion import relion_vdam_mstep as mstep
 
 pytestmark = pytest.mark.unit
 

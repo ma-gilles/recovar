@@ -6,18 +6,15 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar.em.dense_single_volume.helpers import coarse_score_diagnostics, significance
-from recovar.em.dense_single_volume.helpers.coarse_score_diagnostics import (
+from recovar.em.diagnostics import coarse_score_diagnostics
+from recovar.em.diagnostics.coarse_score_diagnostics import (
     _coarse_selector_audit_from_full_stats,
     _with_coarse_selector_audit,
     _with_coarse_significance_diagnostics,
 )
-from recovar.em.initial_model.estep_common import (
-    _estep_meta,
-)
-from recovar.em.initial_model.sparse_pass2_estep import (
-    _sparse_pass2_estep_meta,
-)
+from recovar.em.scoring import significance
+from recovar.em.vdam.estep_common import _estep_meta
+from recovar.em.vdam.sparse_pass2_estep import _sparse_pass2_estep_meta
 
 
 def _control_audit() -> dict:

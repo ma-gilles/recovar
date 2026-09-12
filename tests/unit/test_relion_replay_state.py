@@ -6,9 +6,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-import recovar.em.dense_single_volume.projector_preparation as projector_preparation
-import recovar.em.dense_single_volume.relion_replay as relion_replay_module
-import recovar.em.dense_single_volume.helpers.orientation_priors as orientation_priors_module
+import recovar.em.diagnostics.relion_replay as relion_replay_module
+import recovar.em.helpers.orientation_priors as orientation_priors_module
+import recovar.em.refinement.projector_preparation as projector_preparation
 
 pytestmark = pytest.mark.unit
 IMAGE_SIZE = 64

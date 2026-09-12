@@ -44,12 +44,12 @@ SOURCE_FILES=(
   recovar/cuda/cuda_backproject.cu
   recovar/cuda_backproject.py
   recovar/utils/parity_provenance.py
-  recovar/em/dense_single_volume/batch_planning.py
-  recovar/em/dense_single_volume/fixed_capacity_local.py
-  recovar/em/dense_single_volume/local_big_jit.py
-  recovar/em/dense_single_volume/local_caches.py
-  recovar/em/dense_single_volume/local_em_engine.py
-  recovar/em/dense_single_volume/local_layout.py
+  recovar/em/helpers/batch_planning.py
+  recovar/em/local/fixed_capacity_local.py
+  recovar/em/local/local_big_jit.py
+  recovar/em/local/local_caches.py
+  recovar/em/local/local_em_engine.py
+  recovar/em/local/local_layout.py
   scripts/run_fixed_capacity_local_score_gate.py
   scripts/run_fixed_capacity_local_score_gate.sbatch
   scripts/vdam_gpu_selection.sh

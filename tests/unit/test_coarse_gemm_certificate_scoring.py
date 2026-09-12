@@ -7,8 +7,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import scoring
-from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+from recovar.em.scoring import scoring
+from recovar.em.scoring.coarse_gemm_hybrid import (
     _upward_add_f64,
     _upward_multiply_f64,
     certified_f64_expanded_score_gammas,

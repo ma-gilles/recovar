@@ -138,7 +138,7 @@ result = run_dense_ppca_fused_em_iteration(
   most-load-bearing imports.
 - **Half-Fourier helpers, FFT conventions** → `recovar/core/fourier_transform_utils.py`.
 - **Preprocessing, batch fetch, half-spectrum weights** →
-  `recovar/em/dense_single_volume/helpers/`.
+  `recovar/em/helpers/`.
 - **Noise model expansion** → `recovar/reconstruction/noise.py`.
 
 The single rule: **if it's used by `dense_dataset.py` and `local_dataset.py`,

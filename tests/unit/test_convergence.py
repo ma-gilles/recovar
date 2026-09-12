@@ -24,7 +24,7 @@ pytestmark = pytest.mark.unit
 # Import targets
 # ---------------------------------------------------------------------------
 
-from recovar.em.dense_single_volume.helpers.convergence import (
+from recovar.em.helpers.convergence import (
     MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
     MAX_NR_ITER_WO_RESOL_GAIN,
     RefinementState,
@@ -1424,8 +1424,8 @@ class TestRefinementPolicy:
         assert _exhaustive_grid_order_for_state(nonlocal_state) == 4
 
     def test_approx_acc_rot_convergence_policy_guards_confident_prelocal_runs(self, monkeypatch):
-        from recovar.em.dense_single_volume.helpers import convergence as convergence_helpers
-        from recovar.em.dense_single_volume.helpers.convergence import RefinementState
+        from recovar.em.helpers import convergence as convergence_helpers
+        from recovar.em.helpers.convergence import RefinementState
 
         for name in (
             "RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE",
@@ -1454,8 +1454,8 @@ class TestRefinementPolicy:
         assert "high-pmax" in reason
 
     def test_approx_acc_rot_convergence_policy_is_diagnostic_by_default(self, monkeypatch):
-        from recovar.em.dense_single_volume.helpers import convergence as convergence_helpers
-        from recovar.em.dense_single_volume.helpers.convergence import RefinementState
+        from recovar.em.helpers import convergence as convergence_helpers
+        from recovar.em.helpers.convergence import RefinementState
 
         for name in (
             "RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE",
@@ -1484,8 +1484,8 @@ class TestRefinementPolicy:
         assert reason == "diagnostic-only-default"
 
     def test_approx_acc_rot_convergence_policy_env_overrides(self, monkeypatch):
-        from recovar.em.dense_single_volume.helpers import convergence as convergence_helpers
-        from recovar.em.dense_single_volume.helpers.convergence import RefinementState
+        from recovar.em.helpers import convergence as convergence_helpers
+        from recovar.em.helpers.convergence import RefinementState
 
         state = RefinementState(
             healpix_order=3,
@@ -1521,7 +1521,7 @@ class TestRefinementPolicy:
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 @pytest.mark.parametrize("trailing_shape", [(2,), (3, 3)])
 def test_pose_stacks_preserve_empty_half_and_requested_precision(dtype, trailing_shape):
-    from recovar.em.dense_single_volume.helpers.convergence import concatenate_pose_stacks_or_none
+    from recovar.em.helpers.convergence import concatenate_pose_stacks_or_none
 
     populated = np.arange(2 * np.prod(trailing_shape), dtype=np.float64).reshape(2, *trailing_shape)
     result = concatenate_pose_stacks_or_none(
@@ -1535,7 +1535,7 @@ def test_pose_stacks_preserve_empty_half_and_requested_precision(dtype, trailing
 
 @pytest.mark.parametrize("stacks,warning", [([None, np.zeros((1, 2))], False), ([np.zeros((1, 3))], True)])
 def test_pose_stacks_skip_unavailable_or_malformed_half(stacks, warning, caplog):
-    from recovar.em.dense_single_volume.helpers.convergence import concatenate_pose_stacks_or_none
+    from recovar.em.helpers.convergence import concatenate_pose_stacks_or_none
 
     with caplog.at_level(logging.WARNING):
         result = concatenate_pose_stacks_or_none(

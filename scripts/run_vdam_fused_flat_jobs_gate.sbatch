@@ -46,9 +46,9 @@ nvidia-smi -q > "${PROVENANCE}/nvidia_smi.txt"
   sha256sum \
     recovar/cuda/cuda_backproject.cu \
     recovar/cuda_backproject.py \
-    recovar/em/dense_single_volume/helpers/sparse_pass2_bucketed.py \
-    recovar/em/dense_single_volume/local_big_jit.py \
-    recovar/em/dense_single_volume/local_em_engine.py \
+    recovar/em/sparse_pass2/sparse_pass2_bucketed.py \
+    recovar/em/local/local_big_jit.py \
+    recovar/em/local/local_em_engine.py \
     tests/unit/test_cuda_relion_fine_diff2.py \
     tests/unit/test_flat_local_rows.py \
     scripts/benchmark_vdam_fused_flat_jobs.py \

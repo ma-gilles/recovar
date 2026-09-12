@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import significance
+from recovar.em.scoring import significance
 
 pytestmark = pytest.mark.unit
 
@@ -52,8 +52,8 @@ def test_physical_pmax_gpu_shapes(width, monkeypatch):
     import inspect
     import json
     import os
-    from pathlib import Path
     import time
+    from pathlib import Path
 
     import jax
     from jax._src import compiler

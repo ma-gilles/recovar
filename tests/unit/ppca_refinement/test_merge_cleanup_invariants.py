@@ -34,8 +34,12 @@ import numpy as np
 import pytest
 
 from recovar.core import fourier_transform_utils as ftu
-from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
+from recovar.em.local.local_layout import LocalHypothesisLayout
 from recovar.em.ppca_refinement import postprocess as postprocess_module
+from recovar.em.ppca_refinement.config import (
+    GeometryConfig,
+    ScheduleConfig,
+)
 from recovar.em.ppca_refinement.dense_dataset import (
     iter_dense_ppca_dataset_blocks,
     prepare_dense_ppca_dataset_inputs,
@@ -51,10 +55,6 @@ from recovar.em.ppca_refinement.refinement_loop import (
     run_local_ppca_refinement_loop,
 )
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
-from recovar.em.ppca_refinement.config import (
-    GeometryConfig,
-    ScheduleConfig,
-)
 
 pytestmark = pytest.mark.unit
 

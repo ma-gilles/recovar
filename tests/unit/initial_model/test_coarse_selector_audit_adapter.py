@@ -9,11 +9,8 @@ from typing import NamedTuple
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.coarse_score_diagnostics import (
-    _with_coarse_selector_audit,
-)
-from recovar.em.initial_model import dense_adapter
-from recovar.em.initial_model import sparse_pass2_estep
+from recovar.em.diagnostics.coarse_score_diagnostics import _with_coarse_selector_audit
+from recovar.em.vdam import dense_adapter, sparse_pass2_estep
 
 pytestmark = pytest.mark.unit
 

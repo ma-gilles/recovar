@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject as cb
-from recovar.em.dense_single_volume.helpers import projection, significance
+from recovar.em.helpers import projection
+from recovar.em.scoring import significance
 
 pytestmark = pytest.mark.unit
 

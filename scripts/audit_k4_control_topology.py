@@ -19,7 +19,7 @@ from typing import Any
 
 import numpy as np
 
-from recovar.em.dense_single_volume.relion_worker_scale import (
+from recovar.em.relion.relion_worker_scale import (
     load_relion_dispatch_schedule,
     relion_class3d_follower_owners_from_schedule,
     verify_relion_dispatch_schedule_oracle,

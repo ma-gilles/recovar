@@ -114,11 +114,11 @@ def _audit_metadata(*, hybrid: bool) -> dict:
 def test_source_manifest_covers_real_transition_and_high_risk_dispatch() -> None:
     required = {
         "recovar/cuda/cuda_backproject.cu",
-        "recovar/em/dense_single_volume/helpers/coarse_gemm_hybrid.py",
-        "recovar/em/dense_single_volume/helpers/scoring.py",
-        "recovar/em/dense_single_volume/helpers/significance.py",
-        "recovar/em/dense_single_volume/k_class.py",
-        "recovar/em/initial_model/dense_adapter.py",
+        "recovar/em/scoring/coarse_gemm_hybrid.py",
+        "recovar/em/scoring/scoring.py",
+        "recovar/em/scoring/significance.py",
+        "recovar/em/classification/k_class.py",
+        "recovar/em/vdam/dense_adapter.py",
         "scripts/analyze_vdam_gf46_hybrid_transition.py",
         "scripts/run_vdam_gf46_hybrid_transition.sbatch",
         "scripts/run_vdam_late_iteration_profile.py",

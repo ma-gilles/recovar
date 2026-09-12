@@ -4,8 +4,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_bucket_stages
-from recovar.em.dense_single_volume.helpers import vdam_replay
+from recovar.em.diagnostics import vdam_replay
+from recovar.em.local import local_bucket_stages
 from scripts.build_vdam_block_chronology import RECORD_DTYPE
 
 

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import relion_worker_scale as scale
+from recovar.em.relion import relion_worker_scale as scale
 
 pytestmark = pytest.mark.unit
 

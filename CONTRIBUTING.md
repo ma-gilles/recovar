@@ -86,7 +86,7 @@ empty or were warmed by a specified command.
 
 The dense/local fast guard first checks undefined names with the installed Ruff
 before importing JAX or compiling tests. This check covers
-`recovar/em/dense_single_volume`; it is not repository-wide lint or scientific
+`recovar/em`; it is not repository-wide lint or scientific
 qualification.
 
 Use focused tests between edits. Group related changes into a frozen checkpoint

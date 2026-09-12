@@ -91,8 +91,7 @@ def test_compact_weighted_sums_and_noise_wrapper_matches_composed_boundaries(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_noise_blocks
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed, sparse_pass2_noise_blocks
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)

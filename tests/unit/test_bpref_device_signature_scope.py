@@ -8,14 +8,14 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject
+from recovar.em.classification import k_class
+from recovar.em.dense import half_scoring
+from recovar.em.diagnostics import bpref_diagnostics, local_bpref_capture
 from recovar.em.diagnostics import iteration as debug_dumps
-from recovar.em.dense_single_volume import half_scoring
-from recovar.em.dense_single_volume import iteration_loop
-from recovar.em.dense_single_volume import k_class
-from recovar.em.dense_single_volume import local_em_engine
-from recovar.em.dense_single_volume.helpers import bpref_diagnostics, sparse_pass2_bucketed
-from recovar.em.dense_single_volume.local_backprojection import compute_local_mstep_sums
-from recovar.em.dense_single_volume import local_bpref_capture
+from recovar.em.local import local_em_engine
+from recovar.em.local.local_backprojection import compute_local_mstep_sums
+from recovar.em.refinement import iteration_loop
+from recovar.em.sparse_pass2 import sparse_pass2_bucketed
 
 pytestmark = pytest.mark.unit
 
@@ -955,7 +955,7 @@ def test_later_capture_support_excludes_dense_full_support_fallback():
 @pytest.mark.parametrize("provided", [False, True])
 @pytest.mark.parametrize("masked", [False, True])
 def test_preprocess_capture_preserves_selected_metadata(native, provided, masked):
-    from recovar.em.dense_single_volume.helpers.preprocessing import prepare_batch_preprocess_operands
+    from recovar.em.helpers.preprocessing import prepare_batch_preprocess_operands
 
     mask = np.arange(16, dtype=np.float32).reshape(4, 4) if masked else None
     backend = SimpleNamespace(relion_fourier_backend="relion_cuda" if native else "jax", image_mask=mask)

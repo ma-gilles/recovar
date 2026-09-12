@@ -80,17 +80,17 @@ SOURCE_FILES=(
   recovar/cuda_backproject.py
   recovar/data_io/image_loader.py
   recovar/data_io/staging.py
-  recovar/em/dense_single_volume/batch_planning.py
-  recovar/em/dense_single_volume/helpers/coarse_gemm_streaming.py
-  recovar/em/dense_single_volume/helpers/projection.py
-  recovar/em/dense_single_volume/helpers/scoring.py
-  recovar/em/dense_single_volume/helpers/significance.py
-  recovar/em/dense_single_volume/k_class.py
-  recovar/em/initial_model/dense_adapter.py
-  recovar/em/initial_model/driver.py
-  recovar/em/initial_model/iteration_loop.py
-  recovar/em/initial_model/m_step.py
-  recovar/em/initial_model/schedules.py
+  recovar/em/helpers/batch_planning.py
+  recovar/em/scoring/coarse_gemm_streaming.py
+  recovar/em/helpers/projection.py
+  recovar/em/scoring/scoring.py
+  recovar/em/scoring/significance.py
+  recovar/em/classification/k_class.py
+  recovar/em/vdam/dense_adapter.py
+  recovar/em/vdam/driver.py
+  recovar/em/vdam/iteration_loop.py
+  recovar/em/vdam/m_step.py
+  recovar/em/vdam/schedules.py
   recovar/commands/initial_model.py
   scripts/run_ab_initio.py
   scripts/run_vdam_coarse_gemm_gf46_streaming_selector.sbatch
@@ -351,13 +351,13 @@ from pathlib import Path
 import numpy as np
 
 from recovar.data_io.starfile import read_star
-from recovar.em.initial_model.driver import (
+from recovar.em.vdam.driver import (
     _micrograph_sort_order,
     _optics_group_indices,
     _relion_star_list_value,
 )
-from recovar.em.initial_model.iteration_loop import select_subset_for_iter
-from recovar.em.initial_model.state import InitialModelState
+from recovar.em.vdam.iteration_loop import select_subset_for_iter
+from recovar.em.vdam.state import InitialModelState
 from recovar.relion_bind import _relion_bind_core as relion_bind_core
 
 EXPECTED_TARGETS = (1, 2160)

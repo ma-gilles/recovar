@@ -2,7 +2,7 @@
 
 import inspect
 
-from recovar.em.initial_model import estep_meta_updates, iteration_loop, subset_schedule
+from recovar.em.vdam import estep_meta_updates, iteration_loop, subset_schedule
 
 
 def test_owners_hold_the_definitions_and_the_loop_routes_to_them():

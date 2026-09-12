@@ -178,13 +178,13 @@ def _per_pose_stats_block(Y1, proj_aug, ctf2_over_noise, y_norm):
     the real parts of the Hermitian inner products. The ``.real``
     projections are exact (not approximations) provided the half-image
     weights are baked into ``Y1``, ``ctf2_over_noise``, and ``y_norm``
-    upstream. They are: ``recovar.em.dense_single_volume.helpers.preprocessing.preprocess_batch``
+    upstream. They are: ``recovar.em.helpers.preprocessing.preprocess_batch``
     computes ``y_norm = Σ_f (|y|²/σ²) · w_f``, and
     :func:`iter_dense_ppca_dataset_blocks` bakes
     ``score_mask = window_mask × half_weights`` into both ``Y1`` and
     ``ctf2_over_noise``. The weights are ``w_f = 2`` for non-DC /
     non-Nyquist Fourier pixels and ``w_f = 1`` for DC and Nyquist (see
-    :func:`recovar.em.dense_single_volume.helpers.half_spectrum.make_half_image_weights`),
+    :func:`recovar.em.helpers.half_spectrum.make_half_image_weights`),
     so each einsum below is the **full-Fourier** inner product and its
     real part is exact under the Hermitian symmetry of real-space volumes.
     """
@@ -530,7 +530,7 @@ def accumulate_pose_ppca_block_cached(
     :func:`dense_pose_ppca_score_with_moments_blocked`. Same math, same
     numerics: γ = exp(score − logZ), aggregate via einsum, backproject.
     """
-    from recovar.em.dense_single_volume.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
+    from recovar.em.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
 
     score = jnp.asarray(score)
     alpha = jnp.asarray(alpha)
@@ -645,7 +645,7 @@ def fused_dense_pose_ppca_block(
     This keeps tensors at block scope and avoids a global
     ``[images, rotations, translations, q, q]`` moment tensor.
     """
-    from recovar.em.dense_single_volume.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
+    from recovar.em.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
 
     Y1 = jnp.asarray(Y1)
     proj_aug = jnp.asarray(proj_aug)
@@ -733,7 +733,7 @@ def fused_dense_pose_ppca_block(
 
 
 def _enforce_augmented_x0(volumes, volume_shape):
-    from recovar.em.dense_single_volume.local_backprojection import enforce_relion_half_volume_x0_hermitian
+    from recovar.em.local.local_backprojection import enforce_relion_half_volume_x0_hermitian
 
     enforced = [enforce_relion_half_volume_x0_hermitian(volumes[i], volume_shape) for i in range(volumes.shape[0])]
     return jnp.stack(enforced, axis=0)

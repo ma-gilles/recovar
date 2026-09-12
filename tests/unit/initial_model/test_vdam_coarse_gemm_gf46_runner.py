@@ -82,9 +82,9 @@ def test_runner_pins_the_exact_gf46_inputs_and_manifests() -> None:
     assert source.count("verify_frozen_inputs") >= 3
     source_files = _array("SOURCE_FILES")
     for required in (
-        "recovar/em/dense_single_volume/helpers/scoring.py",
-        "recovar/em/dense_single_volume/helpers/significance.py",
-        "recovar/em/initial_model/dense_adapter.py",
+        "recovar/em/scoring/scoring.py",
+        "recovar/em/scoring/significance.py",
+        "recovar/em/vdam/dense_adapter.py",
         "scripts/run_vdam_late_iteration_profile.py",
         "scripts/analyze_vdam_coarse_gemm_gf46_gate.py",
         "scripts/run_vdam_coarse_gemm_gf46_gate.sbatch",

@@ -5,7 +5,7 @@ import inspect
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers import projection
+from recovar.em.helpers import projection
 
 
 def test_fftw_block_clamps_the_projector_size_and_transposes_rotations():

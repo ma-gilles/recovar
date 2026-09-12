@@ -4,8 +4,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_projection_cache as cache
-from recovar.em.dense_single_volume.local_layout import LocalBucketSpec
+from recovar.em.local import local_projection_cache as cache
+from recovar.em.local.local_layout import LocalBucketSpec
 
 pytestmark = pytest.mark.unit
 

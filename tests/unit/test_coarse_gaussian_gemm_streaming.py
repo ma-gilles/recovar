@@ -8,7 +8,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.coarse_gemm_streaming import (
+from recovar.em.diagnostics.coarse_gaussian_diagnostics import (
+    CoarseGaussianGemmDiagnosticScope,
+    _coarse_gaussian_gemm_streaming_diagnostic_request,
+    _seal_coarse_gaussian_gemm_streaming_scope,
+)
+from recovar.em.scoring.coarse_gemm_streaming import (
     COARSE_GEMM_STREAMING_SCHEMA,
     coarse_gemm_streaming_dual_state_bytes,
     coarse_gemm_streaming_state_bytes,
@@ -16,11 +21,6 @@ from recovar.em.dense_single_volume.helpers.coarse_gemm_streaming import (
     summarize_coarse_gemm_streaming_state,
     update_coarse_gemm_streaming_state,
     write_coarse_gemm_streaming_summary,
-)
-from recovar.em.dense_single_volume.helpers.coarse_gaussian_diagnostics import (
-    CoarseGaussianGemmDiagnosticScope,
-    _coarse_gaussian_gemm_streaming_diagnostic_request,
-    _seal_coarse_gaussian_gemm_streaming_scope,
 )
 
 pytestmark = pytest.mark.unit

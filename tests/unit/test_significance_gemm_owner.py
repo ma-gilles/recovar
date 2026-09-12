@@ -2,12 +2,9 @@
 
 import inspect
 
-from recovar.em.dense_single_volume.helpers import (
-    coarse_gaussian_diagnostics,
-    coarse_gaussian_gemm,
-    relion_coarse_operands,
-    significance,
-)
+from recovar.em.diagnostics import coarse_gaussian_diagnostics
+from recovar.em.relion import relion_coarse_operands
+from recovar.em.scoring import coarse_gaussian_gemm, significance
 
 
 def test_owners_hold_the_definitions_and_significance_routes_to_them():

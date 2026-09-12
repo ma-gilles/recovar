@@ -12,8 +12,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import mean_helpers
-from recovar.em.dense_single_volume.helpers.resolution import shell_index_to_resolution_angstrom
+from recovar.em.helpers.resolution import shell_index_to_resolution_angstrom
+from recovar.em.refinement import mean_helpers
 from recovar.reconstruction import regularization
 
 pytestmark = pytest.mark.unit

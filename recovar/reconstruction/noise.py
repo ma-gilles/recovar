@@ -8,14 +8,14 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar.utils.nvtx_shim import nvtx
 
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar import core, utils, jax_config
+from recovar import core, jax_config, utils
 from recovar.core.configs import ForwardModelConfig, ModelState
 from recovar.heterogeneity import covariance_core
 from recovar.reconstruction import regularization
+from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 
@@ -383,8 +383,8 @@ def fit_noise_model_to_images(
             stacking convention as ``fitted``.
     """
     # Import optimization libraries
-    from jaxopt import ScipyBoundedMinimize, OptaxSolver
     import optax
+    from jaxopt import OptaxSolver, ScipyBoundedMinimize
 
     # Special handling for tilt series data
     if isinstance(experiment_dataset.noise, VariableRadialNoiseModel) and not tilt_dose_inner:
@@ -939,10 +939,7 @@ def normalize_wsum_to_sigma2_noise(wsum_sigma2_noise, wsum_img_power, sumw, imag
         Per-shell noise variance in **recovar's native FFT units**, ready to
         be fed back into the engine. Same scale as ``|process_images|^2``.
     """
-    from recovar.em.dense_single_volume.helpers.half_spectrum import (
-        bin_shell_values_jax,
-        make_relion_noise_shell_indices_half,
-    )
+    from recovar.em.helpers.half_spectrum import bin_shell_values_jax, make_relion_noise_shell_indices_half
 
     # Preserve whatever real dtype the caller's accumulators already carry
     # (float64 end to end when use_float64_scoring/use_float64_projections

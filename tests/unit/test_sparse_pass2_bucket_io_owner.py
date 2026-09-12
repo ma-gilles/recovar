@@ -2,12 +2,8 @@
 
 import inspect
 
-from recovar.em.dense_single_volume.helpers import (
-    sparse_pass2_bucket_io,
-    sparse_pass2_bucket_plan,
-    sparse_pass2_bucketed,
-    sparse_pass2_dump,
-)
+from recovar.em.diagnostics import sparse_pass2_dump
+from recovar.em.sparse_pass2 import sparse_pass2_bucket_io, sparse_pass2_bucket_plan, sparse_pass2_bucketed
 
 
 def test_owners_hold_the_definitions_and_the_pass2_module_routes_to_them():

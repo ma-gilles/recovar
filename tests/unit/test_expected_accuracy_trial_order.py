@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import expected_accuracy as owner
+from recovar.em.helpers import expected_accuracy as owner
 
 pytestmark = pytest.mark.unit
 LOG = logging.getLogger("trial_order_test")

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_timing as timing
+from recovar.em.local import local_timing as timing
 
 pytestmark = pytest.mark.unit
 

@@ -7,26 +7,21 @@ import sys
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.types import NoiseStats
-from recovar.em.dense_single_volume.iteration_loop import (
-    _run_relion_iteration_loop,
-)
-from recovar.em.dense_single_volume.relion_normalization import update_relion_norm_scale_corrections
-from recovar.em.dense_single_volume.relion_replay import (
-    _apply_replay_correction_overrides,
-    _RelionHalfInputState,
-)
-from recovar.em.dense_single_volume.relion_worker_scale import (
-    _dispatch_relion_follower_scale_for_final_all_data,
-    _dispatch_relion_follower_scale_for_numbered_iteration,
-    _finalize_relion_follower_scale_replay_telemetry,
-    _update_relion_follower_corrections,
-    _remap_relion_follower_runtime_inputs,
-    _require_relion_follower_owners,
-    _validate_coupled_relion_restart_state,
+from recovar.em.diagnostics.relion_replay import _apply_replay_correction_overrides, _RelionHalfInputState
+from recovar.em.helpers.types import NoiseStats
+from recovar.em.refinement.iteration_loop import _run_relion_iteration_loop
+from recovar.em.relion.relion_normalization import update_relion_norm_scale_corrections
+from recovar.em.relion.relion_worker_scale import (
     RelionDispatchSchedule,
     RelionFollowerScaleReplay,
     RelionFollowerScaleSetup,
+    _dispatch_relion_follower_scale_for_final_all_data,
+    _dispatch_relion_follower_scale_for_numbered_iteration,
+    _finalize_relion_follower_scale_replay_telemetry,
+    _remap_relion_follower_runtime_inputs,
+    _require_relion_follower_owners,
+    _update_relion_follower_corrections,
+    _validate_coupled_relion_restart_state,
     load_relion_dispatch_schedule,
     load_relion_follower_scale_replay,
     make_relion_dispatch_schedule_from_chunks,

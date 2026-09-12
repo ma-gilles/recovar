@@ -3,10 +3,7 @@
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.normalization_inputs import (
-    optional_normalization_vector,
-    prepare_local_normalization_inputs,
-)
+from recovar.em.helpers.normalization_inputs import optional_normalization_vector, prepare_local_normalization_inputs
 
 pytestmark = pytest.mark.unit
 

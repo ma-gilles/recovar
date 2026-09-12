@@ -55,12 +55,8 @@ def main() -> None:
     parser.add_argument("--current-size", type=int, default=52)
     args = parser.parse_args()
 
-    from recovar.em.dense_single_volume.helpers.fourier_window import (
-        make_fourier_window_indices_np,
-    )
-    from recovar.em.dense_single_volume.helpers.projection import (
-        compute_relion_projector_projections_block,
-    )
+    from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
+    from recovar.em.helpers.projection import compute_relion_projector_projections_block
 
     capture = args.relion_capture.resolve()
     score_dump = np.load(args.recovar_score_dump)

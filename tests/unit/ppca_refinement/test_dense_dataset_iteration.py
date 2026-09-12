@@ -4,10 +4,8 @@ import numpy as np
 import pytest
 
 import recovar.core.fourier_transform_utils as ftu
-from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights
-from recovar.em.dense_single_volume.helpers.scoring import _e_step_block_scores
-from recovar.em.dense_single_volume.ppca_bridge import run_dense_ppca_refinement_with_kclass_schedule
-from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
+from recovar.em.helpers.half_spectrum import make_half_image_weights
+from recovar.em.local.local_layout import LocalHypothesisLayout
 from recovar.em.ppca_refinement import (
     HalfsetMeanComparison,
     PoseMarginalPPCAEMState,
@@ -25,6 +23,8 @@ from recovar.em.ppca_refinement.config import (
     ScoringConfig,
     SparsePass2Config,
 )
+from recovar.em.ppca_refinement.ppca_bridge import run_dense_ppca_refinement_with_kclass_schedule
+from recovar.em.scoring.scoring import _e_step_block_scores
 
 pytestmark = pytest.mark.unit
 

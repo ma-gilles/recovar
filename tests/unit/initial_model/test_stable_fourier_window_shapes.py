@@ -6,34 +6,20 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import significance
-from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
-    plan_coarse_gemm_certificate_topology,
-)
-from recovar.em.dense_single_volume.helpers.fourier_window import (
+from recovar.em.helpers.fourier_window import (
     make_fourier_window_indices_np,
     make_frequency_coords_half_np,
     make_stable_fourier_window_shape_plan,
     stable_fourier_window_current_size,
 )
-from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
-    crop_relion_x_half_accumulator,
-)
-from recovar.em.dense_single_volume.helpers.projection import (
-    _texture_centered_crop_at_indices,
-)
-from recovar.em.dense_single_volume.helpers.significance import (
-    _coarse_gaussian_fused_logical_lookup,
-    _plan_coarse_gaussian_square_layout,
-)
-from recovar.em.dense_single_volume.helpers.sparse_pass2_wavg import (
-    _make_relion_wavg_rectangle,
-    _make_stable_relion_wavg_rectangle,
-)
-from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
-    _relion_cuda_fine_full_to_compact_lookup,
-)
-from recovar.em.dense_single_volume.shape_buckets import pad_axis
+from recovar.em.helpers.half_volume_mstep import crop_relion_x_half_accumulator
+from recovar.em.helpers.projection import _texture_centered_crop_at_indices
+from recovar.em.helpers.shape_buckets import pad_axis
+from recovar.em.scoring import significance
+from recovar.em.scoring.coarse_gemm_hybrid import plan_coarse_gemm_certificate_topology
+from recovar.em.scoring.significance import _coarse_gaussian_fused_logical_lookup, _plan_coarse_gaussian_square_layout
+from recovar.em.sparse_pass2.sparse_pass2_scoring import _relion_cuda_fine_full_to_compact_lookup
+from recovar.em.sparse_pass2.sparse_pass2_wavg import _make_relion_wavg_rectangle, _make_stable_relion_wavg_rectangle
 
 pytestmark = pytest.mark.unit
 
@@ -125,7 +111,7 @@ def test_stable_window_size_rejects_invalid_shapes(current_size, image_size, qua
 
 
 def test_stable_window_runtime_quantum_is_diagnostic_and_fail_closed(monkeypatch):
-    from recovar.em.dense_single_volume.helpers.fourier_window import (
+    from recovar.em.helpers.fourier_window import (
         DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM,
         STABLE_FOURIER_WINDOW_QUANTUM_ENV,
         stable_fourier_window_quantum,
@@ -409,11 +395,7 @@ def test_physical_class_boundary_stays_on_runtime_bound_engine_route():
     assert lower.logical_spec.use_window is True
     assert boundary.logical_spec.use_window is True
     engine_source = (
-        Path(__file__).resolve().parents[3]
-        / "recovar"
-        / "em"
-        / "dense_single_volume"
-        / "local_em_engine.py"
+        Path(__file__).resolve().parents[3] / 'recovar' / 'em' / 'local' / 'local_em_engine.py'
     ).read_text()
     assert (
         "stable_fourier_window_shapes and "
@@ -423,11 +405,7 @@ def test_physical_class_boundary_stays_on_runtime_bound_engine_route():
 
 def test_stable_bpref_has_one_fail_closed_source_operand_route():
     engine_source = (
-        Path(__file__).resolve().parents[3]
-        / "recovar"
-        / "em"
-        / "dense_single_volume"
-        / "local_em_engine.py"
+        Path(__file__).resolve().parents[3] / 'recovar' / 'em' / 'local' / 'local_em_engine.py'
     ).read_text()
 
     assert "if stable_window_active and not (" in engine_source
@@ -1104,9 +1082,7 @@ def test_runtime_bpref_lowering_and_jit_cache_ignore_logical_size(monkeypatch):
 
 
 def test_stable_bpref_helper_rejects_noninline_projector():
-    from recovar.em.dense_single_volume.local_physical_grid import (
-        _accumulate_relion_vdam_physical_particle_grid,
-    )
+    from recovar.em.local.local_physical_grid import _accumulate_relion_vdam_physical_particle_grid
 
     with pytest.raises(ValueError, match="requires the inline RELION projector"):
         _accumulate_relion_vdam_physical_particle_grid(
@@ -1130,7 +1106,7 @@ def test_stable_bpref_helper_rejects_noninline_projector():
 
 
 def test_stable_window_engine_fails_closed_without_exact_vdam_topology():
-    from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
+    from recovar.em.local.local_em_engine import run_local_em_exact
 
     with pytest.raises(ValueError, match="K=1 exact-local VDAM topology"):
         run_local_em_exact(
@@ -1149,7 +1125,7 @@ def test_stable_window_engine_fails_closed_without_exact_vdam_topology():
 
 @pytest.mark.parametrize("disabled_adjoint", ("disable_adjoint_y", "disable_adjoint_ctf"))
 def test_stable_window_engine_requires_complete_bpref_accumulators(disabled_adjoint):
-    from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
+    from recovar.em.local.local_em_engine import run_local_em_exact
 
     kwargs = {
         disabled_adjoint: True,
@@ -1178,7 +1154,7 @@ def test_stable_window_engine_requires_complete_bpref_accumulators(disabled_adjo
 
 
 def test_stable_window_engine_rejects_external_host_replay(monkeypatch):
-    from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
+    from recovar.em.local.local_em_engine import run_local_em_exact
 
     monkeypatch.setenv("RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY", "/tmp/replay.so")
     with pytest.raises(ValueError, match="do not support external VDAM host replay"):
@@ -1204,7 +1180,7 @@ def test_stable_window_engine_rejects_external_host_replay(monkeypatch):
 
 
 def test_stable_window_engine_rejects_distinct_score_and_reconstruction_sizes():
-    from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
+    from recovar.em.local.local_em_engine import run_local_em_exact
 
     dataset = SimpleNamespace(
         image_shape=(128, 128),

@@ -94,9 +94,7 @@ def _live_pass2_inverse_noise_report(
 ) -> dict[str, object]:
     """Compare the inverse-noise words actually delivered to sparse pass 2."""
 
-    from recovar.em.dense_single_volume.helpers.half_spectrum import (
-        make_shell_indices_half,
-    )
+    from recovar.em.helpers.half_spectrum import make_shell_indices_half
 
     with np.load(pass2_path, allow_pickle=False) as archive:
         required = {"window_indices", "direct_inverse_noise_score"}

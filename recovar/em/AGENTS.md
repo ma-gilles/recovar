@@ -21,11 +21,13 @@ GUI excluded**, before new-engine development. Root instructions also apply.
   unused forwarding wrappers. Preserve scientific defaults, casts, reduction
   order, JIT boundaries, memory lifetime, saved formats and non-EM APIs during
   structural work. Keep numerical and runtime repairs separate.
-- Keep `dense_single_volume/__init__.py` free of execution imports. Import
-  `refine_single_volume` from `dense_single_volume.iteration_loop`, K-class entry
-  points from `dense_single_volume.k_class` and result assembly/types from
-  `dense_single_volume.k_class_results`. Helpers must not initialize
-  schedulers, dense/local engines or sparse scoring.
+- `recovar/em/` is the refinement implementation root. Keep responsibility
+  package initializers free of execution imports. Import `refine_single_volume`
+  from `recovar.em.refinement.iteration_loop`, K-class execution from `recovar.em.classification.k_class`
+  and result assembly/types from `recovar.em.classification.k_class_results`. Helpers and
+  diagnostics must not initialize schedulers, dense/local engines or sparse
+  scoring. `_legacy_pickle` only resolves saved objects from the retired
+  namespace; production callers use current owners.
 
 ## Scientific rules — never waived by cleanup or cost reduction
 

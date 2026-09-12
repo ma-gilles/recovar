@@ -10,12 +10,8 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
-    SCHEMA as PRODUCTION_CAPTURE_SCHEMA,
-)
-from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
-    validate_raw_capture_shard,
-)
+from recovar.em.diagnostics.compact_candidate_capture import SCHEMA as PRODUCTION_CAPTURE_SCHEMA
+from recovar.em.diagnostics.compact_candidate_capture import validate_raw_capture_shard
 from recovar.utils.file_hash import sha256_file
 from scripts.analyze_k1_fine_score_boundary import (
     _center,

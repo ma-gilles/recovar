@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from recovar.em.dense_single_volume.relion_replay import _resolve_replay_random_perturbation
+from recovar.em.diagnostics.relion_replay import _resolve_replay_random_perturbation
 from recovar.em.sampling import read_relion_optimiser_metadata
 
 

@@ -202,9 +202,7 @@ def _translate_native_preprocess_hybrid(
     import jax.numpy as jnp
 
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
-        _relion_translation_angles_f32,
-    )
+    from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
 
     translation_angles = _relion_translation_angles_f32(
         np.asarray(fine_translations, dtype=np.float32),
@@ -320,9 +318,7 @@ def _exact_ppref_projections(
     import jax
     import jax.numpy as jnp
 
-    from recovar.em.dense_single_volume.helpers.projection import (
-        compute_relion_projector_projections_block,
-    )
+    from recovar.em.helpers.projection import compute_relion_projector_projections_block
     if __package__:
         from scripts.analyze_k1_exact_ppref_fine_boundary import _load_ppref
     else:
@@ -540,9 +536,7 @@ def main() -> None:
         native_input_comparisons = None
         ppref_metadata = None
         if has_native_inputs:
-            from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
-                _relion_translation_angles_f32,
-            )
+            from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
 
             orientation_num = int(native_scalar["orientation_num"])
             translation_num = int(native_scalar["translation_num"])

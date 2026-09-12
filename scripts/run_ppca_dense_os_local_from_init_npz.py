@@ -28,8 +28,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from recovar.data_io.cryoem_dataset import load_dataset
-from recovar.em.dense_single_volume.local_layout import build_pass2_hypothesis_layout
-from recovar.em.sampling import get_relion_rotation_grid
+from recovar.em.local.local_layout import build_pass2_hypothesis_layout
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
     PoseSelectionConfig,
@@ -39,6 +38,11 @@ from recovar.em.ppca_refinement.config import (
 )
 from recovar.em.ppca_refinement.dense_dataset import compute_dense_ppca_adaptive_significance
 from recovar.em.ppca_refinement.highres_refinement import build_top_p_local_hypothesis_layout
+from recovar.em.ppca_refinement.initialization import (
+    loading_row_norm_variance_prior,
+    pipeline_variance_W_prior,
+    volume_power_variance_prior,
+)
 from recovar.em.ppca_refinement.local_dataset import (
     run_local_ppca_fused_em_iteration,
     run_local_ppca_pose_scoring_iteration,
@@ -49,11 +53,7 @@ from recovar.em.ppca_refinement.mean_regularization import (
     relion_style_mean_precision_from_stats,
 )
 from recovar.em.ppca_refinement.postprocess import PostprocessConfig
-from recovar.em.ppca_refinement.initialization import (
-    loading_row_norm_variance_prior,
-    pipeline_variance_W_prior,
-    volume_power_variance_prior,
-)
+from recovar.em.sampling import get_relion_rotation_grid
 from scripts.run_ppca_local_from_init_npz import (
     _half_size,
     _image_ordered_pose_arrays,

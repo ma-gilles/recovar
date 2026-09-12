@@ -153,7 +153,7 @@ def test_estep_pmax_matches_relion_iter1():
 
     from recovar.core import fourier_transform_utils as ftu
     from recovar.data_io.cryoem_dataset import load_dataset
-    from recovar.em.dense_single_volume.em_engine import run_em
+    from recovar.em.dense.em_engine import run_em
     from recovar.em.sampling import get_relion_hidden_rotation_grid, get_translation_grid
     from recovar.utils.helpers import load_relion_volume
 
@@ -350,23 +350,17 @@ def test_estep_bpref_forward_parity():
 
     from recovar.data_io.cryoem_dataset import load_dataset
     from recovar.data_io.starfile import read_star
-    from recovar.em.dense_single_volume.helpers.orientation_priors import make_relion_translation_log_prior
-    from recovar.em.initial_model import initialise_denovo_state
-    from recovar.em.initial_model.dense_adapter import (
-        run_dense_initial_model_estep,
-    )
-    from recovar.em.initial_model.estep_common import (
-        DenseInitialModelEstepConfig,
-    )
-    from recovar.em.initial_model.dense_adapter import (
-        split_pseudo_halfset_particle_ids as _split_halfset_particle_ids,
-    )
+    from recovar.em.helpers.orientation_priors import make_relion_translation_log_prior
     from recovar.em.sampling import (
         apply_relion_translation_perturbation,
         get_oversampled_rotation_grid_from_samples,
         get_oversampled_translation_grid,
         get_translation_grid,
     )
+    from recovar.em.vdam import initialise_denovo_state
+    from recovar.em.vdam.dense_adapter import run_dense_initial_model_estep
+    from recovar.em.vdam.dense_adapter import split_pseudo_halfset_particle_ids as _split_halfset_particle_ids
+    from recovar.em.vdam.estep_common import DenseInitialModelEstepConfig
 
     try:
         if not jax.devices("gpu"):

@@ -10,9 +10,7 @@ from typing import Any
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.half_spectrum import (
-    make_shell_indices_half,
-)
+from recovar.em.helpers.half_spectrum import make_shell_indices_half
 from scripts.analyze_em_k1_corr_img_conditioning import (
     SHELL_PARTITION_CLASSIFICATION,
     _load_ctf_half,

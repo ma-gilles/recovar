@@ -7,7 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import projection_cache
+from recovar.em.helpers import projection_cache
 
 pytestmark = pytest.mark.unit
 

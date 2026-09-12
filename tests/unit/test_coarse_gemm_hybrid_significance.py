@@ -9,13 +9,13 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume.helpers import coarse_score_diagnostics, significance
-from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+from recovar.em.diagnostics import coarse_score_diagnostics
+from recovar.em.scoring import coarse_gaussian_gemm, significance
+from recovar.em.scoring.coarse_gemm_hybrid import (
     map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids,
     plan_coarse_gemm_certificate_topology,
 )
-from recovar.em.dense_single_volume.helpers.significant_samples import ComplementSignificantSampleIndices
-from recovar.em.dense_single_volume.helpers import coarse_gaussian_gemm
+from recovar.em.scoring.significant_samples import ComplementSignificantSampleIndices
 
 
 def test_direct_and_hybrid_share_disk_masked_compact_projection_operands():

@@ -13,9 +13,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_relion_translation_angles_match_captured_float32_bits():
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
-        _relion_translation_angles_f32,
-    )
+    from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
 
     translations = np.asarray(
         [
@@ -63,7 +61,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     import inspect
 
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.local import local_em_engine
 
     source = (
         Path(__file__).resolve().parents[2]

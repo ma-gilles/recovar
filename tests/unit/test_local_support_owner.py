@@ -6,7 +6,7 @@ import inspect
 
 import pytest
 
-from recovar.em.dense_single_volume import local_score_pass
+from recovar.em.local import local_score_pass
 
 pytestmark = pytest.mark.unit
 

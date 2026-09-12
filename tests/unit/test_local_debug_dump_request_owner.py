@@ -2,7 +2,7 @@
 
 import inspect
 
-from recovar.em.dense_single_volume import local_debug
+from recovar.em.diagnostics import local_debug
 
 
 def test_parsers_delegate_to_the_owner(monkeypatch, tmp_path):

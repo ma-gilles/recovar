@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.state_swap_probe import (
+from recovar.em.diagnostics.state_swap_probe import (
     _STATE_SWAP_VARIANT_COMPONENTS,
     REQUIRED_STATE_SWAP_REPLAY_KEYS,
     add_state_swap_probe_arguments,
@@ -17,7 +17,7 @@ from recovar.em.dense_single_volume.helpers.state_swap_probe import (
     state_swap_variant_choices,
     validate_state_swap_probe_application,
 )
-from recovar.em.dense_single_volume.helpers.state_swap_runtime import (
+from recovar.em.diagnostics.state_swap_runtime import (
     _apply_state_swap_probe,
     _scale_state_swap_reference_maps,
     _snapshot_state_swap_inputs,
@@ -273,7 +273,7 @@ def test_full_runner_propagates_and_serializes_state_swap_probe():
 
 def test_relion_references_are_applied_before_state_restoration():
     tree = ast.parse(
-        (REPO_ROOT / "recovar/em/dense_single_volume/iteration_loop.py").read_text()
+        (REPO_ROOT / "recovar/em/refinement/iteration_loop.py").read_text()
     )
     loop_function = next(
         node
@@ -296,7 +296,7 @@ def test_relion_references_are_applied_before_state_restoration():
 
 
 def test_state_swap_snapshot_is_bounded_to_target_iteration():
-    source = (REPO_ROOT / "recovar/em/dense_single_volume/iteration_loop.py").read_text()
+    source = (REPO_ROOT / "recovar/em/refinement/iteration_loop.py").read_text()
     snapshot_block = source.split("recovar_state_swap_snapshot = None", 1)[1].split(
         "replay_result = apply_iter_replay_overrides", 1
     )[0]

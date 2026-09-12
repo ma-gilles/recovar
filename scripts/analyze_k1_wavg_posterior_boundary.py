@@ -190,9 +190,7 @@ def _load_native(weights_path: Path) -> dict[str, np.ndarray | int]:
 
 
 def analyze(native_directory: Path, recovar_directory: Path) -> dict[str, object]:
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
-        _relion_translation_angles_f32,
-    )
+    from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
 
     preprocess_by_part = {
         int(artifact.part_id): artifact

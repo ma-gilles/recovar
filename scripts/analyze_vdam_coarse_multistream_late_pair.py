@@ -30,9 +30,7 @@ import mrcfile
 import numpy as np
 import starfile
 
-from recovar.em.dense_single_volume.helpers.coarse_score_diagnostics import (
-    _validate_coarse_selector_audit,
-)
+from recovar.em.diagnostics.coarse_score_diagnostics import _validate_coarse_selector_audit
 from scripts import summarize_vdam_nsys_sqlite as nsys_sqlite
 from scripts.analyze_vdam_coarse_combined_true200 import (
     _has_nonfinite_numeric,

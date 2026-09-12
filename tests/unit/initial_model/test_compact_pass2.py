@@ -8,18 +8,14 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.sparse_pass2_window import (
+from recovar.em.helpers.types import make_relion_stats
+from recovar.em.local.local_backprojection import compute_relion_f32_sequential_mstep_sums
+from recovar.em.sparse_pass2.sparse_pass2_compact_pair_sums import _compact_pair_weighted_rotation_sums
+from recovar.em.sparse_pass2.sparse_pass2_window import (
     subtract_projected_reference_from_sparse_mstep_rotation_sums,
     subtract_projected_reference_from_sparse_mstep_sums,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_compact_pair_sums import (
-    _compact_pair_weighted_rotation_sums,
-)
-from recovar.em.dense_single_volume.helpers.types import make_relion_stats
-from recovar.em.dense_single_volume.local_backprojection import (
-    compute_relion_f32_sequential_mstep_sums,
-)
-from recovar.em.initial_model.sparse_pass2_estep import (
+from recovar.em.vdam.sparse_pass2_estep import (
     _collapse_compact_pass2_rotation_stats_to_directions,
     _compact_sparse_pass2_enabled,
 )
@@ -51,7 +47,7 @@ def test_explicit_pass2_engine_overrides_legacy_environment(monkeypatch):
 def test_compact_sparse_pass2_is_not_k1_scoped():
     from inspect import getsource
 
-    from recovar.em.initial_model import dense_adapter
+    from recovar.em.vdam import dense_adapter
 
     source = getsource(dense_adapter._run_sparse_pass2_initial_model_estep)
     assert "compact sparse pass 2 is currently qualified only for K=1" not in source

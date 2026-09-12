@@ -1,4 +1,4 @@
-"""Regression tests for `recovar.em.initial_model.layout`.
+"""Regression tests for `recovar.em.vdam.layout`.
 
 These pin behavior that's load-bearing for InitialModel/VDAM RELION parity:
 - `run_em_output_to_bpref` clamps near-denormal weight noise to 0 so RELION's
@@ -12,11 +12,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from recovar.em.initial_model.layout import (
-    bpref_to_run_em_output,
-    run_em_output_to_bpref,
-)
-from recovar.em.initial_model.relion_layout import relion_x_public_output_to_bpref
+from recovar.em.vdam.layout import bpref_to_run_em_output, run_em_output_to_bpref
+from recovar.em.vdam.relion_layout import relion_x_public_output_to_bpref
 
 
 def _make_full_with_centered_slab(ori_size: int, r_max: int, slab: np.ndarray) -> np.ndarray:
@@ -193,12 +190,8 @@ def test_run_em_output_to_bpref_accepts_shared_compact_backprojector_cube():
 
 
 def test_relion_x_public_output_to_bpref_exactly_inverts_shared_public_layout():
-    from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
-        relion_x_half_volume_to_full,
-    )
-    from recovar.em.dense_single_volume.local_backprojection import (
-        enforce_relion_half_volume_x0_hermitian_host,
-    )
+    from recovar.em.helpers.half_volume_mstep import relion_x_half_volume_to_full
+    from recovar.em.local.local_backprojection import enforce_relion_half_volume_x0_hermitian_host
 
     ori_size = 128
     r_max = 19

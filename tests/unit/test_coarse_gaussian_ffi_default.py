@@ -11,7 +11,7 @@ import inspect
 
 import pytest
 
-from recovar.em.dense_single_volume.helpers import significance
+from recovar.em.scoring import significance
 
 pytestmark = pytest.mark.unit
 

@@ -61,14 +61,14 @@ SOURCE_FILES=(
   recovar/cuda/Makefile
   recovar/cuda/cuda_backproject.cu
   recovar/cuda_backproject.py
-  recovar/em/dense_single_volume/helpers/significance.py
-  recovar/em/dense_single_volume/k_class.py
+  recovar/em/scoring/significance.py
+  recovar/em/classification/k_class.py
   recovar/commands/initial_model.py
-  recovar/em/initial_model/dense_adapter.py
-  recovar/em/initial_model/driver.py
-  recovar/em/initial_model/iteration_loop.py
-  recovar/em/initial_model/m_step.py
-  recovar/em/initial_model/schedules.py
+  recovar/em/vdam/dense_adapter.py
+  recovar/em/vdam/driver.py
+  recovar/em/vdam/iteration_loop.py
+  recovar/em/vdam/m_step.py
+  recovar/em/vdam/schedules.py
   tests/conftest.py
   tests/unit/test_cuda_relion_fine_diff2.py
   scripts/run_ab_initio.py

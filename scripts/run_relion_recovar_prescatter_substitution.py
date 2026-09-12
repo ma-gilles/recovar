@@ -106,7 +106,7 @@ def scatter_operand(
 
 
 def _half_to_public(data: np.ndarray, weight: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    from recovar.em.dense_single_volume.helpers import half_volume_mstep
+    from recovar.em.helpers import half_volume_mstep
 
     data_post = half_volume_mstep.enforce_relion_half_volume_x0_hermitian_host(
         data, ACCUMULATOR_SHAPE
@@ -310,7 +310,7 @@ def reconstruct_common(args: argparse.Namespace) -> None:
     import jax.numpy as jnp
 
     from recovar.core import fourier_transform_utils as ftu
-    from recovar.em.dense_single_volume.mean_helpers import _reconstruct_volume_eager
+    from recovar.em.refinement.mean_helpers import _reconstruct_volume_eager
     from recovar.utils.helpers import recovar_volume_to_relion
 
     output = Path(args.output).resolve()

@@ -10,13 +10,11 @@ import numpy as np
 import pytest
 from helpers import score_diagnostics
 
-from recovar.em.dense_single_volume.helpers import coarse_score_diagnostics, relion_ctf, scoring, significance
-
-from recovar.em.dense_single_volume.helpers import coarse_gaussian_gemm
-from recovar.em.dense_single_volume.helpers.coarse_gemm_streaming import (
-    COARSE_GEMM_STREAMING_SCHEMA,
-)
-from recovar.em.dense_single_volume.helpers.significant_samples import significant_sample_ids
+from recovar.em.diagnostics import coarse_score_diagnostics
+from recovar.em.relion import relion_ctf
+from recovar.em.scoring import coarse_gaussian_gemm, scoring, significance
+from recovar.em.scoring.coarse_gemm_streaming import COARSE_GEMM_STREAMING_SCHEMA
+from recovar.em.scoring.significant_samples import significant_sample_ids
 
 
 def _macro_operands(*, real_dtype, n_images=4, n_trans=3, n_rotations=5, n_pixels=11):
@@ -512,8 +510,7 @@ def test_coarse_gaussian_gemm_resource_gate_records_full_transient_and_host_sync
 
 
 def test_initial_model_multigroup_diagnostic_scopes_are_deterministic_and_unique():
-    from recovar.em.initial_model import dense_adapter
-    from recovar.em.initial_model import sparse_pass2_estep
+    from recovar.em.vdam import dense_adapter, sparse_pass2_estep
 
     groups = [
         (0, np.asarray([0, 2], dtype=np.int64), None),
@@ -1145,9 +1142,8 @@ def test_coarse_gaussian_gemm_macro_projects_once_and_binds_all_image_lanes(
 
 
 def test_coarse_gaussian_gemm_macro_is_shared_by_em_and_initial_model():
-    from recovar.em.dense_single_volume import k_class
-    from recovar.em.initial_model import dense_adapter
-    from recovar.em.initial_model import sparse_pass2_estep
+    from recovar.em.classification import k_class
+    from recovar.em.vdam import dense_adapter, sparse_pass2_estep
 
     assert (
         sparse_pass2_estep._compute_k_class_significance_batched
@@ -1270,8 +1266,8 @@ def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
     """The opt-in cache owns projections once and only serves later blocks."""
 
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers import projection as projection_helpers
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_scoring
+    from recovar.em.helpers import projection as projection_helpers
+    from recovar.em.sparse_pass2 import sparse_pass2_scoring
     for name, value in {
         "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE": "0",
@@ -1474,16 +1470,10 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
     """Selected and exact-full-direct hybrid scores are reused in both passes."""
 
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers import (
-        oversampling,
-        preprocessing,
-        sparse_pass2_scoring,
-    )
-    from recovar.em.dense_single_volume.helpers import projection as projection_helpers
-    from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
-        CoarseGemmHybridBlockSelection,
-        CoarseGemmHybridCompactScores,
-    )
+    from recovar.em.helpers import oversampling, preprocessing
+    from recovar.em.helpers import projection as projection_helpers
+    from recovar.em.scoring.coarse_gemm_hybrid import CoarseGemmHybridBlockSelection, CoarseGemmHybridCompactScores
+    from recovar.em.sparse_pass2 import sparse_pass2_scoring
 
     for name, value in {
         "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1",
@@ -2309,8 +2299,8 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
     """Live K-class pass preserves layout, priors, support, and both tail masks."""
 
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers import projection as projection_helpers
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_scoring
+    from recovar.em.helpers import projection as projection_helpers
+    from recovar.em.sparse_pass2 import sparse_pass2_scoring
     for name, value in {
         "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO": "1",
         "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE": "0",

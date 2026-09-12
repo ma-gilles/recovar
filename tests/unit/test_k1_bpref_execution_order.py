@@ -4,17 +4,12 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.batch_planning import (
-    _plan_consecutive_padded_batches,
-)
-from recovar.em.dense_single_volume.helpers.env_flags import parse_env_flag
-from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
-    _bucket_pass2_inputs,
-)
-from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (
-    _normalize_pass2_bucket,
-)
-from recovar.em.dense_single_volume.helpers.sparse_pass2_policy import (
+from recovar.em.classification.k_class import _apply_bpref_particle_order_policy
+from recovar.em.diagnostics.relion_replay import _validate_bpref_particle_order_scope
+from recovar.em.helpers.batch_planning import _plan_consecutive_padded_batches
+from recovar.em.helpers.env_flags import parse_env_flag
+from recovar.em.scoring.sparse_bucket_arrays import _bucket_pass2_inputs
+from recovar.em.sparse_pass2.sparse_pass2_policy import (
     _BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT_ENV,
     _BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV,
     _BPREF_EXECUTION_ORDER_CHUNK_SIZE_ENV,
@@ -24,12 +19,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_policy import (
     _resolve_bpref_execution_bucket_policy,
     _resolve_bpref_processing_order,
 )
-from recovar.em.dense_single_volume.k_class import (
-    _apply_bpref_particle_order_policy,
-)
-from recovar.em.dense_single_volume.relion_replay import (
-    _validate_bpref_particle_order_scope,
-)
+from recovar.em.sparse_pass2.sparse_pass2_posterior import _normalize_pass2_bucket
 
 
 def test_sparse_pass2_execution_order_override_is_exact_and_single_particle():

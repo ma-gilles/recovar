@@ -9,7 +9,9 @@ halfset mode must pass ``accum_h0.weight`` unchanged.
 The tests intercept ``vdam_update_ssnr_arrays_from_bpref`` to inspect
 the weight argument exactly as ``vdam_m_step_single_class`` calls it,
 without relying on downstream tau2/sigma2 values that are sensitive to
-the binding's numerical details.
+the binding's numerical details. The probe explicitly selects the Python
+composition: the default fused native transaction calls SSNR internally and
+cannot be intercepted at the Python binding attribute.
 """
 
 from __future__ import annotations
@@ -17,13 +19,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from recovar.em.initial_model import initialise_denovo_state
-from recovar.em.initial_model.mstep_accumulator import (
-    VdamAccumulator,
-)
-from recovar.em.initial_model.mstep_single_class import (
-    vdam_m_step_single_class,
-)
+from recovar.em.vdam import initialise_denovo_state
+from recovar.em.vdam.mstep_accumulator import VdamAccumulator
+from recovar.em.vdam.mstep_single_class import vdam_m_step_single_class
 
 pytestmark = pytest.mark.unit
 
@@ -88,6 +86,7 @@ def test_k1_pseudo_halfsets_uses_primary_weight(_bind_module, monkeypatch):
         accum_h1=a1,
         grad_current_stepsize=0.5,
         tau2_fudge_factor=1.0,
+        use_native_transaction=False,
     )
 
     assert rec.call_count == 1
@@ -112,6 +111,7 @@ def test_k1_no_halfsets_uses_h0_weight(_bind_module, monkeypatch):
         accum_h1=None,
         grad_current_stepsize=0.5,
         tau2_fudge_factor=1.0,
+        use_native_transaction=False,
     )
 
     assert rec.call_count == 1
@@ -137,6 +137,7 @@ def test_k_class_pseudo_halfsets_uses_h0_weight(_bind_module, monkeypatch, K):
         accum_h1=a1,
         grad_current_stepsize=0.5,
         tau2_fudge_factor=1.0,
+        use_native_transaction=False,
     )
 
     assert rec.call_count == 1

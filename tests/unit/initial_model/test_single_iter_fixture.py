@@ -60,7 +60,7 @@ def test_single_iter_plain_em():
 
     from recovar.core import fourier_transform_utils as ftu
     from recovar.data_io.cryoem_dataset import load_dataset
-    from recovar.em.dense_single_volume.em_engine import run_em
+    from recovar.em.dense.em_engine import run_em
     from recovar.em.sampling import get_relion_hidden_rotation_grid, get_translation_grid
     from recovar.reconstruction.noise import make_radial_noise
     from recovar.utils.helpers import load_relion_volume

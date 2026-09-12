@@ -6,8 +6,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.mean_helpers import prepare_initial_mean_variance
-from recovar.em.dense_single_volume.projector_preparation import prepare_initial_real_references
+from recovar.em.refinement.mean_helpers import prepare_initial_mean_variance
+from recovar.em.refinement.projector_preparation import prepare_initial_real_references
 
 pytestmark = pytest.mark.unit
 LOG = logging.getLogger(__name__)

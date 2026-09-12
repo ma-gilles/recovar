@@ -2,7 +2,7 @@
 
 import inspect
 
-from recovar.em.dense_single_volume import local_big_jit, local_em_engine
+from recovar.em.local import local_big_jit, local_em_engine
 
 CORE_FIELDS = (
     "Ft_y",

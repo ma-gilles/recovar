@@ -6,13 +6,9 @@ from dataclasses import fields
 import numpy as np
 import pytest
 
-from recovar.em.initial_model import initialise_denovo_state
-from recovar.em.initial_model.mstep_accumulator import (
-    VdamAccumulator,
-)
-from recovar.em.initial_model.mstep_single_class import (
-    vdam_m_step_single_class,
-)
+from recovar.em.vdam import initialise_denovo_state
+from recovar.em.vdam.mstep_accumulator import VdamAccumulator
+from recovar.em.vdam.mstep_single_class import vdam_m_step_single_class
 
 pytestmark = pytest.mark.unit
 
@@ -124,7 +120,7 @@ def test_dump_keeps_primitive_boundaries(transaction_bind, monkeypatch, tmp_path
 @pytest.mark.parametrize("K,pseudo", [(1, False), (1, True), (4, False), (4, True)])
 @pytest.mark.parametrize("current_size,padding", [(0, 1), (8, 1), (16, 2)])
 def test_device_backend_preserves_complete_state_and_inputs(transaction_bind, K, pseudo, current_size, padding, monkeypatch):
-    from recovar.em.dense_single_volume.helpers import relion_vdam_mstep
+    from recovar.em.relion import relion_vdam_mstep
 
     state, accumulators = _case(K, pseudo, current_size, True, padding)
     original = deepcopy(state)
@@ -165,7 +161,7 @@ def test_device_backend_preserves_complete_state_and_inputs(transaction_bind, K,
 
 
 def test_device_request_keeps_native_dump_boundaries(transaction_bind, monkeypatch, tmp_path):
-    from recovar.em.dense_single_volume.helpers import relion_vdam_mstep
+    from recovar.em.relion import relion_vdam_mstep
 
     state, accumulators = _case(1, True, 8, False)
     monkeypatch.setenv("RECOVAR_MSTEP_DUMP_DIR", str(tmp_path))

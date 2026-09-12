@@ -8,9 +8,9 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject as cuda
-from recovar.em.dense_single_volume import local_em_engine as engine
-from recovar.em.dense_single_volume.helpers import deferred_vdam_host_pack as helper
-from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
+from recovar.em.helpers import deferred_vdam_host_pack as helper
+from recovar.em.helpers.env_flags import parse_env_binary_flag
+from recovar.em.local import local_em_engine as engine
 
 pytestmark = pytest.mark.unit
 

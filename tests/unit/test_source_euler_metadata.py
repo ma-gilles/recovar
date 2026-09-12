@@ -10,17 +10,15 @@ import numpy as np
 import pytest
 
 from recovar.em import sampling
-from recovar.em.dense_single_volume import k_class, k_class_inputs, k_class_results
-from recovar.em.dense_single_volume import local_bucket_stages as engine
-from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
-    _prepare_per_image_pass2_inputs,
-)
-from recovar.em.dense_single_volume.helpers.types import LocalEMResult, make_relion_stats
-from recovar.em.dense_single_volume.local_layout import (
+from recovar.em.classification import k_class, k_class_inputs, k_class_results
+from recovar.em.helpers.types import LocalEMResult, make_relion_stats
+from recovar.em.local import local_bucket_stages as engine
+from recovar.em.local.local_layout import (
     LocalHypothesisLayout,
     bucket_local_hypothesis_layout,
     build_pass2_hypothesis_layout,
 )
+from recovar.em.scoring.sparse_bucket_arrays import _prepare_per_image_pass2_inputs
 
 pytestmark = pytest.mark.unit
 
@@ -241,7 +239,7 @@ def test_true_local_winner_gathers_eulers_without_changing_other_buffers():
 
 
 def test_loader_reordering_preserves_source_rows_and_legacy_unavailability():
-    from recovar.em.dense_single_volume.local_layout import LocalBucketSpec
+    from recovar.em.local.local_layout import LocalBucketSpec
 
     eulers = np.arange(18, dtype=np.float64).reshape(3, 2, 3) + 2**-37
     bucket = LocalBucketSpec(

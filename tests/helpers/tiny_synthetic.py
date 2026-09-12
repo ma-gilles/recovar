@@ -1,13 +1,13 @@
-import numpy as np
 from pathlib import Path
+
+import numpy as np
 import pandas as pd
 
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.simulation.simulator as simulator
 import recovar.simulation.synthetic_dataset as synthetic_dataset
+from recovar import core, utils
 from recovar.data_io import cryoem_dataset as dataset
-from recovar import core
-import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar import utils
 from recovar.data_io import starfile
 
 
@@ -130,7 +130,7 @@ class TinyFTImageStack:
     def process_images_half(self, image, apply_image_mask=False):
         """Half-spectrum variant required by dense-EM preprocessing.
 
-        ``recovar/em/dense_single_volume/helpers/preprocessing.py:63`` and the
+        ``recovar/em/helpers/preprocessing.py:63`` and the
         ``ParticleImageBackend.process_images_half`` plumbing now route
         through this method. Images here are already centered FT in flat
         ``(n_images, D*D)`` layout; remap to packed half-spectrum

@@ -21,12 +21,9 @@ import os
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.env_flags import parse_int_set
-from recovar.em.dense_single_volume.helpers.half_spectrum import (
-    make_half_image_weights,
-    make_shell_indices_half,
-)
-from recovar.em.dense_single_volume.relion_metadata import _relion_half_plane_shell_counts
+from recovar.em.helpers.env_flags import parse_int_set
+from recovar.em.helpers.half_spectrum import make_half_image_weights, make_shell_indices_half
+from recovar.em.relion.relion_metadata import _relion_half_plane_shell_counts
 from recovar.em.sampling import rotation_grid_size
 
 logger = logging.getLogger("recovar.em.dense_single_volume.debug_dumps")

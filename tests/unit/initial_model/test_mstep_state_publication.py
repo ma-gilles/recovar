@@ -5,10 +5,8 @@ from dataclasses import fields
 import numpy as np
 import pytest
 
-from recovar.em.initial_model import m_step
-
-from recovar.em.initial_model import mstep_single_class
-from recovar.em.initial_model.state import InitialModelState, half_slot_index
+from recovar.em.vdam import m_step, mstep_single_class
+from recovar.em.vdam.state import InitialModelState, half_slot_index
 
 pytestmark = pytest.mark.unit
 SELECTOR = "RECOVAR_VDAM_MSTEP_COPY_UNTOUCHED"

@@ -21,14 +21,12 @@ import jax
 import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
-import recovar.em.dense_single_volume.em_engine as em_engine_module
+import recovar.em.dense.em_engine as em_engine_module
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.em_engine import run_em
-from recovar.em.dense_single_volume.helpers.adjoint import (
-    adjoint_slice_volume_half as _adjoint_slice_volume_half,
-)
-from recovar.em.dense_single_volume.helpers.half_spectrum import (
+from recovar.em.dense.em_engine import run_em
+from recovar.em.helpers.adjoint import adjoint_slice_volume_half as _adjoint_slice_volume_half
+from recovar.em.helpers.half_spectrum import (
     bin_shell_values_jax,
     bin_shell_values_np,
     make_half_image_weights,
@@ -36,17 +34,9 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_scoring_half_image_weights,
     make_shell_indices_half,
 )
-from recovar.em.dense_single_volume.helpers.preprocessing import (
-    preprocess_batch as _preprocess_batch,
-)
-from recovar.em.dense_single_volume.helpers.projection import (
-    compute_projections_block as _compute_projections_block,
-)
-from recovar.em.dense_single_volume.helpers.scoring import (
-    _e_step_block_scores,
-    _m_step_block_compute,
-    _update_logsumexp,
-)
+from recovar.em.helpers.preprocessing import preprocess_batch as _preprocess_batch
+from recovar.em.helpers.projection import compute_projections_block as _compute_projections_block
+from recovar.em.scoring.scoring import _e_step_block_scores, _m_step_block_compute, _update_logsumexp
 
 pytestmark = pytest.mark.unit
 
@@ -185,10 +175,10 @@ def test_shell_binning_maps_arbitrary_out_of_range_indices_to_drop_bin():
 def test_noise_shell_accumulation_uses_sentinel_safe_binning_helper():
     repo_root = Path(__file__).resolve().parents[2]
     safe_binning_markers = {
-        "recovar/em/dense_single_volume/em_engine.py": "bin_shell_values_jax",
-        "recovar/em/dense_single_volume/local_big_jit.py": "bin_shell_values_jax",
-        "recovar/em/dense_single_volume/local_em_engine.py": "_noise_image_power_shells_and_per_image",
-        "recovar/em/dense_single_volume/helpers/projection.py": "bin_shell_values_jax",
+        "recovar/em/dense/em_engine.py": "bin_shell_values_jax",
+        "recovar/em/local/local_big_jit.py": "bin_shell_values_jax",
+        "recovar/em/local/local_em_engine.py": "_noise_image_power_shells_and_per_image",
+        "recovar/em/helpers/projection.py": "bin_shell_values_jax",
     }
     for rel_path, safe_binning_marker in safe_binning_markers.items():
         source = (repo_root / rel_path).read_text()
@@ -199,7 +189,7 @@ def test_noise_shell_accumulation_uses_sentinel_safe_binning_helper():
     # bin shells by scatter, and the family must still reach the sentinel-safe helper.
     pass2_sources = {
         path.name: path.read_text()
-        for path in sorted((repo_root / "recovar/em/dense_single_volume/helpers").glob("sparse_pass2*.py"))
+        for path in sorted((repo_root / "recovar/em/helpers").glob("sparse_pass2*.py"))
     }
     assert pass2_sources
     for name, source in pass2_sources.items():

@@ -21,16 +21,13 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.dense_single_volume.relion_replay import (
+from recovar.em.diagnostics.relion_replay import (
     read_relion_single_optics_sigma2_noise as _read_relion_single_optics_sigma2_noise,
 )
-from recovar.em.dense_single_volume.relion_replay import (
+from recovar.em.diagnostics.relion_replay import (
     relion_mpi_process_start_scoring_noise_pair as _relion_mpi_process_start_scoring_noise_pair,
 )
-from recovar.em.initial_model.gt_metrics import (
-    DEFAULT_GT_ALIGN_HEALPIX_ORDER,
-    DEFAULT_GT_ALIGN_MAX_SHELL,
-)
+from recovar.em.vdam.gt_metrics import DEFAULT_GT_ALIGN_HEALPIX_ORDER, DEFAULT_GT_ALIGN_MAX_SHELL
 from recovar.utils.parity_provenance import (
     _safe_git_commit,
 )
@@ -292,9 +289,7 @@ def particle_half_indices(
 
     subsets = np.asarray(random_subsets)
     if fresh_order_seed is not None:
-        from recovar.em.dense_single_volume.helpers.expected_accuracy import (
-            relion_auto_refine_half_orders,
-        )
+        from recovar.em.helpers.expected_accuracy import relion_auto_refine_half_orders
 
         return relion_auto_refine_half_orders(
             subsets,
@@ -644,9 +639,7 @@ def filter_fresh_initial_reference(
     its binary64 real-space result directly to the initial projector.
     """
 
-    from recovar.em.initial_model.bootstrap_iref import (
-        initial_low_pass_filter_references,
-    )
+    from recovar.em.vdam.bootstrap_iref import initial_low_pass_filter_references
 
     volume_real = np.asarray(volume_real, dtype=np.float64)
     if volume_real.ndim != 3 or len(set(volume_real.shape)) != 1:
@@ -1413,8 +1406,8 @@ def main():
     from recovar import utils
     from recovar.core import fourier_transform_utils as ftu
     from recovar.data_io.cryoem_dataset import load_dataset
-    from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
-    from recovar.em.dense_single_volume.refinement_options import (
+    from recovar.em.refinement.iteration_loop import refine_single_volume
+    from recovar.em.refinement.refinement_options import (
         AdaptiveOptions,
         EngineDebugOptions,
         LocalSearchOptions,
@@ -2332,7 +2325,7 @@ def main():
         gt_ft = np.asarray(ftu.get_dft3(jnp.asarray(gt_real))).reshape(-1)
         print(f"  GT volume: {gt_path}")
         if args.gt_align:
-            from recovar.em.initial_model.gt_metrics import relion_alignment_rotations
+            from recovar.em.vdam.gt_metrics import relion_alignment_rotations
 
             gt_align_rotations = relion_alignment_rotations(args.gt_align_healpix_order)
             print(
@@ -2786,7 +2779,7 @@ def main():
     gt_ledger_summary = {}
     if gt_ft is not None:
         print("\n=== Final FSC vs GT ===")
-        from recovar.em.initial_model.gt_metrics import align_volume_to_reference
+        from recovar.em.vdam.gt_metrics import align_volume_to_reference
 
         gt_summary = {}
         recovar_final_series = {

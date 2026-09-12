@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import coarse_partition as p
-from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
+from recovar.em.scoring import coarse_partition as p
+from recovar.em.scoring.coarse_gemm_hybrid import (
     CoarseGemmHybridIntervalState,
     validate_coarse_gemm_hybrid_block_selection_for_rescore,
 )
@@ -117,9 +117,9 @@ def test_device_gather_retains_image_order_and_zeroes_poisoned_padding(has_prior
 @pytest.mark.parametrize("invalid_selected", [False, True])
 @pytest.mark.parametrize("capture", [False, True])
 def test_composition_certifies_once_and_only_full_scores_required_groups(monkeypatch, invalid_selected, capture):
-    from recovar.em.dense_single_volume.helpers import significance as s
-    from recovar.em.dense_single_volume.helpers import coarse_gaussian_gemm
-    from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import plan_coarse_gemm_certificate_topology
+    from recovar.em.scoring import coarse_gaussian_gemm
+    from recovar.em.scoring import significance as s
+    from recovar.em.scoring.coarse_gemm_hybrid import plan_coarse_gemm_certificate_topology
 
     state = certificate([1, 65, 64, 2], physical=5)
     topology = plan_coarse_gemm_certificate_topology(

@@ -6,9 +6,9 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume.bpref_transaction import BprefTransactionQueue
-from recovar.em.dense_single_volume import local_em_engine
-from recovar.em.dense_single_volume.helpers.env_flags import parse_env_binary_flag
+from recovar.em.helpers.bpref_transaction import BprefTransactionQueue
+from recovar.em.helpers.env_flags import parse_env_binary_flag
+from recovar.em.local import local_em_engine
 
 pytestmark = pytest.mark.unit
 
@@ -143,7 +143,7 @@ def test_cuda_packing_selector(monkeypatch, value, expected):
     [((1,), 1), ((1,), 256), ((42, 42, 42, 42, 32), 256), ((63, 11), 128), ((1,) * 256, 256), ((32,), 32)],
 )
 def test_cuda_pack_preserves_every_bit_and_bucket_worker_ids(counts, capacity):
-    from recovar.em.dense_single_volume.bpref_transaction import _pad_particle_fields
+    from recovar.em.helpers.bpref_transaction import _pad_particle_fields
 
     assert jax.default_backend() == "gpu"
     assert cuda_backproject.cuda_available()

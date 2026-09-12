@@ -11,9 +11,7 @@ the int64 contract at every host-side boundary of the id flow.
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_em_engine, local_layout, local_projection_cache
-
-from recovar.em.dense_single_volume import local_bucket_stages
+from recovar.em.local import local_bucket_stages, local_em_engine, local_layout, local_projection_cache
 
 
 def test_parent_expanded_child_ids_exceeding_int32_stay_positive_int64():

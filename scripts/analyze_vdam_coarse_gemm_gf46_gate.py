@@ -161,11 +161,11 @@ GEMM_ENV = "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO"
 GEMM_LOG_MARKER = "Opt-in shared coarse projection-once/GEMM macro enabled"
 SOURCE_REQUIRED = frozenset(
     {
-        "recovar/em/dense_single_volume/helpers/scoring.py",
-        "recovar/em/dense_single_volume/helpers/significance.py",
-        "recovar/em/initial_model/dense_adapter.py",
-        "recovar/em/initial_model/driver.py",
-        "recovar/em/initial_model/iteration_loop.py",
+        "recovar/em/scoring/scoring.py",
+        "recovar/em/scoring/significance.py",
+        "recovar/em/vdam/dense_adapter.py",
+        "recovar/em/vdam/driver.py",
+        "recovar/em/vdam/iteration_loop.py",
         "scripts/run_ab_initio.py",
         "scripts/run_vdam_late_iteration_profile.py",
         "scripts/analyze_vdam_coarse_gemm_gf46_gate.py",

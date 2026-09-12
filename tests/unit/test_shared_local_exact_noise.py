@@ -7,8 +7,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_big_jit, local_em_engine
-from recovar.em.dense_single_volume import local_bucket_stages
+from recovar.em.local import local_big_jit, local_bucket_stages, local_em_engine
 
 pytestmark = pytest.mark.unit
 

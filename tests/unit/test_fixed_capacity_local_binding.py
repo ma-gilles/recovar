@@ -9,20 +9,15 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import fixed_capacity_local, local_big_jit, local_em_engine
-
-from recovar.em.dense_single_volume import local_bucket_stages
-from recovar.em.dense_single_volume.batch_planning import (
-    _plan_fixed_capacity_whole_local,
-    _seal_fixed_capacity_physical_order,
-)
-from recovar.em.dense_single_volume.fixed_capacity_local import (
+from recovar.em.helpers.batch_planning import _plan_fixed_capacity_whole_local, _seal_fixed_capacity_physical_order
+from recovar.em.local import fixed_capacity_local, local_big_jit, local_bucket_stages, local_em_engine
+from recovar.em.local.fixed_capacity_local import (
     _bind_fixed_capacity_local_execution,
     _materialize_fixed_capacity_active_local_rows,
     _materialize_fixed_capacity_local_call_view,
 )
-from recovar.em.dense_single_volume.local_caches import _assemble_fixed_capacity_local_operands_once
-from recovar.em.dense_single_volume.local_layout import (
+from recovar.em.local.local_caches import _assemble_fixed_capacity_local_operands_once
+from recovar.em.local.local_layout import (
     LocalBucketSpec,
     _fixed_capacity_calls_from_local_buckets,
     _pack_fixed_capacity_local_hypothesis_program,

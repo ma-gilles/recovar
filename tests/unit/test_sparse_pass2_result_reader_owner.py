@@ -4,8 +4,8 @@ import inspect
 
 import numpy as np
 
-from recovar.em.dense_single_volume import k_class
-from recovar.em.dense_single_volume.helpers import types
+from recovar.em.classification import k_class
+from recovar.em.helpers import types
 
 
 def test_reader_inverts_the_builder_for_every_optional_combination():

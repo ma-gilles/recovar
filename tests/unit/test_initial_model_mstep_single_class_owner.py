@@ -2,7 +2,7 @@
 
 import inspect
 
-from recovar.em.initial_model import m_step, mstep_accumulator, mstep_single_class
+from recovar.em.vdam import m_step, mstep_accumulator, mstep_single_class
 
 
 def test_owners_and_routing():

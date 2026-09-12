@@ -2,9 +2,7 @@ import struct
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
-    _relion_translation_angles_f32,
-)
+from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
 from scripts import analyze_k1_norm_residual_bpref_boundary as analyzer
 from scripts.validate_relion_bpref_prescatter import ROTATION_DTYPE, ROW_DTYPE
 

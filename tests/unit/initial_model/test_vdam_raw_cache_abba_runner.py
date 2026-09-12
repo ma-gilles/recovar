@@ -62,7 +62,7 @@ def test_runner_allows_only_declared_benchmark_overlay() -> None:
     assert "science-base overlay contains an unapproved benchmark path" in source
     assert _array("BENCHMARK_DIFF_ALLOWLIST") == [
         "recovar/data_io/image_loader.py",
-        "recovar/em/initial_model/iteration_loop.py",
+        "recovar/em/vdam/iteration_loop.py",
         "scripts/analyze_vdam_raw_cache_abba.py",
         "scripts/probe_vdam_raw_cache_memory.py",
         "scripts/run_vdam_late_iteration_profile.py",
@@ -85,8 +85,8 @@ def test_runner_pins_source_and_exact_gf46_input_manifests() -> None:
     for required in (
         "recovar/data_io/image_loader.py",
         "recovar/data_io/staging.py",
-        "recovar/em/dense_single_volume/batch_planning.py",
-        "recovar/em/initial_model/driver.py",
+        "recovar/em/helpers/batch_planning.py",
+        "recovar/em/vdam/driver.py",
         "tests/unit/test_image_loader.py",
         "tests/unit/initial_model/test_iteration_loop.py",
         "scripts/run_ab_initio.py",

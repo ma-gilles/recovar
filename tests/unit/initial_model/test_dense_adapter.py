@@ -7,9 +7,9 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
-from recovar.em.initial_model import initialise_denovo_state
-from recovar.em.initial_model.dense_adapter import (
+from recovar.em.local.local_layout import LocalHypothesisLayout
+from recovar.em.vdam import initialise_denovo_state
+from recovar.em.vdam.dense_adapter import (
     _relion_projector_to_dense_volume,
     _resolve_class_inputs,
     class_log_priors_from_state,
@@ -18,12 +18,8 @@ from recovar.em.initial_model.dense_adapter import (
     run_dense_initial_model_estep,
     split_pseudo_halfset_particle_ids,
 )
-from recovar.em.initial_model.estep_common import (
-    DenseInitialModelEstepConfig,
-    _arrays_to_accumulators,
-    _estep_meta,
-)
-from recovar.em.initial_model.sparse_pass2_estep import (
+from recovar.em.vdam.estep_common import DenseInitialModelEstepConfig, _arrays_to_accumulators, _estep_meta
+from recovar.em.vdam.sparse_pass2_estep import (
     _initial_model_pass2_layout,
     _initial_model_relion_f32_coarse_tie_ulps,
     _initial_model_relion_f32_fine_posterior_enabled,
@@ -191,13 +187,9 @@ def _fake_result_with_profile(n_classes: int, n: int, *, n_images: int = 2, n_gr
 
 
 def test_arrays_to_accumulators_inverts_relion_x_public_layout_without_projector_flip():
-    from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
-        relion_x_half_volume_to_full,
-    )
-    from recovar.em.dense_single_volume.local_backprojection import (
-        enforce_relion_half_volume_x0_hermitian_host,
-    )
-    from recovar.em.initial_model.layout import relion_bpref_frame_scales
+    from recovar.em.helpers.half_volume_mstep import relion_x_half_volume_to_full
+    from recovar.em.local.local_backprojection import enforce_relion_half_volume_x0_hermitian_host
+    from recovar.em.vdam.layout import relion_bpref_frame_scales
 
     state = initialise_denovo_state(
         ori_size=8,
@@ -302,8 +294,7 @@ def test_class_log_priors_from_state_allows_inactive_class():
 
 
 def test_dense_initial_model_estep_runs_separate_k_class_calls_for_pseudo_halfsets(monkeypatch):
-    from recovar.em.initial_model import dense_adapter
-    from recovar.em.initial_model import sparse_pass2_estep
+    from recovar.em.vdam import dense_adapter, sparse_pass2_estep
 
     calls = []
     conversions = []
@@ -331,7 +322,7 @@ def test_dense_initial_model_estep_runs_separate_k_class_calls_for_pseudo_halfse
         return _fake_result(n_classes=2, n=8, n_images=int(np.asarray(kwargs["image_indices"]).size), n_groups=1)
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.run_dense_k_class_em",
+        "recovar.em.vdam.dense_adapter.run_dense_k_class_em",
         fake_run_dense_k_class_em,
     )
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=2, nr_iter=1, n_directions=4)
@@ -467,7 +458,7 @@ def test_dense_initial_model_estep_slices_full_translation_prior_for_pseudo_half
         return _fake_result(n_classes=1, n=8, n_images=int(np.asarray(kwargs["image_indices"]).size), n_groups=1)
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.run_dense_k_class_em",
+        "recovar.em.vdam.dense_adapter.run_dense_k_class_em",
         fake_run_dense_k_class_em,
     )
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=1, n_directions=4)
@@ -510,7 +501,7 @@ def test_dense_initial_model_estep_meta_includes_optional_profiles(monkeypatch):
         )
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.run_dense_k_class_em",
+        "recovar.em.vdam.dense_adapter.run_dense_k_class_em",
         fake_run_dense_k_class_em,
     )
     state = initialise_denovo_state(
@@ -557,7 +548,7 @@ def test_dense_initial_model_estep_pseudo_halfset_meta_includes_per_halfset_prof
         )
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.run_dense_k_class_em",
+        "recovar.em.vdam.dense_adapter.run_dense_k_class_em",
         fake_run_dense_k_class_em,
     )
     state = initialise_denovo_state(
@@ -610,11 +601,11 @@ def test_dense_initial_model_estep_uses_current_state_reference_when_means_omitt
         return _fake_result(n_classes=1, n=8)
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.reference_to_dense_means",
+        "recovar.em.vdam.dense_adapter.reference_to_dense_means",
         fake_reference_to_dense_means,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.run_dense_k_class_em",
+        "recovar.em.vdam.dense_adapter.run_dense_k_class_em",
         fake_run_dense_k_class_em,
     )
     state = initialise_denovo_state(
@@ -758,7 +749,7 @@ def test_reference_to_relion_projector_dense_means_uses_relion_projector_frame(m
         "recovar.relion_bind._relion_bind_core.compute_fourier_transform_map",
         fake_compute_fourier_transform_map,
     )
-    monkeypatch.setattr("recovar.em.initial_model.dense_adapter._relion_projector_to_dense_volume", fake_embed)
+    monkeypatch.setattr("recovar.em.vdam.dense_adapter._relion_projector_to_dense_volume", fake_embed)
 
     refs = np.zeros((1, 4, 4, 4), dtype=np.float32)
     means = reference_to_relion_projector_dense_means(refs, current_size=2, padding_factor=1)
@@ -782,7 +773,7 @@ def test_reference_to_relion_projector_dense_means_uses_relion_projector_frame(m
 def test_relion_projector_projection_dense_scale_matches_embedded_means(monkeypatch):
     import jax.numpy as jnp
 
-    from recovar.em.dense_single_volume.helpers import projection as projection_helpers
+    from recovar.em.helpers import projection as projection_helpers
 
     raw = jnp.asarray([[1.0 + 2.0j, -3.0 + 0.5j]], dtype=jnp.complex64)
 
@@ -817,11 +808,11 @@ def test_resolve_class_inputs_relion_projector_uses_exact_path_by_default(monkey
     dense_means = np.full((1, 8**3), 2.0 + 0.5j, dtype=np.complex64)
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.reference_to_relion_projector_half_maps",
+        "recovar.em.vdam.dense_adapter.reference_to_relion_projector_half_maps",
         lambda *args, **kwargs: (projector_half, 2),
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.relion_projector_half_maps_to_dense_means",
+        "recovar.em.vdam.dense_adapter.relion_projector_half_maps_to_dense_means",
         lambda *args, **kwargs: dense_means,
     )
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=1, n_directions=4)
@@ -850,7 +841,7 @@ def test_resolve_class_inputs_reuses_prebuilt_production_projector(monkeypatch):
     dense_means = np.full((1, 8**3), 2.0 + 0.5j, dtype=np.complex64)
     mean_variance = np.abs(dense_means) ** 2
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.reference_to_relion_projector_half_maps",
+        "recovar.em.vdam.dense_adapter.reference_to_relion_projector_half_maps",
         lambda *args, **kwargs: pytest.fail("prebuilt production projector was rebuilt"),
     )
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=1, n_directions=4)
@@ -877,11 +868,11 @@ def test_resolve_class_inputs_can_dump_exact_projector_operand(monkeypatch, tmp_
     projector_half = np.arange(54, dtype=np.float32).reshape(1, 3, 3, 6)[..., :2].astype(np.complex64)
     dense_means = np.zeros((1, 8**3), dtype=np.complex64)
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.reference_to_relion_projector_half_maps",
+        "recovar.em.vdam.dense_adapter.reference_to_relion_projector_half_maps",
         lambda *args, **kwargs: (projector_half, 2),
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.relion_projector_half_maps_to_dense_means",
+        "recovar.em.vdam.dense_adapter.relion_projector_half_maps_to_dense_means",
         lambda *args, **kwargs: dense_means,
     )
     monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR", str(tmp_path))
@@ -915,7 +906,7 @@ def test_dense_initial_model_estep_handles_empty_halfset(monkeypatch):
         return result
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter.run_dense_k_class_em",
+        "recovar.em.vdam.dense_adapter.run_dense_k_class_em",
         fake_run_dense_k_class_em,
     )
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=1, n_directions=4)
@@ -951,7 +942,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         raise AssertionError("Sparse execution computed unused dense rotations")
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._dense_rotations_for_config",
+        "recovar.em.vdam.dense_adapter._dense_rotations_for_config",
         unused_dense_conversion,
     )
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2", raising=False)
@@ -961,7 +952,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM", raising=False)
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE", raising=False)
 
-    from recovar.em.dense_single_volume.helpers import bpref_diagnostics as sparse_diagnostics
+    from recovar.em.diagnostics import bpref_diagnostics as sparse_diagnostics
 
     monkeypatch.setattr(
         sparse_diagnostics,
@@ -1080,23 +1071,23 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         return _fake_result(n_classes=1, n=8, n_images=int(dataset.n_units), n_groups=1)
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep._compute_k_class_significance_batched",
+        "recovar.em.vdam.sparse_pass2_estep._compute_k_class_significance_batched",
         fake_significance,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep._safe_coarse_significance_image_batch_size",
+        "recovar.em.vdam.sparse_pass2_estep._safe_coarse_significance_image_batch_size",
         lambda *_args, **_kwargs: 7,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep.build_pass2_hypothesis_layout",
+        "recovar.em.vdam.sparse_pass2_estep.build_pass2_hypothesis_layout",
         fake_build_layout,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep.run_local_k_class_em",
+        "recovar.em.vdam.sparse_pass2_estep.run_local_k_class_em",
         fake_run_local,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._resolve_class_inputs",
+        "recovar.em.vdam.dense_adapter._resolve_class_inputs",
         lambda state, config: (
             config.means,
             config.mean_variance,
@@ -1105,7 +1096,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         ),
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep._uses_relion_cuda_image_preprocessing",
+        "recovar.em.vdam.sparse_pass2_estep._uses_relion_cuda_image_preprocessing",
         lambda dataset: True,
     )
     monkeypatch.setattr(
@@ -1249,9 +1240,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
 
 
 def test_exact_relion_fine_diff2_can_be_disabled(monkeypatch):
-    from recovar.em.initial_model.sparse_pass2_estep import (
-        _exact_relion_fine_diff2_enabled,
-    )
+    from recovar.em.vdam.sparse_pass2_estep import _exact_relion_fine_diff2_enabled
 
     for value in ("0", "false", "NO", "Off"):
         monkeypatch.setenv("RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2", value)
@@ -1259,9 +1248,7 @@ def test_exact_relion_fine_diff2_can_be_disabled(monkeypatch):
 
 
 def test_initial_model_flat_local_rows_are_explicit_opt_in(monkeypatch):
-    from recovar.em.initial_model.sparse_pass2_estep import (
-        _flat_local_rows_enabled,
-    )
+    from recovar.em.vdam.sparse_pass2_estep import _flat_local_rows_enabled
 
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS", raising=False)
     assert _flat_local_rows_enabled() is False
@@ -1274,9 +1261,7 @@ def test_initial_model_flat_local_rows_are_explicit_opt_in(monkeypatch):
 
 
 def test_initial_model_stable_flat_row_capacity_is_explicit_opt_in(monkeypatch):
-    from recovar.em.initial_model.sparse_pass2_estep import (
-        _stable_flat_row_capacity_enabled,
-    )
+    from recovar.em.vdam.sparse_pass2_estep import _stable_flat_row_capacity_enabled
 
     variable = "RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY"
     monkeypatch.delenv(variable, raising=False)
@@ -1290,9 +1275,7 @@ def test_initial_model_stable_flat_row_capacity_is_explicit_opt_in(monkeypatch):
 
 
 def test_initial_model_packed_local_projection_is_explicit_opt_in(monkeypatch):
-    from recovar.em.initial_model.sparse_pass2_estep import (
-        _packed_local_projection_enabled,
-    )
+    from recovar.em.vdam.sparse_pass2_estep import _packed_local_projection_enabled
 
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION", raising=False)
     assert _packed_local_projection_enabled() is False
@@ -1305,9 +1288,7 @@ def test_initial_model_packed_local_projection_is_explicit_opt_in(monkeypatch):
 
 
 def test_shared_fused_pair_fine_score_is_explicit_opt_in(monkeypatch):
-    from recovar.em.initial_model.sparse_pass2_estep import (
-        _fused_pair_fine_score_enabled,
-    )
+    from recovar.em.vdam.sparse_pass2_estep import _fused_pair_fine_score_enabled
 
     variable = "RECOVAR_EXACT_LOCAL_FUSED_PAIR_FINE_SCORE"
     monkeypatch.delenv(variable, raising=False)
@@ -1321,9 +1302,7 @@ def test_shared_fused_pair_fine_score_is_explicit_opt_in(monkeypatch):
 
 
 def test_initial_model_deferred_packed_vdam_is_explicit_opt_in(monkeypatch):
-    from recovar.em.initial_model.sparse_pass2_estep import (
-        _defer_packed_vdam_enabled,
-    )
+    from recovar.em.vdam.sparse_pass2_estep import _defer_packed_vdam_enabled
 
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM", raising=False)
     assert _defer_packed_vdam_enabled() is False
@@ -1336,9 +1315,7 @@ def test_initial_model_deferred_packed_vdam_is_explicit_opt_in(monkeypatch):
 
 
 def test_initial_model_packed_final_noise_is_explicit_opt_in(monkeypatch):
-    from recovar.em.initial_model.sparse_pass2_estep import (
-        _packed_final_noise_enabled,
-    )
+    from recovar.em.vdam.sparse_pass2_estep import _packed_final_noise_enabled
 
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE", raising=False)
     assert _packed_final_noise_enabled() is False
@@ -1375,11 +1352,11 @@ def test_dense_initial_model_estep_os0_uses_device_coarse_rotations(monkeypatch)
         fake_device_coarse,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep._compute_k_class_significance_batched",
+        "recovar.em.vdam.sparse_pass2_estep._compute_k_class_significance_batched",
         fake_significance,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._resolve_class_inputs",
+        "recovar.em.vdam.dense_adapter._resolve_class_inputs",
         lambda state, config: (
             config.means,
             config.mean_variance,
@@ -1388,7 +1365,7 @@ def test_dense_initial_model_estep_os0_uses_device_coarse_rotations(monkeypatch)
         ),
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep._uses_relion_cuda_image_preprocessing",
+        "recovar.em.vdam.sparse_pass2_estep._uses_relion_cuda_image_preprocessing",
         lambda _dataset: True,
     )
 
@@ -1431,9 +1408,7 @@ def test_dense_initial_model_estep_os0_uses_device_coarse_rotations(monkeypatch)
 
 
 def test_initial_model_local_bucket_unification_can_be_disabled(monkeypatch):
-    from recovar.em.initial_model.sparse_pass2_estep import (
-        _unify_local_bucket_sizes_enabled,
-    )
+    from recovar.em.vdam.sparse_pass2_estep import _unify_local_bucket_sizes_enabled
 
     monkeypatch.delenv("RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES", raising=False)
     assert _unify_local_bucket_sizes_enabled() is True
@@ -1443,8 +1418,8 @@ def test_initial_model_local_bucket_unification_can_be_disabled(monkeypatch):
 
 
 def test_dense_initial_model_estep_os0_keeps_coarse_normalization_pose_and_support(monkeypatch):
-    from recovar.em.dense_single_volume.helpers.types import make_relion_stats
-    from recovar.em.dense_single_volume.k_class_results import KClassEMResult
+    from recovar.em.classification.k_class_results import KClassEMResult
+    from recovar.em.helpers.types import make_relion_stats
 
     calls = {}
     coarse_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 72, axis=0)
@@ -1525,15 +1500,15 @@ def test_dense_initial_model_estep_os0_keeps_coarse_normalization_pose_and_suppo
         )
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep._compute_k_class_significance_batched",
+        "recovar.em.vdam.sparse_pass2_estep._compute_k_class_significance_batched",
         fake_significance,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep.build_pass2_hypothesis_layout",
+        "recovar.em.vdam.sparse_pass2_estep.build_pass2_hypothesis_layout",
         fake_build_layout,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep.run_local_k_class_em",
+        "recovar.em.vdam.sparse_pass2_estep.run_local_k_class_em",
         fake_run_local,
     )
 
@@ -1615,19 +1590,19 @@ def test_dense_initial_model_estep_compact_os0_reuses_coarse_normalization_and_s
         )
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep._compute_k_class_significance_batched",
+        "recovar.em.vdam.sparse_pass2_estep._compute_k_class_significance_batched",
         fake_significance,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep._run_sparse_k_class_adaptive_pass2",
+        "recovar.em.vdam.sparse_pass2_estep._run_sparse_k_class_adaptive_pass2",
         fake_run_compact,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep._collapse_compact_pass2_rotation_stats_to_directions",
+        "recovar.em.vdam.sparse_pass2_estep._collapse_compact_pass2_rotation_stats_to_directions",
         lambda result, _n_psi: result,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep._restore_zero_oversampling_coarse_metadata",
+        "recovar.em.vdam.sparse_pass2_estep._restore_zero_oversampling_coarse_metadata",
         lambda result, **_kwargs: result,
     )
 
@@ -1677,11 +1652,9 @@ def test_dense_initial_model_estep_compact_os0_reuses_coarse_normalization_and_s
 
 
 def test_zero_oversampling_restores_k_class_coarse_argmax_metadata():
-    from recovar.em.dense_single_volume.helpers.types import make_relion_stats
-    from recovar.em.dense_single_volume.k_class_results import KClassEMResult
-    from recovar.em.initial_model.sparse_pass2_estep import (
-        _restore_zero_oversampling_coarse_metadata,
-    )
+    from recovar.em.classification.k_class_results import KClassEMResult
+    from recovar.em.helpers.types import make_relion_stats
+    from recovar.em.vdam.sparse_pass2_estep import _restore_zero_oversampling_coarse_metadata
 
     coarse_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 4, axis=0)
     coarse_rotations[:, 0, 0] = np.arange(4, dtype=np.float32)
@@ -1801,15 +1774,15 @@ def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypa
         return _fake_result(n_classes=2, n=8, n_images=int(dataset.n_units), n_groups=1)
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep._compute_k_class_significance_batched",
+        "recovar.em.vdam.sparse_pass2_estep._compute_k_class_significance_batched",
         fake_significance,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep.build_pass2_hypothesis_layout",
+        "recovar.em.vdam.sparse_pass2_estep.build_pass2_hypothesis_layout",
         fake_build_layout,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep.run_local_k_class_em",
+        "recovar.em.vdam.sparse_pass2_estep.run_local_k_class_em",
         fake_run_local,
     )
 
@@ -1939,15 +1912,15 @@ def test_dense_initial_model_estep_sparse_pass2_pseudo_halfsets_use_separate_loc
         return _fake_result(n_classes=1, n=8, n_images=int(dataset.n_images), n_groups=1)
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep._compute_k_class_significance_batched",
+        "recovar.em.vdam.sparse_pass2_estep._compute_k_class_significance_batched",
         fake_significance,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep.build_pass2_hypothesis_layout",
+        "recovar.em.vdam.sparse_pass2_estep.build_pass2_hypothesis_layout",
         fake_build_layout,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep.run_local_k_class_em",
+        "recovar.em.vdam.sparse_pass2_estep.run_local_k_class_em",
         fake_run_local,
     )
 
@@ -2086,23 +2059,23 @@ def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypat
         return result
 
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep._compute_k_class_significance_batched",
+        "recovar.em.vdam.sparse_pass2_estep._compute_k_class_significance_batched",
         fake_significance,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep.build_pass2_hypothesis_layout",
+        "recovar.em.vdam.sparse_pass2_estep.build_pass2_hypothesis_layout",
         fake_build_layout,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep.run_local_k_class_em",
+        "recovar.em.vdam.sparse_pass2_estep.run_local_k_class_em",
         fake_run_local,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.sparse_pass2_estep._uses_relion_cuda_image_preprocessing",
+        "recovar.em.vdam.sparse_pass2_estep._uses_relion_cuda_image_preprocessing",
         lambda dataset: True,
     )
     monkeypatch.setattr(
-        "recovar.em.initial_model.dense_adapter._resolve_class_inputs",
+        "recovar.em.vdam.dense_adapter._resolve_class_inputs",
         lambda state, config: (
             np.zeros((1, 8**3), dtype=np.complex64),
             np.ones((1, 8**3), dtype=np.float32),

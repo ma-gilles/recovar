@@ -334,17 +334,17 @@ and are marked `SAFE_TO_DELETE`.
 
 ## Code references
 
-- `recovar/em/dense_single_volume/helpers/coarse_gemm_streaming.py:CoarseGemmStreamingState`
-- `recovar/em/dense_single_volume/helpers/coarse_gemm_streaming.py:summarize_coarse_gemm_streaming_state`
-- `recovar/em/dense_single_volume/helpers/coarse_gemm_streaming.py:aggregate_coarse_gemm_streaming_summaries`
-- `recovar/em/dense_single_volume/helpers/coarse_gemm_hybrid.py:CoarseGemmCertificateTopology`
-- `recovar/em/dense_single_volume/helpers/coarse_gemm_hybrid.py:coarse_gemm_direct_f32_ftz_envelope_and_range`
-- `recovar/em/dense_single_volume/helpers/projection_cache.py:build_projection_cache`
-- `recovar/em/dense_single_volume/helpers/scoring.py:_relion_coarse_gaussian_gemm_update_certificate_state`
-- `recovar/em/dense_single_volume/helpers/scoring.py:_relion_coarse_diff2_rotation_blocks_from_topology_f32`
-- `recovar/em/dense_single_volume/helpers/significance.py:_score_relion_coarse_gaussian_gemm_macro`
-- `recovar/em/dense_single_volume/helpers/significance.py:_seal_coarse_gaussian_gemm_streaming_scope`
-- `recovar/em/initial_model/dense_adapter.py:_initial_model_coarse_gemm_diagnostic_scopes`
+- `recovar/em/scoring/coarse_gemm_streaming.py:CoarseGemmStreamingState`
+- `recovar/em/scoring/coarse_gemm_streaming.py:summarize_coarse_gemm_streaming_state`
+- `recovar/em/scoring/coarse_gemm_streaming.py:aggregate_coarse_gemm_streaming_summaries`
+- `recovar/em/scoring/coarse_gemm_hybrid.py:CoarseGemmCertificateTopology`
+- `recovar/em/scoring/coarse_gemm_hybrid.py:coarse_gemm_direct_f32_ftz_envelope_and_range`
+- `recovar/em/helpers/projection_cache.py:build_projection_cache`
+- `recovar/em/scoring/scoring.py:_relion_coarse_gaussian_gemm_update_certificate_state`
+- `recovar/em/scoring/scoring.py:_relion_coarse_diff2_rotation_blocks_from_topology_f32`
+- `recovar/em/scoring/significance.py:_score_relion_coarse_gaussian_gemm_macro`
+- `recovar/em/scoring/significance.py:_seal_coarse_gaussian_gemm_streaming_scope`
+- `recovar/em/vdam/dense_adapter.py:_initial_model_coarse_gemm_diagnostic_scopes`
 - `recovar/cuda_backproject.py:relion_coarse_diff2_rotation_blocks_f32`
 - `recovar/cuda/cuda_backproject.cu:launch_relion_coarse_diff2_rotation_blocks_f32`
 - `scripts/run_vdam_coarse_gemm_gf46_streaming_selector.sbatch`

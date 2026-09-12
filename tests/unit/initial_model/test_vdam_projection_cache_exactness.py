@@ -6,10 +6,8 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
-from recovar.em.dense_single_volume.helpers.projection import (
-    compute_relion_projector_projections_block,
-)
+from recovar.em.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.helpers.projection import compute_relion_projector_projections_block
 
 pytestmark = [pytest.mark.unit, pytest.mark.gpu]
 

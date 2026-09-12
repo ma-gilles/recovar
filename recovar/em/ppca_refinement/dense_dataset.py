@@ -19,13 +19,10 @@ import numpy as np
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
-from recovar.em.dense_single_volume.helpers.half_spectrum import make_scoring_half_image_weights
-from recovar.em.dense_single_volume.helpers.oversampling import find_significant_mask
-from recovar.em.dense_single_volume.helpers.preprocessing import (
-    prepare_reconstruction_batch,
-    preprocess_batch,
-)
+from recovar.em.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.helpers.half_spectrum import make_scoring_half_image_weights
+from recovar.em.helpers.oversampling import find_significant_mask
+from recovar.em.helpers.preprocessing import prepare_reconstruction_batch, preprocess_batch
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
     PoseSelectionConfig,
@@ -605,7 +602,7 @@ def compute_dense_ppca_adaptive_significance(
 
     The returned ``significant_sample_indices`` use rotation-major packed pose
     IDs (``rotation_idx * n_translations + translation_idx``), matching
-    :func:`recovar.em.dense_single_volume.local_layout.build_pass2_hypothesis_layout`.
+    :func:`recovar.em.local.local_layout.build_pass2_hypothesis_layout`.
     """
 
     geometry = geometry if geometry is not None else GeometryConfig()

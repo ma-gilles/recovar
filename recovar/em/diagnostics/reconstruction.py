@@ -9,7 +9,7 @@ import os
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.resolution import shell_index_to_resolution_angstrom
+from recovar.em.helpers.resolution import shell_index_to_resolution_angstrom
 
 
 def write_kclass_current_size(

@@ -1,8 +1,8 @@
 """Focused tests for RELION's fused fine-Gaussian CUDA FFI."""
 
+from decimal import Decimal, localcontext
 from itertools import permutations
 from pathlib import Path
-from decimal import Decimal, localcontext
 
 import numpy as np
 import pytest
@@ -11,7 +11,8 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.helpers import compact_candidates, relion_ctf
+from recovar.em.relion import relion_ctf
+from recovar.em.scoring import compact_candidates
 
 pytestmark = pytest.mark.unit
 
@@ -490,7 +491,7 @@ def test_relion_fused_coarse_projector_source_pins_vdam_support_and_segmentation
     assert "launch_relion_coarse_diff2_projector_prehalf_f32<true>(" in capture
     assert "prehalf_weight" in capture
 
-    from recovar.em.dense_single_volume.helpers import significance
+    from recovar.em.scoring import significance
 
     significance_source = Path(significance.__file__).read_text()
     # Both guarded routes in the shared K=1/K-class significance
@@ -565,7 +566,7 @@ def test_relion_coarse_vdam_multistream_source_reuses_production_math():
     assert 'Attr<int64_t>("prehalf_weight")' in binding
 
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers import significance
+    from recovar.em.scoring import significance
 
     wrapper_source = Path(cuda_backproject.__file__).read_text()
     wrapper_start = wrapper_source.index(
@@ -687,7 +688,7 @@ def test_relion_coarse_prehalf_shared_body_is_built_packaged_and_stale_checked()
 
 
 def test_k1_coarse_multistream_workers_are_default_off_and_fail_closed(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import significance
+    from recovar.em.scoring import significance
 
     monkeypatch.delenv("RECOVAR_K1_COARSE_MULTISTREAM_WORKERS", raising=False)
     assert significance._k1_coarse_multistream_worker_count() == 0
@@ -703,7 +704,7 @@ def test_k1_coarse_multistream_workers_are_default_off_and_fail_closed(monkeypat
 def test_k1_coarse_native_atomic_reduction_is_default_off_and_fail_closed(
     monkeypatch,
 ):
-    from recovar.em.dense_single_volume.helpers import significance
+    from recovar.em.scoring import significance
 
     variable = "RECOVAR_K1_COARSE_NATIVE_ATOMIC_REDUCTION"
     monkeypatch.delenv(variable, raising=False)
@@ -719,7 +720,7 @@ def test_k1_coarse_native_atomic_reduction_is_default_off_and_fail_closed(
 
 
 def test_k1_coarse_prehalf_weight_is_default_off_and_fail_closed(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import significance
+    from recovar.em.scoring import significance
 
     variable = "RECOVAR_K1_COARSE_PREHALF_WEIGHT"
     monkeypatch.delenv(variable, raising=False)
@@ -742,7 +743,7 @@ def test_k1_coarse_native_atomic_selection_is_scoped_to_live_t29_gate(
     translation_count,
     expected,
 ):
-    from recovar.em.dense_single_volume.helpers import significance
+    from recovar.em.scoring import significance
 
     assert (
         significance._k1_coarse_native_atomic_reduction_selected(
@@ -767,7 +768,7 @@ def test_k1_coarse_native_atomic_selection_is_scoped_to_live_t29_gate(
 def test_k1_coarse_single_lane_canonical_is_default_off_and_fail_closed(
     monkeypatch,
 ):
-    from recovar.em.dense_single_volume.helpers import significance
+    from recovar.em.scoring import significance
 
     variable = "RECOVAR_K1_COARSE_SINGLE_LANE_CANONICAL"
     monkeypatch.delenv(variable, raising=False)
@@ -790,7 +791,7 @@ def test_k1_coarse_single_lane_selection_falls_back_outside_one_lane_range(
     translation_count,
     expected,
 ):
-    from recovar.em.dense_single_volume.helpers import significance
+    from recovar.em.scoring import significance
 
     assert (
         significance._k1_coarse_single_lane_canonical_selected(
@@ -994,7 +995,7 @@ def test_relion_coarse_multistream_reduction_mode_is_one_static_trace(monkeypatc
 
 
 def test_k1_coarse_gaussian_flag_honors_scoped_default_and_explicit_opt_out(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import significance
+    from recovar.em.scoring import significance
 
     monkeypatch.delenv("RECOVAR_K1_COARSE_GAUSSIAN_FFI", raising=False)
     assert not significance._k1_coarse_gaussian_ffi_enabled()
@@ -1026,7 +1027,7 @@ def test_k1_coarse_gaussian_flag_honors_scoped_default_and_explicit_opt_out(monk
 
 
 def test_k1_coarse_native_texture_flag_honors_default_and_opt_out(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import significance
+    from recovar.em.scoring import significance
 
     monkeypatch.delenv(
         "RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE",
@@ -1047,7 +1048,7 @@ def test_k1_coarse_native_texture_flag_honors_default_and_opt_out(monkeypatch):
 
 
 def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import significance
+    from recovar.em.scoring import significance
 
     monkeypatch.delenv("RECOVAR_K1_COARSE_GAUSSIAN_SINCOSF", raising=False)
     assert not significance._k1_coarse_gaussian_sincosf_enabled()
@@ -1100,7 +1101,7 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     assert "RELION CUDA image preprocessing" in source
     assert "processed_direct = _process_relion_exact_coarse_half_image(" in source
     assert "exact_operands = _assemble_relion_exact_coarse_gaussian_operands(" in source
-    from recovar.em.dense_single_volume.helpers import relion_coarse_operands
+    from recovar.em.relion import relion_coarse_operands
 
     operands_source = Path(relion_coarse_operands.__file__).read_text()
     assembler_start = operands_source.index("def _assemble_relion_exact_coarse_gaussian_operands(")
@@ -1115,9 +1116,7 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
 
 
 def test_compact_projection_window_positions_map_full_indices_to_compact_rows():
-    from recovar.em.dense_single_volume.helpers.significance import (
-        _compact_projection_window_positions,
-    )
+    from recovar.em.scoring.significance import _compact_projection_window_positions
 
     compact = np.asarray([20, 21, 25, 26, 10, 11], dtype=np.int32)
     window = np.asarray([10, 20, 26, 11], dtype=np.int32)
@@ -1133,9 +1132,7 @@ def test_compact_projection_window_positions_map_full_indices_to_compact_rows():
 def test_exact_relion_ctf_source_defaults_to_dataset_star(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
-    from recovar.em.dense_single_volume.helpers.relion_ctf import (
-        _relion_exact_ctf_source_star,
-    )
+    from recovar.em.relion.relion_ctf import _relion_exact_ctf_source_star
 
     dataset_star = tmp_path / "particles.star"
     explicit_star = tmp_path / "override.star"
@@ -1250,9 +1247,7 @@ def test_exact_relion_ctf_source_exposes_host_and_shared_device_boundaries(
 
 
 def test_coarse_gaussian_square_operands_reuse_weighted_score_inputs():
-    from recovar.em.dense_single_volume.helpers.relion_coarse_operands import (
-        _relion_coarse_gaussian_square_operands,
-    )
+    from recovar.em.relion.relion_coarse_operands import _relion_coarse_gaussian_square_operands
 
     shifted = jnp.asarray(
         [
@@ -1300,9 +1295,7 @@ def test_coarse_gaussian_sincosf_operands_reuse_unshifted_weighted_input(
     monkeypatch,
 ):
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers.relion_coarse_operands import (
-        _relion_coarse_gaussian_square_operands_sincosf,
-    )
+    from recovar.em.relion.relion_coarse_operands import _relion_coarse_gaussian_square_operands_sincosf
 
     captured = {}
 
@@ -1365,9 +1358,7 @@ def test_coarse_gaussian_sincosf_operands_reuse_unshifted_weighted_input(
 
 def test_coarse_gaussian_sincosf_operands_preserve_float64(monkeypatch):
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers.relion_coarse_operands import (
-        _relion_coarse_gaussian_square_operands_sincosf,
-    )
+    from recovar.em.relion.relion_coarse_operands import _relion_coarse_gaussian_square_operands_sincosf
 
     captured = {}
 
@@ -1411,12 +1402,8 @@ def test_coarse_gaussian_sincosf_operands_run_cuda_translation(
     gpu_device,
 ):
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers.relion_coarse_operands import (
-        _relion_coarse_gaussian_square_operands_sincosf,
-    )
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
-        _relion_translation_angles_f32,
-    )
+    from recovar.em.relion.relion_coarse_operands import _relion_coarse_gaussian_square_operands_sincosf
+    from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -2726,9 +2713,7 @@ def test_relion_fused_translate_pairs_preserve_source_order_posterior_and_ties(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (
-        _relion_f32_fine_posterior,
-    )
+    from recovar.em.sparse_pass2.sparse_pass2_posterior import _relion_f32_fine_posterior
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
@@ -3324,9 +3309,7 @@ def test_sparse_pass2_fused_flag_routes_supported_operand_layouts(
     expected_shape,
 ):
     import recovar.cuda_backproject as cuda_backproject
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
-        _relion_cuda_fine_diff2_sum,
-    )
+    from recovar.em.sparse_pass2.sparse_pass2_scoring import _relion_cuda_fine_diff2_sum
 
     routes = []
 
@@ -3379,9 +3362,7 @@ def test_sparse_pass2_fused_flag_routes_supported_operand_layouts(
 
 def test_sparse_pass2_fused_flag_routes_float64_to_f64_ffi(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
-        _relion_cuda_fine_diff2_sum,
-    )
+    from recovar.em.sparse_pass2.sparse_pass2_scoring import _relion_cuda_fine_diff2_sum
 
     calls = []
 
@@ -3465,9 +3446,7 @@ def test_relion_wavg_sequential_triplet_matches_jax_loop_bitwise(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_wavg import (
-        _relion_wavg_sequential_triplet_terms_jax,
-    )
+    from recovar.em.sparse_pass2.sparse_pass2_wavg import _relion_wavg_sequential_triplet_terms_jax
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
