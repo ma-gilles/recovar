@@ -7778,12 +7778,8 @@ def test_run_local_em_exact_default_path_matches_debug_split_path(monkeypatch, r
     assert noise_default.sumw == pytest.approx(noise_split.sumw, abs=1e-5)
 
 
-def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng, tmp_path):
-    dataset = RawRealImageDataset(3, rng)
-    mean = _hermitian_volume(VOLUME_SHAPE, seed=551)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
-    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
-    all_rotations = _make_rotations(5, seed=553)
+def _three_image_local_layout(all_rotations):
+    """Small ragged pose layout shared by fused/split local-search checks."""
     translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
     rotation_ids = [
         np.array([0, 1, 2], dtype=np.int32),
@@ -7793,7 +7789,7 @@ def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng,
     rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
     rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
     rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
-    local_layout = LocalHypothesisLayout(
+    return LocalHypothesisLayout(
         n_global_rotations=all_rotations.shape[0],
         n_pixels=6,
         n_psi=1,
@@ -7808,6 +7804,15 @@ def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng,
             dtype=np.float32,
         ),
     )
+
+
+def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng, tmp_path):
+    dataset = RawRealImageDataset(3, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=551)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    all_rotations = _make_rotations(5, seed=553)
+    local_layout = _three_image_local_layout(all_rotations)
     common_kwargs = dict(
         image_batch_size=3,
         rotation_block_size=8,
@@ -8059,30 +8064,7 @@ def test_run_local_em_exact_score_only_big_jit_matches_debug_split(monkeypatch, 
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=563)
-    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
-    rotation_ids = [
-        np.array([0, 1, 2], dtype=np.int32),
-        np.array([1, 3], dtype=np.int32),
-        np.array([0, 2, 4], dtype=np.int32),
-    ]
-    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
-    local_layout = LocalHypothesisLayout(
-        n_global_rotations=all_rotations.shape[0],
-        n_pixels=6,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=rotation_ids_flat,
-        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
-        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=translations,
-        translation_log_priors=np.array(
-            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
-            dtype=np.float32,
-        ),
-    )
+    local_layout = _three_image_local_layout(all_rotations)
     common_kwargs = dict(
         image_batch_size=3,
         rotation_block_size=8,
@@ -8171,30 +8153,7 @@ def test_local_score_debug_dump_defaults_to_big_jit(monkeypatch, rng, tmp_path):
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=564)
-    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
-    rotation_ids = [
-        np.array([0, 1, 2], dtype=np.int32),
-        np.array([1, 3], dtype=np.int32),
-        np.array([0, 2, 4], dtype=np.int32),
-    ]
-    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
-    local_layout = LocalHypothesisLayout(
-        n_global_rotations=all_rotations.shape[0],
-        n_pixels=6,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=rotation_ids_flat,
-        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
-        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=translations,
-        translation_log_priors=np.array(
-            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
-            dtype=np.float32,
-        ),
-    )
+    local_layout = _three_image_local_layout(all_rotations)
 
     score_dump_dir = tmp_path / "score_dump"
     fused_dump_dir = tmp_path / "fused_dump"
@@ -8264,30 +8223,7 @@ def test_local_score_debug_dump_operands_stay_on_big_jit(monkeypatch, rng, tmp_p
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=565)
-    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
-    rotation_ids = [
-        np.array([0, 1, 2], dtype=np.int32),
-        np.array([1, 3], dtype=np.int32),
-        np.array([0, 2, 4], dtype=np.int32),
-    ]
-    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
-    local_layout = LocalHypothesisLayout(
-        n_global_rotations=all_rotations.shape[0],
-        n_pixels=6,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=rotation_ids_flat,
-        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
-        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=translations,
-        translation_log_priors=np.array(
-            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
-            dtype=np.float32,
-        ),
-    )
+    local_layout = _three_image_local_layout(all_rotations)
     common_kwargs = dict(
         image_batch_size=3,
         rotation_block_size=8,
@@ -8389,30 +8325,7 @@ def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=567)
-    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
-    rotation_ids = [
-        np.array([0, 1, 2], dtype=np.int32),
-        np.array([1, 3], dtype=np.int32),
-        np.array([0, 2, 4], dtype=np.int32),
-    ]
-    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
-    local_layout = LocalHypothesisLayout(
-        n_global_rotations=all_rotations.shape[0],
-        n_pixels=6,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=rotation_ids_flat,
-        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
-        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=translations,
-        translation_log_priors=np.array(
-            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
-            dtype=np.float32,
-        ),
-    )
+    local_layout = _three_image_local_layout(all_rotations)
 
     common_kwargs = dict(
         image_batch_size=1,
@@ -8535,30 +8448,7 @@ def test_local_score_debug_force_split_only_splits_target_bucket(monkeypatch, rn
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=570)
-    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
-    rotation_ids = [
-        np.array([0, 1, 2], dtype=np.int32),
-        np.array([1, 3], dtype=np.int32),
-        np.array([0, 2, 4], dtype=np.int32),
-    ]
-    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
-    local_layout = LocalHypothesisLayout(
-        n_global_rotations=all_rotations.shape[0],
-        n_pixels=6,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=rotation_ids_flat,
-        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
-        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=translations,
-        translation_log_priors=np.array(
-            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
-            dtype=np.float32,
-        ),
-    )
+    local_layout = _three_image_local_layout(all_rotations)
     score_dump_dir = tmp_path / "score_dump"
     monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", str(score_dump_dir))
     monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", "2")
@@ -8761,30 +8651,7 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=567)
-    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
-    rotation_ids = [
-        np.array([0, 1, 2], dtype=np.int32),
-        np.array([1, 3], dtype=np.int32),
-        np.array([0, 2, 4], dtype=np.int32),
-    ]
-    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
-    local_layout = LocalHypothesisLayout(
-        n_global_rotations=all_rotations.shape[0],
-        n_pixels=6,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=rotation_ids_flat,
-        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
-        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=translations,
-        translation_log_priors=np.array(
-            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
-            dtype=np.float32,
-        ),
-    )
+    local_layout = _three_image_local_layout(all_rotations)
     common_kwargs = dict(
         image_batch_size=3,
         rotation_block_size=8,
@@ -8854,30 +8721,7 @@ def test_run_local_em_exact_relion_projection_cache_matches_uncached_big_jit(mon
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=569)
-    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
-    rotation_ids = [
-        np.array([0, 1, 2], dtype=np.int32),
-        np.array([1, 3], dtype=np.int32),
-        np.array([0, 2, 4], dtype=np.int32),
-    ]
-    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
-    local_layout = LocalHypothesisLayout(
-        n_global_rotations=all_rotations.shape[0],
-        n_pixels=6,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=rotation_ids_flat,
-        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
-        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=translations,
-        translation_log_priors=np.array(
-            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
-            dtype=np.float32,
-        ),
-    )
+    local_layout = _three_image_local_layout(all_rotations)
     common_kwargs = dict(
         image_batch_size=3,
         rotation_block_size=8,
@@ -15522,14 +15366,19 @@ def test_replay_current_size_uses_control_model_star():
     assert _replay_control_model_iteration(13, 0) == 14
 
 
-def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootstrap(
+@pytest.mark.parametrize(
+    ("replay_source", "rotation_seed"),
+    [("iteration_override", 7), ("initial_state", 11)],
+)
+def test_previous_best_rotations_skip_first_local_dense_bootstrap(
     half_datasets,
     init_volume,
     translations,
     monkeypatch,
+    replay_source,
+    rotation_seed,
 ):
-    """hp4 should enter local search immediately when previous best rotations exist."""
-    import recovar.em.refinement.iteration_loop as refine_mod
+    """Both replay entry points enter hp4 local search without a dense bootstrap."""
 
     dense_calls = []
     local_calls = []
@@ -15546,7 +15395,6 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
         disc_type,
         **kwargs,
     ):
-        _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         dense_calls.append(int(np.asarray(rotations).shape[0]))
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
@@ -15578,22 +15426,6 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
         current_size,
         **kwargs,
     ):
-        _ = (
-            mean,
-            mean_variance,
-            noise_variance,
-            sigma_rot,
-            sigma_psi,
-            translations,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-            kwargs,
-        )
         local_calls.append(
             {
                 "healpix_order": int(healpix_order),
@@ -15649,12 +15481,22 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
         ),
     )
 
+    replay = (
+        ReplayState(replay_iteration_overrides=[{
+            "local_search": True,
+            "healpix_order": 4,
+            "previous_best_rotation_eulers": [prev_h1, prev_h2],
+        }])
+        if replay_source == "iteration_override"
+        else ReplayState(init_previous_best_rotation_eulers=[prev_h1, prev_h2])
+    )
+
     refine_single_volume(
         half_datasets,
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(rotation_grid_size(4), seed=7),
+        _make_rotations(rotation_grid_size(4), seed=rotation_seed),
         translations,
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -15667,171 +15509,7 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
             ),
             batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=512),
             adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=4),
-            replay=ReplayState(
-                replay_iteration_overrides=[
-                    {
-                        "local_search": True,
-                        "healpix_order": 4,
-                        "previous_best_rotation_eulers": [prev_h1, prev_h2],
-                    }
-                ]
-            ),
-        ),
-    )
-
-    assert local_calls
-    assert not dense_calls
-    for call in local_calls:
-        assert call["healpix_order"] == 4
-        assert call["prior_shape"][0] == half_datasets[0].n_units
-
-
-def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
-    half_datasets,
-    init_volume,
-    translations,
-    monkeypatch,
-):
-    """Initial previous-best eulers should skip the dense hp4 bootstrap."""
-    import recovar.em.refinement.iteration_loop as refine_mod
-
-    dense_calls = []
-    local_calls = []
-    prev_h1 = np.zeros((half_datasets[0].n_units, 3), dtype=np.float32)
-    prev_h2 = np.zeros((half_datasets[1].n_units, 3), dtype=np.float32)
-
-    def fake_run_em(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        rotations,
-        translations,
-        disc_type,
-        **kwargs,
-    ):
-        _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
-        dense_calls.append(int(np.asarray(rotations).shape[0]))
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return _mock_dense_em_result(
-            n_images=experiment_dataset.n_units,
-            n_rotations=np.asarray(rotations).shape[0],
-            volume_size=recon_vol_size,
-            n_shells=n_shells,
-        )
-
-    def fake_grouped_local_search(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        prior_rotations,
-        rotation_grid_rotations,
-        rotation_grid_eulers,
-        healpix_order,
-        sigma_rot,
-        sigma_psi,
-        translations,
-        prior_translations,
-        sigma_offset_angstrom,
-        offset_range_pixels,
-        disc_type,
-        image_batch_size,
-        rotation_block_size,
-        current_size,
-        **kwargs,
-    ):
-        _ = (
-            mean,
-            mean_variance,
-            noise_variance,
-            sigma_rot,
-            sigma_psi,
-            translations,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-            kwargs,
-        )
-        local_calls.append(
-            {
-                "healpix_order": int(healpix_order),
-                "prior_shape": np.asarray(prior_rotations).shape,
-                "grid_shape": np.asarray(rotation_grid_rotations).shape,
-            }
-        )
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        base_outputs = (
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-        )
-        relion_stats = RelionStats(
-            log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-            best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-            max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-            rotation_posterior_sums=jnp.ones(np.asarray(rotation_grid_rotations).shape[0], dtype=jnp.float32),
-        )
-        noise_stats = NoiseStats(
-            wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-            wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-            wsum_sigma2_offset=0.0,
-            sumw=float(experiment_dataset.n_units),
-        )
-        best_pose_details = ()
-        if kwargs.get("return_best_pose_details"):
-            best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
-            best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
-            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
-            best_pose_details = (best_rots, best_trans, best_ids)
-        return _mock_local_search_result(
-            base_outputs,
-            relion_stats,
-            noise_stats,
-            kwargs,
-            experiment_dataset.n_units,
-            best_pose_details,
-        )
-
-    monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
-    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
-    monkeypatch.setattr(
-        mean_helpers_module,
-        "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order, *, dtype=np.float32: (
-            np.ones(
-                max(1, rotation_grid_size(healpix_order)),
-                dtype=np.float64,
-            )
-            / max(1, rotation_grid_size(healpix_order))
-        ),
-    )
-
-    refine_single_volume(
-        half_datasets,
-        init_volume,
-        jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-        jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(rotation_grid_size(4), seed=11),
-        translations,
-        options=RefinementOptions(
-            disc_type="linear_interp",
-            schedule=RefinementSchedule(
-                max_iter=1,
-                init_current_size=16,
-                init_healpix_order=4,
-                max_healpix_order=4,
-                skip_final_iteration=True,
-            ),
-            batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=512),
-            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=4),
-            replay=ReplayState(init_previous_best_rotation_eulers=[prev_h1, prev_h2]),
+            replay=replay,
         ),
     )
 
