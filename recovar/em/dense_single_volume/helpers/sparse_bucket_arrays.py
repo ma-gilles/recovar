@@ -965,17 +965,34 @@ def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_in
     )
     padded_log_prior = np.full((batch, pair_bucket_size), -1e30, dtype=log_prior_dtype)
 
-    for row, image_idx in enumerate(image_indices.tolist()):
-        count = int(index_arrays["pair_counts"][row])
-        if count == 0:
-            continue
-
-        local_rot_rows = index_arrays["local_rotation_row"][row, :count]
-        rotation_indices = np.asarray(per_image_inputs["oversampled_rot_indices"][image_idx], dtype=np.int64)
-        rotation_log_prior = np.asarray(per_image_inputs["log_prior"][image_idx], dtype=log_prior_dtype)
-
-        padded_rotation_index[row, :count] = rotation_indices[local_rot_rows]
-        padded_log_prior[row, :count] = rotation_log_prior[local_rot_rows]
+    # One flat gather per field instead of a Python loop of per-image gathers and
+    # slice assignments. Measured 2026-09-12 on the 100k/256 K=4 fixture: the loop
+    # form made this "build" stage 17.6% of the pass-2 bucket loop, against 1.0% on
+    # the 5k/128 fixture, because its cost scales with the particle count. The values
+    # written and their positions are identical; only the marshalling changes.
+    pair_counts_np = np.asarray(index_arrays["pair_counts"], dtype=np.int64)
+    total_pairs = int(pair_counts_np.sum())
+    if total_pairs:
+        image_list = image_indices.tolist()
+        rotation_rows = [
+            np.asarray(per_image_inputs["oversampled_rot_indices"][i], dtype=np.int64)
+            for i in image_list
+        ]
+        prior_rows = [
+            np.asarray(per_image_inputs["log_prior"][i], dtype=log_prior_dtype)
+            for i in image_list
+        ]
+        source_sizes = np.fromiter((a.shape[0] for a in rotation_rows), dtype=np.int64, count=batch)
+        source_starts = np.concatenate(([0], np.cumsum(source_sizes)[:-1])) if batch else np.zeros(0, np.int64)
+        dest_starts = np.concatenate(([0], np.cumsum(pair_counts_np)[:-1])) if batch else np.zeros(0, np.int64)
+        dest_rows = np.repeat(np.arange(batch, dtype=np.int64), pair_counts_np)
+        dest_cols = np.arange(total_pairs, dtype=np.int64) - np.repeat(dest_starts, pair_counts_np)
+        flat_local_rows = np.asarray(index_arrays["local_rotation_row"])[dest_rows, dest_cols].astype(
+            np.int64, copy=False
+        )
+        gather = flat_local_rows + np.repeat(source_starts, pair_counts_np)
+        padded_rotation_index[dest_rows, dest_cols] = np.concatenate(rotation_rows)[gather]
+        padded_log_prior[dest_rows, dest_cols] = np.concatenate(prior_rows)[gather]
 
     return {
         "image_indices": image_indices,
