@@ -51,11 +51,6 @@ class KClassEMResult(NamedTuple):
     best_pose_eulers_deg: np.ndarray | None = None
 
 
-# Retain the historical pickle GLOBAL name. k_class re-exports this same type;
-# assigning its module string does not import that execution module here.
-KClassEMResult.__module__ = "recovar.em.dense_single_volume.k_class"
-
-
 def _logsumexp_np(values: np.ndarray, axis: int) -> np.ndarray:
     max_value = np.max(values, axis=axis, keepdims=True)
     # Guard against the all-(-inf) case which would otherwise propagate NaN

@@ -15,7 +15,12 @@ incomplete. See [cleanup plan](cleanup_plan.md), [codebase map](codebase.md),
 [benchmark contract](benchmarks.md) and [EM operating rules](../../recovar/em/AGENTS.md).
 
 Structural changes preserve defaults, casts/reductions/JIT order, buffer lifetime,
-non-EM APIs, saved formats and independent references. Canonical source Euler
+non-EM APIs/formats and independent references. EM/VDAM APIs, CLI interfaces and
+historical Python object names need not remain compatible. Prefer less code and
+clear ownership over wrappers or consolidation that introduces complex branching.
+Keep maintained validation tools; preserve obsolete experiments by their last
+usable commit and external evidence, then remove their tools and redundant tests.
+Canonical source Euler
 angles and host pixel geometry stay metadata; derive computation arrays from them.
 Double is diagnostic, not a production remedy or proof of noise. No tolerance or
 baseline changes. User priority is short-prefix parity then final FSC, with up to

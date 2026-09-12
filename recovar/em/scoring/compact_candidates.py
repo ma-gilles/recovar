@@ -322,7 +322,3 @@ def build_compact_fine_job_plan_from_pair_arrays(
         "valid_job_count": valid_job_count,
         "job_plan": job_plan,
     }
-
-
-# Preserve the stored class identity; the sparse owner imports this same class.
-SparseCandidateMask.__module__ = "recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed"

@@ -35,12 +35,11 @@ def test_coarse_support_encoding_preserves_ids_and_count(mask, expected_ids, enc
 
 
 @pytest.mark.parametrize("protocol", [4, 5])
-def test_complement_support_keeps_legacy_pickle_identity(protocol):
+def test_complement_support_roundtrip(protocol):
     samples = ComplementSignificantSampleIndices(np.array([1, 4], dtype=np.int32), 6)
     assert samples._fields == ("excluded_indices", "total_size")
     assert samples.__annotations__ == {"excluded_indices": np.ndarray, "total_size": int}
     packed = pickle.dumps(samples, protocol=protocol)
-    assert b"recovar.em.dense_single_volume.helpers.significance" in packed
     restored = pickle.loads(packed)
     assert type(restored) is ComplementSignificantSampleIndices
     assert restored.size == 4

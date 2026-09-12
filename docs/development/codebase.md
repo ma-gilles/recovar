@@ -43,9 +43,10 @@ their semantics already match:
 There is no second EM stack for VDAM. Its adapters supply the existing shared
 kernels with VDAM-specific inputs. Scheduling and state transitions remain with
 their workflow. The retired `dense_single_volume/` and `initial_model/` source
-directories are gone; `_legacy_pickle.py` supplies lazy historical class lookup
-for saved Python objects, without loading the execution engines at registration.
-New source imports current owners directly. Historical logger names remain stable.
+directories are gone. Import current owners directly: EM/VDAM is work in
+progress, with no backward compatibility requirement for its Python APIs, CLIs
+or old Python object names. Main heterogeneity pipeline compatibility remains
+required. Historical logger names remain stable.
 
 ## Shared data and numerical boundaries
 

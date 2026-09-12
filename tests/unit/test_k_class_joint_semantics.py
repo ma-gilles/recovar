@@ -2228,15 +2228,3 @@ def test_read_relion_direction_priors_reads_all_classes(tmp_path):
         rtol=0.0,
         atol=0.0,
     )
-
-
-def test_k_class_result_preserves_historical_pickle_global():
-    """Old result streams resolve to the sole type at its new source owner."""
-    import pickle
-
-    from recovar.em.classification import k_class, k_class_results
-
-    historical_global = b"crecovar.em.dense_single_volume.k_class\nKClassEMResult\np0\n."
-    assert k_class.KClassEMResult is k_class_results.KClassEMResult
-    assert pickle.loads(historical_global) is k_class_results.KClassEMResult
-    assert pickle.dumps(k_class_results.KClassEMResult, protocol=0) == historical_global

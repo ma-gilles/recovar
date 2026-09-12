@@ -66,7 +66,3 @@ def compact_significant_sample_indices_from_mask(mask) -> object:
             total_size=int(mask_np.size),
         )
     return np.flatnonzero(mask_np).astype(np.int32)
-
-
-# Preserve stored NamedTuple identity; significance imports this same class.
-ComplementSignificantSampleIndices.__module__ = "recovar.em.dense_single_volume.helpers.significance"

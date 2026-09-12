@@ -19,15 +19,16 @@ GUI excluded**, before new-engine development. Root instructions also apply.
   and [SUBAGENTS.md](SUBAGENTS.md); use bounded, disjoint scopes.
 - EM APIs may change for clarity; migrate callers/tests/docs together and remove
   unused forwarding wrappers. Preserve scientific defaults, casts, reduction
-  order, JIT boundaries, memory lifetime, saved formats and non-EM APIs during
+  order, JIT boundaries, memory lifetime and non-EM APIs/formats during
   structural work. Keep numerical and runtime repairs separate.
 - `recovar/em/` is the refinement implementation root. Keep responsibility
   package initializers free of execution imports. Import `refine_single_volume`
   from `recovar.em.refinement.iteration_loop`, K-class execution from `recovar.em.classification.k_class`
   and result assembly/types from `recovar.em.classification.k_class_results`. Helpers and
   diagnostics must not initialize schedulers, dense/local engines or sparse
-  scoring. `_legacy_pickle` only resolves saved objects from the retired
-  namespace; production callers use current owners.
+  scoring. EM/VDAM APIs, CLIs and historical Python object names have no backward
+  compatibility requirement; migrate maintained callers to current owners.
+  Preserve the main heterogeneity pipeline APIs and saved formats.
 
 ## Scientific rules — never waived by cleanup or cost reduction
 

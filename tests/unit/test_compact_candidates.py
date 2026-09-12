@@ -17,7 +17,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.mark.parametrize("protocol", [4, 5])
 @pytest.mark.parametrize("mode", ["full", "empty", "coarse", "coarse_exclude"])
-def test_sparse_mask_legacy_pickle_identity_and_source_order(mode, protocol):
+def test_sparse_mask_roundtrip_and_source_order(mode, protocol):
     mask = SparseCandidateMask(
         mode=mode,
         n_rows=2,
@@ -36,7 +36,6 @@ def test_sparse_mask_legacy_pickle_identity_and_source_order(mode, protocol):
     np.testing.assert_array_equal(np.asarray(mask), expected)
     assert mask.count == np.count_nonzero(expected)
     packed = pickle.dumps(mask, protocol=protocol)
-    assert b"recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed" in packed
     restored = pickle.loads(packed)
     assert type(restored) is SparseCandidateMask
     np.testing.assert_array_equal(np.asarray(restored), expected)

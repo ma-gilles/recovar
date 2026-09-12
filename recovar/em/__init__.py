@@ -5,10 +5,6 @@ Both use the shared execution packages. The earlier public EM classes and
 functions remain re-exported here for existing callers.
 """
 
-import sys as _sys
-
-from ._legacy_pickle import install as _install_legacy_pickle_names
-
 # Classes
 from .core import (
     compute_CTFed_proj_norms,
@@ -101,7 +97,3 @@ __all__ = [
     "estimate_principal_components_simple",
     "estimate_principal_components_halfset",
 ]
-
-# Saved result/state objects may still name the retired refinement package.
-_install_legacy_pickle_names(_sys.modules[__name__])
-del _install_legacy_pickle_names, _sys
