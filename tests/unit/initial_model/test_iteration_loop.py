@@ -22,7 +22,7 @@ from recovar.em.vdam.iteration_loop import (
     update_current_resolution_from_data_vs_prior,
     update_image_size_and_resolution_pointers,
 )
-from recovar.em.vdam.mstep_accumulator import VdamAccumulator
+from recovar.em.vdam.state import VdamAccumulator
 from recovar.em.vdam.subset import numpy_rnd_unif_factory
 from recovar.em.vdam.subset_schedule import restore_subset_order_for_continuation, select_subset_for_iter
 

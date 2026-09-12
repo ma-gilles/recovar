@@ -486,7 +486,7 @@ LOC_PER_FILE_CEILING = {
     "__init__.py": 160,
     "init.py": 280,
     "iteration_loop.py": 870,
-    "layout.py": 150,
+    "layout.py": 186,  # Includes the former 36-line relion_layout.py; total budget unchanged.
     "m_step.py": 450,
     "schedules.py": 400,
     "state.py": 130,

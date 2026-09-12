@@ -88,3 +88,19 @@ def half_slot_index(k: int, h: int, K: int, pseudo_halfsets: bool) -> int:
     if h not in (0, 1):
         raise ValueError(f"halfset id must be 0 or 1, got {h}")
     return h * K + k
+
+
+@dataclass
+class VdamAccumulator:
+    """Per-class raw backprojection accumulator.
+
+    The E-step adapter produces one `VdamAccumulator` per `(class, halfset)`
+    pair (so `2K` total when `pseudo_halfsets` is active). `data` and
+    `weight` have the padded Fourier shape `(N_pad, N_pad, N_pad // 2 + 1)`
+    at `padding_factor=1`.
+    """
+
+    data: np.ndarray  # complex128, shape (Nz_pad, Ny_pad, Nx_pad_half)
+    weight: np.ndarray  # float64, same shape
+    class_idx: int
+    halfset_idx: int

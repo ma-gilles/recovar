@@ -48,8 +48,7 @@ from recovar.em.vdam.estep_common import (
     _relion_projector_dense_rotations,
     _select_image_rows,
 )
-from recovar.em.vdam.mstep_accumulator import VdamAccumulator
-from recovar.em.vdam.state import InitialModelState
+from recovar.em.vdam.state import InitialModelState, VdamAccumulator
 
 logger = logging.getLogger(__name__)
 

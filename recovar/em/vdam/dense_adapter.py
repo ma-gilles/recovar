@@ -25,9 +25,8 @@ from recovar.em.vdam.estep_common import (
     _group_local_kwargs,
     _relion_projector_dense_rotations,
 )
-from recovar.em.vdam.mstep_accumulator import VdamAccumulator
+from recovar.em.vdam.state import InitialModelState, VdamAccumulator
 from recovar.em.vdam.sparse_pass2_estep import _SPARSE_PASS2_RESULT_FIELDS, _run_sparse_pass2_initial_model_estep
-from recovar.em.vdam.state import InitialModelState
 
 _ENGINE_DEFAULTS: dict[str, Any] = {
     "current_size": None,

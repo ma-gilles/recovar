@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from recovar.em.vdam import initialise_denovo_state
-from recovar.em.vdam.mstep_accumulator import VdamAccumulator
+from recovar.em.vdam.state import VdamAccumulator
 from recovar.em.vdam.mstep_single_class import vdam_m_step_single_class
 
 pytestmark = pytest.mark.unit

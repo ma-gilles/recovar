@@ -14,10 +14,8 @@ from typing import Any, Literal
 
 import numpy as np
 
-from recovar.em.vdam.layout import relion_bpref_frame_scales, run_em_output_to_bpref
-from recovar.em.vdam.mstep_accumulator import VdamAccumulator
-from recovar.em.vdam.relion_layout import relion_x_public_output_to_bpref
-from recovar.em.vdam.state import InitialModelState
+from recovar.em.vdam.layout import relion_bpref_frame_scales, relion_x_public_output_to_bpref, run_em_output_to_bpref
+from recovar.em.vdam.state import InitialModelState, VdamAccumulator
 
 ProjectorSetupBackend = Literal["native", "jax"]
 

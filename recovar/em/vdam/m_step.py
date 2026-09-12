@@ -8,9 +8,8 @@ from __future__ import annotations
 
 from typing import Literal
 
-from recovar.em.vdam.mstep_accumulator import VdamAccumulator
+from recovar.em.vdam.state import InitialModelState, VdamAccumulator
 from recovar.em.vdam.mstep_single_class import vdam_m_step_single_class
-from recovar.em.vdam.state import InitialModelState
 
 # Numerical state owned by the M transaction; authoritative priors stay separate.
 

@@ -16,8 +16,7 @@ from typing import Literal, Optional
 
 import numpy as np
 
-from recovar.em.vdam.mstep_accumulator import VdamAccumulator
-from recovar.em.vdam.state import InitialModelState, half_slot_index
+from recovar.em.vdam.state import InitialModelState, VdamAccumulator, half_slot_index
 
 XMIPP_EQUAL_ACCURACY: float = 1e-6
 
