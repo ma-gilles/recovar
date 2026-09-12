@@ -1,6 +1,8 @@
 import re
 from pathlib import Path
 
+from helpers.cuda_source import read_cuda_source
+
 import numpy as np
 import pytest
 
@@ -283,10 +285,7 @@ def test_materialized_native_grid_replay_gathers_rows_before_identity_launch(
 
 
 def test_native_trace_first_atomic_precedes_interpolation_registers():
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "recovar/cuda/cuda_backproject.cu"
-    ).read_text()
+    source = read_cuda_source()
     kernel = source.split(
         "__global__ void relion_vdam_native_sgd_f32_kernel(", maxsplit=1
     )[1].split(

@@ -1,6 +1,8 @@
 """Host contract for low-cardinality exact VDAM Fourier-window shapes."""
 
 from pathlib import Path
+
+from helpers.cuda_source import read_cuda_source
 from types import SimpleNamespace
 
 import numpy as np
@@ -736,12 +738,7 @@ def test_crop_relion_x_half_accumulator_rejects_unsupported_topology(
 
 
 def test_runtime_cuda_kernels_are_separate_from_default_primitives():
-    source = (
-        Path(__file__).resolve().parents[3]
-        / "recovar"
-        / "cuda"
-        / "cuda_backproject.cu"
-    ).read_text()
+    source = read_cuda_source()
 
     powerclass_start = source.index("void relion_powerclass_spectrum_highres_f32_kernel(")
     powerclass = source[
@@ -785,12 +782,7 @@ def test_runtime_cuda_kernels_are_separate_from_default_primitives():
 
 
 def test_stable_bpref_uses_capacity_stride_but_logical_native_issue_count():
-    source = (
-        Path(__file__).resolve().parents[3]
-        / "recovar"
-        / "cuda"
-        / "cuda_backproject.cu"
-    ).read_text()
+    source = read_cuda_source()
     launcher_start = source.index(
         "cudaError_t launch_relion_vdam_mstep_fused_projector_x_half("
     )
@@ -924,7 +916,7 @@ def test_stable_bpref_wrapper_packs_logical_rows_and_poison_tail(monkeypatch):
 def test_runtime_bpref_ffi_abi_keeps_default_static_target_separate():
     root = Path(__file__).resolve().parents[3]
     python_source = (root / "recovar" / "cuda_backproject.py").read_text()
-    cuda_source = (root / "recovar" / "cuda" / "cuda_backproject.cu").read_text()
+    cuda_source = read_cuda_source()
 
     assert "cuda_relion_vdam_mstep_fused_projector_x_half" in python_source
     assert "cuda_relion_vdam_mstep_fused_projector_runtime_x_half" in python_source
@@ -974,7 +966,7 @@ def test_runtime_bpref_ffi_abi_keeps_default_static_target_separate():
 def test_runtime_coarse_ffi_abi_keeps_static_targets_separate():
     root = Path(__file__).resolve().parents[3]
     python_source = (root / "recovar" / "cuda_backproject.py").read_text()
-    cuda_source = (root / "recovar" / "cuda" / "cuda_backproject.cu").read_text()
+    cuda_source = read_cuda_source()
 
     for stem in ("Rectangular", "RotationBlocks"):
         assert f"cuda_relion_coarse_diff2_{'rectangular' if stem == 'Rectangular' else 'rotation_blocks'}_runtime_f32" in python_source

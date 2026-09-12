@@ -4,6 +4,8 @@ from decimal import Decimal, localcontext
 from itertools import permutations
 from pathlib import Path
 
+from helpers.cuda_source import read_cuda_source
+
 import numpy as np
 import pytest
 
@@ -161,12 +163,7 @@ def _operands():
 
 
 def test_relion_fine_diff2_cuda_source_pins_production_rounding_order():
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "recovar"
-        / "cuda"
-        / "cuda_backproject.cu"
-    ).read_text()
+    source = read_cuda_source()
 
     start = source.index("relion_fine_diff2_update_f32")
     prehalf_start = source.index("relion_fine_diff2_update_prehalf_f32", start)
@@ -237,12 +234,7 @@ def test_relion_coarse_prehalf_cpu_oracle_pins_equivalent_source_orders():
 
 
 def test_relion_fused_translate_cuda_source_pins_native_block_topology():
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "recovar"
-        / "cuda"
-        / "cuda_backproject.cu"
-    ).read_text()
+    source = read_cuda_source()
 
     assert "constexpr int kRelionFineDiff2TranslationCapacity = 7;" in source
     assert "constexpr int kRelionFineDiff2Ref3dJobChunk = 4;" in source
@@ -302,12 +294,7 @@ def test_relion_fused_translate_cuda_source_pins_native_block_topology():
 
 
 def test_relion_powerclass_cuda_source_pins_native_atomic_topology():
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "recovar"
-        / "cuda"
-        / "cuda_backproject.cu"
-    ).read_text()
+    source = read_cuda_source()
 
     start = source.index("relion_powerclass_spectrum_highres_f32_kernel")
     block = source[start : source.index("cudaError_t", start)]
@@ -319,12 +306,7 @@ def test_relion_powerclass_cuda_source_pins_native_atomic_topology():
 
 
 def test_relion_coarse_diff2_cuda_source_pins_production_topology():
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "recovar"
-        / "cuda"
-        / "cuda_backproject.cu"
-    ).read_text()
+    source = read_cuda_source()
 
     start = source.index("relion_coarse_diff2_rotation_block_f32")
     block = source[start : source.index("cudaError_t", start)]
@@ -359,12 +341,7 @@ def test_relion_coarse_diff2_cuda_source_pins_production_topology():
 
 
 def test_relion_coarse_normalized_cc_source_pins_native_tree_and_atomics():
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "recovar"
-        / "cuda"
-        / "cuda_backproject.cu"
-    ).read_text()
+    source = read_cuda_source()
 
     start = source.index("relion_coarse_normalized_cc_pairs_f32_kernel")
     block = source[start : source.index("cudaError_t", start)]
@@ -397,12 +374,7 @@ def test_relion_coarse_normalized_cc_source_pins_native_tree_and_atomics():
 
 
 def test_relion_coarse_native_texture_source_pins_fused_projection_topology():
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "recovar"
-        / "cuda"
-        / "cuda_backproject.cu"
-    ).read_text()
+    source = read_cuda_source()
 
     start = source.index(
         "relion_coarse_diff2_native_texture_rectangular_f32_kernel"
@@ -425,7 +397,7 @@ def test_relion_coarse_native_texture_source_pins_fused_projection_topology():
 def test_relion_fused_coarse_projector_source_pins_vdam_support_and_segmentation():
     root = Path(__file__).resolve().parents[2]
     cuda_dir = root / "recovar" / "cuda"
-    source = (cuda_dir / "cuda_backproject.cu").read_text()
+    source = read_cuda_source()
     block = (cuda_dir / "relion_coarse_diff2_projector_body.inc").read_text()
 
     launcher_start = source.index("launch_relion_coarse_diff2_projector_f32_impl")
@@ -505,12 +477,7 @@ def test_relion_fused_coarse_projector_source_pins_vdam_support_and_segmentation
 
 
 def test_relion_coarse_vdam_multistream_source_reuses_production_math():
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "recovar"
-        / "cuda"
-        / "cuda_backproject.cu"
-    ).read_text()
+    source = read_cuda_source()
 
     helper_start = source.index("constexpr int kRelionVdamWorkerStreams = 8;")
     helper_end = source.index("cudaError_t report_relion_vdam_driver_error", helper_start)
@@ -649,7 +616,7 @@ def test_relion_coarse_prehalf_api_defaults_are_static_and_forwarded():
         assert '"prehalf_weight"' in decorator
         assert "prehalf_weight=np.int64(bool(prehalf_weight))" in wrapper
 
-    cuda_source = (Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu").read_text()
+    cuda_source = read_cuda_source()
     handler_names = (
         "RelionCoarseDiff2ProjectorF32,",
         "RelionCoarseDiff2ProjectorMultistreamF32,",
@@ -667,7 +634,7 @@ def test_relion_coarse_prehalf_shared_body_is_built_packaged_and_stale_checked()
     makefile = (root / "recovar" / "cuda" / "Makefile").read_text()
     manifest = (root / "MANIFEST.in").read_text()
 
-    build_inputs = ("cuda_backproject.cu", include_name, "noise_residual.cuh")
+    build_inputs = ("cuda_backproject.cu", include_name, "noise_residual.cuh", "relion_vdam_mstep.cuh")
     library_rule = next(line for line in makefile.splitlines() if line.startswith("$(LIB):"))
     prerequisites, order_only = library_rule.split(":", 1)[1].split("|", 1)
     assert set(prerequisites.split()) == set(build_inputs)
@@ -679,6 +646,7 @@ def test_relion_coarse_prehalf_shared_body_is_built_packaged_and_stale_checked()
 
     assert cuda_backproject._CUDA_BUILD_SOURCE_NAMES == (
         "noise_residual.cuh",
+        "relion_vdam_mstep.cuh",
         "cuda_backproject.cu",
         include_name,
         "Makefile",
@@ -1020,7 +988,7 @@ def test_k1_coarse_gaussian_flag_honors_scoped_default_and_explicit_opt_out(monk
         assert "include_dc=True" in window_call
 
     k_class_source = (
-        Path(significance.__file__).resolve().parent.parent / "k_class.py"
+        Path(significance.__file__).resolve().parent.parent / "classification" / "k_class.py"
     ).read_text()
     assert 'engine_kwargs.get("preserve_bpref_particle_order", False)' in k_class_source
     assert "relion_coarse_gaussian_default=" in k_class_source

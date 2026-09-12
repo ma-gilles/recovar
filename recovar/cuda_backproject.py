@@ -56,6 +56,7 @@ _LIB_DIR = pathlib.Path(__file__).resolve().parent / "cuda"
 _PACKAGE_LIB_PATH = _LIB_DIR / "libcuda_backproject.so"
 _CUDA_BUILD_SOURCE_NAMES = (
     "noise_residual.cuh",
+    "relion_vdam_mstep.cuh",
     "cuda_backproject.cu",
     "relion_coarse_diff2_projector_body.inc",
     "Makefile",

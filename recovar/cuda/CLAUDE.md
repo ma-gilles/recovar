@@ -41,6 +41,16 @@ These are build-selection rules, not proof that every toolkit/driver/device
 combination works. `CUDA_ARCH` can override the list when the selected compiler
 supports the requested targets. Record overrides with benchmark results.
 
+## Source ownership
+
+`cuda_backproject.cu` is the translation unit for shared projection/backprojection
+kernels and FFI handlers. `relion_vdam_mstep.cuh` owns the RELION-layout VDAM
+M-step and native replay implementation; it is included in the existing private
+namespace after its support definitions. `noise_residual.cuh` owns shared noise
+reductions, and `relion_coarse_diff2_projector_body.inc` supplies the common coarse
+projector kernel body. Keep build, packaging and loader-staleness inputs aligned
+when changing these boundaries.
+
 ## Runtime and interface
 
 `recovar/cuda_backproject.py` registers kernels through JAX XLA FFI.

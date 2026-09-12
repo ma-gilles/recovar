@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+from helpers.cuda_source import read_cuda_source
+
 import numpy as np
 import pytest
 
@@ -37,12 +39,7 @@ def test_relion_translation_angles_match_captured_float32_bits():
 
 
 def test_relion_translation_cuda_source_preserves_explicit_arithmetic():
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "recovar"
-        / "cuda"
-        / "cuda_backproject.cu"
-    ).read_text()
+    source = read_cuda_source()
 
     assert "relion_score_translate_f32" in source
     assert "__fmaf_rn(" in source
@@ -63,12 +60,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
     from recovar import cuda_backproject
     from recovar.em.local import local_em_engine
 
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "recovar"
-        / "cuda"
-        / "cuda_backproject.cu"
-    ).read_text()
+    source = read_cuda_source()
     assert "bool SEPARATE_DATA = false" in source
     assert "atomicAdd(&data_real_volume[off], sre);" in source
     assert "atomicAdd(&data_imag_volume[off], sim);" in source
@@ -224,12 +216,7 @@ def test_relion_vdam_fused_source_uses_native_separate_accumulator_storage():
 
 
 def test_relion_vdam_ordered_scatter_cuda_graph_is_opt_in_and_fail_closed():
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "recovar"
-        / "cuda"
-        / "cuda_backproject.cu"
-    ).read_text()
+    source = read_cuda_source()
     launcher = source.split(
         "cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(", 1
     )[1].split("__device__ __forceinline__ float relion_fine_diff2_update_f32", 1)[0]
@@ -302,12 +289,7 @@ def test_relion_vdam_ordered_scatter_cuda_graph_is_opt_in_and_fail_closed():
 
 
 def test_relion_vdam_exact_native_ptx_discriminator_is_opt_in_and_fail_closed():
-    source = (
-        Path(__file__).resolve().parents[2]
-        / "recovar"
-        / "cuda"
-        / "cuda_backproject.cu"
-    ).read_text()
+    source = read_cuda_source()
     makefile = (
         Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "Makefile"
     ).read_text()
