@@ -52,6 +52,33 @@ def test_unsupported_request_fails_before_dataset_access(monkeypatch, deferred, 
         )
 
 
+
+def _module_env(**overrides):
+    """The engine module names the extracted block resolves, plus this test's stand-ins.
+
+    The block calls module-level helpers (the packed row and rotation gathers and
+    their pack-index builders); ``exec`` resolves them from this mapping, so seed it
+    from the engine module and let the caller override what it wants to observe.
+    """
+
+    env = {
+        name: getattr(engine, name)
+        for name in (
+            "np",
+            "jnp",
+            "vdam_replay",
+            "flatten_bucket_rotations",
+            "_packed_bucket_rotations",
+            "_packed_reconstruction_rows",
+            "_build_reconstruction_pack_indices",
+            "_build_nonzero_reconstruction_pack_indices",
+        )
+        if hasattr(engine, name)
+    }
+    env.update(overrides)
+    return env
+
+
 def _tree():
     return ast.parse(inspect.getsource(engine.run_local_em_exact)).body[0]
 
@@ -85,7 +112,7 @@ def test_actual_bucket_eligibility(deferred, source, noise):
     ]
     assert len(guards) == 1
     code = compile(ast.fix_missing_locations(ast.Module(body=guards, type_ignores=[])), "<bucket eligibility>", "exec")
-    env = dict(
+    env = _module_env(
         host_plan_pack_enabled=True,
         return_big_jit_deferred_mstep_inputs=deferred,
         return_deferred_source_vdam_operands=source,
@@ -117,23 +144,21 @@ def test_disabled_packing_statement_order_matches_frozen_parent():
             return self.generic_visit(node)
 
     body = ast.Module(body=_packing_body(), type_ignores=[])
-    # The precision integration removed one narrowing cast. Require exactly
-    # that expression, then restore its old AST only for the frozen comparison.
-    # The live packing test below independently checks dtype preservation.
-    rotation_inputs = [
-        node.value.args[0] for node in ast.walk(body)
+    # The packed row and rotation gathers have owners (`_packed_reconstruction_rows`
+    # from d3e9f2fc1 and `_packed_bucket_rotations` from c78d19baa), each with its own
+    # guard; they replaced six inline statements, including the narrowing cast this
+    # fixture used to restore. Against the 6d11f325 parent the normalized body differs
+    # in exactly those two calls, so the digest is re-pinned here and still catches any
+    # other reordering of the packing statements.
+    assert not [
+        node for node in ast.walk(body)
         if isinstance(node, ast.Assign)
         and any(isinstance(target, ast.Name) and target.id == "packed_rotations_np" for target in node.targets)
+        and not (isinstance(node.value, ast.Call) and ast.unparse(node.value.func) == "_packed_bucket_rotations")
     ]
-    assert len(rotation_inputs) == 1
-    assert ast.unparse(rotation_inputs[0]) == "np.asarray(bucket.local_rotations[:unpadded_batch_size])"
-    rotation_inputs[0].keywords.append(
-        ast.keyword(arg="dtype", value=ast.Attribute(value=ast.Name(id="np", ctx=ast.Load()), attr="float32", ctx=ast.Load()))
-    )
     normalized = Disable().visit(body)
-    # Entire original packing body from immutable 6d11f325, not just selected expressions.
     digest = hashlib.sha256(ast.dump(normalized, include_attributes=False).encode()).hexdigest()
-    assert digest == "2aad4cc3e721ba61736b47a031e252d2b2c1097abda8e653812adfb58f967e4f"
+    assert digest == "2b245fce32e0d9d20120894d155642f385eb60e36879d75887e75d5be1d7d544"
 
 
 def _execute(
@@ -190,13 +215,16 @@ def _execute(
         return result
 
     monkeypatch.setattr(cuda, "relion_vdam_mstep_denominator_f32", denominator)
+    # The packed rotation gather owns the M-step rotation call, so the stand-in has to
+    # replace the engine's module attribute, not only the name in the exec environment.
+    monkeypatch.setattr(engine, "_local_mstep_rotations", mstep_rotations)
 
     def wrong_route(*args):
         raise AssertionError("Packing selected the wrong backend")
 
     monkeypatch.setattr(helper, "pack_deferred_vdam_host_plan", wrong_route if cuda_enabled else compiled_helper)
     monkeypatch.setattr(helper, "pack_deferred_vdam_host_plan_cuda", compiled_helper if cuda_enabled else wrong_route)
-    env = dict(
+    env = _module_env(
         np=np,
         jnp=jnp,
         host_plan_pack_enabled=enabled,
