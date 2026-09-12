@@ -13,7 +13,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_relion_translation_angles_match_captured_float32_bits():
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
         _relion_translation_angles_f32,
     )
 

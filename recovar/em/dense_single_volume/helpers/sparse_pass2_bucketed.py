@@ -29,21 +29,17 @@ from __future__ import annotations
 import logging
 import os
 import time
-from functools import partial
-from pathlib import Path
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.dense_single_volume.helpers import (
     bpref_diagnostics,
     norm_scale_diagnostics,
     pass2_diagnostics,
-    relion_ctf,
 )
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch, original_image_indices
 from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
@@ -56,7 +52,6 @@ from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
 from recovar.em.dense_single_volume.helpers.compact_candidates import (
     SparseCandidateMask,  # noqa: F401 - SparseCandidateMask.__module__ is pinned to this module, so legacy pickles resolve it here
     _candidate_mask_count,
-    _candidate_mask_is_full,
 )
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.env_flags import (
@@ -69,10 +64,8 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
     make_fourier_window_spec,
 )
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
-    make_half_image_weights,
     make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
-    make_shell_indices_half,
     mask_relion_noise_shell_indices_to_current_window,
 )
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
@@ -83,19 +76,13 @@ from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
     relion_x_half_accumulators_to_public_layout,
     relion_x_half_mstep_accumulator_dtypes,
 )
-from recovar.em.dense_single_volume.helpers.image_shifts import (
-    apply_relion_integer_pre_shifts,
-    half_image_phase_factors,
-)
 from recovar.em.dense_single_volume.helpers.normalization_inputs import optional_normalization_vector
 from recovar.em.dense_single_volume.helpers.oversampling import (
     _find_significant_mask_full_sort,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
-    apply_half_translation_phases,
     half_translation_phase_table,
     prepare_batch_preprocess_operands,
-    process_half_image,
 )
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_norm_residual_per_image as _compute_norm_residual_per_image,
@@ -108,15 +95,12 @@ from recovar.em.dense_single_volume.helpers.projection import (
 )
 from recovar.em.dense_single_volume.helpers.scale_groups import prepare_scale_correction_groups
 from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
-    _DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH,
     _bucket_pass2_inputs,
-    _bucket_sparse_k_class_compact_pair_counts,
     _bucket_sparse_k_class_pass2_inputs,
     _build_bucket_arrays,
     _build_compact_pair_bucket_arrays,
     _build_compact_pair_bucket_arrays_from_per_image_inputs,
     _build_k_class_bucket_arrays,
-    _compact_pair_counts_from_inputs,
     _compact_pair_image_mask_for_threshold,
     _prepare_per_image_compact_candidate_pairs,
     _prepare_per_image_pass2_inputs,
@@ -127,6 +111,26 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_adjoint import (
     _accumulate_relion_x_half_per_particle_launches,
     _projection_rotation_chunk_size,
     _split_compact_pair_buckets_by_projection_gather_budget,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
+    _prepare_bucket_io,
+    _relion_cuda_score_translation_angles_if_available,
+    _reorder_to_indices,
+    _translation_phase_table_for_indices,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_plan import (
+    _bucket_group_stats,
+    _bucket_summary,
+    _compact_k_class_pair_plan_stats_from_counts,
+    _compact_pair_buckets_for_execution_threshold,
+    _compact_pair_execution_mask_excluding_full_support,
+    _compact_pair_hybrid_threshold_reports,
+    _compact_pair_threshold_report_thresholds,
+    _hybrid_k_class_compact_pair_execution_buckets,
+    _k_class_execution_bucket_group_stats,
+    _maybe_prepare_sparse_k_class_compact_pair_plan,
+    _tag_k_class_execution_bucket,
+    _validate_k_class_execution_bucket_partition,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_budget import (
     _EXACT_RAW_DIFF2_CACHE_MAX_BYTES,
@@ -168,6 +172,20 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_compact_pair_sums impor
     _rectangular_active_weighted_sums_or_none,
     _select_active_flat_rows,
     _select_active_flat_values,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_dump import (
+    _NORM_RESIDUAL_DUMP_STOP_AFTER_TARGET_ENV,
+    _PASS2_DUMP_STOP_AFTER_TARGET_ENV,
+    Pass2DumpComplete,
+    _add_sparse_group_timing,
+    _k1_pass2_dump_progress,
+    _k_class_pass2_dump_progress,
+    _log_pass2_top2_debug,
+    _log_sparse_kclass_group_timing,
+    _pass2_dump_requested_for_bucket,
+    _pass2_top2_debug_target_indices,
+    _prioritize_stopped_pass2_dump_buckets,
+    _resolve_local_target_indices,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_noise_blocks import (
     _compute_noise_block_and_norm_residual_chunked,
@@ -245,15 +263,12 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
     _RELION_FINE_DIFF2_FUSED_FFI_ENV,
     _gather_pair_translation_log_prior,
     _gather_projection_cache_rows,
-    _relion_cuda_corr_img_from_native_noise_variance,
-    _relion_cuda_corr_img_from_rfloat_ctf,
     _relion_cuda_fine_diff2_min,
     _relion_cuda_fine_diff2_to_scores,
     _relion_cuda_fine_full_to_compact_lookup,
     _relion_cuda_fine_global_diff2_min,
     _relion_cuda_fine_log_evidence_offset,
     _relion_cuda_fine_partition_diff2_min_or_inf,
-    _relion_cuda_pixel_correction_from_rfloat_ctf,
     _relion_powerclass_noise_terms,
     _score_pass2_bucket_gaussian_algebraic,
     _score_pass2_bucket_gaussian_algebraic_components,
@@ -316,13 +331,9 @@ logger = logging.getLogger(__name__)
 _EXACT_RAW_DIFF2_CACHE_MAX_BYTES_ENV = "RECOVAR_SPARSE_PASS2_EXACT_RAW_DIFF2_CACHE_MAX_BYTES"
 _SMALL_BUCKET_MAX_TRANSLATION_TILE_BYTES_ENV = "RECOVAR_SPARSE_PASS2_SMALL_BUCKET_MAX_TRANSLATION_TILE_BYTES"
 _SMALL_BUCKET_THRESHOLD_ENV = "RECOVAR_SPARSE_PASS2_SMALL_BUCKET_THRESHOLD"
-_COMPACT_KCLASS_PAIR_STATS_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_STATS"
 _SPARSE_KCLASS_COMPACT_ACTIVE_ROWS_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_ACTIVE_ROWS"
 _SPARSE_KCLASS_COMPACT_BUCKETS_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_BUCKETS"
 _SPARSE_KCLASS_REUSE_COMPACT_NOISE_SUMS_ENV = "RECOVAR_SPARSE_KCLASS_REUSE_COMPACT_NOISE_SUMS"
-_SPARSE_KCLASS_COMPACT_PAIRS_THRESHOLD_REPORT_ENV = (
-    "RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_THRESHOLD_REPORT"
-)
 _SPARSE_KCLASS_GROUP_TIMING_ENV = "RECOVAR_SPARSE_KCLASS_GROUP_TIMING"
 _SPARSE_KCLASS_EXECUTION_SIGNATURES_ENV = (
     "RECOVAR_SPARSE_KCLASS_EXECUTION_SIGNATURES"
@@ -337,16 +348,11 @@ _SPARSE_KCLASS_RECTANGULAR_ACTIVE_PREMATMUL_MAX_GROUPED_DENSE_RATIO_ENV = (
 )
 _SPARSE_KCLASS_FUSED_NOISE_NORM_ENV = "RECOVAR_SPARSE_KCLASS_FUSED_NOISE_NORM"
 _RELION_TRANSLATED_WAVG_NORM_ENV = "RECOVAR_K1_RELION_TRANSLATED_WAVG_NORM"
-_PASS2_DUMP_STOP_AFTER_TARGET_ENV = "RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET"
-_NORM_RESIDUAL_DUMP_STOP_AFTER_TARGET_ENV = (
-    "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_STOP_AFTER_TARGET"
-)
 _SPARSE_PASS2_GROUP_PROGRESS_CHUNKS_ENV = "RECOVAR_SPARSE_PASS2_GROUP_PROGRESS_CHUNKS"
 _SPARSE_PASS2_GROUP_PROGRESS_SECONDS_ENV = "RECOVAR_SPARSE_PASS2_GROUP_PROGRESS_SECONDS"
 _SPARSE_KCLASS_RAW_HOST_STAGING_MAX_BYTES_ENV = (
     "RECOVAR_SPARSE_KCLASS_RAW_HOST_STAGING_MAX_BYTES"
 )
-_DEFAULT_COMPACT_PAIR_THRESHOLD_REPORT = (8192, 16384, 32768, 65536, 131072)
 _DEFAULT_RECTANGULAR_ACTIVE_ROWS_MIN_BUCKET_SIZE = 4096
 _DEFAULT_RECTANGULAR_ACTIVE_PREMATMUL_MAX_GROUPED_DENSE_RATIO = 0.05
 _DEFAULT_PASS2_GROUP_PROGRESS_CHUNKS = 1000
@@ -356,63 +362,6 @@ _DEFAULT_KCLASS_RAW_HOST_STAGING_MAX_BYTES = 8 * 1024**3
 
 _cached_score_chunk_log_keys: set[tuple[str, int, int, int]] = set()
 _relion_wavg_direct_noise_log_keys: set[int] = set()
-
-
-class Pass2DumpComplete(RuntimeError):
-    """Raised by explicit diagnostic runs after requested pass-2 dump files are written."""
-
-    def __init__(self, *, dump_count: int, current_size: int | None):
-        self.dump_count = int(dump_count)
-        self.current_size = None if current_size is None else int(current_size)
-        super().__init__(
-            "requested RECOVAR pass-2 dump target set was written "
-            f"(dump_count={self.dump_count}, current_size={self.current_size})"
-        )
-
-
-def _k_class_pass2_dump_progress(
-    *,
-    dump_dir: str | Path,
-    target_original_indices,
-    target_classes_one_based,
-    current_size: int | None,
-) -> tuple[int, int]:
-    """Return written and expected file counts for a K-class dump target set."""
-
-    target_indices = {int(value) for value in target_original_indices}
-    target_classes = {int(value) for value in target_classes_one_based}
-    if not target_indices:
-        raise ValueError("K-class pass-2 dump completion requires at least one target particle")
-    if not target_classes or min(target_classes) < 1:
-        raise ValueError("K-class pass-2 dump completion requires positive one-based classes")
-    size_label = -1 if current_size is None else int(current_size)
-    root = Path(dump_dir)
-    expected_paths = [
-        root / f"pass2_orig{original_index:06d}_class{class_one_based:03d}_cs{size_label:03d}.npz"
-        for original_index in sorted(target_indices)
-        for class_one_based in sorted(target_classes)
-    ]
-    return sum(path.is_file() for path in expected_paths), len(expected_paths)
-
-
-def _k1_pass2_dump_progress(
-    *,
-    dump_dir: str | Path,
-    target_original_indices,
-    current_size: int | None,
-) -> tuple[int, int]:
-    """Return written and expected file counts for a K=1 dump target set."""
-
-    target_indices = {int(value) for value in target_original_indices}
-    if not target_indices:
-        raise ValueError("K=1 pass-2 dump completion requires at least one target particle")
-    size_label = -1 if current_size is None else int(current_size)
-    root = Path(dump_dir)
-    expected_paths = [
-        root / f"pass2_orig{original_index:06d}_cs{size_label:03d}.npz"
-        for original_index in sorted(target_indices)
-    ]
-    return sum(path.is_file() for path in expected_paths), len(expected_paths)
 
 
 class SparseKClassPass2FusedResult(NamedTuple):
@@ -434,409 +383,14 @@ class SparseKClassPass2FusedResult(NamedTuple):
     per_class_best_pose_eulers_deg: tuple[np.ndarray, ...] | None = None
 
 
-class SparseKClassCompactPairPlanStats(NamedTuple):
-    """Host-side accounting for the compact K-class pass-2 planner."""
-
-    buckets: tuple[dict, ...]
-    valid_pair_candidates: int
-    padded_pair_candidates: int
-    rectangular_candidates: int
-    reduction_factor: float
-    padded_reduction_factor: float
-    median_valid_pairs_per_image: int
-    mean_valid_pairs_per_image: float
-    max_valid_pairs_per_image: int
-    max_images_per_microbatch: int
-
-
-def _candidate_mask_prefers_rectangular_execution(candidate_mask) -> bool:
-    if isinstance(candidate_mask, SparseCandidateMask):
-        return candidate_mask.mode in {"full", "coarse_exclude"}
-    return _candidate_mask_is_full(candidate_mask)
-
-
-def _compact_pair_execution_mask_excluding_full_support(per_image_inputs_by_class, image_mask):
-    """Filter compact-pair execution away from masks with no sparse reduction.
-
-    Compact pairs are a memory win only when they represent a strict subset of
-    the rectangular rotation x translation tile.  A full-support mask would
-    materialize the same candidate set in larger host-side arrays, which is
-    pathological for the first global RELION-style iteration.
-    """
-
-    if not per_image_inputs_by_class:
-        return image_mask, 0
-    n_images = len(per_image_inputs_by_class[0]["candidate_mask"])
-    for per_image_inputs in per_image_inputs_by_class[1:]:
-        if len(per_image_inputs["candidate_mask"]) != n_images:
-            raise ValueError("All classes must have the same image count for compact sparse pass-2")
-    if image_mask is None:
-        filtered = np.ones(n_images, dtype=bool)
-        had_input_mask = False
-    else:
-        filtered = np.asarray(image_mask, dtype=bool).copy()
-        if filtered.shape != (n_images,):
-            raise ValueError(f"compact pair image mask shape mismatch: {filtered.shape} vs {(n_images,)}")
-        had_input_mask = True
-
-    excluded = 0
-    for image_idx in np.flatnonzero(filtered):
-        if any(
-            _candidate_mask_prefers_rectangular_execution(per_image_inputs["candidate_mask"][int(image_idx)])
-            for per_image_inputs in per_image_inputs_by_class
-        ):
-            filtered[int(image_idx)] = False
-            excluded += 1
-
-    if excluded == 0 and not had_input_mask:
-        return None, 0
-    return filtered, excluded
-
-
 # ---------------------------------------------------------------------------
 # Per-image hypothesis preparation
 # ---------------------------------------------------------------------------
 
 
-def _half_translation_phase_table_for_indices(translations, image_shape, pixel_indices):
-    lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
-        image_shape,
-        voxel_size=1,
-        scaled=True,
-    )
-    lattice_half = jnp.asarray(lattice_half)
-    lattice_window = lattice_half[jnp.asarray(pixel_indices, dtype=jnp.int32)]
-    phase_arg = jnp.einsum(
-        "td,pd->tp",
-        jnp.asarray(translations, dtype=jnp.float32),
-        lattice_window,
-        precision=jax.lax.Precision.HIGHEST,
-    )
-    return jnp.exp(-2j * jnp.pi * phase_arg)
-
-
-def _translation_phase_table_for_indices(
-    translations,
-    image_shape,
-    pixel_indices,
-    translation_phases_half,
-):
-    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32)
-    if translation_phases_half is None:
-        return _half_translation_phase_table_for_indices(translations, image_shape, pixel_indices)
-    return translation_phases_half[:, pixel_indices]
-
-
-def _relion_translation_angles_f32(translations, image_shape):
-    """Return RELION fine-score ``(tx, ty)`` radians with host rounding."""
-
-    image_size = int(image_shape[0])
-    if image_size <= 0:
-        raise ValueError(f"image_shape must be positive, got {image_shape}")
-    translations_f64 = np.asarray(translations, dtype=np.float64)
-    if translations_f64.ndim != 2 or translations_f64.shape[1] != 2:
-        raise ValueError(
-            "RELION score translations must have shape (T, 2), got "
-            f"{translations_f64.shape}"
-        )
-    return np.asarray(
-        -2.0 * np.pi * translations_f64 / float(image_size),
-        dtype=np.float32,
-    )
-
-
-def _relion_translation_angles_f64(translations, image_shape):
-    """Return RELION double-ACC ``(tx, ty)`` translation radians."""
-
-    image_size = int(image_shape[0])
-    if image_size <= 0:
-        raise ValueError(f"image_shape must be positive, got {image_shape}")
-    translations_f64 = np.asarray(translations, dtype=np.float64)
-    if translations_f64.ndim != 2 or translations_f64.shape[1] != 2:
-        raise ValueError(
-            "RELION score translations must have shape (T, 2), got "
-            f"{translations_f64.shape}"
-        )
-    return -2.0 * np.pi * translations_f64 / float(image_size)
-
-
-def _relion_cuda_score_translation_angles_if_available(
-    translations,
-    image_shape,
-    *,
-    enabled,
-    dtype=np.float32,
-):
-    """Prepare exact score-translation angles or retain the JAX fallback."""
-
-    if not enabled or jax.default_backend() != "gpu":
-        return None
-    from recovar import cuda_backproject
-
-    if not cuda_backproject.cuda_available():
-        logger.warning(
-            "Exact RELION fine Gaussian scoring is retaining JAX translation "
-            "phase arithmetic because custom CUDA is unavailable"
-        )
-        return None
-    dtype = np.dtype(dtype)
-    if dtype not in (np.dtype(np.float32), np.dtype(np.float64)):
-        raise ValueError(f"RELION CUDA translation dtype must be float32 or float64, got {dtype}")
-    logger.info(
-        "Exact RELION fine Gaussian scoring: using CUDA %s score/M-step translation",
-        "sincosf" if dtype == np.dtype(np.float32) else "sincos",
-    )
-    return jnp.asarray(
-        np.asarray(
-            -2.0 * np.pi * np.asarray(translations, dtype=np.float64) / float(image_shape[0]),
-            dtype=dtype,
-        ),
-        dtype=dtype,
-    )
-
-
-def _compact_k_class_pair_plan_stats(
-    per_image_inputs_by_class,
-    dense_buckets,
-    n_fine_trans,
-    *,
-    pair_block_size_for_quantization=5000,
-    max_pair_candidates_per_microbatch=_DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH,
-    max_images_per_microbatch=2048,
-    tail_bucket_coalesce_max_images=None,
-    tail_bucket_coalesce_max_inflation=None,
-    tail_bucket_coalesce_min_bucket_size=None,
-    image_mask=None,
-) -> SparseKClassCompactPairPlanStats:
-    """Compute compact-pair work counters without changing pass-2 execution."""
-
-    compact_inputs_by_class = tuple(
-        _prepare_per_image_compact_candidate_pairs(per_image_inputs)
-        for per_image_inputs in per_image_inputs_by_class
-    )
-    return _compact_k_class_pair_plan_stats_from_counts(
-        _compact_pair_counts_from_inputs(compact_inputs_by_class),
-        dense_buckets,
-        n_fine_trans,
-        pair_block_size_for_quantization=pair_block_size_for_quantization,
-        max_pair_candidates_per_microbatch=max_pair_candidates_per_microbatch,
-        max_images_per_microbatch=max_images_per_microbatch,
-        tail_bucket_coalesce_max_images=tail_bucket_coalesce_max_images,
-        tail_bucket_coalesce_max_inflation=tail_bucket_coalesce_max_inflation,
-        tail_bucket_coalesce_min_bucket_size=tail_bucket_coalesce_min_bucket_size,
-        image_mask=image_mask,
-    )
-
-
-def _compact_k_class_pair_plan_stats_from_counts(
-    pair_counts_by_class,
-    dense_buckets,
-    n_fine_trans,
-    *,
-    pair_block_size_for_quantization=5000,
-    max_pair_candidates_per_microbatch=_DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH,
-    max_images_per_microbatch=2048,
-    tail_bucket_coalesce_max_images=None,
-    tail_bucket_coalesce_max_inflation=None,
-    tail_bucket_coalesce_min_bucket_size=None,
-    image_mask=None,
-) -> SparseKClassCompactPairPlanStats:
-    """Compute compact-pair work counters from per-image valid-pair counts."""
-
-    if image_mask is not None:
-        image_mask = np.asarray(image_mask, dtype=bool)
-        n_images = int(np.asarray(pair_counts_by_class[0]).shape[0]) if pair_counts_by_class else 0
-        if image_mask.shape != (n_images,):
-            raise ValueError(f"compact pair image mask shape mismatch: {image_mask.shape} vs {(n_images,)}")
-
-    compact_buckets = _bucket_sparse_k_class_compact_pair_counts(
-        pair_counts_by_class,
-        pair_block_size_for_quantization=pair_block_size_for_quantization,
-        max_pair_candidates_per_microbatch=max_pair_candidates_per_microbatch,
-        max_images_per_microbatch=max_images_per_microbatch,
-        image_mask=image_mask,
-        tail_bucket_coalesce_max_images=tail_bucket_coalesce_max_images,
-        tail_bucket_coalesce_max_inflation=tail_bucket_coalesce_max_inflation,
-        tail_bucket_coalesce_min_bucket_size=tail_bucket_coalesce_min_bucket_size,
-    )
-
-    n_classes = len(pair_counts_by_class)
-    valid_count_arrays = []
-    for pair_counts in pair_counts_by_class:
-        pair_counts = np.asarray(pair_counts, dtype=np.int64)
-        if image_mask is not None:
-            pair_counts = pair_counts[image_mask]
-        valid_count_arrays.append(pair_counts)
-    valid_counts = np.concatenate(valid_count_arrays) if valid_count_arrays else np.zeros(0, dtype=np.int64)
-    valid_pair_candidates = int(valid_counts.sum(dtype=np.int64))
-    padded_pair_candidates = int(
-        sum(
-            n_classes * len(bucket["image_indices"]) * int(bucket["pair_bucket_size"])
-            for bucket in compact_buckets
-        )
-    )
-    rectangular_candidates = int(
-        sum(
-            n_classes
-            * (
-                int(np.count_nonzero(image_mask[np.asarray(bucket["image_indices"], dtype=np.int64)]))
-                if image_mask is not None
-                else len(bucket["image_indices"])
-            )
-            * int(bucket["bucket_size"])
-            * int(n_fine_trans)
-            for bucket in dense_buckets
-        )
-    )
-    reduction_factor = (
-        float(rectangular_candidates) / float(valid_pair_candidates)
-        if valid_pair_candidates > 0
-        else float("inf")
-    )
-    padded_reduction_factor = (
-        float(rectangular_candidates) / float(padded_pair_candidates)
-        if padded_pair_candidates > 0
-        else float("inf")
-    )
-
-    return SparseKClassCompactPairPlanStats(
-        buckets=tuple(compact_buckets),
-        valid_pair_candidates=valid_pair_candidates,
-        padded_pair_candidates=padded_pair_candidates,
-        rectangular_candidates=rectangular_candidates,
-        reduction_factor=reduction_factor,
-        padded_reduction_factor=padded_reduction_factor,
-        median_valid_pairs_per_image=int(np.median(valid_counts)) if valid_counts.size else 0,
-        mean_valid_pairs_per_image=float(np.mean(valid_counts)) if valid_counts.size else 0.0,
-        max_valid_pairs_per_image=int(valid_counts.max(initial=0)) if valid_counts.size else 0,
-        max_images_per_microbatch=max(1, int(max_images_per_microbatch)),
-    )
-
-
-def _maybe_prepare_sparse_k_class_compact_pair_plan(
-    per_image_inputs_by_class,
-    dense_buckets,
-    n_fine_trans,
-    *,
-    max_pair_candidates_per_microbatch=_DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH,
-    max_images_per_microbatch=2048,
-    tail_bucket_coalesce_max_images=None,
-    tail_bucket_coalesce_max_inflation=None,
-    tail_bucket_coalesce_min_bucket_size=None,
-) -> SparseKClassCompactPairPlanStats | None:
-    """Return compact-pair planner stats only when explicitly enabled.
-
-    The planner is diagnostic only: dense rectangular scoring/M-step remains
-    authoritative.
-    """
-
-    stats_flag = os.environ.get(_COMPACT_KCLASS_PAIR_STATS_ENV)
-    if stats_flag is None or stats_flag.strip().lower() not in {"1", "true", "yes", "on"}:
-        return None
-    compact_pair_max_images_per_microbatch = _compact_pair_max_images_per_microbatch_for_pass(
-        max_images_per_microbatch,
-    )
-    return _compact_k_class_pair_plan_stats(
-        per_image_inputs_by_class,
-        dense_buckets,
-        n_fine_trans,
-        max_pair_candidates_per_microbatch=max_pair_candidates_per_microbatch,
-        max_images_per_microbatch=compact_pair_max_images_per_microbatch,
-        tail_bucket_coalesce_max_images=tail_bucket_coalesce_max_images,
-        tail_bucket_coalesce_max_inflation=tail_bucket_coalesce_max_inflation,
-        tail_bucket_coalesce_min_bucket_size=tail_bucket_coalesce_min_bucket_size,
-        image_mask=None,
-    )
-
-
 # ---------------------------------------------------------------------------
 # Bucket spec
 # ---------------------------------------------------------------------------
-
-
-_PASS2_TOP2_DEBUG_INDICES_ENV = "RECOVAR_PASS2_TOP2_DEBUG_INDICES"
-
-
-def _pass2_top2_debug_target_indices() -> tuple[int, ...]:
-    """Diagnostic only: original (combined, pre-half-split) dataset image
-    indices to log the fine (pass-2) top-2 candidate score margin for,
-    mirroring ``k_class._pass1_top2_debug_target_indices`` but for the
-    oversampled fine-grid decision within pass-1's surviving coarse
-    cell(s), where the per-particle candidate set actually differs
-    (children of that particle's own coarse winner). Resolved to this
-    call's local (within-half) index space via
-    ``_resolve_local_target_indices`` before use -- a half-1 and a half-2
-    particle can share the same local position, so matching on the raw
-    env value directly would silently also hit an unrelated particle in
-    the other half.
-    """
-
-    raw = os.environ.get(_PASS2_TOP2_DEBUG_INDICES_ENV, "").strip()
-    if not raw:
-        return ()
-    return tuple(int(token) for token in raw.split(",") if token.strip())
-
-
-def _resolve_local_target_indices(experiment_dataset, original_targets: tuple[int, ...]) -> tuple[int, ...]:
-    """Map original (combined dataset) indices to this half's local indices.
-
-    Only returns the subset of ``original_targets`` actually present in
-    ``experiment_dataset`` (e.g. the half this call is scoring). Required
-    because pass-1/pass-2 debug/override target indices are specified in
-    original-dataset space but ``image_indices`` inside the per-half
-    scoring functions is local (within-half) space, and two different
-    halves' particles can land on the same local position.
-    """
-
-    if not original_targets:
-        return ()
-    resolver = getattr(experiment_dataset, "local_image_indices_from_original", None)
-    if not callable(resolver):
-        raise RuntimeError(
-            "pass1/pass2 top-2 debug/override requires "
-            "experiment_dataset.local_image_indices_from_original()"
-        )
-    local = np.asarray(
-        resolver(np.asarray(original_targets, dtype=np.int64), allow_missing=True)
-    )
-    return tuple(int(v) for v in local if v >= 0)
-
-
-def _log_pass2_top2_debug(scores, image_indices, targets: tuple[int, ...], *, dataset_tag=None) -> None:
-    image_indices_np = np.asarray(image_indices, dtype=np.int64).reshape(-1)
-    for target in targets:
-        rows = np.flatnonzero(image_indices_np == target)
-        if rows.size == 0:
-            continue
-        row = int(rows[0])
-        flat = np.asarray(scores[row], dtype=np.float64).reshape(-1)
-        finite = flat[np.isfinite(flat)]
-        if finite.size < 1:
-            logger.warning("PASS2_TOP2_DEBUG dataset=%s image_idx=%d: no finite fine candidates", dataset_tag, target)
-            continue
-        order = np.argsort(finite)
-        best = float(finite[order[-1]])
-        second = float(finite[order[-2]]) if finite.size >= 2 else float("-inf")
-        n_row_trans = int(np.asarray(scores).shape[-1])
-        best_flat_id = int(np.flatnonzero(flat == best)[0])
-        second_candidates = np.flatnonzero(flat == second) if finite.size >= 2 else np.array([], dtype=np.int64)
-        second_flat_id = int(second_candidates[0]) if second_candidates.size else -1
-        logger.warning(
-            "PASS2_TOP2_DEBUG dataset=%s image_idx=%d n_candidates=%d best_score=%.8f second_score=%.8f "
-            "margin=%.8g best_flat_id=%d(rot=%d,trans=%d) second_flat_id=%d(rot=%d,trans=%d)",
-            dataset_tag,
-            target,
-            finite.size,
-            best,
-            second,
-            best - second,
-            best_flat_id,
-            best_flat_id // n_row_trans,
-            best_flat_id % n_row_trans,
-            second_flat_id,
-            second_flat_id // n_row_trans if second_flat_id >= 0 else -1,
-            second_flat_id % n_row_trans if second_flat_id >= 0 else -1,
-        )
 
 
 class _SparsePass2WindowSetup(NamedTuple):
@@ -930,283 +484,6 @@ def _sparse_pass2_window_setup(
     )
 
 
-def _bucket_summary(buckets, size_key: str = "bucket_size") -> str:
-    if not buckets:
-        return "empty"
-    sizes = np.asarray([int(bucket[size_key]) for bucket in buckets], dtype=np.int64)
-    image_counts = np.asarray([len(bucket["image_indices"]) for bucket in buckets], dtype=np.int64)
-    unique, counts = np.unique(sizes, return_counts=True)
-    top = sorted(zip(unique.tolist(), counts.tolist(), strict=True), key=lambda item: item[1], reverse=True)[:8]
-    return (
-        f"bucket_size min/med/mean/max={int(sizes.min())}/{int(np.median(sizes))}/"
-        f"{float(np.mean(sizes)):.1f}/{int(sizes.max())}, "
-        f"images_per_bucket med/max={int(np.median(image_counts))}/{int(image_counts.max())}, "
-        f"top_bucket_counts={top}"
-    )
-
-
-def _bucket_group_stats(buckets, size_key: str = "bucket_size") -> dict[int, tuple[int, int]]:
-    stats: dict[int, list[int]] = {}
-    for bucket in buckets:
-        bucket_size = int(bucket[size_key])
-        entry = stats.setdefault(bucket_size, [0, 0])
-        entry[0] += 1
-        entry[1] += len(bucket["image_indices"])
-    return {bucket_size: (counts[0], counts[1]) for bucket_size, counts in stats.items()}
-
-
-def _tag_k_class_execution_bucket(bucket, *, mode: str):
-    tagged = dict(bucket)
-    tagged["_execution_mode"] = mode
-    if mode == "compact_pair":
-        tagged["_execution_size_key"] = "pair_bucket_size"
-    elif mode == "rectangular":
-        tagged["_execution_size_key"] = "bucket_size"
-    else:
-        raise ValueError(f"Unknown sparse K-class execution mode {mode!r}")
-    tagged["_execution_bucket_size"] = int(tagged[tagged["_execution_size_key"]])
-    return tagged
-
-
-def _k_class_execution_bucket_group_stats(buckets):
-    stats: dict[tuple[str, str, int], list[int]] = {}
-    for bucket in buckets:
-        mode = str(bucket.get("_execution_mode", "rectangular"))
-        size_key = str(bucket.get("_execution_size_key", "bucket_size"))
-        bucket_size = int(bucket.get("_execution_bucket_size", bucket[size_key]))
-        key = (mode, size_key, bucket_size)
-        entry = stats.setdefault(key, [0, 0])
-        entry[0] += 1
-        entry[1] += len(bucket["image_indices"])
-    return {key: (counts[0], counts[1]) for key, counts in stats.items()}
-
-
-def _hybrid_k_class_compact_pair_execution_buckets(
-    dense_buckets,
-    compact_pair_buckets,
-    *,
-    min_pair_bucket_size: int,
-):
-    """Route low pair-count images through rectangular buckets and high tails through compact pairs."""
-
-    min_pair_bucket_size = int(min_pair_bucket_size)
-    if min_pair_bucket_size <= 0:
-        raise ValueError("min_pair_bucket_size must be positive")
-
-    compact_execution_buckets = []
-    compact_image_indices = set()
-    for bucket in compact_pair_buckets:
-        if int(bucket["pair_bucket_size"]) < min_pair_bucket_size:
-            continue
-        tagged = _tag_k_class_execution_bucket(bucket, mode="compact_pair")
-        compact_execution_buckets.append(tagged)
-        compact_image_indices.update(int(idx) for idx in np.asarray(bucket["image_indices"], dtype=np.int64))
-
-    rectangular_execution_buckets = []
-    for bucket in dense_buckets:
-        image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
-        if compact_image_indices:
-            keep_mask = np.asarray([int(idx) not in compact_image_indices for idx in image_indices], dtype=bool)
-            image_indices = image_indices[keep_mask]
-        if image_indices.size == 0:
-            continue
-        rectangular_bucket = dict(bucket)
-        rectangular_bucket["image_indices"] = np.asarray(image_indices, dtype=np.int64)
-        rectangular_execution_buckets.append(
-            _tag_k_class_execution_bucket(rectangular_bucket, mode="rectangular"),
-        )
-
-    return rectangular_execution_buckets + compact_execution_buckets
-
-
-def _compact_pair_buckets_for_execution_threshold(compact_pair_buckets, min_pair_bucket_size: int | None):
-    """Return compact buckets eligible for execution under the hybrid threshold."""
-
-    if min_pair_bucket_size is None:
-        return list(compact_pair_buckets)
-    min_pair_bucket_size = int(min_pair_bucket_size)
-    if min_pair_bucket_size <= 0:
-        raise ValueError("min_pair_bucket_size must be positive")
-    return [
-        bucket
-        for bucket in compact_pair_buckets
-        if int(bucket["pair_bucket_size"]) >= min_pair_bucket_size
-    ]
-
-
-def _validate_k_class_execution_bucket_partition(execution_buckets, *, n_images: int) -> None:
-    """Validate that execution buckets cover each image exactly once."""
-
-    n_images = int(n_images)
-    if n_images < 0:
-        raise ValueError("n_images must be non-negative")
-    if n_images == 0:
-        if execution_buckets:
-            raise ValueError("Execution buckets must be empty when n_images=0")
-        return
-    if not execution_buckets:
-        raise ValueError(f"Execution buckets are empty for {n_images} images")
-
-    image_indices = np.concatenate(
-        [
-            np.asarray(bucket["image_indices"], dtype=np.int64).reshape(-1)
-            for bucket in execution_buckets
-        ],
-    )
-    if image_indices.size != n_images:
-        raise ValueError(
-            "Execution bucket image coverage count mismatch: "
-            f"got {image_indices.size}, expected {n_images}",
-        )
-    if int(image_indices.min(initial=0)) < 0 or int(image_indices.max(initial=-1)) >= n_images:
-        raise ValueError(
-            "Execution bucket image indices out of range for "
-            f"{n_images} images",
-        )
-
-    counts = np.bincount(image_indices, minlength=n_images)
-    missing = np.flatnonzero(counts == 0)
-    duplicated = np.flatnonzero(counts > 1)
-    if missing.size or duplicated.size:
-        raise ValueError(
-            "Execution buckets must partition images exactly once "
-            f"(missing={missing[:8].tolist()}, duplicated={duplicated[:8].tolist()})",
-        )
-
-
-def _compact_pair_threshold_report_thresholds() -> tuple[int, ...]:
-    raw_thresholds = parse_env_int_set(_SPARSE_KCLASS_COMPACT_PAIRS_THRESHOLD_REPORT_ENV)
-    if raw_thresholds is None:
-        return _DEFAULT_COMPACT_PAIR_THRESHOLD_REPORT
-    return tuple(sorted(int(value) for value in raw_thresholds if int(value) > 0))
-
-
-def _compact_pair_hybrid_threshold_reports(
-    dense_buckets,
-    compact_pair_buckets,
-    *,
-    thresholds: tuple[int, ...],
-    n_classes: int,
-    n_fine_trans: int,
-):
-    """Estimate hybrid compact-pair routing cost for candidate thresholds."""
-
-    baseline_rectangular_candidates = int(
-        sum(
-            int(n_classes) * len(bucket["image_indices"]) * int(bucket["bucket_size"]) * int(n_fine_trans)
-            for bucket in dense_buckets
-        )
-    )
-    reports = []
-    for threshold in thresholds:
-        threshold = int(threshold)
-        compact_buckets_for_threshold = [
-            bucket
-            for bucket in compact_pair_buckets
-            if int(bucket["pair_bucket_size"]) >= threshold
-        ]
-        compact_image_indices = {
-            int(idx)
-            for bucket in compact_buckets_for_threshold
-            for idx in np.asarray(bucket["image_indices"], dtype=np.int64)
-        }
-        compact_candidates = int(
-            sum(
-                int(n_classes) * len(bucket["image_indices"]) * int(bucket["pair_bucket_size"])
-                for bucket in compact_buckets_for_threshold
-            )
-        )
-
-        rectangular_buckets = 0
-        rectangular_images = 0
-        rectangular_candidates = 0
-        for bucket in dense_buckets:
-            image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
-            if compact_image_indices:
-                keep_mask = np.asarray(
-                    [int(idx) not in compact_image_indices for idx in image_indices],
-                    dtype=bool,
-                )
-                image_indices = image_indices[keep_mask]
-            if image_indices.size == 0:
-                continue
-            rectangular_buckets += 1
-            rectangular_images += int(image_indices.size)
-            rectangular_candidates += (
-                int(n_classes)
-                * int(image_indices.size)
-                * int(bucket["bucket_size"])
-                * int(n_fine_trans)
-            )
-
-        total_candidates = int(rectangular_candidates + compact_candidates)
-        reports.append(
-            {
-                "threshold": threshold,
-                "compact_buckets": len(compact_buckets_for_threshold),
-                "compact_images": len(compact_image_indices),
-                "rectangular_buckets": rectangular_buckets,
-                "rectangular_images": rectangular_images,
-                "rectangular_candidate_slots": rectangular_candidates,
-                "compact_candidate_slots": compact_candidates,
-                "total_candidate_slots": total_candidates,
-                "slot_reduction": (
-                    float(baseline_rectangular_candidates) / float(total_candidates)
-                    if total_candidates > 0
-                    else float("inf")
-                ),
-            }
-        )
-    return reports
-
-
-def _add_sparse_group_timing(group_timing: dict[str, float] | None, key: str, elapsed_s: float) -> None:
-    if group_timing is None:
-        return
-    group_timing[key] = group_timing.get(key, 0.0) + float(elapsed_s)
-
-
-def _log_sparse_kclass_group_timing(
-    group_key: tuple[str, str, int],
-    group_timing: dict[str, float] | None,
-    *,
-    wall_s: float,
-) -> None:
-    if group_timing is None:
-        return
-    build_s = group_timing.get("build", 0.0)
-    fetch_s = group_timing.get("fetch", 0.0)
-    prepare_s = group_timing.get("prepare", 0.0)
-    score_s = group_timing.get("score", 0.0)
-    mstep_noise_stats_s = group_timing.get("mstep_noise_stats", 0.0)
-    mstep_weighted_sums_s = group_timing.get("mstep_weighted_sums", 0.0)
-    mstep_adjoint_s = group_timing.get("mstep_adjoint", 0.0)
-    noise_s = group_timing.get("noise", 0.0)
-    stats_s = group_timing.get("stats", 0.0)
-    total_profiled_s = build_s + fetch_s + prepare_s + score_s + mstep_noise_stats_s
-    logger.info(
-        "Sparse fused K-class pass-2 bucket group timing: mode=%s %s=%d "
-        "build=%.2fs fetch=%.2fs prepare=%.2fs score=%.2fs "
-        "mstep_noise_stats=%.2fs mstep_weighted_sums=%.2fs "
-        "mstep_adjoint=%.2fs noise=%.2fs stats=%.2fs "
-        "total_profiled=%.2fs wall=%.2fs",
-        group_key[0],
-        group_key[1],
-        group_key[2],
-        build_s,
-        fetch_s,
-        prepare_s,
-        score_s,
-        mstep_noise_stats_s,
-        mstep_weighted_sums_s,
-        mstep_adjoint_s,
-        noise_s,
-        stats_s,
-        total_profiled_s,
-        float(wall_s),
-    )
-
-
 # ---------------------------------------------------------------------------
 # Scoring + normalization (per-bucket, supports (B, R, T) mask)
 # ---------------------------------------------------------------------------
@@ -1215,686 +492,6 @@ def _log_sparse_kclass_group_timing(
 # ---------------------------------------------------------------------------
 # Main bucketed driver
 # ---------------------------------------------------------------------------
-
-
-def _reorder_to_indices(image_indices_returned, requested_image_indices, *arrays):
-    """Reorder per-image arrays so they match the order returned by the dataset."""
-    if np.array_equal(image_indices_returned, requested_image_indices):
-        return arrays
-    position = {int(idx): pos for pos, idx in enumerate(np.asarray(requested_image_indices).tolist())}
-    order = np.array([position[int(idx)] for idx in np.asarray(image_indices_returned).tolist()], dtype=np.int64)
-    return tuple(arr[order] for arr in arrays)
-
-
-def _pass2_dump_requested_for_bucket(
-    *,
-    experiment_dataset,
-    image_indices,
-    current_size,
-) -> bool:
-    """Return whether this bucket must stay materialized for a pass-2 dump."""
-
-    return bool(
-        pass2_diagnostics._pass2_dump_target_rows(
-            experiment_dataset=experiment_dataset,
-            image_indices=image_indices,
-            current_size=current_size,
-        ).size
-    )
-
-
-def _prioritize_stopped_pass2_dump_buckets(
-    buckets,
-    *,
-    experiment_dataset,
-    current_size,
-):
-    """Move explicitly requested dump buckets first in a stopped diagnostic.
-
-    A stop-after-target capture consumes no M-step result, so unrelated
-    particles cannot affect the requested particle's fine-score operands.
-    Normal refinement and non-stopped dumps retain their original physical
-    execution order.
-    """
-
-    stopped_pass2_dump = _pass2_dump_enabled() and parse_env_flag(
-        _PASS2_DUMP_STOP_AFTER_TARGET_ENV, default=False
-    )
-    stopped_norm_dump = parse_env_flag(
-        "RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS", default=False
-    ) and parse_env_flag(
-        _NORM_RESIDUAL_DUMP_STOP_AFTER_TARGET_ENV, default=False
-    )
-    if not (stopped_pass2_dump or stopped_norm_dump):
-        return buckets
-
-    requested = []
-    remaining = []
-    for bucket in buckets:
-        destination = (
-            requested
-            if _pass2_dump_requested_for_bucket(
-                experiment_dataset=experiment_dataset,
-                image_indices=bucket["image_indices"],
-                current_size=current_size,
-            )
-            else remaining
-        )
-        destination.append(bucket)
-    if not requested:
-        return buckets
-    logger.info(
-        "Sparse K=1 pass-2 stopped diagnostic: moving %d requested dump "
-        "bucket(s) before %d unrelated bucket(s)",
-        len(requested),
-        len(remaining),
-    )
-    return requested + remaining
-
-
-@jax.jit
-def _take_columns(values, column_indices):
-    """Gather Fourier-window columns in one compiled program per shape."""
-
-    return values[:, column_indices]
-
-
-@jax.jit
-def _ctf2_over_noise_and_ctf2(ctf_half, noise_variance_half):
-    """Return ``CTF^2 / sigma2`` and ``CTF^2`` for the generic bucket path."""
-
-    return ctf_half**2 / noise_variance_half, ctf_half**2
-
-
-@partial(jax.jit, static_argnames=("multiply_inverse_noise",))
-def _gaussian_batch_norm(processed_score_half_raw, noise_operand, norm_half_weights, *, multiply_inverse_noise: bool):
-    """Dense ``run_em`` image-norm term: weighted |image|^2 / sigma2 summed per image."""
-
-    power = jnp.abs(processed_score_half_raw) ** 2
-    if multiply_inverse_noise:
-        score_power_over_noise = power * noise_operand[None, :]
-    else:
-        score_power_over_noise = power / noise_operand
-    return jnp.sum(
-        score_power_over_noise * norm_half_weights[None, :],
-        axis=-1,
-        keepdims=True,
-    ).real
-
-
-@jax.jit
-def _ctf_over_noise_weighted_pair(processed_score_half_raw, processed_recon_half_raw, ctf_half, noise_variance_half):
-    """Weight score and reconstruction images by ``CTF / sigma2`` in one program."""
-
-    return (
-        processed_score_half_raw * ctf_half / noise_variance_half,
-        processed_recon_half_raw * ctf_half / noise_variance_half,
-    )
-
-
-@jax.jit
-def _divide_by_safe_ctf(sparse_score_input_half, ctf_half):
-    """Divide by the CTF where it is safely non-zero, else pass through."""
-
-    ctf_safe = jnp.abs(ctf_half) > 1e-8
-    return jnp.where(
-        ctf_safe,
-        sparse_score_input_half / ctf_half,
-        sparse_score_input_half,
-    )
-
-
-def _prepare_bucket_io(
-    experiment_dataset,
-    batch,
-    ctf_params,
-    image_indices,
-    noise_variance_half,
-    fine_translations,
-    config,
-    n_trans,
-    score_with_masked_images,
-    half_spectrum_scoring,
-    image_corrections,
-    scale_corrections,
-    image_pre_shifts,
-    use_float64_scoring,
-    return_direct_scoring_io=False,
-    score_only=False,
-    score_mode="gaussian",
-    window_indices=None,
-    recon_window_indices=None,
-    translation_phases_half=None,
-    score_translation_phases=None,
-    recon_translation_phases=None,
-    relion_score_translation_angles=None,
-    return_windowed_shifted=False,
-    return_shifted_score=True,
-    relion_exact_normalized_cc_operands=False,
-    relion_exact_bpref_operands=False,
-):
-    """Run preprocessing for a batch of images (translations tiled, CTF/noise ratios).
-
-    Mirrors the ``run_em``/``_preprocess_batch`` pipeline exactly so the
-    bucketed sparse pass-2 path is bit-for-bit identical to calling
-    ``run_em`` per image.
-    """
-    if score_mode not in {"gaussian", "normalized_cc"}:
-        raise ValueError(f"score_mode must be 'gaussian' or 'normalized_cc', got {score_mode!r}")
-    if return_windowed_shifted:
-        if window_indices is None:
-            raise ValueError("return_windowed_shifted requires window_indices")
-        if recon_window_indices is None:
-            recon_window_indices = window_indices
-
-    image_shape = config.image_shape
-    use_normalized_cc = score_mode == "normalized_cc"
-    (
-        relion_cuda_preprocess,
-        integer_pre_shifts,
-        batch_corr_np,
-        batch_scale_np,
-        relion_preprocess_kwargs,
-    ) = prepare_batch_preprocess_operands(
-        experiment_dataset,
-        batch,
-        image_indices,
-        image_corrections=image_corrections,
-        scale_corrections=scale_corrections,
-        image_pre_shifts=image_pre_shifts,
-        dtype=(np.float64 if use_float64_scoring else np.float32),
-    )
-    real_space_pre_shift_applied = integer_pre_shifts is not None
-    if real_space_pre_shift_applied and not relion_cuda_preprocess:
-        batch = apply_relion_integer_pre_shifts(batch, integer_pre_shifts)
-
-    ctf_half_rfloat = (
-        relion_ctf._relion_exact_ctf_half_from_source_star(
-            experiment_dataset,
-            image_indices,
-            image_shape,
-        )
-        if relion_exact_bpref_operands
-        else None
-    )
-    acc_real_dtype = jnp.float64 if use_float64_scoring else jnp.float32
-    ctf_half = (
-        jnp.asarray(ctf_half_rfloat, dtype=acc_real_dtype)
-        if ctf_half_rfloat is not None
-        else config.compute_ctf_half(jnp.asarray(ctf_params, dtype=acc_real_dtype))
-    )
-    batch_scale = jnp.asarray(batch_scale_np, dtype=ctf_half.dtype)
-    relion_score_corr_img_half = None
-    direct_pixel_correction_full = None
-    if relion_exact_bpref_operands:
-        if relion_preprocess_kwargs is None:
-            raise ValueError(
-                "exact RELION BPref operands require RELION CUDA preprocessing"
-            )
-        relion_preprocess_kwargs = dict(relion_preprocess_kwargs)
-        relion_preprocess_kwargs["relion_fft_per_image"] = True
-        # RELION computes minvsigma2 from its binary64 sigma2 spectrum, then
-        # stores the reciprocal as XFLOAT. Preserve that cast boundary and
-        # its scalar multiplication order instead of dividing by an already
-        # rounded variance. XFLOAT is float64 under ACC_DOUBLE_PRECISION.
-        inverse_noise_half = jnp.reciprocal(
-            jnp.asarray(noise_variance_half, dtype=jnp.float64)
-        ).astype(acc_real_dtype)
-        weighted_ctf_half = ctf_half * inverse_noise_half[None, :]
-        ctf2_over_nv_half = weighted_ctf_half * ctf_half
-        relion_score_corr_img_half = _relion_cuda_corr_img_from_native_noise_variance(
-            noise_variance_half[None, :],
-            ctf_half_rfloat,
-            image_shape,
-            batch_scale[:, None] if scale_corrections is not None else None,
-            output_dtype=acc_real_dtype,
-        )
-        ctf2_score_half = ctf_half**2
-    else:
-        inverse_noise_half = None
-        weighted_ctf_half = None
-        ctf2_over_nv_half, ctf2_score_half = _ctf2_over_noise_and_ctf2(ctf_half, noise_variance_half)
-
-    # Raw processed half-spectrum images (BEFORE any per-image correction).
-    # The score path uses masked images iff ``score_with_masked_images`` is True,
-    # while the reconstruction path always uses the unmasked (raw) images.
-    processed_score_half_raw = process_half_image(
-        experiment_dataset,
-        batch,
-        score_with_masked_images,
-        relion_preprocess_kwargs=relion_preprocess_kwargs,
-    )
-    if score_with_masked_images:
-        processed_recon_half_raw = process_half_image(
-            experiment_dataset,
-            batch,
-            False,
-            relion_preprocess_kwargs=relion_preprocess_kwargs,
-        )
-    else:
-        processed_recon_half_raw = processed_score_half_raw
-
-    if use_normalized_cc:
-        # RELION firstiter_cc uses unweighted image power over the same Fourier
-        # window as the score denominator, with no Hermitian doubling.
-        if relion_exact_normalized_cc_operands:
-            # ``exp_local_sqrtXi2`` is formed from an RFLOAT (float64) serial
-            # sum before RELION casts its reciprocal to XFLOAT.  A float32 XLA
-            # reduction can move that reciprocal by one ULP, which is enough
-            # to erase demonstrated fine-translation score margins.
-            norm_real = processed_score_half_raw.real.astype(jnp.float64)
-            norm_imag = processed_score_half_raw.imag.astype(jnp.float64)
-            abs2_half = norm_real * norm_real + norm_imag * norm_imag
-        else:
-            abs2_half = jnp.abs(processed_score_half_raw) ** 2
-        if window_indices is not None:
-            abs2_half = abs2_half[:, window_indices]
-        batch_norm = jnp.sum(abs2_half, axis=-1, keepdims=True).real
-    else:
-        # batch_norm starts from raw processed-score images, then follows dense
-        # run_em's image-only correction convention below.
-        norm_half_weights = make_half_image_weights(image_shape)
-        batch_norm = _gaussian_batch_norm(
-            processed_score_half_raw,
-            inverse_noise_half if relion_exact_bpref_operands else noise_variance_half,
-            norm_half_weights,
-            multiply_inverse_noise=bool(relion_exact_bpref_operands),
-        )
-
-    if relion_exact_bpref_operands:
-        score_weighted_half = processed_score_half_raw * weighted_ctf_half
-        recon_weighted_half = processed_recon_half_raw * weighted_ctf_half
-        recon_bpref_input_half = processed_recon_half_raw
-    else:
-        score_weighted_half, recon_weighted_half = _ctf_over_noise_weighted_pair(
-            processed_score_half_raw,
-            processed_recon_half_raw,
-            ctf_half,
-            noise_variance_half,
-        )
-        recon_bpref_input_half = None
-    folded_normalized_cc_operands = (
-        use_normalized_cc and not relion_exact_normalized_cc_operands
-    )
-    sparse_score_input_half = (
-        processed_score_half_raw * ctf_half
-        if folded_normalized_cc_operands
-        else processed_score_half_raw
-    )
-    processed_score_half_for_noise = processed_score_half_raw
-
-    # Per-image image corrections follow dense run_em's image-only convention.
-    if image_corrections is not None:
-        batch_corr = jnp.asarray(batch_corr_np)
-        image_only_corr = batch_corr / batch_scale
-        # Note: corrections are applied to the per-translation-tiled arrays in
-        # run_em, but multiplication by a per-image scalar commutes with the
-        # tiling and shifting so we apply it before tiling for efficiency.
-        applied_corr = batch_scale if relion_cuda_preprocess else batch_corr
-        score_weighted_half = score_weighted_half * applied_corr[:, None]
-        recon_weighted_half = recon_weighted_half * applied_corr[:, None]
-        if relion_exact_bpref_operands:
-            recon_bpref_input_half = recon_bpref_input_half * applied_corr[:, None]
-        if return_direct_scoring_io:
-            direct_raw_corr = batch_corr / batch_scale
-            if folded_normalized_cc_operands:
-                sparse_score_input_half = sparse_score_input_half * applied_corr[:, None]
-            elif not relion_cuda_preprocess:
-                sparse_score_input_half = sparse_score_input_half * direct_raw_corr[:, None]
-        if not relion_cuda_preprocess:
-            batch_norm = batch_norm * (image_only_corr**2)[:, None]
-            processed_score_half_for_noise = processed_score_half_for_noise * image_only_corr[:, None]
-
-    # Per-image scale correction on CTF^2/noise.
-    if scale_corrections is not None:
-        ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
-        ctf2_score_half = ctf2_score_half * (batch_scale**2)[:, None]
-        if return_direct_scoring_io:
-            if not folded_normalized_cc_operands and not relion_exact_bpref_operands:
-                sparse_score_input_half = sparse_score_input_half / batch_scale[:, None]
-
-    # BPref operands remain in their demonstrated native XFLOAT order. Only
-    # fine-score corr_img uses RELION's distinct RFLOAT-square construction.
-    ctf2_over_nv_recon_half = ctf2_over_nv_half
-    if relion_score_corr_img_half is not None:
-        ctf2_over_nv_half = relion_score_corr_img_half
-
-    if return_direct_scoring_io and not folded_normalized_cc_operands:
-        if relion_exact_bpref_operands:
-            pixel_correction = _relion_cuda_pixel_correction_from_rfloat_ctf(
-                batch_scale[:, None],
-                ctf_half_rfloat,
-                output_dtype=acc_real_dtype,
-            )
-            direct_pixel_correction_full = pixel_correction
-            sparse_score_input_half = sparse_score_input_half * pixel_correction
-        else:
-            sparse_score_input_half = _divide_by_safe_ctf(sparse_score_input_half, ctf_half)
-    if score_only and not return_direct_scoring_io:
-        raise ValueError("score-only sparse pass-2 requires direct scoring I/O")
-
-    # Per-image pre-centering: phase shift in Fourier space after scalar corrections.
-    if image_pre_shifts is not None and not real_space_pre_shift_applied:
-        batch_shifts = jnp.asarray(np.asarray(image_pre_shifts)[np.asarray(image_indices)])
-        phase_factors = half_image_phase_factors(image_shape, batch_shifts, dtype=batch_shifts.dtype)
-        if not score_only:
-            score_weighted_half = score_weighted_half * phase_factors
-            recon_weighted_half = recon_weighted_half * phase_factors
-            if relion_exact_bpref_operands:
-                recon_bpref_input_half = recon_bpref_input_half * phase_factors
-        if return_direct_scoring_io:
-            sparse_score_input_half = sparse_score_input_half * phase_factors
-
-    score_weighted_half_for_score = score_weighted_half
-
-    if translation_phases_half is None and not return_windowed_shifted:
-        translation_phases_half = half_translation_phase_table(fine_translations, image_shape)
-
-    def _cuda_translate_score(values, pixel_indices):
-        if relion_score_translation_angles is None:
-            return None
-        from recovar import cuda_backproject
-
-        values = jnp.asarray(values)
-        pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32)
-        if values.dtype == jnp.complex128:
-            return cuda_backproject.relion_translate_score_f64(
-                values,
-                jnp.asarray(relion_score_translation_angles, dtype=jnp.float64),
-                pixel_indices,
-                image_shape,
-            )
-        return cuda_backproject.relion_translate_score_f32(
-            jnp.asarray(values, dtype=jnp.complex64),
-            jnp.asarray(relion_score_translation_angles, dtype=jnp.float32),
-            pixel_indices,
-            image_shape,
-        )
-    if score_only:
-        shifted_score_half = None
-        shifted_recon_half = None
-        shifted_score_half_with_dc = None
-        ctf2_over_nv_half_with_dc = None
-    else:
-        if return_windowed_shifted:
-            score_indices = jnp.asarray(window_indices, dtype=jnp.int32)
-            recon_indices = jnp.asarray(recon_window_indices, dtype=jnp.int32)
-            score_phase = (
-                score_translation_phases
-                if score_translation_phases is not None
-                else _translation_phase_table_for_indices(
-                    fine_translations,
-                    image_shape,
-                    score_indices,
-                    translation_phases_half,
-                )
-            )
-            recon_phase = (
-                recon_translation_phases
-                if recon_translation_phases is not None
-                else _translation_phase_table_for_indices(
-                    fine_translations,
-                    image_shape,
-                    recon_indices,
-                    translation_phases_half,
-                )
-            )
-            shifted_score_half = None
-            if return_shifted_score:
-                score_weighted_window = _take_columns(score_weighted_half_for_score, score_indices)
-                shifted_score_half = _cuda_translate_score(
-                    score_weighted_window,
-                    score_indices,
-                )
-                if shifted_score_half is None:
-                    shifted_score_half = apply_half_translation_phases(
-                        score_weighted_window,
-                        score_phase,
-                    )
-            if relion_exact_bpref_operands:
-                if relion_score_translation_angles is None:
-                    raise ValueError(
-                        "exact RELION BPref operands require RELION translation angles"
-                    )
-                from recovar import cuda_backproject
-
-                translate_bpref = (
-                    cuda_backproject.relion_translate_bpref_f64
-                    if use_float64_scoring
-                    else cuda_backproject.relion_translate_bpref_f32
-                )
-                complex_dtype = jnp.complex128 if use_float64_scoring else jnp.complex64
-                shifted_recon_half = translate_bpref(
-                    jnp.asarray(recon_bpref_input_half[:, recon_indices], dtype=complex_dtype),
-                    jnp.asarray(weighted_ctf_half[:, recon_indices], dtype=acc_real_dtype),
-                    jnp.asarray(relion_score_translation_angles, dtype=acc_real_dtype),
-                    recon_indices,
-                    image_shape,
-                )
-            else:
-                recon_weighted_window = _take_columns(recon_weighted_half, recon_indices)
-                shifted_recon_half = _cuda_translate_score(
-                    recon_weighted_window,
-                    recon_indices,
-                )
-                if shifted_recon_half is None:
-                    shifted_recon_half = apply_half_translation_phases(
-                        recon_weighted_window,
-                        recon_phase,
-                    )
-            if score_with_masked_images:
-                score_weighted_recon_window = _take_columns(score_weighted_half, recon_indices)
-                shifted_score_half_with_dc = _cuda_translate_score(
-                    score_weighted_recon_window,
-                    recon_indices,
-                )
-                if shifted_score_half_with_dc is None:
-                    shifted_score_half_with_dc = apply_half_translation_phases(
-                        score_weighted_recon_window,
-                        recon_phase,
-                    )
-            else:
-                shifted_score_half_with_dc = shifted_recon_half
-        else:
-            if relion_exact_bpref_operands:
-                if relion_score_translation_angles is None:
-                    raise ValueError(
-                        "exact RELION BPref operands require RELION translation angles"
-                    )
-                from recovar import cuda_backproject
-
-                translate_bpref = (
-                    cuda_backproject.relion_translate_bpref_f64
-                    if use_float64_scoring
-                    else cuda_backproject.relion_translate_bpref_f32
-                )
-                complex_dtype = jnp.complex128 if use_float64_scoring else jnp.complex64
-                exact_shifted_recon_half = translate_bpref(
-                    jnp.asarray(recon_bpref_input_half, dtype=complex_dtype),
-                    jnp.asarray(weighted_ctf_half, dtype=acc_real_dtype),
-                    jnp.asarray(relion_score_translation_angles, dtype=acc_real_dtype),
-                    jnp.arange(recon_bpref_input_half.shape[1], dtype=jnp.int32),
-                    image_shape,
-                )
-            else:
-                exact_shifted_recon_half = None
-            shifted_score_half = None
-            if return_shifted_score:
-                full_pixel_indices = jnp.arange(score_weighted_half_for_score.shape[1], dtype=jnp.int32)
-                shifted_score_half = _cuda_translate_score(
-                    score_weighted_half_for_score,
-                    full_pixel_indices,
-                )
-                if shifted_score_half is None:
-                    shifted_score_half = apply_half_translation_phases(
-                        score_weighted_half_for_score,
-                        translation_phases_half,
-                    )
-            if score_with_masked_images:
-                shifted_recon_half = (
-                    exact_shifted_recon_half
-                    if exact_shifted_recon_half is not None
-                    else _cuda_translate_score(
-                        recon_weighted_half,
-                        jnp.arange(recon_weighted_half.shape[1], dtype=jnp.int32),
-                    )
-                )
-                if shifted_recon_half is None:
-                    shifted_recon_half = apply_half_translation_phases(
-                        recon_weighted_half,
-                        translation_phases_half,
-                    )
-                shifted_score_half_with_dc = _cuda_translate_score(
-                    score_weighted_half,
-                    jnp.arange(score_weighted_half.shape[1], dtype=jnp.int32),
-                )
-                if shifted_score_half_with_dc is None:
-                    shifted_score_half_with_dc = apply_half_translation_phases(
-                        score_weighted_half,
-                        translation_phases_half,
-                    )
-            else:
-                shifted_recon_half = (
-                    exact_shifted_recon_half
-                    if exact_shifted_recon_half is not None
-                    else _cuda_translate_score(
-                        recon_weighted_half,
-                        jnp.arange(recon_weighted_half.shape[1], dtype=jnp.int32),
-                    )
-                )
-                if shifted_recon_half is None:
-                    shifted_recon_half = apply_half_translation_phases(
-                        recon_weighted_half,
-                        translation_phases_half,
-                    )
-                shifted_score_half_with_dc = shifted_recon_half
-        ctf2_over_nv_half_with_dc = ctf2_over_nv_recon_half
-
-    shifted_corrected_score_half = None
-    direct_score_input = None
-    direct_preprocessed_score_input = None
-    direct_pixel_correction = None
-    if return_direct_scoring_io:
-        if return_windowed_shifted:
-            score_indices = jnp.asarray(window_indices, dtype=jnp.int32)
-            direct_score_input = _take_columns(sparse_score_input_half, score_indices)
-            direct_preprocessed_score_input = _take_columns(processed_score_half_raw, score_indices)
-            if direct_pixel_correction_full is not None:
-                direct_pixel_correction = _take_columns(direct_pixel_correction_full, score_indices)
-            direct_score_pixel_indices = score_indices
-        else:
-            direct_score_input = sparse_score_input_half
-            direct_preprocessed_score_input = processed_score_half_raw
-            direct_pixel_correction = direct_pixel_correction_full
-            direct_score_pixel_indices = jnp.arange(
-                sparse_score_input_half.shape[1],
-                dtype=jnp.int32,
-            )
-        if relion_score_translation_angles is not None:
-            from recovar import cuda_backproject
-
-            shifted_corrected_score_half = _cuda_translate_score(
-                direct_score_input,
-                direct_score_pixel_indices,
-            )
-        else:
-            if return_windowed_shifted:
-                score_phase = (
-                    score_translation_phases
-                    if score_translation_phases is not None
-                    else _translation_phase_table_for_indices(
-                        fine_translations,
-                        image_shape,
-                        direct_score_pixel_indices,
-                        translation_phases_half,
-                    )
-                )
-            else:
-                score_phase = translation_phases_half
-            shifted_corrected_score_half = apply_half_translation_phases(
-                direct_score_input,
-                score_phase,
-            )
-
-    if half_spectrum_scoring and not use_normalized_cc:
-        dc_shell_idx = make_shell_indices_half(image_shape)
-        dc_mask = dc_shell_idx == 0
-        if not score_only and shifted_score_half is not None:
-            if return_windowed_shifted:
-                score_indices = jnp.asarray(window_indices, dtype=jnp.int32)
-                shifted_score_half = jnp.where(dc_mask[score_indices][None, :], 0.0, shifted_score_half)
-            else:
-                shifted_score_half = jnp.where(dc_mask[None, :], 0.0, shifted_score_half)
-        ctf2_over_nv_half = jnp.where(dc_mask[None, :], 0.0, ctf2_over_nv_half)
-
-    precision_policy = DensePrecisionPolicy(use_float64_scoring=use_float64_scoring)
-    if return_direct_scoring_io and use_normalized_cc:
-        inv_xi2 = (1.0 / jnp.maximum(batch_norm, jnp.asarray(1e-30, dtype=batch_norm.dtype))).astype(
-            precision_policy.score_real_dtype,
-        )
-        if folded_normalized_cc_operands:
-            shifted_corrected_score_half = shifted_corrected_score_half * jnp.repeat(inv_xi2, n_trans, axis=0)
-            ctf2_over_nv_half = ctf2_score_half * inv_xi2
-        else:
-            # buildCorrImage evaluates CTF * CTF in RFLOAT and casts the full
-            # product to XFLOAT once.  Reusing the generic float32 CTF-square
-            # path changes most corr_img pixels by one or two ULPs.  Preserve
-            # the source order here; the existing RECOVAR FFT normalization
-            # is already encoded in ``inv_xi2``.
-            corr_ctf_rfloat = (
-                ctf_half.astype(jnp.float64)
-                if ctf_half_rfloat is None
-                else ctf_half_rfloat
-            )
-            ctf2_over_nv_half = _relion_cuda_corr_img_from_rfloat_ctf(
-                inv_xi2,
-                corr_ctf_rfloat,
-                batch_scale[:, None] if scale_corrections is not None else None,
-            )
-    if return_windowed_shifted:
-        score_indices = jnp.asarray(window_indices, dtype=jnp.int32)
-        ctf2_over_nv_half = _take_columns(ctf2_over_nv_half, score_indices)
-        if ctf2_over_nv_half_with_dc is not None:
-            recon_indices = jnp.asarray(recon_window_indices, dtype=jnp.int32)
-            ctf2_over_nv_half_with_dc = _take_columns(ctf2_over_nv_half_with_dc, recon_indices)
-    if score_only:
-        ctf2_over_nv_half = ctf2_over_nv_half.astype(precision_policy.score_real_dtype)
-    else:
-        if shifted_score_half is not None:
-            shifted_score_half = shifted_score_half.astype(precision_policy.score_complex_dtype)
-        ctf2_over_nv_half = ctf2_over_nv_half.astype(precision_policy.score_real_dtype)
-        if precision_policy.use_float64_scoring:
-            shifted_recon_half = shifted_recon_half.astype(precision_policy.score_complex_dtype)
-            shifted_score_half_with_dc = shifted_score_half_with_dc.astype(precision_policy.score_complex_dtype)
-            ctf2_over_nv_half_with_dc = ctf2_over_nv_half_with_dc.astype(precision_policy.score_real_dtype)
-    if return_direct_scoring_io:
-        shifted_corrected_score_half = shifted_corrected_score_half.astype(
-            precision_policy.score_complex_dtype,
-        )
-
-    return (
-        shifted_score_half,
-        shifted_recon_half,
-        batch_norm,
-        ctf2_over_nv_half,
-        ctf2_over_nv_half_with_dc,
-        shifted_score_half_with_dc,
-        processed_score_half_for_noise,
-        shifted_corrected_score_half,
-        direct_score_input,
-        direct_preprocessed_score_input,
-        direct_pixel_correction,
-        (
-            None
-            if relion_preprocess_kwargs is None
-            else relion_preprocess_kwargs.get("relion_normalization_factors")
-        ),
-        integer_pre_shifts,
-        batch_corr_np,
-        batch_scale_np,
-        inverse_noise_half,
-        ctf_half_rfloat,
-    )
 
 
 @jax.jit

@@ -18,7 +18,7 @@ from recovar.data_io.image_backends import _centered_rfft2_jax, _centered_rfft2_
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
     _half_translation_phase_table_for_indices,
 )
 from recovar.utils.file_hash import sha256_file

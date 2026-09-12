@@ -9,7 +9,7 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
     make_fourier_window_indices_np,
     make_frequency_coords_half_np,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_dump import (
     _prioritize_stopped_pass2_dump_buckets,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_wavg import (
@@ -174,11 +174,11 @@ def test_wavg_direct_residual_preserves_coupled_noise_and_norm(monkeypatch):
 def test_stopped_pass2_dump_prioritizes_only_requested_bucket(monkeypatch):
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET", "1")
     monkeypatch.setattr(
-        "recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed._pass2_dump_enabled",
+        "recovar.em.dense_single_volume.helpers.sparse_pass2_dump._pass2_dump_enabled",
         lambda: True,
     )
     monkeypatch.setattr(
-        "recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed._pass2_dump_requested_for_bucket",
+        "recovar.em.dense_single_volume.helpers.sparse_pass2_dump._pass2_dump_requested_for_bucket",
         lambda **kwargs: int(np.asarray(kwargs["image_indices"])[0]) == 7,
     )
     buckets = [
@@ -199,7 +199,7 @@ def test_stopped_pass2_dump_prioritizes_only_requested_bucket(monkeypatch):
 def test_nonstopped_pass2_dump_preserves_bucket_order(monkeypatch):
     monkeypatch.delenv("RECOVAR_PASS2_DUMP_STOP_AFTER_TARGET", raising=False)
     monkeypatch.setattr(
-        "recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed._pass2_dump_enabled",
+        "recovar.em.dense_single_volume.helpers.sparse_pass2_dump._pass2_dump_enabled",
         lambda: True,
     )
     buckets = [
@@ -218,13 +218,13 @@ def test_nonstopped_pass2_dump_preserves_bucket_order(monkeypatch):
 
 def test_stopped_norm_residual_dump_prioritizes_requested_bucket(monkeypatch):
     monkeypatch.setattr(
-        "recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed._pass2_dump_enabled",
+        "recovar.em.dense_single_volume.helpers.sparse_pass2_dump._pass2_dump_enabled",
         lambda: False,
     )
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_NORM_RESIDUAL_INPUTS", "1")
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_NORM_RESIDUAL_STOP_AFTER_TARGET", "1")
     monkeypatch.setattr(
-        "recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed._pass2_dump_requested_for_bucket",
+        "recovar.em.dense_single_volume.helpers.sparse_pass2_dump._pass2_dump_requested_for_bucket",
         lambda **kwargs: int(np.asarray(kwargs["image_indices"])[0]) == 7,
     )
     buckets = [

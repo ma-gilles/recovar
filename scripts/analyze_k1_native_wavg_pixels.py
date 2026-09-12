@@ -202,7 +202,7 @@ def _translate_native_preprocess_hybrid(
     import jax.numpy as jnp
 
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
         _relion_translation_angles_f32,
     )
 
@@ -540,7 +540,7 @@ def main() -> None:
         native_input_comparisons = None
         ppref_metadata = None
         if has_native_inputs:
-            from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+            from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
                 _relion_translation_angles_f32,
             )
 

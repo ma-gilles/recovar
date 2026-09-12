@@ -17,7 +17,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
     _relion_translation_angles_f32,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (

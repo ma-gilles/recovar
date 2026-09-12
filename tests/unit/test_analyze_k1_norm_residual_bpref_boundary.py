@@ -2,7 +2,7 @@ import struct
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
     _relion_translation_angles_f32,
 )
 from scripts import analyze_k1_norm_residual_bpref_boundary as analyzer

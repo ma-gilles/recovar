@@ -2719,7 +2719,7 @@ def _assemble_relion_exact_coarse_gaussian_operands(
     from recovar.em.dense_single_volume.helpers.relion_ctf import (
         _relion_exact_ctf_half_from_source_star_host,
     )
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
         _relion_translation_angles_f32,
         _relion_translation_angles_f64,
     )
@@ -4555,7 +4555,7 @@ def _compute_k_class_significance_batched(
         from recovar.em.dense_single_volume.helpers.relion_ctf import (
             _relion_exact_ctf_half_from_source_star,
         )
-        from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
             _relion_translation_angles_f32,
         )
         from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
@@ -4893,7 +4893,7 @@ def _compute_k_class_significance_batched(
         from recovar.em.dense_single_volume.helpers.relion_ctf import (
             _relion_exact_ctf_half_from_source_star,
         )
-        from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+        from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
             _relion_translation_angles_f32,
         )
         from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (

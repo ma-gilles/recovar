@@ -14,7 +14,7 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     class_weights_from_direction_prior,
     normalize_class_direction_prior_per_half,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
     _relion_translation_angles_f32,
 )
 from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats

@@ -1411,7 +1411,7 @@ def test_coarse_gaussian_sincosf_operands_run_cuda_translation(
     from recovar.em.dense_single_volume.helpers.significance import (
         _relion_coarse_gaussian_square_operands_sincosf,
     )
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
         _relion_translation_angles_f32,
     )
 

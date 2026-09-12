@@ -27,7 +27,7 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
     _half_translation_phase_table_for_indices,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (

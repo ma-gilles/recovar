@@ -27,7 +27,7 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_relion_noise_shell_indices_half,
     make_scoring_half_image_weights,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
     _relion_translation_angles_f32,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (

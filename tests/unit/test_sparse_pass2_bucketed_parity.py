@@ -32,7 +32,7 @@ from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
     _build_bucket_arrays,
     _prepare_per_image_pass2_inputs,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
     _reorder_to_indices,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (

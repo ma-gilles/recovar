@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
     _relion_translation_angles_f32,
 )
 from scripts.analyze_k1_scale_aa_candidates import analyze

@@ -23,7 +23,7 @@ from recovar.data_io.image_backends import (
     _centered_rfft2_jax_per_image,
     _centered_rfft2_numpy,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (
     _relion_translation_angles_f32,
 )
 from recovar.utils.file_hash import sha256_file

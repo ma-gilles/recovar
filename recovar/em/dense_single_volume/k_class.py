@@ -1352,7 +1352,9 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         coarse_rotation_ids=engine_kwargs.get("coarse_rotation_ids"),
         translation_phase_source=engine_kwargs.get("translation_phase_source"),
     )[-1]
-    from .helpers.sparse_pass2_bucketed import _resolve_local_target_indices
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_dump import (
+        _resolve_local_target_indices,
+    )
 
     _top2_debug_indices = _resolve_local_target_indices(
         experiment_dataset, _pass1_top2_debug_target_indices()
@@ -2836,7 +2838,9 @@ def run_dense_k_class_em_adaptive(
             dtype=np.int32,
         )
         if _top2_debug_indices:
-            from .helpers.sparse_pass2_bucketed import _resolve_local_target_indices
+            from recovar.em.dense_single_volume.helpers.sparse_pass2_dump import (
+                _resolve_local_target_indices,
+            )
 
             _log_pass1_top2_debug(
                 _full_coarse_stats,
