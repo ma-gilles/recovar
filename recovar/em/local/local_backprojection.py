@@ -60,35 +60,6 @@ def compute_local_ctf_sums_from_probs_sum_t(probs_sum_t, ctf2_over_nv):
 
 
 @jax.jit
-def compute_relion_f32_sequential_mstep_sums(probs, shifted, ctf2_over_nv):
-    """Reduce translations in RELION GPU float32 order for an x-half diagnostic.
-
-    RELION's GPU backprojector visits translations in increasing index order
-    inside each orientation/pixel thread, carrying both the complex numerator
-    and positive CTF/noise denominator in ``XFLOAT`` (float32 in the reference
-    build).  Keep this separate from the production GEMM reduction so the
-    diagnostic cannot change default behavior.
-    """
-
-    probs_f32 = jnp.asarray(probs, dtype=jnp.float32)
-    shifted_c64 = jnp.asarray(shifted, dtype=jnp.complex64)
-    ctf2_f32 = jnp.asarray(ctf2_over_nv, dtype=jnp.float32)
-    batch, n_rot, n_trans = probs_f32.shape
-    n_pixels = shifted_c64.shape[-1]
-    numerator0 = jnp.zeros((batch, n_rot, n_pixels), dtype=jnp.complex64)
-    denominator0 = jnp.zeros((batch, n_rot, n_pixels), dtype=jnp.float32)
-
-    def add_translation(trans_idx, carry):
-        numerator, denominator = carry
-        weight = probs_f32[:, :, trans_idx, None]
-        numerator = numerator + weight * shifted_c64[:, None, trans_idx, :]
-        denominator = denominator + weight * ctf2_f32[:, None, :]
-        return numerator, denominator
-
-    return jax.lax.fori_loop(0, n_trans, add_translation, (numerator0, denominator0))
-
-
-@jax.jit
 def compute_relion_sequential_mstep_sums(probs, shifted, ctf2_over_nv):
     """Reduce translations in RELION order without changing precision.
 

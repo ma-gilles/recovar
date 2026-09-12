@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from recovar.em.helpers.types import make_relion_stats
-from recovar.em.local.local_backprojection import compute_relion_f32_sequential_mstep_sums
+from helpers.mstep_reference import numpy_relion_f32_mstep_sums
 from recovar.em.sparse_pass2.sparse_pass2_compact_pair_sums import _compact_pair_weighted_rotation_sums
 from recovar.em.sparse_pass2.sparse_pass2_window import (
     subtract_projected_reference_from_sparse_mstep_rotation_sums,
@@ -115,7 +115,7 @@ def test_compact_mstep_can_preserve_relion_translation_reduction(monkeypatch):
         )
     )
     dense_probs = jnp.asarray([[[0.2, 0.3], [0.1, 0.4]]], dtype=jnp.float32)
-    expected_summed, expected_weight = compute_relion_f32_sequential_mstep_sums(
+    expected_summed, expected_weight = numpy_relion_f32_mstep_sums(
         dense_probs,
         shifted,
         ctf2,

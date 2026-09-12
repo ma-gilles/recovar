@@ -3,25 +3,14 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+from helpers.mstep_reference import numpy_relion_f32_mstep_sums
+
 from recovar.em.local.local_backprojection import (
     compute_local_mstep_sums,
     compute_local_noise_scalar_terms,
     compute_local_weighted_sums,
-    compute_relion_f32_sequential_mstep_sums,
+    compute_relion_sequential_mstep_sums,
 )
-
-
-def _numpy_relion_f32_loop(probs, shifted, ctf2_over_nv):
-    probs = np.asarray(probs, dtype=np.float32)
-    shifted = np.asarray(shifted, dtype=np.complex64)
-    ctf2_over_nv = np.asarray(ctf2_over_nv, dtype=np.float32)
-    numerator = np.zeros((probs.shape[0], probs.shape[1], shifted.shape[-1]), dtype=np.complex64)
-    denominator = np.zeros(numerator.shape, dtype=np.float32)
-    for trans_idx in range(probs.shape[-1]):
-        weight = probs[:, :, trans_idx, None]
-        numerator += weight * shifted[:, None, trans_idx, :]
-        denominator += weight * ctf2_over_nv[:, None, :]
-    return numerator, denominator
 
 
 def test_relion_f32_sequential_mstep_sums_match_numpy_translation_loop_exactly():
@@ -32,8 +21,10 @@ def test_relion_f32_sequential_mstep_sums_match_numpy_translation_loop_exactly()
     )
     ctf2_over_nv = np.array([[1.0e8, 8.0]], dtype=np.float64)
 
-    expected_y, expected_ctf = _numpy_relion_f32_loop(probs, shifted, ctf2_over_nv)
-    actual_y, actual_ctf = compute_relion_f32_sequential_mstep_sums(probs, shifted, ctf2_over_nv)
+    expected_y, expected_ctf = numpy_relion_f32_mstep_sums(probs, shifted, ctf2_over_nv)
+    actual_y, actual_ctf = compute_relion_sequential_mstep_sums(
+        probs.astype(np.float32), shifted, ctf2_over_nv.astype(np.float32)
+    )
 
     assert actual_y.dtype == np.dtype(np.complex64)
     assert actual_ctf.dtype == np.dtype(np.float32)
