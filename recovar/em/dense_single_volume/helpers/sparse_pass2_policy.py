@@ -15,7 +15,6 @@ from pathlib import Path
 import jax
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers import pass2_diagnostics
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_flag, parse_env_nonnegative_int
 from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
     _DEFAULT_TAIL_BUCKET_COALESCE_MAX_INFLATION,
@@ -26,6 +25,7 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_budget import (
     _optional_positive_float_env,
     _optional_positive_int_env,
 )
+from recovar.em.diagnostics import pass2 as pass2_diagnostics
 
 _RELION_WAVG_ATOMIC_SCALE_AA_ENV = "RECOVAR_RELION_WAVG_ATOMIC_SCALE_AA"
 

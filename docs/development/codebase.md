@@ -60,6 +60,21 @@ not from the size of this overview. Current evidence belongs in [EM status](em_s
 
 ## Diagnostics and reusable evidence
 
+The optional iteration, reconstruction, pass-2 operand and normalization capture
+writers live in [`recovar/em/diagnostics`](../../recovar/em/diagnostics/__init__.py).
+Production engines call them at the existing capture boundaries. The package
+initializer imports nothing; the individual writers still use shared numerical
+utilities and the BPref capture context. This is an ownership boundary, not a
+claim that all diagnostics have already been removed from normal import paths.
+
+[`recovar/relion_bind`](../../recovar/relion_bind/__init__.py) currently mixes
+native runtime dependencies with independent validation interfaces. RELION-style
+EM uses its sampling, particle ordering, CTF and reconstruction routines; those
+are not removable merely because the package also supports parity tests.
+Oracle-only bindings, replay tools and historical experiment scripts need a
+consumer/reproduction audit before relocation or deletion. Keep the independent
+references under tests separate from the production functions they validate.
+
 See [diagnostic owners](em_implementation.md#diagnostics-and-reusable-evidence)
 for score, posterior, BPref, noise, normalization and output capture boundaries.
 Use existing provenance/test wrappers and immutable evidence roots. Historical

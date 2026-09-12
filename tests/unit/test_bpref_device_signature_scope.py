@@ -8,7 +8,11 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume import debug_dumps, half_scoring, iteration_loop, k_class, local_em_engine
+from recovar.em.diagnostics import iteration as debug_dumps
+from recovar.em.dense_single_volume import half_scoring
+from recovar.em.dense_single_volume import iteration_loop
+from recovar.em.dense_single_volume import k_class
+from recovar.em.dense_single_volume import local_em_engine
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics, sparse_pass2_bucketed
 from recovar.em.dense_single_volume.local_backprojection import compute_local_mstep_sums
 from recovar.em.dense_single_volume import local_bpref_capture

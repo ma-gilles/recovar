@@ -44,20 +44,18 @@ import numpy as np
 import pytest
 
 import recovar.em.dense_single_volume.helpers.oversampling as oversampling_mod
-import recovar.em.dense_single_volume.helpers.pass2_diagnostics as pass2_diagnostics
+import recovar.em.diagnostics.pass2 as pass2_diagnostics
 import recovar.em.dense_single_volume.helpers.score_constraints as score_constraints_mod
 import recovar.em.dense_single_volume.helpers.significance as sig_mod
 import recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed as sparse_pass2_mod
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop
 import recovar.em.dense_single_volume.k_class as k_class_mod
-from recovar.em.dense_single_volume import (
-    debug_dumps,
-    half_scoring,
-    k_class_results,
-    relion_replay,
-    score_outputs,
-    scoring_policy,
-)
+from recovar.em.diagnostics import iteration as debug_dumps
+from recovar.em.dense_single_volume import half_scoring
+from recovar.em.dense_single_volume import k_class_results
+from recovar.em.dense_single_volume import relion_replay
+from recovar.em.dense_single_volume import score_outputs
+from recovar.em.dense_single_volume import scoring_policy
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 from recovar.em.dense_single_volume.helpers import coarse_gaussian_diagnostics
 

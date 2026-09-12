@@ -4,8 +4,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import bpref_diagnostics, norm_scale_diagnostics
+from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse
+from recovar.em.diagnostics import norm_scale as norm_scale_diagnostics
 
 
 def test_norm_residual_only_mode_does_not_enable_full_pass2_dump(tmp_path, monkeypatch):

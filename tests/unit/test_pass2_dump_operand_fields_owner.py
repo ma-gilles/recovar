@@ -4,7 +4,7 @@ import inspect
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers import pass2_diagnostics
+from recovar.em.diagnostics import pass2 as pass2_diagnostics
 
 
 def test_absent_operands_are_recorded_as_absent():

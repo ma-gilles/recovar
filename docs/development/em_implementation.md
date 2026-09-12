@@ -271,7 +271,7 @@ operands (windowed shifted images and weights, batch norm, half weights, batch a
 translation counts, shapes, score mode and precision policy) are bound once per batch as
 `score_block_kwargs`; the pass-1 and pass-2 rotation-block scorers add only their block's
 projections ([`test_em_engine_score_block_kwargs.py`](../../tests/unit/test_em_engine_score_block_kwargs.py)).
-[`pass2_diagnostics._optional_operand_row_fields`](../../recovar/em/dense_single_volume/helpers/pass2_diagnostics.py)
+[`pass2_diagnostics._optional_operand_row_fields`](../../recovar/em/diagnostics/pass2.py)
 captures one image's optional RELION score operands for the K=1 pass-2 dump, recording
 operands the caller did not supply as absent (empty arrays of the capture dtype, or NaN for
 the per-image normalization factor and batch corrections); the selected-rows and
@@ -434,15 +434,15 @@ controller and scorer must be patched at both consumers. Patch the call site
 exercised by the test; do not add reverse imports to preserve an old monkeypatch
 location.
 
-[`debug_dumps`](../../recovar/em/dense_single_volume/debug_dumps.py) owns the
+[`diagnostics.iteration`](../../recovar/em/diagnostics/iteration.py) owns the
 half-selection policy for terminating significance/noise captures and numbered
 BPref device captures, together with iteration dump writers. The controller
 calls those selectors at the same dispatch boundaries and retains diagnostic
 completion/stop control. Selector errors and log messages are unchanged; their
-logger namespace follows `debug_dumps`. Capture state and counters belong to the
+logger keeps its historical `dense_single_volume.debug_dumps` namespace. Capture state and counters belong to the
 separate diagnostic owner below.
 
-[`helpers.reconstruction_diagnostics`](../../recovar/em/dense_single_volume/helpers/reconstruction_diagnostics.py)
+[`diagnostics.reconstruction`](../../recovar/em/diagnostics/reconstruction.py)
 serializes the K-class current-size/M-step, tau2-update and final BPref NPZ
 captures. The refinement controller retains the environment gates and call
 boundaries; writers preserve historical fields, casts and optional entries.
@@ -456,12 +456,14 @@ scripts import these helpers directly; saved-audit validation does not require
 loading `significance`. `significance` calls this owner directly. JAX scoring/M-step kernels remain in
 `helpers.scoring`; diagnostic imports do not initialize those execution modules.
 
-[`helpers.pass2_diagnostics`](../../recovar/em/dense_single_volume/helpers/pass2_diagnostics.py)
-owns K1/K-class score dumps, norm-residual and chunked scale-AA writers, and
-target-row selection, including staging effective K-class raw operands after
+[`diagnostics.pass2`](../../recovar/em/diagnostics/pass2.py)
+owns K1/K-class score dumps and target-row selection, including staging effective K-class raw operands after
 scoring. It reads the shared numbered-half context from `bpref_diagnostics`;
 it does not import sparse scoring. The scorer retains scheduling and numerical
 operand preparation, calling the capture helpers at their original boundaries. Capture schemas, casts and reduction order are unchanged.
+[`diagnostics.norm_scale`](../../recovar/em/diagnostics/norm_scale.py) owns
+normalization-residual and chunked scale-AA captures. The diagnostics package
+itself imports no engines or capture modules; import specific writers directly.
 
 K1 and fused K-class preprocessing captures share
 `bpref_diagnostics.build_bpref_preprocess_capture`. Callers retain the raw

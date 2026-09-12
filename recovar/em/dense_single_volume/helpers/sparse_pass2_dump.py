@@ -14,9 +14,9 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers import pass2_diagnostics
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_flag
 from recovar.em.dense_single_volume.helpers.sparse_pass2_policy import _pass2_dump_enabled
+from recovar.em.diagnostics import pass2 as pass2_diagnostics
 
 logger = logging.getLogger(__name__)
 

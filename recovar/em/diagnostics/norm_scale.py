@@ -16,10 +16,7 @@ import numpy as np
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 from recovar.em.dense_single_volume.helpers.batch_fetch import original_image_indices
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_flag
-from recovar.em.dense_single_volume.helpers.pass2_diagnostics import (
-    _PASS2_DUMP_DIR_ENV,
-    _pass2_dump_target_rows,
-)
+from recovar.em.diagnostics.pass2 import _PASS2_DUMP_DIR_ENV, _pass2_dump_target_rows
 
 
 def _maybe_dump_norm_residual_inputs(

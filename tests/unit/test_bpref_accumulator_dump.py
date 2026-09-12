@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.debug_dumps import _save_bpref_accumulators
+from recovar.em.diagnostics.iteration import _save_bpref_accumulators
 from scripts.analyze_k1_half1_raw_accumulator import _load_recovar
 
 

@@ -35,11 +35,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers import (
-    bpref_diagnostics,
-    norm_scale_diagnostics,
-    pass2_diagnostics,
-)
+from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch, original_image_indices
 from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
     compact_capture_requested_for_original_indices,
@@ -312,6 +308,8 @@ from recovar.em.dense_single_volume.local_backprojection import (
     flatten_bucket_rotations,
     flatten_bucket_rows,
 )
+from recovar.em.diagnostics import norm_scale as norm_scale_diagnostics
+from recovar.em.diagnostics import pass2 as pass2_diagnostics
 from recovar.reconstruction import noise as noise_utils
 
 logger = logging.getLogger(__name__)

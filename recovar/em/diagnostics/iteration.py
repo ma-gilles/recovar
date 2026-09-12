@@ -29,7 +29,7 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
 from recovar.em.dense_single_volume.relion_metadata import _relion_half_plane_shell_counts
 from recovar.em.sampling import rotation_grid_size
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("recovar.em.dense_single_volume.debug_dumps")
 
 
 _SIGNIFICANCE_DUMP_TARGET_HALF_ENV = "RECOVAR_SIGNIFICANCE_DUMP_TARGET_HALF"

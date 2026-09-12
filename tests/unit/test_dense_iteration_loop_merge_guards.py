@@ -28,7 +28,7 @@ from recovar.em.dense_single_volume import (
     score_outputs,
     scoring_policy,
 )
-from recovar.em.dense_single_volume.helpers import reconstruction_diagnostics
+from recovar.em.diagnostics import reconstruction as reconstruction_diagnostics
 from recovar.em.dense_single_volume.helpers import orientation_priors
 from recovar.em.dense_single_volume.helpers.convergence import _native_final_perturbation_healpix_order
 from recovar.em.dense_single_volume.local_search_iteration import _LocalSearchIterationResult

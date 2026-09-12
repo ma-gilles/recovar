@@ -42,7 +42,7 @@ from recovar.em.dense_single_volume.half_scoring import (
     _score_half_dense_in_bpref_scope,
     _score_half_local_in_bpref_scope,
 )
-from recovar.em.dense_single_volume.helpers import bpref_diagnostics, reconstruction_diagnostics
+from recovar.em.dense_single_volume.helpers import bpref_diagnostics
 from recovar.em.dense_single_volume.helpers.convergence import (
     RefinementState,
     _apply_relion_healpix_order_oracle,
@@ -190,6 +190,7 @@ from recovar.em.dense_single_volume.scoring_policy import (
     _dense_global_scoring_dtype,
     _k1_relion_x_half_mstep_enabled,
 )
+from recovar.em.diagnostics import reconstruction as reconstruction_diagnostics
 from recovar.em.sampling import (
     _get_relion_rotation_grid_eulers_float64,
     _relion_adaptive_pass1_rotations,
@@ -251,7 +252,7 @@ def _kclass_replay_tau2_same_iter_enabled() -> bool:
     return parse_env_flag_or_false(_KCLASS_REPLAY_TAU2_SAME_ITER_ENV, logger=logger)
 
 
-from recovar.em.dense_single_volume.debug_dumps import (  # noqa: F401
+from recovar.em.diagnostics.iteration import (  # noqa: F401
     _bpref_device_signature_active_for_numbered_half,
     _maybe_dump_noise_update_debug,
     _save_bpref_accumulators,

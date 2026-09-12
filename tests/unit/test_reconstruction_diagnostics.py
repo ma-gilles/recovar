@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import reconstruction_diagnostics as dumps
+from recovar.em.diagnostics import reconstruction as dumps
 
 pytestmark = pytest.mark.unit
 
