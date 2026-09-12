@@ -37,8 +37,8 @@ gates. The observer reads host-return values; no intervention in its source is
 reported, but instrumentation and different incoming histories remain limitations.
 The failed real-full200, robustness and K4 conditions remain failed.
 
-[Exact values and hashes](result.json),
-[portable row scores/support](row942_scores_and_support.npz),
+[Exact values and hashes](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/vdam-coarse-cap-tie-20260910/result.json),
+[portable row scores/support](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/vdam-coarse-cap-tie-20260910/row942_scores_and_support.npz),
 [review script](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/coarse_cap_tie_review_20260910/review.py),
 [CPU command/receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/coarse_cap_tie_review_20260910/verification/receipt.json).
 All declared launch pins and the six capture/index files plus36 metadata files

@@ -8,7 +8,7 @@ mismatch to cleanup alone. It does not waive any quality gate.
 
 ## First saved state
 
-[The array audit](first_saved_state.json) compares 15 arrays from the first
+[The array audit](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/real10076-repeatability-20260907/first_saved_state.json) compares 15 arrays from the first
 numbered iteration (`it000`). It verifies every input against its original run
 digest and rechecks all 30 files after comparison. No GPU workload was rerun.
 
@@ -52,7 +52,7 @@ observations, not new expected baselines or a performance qualification.
 
 ## First-iteration boundary diagnostic
 
-[Three shortened runs](boundary_run_record.json) at the same unchanged source
+[Three shortened runs](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/real10076-repeatability-20260907/boundary_run_record.json) at the same unchanged source
 completed in Slurm13576748 (669.83 seconds including setup, execution and
 identity checks). The only scientific option changed from the autonomous run
 was `--max_iter 999` to `--max_iter 1`. The first run retained original capture
@@ -60,7 +60,7 @@ settings; the next two added both boundary captures below. All three used the
 same physical H100, `GPU-9f98ccbf-3c62-c54f-7409-7eb58845ad4a`, with independent
 empty caches and private immutable CUDA copies.
 
-[CPU audit13576847](first_iteration_boundaries.json) took 4.32 seconds and
+[CPU audit13576847](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/real10076-repeatability-20260907/first_iteration_boundaries.json) took 4.32 seconds and
 verified all 49 consumed files against execution-time hashes, then rechecked
 them after comparison. The two boundary-capture runs already differ in all four
 pre-join buffers. Their maximum numerator differences are 2.9802322e-8 and
@@ -68,7 +68,7 @@ pre-join buffers. Their maximum numerator differences are 2.9802322e-8 and
 Within each run, all four post-join buffers exactly equal the later saved arrays.
 
 The remaining 11 fields match across all three runs. They also
-[match the original autonomous run by file hash](historical_first_iteration_identity.json),
+[match the original autonomous run by file hash](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/real10076-repeatability-20260907/historical_first_iteration_identity.json),
 giving 33 historical file matches. The shortened runs reproduce those recorded
 first-iteration states, but have a different GPU UUID from the historical pair
 and do not prove complete E-step input identity or autonomous repeatability.

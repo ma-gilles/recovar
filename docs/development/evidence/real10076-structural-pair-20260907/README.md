@@ -9,9 +9,9 @@ by this run.
 
 ## Map and particle results
 
-[The map/controller report](map_and_controller.json) compares 51 products:
+[The map/controller report](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/real10076-structural-pair-20260907/map_and_controller.json) compares 51 products:
 two half-maps and their merged map for every iteration, plus three final
-products. All 51 [127-shell FSC curves](shellwise_fsc.json) are preserved with a
+products. All 51 [127-shell FSC curves](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/real10076-structural-pair-20260907/shellwise_fsc.json) are preserved with a
 lossless numeric roundtrip from the original NPZ. The unchanged FSC-AUC floor
 is 0.995. The first failing map is half 1 in iteration 8 (0.9933899201);
 27 of 51 products fail.
@@ -22,7 +22,7 @@ is 0.995. The first failing map is half 1 in iteration 8 (0.9933899201);
 | Half 2 | 0.9762480498 | Failed |
 | Merged | 0.9723503638 | Failed |
 
-[The particle report](particle_fields.json) checks all 69 required image-ordered
+[The particle report](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/real10076-structural-pair-20260907/particle_fields.json) checks all 69 required image-ordered
 fields, including final outputs. Sixty fail the existing recorded-field
 contract. In the first numbered iteration, support, Pmax, Euler coordinates
 and translations are exact. Support counts first differ in iteration 2:
@@ -43,7 +43,7 @@ waive this pair's failed gates.
 
 ## Run identity and reproduction
 
-[The run record](run_record.json) preserves complete commands, environment
+[The run record](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/real10076-structural-pair-20260907/run_record.json) preserves complete commands, environment
 overrides, source/native-library identities, 174 fixture identities, independent
 cache directories and archive hashes. Both runs used H100
 `GPU-202f2d43-7a0a-bec1-135f-bb496ab059a7`. Source, fixture, native-library and

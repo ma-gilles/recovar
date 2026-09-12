@@ -24,11 +24,11 @@ source-to-binary closure remains unavailable.
 
 ## Preserved records
 
-- [review.json](review.json): independently recomputed metrics for every repeat,
+- [review.json](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/vdam-coarse-repeat-20260909/review.json): independently recomputed metrics for every repeat,
   array file hashes, source/build identity and explicit limitations.
-- [manifest.json](manifest.json): byte-identical producer manifest with 13 input,
+- [manifest.json](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/vdam-coarse-repeat-20260909/manifest.json): byte-identical producer manifest with 13 input,
   source and harness pins. The audit also checks 17 native inputs in both trees.
-- [audit.py.txt](audit.py.txt): exact CPU audit source; SHA-256 `30fa0c32add89ea66629b65f185838eed5481851e69dc45e7633d2f2a6d4a4bc`.
+- [audit.py.txt](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/vdam-coarse-repeat-20260909/audit.py.txt): exact CPU audit source; SHA-256 `30fa0c32add89ea66629b65f185838eed5481851e69dc45e7633d2f2a6d4a4bc`.
   The text suffix keeps this historical script out of application entry points.
 
 Original GPU artifacts (including the 16 score arrays and completion receipt):

@@ -29,7 +29,7 @@ host precision is preserved, and offline FSC computation uses complex128.
 | Merged GT FSC-AUC delta versus RELION | +0.000254144 | +0.000249589 | Slightly lower; both pass ≥ −0.002 |
 | Qualified speed / memory comparison | Not measured | Not measured | Not measured |
 
-The [comparison](comparison.json) verifies the unchanged source, fixture,
+The [comparison](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/pr180-k1-noise-state-20260908/comparison.json) verifies the unchanged source, fixture,
 precision settings and particle/half mappings. Half 1 supplies a negative
 control: its Pmax array is exactly identical between runs. The iteration-3
 half-specific noise spectra differ by up to 9.95% relative to half 2.
@@ -37,8 +37,8 @@ The sole angular discrepancy above 0.1 degrees was at zero-based row 4932
 in half 2; it disappears with half-specific noise.
 
 Full shellwise FSC curves and particle checks are retained in the
-[broadcast audit](broadcast_audit.json) and
-[half-specific audit](continuous_audit.json). Passing map gates do not cancel
+[broadcast audit](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/pr180-k1-noise-state-20260908/broadcast_audit.json) and
+[half-specific audit](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/pr180-k1-noise-state-20260908/continuous_audit.json). Passing map gates do not cancel
 failed particle gates. The merged GT FSC 0.5 crossing also differs from the
 oracle; inspect the saved curves rather than substituting map correlation.
 
@@ -49,7 +49,7 @@ small angular difference alone does not establish tie-aware decision parity.
 
 ## Provenance and limitations
 
-[Run record](run_record.json) includes commands, precision overrides, fixture
+[Run record](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/pr180-k1-noise-state-20260908/run_record.json) includes commands, precision overrides, fixture
 hashes, source-manifest identities, native libraries, instrumentation and job
 outcomes. Both executions and offline audits preserve their consumed inputs.
 Both Slurm jobs exit 1 because the particle audit fails; EM execution exits 0.

@@ -17,7 +17,7 @@ comparisons across20 updates. Count3 is73 versus72 at input row1579. No raw
 margin waiver follows from this uninstrumented run. Later diagnostic explanations
 require their own source/input/margin audit. Existing map gates were unchanged.
 
-[Machine-readable admission](result.json) records verified pins and exact scope.
+[Machine-readable admission](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/vdam-canonical-pixel-prefix20-20260910/result.json) records verified pins and exact scope.
 [Producer report](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_canonical_pixel_integrated_prefix20_20260909/RESULTS.md)
 contains commands, source/native manifests, lifecycle, complete curves and state.
 [Integrator audit](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/canonical_pixel_prefix_admission_20260910/review.py)

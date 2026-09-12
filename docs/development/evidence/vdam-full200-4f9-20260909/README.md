@@ -18,7 +18,7 @@ later cleanup commits, ordinary auto-refine, other data/seeds, exactly K4,
 | Final cross-engine FSC-AUC | 0.9997294862648998 | >=0.999 |
 | Final registered-GT AUC, candidate / native | 0.38897697468181186 / 0.38907639621865686 | Delta -0.00009942153684500132 |
 
-All1,005 shellwise curves and saved integrals survive in [shellwise.npz](shellwise.npz)
+All1,005 shellwise curves and saved integrals survive in [shellwise.npz](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/vdam-full200-4f9-20260909/shellwise.npz)
 (456KB; numerical metrics only, no particle images or volumes). The labels are
 `new_candidate`, `native`; all201 integer checkpoint IDs and63 shells are explicit.
 There are201 cross-engine curves,402 raw-GT curves and402 registered-GT curves.
@@ -66,12 +66,12 @@ No isolated-stage, current100k or newer-tip speed claim follows.
 
 ## Reproduce and inspect
 
-[run_record.json](run_record.json) preserves the exact native and RECOVAR CLI
+[run_record.json](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/vdam-full200-4f9-20260909/run_record.json) preserves the exact native and RECOVAR CLI
 arguments, manifest/input pins, binaries/libraries, physical GPU identity,
 producer/analysis commands, timing boundaries and limitations.
-[quality_summary.json](quality_summary.json) preserves the producer's summary.
-[manifest.json](manifest.json) binds the archived files to original evidence and
-the canonical AUC source. [audit.py.txt](audit.py.txt) contains that exact function
+[quality_summary.json](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/vdam-full200-4f9-20260909/quality_summary.json) preserves the producer's summary.
+[manifest.json](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/vdam-full200-4f9-20260909/manifest.json) binds the archived files to original evidence and
+the canonical AUC source. [audit.py.txt](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/vdam-full200-4f9-20260909/audit.py.txt) contains that exact function
 and the archive checks; the text suffix keeps this historical audit out of runtime
 entry points. Run from the primary checkout with its pinned pixi environment:
 

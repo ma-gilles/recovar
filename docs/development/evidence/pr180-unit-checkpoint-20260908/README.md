@@ -7,8 +7,8 @@ focused follow-up. These checks span revisions and execution environments;
 they do not establish a fresh full-suite pass or current-source trajectory,
 quality or performance qualification.
 
-The [CPU summary](cpu_summary.json) preserves the original results. The
-[failure reconciliation](failure_reconciliation.json) records each of the 25
+The [CPU summary](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/pr180-unit-checkpoint-20260908/cpu_summary.json) preserves the original results. The
+[failure reconciliation](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/pr180-unit-checkpoint-20260908/failure_reconciliation.json) records each of the 25
 failed cases, its follow-up, source revision, dirty fingerprint and artifact
 hashes. Twenty-four retain their original case IDs. One diagnostic norm test
 is explicitly replaced by two parametrized cases; it is not silently dropped.
@@ -31,7 +31,7 @@ is explicitly replaced by two parametrized cases; it is not silently dropped.
   behavior. Nine norm/capture cases and two existing precision-default guards
   pass. Runtime code and tolerances are unchanged.
 
-The [sampling comparison](sampling_comparison.json) records eight exact
+The [sampling comparison](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/pr180-unit-checkpoint-20260908/sampling_comparison.json) records eight exact
 original/new grid comparisons: HEALPix orders 0–3 in both precisions. It also
 checks that the direct helper call leaves the controller unloaded and that
 retained metadata computations and existing scientific assertions are
@@ -56,7 +56,7 @@ Scheduler-assigned visibility was preserved.
 | Eight tiny GPU/native-CUDA cases | 13625819 | 8 passed, no skips | 15 s |
 | Five dry-run tool checks and one float32 comparison | 13625952 | 6 passed, no skips | 6 s |
 
-The [GPU records](gpu_followups.json) include exact test selections, commands,
+The [GPU records](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/pr180-unit-checkpoint-20260908/gpu_followups.json) include exact test selections, commands,
 environment overrides, submission records, import paths, source and library
 hashes, and before/after identity checks. The second job supplies the existing
 `RELION_REFINE_MPI` executable explicitly. Dry-run checks resolve and hash it;

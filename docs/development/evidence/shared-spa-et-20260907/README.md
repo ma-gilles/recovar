@@ -5,12 +5,12 @@ runs at `6ebaf5fad115817a3ce074076b09d1bc20bcd446`. Each workload ran once on an
 allocated H100 against the committed historical baselines. It is a historical
 checkpoint, not qualification of a later source or a replacement baseline.
 
-- [Run record](run_record.json): exact commands, environment, source, lock and
+- [Run record](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/shared-spa-et-20260907/run_record.json): exact commands, environment, source, lock and
   CUDA identities, GPU UUIDs and instrumentation hashes.
-- [Quality and performance](quality_and_performance.json) and
+- [Quality and performance](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/shared-spa-et-20260907/quality_and_performance.json) and
   [comparison tables](comparison_tables.md): original tests and the corrected
   read-only inventory audit, including all historical performance warnings.
-- [Generated inputs and FSC curves](fixtures_and_fsc.json): 58 fixture-file
+- [Generated inputs and FSC curves](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/shared-spa-et-20260907/fixtures_and_fsc.json): 58 fixture-file
   identities and 54 consumed product hashes per workload; six complete
   63-shell curves recovered from saved outputs on CPU.
 

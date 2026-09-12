@@ -32,7 +32,7 @@ same iteration-3-to-4 state with `--continuous-relion-noise-state`.
 | 3694 | 0.514434397221 | 0.514445841312 | 0.512997 |
 | 4568 | 0.784231245518 | 0.784208059311 | 0.785391 |
 
-The [subset audit](subset_audit.json) and [capture audit](capture_audit.json)
+The [subset audit](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/pr180-k1-targeted-capture-20260908/subset_audit.json) and [capture audit](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/pr180-k1-targeted-capture-20260908/capture_audit.json)
 retain full values, deltas, half membership, pose comparisons and consumed
 artifact hashes. The audit also rejects missing particles. The production
 residuals remain unresolved. In particular, the dump moves row 1300 across the
@@ -47,7 +47,7 @@ candidates, 1,057,920 have finite combined scores; every finite stored value
 round-trips exactly through float32. The legacy dump stores these values in
 float64 arrays, which does not change their original arithmetic precision.
 
-The [score summary](score_summary.json) records the leading eight candidates
+The [score summary](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/pr180-k1-targeted-capture-20260908/score_summary.json) records the leading eight candidates
 and hashes every consumed score block. The winner/runner-up score margin is
 `1.7069549560546875`. Normalizing the captured float32 scores in float64 gives
 Pmax `0.8464409107915538`, just `-5.01476e-10` from the dump-path Pmax. Its gap to
@@ -63,7 +63,7 @@ internal candidate indices is not established.
 
 ## Reproduction and evidence
 
-The [run record](run_record.json) contains both exact argument lists, precision
+The [run record](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/pr180-k1-targeted-capture-20260908/run_record.json) contains both exact argument lists, precision
 and capture settings, source/native-library identities, import paths, commands,
 submission and hardware records. Preflight checked 1,794 source files and 155
 input/result files plus instrumentation and libraries. Audit self-checks

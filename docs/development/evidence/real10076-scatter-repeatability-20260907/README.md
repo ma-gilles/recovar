@@ -8,7 +8,7 @@ qualify the cleanup, or change any accuracy or performance gate.
 
 ## Captured operands
 
-[Operand comparison](operand_comparison.json) records two shortened,
+[Operand comparison](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/real10076-scatter-repeatability-20260907/operand_comparison.json) records two shortened,
 first-iteration runs at PR158 commit
 `44d770de3f9336ab2f3f6a34203394bae8d1aeed`. Each contains all 5,000 half-1
 particles and 40,000 valid rotation rows, in 23 packets. All 20 recorded
@@ -26,7 +26,7 @@ intermediate inside the E-step.
 
 ## Repeated production function
 
-[Fixed-input comparison](fixed_input_comparison.json) replays the first
+[Fixed-input comparison](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/real10076-scatter-repeatability-20260907/fixed_input_comparison.json) replays the first
 captured stream, selected before execution, three times from fresh zero
 accumulators. Each trial calls
 `recovar.cuda_backproject.relion_fused_x_half_backproject_indexed` once per
@@ -56,7 +56,7 @@ recorded replay timings are diagnostics, not ordinary execution benchmarks.
 
 ## Provenance and reproduction
 
-[Run record](run_record.json) identifies the source, all 23 selected packet
+[Run record](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/real10076-scatter-repeatability-20260907/run_record.json) identifies the source, all 23 selected packet
 hashes, manifests, scripts, library and archived reports. The complete operand
 report also retains the identities of both captured streams. Large inputs and
 18 output arrays remain outside git, with their SHA-256 digests in the reports.

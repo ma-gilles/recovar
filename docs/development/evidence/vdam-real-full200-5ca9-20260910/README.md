@@ -21,11 +21,11 @@ The integrator recomputed these12 curves from8 manifest-hashed MRCs using the
 canonical FSC functions, verified identical to the frozen source. Every AUC
 matches the producer exactly. All804 map paths exist and have manifest entries;
 this is not rehashing/recomputing all804 maps. The producer samples19 checkpoints,
-not all201; sampled failure locations are preserved in [result.json](result.json).
+not all201; sampled failure locations are preserved in [result.json](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/vdam-real-full200-5ca9-20260910/result.json).
 All2,317 declared candidate source files and18 manifest pins check before/after.
 Full transitive native build/input closure is outside this review.
 
-[reviewed_curves.npz](reviewed_curves.npz) stores the12 recomputed curves and8
+[reviewed_curves.npz](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/vdam-real-full200-5ca9-20260910/reviewed_curves.npz) stores the12 recomputed curves and8
 raw/aligned saved reference curves. The reference is not registered as GT in the
 fixture manifest. Independently fitted reference alignments and shell proxies do
 not establish absolute accuracy. No reference fit was repeated here.

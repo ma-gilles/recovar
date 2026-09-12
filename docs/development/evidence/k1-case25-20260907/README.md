@@ -24,12 +24,12 @@ that warning. These measurements do not replace any established baseline.
 
 ## Archived evidence
 
-- [Run record](run_record.json): commands, environment, source and lock hashes,
+- [Run record](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/k1-case25-20260907/run_record.json): commands, environment, source and lock hashes,
   native binary identity, all 84 fixture file identities, process exits,
   output hashes and original artifact locations.
-- [Comparison](comparison.json): the original report, preserved byte for byte,
+- [Comparison](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/k1-case25-20260907/comparison.json): the original report, preserved byte for byte,
   including every direct map score and the individual timing/memory results.
-- [FSC curves](fsc_curves.json): all 189 float64 curves, each with 63 shells,
+- [FSC curves](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/k1-case25-20260907/fsc_curves.json): all 189 float64 curves, each with 63 shells,
   converted losslessly from the three original NPZ files. The run record
   identifies those files and the archived JSON by SHA256.
 
@@ -39,7 +39,7 @@ for the corresponding numbered RELION iterations. Each group also contains
 final products. Preserve this offset when joining the groups. Curve samples
 retain their original order and values; no smoothing or interpolation was used.
 
-An [additional particle-field audit](particle_fields_audit.json) compares all
+An [additional particle-field audit](https://github.com/ma-gilles/recovar/blob/5c07fc3169d636dc3775b2bb41ae4c76d6829611/docs/development/evidence/k1-case25-20260907/particle_fields_audit.json) compares all
 37 explicitly image-ordered fields in the two result archives. Recorded
 pose/support decisions agree exactly. Pmax differences have maximum 0.000155002
 and largest per-field p95 0.0000503063. This extends the recorded-field evidence;
