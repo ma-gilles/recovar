@@ -974,8 +974,7 @@ def _run_sparse_pass2_initial_model_estep(
             local_layout = tuple(local_layouts)
 
         t0 = time.time()
-        from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_diagnostics
-
+        from recovar.em.dense_single_volume.helpers import sparse_pass2_posterior as sparse_diagnostics
         use_exact_local_relion_operands = bool(
             state.K == 1
             and use_exact_relion_projector

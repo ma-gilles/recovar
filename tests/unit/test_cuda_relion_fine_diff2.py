@@ -2723,7 +2723,7 @@ def test_relion_fused_translate_pairs_preserve_source_order_posterior_and_ties(
     gpu_device,
 ):
     import recovar.cuda_backproject as cuda_backproject
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (
         _relion_f32_fine_posterior,
     )
 

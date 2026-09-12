@@ -19,7 +19,7 @@ from recovar.em.dense_single_volume.helpers.flat_local_rows import (
     build_pool_flat_local_row_plan,
     scatter_flat_local_rows,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (
     _relion_f32_fine_posterior,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (

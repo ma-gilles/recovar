@@ -50,9 +50,11 @@ from recovar.em.dense_single_volume.helpers.projection import (
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _relion_cuda_translate_wavg_norm_images,
-    _relion_f32_fine_reconstruction_probs,
     _relion_wavg_rectangle_triplet_terms,
     _relion_wavg_sequential_triplet_terms,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (
+    _relion_f32_fine_reconstruction_probs,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_scoring import (
     _relion_cuda_fine_diff2_to_scores,

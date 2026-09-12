@@ -596,7 +596,7 @@ def analyze(
         current_posterior = np.asarray(recovar["reconstruction_probs"])[particle_slot][
             active_rotation_rows
         ][rotation_map]
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (
         _relion_f32_fine_reconstruction_probs,
     )
 

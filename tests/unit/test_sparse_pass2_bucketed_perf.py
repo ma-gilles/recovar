@@ -85,25 +85,27 @@ from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
     _compute_sparse_pass2_windowed_projections_block,
     _half_translation_phase_table_for_indices,
     _hybrid_k_class_compact_pair_execution_buckets,
+    _maybe_prepare_sparse_k_class_compact_pair_plan,
+    _prepare_bucket_io,
+    _projection_gather_bytes_per_rotation_row,
+    _projection_rotation_chunk_size,
+    _relion_translation_angles_f32,
+    _split_compact_pair_buckets_by_projection_gather_budget,
+    _validate_k_class_execution_bucket_partition,
+    _weighted_image_power_shells_and_per_image,
+)
+from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (
     _logsumexp_pass2_bucket_score_only,
     _logsumexp_pass2_pairs_score_only,
-    _maybe_prepare_sparse_k_class_compact_pair_plan,
     _normalize_pass2_bucket,
     _normalize_pass2_bucket_score_only,
     _normalize_pass2_bucket_with_log_z,
     _normalize_pass2_pairs_with_log_z,
-    _prepare_bucket_io,
-    _projection_gather_bytes_per_rotation_row,
-    _projection_rotation_chunk_size,
     _relion_fine_mstep_prune_mode,
     _relion_joint_winner_take_all_masks,
     _relion_pass2_reconstruction_joint_masks,
     _relion_pass2_reconstruction_pair_probs,
     _relion_pass2_reconstruction_probs,
-    _relion_translation_angles_f32,
-    _split_compact_pair_buckets_by_projection_gather_budget,
-    _validate_k_class_execution_bucket_partition,
-    _weighted_image_power_shells_and_per_image,
     _winner_take_all_bucket_probs_from_global_argmax,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_compact_pair_sums import (
@@ -5100,6 +5102,9 @@ def test_k1_relion_fine_mstep_prune_keeps_unweighted_high_shell_image_power(monk
         return jnp.zeros_like(probs), jnp.zeros(probs.shape[0], dtype=jnp.int32), jnp.zeros(probs.shape[0], dtype=jnp.int32)
 
     monkeypatch.setattr(bucketed_mod, "_relion_pass2_reconstruction_probs", prune_everything)
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_posterior
+
+    monkeypatch.setattr(sparse_pass2_posterior, "_relion_pass2_reconstruction_probs", prune_everything)
     pruned = compute_pass2_stats_sparse(
         **common,
         relion_fine_mstep_prune=True,

@@ -8,7 +8,7 @@ import jax.numpy as jnp
 
 from recovar.em.dense_single_volume import local_em_engine
 from recovar.em.dense_single_volume.helpers.projection import compute_noise_block
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (
     _relion_f32_fine_reconstruction_probs,
 )
 from recovar.em.dense_single_volume.local_backprojection import (

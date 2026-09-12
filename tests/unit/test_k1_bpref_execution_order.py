@@ -11,7 +11,7 @@ from recovar.em.dense_single_volume.helpers.env_flags import parse_env_flag
 from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
     _bucket_pass2_inputs,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (
     _normalize_pass2_bucket,
 )
 from recovar.em.dense_single_volume.helpers.sparse_pass2_policy import (

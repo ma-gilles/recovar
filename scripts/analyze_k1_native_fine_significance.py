@@ -109,7 +109,7 @@ def analyze(
     if weights.size == 0:
         raise ValueError("native fine-score capture has no active weights")
 
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+    from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (
         _relion_f32_fine_reconstruction_probs,
     )
 

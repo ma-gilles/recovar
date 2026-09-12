@@ -6,7 +6,7 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (
     _RELION_X_HALF_F32_FINE_POSTERIOR_ENV,
     _relion_f32_fine_posterior,
     _relion_f32_fine_reconstruction_probs,
