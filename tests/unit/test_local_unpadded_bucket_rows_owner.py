@@ -17,9 +17,12 @@ def test_owner_limits_every_row_array_and_keeps_optional_none():
 
 
 def test_both_postprocess_calls_use_the_owner():
-    src = inspect.getsource(local_em_engine)
+    from recovar.em.dense_single_volume import local_bucket_stages
+
+    # one call site is the engine's own, the other is in the bucket stage that owns it
+    src = inspect.getsource(local_em_engine) + inspect.getsource(local_bucket_stages)
     assert src.count("**_unpadded_bucket_rows(bucket, unpadded_batch_size),") == 2
-    for fn in (local_em_engine._postprocess_fixed_capacity_whole_score_calls, local_em_engine.run_local_em_exact):
+    for fn in (local_bucket_stages._postprocess_fixed_capacity_whole_score_calls, local_em_engine.run_local_em_exact):
         assert "**_unpadded_bucket_rows(bucket, unpadded_batch_size)," in inspect.getsource(fn)
     # only the owner slices the mask (the VDAM replay capture passes the rotation ids alone)
     assert src.count("local_rotation_mask=bucket.local_rotation_mask[:unpadded_batch_size]") == 1

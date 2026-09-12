@@ -11,6 +11,7 @@ from recovar import cuda_backproject
 from recovar.em.dense_single_volume import debug_dumps, half_scoring, iteration_loop, k_class, local_em_engine
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics, sparse_pass2_bucketed
 from recovar.em.dense_single_volume.local_backprojection import compute_local_mstep_sums
+from recovar.em.dense_single_volume import local_bpref_capture
 
 pytestmark = pytest.mark.unit
 
@@ -751,7 +752,7 @@ def test_exact_local_contribution_capture_routes_only_the_target_boundary(monkey
     monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "/tmp/contributions")
     bpref_diagnostics.set_bpref_contribution_dump_context(iteration=7, half=2)
     try:
-        assert not local_em_engine._exact_local_bpref_contribution_capture_active(
+        assert not local_bpref_capture._exact_local_bpref_contribution_capture_active(
             current_size=50,
             debug_iteration=7,
         )
@@ -763,7 +764,7 @@ def test_exact_local_contribution_capture_routes_only_the_target_boundary(monkey
     monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE", "50")
     bpref_diagnostics.set_bpref_contribution_dump_context(iteration=7, half=2)
     try:
-        assert local_em_engine._exact_local_bpref_contribution_capture_active(
+        assert local_bpref_capture._exact_local_bpref_contribution_capture_active(
             current_size=50,
             debug_iteration=7,
         )
@@ -786,16 +787,16 @@ def test_exact_local_contribution_capture_routes_only_the_target_boundary(monkey
                 score_only=False,
                 mstep_relion_x_half=False,
             )
-        assert not local_em_engine._exact_local_bpref_contribution_capture_active(
+        assert not local_bpref_capture._exact_local_bpref_contribution_capture_active(
             current_size=52,
             debug_iteration=7,
         )
-        assert not local_em_engine._exact_local_bpref_contribution_capture_active(
+        assert not local_bpref_capture._exact_local_bpref_contribution_capture_active(
             current_size=50,
             debug_iteration=8,
         )
         bpref_diagnostics.set_bpref_contribution_dump_context(iteration=7, half=1)
-        assert not local_em_engine._exact_local_bpref_contribution_capture_active(
+        assert not local_bpref_capture._exact_local_bpref_contribution_capture_active(
             current_size=50,
             debug_iteration=7,
         )

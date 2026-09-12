@@ -1104,7 +1104,7 @@ def test_runtime_bpref_lowering_and_jit_cache_ignore_logical_size(monkeypatch):
 
 
 def test_stable_bpref_helper_rejects_noninline_projector():
-    from recovar.em.dense_single_volume.local_em_engine import (
+    from recovar.em.dense_single_volume.local_physical_grid import (
         _accumulate_relion_vdam_physical_particle_grid,
     )
 

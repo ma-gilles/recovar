@@ -10,6 +10,8 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume import fixed_capacity_local, local_big_jit, local_em_engine
+
+from recovar.em.dense_single_volume import local_bucket_stages
 from recovar.em.dense_single_volume.batch_planning import (
     _plan_fixed_capacity_whole_local,
     _seal_fixed_capacity_physical_order,
@@ -842,7 +844,7 @@ def test_local_big_jit_shared_invocation_forwards_one_call_without_numeric_chang
         calls.append((args, kwargs))
         return expected
 
-    monkeypatch.setattr(local_em_engine, "run_local_bucket_big_jit", fake_big_jit)
+    monkeypatch.setattr(local_bucket_stages, "run_local_bucket_big_jit", fake_big_jit)
 
     result = local_em_engine._invoke_local_bucket_big_jit(positional, marker=keyword)
 

@@ -6,7 +6,7 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.dense_single_volume import local_bpref_capture
 from recovar.em.dense_single_volume.helpers.projection import compute_noise_block
 from recovar.em.dense_single_volume.helpers.sparse_pass2_posterior import (
     _relion_f32_fine_reconstruction_probs,
@@ -232,7 +232,7 @@ def test_bpref_capture_rebuilds_relion_f32_mstep_probs_not_generic_debug_probs()
         adaptive_fraction=0.999,
     )
 
-    captured = local_em_engine._exact_local_bpref_reconstruction_probs_for_capture(
+    captured = local_bpref_capture._exact_local_bpref_reconstruction_probs_for_capture(
         scores,
         generic_probs,
         expected_mask,

@@ -53,6 +53,7 @@ from recovar.em.dense_single_volume.local_layout import (
     _pack_fixed_capacity_local_hypothesis_program,
     bucket_local_hypothesis_layout,
 )
+from recovar.em.dense_single_volume import local_bucket_stages
 
 
 SCHEMA = "recovar.fixed_capacity_local_score_gate.v7"
@@ -402,7 +403,7 @@ def _capture_shared_numeric_call(
     donated_input_objects: list[object] | None = None,
 ) -> Iterator[list[_CapturedCall]]:
     original_wrapper = local_em_engine._invoke_local_bucket_big_jit
-    shared_numeric = local_em_engine.run_local_bucket_big_jit
+    shared_numeric = local_bucket_stages.run_local_bucket_big_jit
     signature = inspect.signature(shared_numeric)
     captures: list[_CapturedCall] = []
     if donated_input_objects is None:

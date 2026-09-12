@@ -157,9 +157,11 @@ def test_bpref_target_rows_accept_slurm_safe_semicolon_list(monkeypatch):
 
 @pytest.mark.unit
 def test_big_jit_bpref_capture_observes_production_tensors_without_disabling_path():
-    source = (
-        REPO_ROOT / "recovar/em/dense_single_volume/local_em_engine.py"
-    ).read_text()
+    # the capture is driven from the engine and recorded by its owner
+    source = "\n".join(
+        (REPO_ROOT / "recovar/em/dense_single_volume" / name).read_text()
+        for name in ("local_em_engine.py", "local_bpref_capture.py")
+    )
 
     use_big_jit_block = source.split("use_big_jit_buckets = (", 1)[1].split(")\n", 1)[0]
     assert "bpref_contribution_capture_active" not in use_big_jit_block

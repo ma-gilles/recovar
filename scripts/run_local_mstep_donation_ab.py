@@ -1004,15 +1004,14 @@ class LocalMstepDonationMonitor:
 def installed_local_mstep_donation_arm(
     arm: str,
 ) -> Iterator[LocalMstepDonationMonitor]:
-    from recovar.em.dense_single_volume import local_em_engine
-
-    original = local_em_engine._invoke_local_bucket_big_jit
+    from recovar.em.dense_single_volume import local_bucket_stages
+    original = local_bucket_stages._invoke_local_bucket_big_jit
     monitor = LocalMstepDonationMonitor(arm)
-    local_em_engine._invoke_local_bucket_big_jit = monitor
+    local_bucket_stages._invoke_local_bucket_big_jit = monitor
     try:
         yield monitor
     finally:
-        local_em_engine._invoke_local_bucket_big_jit = original
+        local_bucket_stages._invoke_local_bucket_big_jit = original
 
 
 def _gpu_uuid(expected: str | None) -> str | None:

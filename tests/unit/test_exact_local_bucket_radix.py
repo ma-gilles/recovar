@@ -11,8 +11,10 @@ from recovar.em.dense_single_volume.local_batch_planning import (
     _exact_local_xhalf_projection_microbatch_cap,
 )
 from recovar.em.dense_single_volume.local_em_engine import (
-    _build_reconstruction_pack_indices,
     run_local_em_exact,
+)
+from recovar.em.dense_single_volume.local_bucket_stages import (
+    _build_reconstruction_pack_indices,
 )
 from recovar.em.dense_single_volume.local_layout import (
     EXACT_LOCAL_BUCKET_RADIX_ENV,

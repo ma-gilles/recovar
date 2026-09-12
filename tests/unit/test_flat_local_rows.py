@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.dense_single_volume import local_bucket_stages
 from recovar.em.dense_single_volume.helpers import compact_candidates
 from recovar.em.dense_single_volume.helpers.flat_local_rows import (
     build_dense_to_flat_local_row_lookup,
@@ -187,7 +187,7 @@ def test_local_fused_pairs_reuse_compact_source_order_and_map_flat_projection_ro
         local_sample_mask=sample_mask,
     )
 
-    actual = local_em_engine._build_local_fused_pair_fine_arguments(
+    actual = local_bucket_stages._build_local_fused_pair_fine_arguments(
         bucket,
         encoded,
         np.asarray([True, True, False]),
@@ -249,9 +249,9 @@ def test_local_fused_pairs_reuse_compact_source_order_and_map_flat_projection_ro
     assert np.all(actual["job_plan"][7:] == -1)
 
     monkeypatch.setenv("RECOVAR_EXACT_FINE_JOB_BUCKET_QUANTUM", "8192")
-    capacities = local_em_engine._plan_local_fine_job_capacities([bucket])
+    capacities = local_bucket_stages._plan_local_fine_job_capacities([bucket])
     assert capacities == {(3, dense_rotation_count): 144}
-    stable = local_em_engine._build_local_fused_pair_fine_arguments(
+    stable = local_bucket_stages._build_local_fused_pair_fine_arguments(
         bucket,
         encoded,
         np.asarray([True, True, False]),
@@ -415,12 +415,12 @@ def test_flat_row_capacity_reuses_one_shape_per_dense_bucket_abi():
         actual_rotation_counts=np.asarray([65, 9], dtype=np.int32),
     )
 
-    capacities = local_em_engine._plan_flat_local_row_capacities(
+    capacities = local_bucket_stages._plan_flat_local_row_capacities(
         (first, second),
         rotation_block_size=128,
         exact_local_bucket_radix=4,
     )
-    encoded = local_em_engine._build_flat_local_row_argument(
+    encoded = local_bucket_stages._build_flat_local_row_argument(
         first,
         capacities,
         dense_batch_size=4,
@@ -450,32 +450,32 @@ def test_stable_flat_row_capacity_reuses_mature_rectangular_bucket_abi():
         actual_rotation_counts=np.asarray([65, 9], dtype=np.int32),
     )
 
-    capacities = local_em_engine._plan_flat_local_row_capacities(
+    capacities = local_bucket_stages._plan_flat_local_row_capacities(
         (first, second),
         rotation_block_size=128,
         exact_local_bucket_radix=4,
         stable_rectangular_capacity=True,
     )
-    first_encoded = local_em_engine._build_flat_local_row_argument(
+    first_encoded = local_bucket_stages._build_flat_local_row_argument(
         first,
         capacities,
         dense_batch_size=4,
         rotation_block_size=128,
         exact_local_bucket_radix=4,
     )
-    second_encoded = local_em_engine._build_flat_local_row_argument(
+    second_encoded = local_bucket_stages._build_flat_local_row_argument(
         second,
         capacities,
         dense_batch_size=4,
         rotation_block_size=128,
         exact_local_bucket_radix=4,
     )
-    ordinary_capacities = local_em_engine._plan_flat_local_row_capacities(
+    ordinary_capacities = local_bucket_stages._plan_flat_local_row_capacities(
         (first, second),
         rotation_block_size=128,
         exact_local_bucket_radix=4,
     )
-    ordinary_first = local_em_engine._build_flat_local_row_argument(
+    ordinary_first = local_bucket_stages._build_flat_local_row_argument(
         first,
         ordinary_capacities,
         dense_batch_size=4,

@@ -140,24 +140,28 @@ from recovar.em.dense_single_volume.local_caches import (
 from recovar.em.dense_single_volume.local_preprocessing import prepare_local_bucket
 from recovar.em.dense_single_volume.local_em_engine import (
     EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV,
-    EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV,
     EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV,
     EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV,
     EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS_ENV,
-    EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV,
     LOCAL_SCORE_DUMP_TARGET_ONLY_ENV,
-    _accumulate_relion_physical_particle_grid,
-    _accumulate_relion_vdam_physical_particle_grid,
-    _adjoint_slice_volume_maybe_windowed_row_chunks,
-    _build_reconstruction_pack_indices,
     _local_processed_half_cache_enabled,
     _local_raw_cache_enabled,
+    run_local_em_exact,
+)
+from recovar.em.dense_single_volume.local_bucket_stages import (
+    EXACT_LOCAL_RECONSTRUCTION_PACK_QUANTUM_ENV,
+    _adjoint_slice_volume_maybe_windowed_row_chunks,
+    _build_reconstruction_pack_indices,
     _pad_local_big_jit_image_axis,
     _reorder_bucket_to_indices,
+)
+from recovar.em.dense_single_volume.local_physical_grid import (
+    EXACT_LOCAL_SOURCE_BPREF_PARTICLE_CHUNK_SIZE_ENV,
+    _accumulate_relion_physical_particle_grid,
+    _accumulate_relion_vdam_physical_particle_grid,
     _source_faithful_bpref_particle_chunk_cap,
     _source_faithful_bpref_particle_chunk_size,
     _source_faithful_bpref_particle_slices,
-    run_local_em_exact,
 )
 from recovar.em.dense_single_volume.local_batch_planning import (
     EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV,
@@ -4025,6 +4029,7 @@ def test_pad_local_big_jit_image_axis_masks_dummy_rows():
 
 def test_project_local_bucket_accepts_singleton_class_relion_projector(monkeypatch):
     from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.dense_single_volume import local_bucket_stages
     from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
     from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 
@@ -4045,7 +4050,7 @@ def test_project_local_bucket_accepts_singleton_class_relion_projector(monkeypat
         calls.append((np.asarray(projector_half).shape, tuple(rotations.shape), dict(kwargs)))
         return jnp.ones((rotations.shape[0], image_shape[0] * (image_shape[0] // 2 + 1)), dtype=jnp.complex64), None
 
-    monkeypatch.setattr(local_em_engine, "_compute_relion_projector_projections_block", fake_projector)
+    monkeypatch.setattr(local_bucket_stages, "_compute_relion_projector_projections_block", fake_projector)
 
     block = local_em_engine._project_local_bucket(
         mean_for_proj=jnp.zeros((4, 4, 4), dtype=jnp.complex64),
@@ -4428,6 +4433,7 @@ def test_local_big_jit_relion_projector_matches_helper(rng):
 
 def test_project_local_bucket_windowed_relion_projector_uses_compact_indices(monkeypatch):
     from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.dense_single_volume import local_bucket_stages
     from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
     from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 
@@ -4459,7 +4465,7 @@ def test_project_local_bucket_windowed_relion_projector_uses_compact_indices(mon
         values = jnp.arange(rotations.shape[0] * n_values, dtype=jnp.float32).reshape(rotations.shape[0], n_values)
         return values.astype(jnp.complex64), None
 
-    monkeypatch.setattr(local_em_engine, "_compute_relion_projector_projections_block", fake_projector)
+    monkeypatch.setattr(local_bucket_stages, "_compute_relion_projector_projections_block", fake_projector)
     window_spec = make_fourier_window_spec((8, 8), 6, 40, include_recon_window=True)
 
     block = local_em_engine._project_local_bucket(
@@ -4485,6 +4491,7 @@ def test_project_local_bucket_windowed_relion_projector_uses_compact_indices(mon
 
 def test_packed_local_noise_projection_accepts_relion_projector(monkeypatch):
     from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.dense_single_volume import local_bucket_stages
     from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
     from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 
@@ -4496,7 +4503,7 @@ def test_packed_local_noise_projection_accepts_relion_projector(monkeypatch):
         values = jnp.arange(rotations.shape[0] * n_half, dtype=jnp.float32).reshape(rotations.shape[0], n_half)
         return values.astype(jnp.complex64), None
 
-    monkeypatch.setattr(local_em_engine, "_compute_relion_projector_projections_block", fake_projector)
+    monkeypatch.setattr(local_bucket_stages, "_compute_relion_projector_projections_block", fake_projector)
     window_spec = make_fourier_window_spec((4, 4), 4, 12, include_recon_window=True)
 
     packed = local_em_engine._project_packed_noise_rows(
@@ -4578,32 +4585,35 @@ def test_local_relion_projection_cache_forwards_texture_selection(monkeypatch):
 
 def test_packed_local_noise_projection_chunk_rows_env(monkeypatch):
     from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.dense_single_volume import local_bucket_stages
 
-    monkeypatch.delenv(local_em_engine.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, raising=False)
+    monkeypatch.delenv(local_bucket_stages.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, raising=False)
     assert local_em_engine._packed_noise_projection_chunk_rows(12) == (
-        local_em_engine.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS // 12
+        local_bucket_stages.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS // 12
     )
 
-    monkeypatch.setenv(local_em_engine.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, "25")
+    monkeypatch.setenv(local_bucket_stages.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, "25")
     assert local_em_engine._packed_noise_projection_chunk_rows(12) == 2
     assert local_em_engine._packed_noise_projection_chunk_rows(12, batch_size=2) == 1
 
-    monkeypatch.setenv(local_em_engine.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, "not_an_int")
+    monkeypatch.setenv(local_bucket_stages.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, "not_an_int")
     assert local_em_engine._packed_noise_projection_chunk_rows(12) == (
-        local_em_engine.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS // 12
+        local_bucket_stages.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS // 12
     )
 
 
 def test_packed_local_noise_projection_default_cap_is_memory_safe(monkeypatch):
     from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.dense_single_volume import local_bucket_stages
 
-    monkeypatch.delenv(local_em_engine.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, raising=False)
+    monkeypatch.delenv(local_bucket_stages.EXACT_LOCAL_PACKED_NOISE_TARGET_ROW_PIXELS_ENV, raising=False)
     assert local_em_engine._packed_noise_projection_chunk_rows(4096, batch_size=64) <= 256
     assert local_em_engine._packed_noise_projection_chunk_rows(74112, batch_size=64) <= 14
 
 
 def test_exact_local_progress_env_and_hook(monkeypatch):
     from recovar.em.dense_single_volume import local_em_engine, local_timing
+    from recovar.em.dense_single_volume import local_bucket_stages
     from recovar.em.dense_single_volume.helpers.env_flags import parse_env_nonnegative_int
 
     monkeypatch.delenv(local_timing.EXACT_LOCAL_PROGRESS_CHUNKS_ENV, raising=False)
@@ -4628,6 +4638,7 @@ def test_exact_local_progress_env_and_hook(monkeypatch):
 
 def test_exact_local_noise_projection_chunks_packed_tail():
     from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.dense_single_volume import local_bucket_stages
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     assert "_packed_noise_projection_chunk_rows" in src
@@ -4637,6 +4648,7 @@ def test_exact_local_noise_projection_chunks_packed_tail():
 
 def test_exact_local_cached_noise_projection_chunks_packed_tail():
     from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.dense_single_volume import local_bucket_stages
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     marker = "Exact local cached noise projection chunking"
@@ -4653,6 +4665,7 @@ def test_exact_local_cached_noise_projection_chunks_packed_tail():
 
 def test_exact_local_relion_projector_noise_projection_materializes_once():
     from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.dense_single_volume import local_bucket_stages
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     defer_src = src[src.index("can_defer_local_noise_projection = (") :]
@@ -4668,6 +4681,7 @@ def test_exact_local_relion_projector_noise_projection_materializes_once():
 
 def test_dense_and_local_noise_mask_asymmetric_current_crop():
     from recovar.em.dense_single_volume import em_engine, local_em_engine
+    from recovar.em.dense_single_volume import local_bucket_stages
 
     dense_src = inspect.getsource(em_engine.run_em)
     local_src = inspect.getsource(local_em_engine.run_local_em_exact)
@@ -4796,6 +4810,7 @@ def test_half0_local_relion_accumulator_offload_skips_non_x_half():
 
 def test_exact_local_relion_x_half_full_support_mstep_uses_fftw_indices_and_radius():
     from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.dense_single_volume import local_bucket_stages
 
     image_shape = (128, 128)
     half_width = image_shape[1] // 2 + 1
@@ -4816,6 +4831,7 @@ def test_exact_local_relion_x_half_full_support_mstep_uses_fftw_indices_and_radi
 
 def test_exact_local_relion_x_half_windowed_mstep_uses_fftw_indices_and_current_radius():
     from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.dense_single_volume import local_bucket_stages
 
     image_shape = (128, 128)
     half_width = image_shape[1] // 2 + 1
@@ -4847,6 +4863,7 @@ def test_exact_local_relion_x_half_windowed_mstep_uses_fftw_indices_and_current_
 
 def test_exact_local_fused_posterior_missing_warning_respects_filters():
     from recovar.em.dense_single_volume import local_em_engine
+    from recovar.em.dense_single_volume import local_bucket_stages
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     assert "debug_fused_posterior_dump_filter_matches = (" in src
@@ -7929,6 +7946,8 @@ def test_run_local_em_exact_big_jit_cache_ignores_bound_dataset_process_method(
 
     from recovar.em.dense_single_volume import local_big_jit, local_em_engine
 
+    from recovar.em.dense_single_volume import local_bucket_stages
+
     for function in (
         local_big_jit.run_local_bucket_big_jit,
         local_big_jit._preprocess_half,
@@ -8036,7 +8055,7 @@ def test_run_local_em_exact_big_jit_cache_ignores_bound_dataset_process_method(
             )
             return function(*bound.args, **bound.kwargs)
 
-        monkeypatch.setattr(local_em_engine, "run_local_bucket_big_jit", with_bound_process)
+        monkeypatch.setattr(local_bucket_stages, "run_local_bucket_big_jit", with_bound_process)
         reference = run_local_em_exact(
             datasets[0],
             mean,
@@ -8687,6 +8706,7 @@ def test_local_big_jit_float64_relion_translation_covers_mstep_operand():
 
 def test_local_big_jit_source_ordered_vdam_mstep_is_strictly_guarded():
     from recovar.em.dense_single_volume import local_big_jit, local_em_engine
+    from recovar.em.dense_single_volume import local_bucket_stages
 
     src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
     source_ordered_block = src[
@@ -8995,6 +9015,7 @@ def test_local_bpref_plans_logical_and_physical_shapes(
     monkeypatch, rng, stable, current_size, reconstruction_size, expected_sizes, expected_shapes,
 ):
     from recovar.em.dense_single_volume import local_em_engine as engine
+    from recovar.em.dense_single_volume import local_bucket_stages
 
     case = _sparse_big_jit_local_case(rng)
     original = engine.relion_backprojector_volume_shape
@@ -9276,6 +9297,7 @@ def test_run_local_em_exact_over_cap_significant_support_defaults_to_deferred_bi
 @pytest.mark.parametrize("current_size,expected_cutoff", [(None, 4), (6, 3)])
 def test_local_noise_calls_use_logical_cutoff(monkeypatch, rng, deferred, current_size, expected_cutoff):
     from recovar.em.dense_single_volume import local_em_engine as engine
+    from recovar.em.dense_single_volume import local_bucket_stages
 
     case = _sparse_big_jit_local_case(rng)
     for key in ("RECOVAR_LOCAL_SCORE_DUMP_DIR", "RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES",
@@ -9314,6 +9336,7 @@ def test_skip_deferred_zero_norm_preserves_real_local_outputs(
 ):
     import jax
     from recovar.em.dense_single_volume import local_em_engine as engine
+    from recovar.em.dense_single_volume import local_bucket_stages
 
     case = _sparse_big_jit_local_case(rng)
     for key in ("RECOVAR_LOCAL_SCORE_DUMP_DIR", "RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES",
@@ -9382,6 +9405,7 @@ def test_skip_deferred_zero_norm_preserves_real_local_outputs(
 @pytest.mark.parametrize("token, expected", [(None, False), ("0", False), ("1", True), (" 1 ", True)])
 def test_skip_deferred_zero_norm_selector(monkeypatch, token, expected):
     from recovar.em.dense_single_volume import local_em_engine as engine
+    from recovar.em.dense_single_volume import local_bucket_stages
     monkeypatch.delenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, raising=False)
     if token is not None:
         monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, token)
@@ -9391,6 +9415,7 @@ def test_skip_deferred_zero_norm_selector(monkeypatch, token, expected):
 @pytest.mark.parametrize("token", ["", "2", "true", "false", "-1"])
 def test_skip_deferred_zero_norm_rejects_invalid_selector(monkeypatch, token):
     from recovar.em.dense_single_volume import local_em_engine as engine
+    from recovar.em.dense_single_volume import local_bucket_stages
     monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, token)
     with pytest.raises(ValueError, match="RECOVAR_EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM"):
         parse_env_binary_flag(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV)

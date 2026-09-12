@@ -4,7 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.dense_single_volume import local_bucket_stages
 from recovar.em.dense_single_volume.helpers import vdam_replay
 from scripts.build_vdam_block_chronology import RECORD_DTYPE
 
@@ -360,13 +360,13 @@ def test_captured_replay_preserves_zero_posterior_native_grid_rows():
     local = np.asarray([[True, True, True, True]], dtype=bool)
     posterior_sum = np.asarray([[1.0, 0.0, 2.0, 0.0]], dtype=np.float64)
 
-    full_indices, full_mask, _, _ = local_em_engine._build_reconstruction_pack_indices(
+    full_indices, full_mask, _, _ = local_bucket_stages._build_reconstruction_pack_indices(
         significant,
         local,
         4,
     )
     sparse_indices, sparse_mask, _, _ = (
-        local_em_engine._build_nonzero_reconstruction_pack_indices(
+        local_bucket_stages._build_nonzero_reconstruction_pack_indices(
             significant,
             local,
             posterior_sum,

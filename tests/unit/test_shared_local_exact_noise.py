@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume import local_big_jit, local_em_engine
+from recovar.em.dense_single_volume import local_bucket_stages
 
 pytestmark = pytest.mark.unit
 
@@ -417,7 +418,7 @@ def test_norm_capacity_reuses_noise_executable_and_preserves_logical_carries(dty
     seen_shapes = set()
     try:
         for n_images in (200, 208, 272, 1000, 1024, 1025, 2000):
-            capacity = local_em_engine._noise_norm_capacity(n_images, enabled=True)
+            capacity = local_bucket_stages._noise_norm_capacity(n_images, enabled=True)
             assert 0 <= capacity - n_images < 1024
             inputs = _make_noise_inputs(32)
             # Nonzero existing carries and repeated, non-prefix image indices.

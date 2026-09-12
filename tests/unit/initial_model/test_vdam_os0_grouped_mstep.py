@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from recovar.em.dense_single_volume.local_em_engine import (
+from recovar.em.dense_single_volume.local_bucket_stages import (
     _return_local_big_jit_mstep_tensors,
 )
 

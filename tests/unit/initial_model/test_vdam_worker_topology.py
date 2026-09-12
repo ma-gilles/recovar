@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.dense_single_volume import local_physical_grid
 from recovar.em.dense_single_volume.helpers import vdam_replay
 
 pytestmark = pytest.mark.unit
@@ -483,7 +483,7 @@ def test_particle_issue_order_reorders_every_particle_operand_and_serializes_con
     ).copy()
     rotations[:, 0, 0, 0] = particle_ids
 
-    local_em_engine._accumulate_relion_vdam_physical_particle_grid(
+    local_physical_grid._accumulate_relion_vdam_physical_particle_grid(
         images=np.asarray([[10, 11], [20, 21], [30, 31]], dtype=np.complex64),
         ctf=np.asarray([[10, 10], [20, 20], [30, 30]], dtype=np.float32),
         minvsigma2=np.ones((3, 2), dtype=np.float32),
@@ -525,7 +525,7 @@ def test_particle_issue_order_reorders_every_particle_operand_and_serializes_con
 
 def test_missing_preprojected_reference_requires_inline_projector():
     with pytest.raises(ValueError, match="requires reference operands"):
-        local_em_engine._accumulate_relion_vdam_physical_particle_grid(
+        local_physical_grid._accumulate_relion_vdam_physical_particle_grid(
             images=np.zeros((1, 1), dtype=np.complex64),
             ctf=np.ones((1, 1), dtype=np.float32),
             minvsigma2=np.ones((1, 1), dtype=np.float32),
@@ -545,7 +545,7 @@ def test_missing_preprojected_reference_requires_inline_projector():
 
 def test_particle_issue_order_rejects_nonbijective_particle_axis():
     with pytest.raises(ValueError, match="particle-axis bijection"):
-        local_em_engine._accumulate_relion_vdam_physical_particle_grid(
+        local_physical_grid._accumulate_relion_vdam_physical_particle_grid(
             images=np.zeros((2, 1), dtype=np.complex64),
             ctf=np.zeros((2, 1), dtype=np.float32),
             minvsigma2=np.zeros((2, 1), dtype=np.float32),

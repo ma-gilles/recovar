@@ -7,6 +7,8 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume import local_em_engine as engine
+
+from recovar.em.dense_single_volume import local_bucket_stages
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 
@@ -33,10 +35,10 @@ def projection_case(monkeypatch, backend, current_size, reconstruct, input_dtype
         calls.append(("ordinary", tuple(rotations.shape), kwargs))
         return jnp.asarray(full), None
 
-    monkeypatch.setattr(engine, "_compute_relion_projector_projections_block", native)
-    monkeypatch.setattr(engine, "_project_indexed_half_spectrum", indexed)
-    monkeypatch.setattr(engine, "_compute_projections_block", ordinary)
-    monkeypatch.setattr(engine, "_indexed_projection_available", lambda: backend != "unavailable")
+    monkeypatch.setattr(local_bucket_stages, "_compute_relion_projector_projections_block", native)
+    monkeypatch.setattr(local_bucket_stages, "_project_indexed_half_spectrum", indexed)
+    monkeypatch.setattr(local_bucket_stages, "_compute_projections_block", ordinary)
+    monkeypatch.setattr(local_bucket_stages, "_indexed_projection_available", lambda: backend != "unavailable")
     kwargs = dict(
         mean_for_proj=jnp.zeros((8, 8, 8), dtype=jnp.complex64),
         bucket=SimpleNamespace(

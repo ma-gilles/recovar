@@ -4,13 +4,15 @@ import inspect
 
 from recovar.em.dense_single_volume import local_em_engine
 
+from recovar.em.dense_single_volume import local_bucket_stages
+
 
 def test_both_local_projections_share_the_relion_projector_owner():
     for fn in (local_em_engine._project_local_bucket, local_em_engine._project_packed_noise_rows):
         src = inspect.getsource(fn)
         assert src.count("_relion_local_projector_flat(") == 1
         assert "prepare_local_projector_slab(" not in src and "_compute_relion_projector_projections_block(" not in src
-    owner = inspect.getsource(local_em_engine._relion_local_projector_flat)
+    owner = inspect.getsource(local_bucket_stages._relion_local_projector_flat)
     assert owner.index("prepare_local_projector_slab(") < owner.index("_compute_relion_projector_projections_block(")
     assert 'raise ValueError("relion_projector_r_max is required' in owner
 
@@ -22,8 +24,8 @@ def test_owner_builds_the_projector_keywords_from_the_window(monkeypatch):
         seen.update(kwargs, half=half, rotations=rotations)
         return "FLAT", None
 
-    monkeypatch.setattr(local_em_engine, "_compute_relion_projector_projections_block", fake_block)
-    monkeypatch.setattr(local_em_engine, "prepare_local_projector_slab", lambda h: ("SLAB", h))
+    monkeypatch.setattr(local_bucket_stages, "_compute_relion_projector_projections_block", fake_block)
+    monkeypatch.setattr(local_bucket_stages, "prepare_local_projector_slab", lambda h: ("SLAB", h))
 
     class Window:
         use_window = True
@@ -33,7 +35,7 @@ def test_owner_builds_the_projector_keywords_from_the_window(monkeypatch):
         def relion_projector_output_size():
             return 12
 
-    out = local_em_engine._relion_local_projector_flat(
+    out = local_bucket_stages._relion_local_projector_flat(
         "HALF", "ROT", image_shape=(8, 8), relion_projector_r_max=4, projection_padding_factor=2,
         projection_kwargs={"mask_current_image_disk": False, "relion_texture_interp": True}, window_spec=Window(), projection_indices="IDX",
     )

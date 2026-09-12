@@ -13,6 +13,8 @@ import pytest
 
 from recovar.em.dense_single_volume import local_em_engine, local_layout, local_projection_cache
 
+from recovar.em.dense_single_volume import local_bucket_stages
+
 
 def test_parent_expanded_child_ids_exceeding_int32_stay_positive_int64():
     fine_order = 9
@@ -53,7 +55,7 @@ def test_projection_cache_rows_map_large_ids_and_padding():
 def test_hard_assignment_encoding_is_int64():
     rotation_ids = np.array([2**33, 3], dtype=np.int64)
     trans = np.array([83, 0], dtype=np.int32)
-    encoded = local_em_engine.encode_hard_assignment(rotation_ids, trans, 84)
+    encoded = local_bucket_stages.encode_hard_assignment(rotation_ids, trans, 84)
     assert encoded.dtype == np.int64
     assert encoded.tolist() == [2**33 * 84 + 83, 3 * 84]
     assert np.all(encoded // 84 == rotation_ids)

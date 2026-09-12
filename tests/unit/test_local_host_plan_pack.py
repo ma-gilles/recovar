@@ -217,7 +217,9 @@ def _execute(
     monkeypatch.setattr(cuda, "relion_vdam_mstep_denominator_f32", denominator)
     # The packed rotation gather owns the M-step rotation call, so the stand-in has to
     # replace the engine's module attribute, not only the name in the exec environment.
-    monkeypatch.setattr(engine, "_local_mstep_rotations", mstep_rotations)
+    from recovar.em.dense_single_volume import local_bucket_stages
+
+    monkeypatch.setattr(local_bucket_stages, "_local_mstep_rotations", mstep_rotations)
 
     def wrong_route(*args):
         raise AssertionError("Packing selected the wrong backend")

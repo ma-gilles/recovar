@@ -160,11 +160,10 @@ def test_validate_local_relion_projector_window_accepts_image_window_and_rejects
 
     from dataclasses import replace
 
-    from recovar.em.dense_single_volume import local_em_engine
-
+    from recovar.em.dense_single_volume import local_bucket_stages
     spec = _spec()
-    assert local_em_engine.validate_local_relion_projector_window(spec, (IMAGE, IMAGE)) == IMAGE_CURRENT
+    assert local_bucket_stages.validate_local_relion_projector_window(spec, (IMAGE, IMAGE)) == IMAGE_CURRENT
     model_window_spec = replace(spec, image_current_size=MODEL_CURRENT)
     assert model_window_spec.relion_projector_output_size() == MODEL_CURRENT
     with pytest.raises(ValueError, match="exceed projector crop"):
-        local_em_engine.validate_local_relion_projector_window(model_window_spec, (IMAGE, IMAGE))
+        local_bucket_stages.validate_local_relion_projector_window(model_window_spec, (IMAGE, IMAGE))

@@ -23,7 +23,9 @@ from recovar.em.dense_single_volume.local_big_jit import (
     _norm_correction_image_power_mass,
     _norm_correction_image_power_per_image,
 )
-from recovar.em.dense_single_volume.local_em_engine import _noise_wsum_initial_dtype
+from recovar.em.dense_single_volume.local_bucket_stages import (
+    _noise_wsum_initial_dtype,
+)
 
 
 @pytest.mark.parametrize(

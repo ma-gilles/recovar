@@ -11,7 +11,7 @@ import pytest
 
 from recovar.em import sampling
 from recovar.em.dense_single_volume import k_class, k_class_inputs, k_class_results
-from recovar.em.dense_single_volume import local_em_engine as engine
+from recovar.em.dense_single_volume import local_bucket_stages as engine
 from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
     _prepare_per_image_pass2_inputs,
 )
