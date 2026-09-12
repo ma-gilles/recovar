@@ -634,7 +634,7 @@ def test_relion_coarse_prehalf_shared_body_is_built_packaged_and_stale_checked()
     makefile = (root / "recovar" / "cuda" / "Makefile").read_text()
     manifest = (root / "MANIFEST.in").read_text()
 
-    build_inputs = ("cuda_backproject.cu", include_name, "noise_residual.cuh", "relion_vdam_mstep.cuh")
+    build_inputs = ("cuda_backproject.cu", include_name, "noise_residual.cuh", "relion_vdam_mstep.cuh", "relion_scoring.cuh")
     library_rule = next(line for line in makefile.splitlines() if line.startswith("$(LIB):"))
     prerequisites, order_only = library_rule.split(":", 1)[1].split("|", 1)
     assert set(prerequisites.split()) == set(build_inputs)
@@ -647,6 +647,7 @@ def test_relion_coarse_prehalf_shared_body_is_built_packaged_and_stale_checked()
     assert cuda_backproject._CUDA_BUILD_SOURCE_NAMES == (
         "noise_residual.cuh",
         "relion_vdam_mstep.cuh",
+        "relion_scoring.cuh",
         "cuda_backproject.cu",
         include_name,
         "Makefile",

@@ -5,3 +5,4 @@ include recovar/cuda/relion_coarse_diff2_projector_body.inc
 include setup_helpers.py
 include recovar/cuda/noise_residual.cuh
 include recovar/cuda/relion_vdam_mstep.cuh
+include recovar/cuda/relion_scoring.cuh

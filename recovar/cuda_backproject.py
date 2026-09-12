@@ -57,6 +57,7 @@ _PACKAGE_LIB_PATH = _LIB_DIR / "libcuda_backproject.so"
 _CUDA_BUILD_SOURCE_NAMES = (
     "noise_residual.cuh",
     "relion_vdam_mstep.cuh",
+    "relion_scoring.cuh",
     "cuda_backproject.cu",
     "relion_coarse_diff2_projector_body.inc",
     "Makefile",

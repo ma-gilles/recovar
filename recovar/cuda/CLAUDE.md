@@ -48,8 +48,9 @@ kernels and FFI handlers. `relion_vdam_mstep.cuh` owns the RELION-layout VDAM
 M-step and native replay implementation. Its kernels share the translation unit's
 private namespace; the host replay C ABI and argument record have external
 linkage so nvcc emits the callable export. `noise_residual.cuh` owns shared noise
-reductions, and `relion_coarse_diff2_projector_body.inc` supplies the common coarse
-projector kernel body. Keep build, packaging and loader-staleness inputs aligned
+reductions. `relion_scoring.cuh` owns shared EM/VDAM coarse and fine scoring,
+translation and power-spectrum kernels; its common coarse projector body is
+`relion_coarse_diff2_projector_body.inc`. Keep build, packaging and loader-staleness inputs aligned
 when changing these boundaries.
 
 ## Runtime and interface

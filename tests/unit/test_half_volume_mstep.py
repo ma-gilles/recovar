@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 import logging
 import re
-from pathlib import Path
+from helpers.cuda_source import read_cuda_source
 
 import numpy as np
 import pytest
@@ -572,8 +572,7 @@ def test_relion_x_half_batched_indexed_adjoint_preserves_accumulator_dtype(monke
 
 
 def test_relion_x_half_cuda_skips_fftw_x0_negative_row_duplicate():
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
 
     duplicate_x0_guard = "relion_fold_x && HALF_IMG && HALF_VOL && k1_idx == 0 && k0_idx >= image_w"
     assert text.count(duplicate_x0_guard) == 2
@@ -585,8 +584,7 @@ def test_relion_x_half_cuda_skips_fftw_x0_negative_row_duplicate():
 
 
 def test_relion_x_half_cuda_rotates_before_applying_padding_factor():
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
 
     # Strict RELION backprojection must preserve the operation ordering in
     # cuda_kernel_backproject3D. At outer-shell pixels, distributing the
@@ -607,8 +605,7 @@ def test_relion_x_half_cuda_rotates_before_applying_padding_factor():
 
 
 def test_relion_x_half_cuda_pins_physical_radius_accumulation_order():
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
 
     helper = text[text.index("float relion_radius_squared(") : text.index("#define BLOCK_SIZE")]
     assert "__fmul_rn(rk1, rk1)" in helper
@@ -701,8 +698,7 @@ def test_relion_x_half_bp_block_topology_actual_256_to_48_support_is_unique():
 
 
 def test_relion_x_half_bp_block_topology_cuda_source_covers_single_and_batch():
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
 
     assert "RELION_BLOCK_TOPOLOGY ? 128 : n_pixels" in text
     assert "dim3 relion_block(128)" in text
@@ -852,8 +848,7 @@ def test_relion_fused_x_half_wrapper_rejects_non_relion_dtypes(
 
 
 def test_relion_fused_x_half_cuda_source_interleaves_neighbor_atomics():
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
 
     assert "relion_fused_x_half_backproject_kernel" in text
     assert "for (int pix = (int)threadIdx.x; pix < n_pixels; pix += 128)" in text
@@ -890,8 +885,7 @@ def test_relion_fused_x_half_cuda_source_interleaves_neighbor_atomics():
 def test_relion_x_half_cuda_uses_native_floorf_buckets_in_double_mode():
     """RELION's double CUDA BPref still rounds interpolation buckets via floorf."""
 
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
 
     assert (
         "static __device__ __forceinline__ int relion_floor_int(double x) "
@@ -1033,8 +1027,7 @@ def test_ordinary_indexed_signature_inertness_gate_rejects_shadow_mismatch(monke
 
 
 def test_ordinary_indexed_signature_cuda_source_copies_after_production_launch():
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
     start = text.index("cudaError_t launch_backproject_indexed_with_signature(")
     launch = text[start : text.index("cudaError_t launch_relion_fused_x_half_backproject(", start)]
 
@@ -1048,8 +1041,7 @@ def test_ordinary_indexed_signature_cuda_source_copies_after_production_launch()
 
 
 def test_ordinary_indexed_signature_matches_production_fraction_order():
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
     production = text[
         text.index("static __device__ __forceinline__ void scatter_trilinear(") :
         text.index("/* Strict RELION x-half diagnostic:")
@@ -1111,8 +1103,7 @@ def test_ordinary_indexed_signature_ffi_smoke(monkeypatch, custom_cuda_lib, gpu_
 
 
 def test_relion_fused_x_half_signature_cuda_source_copies_before_read_only_kernel():
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
     start = text.index("cudaError_t launch_relion_fused_x_half_backproject_with_signature(")
     launch = text[start : text.index("template <typename T>", start)]
 
