@@ -148,6 +148,10 @@ from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
     _build_bucket_arrays,
     _compact_bucket_size_for_class,
     _build_k_class_bucket_arrays,
+    image_capacity_enabled,
+    quantized_image_capacity,
+    pad_bucket_arrays_to_image_capacity,
+    pad_compact_pair_arrays_to_image_capacity,
 )
 from recovar.em.dense_single_volume.helpers.translation_prior import (
     expand_fine_translation_prior,
@@ -4190,14 +4194,15 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
     for bucket in compact_buckets:
         image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
         original_max_images = max(original_max_images, int(image_indices.size))
-        if image_indices.size <= 1:
-            split_buckets.append(bucket)
-            split_max_images = max(split_max_images, int(image_indices.size))
-            continue
-        max_images = int(image_indices.size)
-        max_images = min(
-            max_images,
-            original_pair_bucket_max_images[int(bucket["pair_bucket_size"])],
+        # How many images this bucket's byte budgets allow, independent of how many it
+        # actually holds. Chunking clamps this by the bucket's own size, but image-axis
+        # capacity quantization pads *towards* it, so it must be computed without that
+        # clamp -- otherwise the budget always equals the bucket size and forbids any
+        # padding. Single-image buckets need it too: they are the ones most worth
+        # padding, and they are also the ones where padding could blow up memory.
+        single_image_bucket = image_indices.size <= 1
+        image_byte_budget = int(
+            original_pair_bucket_max_images.get(int(bucket["pair_bucket_size"]), int(image_indices.size))
         )
         if max_gather_bytes is not None or max_dense_mstep_bytes is not None:
             if "class_bucket_sizes" in bucket:
@@ -4213,16 +4218,28 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
                 )
         if max_gather_bytes is not None:
             per_image_bytes = max(1, int(max_class_bucket_size) * row_bytes)
-            max_images = min(max_images, max(1, max_gather_bytes // per_image_bytes))
+            image_byte_budget = min(image_byte_budget, max(1, max_gather_bytes // per_image_bytes))
         if max_dense_mstep_bytes is not None:
             dense_bytes_per_image = max(1, int(max_class_bucket_size) * n_fine_trans_int * prob_item_bytes)
-            max_dense_bytes_per_image = max(max_dense_bytes_per_image, dense_bytes_per_image)
-            max_images = min(max_images, max(1, max_dense_mstep_bytes // dense_bytes_per_image))
+            if not single_image_bucket:
+                max_dense_bytes_per_image = max(max_dense_bytes_per_image, dense_bytes_per_image)
+            image_byte_budget = min(image_byte_budget, max(1, max_dense_mstep_bytes // dense_bytes_per_image))
         if max_prepare_images is not None:
-            max_images = min(max_images, max_prepare_images)
+            image_byte_budget = min(image_byte_budget, max_prepare_images)
+        if single_image_bucket:
+            single_bucket = dict(bucket)
+            single_bucket["image_capacity_budget"] = int(image_byte_budget)
+            split_buckets.append(single_bucket)
+            split_max_images = max(split_max_images, int(image_indices.size))
+            continue
+        max_images = min(int(image_indices.size), image_byte_budget)
         chunk_bounds = bucket_chunk_bounds(int(image_indices.size), max_images)
+        # Record the byte budget this bucket was sized against. Image-axis capacity
+        # quantization pads towards it and must never pad past it.
         if len(chunk_bounds) <= 1:
-            split_buckets.append(bucket)
+            unsplit_bucket = dict(bucket)
+            unsplit_bucket["image_capacity_budget"] = int(image_byte_budget)
+            split_buckets.append(unsplit_bucket)
             split_max_images = max(split_max_images, int(image_indices.size))
             continue
         split_bucket_count += 1
@@ -4230,6 +4247,7 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
             chunk = image_indices[start:stop]
             chunk_bucket = dict(bucket)
             chunk_bucket["image_indices"] = np.asarray(chunk, dtype=np.int64)
+            chunk_bucket["image_capacity_budget"] = int(image_byte_budget)
             split_buckets.append(chunk_bucket)
             split_max_images = max(split_max_images, int(chunk.size))
     if split_bucket_count:
@@ -13502,6 +13520,8 @@ def compute_k_class_pass2_stats_sparse_fused(
     overall_t0 = time.time()
     rectangular_rotation_slots = 0
     compact_rotation_slots = 0
+    image_capacity_padded_buckets = 0
+    image_capacity_padded_rows = 0
     compact_mstep_active_rows = 0
     compact_mstep_padded_active_rows = 0
     compact_mstep_rectangular_rows = 0
@@ -13835,6 +13855,46 @@ def compute_k_class_pass2_stats_sparse_fused(
                 "image_mask": diagnostic_image_mask,
                 "image_mask_mode": diagnostic_image_mask_mode,
             }
+        # Image-axis capacity: the image count is part of every bucket shape, so an
+        # arbitrary count makes nearly every bucket a fresh XLA program. Pad the axis
+        # to a repeating capacity here, once the fetch order is final and before any
+        # per-image gather, so every array below is built at the padded width. Padded
+        # rows are masked off (pair_mask/candidate_mask false, counts zero) and
+        # contribute exactly zero to every accumulator; only the host-side per-image
+        # result loop has to stay on the real rows.
+        n_real_images = batch
+        if (
+            bucket_uses_compact_pairs
+            and image_capacity_enabled()
+            and compact_pair_arrays_by_class is not None
+        ):
+            image_capacity = quantized_image_capacity(
+                batch,
+                max_images=bucket_meta.get("image_capacity_budget"),
+            )
+            if image_capacity > batch:
+                pad_rows = image_capacity - batch
+                image_indices = np.concatenate(
+                    [image_indices, np.repeat(image_indices[-1:], pad_rows)]
+                )
+                batch_data = jnp.concatenate(
+                    [batch_data, jnp.repeat(batch_data[-1:], pad_rows, axis=0)], axis=0
+                )
+                ctf_params_np = np.asarray(ctf_params)
+                ctf_params = np.concatenate(
+                    [ctf_params_np, np.repeat(ctf_params_np[-1:], pad_rows, axis=0)], axis=0
+                )
+                class_bucket_arrays = [
+                    pad_bucket_arrays_to_image_capacity(arrays, image_capacity)
+                    for arrays in class_bucket_arrays
+                ]
+                compact_pair_arrays_by_class = [
+                    pad_compact_pair_arrays_to_image_capacity(pair_arrays, image_capacity)
+                    for pair_arrays in compact_pair_arrays_by_class
+                ]
+                batch = image_capacity
+                image_capacity_padded_buckets += 1
+                image_capacity_padded_rows += pad_rows
         bucket_group_ids = (
             jnp.asarray(group_ids_np[image_indices], dtype=jnp.int32)
             if group_ids_np is not None
@@ -15873,8 +15933,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                     row_index_np,
                     best_rot_idx,
                 ]
-            if np.any(best_rot_idx >= actual_counts_arr):
-                bad = np.flatnonzero(best_rot_idx >= actual_counts_arr)
+            # Padded image rows exist only to keep the bucket shape repeatable; they
+            # carry actual_counts zero and must not be checked or written back.
+            real_rows = slice(0, n_real_images)
+            if np.any(best_rot_idx[real_rows] >= actual_counts_arr[real_rows]):
+                bad = np.flatnonzero(best_rot_idx[real_rows] >= actual_counts_arr[real_rows])
                 raise RuntimeError(
                     "Fused sparse K-class pass-2: best rotation index points into padding for "
                     f"class {class_index + 1}, images {bad.tolist()}",
@@ -15885,7 +15948,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             )
             class_log_z_np = np.asarray(class_score_log_z_bucket[class_index], dtype=np.float64)
             probs_sum_t = np.asarray(probs_sum_t_jax, dtype=np.float64)
-            for row, image_idx in enumerate(image_indices.tolist()):
+            for row, image_idx in enumerate(image_indices[:n_real_images].tolist()):
                 r = int(best_rot_idx[row])
                 t = int(best_trans_idx[row])
                 fine_rot_idx = int(best_fine_rot_idx[row])
@@ -15973,6 +16036,14 @@ def compute_k_class_pass2_stats_sparse_fused(
         rectangular_rotation_slots,
         compact_slot_ratio,
     )
+    if image_capacity_padded_buckets:
+        logger.info(
+            "Sparse fused K-class pass-2 image-axis capacity: padded %d of %d buckets, "
+            "%d padded image rows",
+            image_capacity_padded_buckets,
+            len(buckets),
+            image_capacity_padded_rows,
+        )
     if raw_host_staging_total_bytes:
         logger.info(
             "Sparse fused K-class raw diff2 host staging: transferred=%.3f GiB "

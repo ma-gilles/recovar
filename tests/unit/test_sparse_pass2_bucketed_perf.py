@@ -9956,3 +9956,133 @@ def test_bucketed_call_count_bounded_versus_perimage():
         "— expected fewer (one per bucket)."
     )
     print(f"Bucketed: {score_call_count['n']} score calls for {n_images} images")
+
+
+def _fused_kclass_capacity_fixture():
+    """Small exactly-K2 fused pass-2 call used to compare image-axis capacities."""
+
+    from recovar.em.sampling import rotation_grid_size
+
+    n_images = 3
+    n_classes = 2
+    rotation_grid_size(0)
+    fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 3, axis=0)
+    fine_parent = np.asarray([0, 1, 2], dtype=np.int64)
+    fine_translations = np.asarray([[0.0, 0.0], [0.25, 0.0]], dtype=np.float32)
+    fine_translation_parent = np.zeros(2, dtype=np.int32)
+    significant_by_class = [
+        [np.asarray([0, 1], dtype=np.int32), np.asarray([1, 2], dtype=np.int32), np.asarray([0, 2], dtype=np.int32)],
+        [np.asarray([0, 2], dtype=np.int32), np.asarray([0, 1], dtype=np.int32), np.asarray([1, 2], dtype=np.int32)],
+    ]
+    volumes = jnp.stack(
+        [_hermitian_volume(VOLUME_SHAPE, seed=2027), _hermitian_volume(VOLUME_SHAPE, seed=2029)]
+    )
+    return dict(
+        experiment_dataset=MockDataset(n_images=n_images, seed=2039),
+        volumes=volumes,
+        mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0,
+        noise_variance=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        translations=np.asarray([[0.0, 0.0]], dtype=np.float32),
+        significant_sample_indices_by_class=significant_by_class,
+        rotation_log_priors_by_class=[None] * n_classes,
+        translation_log_prior=np.array([-0.25], dtype=np.float32),
+        nside_level=0,
+        disc_type="linear_interp",
+        oversampling_order=0,
+        current_size=4,
+        half_spectrum_scoring=True,
+        fine_rotations_override=fine_rotations,
+        fine_rotation_parent_override=fine_parent,
+        fine_translations_override=fine_translations,
+        fine_translation_parent_override=fine_translation_parent,
+        relion_x_half_mstep=False,
+        relion_fine_mstep_prune_mode="joint",
+        adaptive_fraction=0.9,
+    )
+
+
+def _fused_kclass_result_arrays(result):
+    """Every array-valued field of a fused pass-2 result, for exact comparison."""
+
+    arrays = {}
+    for name in dir(result):
+        if name.startswith("_"):
+            continue
+        value = getattr(result, name)
+        if callable(value):
+            continue
+        if isinstance(value, (list, tuple)):
+            for i, item in enumerate(value):
+                if hasattr(item, "shape") or isinstance(item, (int, float)):
+                    arrays[f"{name}[{i}]"] = np.asarray(item)
+        elif hasattr(value, "shape") or isinstance(value, (int, float)):
+            arrays[name] = np.asarray(value)
+    return arrays
+
+
+def test_image_axis_capacity_padding_does_not_change_fused_kclass_results(monkeypatch):
+    """Padding the image axis must be numerically invisible.
+
+    The capacity exists purely so bucket shapes repeat and JAX stops tracing a new
+    program per bucket. Padded rows carry pair_mask/candidate_mask false, and
+    _normalize_pass2_pairs_with_log_z maps an all-masked row to exactly zero
+    probability, so every accumulator must come out bit-for-bit identical.
+    """
+
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    # The byte budget for a one-bucket fixture is the bucket's own size, so the
+    # production cap correctly refuses to pad here. Drive the capacity directly so the
+    # padding path itself is exercised; the cap's arithmetic is covered by
+    # tests/unit/test_sparse_pass2_image_capacity.py.
+    monkeypatch.setattr(
+        bucketed_mod,
+        "quantized_image_capacity",
+        lambda n, **_kwargs: max(16, 1 << (int(n) - 1).bit_length()) if int(n) > 0 else 0,
+    )
+    pads = []
+    original_pad = bucketed_mod.pad_compact_pair_arrays_to_image_capacity
+
+    def recording_pad(pair_arrays, capacity):
+        out = original_pad(pair_arrays, capacity)
+        pads.append((int(np.asarray(pair_arrays["image_indices"]).shape[0]), int(capacity)))
+        return out
+
+    monkeypatch.setattr(bucketed_mod, "pad_compact_pair_arrays_to_image_capacity", recording_pad)
+
+    def run(capacity_flag):
+        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_PASS2_IMAGE_CAPACITY", capacity_flag)
+        return bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**_fused_kclass_capacity_fixture())
+
+    baseline = _fused_kclass_result_arrays(run("0"))
+    assert pads == [], "padding must not run while the capacity flag is off"
+    padded = _fused_kclass_result_arrays(run("1"))
+    # Prove the comparison is not vacuous: the run really did pad the image axis.
+    assert pads, "capacity flag on, but no bucket was padded - the test proves nothing"
+    assert all(capacity > real for real, capacity in pads), pads
+
+    assert baseline, "fixture produced no comparable result arrays"
+    assert set(baseline) == set(padded)
+    mismatched = []
+    for name, expected in baseline.items():
+        actual = padded[name]
+        if expected.shape != actual.shape or not np.array_equal(
+            np.nan_to_num(expected, nan=0.0, posinf=1e30, neginf=-1e30),
+            np.nan_to_num(actual, nan=0.0, posinf=1e30, neginf=-1e30),
+        ):
+            mismatched.append(name)
+    assert not mismatched, f"image-axis padding changed: {mismatched}"
+
+
+def test_image_axis_capacity_pads_a_small_bucket(monkeypatch):
+    """Guard that the equivalence test above is actually exercising padding."""
+
+    from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import (
+        quantized_image_capacity,
+    )
+
+    # The fixture has three images, so the capacity must round them up to the floor.
+    assert quantized_image_capacity(3) == 16

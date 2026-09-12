@@ -29,6 +29,54 @@ _DEFAULT_TAIL_BUCKET_COALESCE_MIN_BUCKET_SIZE = 4096
 LADDER_CHUNKS_ENV = "RECOVAR_SPARSE_PASS2_LADDER_CHUNKS"
 LADDER_CHUNK_FLOOR = 16
 
+IMAGE_CAPACITY_ENV = "RECOVAR_SPARSE_PASS2_IMAGE_CAPACITY"
+IMAGE_CAPACITY_FLOOR = 16
+
+
+def image_capacity_enabled() -> bool:
+    """Return whether bucket image axes are padded to a repeating capacity."""
+
+    return parse_env_binary_flag(IMAGE_CAPACITY_ENV)
+
+
+def quantized_image_capacity(
+    n_images: int,
+    *,
+    max_images: int | None = None,
+    floor: int = IMAGE_CAPACITY_FLOOR,
+) -> int:
+    """Round a bucket's image count up to a power of two so shapes repeat.
+
+    Fused K-class pass 2 keys one XLA program per (helper, shape), and the image
+    axis is part of every shape. Measured 2026-09-12 on a 20-iteration exactly-K4
+    run: 128 buckets produced 88 distinct (pair width, rotation rows, images)
+    shapes across 62 distinct image counts, and JAX traced and lowered a program
+    for 5939 distinct keys, executing each exactly once. Quantizing this axis
+    collapses those 88 shapes to 38. Padded rows carry ``pair_mask``/
+    ``candidate_mask`` false, and
+    :func:`_normalize_pass2_pairs_with_log_z` maps an all-masked row to exactly
+    zero probability, so they contribute nothing to any accumulator.
+
+    ``max_images`` is the caller's byte budget for gather, preparation and the
+    dense M step. The capacity never exceeds it: padding past that budget would
+    trade a compile saving for an out-of-memory failure. When no power of two
+    fits, the exact count is returned and that bucket keeps its own shape.
+    """
+
+    n_images = int(n_images)
+    if n_images <= 0:
+        return 0
+    cap = None if max_images is None else max(1, int(max_images))
+    if cap is not None and n_images >= cap:
+        return n_images
+    candidate = max(int(floor), 1 << (n_images - 1).bit_length())
+    if candidate < n_images:
+        candidate = 1 << (n_images - 1).bit_length()
+    if cap is not None and candidate > cap:
+        return n_images
+    return candidate
+
+
 
 def ladder_chunks_enabled() -> bool:
     """Return whether bucket image lists are split into power-of-two chunks.
@@ -811,6 +859,70 @@ def _build_compact_pair_bucket_arrays(bucket, compact_inputs):
         "log_prior": padded_log_prior,
         "pair_mask": padded_pair_mask,
     }
+
+
+def _pad_rows(values, capacity, fill):
+    """Extend ``values`` along axis 0 to ``capacity`` rows filled with ``fill``."""
+
+    if values is None:
+        return None
+    values = np.asarray(values)
+    pad = int(capacity) - int(values.shape[0])
+    if pad <= 0:
+        return values
+    tail = np.full((pad,) + values.shape[1:], fill, dtype=values.dtype)
+    return np.concatenate([values, tail], axis=0)
+
+
+def pad_bucket_arrays_to_image_capacity(arrays, capacity):
+    """Pad one class's dense bucket arrays out to a quantized image capacity.
+
+    The padded rows carry ``actual_counts`` zero and ``candidate_mask`` false, which
+    is the same contract the rotation axis already uses for its padding, so they
+    contribute exactly zero to every accumulator. Identity rotations are harmless
+    for the same reason.
+    """
+
+    capacity = int(capacity)
+    if capacity <= int(np.asarray(arrays["image_indices"]).shape[0]):
+        return arrays
+    shared_mstep = arrays["mstep_rotations"] is arrays["rotations"]
+    rotations = _pad_rows(arrays["rotations"], capacity, 0)
+    rotations[int(np.asarray(arrays["rotations"]).shape[0]):] = np.eye(3, dtype=rotations.dtype)
+    padded = dict(arrays)
+    padded["rotations"] = rotations
+    padded["mstep_rotations"] = rotations if shared_mstep else _pad_rows(arrays["mstep_rotations"], capacity, 0)
+    if not shared_mstep:
+        start = int(np.asarray(arrays["mstep_rotations"]).shape[0])
+        padded["mstep_rotations"][start:] = np.eye(3, dtype=padded["mstep_rotations"].dtype)
+    padded["rotation_indices"] = _pad_rows(arrays["rotation_indices"], capacity, 0)
+    padded["actual_counts"] = _pad_rows(arrays["actual_counts"], capacity, 0)
+    padded["log_prior"] = _pad_rows(arrays["log_prior"], capacity, -1e30)
+    padded["candidate_mask"] = _pad_rows(arrays["candidate_mask"], capacity, False)
+    padded["parent_map"] = _pad_rows(arrays["parent_map"], capacity, -1)
+    return padded
+
+
+def pad_compact_pair_arrays_to_image_capacity(pair_arrays, capacity):
+    """Pad one class's compact-pair arrays out to a quantized image capacity.
+
+    Padded rows carry ``pair_counts`` zero and ``pair_mask`` false.
+    ``_normalize_pass2_pairs_with_log_z`` maps an all-masked row to exactly zero
+    probability, so a padded image contributes nothing to the M step, the noise
+    accumulators or the posterior sums.
+    """
+
+    capacity = int(capacity)
+    if capacity <= int(np.asarray(pair_arrays["image_indices"]).shape[0]):
+        return pair_arrays
+    padded = dict(pair_arrays)
+    padded["pair_counts"] = _pad_rows(pair_arrays["pair_counts"], capacity, 0)
+    padded["local_rotation_row"] = _pad_rows(pair_arrays["local_rotation_row"], capacity, 0)
+    padded["translation_idx"] = _pad_rows(pair_arrays["translation_idx"], capacity, 0)
+    padded["rotation_index"] = _pad_rows(pair_arrays["rotation_index"], capacity, 0)
+    padded["log_prior"] = _pad_rows(pair_arrays["log_prior"], capacity, -1e30)
+    padded["pair_mask"] = _pad_rows(pair_arrays["pair_mask"], capacity, False)
+    return padded
 
 
 def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_inputs):
