@@ -79,5 +79,5 @@ def test_dashboard_records_hybrid_evidence_without_score_inflation(dashboard: st
     assert "frozen correctness **2 / 20**" in dashboard
     assert "frozen runtime **0 / 20**" in dashboard
     assert "Job `13358712` replayed that exact transition" in dashboard.replace("\n", " ")
-    assert "pass 2 is flat at `829.611 -> 834.388 s`" in dashboard
-    assert "Focused regression | **126 / 126 PASS**" in dashboard
+    assert "pass 2 is **1.269x** faster" in dashboard.replace("\n> ", " ")
+    assert "Focused regression | **INTEGRATED SEAMS PASS**" in dashboard
