@@ -2141,13 +2141,23 @@ def _log_sparse_kclass_group_timing(
     mstep_adjoint_s = group_timing.get("mstep_adjoint", 0.0)
     noise_s = group_timing.get("noise", 0.0)
     stats_s = group_timing.get("stats", 0.0)
+    prepare_substages = " ".join(
+        f"{key}={group_timing.get(key, 0.0):.2f}s"
+        for key in (
+            "prepare_ctf_noise",
+            "prepare_image_fft",
+            "prepare_weighting",
+            "prepare_translate",
+            "prepare_window_cast",
+        )
+    )
     total_profiled_s = build_s + fetch_s + prepare_s + score_s + mstep_noise_stats_s
     logger.info(
         "Sparse fused K-class pass-2 bucket group timing: mode=%s %s=%d "
         "build=%.2fs fetch=%.2fs prepare=%.2fs score=%.2fs "
         "mstep_noise_stats=%.2fs mstep_weighted_sums=%.2fs "
         "mstep_adjoint=%.2fs noise=%.2fs stats=%.2fs "
-        "total_profiled=%.2fs wall=%.2fs",
+        "total_profiled=%.2fs wall=%.2fs %s",
         group_key[0],
         group_key[1],
         group_key[2],
@@ -2162,6 +2172,7 @@ def _log_sparse_kclass_group_timing(
         stats_s,
         total_profiled_s,
         float(wall_s),
+        prepare_substages,
     )
 
 
@@ -7508,6 +7519,7 @@ def _prepare_bucket_io(
     return_shifted_score=True,
     relion_exact_normalized_cc_operands=False,
     relion_exact_bpref_operands=False,
+    stage_timing=None,
 ):
     """Run preprocessing for a batch of images (translations tiled, CTF/noise ratios).
 
@@ -7526,6 +7538,7 @@ def _prepare_bucket_io(
     image_shape = config.image_shape
     use_normalized_cc = score_mode == "normalized_cc"
     batch_size = int(batch.shape[0])
+    substage_t0 = time.time()
     (
         relion_cuda_preprocess,
         integer_pre_shifts,
@@ -7608,6 +7621,9 @@ def _prepare_bucket_io(
         ctf2_over_nv_half, ctf2_score_half = _ctf2_over_noise_and_ctf2(ctf_half, noise_variance_half)
     generic_inverse_noise = inverse_noise_half is not None and not relion_exact_bpref_operands
 
+    _add_sparse_group_timing(stage_timing, "prepare_ctf_noise", time.time() - substage_t0)
+    substage_t0 = time.time()
+
     # Raw processed half-spectrum images (BEFORE any per-image correction).
     # The score path uses masked images iff ``score_with_masked_images`` is True,
     # while the reconstruction path always uses the unmasked (raw) images.
@@ -7626,6 +7642,9 @@ def _prepare_bucket_io(
         )
     else:
         processed_recon_half_raw = processed_score_half_raw
+
+    _add_sparse_group_timing(stage_timing, "prepare_image_fft", time.time() - substage_t0)
+    substage_t0 = time.time()
 
     if use_normalized_cc:
         # RELION firstiter_cc uses unweighted image power over the same Fourier
@@ -7744,6 +7763,9 @@ def _prepare_bucket_io(
                 recon_bpref_input_half = recon_bpref_input_half * phase_factors
         if return_direct_scoring_io:
             sparse_score_input_half = sparse_score_input_half * phase_factors
+
+    _add_sparse_group_timing(stage_timing, "prepare_weighting", time.time() - substage_t0)
+    substage_t0 = time.time()
 
     score_weighted_half_for_score = score_weighted_half
 
@@ -7930,6 +7952,9 @@ def _prepare_bucket_io(
                 shifted_score_half_with_dc = shifted_recon_half
         ctf2_over_nv_half_with_dc = ctf2_over_nv_recon_half
 
+    _add_sparse_group_timing(stage_timing, "prepare_translate", time.time() - substage_t0)
+    substage_t0 = time.time()
+
     shifted_corrected_score_half = None
     direct_score_input = None
     direct_preprocessed_score_input = None
@@ -8031,6 +8056,8 @@ def _prepare_bucket_io(
         shifted_corrected_score_half = shifted_corrected_score_half.astype(
             precision_policy.score_complex_dtype,
         )
+
+    _add_sparse_group_timing(stage_timing, "prepare_window_cast", time.time() - substage_t0)
 
     # The casts above narrow the score operands unconditionally but the
     # reconstruction operands only under float64 scoring, so one float64 factor
@@ -13883,6 +13910,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             return_windowed_shifted=windowed_prepare,
             return_shifted_score=not half_spectrum_scoring,
             relion_exact_bpref_operands=relion_exact_bpref_operands,
+            stage_timing=group_timing,
         )
         relion_highres_xi2_half = None
         if use_exact_relion_gaussian or (accumulate_noise and current_size is not None):
