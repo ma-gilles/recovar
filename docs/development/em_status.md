@@ -24,7 +24,8 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
 ## Source and ownership
 
 - Primary: `/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/recovar_structural_cleanup_20260907`,
-  branch `codex/integrate-pr180`, published tip `a2ab056cb5dfac9b1152692f15a4ce683f9fc9b2` (2026-09-10).
+  branch `codex/integrate-pr180`; current published identity is in the
+  [lead status](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/status/em_clean.json).
   Recheck HEAD, diff and untracked files; earlier trajectories do not qualify it.
 - **em_clean is sole integrator/publisher**, [draft PR179](https://github.com/ma-gilles/recovar/pull/179)
   on pinned PR158 base `44d770de3f9336ab2f3f6a34203394bae8d1aeed`.
@@ -40,6 +41,21 @@ baseline changes. User priority is short-prefix parity then final FSC, with up t
   Leave local GPU0 free; only immediately idle GPUs1–3 by UUID; respect Slurm visibility.
 
 ## Engineering work and recent evidence
+
+The September 12 Codex takeover recovered unpublished particle-ordering commits
+`71861fb42` and `a68a58514`. All four declared CPU checks finished on unchanged
+`a68a58514`: fast guard 90 passed; owner suites 449 passed/2 skipped; panel
+520 passed/1 failed/1 skipped; ordering references 1706 passed/1 failed/31 skipped.
+Both failures were the same policy test reading requirements from the former
+documentation owner. Its repair preserves all 13 requirements in the linked
+runbook/CONTRIBUTING owners. Six policy tests and all 12 K-class result tests pass;
+the latter are consolidated from five files into `test_kclass_results_owner.py`
+with identical definition ASTs. Original failed receipts remain preserved.
+[Recovery, coverage mapping and admission limits](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_clean_recovery_20260912/result.json).
+The opt-in modern ordering keeps the legacy default. This CPU checkpoint does
+not qualify GPU execution, trajectories, larger synthetic/real/exact-K4 quality
+or performance; the gates below remain open. The prepared K-class production
+split is deferred pending a benefit beyond moving definitions into more files.
 
 Each row is one commit on draft PR179 with an exact old/new comparison, the CPU
 fast guard and, where the controller path changed, the 502-case controller

@@ -125,7 +125,7 @@ In [`k_class`](../../recovar/em/dense_single_volume/k_class.py),
 `_override_class_assignments_with_coarse_winner` applies RELION's coarse-grid
 binarization to a pass-2 result (winning class, that class's fine pose, decoded
 best-pose details) for both adaptive pass-2 paths
-([`test_kclass_coarse_override_owner.py`](../../tests/unit/test_kclass_coarse_override_owner.py)).
+([`test_kclass_results_owner.py`](../../tests/unit/test_kclass_results_owner.py)).
 
 Replay and finalization have separate selection and mutation boundaries:
 
@@ -255,7 +255,7 @@ per-class outputs of the dense and sparse firstiter-CC global-winner subset pass
 order: a class without images gets zero accumulators, `-inf` best scores and zero posteriors,
 and a scored class has its subset accumulators, statistics, noise and best poses expanded to
 the full image axis. Each route states whether it hosts the appended accumulators
-([`test_kclass_subset_results_owner.py`](../../tests/unit/test_kclass_subset_results_owner.py)).
+([`test_kclass_results_owner.py`](../../tests/unit/test_kclass_results_owner.py)).
 [`scoring._e_step_block_score_components`](../../recovar/em/dense_single_volume/helpers/scoring.py)
 computes the two HIGHEST-precision GEMMs every dense scorer is built from (the cross term
 `-2 Re(conj(shifted) . proj_weighted)` and the model energy `ctf2_over_nv . proj_abs2`);
