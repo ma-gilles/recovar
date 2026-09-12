@@ -271,10 +271,7 @@ def test_arrays_to_accumulators_splits_grouped_halfsets():
 
 
 def test_split_pseudo_halfset_particle_ids_uses_particle_id_parity():
-    h0, h1 = split_pseudo_halfset_particle_ids(
-        5,
-        micrograph_names=np.asarray(["b", "a", "b", "a", "c"]),
-    )
+    h0, h1 = split_pseudo_halfset_particle_ids(5)
     np.testing.assert_array_equal(h0, np.asarray([0, 2, 4]))
     np.testing.assert_array_equal(h1, np.asarray([1, 3]))
 

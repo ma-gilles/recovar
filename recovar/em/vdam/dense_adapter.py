@@ -54,15 +54,11 @@ _RELION_PROJECTOR_DUMP_DIR_ENV = "RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR"
 logger = logging.getLogger(__name__)
 
 
-def split_pseudo_halfset_particle_ids(
-    n_images: int,
-    micrograph_names: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
+def split_pseudo_halfset_particle_ids(n_images: int) -> tuple[np.ndarray, np.ndarray]:
     """Return RELION-style pseudo-halfset image indices.
 
     RELION's InitialModel BPref path routes pseudo-halfsets by global
-    ``part_id % 2`` in ``storeWeightedSums``. ``micrograph_names`` is accepted
-    for backwards compatibility but does not affect this routing.
+    ``part_id % 2`` in ``storeWeightedSums``.
     """
     ids = np.arange(int(n_images), dtype=np.int64)
     return ids[0::2], ids[1::2]

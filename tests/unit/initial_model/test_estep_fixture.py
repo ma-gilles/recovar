@@ -349,7 +349,6 @@ def test_estep_bpref_forward_parity():
     import jax
 
     from recovar.data_io.cryoem_dataset import load_dataset
-    from recovar.data_io.starfile import read_star
     from recovar.em.helpers.orientation_priors import make_relion_translation_log_prior
     from recovar.em.sampling import (
         apply_relion_translation_perturbation,
@@ -430,12 +429,8 @@ def test_estep_bpref_forward_parity():
     current_size = 28
     r_max = 14
 
-    # Pseudo-halfset routing: pass micrograph names so the wrapper picks
-    # RELION-sorted halfsets via `_split_halfset_particle_ids`.
-    main_in, _ = read_star(str(PARTICLES_STAR))
-    mic_names = np.asarray(main_in["_rlnMicrographName"].tolist())
-    # Sanity-check the wrapper's halfset assignment matches RELION's lex-sort.
-    h0_ids, h1_ids = _split_halfset_particle_ids(ds.n_images, micrograph_names=mic_names)
+    # InitialModel pseudo-halfsets follow global particle-ID parity.
+    h0_ids, h1_ids = _split_halfset_particle_ids(ds.n_images)
     assert h0_ids.size + h1_ids.size == ds.n_images
 
     # Drive the production wrapper. The adapter now constructs the RELION

@@ -8,8 +8,7 @@ RELION's iter-1 BPref dump from the SAME RELION run (perturbation
 matches).
 
 Apply ALL corrections discovered during Phase B:
-  - RELION-sorted halfset assignment (`_split_halfset_particle_ids`
-    with micrograph_names supplied)
+  - Pseudo-halfset assignment by global particle-ID parity
   - R_from_relion conversion of dumped Eulers to recovar frame
   - relion_firstiter_score_mode='gaussian' (matches RELION's
     do_firstiter_cc=0 default)
@@ -79,7 +78,6 @@ def main() -> None:
 
     from recovar.core import fourier_transform_utils as ftu
     from recovar.data_io.cryoem_dataset import load_dataset
-    from recovar.data_io.starfile import read_star
     from recovar.em.dense.em_engine import run_em
     from recovar.em.vdam.dense_adapter import split_pseudo_halfset_particle_ids as _split_halfset_particle_ids
     from recovar.reconstruction.noise import make_radial_noise
@@ -125,9 +123,7 @@ def main() -> None:
     r_max = 14
     current_size = 28
 
-    main_in, _ = read_star(str(PARTICLES_STAR))
-    mic_names = np.asarray(main_in["_rlnMicrographName"].tolist())
-    h0_ids, _ = _split_halfset_particle_ids(ds.n_images, micrograph_names=mic_names)
+    h0_ids, _ = _split_halfset_particle_ids(ds.n_images)
     ds_h0 = ds.subset(h0_ids)
 
     print(
