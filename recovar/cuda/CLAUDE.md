@@ -45,8 +45,9 @@ supports the requested targets. Record overrides with benchmark results.
 
 `cuda_backproject.cu` is the translation unit for shared projection/backprojection
 kernels and FFI handlers. `relion_vdam_mstep.cuh` owns the RELION-layout VDAM
-M-step and native replay implementation; it is included in the existing private
-namespace after its support definitions. `noise_residual.cuh` owns shared noise
+M-step and native replay implementation. Its kernels share the translation unit's
+private namespace; the host replay C ABI and argument record have external
+linkage so nvcc emits the callable export. `noise_residual.cuh` owns shared noise
 reductions, and `relion_coarse_diff2_projector_body.inc` supplies the common coarse
 projector kernel body. Keep build, packaging and loader-staleness inputs aligned
 when changing these boundaries.

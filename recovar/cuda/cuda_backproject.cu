@@ -4587,7 +4587,11 @@ __device__ __forceinline__ float2 relion_vdam_project_texture_f32(
             zp - static_cast<float>(tex_z_init) + 0.5f));
 }
 
+}  // namespace
+
 #include "relion_vdam_mstep.cuh"
+
+namespace {
 
 __device__ __forceinline__ float relion_fine_diff2_update_f32(
     float2 reference,

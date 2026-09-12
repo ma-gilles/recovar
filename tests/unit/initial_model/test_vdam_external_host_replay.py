@@ -1,3 +1,5 @@
+import ctypes
+import os
 from pathlib import Path
 
 from helpers.cuda_source import read_cuda_source
@@ -11,6 +13,21 @@ PYTHON_WRAPPER = ROOT / "recovar" / "cuda_backproject.py"
 LOCAL_ENGINE = ROOT / 'recovar' / 'em' / 'local' / 'local_em_engine.py'
 REPLAY_HELPER = ROOT / 'recovar' / 'em' / 'diagnostics' / 'vdam_replay.py'
 HELPER = ROOT / "scripts" / "run_vdam_exact_native_host_replay.py"
+
+
+@pytest.mark.integration
+def test_compiled_host_replay_rejects_missing_operands():
+    """Check the actual C export without initializing a CUDA device."""
+    library_path = os.environ.get("RECOVAR_CUDA_LIB")
+    if not library_path:
+        pytest.skip("requires an explicitly built RECOVAR_CUDA_LIB")
+    library = ctypes.CDLL(str(Path(library_path).resolve(strict=True)))
+    replay = library.recovar_relion_vdam_exact_native_host_replay
+    replay.argtypes = [ctypes.POINTER(run_vdam_exact_native_host_replay.ReplayArguments)]
+    replay.restype = ctypes.c_int
+    assert replay(None) == 1  # cudaErrorInvalidValue
+    empty = run_vdam_exact_native_host_replay.ReplayArguments()
+    assert replay(ctypes.byref(empty)) == 1
 
 
 def test_exact_native_host_replay_has_one_shared_abi():

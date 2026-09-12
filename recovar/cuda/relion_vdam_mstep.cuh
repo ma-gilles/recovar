@@ -1,3 +1,5 @@
+namespace {
+
 /* Preserve RELION's by-value projector layout and method body for the VDAM
  * SGD discriminator.  The texture payload is pre-scaled into RELION's frame,
  * so projection itself has the same arithmetic and control flow as BP.cuh. */
@@ -2829,6 +2831,8 @@ cleanup:
     if (imag) cudaFree(imag);
     return err;
 }
+
+}  // namespace
 
 // Host-only ABI used by the clean-process VDAM discriminator.  It deliberately
 // accepts already-materialized dense operands: the parent JAX process retains
