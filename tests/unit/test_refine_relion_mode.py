@@ -1297,6 +1297,26 @@ def _mock_dense_em_result(
     )
 
 
+def _mock_run_dense_em(
+    experiment_dataset,
+    mean,
+    mean_variance,
+    noise_variance,
+    rotations,
+    translations,
+    disc_type,
+    **kwargs,
+):
+    n_shells = experiment_dataset.image_shape[0] // 2 + 1
+    recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
+    return _mock_dense_em_result(
+        n_images=experiment_dataset.n_units,
+        n_rotations=np.asarray(rotations).shape[0],
+        volume_size=recon_vol_size,
+        n_shells=n_shells,
+    )
+
+
 def _mock_reconstruction_accumulator_size(experiment_dataset, kwargs, *, current_size=None):
     """Match the active full-grid or RELION x-half BackProjector layout."""
 
@@ -14579,25 +14599,6 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
         order = int(order)
         return np.zeros((order_sizes[order], 3), dtype=np.float32)
 
-    def fake_run_em(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        rotations,
-        translations,
-        disc_type,
-        **kwargs,
-    ):
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return _mock_dense_em_result(
-            n_images=experiment_dataset.n_units,
-            n_rotations=np.asarray(rotations).shape[0],
-            volume_size=recon_vol_size,
-            n_shells=n_shells,
-        )
-
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
@@ -14665,7 +14666,7 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
             fake_get_grid_eulers(order).astype(dtype),
         ),
     )
-    monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
+    monkeypatch.setattr(half_scoring, "run_em", _mock_run_dense_em)
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
         mean_helpers_module,
@@ -14734,25 +14735,6 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
         order = int(order)
         return np.zeros((order_sizes[order], 3), dtype=np.float32)
 
-    def fake_run_em(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        rotations,
-        translations,
-        disc_type,
-        **kwargs,
-    ):
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return _mock_dense_em_result(
-            n_images=experiment_dataset.n_units,
-            n_rotations=np.asarray(rotations).shape[0],
-            volume_size=recon_vol_size,
-            n_shells=n_shells,
-        )
-
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
@@ -14818,7 +14800,7 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
             fake_get_grid_eulers(order).astype(dtype),
         ),
     )
-    monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
+    monkeypatch.setattr(half_scoring, "run_em", _mock_run_dense_em)
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
         mean_helpers_module,
@@ -14880,18 +14862,6 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
     def fake_get_grid_eulers(order):
         return np.zeros((fake_rotation_grid_size(order), 3), dtype=np.float32)
 
-    def fake_run_em(
-        experiment_dataset, mean, mean_variance, noise_variance, rotations, translations, disc_type, **kwargs
-    ):
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return _mock_dense_em_result(
-            n_images=experiment_dataset.n_units,
-            n_rotations=np.asarray(rotations).shape[0],
-            volume_size=recon_vol_size,
-            n_shells=n_shells,
-        )
-
     def fake_local_search(experiment_dataset, *args, **kwargs):
         _ = args
         reconstruct_flags.append(kwargs["reconstruct_significant_only"])
@@ -14928,7 +14898,7 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
             fake_get_grid_eulers(order).astype(dtype),
         ),
     )
-    monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
+    monkeypatch.setattr(half_scoring, "run_em", _mock_run_dense_em)
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_local_search)
     monkeypatch.setattr(
         mean_helpers_module,
@@ -14977,18 +14947,6 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
     def fake_get_grid_eulers(order):
         return np.zeros((fake_rotation_grid_size(order), 3), dtype=np.float32)
 
-    def fake_run_em(
-        experiment_dataset, mean, mean_variance, noise_variance, rotations, translations, disc_type, **kwargs
-    ):
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return _mock_dense_em_result(
-            n_images=experiment_dataset.n_units,
-            n_rotations=np.asarray(rotations).shape[0],
-            volume_size=recon_vol_size,
-            n_shells=n_shells,
-        )
-
     def fake_local_search(experiment_dataset, *args, **kwargs):
         _ = args
         image_batch_sizes.append(int(kwargs["image_batch_size"]))
@@ -15025,7 +14983,7 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
             fake_get_grid_eulers(order).astype(dtype),
         ),
     )
-    monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
+    monkeypatch.setattr(half_scoring, "run_em", _mock_run_dense_em)
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_local_search)
     monkeypatch.setattr(
         mean_helpers_module,
@@ -15101,25 +15059,6 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
         order = int(order)
         return np.zeros((order_sizes[order], 3), dtype=np.float32)
 
-    def fake_run_em(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        rotations,
-        translations,
-        disc_type,
-        **kwargs,
-    ):
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return _mock_dense_em_result(
-            n_images=experiment_dataset.n_units,
-            n_rotations=np.asarray(rotations).shape[0],
-            volume_size=recon_vol_size,
-            n_shells=n_shells,
-        )
-
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
@@ -15184,7 +15123,7 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
             fake_get_grid_eulers(order).astype(dtype),
         ),
     )
-    monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
+    monkeypatch.setattr(half_scoring, "run_em", _mock_run_dense_em)
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
         mean_helpers_module,
@@ -15868,25 +15807,6 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         vals = np.arange(order_sizes[order], dtype=np.float32)
         return np.stack([vals, vals + 100.0, vals + 200.0], axis=1)
 
-    def fake_run_em(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        rotations,
-        translations,
-        disc_type,
-        **kwargs,
-    ):
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
-        return _mock_dense_em_result(
-            n_images=experiment_dataset.n_units,
-            n_rotations=np.asarray(rotations).shape[0],
-            volume_size=recon_vol_size,
-            n_shells=n_shells,
-        )
-
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
@@ -15964,7 +15884,7 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
             fake_get_grid_eulers(order).astype(dtype),
         ),
     )
-    monkeypatch.setattr(half_scoring, "run_em", fake_run_em)
+    monkeypatch.setattr(half_scoring, "run_em", _mock_run_dense_em)
     monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
         mean_helpers_module,
