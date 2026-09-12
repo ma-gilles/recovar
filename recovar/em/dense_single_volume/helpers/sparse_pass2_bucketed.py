@@ -2155,6 +2155,9 @@ def _log_sparse_kclass_group_timing(
             "prepare_window_cast",
             "score_projection_barrier",
             "mstep_active_row_sync",
+            "noise_sums",
+            "noise_power_shells",
+            "noise_scale_correction",
         )
     )
     total_profiled_s = build_s + fetch_s + prepare_s + score_s + mstep_noise_stats_s
@@ -15612,6 +15615,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                 flat_ctf_probs = None
             if accumulate_noise:
                 substage_t0 = time.time()
+                noise_sub_t0 = substage_t0
                 if bucket_uses_compact_pairs:
                     noise_probs = mstep_probs
                     translation_posterior = np.asarray(translation_posterior_jax, dtype=np.float64)
@@ -15666,6 +15670,8 @@ def compute_k_class_pass2_stats_sparse_fused(
                     else:
                         summed_masked_noise = compute_local_weighted_sums(noise_probs, shifted_noise_split)
                         ctf_probs_for_noise = ctf_probs
+                _add_sparse_group_timing(group_timing, "noise_sums", time.time() - noise_sub_t0)
+                noise_sub_t0 = time.time()
                 if translation_sqdist_ang is not None:
                     noise_sigma2_offset_total[class_index] += float(
                         np.sum(translation_posterior * translation_sqdist_ang, dtype=np.float64)
@@ -15690,6 +15696,8 @@ def compute_k_class_pass2_stats_sparse_fused(
                     dtype=np.float64,
                 )
                 noise_sumw_total[class_index] += float(np.sum(support_mass_np, dtype=np.float64))
+                _add_sparse_group_timing(group_timing, "noise_power_shells", time.time() - noise_sub_t0)
+                noise_sub_t0 = time.time()
                 if noise_scale_correction_xa_total is not None:
                     if ctf_probs_for_noise is None:
                         scale_summed_masked = compute_local_weighted_sums(noise_probs, shifted_noise_split)
@@ -15909,6 +15917,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                         block_norm_residual,
                         dtype=np.float64,
                     )
+                _add_sparse_group_timing(
+                    group_timing, "noise_scale_correction", time.time() - noise_sub_t0
+                )
                 _add_sparse_group_timing(group_timing, "noise", time.time() - substage_t0)
 
             substage_t0 = time.time()
