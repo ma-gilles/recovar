@@ -10,15 +10,17 @@ import pytest
 
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sp
 
+from recovar.em.dense_single_volume.helpers import sparse_pass2_window
+
 pytestmark = pytest.mark.unit
 
 
 def _setup(monkeypatch, *, use_window, recon, x_half, prepare):
     calls = []
-    monkeypatch.setattr(sp.ForwardModelConfig, "from_dataset", lambda ds, *, disc_type, process_fn: calls.append(("config", disc_type)) or "config")
-    monkeypatch.setattr(sp, "make_fourier_window_spec", lambda *a, **kw: SimpleNamespace(use_window=use_window, score_indices_np="sinp", score_indices="si", recon_indices=recon, n_score=11, n_recon=7))
-    monkeypatch.setattr(sp, "centered_half_indices_to_fftw_half_indices", lambda shape, idx: calls.append(("fftw", idx if not hasattr(idx, "shape") else int(idx.shape[0]))) or "xhalf")
-    monkeypatch.setattr(sp, "_windowed_prepare_enabled_for_pass", lambda use_window: prepare)
+    monkeypatch.setattr(sparse_pass2_window.ForwardModelConfig, "from_dataset", lambda ds, *, disc_type, process_fn: calls.append(("config", disc_type)) or "config")
+    monkeypatch.setattr(sparse_pass2_window, "make_fourier_window_spec", lambda *a, **kw: SimpleNamespace(use_window=use_window, score_indices_np="sinp", score_indices="si", recon_indices=recon, n_score=11, n_recon=7))
+    monkeypatch.setattr(sparse_pass2_window, "centered_half_indices_to_fftw_half_indices", lambda shape, idx: calls.append(("fftw", idx if not hasattr(idx, "shape") else int(idx.shape[0]))) or "xhalf")
+    monkeypatch.setattr(sparse_pass2_window, "_windowed_prepare_enabled_for_pass", lambda use_window: prepare)
     out = sp._sparse_pass2_window_setup(
         SimpleNamespace(process_images=None), disc_type="linear", image_shape=(8, 8), current_size=6, n_half=40, mstep_current_size=8,
         square_window=False, window_spec_kwargs={}, use_relion_x_half_mstep=x_half, log_label="Sparse pass-2",

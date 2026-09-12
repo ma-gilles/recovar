@@ -8,7 +8,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.dense_single_volume.helpers.sparse_pass2_window import (
     subtract_projected_reference_from_sparse_mstep_rotation_sums,
     subtract_projected_reference_from_sparse_mstep_sums,
 )

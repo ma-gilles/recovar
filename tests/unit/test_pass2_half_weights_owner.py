@@ -6,6 +6,8 @@ import jax.numpy as jnp
 
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sp
 
+from recovar.em.dense_single_volume.helpers import sparse_pass2_window
+
 
 def test_both_entry_points_use_the_owner():
     for fn in (sp.compute_pass2_stats_sparse_bucketed, sp.compute_k_class_pass2_stats_sparse_fused):
@@ -14,7 +16,7 @@ def test_both_entry_points_use_the_owner():
 
 
 def test_owner_casts_and_rewindows_in_double(monkeypatch):
-    monkeypatch.setattr(sp, "make_scoring_half_image_weights", lambda shape, *, relion_half_sum, exclude_relion_redundant_x0: jnp.ones((4,), dtype=jnp.float32) * (2.0 if exclude_relion_redundant_x0 else 1.0))
+    monkeypatch.setattr(sparse_pass2_window, "make_scoring_half_image_weights", lambda shape, *, relion_half_sum, exclude_relion_redundant_x0: jnp.ones((4,), dtype=jnp.float32) * (2.0 if exclude_relion_redundant_x0 else 1.0))
 
     class Window:
         @staticmethod
