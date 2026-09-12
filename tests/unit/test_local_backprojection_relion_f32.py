@@ -197,7 +197,7 @@ def test_local_noise_scalar_terms_inline_the_mature_big_jit_primitives():
 
 
 
-def test_local_mstep_sums_env_gate_only_changes_relion_x_half(monkeypatch):
+def test_local_mstep_sums_preserve_promoted_precision_for_mixed_operands(monkeypatch):
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION", "1")
     probs = np.array([[[1.0, 1.0, 1.0]]], dtype=np.float64)
     shifted = np.array([[[1.0e8 + 0j], [1.0 + 0j], [-1.0e8 + 0j]]], dtype=np.complex64)
@@ -206,10 +206,11 @@ def test_local_mstep_sums_env_gate_only_changes_relion_x_half(monkeypatch):
     xhalf_y, xhalf_ctf = compute_local_mstep_sums(probs, shifted, ctf2_over_nv, relion_x_half=True)
     normal_y, normal_ctf = compute_local_mstep_sums(probs, shifted, ctf2_over_nv, relion_x_half=False)
 
-    assert xhalf_y.dtype == np.dtype(np.complex64)
-    assert xhalf_ctf.dtype == np.dtype(np.float32)
+    assert xhalf_y.dtype == np.dtype(np.complex128)
+    assert xhalf_ctf.dtype == np.dtype(np.float64)
     assert normal_y.dtype == np.dtype(np.complex128)
     assert normal_ctf.dtype == np.dtype(np.float64)
-    assert np.asarray(xhalf_y)[0, 0, 0] == 0.0
+    assert np.asarray(xhalf_y)[0, 0, 0] == 1.0
     assert np.asarray(normal_y)[0, 0, 0] == 1.0
     np.testing.assert_array_equal(np.asarray(normal_ctf), np.array([[[6.0]]], dtype=np.float64))
+    np.testing.assert_array_equal(xhalf_ctf, normal_ctf)
