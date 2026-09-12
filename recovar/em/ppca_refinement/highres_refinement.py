@@ -36,6 +36,7 @@ from recovar.em.ppca_refinement.refinement_loop import (
     HalfsetMeanComparison,
     PPCARefinementIterationRecord,
     _combined_best_pose_ids,
+    _initial_schedule_state,
     _mean_halfset_diagnostic,
     _resolve_kclass_allows,
     compare_halfset_means_by_fsc,
@@ -133,14 +134,6 @@ def initialize_state_from_pipeline_ppca(
         schedule_state=schedule_state,
         pc_prior_config=pc_prior_config if pc_prior_config is not None else PCPriorConfig(),
     )
-
-
-def _initial_schedule_state(state: PoseMarginalPPCAEMState, dataset, init_current_size: int | None):
-    if state.schedule_state is not None:
-        return state.schedule_state
-    current_size = int(init_current_size if init_current_size is not None else dataset.image_shape[0])
-    q = int(jnp.asarray(state.W_score).shape[1]) if jnp.asarray(state.W_score).ndim == 2 else 0
-    return PPCARefinementScheduleState(current_size=current_size, healpix_order=0, q=q)
 
 
 def _gate_ppca_iteration(

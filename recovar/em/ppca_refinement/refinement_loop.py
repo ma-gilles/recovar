@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -144,20 +143,15 @@ def _resolve_kclass_allows(
     halfset_comparison: HalfsetMeanComparison,
 ) -> bool:
     if callable(kclass_schedule_allows):
-        signature = inspect.signature(kclass_schedule_allows)
-        parameters = signature.parameters
-        supports_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in parameters.values())
-        if supports_kwargs or "current_size" in parameters or "proposed_current_size" in parameters:
-            return bool(
-                kclass_schedule_allows(
-                    iteration,
-                    state,
-                    current_size=current_size,
-                    proposed_current_size=proposed_current_size,
-                    halfset_comparison=halfset_comparison,
-                )
+        return bool(
+            kclass_schedule_allows(
+                iteration,
+                state,
+                current_size=current_size,
+                proposed_current_size=proposed_current_size,
+                halfset_comparison=halfset_comparison,
             )
-        return bool(kclass_schedule_allows(iteration, state))
+        )
     return bool(kclass_schedule_allows)
 
 
@@ -171,6 +165,77 @@ def _initial_schedule_state(state: PoseMarginalPPCAEMState, experiment_dataset, 
         healpix_order=0,
         q=q,
     )
+
+
+def _finish_refinement_iteration(
+    updated: PoseMarginalPPCAEMState,
+    schedule_state: PPCARefinementScheduleState,
+    comparison: HalfsetMeanComparison,
+    best_pose_indices: np.ndarray,
+    *,
+    iteration: int,
+    current_size: int,
+    proposed_size: int,
+    kclass_schedule_allows,
+    pose_stability_threshold: float,
+    path_diagnostics: dict,
+) -> tuple[PoseMarginalPPCAEMState, PPCARefinementIterationRecord]:
+    """Apply the shared halfset gate and record its resolution decision.
+
+    See ``docs/math/ppca_angle_refine_plan_2026_05_05.md#halfset-resolution-gate``.
+    """
+    W_agreement = loading_subspace_agreement(
+        np.asarray(updated.W_half[0]).T,
+        np.asarray(updated.W_half[1]).T,
+    )
+    kclass_allows = _resolve_kclass_allows(
+        kclass_schedule_allows,
+        iteration,
+        updated,
+        current_size=current_size,
+        proposed_current_size=proposed_size,
+        halfset_comparison=comparison,
+    )
+    candidate_state = schedule_state.replace(
+        previous_best_pose_indices=schedule_state.best_pose_indices,
+        best_pose_indices=best_pose_indices,
+        halfset_mean_fsc=comparison.fsc,
+        halfset_means_aligned=comparison.means_aligned,
+        halfset_resolution_supports=comparison.resolution_supports,
+        no_halfset_drift=comparison.no_halfset_drift,
+        kclass_schedule_allows=kclass_allows and proposed_size > current_size,
+        pmax_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "pmax_mean"),
+        logZ_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "logZ_mean"),
+        nsig_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "nsig_mean"),
+        W_subspace_agreement=W_agreement,
+    )
+    decision = evaluate_halfset_resolution_gate(
+        candidate_state,
+        pose_stability_threshold=pose_stability_threshold,
+    )
+    next_size = proposed_size if decision.allow_increase else current_size
+    next_schedule = candidate_state.replace(
+        current_size=next_size,
+        pose_change_fraction=decision.pose_change_fraction,
+        diagnostics={
+            **candidate_state.diagnostics,
+            "iteration": int(iteration),
+            "proposed_current_size": int(proposed_size),
+            "resolution_increased": bool(decision.allow_increase),
+            "halfset_comparison": comparison.diagnostics,
+            "gate_reasons": decision.reasons,
+            **path_diagnostics,
+        },
+    )
+    updated = updated.replace(schedule_state=next_schedule)
+    record = PPCARefinementIterationRecord(
+        iteration=iteration,
+        current_size=next_size,
+        proposed_current_size=proposed_size,
+        resolution_decision=decision,
+        diagnostics=next_schedule.diagnostics,
+    )
+    return updated, record
 
 
 def run_dense_ppca_refinement_loop(
@@ -249,58 +314,16 @@ def run_dense_ppca_refinement_loop(
                 means_aligned=True,
             )
         )
-        W_agreement = loading_subspace_agreement(
-            np.asarray(updated.W_half[0]).T,
-            np.asarray(updated.W_half[1]).T,
-        )
-        kclass_allows = _resolve_kclass_allows(
-            kclass_schedule_allows,
-            iteration,
-            updated,
+        updated, record = _finish_refinement_iteration(
+            updated, schedule_state, comparison, best_pose_indices,
+            iteration=iteration,
             current_size=current_size,
-            proposed_current_size=proposed_size,
-            halfset_comparison=comparison,
-        )
-        candidate_state = schedule_state.replace(
-            previous_best_pose_indices=schedule_state.best_pose_indices,
-            best_pose_indices=best_pose_indices,
-            halfset_mean_fsc=comparison.fsc,
-            halfset_means_aligned=comparison.means_aligned,
-            halfset_resolution_supports=comparison.resolution_supports,
-            no_halfset_drift=comparison.no_halfset_drift,
-            kclass_schedule_allows=kclass_allows and proposed_size > current_size,
-            pmax_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "pmax_mean"),
-            logZ_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "logZ_mean"),
-            nsig_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "nsig_mean"),
-            W_subspace_agreement=W_agreement,
-        )
-        decision = evaluate_halfset_resolution_gate(
-            candidate_state,
+            proposed_size=proposed_size,
+            kclass_schedule_allows=kclass_schedule_allows,
             pose_stability_threshold=pose_stability_threshold,
+            path_diagnostics={},
         )
-        next_size = proposed_size if decision.allow_increase else current_size
-        next_schedule = candidate_state.replace(
-            current_size=next_size,
-            pose_change_fraction=decision.pose_change_fraction,
-            diagnostics={
-                **candidate_state.diagnostics,
-                "iteration": int(iteration),
-                "proposed_current_size": int(proposed_size),
-                "resolution_increased": bool(decision.allow_increase),
-                "halfset_comparison": comparison.diagnostics,
-                "gate_reasons": decision.reasons,
-            },
-        )
-        updated = updated.replace(schedule_state=next_schedule)
-        records.append(
-            PPCARefinementIterationRecord(
-                iteration=iteration,
-                current_size=next_size,
-                proposed_current_size=proposed_size,
-                resolution_decision=decision,
-                diagnostics=next_schedule.diagnostics,
-            )
-        )
+        records.append(record)
         state = updated
     return state, records
 
@@ -389,58 +412,15 @@ def run_local_ppca_refinement_loop(
                 means_aligned=True,
             )
         )
-        W_agreement = loading_subspace_agreement(
-            np.asarray(updated.W_half[0]).T,
-            np.asarray(updated.W_half[1]).T,
-        )
-        kclass_allows = _resolve_kclass_allows(
-            kclass_schedule_allows,
-            iteration,
-            updated,
+        updated, record = _finish_refinement_iteration(
+            updated, schedule_state, comparison, best_pose_indices,
+            iteration=iteration,
             current_size=current_size,
-            proposed_current_size=proposed_size,
-            halfset_comparison=comparison,
-        )
-        candidate_state = schedule_state.replace(
-            previous_best_pose_indices=schedule_state.best_pose_indices,
-            best_pose_indices=best_pose_indices,
-            halfset_mean_fsc=comparison.fsc,
-            halfset_means_aligned=comparison.means_aligned,
-            halfset_resolution_supports=comparison.resolution_supports,
-            no_halfset_drift=comparison.no_halfset_drift,
-            kclass_schedule_allows=kclass_allows and proposed_size > current_size,
-            pmax_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "pmax_mean"),
-            logZ_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "logZ_mean"),
-            nsig_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "nsig_mean"),
-            W_subspace_agreement=W_agreement,
-        )
-        decision = evaluate_halfset_resolution_gate(
-            candidate_state,
+            proposed_size=proposed_size,
+            kclass_schedule_allows=kclass_schedule_allows,
             pose_stability_threshold=pose_stability_threshold,
+            path_diagnostics={"path": "exact_local"},
         )
-        next_size = proposed_size if decision.allow_increase else current_size
-        next_schedule = candidate_state.replace(
-            current_size=next_size,
-            pose_change_fraction=decision.pose_change_fraction,
-            diagnostics={
-                **candidate_state.diagnostics,
-                "iteration": int(iteration),
-                "proposed_current_size": int(proposed_size),
-                "resolution_increased": bool(decision.allow_increase),
-                "halfset_comparison": comparison.diagnostics,
-                "gate_reasons": decision.reasons,
-                "path": "exact_local",
-            },
-        )
-        updated = updated.replace(schedule_state=next_schedule)
-        records.append(
-            PPCARefinementIterationRecord(
-                iteration=iteration,
-                current_size=next_size,
-                proposed_current_size=proposed_size,
-                resolution_decision=decision,
-                diagnostics=next_schedule.diagnostics,
-            )
-        )
+        records.append(record)
         state = updated
     return state, records
