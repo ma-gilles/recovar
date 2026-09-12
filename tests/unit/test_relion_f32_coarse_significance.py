@@ -8,8 +8,10 @@ from recovar.em.dense_single_volume.helpers.oversampling import (
     _relion_cuda_f32_tail_target,
     relion_cuda_f32_coarse_posterior,
 )
-from recovar.em.dense_single_volume.helpers.significance import (
+from recovar.em.dense_single_volume.helpers.coarse_gaussian_gemm import (
     _K1_RELION_F32_COARSE_SUPPORT_ENV,
+)
+from recovar.em.dense_single_volume.helpers.relion_coarse_operands import (
     _k1_relion_f32_coarse_support_enabled,
 )
 

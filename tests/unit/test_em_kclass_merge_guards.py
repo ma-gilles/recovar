@@ -59,6 +59,7 @@ from recovar.em.dense_single_volume import (
     scoring_policy,
 )
 from recovar.em.dense_single_volume.helpers import bpref_diagnostics
+from recovar.em.dense_single_volume.helpers import coarse_gaussian_diagnostics
 
 pytestmark = pytest.mark.unit
 
@@ -780,7 +781,7 @@ def test_kclass_significance_dump_can_stop_after_durable_target(monkeypatch, tmp
     monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_ITERATION", "2")
     monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET", "1")
 
-    with pytest.raises(sig_mod.SignificanceDumpComplete) as exc_info:
+    with pytest.raises(coarse_gaussian_diagnostics.SignificanceDumpComplete) as exc_info:
         sig_mod._maybe_dump_k_class_significance_batch(
             experiment_dataset=SimpleNamespace(
                 dataset_indices=np.asarray([42], dtype=np.int64),
@@ -822,8 +823,8 @@ def test_kclass_significance_stop_without_iteration_uses_unsuffixed_path(monkeyp
     monkeypatch.setenv("RECOVAR_SIGNIFICANCE_DUMP_STOP_AFTER_TARGET", "1")
     monkeypatch.delenv("RECOVAR_SIGNIFICANCE_DUMP_ITERATION", raising=False)
 
-    with pytest.raises(sig_mod.SignificanceDumpComplete):
-        sig_mod._maybe_stop_after_significance_dump(
+    with pytest.raises(coarse_gaussian_diagnostics.SignificanceDumpComplete):
+        coarse_gaussian_diagnostics._maybe_stop_after_significance_dump(
             str(dump_path),
             dump_dir=str(dump_dir),
             target_original_indices={42},
@@ -877,7 +878,7 @@ def test_significance_stop_waits_for_complete_target_set(monkeypatch, tmp_path):
     second_path = dump_dir / "significance_orig000043_it002_cs014.npz"
     first_path.touch()
 
-    sig_mod._maybe_stop_after_significance_dump(
+    coarse_gaussian_diagnostics._maybe_stop_after_significance_dump(
         str(first_path),
         dump_dir=str(dump_dir),
         target_original_indices={42, 43},
@@ -886,8 +887,8 @@ def test_significance_stop_waits_for_complete_target_set(monkeypatch, tmp_path):
     )
 
     second_path.touch()
-    with pytest.raises(sig_mod.SignificanceDumpComplete):
-        sig_mod._maybe_stop_after_significance_dump(
+    with pytest.raises(coarse_gaussian_diagnostics.SignificanceDumpComplete):
+        coarse_gaussian_diagnostics._maybe_stop_after_significance_dump(
             str(second_path),
             dump_dir=str(dump_dir),
             target_original_indices={42, 43},

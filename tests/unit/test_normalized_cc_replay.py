@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.significance import (
+from recovar.em.dense_single_volume.helpers.relion_coarse_operands import (
     _relion_cc_inverse_power_from_processed,
 )
 from recovar.em.normalized_cc_replay import (
@@ -336,7 +336,7 @@ def test_jax_relion_coarse_rescore_preserves_double_accelerator_precision():
 
 
 def test_relion_coarse_exact_tie_uses_direction_major_flat_order():
-    from recovar.em.dense_single_volume.helpers.significance import (
+    from recovar.em.dense_single_volume.helpers.relion_coarse_operands import (
         _relion_coarse_pose_tie_break_keys,
         _select_relion_coarse_rescore_winner_slots,
     )
@@ -362,7 +362,7 @@ def test_relion_coarse_exact_tie_uses_direction_major_flat_order():
 
 
 def test_relion_coarse_tie_order_maps_subset_rotation_ids():
-    from recovar.em.dense_single_volume.helpers.significance import (
+    from recovar.em.dense_single_volume.helpers.relion_coarse_operands import (
         _relion_coarse_pose_tie_break_keys,
         _select_relion_coarse_rescore_winner_slots,
     )

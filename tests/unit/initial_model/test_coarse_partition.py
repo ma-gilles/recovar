@@ -118,6 +118,7 @@ def test_device_gather_retains_image_order_and_zeroes_poisoned_padding(has_prior
 @pytest.mark.parametrize("capture", [False, True])
 def test_composition_certifies_once_and_only_full_scores_required_groups(monkeypatch, invalid_selected, capture):
     from recovar.em.dense_single_volume.helpers import significance as s
+    from recovar.em.dense_single_volume.helpers import coarse_gaussian_gemm
     from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import plan_coarse_gemm_certificate_topology
 
     state = certificate([1, 65, 64, 2], physical=5)
@@ -162,7 +163,7 @@ def test_composition_certifies_once_and_only_full_scores_required_groups(monkeyp
         n = kwargs["actual_image_count"]
         full_rows.append(np.asarray(i[:n]).tolist())
         np.testing.assert_array_equal(kwargs["translation_log_prior"][:n], prior[np.asarray(i[:n], np.int32)])
-        return s.CoarseGaussianGemmHybridBatchResult(
+        return coarse_gaussian_gemm.CoarseGaussianGemmHybridBatchResult(
             scores=np.zeros((32, 1280, 3), np.float32),
             raw_score_max=np.zeros(32, np.float32),
             scores_include_priors=False,
@@ -172,10 +173,10 @@ def test_composition_certifies_once_and_only_full_scores_required_groups(monkeyp
             score_representation="dense_full_direct_static_capacity",
         )
 
-    monkeypatch.setattr(s, "_prepare_relion_coarse_gaussian_gemm_f64_image_batch", prepare)
-    monkeypatch.setattr(s, "initialize_coarse_gemm_hybrid_interval_state", lambda *args: state)
-    monkeypatch.setattr(s, "_relion_coarse_gaussian_gemm_update_certificate_state", update)
-    monkeypatch.setattr(s, "_relion_coarse_diff2_rotation_blocks_from_topology_f32", selected)
+    monkeypatch.setattr(coarse_gaussian_gemm, "_prepare_relion_coarse_gaussian_gemm_f64_image_batch", prepare)
+    monkeypatch.setattr(coarse_gaussian_gemm, "initialize_coarse_gemm_hybrid_interval_state", lambda *args: state)
+    monkeypatch.setattr(coarse_gaussian_gemm, "_relion_coarse_gaussian_gemm_update_certificate_state", update)
+    monkeypatch.setattr(coarse_gaussian_gemm, "_relion_coarse_diff2_rotation_blocks_from_topology_f32", selected)
     monkeypatch.setattr(s, "_compute_coarse_gaussian_gemm_hybrid_batch", full)
     result, groups = p.compute_partitioned_coarse_batch(
         cache,

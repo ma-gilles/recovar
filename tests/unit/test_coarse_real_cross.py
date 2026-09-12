@@ -5,6 +5,8 @@ import numpy as np
 import pytest
 
 from recovar.em.dense_single_volume.helpers import significance
+
+from recovar.em.dense_single_volume.helpers import coarse_gaussian_gemm
 from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import plan_coarse_gemm_certificate_topology
 
 pytestmark = [pytest.mark.unit, pytest.mark.gpu]
@@ -47,7 +49,7 @@ def test_real_cross_preserves_selected_exact_scores(dyadic, actual_images, custo
     # Dyadic cases retain two independent real CUDA launches and exact outputs.
     calls = []
     if not dyadic:
-        original = significance._relion_coarse_diff2_rotation_blocks_from_topology_f32
+        original = coarse_gaussian_gemm._relion_coarse_diff2_rotation_blocks_from_topology_f32
 
         def same_input_cuda_result(*args, **kwargs):
             leaves, structure = jax.tree_util.tree_flatten((args, kwargs))
@@ -66,7 +68,7 @@ def test_real_cross_preserves_selected_exact_scores(dyadic, actual_images, custo
             return calls[0][2]
 
         monkeypatch.setattr(
-            significance, "_relion_coarse_diff2_rotation_blocks_from_topology_f32", same_input_cuda_result
+            coarse_gaussian_gemm, "_relion_coarse_diff2_rotation_blocks_from_topology_f32", same_input_cuda_result
         )
     results = [significance._compute_coarse_gaussian_gemm_hybrid_batch(
         reference[None], shifted, weight, initial, **kwargs, real_cross=enabled

@@ -1294,9 +1294,11 @@ def _run_dense_k_class_joint_firstiter_score_probe(
 ) -> _DenseKClassScoreProbeResult:
     """Score RELION firstiter-CC K-class coarse poses in one shared pass."""
 
-    from .helpers.significance import (
-        _compute_k_class_significance_batched,
+    from recovar.em.dense_single_volume.helpers.coarse_gaussian_diagnostics import (
         _significance_debug_dump_matches,
+    )
+    from recovar.em.dense_single_volume.helpers.significance import (
+        _compute_k_class_significance_batched,
     )
 
     means_array = _as_class_means(means_array)

@@ -17,7 +17,7 @@ from recovar.em.dense_single_volume.helpers.coarse_gemm_streaming import (
     update_coarse_gemm_streaming_state,
     write_coarse_gemm_streaming_summary,
 )
-from recovar.em.dense_single_volume.helpers.significance import (
+from recovar.em.dense_single_volume.helpers.coarse_gaussian_diagnostics import (
     CoarseGaussianGemmDiagnosticScope,
     _coarse_gaussian_gemm_streaming_diagnostic_request,
     _seal_coarse_gaussian_gemm_streaming_scope,

@@ -15,6 +15,7 @@ from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
     plan_coarse_gemm_certificate_topology,
 )
 from recovar.em.dense_single_volume.helpers.significant_samples import ComplementSignificantSampleIndices
+from recovar.em.dense_single_volume.helpers import coarse_gaussian_gemm
 
 
 def test_direct_and_hybrid_share_disk_masked_compact_projection_operands():
@@ -383,7 +384,7 @@ def test_hybrid_publishes_only_selected_exact_source16_scores(monkeypatch, share
     cache, shifted, weight, initial, topology = _hybrid_operands()
     full_callback_calls = 0
     monkeypatch.setattr(
-        significance,
+        coarse_gaussian_gemm,
         "_relion_coarse_diff2_rotation_blocks_from_topology_f32",
         _selected_diff2_from_ids,
     )
@@ -501,7 +502,7 @@ def test_every_hybrid_full_dense_exit_uses_lazy_callback(
             return jnp.asarray(selected)
 
         monkeypatch.setattr(
-            significance,
+            coarse_gaussian_gemm,
             "_relion_coarse_diff2_rotation_blocks_from_topology_f32",
             invalid_selected,
         )
@@ -596,7 +597,12 @@ def test_hybrid_compact_posterior_retains_ordered_ids_without_dense_scatter(
         lambda **_kwargs: "compact_selected_exact",
     )
     monkeypatch.setattr(
-        significance,
+        coarse_gaussian_gemm,
+        "_select_coarse_gaussian_gemm_score_representation",
+        lambda **_kwargs: "compact_selected_exact",
+    )
+    monkeypatch.setattr(
+        coarse_gaussian_gemm,
         "_relion_coarse_diff2_rotation_blocks_from_topology_f32",
         _selected_diff2_from_ids,
     )
@@ -608,7 +614,7 @@ def test_hybrid_compact_posterior_retains_ordered_ids_without_dense_scatter(
         raise AssertionError("eligible compact rescore must not run full fallback")
 
     monkeypatch.setattr(
-        significance,
+        coarse_gaussian_gemm,
         "assemble_coarse_gemm_hybrid_dense_scores_f32",
         reject_dense,
     )
@@ -677,7 +683,7 @@ def test_compact_hybrid_chooses_dense_before_certificate_when_not_smaller(
         )
 
     monkeypatch.setattr(
-        significance,
+        coarse_gaussian_gemm,
         "_relion_coarse_gaussian_gemm_update_certificate_state",
         reject_certificate,
     )
@@ -733,7 +739,7 @@ def test_compact_hybrid_latched_overflow_skips_certificate(monkeypatch):
         )
 
     monkeypatch.setattr(
-        significance,
+        coarse_gaussian_gemm,
         "_relion_coarse_gaussian_gemm_update_certificate_state",
         reject_certificate,
     )
@@ -792,7 +798,7 @@ def test_hybrid_capacity_overflow_uses_one_full_direct_batch(monkeypatch):
         return jnp.asarray(values + np.float32(1.0))
 
     monkeypatch.setattr(
-        significance,
+        coarse_gaussian_gemm,
         "_relion_coarse_diff2_rotation_blocks_from_topology_f32",
         reject_selected,
     )
@@ -840,6 +846,13 @@ def test_hybrid_invalid_selected_output_falls_back_for_whole_batch(
             "compact_selected_exact" if compact_posterior else "dense_selected_exact"
         ),
     )
+    monkeypatch.setattr(
+        coarse_gaussian_gemm,
+        "_select_coarse_gaussian_gemm_score_representation",
+        lambda **_kwargs: (
+            "compact_selected_exact" if compact_posterior else "dense_selected_exact"
+        ),
+    )
 
     def invalid_selected(*args, **kwargs):
         selected = np.array(
@@ -859,7 +872,7 @@ def test_hybrid_invalid_selected_output_falls_back_for_whole_batch(
         )
 
     monkeypatch.setattr(
-        significance,
+        coarse_gaussian_gemm,
         "_relion_coarse_diff2_rotation_blocks_from_topology_f32",
         invalid_selected,
     )
@@ -938,12 +951,12 @@ def test_omitting_certified_zero_weight_blocks_preserves_f64_logsumexp_bits(
 def test_shared_pretranslated_dispatch_flag_is_strict_and_default_off(monkeypatch):
     name = "RECOVAR_COARSE_SHARED_PRETRANSLATED"
     monkeypatch.delenv(name, raising=False)
-    assert not significance._coarse_shared_pretranslated_enabled()
+    assert not coarse_gaussian_gemm._coarse_shared_pretranslated_enabled()
     monkeypatch.setenv(name, "1")
-    assert significance._coarse_shared_pretranslated_enabled()
+    assert coarse_gaussian_gemm._coarse_shared_pretranslated_enabled()
     monkeypatch.setenv(name, "automatic")
     with pytest.raises(ValueError, match=name):
-        significance._coarse_shared_pretranslated_enabled()
+        coarse_gaussian_gemm._coarse_shared_pretranslated_enabled()
 
 
 @pytest.mark.parametrize("shared", [False, True])

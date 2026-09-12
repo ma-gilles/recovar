@@ -1100,8 +1100,11 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     assert "RELION CUDA image preprocessing" in source
     assert "processed_direct = _process_relion_exact_coarse_half_image(" in source
     assert "exact_operands = _assemble_relion_exact_coarse_gaussian_operands(" in source
-    assembler_start = source.index("def _assemble_relion_exact_coarse_gaussian_operands(")
-    assembler = source[assembler_start : source.index("\ndef ", assembler_start + 1)]
+    from recovar.em.dense_single_volume.helpers import relion_coarse_operands
+
+    operands_source = Path(relion_coarse_operands.__file__).read_text()
+    assembler_start = operands_source.index("def _assemble_relion_exact_coarse_gaussian_operands(")
+    assembler = operands_source[assembler_start : operands_source.index("\ndef ", assembler_start + 1)]
     assert "_relion_exact_ctf_half_from_source_star_host(" in assembler
     assert "processed_score * pixel_correction" in assembler
     assert "pixel_indices=score_indices_np" in assembler
@@ -1247,7 +1250,7 @@ def test_exact_relion_ctf_source_exposes_host_and_shared_device_boundaries(
 
 
 def test_coarse_gaussian_square_operands_reuse_weighted_score_inputs():
-    from recovar.em.dense_single_volume.helpers.significance import (
+    from recovar.em.dense_single_volume.helpers.relion_coarse_operands import (
         _relion_coarse_gaussian_square_operands,
     )
 
@@ -1297,7 +1300,7 @@ def test_coarse_gaussian_sincosf_operands_reuse_unshifted_weighted_input(
     monkeypatch,
 ):
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers.significance import (
+    from recovar.em.dense_single_volume.helpers.relion_coarse_operands import (
         _relion_coarse_gaussian_square_operands_sincosf,
     )
 
@@ -1362,7 +1365,7 @@ def test_coarse_gaussian_sincosf_operands_reuse_unshifted_weighted_input(
 
 def test_coarse_gaussian_sincosf_operands_preserve_float64(monkeypatch):
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers.significance import (
+    from recovar.em.dense_single_volume.helpers.relion_coarse_operands import (
         _relion_coarse_gaussian_square_operands_sincosf,
     )
 
@@ -1408,7 +1411,7 @@ def test_coarse_gaussian_sincosf_operands_run_cuda_translation(
     gpu_device,
 ):
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers.significance import (
+    from recovar.em.dense_single_volume.helpers.relion_coarse_operands import (
         _relion_coarse_gaussian_square_operands_sincosf,
     )
     from recovar.em.dense_single_volume.helpers.sparse_pass2_bucket_io import (

@@ -11,7 +11,9 @@ from recovar.em.dense_single_volume.helpers.coarse_gemm_hybrid import (
     assemble_coarse_gemm_hybrid_compact_scores_f32,
 )
 from recovar.em.dense_single_volume.helpers.coarse_partition import CoarseRowResult
-from recovar.em.dense_single_volume.helpers.significance import CoarseGaussianGemmHybridBatchResult
+from recovar.em.dense_single_volume.helpers.coarse_gaussian_gemm import (
+    CoarseGaussianGemmHybridBatchResult,
+)
 
 pytestmark = pytest.mark.unit
 

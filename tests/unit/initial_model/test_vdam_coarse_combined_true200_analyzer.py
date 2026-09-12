@@ -1957,7 +1957,7 @@ def test_direct_hybrid_panel_contract_rejects_assignment_corruption(
 
 
 def test_maximum_declared_projection_cache_plan_fits_without_alias_assumption() -> None:
-    from recovar.em.dense_single_volume.helpers.significance import (
+    from recovar.em.dense_single_volume.helpers.coarse_gaussian_gemm import (
         _plan_coarse_gaussian_gemm_projection_cache,
     )
 

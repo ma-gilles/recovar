@@ -133,6 +133,7 @@ def compute_partitioned_coarse_batch(
     source-pose mappings. Posterior processing must use each result's original
     mapping before restoring the image order. No full score expansion is needed.
     """
+    from recovar.em.dense_single_volume.helpers import coarse_gaussian_gemm
     from recovar.em.dense_single_volume.helpers import significance as s
 
     validate_coarse_gemm_certificate_topology(topology)
@@ -170,11 +171,11 @@ def compute_partitioned_coarse_batch(
         raise ValueError("Rotation priors must match source rotations")
     if tp is not None and tp.shape != (batch, translations):
         raise ValueError("Translation priors must match image/translation dimensions")
-    images = s._prepare_relion_coarse_gaussian_gemm_f64_image_batch(shifted, weight, initial, actual)
-    state = s.initialize_coarse_gemm_hybrid_interval_state(batch, rotations)
+    images = coarse_gaussian_gemm._prepare_relion_coarse_gaussian_gemm_f64_image_batch(shifted, weight, initial, actual)
+    state = coarse_gaussian_gemm.initialize_coarse_gemm_hybrid_interval_state(batch, rotations)
     for start in range(0, rotations, chunk):
         stop = min(start + chunk, rotations)
-        state = s._relion_coarse_gaussian_gemm_update_certificate_state(
+        state = coarse_gaussian_gemm._relion_coarse_gaussian_gemm_update_certificate_state(
             state,
             cache[0, start:stop],
             images,
@@ -208,7 +209,7 @@ def compute_partitioned_coarse_batch(
             kwargs = dict(topology=topology)
             if logical_full_pixel_count is not None:
                 kwargs["logical_full_pixel_count"] = logical_full_pixel_count
-            diff2 = s._relion_coarse_diff2_rotation_blocks_from_topology_f32(
+            diff2 = coarse_gaussian_gemm._relion_coarse_diff2_rotation_blocks_from_topology_f32(
                 cache[0], x, w, ini, jnp.asarray(group.selection.block_ids), **kwargs
             )
             compact = assemble_coarse_gemm_hybrid_compact_scores_f32(
@@ -221,7 +222,7 @@ def compute_partitioned_coarse_batch(
                 translation_log_prior=prior,
             )
             if np.all(np.asarray(compact.selected_output_valid, dtype=bool)):
-                result = s.CoarseGaussianGemmHybridBatchResult(
+                result = coarse_gaussian_gemm.CoarseGaussianGemmHybridBatchResult(
                     scores=None,
                     raw_score_max=jnp.where(
                         jnp.arange(group.physical_count, dtype=jnp.int32) < len(group.image_indices),

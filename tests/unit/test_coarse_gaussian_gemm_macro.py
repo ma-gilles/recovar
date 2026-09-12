@@ -11,6 +11,8 @@ import pytest
 from helpers import score_diagnostics
 
 from recovar.em.dense_single_volume.helpers import coarse_score_diagnostics, relion_ctf, scoring, significance
+
+from recovar.em.dense_single_volume.helpers import coarse_gaussian_gemm
 from recovar.em.dense_single_volume.helpers.coarse_gemm_streaming import (
     COARSE_GEMM_STREAMING_SCHEMA,
 )
@@ -1109,7 +1111,7 @@ def test_coarse_gaussian_gemm_macro_projects_once_and_binds_all_image_lanes(
         return sentinel
 
     monkeypatch.setattr(
-        significance,
+        coarse_gaussian_gemm,
         "_relion_coarse_gaussian_gemm_scores",
         capture_score,
     )
@@ -1376,7 +1378,7 @@ def test_coarse_gaussian_gemm_live_k1_cache_builds_once_outside_image_loop(
         )
 
     monkeypatch.setattr(
-        significance,
+        coarse_gaussian_gemm,
         "_relion_coarse_gaussian_gemm_scores",
         controlled_scores,
     )
@@ -1764,7 +1766,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
             helper_outputs.append(compact_values)
         else:
             helper_outputs.append(np.asarray(published_scores).reshape(batch_size, -1))
-        result = significance.CoarseGaussianGemmHybridBatchResult(
+        result = coarse_gaussian_gemm.CoarseGaussianGemmHybridBatchResult(
             scores=published_scores,
             raw_score_max=jnp.zeros(batch_size, dtype=jnp.float32),
             scores_include_priors=use_selected,
@@ -2440,7 +2442,7 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
         return scores
 
     monkeypatch.setattr(
-        significance,
+        coarse_gaussian_gemm,
         "_relion_coarse_gaussian_gemm_scores",
         controlled_scores,
     )

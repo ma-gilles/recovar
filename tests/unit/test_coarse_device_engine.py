@@ -84,6 +84,8 @@ def _fixture(monkeypatch, status=None):
     def forbidden(*args, **kwargs):
         raise AssertionError("device route re-entered host certificate or selected scorer")
 
+    from recovar.em.dense_single_volume.helpers import coarse_gaussian_gemm
+
     for name in (
         "_prepare_relion_coarse_gaussian_gemm_f64_image_batch",
         "_relion_coarse_gaussian_gemm_update_certificate_state",
@@ -91,7 +93,7 @@ def _fixture(monkeypatch, status=None):
         "_relion_coarse_diff2_rotation_blocks_from_topology_f32",
         "assemble_coarse_gemm_hybrid_compact_scores_f32",
     ):
-        monkeypatch.setattr(significance, name, forbidden)
+        monkeypatch.setattr(coarse_gaussian_gemm, name, forbidden)
     return operands, kwargs, result, calls
 
 

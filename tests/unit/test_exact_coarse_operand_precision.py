@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume.helpers import relion_ctf, significance, sparse_pass2_bucketed
+from recovar.em.dense_single_volume.helpers import relion_ctf, relion_coarse_operands, sparse_pass2_bucketed
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucket_io
 
 pytestmark = pytest.mark.unit
@@ -61,7 +61,7 @@ def test_exact_coarse_assembly_precision_and_padding(
         assert images.shape == (batch_size, 12)
         return jnp.zeros(images.shape[0], dtype=real_dtype)
 
-    result = significance._assemble_relion_exact_coarse_gaussian_operands(
+    result = relion_coarse_operands._assemble_relion_exact_coarse_gaussian_operands(
         object(),
         source_images,
         np.arange(2),
