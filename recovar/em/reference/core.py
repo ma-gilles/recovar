@@ -121,20 +121,6 @@ def compute_CTFed_proj_norms(projections, CTF_params, ctf, noise_variance, voxel
     return result
 
 
-def probabilities_to_hard_assignment_pose(probabilities, rotation_grid, translation_grid):
-    idx = np.argmax(probabilities.reshape(probabilities.shape[0], -1), axis=-1)
-    return hard_assignment_idx_to_pose(idx, rotation_grid, translation_grid)
-
-
-def probabilities_to_hard_assignment_idx(probabilities, rotation_grid, translation_grid):
-    idx = np.argmax(probabilities.reshape(probabilities.shape[0], -1), axis=-1)
-    square_shape = (rotation_grid.shape[0], translation_grid.shape[0])
-    maxpos_vect = np.column_stack(np.unravel_index(idx, square_shape))
-    rot_idx = maxpos_vect[:, 0]
-    trans_idx = maxpos_vect[:, 1]
-    return rot_idx, trans_idx
-
-
 def hard_assignment_idx_to_pose(indices, rotation_grid, translation_grid):
     square_shape = (rotation_grid.shape[0], translation_grid.shape[0])
     maxpos_vect = np.column_stack(np.unravel_index(indices, square_shape))

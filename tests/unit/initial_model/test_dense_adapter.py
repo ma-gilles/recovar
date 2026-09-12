@@ -14,7 +14,8 @@ from recovar.em.vdam.dense_adapter import (
     _resolve_class_inputs,
     class_log_priors_from_state,
     reference_to_dense_means,
-    reference_to_relion_projector_dense_means,
+    reference_to_relion_projector_half_maps,
+    relion_projector_half_maps_to_dense_means,
     run_dense_initial_model_estep,
     split_pseudo_halfset_particle_ids,
 )
@@ -715,7 +716,7 @@ def test_relion_projector_to_dense_volume_truncates_oversize(monkeypatch):
     np.testing.assert_array_equal(half[2, 2, :3], rev[3, 3, :3])
 
 
-def test_reference_to_relion_projector_dense_means_uses_relion_projector_frame(monkeypatch):
+def test_projector_conversion_uses_relion_frame(monkeypatch):
     calls = []
 
     def fake_recovar_volume_to_relion(ref):
@@ -749,7 +750,8 @@ def test_reference_to_relion_projector_dense_means_uses_relion_projector_frame(m
     monkeypatch.setattr("recovar.em.vdam.dense_adapter._relion_projector_to_dense_volume", fake_embed)
 
     refs = np.zeros((1, 4, 4, 4), dtype=np.float32)
-    means = reference_to_relion_projector_dense_means(refs, current_size=2, padding_factor=1)
+    projector_maps, _ = reference_to_relion_projector_half_maps(refs, current_size=2, padding_factor=1)
+    means = relion_projector_half_maps_to_dense_means(projector_maps, refs.shape[-1])
 
     assert means.shape == (1, 4**3)
     assert means.dtype == np.complex64

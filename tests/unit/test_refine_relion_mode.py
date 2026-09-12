@@ -2290,7 +2290,6 @@ def test_build_local_hypothesis_layout_and_bucketization_preserve_per_image_supp
         per_image=False,
         grid_metadata=None,
     ):
-        _ = (prior_rotation_indices, sigma_rot, sigma_psi, healpix_order, sigma_cutoff, grid_metadata)
         assert per_image
         image_idx = call_count["value"]
         call_count["value"] += 1
@@ -3046,23 +3045,6 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
         rotation_grid_angular_sampling_deg=None,
         dtype=np.float32,
     ):
-        _ = (
-            prior_rotations,
-            rotation_grid_rotations,
-            sigma_rot,
-            sigma_psi,
-            healpix_order,
-            translations,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            voxel_size,
-            grid_metadata,
-            translation_prior_reference_translations,
-            rotation_grid_random_perturbation,
-            rotation_grid_angular_sampling_deg,
-            dtype,
-        )
         captured["rotation_log_prior"] = (
             None if rotation_log_prior is None else np.asarray(rotation_log_prior, dtype=np.float32).copy()
         )
@@ -5658,17 +5640,6 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
         rotation_grid_angular_sampling_deg=None,
         dtype=np.float32,
     ):
-        _ = (
-            prior_rotations,
-            sigma_rot,
-            sigma_psi,
-            healpix_order,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            voxel_size,
-            translation_prior_reference_translations,
-        )
         captured["grid_metadata_mode"] = grid_metadata["mode"]
         captured["n_pixels"] = int(grid_metadata["n_pixels"])
         captured["n_psi"] = int(grid_metadata["n_psi"])
@@ -14400,7 +14371,6 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         return np.zeros((order_sizes[order], 3), dtype=np.float32)
 
     def fake_advance_relion_perturbation(current, perturb_factor, rng):
-        _ = (current, perturb_factor, rng)
         return 0.25
 
     def fake_apply_relion_rotation_perturbation(rotations, random_perturbation, angular_sampling_deg):
@@ -14464,24 +14434,6 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         current_size,
         **kwargs,
     ):
-        _ = (
-            experiment_dataset,
-            mean,
-            mean_variance,
-            noise_variance,
-            prior_rotations,
-            sigma_rot,
-            sigma_psi,
-            translations,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-            kwargs,
-        )
         local_calls.append(
             {
                 "healpix_order": int(healpix_order),
@@ -14637,7 +14589,6 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
         disc_type,
         **kwargs,
     ):
-        _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         return _mock_dense_em_result(
@@ -14668,25 +14619,6 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
         current_size,
         **kwargs,
     ):
-        _ = (
-            mean,
-            mean_variance,
-            noise_variance,
-            prior_rotations,
-            rotation_grid_rotations,
-            rotation_grid_eulers,
-            healpix_order,
-            sigma_rot,
-            sigma_psi,
-            translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-            kwargs,
-        )
         local_prior_translations.append(np.asarray(prior_translations, dtype=np.float32).copy())
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
@@ -14812,7 +14744,6 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
         disc_type,
         **kwargs,
     ):
-        _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         return _mock_dense_em_result(
@@ -14843,26 +14774,6 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
         current_size,
         **kwargs,
     ):
-        _ = (
-            experiment_dataset,
-            mean,
-            mean_variance,
-            noise_variance,
-            prior_rotations,
-            rotation_grid_rotations,
-            rotation_grid_eulers,
-            healpix_order,
-            sigma_rot,
-            sigma_psi,
-            translations,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-        )
         recorded_translation_reference_grids.append(
             np.asarray(kwargs["translation_prior_reference_translations"], dtype=np.float32).copy()
         )
@@ -14972,7 +14883,6 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
     def fake_run_em(
         experiment_dataset, mean, mean_variance, noise_variance, rotations, translations, disc_type, **kwargs
     ):
-        _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         return _mock_dense_em_result(
@@ -15070,7 +14980,6 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
     def fake_run_em(
         experiment_dataset, mean, mean_variance, noise_variance, rotations, translations, disc_type, **kwargs
     ):
-        _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         return _mock_dense_em_result(
@@ -15202,7 +15111,6 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
         disc_type,
         **kwargs,
     ):
-        _ = (mean, mean_variance, noise_variance, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         return _mock_dense_em_result(
@@ -15233,26 +15141,6 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
         current_size,
         **kwargs,
     ):
-        _ = (
-            experiment_dataset,
-            mean,
-            mean_variance,
-            noise_variance,
-            prior_rotations,
-            rotation_grid_rotations,
-            rotation_grid_eulers,
-            healpix_order,
-            sigma_rot,
-            sigma_psi,
-            translations,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-        )
         recorded_translation_reference_grids.append(
             np.asarray(kwargs["translation_prior_reference_translations"], dtype=np.float32).copy()
         )
@@ -15545,7 +15433,6 @@ def test_relion_mode_writes_absolute_translations_from_previous_offset(
         disc_type,
         **kwargs,
     ):
-        _ = (mean, mean_variance, noise_variance, rotations, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         hard_assignment = np.full(experiment_dataset.n_units, 1, dtype=np.int32)
@@ -15844,7 +15731,6 @@ def test_relion_mode_dense_k_class_writes_absolute_translations_from_previous_of
         disc_type,
         **kwargs,
     ):
-        _ = (means, mean_variance, noise_variance, translations, disc_type)
         half_idx = len(dense_calls)
         dense_calls.append(kwargs)
         n_classes = int(np.asarray(means).shape[0])
@@ -15992,7 +15878,6 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         disc_type,
         **kwargs,
     ):
-        _ = (mean, mean_variance, noise_variance, rotations, translations, disc_type, kwargs)
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         return _mock_dense_em_result(
@@ -16023,25 +15908,6 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         current_size,
         **kwargs,
     ):
-        _ = (
-            mean,
-            mean_variance,
-            noise_variance,
-            prior_rotations,
-            rotation_grid_rotations,
-            rotation_grid_eulers,
-            healpix_order,
-            sigma_rot,
-            sigma_psi,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-            kwargs,
-        )
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = _mock_reconstruction_accumulator_size(experiment_dataset, kwargs)
         assignment = np.full(

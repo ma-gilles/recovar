@@ -296,27 +296,6 @@ def relion_projector_half_maps_to_dense_means(projector_half_maps: np.ndarray, o
     return np.asarray(means, dtype=np.complex64)
 
 
-def reference_to_relion_projector_dense_means(
-    references: np.ndarray,
-    *,
-    current_size: int,
-    padding_factor: int = 1,
-    interpolator: int = 1,
-) -> np.ndarray:
-    """Convert recovar-frame references through RELION's ``Projector`` setup (data_dim=2, scaled by ``-N^2``)."""
-
-    projector_half_maps, _r_max = reference_to_relion_projector_half_maps(
-        references,
-        current_size=current_size,
-        padding_factor=padding_factor,
-        interpolator=interpolator,
-    )
-    return relion_projector_half_maps_to_dense_means(
-        projector_half_maps,
-        int(np.asarray(references).shape[-1]),
-    )
-
-
 def _dense_rotations_for_config(rotations: Any, config: DenseInitialModelEstepConfig) -> np.ndarray:
     rotations_np = np.asarray(rotations, dtype=np.float32)
     if not config.relion_projector_frame:
