@@ -133,6 +133,85 @@ def compact_candidate_indices_in_source_order(candidate_mask):
     return np.nonzero(_candidate_mask_to_dense(candidate_mask))
 
 
+def _batched_compact_candidate_indices(candidate_masks):
+    """Source-ordered ``(rotation, translation)`` ids for a whole bucket at once.
+
+    ``compact_candidate_indices_in_source_order`` materializes a dense ``(R, T)``
+    mask and calls ``np.nonzero`` once per image. Measured 2026-09-12 on the
+    100k/256 K=4 fixture, that per-image loop made bucket construction 22 % of the
+    pass-2 loop. Within one bucket every image shares ``R``, ``T`` and normally the
+    fine-to-coarse translation parent, so the bucket is one padded
+    ``(B, cR, cT)`` table, one gather to ``(B, R, T)`` and one ``np.nonzero``.
+    C-order ``nonzero`` over ``(B, R, T)`` is exactly the per-image rotation-major,
+    translation-minor source order, so the result is identical.
+
+    Returns ``None`` when the bucket is not uniform enough (dense NumPy masks,
+    ``coarse_exclude`` specs, or differing translation parents); the caller then
+    uses the per-image path unchanged.
+    """
+
+    if not candidate_masks:
+        return None
+    if not all(isinstance(m, SparseCandidateMask) for m in candidate_masks):
+        return None
+    modes = {m.mode for m in candidate_masks}
+    if not modes <= {"coarse", "full", "empty"}:
+        return None
+    first = candidate_masks[0]
+    n_rows, n_trans = int(first.n_rows), int(first.n_fine_trans)
+    if any(int(m.n_rows) != n_rows or int(m.n_fine_trans) != n_trans for m in candidate_masks):
+        return None
+    coarse = [m for m in candidate_masks if m.mode == "coarse"]
+    if coarse:
+        ftp = np.asarray(coarse[0].fine_translation_parent)
+        for m in coarse:
+            if m.coarse_valid is None or m.parent_map is None or m.fine_translation_parent is None:
+                return None
+            if not np.array_equal(np.asarray(m.fine_translation_parent), ftp):
+                return None
+    batch = len(candidate_masks)
+    if n_rows == 0 or n_trans == 0:
+        empty = np.zeros(0, dtype=np.int64)
+        return tuple((empty, empty) for _ in candidate_masks)
+
+    dense = np.zeros((batch, n_rows, n_trans), dtype=bool)
+    full_rows = [i for i, m in enumerate(candidate_masks) if m.mode == "full"]
+    if full_rows:
+        dense[full_rows] = True
+    coarse_rows = [i for i, m in enumerate(candidate_masks) if m.mode == "coarse"]
+    if coarse_rows:
+        # Pad every image's coarse-validity table to the bucket's largest coarse
+        # rotation count. Padded rows are False and are never addressed, because
+        # each image's parent_map only points into its own table.
+        tables = [np.asarray(candidate_masks[i].coarse_valid, dtype=bool) for i in coarse_rows]
+        c_rot = max(t.shape[0] for t in tables)
+        c_trans = tables[0].shape[1]
+        if any(t.shape[1] != c_trans for t in tables):
+            return None
+        stacked = np.zeros((len(coarse_rows), c_rot, c_trans), dtype=bool)
+        for k, t in enumerate(tables):
+            stacked[k, : t.shape[0]] = t
+        fine_trans = stacked[:, :, ftp]  # (Bc, cR, T)
+        parents = np.stack(
+            [np.asarray(candidate_masks[i].parent_map, dtype=np.int64) for i in coarse_rows]
+        )  # (Bc, R)
+        gathered = np.take_along_axis(
+            fine_trans,
+            np.broadcast_to(parents[:, :, None], (len(coarse_rows), n_rows, n_trans)),
+            axis=1,
+        )
+        dense[coarse_rows] = gathered
+
+    image_row, rotation_row, translation_id = np.nonzero(dense)
+    counts = np.bincount(image_row, minlength=batch)
+    starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    out = []
+    for i in range(batch):
+        a, b = int(starts[i]), int(starts[i] + counts[i])
+        out.append((rotation_row[a:b].astype(np.int64, copy=False), translation_id[a:b].astype(np.int64, copy=False)))
+    return tuple(out)
+
+
 def build_compact_pair_index_arrays(
     candidate_masks,
     *,
@@ -148,9 +227,11 @@ def build_compact_pair_index_arrays(
     """
 
     candidate_masks = tuple(candidate_masks)
-    compact_indices = tuple(
-        compact_candidate_indices_in_source_order(candidate_mask) for candidate_mask in candidate_masks
-    )
+    compact_indices = _batched_compact_candidate_indices(candidate_masks)
+    if compact_indices is None:
+        compact_indices = tuple(
+            compact_candidate_indices_in_source_order(candidate_mask) for candidate_mask in candidate_masks
+        )
     pair_counts = np.asarray(
         [rotation_rows.shape[0] for rotation_rows, _ in compact_indices],
         dtype=np.int32,
