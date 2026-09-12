@@ -2149,6 +2149,8 @@ def _log_sparse_kclass_group_timing(
             "prepare_weighting",
             "prepare_translate",
             "prepare_window_cast",
+            "score_projection_barrier",
+            "mstep_active_row_sync",
         )
     )
     total_profiled_s = build_s + fetch_s + prepare_s + score_s + mstep_noise_stats_s
@@ -14340,6 +14342,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                 compact_pair_check_rows += int(dense_log_z_np.size)
             class_score_log_z_bucket.append(class_log_z_for_bucket)
             if cache is None and use_window and defer_compact_recon_projection:
+                barrier_t0 = time.time()
                 try:
                     ready_value = (
                         raw_diff2
@@ -14349,6 +14352,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                     ready_value.block_until_ready()
                 except AttributeError:
                     pass
+                _add_sparse_group_timing(
+                    group_timing, "score_projection_barrier", time.time() - barrier_t0
+                )
                 del proj_half
                 proj_for_noise_flat, _, _ = _compute_sparse_pass2_windowed_projections_block(
                     mean_for_proj_by_class[class_index],
@@ -15274,11 +15280,17 @@ def compute_k_class_pass2_stats_sparse_fused(
                 pass
             elif bucket_uses_active_rows:
                 if mstep_active_indices is None:
+                    active_rows_t0 = time.time()
                     mstep_active_indices, mstep_active_mask, mstep_active_count = (
                         _active_flat_row_indices_from_probs_sum_t(
                             probs_sum_t_jax,
                             pad_multiple=active_row_pad_multiple,
                         )
+                    )
+                    _add_sparse_group_timing(
+                        group_timing,
+                        "mstep_active_row_sync",
+                        time.time() - active_rows_t0,
                     )
                 if bucket_uses_compact_pairs:
                     compact_mstep_active_rows += int(mstep_active_count)
