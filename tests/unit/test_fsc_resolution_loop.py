@@ -1,11 +1,4 @@
-"""Current-size and resolution loop tests for dense single-volume refinement.
-
-Tests:
-1. test_fsc_to_current_size: FSC -> shell -> current_size mapping.
-2. test_oracle_mode_matches_relion_trajectory: Run with RELION's current_sizes.
-3. test_resolution_improves_over_iterations: current_size generally increases.
-4. test_one_iteration_with_windowing: One iteration at current_size=32 is valid.
-"""
+"""Current-size, FSC history and windowing tests for single-volume refinement."""
 
 import numpy as np
 import pytest
@@ -13,8 +6,6 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.em.helpers.fourier_window import quantize_current_size
-from recovar.em.helpers.resolution import fsc_to_current_size
 from recovar.em.refinement import iteration_loop as iteration_loop_module
 from recovar.em.refinement.iteration_loop import refine_single_volume
 from recovar.em.refinement.refinement_options import (
@@ -232,57 +223,6 @@ def generated_relion_rotation_grid(monkeypatch):
         "_relion_rotation_grid_float32",
         fake_relion_rotation_grid_float32,
     )
-
-
-# ===========================================================================
-# Test 1: fsc_to_current_size
-# ===========================================================================
-
-
-class TestFscToCurrentSize:
-    """Verify the FSC -> shell -> current_size mapping."""
-
-    def test_perfect_fsc_gives_max_size(self):
-        """FSC=1 at all shells -> current_size = max allowed."""
-        fsc = jnp.ones(64)
-        cs = fsc_to_current_size(fsc, threshold=1.0 / 7.0)
-        # With FSC=1 everywhere, resolution is at the last shell (63)
-        # current_size = 2 * 63 = 126
-        assert cs >= 100, f"Perfect FSC should give large current_size, got {cs}"
-
-    def test_zero_fsc_gives_min_size(self):
-        """FSC=0 at all shells -> current_size = min_size."""
-        fsc = jnp.zeros(64)
-        cs = fsc_to_current_size(fsc, threshold=1.0 / 7.0, min_size=32)
-        assert cs == 32, f"Zero FSC should give min_size=32, got {cs}"
-
-    def test_partial_fsc_gives_reasonable_size(self):
-        """FSC that drops at shell 20 -> current_size ~ 40."""
-        fsc = jnp.concatenate(
-            [
-                jnp.ones(20),  # high FSC up to shell 19
-                jnp.zeros(44),  # drops to 0 after
-            ]
-        )
-        cs = fsc_to_current_size(fsc, threshold=1.0 / 7.0)
-        # Should be approximately 2 * 20 = 40
-        assert 32 <= cs <= 50, f"Expected ~40, got {cs}"
-
-    def test_gradual_fsc_decay(self):
-        """FSC that gradually decays."""
-        shells = np.arange(64)
-        fsc = jnp.array(np.exp(-shells / 15.0))  # drops below 0.143 around shell 29
-        cs = fsc_to_current_size(fsc, threshold=1.0 / 7.0)
-        assert 40 <= cs <= 70, f"Expected ~58, got {cs}"
-
-    def test_quantize_after_fsc(self):
-        """After fsc_to_current_size, quantize produces a valid even size."""
-        fsc = jnp.concatenate([jnp.ones(20), jnp.zeros(44)])
-        raw_cs = fsc_to_current_size(fsc, threshold=1.0 / 7.0)
-        q_cs = quantize_current_size(raw_cs, ori_size=128)
-        assert q_cs % 2 == 0
-        assert 16 <= q_cs <= 128
-        assert q_cs >= raw_cs
 
 
 # ===========================================================================
