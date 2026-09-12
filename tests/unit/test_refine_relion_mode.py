@@ -4594,7 +4594,7 @@ def test_packed_local_noise_projection_default_cap_is_memory_safe(monkeypatch):
 
 def test_exact_local_progress_env_and_hook(monkeypatch):
     from recovar.em.helpers.env_flags import parse_env_nonnegative_int
-    from recovar.em.local import local_bucket_stages, local_em_engine, local_timing
+    from recovar.em.local import local_em_engine, local_timing
 
     monkeypatch.delenv(local_timing.EXACT_LOCAL_PROGRESS_CHUNKS_ENV, raising=False)
     assert parse_env_nonnegative_int(local_timing.EXACT_LOCAL_PROGRESS_CHUNKS_ENV) is None
@@ -4617,7 +4617,7 @@ def test_exact_local_progress_env_and_hook(monkeypatch):
 
 
 def test_exact_local_noise_projection_chunks_packed_tail():
-    from recovar.em.local import local_bucket_stages, local_em_engine
+    from recovar.em.local import local_em_engine
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     assert "_packed_noise_projection_chunk_rows" in src
@@ -4626,7 +4626,7 @@ def test_exact_local_noise_projection_chunks_packed_tail():
 
 
 def test_exact_local_cached_noise_projection_chunks_packed_tail():
-    from recovar.em.local import local_bucket_stages, local_em_engine
+    from recovar.em.local import local_em_engine
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     marker = "Exact local cached noise projection chunking"
@@ -4642,7 +4642,7 @@ def test_exact_local_cached_noise_projection_chunks_packed_tail():
 
 
 def test_exact_local_relion_projector_noise_projection_materializes_once():
-    from recovar.em.local import local_bucket_stages, local_em_engine
+    from recovar.em.local import local_em_engine
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     defer_src = src[src.index("can_defer_local_noise_projection = (") :]
@@ -4658,7 +4658,7 @@ def test_exact_local_relion_projector_noise_projection_materializes_once():
 
 def test_dense_and_local_noise_mask_asymmetric_current_crop():
     from recovar.em.dense import em_engine
-    from recovar.em.local import local_bucket_stages, local_em_engine
+    from recovar.em.local import local_em_engine
 
     dense_src = inspect.getsource(em_engine.run_em)
     local_src = inspect.getsource(local_em_engine.run_local_em_exact)
@@ -4786,7 +4786,7 @@ def test_half0_local_relion_accumulator_offload_skips_non_x_half():
 
 
 def test_exact_local_relion_x_half_full_support_mstep_uses_fftw_indices_and_radius():
-    from recovar.em.local import local_bucket_stages, local_em_engine
+    from recovar.em.local import local_em_engine
 
     image_shape = (128, 128)
     half_width = image_shape[1] // 2 + 1
@@ -4806,7 +4806,7 @@ def test_exact_local_relion_x_half_full_support_mstep_uses_fftw_indices_and_radi
 
 
 def test_exact_local_relion_x_half_windowed_mstep_uses_fftw_indices_and_current_radius():
-    from recovar.em.local import local_bucket_stages, local_em_engine
+    from recovar.em.local import local_em_engine
 
     image_shape = (128, 128)
     half_width = image_shape[1] // 2 + 1
@@ -4837,7 +4837,7 @@ def test_exact_local_relion_x_half_windowed_mstep_uses_fftw_indices_and_current_
 
 
 def test_exact_local_fused_posterior_missing_warning_respects_filters():
-    from recovar.em.local import local_bucket_stages, local_em_engine
+    from recovar.em.local import local_em_engine
 
     src = inspect.getsource(local_em_engine.run_local_em_exact)
     assert "debug_fused_posterior_dump_filter_matches = (" in src
@@ -7912,7 +7912,7 @@ def test_run_local_em_exact_big_jit_cache_ignores_bound_dataset_process_method(
 ):
     import jax
 
-    from recovar.em.local import local_big_jit, local_bucket_stages, local_em_engine
+    from recovar.em.local import local_big_jit, local_bucket_stages
 
     for function in (
         local_big_jit.run_local_bucket_big_jit,
@@ -8556,7 +8556,7 @@ def test_local_big_jit_float64_relion_translation_covers_mstep_operand():
 
 
 def test_local_big_jit_source_ordered_vdam_mstep_is_strictly_guarded():
-    from recovar.em.local import local_big_jit, local_bucket_stages, local_em_engine
+    from recovar.em.local import local_big_jit, local_em_engine
 
     src = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
     source_ordered_block = src[
@@ -8818,7 +8818,6 @@ def _sparse_big_jit_local_case(rng):
 def test_local_bpref_plans_logical_and_physical_shapes(
     monkeypatch, rng, stable, current_size, reconstruction_size, expected_sizes, expected_shapes,
 ):
-    from recovar.em.local import local_bucket_stages
     from recovar.em.local import local_em_engine as engine
 
     case = _sparse_big_jit_local_case(rng)
@@ -9100,7 +9099,6 @@ def test_run_local_em_exact_over_cap_significant_support_defaults_to_deferred_bi
 @pytest.mark.parametrize("deferred", [False, True], ids=["ordinary", "deferred"])
 @pytest.mark.parametrize("current_size,expected_cutoff", [(None, 4), (6, 3)])
 def test_local_noise_calls_use_logical_cutoff(monkeypatch, rng, deferred, current_size, expected_cutoff):
-    from recovar.em.local import local_bucket_stages
     from recovar.em.local import local_em_engine as engine
 
     case = _sparse_big_jit_local_case(rng)
@@ -9140,7 +9138,6 @@ def test_skip_deferred_zero_norm_preserves_real_local_outputs(
 ):
     import jax
 
-    from recovar.em.local import local_bucket_stages
     from recovar.em.local import local_em_engine as engine
 
     case = _sparse_big_jit_local_case(rng)
@@ -9209,7 +9206,6 @@ def test_skip_deferred_zero_norm_preserves_real_local_outputs(
 
 @pytest.mark.parametrize("token, expected", [(None, False), ("0", False), ("1", True), (" 1 ", True)])
 def test_skip_deferred_zero_norm_selector(monkeypatch, token, expected):
-    from recovar.em.local import local_bucket_stages
     from recovar.em.local import local_em_engine as engine
     monkeypatch.delenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, raising=False)
     if token is not None:
@@ -9219,7 +9215,6 @@ def test_skip_deferred_zero_norm_selector(monkeypatch, token, expected):
 
 @pytest.mark.parametrize("token", ["", "2", "true", "false", "-1"])
 def test_skip_deferred_zero_norm_rejects_invalid_selector(monkeypatch, token):
-    from recovar.em.local import local_bucket_stages
     from recovar.em.local import local_em_engine as engine
     monkeypatch.setenv(engine.EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM_ENV, token)
     with pytest.raises(ValueError, match="RECOVAR_EXACT_LOCAL_SKIP_DEFERRED_ZERO_NORM"):

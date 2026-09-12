@@ -292,7 +292,7 @@ def test_class_log_priors_from_state_allows_inactive_class():
 
 
 def test_dense_initial_model_estep_runs_separate_k_class_calls_for_pseudo_halfsets(monkeypatch):
-    from recovar.em.vdam import dense_adapter, sparse_pass2_estep
+    from recovar.em.vdam import dense_adapter
 
     calls = []
     conversions = []
