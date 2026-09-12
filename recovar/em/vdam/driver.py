@@ -63,7 +63,6 @@ from recovar.em.vdam.schedules import (
 from recovar.em.vdam.star_io import (
     NativeParticleState,
     _experiment_read_order,
-    _image_origin_offsets_pixels_from_star,
     _micrograph_sort_order,
     _output_dir_from_prefix,
     _particle_state_from_star,
@@ -609,11 +608,6 @@ def _native_optics_state(main_star, optics_star, dataset) -> NativeOpticsState:
         defAngle=np.asarray(main_star["_rlnDefocusAngle"].astype(float).to_numpy(), dtype=np.float64),
         phase_shift=_phase_shift(main_star),
     )
-
-
-def _image_pre_shifts_from_star(main_star, dataset) -> np.ndarray:
-    """RELION rounded old-offset image pre-shifts in pixel units (accelerated path)."""
-    return relion_round_away_from_zero(_image_origin_offsets_pixels_from_star(main_star, dataset))
 
 
 def _load_raw_images(dataset, image_indices: np.ndarray, *, batch_size: int) -> np.ndarray:

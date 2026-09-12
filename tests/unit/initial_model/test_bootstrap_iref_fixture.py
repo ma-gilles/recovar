@@ -10,12 +10,13 @@ per-shell amplitude ratio within 5% across shells 1..Nyquist.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from recovar.em.vdam.bootstrap_iref import ParticleCTF, initial_low_pass_filter_references
+from recovar.em.vdam.bootstrap_iref import initial_low_pass_filter_references
 
 FIXTURE_DIR = Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run")
 PARTICLES_STAR = Path(
@@ -32,6 +33,22 @@ requires_fixture = pytest.mark.skipif(
     not (FIXTURE_DIR.exists() and PARTICLES_MRCS.exists() and PARTICLES_STAR.exists()),
     reason="RELION InitialModel fixture not available on this host",
 )
+
+
+@dataclass
+class ParticleCTF:
+    """Per-particle CTF + optics-group scalars (voltage kV, Cs mm, Q0, angpix Å)."""
+
+    defU: float
+    defV: float
+    defAngle: float
+    phase_shift: float = 0.0
+    voltage: float = 300.0
+    Cs: float = 2.7
+    Q0: float = 0.07
+    angpix: float = 8.5
+    ori_size: int = 64
+
 
 
 def _load_star_ctf(star_path: Path) -> list[ParticleCTF]:

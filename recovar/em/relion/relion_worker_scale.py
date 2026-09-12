@@ -958,50 +958,6 @@ def make_relion_follower_scale_state(
     )
 
 
-def relion_class3d_sorted_particle_ids(
-    *,
-    particle_ids_by_image,
-    optics_group_ids_by_image,
-    random_seed: int,
-) -> np.ndarray:
-    """Return RELION's exact one-time Class3D shuffled internal-particle order.
-
-    RELION shuffles the initial ``sorted_idx`` once at the original first
-    expectation using ``std::mt19937(random_seed + 1)``, then stable-sorts by
-    optics group. Its function-static guard retains that order on later
-    iterations and diagnostic continuations. The binding supplies the
-    source-faithful ``std::shuffle``.
-    """
-
-    particle_ids = np.asarray(particle_ids_by_image, dtype=np.int64).reshape(-1)
-    optics_by_image = np.asarray(optics_group_ids_by_image, dtype=np.int64).reshape(-1)
-    if optics_by_image.shape != particle_ids.shape:
-        raise ValueError("optics_group_ids_by_image must match particle_ids_by_image")
-    n_particles = int(particle_ids.size)
-    if np.unique(particle_ids).size != n_particles or (
-        n_particles and (int(np.min(particle_ids)) < 0 or int(np.max(particle_ids)) >= n_particles)
-    ):
-        raise ValueError("particle_ids_by_image must be a permutation of [0, n_particles)")
-    optics_by_particle = np.empty(n_particles, dtype=np.int64)
-    optics_by_particle[particle_ids] = optics_by_image
-
-    from recovar.relion_bind import _relion_bind_core as bind
-
-    if not hasattr(bind, "vdam_randomise_particles_order"):
-        raise RuntimeError("RELION binding lacks vdam_randomise_particles_order; rebuild recovar/relion_bind")
-    sorted_particle_ids = np.asarray(
-        bind.vdam_randomise_particles_order(
-            n_particles,
-            int(random_seed) + 1,
-        ),
-        dtype=np.int64,
-    )
-    sorted_particle_ids = sorted_particle_ids[
-        np.argsort(optics_by_particle[sorted_particle_ids], kind="stable")
-    ]
-    return sorted_particle_ids
-
-
 def relion_class3d_follower_owners_from_schedule(
     schedule: RelionDispatchSchedule,
     *,

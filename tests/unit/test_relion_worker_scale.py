@@ -27,7 +27,6 @@ from recovar.em.relion.relion_worker_scale import (
     make_relion_dispatch_schedule_from_chunks,
     make_relion_follower_scale_state,
     relion_class3d_follower_owners_from_schedule,
-    relion_class3d_sorted_particle_ids,
     relion_oracle_id,
     relion_oracle_manifest_sha256,
     relion_ordered_particle_sha256,
@@ -165,12 +164,12 @@ def test_dynamic_dispatch_rejects_overlap_and_missing_positions():
 
 def test_class3d_shuffle_is_always_original_seed_plus_one():
     particle_ids = np.arange(10_000, dtype=np.int64)
-    optics_ids = np.zeros_like(particle_ids)
 
-    sorted_particle_ids = relion_class3d_sorted_particle_ids(
-        particle_ids_by_image=particle_ids,
-        optics_group_ids_by_image=optics_ids,
-        random_seed=2802,
+    from recovar.relion_bind import _relion_bind_core as bind
+
+    sorted_particle_ids = np.asarray(
+        bind.vdam_randomise_particles_order(particle_ids.size, 2802 + 1),
+        dtype=np.int64,
     )
 
     # Captured independently from all three ranks in the K=4 fixture.

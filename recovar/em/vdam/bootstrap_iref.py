@@ -8,26 +8,9 @@ Parity target: ``run_it000_class001.mrc`` (|CC|>0.998).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 import numpy as np
 
 WIDTH_FMASK_EDGE: float = 2.0  # ml_optimiser.h:91
-
-
-@dataclass
-class ParticleCTF:
-    """Per-particle CTF + optics-group scalars (voltage kV, Cs mm, Q0, angpix Å)."""
-
-    defU: float
-    defV: float
-    defAngle: float
-    phase_shift: float = 0.0
-    voltage: float = 300.0
-    Cs: float = 2.7
-    Q0: float = 0.07
-    angpix: float = 8.5
-    ori_size: int = 64
 
 
 def reorder_particles_relion_style(

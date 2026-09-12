@@ -458,7 +458,9 @@ def test_image_pre_shifts_from_star_converts_angstrom_origins_to_rounded_pixels(
     )
 
     raw = star_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
-    shifts = driver._image_pre_shifts_from_star(main, SimpleNamespace(voxel_size=2.0))
+    shifts = driver.relion_round_away_from_zero(
+        star_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
+    )
 
     np.testing.assert_allclose(
         raw,
@@ -475,7 +477,9 @@ def test_image_pre_shifts_from_star_converts_angstrom_origins_to_rounded_pixels(
 def test_image_pre_shifts_from_star_uses_legacy_pixel_origins():
     main = pd.DataFrame({"_rlnOriginX": ["0.5", "-1.5"], "_rlnOriginY": ["1.6", "-0.49"]})
 
-    shifts = driver._image_pre_shifts_from_star(main, SimpleNamespace(voxel_size=2.0))
+    shifts = driver.relion_round_away_from_zero(
+        star_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
+    )
 
     np.testing.assert_array_equal(shifts, np.asarray([[1.0, 2.0], [-2.0, 0.0]], dtype=np.float32))
 
@@ -488,7 +492,9 @@ def test_image_pre_shifts_from_star_rounds_before_float32_downcast():
         }
     )
 
-    shifts = driver._image_pre_shifts_from_star(main, SimpleNamespace(voxel_size=2.0))
+    shifts = driver.relion_round_away_from_zero(
+        star_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
+    )
 
     np.testing.assert_array_equal(shifts, np.asarray([[0.0, 0.0], [1.0, -1.0]], dtype=np.float32))
 
@@ -496,7 +502,9 @@ def test_image_pre_shifts_from_star_rounds_before_float32_downcast():
 def test_image_pre_shifts_from_star_defaults_to_zero_without_origins():
     main = pd.DataFrame({"_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs"]})
 
-    shifts = driver._image_pre_shifts_from_star(main, SimpleNamespace(voxel_size=2.0))
+    shifts = driver.relion_round_away_from_zero(
+        star_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
+    )
 
     np.testing.assert_array_equal(shifts, np.zeros((2, 2), dtype=np.float32))
 
