@@ -546,7 +546,6 @@ _TARGET_PROJECT_RELION_HALF_IMAGE_RADIUS = "cuda_project_relion_half_image_radiu
 _TARGET_PROJECT_INDEXED = "cuda_project_indexed"
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
 _TARGET_BATCH_BACKPROJECT_INDEXED = "cuda_batch_backproject_indexed"
-_TARGET_BATCH_PROJECT = "cuda_batch_project"
 _TARGET_BATCH_BP_INTERLEAVED = "cuda_batch_bp_interleaved"
 _TARGET_FUSED_BP = "cuda_fused_bp"
 _TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
@@ -695,7 +694,6 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     (_TARGET_PROJECT_INDEXED, "ProjectIndexed"),
     (_TARGET_BATCH_BACKPROJECT, "BatchBackproject"),
     (_TARGET_BATCH_BACKPROJECT_INDEXED, "BatchBackprojectIndexed"),
-    (_TARGET_BATCH_PROJECT, "BatchProject"),
     (_TARGET_BATCH_BP_INTERLEAVED, "BatchBackprojectInterleaved"),
     (_TARGET_FUSED_BP, "FusedBackproject"),
     (_TARGET_PER_IMAGE_BP, "PerImageBackproject"),
@@ -7124,21 +7122,6 @@ def batch_project(
     -------
     complex array, shape ``(batch, n_images, n_pixels)``.
     """
-    # TODO: The underlying CUDA batch_project_kernel loops over volumes
-    # sequentially per-thread (`for b in 0..batch_size`), causing L2 cache
-    # thrashing when batch is large (e.g. 161 basis vectors × 256³ volumes).
-    # Each thread jumps 128 MB between volumes, far exceeding L2 capacity
-    # (40 MB on A100), so every read is a cache miss.
-    #
-    # Fix options for the CUDA kernel:
-    #   1. Parallelize over volumes in the grid dimension (one thread-block
-    #      per volume×image×pixel-tile) so all threads in a block read from
-    #      the same volume → cache-friendly.
-    #   2. Tile the volume batch loop with shared memory staging.
-    #
-    # For now, vmap over single-volume `project` is ~30-40x faster for large
-    # batches because each kernel launch processes one volume that stays
-    # cache-hot for all images.
     return jax.vmap(
         lambda v: project(
             v,
