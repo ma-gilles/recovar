@@ -1188,14 +1188,12 @@ def refine_angular_sampling(state: RefinementState) -> RefinementState:
     # `updateAngularSampling`: when sampling refines, RELION resets both
     # the stall counters and the sticky smallest_changes_optimal_*
     # baselines).
-    return RefinementState(
-        iteration=state.iteration,
+    return replace(
+        state,
         healpix_order=new_order,
         angular_step=new_angular_step,
-        adaptive_oversampling=state.adaptive_oversampling,
         translation_range=new_trans_range,
         translation_step=new_trans_step,
-        current_resolution=state.current_resolution,
         previous_resolution=state.current_resolution,
         nr_iter_wo_resol_gain=0,
         nr_iter_wo_assignment_changes=0,
@@ -1204,18 +1202,6 @@ def refine_angular_sampling(state: RefinementState) -> RefinementState:
         do_local_search=do_local,
         sigma_rot=sigma_rad,
         sigma_psi=sigma_rad,
-        best_rotations=state.best_rotations,
-        best_translations=state.best_translations,
-        ave_Pmax=state.ave_Pmax,
-        acc_rot=state.acc_rot,
-        acc_trans=state.acc_trans,
-        voxel_size_angstrom=state.voxel_size_angstrom,
-        particle_diameter_angstrom=state.particle_diameter_angstrom,
-        max_healpix_order=state.max_healpix_order,
-        auto_local_healpix_order=state.auto_local_healpix_order,
-        auto_resolution_based_angles=state.auto_resolution_based_angles,
-        fraction_changed=state.fraction_changed,
-        changes_optimal_offsets=state.changes_optimal_offsets,
         # RELION-exact reset (B4):
         current_changes_optimal_orientations=float("inf"),
         current_changes_optimal_offsets_angstrom=float("inf"),
@@ -1224,10 +1210,6 @@ def refine_angular_sampling(state: RefinementState) -> RefinementState:
         smallest_changes_optimal_offsets_angstrom=SMALLEST_CHANGES_INIT_OFFSETS,
         smallest_changes_optimal_classes=SMALLEST_CHANGES_INIT_CLASSES,
         nr_iter_wo_large_hidden_variable_changes=0,
-        mpi_leader_hidden_variable_angular_step_deg=state.mpi_leader_hidden_variable_angular_step_deg,
-        mpi_leader_hidden_variable_translation_step_angstrom=(
-            state.mpi_leader_hidden_variable_translation_step_angstrom
-        ),
         # The follower reset performed by updateAngularSampling is the value
         # observed in the optimiser STAR for the first iteration on every new
         # sampling, even though rank 0 subsequently aggregates B3 changes.
@@ -1476,32 +1458,20 @@ def update_refinement_state(
     new_acc_trans = acc_trans if acc_trans is not None else state.acc_trans
 
     # --- Build updated state ---
-    updated = RefinementState(
+    updated = replace(
+        state,
         iteration=state.iteration + 1,
-        healpix_order=state.healpix_order,
-        angular_step=state.angular_step,
-        adaptive_oversampling=state.adaptive_oversampling,
-        translation_range=state.translation_range,
-        translation_step=state.translation_step,
         current_resolution=new_resolution,
         previous_resolution=state.current_resolution,
         nr_iter_wo_resol_gain=nr_iter_wo_resol_gain,
         nr_iter_wo_assignment_changes=nr_iter_wo_assignment_changes,
         has_converged=False,
-        has_fine_enough_angular_sampling=state.has_fine_enough_angular_sampling,
-        do_local_search=state.do_local_search,
-        sigma_rot=state.sigma_rot,
-        sigma_psi=state.sigma_psi,
         best_rotations=current_assignments,
         best_translations=None,
         ave_Pmax=ave_pmax,
         acc_rot=new_acc_rot,
         acc_trans=new_acc_trans,
         voxel_size_angstrom=float(voxel_size_angstrom if voxel_size_angstrom > 0 else 1.0),
-        particle_diameter_angstrom=state.particle_diameter_angstrom,
-        max_healpix_order=state.max_healpix_order,
-        auto_local_healpix_order=state.auto_local_healpix_order,
-        auto_resolution_based_angles=state.auto_resolution_based_angles,
         fraction_changed=frac_changed,
         changes_optimal_offsets=trans_changes,
         current_changes_optimal_orientations=current_changes_orientations,
@@ -1511,10 +1481,6 @@ def update_refinement_state(
         smallest_changes_optimal_offsets_angstrom=smallest_offsets,
         smallest_changes_optimal_classes=smallest_classes,
         nr_iter_wo_large_hidden_variable_changes=nr_iter_wo_large_hidden_variable_changes,
-        mpi_leader_hidden_variable_angular_step_deg=state.mpi_leader_hidden_variable_angular_step_deg,
-        mpi_leader_hidden_variable_translation_step_angstrom=(
-            state.mpi_leader_hidden_variable_translation_step_angstrom
-        ),
         suppress_hidden_variable_increment_once=False,
     )
 
