@@ -150,7 +150,7 @@ def pad_batch_data_ctf_and_valid_mask(batch_data, ctf_params, target_batch_size:
     big-JIT callers that mask padded images before using those rows.
     """
 
-    actual_batch_size = int(np.asarray(batch_data).shape[0])
+    actual_batch_size = int(batch_data.shape[0])  # shape only: no host copy of a device batch
     padded_batch_size = int(max(actual_batch_size, target_batch_size))
     if actual_batch_size == padded_batch_size:
         return (

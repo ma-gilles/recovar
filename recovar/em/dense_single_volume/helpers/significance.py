@@ -200,7 +200,7 @@ def _pad_significance_preprocess_inputs(
 ):
     """Give a tail significance batch the same compiled image shape as full batches."""
 
-    actual_size = int(np.asarray(batch_data).shape[0])
+    actual_size = int(batch_data.shape[0])  # shape only: no host copy of a device batch
     target_size = max(actual_size, int(target_size))
     if actual_size == target_size:
         return (
@@ -5969,7 +5969,9 @@ def _compute_k_class_significance_batched(
                 relion_preprocess_kwargs,
                 target_size=int(image_batch_size),
             )
-        batch_size = int(np.asarray(batch_data).shape[0])
+        # Read the shape without np.asarray: on a device array that pulled the whole
+        # image batch to the host every coarse batch (6 s per iteration at 100k/256).
+        batch_size = int(batch_data.shape[0])
         if coarse_gaussian_gemm_hybrid_requested:
             coarse_gaussian_gemm_hybrid_actual_image_batch_sizes.append(
                 int(actual_batch_size),

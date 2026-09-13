@@ -1089,7 +1089,7 @@ def run_em(
             ) = _pad_dense_big_jit_image_axis(batch_data, ctf_params, image_batch_size)
         else:
             valid_image_mask_np = np.ones(actual_batch_size, dtype=bool)
-        batch_size = int(np.asarray(batch_data).shape[0])
+        batch_size = int(batch_data.shape[0])  # shape only: no host copy of a device batch
         valid_image_mask = jnp.asarray(valid_image_mask_np, dtype=bool)
         batch_data = jnp.asarray(batch_data)
         if scale_corrections is not None:
