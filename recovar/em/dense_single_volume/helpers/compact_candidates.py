@@ -142,8 +142,9 @@ def _batched_compact_candidate_indices(candidate_masks):
     pass-2 loop. Within one bucket every image shares ``R``, ``T`` and normally the
     fine-to-coarse translation parent, so the bucket is one padded
     ``(B, cR, cT)`` table, one gather to ``(B, R, T)`` and one ``np.nonzero``.
-    C-order ``nonzero`` over ``(B, R, T)`` is exactly the per-image rotation-major,
-    translation-minor source order, so the result is identical.
+    Coarse specs are enumerated per coarse row and repeated along the fine
+    rows, which keeps the per-image rotation-major, translation-minor source
+    order without materializing the padded ``(B, R, T)`` table.
 
     Returns ``None`` when the bucket is not uniform enough (dense NumPy masks,
     ``coarse_exclude`` specs, or differing translation parents); the caller then
@@ -174,10 +175,28 @@ def _batched_compact_candidate_indices(candidate_masks):
         empty = np.zeros(0, dtype=np.int64)
         return tuple((empty, empty) for _ in candidate_masks)
 
-    dense = np.zeros((batch, n_rows, n_trans), dtype=bool)
-    full_rows = [i for i, m in enumerate(candidate_masks) if m.mode == "full"]
-    if full_rows:
-        dense[full_rows] = True
+    # A coarse spec is ``coarse_valid[:, ftp][parent_map]``: every fine row
+    # ``r`` repeats the fine-translation list of its coarse row ``parent_map[r]``.
+    # Enumerate that list once per coarse row on the small ``(Bc, cR, T)`` table
+    # and expand it along the fine rows with repeats: O(Bc * cR * T + pairs)
+    # instead of the O(B * R * T) dense ``np.nonzero``. At 100k/256 the bucket
+    # rows R are padded to thousands while the median image keeps ~9k of ~1M
+    # candidate slots, so the dense scan was the host "build" stage (317 s of
+    # the 1 106 s iteration 2, job 13804810). C order of ``np.nonzero`` on
+    # ``(Bc, cR, T)`` is coarse-row major, translation minor, so the expanded
+    # order is exactly the per-image rotation-major, translation-minor order.
+    out: list = [None] * batch
+    full_pairs = None
+    for i, m in enumerate(candidate_masks):
+        if m.mode == "full":
+            if full_pairs is None:
+                full_pairs = (
+                    np.repeat(np.arange(n_rows, dtype=np.int64), n_trans),
+                    np.tile(np.arange(n_trans, dtype=np.int64), n_rows),
+                )
+            out[i] = full_pairs
+        elif m.mode == "empty":
+            out[i] = (np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64))
     coarse_rows = [i for i, m in enumerate(candidate_masks) if m.mode == "coarse"]
     if coarse_rows:
         # Pad every image's coarse-validity table to the bucket's largest coarse
@@ -192,23 +211,25 @@ def _batched_compact_candidate_indices(candidate_masks):
         for k, t in enumerate(tables):
             stacked[k, : t.shape[0]] = t
         fine_trans = stacked[:, :, ftp]  # (Bc, cR, T)
-        parents = np.stack(
-            [np.asarray(candidate_masks[i].parent_map, dtype=np.int64) for i in coarse_rows]
-        )  # (Bc, R)
-        gathered = np.take_along_axis(
-            fine_trans,
-            np.broadcast_to(parents[:, :, None], (len(coarse_rows), n_rows, n_trans)),
-            axis=1,
-        )
-        dense[coarse_rows] = gathered
-
-    image_row, rotation_row, translation_id = np.nonzero(dense)
-    counts = np.bincount(image_row, minlength=batch)
-    starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
-    out = []
-    for i in range(batch):
-        a, b = int(starts[i]), int(starts[i] + counts[i])
-        out.append((rotation_row[a:b].astype(np.int64, copy=False), translation_id[a:b].astype(np.int64, copy=False)))
+        b_idx, c_idx, t_idx = np.nonzero(fine_trans)
+        coarse_counts = np.bincount(b_idx * c_rot + c_idx, minlength=len(coarse_rows) * c_rot)
+        coarse_starts = np.concatenate(([0], np.cumsum(coarse_counts)[:-1]))
+        t_idx = t_idx.astype(np.int64, copy=False)
+        for k, i in enumerate(coarse_rows):
+            parents = np.asarray(candidate_masks[i].parent_map, dtype=np.int64)
+            if parents.shape[0] != n_rows:
+                return None
+            flat_parents = k * c_rot + parents
+            row_counts = coarse_counts[flat_parents]  # (R,)
+            total = int(row_counts.sum())
+            if total == 0:
+                out[i] = (np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64))
+                continue
+            rotation_row = np.repeat(np.arange(n_rows, dtype=np.int64), row_counts)
+            row_starts = np.concatenate(([0], np.cumsum(row_counts)[:-1]))
+            within = np.arange(total, dtype=np.int64) - np.repeat(row_starts, row_counts)
+            translation_id = t_idx[np.repeat(coarse_starts[flat_parents], row_counts) + within]
+            out[i] = (rotation_row, translation_id)
     return tuple(out)
 
 
