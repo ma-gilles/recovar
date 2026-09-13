@@ -275,6 +275,9 @@ _SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS_ENV = (
 _SPARSE_KCLASS_FUSED_NOISE_NORM_ENV = "RECOVAR_SPARSE_KCLASS_FUSED_NOISE_NORM"
 _SPARSE_KCLASS_RESIDUAL_TERMS_FUSED_ENV = "RECOVAR_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED"
 _SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS_ENV = "RECOVAR_SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS"
+_SPARSE_KCLASS_NATIVE_PAIR_SPARSE_SUMS_ENV = (
+    "RECOVAR_SPARSE_KCLASS_NATIVE_PAIR_SPARSE_SUMS"
+)
 _SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS_ENV = (
     "RECOVAR_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS"
 )
@@ -6446,6 +6449,52 @@ def _compact_pair_weighted_rotation_and_image_sums_fused_image_sums(
     return summed, summed_image, ctf_probs, probs_sum_t, translation_posterior
 
 
+@partial(jax.jit, static_argnames=("n_rotation_rows", "n_trans"))
+def _compact_pair_sorted_csr(
+    pair_probs,
+    local_rotation_row,
+    translation_idx,
+    pair_mask,
+    *,
+    n_rotation_rows,
+    n_trans,
+):
+    """Sort compact pairs by (rotation row, translation) and return CSR row offsets.
+
+    Returns float32 probabilities and int32 translations in sorted order plus
+    int32 ``(batch, n_rotation_rows + 1)`` offsets; invalid pairs sort last with
+    zero weight. Sorting by the unique key ``row * n_trans + translation`` makes
+    the per-row translation order ascending regardless of the input order, which
+    is what the pair-sparse native kernel needs to reproduce the dense sums.
+    """
+    weights, safe_rotation_row, safe_translation_idx, valid_pair = _compact_pair_valid_weights_and_indices(
+        pair_probs,
+        local_rotation_row,
+        translation_idx,
+        pair_mask,
+        n_rotation_rows=n_rotation_rows,
+        n_trans=n_trans,
+    )
+    n_rotation_rows = int(n_rotation_rows)
+    n_trans = int(n_trans)
+    sentinel = jnp.int32(n_rotation_rows * n_trans)
+    keys = jnp.where(
+        valid_pair,
+        safe_rotation_row.astype(jnp.int32) * jnp.int32(n_trans) + safe_translation_idx.astype(jnp.int32),
+        sentinel,
+    )
+    order = jnp.argsort(keys, axis=1)
+    sorted_keys = jnp.take_along_axis(keys, order, axis=1)
+    sorted_rows = jnp.where(
+        sorted_keys < sentinel, sorted_keys // jnp.int32(n_trans), jnp.int32(n_rotation_rows)
+    ).astype(jnp.int32)
+    sorted_probs = jnp.take_along_axis(weights, order, axis=1).astype(jnp.float32)
+    sorted_translations = jnp.take_along_axis(safe_translation_idx, order, axis=1).astype(jnp.int32)
+    row_ids = jnp.arange(n_rotation_rows + 1, dtype=jnp.int32)
+    row_offsets = jax.vmap(lambda rows: jnp.searchsorted(rows, row_ids, side="left"))(sorted_rows)
+    return sorted_probs, sorted_translations, row_offsets.astype(jnp.int32)
+
+
 @partial(jax.jit, static_argnames=("n_rotation_rows",))
 def _compact_pair_weighted_rotation_and_image_sums_native(
     pair_probs,
@@ -6459,21 +6508,45 @@ def _compact_pair_weighted_rotation_and_image_sums_native(
 ):
     """Use one native launch boundary for two independent weighted sums."""
 
-    from recovar.cuda_backproject import dual_weighted_sums_f32
+    from recovar.cuda_backproject import dual_weighted_sums_f32, dual_weighted_sums_pairs_f32
 
+    n_trans = int(shifted_recon_split.shape[1])
     dense_probs = _compact_pair_dense_probs_and_reductions(
         pair_probs,
         local_rotation_row,
         translation_idx,
         pair_mask,
         n_rotation_rows=n_rotation_rows,
-        n_trans=shifted_recon_split.shape[1],
+        n_trans=n_trans,
     )
-    summed, summed_image = dual_weighted_sums_f32(
-        dense_probs,
-        shifted_recon_split,
-        shifted_image_split,
-    )
+    if parse_env_flag(_SPARSE_KCLASS_NATIVE_PAIR_SPARSE_SUMS_ENV, default=False):
+        # The dense kernel visits every (row, translation) slot and skips zeros;
+        # at 100k/256 the table is ~1 % populated and 73 % of rows are padding,
+        # so it read zeros for 158 s of iteration 2 (job 13804810). Sort the
+        # pairs by (row, translation) and let each row iterate only its own
+        # range: same fma order, bit-identical sums. dense_probs still yields
+        # probs_sum_t and the translation posterior unchanged.
+        sorted_probs, sorted_translations, row_offsets = _compact_pair_sorted_csr(
+            pair_probs,
+            local_rotation_row,
+            translation_idx,
+            pair_mask,
+            n_rotation_rows=n_rotation_rows,
+            n_trans=n_trans,
+        )
+        summed, summed_image = dual_weighted_sums_pairs_f32(
+            sorted_probs,
+            sorted_translations,
+            row_offsets,
+            shifted_recon_split,
+            shifted_image_split,
+        )
+    else:
+        summed, summed_image = dual_weighted_sums_f32(
+            dense_probs,
+            shifted_recon_split,
+            shifted_image_split,
+        )
     probs_sum_t = jnp.sum(dense_probs, axis=-1)
     ctf_probs = compute_local_ctf_sums_from_probs_sum_t(probs_sum_t, ctf2_over_nv_recon)
     translation_posterior = jnp.sum(dense_probs, axis=1)
