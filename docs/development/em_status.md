@@ -6,6 +6,18 @@ every test or publication. Detailed receipts belong behind links. The
 at `a2ab056cb`, including one paragraph per earlier checkpoint; its historical
 next actions are superseded here.
 
+## Sparse projection radius correction — September 13
+
+The generic sparse pass-2 projector must retain `max_r` when forwarding to the
+shared projection implementation. Consuming that argument changed both the
+cutoff and CUDA texture geometry relative to coarse scoring. The narrow repair
+from peer `83fc89583` is integrated separately from its noise/speed ancestry.
+Seven new regression cases fail before the repair;29 focused projection checks
+and90 CPU fast-guard checks pass afterward. The [radius formulation and scoped
+four-particle evidence](../math/sparse_projection_radius.md) explain the cause.
+A fresh current-source three-iteration integration is being prepared; trajectory,
+strict-state and performance acceptance remain open. [Integration receipts](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_radius_integration_20260913/plan.json).
+
 ## Integrated K1 prior correction — September 12
 
 The narrow cold-start prior correction from the EM peer is integrated at

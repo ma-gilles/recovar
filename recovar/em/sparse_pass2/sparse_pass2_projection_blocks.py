@@ -3,6 +3,8 @@
 The per-bucket projection of hypothesis rotations (full and windowed) with
 their chunking and finalization. ``sparse_pass2_bucketed`` projects every
 bucket through these owners.
+
+Radius propagation: ``docs/math/sparse_projection_radius.md``.
 """
 
 from __future__ import annotations
@@ -37,7 +39,9 @@ def _compute_sparse_pass2_projections_block(
 ):
     projection_kwargs = dict(projection_kwargs)
     return_abs2 = projection_kwargs.pop("return_abs2", True)
-    projection_max_r = projection_kwargs.pop("max_r", None)
+    # The generic projector also needs this cutoff; consuming it here made
+    # sparse pass 2 silently use a different radius from coarse scoring.
+    projection_max_r = projection_kwargs.get("max_r", None)
     projection_relion_texture_interp = projection_kwargs.get("relion_texture_interp")
     projection_mask_current_image_disk = bool(
         projection_kwargs.pop("mask_current_image_disk", True)
