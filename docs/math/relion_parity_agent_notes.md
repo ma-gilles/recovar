@@ -880,4 +880,3 @@ Each link points to the exact published line, including its subordinate notes.
 ## 2026-09-01 — fixed-capacity call-0 score gate sealed for review
 
 [Archived findings and reproduction details](https://github.com/ma-gilles/recovar/blob/8f0cc9648ab9e2eb13e91badc50a5f3d01738917/docs/math/relion_parity_agent_notes.md#L14410).
-

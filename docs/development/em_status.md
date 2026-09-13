@@ -287,7 +287,7 @@ this page does not schedule or authorize duplicate runs.
 The tiny dtype-repair CUDA guard is complete on its frozen source. Continue
 strict K1 state closure and the existing peer attribution jobs before advancing
 the scientific ladder in the coordination queue. Do not restart completed checks
-or duplicate live candidates. The latest VDAM size check still fails at 8624 > 6100 lines; moving code into
+or duplicate live candidates. The latest VDAM size check still fails at 8621 > 6100 lines; moving code into
 another owner does not remove it from the budget.
 The bounded v6 native capture passed live rank/library and closed-payload checks;
 all 184 files and three ranks were independently verified. This supplies qualified
@@ -317,3 +317,14 @@ is disabled; isolated Terra smokes passed but the reviewed small-task pilot used
 1.625× input and 1.667× elapsed time versus direct Astra. No token savings proved.
 Compact handoffs, scripted receipts and batched publication continue. No automatic
 wakeup/model-polling promise. [Setup, measured limits and recovery](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/delegated/README.md).
+
+Independent CPU replay of that capture now reproduces all 512 lane slots and
+6,496 running values using the existing RECOVAR direct-square arithmetic.
+Lane accumulation explains the three traced support differences, but correcting
+those scores exposes another cutoff difference. Full support remains open;
+qualification of the existing rectangular scorer is being prepared. See the
+[attribution review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/native_v6_attribution_lead_review_20260913/result.json).
+
+The accumulated parity notebook is now a [history index](../math/relion_parity_agent_notes.md)
+with 216 links to the exact published findings. This removes 13,579 historical
+lines from the working tree without discarding the scientific record.
