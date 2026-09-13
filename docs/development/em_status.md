@@ -6,6 +6,30 @@ every test or publication. Detailed receipts belong behind links. The
 at `a2ab056cb`, including one paragraph per earlier checkpoint; its historical
 next actions are superseded here.
 
+## Coarse geometry and compact prior ownership — September 13
+
+The narrow [zero-oversampling geometry correction](../math/zero_coarse_geometry.md)
+is integrated at `c5559c7aa`. Coarse device matrices change only for the eligible
+F32 K1 sparse Gaussian route; fine scoring and M-step geometry stay unchanged.
+The actual-source peer replay reduces the selected particle's support flips from
+five to three, but its count remains 52884 versus native 52883. CPU routing
+checks pass; matched H100 trajectory **13816465** is pending on frozen `c5559c7aa`.
+[Integration and validation receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_zero_geometry_integration_20260913/result.json).
+
+Compact execution now gathers rotation priors from one row table (`bdee41a78`),
+while independent diagnostic materialization is retained. Reorder assembly and
+VDAM startup profiling duplication are also removed. Fresh tiny K2 CUDA guard
+**13816668** is pending on `bdee41a78`; earlier guard **13815504** remains pinned
+to `a38f75764`. Neither is a full trajectory, exact-K4 or speed qualification.
+[Prior comparisons and focused checks](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/compact_lazy_prior_integration_20260913/result.json).
+
+Six of ten same-source VDAM controls are complete at this checkpoint. Both
+head-heavy controls pass the original mean-FSC band, but kent-offset control1
+and uniform control2 fall below their bands. Optional flags alone do not explain
+all failures. Remaining controls and bisections are diagnostic; original bands
+and the held speed-integration decision remain unchanged.
+[Recorded control review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_capacity_noise_review_20260913/control_matrix_progress.json).
+
 ## Zero-oversampling controller integration — September 13
 
 The narrow controller port retains the coarse numeric denominator and winner
@@ -30,7 +54,8 @@ but three original mean-FSC bands still fail: radial flags2 **0.0693 < 0.0719**,
 head-heavy flags1 **0.1104 < 0.1122**, uniform flags1 **0.0672 < 0.0685**.
 All ten fixed-head arms completed. Same-source controls **13814629–13814638**
 are diagnostic; they do not replace the original bands. Private speed integration
-remains held. The retained VDAM size gate also fails at **8806 > 6100** lines.
+remains held. The last recorded VDAM size check failed at **8806 > 6100** lines; the
+subsequent profiling cleanup does not close that gap.
 [Independent fixed-matrix review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_capacity_noise_review_20260913/fixed_matrix_review.json).
 
 ## Opt-in native startup noise — September 13
