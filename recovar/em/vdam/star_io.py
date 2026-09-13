@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -523,6 +523,47 @@ class _StageProfile:
         if self.enabled:
             self.values["total_time_s"] = float(time.perf_counter() - self.started)
             print(f"VDAM {label} profile: {json.dumps(self.values, sort_keys=True)}", flush=True)
+
+
+def _write_initial_run_metadata(opts, continuation) -> None:
+    """Write startup options and the optional native continuation provenance."""
+
+    Path(opts.outputname).parent.mkdir(parents=True, exist_ok=True)
+    config_path = f"{opts.outputname}_native_options.json"
+    native_options = asdict(opts)
+    native_options["resolved_cuda_allocator"] = os.environ.get(
+        "TF_GPU_ALLOCATOR",
+        "default",
+    )
+    native_options["jax_compilation_cache_enabled"] = bool(
+        os.environ.get("JAX_COMPILATION_CACHE_DIR")
+    )
+    native_options["jax_compilation_cache_dir"] = os.environ.get(
+        "JAX_COMPILATION_CACHE_DIR"
+    )
+    native_options["jax_persistent_cache_min_compile_time_secs"] = os.environ.get(
+        "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS"
+    )
+    with open(config_path, "w") as f:
+        json.dump(native_options, f, indent=2, sort_keys=True)
+    if continuation is not None:
+        continuation_path = f"{opts.outputname}_diagnostic_continuation.json"
+        with open(continuation_path, "w") as f:
+            json.dump(
+                {
+                    "classification": "diagnostic_performance_only",
+                    "exactly_one_next_iteration": True,
+                    "iteration": int(continuation.iteration),
+                    "optimiser_star": str(continuation.optimiser_star),
+                    "model_star": str(continuation.model_star),
+                    "data_star": str(continuation.data_star),
+                    "sampling_star": str(continuation.sampling_star),
+                },
+                f,
+                indent=2,
+                sort_keys=True,
+            )
+            f.write("\n")
 
 
 def _write_iteration_artifacts(

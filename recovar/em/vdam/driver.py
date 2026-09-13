@@ -7,10 +7,8 @@ artifact writing are coordinated here through their implementation owners.
 
 from __future__ import annotations
 
-import json
 import os
-from dataclasses import asdict, dataclass, replace
-from pathlib import Path
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import numpy as np
@@ -814,24 +812,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     profile.record("expectation_setup")
 
     if opts.write_iter_artifacts:
-        Path(opts.outputname).parent.mkdir(parents=True, exist_ok=True)
-        config_path = f"{opts.outputname}_native_options.json"
-        native_options = asdict(opts)
-        native_options["resolved_cuda_allocator"] = os.environ.get(
-            "TF_GPU_ALLOCATOR",
-            "default",
-        )
-        native_options["jax_compilation_cache_enabled"] = bool(
-            os.environ.get("JAX_COMPILATION_CACHE_DIR")
-        )
-        native_options["jax_compilation_cache_dir"] = os.environ.get(
-            "JAX_COMPILATION_CACHE_DIR"
-        )
-        native_options["jax_persistent_cache_min_compile_time_secs"] = os.environ.get(
-            "JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS"
-        )
-        with open(config_path, "w") as f:
-            json.dump(native_options, f, indent=2, sort_keys=True)
+        star_io._write_initial_run_metadata(opts, continuation)
         if continuation is None:
             _write_iteration_artifacts(
                 opts.outputname,
@@ -843,24 +824,6 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
                 dataset=dataset,
                 particle_state=particle_state,
             )
-        else:
-            continuation_path = f"{opts.outputname}_diagnostic_continuation.json"
-            with open(continuation_path, "w") as f:
-                json.dump(
-                    {
-                        "classification": "diagnostic_performance_only",
-                        "exactly_one_next_iteration": True,
-                        "iteration": int(continuation.iteration),
-                        "optimiser_star": str(continuation.optimiser_star),
-                        "model_star": str(continuation.model_star),
-                        "data_star": str(continuation.data_star),
-                        "sampling_star": str(continuation.sampling_star),
-                    },
-                    f,
-                    indent=2,
-                    sort_keys=True,
-                )
-                f.write("\n")
     profile.record("initial_artifacts")
 
     def artifact_sink(current, iteration, meta):
