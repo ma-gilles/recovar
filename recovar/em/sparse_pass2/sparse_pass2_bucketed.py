@@ -7439,8 +7439,21 @@ def compute_k_class_pass2_stats_sparse_fused(
                         log_label_prefix=f"kclass{class_index + 1}-particle-xhalf",
                     )
                 )
-            elif active_flat_rows_chunked:
+            else:
                 if use_window:
+                    adjoint_window_indices = mstep_window_indices
+                    adjoint_max_r = float(current_size // 2)
+                    adjoint_layout = "window"
+                elif use_relion_x_half_mstep:
+                    adjoint_window_indices = relion_x_half_recon_indices
+                    adjoint_max_r = None
+                    adjoint_layout = "xhalf"
+                else:
+                    adjoint_window_indices = None
+                    adjoint_max_r = None
+                    adjoint_layout = "half"
+
+                if active_flat_rows_chunked:
                     Ft_y_total[class_index], Ft_ctf_total[class_index] = (
                         _accumulate_active_flat_rows_adjoint_chunked(
                             summed,
@@ -7450,161 +7463,52 @@ def compute_k_class_pass2_stats_sparse_fused(
                             mstep_active_mask,
                             Ft_y_total[class_index],
                             Ft_ctf_total[class_index],
-                            window_indices=mstep_window_indices,
-                            use_windowed_adjoint=True,
+                            window_indices=adjoint_window_indices,
+                            use_windowed_adjoint=use_window or use_relion_x_half_mstep,
                             image_shape=image_shape,
                             volume_shape=recon_volume_shape,
                             disc_type="linear_interp",
                             half_image=True,
                             half_volume=use_half_volume_mstep,
-                            max_r=float(current_size // 2),
+                            max_r=adjoint_max_r,
                             relion_x_half=use_relion_x_half_mstep,
                             max_block_bytes=max_adjoint_block_bytes,
-                            log_label_prefix=f"kclass{class_index + 1}-active-window",
-                        )
-                    )
-                elif use_relion_x_half_mstep:
-                    Ft_y_total[class_index], Ft_ctf_total[class_index] = (
-                        _accumulate_active_flat_rows_adjoint_chunked(
-                            summed,
-                            ctf_probs,
-                            flat_backproject_rotations_by_class[class_index],
-                            mstep_active_indices,
-                            mstep_active_mask,
-                            Ft_y_total[class_index],
-                            Ft_ctf_total[class_index],
-                            window_indices=relion_x_half_recon_indices,
-                            use_windowed_adjoint=True,
-                            image_shape=image_shape,
-                            volume_shape=recon_volume_shape,
-                            disc_type="linear_interp",
-                            half_image=True,
-                            half_volume=use_half_volume_mstep,
-                            max_r=None,
-                            relion_x_half=True,
-                            max_block_bytes=max_adjoint_block_bytes,
-                            log_label_prefix=f"kclass{class_index + 1}-active-xhalf",
+                            log_label_prefix=f"kclass{class_index + 1}-active-{adjoint_layout}",
                         )
                     )
                 else:
-                    Ft_y_total[class_index], Ft_ctf_total[class_index] = (
-                        _accumulate_active_flat_rows_adjoint_chunked(
-                            summed,
-                            ctf_probs,
-                            flat_backproject_rotations_by_class[class_index],
-                            mstep_active_indices,
-                            mstep_active_mask,
-                            Ft_y_total[class_index],
-                            Ft_ctf_total[class_index],
-                            use_windowed_adjoint=False,
-                            image_shape=image_shape,
-                            volume_shape=recon_volume_shape,
-                            disc_type="linear_interp",
-                            half_image=True,
-                            half_volume=use_half_volume_mstep,
-                            max_r=None,
-                            relion_x_half=False,
-                            max_block_bytes=max_adjoint_block_bytes,
-                            log_label_prefix=f"kclass{class_index + 1}-active-half",
-                        )
+                    Ft_y_total[class_index] = _accumulate_adjoint_block_chunked(
+                        flat_summed,
+                        active_flat_rotations,
+                        Ft_y_total[class_index],
+                        window_indices=adjoint_window_indices,
+                        use_windowed_adjoint=use_window or use_relion_x_half_mstep,
+                        image_shape=image_shape,
+                        volume_shape=recon_volume_shape,
+                        disc_type="linear_interp",
+                        half_image=True,
+                        half_volume=use_half_volume_mstep,
+                        max_r=adjoint_max_r,
+                        relion_x_half=use_relion_x_half_mstep,
+                        max_block_bytes=max_adjoint_block_bytes,
+                        log_label=f"kclass{class_index + 1}-y-{adjoint_layout}",
                     )
-            elif use_window:
-                Ft_y_total[class_index] = _accumulate_adjoint_block_chunked(
-                    flat_summed,
-                    active_flat_rotations,
-                    Ft_y_total[class_index],
-                    window_indices=mstep_window_indices,
-                    use_windowed_adjoint=True,
-                    image_shape=image_shape,
-                    volume_shape=recon_volume_shape,
-                    disc_type="linear_interp",
-                    half_image=True,
-                    half_volume=use_half_volume_mstep,
-                    max_r=float(current_size // 2),
-                    relion_x_half=use_relion_x_half_mstep,
-                    max_block_bytes=max_adjoint_block_bytes,
-                    log_label=f"kclass{class_index + 1}-y-window",
-                )
-                Ft_ctf_total[class_index] = _accumulate_adjoint_block_chunked(
-                    flat_ctf_probs,
-                    active_flat_rotations,
-                    Ft_ctf_total[class_index],
-                    window_indices=mstep_window_indices,
-                    use_windowed_adjoint=True,
-                    image_shape=image_shape,
-                    volume_shape=recon_volume_shape,
-                    disc_type="linear_interp",
-                    half_image=True,
-                    half_volume=use_half_volume_mstep,
-                    max_r=float(current_size // 2),
-                    relion_x_half=use_relion_x_half_mstep,
-                    max_block_bytes=max_adjoint_block_bytes,
-                    log_label=f"kclass{class_index + 1}-ctf-window",
-                )
-            elif use_relion_x_half_mstep:
-                Ft_y_total[class_index] = _accumulate_adjoint_block_chunked(
-                    flat_summed,
-                    active_flat_rotations,
-                    Ft_y_total[class_index],
-                    window_indices=relion_x_half_recon_indices,
-                    use_windowed_adjoint=True,
-                    image_shape=image_shape,
-                    volume_shape=recon_volume_shape,
-                    disc_type="linear_interp",
-                    half_image=True,
-                    half_volume=use_half_volume_mstep,
-                    max_r=None,
-                    relion_x_half=True,
-                    max_block_bytes=max_adjoint_block_bytes,
-                    log_label=f"kclass{class_index + 1}-y-xhalf",
-                )
-                Ft_ctf_total[class_index] = _accumulate_adjoint_block_chunked(
-                    flat_ctf_probs,
-                    active_flat_rotations,
-                    Ft_ctf_total[class_index],
-                    window_indices=relion_x_half_recon_indices,
-                    use_windowed_adjoint=True,
-                    image_shape=image_shape,
-                    volume_shape=recon_volume_shape,
-                    disc_type="linear_interp",
-                    half_image=True,
-                    half_volume=use_half_volume_mstep,
-                    max_r=None,
-                    relion_x_half=True,
-                    max_block_bytes=max_adjoint_block_bytes,
-                    log_label=f"kclass{class_index + 1}-ctf-xhalf",
-                )
-            else:
-                Ft_y_total[class_index] = _accumulate_adjoint_block_chunked(
-                    flat_summed,
-                    active_flat_rotations,
-                    Ft_y_total[class_index],
-                    use_windowed_adjoint=False,
-                    image_shape=image_shape,
-                    volume_shape=recon_volume_shape,
-                    disc_type="linear_interp",
-                    half_image=True,
-                    half_volume=use_half_volume_mstep,
-                    max_r=None,
-                    relion_x_half=False,
-                    max_block_bytes=max_adjoint_block_bytes,
-                    log_label=f"kclass{class_index + 1}-y-half",
-                )
-                Ft_ctf_total[class_index] = _accumulate_adjoint_block_chunked(
-                    flat_ctf_probs,
-                    active_flat_rotations,
-                    Ft_ctf_total[class_index],
-                    use_windowed_adjoint=False,
-                    image_shape=image_shape,
-                    volume_shape=recon_volume_shape,
-                    disc_type="linear_interp",
-                    half_image=True,
-                    half_volume=use_half_volume_mstep,
-                    max_r=None,
-                    relion_x_half=False,
-                    max_block_bytes=max_adjoint_block_bytes,
-                    log_label=f"kclass{class_index + 1}-ctf-half",
-                )
+                    Ft_ctf_total[class_index] = _accumulate_adjoint_block_chunked(
+                        flat_ctf_probs,
+                        active_flat_rotations,
+                        Ft_ctf_total[class_index],
+                        window_indices=adjoint_window_indices,
+                        use_windowed_adjoint=use_window or use_relion_x_half_mstep,
+                        image_shape=image_shape,
+                        volume_shape=recon_volume_shape,
+                        disc_type="linear_interp",
+                        half_image=True,
+                        half_volume=use_half_volume_mstep,
+                        max_r=adjoint_max_r,
+                        relion_x_half=use_relion_x_half_mstep,
+                        max_block_bytes=max_adjoint_block_bytes,
+                        log_label=f"kclass{class_index + 1}-ctf-{adjoint_layout}",
+                    )
             _add_sparse_group_timing(group_timing, "mstep_adjoint", time.time() - substage_t0)
             host_updates.append(
                 noise_statistics.posterior,
