@@ -243,6 +243,7 @@ from recovar.em.sparse_pass2.sparse_pass2_projection_blocks import (
     _projection_kwargs_for_relion_score_window,
 )
 from recovar.em.sparse_pass2.sparse_pass2_scoring import (
+    _gather_pair_rotation_log_prior,
     _gather_pair_translation_log_prior,
     _gather_projection_cache_rows,
     _relion_cuda_fine_diff2_min,
@@ -5779,26 +5780,27 @@ def compute_k_class_pass2_stats_sparse_fused(
             reordered = []
             for arrays in class_bucket_arrays:
                 shared_mstep_rotations = arrays["mstep_rotations"] is arrays["rotations"]
-                if arrays["log_prior"] is None:
+                if arrays["candidate_mask"] is None:
                     if shared_mstep_rotations:
-                        rotations, rotation_indices, actual_counts = _reorder_to_indices(
+                        rotations, rotation_indices, log_prior, actual_counts = _reorder_to_indices(
                             fetched_indices_np,
                             image_indices,
                             arrays["rotations"],
                             arrays["rotation_indices"],
+                            arrays["log_prior"],
                             arrays["actual_counts"],
                         )
                         mstep_rotations = rotations
                     else:
-                        rotations, mstep_rotations, rotation_indices, actual_counts = _reorder_to_indices(
+                        rotations, mstep_rotations, rotation_indices, log_prior, actual_counts = _reorder_to_indices(
                             fetched_indices_np,
                             image_indices,
                             arrays["rotations"],
                             arrays["mstep_rotations"],
                             arrays["rotation_indices"],
+                            arrays["log_prior"],
                             arrays["actual_counts"],
                         )
-                    log_prior = None
                     candidate_mask = None
                     parent_map_padded = None
                 else:
@@ -5862,7 +5864,6 @@ def compute_k_class_pass2_stats_sparse_fused(
                         pair_counts,
                         local_rotation_row,
                         translation_idx,
-                        pair_log_prior,
                         pair_mask,
                     ) = _reorder_to_indices(
                         fetched_indices_np,
@@ -5870,7 +5871,6 @@ def compute_k_class_pass2_stats_sparse_fused(
                         pair_arrays["pair_counts"],
                         pair_arrays["local_rotation_row"],
                         pair_arrays["translation_idx"],
-                        pair_arrays["log_prior"],
                         pair_arrays["pair_mask"],
                     )
                     reordered_compact_pairs.append(
@@ -5880,7 +5880,6 @@ def compute_k_class_pass2_stats_sparse_fused(
                             "pair_counts": pair_counts,
                             "local_rotation_row": local_rotation_row,
                             "translation_idx": translation_idx,
-                            "log_prior": pair_log_prior,
                             "pair_mask": pair_mask,
                         }
                     )
@@ -6224,8 +6223,10 @@ def compute_k_class_pass2_stats_sparse_fused(
                     raw_diff2_by_class.append(raw_host)
                     raw_diff2_masks_by_class.append(pair_mask)
                     raw_diff2_rotation_priors_by_class.append(
-                        jnp.asarray(
-                            compact_arrays["log_prior"],
+                        _gather_pair_rotation_log_prior(
+                            jnp.asarray(arrays["log_prior"]),
+                            local_rotation_row,
+                            pair_mask,
                             dtype=precision_policy.score_real_dtype,
                         )
                     )
@@ -6245,7 +6246,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                         ctf2_over_nv_score,
                         proj_half,
                         direct_half_weights,
-                        jnp.asarray(compact_arrays["log_prior"]),
+                        _gather_pair_rotation_log_prior(
+                            jnp.asarray(arrays["log_prior"]),
+                            jnp.asarray(compact_arrays["local_rotation_row"]),
+                            pair_mask,
+                        ),
                         bucket_translation_prior,
                         jnp.asarray(compact_arrays["local_rotation_row"]),
                         jnp.asarray(compact_arrays["translation_idx"]),

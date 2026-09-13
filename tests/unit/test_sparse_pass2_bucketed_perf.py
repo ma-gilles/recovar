@@ -1892,9 +1892,18 @@ def test_compact_pair_bucket_arrays_can_be_materialized_per_bucket():
     precomputed = _build_compact_pair_bucket_arrays(bucket, compact_inputs)
     on_demand = _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_inputs)
 
-    assert precomputed.keys() == on_demand.keys()
-    for key in precomputed:
+    assert precomputed.keys() - {"log_prior"} == on_demand.keys()
+    for key in on_demand:
         np.testing.assert_array_equal(on_demand[key], precomputed[key])
+    from recovar.em.sparse_pass2.sparse_pass2_scoring import _gather_pair_rotation_log_prior
+
+    row_priors = np.stack([per_image_inputs["log_prior"][i] for i in bucket["image_indices"]])
+    gathered = _gather_pair_rotation_log_prior(
+        jnp.asarray(row_priors),
+        jnp.asarray(on_demand["local_rotation_row"]),
+        jnp.asarray(on_demand["pair_mask"]),
+    )
+    np.testing.assert_array_equal(np.asarray(gathered), precomputed["log_prior"])
     assert precomputed["log_prior"].dtype == np.float64
     assert precomputed["log_prior"][1, 2] == 0.2 + 2.0**-40
 
@@ -3704,9 +3713,11 @@ def test_compact_pair_execution_bucket_arrays_skip_unused_dense_score_fields(mon
     )
 
     assert [int(arrays["bucket_size"]) for arrays in compact_pair_execution] == [32, 128]
-    for arrays in compact_pair_execution:
+    for class_inputs, arrays in zip(per_class, compact_pair_execution):
         assert arrays["candidate_mask"] is None
-        assert arrays["log_prior"] is None
+        for row, count in enumerate(arrays["actual_counts"]):
+            np.testing.assert_array_equal(arrays["log_prior"][row, :count], class_inputs["log_prior"][row])
+            assert np.all(arrays["log_prior"][row, count:] == np.asarray(-1e30, dtype=arrays["log_prior"].dtype))
         assert arrays["parent_map"] is None
         assert arrays["rotations"].shape[:2] == (
             bucket["image_indices"].shape[0],

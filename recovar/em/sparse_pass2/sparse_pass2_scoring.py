@@ -1328,6 +1328,15 @@ def _score_pass2_pairs_gaussian_algebraic(
 
 
 @partial(jax.jit, static_argnames=("dtype",))
+def _gather_pair_rotation_log_prior(row_log_prior, local_rotation_row, pair_mask, *, dtype=None):
+    """Gather compact rotation priors, preserving the host table's padding and casts."""
+    rows = jnp.where(pair_mask, local_rotation_row, 0).astype(jnp.int32)
+    gathered = jnp.take_along_axis(row_log_prior, rows, axis=1)
+    values = jnp.where(pair_mask, gathered, jnp.asarray(-1e30, dtype=row_log_prior.dtype))
+    return values if dtype is None else values.astype(dtype)
+
+
+@partial(jax.jit, static_argnames=("dtype",))
 def _gather_pair_translation_log_prior(bucket_translation_prior, translation_idx, pair_mask, *, dtype):
     """Gather each compact pair's translation log prior in one compiled program.
 

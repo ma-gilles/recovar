@@ -880,29 +880,12 @@ def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_in
         (per_image_inputs["candidate_mask"][int(image_idx)] for image_idx in image_indices),
         pair_bucket_size=pair_bucket_size,
     )
-    batch = int(image_indices.shape[0])
-    log_prior_dtype = np.result_type(
-        *(np.asarray(per_image_inputs["log_prior"][int(image_idx)]).dtype for image_idx in image_indices)
-    )
-    padded_log_prior = np.full((batch, pair_bucket_size), -1e30, dtype=log_prior_dtype)
-
-    for row, image_idx in enumerate(image_indices.tolist()):
-        count = int(index_arrays["pair_counts"][row])
-        if count == 0:
-            continue
-
-        local_rot_rows = index_arrays["local_rotation_row"][row, :count]
-        rotation_log_prior = np.asarray(per_image_inputs["log_prior"][image_idx], dtype=log_prior_dtype)
-
-        padded_log_prior[row, :count] = rotation_log_prior[local_rot_rows]
-
     return {
         "image_indices": image_indices,
         "pair_bucket_size": pair_bucket_size,
         "pair_counts": index_arrays["pair_counts"],
         "local_rotation_row": index_arrays["local_rotation_row"],
         "translation_idx": index_arrays["translation_idx"],
-        "log_prior": padded_log_prior,
         "pair_mask": index_arrays["pair_mask"],
     }
 
@@ -944,16 +927,12 @@ def _build_bucket_arrays(
         if separate_mstep_rotations
         else padded_rotations
     )
-    padded_log_prior = (
-        np.full(
-            (batch, bucket_size),
-            -1e30,
-            dtype=np.result_type(
-                *(np.asarray(per_image_inputs["log_prior"][int(image_idx)]).dtype for image_idx in image_indices)
-            ),
-        )
-        if include_dense_score_fields
-        else None
+    padded_log_prior = np.full(
+        (batch, bucket_size),
+        -1e30,
+        dtype=np.result_type(
+            *(np.asarray(per_image_inputs["log_prior"][int(image_idx)]).dtype for image_idx in image_indices)
+        ),
     )
     padded_candidate_mask = (
         np.zeros((batch, bucket_size, n_fine_trans), dtype=bool) if include_dense_score_fields else None
@@ -968,8 +947,8 @@ def _build_bucket_arrays(
         padded_rotations[row, :cnt] = rots
         if separate_mstep_rotations:
             padded_mstep_rotations[row, :cnt] = per_image_inputs["oversampled_mstep_rots"][image_idx]
+        padded_log_prior[row, :cnt] = per_image_inputs["log_prior"][image_idx]
         if include_dense_score_fields:
-            padded_log_prior[row, :cnt] = per_image_inputs["log_prior"][image_idx]
             padded_candidate_mask[row, :cnt, :] = _candidate_mask_to_dense(
                 per_image_inputs["candidate_mask"][image_idx]
             )
