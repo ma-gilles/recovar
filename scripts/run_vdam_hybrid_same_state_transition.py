@@ -2909,7 +2909,7 @@ def _run_transition_arm(
 
     main_star, _optics_star = read_star(opts.fn_img)
     optics_group_by_particle = star_io._optics_group_indices(main_star)
-    particle_order = star_io._micrograph_sort_order(main_star)
+    particle_order = star_io._experiment_read_order(main_star)
     grad_ini_subset_size, grad_fin_subset_size = default_subset_sizes_for_3d_initial_model(
         int(dataset.n_images)
     )

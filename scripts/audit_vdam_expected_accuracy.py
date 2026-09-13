@@ -13,7 +13,7 @@ import starfile
 
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.data_io.starfile import read_star
-from recovar.em.vdam.star_io import _micrograph_sort_order, _native_optics_state
+from recovar.em.vdam.star_io import _experiment_read_order, _native_optics_state
 from recovar.relion_bind import _relion_bind_core as bind
 
 
@@ -58,7 +58,7 @@ def main() -> None:
     args = parser.parse_args()
 
     input_particles, input_optics = read_star(args.input_star)
-    order = _micrograph_sort_order(input_particles)
+    order = _experiment_read_order(input_particles)
     trials = np.asarray(order[: min(args.max_trials, order.size)], dtype=np.int64)
     dataset = load_dataset(str(args.input_star), lazy=True)
     optics = _native_optics_state(input_particles, input_optics, dataset)

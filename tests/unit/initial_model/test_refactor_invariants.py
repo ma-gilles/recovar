@@ -521,7 +521,7 @@ print(parent_elapsed, initial_model_elapsed)
 
 # Module ownership and adapter routing.
 
-MOVED = ("NativeOpticsState", "_optics_group_indices", "_single_optics_scalars", "_phase_shift", "_native_optics_state", "_particle_state_from_star", "_write_model_star", "_write_data_star", "_write_iteration_artifacts", "_write_final_outputs", "_star_column", "_stack_star_pair", "_experiment_read_order", "_micrograph_sort_order")
+MOVED = ("NativeOpticsState", "_optics_group_indices", "_single_optics_scalars", "_phase_shift", "_native_optics_state", "_particle_state_from_star", "_write_model_star", "_write_data_star", "_write_iteration_artifacts", "_write_final_outputs", "_star_column", "_stack_star_pair", "_experiment_read_order")
 SAMPLING = ("NativeSamplingPlan", "NativeSamplingState", "_build_sampling_plan", "_initial_sampling_state", "_estimate_native_sampling_accuracy", "_relion_update_native_sampling_state", "_prepare_native_sampling_for_iteration", "_random_perturbation_for_iteration")
 
 

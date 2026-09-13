@@ -163,7 +163,7 @@ def test_native_vdam_subset_order_uses_relion_sorted_idx_base_order():
     iteration_loop = _initial_model_package_source()  # the subset draw lives in its owner module
 
     expected_driver_tokens = [
-        "_micrograph_sort_order(main_star)",
+        "particle_order = _experiment_read_order(main_star)",
         "_experiment_read_order(main_star)",
         "particle_order=particle_order",
     ]

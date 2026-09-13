@@ -122,25 +122,14 @@ def _relion_star_list_value(text: str, label: str, cast=str):
     return cast(tokens[0])
 
 
-def _output_dir_from_prefix(outputname: str) -> Path:
-    parent = Path(outputname).parent
-    return Path(".") if str(parent) == "" else parent
-
-
 def _initial_model_mrc_from_prefix(outputname: str) -> str:
     """Mirror RELION's GUI ``outputname.rstrip("run") + initial_model.mrc``."""
 
     return outputname.rstrip("run") + "initial_model.mrc"
 
 
-def _micrograph_sort_order(main_star) -> np.ndarray:
-    """RELION's InitialModel ``sorted_idx`` follows Experiment::read order."""
-
-    return _experiment_read_order(main_star)
-
-
 def _experiment_read_order(main_star) -> np.ndarray:
-    """RELION Experiment::read order used by bootstrap/noise initialisation."""
+    """RELION Experiment::read order for bootstrap, noise and subset scheduling."""
 
     mic_col = _star_column(main_star, "_rlnMicrographName")
     if mic_col is None:
@@ -427,7 +416,7 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
     if len(main_star) != n_images:
         raise ValueError(f"STAR table has {len(main_star)} particles but dataset has {n_images} images")
 
-    output_order = _micrograph_sort_order(main_star)
+    output_order = _experiment_read_order(main_star)
     table = main_star.copy()
     visited = particle_state.visited
     if visited is None:
@@ -542,7 +531,7 @@ def _write_iteration_artifacts(
         artifact_profile[f"{name}_time_s"] = float(now - stage_started)
         stage_started = now
 
-    out_dir = _output_dir_from_prefix(output_prefix)
+    out_dir = Path(output_prefix).parent
     out_dir.mkdir(parents=True, exist_ok=True)
     class_mrcs = _class_mrc_paths(output_prefix, iteration, int(state.K))
     _record_artifact_stage("setup")
@@ -589,7 +578,7 @@ def _json_ready(value):
 def _write_final_outputs(output_prefix: str, state: InitialModelState) -> tuple[str, tuple[str, ...]]:
     iteration = int(state.iter)
     class_mrcs = _class_mrc_paths(output_prefix, iteration, int(state.K))
-    out_dir = _output_dir_from_prefix(output_prefix)
+    out_dir = Path(output_prefix).parent
     out_dir.mkdir(parents=True, exist_ok=True)
     for k, class_mrc in enumerate(class_mrcs):
         if not os.path.exists(class_mrc):

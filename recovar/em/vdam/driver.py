@@ -11,6 +11,7 @@ import json
 import os
 import time
 from dataclasses import asdict, dataclass, replace
+from pathlib import Path
 from typing import Iterable, Literal
 
 import numpy as np
@@ -60,8 +61,6 @@ from recovar.em.vdam.schedules import (
 from recovar.em.vdam.star_io import (
     NativeOpticsState,
     _experiment_read_order,
-    _micrograph_sort_order,
-    _output_dir_from_prefix,
     _particle_state_from_star,
     _write_final_outputs,
     _write_iteration_artifacts,
@@ -1014,7 +1013,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     _record_driver_stage("validation")
 
     main_star, optics_star = read_star(opts.fn_img)
-    particle_order = _micrograph_sort_order(main_star)
+    particle_order = _experiment_read_order(main_star)
     _record_driver_stage("input_star")
     dataset = load_dataset(
         opts.fn_img,
@@ -1119,7 +1118,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     _record_driver_stage("expectation_setup")
 
     if opts.write_iter_artifacts:
-        _output_dir_from_prefix(opts.outputname).mkdir(parents=True, exist_ok=True)
+        Path(opts.outputname).parent.mkdir(parents=True, exist_ok=True)
         config_path = f"{opts.outputname}_native_options.json"
         native_options = asdict(opts)
         native_options["resolved_cuda_allocator"] = os.environ.get(
