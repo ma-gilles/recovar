@@ -473,6 +473,154 @@ def _coalesce_tail_bucket_sizes(
     return assigned_sizes[inverse]
 
 
+VECTORIZED_HYPOTHESIS_PREP_ENV = "RECOVAR_SPARSE_PASS2_VECTORIZED_HYPOTHESIS_PREP"
+
+
+def vectorized_hypothesis_prep_enabled() -> bool:
+    """Prepare the per-image pass-2 hypotheses for all images at once.
+
+    ``_prepare_per_image_pass2_inputs`` loops over every image in Python
+    (np.unique, boolean child masks, searchsorted, per-image gathers); at
+    100k/256 K=4 that is 34 s of host time per iteration (job 13832892,
+    "hypothesis_prep=34.06s").  The vectorized path builds the same per-image
+    arrays from flat concatenations and hands out views, for the paired
+    RELION fine-grid override with a parent-major fine grid.  Images that need
+    another branch (no samples, complement masks, empty sets) keep the loop.
+    """
+
+    return parse_env_binary_flag(VECTORIZED_HYPOTHESIS_PREP_ENV)
+
+
+def _fine_children_ranges(fine_parent_np, n_coarse_rot):
+    """``(child_start, child_count)`` per coarse rotation, or ``None`` if not parent-major."""
+
+    fine_parent_np = np.asarray(fine_parent_np, dtype=np.int64)
+    if fine_parent_np.ndim != 1 or (fine_parent_np.size > 1 and np.any(np.diff(fine_parent_np) < 0)):
+        return None
+    child_count = np.bincount(fine_parent_np, minlength=int(n_coarse_rot)).astype(np.int64)
+    child_start = np.concatenate(([0], np.cumsum(child_count)[:-1])).astype(np.int64)
+    return child_start, child_count
+
+
+def _prepare_coarse_images_vectorized(
+    sample_lists,
+    *,
+    n_coarse_rot,
+    n_coarse_trans,
+    n_fine_trans,
+    fine_translation_parent,
+    rotation_log_prior_np,
+    fine_rotations_np,
+    fine_mstep_rotations_np,
+    fine_source_eulers,
+    child_start,
+    child_count,
+    dtype,
+):
+    """Vectorized equivalent of the per-image ``coarse`` branch of the loop.
+
+    Every returned per-image array is a view into one flat array and equals
+    the loop's result element for element (values, dtypes and order); the
+    unique coarse rotations are ascending, the fine rows are the ascending
+    children of those rotations (``np.flatnonzero`` order for a parent-major
+    grid) and ``parent_map`` is the rank of each row's parent.
+    """
+
+    n_images = len(sample_lists)
+    lengths = np.fromiter((int(np.asarray(s).size) for s in sample_lists), dtype=np.int64, count=n_images)
+    flat_sig = (
+        np.concatenate([np.asarray(s, dtype=np.int32).reshape(-1) for s in sample_lists]).astype(np.int64)
+        if n_images
+        else np.zeros(0, dtype=np.int64)
+    )
+    sig_img = np.repeat(np.arange(n_images, dtype=np.int64), lengths)
+    coarse_rot = flat_sig // int(n_coarse_trans)
+    coarse_trans = flat_sig % int(n_coarse_trans)
+    pair_key, sig_pair = np.unique(sig_img * int(n_coarse_rot) + coarse_rot, return_inverse=True)
+    sig_pair = np.asarray(sig_pair).reshape(-1)
+    pair_img = pair_key // int(n_coarse_rot)
+    pair_urot = pair_key % int(n_coarse_rot)
+    n_pairs = int(pair_key.shape[0])
+    pairs_per_image = np.bincount(pair_img, minlength=n_images).astype(np.int64)
+    pair_starts = np.concatenate(([0], np.cumsum(pairs_per_image)[:-1])).astype(np.int64)
+    pair_rank = np.arange(n_pairs, dtype=np.int64) - np.repeat(pair_starts, pairs_per_image)
+
+    rows_per_pair = child_count[pair_urot]
+    n_rows = int(rows_per_pair.sum())
+    row_pair = np.repeat(np.arange(n_pairs, dtype=np.int64), rows_per_pair)
+    row_starts = np.concatenate(([0], np.cumsum(rows_per_pair)[:-1])).astype(np.int64)
+    row_offset = np.arange(n_rows, dtype=np.int64) - np.repeat(row_starts, rows_per_pair)
+    flat_rot_indices = child_start[pair_urot][row_pair] + row_offset
+    flat_parent_map = pair_rank[row_pair].astype(np.int32)
+    rows_per_image = np.bincount(pair_img, weights=rows_per_pair, minlength=n_images).astype(np.int64)
+
+    # np.take on a contiguous first axis is the fastest host gather for these
+    # (rows, 3, 3) / (rows, 3) tables; the per-image loop gathers the same rows.
+    flat_rots = np.take(np.asarray(fine_rotations_np, dtype=dtype), flat_rot_indices, axis=0)
+    flat_mstep_rots = (
+        None
+        if fine_mstep_rotations_np is None
+        else np.take(np.asarray(fine_mstep_rotations_np, dtype=dtype), flat_rot_indices, axis=0)
+    )
+    flat_eulers = None if fine_source_eulers is None else np.take(np.asarray(fine_source_eulers), flat_rot_indices, axis=0)
+    if rotation_log_prior_np is not None:
+        flat_log_prior = np.take(np.asarray(rotation_log_prior_np, dtype=dtype), pair_urot[row_pair])
+    else:
+        flat_log_prior = np.zeros(n_rows, dtype=dtype)
+
+    coarse_valid_flat = np.zeros((n_pairs, int(n_coarse_trans)), dtype=bool)
+    coarse_valid_flat[sig_pair, coarse_trans] = True
+    ftp = np.asarray(fine_translation_parent, dtype=np.int64).reshape(-1)
+    fine_children_per_coarse_trans = np.bincount(ftp, minlength=int(n_coarse_trans)).astype(np.int64)
+    # Each significant sample is one distinct (coarse rotation, coarse translation)
+    # cell of its image, so the fine-translation children of a pair's valid cells
+    # sum over its samples; exact in float64 for these small integers.
+    valid_fine_per_pair = np.rint(
+        np.bincount(sig_pair, weights=fine_children_per_coarse_trans[coarse_trans], minlength=n_pairs)
+    ).astype(np.int64)
+    counts_per_image = np.rint(
+        np.bincount(pair_img, weights=rows_per_pair * valid_fine_per_pair, minlength=n_images)
+    ).astype(np.int64)
+
+    row_bounds = np.concatenate(([0], np.cumsum(rows_per_image))).astype(np.int64)
+    pair_bounds = np.concatenate(([0], np.cumsum(pairs_per_image))).astype(np.int64)
+    unique_rot_flat = pair_urot.astype(np.int32)
+    out = {
+        "source_eulers": [],
+        "oversampled_rots": [],
+        "oversampled_mstep_rots": [],
+        "parent_map": [],
+        "oversampled_rot_indices": [],
+        "unique_rot": [],
+        "log_prior": [],
+        "candidate_mask": [],
+    }
+    for i in range(n_images):
+        r0, r1 = int(row_bounds[i]), int(row_bounds[i + 1])
+        p0, p1 = int(pair_bounds[i]), int(pair_bounds[i + 1])
+        rots = flat_rots[r0:r1]
+        parent_map = flat_parent_map[r0:r1]
+        out["source_eulers"].append(None if flat_eulers is None else flat_eulers[r0:r1])
+        out["oversampled_rots"].append(rots)
+        out["oversampled_mstep_rots"].append(rots if flat_mstep_rots is None else flat_mstep_rots[r0:r1])
+        out["parent_map"].append(parent_map)
+        out["oversampled_rot_indices"].append(flat_rot_indices[r0:r1])
+        out["unique_rot"].append(unique_rot_flat[p0:p1])
+        out["log_prior"].append(flat_log_prior[r0:r1])
+        out["candidate_mask"].append(
+            SparseCandidateMask(
+                mode="coarse",
+                n_rows=r1 - r0,
+                n_fine_trans=n_fine_trans,
+                parent_map=parent_map,
+                coarse_valid=coarse_valid_flat[p0:p1],
+                fine_translation_parent=fine_translation_parent,
+                count=int(counts_per_image[i]),
+            )
+        )
+    return out
+
+
 def _prepare_per_image_pass2_inputs(
     significant_sample_indices,
     n_coarse_rot,
@@ -517,6 +665,16 @@ def _prepare_per_image_pass2_inputs(
     per_image_unique_rot = []
     per_image_log_prior = []
     per_image_candidate_mask = []
+    per_image_lists = {
+        "source_eulers": per_image_source_eulers,
+        "oversampled_rots": per_image_oversampled_rots,
+        "oversampled_mstep_rots": per_image_oversampled_mstep_rots,
+        "parent_map": per_image_parent_map,
+        "oversampled_rot_indices": per_image_oversampled_rot_indices,
+        "unique_rot": per_image_unique_rot,
+        "log_prior": per_image_log_prior,
+        "candidate_mask": per_image_candidate_mask,
+    }
     full_unique_rot = np.arange(n_coarse_rot, dtype=np.int32)
     full_support_rotation_cache = None
     full_support_log_prior_cache = None
@@ -591,7 +749,46 @@ def _prepare_per_image_pass2_inputs(
             None if source_eulers is None else source_eulers[order],
         )
 
+    vectorized_indices = []
+    if (
+        fine_rotations_np is not None
+        and not relion_parent_execution_order
+        and vectorized_hypothesis_prep_enabled()
+    ):
+        children = _fine_children_ranges(fine_parent_np, n_coarse_rot)
+        if children is not None:
+            vectorized_indices = [
+                image_idx
+                for image_idx, sig_samples in enumerate(significant_sample_indices)
+                if sig_samples is not None
+                and not isinstance(sig_samples, ComplementSignificantSampleIndices)
+                and np.asarray(sig_samples).size > 0
+            ]
+    vectorized = None
+    if vectorized_indices:
+        vectorized = _prepare_coarse_images_vectorized(
+            [significant_sample_indices[image_idx] for image_idx in vectorized_indices],
+            n_coarse_rot=n_coarse_rot,
+            n_coarse_trans=n_coarse_trans,
+            n_fine_trans=n_fine_trans,
+            fine_translation_parent=fine_translation_parent,
+            rotation_log_prior_np=rotation_log_prior_np,
+            fine_rotations_np=fine_rotations_np,
+            fine_mstep_rotations_np=fine_mstep_rotations_np,
+            fine_source_eulers=fine_source_eulers,
+            child_start=children[0],
+            child_count=children[1],
+            dtype=dtype,
+        )
+    vectorized_set = set(vectorized_indices)
+    vectorized_position = {image_idx: position for position, image_idx in enumerate(vectorized_indices)}
+
     for image_idx, sig_samples in enumerate(significant_sample_indices):
+        if image_idx in vectorized_set:
+            position = vectorized_position[image_idx]
+            for key, values in vectorized.items():
+                per_image_lists[key].append(values[position])
+            continue
         coarse_excluded = None
         if sig_samples is None:
             unique_rot = full_unique_rot
