@@ -796,7 +796,6 @@ def _prepare_per_image_compact_candidate_pairs(per_image_inputs, *, image_mask=N
             raise ValueError(f"compact pair image mask shape mismatch: {image_mask.shape} vs {(n_images,)}")
     compact_local_rotation_row = []
     compact_translation_idx = []
-    compact_rotation_index = []
     compact_log_prior = []
     compact_pair_mask = []
     pair_counts = np.zeros(n_images, dtype=np.int32)
@@ -810,7 +809,6 @@ def _prepare_per_image_compact_candidate_pairs(per_image_inputs, *, image_mask=N
         if image_mask is not None and not bool(image_mask[image_idx]):
             compact_local_rotation_row.append(np.zeros(0, dtype=np.int32))
             compact_translation_idx.append(np.zeros(0, dtype=np.int32))
-            compact_rotation_index.append(np.zeros(0, dtype=np.int64))
             compact_log_prior.append(np.zeros(0, dtype=log_prior_dtype))
             compact_pair_mask.append(np.zeros(0, dtype=bool))
             continue
@@ -819,12 +817,10 @@ def _prepare_per_image_compact_candidate_pairs(per_image_inputs, *, image_mask=N
         )
         local_rot_rows = local_rot_rows.astype(np.int32, copy=False)
         translation_idx = translation_idx.astype(np.int32, copy=False)
-        rotation_indices = np.asarray(per_image_inputs["oversampled_rot_indices"][image_idx], dtype=np.int64)
         rotation_log_prior = np.asarray(per_image_inputs["log_prior"][image_idx], dtype=log_prior_dtype)
 
         compact_local_rotation_row.append(local_rot_rows)
         compact_translation_idx.append(translation_idx)
-        compact_rotation_index.append(rotation_indices[local_rot_rows].astype(np.int64, copy=False))
         compact_log_prior.append(rotation_log_prior[local_rot_rows].astype(log_prior_dtype, copy=False))
         compact_pair_mask.append(np.ones(local_rot_rows.shape[0], dtype=bool))
         pair_counts[image_idx] = int(local_rot_rows.shape[0])
@@ -832,7 +828,6 @@ def _prepare_per_image_compact_candidate_pairs(per_image_inputs, *, image_mask=N
     return {
         "local_rotation_row": compact_local_rotation_row,
         "translation_idx": compact_translation_idx,
-        "rotation_index": compact_rotation_index,
         "log_prior": compact_log_prior,
         "pair_mask": compact_pair_mask,
         "pair_counts": pair_counts,
@@ -848,7 +843,6 @@ def _build_compact_pair_bucket_arrays(bucket, compact_inputs):
 
     padded_local_rotation_row = np.full((batch, pair_bucket_size), -1, dtype=np.int32)
     padded_translation_idx = np.full((batch, pair_bucket_size), -1, dtype=np.int32)
-    padded_rotation_index = np.zeros((batch, pair_bucket_size), dtype=np.int64)
     log_prior_dtype = np.result_type(
         *(np.asarray(compact_inputs["log_prior"][int(image_idx)]).dtype for image_idx in image_indices)
     )
@@ -863,7 +857,6 @@ def _build_compact_pair_bucket_arrays(bucket, compact_inputs):
             continue
         padded_local_rotation_row[row, :count] = compact_inputs["local_rotation_row"][image_idx]
         padded_translation_idx[row, :count] = compact_inputs["translation_idx"][image_idx]
-        padded_rotation_index[row, :count] = compact_inputs["rotation_index"][image_idx]
         padded_log_prior[row, :count] = compact_inputs["log_prior"][image_idx]
         padded_pair_mask[row, :count] = compact_inputs["pair_mask"][image_idx]
 
@@ -873,7 +866,6 @@ def _build_compact_pair_bucket_arrays(bucket, compact_inputs):
         "pair_counts": pair_counts,
         "local_rotation_row": padded_local_rotation_row,
         "translation_idx": padded_translation_idx,
-        "rotation_index": padded_rotation_index,
         "log_prior": padded_log_prior,
         "pair_mask": padded_pair_mask,
     }
@@ -889,7 +881,6 @@ def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_in
         pair_bucket_size=pair_bucket_size,
     )
     batch = int(image_indices.shape[0])
-    padded_rotation_index = np.zeros((batch, pair_bucket_size), dtype=np.int64)
     log_prior_dtype = np.result_type(
         *(np.asarray(per_image_inputs["log_prior"][int(image_idx)]).dtype for image_idx in image_indices)
     )
@@ -901,10 +892,8 @@ def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_in
             continue
 
         local_rot_rows = index_arrays["local_rotation_row"][row, :count]
-        rotation_indices = np.asarray(per_image_inputs["oversampled_rot_indices"][image_idx], dtype=np.int64)
         rotation_log_prior = np.asarray(per_image_inputs["log_prior"][image_idx], dtype=log_prior_dtype)
 
-        padded_rotation_index[row, :count] = rotation_indices[local_rot_rows]
         padded_log_prior[row, :count] = rotation_log_prior[local_rot_rows]
 
     return {
@@ -913,7 +902,6 @@ def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_in
         "pair_counts": index_arrays["pair_counts"],
         "local_rotation_row": index_arrays["local_rotation_row"],
         "translation_idx": index_arrays["translation_idx"],
-        "rotation_index": padded_rotation_index,
         "log_prior": padded_log_prior,
         "pair_mask": index_arrays["pair_mask"],
     }

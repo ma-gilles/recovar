@@ -3953,10 +3953,6 @@ def test_compact_candidate_pair_builder_matches_dense_mask_nonzero():
         np.testing.assert_array_equal(compact["local_rotation_row"][image_idx], expected_rows)
         np.testing.assert_array_equal(compact["translation_idx"][image_idx], expected_trans)
         np.testing.assert_array_equal(
-            compact["rotation_index"][image_idx],
-            rotation_indices[image_idx][expected_rows],
-        )
-        np.testing.assert_array_equal(
             compact["log_prior"][image_idx],
             log_priors[image_idx][expected_rows],
         )
@@ -5279,7 +5275,6 @@ def test_compact_pair_padding_cannot_be_selected_as_best():
     assert pair_index == 1
     assert int(arrays["local_rotation_row"][0, pair_index]) == 1
     assert int(arrays["translation_idx"][0, pair_index]) == 3
-    assert int(arrays["rotation_index"][0, pair_index]) == 22
     assert float(best_score[0]) == pytest.approx(7.0)
 
 

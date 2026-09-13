@@ -5862,7 +5862,6 @@ def compute_k_class_pass2_stats_sparse_fused(
                         pair_counts,
                         local_rotation_row,
                         translation_idx,
-                        rotation_index,
                         pair_log_prior,
                         pair_mask,
                     ) = _reorder_to_indices(
@@ -5871,7 +5870,6 @@ def compute_k_class_pass2_stats_sparse_fused(
                         pair_arrays["pair_counts"],
                         pair_arrays["local_rotation_row"],
                         pair_arrays["translation_idx"],
-                        pair_arrays["rotation_index"],
                         pair_arrays["log_prior"],
                         pair_arrays["pair_mask"],
                     )
@@ -5882,7 +5880,6 @@ def compute_k_class_pass2_stats_sparse_fused(
                             "pair_counts": pair_counts,
                             "local_rotation_row": local_rotation_row,
                             "translation_idx": translation_idx,
-                            "rotation_index": rotation_index,
                             "log_prior": pair_log_prior,
                             "pair_mask": pair_mask,
                         }
@@ -7932,7 +7929,6 @@ def compute_k_class_pass2_stats_sparse_fused(
                 row_index_np = np.arange(batch, dtype=np.int64)
                 pair_local_rotation_row = np.asarray(pair_arrays["local_rotation_row"], dtype=np.int32)
                 pair_translation_idx = np.asarray(pair_arrays["translation_idx"], dtype=np.int32)
-                pair_rotation_index = np.asarray(pair_arrays["rotation_index"], dtype=np.int64)
                 best_rot_idx = np.where(
                     has_best_pose_np,
                     pair_local_rotation_row[row_index_np, safe_best_argmax_np],
@@ -7943,19 +7939,14 @@ def compute_k_class_pass2_stats_sparse_fused(
                     pair_translation_idx[row_index_np, safe_best_argmax_np],
                     0,
                 ).astype(np.int64, copy=False)
-                best_fine_rot_idx = np.where(
-                    has_best_pose_np,
-                    pair_rotation_index[row_index_np, safe_best_argmax_np],
-                    np.asarray(arrays["rotation_indices"], dtype=np.int64)[:, 0],
-                ).astype(np.int64, copy=False)
             else:
                 best_rot_idx = best_argmax_np // n_fine_trans
                 best_trans_idx = best_argmax_np % n_fine_trans
                 row_index_np = np.arange(batch, dtype=np.int64)
-                best_fine_rot_idx = np.asarray(arrays["rotation_indices"], dtype=np.int64)[
-                    row_index_np,
-                    best_rot_idx,
-                ]
+            best_fine_rot_idx = np.asarray(arrays["rotation_indices"], dtype=np.int64)[
+                row_index_np,
+                best_rot_idx,
+            ]
             if np.any(best_rot_idx >= actual_counts_arr):
                 bad = np.flatnonzero(best_rot_idx >= actual_counts_arr)
                 raise RuntimeError(
