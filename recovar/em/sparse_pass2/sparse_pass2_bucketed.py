@@ -5780,82 +5780,19 @@ def compute_k_class_pass2_stats_sparse_fused(
             reordered = []
             for arrays in class_bucket_arrays:
                 shared_mstep_rotations = arrays["mstep_rotations"] is arrays["rotations"]
-                if arrays["candidate_mask"] is None:
-                    if shared_mstep_rotations:
-                        rotations, rotation_indices, log_prior, actual_counts = _reorder_to_indices(
-                            fetched_indices_np,
-                            image_indices,
-                            arrays["rotations"],
-                            arrays["rotation_indices"],
-                            arrays["log_prior"],
-                            arrays["actual_counts"],
-                        )
-                        mstep_rotations = rotations
-                    else:
-                        rotations, mstep_rotations, rotation_indices, log_prior, actual_counts = _reorder_to_indices(
-                            fetched_indices_np,
-                            image_indices,
-                            arrays["rotations"],
-                            arrays["mstep_rotations"],
-                            arrays["rotation_indices"],
-                            arrays["log_prior"],
-                            arrays["actual_counts"],
-                        )
-                    candidate_mask = None
-                    parent_map_padded = None
-                else:
-                    if shared_mstep_rotations:
-                        (
-                            rotations,
-                            rotation_indices,
-                            log_prior,
-                            candidate_mask,
-                            parent_map_padded,
-                            actual_counts,
-                        ) = _reorder_to_indices(
-                            fetched_indices_np,
-                            image_indices,
-                            arrays["rotations"],
-                            arrays["rotation_indices"],
-                            arrays["log_prior"],
-                            arrays["candidate_mask"],
-                            arrays["parent_map"],
-                            arrays["actual_counts"],
-                        )
-                        mstep_rotations = rotations
-                    else:
-                        (
-                            rotations,
-                            mstep_rotations,
-                            rotation_indices,
-                            log_prior,
-                            candidate_mask,
-                            parent_map_padded,
-                            actual_counts,
-                        ) = _reorder_to_indices(
-                            fetched_indices_np,
-                            image_indices,
-                            arrays["rotations"],
-                            arrays["mstep_rotations"],
-                            arrays["rotation_indices"],
-                            arrays["log_prior"],
-                            arrays["candidate_mask"],
-                            arrays["parent_map"],
-                            arrays["actual_counts"],
-                        )
-                reordered.append(
-                    {
-                        "image_indices": fetched_indices_np,
-                        "bucket_size": arrays["bucket_size"],
-                        "actual_counts": actual_counts,
-                        "rotations": rotations,
-                        "mstep_rotations": mstep_rotations,
-                        "rotation_indices": rotation_indices,
-                        "log_prior": log_prior,
-                        "candidate_mask": candidate_mask,
-                        "parent_map": parent_map_padded,
-                    }
+                fields = ["rotations", "rotation_indices", "actual_counts", "log_prior"]
+                if not shared_mstep_rotations:
+                    fields.append("mstep_rotations")
+                fields.extend(name for name in ("candidate_mask", "parent_map") if arrays[name] is not None)
+                values = _reorder_to_indices(
+                    fetched_indices_np,
+                    image_indices,
+                    *(arrays[name] for name in fields),
                 )
+                reordered_arrays = {**arrays, **dict(zip(fields, values)), "image_indices": fetched_indices_np}
+                if shared_mstep_rotations:
+                    reordered_arrays["mstep_rotations"] = reordered_arrays["rotations"]
+                reordered.append(reordered_arrays)
             class_bucket_arrays = reordered
             if compact_pair_arrays_by_class is not None:
                 reordered_compact_pairs = []
