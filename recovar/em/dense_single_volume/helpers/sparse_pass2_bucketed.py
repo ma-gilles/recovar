@@ -13984,7 +13984,13 @@ def compute_k_class_pass2_stats_sparse_fused(
 
     def _apply_noise_power_host(class_index, image_indices, support_mass_np, shells_np, per_image_np):
         noise_img_power_total[class_index] += shells_np
-        noise_norm_correction_total[class_index][image_indices] += per_image_np
+        # Image-capacity padding repeats the last real image's index; NumPy
+        # ``a[idx] += v`` keeps only one write per duplicate, so the real image's
+        # contribution was lost for one image in every padded bucket (noise3
+        # uniform fixture: a ~1 % class died at it80-100 in 3/3 knob arms while
+        # 4/4 band arms kept it). np.add.at accumulates duplicates exactly; the
+        # padded rows add exactly zero.
+        np.add.at(noise_norm_correction_total[class_index], image_indices, per_image_np)
         noise_sumw_total[class_index] += float(np.sum(support_mass_np, dtype=np.float64))
 
     def _apply_scale_host(class_index, group_ids_np, xa_np, aa_np):
@@ -13993,7 +13999,7 @@ def compute_k_class_pass2_stats_sparse_fused(
 
     def _apply_wsum_host(class_index, image_indices, shells_np, residual_np):
         noise_wsum_total[class_index] += shells_np
-        noise_norm_correction_total[class_index][image_indices] += residual_np
+        np.add.at(noise_norm_correction_total[class_index], image_indices, residual_np)
 
     def _apply_stats_host(
         class_index,
@@ -16342,14 +16348,29 @@ def compute_k_class_pass2_stats_sparse_fused(
                 # RELION adds power_img outside the class loop, once per image.
                 # Keep the shared high-shell term on class zero so downstream
                 # summation of class-local statistics reproduces that ordering.
+                # Image-capacity padding rows duplicate the last real image; the
+                # unweighted high-shell terms are per particle and must not count
+                # them (they made class 0's wsum_img_power and the last image's
+                # norm correction depend on the padding).
+                real_image_mask = (
+                    None
+                    if int(n_real_images) >= int(batch)
+                    else jnp.arange(int(batch), dtype=jnp.int32) < jnp.int32(n_real_images)
+                )
+                masked_norm_high_shell = relion_norm_high_shell
+                if relion_norm_high_shell is not None and real_image_mask is not None:
+                    masked_norm_high_shell = jnp.where(
+                        real_image_mask, relion_norm_high_shell, jnp.zeros_like(relion_norm_high_shell)
+                    )
                 weighted_img_shells, weighted_img_per_image = _weighted_image_power_shells_and_per_image(
                     processed_score_half_for_noise,
                     shell_indices_half,
                     support_mass,
                     shell_count=n_shells,
                     norm_unweighted_shell_cutoff=None if current_size is None else int(current_size // 2),
-                    norm_unweighted_high_shell=relion_norm_high_shell,
+                    norm_unweighted_high_shell=masked_norm_high_shell,
                     include_unweighted_high_shell=class_index == 0,
+                    valid_image_mask=real_image_mask,
                 )
                 if defer_host_stats and not defer_host_stats_check:
                     deferred_host_records.append(
@@ -16487,9 +16508,13 @@ def compute_k_class_pass2_stats_sparse_fused(
                         block_noise_shells_precomputed,
                         dtype=np.float64,
                     )
-                    noise_norm_correction_total[class_index][image_indices] += np.asarray(
+                    np.add.at(
+                        noise_norm_correction_total[class_index],
+                        image_indices,
+                        np.asarray(
                         block_norm_residual_precomputed,
                         dtype=np.float64,
+                    )
                     )
                 elif bucket_uses_active_rows and bucket_uses_compact_pairs:
                     block_noise_shells, block_norm_residual = _compute_active_noise_rows_chunked(

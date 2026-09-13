@@ -10031,7 +10031,8 @@ def _fused_kclass_result_arrays(result):
     return arrays
 
 
-def test_image_axis_capacity_padding_does_not_change_fused_kclass_results(monkeypatch):
+@pytest.mark.parametrize("noise_mode", ["no_noise", "noise"])
+def test_image_axis_capacity_padding_does_not_change_fused_kclass_results(monkeypatch, noise_mode):
     """Padding the image axis must be numerically invisible.
 
     The capacity exists purely so bucket shapes repeat and JAX stops tracing a new
@@ -10071,7 +10072,12 @@ def test_image_axis_capacity_padding_does_not_change_fused_kclass_results(monkey
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
         monkeypatch.setenv("RECOVAR_SPARSE_PASS2_IMAGE_CAPACITY", capacity_flag)
-        return bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**_fused_kclass_capacity_fixture())
+        kwargs = _fused_kclass_capacity_fixture()
+        if noise_mode == "noise":
+            # padded rows repeat the last image index: the per-image noise
+            # appliers must accumulate, not overwrite (noise3 uniform matrix)
+            kwargs["accumulate_noise"] = True
+        return bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs)
 
     baseline = _fused_kclass_result_arrays(run("0"))
     assert pads == [], "padding must not run while the capacity flag is off"
