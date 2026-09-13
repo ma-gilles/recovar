@@ -9890,6 +9890,103 @@ def test_compact_pair_xhalf_gpu_matches_rectangular_fused(monkeypatch):
     assert compact_pairs.profile_summary["sparse_kclass_compact_pair_mstep_pair_sparse_xhalf_fallback"] is True
 
 
+def test_device_chunk_scalars_gpu_fused_noise_accumulator_calls(monkeypatch):
+    """GPU-only guard: with the fused weighted-sums/noise path (native CUDA dual sums, RELION
+    x-half M-step, image capacity padding) RECOVAR_SPARSE_KCLASS_DEVICE_CHUNK_SCALARS must
+    actually run the device noise accumulator (call count asserted, lead review 2026-09-13)
+    and every result must equal the host accumulation bit for bit."""
+
+    import jax
+
+    import recovar.cuda_backproject as cb
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.sampling import rotation_grid_size
+
+    if not any(device.platform == "gpu" for device in jax.devices()):
+        pytest.skip("device chunk scalars fused-noise guard requires a JAX GPU device")
+    if not cb.cuda_available():
+        pytest.skip(cb.cuda_unavailable_error())
+
+    n_images = 7
+    n_coarse_rot = rotation_grid_size(1)
+    fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 6, axis=0)
+    fine_parent = np.asarray([0, 1, 2, 3, 4, 5], dtype=np.int64)
+    fine_translations = np.asarray([[0.0, 0.0], [0.5, 0.0], [0.0, 1.0], [0.5, 1.0]], dtype=np.float32)
+    fine_translation_parent = np.asarray([0, 0, 1, 1], dtype=np.int32)
+    coarse_translations = np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+    rng = np.random.default_rng(5)
+    significant_by_class = [
+        [np.sort(rng.choice(12, size=int(rng.integers(2, 5)), replace=False)).astype(np.int32) for _ in range(n_images)]
+        for _ in range(2)
+    ]
+    ds = MockDataset(n_images=n_images, seed=93)
+    volumes = jnp.stack([_hermitian_volume(VOLUME_SHAPE, seed=111), _hermitian_volume(VOLUME_SHAPE, seed=113)])
+    kwargs = dict(
+        experiment_dataset=ds,
+        means_array=volumes,
+        mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0,
+        noise_variance=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        coarse_rotations_np=np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
+        coarse_translations_np=coarse_translations,
+        fine_rotations_np=fine_rotations,
+        fine_mstep_rotations_np=None,
+        rot_parent_map_np=fine_parent,
+        fine_translations_np=fine_translations,
+        trans_parent_map_np=fine_translation_parent,
+        sig_sample_indices_by_class=significant_by_class,
+        disc_type="linear_interp",
+        class_log_priors=np.log(np.asarray([0.45, 0.55], dtype=np.float64)),
+        accumulate_noise=True,
+        return_best_pose_details=True,
+        oversampling_order=1,
+        random_perturbation=0.0,
+        engine_kwargs={
+            "current_size": None,
+            "relion_half_volume_mstep": False,
+            "mstep_relion_x_half": True,
+            "adaptive_fraction": 0.75,
+        },
+    )
+    calls = []
+    original = bucketed_mod._accumulate_noise_totals_device
+
+    def spy(*args):
+        calls.append(int(np.asarray(args[2]).shape[0]) - int(args[3]))
+        return original(*args)
+
+    def run(flag):
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "3")
+        monkeypatch.setenv("RECOVAR_SPARSE_PASS2_IMAGE_CAPACITY", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_NATIVE_PAIR_SPARSE_SUMS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED_MSTEP_NOISE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_DEFERRED_HOST_STATS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_DEVICE_CHUNK_SCALARS", flag)
+        monkeypatch.setattr(bucketed_mod, "_accumulate_noise_totals_device", spy)
+        calls.clear()
+        result = _run_sparse_k_class_adaptive_pass2(**kwargs)
+        return result, list(calls)
+
+    host, host_calls = run("0")
+    assert host_calls == [], "the device accumulator must not run with the flag off"
+    device, device_calls = run("1")
+    assert device_calls, "the fused-noise path must reach the device accumulator with the flag on"
+    assert any(padded > 0 for padded in device_calls), "image-capacity padding must exercise duplicate indices"
+    for name in ("Ft_y", "Ft_ctf", "per_class_hard_assignments", "class_assignments", "pose_assignments"):
+        np.testing.assert_array_equal(np.asarray(getattr(device, name)), np.asarray(getattr(host, name)), err_msg=name)
+    host_noise = getattr(host, "noise_stats", None)
+    device_noise = getattr(device, "noise_stats", None)
+    assert (host_noise is None) == (device_noise is None)
+    if host_noise is not None:
+        for class_index, (h, d) in enumerate(zip(host_noise, device_noise)):
+            for field in ("wsum_sigma2_noise", "wsum_norm_correction"):
+                if hasattr(h, field):
+                    np.testing.assert_array_equal(np.asarray(getattr(d, field)), np.asarray(getattr(h, field)), err_msg=f"{field} class {class_index}")
+
+
 def test_bucketed_call_count_bounded_versus_perimage():
     """The bucketed path should make far fewer ``run_em``-style backend calls.
 
