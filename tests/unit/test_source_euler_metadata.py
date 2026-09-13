@@ -38,11 +38,12 @@ def test_per_class_layout_selection_preserves_source_eulers(dtype, with_source):
         translation_grid=np.zeros((1, 2), dtype), translation_log_priors=np.zeros((1, 1), dtype),
         source_eulers_flat=source,
     )
-    assert k_class_inputs._select_local_layout_for_class(layout, 0, 4) is layout
+    assert k_class_inputs._class_local_layouts(layout, 4)[0] is layout
     priors = np.arange(4, dtype=dtype).reshape(4, 1)
     layouts = [replace(layout, rotation_log_priors_flat=prior) for prior in priors]
+    selected = k_class_inputs._class_local_layouts(layouts, 4)
     for class_id in range(4):
-        result = k_class_inputs._select_local_layout_for_class(layouts, class_id, 4)
+        result = selected[class_id]
         assert result is layouts[class_id]
         assert result.source_eulers_flat is source
         assert result.rotations_flat is layout.rotations_flat

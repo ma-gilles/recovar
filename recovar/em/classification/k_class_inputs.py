@@ -7,6 +7,8 @@ they do not import execution engines or change scoring precision.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -81,13 +83,12 @@ def _local_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_clas
     return kwargs
 
 
-def _select_local_layout_for_class(
+def _class_local_layouts(
     local_layout,
-    class_index: int,
     n_classes: int,
-) -> LocalHypothesisLayout:
+) -> Sequence[LocalHypothesisLayout]:
     if isinstance(local_layout, (list, tuple)):
         if len(local_layout) != n_classes:
             raise ValueError(f"local_layout must contain {n_classes} per-class layouts, got {len(local_layout)}")
-        return local_layout[class_index]
-    return local_layout
+        return local_layout
+    return (local_layout,) * n_classes

@@ -15,10 +15,10 @@ import numpy as np
 
 from recovar.em.classification.k_class_inputs import (
     _as_class_means,
+    _class_local_layouts,
     _class_log_priors,
     _local_engine_kwargs_for_class,
     _select_class_value,
-    _select_local_layout_for_class,
     _select_projector_half_for_class,
     _select_required_class_value,
 )
@@ -2132,13 +2132,11 @@ def run_local_k_class_em(
         if normalization_log_evidence_np is None and normalization_max_posterior_np is None:
             normalization_log_evidence_np = _logsumexp_np(class_log_evidence_np, axis=0)
 
+    class_layouts = _class_local_layouts(local_layout, n_classes)
+
     if class_log_evidence_np is None:
         if n_classes == 1 and normalization_log_evidence_np is None and normalization_max_posterior_np is None:
-            class_layout = _select_local_layout_for_class(
-                local_layout,
-                0,
-                n_classes,
-            )
+            class_layout = class_layouts[0]
             class_engine_kwargs = _local_engine_kwargs_for_class(base_engine_kwargs, 0, n_classes)
             with score_dump_label("single_class", local=True):
                 output = run_local_em_exact(
@@ -2191,11 +2189,7 @@ def run_local_k_class_em(
         class_log_evidence = []
         support_values_by_class = [] if collect_global_reconstruction_threshold else None
         for class_index in range(n_classes):
-            class_layout = _select_local_layout_for_class(
-                local_layout,
-                class_index,
-                n_classes,
-            )
+            class_layout = class_layouts[class_index]
             class_engine_kwargs = _local_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
             with score_dump_label(f"probe_class{class_index:03d}", local=True):
                 probe = run_local_em_exact(
@@ -2228,13 +2222,6 @@ def run_local_k_class_em(
                 normalization_log_evidence_np,
                 float(base_engine_kwargs.get("adaptive_fraction", 0.999)),
             )
-    else:
-        for class_index in range(n_classes):
-            _select_local_layout_for_class(
-                local_layout,
-                class_index,
-                n_classes,
-            )
 
     global_log_evidence = _logsumexp_np(class_log_evidence_np, axis=0)
     if normalization_log_evidence_np is not None:
@@ -2246,11 +2233,7 @@ def run_local_k_class_em(
         return_profile=return_profile,
     )
     for class_index in range(n_classes):
-        class_layout = _select_local_layout_for_class(
-            local_layout,
-            class_index,
-            n_classes,
-        )
+        class_layout = class_layouts[class_index]
         class_engine_kwargs = _local_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
         with score_dump_label(f"mstep_class{class_index:03d}", local=True):
             normalization_kwargs = (
