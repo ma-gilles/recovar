@@ -9978,7 +9978,14 @@ def test_device_chunk_scalars_gpu_fused_noise_accumulator_calls(monkeypatch):
     device, device_calls = run("1")
     assert device_calls, "the fused-noise path must reach the device accumulator with the flag on"
     assert any(padded > 0 for padded in device_calls), "image-capacity padding must exercise duplicate indices"
-    for name in ("Ft_y", "Ft_ctf", "per_class_hard_assignments", "class_assignments", "pose_assignments"):
+    # The RELION x-half BPref accumulators use CUDA atomics whose order varies run to
+    # run (1 ULP, documented for the flat-row pin); the flag does not touch them, so
+    # they are bounded rather than bitwise. Every statistic the flag produces is bitwise.
+    for name in ("Ft_y", "Ft_ctf"):
+        np.testing.assert_allclose(
+            np.asarray(getattr(device, name)), np.asarray(getattr(host, name)), rtol=1e-6, atol=0.0, err_msg=name
+        )
+    for name in ("per_class_hard_assignments", "class_assignments", "pose_assignments"):
         np.testing.assert_array_equal(np.asarray(getattr(device, name)), np.asarray(getattr(host, name)), err_msg=name)
     host_noise = getattr(host, "noise_stats", None)
     device_noise = getattr(device, "noise_stats", None)
