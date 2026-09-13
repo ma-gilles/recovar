@@ -3,6 +3,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from recovar.em.refinement.half_inputs import HalfInputState
+
 pytest.importorskip("jax")
 import jax.numpy as jnp
 from helpers.fine_grid_significance_reference import _build_fine_grid_significance_mask
@@ -2191,7 +2193,7 @@ def test_class3d_replay_loads_shared_model_direction_prior(tmp_path, monkeypatch
 
     from recovar.em import sampling
     from recovar.em.diagnostics import relion_replay
-    from recovar.em.diagnostics.relion_replay import _RelionHalfInputState, apply_iter_replay_overrides
+    from recovar.em.diagnostics.relion_replay import apply_iter_replay_overrides
 
     (tmp_path / "run_it001_model.star").touch()
     (tmp_path / "run_it002_model.star").touch()
@@ -2235,7 +2237,7 @@ def test_class3d_replay_loads_shared_model_direction_prior(tmp_path, monkeypatch
         translation_range=0.0,
         translation_step=1.0,
     )
-    half_inputs = _RelionHalfInputState.from_initial_values(
+    half_inputs = HalfInputState.from_initial_values(
         previous_best_translations=None,
         previous_best_rotation_eulers=None,
         image_corrections=None,

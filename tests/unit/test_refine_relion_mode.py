@@ -16,6 +16,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from recovar.em.refinement.half_inputs import HalfInputState
+
 pytest.importorskip("jax")
 import healpy as hp
 import jax.numpy as jnp
@@ -771,7 +773,7 @@ def test_replay_translation_grid_preserves_state_grid_for_subtolerance_star_roun
         cryo=Cryo(),
         k_class_enabled=False,
         n_classes=1,
-        relion_half_inputs=iteration_loop_module._RelionHalfInputState.from_initial_values(
+        relion_half_inputs=HalfInputState.from_initial_values(
             previous_best_translations=None,
             previous_best_rotation_eulers=None,
             image_corrections=None,
@@ -899,7 +901,7 @@ def test_replay_override_preserves_half_specific_sigma_offsets():
         cryo=Cryo(),
         k_class_enabled=False,
         n_classes=1,
-        relion_half_inputs=iteration_loop_module._RelionHalfInputState.from_initial_values(
+        relion_half_inputs=HalfInputState.from_initial_values(
             previous_best_translations=None,
             previous_best_rotation_eulers=None,
             image_corrections=None,
@@ -936,7 +938,7 @@ def test_replay_override_preserves_native_scale_and_rescales_star_image_correcti
         voxel_size = 1.0
 
     group_ids = [np.asarray([0, 1], dtype=np.int64), np.asarray([1], dtype=np.int64)]
-    relion_half_inputs = iteration_loop_module._RelionHalfInputState.from_initial_values(
+    relion_half_inputs = HalfInputState.from_initial_values(
         previous_best_translations=None,
         previous_best_rotation_eulers=None,
         image_corrections=[np.asarray([9.0, 9.0], dtype=np.float32), np.asarray([8.0], dtype=np.float32)],
@@ -985,7 +987,7 @@ def test_replay_override_preserves_native_scale_and_rescales_star_image_correcti
 
 
 def test_replay_explicit_scoring_scale_preserves_image_to_scale_ratio():
-    relion_half_inputs = iteration_loop_module._RelionHalfInputState.from_initial_values(
+    relion_half_inputs = HalfInputState.from_initial_values(
         previous_best_translations=None,
         previous_best_rotation_eulers=None,
         image_corrections=None,
@@ -1035,7 +1037,7 @@ def test_replay_explicit_scoring_scale_preserves_image_to_scale_ratio():
 
 
 def test_replay_cold_start_falls_back_to_serialized_scale():
-    relion_half_inputs = iteration_loop_module._RelionHalfInputState.from_initial_values(
+    relion_half_inputs = HalfInputState.from_initial_values(
         previous_best_translations=None,
         previous_best_rotation_eulers=None,
         image_corrections=None,
@@ -1084,7 +1086,7 @@ def test_replay_cold_start_falls_back_to_serialized_scale():
 
 @pytest.mark.parametrize("with_resident_state", [False, True])
 def test_replay_explicit_paired_image_scale_state_remains_exact(with_resident_state):
-    relion_half_inputs = iteration_loop_module._RelionHalfInputState.from_initial_values(
+    relion_half_inputs = HalfInputState.from_initial_values(
         previous_best_translations=None,
         previous_best_rotation_eulers=None,
         image_corrections=(
@@ -1128,7 +1130,7 @@ def test_final_all_data_replay_uses_shared_live_scale_correction_contract():
     assert "_final_replay_img_corr" not in final_replay_source
     assert "_final_replay_scale_corr" not in final_replay_source
 
-    relion_half_inputs = iteration_loop_module._RelionHalfInputState.from_initial_values(
+    relion_half_inputs = HalfInputState.from_initial_values(
         previous_best_translations=None,
         previous_best_rotation_eulers=None,
         image_corrections=[np.asarray([9.0, 9.0]), np.asarray([], dtype=np.float32)],

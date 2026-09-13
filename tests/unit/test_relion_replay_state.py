@@ -9,6 +9,7 @@ import pytest
 import recovar.em.diagnostics.relion_replay as relion_replay_module
 import recovar.em.helpers.orientation_priors as orientation_priors_module
 import recovar.em.refinement.projector_preparation as projector_preparation
+from recovar.em.refinement.half_inputs import HalfInputState
 
 pytestmark = pytest.mark.unit
 IMAGE_SIZE = 64
@@ -115,7 +116,7 @@ def test_sealed_sampling_override_never_reads_external_replay_files(monkeypatch,
         cryo=SimpleNamespace(voxel_size=2.0),
         k_class_enabled=False,
         n_classes=1,
-        relion_half_inputs=relion_replay_module._RelionHalfInputState.from_initial_values(
+        relion_half_inputs=HalfInputState.from_initial_values(
             previous_best_translations=None,
             previous_best_rotation_eulers=None,
             image_corrections=None,
@@ -196,7 +197,7 @@ def test_frozen_replay_explicitly_suppresses_external_direction_prior_reload(
         cryo=SimpleNamespace(voxel_size=1.0),
         k_class_enabled=False,
         n_classes=1,
-        relion_half_inputs=relion_replay_module._RelionHalfInputState.from_initial_values(
+        relion_half_inputs=HalfInputState.from_initial_values(
             previous_best_translations=None,
             previous_best_rotation_eulers=None,
             image_corrections=None,

@@ -57,7 +57,6 @@ from recovar.em.diagnostics.relion_replay import (
     _mean_sigma_offset_per_half,
     _normalize_sigma_offset_per_half,
     _perturbation_restart_state_iteration,
-    _RelionHalfInputState,
     _resolve_replay_random_perturbation,
     _restore_convergence_state_from_replay_restart,
     _sealed_sampling_base_grids,
@@ -142,6 +141,7 @@ from recovar.em.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.local.local_layout import _selected_rotation_matrices
 from recovar.em.local.local_search_iteration import _precompute_exact_local_fine_grid_enabled
 from recovar.em.refinement import finalization_policy
+from recovar.em.refinement.half_inputs import HalfInputState
 from recovar.em.refinement.mean_helpers import (
     _class_tau2_from_iref_power_spectrum,
     _class_tau2_update_details,
@@ -884,7 +884,7 @@ def _run_relion_iteration_loop(
     class_assignments = per_half.class_assignments
     previous_class_assignments = [None, None]
     previous_best_rotations = [None, None]
-    relion_half_inputs = _RelionHalfInputState.from_initial_values(
+    relion_half_inputs = HalfInputState.from_initial_values(
         previous_best_translations=replay.init_previous_best_translations,
         previous_best_rotation_eulers=replay.init_previous_best_rotation_eulers,
         image_corrections=replay.init_image_corrections,

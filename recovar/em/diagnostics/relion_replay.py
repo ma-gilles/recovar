@@ -25,6 +25,7 @@ from recovar.em.helpers.orientation_priors import (
     normalize_direction_prior_per_half,
     remap_half_direction_prior_to_healpix_order,
 )
+from recovar.em.refinement.half_inputs import HalfInputState, optional_half_arrays
 from recovar.em.refinement.noise_updates import (
     _mean_noise_variance,
     _noise_radial_history,
@@ -609,55 +610,6 @@ def _replay_control_model_iteration(init_relion_iteration: int, loop_iteration: 
     return int(init_relion_iteration) + int(loop_iteration) + 1
 
 
-def _optional_float32_half_pair(values, *, dtype=None):
-    """Return optional per-half arrays, preserving precision by default.
-
-    The historical name is retained for import compatibility. Sealed float32
-    sources remain float32, while higher-precision replay state is not
-    silently narrowed.
-    """
-    if values is None:
-        return [None, None]
-    return [
-        np.asarray(values[0], dtype=dtype) if values[0] is not None else None,
-        np.asarray(values[1], dtype=dtype) if values[1] is not None else None,
-    ]
-
-
-def _optional_int64_half_pair(values):
-    """Return optional per-half integer arrays."""
-    if values is None:
-        return [None, None]
-    return [
-        np.asarray(values[0], dtype=np.int64) if values[0] is not None else None,
-        np.asarray(values[1], dtype=np.int64) if values[1] is not None else None,
-    ]
-
-
-def _optional_group_count_half_pair(values):
-    """Return an optional explicit group cardinality for each half-set."""
-    if values is None:
-        return [None, None]
-    arr = np.asarray(values).reshape(-1)
-    if arr.size == 1:
-        arr = np.repeat(arr, 2)
-    if arr.size != 2:
-        raise ValueError(
-            "init_group_count must be a scalar or contain exactly two values; "
-            f"got shape {np.asarray(values).shape}"
-        )
-    counts = []
-    for value in arr:
-        if value is None:
-            counts.append(None)
-            continue
-        count = int(value)
-        if count < 0 or float(value) != float(count):
-            raise ValueError(f"init_group_count values must be non-negative integers, got {value!r}")
-        counts.append(count)
-    return counts
-
-
 def _normalize_sigma_offset_per_half(values):
     """Return a strict two-element float list for half-specific sigma offsets."""
     if values is None:
@@ -689,66 +641,6 @@ def _mean_sigma_offset_per_half(values):
     return float(0.5 * (per_half[0] + per_half[1]))
 
 
-def _normalize_logged_float32_half_pair(values, *, label: str):
-    """Normalize per-half correction arrays and log summary statistics."""
-    per_half = _optional_float32_half_pair(values)
-    for k, arr in enumerate(per_half):
-        if arr is None:
-            continue
-        if arr.size:
-            logger.info(
-                "RELION mode: %s half-%d: mean=%.4f, std=%.4f, min=%.4f, max=%.4f (%d images)",
-                label,
-                k + 1,
-                arr.mean(),
-                arr.std(),
-                arr.min(),
-                arr.max(),
-                len(arr),
-            )
-        else:
-            logger.info("RELION mode: %s half-%d: empty", label, k + 1)
-    return per_half
-
-
-@dataclass
-class _RelionHalfInputState:
-    """Mutable per-half inputs carried across replay and local-search iterations."""
-
-    previous_best_translations: list
-    previous_best_rotation_eulers: list
-    image_corrections: list
-    scale_corrections: list
-    group_ids: list
-    group_count: list
-
-    @classmethod
-    def from_initial_values(
-        cls,
-        *,
-        previous_best_translations,
-        previous_best_rotation_eulers,
-        image_corrections,
-        scale_corrections,
-        group_ids=None,
-        group_count=None,
-    ):
-        return cls(
-            previous_best_translations=_optional_float32_half_pair(previous_best_translations),
-            previous_best_rotation_eulers=_optional_float32_half_pair(previous_best_rotation_eulers),
-            image_corrections=_normalize_logged_float32_half_pair(
-                image_corrections,
-                label="image_corrections",
-            ),
-            scale_corrections=_normalize_logged_float32_half_pair(
-                scale_corrections,
-                label="scale_corrections",
-            ),
-            group_ids=_optional_int64_half_pair(group_ids),
-            group_count=_optional_group_count_half_pair(group_count),
-        )
-
-
 def _apply_replay_correction_overrides(*, relion_half_inputs, replay_override) -> list[str]:
     """Apply replay norm/scale state while distinguishing serialized and live scale."""
 
@@ -765,9 +657,9 @@ def _apply_replay_correction_overrides(*, relion_half_inputs, replay_override) -
         if value is not None
     ]
     correction_dtype = np.result_type(*resident_dtypes) if resident_dtypes else None
-    replay_images = _optional_float32_half_pair(replay_image_value, dtype=correction_dtype)
-    serialized_scales = _optional_float32_half_pair(serialized_scale_value, dtype=correction_dtype)
-    scoring_scales = _optional_float32_half_pair(scoring_scale_value, dtype=correction_dtype)
+    replay_images = optional_half_arrays(replay_image_value, dtype=correction_dtype)
+    serialized_scales = optional_half_arrays(serialized_scale_value, dtype=correction_dtype)
+    scoring_scales = optional_half_arrays(scoring_scale_value, dtype=correction_dtype)
 
     for half_idx in range(2):
         resident_image = relion_half_inputs.image_corrections[half_idx]
@@ -1165,7 +1057,7 @@ def apply_iter_replay_overrides(
     cryo,
     k_class_enabled: bool,
     n_classes: int,
-    relion_half_inputs: _RelionHalfInputState,
+    relion_half_inputs: HalfInputState,
     previous_best_rotations: list,
     noise_variance_per_half: list,
     noise_variance,
@@ -1548,7 +1440,7 @@ def apply_iter_replay_overrides(
             )
         _replay_prev_trans = iter_replay_override.get("previous_best_translations")
         if _replay_prev_trans is not None:
-            relion_half_inputs.previous_best_translations = _optional_float32_half_pair(
+            relion_half_inputs.previous_best_translations = optional_half_arrays(
                 _replay_prev_trans, dtype=runtime_dtype
             )
             logger.info(
@@ -1558,7 +1450,7 @@ def apply_iter_replay_overrides(
             )
         _replay_prev_rots = iter_replay_override.get("previous_best_rotations")
         if _replay_prev_rots is not None:
-            previous_best_rotations = _optional_float32_half_pair(_replay_prev_rots, dtype=runtime_dtype)
+            previous_best_rotations = optional_half_arrays(_replay_prev_rots, dtype=runtime_dtype)
             logger.info(
                 "Replay override: previous_best_rotations <- half1=%s half2=%s",
                 "set" if previous_best_rotations[0] is not None else "none",
@@ -1566,7 +1458,7 @@ def apply_iter_replay_overrides(
             )
         _replay_prev_eulers = iter_replay_override.get("previous_best_rotation_eulers")
         if _replay_prev_eulers is not None:
-            relion_half_inputs.previous_best_rotation_eulers = _optional_float32_half_pair(_replay_prev_eulers)
+            relion_half_inputs.previous_best_rotation_eulers = optional_half_arrays(_replay_prev_eulers)
             logger.info(
                 "Replay override: previous_best_rotation_eulers <- half1=%s half2=%s",
                 "set" if relion_half_inputs.previous_best_rotation_eulers[0] is not None else "none",

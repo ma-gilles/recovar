@@ -7,8 +7,9 @@ import sys
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.diagnostics.relion_replay import _apply_replay_correction_overrides, _RelionHalfInputState
+from recovar.em.diagnostics.relion_replay import _apply_replay_correction_overrides
 from recovar.em.helpers.types import NoiseStats
+from recovar.em.refinement.half_inputs import HalfInputState
 from recovar.em.refinement.iteration_loop import _run_relion_iteration_loop
 from recovar.em.relion.relion_normalization import update_relion_norm_scale_corrections
 from recovar.em.relion.relion_worker_scale import (
@@ -91,7 +92,7 @@ def test_serialized_replay_preserves_live_follower_scale_between_iterations():
         group_ids=groups,
         follower_owners=owners,
     ).astype(np.float32)
-    half_inputs = _RelionHalfInputState.from_initial_values(
+    half_inputs = HalfInputState.from_initial_values(
         previous_best_translations=[None, None],
         previous_best_rotation_eulers=[None, None],
         image_corrections=[live_scales.copy(), np.zeros(0, dtype=np.float32)],
@@ -930,7 +931,7 @@ def test_final_dispatch_remaps_scoring_scale_norm_ratio_and_xa_aa_group_ids():
         group_counts=state.group_counts,
         n_optics_groups=state.n_optics_groups,
     )
-    half_inputs = _RelionHalfInputState.from_initial_values(
+    half_inputs = HalfInputState.from_initial_values(
         previous_best_translations=[None, None],
         previous_best_rotation_eulers=[None, None],
         image_corrections=[np.asarray([2.4, 2.4]), np.zeros(0)],
