@@ -112,18 +112,6 @@ def select_subset_for_iter(
         shuffled = base_order[permutation]
         shuffled_halfset_ids = base_halfset_ids[permutation]
 
-    # randomiseParticlesOrder stable-sorts the selected prefix in place before
-    # the expectation step.  Persist that complete vector (including its
-    # untouched tail) because the next true-subset iteration shuffles it again.
-    if int(subset_size) > 0:
-        prefix = shuffled[: int(subset_size)]
-        keys = np.asarray(
-            [optics_group_by_particle[int(particle_id)] for particle_id in prefix],
-            dtype=np.int64,
-        )
-        stable_order = np.argsort(keys, kind="stable")
-        shuffled[: int(subset_size)] = prefix[stable_order]
-        shuffled_halfset_ids[: int(subset_size)] = shuffled_halfset_ids[: int(subset_size)][stable_order]
     # `-1` (all particles) still needs to be translated via select_vdam_subset
     pseudo = do_grad and pseudo_halfsets_active(gradient_refine=True, do_split_random_halves=False)
     plan = select_vdam_subset(
@@ -133,6 +121,9 @@ def select_subset_for_iter(
         pseudo_halfsets=pseudo,
         halfset_particle_ids=shuffled_halfset_ids,
     )
+    # Persist the sorted prefix and untouched tail for the next iteration's shuffle.
+    shuffled[:subset_size] = plan.particle_ids
+    shuffled_halfset_ids[:subset_size] = plan.part_ids
     new_state = replace(state)
     new_state.subset_particle_ids = plan.particle_ids
     new_state.subset_halfset_ids = plan.halfset_ids

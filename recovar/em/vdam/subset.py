@@ -20,9 +20,10 @@ production wraps RELION's ``init_random_generator(seed) + ran1()``."""
 
 @dataclass(frozen=True)
 class SubsetPlan:
-    """Per-iteration plan from ``select_vdam_subset``: ``particle_ids`` (int64, shuffled+sorted) and ``halfset_ids`` (int8 0/1, or zeros)."""
+    """Selected input rows and RELION part IDs (int64), with halfset IDs (int8)."""
 
     particle_ids: np.ndarray
+    part_ids: np.ndarray
     halfset_ids: np.ndarray
 
 
@@ -84,7 +85,7 @@ def select_vdam_subset(
         if pseudo_halfsets
         else np.zeros(sorted_prefix.size, dtype=np.int8)
     )
-    return SubsetPlan(particle_ids=sorted_prefix, halfset_ids=halfsets)
+    return SubsetPlan(particle_ids=sorted_prefix, part_ids=sorted_halfset_source, halfset_ids=halfsets)
 
 
 def split_pseudo_halfset_particle_ids(n_images: int) -> tuple[np.ndarray, np.ndarray]:
