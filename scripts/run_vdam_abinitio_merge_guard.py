@@ -20,7 +20,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_ROOT = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch")
 
@@ -46,7 +45,9 @@ def _default_output_root() -> Path:
     return DEFAULT_OUTPUT_ROOT
 
 
-def build_guard_commands(tier: str = "cpu", *, quick: bool = False) -> list[GuardCommand]:
+def build_guard_commands(
+    tier: str = "cpu", *, quick: bool = False, ledger_root: Path = Path("parity_results"),
+) -> list[GuardCommand]:
     """Return the command plan for the requested merge-guard tier."""
     if tier not in {"cpu", "gpu", "all"}:
         raise ValueError(f"unknown tier {tier!r}")
@@ -64,9 +65,19 @@ def build_guard_commands(tier: str = "cpu", *, quick: bool = False) -> list[Guar
                         "scripts/evaluate_ab_initio_gt.py",
                         "scripts/run_vdam_abinitio_k2_smoke.py",
                         "scripts/run_vdam_abinitio_merge_guard.py",
+                        "scripts/audit_vdam_fsc_trajectory.py",
+                        "scripts/audit_vdam_particle_state_trajectory.py",
+                        "scripts/run_vdam_relion_parity_case.py",
+                        "scripts/record_vdam_relion_parity_reports.py",
+                        "scripts/summarize_vdam_relion_parity_scorecard.py",
+                        "tests/unit/initial_model/test_audit_vdam_fsc_trajectory.py",
+                        "tests/unit/initial_model/test_audit_vdam_particle_state_trajectory.py",
                         "tests/unit/initial_model/test_evaluate_ab_initio_gt.py",
                         "tests/unit/initial_model/test_gt_metrics.py",
+                        "tests/unit/initial_model/test_run_vdam_relion_parity_case.py",
+                        "tests/unit/initial_model/test_record_vdam_relion_parity_reports.py",
                         "tests/unit/initial_model/test_vdam_abinitio_merge_guard.py",
+                        "tests/unit/initial_model/test_vdam_relion_parity_scorecard.py",
                     ),
                 ),
                 GuardCommand(
@@ -76,9 +87,22 @@ def build_guard_commands(tier: str = "cpu", *, quick: bool = False) -> list[Guar
                         "-m",
                         "pytest",
                         "-v",
+                        "tests/unit/initial_model/test_audit_vdam_fsc_trajectory.py",
+                        "tests/unit/initial_model/test_audit_vdam_particle_state_trajectory.py",
                         "tests/unit/initial_model/test_vdam_abinitio_merge_guard.py",
                         "tests/unit/initial_model/test_gt_metrics.py",
                         "tests/unit/initial_model/test_evaluate_ab_initio_gt.py",
+                        "tests/unit/initial_model/test_run_vdam_relion_parity_case.py",
+                        "tests/unit/initial_model/test_record_vdam_relion_parity_reports.py",
+                        "tests/unit/initial_model/test_vdam_relion_parity_scorecard.py",
+                    ),
+                ),
+                GuardCommand(
+                    "vdam_frozen_scorecard",
+                    (
+                        _python(),
+                        "scripts/summarize_vdam_relion_parity_scorecard.py",
+                        "--check",
                     ),
                 ),
                 GuardCommand(
@@ -131,6 +155,8 @@ def build_guard_commands(tier: str = "cpu", *, quick: bool = False) -> list[Guar
                     "--run-slow",
                     "--run-integration",
                     "--run-gpu",
+                    "--basetemp",
+                    str(ledger_root),
                     "tests/integration/test_em_parity_fast.py",
                 ),
                 backend="gpu",
@@ -139,9 +165,13 @@ def build_guard_commands(tier: str = "cpu", *, quick: bool = False) -> list[Guar
         commands.append(
             GuardCommand(
                 "extract_em_parity_fast_tables",
-                (_python(), "scripts/extract_em_parity_tables.py", "--tier", "fast"),
+                (
+                    _python(), "scripts/extract_em_parity_tables.py", "--tier", "fast",
+                    "--ledger-root", str(ledger_root), "--require-case",
+                    "k1_replay", "kclass_replay", "k1_coldstart", "k1_perturbreplay",
+                    "kclass_coldstart", "kclass_strict", "kclass_strict_os1",
+                ),
                 backend="gpu",
-                required=False,
             )
         )
 
@@ -241,7 +271,7 @@ def run_guard(
     output_dir: Path,
     dry_run: bool = False,
 ) -> dict[str, Any]:
-    commands = build_guard_commands(tier, quick=quick)
+    commands = build_guard_commands(tier, quick=quick, ledger_root=output_dir / "parity_results")
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "SAFE_TO_DELETE").touch()
 

@@ -24,12 +24,9 @@ import numpy as np
 
 from recovar.core import fourier_transform_utils as ftu
 from recovar.data_io.cryoem_dataset import load_dataset
-from recovar.em.dense_single_volume.em_engine import run_em
-from recovar.em.initial_model.schedules import (
-    compute_phase_lengths,
-    compute_stepsize,
-)
+from recovar.em.dense.em_engine import run_em
 from recovar.em.sampling import get_rotation_grid, get_translation_grid
+from recovar.em.vdam.schedules import compute_phase_lengths, compute_stepsize
 from recovar.reconstruction.noise import make_radial_noise
 from recovar.utils.helpers import load_relion_volume
 
@@ -127,7 +124,7 @@ def main():
             half_spectrum_scoring=True,
             return_stats=True,
         )
-        new_mean = np.asarray(result[0]).reshape(ori, ori, ori)
+        new_mean = np.asarray(result.mean).reshape(ori, ori, ori)
         new_vol = np.asarray(ftu.get_idft3(jnp.asarray(new_mean))).real
         step = compute_stepsize(iter=it, phase_lengths=phases, is_3d_model=True, ref_dim=3)
         # Use VDAM schedule step for amplitude but clamp blend into

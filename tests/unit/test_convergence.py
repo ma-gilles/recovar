@@ -12,6 +12,8 @@ Tests cover:
 - get_rotation_grid_at_order from sampling.py
 """
 
+import logging
+
 import numpy as np
 import pytest
 
@@ -22,10 +24,11 @@ pytestmark = pytest.mark.unit
 # Import targets
 # ---------------------------------------------------------------------------
 
-from recovar.em.dense_single_volume.helpers.convergence import (
+from recovar.em.helpers.convergence import (
     MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
     MAX_NR_ITER_WO_RESOL_GAIN,
     RefinementState,
+    _exhaustive_grid_order_for_state,
     check_convergence,
     compute_assignment_changes,
     compute_ave_Pmax,
@@ -44,6 +47,10 @@ from recovar.em.sampling import (
     get_rotation_grid,
     get_rotation_grid_at_order,
 )
+
+# Use the same logger supplied by the refinement controller without importing it.
+_REFINEMENT_LOGGER = logging.getLogger("recovar.em.refinement.iteration_loop")
+
 
 # =========================================================================
 # RefinementState construction
@@ -181,51 +188,49 @@ class TestAngularStepFunctions:
 
 class TestAssignmentChanges:
     def test_identical_assignments_zero_change(self):
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.arange(50) * n_trans + 2  # 50 images
-        frac = compute_assignment_changes(assignments, assignments, n_rot, n_trans, 3)
+        frac = compute_assignment_changes(assignments, assignments, n_trans)
         assert frac == 0.0
 
     def test_all_different_assignments(self):
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         current = np.arange(50) * n_trans
         previous = (np.arange(50) + 1) * n_trans
-        frac = compute_assignment_changes(current, previous, n_rot, n_trans, 3)
+        frac = compute_assignment_changes(current, previous, n_trans)
         assert frac == 1.0
 
     def test_half_changed(self):
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         n_images = 100
         current = np.arange(n_images) * n_trans
         previous = current.copy()
         # Change first 50
         previous[:50] = (np.arange(50) + 50) * n_trans
-        frac = compute_assignment_changes(current, previous, n_rot, n_trans, 3)
+        frac = compute_assignment_changes(current, previous, n_trans)
         assert abs(frac - 0.5) < 1e-10
 
     def test_translation_only_change_not_counted(self):
         """If only translation changed but rotation is same, fraction = 0."""
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         current = np.array([0, 5, 10, 15])  # rot indices 0, 1, 2, 3
         previous = np.array([1, 6, 11, 16])  # same rot indices, different trans
-        frac = compute_assignment_changes(current, previous, n_rot, n_trans, 3)
+        frac = compute_assignment_changes(current, previous, n_trans)
         assert frac == 0.0
 
     def test_none_assignments_return_one(self):
-        frac = compute_assignment_changes(None, np.array([1, 2, 3]), 10, 5, 3)
+        frac = compute_assignment_changes(None, np.array([1, 2, 3]), 5)
         assert frac == 1.0
 
     def test_mismatched_shapes_return_one(self):
-        frac = compute_assignment_changes(np.array([1, 2]), np.array([1, 2, 3]), 10, 5, 3)
+        frac = compute_assignment_changes(np.array([1, 2]), np.array([1, 2, 3]), 5)
         assert frac == 1.0
 
     def test_empty_assignments_return_zero(self):
         frac = compute_assignment_changes(
             np.array([], dtype=np.int32),
             np.array([], dtype=np.int32),
-            10,
             5,
-            3,
         )
         assert frac == 0.0
 
@@ -621,7 +626,7 @@ class TestUpdateRefinementState:
 
     def test_iteration_increments(self):
         state = self._make_base_state()
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.zeros(50, dtype=np.int32)
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -629,7 +634,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             None,
-            n_rot,
             n_trans,
             translations,
             new_resolution=4.5,
@@ -644,7 +648,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             None,
-            10,
             1,
             np.zeros((1, 2), dtype=np.float32),
             new_resolution=4.5,
@@ -659,7 +662,7 @@ class TestUpdateRefinementState:
             current_resolution=5.0,
             nr_iter_wo_resol_gain=3,
         )
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.zeros(50, dtype=np.int32)
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -667,7 +670,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             None,
-            n_rot,
             n_trans,
             translations,
             new_resolution=4.0,  # better than 5.0
@@ -679,7 +681,7 @@ class TestUpdateRefinementState:
             current_resolution=5.0,
             nr_iter_wo_resol_gain=0,
         )
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.zeros(50, dtype=np.int32)
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -687,7 +689,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             None,
-            n_rot,
             n_trans,
             translations,
             new_resolution=5.5,  # worse than 5.0
@@ -706,7 +707,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             None,
-            100,
             5,
             translations,
             new_resolution=4.999,
@@ -720,7 +720,7 @@ class TestUpdateRefinementState:
         # Use improving resolution so angular refinement is NOT triggered
         # (refinement requires both stalls to be >= 1)
         state = self._make_base_state(current_resolution=5.0)
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         # All assignments identical -> fraction_changed = 0
         assignments = np.arange(50) * n_trans
         translations = np.zeros((n_trans, 2), dtype=np.float32)
@@ -729,7 +729,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            n_rot,
             n_trans,
             translations,
             new_resolution=4.0,  # improving -> no resol stall -> no refinement
@@ -740,7 +739,7 @@ class TestUpdateRefinementState:
 
     def test_unstable_assignments_reset_counter(self):
         state = self._make_base_state(nr_iter_wo_assignment_changes=5)
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         current = np.arange(50) * n_trans
         previous = (np.arange(50) + 50) * n_trans  # all different
         translations = np.zeros((n_trans, 2), dtype=np.float32)
@@ -749,7 +748,6 @@ class TestUpdateRefinementState:
             state,
             current,
             previous,
-            n_rot,
             n_trans,
             translations,
             new_resolution=5.0,
@@ -764,7 +762,7 @@ class TestUpdateRefinementState:
             nr_iter_wo_resol_gain=0,  # will become 1 after this iter
             nr_iter_wo_assignment_changes=0,  # will become 1
         )
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.arange(50) * n_trans
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -772,7 +770,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            n_rot,
             n_trans,
             translations,
             new_resolution=5.5,  # stall
@@ -791,7 +788,7 @@ class TestUpdateRefinementState:
             nr_iter_wo_resol_gain=0,
             nr_iter_wo_assignment_changes=0,
         )
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.arange(50) * n_trans
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -799,7 +796,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            n_rot,
             n_trans,
             translations,
             new_resolution=5.5,
@@ -815,7 +811,7 @@ class TestUpdateRefinementState:
             nr_iter_wo_assignment_changes=0,
             acc_rot=1.0,
         )
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.arange(50) * n_trans
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -823,7 +819,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            n_rot,
             n_trans,
             translations,
             new_resolution=5.5,
@@ -845,7 +840,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            100,
             5,
             translations,
             new_resolution=5.5,
@@ -882,7 +876,7 @@ class TestUpdateRefinementState:
 
     def test_pmax_tracking(self):
         state = self._make_base_state()
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.zeros(50, dtype=np.int32)
         translations = np.zeros((n_trans, 2), dtype=np.float32)
         pmax = np.ones(50) * 0.42
@@ -891,7 +885,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             None,
-            n_rot,
             n_trans,
             translations,
             new_resolution=4.0,
@@ -901,7 +894,7 @@ class TestUpdateRefinementState:
 
     def test_k_class_change_tracking_counts_hard_class_changes(self):
         state = self._make_base_state()
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.zeros(5, dtype=np.int32)
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -909,7 +902,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            n_rot,
             n_trans,
             translations,
             new_resolution=4.0,
@@ -921,7 +913,7 @@ class TestUpdateRefinementState:
 
     def test_single_class_change_tracking_remains_zero_when_classes_omitted(self):
         state = self._make_base_state()
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         assignments = np.zeros(5, dtype=np.int32)
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -929,7 +921,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            n_rot,
             n_trans,
             translations,
             new_resolution=4.0,
@@ -947,7 +938,7 @@ class TestUpdateRefinementState:
             smallest_changes_optimal_offsets_angstrom=999.0,
             nr_iter_wo_large_hidden_variable_changes=0,
         )
-        n_rot, n_trans = 100, 1
+        n_trans = 1
         assignments = np.zeros(5, dtype=np.int32)
         translations = np.zeros((n_trans, 2), dtype=np.float32)
         rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 5, axis=0)
@@ -963,7 +954,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            n_rot,
             n_trans,
             translations,
             new_resolution=9.0,
@@ -1042,7 +1032,6 @@ class TestUpdateRefinementState:
             state,
             assignments,
             assignments,
-            n_rotations=1,
             n_translations=1,
             translations=zeros[:1],
             new_resolution=22.6667,
@@ -1248,7 +1237,7 @@ class TestMultiIterationWorkflow:
         Iter 2: at max order but without RELION fine-enough acc_rot -> no convergence
         Iter 3: at max order with fine-enough acc_rot, stalls -> converge
         """
-        n_rot, n_trans = 100, 5
+        n_trans = 5
         n_images = 50
         translations = np.zeros((n_trans, 2), dtype=np.float32)
 
@@ -1265,7 +1254,6 @@ class TestMultiIterationWorkflow:
             state,
             ha0,
             None,
-            n_rot,
             n_trans,
             translations,
             new_resolution=8.0,
@@ -1279,7 +1267,6 @@ class TestMultiIterationWorkflow:
             state,
             ha0,
             ha0,
-            n_rot,
             n_trans,
             translations,
             new_resolution=9.0,  # worse
@@ -1306,7 +1293,6 @@ class TestMultiIterationWorkflow:
             state2,
             ha0,
             ha0,
-            n_rot,
             n_trans,
             translations,
             new_resolution=9.5,
@@ -1328,9 +1314,265 @@ class TestMultiIterationWorkflow:
             state3,
             ha0,
             ha0,
-            n_rot,
             n_trans,
             translations,
             new_resolution=10.0,
         )
         assert state3.has_converged is True
+
+
+class TestRefinementPolicy:
+    """Local-search transitions and optional convergence guards."""
+
+    def test_refinement_state_uses_configured_auto_local_healpix_order(self):
+        default_state = RefinementState(healpix_order=3)
+        assert not default_state.should_do_local_search
+        assert not default_state.do_local_search
+
+        local_state = RefinementState(healpix_order=3, auto_local_healpix_order=3)
+        assert local_state.should_do_local_search
+        assert local_state.do_local_search
+
+    def test_refine_angular_sampling_uses_configured_auto_local_healpix_order(self):
+        state = RefinementState(
+            healpix_order=2,
+            adaptive_oversampling=1,
+            translation_range=10.0,
+            translation_step=2.0,
+            max_healpix_order=7,
+            auto_local_healpix_order=3,
+        )
+
+        refined = refine_angular_sampling(state)
+
+        assert refined.healpix_order == 3
+        assert refined.auto_local_healpix_order == 3
+        assert refined.do_local_search
+        assert refined.sigma_rot > 0.0
+        assert refined.sigma_psi > 0.0
+
+    def test_low_pmax_refinement_guard_is_opt_in(self, monkeypatch):
+        state = RefinementState(
+            healpix_order=4,
+            max_healpix_order=7,
+            auto_local_healpix_order=4,
+            current_resolution=36.0,
+            previous_resolution=36.0,
+            nr_iter_wo_resol_gain=4,
+            nr_iter_wo_large_hidden_variable_changes=1,
+            smallest_changes_optimal_orientations=2.0,
+            smallest_changes_optimal_offsets_angstrom=0.5,
+            smallest_changes_optimal_classes=0,
+            ave_Pmax=0.10,
+            acc_rot=float("inf"),
+        )
+
+        monkeypatch.delenv("RECOVAR_EM_LOW_PMAX_REFINE_GUARD", raising=False)
+        assert should_refine_angular_sampling(state)
+
+        monkeypatch.setenv("RECOVAR_EM_LOW_PMAX_REFINE_GUARD", "1")
+        assert not should_refine_angular_sampling(state)
+
+        confident = RefinementState(
+            healpix_order=4,
+            max_healpix_order=7,
+            auto_local_healpix_order=4,
+            current_resolution=36.0,
+            previous_resolution=36.0,
+            nr_iter_wo_resol_gain=4,
+            nr_iter_wo_large_hidden_variable_changes=1,
+            smallest_changes_optimal_orientations=2.0,
+            smallest_changes_optimal_offsets_angstrom=0.5,
+            smallest_changes_optimal_classes=0,
+            ave_Pmax=0.30,
+            acc_rot=float("inf"),
+        )
+        assert should_refine_angular_sampling(confident)
+
+    def test_low_pmax_refinement_guard_can_cover_prelocal_transition(self, monkeypatch):
+        state = RefinementState(
+            healpix_order=3,
+            max_healpix_order=7,
+            auto_local_healpix_order=4,
+            current_resolution=36.0,
+            previous_resolution=36.0,
+            nr_iter_wo_resol_gain=4,
+            nr_iter_wo_large_hidden_variable_changes=1,
+            smallest_changes_optimal_orientations=2.0,
+            smallest_changes_optimal_offsets_angstrom=0.5,
+            smallest_changes_optimal_classes=0,
+            ave_Pmax=0.10,
+            acc_rot=float("inf"),
+        )
+        assert not state.do_local_search
+
+        monkeypatch.setenv("RECOVAR_EM_LOW_PMAX_REFINE_GUARD", "1")
+        monkeypatch.delenv("RECOVAR_EM_LOW_PMAX_REFINE_REQUIRE_LOCAL", raising=False)
+        assert should_refine_angular_sampling(state)
+
+        monkeypatch.setenv("RECOVAR_EM_LOW_PMAX_REFINE_REQUIRE_LOCAL", "0")
+        assert not should_refine_angular_sampling(state)
+
+    def test_local_search_keeps_exhaustive_grid_at_last_prelocal_order(self):
+        state = RefinementState(healpix_order=4, auto_local_healpix_order=4)
+
+        assert state.do_local_search
+        assert _exhaustive_grid_order_for_state(state) == 3
+
+        nonlocal_state = RefinementState(healpix_order=4, auto_local_healpix_order=5)
+        assert not nonlocal_state.do_local_search
+        assert _exhaustive_grid_order_for_state(nonlocal_state) == 4
+
+    def test_approx_acc_rot_convergence_policy_guards_confident_prelocal_runs(self, monkeypatch):
+        from recovar.em.helpers import convergence as convergence_helpers
+        from recovar.em.helpers.convergence import RefinementState
+
+        for name in (
+            "RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE",
+            "RECOVAR_EM_DISABLE_APPROX_ACC_ROT_FOR_CONVERGENCE",
+            "RECOVAR_EM_APPROX_ACC_ROT_MAX_AVE_PMAX",
+            "RECOVAR_EM_APPROX_ACC_ROT_MIN_ITER",
+        ):
+            monkeypatch.delenv(name, raising=False)
+
+        state = RefinementState(
+            healpix_order=3,
+            auto_local_healpix_order=4,
+            current_resolution=23.65,
+            particle_diameter_angstrom=200.0,
+        )
+
+        allow, reason = convergence_helpers._approx_acc_rot_policy_for_convergence(
+            logger=_REFINEMENT_LOGGER,
+            state=state,
+            iteration_number=5,
+            ave_pmax=0.96,
+            new_resolution_angstrom=23.65,
+        )
+
+        assert not allow
+        assert "high-pmax" in reason
+
+    def test_approx_acc_rot_convergence_policy_is_diagnostic_by_default(self, monkeypatch):
+        from recovar.em.helpers import convergence as convergence_helpers
+        from recovar.em.helpers.convergence import RefinementState
+
+        for name in (
+            "RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE",
+            "RECOVAR_EM_DISABLE_APPROX_ACC_ROT_FOR_CONVERGENCE",
+            "RECOVAR_EM_APPROX_ACC_ROT_MAX_AVE_PMAX",
+            "RECOVAR_EM_APPROX_ACC_ROT_MIN_ITER",
+        ):
+            monkeypatch.delenv(name, raising=False)
+
+        state = RefinementState(
+            healpix_order=3,
+            auto_local_healpix_order=4,
+            current_resolution=36.27,
+            particle_diameter_angstrom=200.0,
+        )
+
+        allow, reason = convergence_helpers._approx_acc_rot_policy_for_convergence(
+            logger=_REFINEMENT_LOGGER,
+            state=state,
+            iteration_number=5,
+            ave_pmax=0.77,
+            new_resolution_angstrom=36.27,
+        )
+
+        assert not allow
+        assert reason == "diagnostic-only-default"
+
+    def test_approx_acc_rot_convergence_policy_env_overrides(self, monkeypatch):
+        from recovar.em.helpers import convergence as convergence_helpers
+        from recovar.em.helpers.convergence import RefinementState
+
+        state = RefinementState(
+            healpix_order=3,
+            auto_local_healpix_order=4,
+            current_resolution=20.0,
+        )
+
+        monkeypatch.setenv("RECOVAR_EM_DISABLE_APPROX_ACC_ROT_FOR_CONVERGENCE", "1")
+        monkeypatch.delenv("RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE", raising=False)
+        allow, reason = convergence_helpers._approx_acc_rot_policy_for_convergence(
+            logger=_REFINEMENT_LOGGER,
+            state=state,
+            iteration_number=5,
+            ave_pmax=0.5,
+            new_resolution_angstrom=20.0,
+        )
+        assert not allow
+        assert reason == "disabled-by-env"
+
+        monkeypatch.setenv("RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE", "1")
+        monkeypatch.delenv("RECOVAR_EM_DISABLE_APPROX_ACC_ROT_FOR_CONVERGENCE", raising=False)
+        allow, reason = convergence_helpers._approx_acc_rot_policy_for_convergence(
+            logger=_REFINEMENT_LOGGER,
+            state=state,
+            iteration_number=1,
+            ave_pmax=1.0,
+            new_resolution_angstrom=10.0,
+        )
+        assert allow
+        assert reason == "forced-by-env"
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("trailing_shape", [(2,), (3, 3)])
+def test_pose_stacks_preserve_empty_half_and_requested_precision(dtype, trailing_shape):
+    from recovar.em.helpers.convergence import concatenate_pose_stacks_or_none
+
+    populated = np.arange(2 * np.prod(trailing_shape), dtype=np.float64).reshape(2, *trailing_shape)
+    result = concatenate_pose_stacks_or_none(
+        [np.array([]), populated], trailing_shape=trailing_shape,
+        label="current pose", dtype=dtype, logger=logging.getLogger(__name__),
+    )
+    assert result.dtype == dtype
+    np.testing.assert_array_equal(result, populated.astype(dtype))
+    assert not np.shares_memory(result, populated)
+
+
+@pytest.mark.parametrize("stacks,warning", [([None, np.zeros((1, 2))], False), ([np.zeros((1, 3))], True)])
+def test_pose_stacks_skip_unavailable_or_malformed_half(stacks, warning, caplog):
+    from recovar.em.helpers.convergence import concatenate_pose_stacks_or_none
+
+    with caplog.at_level(logging.WARNING):
+        result = concatenate_pose_stacks_or_none(
+            stacks, trailing_shape=(2,), label="previous translation",
+            dtype=np.float32, logger=logging.getLogger(__name__),
+        )
+    assert result is None
+    assert bool(caplog.records) is warning
+    if warning:
+        assert "half-1 shape (1, 3)" in caplog.text
+
+
+@pytest.mark.parametrize("update_sampling", [False, True])
+def test_computed_assignment_fraction_survives_sampling_transition(update_sampling):
+    """History can reuse the completed state's fraction after a grid change."""
+    state = RefinementState(
+        healpix_order=2, max_healpix_order=4, current_resolution=8.0,
+        nr_iter_wo_resol_gain=3, nr_iter_wo_large_hidden_variable_changes=3,
+        smallest_changes_optimal_classes=0.0,
+        acc_rot=1.0,
+    )
+    updated = update_refinement_state(
+        state, current_assignments=np.array([0, 1, 4, 6]),
+        previous_assignments=np.array([0, 0, 2, 6]),
+        n_translations=2, translations=np.zeros((2, 2)),
+        new_resolution=8.0, update_sampling=update_sampling,
+        current_rotation_matrices=np.tile(np.eye(3), (4, 1, 1)),
+        previous_rotation_matrices=np.tile(np.eye(3), (4, 1, 1)),
+        current_translations_pixel=np.zeros((4, 2)),
+        previous_translations_pixel=np.zeros((4, 2)),
+        current_classes=np.zeros(4, dtype=int),
+        previous_classes=np.zeros(4, dtype=int),
+        ave_pmax_override=1.0,
+        check_convergence_now=False,
+    )
+    assert updated.fraction_changed == 0.25
+    if update_sampling:
+        assert updated.healpix_order == 3
+    else:
+        assert updated.healpix_order == 2

@@ -34,6 +34,28 @@ requires_big_fixture = pytest.mark.skipif(
 )
 
 
+def reorder_particles_relion_style(
+    main_star,
+    images: np.ndarray,
+    defU: np.ndarray,
+    defV: np.ndarray,
+    defAngle: np.ndarray,
+    phase_shift: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Stable-sort by ``_rlnMicrographName`` and re-index by stack frame (matches ``Experiment::read``)."""
+    img_names = main_star["_rlnImageName"].tolist()
+    mic_names = main_star["_rlnMicrographName"].tolist()
+    order = sorted(range(len(mic_names)), key=lambda i: mic_names[i])
+    frame_ids = [int(img_names[i].split("@")[0]) - 1 for i in order]
+    return (
+        np.ascontiguousarray(images[frame_ids]),
+        np.ascontiguousarray(defU[order]),
+        np.ascontiguousarray(defV[order]),
+        np.ascontiguousarray(defAngle[order]),
+        np.ascontiguousarray(phase_shift[order]),
+    )
+
+
 def _read_bin(path: Path) -> np.ndarray:
     with open(path, "rb") as f:
         nz, ny, nx = struct.unpack("qqq", f.read(24))
@@ -75,7 +97,6 @@ def test_bootstrap_iref_big_fixture():
     import mrcfile
 
     from recovar.data_io.starfile import read_star
-    from recovar.em.initial_model.bootstrap_iref import reorder_particles_relion_style
     from recovar.relion_bind import _relion_bind_core as bind
 
     with mrcfile.open(BIG_MRCS, permissive=True) as m:
@@ -483,7 +504,9 @@ def test_layout_converter_roundtrip():
     embed into a zero-filled centered full (N, N, N) spectrum, then crop
     back: must match byte-for-byte.
     """
-    from recovar.em.initial_model.layout import bpref_to_run_em_output, run_em_output_to_bpref
+    from helpers.vdam import bpref_to_run_em_output
+
+    from recovar.em.vdam.layout import run_em_output_to_bpref
 
     bp_data = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_bp_data_pre_reweight.bin")
     bp_weight = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_bp_weight.bin")
@@ -507,7 +530,9 @@ def test_layout_converter_vdam_mstep_chain():
     adapter. If the E-step reaches machine-precision parity against RELION,
     this same chain produces the final iter-1 Iref to machine precision.
     """
-    from recovar.em.initial_model.layout import bpref_to_run_em_output, run_em_output_to_bpref
+    from helpers.vdam import bpref_to_run_em_output
+
+    from recovar.em.vdam.layout import run_em_output_to_bpref
     from recovar.relion_bind import _relion_bind_core as bind
 
     # Load RELION's per-halfset BP data (pre-reweight)

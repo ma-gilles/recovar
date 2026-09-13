@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from recovar import cuda_backproject
-from recovar.em.dense_single_volume import iteration_loop, k_class, local_em_engine
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
-from recovar.em.dense_single_volume.local_backprojection import compute_local_mstep_sums
+from recovar.em.classification import k_class
+from recovar.em.dense import half_scoring
+from recovar.em.diagnostics import bpref_diagnostics, local_bpref_capture
+from recovar.em.diagnostics import iteration as debug_dumps
+from recovar.em.local import local_em_engine
+from recovar.em.local.local_backprojection import compute_local_mstep_sums
+from recovar.em.refinement import iteration_loop
+from recovar.em.sparse_pass2 import sparse_pass2_bucketed
 
 pytestmark = pytest.mark.unit
 
@@ -27,22 +33,22 @@ def test_device_signature_scope_activates_only_target_numbered_half():
 
     for iteration in range(1, 5):
         for half in (1, 2):
-            assert not iteration_loop._bpref_device_signature_active_for_numbered_half(
+            assert not debug_dumps._bpref_device_signature_active_for_numbered_half(
                 iteration=iteration,
                 half=half,
                 environ=env,
             )
-    assert iteration_loop._bpref_device_signature_active_for_numbered_half(
+    assert debug_dumps._bpref_device_signature_active_for_numbered_half(
         iteration=5,
         half=1,
         environ=env,
     )
-    assert not iteration_loop._bpref_device_signature_active_for_numbered_half(
+    assert not debug_dumps._bpref_device_signature_active_for_numbered_half(
         iteration=5,
         half=2,
         environ=env,
     )
-    assert not iteration_loop._bpref_device_signature_active_for_numbered_half(
+    assert not debug_dumps._bpref_device_signature_active_for_numbered_half(
         iteration=5,
         half=1,
         final_all_data=True,
@@ -59,7 +65,7 @@ def test_device_signature_scope_rejects_missing_or_invalid_target():
         invalid = dict(env)
         invalid.pop(missing)
         with pytest.raises(RuntimeError, match="requires explicit positive"):
-            iteration_loop._bpref_device_signature_active_for_numbered_half(
+            debug_dumps._bpref_device_signature_active_for_numbered_half(
                 iteration=1,
                 half=1,
                 environ=invalid,
@@ -73,7 +79,7 @@ def test_device_signature_scope_rejects_missing_or_invalid_target():
         invalid = dict(env)
         invalid[name] = value
         with pytest.raises((ValueError, RuntimeError)):
-            iteration_loop._bpref_device_signature_active_for_numbered_half(
+            debug_dumps._bpref_device_signature_active_for_numbered_half(
                 iteration=1,
                 half=1,
                 environ=invalid,
@@ -91,7 +97,7 @@ def test_scoped_capture_ignores_all_process_flags_off_target(monkeypatch):
     ):
         monkeypatch.setenv(name, "1")
 
-    inactive = sparse_pass2_bucketed._scoped_bpref_diagnostic_flags(active=False)
+    inactive = bpref_diagnostics._scoped_bpref_diagnostic_flags(active=False)
     assert inactive == {
         "device_signature_configured": True,
         "sequential_translation_reduction": False,
@@ -103,7 +109,7 @@ def test_scoped_capture_ignores_all_process_flags_off_target(monkeypatch):
     with cuda_backproject.bpref_device_signature_scope(False):
         assert not cuda_backproject.relion_x_half_bp_block_topology_enabled()
 
-    active = sparse_pass2_bucketed._scoped_bpref_diagnostic_flags(active=True)
+    active = bpref_diagnostics._scoped_bpref_diagnostic_flags(active=True)
     assert all(value for name, value in active.items() if name != "device_signature_configured")
     with cuda_backproject.bpref_device_signature_scope(True):
         assert cuda_backproject.relion_x_half_bp_block_topology_enabled()
@@ -113,9 +119,9 @@ def test_scoped_device_capture_keeps_live_reduction_and_adjoint_modes_ordinary(m
     monkeypatch.setenv("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "/tmp/device")
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION", "1")
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", "1")
-    flags = sparse_pass2_bucketed._scoped_bpref_diagnostic_flags(active=True)
+    flags = bpref_diagnostics._scoped_bpref_diagnostic_flags(active=True)
 
-    modes = sparse_pass2_bucketed._resolve_bpref_execution_modes(
+    modes = bpref_diagnostics._resolve_bpref_execution_modes(
         flags,
         device_signature_requested=True,
     )
@@ -127,8 +133,22 @@ def test_scoped_device_capture_keeps_live_reduction_and_adjoint_modes_ordinary(m
     assert not modes["live_per_particle_launches"]
 
 
+def test_firstiter_xhalf_topology_is_production_even_without_diagnostic_flags():
+    modes = bpref_diagnostics._resolve_bpref_execution_modes(
+        {
+            "sequential_translation_reduction": False,
+            "per_particle_launches": False,
+        },
+        device_signature_requested=False,
+        production_firstiter_xhalf_topology=True,
+    )
+
+    assert modes["live_sequential_translation_reduction"]
+    assert modes["live_per_particle_launches"]
+
+
 def test_scoped_device_capture_disables_shadows_for_empty_target_bucket():
-    modes = sparse_pass2_bucketed._resolve_bpref_bucket_diagnostic_modes(
+    modes = bpref_diagnostics._resolve_bpref_bucket_diagnostic_modes(
         device_signature_requested=True,
         contribution_diagnostics_active=True,
         target_particle_rows=np.empty((0,), dtype=np.int64),
@@ -144,7 +164,7 @@ def test_scoped_device_capture_disables_shadows_for_empty_target_bucket():
 
 
 def test_scoped_device_capture_activates_only_bucket_with_target_rows():
-    target_modes = sparse_pass2_bucketed._resolve_bpref_bucket_diagnostic_modes(
+    target_modes = bpref_diagnostics._resolve_bpref_bucket_diagnostic_modes(
         device_signature_requested=True,
         contribution_diagnostics_active=True,
         target_particle_rows=np.asarray([2], dtype=np.int64),
@@ -152,7 +172,7 @@ def test_scoped_device_capture_activates_only_bucket_with_target_rows():
     )
     assert all(target_modes.values())
 
-    legacy_modes = sparse_pass2_bucketed._resolve_bpref_bucket_diagnostic_modes(
+    legacy_modes = bpref_diagnostics._resolve_bpref_bucket_diagnostic_modes(
         device_signature_requested=False,
         contribution_diagnostics_active=True,
         target_particle_rows=np.empty((0,), dtype=np.int64),
@@ -183,17 +203,17 @@ def test_device_panel_flush_writes_separate_class_artifacts(tmp_path, monkeypatc
     }
     for class_index in (0, 3):
         key = (*prefix, class_index)
-        sparse_pass2_bucketed._bpref_device_panel_accumulators[key] = (
+        bpref_diagnostics._bpref_device_panel_accumulators[key] = (
             np.zeros(75, dtype=np.complex64),
             np.zeros(75, dtype=np.float32),
         )
-        sparse_pass2_bucketed._bpref_device_panel_launch_counters[key] = class_index + 1
-        sparse_pass2_bucketed._bpref_device_panel_metadata[key] = {
+        bpref_diagnostics._bpref_device_panel_launch_counters[key] = class_index + 1
+        bpref_diagnostics._bpref_device_panel_metadata[key] = {
             **common,
             "class_index": class_index,
         }
 
-    sparse_pass2_bucketed.flush_bpref_device_panel_accumulator(iteration=1, half=2)
+    bpref_diagnostics.flush_bpref_device_panel_accumulator(iteration=1, half=2)
 
     outputs = sorted(Path(tmp_path).glob("recovar_device_panel_native_*.npz"))
     assert [path.name for path in outputs] == [
@@ -206,10 +226,10 @@ def test_device_panel_flush_writes_separate_class_artifacts(tmp_path, monkeypatc
 def test_legacy_native_half_dump_remains_independent_of_class_index(tmp_path, monkeypatch):
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_DIR", str(tmp_path))
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_RUN_ID", "native-control")
-    monkeypatch.setitem(sparse_pass2_bucketed._bpref_contribution_context, "iteration", 1)
-    monkeypatch.setitem(sparse_pass2_bucketed._bpref_contribution_context, "half", 1)
+    monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "iteration", 1)
+    monkeypatch.setitem(bpref_diagnostics._bpref_contribution_context, "half", 1)
 
-    sparse_pass2_bucketed._maybe_dump_native_half_mstep(
+    bpref_diagnostics._maybe_dump_native_half_mstep(
         np.zeros(4, dtype=np.complex64),
         np.zeros(4, dtype=np.float32),
         current_size=2,
@@ -225,14 +245,14 @@ def test_legacy_native_half_dump_remains_independent_of_class_index(tmp_path, mo
 
 
 def test_scoped_soft_row_gate_ignores_unrelated_rows_and_accepts_single_row_bucket():
-    sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+    bpref_diagnostics._validate_bpref_positive_rotation_rows(
         np.asarray([0, 2, 1], dtype=np.int64),
         np.asarray([1], dtype=np.int64),
         device_signature_requested=True,
         winner_take_all=False,
     )
 
-    sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+    bpref_diagnostics._validate_bpref_positive_rotation_rows(
         np.asarray([0, 1, 3], dtype=np.int64),
         np.asarray([1], dtype=np.int64),
         device_signature_requested=True,
@@ -240,7 +260,7 @@ def test_scoped_soft_row_gate_ignores_unrelated_rows_and_accepts_single_row_buck
     )
 
     with pytest.raises(RuntimeError, match="at least one positive row"):
-        sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+        bpref_diagnostics._validate_bpref_positive_rotation_rows(
             np.asarray([0, 2], dtype=np.int64),
             np.empty((0,), dtype=np.int64),
             device_signature_requested=False,
@@ -249,14 +269,14 @@ def test_scoped_soft_row_gate_ignores_unrelated_rows_and_accepts_single_row_buck
 
 
 def test_scoped_kclass_row_gate_accepts_empty_class_slice_but_not_invalid_wta():
-    sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+    bpref_diagnostics._validate_bpref_positive_rotation_rows(
         np.asarray([0, 2], dtype=np.int64),
         np.asarray([0], dtype=np.int64),
         device_signature_requested=True,
         winner_take_all=False,
         posterior_partitioned_across_classes=True,
     )
-    sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+    bpref_diagnostics._validate_bpref_positive_rotation_rows(
         np.asarray([0, 1], dtype=np.int64),
         np.asarray([0, 1], dtype=np.int64),
         device_signature_requested=True,
@@ -265,7 +285,7 @@ def test_scoped_kclass_row_gate_accepts_empty_class_slice_but_not_invalid_wta():
     )
 
     with pytest.raises(RuntimeError, match="at most one positive"):
-        sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+        bpref_diagnostics._validate_bpref_positive_rotation_rows(
             np.asarray([0, 2], dtype=np.int64),
             np.asarray([0, 1], dtype=np.int64),
             device_signature_requested=True,
@@ -275,7 +295,7 @@ def test_scoped_kclass_row_gate_accepts_empty_class_slice_but_not_invalid_wta():
 
 
 def test_empty_kclass_device_signature_payload_preserves_zero_row_topology():
-    payload = sparse_pass2_bucketed._empty_bpref_device_signature_arrays(
+    payload = bpref_diagnostics._empty_bpref_device_signature_arrays(
         2812,
         image_identity_dtype=np.dtype("<U120"),
     )
@@ -309,7 +329,7 @@ def test_zero_contributor_class_capture_writes_manifest_only_signature(
     monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256", "a" * 64)
     monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_RUN_ID", "zero-class")
     monkeypatch.setattr(
-        sparse_pass2_bucketed,
+        bpref_diagnostics,
         "_require_bpref_device_soft_particle_arm",
         lambda **_kwargs: None,
     )
@@ -318,16 +338,16 @@ def test_zero_contributor_class_capture_writes_manifest_only_signature(
         "relion_fused_x_half_backproject_indexed",
         lambda *args, **_kwargs: args[:2],
     )
-    sparse_pass2_bucketed._bpref_device_panel_accumulators.clear()
-    sparse_pass2_bucketed._bpref_device_panel_launch_counters.clear()
-    sparse_pass2_bucketed._bpref_device_panel_metadata.clear()
-    sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=10, half=1)
+    bpref_diagnostics._bpref_device_panel_accumulators.clear()
+    bpref_diagnostics._bpref_device_panel_launch_counters.clear()
+    bpref_diagnostics._bpref_device_panel_metadata.clear()
+    bpref_diagnostics.set_bpref_contribution_dump_context(iteration=10, half=1)
     scores = np.asarray([[[-1.0, -2.0], [-3.0, -4.0]]], dtype=np.float32)
     probs = np.exp(scores).astype(np.float32)
     probs /= probs.sum(axis=(1, 2), keepdims=True)
     zeros = np.zeros((1, 2, 6), dtype=np.float32)
     try:
-        sparse_pass2_bucketed._maybe_dump_bpref_contribution_rows(
+        bpref_diagnostics._maybe_dump_bpref_contribution_rows(
             experiment_dataset=object(),
             image_indices=np.asarray([0]),
             current_size=4,
@@ -388,10 +408,10 @@ def test_zero_contributor_class_capture_writes_manifest_only_signature(
             class_index=1,
         )
     finally:
-        sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
-        sparse_pass2_bucketed._bpref_device_panel_accumulators.clear()
-        sparse_pass2_bucketed._bpref_device_panel_launch_counters.clear()
-        sparse_pass2_bucketed._bpref_device_panel_metadata.clear()
+        bpref_diagnostics.clear_bpref_contribution_dump_context()
+        bpref_diagnostics._bpref_device_panel_accumulators.clear()
+        bpref_diagnostics._bpref_device_panel_launch_counters.clear()
+        bpref_diagnostics._bpref_device_panel_metadata.clear()
 
     signature_path = next(signature_dir.glob("*.device.npz"))
     with np.load(signature_path, allow_pickle=False) as signature:
@@ -405,7 +425,7 @@ def test_zero_contributor_class_capture_writes_manifest_only_signature(
 
 
 def test_scoped_wta_row_gate_checks_target_and_rejects_invalid_target_row():
-    sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+    bpref_diagnostics._validate_bpref_positive_rotation_rows(
         np.asarray([0, 1, 3], dtype=np.int64),
         np.asarray([1], dtype=np.int64),
         device_signature_requested=True,
@@ -413,7 +433,7 @@ def test_scoped_wta_row_gate_checks_target_and_rejects_invalid_target_row():
     )
 
     with pytest.raises(RuntimeError, match="exactly one positive rotation row"):
-        sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+        bpref_diagnostics._validate_bpref_positive_rotation_rows(
             np.asarray([1, 2], dtype=np.int64),
             np.asarray([1], dtype=np.int64),
             device_signature_requested=True,
@@ -421,7 +441,7 @@ def test_scoped_wta_row_gate_checks_target_and_rejects_invalid_target_row():
         )
 
     with pytest.raises(RuntimeError, match="outside the sparse bucket"):
-        sparse_pass2_bucketed._validate_bpref_positive_rotation_rows(
+        bpref_diagnostics._validate_bpref_positive_rotation_rows(
             np.asarray([1, 1], dtype=np.int64),
             np.asarray([2], dtype=np.int64),
             device_signature_requested=True,
@@ -438,8 +458,8 @@ def test_target_dense_half_keeps_block_topology_inactive_for_live_work(monkeypat
         assert not cuda_backproject.relion_x_half_bp_block_topology_enabled()
         return "ordinary-live"
 
-    monkeypatch.setattr(iteration_loop, "_score_half_dense", fake_dense)
-    assert iteration_loop._score_half_dense_in_bpref_scope(
+    monkeypatch.setattr(half_scoring, "_score_half_dense", fake_dense)
+    assert half_scoring._score_half_dense_in_bpref_scope(
         bpref_device_signature_active=True,
     ) == "ordinary-live"
     assert not cuda_backproject.relion_x_half_bp_block_topology_enabled()
@@ -447,19 +467,19 @@ def test_target_dense_half_keeps_block_topology_inactive_for_live_work(monkeypat
 
 def test_target_capture_preserves_rotation_chunk_plan_and_fails_if_target_is_chunked():
     planned_chunk_size = 809
-    assert sparse_pass2_bucketed._guard_bpref_target_rotation_chunking(
+    assert bpref_diagnostics._guard_bpref_target_rotation_chunking(
         planned_chunk_size,
         bucket_size=128,
         target_particle_rows=np.asarray([3], dtype=np.int64),
     ) == planned_chunk_size
-    assert sparse_pass2_bucketed._guard_bpref_target_rotation_chunking(
+    assert bpref_diagnostics._guard_bpref_target_rotation_chunking(
         64,
         bucket_size=128,
         target_particle_rows=np.empty((0,), dtype=np.int64),
     ) == 64
 
     with pytest.raises(RuntimeError, match="refuses to change that plan"):
-        sparse_pass2_bucketed._guard_bpref_target_rotation_chunking(
+        bpref_diagnostics._guard_bpref_target_rotation_chunking(
             64,
             bucket_size=128,
             target_particle_rows=np.asarray([3], dtype=np.int64),
@@ -467,7 +487,7 @@ def test_target_capture_preserves_rotation_chunk_plan_and_fails_if_target_is_chu
 
     source = inspect.getsource(sparse_pass2_bucketed.compute_pass2_stats_sparse_bucketed)
     assert "Scoped BPref device capture disables rotation-chunked pass 2" not in source
-    assert "rotation_chunk_size = _guard_bpref_target_rotation_chunking(" in source
+    assert "rotation_chunk_size = bpref_diagnostics._guard_bpref_target_rotation_chunking(" in source
 
 
 def test_posterior_mask_and_reduced_operand_diagnostic_branches_agree_on_cpu():
@@ -526,7 +546,7 @@ def test_posterior_mask_and_reduced_operand_diagnostic_branches_agree_on_cpu():
         shadow_reconstruction[:3],
         strict=True,
     ):
-        sparse_pass2_bucketed._require_bpref_shadow_exact(
+        bpref_diagnostics._require_bpref_shadow_exact(
             f"CPU test reconstruction {label}", authoritative, shadow
         )
 
@@ -550,7 +570,7 @@ def test_posterior_mask_and_reduced_operand_diagnostic_branches_agree_on_cpu():
         relion_x_half=True,
         sequential_translation_reduction=True,
     )
-    metrics = sparse_pass2_bucketed._require_bpref_reduction_shadow_agreement(
+    metrics = bpref_diagnostics._require_bpref_reduction_shadow_agreement(
         ordinary_summed,
         ordinary_weights,
         shadow_summed,
@@ -577,7 +597,7 @@ def test_standalone_diagnostics_keep_legacy_flags_without_device_capture(monkeyp
     ):
         monkeypatch.setenv(name, "1")
 
-    flags = sparse_pass2_bucketed._scoped_bpref_diagnostic_flags(active=False)
+    flags = bpref_diagnostics._scoped_bpref_diagnostic_flags(active=False)
     assert not flags["device_signature_configured"]
     assert all(value for name, value in flags.items() if name != "device_signature_configured")
     assert cuda_backproject.relion_x_half_bp_block_topology_enabled()
@@ -586,12 +606,12 @@ def test_standalone_diagnostics_keep_legacy_flags_without_device_capture(monkeyp
 def test_target_half2_cannot_leak_into_final_all_data_or_local_search(monkeypatch):
     env = _capture_environment()
     env["RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF"] = "2"
-    assert iteration_loop._bpref_device_signature_active_for_numbered_half(
+    assert debug_dumps._bpref_device_signature_active_for_numbered_half(
         iteration=5,
         half=2,
         environ=env,
     )
-    assert not iteration_loop._bpref_device_signature_active_for_numbered_half(
+    assert not debug_dumps._bpref_device_signature_active_for_numbered_half(
         iteration=5,
         half=2,
         final_all_data=True,
@@ -606,12 +626,12 @@ def test_target_half2_cannot_leak_into_final_all_data_or_local_search(monkeypatc
         assert not cuda_backproject.relion_x_half_bp_block_topology_enabled()
         return "ordinary-local"
 
-    monkeypatch.setattr(iteration_loop, "_score_half_local", fake_local)
-    assert iteration_loop._score_half_local_in_bpref_scope(
+    monkeypatch.setattr(half_scoring, "_score_half_local", fake_local)
+    assert half_scoring._score_half_local_in_bpref_scope(
         bpref_device_signature_active=False
     ) == "ordinary-local"
     with pytest.raises(RuntimeError, match="sparse adaptive pass 2"):
-        iteration_loop._score_half_local_in_bpref_scope(
+        half_scoring._score_half_local_in_bpref_scope(
             bpref_device_signature_active=True
         )
 
@@ -621,7 +641,7 @@ def test_exact_local_contribution_adapter_is_explicit_and_rejects_device_claims(
 ):
     forwarded = []
     monkeypatch.setattr(
-        sparse_pass2_bucketed,
+        bpref_diagnostics,
         "_maybe_dump_bpref_contribution_rows",
         lambda **kwargs: forwarded.append(kwargs),
     )
@@ -656,7 +676,7 @@ def test_exact_local_contribution_adapter_writes_versioned_pre_scatter_fixture(
     monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE", "4")
     monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_IMAGE_NAMES_NPY", str(image_names_path))
     monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_STACK_SHA256", "a" * 64)
-    sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=7, half=2)
+    bpref_diagnostics.set_bpref_contribution_dump_context(iteration=7, half=2)
     try:
         scores = np.asarray(
             [[[0.0, -1.0], [-2.0, -3.0]], [[-0.5, -1.5], [-2.5, -3.5]]],
@@ -716,7 +736,7 @@ def test_exact_local_contribution_adapter_writes_versioned_pre_scatter_fixture(
             shadow_reduction_agreement=None,
         )
     finally:
-        sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+        bpref_diagnostics.clear_bpref_contribution_dump_context()
 
     artifact = next(dump_dir.glob("bpref_contribution_rows_*.npz"))
     with np.load(artifact, allow_pickle=False) as capture:
@@ -734,21 +754,21 @@ def test_exact_local_contribution_adapter_writes_versioned_pre_scatter_fixture(
 
 def test_exact_local_contribution_capture_routes_only_the_target_boundary(monkeypatch):
     monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_DIR", "/tmp/contributions")
-    sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=7, half=2)
+    bpref_diagnostics.set_bpref_contribution_dump_context(iteration=7, half=2)
     try:
-        assert not local_em_engine._exact_local_bpref_contribution_capture_active(
+        assert not local_bpref_capture._exact_local_bpref_contribution_capture_active(
             current_size=50,
             debug_iteration=7,
         )
     finally:
-        sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+        bpref_diagnostics.clear_bpref_contribution_dump_context()
 
     monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION", "7")
     monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF", "2")
     monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_CURRENT_SIZE", "50")
-    sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=7, half=2)
+    bpref_diagnostics.set_bpref_contribution_dump_context(iteration=7, half=2)
     try:
-        assert local_em_engine._exact_local_bpref_contribution_capture_active(
+        assert local_bpref_capture._exact_local_bpref_contribution_capture_active(
             current_size=50,
             debug_iteration=7,
         )
@@ -771,21 +791,21 @@ def test_exact_local_contribution_capture_routes_only_the_target_boundary(monkey
                 score_only=False,
                 mstep_relion_x_half=False,
             )
-        assert not local_em_engine._exact_local_bpref_contribution_capture_active(
+        assert not local_bpref_capture._exact_local_bpref_contribution_capture_active(
             current_size=52,
             debug_iteration=7,
         )
-        assert not local_em_engine._exact_local_bpref_contribution_capture_active(
+        assert not local_bpref_capture._exact_local_bpref_contribution_capture_active(
             current_size=50,
             debug_iteration=8,
         )
-        sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=7, half=1)
-        assert not local_em_engine._exact_local_bpref_contribution_capture_active(
+        bpref_diagnostics.set_bpref_contribution_dump_context(iteration=7, half=1)
+        assert not local_bpref_capture._exact_local_bpref_contribution_capture_active(
             current_size=50,
             debug_iteration=7,
         )
     finally:
-        sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+        bpref_diagnostics.clear_bpref_contribution_dump_context()
 
     source = inspect.getsource(local_em_engine.run_local_em_exact)
     helper_source = inspect.getsource(
@@ -798,14 +818,14 @@ def test_exact_local_contribution_capture_routes_only_the_target_boundary(monkey
 
 
 def test_clear_dump_context_marks_contribution_and_native_dumps_inactive():
-    sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=5, half=2)
-    assert sparse_pass2_bucketed._bpref_contribution_context == {
+    bpref_diagnostics.set_bpref_contribution_dump_context(iteration=5, half=2)
+    assert bpref_diagnostics._bpref_contribution_context == {
         "iteration": 5,
         "half": 2,
     }
 
-    sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
-    assert sparse_pass2_bucketed._bpref_contribution_context == {
+    bpref_diagnostics.clear_bpref_contribution_dump_context()
+    assert bpref_diagnostics._bpref_contribution_context == {
         "iteration": -1,
         "half": -1,
     }
@@ -844,17 +864,17 @@ def test_active_capture_accepts_fused_kclass_route(monkeypatch):
 
 def test_bpref_contribution_class_filter_uses_relion_one_based_numbers(monkeypatch):
     monkeypatch.delenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS", raising=False)
-    assert sparse_pass2_bucketed._bpref_contribution_class_enabled(0)
-    assert sparse_pass2_bucketed._bpref_contribution_class_enabled(3)
+    assert bpref_diagnostics._bpref_contribution_class_enabled(0)
+    assert bpref_diagnostics._bpref_contribution_class_enabled(3)
 
     monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS", "2")
-    assert not sparse_pass2_bucketed._bpref_contribution_class_enabled(0)
-    assert sparse_pass2_bucketed._bpref_contribution_class_enabled(1)
-    assert not sparse_pass2_bucketed._bpref_contribution_class_enabled(2)
+    assert not bpref_diagnostics._bpref_contribution_class_enabled(0)
+    assert bpref_diagnostics._bpref_contribution_class_enabled(1)
+    assert not bpref_diagnostics._bpref_contribution_class_enabled(2)
 
     monkeypatch.setenv("RECOVAR_BPREF_CONTRIBUTION_DUMP_CLASS", "0")
     with pytest.raises(ValueError, match="positive integer"):
-        sparse_pass2_bucketed._bpref_contribution_class_enabled(0)
+        bpref_diagnostics._bpref_contribution_class_enabled(0)
 
 
 def test_fused_kclass_compact_capture_materializes_only_target_rows():
@@ -896,7 +916,7 @@ def test_fused_kclass_compact_capture_materializes_only_target_rows():
         [[0.1, 0.2, 0.0], [0.3, 0.4, 0.5], [0.6, 0.0, 0.0]],
         dtype=np.float32,
     )
-    capture = sparse_pass2_bucketed._materialize_k_class_capture_rows(
+    capture = bpref_diagnostics._materialize_k_class_capture_rows(
         image_indices=image_indices,
         target_particle_rows=np.asarray([1], dtype=np.int64),
         per_image_inputs=per_image_inputs,
@@ -929,3 +949,71 @@ def test_later_capture_support_excludes_dense_full_support_fallback():
     support_end = source.index("fused_atomic_diagnostic_supported =", support_start)
     support_block = source[support_start:support_end]
     assert "and not skip_significance_pruning" in support_block
+
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("provided", [False, True])
+@pytest.mark.parametrize("masked", [False, True])
+def test_preprocess_capture_preserves_selected_metadata(native, provided, masked):
+    from recovar.em.helpers.preprocessing import prepare_batch_preprocess_operands
+
+    mask = np.arange(16, dtype=np.float32).reshape(4, 4) if masked else None
+    backend = SimpleNamespace(relion_fourier_backend="relion_cuda" if native else "jax", image_mask=mask)
+    dataset = SimpleNamespace(image_source=SimpleNamespace(backend=backend))
+    indices = np.asarray([2, 0])
+    shifts = np.asarray([[1, -1], [2, -2], [3, -3]], dtype=np.int32)
+    operands = prepare_batch_preprocess_operands(
+        dataset,
+        np.zeros((2, 4, 4), dtype=np.float32),
+        indices,
+        image_corrections=np.asarray([4.0, 8.0, 16.0]) if provided else None,
+        scale_corrections=np.asarray([2.0, 4.0, 8.0]) if provided else None,
+        image_pre_shifts=shifts if provided else None,
+    )
+    result = bpref_diagnostics.build_bpref_preprocess_capture(
+        dataset,
+        (4, 4),
+        operands,
+        batch=2,
+        score_with_masked_images=masked,
+    )
+    assert list(result) == [
+        "integer_pre_shifts",
+        "batch_image_corrections",
+        "batch_scale_corrections",
+        "relion_preprocess_normalization_factors",
+        "relion_cuda_preprocess",
+        "image_mask",
+        "image_mask_mode",
+    ]
+    np.testing.assert_array_equal(result["integer_pre_shifts"], shifts[indices] if provided else np.zeros((2, 2)))
+    np.testing.assert_array_equal(result["batch_image_corrections"], [16.0, 4.0] if provided else [1.0, 1.0])
+    np.testing.assert_array_equal(result["batch_scale_corrections"], [8.0, 2.0] if provided else [1.0, 1.0])
+    np.testing.assert_array_equal(
+        result["relion_preprocess_normalization_factors"], [2.0, 2.0] if native and provided else [1.0, 1.0]
+    )
+    assert result["relion_cuda_preprocess"] == native
+    assert result["integer_pre_shifts"].dtype == np.int32
+    for key in ("batch_image_corrections", "batch_scale_corrections", "relion_preprocess_normalization_factors"):
+        assert result[key].dtype == np.float32
+    if masked:
+        assert result["image_mask"] is mask
+        assert result["image_mask_mode"] == "multiply"
+    else:
+        np.testing.assert_array_equal(result["image_mask"], np.ones((4, 4)))
+        assert result["image_mask_mode"] == "none"
+
+
+@pytest.mark.parametrize("mode", ["multiply", "invalid"])
+def test_preprocess_capture_rejects_missing_or_invalid_required_mask(mode):
+    backend = SimpleNamespace(image_mask_mode=mode)
+    dataset = SimpleNamespace(image_source=SimpleNamespace(backend=backend))
+    operands = (False, None, None, np.ones(2, dtype=np.float32), None)
+    with pytest.raises(ValueError, match="image.mask"):
+        bpref_diagnostics.build_bpref_preprocess_capture(
+            dataset,
+            (4, 4),
+            operands,
+            batch=2,
+            score_with_masked_images=True,
+        )

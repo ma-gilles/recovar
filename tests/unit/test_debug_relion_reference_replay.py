@@ -2,7 +2,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.core import fourier_transform_utils
-from recovar.em.dense_single_volume.iteration_loop import _maybe_debug_replay_relion_references
+from recovar.em.diagnostics.relion_replay import _maybe_debug_replay_relion_references
 from recovar.utils.helpers import write_relion_mrc
 
 

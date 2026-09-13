@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 from pathlib import Path
@@ -249,21 +248,13 @@ def render_markdown(scorecard: dict) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--scorecard", type=Path, default=DEFAULT_SCORECARD)
-    parser.add_argument("--output", type=Path)
-    parser.add_argument("--check", action="store_true")
-    args = parser.parse_args()
-    scorecard = load_and_validate(args.scorecard)
-    rendered = render_markdown(scorecard)
-    if args.check:
-        target = DEFAULT_MARKDOWN if args.output is None else args.output
-        if target.read_text() != rendered:
-            raise SystemExit(f"{target} is stale; regenerate it")
-    elif args.output is not None:
-        args.output.write_text(rendered)
+    # Direct execution uses the script directory; module execution uses its package.
+    if __name__ == "__main__" and not __package__:
+        from scorecard_cli import run_scorecard_cli
     else:
-        print(rendered, end="")
+        from scripts.scorecard_cli import run_scorecard_cli
+
+    run_scorecard_cli(DEFAULT_SCORECARD, DEFAULT_MARKDOWN, load_and_validate, render_markdown)
 
 
 if __name__ == "__main__":

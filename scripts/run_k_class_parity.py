@@ -68,8 +68,8 @@ def _safe_k_class_replay_batch_plan(
 ) -> _ReplayBatchPlan:
     """Mirror the main RELION replay loop's K-class microbatch planner."""
 
-    from recovar.em.dense_single_volume.batch_planning import _estimate_relion_em_batch_sizes
-    from recovar.em.dense_single_volume.firstiter_cc import (
+    from recovar.em.helpers.batch_planning import (
+        _estimate_relion_em_batch_sizes,
         _safe_dense_k_class_rotation_block_size,
         _safe_firstiter_cc_image_batch_size,
     )
@@ -119,10 +119,7 @@ def _relion_adaptive_coarse_image_size(
 ) -> int:
     """Return RELION's adaptive pass-1 ``image_coarse_size``."""
 
-    from recovar.em.dense_single_volume.helpers.resolution import (
-        clamp_relion_coarse_image_size,
-        compute_coarse_image_size,
-    )
+    from recovar.em.helpers.resolution import clamp_relion_coarse_image_size, compute_coarse_image_size
     from recovar.em.sampling import relion_angular_sampling_deg
 
     coarse_size = compute_coarse_image_size(
@@ -596,28 +593,25 @@ def _relion_bpref_maps_from_sparse_support(
     import jax.numpy as jnp
 
     from recovar.core.configs import ForwardModelConfig
-    from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
-    from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
-    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
-    from recovar.em.dense_single_volume.helpers.half_spectrum import make_scoring_half_image_weights
-    from recovar.em.dense_single_volume.helpers.projection import (
-        compute_projections_block as _compute_projections_block,
-    )
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-        _bucket_pass2_inputs,
-        _build_bucket_arrays,
-        _normalize_pass2_bucket_with_log_z,
-        _prepare_bucket_io,
-        _prepare_per_image_pass2_inputs,
-        _reorder_to_indices,
-        _score_pass2_bucket_relion_gpu_diff2,
-    )
-    from recovar.em.dense_single_volume.local_backprojection import (
+    from recovar.em.helpers.batch_fetch import fetch_indexed_batch
+    from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
+    from recovar.em.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.helpers.half_spectrum import make_scoring_half_image_weights
+    from recovar.em.helpers.projection import compute_projections_block as _compute_projections_block
+    from recovar.em.local.local_backprojection import (
         compute_local_ctf_sums,
         compute_local_weighted_sums,
         flatten_bucket_rotations,
     )
     from recovar.em.sampling import get_oversampled_translation_grid, rotation_grid_size
+    from recovar.em.scoring.sparse_bucket_arrays import (
+        _bucket_pass2_inputs,
+        _build_bucket_arrays,
+        _prepare_per_image_pass2_inputs,
+    )
+    from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _prepare_bucket_io, _reorder_to_indices
+    from recovar.em.sparse_pass2.sparse_pass2_posterior import _normalize_pass2_bucket_with_log_z
+    from recovar.em.sparse_pass2.sparse_pass2_scoring import _score_pass2_bucket_relion_gpu_diff2
     from recovar.reconstruction import noise as noise_utils
     from recovar.relion_bind import _relion_bind_core as bind
     from recovar.utils import helpers
@@ -1206,19 +1200,16 @@ def main() -> None:
     from recovar.core import fourier_transform_utils as ftu
     from recovar.core import mask
     from recovar.data_io.cryoem_dataset import load_dataset
-    from recovar.em.dense_single_volume.helpers.orientation_priors import (
+    from recovar.em.classification.k_class import run_dense_k_class_em
+    from recovar.em.helpers.orientation_priors import (
         make_relion_direction_log_prior,
         make_relion_translation_log_prior,
         relion_translation_prior_center,
         relion_translation_search_base,
     )
-    from recovar.em.dense_single_volume.helpers.oversampling import compute_pass2_stats_sparse
-    from recovar.em.dense_single_volume.helpers.significance import _compute_k_class_significance_batched
-    from recovar.em.dense_single_volume.iteration_loop import RELION_MINRES_MAP, _reconstruct_volume_eager
-    from recovar.em.dense_single_volume.k_class import (
-        run_dense_k_class_em,
-    )
-    from recovar.em.initial_model.dense_adapter import reference_to_relion_projector_half_maps
+    from recovar.em.helpers.oversampling import compute_pass2_stats_sparse
+    from recovar.em.refinement.iteration_loop import RELION_MINRES_MAP, _reconstruct_volume_eager
+    from recovar.em.relion.relion_projector_setup import reference_to_relion_projector_half_maps
     from recovar.em.sampling import (
         apply_relion_rotation_perturbation_to_eulers,
         apply_relion_translation_perturbation,
@@ -1228,6 +1219,7 @@ def main() -> None:
         read_relion_sampling_metadata,
         relion_angular_sampling_deg,
     )
+    from recovar.em.scoring.significance import _compute_k_class_significance_batched
     from recovar.reconstruction import noise as recon_noise
     from recovar.utils import helpers
     from recovar.utils.helpers import write_relion_mrc
@@ -1459,14 +1451,12 @@ def main() -> None:
     print("  batch sizing: " + _batch_plan_note("coarse", base_batch_plan))
 
     t0 = time.time()
-    from recovar.em.dense_single_volume.helpers import (
-        sparse_pass2_bucketed as _sparse_pass2_diagnostics,
-    )
+    from recovar.em.diagnostics import bpref_diagnostics
 
     # Mirror the numbered-half context supplied by the production iteration
     # loop so opt-in contribution/device-signature captures from this
     # one-boundary replay retain exact target-iteration provenance.
-    _sparse_pass2_diagnostics.set_bpref_contribution_dump_context(
+    bpref_diagnostics.set_bpref_contribution_dump_context(
         iteration=args.target_iter,
         half=1,
     )
@@ -1506,7 +1496,7 @@ def main() -> None:
         # for pass-2 only. Recovar evaluates the FULL fine grid but masks out
         # fine poses whose coarse parent did not survive pass-1's
         # adaptive_fraction pruning.
-        from recovar.em.dense_single_volume.k_class import run_dense_k_class_em_adaptive
+        from recovar.em.classification.k_class import run_dense_k_class_em_adaptive
         from recovar.em.sampling import (
             get_oversampled_rotation_grid_from_samples,
         )
@@ -1602,7 +1592,7 @@ def main() -> None:
             current_size=current_size,
             **common_em_kwargs,
         )
-    _sparse_pass2_diagnostics.clear_bpref_contribution_dump_context()
+    bpref_diagnostics.clear_bpref_contribution_dump_context()
     elapsed_s = time.time() - t0
     print(f"  RECOVAR K-class E/M step completed in {elapsed_s:.1f}s")
 
@@ -1660,7 +1650,7 @@ def main() -> None:
             sparse_Ft_y = []
             sparse_Ft_ctf = []
             for class_index in range(n_classes):
-                class_Ft_y, class_Ft_ctf = compute_pass2_stats_sparse(
+                class_output = compute_pass2_stats_sparse(
                     ds,
                     means[class_index],
                     mean_variance_prev[class_index],
@@ -1691,9 +1681,9 @@ def main() -> None:
                     normalization_score_mode="gaussian",
                     relion_projector_half=relion_projector_half_by_class[class_index],
                     relion_projector_r_max=relion_projector_r_max,
-                )[:2]
-                sparse_Ft_y.append(class_Ft_y)
-                sparse_Ft_ctf.append(class_Ft_ctf)
+                )
+                sparse_Ft_y.append(class_output.Ft_y)
+                sparse_Ft_ctf.append(class_output.Ft_ctf)
 
             result = result._replace(
                 Ft_y=jnp.stack([jnp.asarray(value) for value in sparse_Ft_y], axis=0),
@@ -1823,7 +1813,7 @@ def main() -> None:
                 current_size=current_size,
             ).reshape(-1)
             if apply_firstiter_lowpass:
-                from recovar.em.dense_single_volume.mean_helpers import _apply_relion_initial_lowpass_filter
+                from recovar.em.refinement.mean_helpers import _apply_relion_initial_lowpass_filter
 
                 class_ft = _apply_relion_initial_lowpass_filter(
                     class_ft,

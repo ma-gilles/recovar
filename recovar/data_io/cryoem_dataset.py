@@ -93,7 +93,10 @@ def _coerce_image_source(image_source, *, tilt_series_flag):
         return image_source
     return BackendImageSource(
         image_source,
-        info=ImageSourceInfo(tilt_series=tilt_series_flag),
+        info=ImageSourceInfo(
+            tilt_series=tilt_series_flag,
+            dtype=np.dtype(getattr(image_source, "dtype", np.complex64)).type,
+        ),
     )
 
 
@@ -160,7 +163,7 @@ class CryoEMDataset:
         voxel_size: float,
         metadata: ImageMetadata,
         ctf_evaluator=None,
-        dtype: type = np.complex64,
+        dtype: type | np.dtype | None = None,
         dataset_indices: Optional[NDArray[np.integer]] = None,
         grid_size: Optional[int] = None,
         tilt_series_flag: bool = False,
@@ -170,6 +173,13 @@ class CryoEMDataset:
             image_source,
             tilt_series_flag=tilt_series_flag,
         )
+        if dtype is None:
+            dtype = getattr(image_source, "dtype", np.complex64)
+        normalized_dtype = np.dtype(dtype)
+        if normalized_dtype not in (np.dtype(np.complex64), np.dtype(np.complex128)):
+            raise TypeError(f"dtype must be complex64 or complex128, got {normalized_dtype}")
+        complex_dtype = normalized_dtype.type
+
         # --- Grid geometry ---
         if image_source is not None:
             grid_size = image_source.grid_size
@@ -215,8 +225,8 @@ class CryoEMDataset:
         self.volume_mask_threshold = 4 * self.grid_size / 128
 
         # --- Data types ---
-        self.dtype = dtype
-        self.dtype_real = dtype(0).real.dtype
+        self.dtype = complex_dtype
+        self.dtype_real = np.empty((), dtype=normalized_dtype).real.dtype
 
         # --- Per-image metadata ---
         self._metadata = metadata
@@ -434,6 +444,7 @@ class CryoEMDataset:
             tilt_series_flag=self.tilt_series_flag,
             premultiplied_ctf=self.premultiplied_ctf,
             dataset_indices=composed_indices,
+            dtype=self.dtype,
         )
         if self.noise is not None:
             sub.noise = _ImageIndexRemappedNoiseAdapter(self.noise, indices)
@@ -484,6 +495,7 @@ class CryoEMDataset:
             strip_prefix=info.strip_prefix,
             sort_with_Bfac=info.sort_with_Bfac,
             downsample_D=info.downsample_D,
+            dtype=self.dtype,
         )
 
         parent_local_image_indices = self.local_image_indices_from_original(
@@ -688,13 +700,14 @@ class CryoEMDataset:
         """Get predicted images for given indices using forward model.
 
         Args:
-            indices: Array of indices to predict images for
-            volume: Volume to use for prediction
-            skip_ctf: Whether to skip CTF application
-            spatial: Whether to return images in real space (True) or Fourier space (False)
+            indices (numpy.ndarray | list[int]): Image indices to predict.
+            volume (numpy.ndarray | jax.Array): Flattened, centered Fourier-space volume.
+            skip_ctf (bool): Whether to skip CTF application.
+            spatial (bool): Return real-space images when True, Fourier-space images otherwise.
 
         Returns:
-            Predicted images in real space if spatial=True, otherwise in Fourier space
+            images (jax.Array): Real-space images of shape ``(N, H, W)`` when
+                ``spatial=True``, otherwise flattened Fourier images of shape ``(N, H * W)``.
         """
         import recovar.core.forward as core_forward
         from recovar.core.configs import ForwardModelConfig
@@ -975,6 +988,7 @@ def _create_image_source(
     strip_prefix,
     downsample_D,
     sort_with_Bfac=False,
+    dtype=np.complex64,
 ):
     """Create the image-loading layer for this dataset."""
     return create_image_source(
@@ -989,6 +1003,7 @@ def _create_image_source(
         strip_prefix=strip_prefix,
         downsample_D=downsample_D,
         sort_with_Bfac=sort_with_Bfac,
+        dtype=dtype,
     )
 
 
@@ -1001,7 +1016,7 @@ def _load_ctf_params(particles_file, ctf_file, D, ind, n_images):
     from recovar.data_io import load_utils
 
     if ctf_file is not None and ctf_file.endswith(".pkl"):
-        ctf_params_all = np.array(load_utils.load_ctf_params(D, ctf_file))
+        ctf_params_all = load_utils.load_ctf_params(D, ctf_file, preserve_source_geometry=True)
         dataset_indices = _normalize_dataset_indices(ind, n_total=ctf_params_all.shape[0])
         if dataset_indices is None and ctf_params_all.shape[0] != n_images:
             raise ValueError(
@@ -1036,10 +1051,10 @@ def _load_ctf_params(particles_file, ctf_file, D, ind, n_images):
     return ctf_params, dataset_indices
 
 
-def _load_poses(particles_file, poses_file, D, n_images, dataset_indices):
+def _load_poses(particles_file, poses_file, D, n_images, dataset_indices, *, real_dtype=np.float32):
     """Load rotation matrices and translations.
 
-    Returns ``(rots, translations)`` as float32 arrays.
+    Returns ``(rots, translations)`` in *real_dtype*.
     """
     if poses_file is not None and poses_file.endswith(".pkl"):
         from recovar.data_io import load_utils
@@ -1061,14 +1076,14 @@ def _load_poses(particles_file, poses_file, D, n_images, dataset_indices):
         trans = trans_frac * D
         logger.info("Auto-extracted poses from %s", source_file)
 
-    rots = np.asarray(rots, dtype=np.float32)
+    rots = np.asarray(rots, dtype=real_dtype)
     if rots.ndim != 3 or rots.shape[1:] != (3, 3):
         raise ValueError(f"Rotation array must have shape (N, 3, 3), got {rots.shape}")
 
     if trans is None:
-        translations = np.zeros((rots.shape[0], 2), dtype=np.float32)
+        translations = np.zeros((rots.shape[0], 2), dtype=real_dtype)
     else:
-        translations = np.asarray(trans, dtype=np.float32)
+        translations = np.asarray(trans, dtype=real_dtype)
         expected_t_shape = (rots.shape[0], 2)
         if translations.shape != expected_t_shape:
             raise ValueError(f"Translation array must have shape {expected_t_shape}, got {translations.shape}")
@@ -1156,6 +1171,7 @@ def _get_tilt_ctf_source(
     strip_prefix,
     downsample_D,
     sort_with_Bfac,
+    dtype,
 ):
     """Return the grouped image source needed for tilt-specific CTF metadata."""
     if tilt_series or tilt_series_ctf == "cryoem":
@@ -1172,6 +1188,7 @@ def _get_tilt_ctf_source(
         strip_prefix=strip_prefix,
         downsample_D=downsample_D,
         sort_with_Bfac=sort_with_Bfac,
+        dtype=dtype,
     )
 
 
@@ -1193,13 +1210,25 @@ def load_dataset(
     strip_prefix=None,
     sort_with_Bfac=False,
     downsample_D=None,
+    dtype=np.complex64,
 ):
     """Load a cryo-EM / cryo-ET dataset.
 
     Poses and CTF can come from:
     - Pickle files (legacy cryoDRGN format) via *poses_file* / *ctf_file*
     - Auto-extracted from the particles STAR or CS file when those are None
+
+    ``dtype`` controls computational arrays: ``complex64`` uses float32
+    CTF/pose/image arrays; ``complex128`` uses float64. Physical ``voxel_size``
+    is a Python float resolved from source geometry at the loaded image grid,
+    before those casts. Subsets and EM consumers retain that single host scalar.
     """
+    dtype = np.dtype(dtype)
+    if dtype not in (np.dtype(np.complex64), np.dtype(np.complex128)):
+        raise TypeError(f"dtype must be complex64 or complex128, got {dtype}")
+    complex_dtype = dtype.type
+    real_dtype = np.empty((), dtype=dtype).real.dtype
+
     # ---- Validate auto-extraction capability ----
     if poses_file is None or ctf_file is None:
         from recovar.data_io import metadata_readers
@@ -1226,6 +1255,7 @@ def load_dataset(
         strip_prefix,
         downsample_D,
         sort_with_Bfac=sort_with_Bfac,
+        dtype=complex_dtype,
     )
 
     # ---- Load CTF parameters ----
@@ -1252,6 +1282,7 @@ def load_dataset(
             strip_prefix=strip_prefix,
             downsample_D=downsample_D,
             sort_with_Bfac=sort_with_Bfac,
+            dtype=complex_dtype,
         )
         ctf_params, ctf_eval = _apply_tilt_ctf_augmentation(
             ctf_params,
@@ -1270,19 +1301,24 @@ def load_dataset(
         image_source.unpadded_D,
         image_source.n_images,
         dataset_indices,
+        real_dtype=real_dtype,
     )
 
     # ---- Validate voxel sizes ----
     voxel_sizes = ctf_params[:, 0]
     if not np.all(np.isclose(voxel_sizes - voxel_sizes[0], 0)):
         raise ValueError("All voxel sizes must be the same")
-    voxel_size = np.float32(voxel_sizes[0])
+    voxel_size = float(voxel_sizes[0])
 
-    ctf_params = ctf_params.astype(np.float32)
-    dtype_real = np.complex64(0).real.dtype
+    ctf_params = ctf_params.astype(real_dtype)
 
     meta = ImageMetadata(
-        rots, translations, ctf_params[:, 1:], rotation_dtype=np.float32, ctf_dtype=dtype_real, real_dtype=dtype_real
+        rots,
+        translations,
+        ctf_params[:, 1:],
+        rotation_dtype=real_dtype,
+        ctf_dtype=real_dtype,
+        real_dtype=real_dtype,
     )
     ds = CryoEMDataset(
         image_source,
@@ -1292,6 +1328,7 @@ def load_dataset(
         dataset_indices=dataset_indices,
         tilt_series_flag=tilt_series,
         premultiplied_ctf=premultiplied_ctf,
+        dtype=complex_dtype,
     )
     # Store loader paths for downstream reload (e.g. independent half-datasets).
     ds.particles_file = particles_file

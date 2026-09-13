@@ -4,17 +4,14 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import struct
 from pathlib import Path
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.fourier_window import (
-    make_fourier_window_indices_np,
-    make_frequency_coords_half_np,
-)
+from recovar.em.helpers.fourier_window import make_fourier_window_indices_np, make_frequency_coords_half_np
+from recovar.utils.file_hash import sha256_file
 from scripts.analyze_k1_bpref_contributor_membership import match_rotations
 from scripts.analyze_k1_scale_aa_boundary import _native_aa_shells
 
@@ -22,14 +19,6 @@ from scripts.analyze_k1_scale_aa_boundary import _native_aa_shells
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _flat(path: Path, dtype: np.dtype) -> np.ndarray:
@@ -169,9 +158,7 @@ def analyze(
         np.float32(0.0),
     ).astype(np.float32)
 
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-        _relion_translation_angles_f32,
-    )
+    from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
 
     recovar_translation_angles = np.asarray(
         _relion_translation_angles_f32(fine_translations, (image_size, image_size)),
@@ -412,17 +399,17 @@ def analyze(
         },
         "artifacts": {
             "recovar_capture": str(recovar_capture.resolve()),
-            "recovar_capture_sha256": _sha256(recovar_capture),
+            "recovar_capture_sha256": sha256_file(recovar_capture),
             "native_directory": str(native_directory.resolve()),
             "native_file_count": len(native_files),
             "native_files_sha256": {
-                path.name: _sha256(path) for path in native_files
+                path.name: sha256_file(path) for path in native_files
             },
             "native_components": (
                 None if native_components is None else str(native_components.resolve())
             ),
             "native_components_sha256": (
-                None if native_components is None else _sha256(native_components)
+                None if native_components is None else sha256_file(native_components)
             ),
         },
         "classification": (

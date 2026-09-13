@@ -82,7 +82,14 @@ def test_relion_cuda_processed_reconstruction_replays_captured_native_lane(monke
         captured["native_lane_reduction"] = native_lane_reduction
         return images, images
 
+    fourier = np.arange(12, dtype=np.complex64).reshape(1, 4, 3)
+
+    def fake_fft(images):
+        np.testing.assert_array_equal(images, raw)
+        return fourier
+
     monkeypatch.setattr(comparator, "relion_preprocess_real_f32", fake_preprocess)
+    monkeypatch.setattr(comparator, "_centered_rfft2_jax", fake_fft)
     values = {
         "raw_real_images": raw,
         "relion_preprocess_normalization_factors": np.ones(1, dtype=np.float32),
@@ -98,7 +105,7 @@ def test_relion_cuda_processed_reconstruction_replays_captured_native_lane(monke
         values
     )
 
-    assert processed.shape == (1, 12)
+    np.testing.assert_array_equal(processed, fourier.reshape(1, 12))
     assert captured["native_lane_reduction"] is True
     np.testing.assert_array_equal(reconstruction_correction, values["scale_corrections"])
 

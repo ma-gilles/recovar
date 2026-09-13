@@ -1,0 +1,730 @@
+"""Coordinate-preserving Fourier windowing for resolution-dependent EM.
+
+Implements RELION's ``rlnCurrentImageSize`` concept: at early iterations,
+restrict computations to low-frequency shells.  Instead of passing a smaller
+``image_shape`` to slice_volume (which would break the CUDA kernel's
+``volume_shape[0] // image_shape[0]`` upsampling factor), we apply a
+frequency-radius mask on the original half-spectrum grid and use
+gather/scatter to operate on only the unmasked indices.
+
+This gives the same FLOP reduction as actual Fourier cropping while preserving
+correct physical frequency spacing.
+
+**Quantized size options**: explicit callers may still request a restricted
+size set, but the RELION-parity path now allows any even ``current_size`` up
+to the original box size because the gather/scatter window does not change the
+underlying CUDA image grid.
+
+See ``docs/math/plan_relion_parity.md``, Phase 3.
+"""
+
+import os
+from dataclasses import dataclass, replace
+from typing import Any
+
+import jax.numpy as jnp
+import numpy as np
+
+import recovar.core.fourier_transform_utils as ftu
+from recovar.em.helpers.shape_buckets import round_up_to_multiple
+
+# Representative sizes kept for explicit callers that still want a bounded set.
+ALLOWED_CURRENT_SIZES = [16, 24, 32, 48, 64, 80, 96, 104, 112, 120, 128, 160, 192, 224, 256]
+_DEFAULT_PROJECTION_MAX_R = object()
+STABLE_FOURIER_WINDOW_QUANTUM_ENV = (
+    "RECOVAR_RELION_VDAM_STABLE_FOURIER_WINDOW_QUANTUM"
+)
+DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM = 8
+
+
+def stable_fourier_window_quantum() -> int:
+    """Return the shared physical-size quantum for stable EM windows."""
+
+    raw = os.environ.get(STABLE_FOURIER_WINDOW_QUANTUM_ENV, "").strip()
+    if not raw:
+        return DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM
+    try:
+        quantum = int(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"{STABLE_FOURIER_WINDOW_QUANTUM_ENV} must be an even integer >= 2, "
+            f"got {raw!r}"
+        ) from exc
+    if quantum < 2 or quantum % 2:
+        raise ValueError(
+            f"{STABLE_FOURIER_WINDOW_QUANTUM_ENV} must be an even integer >= 2, "
+            f"got {raw!r}"
+        )
+    return quantum
+
+
+@dataclass(frozen=True)
+class FourierWindowSpec:
+    """Score/reconstruction half-spectrum window metadata."""
+
+    use_window: bool
+    score_indices_np: np.ndarray | None
+    recon_indices_np: np.ndarray | None
+    projection_indices_np: np.ndarray | None
+    score_projection_take_np: np.ndarray | None
+    recon_projection_take_np: np.ndarray | None
+    score_indices: Any
+    recon_indices: Any
+    projection_indices: Any
+    score_projection_take: Any
+    recon_projection_take: Any
+    n_score: int
+    n_recon: int
+    n_projection: int
+    max_r: float | None
+    projection_max_r: float | None
+    # Particle-image score window size (RELION's per-optics remapped
+    # ``current_size``).  ``max_r`` describes the model/reconstruction sphere
+    # and can be smaller than this window when the optics remap applies.
+    image_current_size: int | None = None
+
+    def relion_projector_output_size(self) -> int | None:
+        """Return the crop RELION projects into for this window.
+
+        RELION projects references into the particle-image box
+        (``image_current_size``) and clips samples to the model sphere
+        separately.  Sizing the projector crop from ``2 * max_r`` instead uses
+        the reconstruction size, which is smaller than the particle window
+        whenever the optics pixel size differs from the model pixel size (for
+        example 200 versus 202 on EMPIAR-10073 at model current size 200).
+        Score/projection indices outside that smaller crop then alias onto
+        other pixels of the projection (the ``kx = crop/2 + 1`` column reads
+        the next row's ``kx = 0`` value), corrupting fine scores.  Callers that
+        gather projections at ``score_indices`` or ``projection_indices`` must
+        use this size, as the global sparse pass-2 path already does through
+        ``_projection_kwargs_for_relion_score_window``.
+        """
+
+        if not self.use_window:
+            return None
+        if self.image_current_size is not None:
+            return int(self.image_current_size)
+        return int(2 * self.max_r) if self.max_r is not None else None
+
+    def projection_kwargs(self, *, return_abs2=None) -> dict:
+        kwargs = {}
+        if self.use_window:
+            kwargs["max_r"] = self.projection_max_r
+        if return_abs2 is not None:
+            kwargs["return_abs2"] = bool(return_abs2)
+        return kwargs
+
+    def dense_big_jit_max_r(self):
+        return self.dense_big_jit_projection_max_r()
+
+    def dense_big_jit_projection_max_r(self):
+        return self.projection_max_r if self.use_window else "auto"
+
+    def dense_big_jit_backprojection_max_r(self):
+        return self.max_r if self.use_window else "auto"
+
+    def score_values(self, values):
+        return values if self.score_indices is None else values[..., self.score_indices]
+
+    def recon_values(self, values):
+        return values if self.recon_indices is None else values[..., self.recon_indices]
+
+    def score_or_full_indices(self, n_half: int, *, dtype=jnp.int32):
+        return self.score_indices if self.score_indices is not None else jnp.arange(int(n_half), dtype=dtype)
+
+    def recon_or_full_indices(self, n_half: int, *, dtype=jnp.int32):
+        return self.recon_indices if self.recon_indices is not None else jnp.arange(int(n_half), dtype=dtype)
+
+
+@dataclass(frozen=True)
+class StableFourierWindowShapePlan:
+    """Separate RELION's logical cutoff from a low-cardinality buffer shape.
+
+    The ``logical_*`` fields describe the exact support and loop bounds that
+    numerical kernels must consume.  The ``physical_*`` fields are capacities
+    only: callers may append inert storage after each logical prefix, but must
+    not extend a pixel reduction or a BPref issue stream to that capacity.
+
+    This is deliberately a host-side plan.  Merely padding a JAX reduction
+    with zeroes is not exact because a different contracting dimension may
+    select a different reduction tree.  A runtime implementation therefore
+    needs an explicit logical loop bound in each affected CUDA FFI primitive.
+    """
+
+    logical_current_size: int
+    physical_current_size: int
+    logical_reconstruction_current_size: int
+    physical_reconstruction_current_size: int
+    logical_spec: FourierWindowSpec
+    physical_spec: FourierWindowSpec
+
+    @property
+    def logical_score_pixels(self) -> int:
+        return int(self.logical_spec.n_score)
+
+    @property
+    def physical_score_pixels(self) -> int:
+        return int(self.physical_spec.n_score)
+
+    @property
+    def logical_reconstruction_pixels(self) -> int:
+        return int(self.logical_spec.n_recon)
+
+    @property
+    def physical_reconstruction_pixels(self) -> int:
+        return int(self.physical_spec.n_recon)
+
+    @property
+    def logical_projection_pixels(self) -> int:
+        return int(self.logical_spec.n_projection)
+
+    @property
+    def physical_projection_pixels(self) -> int:
+        return int(self.physical_spec.n_projection)
+
+    @property
+    def logical_rectangle_pixels(self) -> int:
+        return self.logical_current_size * (self.logical_current_size // 2 + 1)
+
+    @property
+    def physical_rectangle_pixels(self) -> int:
+        return self.physical_current_size * (self.physical_current_size // 2 + 1)
+
+    @property
+    def physical_signature(self) -> tuple[int, ...]:
+        """Return the shape-only cache key; logical cutoffs are not included."""
+
+        return (
+            self.physical_current_size,
+            self.physical_reconstruction_current_size,
+            self.physical_score_pixels,
+            self.physical_reconstruction_pixels,
+            self.physical_projection_pixels,
+            self.physical_rectangle_pixels,
+        )
+
+    @property
+    def logical_loop_bounds(self) -> tuple[int, ...]:
+        """Return the bounds that exact score/Wavg/BPref kernels must retain."""
+
+        return (
+            self.logical_score_pixels,
+            self.logical_reconstruction_pixels,
+            self.logical_projection_pixels,
+            self.logical_rectangle_pixels,
+        )
+
+    @staticmethod
+    def _spec_indices(spec: FourierWindowSpec, name: str) -> np.ndarray:
+        indices = getattr(spec, f"{name}_indices_np")
+        if indices is not None:
+            return np.asarray(indices, dtype=np.int32)
+        return np.arange(int(getattr(spec, f"n_{name}")), dtype=np.int32)
+
+    def packed_indices_np(self, name: str) -> np.ndarray:
+        """Place the exact logical issue stream before physical-only storage."""
+
+        if name not in {"score", "recon", "projection"}:
+            raise ValueError(f"unknown Fourier window support {name!r}")
+        logical = self._spec_indices(self.logical_spec, name)
+        physical = self._spec_indices(self.physical_spec, name)
+        tail = np.setdiff1d(physical, logical, assume_unique=True)
+        return np.concatenate((logical, tail)).astype(np.int32, copy=False)
+
+    def packed_projection_take_np(self, name: str) -> np.ndarray:
+        """Map a logical-first score/reconstruction capacity into projection storage."""
+
+        if name not in {"score", "recon"}:
+            raise ValueError(f"unknown projection take support {name!r}")
+        projection = self.packed_indices_np("projection")
+        support = self.packed_indices_np(name)
+        positions = {int(pixel): offset for offset, pixel in enumerate(projection)}
+        return np.asarray([positions[int(pixel)] for pixel in support], dtype=np.int32)
+
+    def packed_physical_spec(self, *, dtype=jnp.int32) -> FourierWindowSpec:
+        """Return the physical-capacity spec in logical-first storage order.
+
+        The returned shapes are those of ``physical_spec``. Only their order
+        changes: exact logical score/reconstruction/projection pixels are the
+        prefix consumed by runtime-bound CUDA kernels, followed by the
+        physical-only capacity tail. This keeps the mature shared EM
+        projection implementation as the single producer of Fourier rows.
+        """
+
+        score_indices_np = self.packed_indices_np("score")
+        recon_indices_np = self.packed_indices_np("recon")
+        projection_indices_np = self.packed_indices_np("projection")
+        score_projection_take_np = self.packed_projection_take_np("score")
+        recon_projection_take_np = self.packed_projection_take_np("recon")
+        return replace(
+            self.physical_spec,
+            score_indices_np=score_indices_np,
+            recon_indices_np=recon_indices_np,
+            projection_indices_np=projection_indices_np,
+            score_projection_take_np=score_projection_take_np,
+            recon_projection_take_np=recon_projection_take_np,
+            score_indices=jnp.asarray(score_indices_np, dtype=dtype),
+            recon_indices=jnp.asarray(recon_indices_np, dtype=dtype),
+            projection_indices=jnp.asarray(projection_indices_np, dtype=dtype),
+            score_projection_take=jnp.asarray(score_projection_take_np, dtype=dtype),
+            recon_projection_take=jnp.asarray(recon_projection_take_np, dtype=dtype),
+        )
+
+
+def make_frequency_coords_half_np(image_shape):
+    """Return cached packed-half coordinates from the host geometry planner."""
+    return ftu.get_k_coordinate_of_each_pixel_half_np(image_shape, voxel_size=1, scaled=False)
+
+
+def _relion_half_layout_mask(coords, current_size, *, square=False, include_dc=False, exact_radius=False):
+    """Build the exact RELION half-layout support mask on the full packed grid."""
+    coords = np.asarray(coords, dtype=np.float64)
+    kx = np.rint(coords[:, 0]).astype(np.int32)
+    ky = np.rint(coords[:, 1]).astype(np.int32)
+    r_max = int(current_size) // 2
+    full_size = int(np.max(ky) - np.min(ky) + 1)
+
+    if square:
+        if int(current_size) >= full_size:
+            mask = np.ones_like(kx, dtype=bool)
+        else:
+            # RELION's windowFourierTransform downsizes an FFTW half image to
+            # shape (current_size, current_size // 2 + 1).  In recovar's
+            # centered-row coordinate system that is all rows
+            # ky=-r_max+1..r_max and columns kx=0..r_max.  The original
+            # Nyquist column is represented as -full_size/2 in recovar's
+            # packed half layout, so it must not be included for smaller
+            # current_size crops.
+            kx_packed = np.where(kx < 0, full_size // 2, kx)
+            mask = (
+                (kx_packed >= 0)
+                & (kx_packed <= r_max)
+                & (ky <= r_max)
+                & (ky >= -(r_max - 1))
+            )
+    else:
+        if exact_radius:
+            mask = kx * kx + ky * ky <= r_max * r_max
+        else:
+            radii = np.sqrt(np.sum(coords**2, axis=-1))
+            mask = np.round(radii).astype(np.int32) <= r_max
+        mask &= ky != -r_max
+        mask &= ~((kx == 0) & (ky < 0))
+
+    if exact_radius:
+        mask &= kx * kx + ky * ky <= r_max * r_max
+
+    if not include_dc:
+        mask &= ~((kx == 0) & (ky == 0))
+
+    return mask
+
+
+def make_fourier_window_indices_np(image_shape, current_size, square=False, include_dc=False, exact_radius=False):
+    """Return half-spectrum window indices and their count for host precomputation.
+
+    This avoids JIT compilation overhead and is suitable for precomputing
+    the window indices once before the EM loop.
+
+    Uses the exact RELION half-layout support on the original packed grid.
+    In radial mode this is a rounded shell cutoff on the cropped current-size
+    layout, exclusion of the redundant negative-row ``kx=0`` entries, omission
+    of the negative boundary row ``ky=-current_size//2``, and optional DC
+    exclusion. In square mode this is RELION's FFTW crop shape
+    ``(current_size, current_size//2 + 1)`` mapped onto recovar's centered-row
+    packed half grid.
+
+    Parameters
+    ----------
+    image_shape : tuple (H, W)
+    current_size : int
+    square : bool, optional
+        If True, use RELION's square current-size crop layout. If False
+        (default), use RELION's radial scoring support on that cropped layout.
+    include_dc : bool, optional
+        Include the DC pixel. Set this for reconstruction/noise accumulation;
+        leave it False for likelihood scoring.
+    exact_radius : bool, optional
+        Use RELION BackProjector's squared-radius insertion support instead
+        of rounded shell labels. This avoids accumulating the outer rounded
+        shell rim in M-step backprojection.
+
+    Returns
+    -------
+    indices : np.ndarray of int32, sorted
+    n_windowed : int
+    """
+    coords_np = make_frequency_coords_half_np(image_shape)
+    mask = _relion_half_layout_mask(
+        coords_np,
+        current_size,
+        square=square,
+        include_dc=include_dc,
+        exact_radius=exact_radius,
+    )
+    indices = np.where(mask)[0].astype(np.int32)
+    return indices, len(indices)
+
+
+def centered_half_indices_to_fftw_half_indices(image_shape, indices):
+    """Map RECOVAR centered-row half-spectrum indices to FFTW row order.
+
+    RECOVAR stores packed half-images with the row axis fftshifted
+    (``ky=-N/2..N/2-1``). RELION's BackProjector x-half path consumes FFTW row
+    order (``ky=0..N/2,-N/2+1..-1``). The values can remain in their current
+    compact order; only the coordinate indices passed to the indexed adjoint
+    need this row remapping.
+    """
+
+    height, width = (int(image_shape[0]), int(image_shape[1]))
+    half_width = width // 2 + 1
+    indices = jnp.asarray(indices, dtype=jnp.int32)
+    rows = indices // half_width
+    cols = indices % half_width
+    fftw_rows = (rows + height // 2) % height
+    return (fftw_rows * half_width + cols).astype(jnp.int32)
+
+
+def relion_fftw_order_for_square_score_window(image_shape, current_size, score_indices):
+    """Return the gather order for RELION's cropped FFTW half-image.
+
+    ``score_indices`` address RECOVAR's full-box, centered-row half spectrum.
+    RELION's coarse normalized-CC CUDA kernel instead walks a compact
+    ``current_size x (current_size // 2 + 1)`` FFTW array in row-major order:
+    ``ky=0,+1,...,+N/2,-N/2+1,...,-1`` for a cropped box (and the analogous
+    full-box order including ``ky=-N/2``).  The returned permutation reorders
+    compact values gathered at ``score_indices`` into that exact pixel order.
+
+    This function is deliberately host-side.  The permutation is static for
+    one EM iteration and is transferred once for the bounded near-tie replay.
+    """
+
+    height, width = (int(image_shape[0]), int(image_shape[1]))
+    current_size = int(current_size)
+    if height != width:
+        raise ValueError(f"RELION square score order requires a square image, got {image_shape}")
+    if current_size <= 0 or current_size > height or current_size % 2:
+        raise ValueError(
+            f"current_size must be positive, even, and <= {height}, got {current_size}",
+        )
+
+    indices = np.asarray(score_indices, dtype=np.int64).reshape(-1)
+    expected_size = current_size * (current_size // 2 + 1)
+    if indices.size != expected_size:
+        raise ValueError(
+            "score_indices do not span the full RELION square score window: "
+            f"got {indices.size}, expected {expected_size}",
+        )
+    full_half_width = width // 2 + 1
+    centered_rows = indices // full_half_width
+    centered_cols = indices % full_half_width
+    ky = centered_rows - height // 2
+    kx = np.where(centered_cols == width // 2, -width // 2, centered_cols)
+    fftw_rows = np.where(ky >= 0, ky, current_size + ky)
+    fftw_cols = np.where(kx >= 0, kx, current_size // 2)
+    packed_indices = fftw_rows * (current_size // 2 + 1) + fftw_cols
+    expected_packed = np.arange(expected_size, dtype=np.int64)
+    if not np.array_equal(np.sort(packed_indices), expected_packed):
+        raise ValueError("score_indices do not map bijectively onto the RELION FFTW score window")
+    return np.argsort(packed_indices, kind="stable").astype(np.int32, copy=False)
+
+
+def make_fourier_window_spec(
+    image_shape,
+    current_size,
+    n_half: int,
+    *,
+    reconstruction_current_size=None,
+    square=False,
+    score_square=None,
+    score_include_dc=False,
+    recon_exact_radius=True,
+    projection_max_r=_DEFAULT_PROJECTION_MAX_R,
+    include_recon_window=True,
+    dtype=jnp.int32,
+) -> FourierWindowSpec:
+    """Return shared score/reconstruction window metadata for EM engines.
+
+    ``current_size`` is the particle-image score window.  RELION may remap
+    that size per optics group while retaining ``mymodel.current_size`` for
+    the Projector/BackProjector support.  ``reconstruction_current_size``
+    represents that separate model-coordinate cutoff; omitting it preserves
+    the historical shared-size behavior.
+    """
+
+    use_window = current_size is not None and current_size < image_shape[0]
+    if not use_window:
+        return FourierWindowSpec(
+            use_window=False,
+            score_indices_np=None,
+            recon_indices_np=None,
+            projection_indices_np=None,
+            score_projection_take_np=None,
+            recon_projection_take_np=None,
+            score_indices=None,
+            recon_indices=None,
+            projection_indices=None,
+            score_projection_take=None,
+            recon_projection_take=None,
+            n_score=int(n_half),
+            n_recon=int(n_half),
+            n_projection=int(n_half),
+            max_r=None,
+            projection_max_r=None,
+            image_current_size=None,
+        )
+
+    if score_square is None:
+        score_square = square
+    resolved_reconstruction_current_size = (
+        int(current_size)
+        if reconstruction_current_size is None
+        else int(reconstruction_current_size)
+    )
+    if resolved_reconstruction_current_size <= 0 or resolved_reconstruction_current_size > image_shape[0]:
+        raise ValueError(
+            "reconstruction_current_size must be positive and no larger than the image box, "
+            f"got {resolved_reconstruction_current_size}",
+        )
+    resolved_max_r = float(resolved_reconstruction_current_size // 2)
+    if projection_max_r is _DEFAULT_PROJECTION_MAX_R:
+        resolved_projection_max_r = resolved_max_r
+    elif projection_max_r is None:
+        resolved_projection_max_r = None
+    else:
+        resolved_projection_max_r = float(projection_max_r)
+
+    score_indices_np, n_score = make_fourier_window_indices_np(
+        image_shape,
+        int(current_size),
+        square=bool(score_square),
+        include_dc=bool(score_include_dc),
+    )
+    recon_indices_np = None
+    recon_indices = None
+    n_recon = int(n_score)
+    if include_recon_window:
+        recon_indices_np, n_recon = make_fourier_window_indices_np(
+            image_shape,
+            resolved_reconstruction_current_size,
+            square=square,
+            include_dc=True,
+            exact_radius=bool(recon_exact_radius),
+        )
+        recon_indices = jnp.asarray(recon_indices_np, dtype=dtype)
+    projection_recon_indices_np = score_indices_np if recon_indices_np is None else recon_indices_np
+    projection_indices_np = np.union1d(score_indices_np, projection_recon_indices_np).astype(np.int32, copy=False)
+    score_projection_take_np = np.searchsorted(projection_indices_np, score_indices_np).astype(np.int32, copy=False)
+    recon_projection_take_np = np.searchsorted(
+        projection_indices_np,
+        projection_recon_indices_np,
+    ).astype(np.int32, copy=False)
+
+    return FourierWindowSpec(
+        use_window=True,
+        score_indices_np=score_indices_np,
+        recon_indices_np=recon_indices_np,
+        projection_indices_np=projection_indices_np,
+        score_projection_take_np=score_projection_take_np,
+        recon_projection_take_np=recon_projection_take_np,
+        score_indices=jnp.asarray(score_indices_np, dtype=dtype),
+        recon_indices=recon_indices,
+        projection_indices=jnp.asarray(projection_indices_np, dtype=dtype),
+        score_projection_take=jnp.asarray(score_projection_take_np, dtype=dtype),
+        recon_projection_take=jnp.asarray(recon_projection_take_np, dtype=dtype),
+        n_score=int(n_score),
+        n_recon=int(n_recon),
+        n_projection=int(projection_indices_np.shape[0]),
+        max_r=resolved_max_r,
+        projection_max_r=resolved_projection_max_r,
+        image_current_size=int(current_size),
+    )
+
+
+def stable_fourier_window_current_size(
+    current_size: int,
+    image_size: int,
+    *,
+    quantum: int = 8,
+) -> int:
+    """Return a physical window class without changing the logical cutoff.
+
+    Non-full windows round up to an even ``quantum``.  The full box is kept in
+    a separate class because ``make_fourier_window_spec`` switches from radial
+    support to the complete packed half image there; folding ``N - 2`` into
+    ``N`` would introduce a disproportionate storage and projection jump.
+
+    The return value is a capacity selector only.  It must never replace
+    RELION's ``rlnCurrentImageSize`` in scheduling, scoring, noise updates, or
+    reconstruction support decisions.
+    """
+
+    current_size = int(current_size)
+    image_size = int(image_size)
+    quantum = int(quantum)
+    if image_size < 4 or image_size % 2:
+        raise ValueError(f"image_size must be an even integer >= 4, got {image_size}")
+    if current_size <= 0 or current_size > image_size or current_size % 2:
+        raise ValueError(
+            f"current_size must be positive, even, and <= {image_size}, got {current_size}",
+        )
+    if quantum < 2 or quantum % 2:
+        raise ValueError(f"quantum must be a positive even integer >= 2, got {quantum}")
+    if current_size == image_size:
+        return image_size
+    return min(
+        round_up_to_multiple(current_size, quantum),
+        image_size - 2,
+    )
+
+
+def make_stable_fourier_window_shape_plan(
+    image_shape,
+    current_size: int,
+    n_half: int,
+    *,
+    reconstruction_current_size: int | None = None,
+    enabled: bool = False,
+    quantum: int = 8,
+    square: bool = False,
+    score_square: bool | None = None,
+    score_include_dc: bool = False,
+    recon_exact_radius: bool = True,
+) -> StableFourierWindowShapePlan:
+    """Plan exact logical supports inside optional stable physical capacities.
+
+    ``enabled=False`` is intentionally the default and reproduces today's
+    one-shape-per-current-size behavior.  When enabled, the returned physical
+    capacities may be used to pad arrays after their logical prefixes.  The
+    logical fields remain the source of truth for runtime CUDA loop bounds.
+    """
+
+    image_shape = tuple(int(value) for value in image_shape)
+    if len(image_shape) != 2 or image_shape[0] != image_shape[1]:
+        raise ValueError(f"stable Fourier windows require a square image, got {image_shape}")
+    expected_n_half = image_shape[0] * (image_shape[1] // 2 + 1)
+    if int(n_half) != expected_n_half:
+        raise ValueError(f"n_half must be {expected_n_half} for {image_shape}, got {n_half}")
+
+    logical_current_size = int(current_size)
+    logical_reconstruction_current_size = (
+        logical_current_size
+        if reconstruction_current_size is None
+        else int(reconstruction_current_size)
+    )
+    # Validate both values even when the shape policy is disabled.
+    stable_fourier_window_current_size(logical_current_size, image_shape[0], quantum=quantum)
+    stable_fourier_window_current_size(
+        logical_reconstruction_current_size,
+        image_shape[0],
+        quantum=quantum,
+    )
+    if enabled:
+        physical_current_size = stable_fourier_window_current_size(
+            logical_current_size,
+            image_shape[0],
+            quantum=quantum,
+        )
+        physical_reconstruction_current_size = stable_fourier_window_current_size(
+            logical_reconstruction_current_size,
+            image_shape[0],
+            quantum=quantum,
+        )
+    else:
+        physical_current_size = logical_current_size
+        physical_reconstruction_current_size = logical_reconstruction_current_size
+
+    logical_spec = make_fourier_window_spec(
+        image_shape,
+        logical_current_size,
+        n_half,
+        reconstruction_current_size=logical_reconstruction_current_size,
+        square=square,
+        score_square=score_square,
+        score_include_dc=score_include_dc,
+        recon_exact_radius=recon_exact_radius,
+    )
+    physical_spec = make_fourier_window_spec(
+        image_shape,
+        physical_current_size,
+        n_half,
+        reconstruction_current_size=physical_reconstruction_current_size,
+        square=square,
+        score_square=score_square,
+        score_include_dc=score_include_dc,
+        recon_exact_radius=recon_exact_radius,
+    )
+
+    for name in ("score", "recon", "projection"):
+        logical_indices = StableFourierWindowShapePlan._spec_indices(logical_spec, name)
+        physical_indices = StableFourierWindowShapePlan._spec_indices(physical_spec, name)
+        if np.setdiff1d(logical_indices, physical_indices, assume_unique=True).size:
+            raise ValueError(
+                f"physical Fourier {name} window does not contain its logical support",
+            )
+
+    return StableFourierWindowShapePlan(
+        logical_current_size=logical_current_size,
+        physical_current_size=physical_current_size,
+        logical_reconstruction_current_size=logical_reconstruction_current_size,
+        physical_reconstruction_current_size=physical_reconstruction_current_size,
+        logical_spec=logical_spec,
+        physical_spec=physical_spec,
+    )
+
+
+def quantize_current_size(cs, allowed=None, ori_size=None, min_size=16):
+    """Quantize ``cs`` to a valid current_size.
+
+    Parameters
+    ----------
+    cs : int or float
+        Raw current_size value (e.g., from 2 * max_FSC_shell).
+    allowed : list of int, optional
+        Sorted list of allowed sizes. When provided, round up to the
+        smallest allowed size >= ``cs``.
+    ori_size : int, optional
+        Original image box size. When provided and ``allowed`` is None,
+        quantize to the nearest even size in ``[min_size, ori_size]`` (matching
+        RELION's arbitrary-even current image sizes).
+    min_size : int, optional
+        Minimum current_size to allow in the ``ori_size`` path. For tiny
+        test boxes where ``ori_size < min_size``, the lower bound is reduced
+        automatically so those tests can still exercise non-trivial windowing.
+
+    Returns
+    -------
+    int
+        Quantized current_size.
+    """
+    if allowed is not None:
+        for s in allowed:
+            if s >= cs:
+                return s
+        return allowed[-1]
+
+    if ori_size is not None:
+        upper = int(ori_size)
+        if upper % 2 != 0:
+            upper -= 1
+        if upper < 2:
+            raise ValueError(f"ori_size must allow at least one even size, got {ori_size}")
+
+        lower = int(min_size)
+        if upper < lower:
+            lower = max(4, upper // 2)
+            if lower % 2 != 0:
+                lower -= 1
+            lower = max(2, lower)
+
+        q = max(lower, int(np.ceil(cs)))
+        if q % 2 != 0:
+            q += 1
+        return min(q, upper)
+
+    if allowed is None:
+        allowed = ALLOWED_CURRENT_SIZES
+    for s in allowed:
+        if s >= cs:
+            return s
+    return allowed[-1]

@@ -17,16 +17,18 @@ parity-fix commit raises a clear error rather than silently producing
 "broken parity" — the same protection ``scripts/run_multi_iter_parity.py``
 provides for command-line use.
 
-Quality ledger artifacts are written to
-``tests/baselines/em_parity_quality_fast_ledger_*.json`` for visibility in
-CI logs and PR descriptions; baseline comparisons go to
-``em_parity_quality_fast_baseline.json`` (auto-created on first run).
+Quality ledgers are written under each test's temporary output directory.
+Use pytest --basetemp with a fresh run directory to retain them, then pass that
+root to scripts/extract_em_parity_tables.py --ledger-root. Baselines are read
+only and are never created by these tests. Legacy correlation assertions are
+retained regression checks, not acceptance under the current FSC-only gates.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -60,7 +62,21 @@ K2_RELION_DIR = K2_FIXTURE_DIR / "relion_pdb_k2_os0_ref"
 K2_DATA_STAR = K2_FIXTURE_DIR / "particles.star"
 
 K4_FIXTURE_DIR = FIXTURE_BASE / "data_pdb_k4_5k_128"
-K4_RELION_DIR = K4_FIXTURE_DIR / "relion_pdb_k4_os0_ref"
+# The shipped K4 oracle was a single-process RELION run captured before dispatch
+# logging existed, so strict K>1 replay cannot use it. Point these at a
+# dispatch-capable oracle rerun (RELION MPI with RELION_DISPATCH_LOG) and its
+# schema-3 schedule to run the K4 cases; unset, the tests report the fixture gap.
+K4_RELION_DIR = Path(os.environ.get("EM_PARITY_FAST_K4_RELION_DIR", str(K4_FIXTURE_DIR / "relion_pdb_k4_os0_ref")))
+K4_DISPATCH_SCHEDULE = os.environ.get("EM_PARITY_FAST_K4_DISPATCH_SCHEDULE") or None
+
+
+def _k4_dispatch_schedule_args() -> list[str]:
+    """Strict K>1 replay needs the dispatch schedule captured with the oracle."""
+
+    if K4_DISPATCH_SCHEDULE is None:
+        return []
+    _require_fixture(Path(K4_DISPATCH_SCHEDULE))
+    return ["--relion-dispatch-schedule", K4_DISPATCH_SCHEDULE]
 K4_DATA_STAR = K4_FIXTURE_DIR / "particles.star"
 
 
@@ -85,15 +101,10 @@ def _assert_parity_ancestors_or_skip() -> None:
         pytest.fail(str(exc))
 
 
-def _write_quality_ledger(name: str, payload: dict) -> Path:
-    """Append the test result to em_parity_quality_fast_ledger_<name>.json.
-
-    Each test writes one ledger file so multiple parametrizations don't
-    clobber each other. The companion baseline file is read-only here —
-    do not auto-update.
-    """
-    BASELINES_DIR.mkdir(parents=True, exist_ok=True)
-    ledger_path = BASELINES_DIR / f"em_parity_quality_fast_ledger_{name}.json"
+def _write_quality_ledger(name: str, payload: dict, *, output_dir: Path) -> Path:
+    """Write this case's result beside its outputs, separately from baselines."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ledger_path = output_dir / f"em_parity_quality_fast_ledger_{name}.json"
     payload = dict(payload)
     payload.setdefault("timestamp", time.strftime("%Y-%m-%dT%H:%M:%S"))
     with ledger_path.open("w") as f:
@@ -213,7 +224,7 @@ def test_em_parity_fast_k1_replay(tmp_path):
         "k1_replay_pmax_abs_diff": pmax_abs_diff,
         "k1_replay_walltime_s": elapsed,
     }
-    ledger = _write_quality_ledger("k1_replay", payload)
+    ledger = _write_quality_ledger("k1_replay", payload, output_dir=output_dir)
     logger.info("K=1 replay ledger: %s", ledger)
 
     # NEVER widen tolerance to make a test pass. Fix the code instead.
@@ -317,7 +328,7 @@ def test_em_parity_fast_kclass_replay(tmp_path):
         "kclass_replay_class_assignment_accuracy": class_acc,
         "kclass_replay_walltime_s": elapsed,
     }
-    ledger = _write_quality_ledger("kclass_replay", payload)
+    ledger = _write_quality_ledger("kclass_replay", payload, output_dir=output_dir)
     logger.info("K-class replay ledger: %s", ledger)
 
     # K=2 iter 0→1 is the first K-class iteration after class seeds are loaded;
@@ -396,6 +407,11 @@ def test_em_parity_fast_k1_coldstart(tmp_path):
         # half-2 vs RELION's half-1 — meaningless for parity).
         "--relion_half_sets",
         str(K1_FIXTURE_DIR / "particles_with_halfsets.star"),
+        # The fresh K=1 defaults (source-faithful powerClass normalization, exact
+        # BPref operands) score from RELION's CUDA image preprocessing, as the
+        # K1 completion launcher does.
+        "--image-fourier-backend",
+        "relion_cuda",
     ]
     logger.info("K=1 cold-start cmd: %s", " ".join(cmd))
     t0 = time.time()
@@ -459,7 +475,7 @@ def test_em_parity_fast_k1_coldstart(tmp_path):
         "k1_coldstart_sigma_offset_used_trajectory": sigma_used_traj.tolist(),
         "k1_coldstart_walltime_s": elapsed,
     }
-    ledger = _write_quality_ledger("k1_coldstart", payload)
+    ledger = _write_quality_ledger("k1_coldstart", payload, output_dir=output_dir)
     logger.info("K=1 cold-start ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)
@@ -595,7 +611,7 @@ def test_em_parity_fast_k1_perturbreplay(tmp_path):
         "k1_perturbreplay_pmax_iter3_abs_diff": pmax_diff,
         "k1_perturbreplay_walltime_s": elapsed,
     }
-    ledger = _write_quality_ledger("k1_perturbreplay", payload)
+    ledger = _write_quality_ledger("k1_perturbreplay", payload, output_dir=output_dir)
     logger.info("K=1 perturb-replay ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)
@@ -672,6 +688,7 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
         "0.5",
         "--perturb_replay_relion_dir",
         str(K4_RELION_DIR),
+        *_k4_dispatch_schedule_args(),
         "--firstiter_cc",
         "--init_resolution",
         "30.0",
@@ -728,7 +745,7 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
         "kclass_coldstart_hungarian_assignment": [(int(i), int(j)) for i, j in zip(row, col)],
         "kclass_coldstart_walltime_s": elapsed,
     }
-    ledger = _write_quality_ledger("kclass_coldstart", payload)
+    ledger = _write_quality_ledger("kclass_coldstart", payload, output_dir=output_dir)
     logger.info("K-class cold-start ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)
@@ -815,6 +832,7 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
         str(relion_dir),
         "--relion_init_dir",
         str(relion_dir),
+        *_k4_dispatch_schedule_args(),
         "--firstiter_cc",
         "--init_resolution",
         "30.0",
@@ -900,7 +918,7 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
         "kclass_strict_iter3_class_match": iter3_match,
         "kclass_strict_walltime_s": elapsed,
     }
-    ledger = _write_quality_ledger("kclass_strict", payload)
+    ledger = _write_quality_ledger("kclass_strict", payload, output_dir=output_dir)
     logger.info("K-class strict-parity ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)
@@ -980,6 +998,7 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
         str(relion_dir),
         "--relion_init_dir",
         str(relion_dir),
+        *_k4_dispatch_schedule_args(),
         "--firstiter_cc",
         "--init_resolution",
         "30.0",
@@ -1033,7 +1052,7 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
         "kclass_strict_os1_worst_class_corr": worst_corr,
         "kclass_strict_os1_walltime_s": elapsed,
     }
-    ledger = _write_quality_ledger("kclass_strict_os1", payload)
+    ledger = _write_quality_ledger("kclass_strict_os1", payload, output_dir=output_dir)
     logger.info("K-class strict-parity oversample ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)

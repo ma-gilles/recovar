@@ -545,7 +545,10 @@ def _read_gpu_monitor(path: Path | None) -> dict[str, Any] | None:
         "peak_memory_total_gib": None,
         "peak_device_index": None,
         "peak_device_name": None,
+        "peak_device_uuid": None,
         "peak_timestamp": None,
+        "gpu_uuids": None,
+        "gpu_uuid_count": None,
         "notes": [],
     }
     try:
@@ -558,11 +561,13 @@ def _read_gpu_monitor(path: Path | None) -> dict[str, Any] | None:
             total_col = _csv_column(reader.fieldnames, "memory.total")
             index_col = _csv_column(reader.fieldnames, "index")
             name_col = _csv_column(reader.fieldnames, "name")
+            uuid_col = _csv_column(reader.fieldnames, "uuid")
             timestamp_col = _csv_column(reader.fieldnames, "timestamp")
 
             peak_mib: float | None = None
             peak_row: dict[str, Any] = {}
             device_indices: set[str] = set()
+            device_uuids: set[str] = set()
             for row in reader:
                 used_mib = _parse_mib(row.get(used_col))
                 if used_mib is None:
@@ -572,6 +577,10 @@ def _read_gpu_monitor(path: Path | None) -> dict[str, Any] | None:
                     device_index = str(row.get(index_col, "")).strip()
                     if device_index:
                         device_indices.add(device_index)
+                if uuid_col is not None:
+                    device_uuid = str(row.get(uuid_col, "")).strip()
+                    if device_uuid:
+                        device_uuids.add(device_uuid)
                 if peak_mib is None or used_mib > peak_mib:
                     peak_mib = used_mib
                     peak_row = row
@@ -580,6 +589,9 @@ def _read_gpu_monitor(path: Path | None) -> dict[str, Any] | None:
         return summary
 
     summary["gpu_count"] = len(device_indices)
+    if uuid_col is not None:
+        summary["gpu_uuids"] = sorted(device_uuids)
+        summary["gpu_uuid_count"] = len(device_uuids)
     if peak_mib is None:
         summary["notes"].append("no parseable memory.used samples")
         return summary
@@ -591,6 +603,7 @@ def _read_gpu_monitor(path: Path | None) -> dict[str, Any] | None:
     summary["peak_memory_total_gib"] = float(total_mib / 1024.0) if total_mib is not None else None
     summary["peak_device_index"] = str(peak_row.get(index_col, "")).strip() if index_col is not None else None
     summary["peak_device_name"] = str(peak_row.get(name_col, "")).strip() if name_col is not None else None
+    summary["peak_device_uuid"] = str(peak_row.get(uuid_col, "")).strip() if uuid_col is not None else None
     summary["peak_timestamp"] = str(peak_row.get(timestamp_col, "")).strip() if timestamp_col is not None else None
     return summary
 
@@ -1297,10 +1310,6 @@ def _parse_run_log_telemetry(log_path: Path | None) -> dict[str, Any]:
     if telemetry["counts"]["sparse_pass2_events"] == 0:
         telemetry["notes"].append("no sparse pass-2 telemetry rows found in RECOVAR run log")
     return telemetry
-
-
-def _parse_batch_sizing(log_path: Path | None) -> list[dict[str, Any]]:
-    return list(_parse_run_log_telemetry(log_path).get("batch_sizing_events") or [])
 
 
 def _sparse_pass2_aggregate(
@@ -2155,32 +2164,6 @@ def _check_bool_default(
     values[key] = observed
     if observed is not bool(expected):
         failures.append(f"{key}={observed}, expected {bool(expected)}")
-
-
-def _check_log_contains(
-    *,
-    recovar_dir: Path,
-    log_name: str,
-    pattern: str,
-    label: str,
-    values: dict[str, Any],
-    failures: list[str],
-    missing_fields: list[str],
-) -> None:
-    path = recovar_dir / log_name
-    values[label] = False
-    if not path.exists():
-        missing_fields.append(log_name)
-        failures.append(f"missing {log_name}")
-        return
-    try:
-        found = pattern in path.read_text(errors="replace")
-    except Exception as exc:
-        failures.append(f"failed to read {log_name}: {exc}")
-        return
-    values[label] = bool(found)
-    if not found:
-        failures.append(f"{label}=False, expected log line containing {pattern!r}")
 
 
 def _check_log_line_match(

@@ -224,10 +224,21 @@ def _dose_filter_from_freqs(freqs, cumulative_dose, tilt_angles, voltage):
 
 
 def get_dose_filters(Apix, image_shape, cumulative_dose, tilt_angles, voltage, *, half_image=False):
+    real_dtype = jnp.result_type(cumulative_dose, tilt_angles, voltage, jnp.float32)
     if half_image:
-        freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(image_shape, Apix, scaled=True)
+        freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+            image_shape,
+            Apix,
+            scaled=True,
+            dtype=real_dtype,
+        )
     else:
-        freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, Apix, scaled=True)
+        freqs = fourier_transform_utils.get_k_coordinate_of_each_pixel(
+            image_shape,
+            Apix,
+            scaled=True,
+            dtype=real_dtype,
+        )
     return _dose_filter_from_freqs(freqs, cumulative_dose, tilt_angles, voltage)
 
 
@@ -246,10 +257,22 @@ def get_dose_filters_from_tilt_number(
 
 def _compute_spa_ctf(CTF_params, image_shape, voxel_size, *, half_image=False):
     """Standard single-particle CTF evaluation on a frequency grid."""
+    CTF_params = jnp.asarray(CTF_params)
+    real_dtype = jnp.result_type(CTF_params, jnp.float32)
     if half_image:
-        psi = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size, scaled=True)
+        psi = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+            image_shape,
+            voxel_size,
+            scaled=True,
+            dtype=real_dtype,
+        )
     else:
-        psi = fourier_transform_utils.get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=True)
+        psi = fourier_transform_utils.get_k_coordinate_of_each_pixel(
+            image_shape,
+            voxel_size,
+            scaled=True,
+            dtype=real_dtype,
+        )
     return evaluate_ctf(psi, CTF_params)
 
 

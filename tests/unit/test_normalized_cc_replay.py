@@ -3,10 +3,7 @@
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.significance import (
-    _relion_cc_inverse_power_from_processed,
-)
-from recovar.em.normalized_cc_replay import (
+from recovar.em.diagnostics.normalized_cc_replay import (
     RELION_COARSE_REDUCTION_LANES,
     RELION_FINE_REDUCTION_LANES,
     REPLAY_SCHEMA,
@@ -20,6 +17,7 @@ from recovar.em.normalized_cc_replay import (
     replay_normalized_cc,
     replay_normalized_cc_candidates,
 )
+from recovar.em.relion.relion_coarse_operands import _relion_cc_inverse_power_from_processed
 
 pytestmark = pytest.mark.unit
 
@@ -55,9 +53,7 @@ def test_recovar_logical_replay_matches_production_normalized_cc_score():
     pytest.importorskip("jax")
     import jax.numpy as jnp
 
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-        _score_pass2_pairs_normalized_cc,
-    )
+    from recovar.em.sparse_pass2.sparse_pass2_scoring import _score_pass2_pairs_normalized_cc
 
     shifted, score_weight, projections, half_weight = _production_inputs()
     production = np.asarray(
@@ -130,7 +126,7 @@ def test_relion_coarse_rescore_matches_numpy_replay():
     pytest.importorskip("jax")
     import jax.numpy as jnp
 
-    from recovar.em.dense_single_volume.helpers.scoring import (
+    from recovar.em.scoring.scoring import (
         _relion_coarse_128lane_float32_reduce,
         _relion_coarse_cc_atomic_score_from_components,
         _relion_coarse_normalized_cc_rescore_jax,
@@ -208,7 +204,7 @@ def test_relion_coarse_native_rescore_matches_exact_uniform_operands():
     import jax.numpy as jnp
 
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers.scoring import (
+    from recovar.em.scoring.scoring import (
         _relion_coarse_normalized_cc_rescore,
         _relion_coarse_normalized_cc_rescore_jax,
     )
@@ -302,8 +298,41 @@ def test_relion_coarse_native_texture_rescore_exposes_reduced_components():
     assert translated[0, 0].view(np.uint32) != translated[1, 0].view(np.uint32)
 
 
+def test_jax_relion_coarse_rescore_preserves_double_accelerator_precision():
+    pytest.importorskip("jax")
+    import jax.numpy as jnp
+    from helpers.score_diagnostics import (
+        _relion_coarse_normalized_cc_rescore_f64,
+    )
+
+    rng = np.random.default_rng(6323)
+    n_candidates, n_pixels = 3, 257
+    shifted = rng.normal(size=(n_candidates, n_pixels)) + 1j * rng.normal(
+        size=(n_candidates, n_pixels)
+    )
+    projections = rng.normal(size=(n_candidates, n_pixels)) + 1j * rng.normal(
+        size=(n_candidates, n_pixels)
+    )
+    score_weight = rng.uniform(0.1, 1.5, size=(n_candidates, n_pixels))
+    half_weights = rng.choice(np.asarray([1.0, 2.0]), size=n_pixels)
+    fftw_order = rng.permutation(n_pixels).astype(np.int32)
+
+    actual = np.asarray(
+        _relion_coarse_normalized_cc_rescore_f64(
+            jnp.asarray(shifted, dtype=jnp.complex128),
+            jnp.asarray(score_weight, dtype=jnp.float64),
+            jnp.asarray(projections, dtype=jnp.complex128),
+            jnp.asarray(half_weights, dtype=jnp.float64),
+            jnp.asarray(fftw_order),
+        )
+    )
+
+    assert actual.dtype == np.float64
+    assert np.all(np.isfinite(actual))
+
+
 def test_relion_coarse_exact_tie_uses_direction_major_flat_order():
-    from recovar.em.dense_single_volume.helpers.significance import (
+    from recovar.em.relion.relion_coarse_operands import (
         _relion_coarse_pose_tie_break_keys,
         _select_relion_coarse_rescore_winner_slots,
     )
@@ -329,7 +358,7 @@ def test_relion_coarse_exact_tie_uses_direction_major_flat_order():
 
 
 def test_relion_coarse_tie_order_maps_subset_rotation_ids():
-    from recovar.em.dense_single_volume.helpers.significance import (
+    from recovar.em.relion.relion_coarse_operands import (
         _relion_coarse_pose_tie_break_keys,
         _select_relion_coarse_rescore_winner_slots,
     )

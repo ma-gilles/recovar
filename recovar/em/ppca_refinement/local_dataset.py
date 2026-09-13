@@ -12,12 +12,9 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
-from recovar.em.dense_single_volume.helpers.preprocessing import (
-    prepare_reconstruction_batch,
-    preprocess_batch,
-)
-from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout, bucket_local_hypothesis_layout
+from recovar.em.helpers.batch_fetch import fetch_indexed_batch
+from recovar.em.helpers.preprocessing import prepare_reconstruction_batch, preprocess_batch
+from recovar.em.local.local_layout import LocalHypothesisLayout, bucket_local_hypothesis_layout
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
     PoseSelectionConfig,
@@ -26,22 +23,22 @@ from recovar.em.ppca_refinement.config import (
     SparsePass2Config,
 )
 from recovar.em.ppca_refinement.dense_dataset import prepare_dense_ppca_dataset_inputs
+from recovar.em.ppca_refinement.diagnostics import build_iteration_diagnostics, resolve_image_scale_range
 from recovar.em.ppca_refinement.engine import (
     DensePPCAFusedBlock,
     DensePPCAFusedEMResult,
     PosteriorDiagnostics,
     _enforce_augmented_x0,
 )
-from recovar.em.ppca_refinement.diagnostics import build_iteration_diagnostics, resolve_image_scale_range
 from recovar.em.ppca_refinement.mean_regularization import (
     MeanRegularizationConfig,
     resolve_mean_precision,
 )
-from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 from recovar.em.ppca_refinement.pose_selection import (
     select_distinct_top_poses,
     top_pose_candidate_count,
 )
+from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
 from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
 from recovar.ppca.pose_marginal import compute_ppca_pose_scores_and_moments_no_contrast
@@ -625,7 +622,7 @@ def accumulate_local_pose_ppca_bucket_cached(
 ):
     """Exact local PPCA M-step backprojection from cached score moments."""
 
-    from recovar.em.dense_single_volume.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
+    from recovar.em.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
 
     score = jnp.asarray(score)
     alpha = jnp.asarray(alpha)
@@ -720,7 +717,7 @@ def accumulate_local_pose_ppca_bucket_topk_cached(
 ):
     """Approximate local M-step that backprojects only the top-k posterior poses."""
 
-    from recovar.em.dense_single_volume.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
+    from recovar.em.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
 
     score = jnp.asarray(score)
     alpha = jnp.asarray(alpha)
@@ -836,7 +833,7 @@ def fused_local_pose_ppca_bucket(
     posterior accumulation instead of summing over images before the adjoint.
     """
 
-    from recovar.em.dense_single_volume.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
+    from recovar.em.helpers.adjoint import batch_adjoint_slice_volume_maybe_windowed
 
     Y1 = jnp.asarray(Y1)
     proj_aug = jnp.asarray(proj_aug)
@@ -1942,13 +1939,7 @@ def run_local_ppca_fused_em_iteration(
     sparse_pass2 = sparse_pass2 if sparse_pass2 is not None else SparsePass2Config(enabled=False)
     # Hoist into locals so the rest of the body reads cleanly.
     current_size = geometry.current_size
-    q = geometry.q
-    volume_domain = geometry.volume_domain
-    score_with_masked_images = scoring.score_with_masked_images
-    half_spectrum_scoring = scoring.half_spectrum_scoring
-    square_window = scoring.square_window
     class_log_prior = scoring.class_log_prior
-    image_scale_corrections = scoring.image_scale_corrections
     mstep_chunk_size = schedule.mstep_chunk_size
     image_batch_size = schedule.image_batch_size
     rotation_block_size = schedule.rotation_block_size

@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=vdam-relion-cont
+#SBATCH --account=gilles
+#SBATCH --partition=cryoem
+#SBATCH --qos=della-cryoem
+#SBATCH --constraint=h100
+#SBATCH --gres=gpu:h100:1
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=128G
+#SBATCH --time=00:15:00
+
+set -euo pipefail
+
+: "${VDAM_RELION_CONT_ROOT:?set a unique disposable output root}"
+: "${VDAM_RELION_CONT_INPUT_DIR:?set the materialized fixture data directory}"
+: "${VDAM_RELION_CONT_OPTIMISER:?set the exact incoming optimiser.star}"
+
+ROOT=${VDAM_RELION_CONT_ROOT}
+INPUT=${VDAM_RELION_CONT_INPUT_DIR}
+CONTINUE=${VDAM_RELION_CONT_OPTIMISER}
+REPO_ROOT=${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}}
+LAUNCHER=${REPO_ROOT}/scripts/run_vdam_relion_continuation_capture.sbatch
+ITERATION=${VDAM_RELION_CONT_ITERATION:-3}
+NR_ITER_SCHEDULE=${VDAM_RELION_CONT_NR_ITER_SCHEDULE:-${ITERATION}}
+PART_ID=${VDAM_RELION_CONT_PART_ID:-9}
+STACK_INDEX=${VDAM_RELION_CONT_STACK_INDEX:-}
+CAPTURE_ENABLED=${VDAM_RELION_CONT_CAPTURE:-0}
+BPREF_OPERANDS=${VDAM_RELION_CONT_BPREF_OPERANDS:-0}
+PERTURBATION=${VDAM_RELION_CONT_PERTURBATION:-}
+SIGMA2_NOISE_DUMP_DIR=${VDAM_RELION_CONT_SIGMA2_NOISE_DUMP_DIR:-}
+BPREF_TOPOLOGY_PATH=${VDAM_RELION_CONT_BPREF_TOPOLOGY_PATH:-}
+BPREF_TOPOLOGY_EXPECTED_ROWS=${VDAM_RELION_CONT_BPREF_TOPOLOGY_EXPECTED_ROWS:-}
+MSTEP_DUMP_DIR=${VDAM_RELION_CONT_MSTEP_DUMP_DIR:-}
+TARGET_GPU_UUID=${VDAM_RELION_CONT_TARGET_GPU_UUID:-}
+RELION_BINARY=${VDAM_RELION_BINARY:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}
+RELION_RUNTIME=${VDAM_RELION_RUNTIME:-/scratch/gpfs/GILLES/mg6942/recovar_dev/relion_k4_100k_dispatchv2_20260717}
+RELION_SKIP_MODULE=${VDAM_RELION_SKIP_MODULE:-0}
+OUTPUT=${ROOT}/relion
+CAPTURE=${ROOT}/capture
+
+test -f "${ROOT}/SAFE_TO_DELETE"
+test -s "${INPUT}/particles.star"
+test -s "${CONTINUE}"
+test -x "${RELION_BINARY}"
+test "${ITERATION}" -ge 1
+test "${NR_ITER_SCHEDULE}" -ge "${ITERATION}"
+case "${CAPTURE_ENABLED}" in 0|1) ;; *) echo "VDAM_RELION_CONT_CAPTURE must be 0 or 1" >&2; exit 2 ;; esac
+case "${BPREF_OPERANDS}" in 0|1) ;; *) echo "VDAM_RELION_CONT_BPREF_OPERANDS must be 0 or 1" >&2; exit 2 ;; esac
+if [[ "${BPREF_OPERANDS}" == 1 ]]; then
+    test "${CAPTURE_ENABLED}" == 1
+fi
+case "${RELION_SKIP_MODULE}" in 0|1) ;; *) echo "VDAM_RELION_SKIP_MODULE must be 0 or 1" >&2; exit 2 ;; esac
+mkdir -p "${OUTPUT}" "${CAPTURE}" "${ROOT}/provenance"
+test -z "$(find "${OUTPUT}" "${CAPTURE}" -mindepth 1 -print -quit)"
+
+unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV CONDA_DEFAULT_ENV
+while IFS='=' read -r variable_name _; do
+    case "${variable_name}" in RECOVAR_*|RELION_ACC_DUMP_*|RELION_DUMP_*) unset "${variable_name}" ;; esac
+done < <(env)
+
+export TMPDIR=${ROOT}/runtime/${SLURM_JOB_ID}/tmp
+mkdir -p "${TMPDIR}"
+
+if [[ "${RELION_SKIP_MODULE}" == 0 ]]; then
+    source /etc/profile.d/modules.sh
+    set +u
+    module purge
+    module load relion/5.0.0/gcc-11.5.0
+    set -u
+fi
+MPI_ROOT=/usr/local/openmpi/cuda-12.6/4.1.6/gcc
+CUDA_HOME=/usr/local/cuda-12.6
+export PATH=${CUDA_HOME}/bin:${PATH}
+export LD_LIBRARY_PATH=${RELION_RUNTIME}/system_dev_overlay/lib:${MPI_ROOT}/lib64:${CUDA_HOME}/lib64
+export OMPI_MCA_orte_tmpdir_base=${TMPDIR}
+export OMPI_MCA_shmem_mmap_enable_nfs_warning=0
+export CUDA_VISIBLE_DEVICES=0
+
+visible_gpu_uuid=$(nvidia-smi --query-gpu=uuid --format=csv,noheader | head -n 1 | tr -d '[:space:]')
+if [[ -n "${TARGET_GPU_UUID}" && "${visible_gpu_uuid}" != "${TARGET_GPU_UUID}" ]]; then
+    echo "VDAM_TARGET_GPU_MISS expected=${TARGET_GPU_UUID} observed=${visible_gpu_uuid}" >&2
+    exit 75
+fi
+
+if [[ -n "${PERTURBATION}" ]]; then
+    export RELION_FORCE_SAMPLING_PERTURB=${PERTURBATION}
+fi
+if [[ -n "${SIGMA2_NOISE_DUMP_DIR}" ]]; then
+    mkdir -p "${SIGMA2_NOISE_DUMP_DIR}"
+    export RELION_DUMP_SIGMA2_NOISE_DIR=${SIGMA2_NOISE_DUMP_DIR}
+fi
+if [[ -n "${BPREF_TOPOLOGY_PATH}" ]]; then
+    test ! -e "${BPREF_TOPOLOGY_PATH}"
+    mkdir -p "$(dirname "${BPREF_TOPOLOGY_PATH}")"
+    export RELION_ACC_DUMP_BPREF_TOPOLOGY=${BPREF_TOPOLOGY_PATH}
+fi
+if [[ -n "${MSTEP_DUMP_DIR}" ]]; then
+    mkdir -p "${MSTEP_DUMP_DIR}"
+    export RECOVAR_DEBUG_DUMP_DIR=${MSTEP_DUMP_DIR}
+    export RECOVAR_DEBUG_DUMP_MSTEP_ITER=${ITERATION}
+fi
+
+if [[ "${CAPTURE_ENABLED}" == 1 ]]; then
+    export RELION_ACC_DUMP_DIR=${CAPTURE}
+    export RELION_ACC_DUMP_PART_ID=${PART_ID}
+    if [[ -n "${STACK_INDEX}" ]]; then
+        export RELION_ACC_DUMP_STACK_INDEX=${STACK_INDEX}
+    fi
+    export RELION_ACC_DUMP_ITER=${ITERATION}
+    export RELION_ACC_DUMP_VERBOSE=1
+    if [[ "${BPREF_OPERANDS}" == 1 ]]; then
+        export RELION_ACC_DUMP_BPREF_OPERANDS=1
+    fi
+fi
+
+COMMAND=(
+    srun --ntasks=1 --cpus-per-task=8 --cpu-bind=none "${RELION_BINARY}"
+    --continue "${CONTINUE}" --o "${OUTPUT}/run"
+    --iter "${NR_ITER_SCHEDULE}"
+    --pool 3 --gpu 0 --j 8
+)
+printf '%q ' "${COMMAND[@]}" > "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
+printf '\n' >> "${ROOT}/provenance/command_${SLURM_JOB_ID}.sh"
+sha256sum "${LAUNCHER}" "${RELION_BINARY}" "${CONTINUE}" \
+    > "${ROOT}/provenance/static_inputs_${SLURM_JOB_ID}.sha256"
+nvidia-smi -q > "${ROOT}/provenance/nvidia_smi_${SLURM_JOB_ID}.txt"
+
+start_epoch=$(date +%s)
+(
+    cd "${INPUT}"
+    "${COMMAND[@]}"
+) > "${OUTPUT}/runner.stdout" 2> "${OUTPUT}/runner.stderr"
+wall_s=$(( $(date +%s) - start_epoch ))
+
+test -s "${OUTPUT}/run_it$(printf '%03d' "${ITERATION}")_data.star"
+if [[ -n "${BPREF_TOPOLOGY_PATH}" ]]; then
+    test -s "${BPREF_TOPOLOGY_PATH}"
+    if [[ -n "${BPREF_TOPOLOGY_EXPECTED_ROWS}" ]]; then
+        test "$(wc -l < "${BPREF_TOPOLOGY_PATH}")" -eq \
+            "${BPREF_TOPOLOGY_EXPECTED_ROWS}"
+    fi
+fi
+if [[ -n "${MSTEP_DUMP_DIR}" ]]; then
+    test -s "${MSTEP_DUMP_DIR}/pipe_it${ITERATION}_c0_bp_data_pre_reweight.bin"
+    test -s "${MSTEP_DUMP_DIR}/pipe_it${ITERATION}_c0_bp_weight.bin"
+fi
+if [[ "${CAPTURE_ENABLED}" == 1 ]]; then
+    test -s "${CAPTURE}/Pmax.bin"
+    test -s "${CAPTURE}/pass0_coarse_raw_diff2.bin"
+    test -s "${CAPTURE}/pass1_exp_Mweight_posterior.bin"
+fi
+! rg -qi 'Traceback|Out of memory|CUDA_ERROR_OUT_OF_MEMORY' "${OUTPUT}/runner.stderr"
+printf '{"job_id":"%s","wall_s":%d,"iteration":%d,"nr_iter_schedule":%d,"part_id":%d,"stack_index":"%s","capture":%s,"bpref_operands":%s,"bpref_topology":"%s","bpref_topology_expected_rows":"%s","mstep_dump_dir":"%s","gpu_uuid":"%s","target_gpu_uuid":"%s","continued_from":"%s","forced_perturbation":"%s"}\n' \
+    "${SLURM_JOB_ID}" "${wall_s}" "${ITERATION}" "${NR_ITER_SCHEDULE}" "${PART_ID}" "${STACK_INDEX}" "${CAPTURE_ENABLED}" "${BPREF_OPERANDS}" "${BPREF_TOPOLOGY_PATH}" "${BPREF_TOPOLOGY_EXPECTED_ROWS}" "${MSTEP_DUMP_DIR}" "${visible_gpu_uuid}" "${TARGET_GPU_UUID}" "${CONTINUE}" "${PERTURBATION}" \
+    > "${ROOT}/provenance/walltime_${SLURM_JOB_ID}.json"
+touch "${ROOT}/RUN_SUCCESS_${SLURM_JOB_ID}"

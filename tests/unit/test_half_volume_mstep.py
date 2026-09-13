@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import logging
-from pathlib import Path
 import inspect
+import logging
 import re
+from helpers.cuda_source import read_cuda_source
 
 import numpy as np
 import pytest
@@ -14,7 +14,7 @@ import jax.numpy as jnp
 import recovar.core.fourier_transform_utils as ftu
 import recovar.core.slicing as slicing
 import recovar.cuda_backproject as cuda_backproject
-from recovar.em.dense_single_volume.helpers import half_volume_mstep
+from recovar.em.helpers import half_volume_mstep
 from recovar.reconstruction import regularization
 
 pytestmark = pytest.mark.unit
@@ -194,7 +194,7 @@ def test_non_relion_mstep_keeps_dataset_accumulator_dtype(monkeypatch):
 
 
 def test_exact_local_mstep_splits_when_accumulator_dtypes_differ():
-    from recovar.em.dense_single_volume.local_big_jit import _exact_local_mstep_should_split_adjoints
+    from recovar.em.local.local_big_jit import _exact_local_mstep_should_split_adjoints
 
     assert _exact_local_mstep_should_split_adjoints(
         (259, 259, 259),
@@ -249,7 +249,7 @@ def test_relion_backprojector_volume_shape_rejects_invalid_inputs():
 
 
 def test_enforce_relion_x0_hermitian_uses_centered_odd_grid_partner():
-    from recovar.em.dense_single_volume.local_backprojection import (
+    from recovar.em.local.local_backprojection import (
         enforce_relion_half_volume_x0_hermitian,
         enforce_relion_half_volume_x0_hermitian_host,
     )
@@ -286,7 +286,7 @@ def test_enforce_relion_x0_hermitian_uses_centered_odd_grid_partner():
     assert np.max(np.abs(unshifted_plane - expected_plane)) > 1e-3
 
 
-def test_enforce_half_volume_x0_uses_host_path_for_large_grids(monkeypatch):
+def test_enforce_half_volume_x0_can_force_host_path(monkeypatch):
     volume_shape = (6, 6, 6)
     half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
     Ft_y = _random_complex(half_shape, seed=91)
@@ -299,7 +299,7 @@ def test_enforce_half_volume_x0_uses_host_path_for_large_grids(monkeypatch):
         half_volume_mstep.enforce_relion_half_volume_x0_hermitian(jnp.asarray(Ft_ctf).reshape(-1), volume_shape)
     )
 
-    monkeypatch.setattr(half_volume_mstep, "_large_relion_x_half_host_x0_enabled", lambda full_voxels: True)
+    monkeypatch.setattr(half_volume_mstep, "_large_relion_x_half_host_x0_enabled", lambda full_voxels: False)
 
     def fail_device_enforcement(*args, **kwargs):
         raise AssertionError("device x0 enforcement should not run for large-grid host path")
@@ -312,6 +312,7 @@ def test_enforce_half_volume_x0_uses_host_path_for_large_grids(monkeypatch):
         volume_shape,
         logger=logging.getLogger(__name__),
         label="unit",
+        force_host=True,
     )
 
     assert isinstance(got_y, np.ndarray)
@@ -320,10 +321,9 @@ def test_enforce_half_volume_x0_uses_host_path_for_large_grids(monkeypatch):
     np.testing.assert_allclose(got_ctf, expected_ctf, rtol=1e-6, atol=1e-6)
 
 
-def test_relion_x_half_production_allocators_use_current_size_backprojector_shape():
-    from recovar.em.dense_single_volume import k_class
-    from recovar.em.dense_single_volume import local_em_engine
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+def test_relion_x_half_sparse_allocators_use_current_size_backprojector_shape():
+    from recovar.em.classification import k_class
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed
 
     def assert_uses_current_size_shape(fn):
         source = inspect.getsource(fn)
@@ -335,8 +335,10 @@ def test_relion_x_half_production_allocators_use_current_size_backprojector_shap
             return (
                 "current_size=current_size" in call
                 or "current_size=mstep_current_size" in call
+                or 'current_size=common["current_size"]' in call
                 or (
-                    'common["current_size"]' in call
+                    "current_size=(" in call
+                    and 'common["current_size"]' in call
                     and 'common["reconstruction_current_size"]' in call
                 )
             )
@@ -346,7 +348,6 @@ def test_relion_x_half_production_allocators_use_current_size_backprojector_shap
             if "reconstruction_padding_factor" in call or 'common["reconstruction_padding_factor"]' in call:
                 assert uses_explicit_current_size(call)
 
-    assert_uses_current_size_shape(local_em_engine.run_local_em_exact)
     assert_uses_current_size_shape(sparse_pass2_bucketed.compute_pass2_stats_sparse_bucketed)
     assert_uses_current_size_shape(sparse_pass2_bucketed.compute_k_class_pass2_stats_sparse_fused)
     assert_uses_current_size_shape(k_class._run_sparse_k_class_adaptive_pass2)
@@ -381,7 +382,7 @@ def test_relion_x_half_public_full_layout_uses_host_expand_when_forced(monkeypat
         raise AssertionError("JAX half-volume expansion should not be used")
 
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_TO_NATIVE_HALF", "0")
-    monkeypatch.setenv("RECOVAR_RELION_X_HALF_FULL_HOST", "1")
+    monkeypatch.setenv("RECOVAR_RELION_X_HALF_FULL_HOST", "0")
     monkeypatch.setattr(
         half_volume_mstep.fourier_transform_utils,
         "half_volume_to_full_volume",
@@ -391,6 +392,7 @@ def test_relion_x_half_public_full_layout_uses_host_expand_when_forced(monkeypat
     full = half_volume_mstep.relion_x_half_volume_to_public_layout(
         jnp.asarray(half_grid).reshape(-1),
         volume_shape,
+        force_host=True,
     )
 
     assert isinstance(full, np.ndarray)
@@ -570,8 +572,7 @@ def test_relion_x_half_batched_indexed_adjoint_preserves_accumulator_dtype(monke
 
 
 def test_relion_x_half_cuda_skips_fftw_x0_negative_row_duplicate():
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
 
     duplicate_x0_guard = "relion_fold_x && HALF_IMG && HALF_VOL && k1_idx == 0 && k0_idx >= image_w"
     assert text.count(duplicate_x0_guard) == 2
@@ -583,8 +584,7 @@ def test_relion_x_half_cuda_skips_fftw_x0_negative_row_duplicate():
 
 
 def test_relion_x_half_cuda_rotates_before_applying_padding_factor():
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
 
     # Strict RELION backprojection must preserve the operation ordering in
     # cuda_kernel_backproject3D. At outer-shell pixels, distributing the
@@ -605,14 +605,14 @@ def test_relion_x_half_cuda_rotates_before_applying_padding_factor():
 
 
 def test_relion_x_half_cuda_pins_physical_radius_accumulation_order():
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
 
     helper = text[text.index("float relion_radius_squared(") : text.index("#define BLOCK_SIZE")]
     assert "__fmul_rn(rk1, rk1)" in helper
     assert "__fmaf_rn(rk2, rk2, y2)" in helper
     assert "__fmaf_rn(rk0, rk0, xy2)" in helper
-    assert text.count("relion_radius_squared(rk0, rk1, rk2)") == 4
+    assert "relion_vdam_mstep_fused_x_half_kernel" in text
+    assert text.count("relion_radius_squared(rk0, rk1, rk2)") == 5
 
 
 def test_relion_x_half_bp_block_topology_env_is_off_by_default(monkeypatch):
@@ -698,8 +698,7 @@ def test_relion_x_half_bp_block_topology_actual_256_to_48_support_is_unique():
 
 
 def test_relion_x_half_bp_block_topology_cuda_source_covers_single_and_batch():
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
 
     assert "RELION_BLOCK_TOPOLOGY ? 128 : n_pixels" in text
     assert "dim3 relion_block(128)" in text
@@ -773,10 +772,52 @@ def test_relion_fused_x_half_wrapper_uses_mixed_aliases_and_native_square(monkey
     assert result[0] is data_volume and result[1] is weight_volume
 
 
+def test_relion_fused_x_half_wrapper_preserves_double_precision(monkeypatch):
+    observed = {}
+
+    def fake_ffi_call(_target, result_types, **_options):
+        observed["result_types"] = result_types
+
+        def call(*args, **_attrs):
+            observed["args"] = args
+            return args[4], args[5]
+
+        return call
+
+    monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
+
+    volume_size = 7 * 7 * 4
+    data_volume = jnp.zeros(volume_size, dtype=jnp.complex128)
+    weight_volume = jnp.zeros(volume_size, dtype=jnp.float64)
+    rotation = jnp.asarray(
+        [[[1.0, 0.1, 0.2], [0.3, 1.0, 0.4], [0.5, 0.6, 1.0]]],
+        dtype=jnp.float64,
+    )
+    cuda_backproject.relion_fused_x_half_backproject_indexed.__wrapped__(
+        data_volume,
+        weight_volume,
+        jnp.ones((1, 1), dtype=jnp.complex128),
+        jnp.ones((1, 1), dtype=jnp.float64),
+        jnp.asarray([0], dtype=jnp.int32),
+        rotation,
+        (8, 8),
+        (7, 7, 7),
+        2.0,
+    )
+
+    assert [item.dtype for item in observed["result_types"]] == [jnp.complex128, jnp.float64]
+    assert observed["args"][0].dtype == jnp.complex128
+    assert observed["args"][1].dtype == jnp.float64
+    assert observed["args"][3].dtype == jnp.float64
+    expected_rot6 = np.asarray(rotation)[..., [2, 1, 0]][:, [1, 0], :].reshape(1, 6)
+    np.testing.assert_array_equal(np.asarray(observed["args"][3]), expected_rot6)
+
+
 @pytest.mark.parametrize(
     "data_dtype,weight_dtype,index_dtype,error_match",
     [
-        (jnp.complex128, jnp.float32, jnp.int32, "data volume must be complex64"),
+        (jnp.complex128, jnp.float32, jnp.int32, "weight volume must be float64"),
         (jnp.complex64, jnp.float64, jnp.int32, "weight volume must be float32"),
         (jnp.complex64, jnp.float32, jnp.int64, "pixel indices must be int32"),
     ],
@@ -807,27 +848,72 @@ def test_relion_fused_x_half_wrapper_rejects_non_relion_dtypes(
 
 
 def test_relion_fused_x_half_cuda_source_interleaves_neighbor_atomics():
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
 
     assert "relion_fused_x_half_backproject_kernel" in text
     assert "for (int pix = (int)threadIdx.x; pix < n_pixels; pix += 128)" in text
     assert "dim3 block(128)" in text
     assert "if (!(Fweight > 0.0f)) {" in text
     atomic_sequence = re.compile(
+        r"if constexpr \(SEPARATE_DATA\) \{\s*"
+        r"atomicAdd\(&data_real_volume\[off\], sre\);\s*"
+        r"atomicAdd\(&data_imag_volume\[off\], sim\);\s*"
+        r"\} else \{\s*"
         r"atomicAdd\(&data_volume\[off\]\.x, sre\);\s*"
         r"atomicAdd\(&data_volume\[off\]\.y, sim\);\s*"
+        r"\}\s*"
         r"atomicAdd\(&weight_volume\[off\], w \* Fweight\);"
     )
     assert atomic_sequence.search(text)
+    fused_kernel = text[
+        text.index("relion_fused_x_half_backproject_kernel(") :
+        text.index("/* ================================================================== */", text.index("relion_fused_x_half_backproject_kernel("))
+    ]
+    assert "const T r2_3d = relion_radius_squared" in fused_kernel
+    assert "const float r2_3d = relion_radius_squared" not in fused_kernel
     handler = text[
         text.index("RelionFusedXHalfBackproject, RelionFusedXHalfBackprojectImpl") :
         text.index(
-            "RelionFusedXHalfBackprojectSignature, "
-            "RelionFusedXHalfBackprojectSignatureImpl"
+            "RelionFusedXHalfBackprojectParticleGrid,"
         )
     ]
     assert handler.count(".Ret<ffi::AnyBuffer>()") == 2
+    assert "RelionFusedXHalfBackprojectParticleGridImpl" in text
+    assert "for (int64_t particle = 0; particle < n_particles; ++particle)" in text
+
+
+def test_relion_x_half_cuda_uses_native_floorf_buckets_in_double_mode():
+    """RELION's double CUDA BPref still rounds interpolation buckets via floorf."""
+
+    text = read_cuda_source()
+
+    assert (
+        "static __device__ __forceinline__ int relion_floor_int(double x) "
+        "{ return (int)floorf((float)x); }"
+    ) in text
+    compact_gate = text[
+        text.index("static __device__ __forceinline__ bool relion_compact_trilinear_oob(") :
+        text.index("/* scatter_nearest:")
+    ]
+    assert compact_gate.count("relion_floor_int(") == 3
+
+    fused_scatter = text[
+        text.index("static __device__ __forceinline__ void scatter_trilinear_relion_fused_x_half(") :
+        text.index("/* ================================================================== */", text.index("static __device__ __forceinline__ void scatter_trilinear_relion_fused_x_half("))
+    ]
+    for axis in range(3):
+        assert f"const int r{axis} = relion_floor_int(rk{axis});" in fused_scatter
+
+    indexed_kernel = text[
+        text.index("backproject_indexed_kernel(") :
+        text.index("/* Diagnostic companion", text.index("backproject_indexed_kernel("))
+    ]
+    batched_kernel = text[
+        text.index("batch_backproject_indexed_kernel(") :
+        text.index("/* One invocation corresponds", text.index("batch_backproject_indexed_kernel("))
+    ]
+    assert "stride0, stride1,\n                                           relion_half_backproject" in indexed_kernel
+    assert "stride0, stride1,\n                                               relion_half_backproject" in batched_kernel
 
 
 def test_relion_fused_x_half_signature_inertness_gate_rejects_shadow_mismatch():
@@ -941,8 +1027,7 @@ def test_ordinary_indexed_signature_inertness_gate_rejects_shadow_mismatch(monke
 
 
 def test_ordinary_indexed_signature_cuda_source_copies_after_production_launch():
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
     start = text.index("cudaError_t launch_backproject_indexed_with_signature(")
     launch = text[start : text.index("cudaError_t launch_relion_fused_x_half_backproject(", start)]
 
@@ -956,8 +1041,7 @@ def test_ordinary_indexed_signature_cuda_source_copies_after_production_launch()
 
 
 def test_ordinary_indexed_signature_matches_production_fraction_order():
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
     production = text[
         text.index("static __device__ __forceinline__ void scatter_trilinear(") :
         text.index("/* Strict RELION x-half diagnostic:")
@@ -1019,16 +1103,15 @@ def test_ordinary_indexed_signature_ffi_smoke(monkeypatch, custom_cuda_lib, gpu_
 
 
 def test_relion_fused_x_half_signature_cuda_source_copies_before_read_only_kernel():
-    cuda_source = Path(__file__).resolve().parents[2] / "recovar" / "cuda" / "cuda_backproject.cu"
-    text = cuda_source.read_text()
+    text = read_cuda_source()
     start = text.index("cudaError_t launch_relion_fused_x_half_backproject_with_signature(")
     launch = text[start : text.index("template <typename T>", start)]
 
     ordinary = launch.index("launch_relion_fused_x_half_backproject(")
     shadow = launch.index("cudaMemcpyAsync(accumulator_shadow_data")
-    signature = launch.index("relion_fused_x_half_backproject_kernel<true, false>")
+    signature = launch.index("relion_fused_x_half_backproject_kernel<float, float2, true, false>")
     assert ordinary < shadow < signature
-    assert "relion_fused_x_half_backproject_kernel<true, true>" not in launch
+    assert "relion_fused_x_half_backproject_kernel<float, float2, true, true>" not in launch
     for name in (
         "accumulator_shadow_weight",
         "operand_shadow_data_rows",
@@ -1267,3 +1350,150 @@ def test_relion_fused_x_half_cuda_matches_separate_topology(
 
     np.testing.assert_allclose(np.asarray(actual_data), np.asarray(expected_data), rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(np.asarray(actual_weight), np.asarray(expected_weight), rtol=1e-6, atol=1e-6)
+
+
+@pytest.mark.gpu
+def test_relion_fused_x_half_native_particle_grid_is_bitwise_sequential(
+    monkeypatch, custom_cuda_lib, gpu_device
+):
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    image_shape = (8, 8)
+    volume_shape = (7, 7, 7)
+    volume_size = 7 * 7 * 4
+    pixel_indices = jnp.asarray([1, 2 * 5 + 2, 7 * 5 + 1], dtype=jnp.int32)
+    data_rows = jnp.asarray(
+        [
+            [[1 + 2j, -3 + 1.5j, 0.25 - 2j], [0 + 0j, 2 - 1j, -1 + 0.5j]],
+            [[-2 + 1j, 0.5 + 0.25j, 3 - 4j], [1 - 1j, 2 + 3j, -0.5 + 0j]],
+            [[0.75 - 0.5j, 1.5 + 2j, -2 - 1j], [0 + 0j, 0 + 0j, 0 + 0j]],
+        ],
+        dtype=jnp.complex64,
+    )
+    weight_rows = jnp.asarray(
+        [
+            [[1, 0.5, 2], [0.75, 1.25, 0.25]],
+            [[0.25, 1.5, 0.75], [2, 0.5, 1]],
+            [[1.25, 0.25, 0.5], [0, 0, 0]],
+        ],
+        dtype=jnp.float32,
+    )
+    base_rotations = jnp.asarray(
+        [
+            np.eye(3, dtype=np.float32),
+            [[0, -1, 0], [1, 0, 0], [0, 0, 1]],
+        ],
+        dtype=jnp.float32,
+    )
+    rotations = jnp.broadcast_to(base_rotations, (3, 2, 3, 3))
+
+    with cuda_backproject.jax.default_device(gpu_device):
+        expected_data = jnp.zeros(volume_size, dtype=jnp.complex64)
+        expected_weight = jnp.zeros(volume_size, dtype=jnp.float32)
+        for particle in range(3):
+            expected_data, expected_weight = cuda_backproject.relion_fused_x_half_backproject_indexed(
+                expected_data,
+                expected_weight,
+                data_rows[particle],
+                weight_rows[particle],
+                pixel_indices,
+                rotations[particle],
+                image_shape,
+                volume_shape,
+                2.0,
+            )
+        actual_data, actual_weight = (
+            cuda_backproject.relion_fused_x_half_backproject_particle_grid_indexed(
+                jnp.zeros(volume_size, dtype=jnp.complex64),
+                jnp.zeros(volume_size, dtype=jnp.float32),
+                data_rows,
+                weight_rows,
+                pixel_indices,
+                rotations,
+                image_shape,
+                volume_shape,
+                2.0,
+            )
+        )
+
+    np.testing.assert_array_equal(np.asarray(actual_data), np.asarray(expected_data))
+    np.testing.assert_array_equal(np.asarray(actual_weight), np.asarray(expected_weight))
+
+
+def test_relion_fused_x_half_particle_grid_preserves_particle_axis_in_native_attrs(
+    monkeypatch,
+):
+    observed = {}
+
+    def fake_ffi_call(target, result_types, **options):
+        observed.update(target=target, result_types=result_types, options=options)
+
+        def call(*args, **attrs):
+            observed.update(args=args, attrs=attrs)
+            return args[4], args[5]
+
+        return call
+
+    monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
+    monkeypatch.setattr(cuda_backproject.jax.ffi, "ffi_call", fake_ffi_call)
+    data_volume = jnp.zeros(7 * 7 * 4, dtype=jnp.complex64)
+    weight_volume = jnp.zeros(7 * 7 * 4, dtype=jnp.float32)
+    data_rows = jnp.ones((2, 3, 2), dtype=jnp.complex64)
+    weight_rows = jnp.ones((2, 3, 2), dtype=jnp.float32)
+    pixel_indices = jnp.asarray([1, 7 * 5 + 1], dtype=jnp.int32)
+    rotations = jnp.broadcast_to(jnp.eye(3, dtype=jnp.float32), (2, 3, 3, 3))
+
+    result = cuda_backproject.relion_fused_x_half_backproject_particle_grid_indexed.__wrapped__(
+        data_volume,
+        weight_volume,
+        data_rows,
+        weight_rows,
+        pixel_indices,
+        rotations,
+        (8, 8),
+        (7, 7, 7),
+        2.0,
+    )
+
+    assert observed["target"] == cuda_backproject._TARGET_RELION_FUSED_X_HALF_BP_PARTICLE_GRID
+    assert observed["options"]["input_output_aliases"] == {4: 0, 5: 1}
+    assert observed["attrs"]["n_particles"] == 2
+    assert observed["attrs"]["rows_per_particle"] == 3
+    assert observed["args"][0].shape == (6, 12)
+    assert observed["args"][3].shape == (6, 6)
+    assert result[0] is data_volume and result[1] is weight_volume
+
+
+
+def test_enforce_half_volume_x0_uses_host_path_for_large_grids(monkeypatch):
+    volume_shape = (6, 6, 6)
+    half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+    Ft_y = _random_complex(half_shape, seed=91)
+    Ft_ctf = _random_complex(half_shape, seed=92)
+
+    expected_y = np.asarray(
+        half_volume_mstep.enforce_relion_half_volume_x0_hermitian(jnp.asarray(Ft_y).reshape(-1), volume_shape)
+    )
+    expected_ctf = np.asarray(
+        half_volume_mstep.enforce_relion_half_volume_x0_hermitian(jnp.asarray(Ft_ctf).reshape(-1), volume_shape)
+    )
+
+    monkeypatch.setattr(half_volume_mstep, "_large_relion_x_half_host_x0_enabled", lambda full_voxels: True)
+
+    def fail_device_enforcement(*args, **kwargs):
+        raise AssertionError("device x0 enforcement should not run for large-grid host path")
+
+    monkeypatch.setattr(half_volume_mstep, "enforce_relion_half_volume_x0_hermitian", fail_device_enforcement)
+
+    got_y, got_ctf = half_volume_mstep.enforce_half_volume_x0(
+        jnp.asarray(Ft_y).reshape(-1),
+        jnp.asarray(Ft_ctf).reshape(-1),
+        volume_shape,
+        logger=logging.getLogger(__name__),
+        label="unit",
+    )
+
+    assert isinstance(got_y, np.ndarray)
+    assert isinstance(got_ctf, np.ndarray)
+    np.testing.assert_allclose(got_y, expected_y, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(got_ctf, expected_ctf, rtol=1e-6, atol=1e-6)

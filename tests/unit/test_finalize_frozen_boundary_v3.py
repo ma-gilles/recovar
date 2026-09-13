@@ -8,11 +8,11 @@ import pandas as pd
 import pytest
 import starfile
 
-from recovar.em.dense_single_volume.frozen_boundary import (
+from recovar.em.diagnostics.frozen_boundary import (
+    _V3_SCALAR_DTYPES,
     FROZEN_BOUNDARY_NUMERICAL_CLASSIFICATION_SCOPE,
     FROZEN_BOUNDARY_PROVENANCE_VERIFICATION_SCOPE,
     V3_REQUIRED_FIXED_SOURCE_NAMES,
-    _V3_SCALAR_DTYPES,
 )
 from scripts.finalize_frozen_boundary_v3 import (
     _runtime_payload,

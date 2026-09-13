@@ -1,30 +1,17 @@
-"""Regression tests for the K=1 halfset-averaging SsnrMap fix.
+"""Regression tests for the InitialModel SsnrMap weight source.
 
-Pinned at commit ``db4f49c4`` after the unconditional version
-(``58092af8``) regressed K>1 trajectories. Behavior locked in:
-
-* ``state.K == 1`` AND ``accum_h1 is not None`` → SsnrMap weight is
-  ``0.5 * (accum_h0.weight + accum_h1.weight)``. RELION at iter-1
-  passes a single unified-halfset BPref weight to ``updateSSNRarrays``
-  (``do_split_random_halves=0``); recovar's pseudo-halfset architecture
-  produces two per-class accumulators, each ~equivalent to a full pass
-  via Hermitian doubling, so averaging recovers the unified weight.
-  Aligns autosampling timing with RELION (HEALPix 1→2 fires at iter-10
-  in the K=1 nr_iter=10 PDB walkthrough).
-
-* ``state.K > 1`` (any pseudo_halfsets setting) → SsnrMap weight is
-  ``accum_h0.weight``. Per-class softmax assignment makes h0/h1 not
-  symmetric across particles; averaging there inflates resolution and
-  regressed K=4 nr_iter=10 mean CC vs RELION from 0.997 → 0.90 in one
-  test before this conditional was added.
-
-* ``accum_h1 is None`` (pseudo_halfsets=False) → SsnrMap weight is
-  ``accum_h0.weight``. Falls back to single-set behavior cleanly.
+RELION calls ``updateSSNRarrays`` on ``BPref[iclass]``.  Its pseudo-halfset
+``BPref[iclass + nr_classes]`` is used by the gradient-moment update but is
+not averaged into the SsnrMap input.  RECOVAR's matching objects are
+``accum_h0`` and ``accum_h1``, respectively, so every class count and
+halfset mode must pass ``accum_h0.weight`` unchanged.
 
 The tests intercept ``vdam_update_ssnr_arrays_from_bpref`` to inspect
 the weight argument exactly as ``vdam_m_step_single_class`` calls it,
 without relying on downstream tau2/sigma2 values that are sensitive to
-the binding's numerical details.
+the binding's numerical details. The probe explicitly selects the Python
+composition: the default fused native transaction calls SSNR internally and
+cannot be intercepted at the Python binding attribute.
 """
 
 from __future__ import annotations
@@ -32,11 +19,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from recovar.em.initial_model import initialise_denovo_state
-from recovar.em.initial_model.m_step import (
-    VdamAccumulator,
-    vdam_m_step_single_class,
-)
+from recovar.em.vdam.init import initialise_denovo_state
+from recovar.em.vdam.mstep_single_class import vdam_m_step_single_class
+from recovar.em.vdam.state import VdamAccumulator
 
 pytestmark = pytest.mark.unit
 
@@ -84,8 +69,8 @@ def _patch_ssnr(monkeypatch, bind):
     return rec
 
 
-def test_k1_pseudo_halfsets_uses_averaged_weight(_bind_module, monkeypatch):
-    """K=1 with both halfsets present → SsnrMap input is 0.5*(h0+h1)."""
+def test_k1_pseudo_halfsets_uses_primary_weight(_bind_module, monkeypatch):
+    """K=1 with both halfsets present still uses the primary BPref weight."""
     rec = _patch_ssnr(monkeypatch, _bind_module)
 
     ori = 16
@@ -101,14 +86,13 @@ def test_k1_pseudo_halfsets_uses_averaged_weight(_bind_module, monkeypatch):
         accum_h1=a1,
         grad_current_stepsize=0.5,
         tau2_fudge_factor=1.0,
+        use_native_transaction=False,
     )
 
     assert rec.call_count == 1
-    expected = 0.5 * (a0.weight + a1.weight)
-    np.testing.assert_array_equal(rec.captured_weight, expected)
-    # Sanity: the average is genuinely different from h0 alone (so the
-    # condition is non-trivial — different scales above guarantee this).
-    assert not np.array_equal(rec.captured_weight, a0.weight)
+    np.testing.assert_array_equal(rec.captured_weight, a0.weight)
+    averaged = 0.5 * (a0.weight + a1.weight)
+    assert not np.array_equal(rec.captured_weight, averaged)
 
 
 def test_k1_no_halfsets_uses_h0_weight(_bind_module, monkeypatch):
@@ -127,6 +111,7 @@ def test_k1_no_halfsets_uses_h0_weight(_bind_module, monkeypatch):
         accum_h1=None,
         grad_current_stepsize=0.5,
         tau2_fudge_factor=1.0,
+        use_native_transaction=False,
     )
 
     assert rec.call_count == 1
@@ -135,14 +120,7 @@ def test_k1_no_halfsets_uses_h0_weight(_bind_module, monkeypatch):
 
 @pytest.mark.parametrize("K", [2, 4])
 def test_k_class_pseudo_halfsets_uses_h0_weight(_bind_module, monkeypatch, K):
-    """K>1 with pseudo_halfsets=True → SsnrMap input is accum_h0.weight, NOT averaged.
-
-    Locks down the K=4 regression fix: averaging here drove K=4 nr_iter=10
-    mean CC from 0.997 → 0.90 because per-class halfset accumulators are
-    not symmetric under softmax class assignment. Even when accum_h1 is
-    available, K>1 must keep the h0-only path until the K-class structural
-    rewrite (Class3D single-set + prev-Iref tau2) lands.
-    """
+    """K>1 with pseudo-halfsets also uses accum_h0.weight, never an average."""
     rec = _patch_ssnr(monkeypatch, _bind_module)
 
     ori = 16
@@ -159,6 +137,7 @@ def test_k_class_pseudo_halfsets_uses_h0_weight(_bind_module, monkeypatch, K):
         accum_h1=a1,
         grad_current_stepsize=0.5,
         tau2_fudge_factor=1.0,
+        use_native_transaction=False,
     )
 
     assert rec.call_count == 1

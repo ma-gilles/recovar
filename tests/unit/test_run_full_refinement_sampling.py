@@ -65,9 +65,7 @@ def test_relion_firstiter_controls_do_not_change_other_modes(firstiter_cc, n_cla
 
 
 def test_k1_firstiter_cc_explicit_opt_outs_override_defaults(monkeypatch):
-    from recovar.em.dense_single_volume.helpers.significance import (
-        _firstiter_cc_tree_top2_rescore_max_margin,
-    )
+    from recovar.em.scoring.significance import _firstiter_cc_tree_top2_rescore_max_margin
 
     environment = {
         "RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE": "0",

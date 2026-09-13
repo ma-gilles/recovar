@@ -33,6 +33,7 @@ from recovar.gui_v2.backend.services.command_builder import (
     build_compute_trajectory_command,
     build_density_command,
     build_downsample_command,
+    build_initial_model_command,
     build_pipeline_command,
     build_postprocess_command,
     build_stable_states_command,
@@ -66,6 +67,86 @@ async def client(app):
 
 
 class TestCommandBuilders:
+    def test_initial_model_command_uses_native_defaults_and_overrides(self):
+        cmd = build_initial_model_command(
+            {
+                "input_star": "/data/particles.star",
+                "outdir": "/out/InitialModel/job_0001",
+                "nr_classes": 2,
+                "do_solvent": False,
+                "padding_factor": 2,
+                "grad_ini_frac": 0.4,
+                "grad_fin_frac": 0.1,
+                "grad_em_iters": 3,
+                "stepsize": 0.3,
+                "mu": 0.7,
+                "jax_compilation_cache_dir": "/shared/jax-cache",
+            }
+        )
+        assert cmd[:2] == [cmd[0], "initial_model"]
+        assert cmd[cmd.index("--i") + 1] == "/data/particles.star"
+        assert cmd[cmd.index("--o") + 1] == "/out/InitialModel/job_0001/run"
+        assert cmd[cmd.index("--nr-iter") + 1] == "200"
+        assert cmd[cmd.index("--K") + 1] == "2"
+        assert "--no-solvent" in cmd
+        assert "--ctf" in cmd
+        assert "--require-custom-cuda" in cmd
+        assert cmd[cmd.index("--padding-factor") + 1] == "2"
+        assert cmd[cmd.index("--pass2-engine") + 1] == "auto"
+        assert "--relion-wavg-sequential-cuda" in cmd
+        assert "--no-stable-fourier-window-shapes" in cmd
+        assert cmd[cmd.index("--exact-local-bucket-radix") + 1] == "4"
+        assert cmd[cmd.index("--exact-local-physical-order-chunk-size") + 1] == "0"
+        assert cmd[cmd.index("--grad-ini-frac") + 1] == "0.4"
+        assert cmd[cmd.index("--grad-fin-frac") + 1] == "0.1"
+        assert cmd[cmd.index("--grad-em-iters") + 1] == "3"
+        assert cmd[cmd.index("--stepsize") + 1] == "0.3"
+        assert cmd[cmd.index("--mu") + 1] == "0.7"
+        assert "--jax-compilation-cache" in cmd
+        assert cmd[cmd.index("--jax-compilation-cache-dir") + 1] == "/shared/jax-cache"
+
+    def test_initial_model_command_exposes_stable_fourier_window_policy(self):
+        cmd = build_initial_model_command(
+            {
+                "input_star": "/data/particles.star",
+                "outdir": "/out/InitialModel/job_0001",
+                "stable_fourier_window_shapes": True,
+            }
+        )
+
+        assert "--stable-fourier-window-shapes" in cmd
+        assert "--no-stable-fourier-window-shapes" not in cmd
+
+    def test_initial_model_command_rejects_unqualified_bucket_radix(self):
+        with pytest.raises(ValueError, match="must be 2 or 4"):
+            build_initial_model_command(
+                {
+                    "input_star": "/data/particles.star",
+                    "outdir": "/out/InitialModel/job_0001",
+                    "exact_local_bucket_radix": 3,
+                }
+            )
+
+    def test_initial_model_command_accepts_bounded_physical_order_chunks(self):
+        cmd = build_initial_model_command(
+            {
+                "input_star": "/data/particles.star",
+                "outdir": "/out/InitialModel/job_0001",
+                "exact_local_physical_order_chunk_size": 220,
+            }
+        )
+        assert cmd[cmd.index("--exact-local-physical-order-chunk-size") + 1] == "220"
+
+        for invalid_chunk_size in (-1, 1, 2):
+            with pytest.raises(ValueError, match="must be 0 .* or at least 3"):
+                build_initial_model_command(
+                    {
+                        "input_star": "/data/particles.star",
+                        "outdir": "/out/InitialModel/job_0001",
+                        "exact_local_physical_order_chunk_size": invalid_chunk_size,
+                    }
+                )
+
     def test_pipeline_command_minimal(self):
         cmd = build_pipeline_command({
             "particles": "/data/test.star",
@@ -193,6 +274,60 @@ class TestCommandBuilders:
 
 
 class TestJobsAPI:
+    @pytest.mark.asyncio
+    async def test_initial_model_defaults_and_submission(self, client: AsyncClient, tmp_path: Path):
+        defaults_response = await client.get("/api/jobs/initial-model/defaults")
+        assert defaults_response.status_code == 200
+        assert defaults_response.json()["nr_iter"] == 200
+        assert defaults_response.json()["nr_classes"] == 1
+        assert defaults_response.json()["require_custom_cuda"] is True
+        assert defaults_response.json()["use_jax_compilation_cache"] is True
+        assert defaults_response.json()["jax_compilation_cache_dir"] == ""
+        assert defaults_response.json()["relion_wavg_sequential_cuda"] is True
+        assert defaults_response.json()["exact_local_bucket_radix"] == 4
+        assert defaults_response.json()["exact_local_physical_order_chunk_size"] == 0
+        assert defaults_response.json()["stable_fourier_window_shapes"] is False
+
+        project_dir = str(tmp_path / "initial_model_project")
+        response = await client.post("/api/projects", json={"path": project_dir, "name": "InitialModel"})
+        project_id = response.json()["id"]
+        input_star = tmp_path / "particles.star"
+        input_star.write_text("data_particles\n")
+        mock_executor = AsyncMock()
+        mock_executor.submit = AsyncMock(return_value="initial-model-handle")
+
+        with patch("recovar.gui_v2.backend.api.jobs.get_executor", return_value=mock_executor):
+            response = await client.post(
+                "/api/jobs",
+                json={
+                    "project_id": project_id,
+                    "type": "initial_model",
+                    "params": {"input_star": str(input_star), "nr_classes": 1},
+                },
+            )
+
+        assert response.status_code == 201
+        assert response.json()["type"] == "InitialModel"
+        submitted = mock_executor.submit.await_args.kwargs
+        assert submitted["command"][1] == "initial_model"
+        assert submitted["command"][submitted["command"].index("--i") + 1] == str(input_star)
+
+    @pytest.mark.asyncio
+    async def test_initial_model_validation_rejects_missing_or_non_star(self, client: AsyncClient, tmp_path: Path):
+        project_dir = str(tmp_path / "initial_model_validation")
+        response = await client.post("/api/projects", json={"path": project_dir, "name": "InitialModel validation"})
+        project_id = response.json()["id"]
+        text_input = tmp_path / "particles.txt"
+        text_input.write_text("not a STAR")
+
+        response = await client.post(
+            "/api/jobs/validate",
+            json={"project_id": project_id, "type": "abinitio", "params": {"input_star": str(text_input)}},
+        )
+        assert response.status_code == 200
+        assert response.json()["valid"] is False
+        assert "must be a RELION STAR file" in response.json()["errors"][0]
+
     @pytest.mark.asyncio
     async def test_submit_and_get_job(self, client: AsyncClient, tmp_path: Path):
         """Submit a pipeline job, then retrieve it."""

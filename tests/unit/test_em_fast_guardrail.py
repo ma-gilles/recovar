@@ -12,12 +12,9 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
-from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
-from recovar.em.dense_single_volume.helpers.image_shifts import (
-    half_image_phase_factors,
-    tiled_half_image_phase_factors,
-)
+from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
+from recovar.em.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.helpers.image_shifts import half_image_phase_factors, tiled_half_image_phase_factors
 
 pytestmark = pytest.mark.unit
 

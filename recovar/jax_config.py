@@ -44,7 +44,10 @@ if "xla_gpu_enable_triton_gemm" not in _existing_flags:
 # RECOVAR_DISABLE_JAX_CACHE=1. Cache contents are large XLA modules keyed by
 # compute graph hash — safe to delete; recovar will rebuild on next run.
 # Measured 2026-05-11: cut K=1 50k/256 4-iter wall from 171s → 75s (56%) on
-# second run by skipping repeated iter-1 JIT compile.
+# second run by skipping repeated iter-1 JIT compile.  Keep only compilations
+# that take at least 10 ms: caching every trivial dispatch created hundreds of
+# thousands of files, while the 10 ms threshold preserved the measured VDAM
+# warm runtime with a much smaller cache.
 _jax_cache_disabled = os.environ.get("RECOVAR_DISABLE_JAX_CACHE", "").lower() in {"1", "true", "yes", "on"}
 if not _jax_cache_disabled and not os.environ.get("JAX_COMPILATION_CACHE_DIR"):
     _default_cache_dir = os.environ.get(
@@ -52,7 +55,7 @@ if not _jax_cache_disabled and not os.environ.get("JAX_COMPILATION_CACHE_DIR"):
         os.path.expanduser("~/.cache/recovar/jax_compile"),
     )
     os.environ["JAX_COMPILATION_CACHE_DIR"] = _default_cache_dir
-    os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0")
+    os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0.01")
     try:
         os.makedirs(_default_cache_dir, exist_ok=True)
     except OSError:

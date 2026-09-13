@@ -11,7 +11,7 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.relion_projector_capture import (
+from recovar.em.diagnostics.relion_projector_capture import (
     build_relion_projector_replay_state,
     load_relion_projector_iref_state,
 )

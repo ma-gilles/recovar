@@ -19,13 +19,10 @@ import numpy as np
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
-from recovar.em.dense_single_volume.helpers.half_spectrum import make_scoring_half_image_weights
-from recovar.em.dense_single_volume.helpers.oversampling import find_significant_mask
-from recovar.em.dense_single_volume.helpers.preprocessing import (
-    prepare_reconstruction_batch,
-    preprocess_batch,
-)
+from recovar.em.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.helpers.half_spectrum import make_scoring_half_image_weights
+from recovar.em.helpers.oversampling import find_significant_mask
+from recovar.em.helpers.preprocessing import prepare_reconstruction_batch, preprocess_batch
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
     PoseSelectionConfig,
@@ -51,13 +48,13 @@ from recovar.em.ppca_refinement.mean_regularization import (
     MeanRegularizationConfig,
     resolve_mean_precision,
 )
-from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 from recovar.em.ppca_refinement.pose_selection import (
     merge_top_p_pose_scores,
     select_distinct_top_poses,
     top_p_from_score_block,
     top_pose_candidate_count,
 )
+from recovar.em.ppca_refinement.postprocess import PostprocessConfig, postprocess_ppca_half_volumes
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
 from recovar.ppca import AugmentedPPCAStats, augmented_ppca_mstep_objective, solve_augmented_ppca_mstep
 from recovar.ppca.triangular import _tri_size
@@ -605,7 +602,7 @@ def compute_dense_ppca_adaptive_significance(
 
     The returned ``significant_sample_indices`` use rotation-major packed pose
     IDs (``rotation_idx * n_translations + translation_idx``), matching
-    :func:`recovar.em.dense_single_volume.local_layout.build_pass2_hypothesis_layout`.
+    :func:`recovar.em.local.local_layout.build_pass2_hypothesis_layout`.
     """
 
     geometry = geometry if geometry is not None else GeometryConfig()
@@ -770,41 +767,6 @@ def compute_dense_ppca_adaptive_significance(
             "top_pose_min_translation_px": float(pose_selection.top_pose_min_translation_px),
         },
     )
-
-
-def build_dense_ppca_fine_pose_mask_from_significance(
-    significant_sample_indices,
-    *,
-    n_coarse_rotations: int,
-    n_coarse_translations: int,
-    rot_parent_map: np.ndarray,
-    trans_parent_map: np.ndarray,
-    n_fine_rotations: int,
-    n_fine_translations: int,
-) -> np.ndarray:
-    """Expand coarse PPCA significant samples to a fine-grid pass-2 mask."""
-
-    rot_parent_map = np.asarray(rot_parent_map, dtype=np.int64)
-    trans_parent_map = np.asarray(trans_parent_map, dtype=np.int64)
-    if rot_parent_map.shape != (int(n_fine_rotations),):
-        raise ValueError(f"rot_parent_map shape {rot_parent_map.shape} != ({int(n_fine_rotations)},)")
-    if trans_parent_map.shape != (int(n_fine_translations),):
-        raise ValueError(f"trans_parent_map shape {trans_parent_map.shape} != ({int(n_fine_translations)},)")
-    n_images = len(significant_sample_indices)
-    mask = np.zeros((n_images, int(n_fine_rotations), int(n_fine_translations)), dtype=bool)
-    for image_idx, sig in enumerate(significant_sample_indices):
-        if sig is None:
-            mask[image_idx] = True
-            continue
-        sig = np.asarray(sig, dtype=np.int64).reshape(-1)
-        if sig.size == 0:
-            continue
-        coarse_rot = sig // int(n_coarse_translations)
-        coarse_trans = sig % int(n_coarse_translations)
-        coarse_pair = np.zeros((int(n_coarse_rotations), int(n_coarse_translations)), dtype=bool)
-        coarse_pair[coarse_rot, coarse_trans] = True
-        mask[image_idx] = coarse_pair[rot_parent_map][:, trans_parent_map]
-    return mask
 
 
 def run_dense_ppca_fused_em_iteration(

@@ -424,11 +424,11 @@ def get_image_batch_size(grid_size, gpu_memory):
     """Calculate batch size for image processing.
 
     Args:
-        grid_size: Size of the grid
-        gpu_memory: Available GPU memory in GB
+        grid_size (int): Image side length in pixels.
+        gpu_memory (float): Available GPU memory in GB.
 
     Returns:
-        Integer batch size with reasonable bounds
+        batch_size (int): Heuristic batch size, clamped to ``[1, 2**20]``.
     """
     if grid_size < 1:
         raise ValueError("grid_size must be positive")
@@ -441,7 +441,7 @@ def get_image_batch_size(grid_size, gpu_memory):
     gpu_memory_f = float(gpu_memory)
 
     # Each image is grid_size^2 complex64 values (8 bytes each).
-    # 2^18 / grid_size^2 targets ~2 GB per batch at gpu_memory=1.
+    # 2^18 / grid_size^2 gives 2 MiB of image data per GB of supplied budget.
     batch_size = (2.0**18.0) / (grid_size_f * grid_size_f) * gpu_memory_f
 
     # Add reasonable bounds
@@ -818,9 +818,18 @@ def write_starfile_from_cryodrgn_format(
     ctf = pickle_load(ctf_path)
     poses = pickle_load(pose_path)
     rots = poses[0]
-    trans = poses[1]
+    # cryoDRGN pose pickles store translations as fractions of the box width,
+    # while RELION 3.1 STAR origin columns are in Angstroms.
+    trans = np.asarray(poses[1]) * float(ctf[0, 0]) * float(ctf[0, 1])
     write_starfile(
-        ctf[:, 2:], rots, trans, ctf[0, 1], ctf[0, 0], particles_file_path, output_filename, halfset_indices=None
+        ctf[:, 2:],
+        rots,
+        trans,
+        ctf[0, 1],
+        ctf[0, 0],
+        particles_file_path,
+        output_filename,
+        halfset_indices=halfset_indices,
     )
 
 

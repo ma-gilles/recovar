@@ -15,30 +15,27 @@ RELION fixture in Phase 4. Here we validate:
   - `hermitian_weights_relion` produces all-ones half-complex map.
   - `fourier_crop_half` keeps low-|k| rows from the top and high-|k| rows
     from the tail.
-  - `build_posterior_summary` extracts Pmax / argmax correctly on a
-    synthetic posterior tensor.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pytest
+from helpers.vdam import (
+    fourier_crop_half,
+    hermitian_weights_relion,
+    minvsigma2_with_dc_zero,
+)
 
-from recovar.em.initial_model import (
-    MOM2_INIT_CONSTANT,
-    build_posterior_summary,
+from recovar.em.vdam.init import (
     compute_current_size_for_denovo,
     compute_ini_high_angstrom,
     compute_ini_high_shell,
-    fourier_crop_half,
-    half_slot_count,
-    half_slot_index,
-    hermitian_weights_relion,
     initialise_data_vs_prior_from_references,
     initialise_denovo_state,
-    minvsigma2_with_dc_zero,
     seed_noise_from_mavg,
 )
+from recovar.em.vdam.state import MOM2_INIT_CONSTANT, half_slot_count, half_slot_index
 
 pytestmark = pytest.mark.unit
 
@@ -253,6 +250,32 @@ class TestInitialiseDataVsPrior:
         np.testing.assert_array_equal(state.tau2_class, 0.0)
         np.testing.assert_array_equal(state.data_vs_prior_class, 0.0)
 
+    def test_reference_spectrum_uses_relion_volume_frame(self):
+        from recovar.em.vdam.init import _relion_power_spectrum_3d
+        from recovar.utils.helpers import recovar_volume_to_relion
+
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=1,
+            nr_iter=1,
+            n_directions=12,
+        )
+        z, y, x = np.indices((8, 8, 8), dtype=np.float64)
+        state.Iref[0] = np.exp(-((x - 1.0) ** 2 / 2.0 + (y - 3.0) ** 2 / 5.0 + (z - 5.0) ** 2 / 11.0))
+        state.sigma2_noise.fill(1.0)
+
+        out = initialise_data_vs_prior_from_references(state, nr_particles=10)
+        expected = _relion_power_spectrum_3d(
+            recovar_volume_to_relion(state.Iref[0]), state.ori_size // 2 + 1
+        ) * (state.ori_size * state.ori_size / 2.0)
+        direct_wrong_frame = _relion_power_spectrum_3d(state.Iref[0], state.ori_size // 2 + 1) * (
+            state.ori_size * state.ori_size / 2.0
+        )
+
+        np.testing.assert_allclose(out.tau2_class[0], expected, rtol=1e-14, atol=0.0)
+        assert not np.allclose(out.tau2_class[0], direct_wrong_frame, rtol=1e-8, atol=0.0)
+
     def test_rejects_missing_noise(self):
         state = initialise_denovo_state(ori_size=16, pixel_size=1.0, K=1, nr_iter=10, n_directions=12)
         state.Iref[0, 8, 8, 8] = 1.0
@@ -329,48 +352,3 @@ class TestFourierCropHalf:
             fourier_crop_half(np.zeros(5, dtype=np.complex128), current_size=4)
         with pytest.raises(ValueError):
             fourier_crop_half(np.zeros((8, 6), dtype=np.complex128), current_size=4)
-
-
-# ---------------------------------------------------------------------------
-# Posterior summary
-# ---------------------------------------------------------------------------
-
-
-class TestBuildPosteriorSummary:
-    def test_basic_extraction(self):
-        N, K, n_rot, n_trans = 3, 2, 4, 5
-        # Force argmax at (img=0, k=1, r=2, t=3) for image 0
-        weights = np.zeros((N, K, n_rot, n_trans))
-        weights[0, 1, 2, 3] = 0.7
-        weights[0, 0, 0, 0] = 0.3
-        weights[1, 0, 1, 1] = 1.0
-        weights[2, 1, 3, 4] = 0.4  # Not unique across image 2
-        weights[2, 0, 0, 0] = 0.6  # argmax here for image 2
-
-        post = build_posterior_summary(weights, significance_threshold=0.1)
-        np.testing.assert_allclose(post.pmax, [0.7, 1.0, 0.6])
-
-        # Image 0: best is (k=1, r=2, t=3)
-        assert post.best_class[0] == 1
-        assert post.best_euler[0, 0] == 2  # rot_idx
-        assert post.best_trans[0, 0] == 3  # trans_idx
-
-        # Image 1: best is (k=0, r=1, t=1)
-        assert post.best_class[1] == 0
-        assert post.best_euler[1, 0] == 1
-        assert post.best_trans[1, 0] == 1
-
-        # Image 2: best is (k=0, r=0, t=0)
-        assert post.best_class[2] == 0
-        assert post.best_euler[2, 0] == 0
-        assert post.best_trans[2, 0] == 0
-
-        # Significance counts
-        # image 0: 2 entries > 0.1 (0.7, 0.3)
-        # image 1: 1 entry > 0.1 (1.0)
-        # image 2: 2 entries > 0.1 (0.6, 0.4)
-        np.testing.assert_array_equal(post.nr_significant, [2, 1, 2])
-
-    def test_bad_shape(self):
-        with pytest.raises(ValueError):
-            build_posterior_summary(np.zeros((3, 4, 5)))

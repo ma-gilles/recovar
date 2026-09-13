@@ -21,10 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.initial_model.gt_metrics import (
-    DEFAULT_GT_ALIGN_HEALPIX_ORDER,
-    DEFAULT_GT_ALIGN_MAX_SHELL,
-)
+from recovar.em.diagnostics.gt_metrics import DEFAULT_GT_ALIGN_HEALPIX_ORDER, DEFAULT_GT_ALIGN_MAX_SHELL
 
 
 def resolve_intermediates_dir(recovar_dir, explicit_intermediates_dir=None):
@@ -100,10 +97,7 @@ def main():
     import mrcfile
 
     from recovar.core import fourier_transform_utils as ftu
-    from recovar.em.initial_model.gt_metrics import (
-        align_volume_to_reference,
-        relion_alignment_rotations,
-    )
+    from recovar.em.diagnostics.gt_metrics import align_volume_to_reference, relion_alignment_rotations
     from recovar.reconstruction import regularization
     from recovar.utils import helpers
 

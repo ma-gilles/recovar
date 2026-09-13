@@ -1035,7 +1035,7 @@ def test_iter_batches_skips_outer_prefetch_when_image_source_already_prefetches(
     assert len(no_prefetch_batch) == 7
 
 
-def _fake_load_ctf_params(D, ctf_file):
+def _fake_load_ctf_params(D, ctf_file, *, preserve_source_geometry=False):
     n = 4
     # [voxel, dfu, dfv, dfang, volt, cs, w, phase]
     ctf = np.zeros((n, 8), dtype=np.float32)
@@ -1083,7 +1083,7 @@ def test_load_dataset_rejects_ctf_count_mismatch_when_no_subset(monkeypatch):
     monkeypatch.setattr(image_sources.image_backends, "ParticleImageDataset", lambda *a, **k: fake_stack)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
 
-    def _short_ctf(D, ctf_file):
+    def _short_ctf(D, ctf_file, *, preserve_source_geometry=False):
         _ = (D, ctf_file)
         ctf = np.zeros((3, 8), dtype=np.float32)
         ctf[:, 0] = 1.5

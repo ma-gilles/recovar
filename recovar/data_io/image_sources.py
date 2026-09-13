@@ -89,6 +89,7 @@ class ImageSourceInfo:
     strip_prefix: Optional[str] = None
     downsample_D: Optional[int] = None
     invert_data: bool = False
+    dtype: type = np.complex64
 
 
 class ImageSource:
@@ -492,6 +493,7 @@ def create_image_source(
     strip_prefix=None,
     downsample_D=None,
     sort_with_Bfac=False,
+    dtype=np.complex64,
 ):
     if tilt_series:
         tilt_file_option = "relion5" if tilt_series_ctf == "relion5" else "warp"
@@ -504,6 +506,7 @@ def create_image_source(
             tilt_file_option=tilt_file_option,
             strip_prefix=strip_prefix,
             sort_with_Bfac=sort_with_Bfac,
+            dtype=dtype,
         )
     else:
         backend = image_backends.ParticleImageDataset(
@@ -515,6 +518,7 @@ def create_image_source(
             invert_data=uninvert_data,
             strip_prefix=strip_prefix,
             downsample_D=downsample_D,
+            dtype=dtype,
         )
 
     info = ImageSourceInfo(
@@ -529,5 +533,6 @@ def create_image_source(
         strip_prefix=strip_prefix,
         downsample_D=downsample_D,
         invert_data=bool(uninvert_data),
+        dtype=np.dtype(dtype).type,
     )
     return BackendImageSource(backend, info=info)

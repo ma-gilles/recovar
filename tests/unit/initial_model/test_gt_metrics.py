@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from recovar.em.initial_model.gt_metrics import (
+from recovar.em.diagnostics.gt_metrics import (
     DEFAULT_GT_ALIGN_HEALPIX_ORDER,
     DEFAULT_GT_ALIGN_MAX_SHELL,
     align_volume_to_reference,

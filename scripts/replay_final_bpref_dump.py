@@ -253,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     repo_root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(repo_root))
 
-    from recovar.em.dense_single_volume.helpers import half_volume_mstep
+    from recovar.em.helpers import half_volume_mstep
     from recovar.reconstruction import regularization, relion_functions
     from recovar.utils import helpers
 

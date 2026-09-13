@@ -38,7 +38,7 @@ import numpy as np
 
 from recovar import utils
 from recovar.core import fourier_transform_utils as ftu
-from recovar.em.dense_single_volume.frozen_boundary import (
+from recovar.em.diagnostics.frozen_boundary import (
     FROZEN_BOUNDARY_FIXED_DIAGNOSTIC_ARM,
     FROZEN_BOUNDARY_FIXED_MATH_ENVIRONMENT_CONTRACT,
     FROZEN_BOUNDARY_NUMERICAL_CLASSIFICATION_SCOPE,
@@ -47,22 +47,21 @@ from recovar.em.dense_single_volume.frozen_boundary import (
     validate_fixed_diagnostic_boundary_runtime_config,
     verify_fixed_diagnostic_boundary_sources,
 )
-from recovar.em.dense_single_volume.helpers.relion_projector_capture import (
-    build_relion_projector_replay_state,
+from recovar.em.diagnostics.relion_projector_capture import build_relion_projector_replay_state
+from recovar.em.diagnostics.relion_replay import (
+    read_relion_single_optics_sigma2_noise as _read_relion_single_optics_sigma2_noise,
 )
-from recovar.em.dense_single_volume.helpers.state_swap_probe import (
+from recovar.em.diagnostics.relion_replay import (
+    relion_mpi_process_start_scoring_noise_pair as _relion_mpi_process_start_scoring_noise_pair,
+)
+from recovar.em.diagnostics.state_swap_probe import (
     add_state_swap_probe_arguments,
     build_state_swap_probe,
     state_swap_probe_loop_index,
     validate_state_swap_probe_application,
 )
-from recovar.em.dense_single_volume.relion_replay import (
-    read_relion_single_optics_sigma2_noise as _read_relion_single_optics_sigma2_noise,
-)
-from recovar.em.dense_single_volume.relion_replay import (
-    relion_mpi_process_start_scoring_noise_pair as _relion_mpi_process_start_scoring_noise_pair,
-)
-from recovar.em.dense_single_volume.relion_worker_scale import (
+from recovar.em.relion.initial_noise import compute_avg_unaligned_and_sigma2
+from recovar.em.relion.relion_worker_scale import (
     load_relion_dispatch_schedule,
     load_relion_follower_scale_replay,
     relion_class3d_follower_owners_from_schedule,
@@ -70,7 +69,6 @@ from recovar.em.dense_single_volume.relion_worker_scale import (
     validate_relion_follower_scale_replay,
     verify_relion_dispatch_schedule_oracle,
 )
-from recovar.em.initial_model.avg_unaligned import compute_avg_unaligned_and_sigma2
 from recovar.utils.parity_provenance import _safe_git_commit, git_worktree_provenance
 
 logging.basicConfig(
@@ -83,9 +81,11 @@ logger = logging.getLogger(__name__)
 
 _CONCRETE_RECOVAR_PROVENANCE_MODULES = (
     "recovar",
-    "recovar.em.dense_single_volume.iteration_loop",
-    "recovar.em.dense_single_volume.k_class",
-    "recovar.em.dense_single_volume.helpers.significance",
+    "recovar.em.refinement.iteration_loop",
+    "recovar.em.dense.half_scoring",
+    "recovar.em.dense.scoring_policy",
+    "recovar.em.classification.k_class",
+    "recovar.em.scoring.significance",
 )
 _INITIAL_PROJECTOR_USE_REAL_REFERENCE_ENV = "RECOVAR_INITIAL_PROJECTOR_USE_REAL_REFERENCE"
 _FIRSTITER_CC_TREE_TOP2_RESCORE_MAX_MARGIN_ENV = (
@@ -1113,11 +1113,12 @@ def _relion_halfset_and_accuracy_layout(
     *,
     random_seed=None,
     first_iteration=1,
+    shuffle_algorithm="legacy",
 ):
     """Map RELION particle rows onto RECOVAR's half-local ordering.
 
     Supplying ``random_seed`` selects fresh AutoRefine semantics: one paired
-    half shuffle under a continued libc-rand stream, followed by a stable
+    half shuffle using the selected oracle's RNG, followed by a stable
     numeric optics-group sort. Continuation and replay callers omit the seed
     and retain their existing row order.
     """
@@ -1159,9 +1160,7 @@ def _relion_halfset_and_accuracy_layout(
             dtype=np.int64,
         )
     else:
-        from recovar.em.dense_single_volume.helpers.expected_accuracy import (
-            relion_auto_refine_half_orders,
-        )
+        from recovar.em.helpers.expected_accuracy import relion_auto_refine_half_orders
 
         relion_optics = (
             np.asarray(relion_particles["rlnOpticsGroup"], dtype=np.int64)
@@ -1173,6 +1172,7 @@ def _relion_halfset_and_accuracy_layout(
             int(random_seed),
             int(first_iteration),
             optics_group_ids=relion_optics,
+            shuffle_algorithm=shuffle_algorithm,
         )
         half1_idx, half2_idx = (
             np.asarray(
@@ -1326,6 +1326,39 @@ def _compute_relion_fresh_k1_initial_sigma2(
     return sigma2_per_group
 
 
+def _compute_relion_noise_only_bootstrap(
+    dataset, *, args, frozen_boundary, source_rows, optics_group_ids, mask_params,
+):
+    """Compute startup noise without replaying any model/particle state.
+
+    Qualification-only single-optics K1 path; preserve the existing host F64
+    bootstrap and explicitly supply F32 noise to production scoring. See
+    docs/math/relion_refinement_algorithm.md#noise-only-bootstrap-qualification.
+    """
+    if (
+        int(args.n_classes) != 1 or int(args.init_relion_iteration) != 0
+        or frozen_boundary is not None or args.perturb_replay_relion_dir is not None
+        or args.relion_init_dir is not None or args.init_noise_from_npz is not None
+        or args.initial_noise_cache_dir is not None or args.relion_half_sets is None
+        or source_rows is None or optics_group_ids is None or mask_params is None
+    ):
+        raise ValueError(
+            "RELION noise-only bootstrap requires a fresh K1 start with half-set "
+            "order/mask metadata and no state replay, noise replay or noise cache"
+        )
+    if np.unique(optics_group_ids).size != 1:
+        raise ValueError("RELION noise-only bootstrap currently requires one optics group")
+    sigma2 = _compute_relion_fresh_k1_initial_sigma2(
+        dataset, source_rows=source_rows, optics_group_ids=optics_group_ids,
+        particle_diameter_ang=float(mask_params[0]), width_mask_edge_px=int(mask_params[1]),
+    )[0]
+    radial = sigma2 * float(dataset.grid_size) ** 4
+    noise = _relion_sigma2_to_native_noise_variance(
+        sigma2, grid_size=int(dataset.grid_size), output_dtype=np.float32,
+    )
+    return radial, noise
+
+
 def _relion_sigma2_to_native_noise_variance(
     sigma2,
     *,
@@ -1420,6 +1453,7 @@ def _build_replay_iteration_overrides(
     include_k1_scoring_scale=False,
     strict=False,
     process_start_noise_broadcast=True,
+    noise_dtype=np.float32,
 ):
     """Build per-iter replay overrides keyed on recovar iteration index.
 
@@ -1452,6 +1486,10 @@ def _build_replay_iteration_overrides(
     run_it000 carries the particle pre-centering offsets, initial orientations,
     image/scale corrections, and direction prior that RELION uses in its first
     expectation step.
+
+    ``noise_dtype`` controls only the expanded pixel representation of the
+    RFLOAT model-STAR spectrum. Double-scoring replays must retain float64 so
+    the reciprocal is not narrowed before construction of ``Minvsigma2``.
     """
     import re as _re
     from pathlib import Path as _Path
@@ -1476,6 +1514,10 @@ def _build_replay_iteration_overrides(
             return read_relion_direction_priors(model_path)
         return read_relion_direction_prior(model_path)
 
+    noise_dtype = np.dtype(noise_dtype)
+    if noise_dtype not in (np.dtype(np.float32), np.dtype(np.float64)):
+        raise TypeError(f"noise_dtype must be float32 or float64, got {noise_dtype}")
+
     def _read_model_noise_variance(model, *, image_shape):
         radial = _read_relion_single_optics_sigma2_noise(
             model,
@@ -1486,7 +1528,7 @@ def _build_replay_iteration_overrides(
         radial = radial * float(ds_grid) ** 4
         return np.asarray(
             utils.make_radial_image(jnp.asarray(radial), image_shape, extend_last_frequency=True),
-            dtype=np.float32,
+            dtype=noise_dtype,
         ).reshape(-1)
 
     def _read_model_class_tau2(model):
@@ -2559,6 +2601,14 @@ def main():
         "Use a negative value for the legacy non-reproducible NumPy path.",
     )
     parser.add_argument(
+        "--relion-particle-shuffle",
+        choices=("legacy", "mt19937"),
+        default="legacy",
+        help="Fresh K=1 AutoRefine particle order: legacy libc random_shuffle "
+        "or mt19937/std::shuffle (RELION f2c1a384). Also selects the accuracy "
+        "trial particles. Legacy remains default while the correction is qualified.",
+    )
+    parser.add_argument(
         "--perturb_replay_relion_dir",
         default=None,
         help="Controlled RELION trajectory replay: read SamplingPerturbInstance "
@@ -2932,6 +2982,15 @@ def main():
         ),
     )
     parser.add_argument(
+        "--initial-noise-bootstrap",
+        choices=("pipeline", "relion"), default="pipeline",
+        help=(
+            "Initial noise estimator. Default pipeline preserves existing behavior. "
+            "relion is an opt-in noise-only qualification path for fresh single-optics "
+            "K1 with supplied halfsets; no model or particle-state replay."
+        ),
+    )
+    parser.add_argument(
         "--init_noise_from_npz",
         default=None,
         help=(
@@ -3209,10 +3268,20 @@ def main():
     logger.info("Loading dataset from %s", args.data_dir)
     from recovar.data_io.cryoem_dataset import load_dataset
 
+    _double_image_preprocessing = (
+        os.environ.get("RECOVAR_USE_FLOAT64_SCORING", "0").strip().lower()
+        in {"1", "true", "yes", "on"}
+    )
     ds = load_dataset(
         os.path.join(args.data_dir, "particles.star"),
         lazy=False,
+        dtype=np.complex128 if _double_image_preprocessing else np.complex64,
     )
+    if _double_image_preprocessing:
+        logger.info(
+            "Double scoring: loading metadata in float64 and preserving "
+            "float64/complex128 through particle masking and FFT"
+        )
     relion_mask_params = _maybe_apply_relion_image_mask(
         ds,
         args,
@@ -3321,6 +3390,7 @@ def main():
             our_particles,
             relion_particles,
             random_seed=args.seed if use_fresh_auto_refine_order else None,
+            shuffle_algorithm=args.relion_particle_shuffle,
         )
         if use_fresh_auto_refine_order:
             expected_accuracy_half1_trial_order_local = np.arange(
@@ -3339,7 +3409,7 @@ def main():
                 relion_fresh_initial_noise_optics_group_ids,
             ) = _relion_fresh_initial_noise_layout(our_particles, relion_particles)
         if (
-            use_relion_live_initial_noise
+            (use_relion_live_initial_noise or args.initial_noise_bootstrap == "relion")
             and relion_fresh_initial_noise_source_rows is None
         ):
             (
@@ -3359,8 +3429,9 @@ def main():
         logger.info("Using RELION half-set split: %d (subset=1) + %d (subset=2)", len(half1_idx), len(half2_idx))
         if use_fresh_auto_refine_order:
             logger.info(
-                "Applied RELION fresh paired AutoRefine particle order with effective seed %d; "
+                "Applied RELION fresh paired AutoRefine particle order (%s) with effective seed %d; "
                 "BPref will preserve this physical order",
+                args.relion_particle_shuffle,
                 int(args.seed) + 1,
             )
     else:
@@ -3370,6 +3441,9 @@ def main():
                 "Using RELION Class3D all-data split: %d particles + empty second accumulator",
                 len(half1_idx),
             )
+
+    if args.relion_particle_shuffle != "legacy" and not use_fresh_auto_refine_order:
+        raise ValueError("--relion-particle-shuffle requires fresh K=1 AutoRefine ordering")
 
     local_stop_requested = (
         bool(args.stop_after_local_search_profile)
@@ -3734,6 +3808,29 @@ def main():
     # at low frequencies.
     from recovar.utils.helpers import load_mrc as _load_mrc
 
+    # RELION's Image<RFLOAT>::read() widens a reference MRC (on-disk float32)
+    # to RFLOAT (double, in our ACC_DOUBLE_PRECISION oracle build) as part of
+    # the read itself (src/ml_model.cpp:MlModel::readImages -> Iref.push_back
+    # (img()), where Iref is std::vector<MultidimArray<RFLOAT>>). Every
+    # downstream step -- including the FFT that builds Projector::data
+    # (MultidimArray<Complex>, Complex = tComplex<RFLOAT>) -- then runs at
+    # that same double precision. Match that here instead of narrowing to
+    # float32/complex64 immediately after the (inherently float32-on-disk)
+    # MRC read, which would otherwise defeat RECOVAR_USE_FLOAT64_PROJECTIONS
+    # no matter how carefully every later cast is fixed (a "narrow-then-
+    # widen" bug: DensePrecisionPolicy.cast_projection_volume, gated on this
+    # same flag, cannot recover precision already lost here). Gated on
+    # RECOVAR_USE_FLOAT64_PROJECTIONS specifically (not also
+    # _SCORING/_dense_global_scoring_dtype's OR) to match
+    # projection_complex_dtype's own condition exactly and avoid forcing an
+    # unrequested precision/memory cost on the projection path when a
+    # caller wants float64 scoring without float64 projections.
+    _init_volume_use_float64 = bool(
+        os.environ.get("RECOVAR_USE_FLOAT64_PROJECTIONS", "0").strip().lower() in {"1", "true", "yes", "on"}
+    )
+    _init_volume_dtype = np.float64 if _init_volume_use_float64 else np.float32
+    _init_volume_complex_dtype = np.complex128 if _init_volume_use_float64 else np.complex64
+
     # RELION's ``initialLowPassFilterReferences`` (ml_optimiser.cpp:3556) low-
     # pass-filters mymodel.Iref in place at startup, gated only on
     # ``ini_high > 0`` (not on ``--firstiter_cc``). With ``--apply-initial-
@@ -3744,7 +3841,7 @@ def main():
     _RELION_FMASK_EDGE = 2
 
     def _apply_ini_high_lowpass_real(volume_real, volume_shape, voxel_size, ini_high):
-        from recovar.em.initial_model.bootstrap_iref import initial_low_pass_filter_references
+        from recovar.em.refinement.mean_helpers import initial_low_pass_filter_references
 
         filtered = initial_low_pass_filter_references(
             np.asarray(volume_real, dtype=np.float64)[None, ...],
@@ -3785,10 +3882,10 @@ def main():
                 f"boundary={frozen_boundary.volume_shape}, dataset={tuple(ds.volume_shape)}"
             )
         init_vol_ft = np.stack(frozen_boundary.means, axis=0)
-        merged_init_ft = np.mean(init_vol_ft.astype(np.complex128), axis=0).astype(np.complex64)
+        merged_init_ft = np.mean(init_vol_ft.astype(np.complex128), axis=0).astype(_init_volume_complex_dtype)
         init_vol_real = np.asarray(
             ftu.get_idft3(jnp.asarray(merged_init_ft).reshape(ds.volume_shape)).real,
-            dtype=np.float32,
+            dtype=_init_volume_dtype,
         )
         logger.info(
             "Initial per-half Fourier volumes loaded from frozen boundary %s",
@@ -3796,8 +3893,7 @@ def main():
         )
     elif args.n_classes == 1:
         init_mrc_path = args.init_volume or os.path.join(args.data_dir, "reference_init.mrc")
-        init_vol_real = _load_mrc(init_mrc_path)
-        init_vol_real = init_vol_real.astype(np.float32)
+        init_vol_real = _load_mrc(init_mrc_path).astype(_init_volume_dtype)
         relion_model_pixel_size = _read_relion_mrc_model_pixel_size(init_mrc_path)
         if not np.isfinite(relion_model_pixel_size) or relion_model_pixel_size <= 0.0:
             raise SystemExit(
@@ -3821,14 +3917,18 @@ def main():
             )
             if _use_initial_projector_real:
                 init_reference_real_for_projector = filtered_real
-            init_vol_real = filtered_real.astype(np.float32, copy=False)
+            init_vol_real = filtered_real.astype(_init_volume_dtype, copy=False)
             logger.info(
                 "Applied RELION initialLowPassFilterReferences to init reference: ini_high=%.2f A, fmask_edge=%d shells",
                 _ini_high_for_lowpass, _RELION_FMASK_EDGE,
             )
         elif _use_initial_projector_real:
             init_reference_real_for_projector = np.asarray(init_vol_real, dtype=np.float64)
-        init_vol_ft = np.array(ftu.get_dft3(jnp.asarray(init_vol_real))).astype(np.complex64).reshape(-1)
+        init_vol_ft = (
+            np.array(ftu.get_dft3(jnp.asarray(init_vol_real)))
+            .astype(_init_volume_complex_dtype)
+            .reshape(-1)
+        )
         logger.info(
             "Initial volume loaded from %s: shape=%s model_pixel_size=%.9g A/px",
             init_mrc_path,
@@ -3847,7 +3947,7 @@ def main():
         per_class_ft = []
         per_class_real_for_projector = []
         for k, p in enumerate(class_paths):
-            vol_real = _load_mrc(p).astype(np.float32)
+            vol_real = _load_mrc(p).astype(_init_volume_dtype)
             assert vol_real.shape == ds.volume_shape, (
                 f"Class {k + 1} volume shape mismatch at {p}: {vol_real.shape} vs {ds.volume_shape}"
             )
@@ -3857,10 +3957,10 @@ def main():
                 )
                 if _use_initial_projector_real:
                     per_class_real_for_projector.append(filtered_real)
-                vol_real = filtered_real.astype(np.float32, copy=False)
+                vol_real = filtered_real.astype(_init_volume_dtype, copy=False)
             elif _use_initial_projector_real:
                 per_class_real_for_projector.append(np.asarray(vol_real, dtype=np.float64))
-            vol_ft = np.array(ftu.get_dft3(jnp.asarray(vol_real))).astype(np.complex64).reshape(-1)
+            vol_ft = np.array(ftu.get_dft3(jnp.asarray(vol_real))).astype(_init_volume_complex_dtype).reshape(-1)
             per_class_ft.append(vol_ft)
             logger.info("Class %d initial volume loaded from %s", k + 1, p)
         if _ini_high_for_lowpass is not None:
@@ -3878,7 +3978,7 @@ def main():
             )
         # For downstream init_PS estimation, use class-1 as the representative
         # (K-class noise/prior bootstrap currently uses a single spectrum).
-        init_vol_real = _load_mrc(class_paths[0]).astype(np.float32)
+        init_vol_real = _load_mrc(class_paths[0]).astype(_init_volume_dtype)
 
     # ---- Set up rotation and translation grids ----
     from recovar.em.sampling import get_relion_rotation_grid, get_translation_grid
@@ -3924,7 +4024,18 @@ def main():
 
     from recovar.reconstruction import noise as recon_noise
 
-    if frozen_boundary is not None:
+    if args.initial_noise_bootstrap == "relion":
+        if _double_image_preprocessing or use_relion_live_initial_noise:
+            raise ValueError("RELION noise-only bootstrap requires production image precision and no live-noise replay")
+        initial_noise_radial, noise_variance = _compute_relion_noise_only_bootstrap(
+            ds, args=args, frozen_boundary=frozen_boundary,
+            source_rows=relion_fresh_initial_noise_source_rows,
+            optics_group_ids=relion_fresh_initial_noise_optics_group_ids,
+            mask_params=relion_mask_params,
+        )
+        logger.info("Noise-only RELION bootstrap: %d shells, scoring dtype=%s; no state replay",
+                    initial_noise_radial.size, noise_variance.dtype)
+    elif frozen_boundary is not None:
         noise_variance = _make_frozen_boundary_noise_variance(
             frozen_boundary.noise_radial_per_half,
             ds.image_shape,
@@ -4101,7 +4212,21 @@ def main():
         ]
         if any(sigma2 is None for sigma2 in _relion_sigma2_per_model):
             raise ValueError("RELION iteration-0 model is missing rlnSigma2Noise")
-        if relion_live_initial_sigma2 is not None:
+        if args.init_noise_from_npz is not None:
+            # An explicit diagnostic noise replay must take precedence over the
+            # rounded rlnSigma2Noise values in the iteration-0 STAR.  RELION's
+            # continuous double-precision run retains more digits in memory
+            # than are serialized there, so overwriting this input defeats the
+            # purpose of --init-noise-from-npz.
+            _explicit_sigma2 = np.asarray(initial_noise_radial, dtype=np.float64) / float(_n4)
+            _relion_sigma2_per_model = [
+                _explicit_sigma2.copy() for _model in _relion_sigma2_per_model
+            ]
+            logger.info(
+                "STRICT-PARITY: explicit --init-noise-from-npz overrides rounded "
+                "RELION iteration-0 rlnSigma2Noise values",
+            )
+        elif relion_live_initial_sigma2 is not None:
             _relion_sigma2_per_model = [
                 np.asarray(relion_live_initial_sigma2, dtype=np.float64).copy()
                 for _model in _relion_sigma2_per_model
@@ -4210,7 +4335,19 @@ def main():
     logger.info("Initial current_size from resolution %.1f A: %d pixels", args.init_resolution, init_current_size)
 
     # ---- Run refinement ----
-    from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
+    from recovar.em.refinement.iteration_loop import refine_single_volume
+    from recovar.em.refinement.refinement_options import (
+        AdaptiveOptions,
+        EngineDebugOptions,
+        ExpectedAccuracyOptions,
+        KClassOptions,
+        LocalSearchOptions,
+        RefinementBatching,
+        RefinementOptions,
+        RefinementSchedule,
+        RelionParityOptions,
+        ReplayState,
+    )
 
     experiment_datasets = [ds_half1, ds_half2]
     translations_jnp = jnp.asarray(translations)
@@ -4272,6 +4409,7 @@ def main():
                 include_k1_mean_variance=(args.state_swap_target_relion_iteration is not None),
                 include_k1_scoring_scale=(args.state_swap_target_relion_iteration is not None),
                 strict=True,
+                noise_dtype=np.float64 if _double_image_preprocessing else np.float32,
             )
 
     final_replay_override = None
@@ -4312,6 +4450,7 @@ def main():
             init_relion_iteration=args.init_relion_iteration,
             particle_names=our_names,
             strict=True,
+            noise_dtype=np.float64 if _double_image_preprocessing else np.float32,
         )
         source_override = final_overrides[-1]
         if source_override is None:
@@ -4369,9 +4508,25 @@ def main():
             particle_names=our_names,
             include_initial_state=True,
             strict=True,
+            noise_dtype=np.float64 if _double_image_preprocessing else np.float32,
         )
         if initial_overrides[0] is not None:
-            if relion_live_initial_noise_variance is not None:
+            if args.init_noise_from_npz is not None:
+                initial_overrides[0] = dict(initial_overrides[0])
+                explicit_noise = (
+                    list(noise_variance)
+                    if isinstance(noise_variance, (list, tuple))
+                    else [noise_variance, noise_variance]
+                )
+                initial_overrides[0]["noise_variance"] = [
+                    np.asarray(value, dtype=np.float64).copy()
+                    for value in explicit_noise
+                ]
+                logger.info(
+                    "STRICT-PARITY: first expectation preserves explicit "
+                    "--init-noise-from-npz instead of rounded model-STAR noise",
+                )
+            elif relion_live_initial_noise_variance is not None:
                 initial_overrides[0] = dict(initial_overrides[0])
                 initial_noise_dtype = (
                     np.float64
@@ -4584,140 +4739,170 @@ def main():
             bool(state_swap_probe["replay_relion_references"]),
         )
 
+    sampling_kwargs = _refine_sampling_kwargs(args, init_healpix_order)
+
     result = refine_single_volume(
         experiment_datasets=experiment_datasets,
         init_volume=jnp.asarray(init_vol_ft),
-        init_reference_real=init_reference_real_for_projector,
         init_noise_variance=noise_variance,
         init_mean_variance=mean_variance,
         rotations=rotations,
         translations=translations_jnp,
-        disc_type=os.environ.get("RECOVAR_DISC_TYPE_OVERRIDE", "linear_interp"),
-        max_iter=args.max_iter,
-        image_batch_size=args.image_batch_size,
-        rotation_block_size=args.rotation_block_size,
-        relion_current_sizes=oracle_current_sizes,
-        relion_healpix_orders=oracle_healpix_orders,
-        init_current_size=init_current_size,
-        init_fsc=None if frozen_boundary is None else frozen_boundary.fsc,
-        init_ave_Pmax=None if frozen_boundary is None else frozen_boundary.ave_pmax,
-        init_has_high_fsc_at_limit=(
-            None if frozen_boundary is None else frozen_boundary.has_high_fsc_at_limit
+        options=RefinementOptions(
+            disc_type=os.environ.get("RECOVAR_DISC_TYPE_OVERRIDE", "linear_interp"),
+            schedule=RefinementSchedule(
+                max_iter=args.max_iter,
+                init_current_size=init_current_size,
+                init_fsc=None if frozen_boundary is None else frozen_boundary.fsc,
+                init_ave_Pmax=None if frozen_boundary is None else frozen_boundary.ave_pmax,
+                init_has_high_fsc_at_limit=(
+                    None if frozen_boundary is None else frozen_boundary.has_high_fsc_at_limit
+                ),
+                init_relion_incr_size=(
+                    10 if frozen_boundary is None else frozen_boundary.relion_incr_size
+                ),
+                fsc_threshold=1.0 / 7.0,
+                init_healpix_order=sampling_kwargs["init_healpix_order"],
+                max_healpix_order=effective_max_healpix_order,
+                init_translation_range=sampling_kwargs["init_translation_range"],
+                init_translation_step=sampling_kwargs["init_translation_step"],
+                init_translation_sigma_angstrom=(
+                    frozen_boundary.translation_sigma_angstrom_per_half
+                    if frozen_boundary is not None
+                    else (
+                        relion_init_sigma_offset_angstrom
+                        if relion_init_sigma_offset_angstrom is not None
+                        else args.offset_sigma_angstrom
+                    )
+                ),
+                particle_diameter_ang=particle_diameter_ang,
+                init_relion_iteration=args.init_relion_iteration,
+                skip_final_iteration=bool(args.skip_final_iteration),
+            ),
+            batching=RefinementBatching(
+                image_batch_size=args.image_batch_size,
+                rotation_block_size=args.rotation_block_size,
+            ),
+            adaptive=AdaptiveOptions(
+                relion_current_sizes=oracle_current_sizes,
+                relion_healpix_orders=oracle_healpix_orders,
+                adaptive_oversampling=args.adaptive_oversampling,
+                max_significants=args.max_significants,
+                nside_level=rotation_grid_order if args.adaptive_oversampling > 0 else None,
+                translation_pixel_offset=sampling_kwargs["translation_pixel_offset"],
+            ),
+            parity=RelionParityOptions(
+                tau2_fudge=effective_tau2_fudge,
+                perturb_factor=args.perturb_factor,
+                perturb_seed=effective_perturb_seed,
+                optimizer_random_seed=args.seed,
+                relion_optics_image_sizes=relion_optics_image_sizes,
+                relion_optics_pixel_sizes=relion_optics_pixel_sizes,
+                relion_model_pixel_size=relion_model_pixel_size,
+                perturb_replay_relion_dir=args.perturb_replay_relion_dir,
+                perturb_replay_restart_state_iterations=perturb_replay_restart_state_iterations,
+                final_sampling_replay_relion_dir=final_sampling_replay_relion_dir,
+                image_fourier_backend=args.image_fourier_backend,
+                emulate_relion_firstiter_cc=bool(args.firstiter_cc),
+                relion_firstiter_ini_high_angstrom=(
+                    relion_firstiter_ini_high_angstrom if args.firstiter_cc else None
+                ),
+                use_per_half_mean_variance=(
+                    frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
+                ),
+                preserve_bpref_particle_order=use_fresh_auto_refine_order,
+            ),
+            local_search=LocalSearchOptions(
+                auto_local_healpix_order=sampling_kwargs["auto_local_healpix_order"],
+                local_search_profile_mode=args.local_search_profile,
+            ),
+            k_class=KClassOptions(
+                n_classes=args.n_classes,
+            ),
+            replay=ReplayState(
+                init_reference_real=init_reference_real_for_projector,
+                init_refinement_state_fields=(
+                    None if frozen_boundary is None else frozen_boundary.refinement_state_fields
+                ),
+                replay_iteration_overrides=replay_iteration_overrides,
+                final_replay_override=final_replay_override,
+                final_replay_reference_maps=final_replay_reference_maps,
+                final_replay_source_iteration=final_replay_source_iteration,
+                init_group_ids=native_group_ids_per_half,
+                init_group_count=native_group_count,
+                relion_scale_follower_count=relion_scale_followers,
+                relion_scale_follower_owners_by_iteration=relion_scale_follower_owners_by_iteration,
+                relion_follower_scale_replay=relion_follower_scale_replay,
+                init_relion_particle_ids=(
+                    None
+                    if native_group_layout is None
+                    else list(native_group_layout.particle_ids_per_half)
+                ),
+                init_relion_optics_group_ids=(
+                    None
+                    if native_group_layout is None
+                    else list(native_group_layout.optics_group_ids_per_half)
+                ),
+                init_relion_optics_group_count=(
+                    None if native_group_layout is None else native_group_layout.n_optics_groups
+                ),
+                init_previous_best_translations=(
+                    None
+                    if init_previous_best_poses is None
+                    else init_previous_best_poses["previous_best_translations"]
+                ),
+                init_previous_best_rotation_eulers=(
+                    None
+                    if init_previous_best_poses is None
+                    else init_previous_best_poses["previous_best_rotation_eulers"]
+                ),
+                init_image_corrections=(
+                    None if frozen_boundary is None else frozen_boundary.image_corrections
+                ),
+                init_scale_corrections=(
+                    None if frozen_boundary is None else frozen_boundary.scale_corrections
+                ),
+                init_direction_prior=(
+                    None if frozen_boundary is None else frozen_boundary.direction_prior_per_half
+                ),
+                preserve_initial_direction_prior=frozen_boundary is not None,
+            ),
+            debug=EngineDebugOptions(
+                save_intermediates_dir=args.save_intermediates_dir,
+                save_intermediates_skip_unregularized=bool(args.save_intermediates_skip_unregularized),
+                state_swap_probe=state_swap_probe,
+                assert_initial_scoring_state_immutable=frozen_boundary is not None,
+                stop_after_local_search_profile=bool(args.stop_after_local_search_profile),
+                stop_after_local_search=bool(args.stop_after_local_search),
+                stop_after_local_search_score_only=bool(args.stop_after_local_search_score_only),
+                sealed_sampling_state=(
+                    frozen_boundary.sampling_state
+                    if frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
+                    else None
+                ),
+                sealed_scoring_context=(
+                    {
+                        "schema": frozen_boundary.schema,
+                        "completed_relion_iteration": frozen_boundary.completed_relion_iteration,
+                        "consumer_relion_iteration": frozen_boundary.consumer_relion_iteration,
+                        "source_sha256": frozen_boundary.source_sha256,
+                        "source_roles": frozen_boundary.source_roles,
+                        "runtime_config": frozen_boundary.runtime_config,
+                        "map_lineage": frozen_boundary.map_lineage,
+                    }
+                    if frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
+                    else None
+                ),
+                expected_accuracy=ExpectedAccuracyOptions(
+                    half1_base_order_local=expected_accuracy_half1_base_order_local,
+                    half1_trial_order_local=expected_accuracy_half1_trial_order_local,
+                    half1_optics_group_ids=expected_accuracy_half1_optics_group_ids,
+                    half1_particle_ids=expected_accuracy_half1_particle_ids,
+                    half1_ctf_params=expected_accuracy_half1_ctf_params,
+                    do_ctf_correction=expected_accuracy_do_ctf_correction,
+                ),
+            ),
         ),
-        init_relion_incr_size=(
-            10 if frozen_boundary is None else frozen_boundary.relion_incr_size
-        ),
-        init_refinement_state_fields=(
-            None if frozen_boundary is None else frozen_boundary.refinement_state_fields
-        ),
-        fsc_threshold=1.0 / 7.0,
-        adaptive_oversampling=args.adaptive_oversampling,
-        max_significants=args.max_significants,
-        nside_level=rotation_grid_order if args.adaptive_oversampling > 0 else None,
-        **_refine_sampling_kwargs(args, init_healpix_order),
-        max_healpix_order=effective_max_healpix_order,
-        init_translation_sigma_angstrom=(
-            frozen_boundary.translation_sigma_angstrom_per_half
-            if frozen_boundary is not None
-            else (
-                relion_init_sigma_offset_angstrom
-                if relion_init_sigma_offset_angstrom is not None
-                else args.offset_sigma_angstrom
-            )
-        ),
-        particle_diameter_ang=particle_diameter_ang,
-        tau2_fudge=effective_tau2_fudge,
-        perturb_factor=args.perturb_factor,
-        perturb_seed=effective_perturb_seed,
-        optimizer_random_seed=args.seed,
-        relion_optics_image_sizes=relion_optics_image_sizes,
-        relion_optics_pixel_sizes=relion_optics_pixel_sizes,
-        relion_model_pixel_size=relion_model_pixel_size,
-        expected_accuracy_half1_base_order_local=expected_accuracy_half1_base_order_local,
-        expected_accuracy_half1_trial_order_local=expected_accuracy_half1_trial_order_local,
-        expected_accuracy_half1_optics_group_ids=expected_accuracy_half1_optics_group_ids,
-        expected_accuracy_half1_particle_ids=expected_accuracy_half1_particle_ids,
-        expected_accuracy_half1_ctf_params=expected_accuracy_half1_ctf_params,
-        expected_accuracy_do_ctf_correction=expected_accuracy_do_ctf_correction,
-        perturb_replay_relion_dir=args.perturb_replay_relion_dir,
-        perturb_replay_restart_state_iterations=perturb_replay_restart_state_iterations,
-        final_sampling_replay_relion_dir=final_sampling_replay_relion_dir,
-        replay_iteration_overrides=replay_iteration_overrides,
-        final_replay_override=final_replay_override,
-        final_replay_reference_maps=final_replay_reference_maps,
-        final_replay_source_iteration=final_replay_source_iteration,
-        init_relion_iteration=args.init_relion_iteration,
-        n_classes=args.n_classes,
-        image_fourier_backend=args.image_fourier_backend,
-        emulate_relion_firstiter_cc=bool(args.firstiter_cc),
-        relion_firstiter_ini_high_angstrom=(
-            relion_firstiter_ini_high_angstrom if args.firstiter_cc else None
-        ),
-        init_group_ids=native_group_ids_per_half,
-        init_group_count=native_group_count,
-        relion_scale_follower_count=relion_scale_followers,
-        relion_scale_follower_owners_by_iteration=relion_scale_follower_owners_by_iteration,
-        relion_follower_scale_replay=relion_follower_scale_replay,
-        init_relion_particle_ids=(
-            None if native_group_layout is None else list(native_group_layout.particle_ids_per_half)
-        ),
-        init_relion_optics_group_ids=(
-            None if native_group_layout is None else list(native_group_layout.optics_group_ids_per_half)
-        ),
-        init_relion_optics_group_count=(
-            None if native_group_layout is None else native_group_layout.n_optics_groups
-        ),
-        init_previous_best_translations=(
-            None
-            if init_previous_best_poses is None
-            else init_previous_best_poses["previous_best_translations"]
-        ),
-        init_previous_best_rotation_eulers=(
-            None
-            if init_previous_best_poses is None
-            else init_previous_best_poses["previous_best_rotation_eulers"]
-        ),
-        init_image_corrections=(
-            None if frozen_boundary is None else frozen_boundary.image_corrections
-        ),
-        init_scale_corrections=(
-            None if frozen_boundary is None else frozen_boundary.scale_corrections
-        ),
-        init_direction_prior=(
-            None if frozen_boundary is None else frozen_boundary.direction_prior_per_half
-        ),
-        assert_initial_scoring_state_immutable=frozen_boundary is not None,
-        preserve_initial_direction_prior=frozen_boundary is not None,
-        skip_final_iteration=bool(args.skip_final_iteration),
-        save_intermediates_dir=args.save_intermediates_dir,
-        save_intermediates_skip_unregularized=bool(args.save_intermediates_skip_unregularized),
-        local_search_profile_mode=args.local_search_profile,
-        stop_after_local_search_profile=bool(args.stop_after_local_search_profile),
-        stop_after_local_search=bool(args.stop_after_local_search),
-        stop_after_local_search_score_only=bool(args.stop_after_local_search_score_only),
-        sealed_sampling_state=(
-            frozen_boundary.sampling_state
-            if frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
-            else None
-        ),
-        sealed_scoring_context=(
-            {
-                "schema": frozen_boundary.schema,
-                "completed_relion_iteration": frozen_boundary.completed_relion_iteration,
-                "consumer_relion_iteration": frozen_boundary.consumer_relion_iteration,
-                "source_sha256": frozen_boundary.source_sha256,
-                "source_roles": frozen_boundary.source_roles,
-                "runtime_config": frozen_boundary.runtime_config,
-                "map_lineage": frozen_boundary.map_lineage,
-            }
-            if frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
-            else None
-        ),
-        use_per_half_mean_variance=(
-            frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
-        ),
-        preserve_bpref_particle_order=use_fresh_auto_refine_order,
-        state_swap_probe=state_swap_probe,
     )
 
     validate_state_swap_probe_application(
@@ -4826,6 +5011,9 @@ def main():
 
     # ---- Save results ----
     save_dict = {
+        "relion_particle_shuffle": np.asarray(args.relion_particle_shuffle),
+        "initial_noise_bootstrap": np.asarray(args.initial_noise_bootstrap),
+        "relion_fresh_particle_order_applied": np.bool_(use_fresh_auto_refine_order),
         "current_sizes": np.array(result["current_sizes"]),
         "pixel_resolutions": np.array(result["pixel_resolutions"]),
         "wall_times": np.array(result["wall_times"]),

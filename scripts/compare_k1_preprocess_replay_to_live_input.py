@@ -4,15 +4,14 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-    _relion_cuda_fine_full_to_compact_lookup,
-)
+from recovar.em.sparse_pass2.sparse_pass2_scoring import _relion_cuda_fine_full_to_compact_lookup
+from recovar.utils.file_hash import sha256_file
+
 if __package__:
     from scripts.validate_relion_fine_operand_capture import load_fine_operand_capture
     from scripts.validate_relion_preprocess_capture import (
@@ -25,14 +24,6 @@ else:
     from validate_relion_preprocess_capture import (  # type: ignore[no-redef]
         load_artifact as load_preprocess_capture,
     )
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, object]:
@@ -142,7 +133,7 @@ def main() -> None:
                 native_reference, live_preprocessed_relion_scale
             ),
             "capture": str(args.native_preprocess_capture.resolve()),
-            "capture_sha256": _sha256(args.native_preprocess_capture),
+            "capture_sha256": sha256_file(args.native_preprocess_capture),
         }
 
     modes: dict[str, object] = {}
@@ -170,7 +161,7 @@ def main() -> None:
                 replay, live_preprocessed_relion_scale
             ),
             "stage_npz": str(path.resolve()),
-            "stage_npz_sha256": _sha256(path),
+            "stage_npz_sha256": sha256_file(path),
         }
 
     native_fine_metrics = None
@@ -199,7 +190,7 @@ def main() -> None:
                 live_fine_convention, exact_preprocess_counterfactual
             ),
             "capture": str(args.native_fine_capture.resolve()),
-            "capture_sha256": _sha256(args.native_fine_capture),
+            "capture_sha256": sha256_file(args.native_fine_capture),
         }
 
     if native_reference is None:
@@ -227,7 +218,7 @@ def main() -> None:
         "native_preprocess_operands": native_preprocess_operands,
         "modes": modes,
         "direct_dump": str(args.direct_dump.resolve()),
-        "direct_dump_sha256": _sha256(args.direct_dump),
+        "direct_dump_sha256": sha256_file(args.direct_dump),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"

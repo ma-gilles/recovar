@@ -18,6 +18,11 @@ from pathlib import Path
 
 import numpy as np
 
+try:
+    from scripts.relion_reference import euler_matrix
+except ModuleNotFoundError:
+    from relion_reference import euler_matrix
+
 DEFAULT_FIXTURE_DIR = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_run_small")
 DEFAULT_DUMP = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_dump_small")
 DEFAULT_OUT = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/p0_diff2_diag_relion_proj")
@@ -45,26 +50,6 @@ def read_meta(p):
         k, v = line.split("=")
         out[k] = v
     return out
-
-
-def euler_to_R(rot_d, tilt_d, psi_d):
-    rot = np.deg2rad(rot_d)
-    tilt = np.deg2rad(tilt_d)
-    psi = np.deg2rad(psi_d)
-    ca, sa = np.cos(rot), np.sin(rot)
-    cb, sb = np.cos(tilt), np.sin(tilt)
-    cg, sg = np.cos(psi), np.sin(psi)
-    cc = cb * ca
-    cs = cb * sa
-    sc = sb * ca
-    ss = sb * sa
-    return np.array(
-        [
-            [cg * cc - sg * sa, cg * cs + sg * ca, -cg * sb],
-            [-sg * cc - cg * sa, -sg * cs + cg * ca, sg * sb],
-            [sc, ss, cb],
-        ]
-    )
 
 
 def _corrcoef(a: np.ndarray, b: np.ndarray) -> float:
@@ -135,7 +120,7 @@ def main():
     )
 
     # Project orient 0 sub-rot 6 to verify RELION C++ shape
-    R_test = euler_to_R(*eulers[0, 0])
+    R_test = euler_matrix(*eulers[0, 0])
     test_proj = project_volume(vol_real, R_test, ori_size=N, padding_factor=1, current_size=-1, do_gridding=True)
     print(f"RELION proj test: shape={test_proj.shape}, dtype={test_proj.dtype}, max={np.abs(test_proj).max():.4e}")
     fref_path = args.dump_dir / f"{prefix}_Fref_orient0.bin"
@@ -162,7 +147,7 @@ def main():
     rot_to_proj = {}
     for k, (orient_idx, iover_rot) in enumerate(unique_rotations):
         eu = eulers[orient_idx, iover_rot]
-        R = euler_to_R(*eu)
+        R = euler_matrix(*eu)
         # current_size=-1 gives full N output; we need to window to (28, 15)
         proj_full = project_volume(vol_real, R, ori_size=N, padding_factor=1, current_size=-1, do_gridding=True)
         # Window (full N, half) → windowed (current_size=28, half=15) using RELION's windowFourierTransform.

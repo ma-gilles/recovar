@@ -252,13 +252,11 @@ def build_report(
     import jax.numpy as jnp
 
     from recovar.cuda_backproject import cuda_available
-    from recovar.em.dense_single_volume.helpers.projection import (
+    from recovar.em.helpers.projection import (
         _relion_projector_texture_enabled,
         compute_relion_projector_projections_block,
     )
-    from recovar.em.initial_model.dense_adapter import (
-        reference_to_relion_projector_half_maps,
-    )
+    from recovar.em.relion.relion_projector_setup import reference_to_relion_projector_half_maps
     from recovar.relion_bind import _relion_bind_core as relion_bind
 
     paths = [

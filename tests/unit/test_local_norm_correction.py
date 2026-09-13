@@ -1,24 +1,75 @@
 """Focused tests for exact-local RELION norm-correction image power."""
 
+import jax
 import numpy as np
 import pytest
 
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.helpers.half_spectrum import make_relion_noise_shell_indices_half
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.helpers.half_spectrum import make_relion_noise_shell_indices_half
+from recovar.em.local.local_big_jit import (
+    _noise_image_power_shells_and_per_image,
+    _norm_correction_image_power_mass,
+    _norm_correction_image_power_per_image,
+)
+from recovar.em.local.local_bucket_stages import _noise_wsum_initial_dtype
+from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _relion_cuda_powerclass_highres_norm_units,
     _relion_cuda_powerclass_spectrum_highres_norm_units,
+)
+from recovar.em.sparse_pass2.sparse_pass2_wavg import (
     _relion_cuda_translate_wavg_norm_images,
     _replace_untranslated_low_shell_norm_power,
     _translated_wavg_low_shell_power_pixels,
     _weighted_image_power_shells_and_per_image,
 )
-from recovar.em.dense_single_volume.local_big_jit import (
-    _norm_correction_image_power_mass,
-    _norm_correction_image_power_per_image,
+
+
+@pytest.mark.parametrize(
+    ("relion_exact_fine_diff2", "use_window", "expected"),
+    (
+        (True, True, np.float64),
+        (True, False, np.float32),
+        (False, True, np.float32),
+        (False, False, np.float32),
+    ),
 )
+def test_noise_wsum_initial_dtype_matches_direct_wavg_output(
+    relion_exact_fine_diff2,
+    use_window,
+    expected,
+):
+    actual = _noise_wsum_initial_dtype(
+        relion_exact_fine_diff2=relion_exact_fine_diff2,
+        use_window=use_window,
+    )
+
+    assert np.dtype(actual) == np.dtype(expected)
+
+
+def test_noise_wsum_float64_zero_is_bitwise_equivalent_to_first_bucket_promotion():
+    direct_wavg_shells = jnp.asarray(
+        [0.0, np.nextafter(1.0, 2.0), -3.25, 2**40 + 0.25],
+        dtype=jnp.float64,
+    )
+    add_bucket = jax.jit(lambda carry, block: carry + block)
+
+    legacy = add_bucket(jnp.zeros(4, dtype=jnp.float32), direct_wavg_shells)
+    canonical = add_bucket(
+        jnp.zeros(
+            4,
+            dtype=_noise_wsum_initial_dtype(
+                relion_exact_fine_diff2=True,
+                use_window=True,
+            ),
+        ),
+        direct_wavg_shells,
+    )
+
+    assert np.asarray(legacy).dtype == np.float64
+    assert np.asarray(canonical).dtype == np.float64
+    np.testing.assert_array_equal(np.asarray(canonical), np.asarray(legacy))
 
 
 def test_norm_correction_mass_drops_invalid_shells_and_keeps_valid_outer_shell():
@@ -144,6 +195,54 @@ def test_norm_correction_power_uses_relion_powerclass_once_or_not_at_all():
     )
 
 
+def test_local_noise_spectrum_uses_unweighted_high_shell_particle_power():
+    processed_prefix = np.asarray(
+        [
+            [1.0 + 1.0j, 2.0 + 0.0j, 3.0 + 0.0j],
+            [4.0 + 0.0j, 0.0 + 5.0j, 6.0 + 0.0j],
+        ],
+        dtype=jnp.complex64,
+    )
+    processed = jnp.asarray(np.pad(processed_prefix, ((0, 0), (0, 9))))
+    support_mass = jnp.asarray([0.25, 0.0], dtype=jnp.float32)
+    shell_indices = jnp.asarray([0, 1, 2] + [3] * 9, dtype=jnp.int32)
+
+    shells, _ = _noise_image_power_shells_and_per_image(
+        processed,
+        support_mass,
+        shell_indices,
+        jnp.asarray([True, True]),
+        projection_max_r=1,
+        shell_count=3,
+        image_shape=(4, 4),
+        current_size=2,
+    )
+
+    power = np.abs(processed_prefix) ** 2
+    expected = np.asarray(
+        [power[0, 0] * 0.25, power[0, 1] * 0.25, power[0, 2] + power[1, 2]],
+        dtype=np.float32,
+    )
+    np.testing.assert_array_equal(np.asarray(shells), expected)
+
+
+def test_local_noise_spectrum_omits_shared_high_shell_for_non_owner_class():
+    processed = jnp.asarray([[1.0 + 0.0j, 2.0 + 0.0j, 3.0 + 0.0j]], dtype=jnp.complex64)
+    shells, _ = _noise_image_power_shells_and_per_image(
+        processed,
+        jnp.asarray([0.25], dtype=jnp.float32),
+        jnp.asarray([0, 1, 2], dtype=jnp.int32),
+        jnp.asarray([True]),
+        projection_max_r=1,
+        shell_count=3,
+        image_shape=(4, 4),
+        current_size=2,
+        include_unweighted_high_shell=False,
+    )
+
+    np.testing.assert_array_equal(np.asarray(shells), np.asarray([0.25, 1.0, 0.0], dtype=np.float32))
+
+
 def test_local_norm_correction_can_use_relion_powerclass_spectrum_tail():
     rng = np.random.default_rng(21084)
     height = 32
@@ -236,6 +335,81 @@ def test_powerclass_spectrum_norm_sums_shell_bins_in_host_precision():
 
     assert np.asarray(actual).dtype == np.float64
     np.testing.assert_array_equal(np.asarray(actual), np.asarray([expected]))
+
+
+def test_powerclass_spectrum_norm_keeps_double_kernel_inputs():
+    height = 8
+    current_size = 4
+    half_width = height // 2 + 1
+    centered = np.arange(height * half_width, dtype=np.float64).reshape(height, half_width)
+    centered = (centered + 1j * (centered / 3.0 + 2.0**-35)).astype(np.complex128)
+    processed = centered.reshape(1, -1) * np.float64(height * height)
+
+    actual = np.asarray(
+        _relion_cuda_powerclass_spectrum_highres_norm_units(
+            jnp.asarray(processed),
+            image_shape=(height, height),
+            current_size=current_size,
+        )
+    )
+
+    relion_image = np.roll(centered, -(height // 2), axis=0)
+    expected = np.float64(0.0)
+    for y in range(height):
+        signed_y = y if y < half_width else y - height
+        for x in range(half_width):
+            shell = int(np.rint(np.sqrt(np.float64(x * x + signed_y * signed_y))))
+            if (
+                shell >= current_size // 2 + 1
+                and shell < half_width
+                and not (x == 0 and signed_y < 0)
+            ):
+                value = relion_image[y, x]
+                expected += np.float64(value.real * value.real + value.imag * value.imag)
+    expected *= np.float64((height * height) ** 2)
+
+    assert actual.dtype == np.float64
+    np.testing.assert_allclose(actual, np.asarray([expected]), rtol=3e-16, atol=1e-8)
+    assert not np.array_equal(actual, actual.astype(np.float32).astype(np.float64))
+
+
+def test_powerclass_spectrum_norm_runtime_current_size_reuses_trace_and_matches_static():
+    height = 8
+    half_width = height // 2 + 1
+    centered = np.arange(height * half_width, dtype=np.float32).reshape(height, half_width)
+    centered = ((centered % 4) + 1j * (centered % 3)).astype(np.complex64)
+    processed = jnp.asarray(centered.reshape(1, -1) * np.float32(height * height))
+
+    function = _relion_cuda_powerclass_spectrum_highres_norm_units
+    function.clear_cache()
+    try:
+        dynamic_by_size = {}
+        for current_size in (4, 6):
+            dynamic_by_size[current_size] = function(
+                processed,
+                image_shape=(height, height),
+                current_size=None,
+                runtime_current_size=jnp.asarray(current_size, dtype=jnp.int32),
+            )
+            if current_size == 4:
+                dynamic_cache_size = function._cache_size()
+                assert dynamic_cache_size == 1
+            else:
+                assert function._cache_size() == dynamic_cache_size
+
+        assert np.any(np.asarray(dynamic_by_size[4]) != np.asarray(dynamic_by_size[6]))
+        for current_size in (4, 6):
+            static = function(
+                processed,
+                image_shape=(height, height),
+                current_size=current_size,
+            )
+            np.testing.assert_array_equal(
+                np.asarray(dynamic_by_size[current_size]),
+                np.asarray(static),
+            )
+    finally:
+        function.clear_cache()
 
 
 def test_translated_wavg_low_shell_power_preserves_per_pixel_boundary():

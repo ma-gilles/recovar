@@ -17,16 +17,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import re
 from pathlib import Path
 
 import numpy as np
 import starfile
-
-
-def stack_index_from_image_name(name: str) -> int:
-    m = re.match(r"(\d+)@", str(name))
-    return int(m.group(1)) - 1 if m else -1
 
 
 def main():

@@ -56,15 +56,6 @@ def _safe_git_branch() -> str:
         return "<detached>"
 
 
-def _safe_git_dirty_lines() -> list[str]:
-    try:
-        return subprocess.check_output(
-            ["git", "status", "--porcelain"], text=True, stderr=subprocess.DEVNULL
-        ).splitlines()
-    except Exception:
-        return []
-
-
 def _safe_git_status_porcelain() -> str:
     try:
         return subprocess.check_output(

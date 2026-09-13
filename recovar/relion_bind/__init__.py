@@ -1,8 +1,8 @@
-"""RELION pybind11 bindings for exact parity testing.
+"""RELION native runtime helpers and independent parity references.
 
-Provides Python wrappers around RELION's C++ subfunctions so that
-recovar and RELION can be called on identical inputs and their outputs
-diffed numerically.
+RELION-style EM uses this extension for sampling, particle ordering, CTFs
+and reconstruction. Other exports provide independent numerical references
+for tests and replay tools; the package is not solely a test dependency.
 
 Submodules
 ----------

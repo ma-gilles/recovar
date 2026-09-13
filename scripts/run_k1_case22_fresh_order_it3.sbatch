@@ -488,7 +488,7 @@ import sys
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
+from recovar.em.diagnostics.compact_candidate_capture import (
     validate_raw_capture_shard,
 )
 

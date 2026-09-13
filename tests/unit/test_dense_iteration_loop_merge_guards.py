@@ -7,29 +7,71 @@ re-running the expensive parity fixtures.
 
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass
+import ast
 import inspect
+from dataclasses import fields, is_dataclass
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import recovar.em.local.local_search_iteration as local_search_iteration
+from recovar.em.local.local_search_iteration import _LocalSearchIterationResult
 
-import recovar.em.dense_single_volume.iteration_loop as iteration_loop
-import recovar.em.dense_single_volume.local_search_iteration as local_search_iteration
-from recovar.em.initial_model.iteration_loop import run_vdam_iterations
+import recovar.em.refinement.iteration_loop as iteration_loop
+from recovar.em.dense import half_scoring, score_outputs, scoring_policy
+from recovar.em.diagnostics import local_debug, relion_replay
+from recovar.em.diagnostics import reconstruction as reconstruction_diagnostics
+from recovar.em.helpers import orientation_priors
+from recovar.em.helpers.convergence import _native_final_perturbation_healpix_order
+from recovar.em.ppca_refinement import ppca_bridge
+from recovar.em.refinement import finalization_policy, mean_helpers
+from recovar.em.relion import relion_worker_scale
+from recovar.em.vdam.iteration_loop import run_vdam_iterations
 
 pytestmark = pytest.mark.unit
+
+
+def _local_score_call_keywords():
+    """Resolve the local scorer's literal shared kwargs for source guards."""
+    function = ast.parse(inspect.getsource(half_scoring._score_half_local)).body[0]
+    dictionaries = {
+        node.targets[0].id: dict(zip((key.value for key in node.value.keys), node.value.values))
+        for node in function.body
+        if isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and isinstance(node.value, ast.Dict)
+    }
+    calls = sorted(
+        (
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_run_local_search_iteration"
+        ),
+        key=lambda node: node.lineno,
+    )
+    resolved = []
+    for call in calls:
+        keywords = {}
+        for keyword in call.keywords:
+            items = dictionaries[keyword.value.id] if keyword.arg is None else {keyword.arg: keyword.value}
+            assert not keywords.keys() & items.keys(), "duplicate local keyword"
+            keywords.update(items)
+        resolved.append({key: ast.unparse(value) for key, value in keywords.items()})
+    return resolved
 
 
 def test_per_half_output_shape_stays_bundled_and_trimmed():
     """The refactor depends on one owner for per-half outputs, without dead fields."""
 
-    assert is_dataclass(iteration_loop.HalfScoreResult)
-    assert is_dataclass(iteration_loop.PerHalfOutputs)
+    assert is_dataclass(score_outputs.HalfScoreResult)
+    assert is_dataclass(score_outputs.PerHalfOutputs)
     assert not hasattr(iteration_loop, "IterationRunSpec")
-    assert not hasattr(iteration_loop.PerHalfOutputs, "for_half")
+    assert not hasattr(score_outputs.PerHalfOutputs, "for_half")
 
-    half_score_fields = {field.name for field in fields(iteration_loop.HalfScoreResult)}
+    half_score_fields = {field.name for field in fields(score_outputs.HalfScoreResult)}
     assert half_score_fields == {
         "ha",
         "Ft_y",
@@ -58,7 +100,7 @@ def test_per_half_output_shape_stays_bundled_and_trimmed():
         }
     )
 
-    per_half_fields = {field.name for field in fields(iteration_loop.PerHalfOutputs)}
+    per_half_fields = {field.name for field in fields(score_outputs.PerHalfOutputs)}
     assert per_half_fields == {
         "hard_assignments",
         "Ft_y",
@@ -88,8 +130,8 @@ def test_per_half_update_from_half_score_result_updates_only_score_payload():
         max_posterior_per_image = np.array([0.25, 0.75], dtype=np.float64)
         rotation_posterior_sums = np.array([1.0, 2.0, 3.0], dtype=np.float64)
 
-    outs = iteration_loop.PerHalfOutputs.empty()
-    hs = iteration_loop.HalfScoreResult(
+    outs = score_outputs.PerHalfOutputs.empty()
+    hs = score_outputs.HalfScoreResult(
         ha=np.array([0, 1], dtype=np.int32),
         Ft_y="ft_y",
         Ft_ctf="ft_ctf",
@@ -121,17 +163,42 @@ def test_per_half_update_from_half_score_result_updates_only_score_payload():
     assert outs.mstep_accumulator_shape == [None, (17, 17, 17)]
 
 
+def test_per_half_update_preserves_double_posterior_state_in_double_mode(monkeypatch):
+    class _Stats:
+        max_posterior_per_image = np.array([0.123456789012345], dtype=np.float64)
+        rotation_posterior_sums = np.array([0.987654321098765], dtype=np.float64)
+
+    monkeypatch.setitem(scoring_policy._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", True)
+    outs = iteration_loop.PerHalfOutputs.empty()
+    outs.update_from(
+        0,
+        iteration_loop.HalfScoreResult(
+            ha=np.array([0], dtype=np.int32),
+            Ft_y=None,
+            Ft_ctf=None,
+            em_stats=_Stats(),
+            noise_stats=None,
+        ),
+        dtype=scoring_policy._dense_global_scoring_dtype(),
+    )
+
+    assert outs.max_posterior[0].dtype == np.float64
+    assert outs.rotation_posterior[0].dtype == np.float64
+    assert outs.max_posterior[0][0] == _Stats.max_posterior_per_image[0]
+    assert outs.rotation_posterior[0][0] == _Stats.rotation_posterior_sums[0]
+
+
 def test_mstep_full_half_axis_resolver_keeps_common_axis_or_default():
-    assert iteration_loop._resolve_mstep_full_half_axis([None, None]) == -1
-    assert iteration_loop._resolve_mstep_full_half_axis([None, 0]) == 0
-    assert iteration_loop._resolve_mstep_full_half_axis([0, 0]) == 0
+    assert score_outputs._resolve_mstep_full_half_axis([None, None]) == -1
+    assert score_outputs._resolve_mstep_full_half_axis([None, 0]) == 0
+    assert score_outputs._resolve_mstep_full_half_axis([0, 0]) == 0
 
     with pytest.raises(RuntimeError, match="full-half axes disagree"):
-        iteration_loop._resolve_mstep_full_half_axis([0, -1])
+        score_outputs._resolve_mstep_full_half_axis([0, -1])
 
 
 def test_local_search_keeps_relion_x_half_mstep_contract():
-    source = inspect.getsource(iteration_loop._score_half_local)
+    source = inspect.getsource(half_scoring._score_half_local)
 
     assert "if k_class_enabled" in source
     assert "_k_class_relion_x_half_mstep_enabled()" in source
@@ -140,6 +207,9 @@ def test_local_search_keeps_relion_x_half_mstep_contract():
     assert "mstep_full_half_axis=0 if local_relion_x_half_mstep else None" in source
     assert "mstep_accumulator_shape=(" in source
     assert "relion_backprojector_volume_shape(" in source
+    assert "reconstruction_current_size_for_engine = (" in source
+    assert "if model_current_size_for_engine is None" in source
+    assert "else model_current_size_for_engine" in source
     assert "current_size=reconstruction_current_size_for_engine" in source[
         source.index("mstep_accumulator_shape=(") :
     ]
@@ -153,6 +223,7 @@ def test_empty_k1_local_or_adaptive_half_keeps_relion_x_half_shape_contract():
     assert "empty_k1_x_half_mstep = (" in empty_source
     assert "and (use_local or use_adaptive)" in empty_source
     assert "relion_backprojector_volume_shape(" in empty_source
+    assert "current_size=(" in empty_source
     assert "if model_current_size_for_engine is None" in empty_source
     assert "else model_current_size_for_engine" in empty_source
     assert "half_volume_accumulator_shape(empty_mstep_accumulator_shape)" in empty_source
@@ -164,7 +235,7 @@ def test_empty_k1_local_or_adaptive_half_keeps_relion_x_half_shape_contract():
 def test_relion_norm_scale_updates_are_not_disabled_for_k_class():
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
     update_start = source.index("can_update_norm_scale = (")
-    update_source = source[update_start : source.index("noise_radial_trajectory.append", update_start)]
+    update_source = source[update_start : source.index("history.record_noise_and_tau2(", update_start)]
 
     assert "not k_class_enabled" not in update_source
     assert "update_relion_norm_scale_corrections(" in update_source
@@ -176,19 +247,19 @@ def test_relion_norm_scale_updates_are_not_disabled_for_k_class():
 
 
 def test_relion_correction_range_formatter_accepts_empty_halves():
-    assert iteration_loop._format_relion_correction_range(np.array([], dtype=np.float32)) == "empty"
-    assert iteration_loop._format_relion_correction_range(np.array([0.5, 2.0], dtype=np.float32)) == "[0.5, 2]"
+    assert relion_worker_scale._format_relion_correction_range(np.array([], dtype=np.float32)) == "empty"
+    assert relion_worker_scale._format_relion_correction_range(np.array([0.5, 2.0], dtype=np.float32)) == "[0.5, 2]"
 
 
 def test_k1_local_search_significant_reconstruction_uses_actual_local_oversampling():
-    source = inspect.getsource(iteration_loop._score_half_local)
+    source = inspect.getsource(half_scoring._score_half_local)
 
     assert "local_reconstruct_significant_only = int(local_parent_oversampling_order) > 0" in source
     assert "local_reconstruct_significant_only = state.adaptive_oversampling > 0" not in source
 
 
 def test_k1_local_search_stats_use_relion_retained_weights():
-    source = inspect.getsource(iteration_loop._score_half_local)
+    source = inspect.getsource(half_scoring._score_half_local)
     wrapper_source = inspect.getsource(local_search_iteration._run_local_search_iteration)
 
     assert "stats_use_reconstruction_probs=local_reconstruct_significant_only" in source
@@ -197,36 +268,114 @@ def test_k1_local_search_stats_use_relion_retained_weights():
 
 
 def test_fresh_k1_spectrum_norm_reaches_local_noise_update_only():
-    score_source = inspect.getsource(iteration_loop._score_half_local)
+    score_source = inspect.getsource(half_scoring._score_half_local)
     wrapper_source = inspect.getsource(local_search_iteration._run_local_search_iteration)
     loop_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
 
     assert "if source_faithful_spectrum_norm and k_class_enabled:" in score_source
-    assert score_source.count("source_faithful_spectrum_norm=source_faithful_spectrum_norm") == 3
+    calls = _local_score_call_keywords()
+    assert len(calls) == 3
+    assert all(call["source_faithful_spectrum_norm"] == "source_faithful_spectrum_norm" for call in calls)
     assert "if source_faithful_spectrum_norm:" in wrapper_source
     assert "fresh K=1-only" in wrapper_source
     assert "source_faithful_spectrum_norm=source_faithful_spectrum_norm" in wrapper_source
     local_dispatch = loop_source[
-        loop_source.index("if use_local:") : loop_source.index("elif use_adaptive:")
+        loop_source.index("if use_local:") : loop_source.index("dense_half_kwargs = dict(")
     ]
     assert "source_faithful_spectrum_norm=source_faithful_spectrum_norm" in local_dispatch
+    dense_keywords = loop_source[
+        loop_source.index("dense_half_kwargs = dict(") : loop_source.index("if use_adaptive:\n                    dense_result")
+    ]
+    assert dense_keywords.count("source_faithful_spectrum_norm=source_faithful_spectrum_norm") == 1
 
 
-def test_k1_local_full_parent_diagnostic_counts_unmasked_parent_layout():
-    source = inspect.getsource(iteration_loop._score_half_local)
+@pytest.mark.parametrize(
+    "parent_masked,fine_masked,empty,expected",
+    [
+        (False, False, False, (4, 6, 3, 6)),
+        (True, False, False, (3, 4, 3, 6)),
+        (False, True, False, (4, 6, 2, 3)),
+        (True, True, False, (3, 4, 2, 3)),
+        (False, False, True, (0, 0, 0, 0)),
+    ],
+)
+def test_k1_local_full_parent_diagnostic_counts_unmasked_parent_layout(parent_masked, fine_masked, empty, expected):
+    # An empty explicit selection remains empty; repeated explicit IDs still
+    # count as entries. None means the full masked or unmasked parent support.
+    translations = np.zeros((3, 2), dtype=np.float32)
+    counts = np.array([] if empty else [2, 0, 1], dtype=np.int32)
+    offsets = np.array([0] if empty else [0, 2, 2, 3], dtype=np.int64)
+    mask = np.array([[True, False, True], [False, True, False], [True, True, False]])
+    parent_layout = SimpleNamespace(
+        rotation_counts=counts,
+        rotation_offsets=offsets,
+        translation_grid=translations,
+        sample_mask_flat=mask if parent_masked else None,
+    )
+    fine_layout = SimpleNamespace(
+        rotation_counts=counts,
+        rotation_offsets=offsets,
+        translation_grid=translations,
+        sample_mask_flat=mask if fine_masked else None,
+    )
+    selected = [] if empty else [None, np.array([], dtype=np.int64), np.array([0, 0, 1, 2])]
+    records = []
+    local_debug.log_local_adaptive_support(
+        SimpleNamespace(info=lambda *args: records.append(args)),
+        parent_layout,
+        selected,
+        translations,
+        fine_layout,
+    )
+    assert records == [
+        (
+            "RELION local adaptive pass 2 mask: parent significant samples median=%d max=%d; "
+            "fine valid candidates median=%d max=%d",
+            *expected,
+        )
+    ]
 
-    assert "if parent_layout.sample_mask_flat is not None" in source
-    assert "else int(stop - start) * int(current_translations.shape[0])" in source
+
+@pytest.mark.parametrize(
+    "masked,empty,expected",
+    [
+        (False, False, (3, 6)),
+        (True, False, (2, 3)),
+        (False, True, (0, 0)),
+    ],
+)
+def test_local_denominator_diagnostic_counts_masked_and_empty_support(masked, empty, expected):
+    layout = SimpleNamespace(
+        rotation_counts=np.array([] if empty else [2, 0, 1], dtype=np.int32),
+        rotation_offsets=np.array([0] if empty else [0, 2, 2, 3], dtype=np.int64),
+        translation_grid=np.zeros((3, 2), dtype=np.float32),
+        sample_mask_flat=(
+            np.array([[True, False, True], [False, True, False], [True, True, False]]) if masked else None
+        ),
+    )
+    records = []
+    local_debug.log_local_denominator_support(
+        SimpleNamespace(info=lambda *args: records.append(args)), layout, "full_parent", "TEST_ENV"
+    )
+    assert records == [
+        (
+            "RELION local adaptive pass 2 diagnostic: denominator support mode=%s "
+            "fine valid candidates median=%d max=%d via %s",
+            "full_parent",
+            *expected,
+            "TEST_ENV",
+        )
+    ]
 
 
 def test_k1_local_parent_probe_applies_relion_max_significants_cap():
-    score_source = inspect.getsource(iteration_loop._score_half_local)
+    score_source = inspect.getsource(half_scoring._score_half_local)
     parent_call = score_source[
         score_source.index("parent_outputs = _run_local_search_iteration") : score_source.index(
-            "parent_profile = parent_outputs[-1]"
+            "parent_profile = parent_outputs.profile_summary"
         )
     ]
-    assert "max_significants=max_significants" in parent_call
+    assert _local_score_call_keywords()[0]["max_significants"] == "max_significants"
     assert "apply_max_significants_to_support=True" in parent_call
 
     wrapper_source = inspect.getsource(local_search_iteration._run_local_search_iteration)
@@ -235,7 +384,7 @@ def test_k1_local_parent_probe_applies_relion_max_significants_cap():
 
 
 def test_k1_local_records_coarse_parent_support_not_fine_reconstruction_count():
-    source = inspect.getsource(iteration_loop._score_half_local)
+    source = inspect.getsource(half_scoring._score_half_local)
 
     parent_count_start = source.index("pruned_parent_significant_sample_indices = significant_sample_indices")
     parent_count_end = source.index("if local_adaptive_pass2_full_parent:", parent_count_start)
@@ -244,33 +393,36 @@ def test_k1_local_records_coarse_parent_support_not_fine_reconstruction_count():
     assert "return_significant_counts=False" in source
     assert "significant_counts=relion_significant_counts_k" in source
 
-    counts = iteration_loop._relion_coarse_significant_counts(
+    counts = half_scoring._relion_coarse_significant_counts(
         [np.array([2, 8], dtype=np.int64), np.array([1, 3, 5, 7], dtype=np.int64)]
     )
     np.testing.assert_array_equal(counts, np.array([2, 4], dtype=np.int32))
-    assert iteration_loop._relion_coarse_significant_counts([np.array([2]), None]) is None
+    assert half_scoring._relion_coarse_significant_counts([np.array([2]), None]) is None
 
 
 def test_k1_local_search_does_not_score_learned_global_direction_prior():
-    source = inspect.getsource(iteration_loop._score_half_local)
+    source = inspect.getsource(half_scoring._score_half_local)
     assert "RELION's convertAllSquaredDifferencesToWeights uses mymodel.pdf_direction" in source
     assert "relion_local_rotation_log_prior_k = None" in source
     assert "rotation_log_prior=relion_local_rotation_log_prior_k" in source
     assert "else relion_local_rotation_log_prior_k" in source
 
+    # Both passes build their pdf_direction log priors through one RELION-semantics
+    # owner; local searches yield no direction prior there.
     loop_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    assert loop_source.count("relion_direction_log_priors_for_half(") == 2
+    assert "make_relion_direction_log_prior(" not in loop_source
     prior_loop = loop_source[
         loop_source.index("for _half_idx in range(2):") : loop_source.index("# --- Run E+M on each half-set ---")
     ]
-    assert "if use_local:" in prior_loop
-    assert "continue" in prior_loop
-
-    final_prior_start = loop_source.index("final_rotation_log_prior_k = None")
-    final_prior_block = loop_source[
-        final_prior_start : loop_source.index("if final_use_local:", final_prior_start)
-    ]
-    assert "if not final_use_local:" in final_prior_block
-    assert "use_local=False" in final_prior_block
+    assert "use_local=use_local," in prior_loop
+    final_prior_start = loop_source.index("final_half_direction_priors = relion_direction_log_priors_for_half(")
+    final_prior_block = loop_source[final_prior_start : loop_source.index("if final_use_local:", final_prior_start)]
+    assert "use_local=final_use_local," in final_prior_block
+    assert "sealed_sampling_state if final_current_rotations is current_rotations else None" in final_prior_block
+    owner_source = inspect.getsource(orientation_priors.relion_direction_log_priors_for_half)
+    assert "if use_local:" in owner_source
+    assert "return HalfDirectionLogPriors(rotation_log_prior=None, class_rotation_log_prior=None)" in owner_source
 
 
 def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
@@ -291,25 +443,25 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
         )
         captured.update(kwargs)
         current_size_shape = (19, 19, 19)
-        outputs = (
-            np.zeros(int(np.prod(current_size_shape)), dtype=np.complex64),
-            np.zeros(int(np.prod(current_size_shape)), dtype=np.float32),
-            np.array([0], dtype=np.int32),
-            best_rotation[None, :, :],
-            np.zeros((1, 2), dtype=np.float32),
-            np.array([0], dtype=np.int32),
-            _Stats(),
-            "noise",
+        outputs = _LocalSearchIterationResult(
+            Ft_y=np.zeros(int(np.prod(current_size_shape)), dtype=np.complex64),
+            Ft_ctf=np.zeros(int(np.prod(current_size_shape)), dtype=np.float32),
+            hard_assignment=np.array([0], dtype=np.int32),
+            best_pose_rotations=best_rotation[None, :, :],
+            best_pose_translations=np.zeros((1, 2), dtype=np.float32),
+            best_pose_rotation_ids=np.array([0], dtype=np.int32),
+            relion_stats=_Stats(),
+            noise_stats="noise",
         )
         if kwargs.get("return_significant_counts"):
-            outputs += (np.array([7], dtype=np.int32),)
+            outputs.significant_counts = np.array([7], dtype=np.int32)
         return outputs
 
     monkeypatch.delenv("RECOVAR_K1_RELION_X_HALF_MSTEP", raising=False)
-    monkeypatch.setattr(iteration_loop, "_k1_relion_x_half_mstep_default_available", lambda: True)
-    monkeypatch.setattr(iteration_loop, "_run_local_search_iteration", fake_run_local_search_iteration)
+    monkeypatch.setattr(scoring_policy, "_k1_relion_x_half_mstep_default_available", lambda: True)
+    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_run_local_search_iteration)
 
-    result = iteration_loop._score_half_local(
+    result = half_scoring._score_half_local(
         k=0,
         experiment_dataset=SimpleNamespace(
             voxel_size=1.0,
@@ -321,7 +473,6 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
         noise_variance_k="noise_variance",
         previous_best_rotation_eulers_k=np.zeros((1, 3), dtype=np.float32),
         local_search_rotations=np.eye(3, dtype=np.float32)[None, :, :],
-        local_search_rotation_eulers=np.zeros((1, 3), dtype=np.float32),
         local_search_order=0,
         sigma_rot=0.1,
         sigma_psi=0.1,
@@ -330,9 +481,9 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
         trans_prior_center=np.zeros((1, 2), dtype=np.float32),
         trans_prior_center_for_engine=np.zeros((1, 2), dtype=np.float32),
         current_sigma_offset_angstrom=1.0,
-        current_translation_range=1.0,
         disc_type="linear_interp",
         cs_for_engine=8,
+        model_current_size_for_engine=8,
         local_pass1_current_size=8,
         image_corrections_k=None,
         scale_corrections_k=None,
@@ -340,7 +491,6 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
         disable_adjoint_y=False,
         disable_adjoint_ctf=False,
         max_significants=-1,
-        state=SimpleNamespace(adaptive_oversampling=0),
         iteration=0,
         save_intermediates_dir=None,
         local_search_random_perturbation=0.0,
@@ -348,18 +498,12 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
         local_parent_oversampling_order=0,
         local_search_translation_prior_mode="coarse",
         replay_prior_translations=None,
-        rotation_log_prior_k=None,
         class_log_priors=None,
         k_class_enabled=False,
         collect_local_search_profile=False,
         diagnostic_score_only=False,
         safe_batch_sizes=lambda *_args, **_kwargs: (2, 3),
-        class_assignments=[None, None],
-        class_posterior_per_half=[None, None],
-        class_full_posterior_per_half=[None, None],
-        best_pose_rotations=[None, None],
-        best_pose_rotation_eulers=[None, None],
-        best_pose_translations=[None, None],
+        outputs=score_outputs.PerHalfOutputs.empty(),
         local_profile_history=[],
     )
 
@@ -370,7 +514,11 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
     assert result.mstep_accumulator_shape == (19, 19, 19)
 
 
-def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monkeypatch):
+@pytest.mark.parametrize("denominator_mode", [None, "full_parent", "rotation_only"])
+@pytest.mark.parametrize("spectrum_norm", [False, True])
+def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(
+    monkeypatch, denominator_mode, spectrum_norm
+):
     parent_counts = np.array([2, 3], dtype=np.int32)
     best_rotation = np.array(
         [
@@ -383,6 +531,7 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
     calls = []
 
     class _Stats:
+        log_evidence_per_image = np.array([-2.0, -3.0], dtype=np.float64)
         max_posterior_per_image = np.array([0.75, 0.5], dtype=np.float32)
         rotation_posterior_sums = np.array([1.0, 1.0], dtype=np.float32)
 
@@ -402,43 +551,43 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
     def fake_run_local_search_iteration(*_args, **kwargs):
         calls.append(dict(kwargs))
         if kwargs["score_only"]:
-            return (
-                "parent_ft_y",
-                "parent_ft_ctf",
-                np.zeros(2, dtype=np.int32),
-                _Stats(),
-                {
+            return _LocalSearchIterationResult(
+                Ft_y="parent_ft_y",
+                Ft_ctf="parent_ft_ctf",
+                hard_assignment=np.zeros(2, dtype=np.int32),
+                relion_stats=_Stats(),
+                profile_summary={
                     "reconstruction_sample_indices_by_image": (
                         np.array([0, 1], dtype=np.int64),
                         np.array([0, 1, 2], dtype=np.int64),
                     ),
                 },
             )
-        return (
-            "fine_ft_y",
-            "fine_ft_ctf",
-            np.array([4, 5], dtype=np.int32),
-            np.broadcast_to(best_rotation, (2, 3, 3)).copy(),
-            np.zeros((2, 2), dtype=np.float32),
-            np.array([0, 1], dtype=np.int32),
-            _Stats(),
-            "fine_noise",
+        return _LocalSearchIterationResult(
+            Ft_y="fine_ft_y",
+            Ft_ctf="fine_ft_ctf",
+            hard_assignment=np.array([4, 5], dtype=np.int32),
+            best_pose_rotations=np.broadcast_to(best_rotation, (2, 3, 3)).copy(),
+            best_pose_translations=np.zeros((2, 2), dtype=np.float32),
+            best_pose_rotation_ids=np.array([0, 1], dtype=np.int32),
+            relion_stats=_Stats(),
+            noise_stats="fine_noise",
         )
 
-    monkeypatch.setattr(iteration_loop, "build_local_search_grid_metadata", lambda _order: {})
-    monkeypatch.setattr(iteration_loop, "build_local_hypothesis_layout", lambda *_args, **_kwargs: parent_layout)
+    monkeypatch.setattr(half_scoring, "build_local_search_grid_metadata", lambda _order: {})
+    monkeypatch.setattr(half_scoring, "build_local_hypothesis_layout", lambda *_args, **_kwargs: parent_layout)
     monkeypatch.setattr(
-        iteration_loop,
+        half_scoring,
         "build_local_adaptive_pass2_hypothesis_layout",
         lambda *_args, **_kwargs: fine_layout,
     )
-    monkeypatch.setattr(iteration_loop, "_local_adaptive_pass2_full_parent_enabled", lambda: False)
-    monkeypatch.setattr(iteration_loop, "_local_adaptive_pass2_rotation_only_enabled", lambda: False)
-    monkeypatch.setattr(iteration_loop, "_local_adaptive_pass2_denominator_support_mode", lambda: None)
-    monkeypatch.setattr(iteration_loop, "_k1_relion_x_half_mstep_enabled", lambda: False)
-    monkeypatch.setattr(iteration_loop, "_run_local_search_iteration", fake_run_local_search_iteration)
+    monkeypatch.setattr(half_scoring, "_local_adaptive_pass2_full_parent_enabled", lambda: False)
+    monkeypatch.setattr(half_scoring, "_local_adaptive_pass2_rotation_only_enabled", lambda: False)
+    monkeypatch.setattr(half_scoring, "_local_adaptive_pass2_denominator_support_mode", lambda: denominator_mode)
+    monkeypatch.setattr(half_scoring, "_k1_relion_x_half_mstep_enabled", lambda: False)
+    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_run_local_search_iteration)
 
-    result = iteration_loop._score_half_local(
+    result = half_scoring._score_half_local(
         k=0,
         experiment_dataset=SimpleNamespace(
             voxel_size=1.0,
@@ -450,7 +599,6 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
         noise_variance_k="noise_variance",
         previous_best_rotation_eulers_k=np.zeros((2, 3), dtype=np.float32),
         local_search_rotations=np.broadcast_to(np.eye(3, dtype=np.float32), (2, 3, 3)).copy(),
-        local_search_rotation_eulers=np.zeros((2, 3), dtype=np.float32),
         local_search_order=1,
         sigma_rot=0.1,
         sigma_psi=0.1,
@@ -459,7 +607,6 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
         trans_prior_center=np.zeros((2, 2), dtype=np.float32),
         trans_prior_center_for_engine=np.zeros((2, 2), dtype=np.float32),
         current_sigma_offset_angstrom=1.0,
-        current_translation_range=1.0,
         disc_type="linear_interp",
         cs_for_engine=8,
         local_pass1_current_size=8,
@@ -469,7 +616,7 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
         disable_adjoint_y=False,
         disable_adjoint_ctf=False,
         max_significants=23,
-        state=SimpleNamespace(adaptive_oversampling=1),
+        source_faithful_spectrum_norm=spectrum_norm,
         iteration=3,
         save_intermediates_dir=None,
         local_search_random_perturbation=0.0,
@@ -477,23 +624,31 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(monke
         local_parent_oversampling_order=1,
         local_search_translation_prior_mode="coarse",
         replay_prior_translations=None,
-        rotation_log_prior_k=None,
         class_log_priors=None,
         k_class_enabled=False,
         collect_local_search_profile=False,
         diagnostic_score_only=False,
         safe_batch_sizes=lambda *_args, **_kwargs: (2, 3),
-        class_assignments=[None, None],
-        class_posterior_per_half=[None, None],
-        class_full_posterior_per_half=[None, None],
-        best_pose_rotations=[None, None],
-        best_pose_rotation_eulers=[None, None],
-        best_pose_translations=[None, None],
+        outputs=score_outputs.PerHalfOutputs.empty(),
         local_profile_history=[],
     )
 
-    assert len(calls) == 2
-    parent_call, fine_call = calls
+    assert len(calls) == (2 if denominator_mode is None else 3)
+    parent_call, fine_call = calls[0], calls[-1]
+    assert all(call["source_faithful_spectrum_norm"] is spectrum_norm for call in calls)
+    assert all(call["max_significants"] == 23 for call in calls)
+    if denominator_mode is None:
+        assert fine_call["normalization_log_evidence"] is None
+    else:
+        denominator_call = calls[1]
+        assert denominator_call["score_only"] is True
+        assert denominator_call["accumulate_noise"] is False
+        assert denominator_call["disable_adjoint_y"] is True
+        assert denominator_call["disable_adjoint_ctf"] is True
+        assert denominator_call["return_best_pose_details"] is False
+        np.testing.assert_array_equal(
+            fine_call["normalization_log_evidence"], _Stats.log_evidence_per_image
+        )
     assert parent_call["score_only"] is True
     assert parent_call.get("return_significant_counts", False) is False
     assert parent_call["apply_max_significants_to_support"] is True
@@ -526,24 +681,24 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
         )
         captured.update(kwargs)
         current_size_shape = (19, 19, 19)
-        return (
-            np.zeros((2, int(np.prod(current_size_shape))), dtype=np.complex64),
-            np.zeros((2, int(np.prod(current_size_shape))), dtype=np.float32),
-            np.array([0], dtype=np.int32),
-            best_rotation[None, :, :],
-            np.zeros((1, 2), dtype=np.float32),
-            np.array([0], dtype=np.int32),
-            _Stats(),
-            "noise",
-            np.array([1], dtype=np.int32),
-            np.array([0.25, 0.75], dtype=np.float64),
-            np.array([0.2, 0.8], dtype=np.float64),
+        return _LocalSearchIterationResult(
+            Ft_y=np.zeros((2, int(np.prod(current_size_shape))), dtype=np.complex64),
+            Ft_ctf=np.zeros((2, int(np.prod(current_size_shape))), dtype=np.float32),
+            hard_assignment=np.array([0], dtype=np.int32),
+            best_pose_rotations=best_rotation[None, :, :],
+            best_pose_translations=np.zeros((1, 2), dtype=np.float32),
+            best_pose_rotation_ids=np.array([0], dtype=np.int32),
+            relion_stats=_Stats(),
+            noise_stats="noise",
+            class_assignments=np.array([1], dtype=np.int32),
+            class_posterior_sums=np.array([0.25, 0.75], dtype=np.float64),
+            class_full_posterior_sums=np.array([0.2, 0.8], dtype=np.float64),
         )
 
-    monkeypatch.setattr(iteration_loop, "_k_class_relion_x_half_mstep_enabled", lambda: True)
-    monkeypatch.setattr(iteration_loop, "_run_local_search_iteration", fake_run_local_search_iteration)
+    monkeypatch.setattr(half_scoring, "_k_class_relion_x_half_mstep_enabled", lambda: True)
+    monkeypatch.setattr(half_scoring, "_run_local_search_iteration", fake_run_local_search_iteration)
 
-    result = iteration_loop._score_half_local(
+    result = half_scoring._score_half_local(
         k=0,
         experiment_dataset=SimpleNamespace(
             voxel_size=1.0,
@@ -555,7 +710,6 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
         noise_variance_k="noise_variance",
         previous_best_rotation_eulers_k=np.zeros((1, 3), dtype=np.float32),
         local_search_rotations=np.eye(3, dtype=np.float32)[None, :, :],
-        local_search_rotation_eulers=np.zeros((1, 3), dtype=np.float32),
         local_search_order=0,
         sigma_rot=0.1,
         sigma_psi=0.1,
@@ -564,9 +718,9 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
         trans_prior_center=np.zeros((1, 2), dtype=np.float32),
         trans_prior_center_for_engine=np.zeros((1, 2), dtype=np.float32),
         current_sigma_offset_angstrom=1.0,
-        current_translation_range=1.0,
         disc_type="linear_interp",
         cs_for_engine=8,
+        model_current_size_for_engine=8,
         local_pass1_current_size=8,
         image_corrections_k=None,
         scale_corrections_k=None,
@@ -574,7 +728,6 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
         disable_adjoint_y=False,
         disable_adjoint_ctf=False,
         max_significants=-1,
-        state=SimpleNamespace(adaptive_oversampling=0),
         iteration=0,
         save_intermediates_dir=None,
         local_search_random_perturbation=0.0,
@@ -582,18 +735,12 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
         local_parent_oversampling_order=0,
         local_search_translation_prior_mode="coarse",
         replay_prior_translations=None,
-        rotation_log_prior_k=None,
         class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
         k_class_enabled=True,
         collect_local_search_profile=False,
         diagnostic_score_only=False,
         safe_batch_sizes=lambda *_args, **_kwargs: (2, 3),
-        class_assignments=[None, None],
-        class_posterior_per_half=[None, None],
-        class_full_posterior_per_half=[None, None],
-        best_pose_rotations=[None, None],
-        best_pose_rotation_eulers=[None, None],
-        best_pose_translations=[None, None],
+        outputs=score_outputs.PerHalfOutputs.empty(),
         local_profile_history=[],
     )
 
@@ -615,11 +762,11 @@ def test_final_all_data_iteration_stays_on_shared_dense_scoring_path():
     assert final_block.count("_score_half_dense_in_bpref_scope(") == 1
     assert "bpref_device_signature_active=False" in final_block
     assert "cs_for_engine=final_current_size" in final_block
-    # Four regularized final reconstructions (K-class, merged K=1, two K=1
-    # halves) plus two K=1 do_map=false products matching RELION *_unfil.mrc.
-    assert final_reconstruct_block.count("current_size=final_current_size") == 6
-    assert final_reconstruct_block.count("tau=None") == 2
-    assert final_reconstruct_block.count("use_spherical_mask=True") == 2
+    # Four call sites: K-class, merged K1, regularized half pair and unfiltered
+    # half pair. The convergence smoke test checks the five executed K1 calls.
+    assert final_reconstruct_block.count("current_size=final_current_size") == 4
+    assert final_reconstruct_block.count("tau=None") == 1
+    assert final_reconstruct_block.count("use_spherical_mask=True") == 1
     assert "do_map=false only omits the tau2 prior" in final_reconstruct_block
     solvent_fsc_marker = "Computed iter-%d solvent-corrected true FSC"
     solvent_fsc_block = source[: source.index(solvent_fsc_marker)]
@@ -627,8 +774,13 @@ def test_final_all_data_iteration_stays_on_shared_dense_scoring_path():
     assert solvent_fsc_block.count("use_spherical_mask=True") == 1
     assert '"unfiltered_means": final_unfiltered_means_for_output' in final_reconstruct_block
     prejoin_save = source.index("final_unfiltered_Ft_y_0 = final_Ft_y_0")
-    lowres_join = source.index("regularization.join_halves_at_low_resolution(", prejoin_save)
+    lowres_join = source.index("join_half_accumulators_at_low_resolution(", prejoin_save)
     assert prejoin_save < lowres_join
+    # The join itself has one owner; the controller only selects its inputs.
+    assert "regularization.join_halves_at_low_resolution(" not in source
+    join_owner_source = inspect.getsource(mean_helpers.join_half_accumulators_at_low_resolution)
+    assert "regularization.join_halves_at_low_resolution(" in join_owner_source
+    assert "current_resolution_angstrom=previous_resolution_angstrom" in join_owner_source
     unfiltered_start = final_reconstruct_block.index("final_unfiltered_means_for_output = [")
     unfiltered_block = final_reconstruct_block[unfiltered_start:]
     assert "final_unfiltered_Ft_ctf_0" in unfiltered_block
@@ -649,7 +801,9 @@ def test_final_all_data_tau2_uses_joined_half_weight_sum():
     tau2_call = source[source.index(marker) : source.index("        logger.info(", source.index(marker))]
 
     assert 'weight_combination="sum"' in tau2_call
-    assert '"tau2_weight_combination": np.asarray("class_iref" if k_class_enabled else "sum")' in source
+    assert "reconstruction_diagnostics.write_final_bpref_accumulators(" in source
+    capture_source = inspect.getsource(reconstruction_diagnostics.write_final_bpref_accumulators)
+    assert '"tau2_weight_combination": np.asarray("class_iref" if k_class_enabled else "sum")' in capture_source
     assert '"tau2_weight_combination_final_all_data": "class_iref" if k_class_enabled else "sum"' in source
 
 
@@ -662,13 +816,27 @@ def test_kclass_final_all_data_recomputes_tau2_from_iref_and_returns_final_means
         final_block.index(kclass_marker) : final_block.index("    else:", final_block.index(kclass_marker))
     ]
 
-    assert "regularization.compute_relion_tau2_from_iref_power_spectrum(" in kclass_tau2_block
+    assert "_class_tau2_from_iref_power_spectrum(" in kclass_tau2_block
     assert "final_join_means[0][class_idx]" in kclass_tau2_block
     assert "current_size=final_current_size" in kclass_tau2_block
-    assert "regularization.compute_data_vs_prior(" in kclass_tau2_block
+    assert "_class_tau2_update_details(" in kclass_tau2_block
     assert "full_half_axis=final_mstep_full_half_axis" in kclass_tau2_block
     assert "accumulator_volume_shape=final_mstep_accumulator_shape" in kclass_tau2_block
     assert "final_mean_variance = jnp.stack(final_mean_variance_per_class, axis=0)" in kclass_tau2_block
+    assert "_stack_class_tau2_update_details(final_tau2_update_details_per_class)" in kclass_tau2_block
+    # The per-class tau2 arithmetic has one owner shared with the regular iterations.
+    assert "regularization.compute_relion_tau2_from_iref_power_spectrum(" not in source
+    assert "regularization.compute_data_vs_prior(" not in source
+    iref_owner_source = inspect.getsource(mean_helpers._class_tau2_from_iref_power_spectrum)
+    assert "regularization.compute_relion_tau2_from_iref_power_spectrum(" in iref_owner_source
+    assert "return_details=True" in iref_owner_source
+    details_owner_source = inspect.getsource(mean_helpers._class_tau2_update_details)
+    assert "regularization.compute_data_vs_prior(" in details_owner_source
+    assert '"fsc_shells": None' in details_owner_source
+    assert source.count("_class_tau2_from_iref_power_spectrum(") == 2
+    assert source.count("data_vs_prior_k, class_tau2_details_k = _class_tau2_update_details(") == 2
+    assert source.count("_stack_class_tau2_update_details(") == 2
+    assert source.count("join_half_accumulators_at_low_resolution(") == 2
 
     reconstruct_marker = "if k_class_enabled:"
     reconstruct_block = final_block[final_block.rindex(reconstruct_marker) :]
@@ -678,15 +846,15 @@ def test_kclass_final_all_data_recomputes_tau2_from_iref_and_returns_final_means
 
 
 def test_final_all_data_grid_correction_defaults_to_gui_quality(monkeypatch):
-    monkeypatch.delenv(iteration_loop._FINAL_ALL_DATA_GRID_CORRECT_ENV, raising=False)
+    monkeypatch.delenv(finalization_policy._FINAL_ALL_DATA_GRID_CORRECT_ENV, raising=False)
 
-    assert iteration_loop._final_all_data_grid_correct_enabled() is False
+    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop.logger) is False
 
-    monkeypatch.setenv(iteration_loop._FINAL_ALL_DATA_GRID_CORRECT_ENV, "0")
-    assert iteration_loop._final_all_data_grid_correct_enabled() is False
+    monkeypatch.setenv(finalization_policy._FINAL_ALL_DATA_GRID_CORRECT_ENV, "0")
+    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop.logger) is False
 
-    monkeypatch.setenv(iteration_loop._FINAL_ALL_DATA_GRID_CORRECT_ENV, "unexpected")
-    assert iteration_loop._final_all_data_grid_correct_enabled() is False
+    monkeypatch.setenv(finalization_policy._FINAL_ALL_DATA_GRID_CORRECT_ENV, "unexpected")
+    assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop.logger) is False
 
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
     assert "RELION final all-data reconstruction gridding correction enabled" in source
@@ -698,90 +866,113 @@ def test_final_all_data_local_search_uses_replayed_translation_range():
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
     final_call_idx = source.index("final_result = _score_half_local_in_bpref_scope(")
     final_call = source[final_call_idx : source.index("            )", final_call_idx)]
-    assert "current_translation_range=final_translation_range" in final_call
-    assert "current_translation_range=float(state.translation_range)" not in final_call
+    assert "current_translations=final_current_translations" in final_call
+    replay_start = source.index('final_translation_range = float(final_replay_meta["offset_range"]) / px')
+    grid_start = source.index("final_base_translations = jnp.asarray(", replay_start)
+    grid = source[grid_start : source.index("final_current_translations = final_base_translations", grid_start)]
+    assert "final_translation_range," in grid
+    assert "final_translation_step," in grid
     assert "debug_iteration=final_sampling_relion_iteration" in final_call
 
 
-def test_final_all_data_sampling_replay_prefers_final_sampling_star_before_last_numbered():
+def test_final_all_data_sampling_replay_forwards_numbered_boundaries_and_strictness():
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
-    marker = "final_sampling_candidates = ["
-    start = source.index(marker)
-    block = source[start : source.index("        for candidate_path", start)]
-
-    final_numbered = (
-        'f"{perturb_replay_relion_prefix}_it{final_sampling_relion_iteration:03d}_sampling.star"'
-    )
-    last_numbered = (
-        'f"{perturb_replay_relion_prefix}_it{final_numbered_sampling_relion_iteration:03d}_sampling.star"'
-    )
-    run_sampling = 'f"{perturb_replay_relion_prefix}_sampling.star"'
-
-    assert final_numbered in block
-    assert last_numbered in block
-    assert run_sampling in block
-    assert block.index(final_numbered) < block.index(run_sampling) < block.index(last_numbered)
-    assert '"final-numbered"' in block
-    assert '"final"' in block
-    assert '"last-numbered"' in block
+    start = source.index("final_sampling_star, final_sampling_star_source, final_sampling_candidates = select_final_sampling_star(")
+    block = source[start : source.index("        )", start)]
+    assert "final_sampling_replay_dir," in block
+    assert "perturb_replay_relion_prefix," in block
+    assert "final_iteration=final_sampling_relion_iteration," in block
+    assert "previous_iteration=final_numbered_sampling_relion_iteration," in block
+    assert "require_final_state=replay.replay_iteration_overrides is not None," in block
 
 
 def test_native_final_perturbation_uses_active_local_order_but_preserves_global_order():
     local_state = SimpleNamespace(do_local_search=True, healpix_order=4)
     global_state = SimpleNamespace(do_local_search=False, healpix_order=4)
 
-    assert iteration_loop._native_final_perturbation_healpix_order(local_state, 3) == 4
-    assert iteration_loop._native_final_perturbation_healpix_order(global_state, 3) == 3
+    assert _native_final_perturbation_healpix_order(local_state, 3) == 4
+    assert _native_final_perturbation_healpix_order(global_state, 3) == 3
 
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
     assert "final_perturbation_healpix_order = _native_final_perturbation_healpix_order(" in source
 
 
-def test_iteration_loop_monkeypatch_ppca_and_vdam_surfaces_survive_merges():
+def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
     required_iteration_loop_symbols = [
-        "_align_fourier_volume_sign_to_reference",
-        "_combined_noise_stats",
         "_maybe_dump_noise_update_debug",
-        "_replay_control_model_iteration",
         "_save_iteration_intermediates",
         "advance_relion_perturbation",
         "apply_relion_rotation_perturbation",
         "apply_relion_rotation_perturbation_to_eulers",
         "apply_relion_translation_perturbation",
-        "build_local_hypothesis_layout",
-        "compute_data_vs_prior",
-        "get_relion_rotation_grid",
-        "get_relion_rotation_grid_eulers",
-        "get_translation_grid",
-        "PPCAKClassScheduleBridge",
-        "read_relion_direction_prior",
-        "read_relion_direction_priors",
-        "read_relion_model_metadata",
-        "read_relion_optimiser_metadata",
         "read_relion_sampling_metadata",
-        "run_dense_ppca_refinement_with_kclass_schedule",
-        "run_local_em_exact",
-        "run_local_k_class_em",
-        "run_local_ppca_refinement_with_kclass_schedule",
     ]
 
     missing = [name for name in required_iteration_loop_symbols if not hasattr(iteration_loop, name)]
     assert missing == []
+    assert hasattr(half_scoring, "build_local_hypothesis_layout")
+    assert callable(relion_replay.read_relion_model_metadata)
+    assert callable(local_search_iteration.run_local_em_exact)
+    assert callable(local_search_iteration.run_local_k_class_em)
+    assert callable(mean_helpers._align_fourier_volume_sign_to_reference)
+    assert callable(mean_helpers._combined_noise_stats)
+    assert callable(relion_replay._replay_control_model_iteration)
+    # The numbered optimiser accuracy override belongs to the replay owner.
+    assert callable(relion_replay.read_relion_optimiser_metadata)
+    assert callable(relion_replay.read_optimiser_accuracy_replay)
+    assert not hasattr(iteration_loop, "read_relion_optimiser_metadata")
+    controller_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    assert controller_source.count("read_optimiser_accuracy_replay(") == 1
+    assert "read_relion_optimiser_metadata(" not in controller_source
+    assert callable(relion_replay.read_relion_direction_prior)
+    assert callable(relion_replay.read_relion_direction_priors)
+    assert iteration_loop._translation_grid_for_class_count is relion_replay._translation_grid_for_class_count
+    assert callable(ppca_bridge.PPCAKClassScheduleBridge)
+    assert callable(ppca_bridge.run_dense_ppca_refinement_with_kclass_schedule)
+    assert callable(ppca_bridge.run_local_ppca_refinement_with_kclass_schedule)
     assert callable(run_vdam_iterations)
 
 
 def test_local_adaptive_pass2_defaults_to_relion_pruned_parent(monkeypatch):
-    monkeypatch.delenv(iteration_loop._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, raising=False)
-    monkeypatch.delenv(iteration_loop._LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV, raising=False)
+    monkeypatch.delenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, raising=False)
+    monkeypatch.delenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV, raising=False)
 
-    assert iteration_loop._local_adaptive_pass2_full_parent_enabled() is False
+    assert scoring_policy._local_adaptive_pass2_full_parent_enabled() is False
 
-    monkeypatch.setenv(iteration_loop._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, "1")
-    assert iteration_loop._local_adaptive_pass2_full_parent_enabled() is True
+    monkeypatch.setenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, "1")
+    assert scoring_policy._local_adaptive_pass2_full_parent_enabled() is True
 
-    monkeypatch.setenv(iteration_loop._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, "0")
-    assert iteration_loop._local_adaptive_pass2_full_parent_enabled() is False
+    monkeypatch.setenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, "0")
+    assert scoring_policy._local_adaptive_pass2_full_parent_enabled() is False
 
-    monkeypatch.setenv(iteration_loop._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, "1")
-    monkeypatch.setenv(iteration_loop._LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV, "1")
-    assert iteration_loop._local_adaptive_pass2_full_parent_enabled() is False
+    monkeypatch.setenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV, "1")
+    monkeypatch.setenv(scoring_policy._LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV, "1")
+    assert scoring_policy._local_adaptive_pass2_full_parent_enabled() is False
+
+
+def test_final_sampling_missing_files_log_all_candidates_without_changing_grid(tmp_path, caplog):
+    """Execute the controller's real replay branch with no sampling files."""
+    tree = ast.parse(inspect.getsource(iteration_loop._run_relion_iteration_loop))
+    branch = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and ast.unparse(node.test) == "final_sampling_replay_dir is not None"
+    )
+    ns = dict(vars(iteration_loop))
+    grid = object()
+    ns.update(
+        final_sampling_replay_dir=str(tmp_path), perturb_replay_relion_prefix="run",
+        final_sampling_relion_iteration=21, final_numbered_sampling_relion_iteration=20,
+        replay=SimpleNamespace(replay_iteration_overrides=None),
+        final_current_translations=grid,
+    )
+    with caplog.at_level("INFO", logger=iteration_loop.logger.name):
+        exec(compile(ast.Module(body=[branch], type_ignores=[]), "controller_final_sampling", "exec"), ns)
+    assert ns["final_sampling_star"] is None
+    assert ns["final_sampling_star_source"] is None
+    assert ns["final_current_translations"] is grid
+    expected_paths = ", ".join(str(tmp_path / name) for name in (
+        "run_it021_sampling.star", "run_sampling.star", "run_it020_sampling.star",
+    ))
+    assert f"relion_iter=21 ({expected_paths})" in caplog.text
+    assert "leaving final trial grid unperturbed" in caplog.text

@@ -58,37 +58,6 @@ def top_p_from_score_block(score, *, rotation_offset: int = 0, candidate_count: 
     return top_scores.astype(jnp.float32), top_rot, top_trans
 
 
-def pad_top_pose_arrays(
-    scores: np.ndarray,
-    rotations: np.ndarray,
-    translations: np.ndarray,
-    *,
-    top_p: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Pad or trim per-image top-p arrays to exactly ``top_p`` columns."""
-
-    scores = np.asarray(scores, dtype=np.float32)
-    rotations = np.asarray(rotations, dtype=np.int32)
-    translations = np.asarray(translations, dtype=np.int32)
-    top_p = int(top_p)
-    if scores.ndim == 1:
-        scores = scores[:, None]
-    if rotations.ndim == 1:
-        rotations = rotations[:, None]
-    if translations.ndim == 1:
-        translations = translations[:, None]
-    n_images = int(scores.shape[0])
-    out_scores = np.full((n_images, top_p), -np.inf, dtype=np.float32)
-    out_rot = np.full((n_images, top_p), -1, dtype=np.int32)
-    out_trans = np.full((n_images, top_p), -1, dtype=np.int32)
-    width = min(top_p, int(scores.shape[1]))
-    if width:
-        out_scores[:, :width] = scores[:, :width]
-        out_rot[:, :width] = rotations[:, :width]
-        out_trans[:, :width] = translations[:, :width]
-    return out_scores, out_rot, out_trans
-
-
 def _rotation_angle_deg(a: np.ndarray, b: np.ndarray) -> float:
     rel = np.asarray(a, dtype=np.float64).T @ np.asarray(b, dtype=np.float64)
     cos_angle = (float(np.trace(rel)) - 1.0) * 0.5

@@ -9,9 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.initial_model.dense_adapter import reference_to_relion_projector_half_maps
+from recovar.em.relion.relion_projector_setup import reference_to_relion_projector_half_maps
 from recovar.utils import helpers
-
 
 MAGIC = b"RLNPPREFV1".ljust(16, b"\0")
 HEADER_WORDS = 16

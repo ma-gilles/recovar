@@ -4,25 +4,22 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+from recovar.em.classification.k_class import _apply_bpref_particle_order_policy
+from recovar.em.diagnostics.relion_replay import _validate_bpref_particle_order_scope
+from recovar.em.helpers.batch_planning import _plan_consecutive_padded_batches
+from recovar.em.helpers.env_flags import parse_env_flag
+from recovar.em.scoring.sparse_bucket_arrays import _bucket_pass2_inputs
+from recovar.em.sparse_pass2.sparse_pass2_policy import (
     _BPREF_EXECUTION_BATCH_CONSECUTIVE_EQUAL_SUPPORT_ENV,
     _BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV,
     _BPREF_EXECUTION_ORDER_CHUNK_SIZE_ENV,
     _BPREF_EXECUTION_ORDER_LOCAL_FILE_ENV,
     _BPREF_REVERSE_PHYSICAL_ORDER_ENV,
-    _bucket_pass2_inputs,
-    _env_flag_enabled,
     _load_bpref_execution_order_local_override,
-    _normalize_pass2_bucket,
     _resolve_bpref_execution_bucket_policy,
     _resolve_bpref_processing_order,
 )
-from recovar.em.dense_single_volume.iteration_loop import (
-    _validate_bpref_particle_order_scope,
-)
-from recovar.em.dense_single_volume.k_class import (
-    _apply_bpref_particle_order_policy,
-)
+from recovar.em.sparse_pass2.sparse_pass2_posterior import _normalize_pass2_bucket
 
 
 def test_sparse_pass2_execution_order_override_is_exact_and_single_particle():
@@ -85,6 +82,99 @@ def test_sparse_pass2_execution_order_override_chunks_only_adjacent_particles():
             processing_order_override=order,
             processing_order_chunk_size=0,
         )
+
+
+def test_shared_consecutive_padded_planner_preserves_order_and_pool_alignment():
+    padded_sizes = np.asarray([32, 64, 16, 128, 32, 16, 256], dtype=np.int64)
+    order = np.asarray([2, 0, 1, 4, 3, 5, 6], dtype=np.int64)
+
+    plans = _plan_consecutive_padded_batches(
+        padded_sizes,
+        processing_order=order,
+        target_items_per_batch=4,
+        max_items_per_batch=20,
+        max_padded_values_per_batch=10_000,
+        item_alignment=3,
+    )
+
+    assert [plan.item_indices.tolist() for plan in plans] == [
+        [2, 0, 1],
+        [4, 3, 5, 6],
+    ]
+    assert [plan.padded_size for plan in plans] == [64, 256]
+    assert [plan.padded_item_capacity for plan in plans] == [3, 4]
+    assert np.cumsum([0] + [plan.item_indices.size for plan in plans[:-1]]).tolist() == [0, 3]
+    assert np.concatenate([plan.item_indices for plan in plans]).tolist() == order.tolist()
+
+
+def test_shared_consecutive_padded_planner_validates_processing_order():
+    with pytest.raises(ValueError, match="must be a permutation"):
+        _plan_consecutive_padded_batches(
+            [16, 32, 64],
+            processing_order=[0, 0, 2],
+            target_items_per_batch=2,
+            max_items_per_batch=2,
+            max_padded_values_per_batch=1024,
+        )
+
+
+@pytest.mark.parametrize(
+    ("target_items", "max_items"),
+    [(2, 8), (8, 2)],
+)
+def test_shared_consecutive_padded_planner_rejects_limits_that_split_a_pool(
+    target_items,
+    max_items,
+):
+    with pytest.raises(ValueError, match="too small to preserve"):
+        _plan_consecutive_padded_batches(
+            [32, 32, 32],
+            target_items_per_batch=target_items,
+            max_items_per_batch=max_items,
+            max_padded_values_per_batch=512,
+            item_alignment=3,
+        )
+
+
+def test_shared_consecutive_padded_planner_rejects_an_oversize_aligned_pool():
+    with pytest.raises(ValueError, match="too small for one aligned item group"):
+        _plan_consecutive_padded_batches(
+            [32, 32, 32],
+            target_items_per_batch=3,
+            max_items_per_batch=3,
+            max_padded_values_per_batch=95,
+            item_alignment=3,
+        )
+
+
+@pytest.mark.parametrize("padded_sizes", [[32], [32, 32], [32, 32, 32, 32], [32, 32, 32, 32, 32]])
+def test_shared_consecutive_padded_planner_allows_a_fitting_final_incomplete_pool(padded_sizes):
+    plans = _plan_consecutive_padded_batches(
+        padded_sizes,
+        target_items_per_batch=3,
+        max_items_per_batch=3,
+        max_padded_values_per_batch=96,
+        item_alignment=3,
+    )
+
+    assert np.concatenate([plan.item_indices for plan in plans]).tolist() == list(
+        range(len(padded_sizes))
+    )
+    assert all(plan.item_indices.size <= 3 for plan in plans)
+
+
+def test_shared_consecutive_padded_planner_keeps_alignment_one_oversize_progress():
+    plans = _plan_consecutive_padded_batches(
+        [128],
+        target_items_per_batch=1,
+        max_items_per_batch=1,
+        max_padded_values_per_batch=64,
+        item_alignment=1,
+    )
+
+    assert len(plans) == 1
+    assert plans[0].item_indices.tolist() == [0]
+    assert plans[0].padded_size == 128
 
 
 def test_sparse_pass2_ordered_chunks_respect_hypothesis_and_image_caps():
@@ -200,7 +290,7 @@ def test_sparse_pass2_execution_order_can_stay_stable_within_size_buckets():
 
 def test_grouped_execution_order_environment_flag_uses_module_parser(monkeypatch):
     monkeypatch.setenv(_BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV, "1")
-    assert _env_flag_enabled(_BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV)
+    assert parse_env_flag(_BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV)
 
 
 def test_fresh_k1_defaults_to_bounded_mixed_support_buckets(monkeypatch):

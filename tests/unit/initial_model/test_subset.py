@@ -15,11 +15,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from helpers.vdam import numpy_rnd_unif_factory
 
-from recovar.em.initial_model.subset import (
-    assign_pseudo_halfsets,
+from recovar.em.vdam.subset import (
     assign_pseudo_halfsets_for_particle_ids,
-    numpy_rnd_unif_factory,
     pseudo_halfsets_active,
     randomise_particles_order,
     select_vdam_subset,
@@ -206,22 +205,13 @@ class TestPseudoHalfsetsActive:
         assert pseudo_halfsets_active(gradient_refine=True, do_split_random_halves=True) is False
 
 
-class TestAssignPseudoHalfsets:
-    def test_even_length(self):
-        assert assign_pseudo_halfsets(4).tolist() == [0, 1, 0, 1]
-
-    def test_odd_length(self):
-        assert assign_pseudo_halfsets(5).tolist() == [0, 1, 0, 1, 0]
-
-    def test_zero(self):
-        assert assign_pseudo_halfsets(0).tolist() == []
-
-    def test_dtype(self):
-        out = assign_pseudo_halfsets(3)
+class TestAssignPseudoHalfsetsForParticleIds:
+    @pytest.mark.parametrize("count, expected", ((3, [0, 1, 0]), (4, [0, 1, 0, 1]), (5, [0, 1, 0, 1, 0])))
+    def test_sequential_ids(self, count, expected):
+        out = assign_pseudo_halfsets_for_particle_ids(np.arange(count, dtype=np.int64))
+        assert out.tolist() == expected
         assert out.dtype == np.int8
 
-
-class TestAssignPseudoHalfsetsForParticleIds:
     def test_global_particle_id_parity(self):
         ids = np.asarray([5, 0, 3, 4, 1, 2], dtype=np.int64)
         assert assign_pseudo_halfsets_for_particle_ids(ids).tolist() == [1, 0, 1, 0, 1, 0]

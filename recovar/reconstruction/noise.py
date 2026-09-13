@@ -8,14 +8,14 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar.utils.nvtx_shim import nvtx
 
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar import core, utils, jax_config
+from recovar import core, jax_config, utils
 from recovar.core.configs import ForwardModelConfig, ModelState
 from recovar.heterogeneity import covariance_core
 from recovar.reconstruction import regularization
+from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 
@@ -167,9 +167,8 @@ def as_noise_model(cov_noise, image_shape):
     -------
     RadialNoiseModel or ConstantNoiseModel
     """
-    import numpy as _np
 
-    arr = _np.asarray(cov_noise)
+    arr = np.asarray(cov_noise)
     half_pixel_count = image_shape[0] * (image_shape[1] // 2 + 1)
     pixel_count = image_shape[0] * image_shape[1]
     if arr.ndim == 1 and arr.size not in (pixel_count, half_pixel_count):
@@ -272,15 +271,20 @@ def predict_noise_variance(
     """Predict noise variance in images, optionally handling upsampling.
 
     Args:
-        noise_variance: Base noise variance (radial or scalar)
-        CTF_params: CTF parameters
-        voxel_size: Voxel size
-        ctf: Function to compute CTF
-        image_masks: Image masks
-        image_shape: Image shape
-        radial: Whether noise is radial
-        premultiplied_ctf: Whether CTF is premultiplied
-        upsample_factor: Factor to upsample by (default 1 for no upsampling)
+        noise_variance (numpy.ndarray | jax.Array): Radial noise profile, or a one-element array for
+            white noise.
+            Upsampling requires a one-dimensional profile.
+        CTF_params (numpy.ndarray | jax.Array): CTF parameters
+        voxel_size (float): Voxel size in Angstroms.
+        ctf (Callable): CTF evaluator accepting parameters, image shape and voxel size.
+        image_masks (numpy.ndarray | jax.Array): Real-space masks, shape ``(n_images, H, W)``.
+        image_shape (tuple[int, int]): Image shape
+        radial (bool): Compatibility argument; the input is always expanded radially.
+        premultiplied_ctf (bool): Whether CTF is premultiplied
+        upsample_factor (int): Factor to upsample by (default 1 for no upsampling)
+
+    Returns:
+        variance (jax.Array): Masked Fourier noise power, shape ``(n_images, H, W)``.
     """
     if upsample_factor > 1:
         # Interpolate noise_variance onto a finer grid using JAX operations
@@ -358,23 +362,29 @@ def fit_noise_model_to_images(
     """Fit noise model to images, handling tilt series data specially.
 
     Args:
-        experiment_dataset: Dataset containing images and metadata
-        volume_mask: Mask for the volume
-        mean_estimate: Estimate of mean volume
-        image_subset: Subset of images to use, or None for all
-        batch_size: Batch size for processing
-        invert_mask: Whether to invert the mask
-        disc_type: Type of discretization to use
-        use_batch_solver: Whether to use batch solver vs full dataset
-        tilt_dose_inner: Whether this is an inner call for tilt series
+        experiment_dataset (CryoEMDataset): Dataset containing images and metadata
+        volume_mask (numpy.ndarray | jax.Array): Mask for the volume
+        mean_estimate (numpy.ndarray | jax.Array): Mean volume in flattened centered Fourier layout.
+        image_subset (numpy.ndarray | None): Subset of images to use, or None for all
+        batch_size (int): Batch size for processing
+        invert_mask (bool): Whether to invert the mask
+        disc_type (str): Compatibility argument; initialization uses linear interpolation.
+        use_batch_solver (bool): Whether to use batch solver vs full dataset
+        tilt_dose_inner (bool): Whether to suppress the outer per-dose fitting loop.
+        image_n_iter (int | float): Image budget per stochastic optimization pass;
+            converted to steps by dividing by batch size. Used only by the
+            batch solver; recursive per-dose calls use the default budget.
 
     Returns:
-        For tilt series: Array of noise variances per tilt
-        Otherwise: Single noise variance and initial estimate
+        fitted (jax.Array): Fitted radial noise profile. For variable radial
+            noise, profiles are stacked by ascending dose index, omitting
+            indices with no selected images.
+        initial (jax.Array): Initial radial noise estimate, with the same
+            stacking convention as ``fitted``.
     """
     # Import optimization libraries
-    from jaxopt import ScipyBoundedMinimize, OptaxSolver
     import optax
+    from jaxopt import OptaxSolver, ScipyBoundedMinimize
 
     # Special handling for tilt series data
     if isinstance(experiment_dataset.noise, VariableRadialNoiseModel) and not tilt_dose_inner:
@@ -929,13 +939,18 @@ def normalize_wsum_to_sigma2_noise(wsum_sigma2_noise, wsum_img_power, sumw, imag
         Per-shell noise variance in **recovar's native FFT units**, ready to
         be fed back into the engine. Same scale as ``|process_images|^2``.
     """
-    from recovar.em.dense_single_volume.helpers.half_spectrum import (
-        bin_shell_values_jax,
-        make_relion_noise_shell_indices_half,
-    )
+    from recovar.em.helpers.half_spectrum import bin_shell_values_jax, make_relion_noise_shell_indices_half
 
-    wsum_sigma2_noise = jnp.asarray(wsum_sigma2_noise, dtype=jnp.float32)
-    wsum_img_power = jnp.asarray(wsum_img_power, dtype=jnp.float32)
+    # Preserve whatever real dtype the caller's accumulators already carry
+    # (float64 end to end when use_float64_scoring/use_float64_projections
+    # are set) instead of forcing float32 here. RELION's own
+    # wsum_model.sigma2_noise stays RFLOAT (double under double-precision
+    # builds) through this exact division; the unconditional float32 casts
+    # this replaced discarded that precision right before the final divide,
+    # on top of whatever precision compute_noise_block's callers already
+    # accumulated it at.
+    wsum_sigma2_noise = jnp.asarray(wsum_sigma2_noise)
+    wsum_img_power = jnp.asarray(wsum_img_power)
     n_shells = image_shape[0] // 2 + 1
 
     shell_indices = make_relion_noise_shell_indices_half(image_shape)
@@ -963,7 +978,7 @@ def normalize_wsum_to_sigma2_noise(wsum_sigma2_noise, wsum_img_power, sumw, imag
     sigma2 = jnp.maximum(sigma2, 1e-15)
 
     # Fill zeros from previous shell (RELION ml_optimiser.cpp:5281-5284)
-    sigma2_np = np.asarray(sigma2, dtype=np.float32)
+    sigma2_np = np.asarray(sigma2)
     for i in range(1, len(sigma2_np)):
         if sigma2_np[i] < 1e-14 and sigma2_np[i - 1] > 1e-14:
             sigma2_np[i] = sigma2_np[i - 1]
@@ -980,20 +995,22 @@ mean_fn = np.mean
 
 @nvtx.annotate("estimate_noise_variance", color="yellow", domain=NVTX_DOMAIN_NOISE)
 def estimate_noise_variance(experiment_dataset, batch_size, max_images=10000):
-    """Estimate per-image noise variance from corner pixels.
+    """Estimate a white-noise level and radial profile from image power.
 
-    Computes the noise power spectrum from image regions outside the
-    particle mask, subsampling to at most *max_images* for efficiency.
+    Averages the power of processed images, subsampling to at most
+    *max_images*. This estimator does not apply a separate solvent mask.
 
     Args:
-        experiment_dataset: A ``CryoEMDataset`` instance.
-        batch_size: Number of images to process per GPU batch.
-        max_images: Maximum number of images to use for estimation.
+        experiment_dataset (CryoEMDataset): A ``CryoEMDataset`` instance.
+        batch_size (int): Number of images to process per GPU batch.
+        max_images (int): Maximum number of images to use for estimation.
 
     Returns:
-        Tuple ``(cov_noise, radial_noise_profile)`` where *cov_noise*
-        is a scalar noise variance and *radial_noise_profile* is the
-        averaged radial power spectrum of the noise.
+        cov_noise (numpy.ndarray): Zero-dimensional array containing the median
+            of the average image power spectrum.
+        radial_noise_profile (numpy.ndarray): Shell averages of that spectrum,
+            with ``grid_size // 2 - 1`` entries. Both outputs use the dataset's
+            real dtype.
     """
     sum_sq = 0
 

@@ -17,7 +17,7 @@ def parity_env(tmp_path, monkeypatch):
     # Reload the module so its globals see the env. parity_dump reads the env on
     # every call via is_active(), so a reload is not strictly necessary, but
     # it ensures _ITER_TIMERS starts empty.
-    from recovar.em.dense_single_volume import parity_dump as p
+    from recovar.em.diagnostics import parity_dump as p
 
     p._ITER_TIMERS.clear()
     p._E_STEP.clear()
@@ -27,7 +27,7 @@ def parity_env(tmp_path, monkeypatch):
 def test_inactive_when_env_unset(monkeypatch):
     monkeypatch.delenv("RECOVAR_PARITY_DUMP_DIR", raising=False)
     monkeypatch.delenv("RECOVAR_PARITY_TIMING_DIR", raising=False)
-    from recovar.em.dense_single_volume import parity_dump as p
+    from recovar.em.diagnostics import parity_dump as p
 
     p._ITER_TIMERS.clear()
     assert not p.is_active()
@@ -139,7 +139,7 @@ def test_timing_only_dump_does_not_require_full_parity_env(tmp_path, monkeypatch
     timing = tmp_path / "timing"
     monkeypatch.setenv("RECOVAR_PARITY_TIMING_DIR", str(timing))
 
-    from recovar.em.dense_single_volume import parity_dump as p
+    from recovar.em.diagnostics import parity_dump as p
 
     p._ITER_TIMERS.clear()
     p._E_STEP.clear()

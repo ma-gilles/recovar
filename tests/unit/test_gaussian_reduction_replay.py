@@ -8,7 +8,7 @@ from itertools import permutations
 import numpy as np
 import pytest
 
-from recovar.em.gaussian_reduction_replay import (
+from recovar.em.diagnostics.gaussian_reduction_replay import (
     CAPTURE_SCHEMA,
     RELION_COARSE_ATOMIC_LANES,
     RELION_COARSE_CHUNK_PIXELS,

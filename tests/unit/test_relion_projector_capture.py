@@ -5,12 +5,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.relion_projector_capture import (
+from recovar.em.diagnostics.relion_projector_capture import (
     ProjectorLoadError,
     build_relion_projector_replay_state,
     load_relion_projector_iref_state,
 )
-from recovar.em.dense_single_volume.relion_replay import _parse_relion_projector_replay_state
+from recovar.em.diagnostics.relion_replay import _parse_relion_projector_replay_state
 
 pytestmark = pytest.mark.unit
 

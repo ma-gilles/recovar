@@ -7,7 +7,7 @@ output bit-for-bit.
 Algorithm (per output pixel (i, x) of the half-image (Y, X//2+1)):
   1. y = i if i <= r_max_out else i - YSIZE     (FFTW-natural y indexing)
   2. (xp, yp, zp) = Ainv @ (x, y, 0)
-  3. Skip if x*x + y*y > r_max_out² OR r² > r_max_ref²    → zero
+  3. Skip if x*x + y*y > r_max_out² OR int(r²) > r_max_ref² → zero
   4. If xp < 0: negate (xp, yp, zp), record is_neg_x
   5. x0 = floor(xp); fx = xp - x0; y0 = floor(yp); fy = yp - y0; z0 = floor(zp); fz = zp - z0
   6. y0 -= STARTINGY; z0 -= STARTINGZ                     (Xmipp-origin shift)
@@ -18,6 +18,21 @@ Algorithm (per output pixel (i, x) of the half-image (Y, X//2+1)):
 Input volume is in RELION's Projector internal layout:
   shape (pad_size, pad_size, pad_size // 2 + 1), complex
   Xmipp origin: STARTINGX=0, STARTINGY=-(pad_size//2), STARTINGZ=-(pad_size//2)
+
+This CPU-side ``Projector::project`` formula (step 5 above) floors ``xp``/``yp``/
+``zp`` at native ``RFLOAT`` (double, under RELION's default ``DoublePrec_CPU``)
+precision. RELION's separate GPU-accelerated kernel (``AccProjectorKernel``'s
+``no_tex3D``, ``relion/src/acc/cuda/cuda_kernels/cuda_device_utils.cuh``) and its
+backprojector (``BP.cuh``) implement the *same* cascaded-lerp formula but floor
+with CUDA's ``floorf()`` -- the single-precision floor -- on ``xp``/``yp``/``zp``
+even when ``ACC_DOUBLE_PRECISION`` makes those doubles; there is no ``#ifdef``
+guard on that call. ``relion_acc_double_floorf_quirk=True`` reproduces that GPU
+quirk here: it narrows ``xp``/``yp``/``zp`` to float32 before flooring (deriving
+``x0``/``y0``/``z0`` from the narrowed value), while the fractional part
+``fx = xp - x0`` still subtracts that (possibly off-by-one) integer from the
+original double ``xp``, exactly as RELION's kernel does. This is off by default;
+it exists only to bit-match RELION's GPU-double build, not because it is
+numerically preferable -- it is a narrowing bug being reproduced, not fixed.
 """
 
 from __future__ import annotations
@@ -28,13 +43,14 @@ import jax
 import jax.numpy as jnp
 
 
-@functools.partial(jax.jit, static_argnums=(2, 3, 4))
+@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5))
 def relion_project_half(
     volume_relion_half: jnp.ndarray,
     R_relion: jnp.ndarray,
     image_size: int,
     r_max: int,
     padding_factor: int = 1,
+    relion_acc_double_floorf_quirk: bool = False,
 ) -> jnp.ndarray:
     """Project a RELION-frame Fourier volume to a 2D half-image.
 
@@ -47,6 +63,10 @@ def relion_project_half(
     image_size : 2D output image size (assumed square).
     r_max : RELION's `r_max` field on the projector (= ori_size//2 - 1 typically).
     padding_factor : projector padding (1 or 2 typically).
+    relion_acc_double_floorf_quirk : reproduce RELION's GPU-accelerated
+        ``no_tex3D`` kernel narrowing ``xp``/``yp``/``zp`` to float32 before
+        flooring (see module docstring). Default False matches RELION's CPU
+        ``Projector::project``, which floors at native double precision.
 
     Returns
     -------
@@ -88,13 +108,27 @@ def relion_project_half(
     yp = jnp.where(is_neg_x, -yp, yp)
     zp = jnp.where(is_neg_x, -zp, zp)
 
-    r2_ref = xp * xp + yp * yp + zp * zp
+    # AccProjectorKernel stores the rotated squared radius in an ``int``
+    # before comparing it with maxR2_padded. Because r2 is nonnegative, this
+    # truncates toward zero. The distinction matters on the outer shell:
+    # roundoff can make an orthogonal rotation produce r2 just above the
+    # integer radius squared, but RELION still retains the pixel while a
+    # direct floating-point comparison incorrectly drops it.
+    r2_ref = (xp * xp + yp * yp + zp * zp).astype(jnp.int32)
     r2_out = (X * X + Y * Y).astype(jnp.float64)
 
-    # Floor + fractional
-    x0 = jnp.floor(xp).astype(jnp.int32)
-    y0 = jnp.floor(yp).astype(jnp.int32)
-    z0 = jnp.floor(zp).astype(jnp.int32)
+    # Floor + fractional. RELION's GPU kernel floors the (double) coordinate
+    # with CUDA's single-precision floorf(); the fractional part still
+    # subtracts that (possibly off-by-one) integer from the original double
+    # coordinate. See module docstring.
+    if relion_acc_double_floorf_quirk:
+        x0 = jnp.floor(xp.astype(jnp.float32)).astype(jnp.int32)
+        y0 = jnp.floor(yp.astype(jnp.float32)).astype(jnp.int32)
+        z0 = jnp.floor(zp.astype(jnp.float32)).astype(jnp.int32)
+    else:
+        x0 = jnp.floor(xp).astype(jnp.int32)
+        y0 = jnp.floor(yp).astype(jnp.int32)
+        z0 = jnp.floor(zp).astype(jnp.int32)
     fx = xp - x0.astype(jnp.float64)
     fy = yp - y0.astype(jnp.float64)
     fz = zp - z0.astype(jnp.float64)

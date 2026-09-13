@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -13,9 +12,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.projection import (
-    compute_relion_projector_projections_block,
-)
+from recovar.em.helpers.projection import compute_relion_projector_projections_block
+from recovar.utils.file_hash import sha256_file
 from scripts.analyze_k1_exact_ppref_fine_boundary import _load_ppref
 from scripts.analyze_k1_fine_operand_tuple import _sass_tree_raw_diff2
 from scripts.compare_k4_relion_recovar_fine_operands import _infer_current_size, _metric
@@ -24,21 +22,12 @@ from scripts.validate_relion_fine_operand_capture import (
     validate_capture,
 )
 
-
 SCHEMA = "recovar.em.k1_same_run_ppref_fine_projection.v1"
 
 
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _native_pixel_indices(pixels: np.ndarray, physical_image_size: int) -> np.ndarray:
@@ -177,9 +166,9 @@ def analyze(
         "native_capture_validation": validation,
         "artifacts": {
             "ppref": str(ppref_path.resolve()),
-            "ppref_sha256": _sha256(ppref_path),
+            "ppref_sha256": sha256_file(ppref_path),
             "fine_operand": str(fine_operand_path.resolve()),
-            "fine_operand_sha256": _sha256(fine_operand_path),
+            "fine_operand_sha256": sha256_file(fine_operand_path),
         },
     }
 

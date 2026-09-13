@@ -22,22 +22,20 @@ pytest.importorskip("jax")
 import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
-from recovar.em.dense_single_volume.helpers.oversampling import (
-    _compute_pass2_stats_sparse_perimage_reference,
-    compute_pass2_stats_sparse,
-)
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-    _build_bucket_arrays,
+from recovar.em.helpers import oversampling as oversampling_module
+from recovar.em.helpers.oversampling import _compute_pass2_stats_sparse_perimage_reference, compute_pass2_stats_sparse
+from recovar.em.scoring.sparse_bucket_arrays import _build_bucket_arrays, _prepare_per_image_pass2_inputs
+from recovar.em.sparse_pass2 import sparse_pass2_bucketed as sparse_pass2_module
+from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _reorder_to_indices
+from recovar.em.sparse_pass2.sparse_pass2_posterior import (
     _normalize_pass2_bucket,
     _normalize_pass2_bucket_with_log_z,
-    _prepare_per_image_pass2_inputs,
-    _reorder_to_indices,
-    _score_pass2_bucket_normalized_cc,
-    _score_pass2_bucket_relion_gpu_diff2,
     _winner_take_all_bucket_probs,
 )
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as sparse_pass2_module
-from recovar.em.dense_single_volume.helpers import oversampling as oversampling_module
+from recovar.em.sparse_pass2.sparse_pass2_scoring import (
+    _score_pass2_bucket_normalized_cc,
+    _score_pass2_bucket_relion_gpu_diff2,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -176,24 +174,20 @@ def _compare_outputs(
     accumulator_scaled_rtol=None,
 ):
     """Compare per-image and accumulated outputs with tight tolerance."""
-    (
-        Ft_y_ref,
-        Ft_ctf_ref,
-        ha_ref,
-        best_rot_ref,
-        best_tr_ref,
-        best_idx_ref,
-        stats_ref,
-    ) = out_ref[:7]
-    (
-        Ft_y_b,
-        Ft_ctf_b,
-        ha_b,
-        best_rot_b,
-        best_tr_b,
-        best_idx_b,
-        stats_b,
-    ) = out_bucket[:7]
+    Ft_y_ref = out_ref.Ft_y
+    Ft_ctf_ref = out_ref.Ft_ctf
+    ha_ref = out_ref.hard_assignment
+    best_rot_ref = out_ref.best_rotations
+    best_tr_ref = out_ref.best_translations
+    best_idx_ref = out_ref.best_rotation_indices
+    stats_ref = out_ref.relion_stats
+    Ft_y_b = out_bucket.Ft_y
+    Ft_ctf_b = out_bucket.Ft_ctf
+    ha_b = out_bucket.hard_assignment
+    best_rot_b = out_bucket.best_rotations
+    best_tr_b = out_bucket.best_translations
+    best_idx_b = out_bucket.best_rotation_indices
+    stats_b = out_bucket.relion_stats
 
     # M-step accumulators must be very close. Some float32 winner-take-all
     # routes sum identical selected rows in different batch/reduction orders;
@@ -248,9 +242,10 @@ def _compare_outputs(
     )
 
     # Noise stats (when present)
-    if len(out_ref) == 8 and len(out_bucket) == 8:
-        ns_ref = out_ref[7]
-        ns_b = out_bucket[7]
+    assert (out_ref.noise_stats is None) == (out_bucket.noise_stats is None)
+    if out_ref.noise_stats is not None:
+        ns_ref = out_ref.noise_stats
+        ns_b = out_bucket.noise_stats
         np.testing.assert_allclose(
             np.asarray(ns_ref.wsum_sigma2_noise),
             np.asarray(ns_b.wsum_sigma2_noise),
@@ -509,6 +504,59 @@ def test_sparse_pass2_mstep_rotations_follow_score_selection_padding_and_reorder
     assert aliased_arrays["mstep_rotations"] is aliased_arrays["rotations"]
 
 
+def test_sparse_pass2_prepare_per_image_inputs_honors_explicit_float64_dtype():
+    """``fine_rotations_override``/``fine_mstep_rotations_override`` must stay at
+    whatever real dtype the caller requests (RELION's own RFLOAT fine-search
+    rotations never narrow to float in a double-precision build) instead of
+    always collapsing to float32.
+    """
+    score_rotations = np.stack([_z_rotation(angle) for angle in (0.1, 0.2, 0.3, 0.4)]).astype(np.float64)
+    mstep_rotations = np.stack([_z_rotation(angle) for angle in (1.1, 1.2, 1.3, 1.4)]).astype(np.float64)
+    parent_map = np.asarray([0, 0, 1, 1], dtype=np.int32)
+    significant_samples = [np.asarray([0, 1], dtype=np.int32)]
+
+    kwargs = dict(
+        significant_sample_indices=significant_samples,
+        n_coarse_rot=12,
+        n_coarse_trans=1,
+        nside_level=0,
+        oversampling_order=0,
+        n_fine_trans=1,
+        fine_translation_parent=np.asarray([0], dtype=np.int32),
+        rotation_log_prior=np.full(12, 1.0 + 2.0**-40, dtype=np.float64),
+        random_perturbation=0.0,
+        fine_rotations_override=score_rotations,
+        fine_mstep_rotations_override=mstep_rotations,
+        fine_rotation_parent_override=parent_map,
+    )
+
+    default_out = _prepare_per_image_pass2_inputs(**kwargs)
+    assert default_out["oversampled_rots"][0].dtype == np.float32
+    assert default_out["oversampled_mstep_rots"][0].dtype == np.float32
+
+    f64_out = _prepare_per_image_pass2_inputs(**kwargs, dtype=np.float64)
+    assert f64_out["oversampled_rots"][0].dtype == np.float64
+    assert f64_out["oversampled_mstep_rots"][0].dtype == np.float64
+    assert f64_out["log_prior"][0].dtype == np.float64
+    assert f64_out["log_prior"][0][0] == 1.0 + 2.0**-40
+    np.testing.assert_allclose(f64_out["oversampled_rots"][0], score_rotations, atol=1e-12)
+    np.testing.assert_allclose(f64_out["oversampled_mstep_rots"][0], mstep_rotations, atol=1e-12)
+    bucket = _build_bucket_arrays(
+        {"bucket_size": 6, "image_indices": np.asarray([0], dtype=np.int64)},
+        f64_out,
+        n_fine_trans=1,
+    )
+    assert bucket["rotations"].dtype == np.float64
+    assert bucket["mstep_rotations"].dtype == np.float64
+    assert bucket["log_prior"].dtype == np.float64
+    np.testing.assert_array_equal(bucket["rotations"][0, :4], score_rotations)
+    np.testing.assert_array_equal(bucket["mstep_rotations"][0, :4], mstep_rotations)
+    assert bucket["log_prior"][0, 0] == 1.0 + 2.0**-40
+    np.testing.assert_allclose(
+        f64_out["oversampled_rots"][0], default_out["oversampled_rots"][0], atol=1e-6
+    )
+
+
 def test_sparse_pass2_distinct_mstep_rotations_do_not_change_score_path(monkeypatch):
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
     score_rotations = np.stack([_z_rotation(angle) for angle in (0.1, 0.2, 0.3, 0.4)])
@@ -572,16 +620,16 @@ def test_sparse_pass2_distinct_mstep_rotations_do_not_change_score_path(monkeypa
         **common,
     )
 
-    np.testing.assert_array_equal(overridden[2], baseline[2])
-    np.testing.assert_array_equal(overridden[3], baseline[3])
-    np.testing.assert_array_equal(overridden[5], baseline[5])
+    np.testing.assert_array_equal(overridden.hard_assignment, baseline.hard_assignment)
+    np.testing.assert_array_equal(overridden.best_rotations, baseline.best_rotations)
+    np.testing.assert_array_equal(overridden.best_rotation_indices, baseline.best_rotation_indices)
     np.testing.assert_array_equal(
-        np.asarray(overridden[6].best_log_score_per_image),
-        np.asarray(baseline[6].best_log_score_per_image),
+        np.asarray(overridden.relion_stats.best_log_score_per_image),
+        np.asarray(baseline.relion_stats.best_log_score_per_image),
     )
     np.testing.assert_array_equal(
-        np.asarray(overridden[6].max_posterior_per_image),
-        np.asarray(baseline[6].max_posterior_per_image),
+        np.asarray(overridden.relion_stats.max_posterior_per_image),
+        np.asarray(baseline.relion_stats.max_posterior_per_image),
     )
 
     assert len(fetched_orders) == 1
@@ -612,6 +660,12 @@ def test_sparse_pass2_per_particle_xhalf_uses_mstep_rotation_tensor():
     fused_source = inspect.getsource(sparse_pass2_module.compute_k_class_pass2_stats_sparse_fused)
     assert "flat_backproject_rotations_by_class" in fused_source
     assert "active_flat_rotations = flat_backproject_rotations_by_class[class_index]" in fused_source
+    assert (
+        "_accumulate_relion_x_half_per_particle_launches(\n"
+        "                        jnp.asarray(summed, dtype=jnp.complex64),\n"
+        "                        jnp.asarray(ctf_probs, dtype=jnp.float32),\n"
+        '                        jnp.asarray(arrays["mstep_rotations"]),'
+    ) in fused_source
 
 
 class TestSparsePass2Bucketed:
@@ -794,10 +848,10 @@ class TestSparsePass2Bucketed:
                 relion_exact_fine_gaussian=True,
             )
 
-    def test_float64_and_explicit_feature_bypass_preserve_algebraic_route(self, monkeypatch):
+    def test_explicit_feature_disable_preserves_algebraic_route(self, monkeypatch):
         def fail_exact_raw(*args, **kwargs):
             del args, kwargs
-            raise AssertionError("exact float32 RELION scorer must be bypassed")
+            raise AssertionError("exact RELION scorer must be bypassed")
 
         monkeypatch.setattr(
             sparse_pass2_module,
@@ -805,17 +859,6 @@ class TestSparsePass2Bucketed:
             fail_exact_raw,
         )
         sig_indices = [np.asarray([0, 1], dtype=np.int32)] * 2
-        out_ref, out_bucket = self._run_both(
-            sig_indices,
-            current_size=6,
-            half_spectrum_scoring=False,
-            use_float64_scoring=True,
-            relion_exact_fine_gaussian=True,
-        )
-        # Bucketed accumulation order differs slightly from the per-image
-        # reference even though both score in float64.
-        _compare_outputs(out_ref, out_bucket, atol=1e-6, rtol=1e-6)
-
         out_ref, out_bucket = self._run_both(
             sig_indices,
             current_size=6,
@@ -850,7 +893,7 @@ class TestSparsePass2Bucketed:
             use_float64_scoring=True,
             translation_prior_centers=translation_prior_centers,
         )
-        assert out_ref[7].wsum_sigma2_offset > 0.0
+        assert out_ref.noise_stats.wsum_sigma2_offset > 0.0
         _compare_outputs(
             out_ref,
             out_bucket,
@@ -929,8 +972,8 @@ class TestSparsePass2Bucketed:
             atol=1e-4,
             rtol=1e-4,
         )
-        assert np.asarray(out_bucket[6].log_evidence_per_image).dtype == np.float64
-        assert np.asarray(out_bucket[6].best_log_score_per_image).dtype == np.float64
+        assert np.asarray(out_bucket.relion_stats.log_evidence_per_image).dtype == np.float64
+        assert np.asarray(out_bucket.relion_stats.best_log_score_per_image).dtype == np.float64
 
     def test_with_image_corrections_match(self):
         """Per-image image_corrections + scale_corrections + pre_shifts must match.

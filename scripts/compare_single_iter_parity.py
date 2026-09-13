@@ -73,11 +73,6 @@ def fftw_to_recovar_half(arr_fftw):
     return np.fft.fftshift(arr_fftw, axes=0)
 
 
-def recovar_half_to_fftw(arr_rhalf):
-    """Inverse of fftw_to_recovar_half."""
-    return np.fft.ifftshift(arr_rhalf, axes=0)
-
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--relion_dir", required=True)

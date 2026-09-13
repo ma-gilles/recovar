@@ -5,6 +5,8 @@ EM_DIR = ROOT / "recovar" / "em"
 CLAUDE = EM_DIR / "CLAUDE.md"
 AGENTS = EM_DIR / "AGENTS.md"
 LEDGER = ROOT / "docs" / "math" / "em_parity_best_metrics.md"
+RUNBOOK = ROOT / "docs" / "development" / "em_parity_runbook.md"
+CONTRIBUTING = ROOT / "CONTRIBUTING.md"
 PARALLEL_TEST_RUNNER = ROOT / "scripts" / "run_tests_parallel.sh"
 
 
@@ -13,9 +15,13 @@ def test_em_agent_guides_stay_in_sync():
 
 
 def test_em_agent_guides_pin_validation_policy():
+    # Procedures belong to the runbook; the always-loaded guide must link to them.
     guide = CLAUDE.read_text()
+    for anchor in ("validation-ladder", "benchmark-design-and-reporting"):
+        assert f"../../docs/development/em_parity_runbook.md#{anchor}" in guide
+    assert "cmp recovar/em/AGENTS.md recovar/em/CLAUDE.md" in CONTRIBUTING.read_text()
+    runbook = RUNBOOK.read_text()
     required = [
-        "cmp recovar/em/CLAUDE.md recovar/em/AGENTS.md",
         "at most once every 3-4 hours",
         "test-em-parity-fast",
         "both K=1 and K=4",
@@ -30,7 +36,7 @@ def test_em_agent_guides_pin_validation_policy():
         "pixi run test-full",
     ]
     for text in required:
-        assert text in guide
+        assert text in runbook
 
 
 def test_em_best_metrics_ledger_has_quality_and_perf_contract():
@@ -66,9 +72,9 @@ def test_em_best_metrics_ledger_has_quality_and_perf_contract():
 def test_parallel_test_runner_accepts_external_runtime_root():
     runner = PARALLEL_TEST_RUNNER.read_text()
     assert 'RUNTIME_ROOT="${RECOVAR_TEST_RUNTIME_ROOT:-${WORKDIR}/.tmp}"' in runner
-    assert runner.count('${RUNTIME_ROOT}/slurm_\\${SLURM_JOB_ID}') == 2
-    assert runner.count('${RUNTIME_ROOT}/pixi_home_\\${SLURM_JOB_ID}') == 2
-    assert runner.count('${RUNTIME_ROOT}/rattler_cache_\\${SLURM_JOB_ID}') == 2
+    assert runner.count("${RUNTIME_ROOT}/slurm_\\${SLURM_JOB_ID}") == 2
+    assert runner.count("${RUNTIME_ROOT}/pixi_home_\\${SLURM_JOB_ID}") == 2
+    assert runner.count("${RUNTIME_ROOT}/rattler_cache_\\${SLURM_JOB_ID}") == 2
 
 
 def test_parallel_test_runner_binds_workers_to_one_slurm_gpu():

@@ -1,18 +1,17 @@
 """Nonfinite-score guardrails for exact-local EM's big-JIT normalizer."""
 
-import inspect
-
 import numpy as np
 import pytest
 
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.local_big_jit import _score_normalize_mstep, _score_normalize_support
-from recovar.em.dense_single_volume.local_backprojection import compute_local_ctf_sums, compute_local_weighted_sums
-from recovar.em.dense_single_volume.local_score_pass import fused_score_normalize_mstep_abs2_on_demand
-from recovar.em.dense_single_volume.helpers.projection import compute_noise_block
-from recovar.em.dense_single_volume import local_em_engine
+from recovar.em.diagnostics import local_bpref_capture
+from recovar.em.helpers.projection import compute_noise_block
+from recovar.em.local.local_backprojection import compute_local_ctf_sums, compute_local_weighted_sums
+from recovar.em.local.local_big_jit import _score_normalize_mstep, _score_normalize_support
+from recovar.em.local.local_score_pass import fused_score_normalize_mstep_abs2_on_demand
+from recovar.em.sparse_pass2.sparse_pass2_posterior import _relion_f32_fine_reconstruction_probs
 
 pytestmark = pytest.mark.unit
 
@@ -175,14 +174,70 @@ def test_score_normalize_support_deferred_mstep_matches_full_mstep():
     np.testing.assert_allclose(deferred_ctf, full["ctf_probs"], rtol=1e-6, atol=1e-6)
 
 
-def test_local_em_engine_normcorr_full_box_current_size_guard():
-    """Full-box local passes use current_size=None and must not divide it by two."""
-    source = inspect.getsource(local_em_engine.run_local_em_exact)
+def test_score_normalize_support_reuses_relion_f32_fine_posterior():
+    """VDAM local search must use the supplied-map RELION weight boundary."""
 
-    assert "norm_unweighted_shell_cutoff = image_shape[0] // 2 if current_size is None else int(current_size // 2)" in source
-    assert source.count("_norm_correction_image_power_per_image(") == 2
-    assert source.count("shell_count=n_shells") == 2
-    assert "jnp.asarray(shell_indices_half) > int(current_size // 2)" not in source
+    inputs = _base_inputs()
+    result = _score_normalize_support(
+        inputs["shifted_score_split"],
+        inputs["ctf2_over_nv_score"],
+        inputs["proj_weighted"],
+        inputs["half_weights"],
+        inputs["rotation_log_prior"],
+        inputs["translation_log_prior"],
+        inputs["rotation_mask"],
+        inputs["sample_mask"],
+        inputs["valid_image_mask"],
+        inputs["normalization_log_z"],
+        has_normalization_log_z=False,
+        half_spectrum_scoring=True,
+        use_float64_normalization=True,
+        reconstruct_significant_only=True,
+        use_relion_f32_fine_posterior=True,
+        adaptive_fraction=0.999,
+        max_significants=-1,
+    )
+    arrays = [np.asarray(value) for value in result]
+    expected = tuple(
+        np.asarray(value)
+        for value in _relion_f32_fine_reconstruction_probs(
+            result[1],
+            adaptive_fraction=0.999,
+        )
+    )
+
+    assert arrays[9].dtype == np.float32
+    np.testing.assert_array_equal(arrays[9], expected[0])
+    np.testing.assert_array_equal(arrays[6], expected[1])
+    np.testing.assert_array_equal(arrays[8], expected[2])
+    np.testing.assert_array_equal(arrays[5], np.max(expected[0], axis=(1, 2)))
+
+
+def test_bpref_capture_rebuilds_relion_f32_mstep_probs_not_generic_debug_probs():
+    """The contribution fixture must expose the tensor used by the M-step."""
+
+    scores = jnp.asarray(
+        [[[0.0, -0.25, -1.0], [-1.5, -2.0, -3.0]]],
+        dtype=jnp.float32,
+    )
+    generic_probs = jnp.exp(scores.astype(jnp.float64))
+    generic_probs /= jnp.sum(generic_probs, axis=(1, 2), keepdims=True)
+    expected_probs, expected_mask, *_ = _relion_f32_fine_reconstruction_probs(
+        scores,
+        adaptive_fraction=0.999,
+    )
+
+    captured = local_bpref_capture._exact_local_bpref_reconstruction_probs_for_capture(
+        scores,
+        generic_probs,
+        expected_mask,
+        use_relion_f32_fine_posterior=True,
+        adaptive_fraction=0.999,
+    )
+
+    assert np.asarray(captured).dtype == np.float32
+    np.testing.assert_array_equal(np.asarray(captured), np.asarray(expected_probs))
+    assert not np.array_equal(np.asarray(captured), np.asarray(generic_probs))
 
 
 def test_compute_noise_block_zero_weight_nonfinite_projection_is_zero():

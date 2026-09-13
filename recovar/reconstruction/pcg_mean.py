@@ -328,63 +328,6 @@ def _mstep_matvec_half(
         return _batched_mask_irfft_rfft(HPW_half, mask, volume_shape)
 
 
-def _mstep_preconditioner(
-    lhs_fourier: jnp.ndarray,
-    reg_diag: jnp.ndarray,
-    mask: jnp.ndarray,
-    volume_shape: tuple,
-    soft_penalty_weight: Optional[jnp.ndarray] = None,
-    soft_penalty_lam: float = 0.0,
-):
-    """Preconditioner: unmasked q×q solve per Fourier voxel.
-
-    Hard mask mode:
-      M_0^{-1} r = P F^{-1}[ D(xi)^{-1} F(P r)(xi) ]
-    Soft penalty mode:
-      M_0^{-1} r = F^{-1}[ (D(xi) + λ_avg I)^{-1} F(r)(xi) ]
-      where λ_avg = λ * mean(w) averages the spatially-varying penalty.
-
-    Cost: one FFT pair + one q×q solve per voxel per CG iteration.
-    """
-    q = reg_diag.shape[1]
-    vs = volume_shape
-    use_soft = soft_penalty_weight is not None and soft_penalty_lam > 0
-
-    half_vol_size = lhs_fourier.shape[0]
-
-    # D(xi) = LHS(xi) + diag(reg(xi))  per half-voxel
-    D = lhs_fourier + jnp.eye(q)[None] * reg_diag[:, :, None]  # (half_vol, q, q)
-
-    if use_soft:
-        # Average penalty strength across volume for circulant approximation
-        lam_avg = soft_penalty_lam * float(jnp.mean(soft_penalty_weight))
-        D = D + lam_avg * jnp.eye(q)[None]
-
-    # Precompute D^{-1} for all half-voxels
-    D_inv = jnp.linalg.inv(D)  # (half_vol, q, q)
-    half_vs = ftu.get_real_fft_packed_shape(vs)
-
-    def apply_Minv(R_real):
-        q_ = R_real.shape[0]
-
-        if use_soft:
-            R_half = ftu.get_dft3_real(R_real).reshape(q_, half_vol_size)
-        else:
-            R_half = ftu.get_dft3_real(mask[None] * R_real).reshape(q_, half_vol_size)
-
-        # Per-voxel q×q solve in half-volume
-        R_solved = jnp.einsum("vij,vj->vi", D_inv, R_half.T)  # (half_vol, q)
-
-        # irfft3 → real
-        result = ftu.get_idft3_real(R_solved.T.reshape(q_, *half_vs), vs)
-        if use_soft:
-            return result
-        else:
-            return mask[None] * result
-
-    return apply_Minv
-
-
 def pcg_mstep(
     lhs_fourier: jnp.ndarray,
     rhs_fourier: jnp.ndarray,

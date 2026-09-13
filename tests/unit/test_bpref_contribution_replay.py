@@ -1,19 +1,20 @@
 import numpy as np
 import pytest
 
-from scripts.replay_bpref_contribution_bundle import (
-    _classify_replay_difference,
-    _map_fsc_metrics,
-)
-from recovar.em.bpref_contribution_replay import (
+from recovar.em.diagnostics.bpref_contribution_replay import (
     BPrefAccumulatorReplay,
     accumulator_replay_metrics,
     dense_fftw_half_rows,
+    native_current_fft_rows,
     exact_array_metrics,
     load_bpref_contribution_bundle,
     load_bpref_contribution_shard,
     replay_relion_double,
     summarize_bpref_contribution_bundle,
+)
+from scripts.replay_bpref_contribution_bundle import (
+    _classify_replay_difference,
+    _map_fsc_metrics,
 )
 
 
@@ -25,6 +26,7 @@ def _write_shard(
     call=0,
     dump=0,
     operand_precision="float32",
+    reconstruction_groups=None,
 ):
     original_indices = np.asarray(original_indices, dtype=np.int64)
     active_particle = np.asarray([0, 0, 1], dtype=np.int32)
@@ -35,6 +37,13 @@ def _write_shard(
     active_global = rotations[active_particle, active_row]
     real_dtype = np.float32 if operand_precision == "float32" else np.float64
     complex_dtype = np.complex64 if operand_precision == "float32" else np.complex128
+    optional_groups = {}
+    if reconstruction_groups is not None:
+        reconstruction_groups = np.asarray(reconstruction_groups, dtype=np.int32)
+        optional_groups = {
+            "reconstruction_group_ids": reconstruction_groups,
+            "active_reconstruction_group_ids": reconstruction_groups[active_particle],
+        }
     np.savez(
         path,
         magic=np.asarray("RECOVAR_BPREF_CONTRIBUTION_ROWS"),
@@ -65,6 +74,7 @@ def _write_shard(
         active_summed=np.ones((3, 6), dtype=complex_dtype) * (call + 1),
         active_ctf_probs=np.ones((3, 6), dtype=real_dtype),
         active_rotations=np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)),
+        **optional_groups,
     )
 
 
@@ -108,6 +118,30 @@ def test_bundle_preserves_execution_order_and_builds_canonical_order(tmp_path):
     assert summary["row_count"] == 6
     assert summary["unique_particle_count"] == 4
     assert summary["quality_gate"].endswith("no correlation metric")
+
+
+def test_bundle_filters_joint_halfset_rows_by_reconstruction_group(tmp_path):
+    path = tmp_path / "joint.npz"
+    _write_shard(path, reconstruction_groups=(0, 1))
+
+    bundle = load_bpref_contribution_bundle([path])
+    group_zero = bundle.concatenate("execution", reconstruction_group=0)
+    group_one = bundle.concatenate("canonical", reconstruction_group=1)
+
+    assert group_zero["active_original_indices"].tolist() == [4, 4]
+    assert group_zero["active_reconstruction_group_ids"].tolist() == [0, 0]
+    assert group_one["active_original_indices"].tolist() == [7]
+    assert group_one["active_reconstruction_group_ids"].tolist() == [1]
+
+
+def test_bundle_rejects_group_filter_when_capture_predates_group_metadata(tmp_path):
+    path = tmp_path / "legacy.npz"
+    _write_shard(path)
+
+    bundle = load_bpref_contribution_bundle([path])
+
+    with pytest.raises(ValueError, match="does not capture reconstruction groups"):
+        bundle.concatenate("execution", reconstruction_group=1)
 
 
 def test_bundle_rejects_overlapping_semantic_rows(tmp_path):
@@ -252,3 +286,12 @@ def test_replay_classification_identifies_precision_dominated_difference():
 
     assert result["classification"] == "scatter_precision"
     assert result["precision_control_unregularized_map_fsc_auc"] == pytest.approx(0.998)
+
+
+def test_native_current_fft_rows_map_native_order_into_centered_full_rows():
+    rows = native_current_fft_rows(full_size=8, current_size=4)
+
+    np.testing.assert_array_equal(
+        rows.reshape(4, 3),
+        np.asarray([[20, 21, 22], [25, 26, 27], [30, 31, 32], [15, 16, 17]]),
+    )

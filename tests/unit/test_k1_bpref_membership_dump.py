@@ -1,8 +1,9 @@
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
+from recovar.em.diagnostics import bpref_diagnostics
 
 
 def test_k1_bpref_membership_dump_preserves_identity_padding_and_weights(
@@ -13,8 +14,8 @@ def test_k1_bpref_membership_dump_preserves_identity_padding_and_weights(
     monkeypatch.setenv("RECOVAR_BPREF_MEMBERSHIP_DUMP_DIR", str(dump_dir))
     monkeypatch.setenv("RECOVAR_BPREF_MEMBERSHIP_DUMP_ITERATION", "2")
     monkeypatch.setenv("RECOVAR_BPREF_MEMBERSHIP_DUMP_HALF", "1")
-    monkeypatch.setattr(sparse_pass2_bucketed, "_bpref_membership_dump_counter", 0)
-    sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=2, half=1)
+    monkeypatch.setattr(bpref_diagnostics, "_bpref_membership_dump_counter", 0)
+    bpref_diagnostics.set_bpref_contribution_dump_context(iteration=2, half=1)
 
     dataset = SimpleNamespace(dataset_indices=np.asarray([41, 73], dtype=np.int64))
     posterior = np.asarray(
@@ -31,7 +32,7 @@ def test_k1_bpref_membership_dump_preserves_identity_padding_and_weights(
     ).copy()
 
     try:
-        sparse_pass2_bucketed._maybe_dump_k1_bpref_membership(
+        bpref_diagnostics._maybe_dump_k1_bpref_membership(
             experiment_dataset=dataset,
             image_indices=np.asarray([0, 1], dtype=np.int64),
             current_size=60,
@@ -47,7 +48,7 @@ def test_k1_bpref_membership_dump_preserves_identity_padding_and_weights(
             reconstruction_threshold=np.asarray([0.2, 0.2], dtype=np.float32),
         )
     finally:
-        sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+        bpref_diagnostics.clear_bpref_contribution_dump_context()
 
     paths = sorted(dump_dir.glob("*.npz"))
     assert len(paths) == 1
@@ -83,9 +84,9 @@ def test_k1_bpref_membership_dump_respects_physical_context(monkeypatch, tmp_pat
     monkeypatch.setenv("RECOVAR_BPREF_MEMBERSHIP_DUMP_DIR", str(tmp_path))
     monkeypatch.setenv("RECOVAR_BPREF_MEMBERSHIP_DUMP_ITERATION", "2")
     monkeypatch.setenv("RECOVAR_BPREF_MEMBERSHIP_DUMP_HALF", "1")
-    sparse_pass2_bucketed.set_bpref_contribution_dump_context(iteration=1, half=1)
+    bpref_diagnostics.set_bpref_contribution_dump_context(iteration=1, half=1)
     try:
-        sparse_pass2_bucketed._maybe_dump_k1_bpref_membership(
+        bpref_diagnostics._maybe_dump_k1_bpref_membership(
             experiment_dataset=SimpleNamespace(dataset_indices=np.asarray([0])),
             image_indices=np.asarray([0]),
             current_size=60,
@@ -101,5 +102,68 @@ def test_k1_bpref_membership_dump_respects_physical_context(monkeypatch, tmp_pat
             reconstruction_threshold=np.zeros((1,), dtype=np.float32),
         )
     finally:
-        sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+        bpref_diagnostics.clear_bpref_contribution_dump_context()
     assert not list(tmp_path.glob("*.npz"))
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("directory", "iteration", "half", "context", "expected"),
+    [
+        ("", None, None, (2, 1), False),
+        ("  ", "invalid", "3", (2, 1), False),
+        ("enabled", None, None, (-1, -1), True),
+        ("enabled", "2", "1", (2, 1), True),
+        ("enabled", "3", "1", (2, 1), False),
+        ("enabled", "3", "invalid", (2, 1), False),
+        ("enabled", "2", "2", (2, 1), False),
+        ("enabled", "2", "", (2, 1), True),
+        ("enabled", "2", "3", (2, 1), ValueError),
+        ("enabled", "invalid", None, (2, 1), ValueError),
+    ],
+)
+def test_membership_selector_preserves_filter_order(monkeypatch, directory, iteration, half, context, expected):
+    monkeypatch.setenv("RECOVAR_BPREF_MEMBERSHIP_DUMP_DIR", directory)
+    for name, value in [("ITERATION", iteration), ("HALF", half)]:
+        name = "RECOVAR_BPREF_MEMBERSHIP_DUMP_" + name
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    monkeypatch.setattr(bpref_diagnostics, "_bpref_contribution_context", {"iteration": context[0], "half": context[1]})
+    if expected is ValueError:
+        with pytest.raises(ValueError):
+            bpref_diagnostics._bpref_membership_dump_requested()
+    else:
+        assert bpref_diagnostics._bpref_membership_dump_requested() is expected
+
+
+@pytest.mark.unit
+def test_membership_counter_continues_across_half_contexts(monkeypatch, tmp_path):
+    monkeypatch.setenv("RECOVAR_BPREF_MEMBERSHIP_DUMP_DIR", str(tmp_path))
+    monkeypatch.delenv("RECOVAR_BPREF_MEMBERSHIP_DUMP_ITERATION", raising=False)
+    monkeypatch.delenv("RECOVAR_BPREF_MEMBERSHIP_DUMP_HALF", raising=False)
+    monkeypatch.setattr(bpref_diagnostics, "_bpref_membership_dump_counter", 0)
+    monkeypatch.setattr(bpref_diagnostics, "_bpref_contribution_context", {"iteration": -1, "half": -1})
+    for half in (1, 2):
+        bpref_diagnostics.set_bpref_contribution_dump_context(iteration=2, half=half)
+        bpref_diagnostics._maybe_dump_k1_bpref_rotation_mass(
+            experiment_dataset=SimpleNamespace(dataset_indices=np.empty(0, dtype=np.int64)),
+            image_indices=np.empty(0, dtype=np.int64),
+            current_size=60,
+            actual_counts=np.empty(0, dtype=np.int64),
+            rotations=np.empty((0, 0, 3, 3), dtype=np.float32),
+            rotation_indices=np.empty(0, dtype=np.int64),
+            candidate_translation_count=np.empty((0, 0), dtype=np.int32),
+            posterior_rotation_mass=np.empty((0, 0), dtype=np.float32),
+            reconstruction_rotation_mass=np.empty((0, 0), dtype=np.float32),
+            significant_translation_count=np.empty((0, 0), dtype=np.int32),
+            reconstruction_sum_weight=np.empty(0, dtype=np.float32),
+            reconstruction_threshold=np.empty(0, dtype=np.float32),
+        )
+        bpref_diagnostics.clear_bpref_contribution_dump_context()
+    assert sorted(path.name for path in tmp_path.iterdir()) == [
+        "bpref_membership_it002_h1_dump000000_cs060.npz",
+        "bpref_membership_it002_h2_dump000001_cs060.npz",
+    ]
+    assert bpref_diagnostics._bpref_membership_dump_counter == 2

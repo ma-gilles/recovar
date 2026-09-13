@@ -42,20 +42,7 @@ from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
 from recovar.em.sampling import get_rotation_grid_at_order, get_translation_grid
 from recovar.reconstruction import noise as recon_noise
 from recovar.utils import helpers
-
-
-def _jsonable(value: Any):
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, np.ndarray):
-        return _jsonable(value.tolist())
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Path):
-        return str(value)
-    return value
+from recovar.utils.json_utils import to_jsonable
 
 
 def _load_noise_variance(simulation_info: str | Path | None, image_shape) -> np.ndarray:
@@ -123,27 +110,10 @@ def _parse_int_schedule(value: str | None, *, name: str) -> list[int] | None:
     return schedule
 
 
-def _parse_float_schedule(value: str | None, *, name: str) -> list[float] | None:
-    if value is None or str(value).strip() == "":
-        return None
-    schedule = [float(part.strip()) for part in str(value).split(",") if part.strip()]
-    if not schedule:
-        raise ValueError(f"{name} must contain at least one number")
-    if any(item < 0.0 for item in schedule):
-        raise ValueError(f"{name} entries must be nonnegative, got {schedule}")
-    return schedule
-
-
 def _schedule_value(schedule: list[int] | None, fallback: int, iteration_index: int) -> int:
     if schedule is None:
         return int(fallback)
     return int(schedule[min(int(iteration_index), len(schedule) - 1)])
-
-
-def _float_schedule_value(schedule: list[float] | None, fallback: float, iteration_index: int) -> float:
-    if schedule is None:
-        return float(fallback)
-    return float(schedule[min(int(iteration_index), len(schedule) - 1)])
 
 
 def _default_healpix_order_schedule(n_iters: int, target_order: int, *, start_order: int = 1) -> list[int]:
@@ -218,137 +188,6 @@ def _default_current_size_schedule(n_iters: int, target_size: int, ori_size: int
                 v += 1 if v + 1 <= target else -1
             schedule.append(int(v))
     return schedule
-
-
-# ---------------------------------------------------------------------------
-# Phase B: FSC / data-vs-prior driven schedule auto-update
-# ---------------------------------------------------------------------------
-
-
-def _half_shell_labels(volume_shape) -> np.ndarray:
-    """Radial-shell labels for the half-Fourier-volume grid (flat index)."""
-    from recovar.core import fourier_transform_utils as ftu
-
-    labels = np.asarray(
-        ftu.get_grid_of_radial_distances_real(tuple(volume_shape), scaled=False, frequency_shift=0),
-        dtype=np.int64,
-    ).reshape(-1)
-    return labels
-
-
-def _per_shell_mean(values: np.ndarray, labels: np.ndarray, n_shells: int) -> np.ndarray:
-    sums = np.bincount(labels, weights=np.asarray(values, dtype=np.float64), minlength=int(n_shells)).astype(np.float64)
-    counts = np.bincount(labels, minlength=int(n_shells)).astype(np.float64)
-    return np.where(counts > 0, sums / np.maximum(counts, 1.0), 0.0)
-
-
-def _data_vs_prior_from_ppca_stats(
-    mu_half,
-    lhs_tri_mu_channel,
-    noise_variance_radial,
-    volume_shape,
-) -> np.ndarray:
-    """Estimate per-shell SSNR from the PPCA M-step output mean and accumulators.
-
-    Computes ``SSNR_shell = E[|mu|^2] * E[lhs_mu_mu] / noise_var(shell)``,
-    the natural single-set analog of RELION's ``data_vs_prior_class``:
-    numerator is the recovered signal power weighted by the per-voxel evidence
-    weight (``sum_i CTF^2 / sigma^2``); denominator is the noise radial
-    profile. Crosses 1 at the resolution where signal stops dominating noise.
-    """
-    labels = _half_shell_labels(volume_shape)
-    # The half-volume's corner reaches sqrt(3) * N/2 shells (~110 for N=128),
-    # not just N/2+1. Use the actual max label + 1 to size the per-shell arrays.
-    max_label = int(labels.max(initial=0))
-    n_shells = max(int(volume_shape[0]) // 2 + 1, max_label + 1)
-    mu = np.asarray(mu_half).reshape(-1)
-    weight = np.asarray(lhs_tri_mu_channel).reshape(-1)
-    if np.iscomplexobj(weight):
-        weight = weight.real
-    if mu.shape[0] != labels.shape[0]:
-        raise ValueError(f"mu_half size {mu.shape[0]} != half-volume size {labels.shape[0]}")
-    if weight.shape[0] != labels.shape[0]:
-        raise ValueError(f"lhs_tri_mu size {weight.shape[0]} != half-volume size {labels.shape[0]}")
-    signal_per_voxel = np.abs(mu) ** 2
-    signal_shell = _per_shell_mean(signal_per_voxel, labels, n_shells)
-    weight_shell = _per_shell_mean(weight, labels, n_shells)
-    noise_radial = np.asarray(noise_variance_radial, dtype=np.float64).reshape(-1)
-    if noise_radial.shape[0] >= n_shells:
-        noise_shell = noise_radial[:n_shells]
-    else:
-        noise_shell = np.concatenate(
-            [
-                noise_radial,
-                np.full(n_shells - noise_radial.shape[0], noise_radial[-1] if noise_radial.size else 1.0),
-            ]
-        )
-    noise_shell = np.where(noise_shell > 1e-30, noise_shell, 1e-30)
-    return signal_shell * weight_shell / noise_shell
-
-
-def _resolution_shell_from_data_vs_prior(dvp: np.ndarray, ori_size: int) -> int:
-    """Port of EM's iteration_loop._resolution_shell_from_data_vs_prior."""
-    arr = np.asarray(dvp, dtype=np.float64)
-    limit = min(int(ori_size) // 2, int(arr.size))
-    ires = 1
-    while ires < limit:
-        if float(arr[ires]) < 1.0:
-            break
-        ires += 1
-    return max(0, ires - 1)
-
-
-def _resolution_shell_from_mu_energy(
-    mu_half,
-    volume_shape,
-    *,
-    relative_threshold: float = 1e-3,
-    floor_shell: int = 4,
-) -> int:
-    """Robust scale-free resolution estimate: highest shell where |mu|² stays
-    above ``relative_threshold * peak_shell_power``.
-
-    Avoids the scale-calibration issues of an SSNR-style data_vs_prior by
-    operating on the ratio of per-shell power to the peak (typically the DC
-    or near-DC shell). Floors at ``floor_shell`` so we don't mistake a noisy
-    near-empty model for fully resolved.
-    """
-    labels = _half_shell_labels(volume_shape)
-    max_label = int(labels.max(initial=0))
-    n_shells = max(int(volume_shape[0]) // 2 + 1, max_label + 1)
-    power = _per_shell_mean(np.abs(np.asarray(mu_half).reshape(-1)) ** 2, labels, n_shells)
-    if power.size == 0 or float(power.max()) <= 0:
-        return int(floor_shell)
-    peak = float(power.max())
-    threshold = float(relative_threshold) * peak
-    limit = min(int(volume_shape[0]) // 2, power.size)
-    res_shell = int(floor_shell)
-    for s in range(int(floor_shell), limit):
-        if float(power[s]) >= threshold:
-            res_shell = s
-        # don't break — keep extending while signal stays above threshold
-    return int(min(res_shell, limit - 1))
-
-
-def _next_current_size_from_resolution(
-    prev_cs: int,
-    res_shell: int,
-    ori_size: int,
-    *,
-    incr_shells: int = 4,
-    target_cs: int | None = None,
-) -> int:
-    """Mirror EM ``updateImageSizeAndResolutionPointers`` (simplified).
-
-    next_cs = min(2 * (res_shell + incr_shells), ori_size), rounded to even,
-    capped at target_cs (the user's --current-size). Monotonically increasing
-    relative to prev_cs (never shrink mid-run)."""
-    cap = int(target_cs) if target_cs is not None else int(ori_size)
-    new_cs = min(2 * (int(res_shell) + int(incr_shells)), int(ori_size), cap)
-    new_cs = max(2, new_cs)
-    if new_cs % 2:
-        new_cs += 1 if new_cs + 1 <= cap else -1
-    return max(int(prev_cs), int(new_cs))
 
 
 def _regularization_penalty(
@@ -546,7 +385,7 @@ def _run_with_halfset_fsc_schedule(
             "resolution_increased": bool(rec.resolution_decision.allow_increase),
             "gate_reasons": list(rec.resolution_decision.reasons),
             "pose_change_fraction": float(rec.resolution_decision.pose_change_fraction),
-            "diagnostics": _jsonable(rec.diagnostics),
+            "diagnostics": to_jsonable(rec.diagnostics),
         }
         iter_summaries.append(rec_summary)
         print(json.dumps(rec_summary, indent=2, sort_keys=True), flush=True)
@@ -649,8 +488,8 @@ def _run_with_halfset_fsc_schedule(
         "output_dir": str(output_dir),
         "final_npz": str(final_npz),
     }
-    (output_dir / "summary.json").write_text(json.dumps(_jsonable(summary), indent=2, sort_keys=True) + "\n")
-    print(json.dumps(_jsonable(summary), indent=2, sort_keys=True))
+    (output_dir / "summary.json").write_text(json.dumps(to_jsonable(summary), indent=2, sort_keys=True) + "\n")
+    print(json.dumps(to_jsonable(summary), indent=2, sort_keys=True))
 
 
 def _parse_args() -> argparse.Namespace:
@@ -1295,7 +1134,7 @@ def main() -> None:
         if gt_pose_diagnostics is not None:
             iter_summary["gt_pose_diagnostics"] = gt_pose_diagnostics
         iter_summaries.append(iter_summary)
-        print(json.dumps(_jsonable(iter_summary), indent=2, sort_keys=True), flush=True)
+        print(json.dumps(to_jsonable(iter_summary), indent=2, sort_keys=True), flush=True)
         current_mu = np.asarray(result.mu_half)
         current_W = np.asarray(result.W_half)
         volume_domain = "fourier_half"
@@ -1390,8 +1229,8 @@ def main() -> None:
         "iterations": iter_summaries,
     }
     summary_path = output_dir / "summary.json"
-    summary_path.write_text(json.dumps(_jsonable(summary), indent=2, sort_keys=True) + "\n")
-    print(json.dumps(_jsonable(summary), indent=2, sort_keys=True))
+    summary_path.write_text(json.dumps(to_jsonable(summary), indent=2, sort_keys=True) + "\n")
+    print(json.dumps(to_jsonable(summary), indent=2, sort_keys=True))
     if not summary["passed"]:
         raise SystemExit(1)
 

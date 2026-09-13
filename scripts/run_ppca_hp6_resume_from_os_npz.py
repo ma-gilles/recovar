@@ -25,15 +25,17 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from recovar.data_io.cryoem_dataset import load_dataset
-from recovar.em.sampling import get_relion_rotation_grid
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
-    PoseSelectionConfig,
     ScheduleConfig,
     ScoringConfig,
     SparsePass2Config,
 )
-from recovar.em.ppca_refinement.highres_refinement import build_top_p_local_hypothesis_layout
+from recovar.em.ppca_refinement.initialization import (
+    loading_row_norm_variance_prior,
+    pipeline_variance_W_prior,
+    volume_power_variance_prior,
+)
 from recovar.em.ppca_refinement.local_dataset import (
     run_local_ppca_fused_em_iteration,
     run_local_ppca_pose_scoring_iteration,
@@ -44,15 +46,20 @@ from recovar.em.ppca_refinement.mean_regularization import (
     relion_style_mean_precision_from_stats,
 )
 from recovar.em.ppca_refinement.postprocess import PostprocessConfig
-from recovar.em.ppca_refinement.initialization import (
-    loading_row_norm_variance_prior,
-    pipeline_variance_W_prior,
-    volume_power_variance_prior,
+from recovar.em.sampling import get_relion_rotation_grid
+from recovar.utils.json_utils import to_jsonable
+
+# Resume the same pipeline with its unchanged pose-layout and summary helpers.
+from scripts.run_ppca_dense_os_local_from_init_npz import (
+    _build_top_p_layout_from_arrays,
+    _layout_summary,
+    _pose_selection,
+    _save_pose_npz,
+    _top_p_subset_summary,
 )
 from scripts.run_ppca_local_from_init_npz import (
     _half_size,
     _image_ordered_pose_arrays,
-    _jsonable,
     _load_init,
     _load_noise_variance,
     _load_simulation_info,
@@ -154,86 +161,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--postprocess-gridding-order", type=int, default=1)
     parser.add_argument("--postprocess-gridding-correct", choices=("radial", "square"), default="radial")
     return parser.parse_args()
-
-
-def _pose_selection(args: argparse.Namespace) -> PoseSelectionConfig:
-    return PoseSelectionConfig(
-        top_p_poses=int(args.top_p_poses),
-        candidate_pool_factor=int(args.top_p_candidate_pool_factor),
-        min_candidate_pool=int(args.top_p_min_candidate_pool),
-        top_pose_max_log_score_gap=float(args.top_p_max_log_score_gap),
-        top_pose_min_angle_deg=float(args.top_p_min_angle_deg),
-        top_pose_min_translation_px=float(args.top_p_min_translation_px),
-    )
-
-
-def _save_pose_npz(path: Path, *, mu, W, image_indices, pose_arrays, extra=None):
-    payload = {
-        "mu_half": np.asarray(mu),
-        "W_half": np.asarray(W),
-        "image_indices": np.asarray(image_indices, dtype=np.int64),
-    }
-    payload.update({k: np.asarray(v) for k, v in pose_arrays.items()})
-    if extra:
-        payload.update({k: np.asarray(v) for k, v in extra.items()})
-    np.savez_compressed(path, **payload)
-
-
-def _build_top_p_layout_from_arrays(
-    pose_arrays,
-    *,
-    center_rotation_grid,
-    target_rotation_grid,
-    healpix_order,
-    translations,
-    center_translation_grid,
-    sigma_rot_deg,
-    sigma_psi_deg,
-    sigma_offset_angstrom,
-    voxel_size,
-):
-    return build_top_p_local_hypothesis_layout(
-        np.asarray(pose_arrays["top_rotation_id"], dtype=np.int64),
-        np.asarray(pose_arrays["top_translation_idx"], dtype=np.int64),
-        center_rotation_grid=center_rotation_grid,
-        top_rotation_matrices=np.asarray(pose_arrays.get("top_rotation_matrix"), dtype=np.float32)
-        if "top_rotation_matrix" in pose_arrays
-        else None,
-        center_translation_grid=center_translation_grid,
-        target_rotation_grid=target_rotation_grid,
-        healpix_order=int(healpix_order),
-        translations=np.asarray(translations, dtype=np.float32),
-        sigma_rot=np.deg2rad(float(sigma_rot_deg)),
-        sigma_psi=np.deg2rad(float(sigma_psi_deg)),
-        sigma_offset_angstrom=float(sigma_offset_angstrom),
-        voxel_size=float(voxel_size),
-    )
-
-
-def _layout_summary(layout):
-    counts = np.asarray(layout.rotation_counts, dtype=np.int64)
-    return {
-        "n_images": int(layout.n_images),
-        "n_translations": int(layout.translation_grid.shape[0]),
-        "rotation_count_min": int(np.min(counts)) if counts.size else 0,
-        "rotation_count_median": float(np.median(counts)) if counts.size else 0.0,
-        "rotation_count_max": int(np.max(counts)) if counts.size else 0,
-        "rotation_count_mean": float(np.mean(counts)) if counts.size else 0.0,
-    }
-
-
-def _top_p_subset_summary(pose_arrays, widths):
-    out = {}
-    post = np.asarray(pose_arrays.get("top_posterior_per_image", pose_arrays.get("top_posterior")), dtype=np.float32)
-    rot = np.asarray(pose_arrays.get("top_rotation_id", pose_arrays.get("top_rotation_idx")), dtype=np.int32)
-    for width in widths:
-        width = min(int(width), int(post.shape[1]) if post.ndim == 2 else 0)
-        if width <= 0:
-            continue
-        valid = rot[:, :width] >= 0
-        out[f"top{width}_valid_mean"] = float(np.mean(np.sum(valid, axis=1)))
-        out[f"top{width}_posterior_mass_mean"] = float(np.mean(np.sum(post[:, :width] * valid, axis=1)))
-    return out
 
 
 def _load_os_pose_arrays(os_npz_path: Path, n_images: int) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray]:
@@ -527,7 +454,7 @@ def main() -> None:
         **_top_p_subset_summary(current_pose, report_widths),
     }
     summary["stages"].append(final_pose_stage)
-    print(json.dumps(_jsonable(final_pose_stage), indent=2, sort_keys=True), flush=True)
+    print(json.dumps(to_jsonable(final_pose_stage), indent=2, sort_keys=True), flush=True)
 
     current_mu = np.asarray(mu)
     current_W = np.asarray(W)
@@ -647,7 +574,7 @@ def main() -> None:
         }
         em_results.append(em_stage)
         summary["stages"].append(em_stage)
-        print(json.dumps(_jsonable(em_stage), indent=2, sort_keys=True), flush=True)
+        print(json.dumps(to_jsonable(em_stage), indent=2, sort_keys=True), flush=True)
 
     final_npz = output_dir / "final_ppca_dense_os_local.npz"
     _save_pose_npz(
@@ -663,8 +590,8 @@ def main() -> None:
     summary["em_iters_completed"] = int(len(em_results))
     summary["passed"] = bool(np.all(np.isfinite(current_mu)) and np.all(np.isfinite(current_W)))
     summary_path = output_dir / "summary.json"
-    summary_path.write_text(json.dumps(_jsonable(summary), indent=2, sort_keys=True) + "\n")
-    print(json.dumps(_jsonable({"summary": summary_path, "final_npz": final_npz, "passed": summary["passed"]}), indent=2))
+    summary_path.write_text(json.dumps(to_jsonable(summary), indent=2, sort_keys=True) + "\n")
+    print(json.dumps(to_jsonable({"summary": summary_path, "final_npz": final_npz, "passed": summary["passed"]}), indent=2))
 
 
 if __name__ == "__main__":

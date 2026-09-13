@@ -1,5 +1,5 @@
 """
-Unit tests for recovar.em.states.
+Unit tests for recovar.em.reference.states.
 
 Covers construction and initial attribute values for:
   EMState, SGDState, HeterogeneousEMState
@@ -12,7 +12,7 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar.em.states import EMState, SGDState, HeterogeneousEMState
+from recovar.em.reference.states import EMState, SGDState, HeterogeneousEMState
 
 pytestmark = pytest.mark.unit
 

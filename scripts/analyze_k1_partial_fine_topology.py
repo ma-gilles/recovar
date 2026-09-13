@@ -10,12 +10,9 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
-    SCHEMA as PRODUCTION_CAPTURE_SCHEMA,
-)
-from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
-    validate_raw_capture_shard,
-)
+from recovar.em.diagnostics.compact_candidate_capture import SCHEMA as PRODUCTION_CAPTURE_SCHEMA
+from recovar.em.diagnostics.compact_candidate_capture import validate_raw_capture_shard
+from recovar.utils.file_hash import sha256_file
 from scripts.analyze_k1_fine_score_boundary import (
     _center,
     _float32_from_bits,
@@ -30,14 +27,6 @@ from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_c
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def partial_rotation_map(
@@ -578,11 +567,11 @@ def analyze(
         "translation_map_max_abs": translation_error,
         "artifacts": {
             "factor": str(factor_path.resolve()),
-            "factor_sha256": _sha256(factor_path),
+            "factor_sha256": sha256_file(factor_path),
             "fine_score": str(fine_score_path.resolve()),
-            "fine_score_sha256": _sha256(fine_score_path),
+            "fine_score_sha256": sha256_file(fine_score_path),
             "recovar": str(recovar_path.resolve()),
-            "recovar_sha256": _sha256(recovar_path),
+            "recovar_sha256": sha256_file(recovar_path),
         },
     }
 

@@ -300,6 +300,10 @@ the augmented solve.
 
 ## Halfset resolution gate
 
+Dense and local iteration publication share
+[`_finish_refinement_iteration`](../../recovar/em/ppca_refinement/refinement_loop.py);
+the gate itself remains in [`evaluate_halfset_resolution_gate`](../../recovar/em/ppca_refinement/schedule.py).
+
 Resolution/current-size growth is allowed only when all first-pass checks pass:
 
 1. K-class schedule says growth is otherwise allowed;

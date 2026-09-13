@@ -1,9 +1,12 @@
 # EM / RELION Parity Program Board
 
-This is the living source of truth for the active milestone and next
-experiment. Keep permanent rules in `recovar/em/AGENTS.md`, detailed dated
-evidence in `docs/math/relion_parity_agent_notes.md`, and accepted completion
-runs in `docs/math/em_parity_best_metrics.md`.
+This file preserves quantitative gates and historical program records. The
+active cleanup milestone and next check live in
+[the EM status page](../development/em_status.md). Keep permanent rules in
+`recovar/em/AGENTS.md`, detailed dated evidence in
+`docs/math/relion_parity_agent_notes.md`, and completion records in
+`docs/math/em_parity_best_metrics.md`. Historical next actions below are not
+current task instructions.
 
 ## Objective
 
@@ -12,8 +15,881 @@ auto-refine and K=4 3D classification. Then optimize to near RELION speed while
 holding the accepted quality checkpoint. Treat native InitialModel/VDAM parity
 as the next product milestone rather than mixing it into the first closure.
 
+## Current VDAM quality priority — September 9
+
+The user provisionally accepts up to **2× RELION runtime** while prioritizing
+quality: first establish short-iteration matched-input score/posterior/state
+parity, then evaluate final shellwise FSC/FSC-AUC against GT and RELION across
+the required scope, including Hungarian-matched K4 and robustness. Once their
+causes and numerical bounds are established, late discrete trajectory differences
+are diagnostic; unexplained mismatches are not excused as noise. Exact parity
+remains preferable. No numerical tolerance or baseline is changed, and the
+long-term speed objective remains. This allowance is not a measurement of
+current-source representative speed or a completed quality gate. See the
+[user-policy handoff](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/handoffs/vdam_quality_priority_20260909.json).
+
+## VDAM active experiment — 2026-08-20
+
+### 2026-09-01 fixed-capacity call-0 correctness gate
+
+The first shared fixed-capacity executor gate is correctness-only and remains
+default-off.  It compares the mature, explicitly disabled-selector, and fixed
+call-0 arms on the same deterministic K=1 score-only call through the single
+shared `run_local_bucket_big_jit` wrapper.  The captured boundary includes the
+complete prepared operand set, scores, `log_Z`, best score/argmax, maximum
+posterior, posterior masses, exact sample/rotation support masks, significant
+counts, row counts, hard assignments, and public `RelionStats`.  Both float32
+and float64 companion lanes run in alternating same-process repeats, followed
+by an independent uninstrumented production-topology comparison.
+
+Because the present seam substitutes byte-validated operands immediately
+before the identical numeric call, its acceptance contract is bitwise exact;
+nonzero drift is unexplained and fails.  A future reduction-order optimization
+may use small nonzero envelopes only after a separate production speed gate
+shows a material win, and only with exact discrete decisions/support plus
+repeat-bounded, non-growing float32 drift and a float64 companion at least
+three orders tighter.  This gate cannot claim speed or promote a default.
+
+The gate audit exposed that `donate_argnums=(4, 5)` donated correction and
+projection-mean inputs even though the implementation comment names the
+loop-carried `Ft_y`/`Ft_ctf` accumulators.  Commit `13bfcce4a` corrects the
+mapping to signature positions `(7, 8)` and adds structural caller guards.
+The old mapping emitted an unusable donated-buffer warning in the CPU dry run;
+the corrected mapping does not.  Independent review returned GO at sealed head
+`d880da3d0`.  H100 job `13288282` then passed `7/7` focused tests and all eight
+captured plus twelve uninstrumented production comparisons on
+`della-h21g4` / `GPU-099c0d77-bb85-f2e9-f628-148b733c9176`.  Every reported
+score, centered-score, `log_Z`, best-score, posterior, and posterior-mass
+delta is exactly zero in both precision lanes; all discrete outputs and
+prepared operand bytes are exact.  The final source manifest remained
+`986f6c733672425e87c8de6b8c7dec18e5d4085c663145d5e2510af6d0a72e6c`.
+This closes the first correctness gate only.  A donation performance claim,
+if any, requires a separate same-binary/toggle or crossed-commit H100 M-step
+runtime and peak-memory gate; fixed-capacity speed and default promotion remain
+unqualified.
+
+### 2026-09-03 stable coarse logical-prefix gate
+
+Validation scope is performance-only and default-off.  Stable coarse square
+capacities remove recompilations across changing logical Fourier windows, but
+the CUDA scorer must still execute only RELION's logical pixel prefix.  H100
+trajectory job `13395892` established the opportunity and rejected the first
+implementation scientifically: checkpoint construction through iteration 47
+fell from `269.649 s` to `239.072 s` (`-11.34%`), while one of 200 particles
+selected an adjacent translation and eight significant counts moved by one.
+This result remains an explicit performance win and hard-state failure.
+
+The first runtime-prefix primitive test (`13397454`) found `31--38%` of raw
+score words different, at most two float32 ULPs, despite skipping every padded
+pixel.  ABBA job `13397690` localized the change to native atomic admission:
+the runtime scorer itself moved within the same two-ULP band, while posterior,
+cutoff, support, significant count, and best pose were wordwise exact.  A
+compact-row experiment then showed that even the accepted static scorer has
+multiple legal raw-score realizations.  In split-kernel ABBA job `13398261`,
+the two crossed static/runtime pairs were bitwise identical while both
+static/static and runtime/runtime pairs differed by at most two ULPs.  Raw
+score bitwise equality is therefore not a valid gate for this native-atomic
+primitive.
+
+The fail-closed replacement does not use a tolerance or an empirical repeat
+diameter.  The default VDAM geometry maps 128 threads over 29 translations,
+giving exactly four active lane partials for each score; inactive threads add
+exact zero.  Enumerating all `4!` serialized atomic orders is therefore the
+complete legal arithmetic set.  Focused H100 job `13398365` passes both the
+rectangular and selected-source-16 scorers against that exhaustive set and
+keeps posterior, cutoff, support, significant count, and argmin wordwise
+exact.  The active next gate is the existing shared-state
+off/on/on/off iteration-47 transition.  No fresh trajectory may start until
+that gate preserves every hard decision/support field and bounds continuous
+state by the established native-repeat contract; runtime must also retain the
+compile-shape win after compact-row packing cost.
+
+### 2026-09-03 selected-source and grouped-BPref performance decisions
+
+Validation scope is performance-only and default-off.  The selected-source
+coarse CUDA primitive is scientifically usable but is not a material runtime
+optimization.  Same-process H100 job `13416867` prewarmed the selected-source
+and mature static-full fused routes, then ran four balanced repeats of each at
+the real GF46 iteration-34-to-35 `T=37` boundary.  The corrected analyzer
+separately proves the executed coarse geometry (`logical/physical=50/64`,
+`R=4608`, `T=37`, 200 particles) and the emitted next schedule (`size=68`,
+HEALPix order 2, `R=36864`, `T=148`).  Routing, instrumentation, and every
+hard-state field are exact.  Continuous map/statistic differences remain at
+repeat scale and pass the existing two-times static-control plus
+`4*float32-epsilon` policy; the stricter one-times diagnostic remains visible.
+
+The isolated selected kernel is `2.346x` faster in dense geometry and `1.334x`
+in compact geometry, but projection-cache, certificate, selector, and assembly
+overhead consume nearly all of that gain.  Dense expectation changes from
+`1.29746 s` to `1.26727 s` (`2.33%` faster), while its directly measured
+cache-plus-hybrid seam is `7.60%` slower than the direct full-fused seam.
+Compact expectation changes from `1.23086 s` to `1.17383 s` (`4.63%` faster),
+and its direct seam improves only `1.34%`.  Peak HBM changes by only `+28 MiB`
+and `-4 MiB`.  This misses the predeclared 10% materiality gate.  Do not run a
+selected-source `0 -> 50` trajectory, compose the branch, or promote a default
+unless a later topology removes the fixed overhead and first passes a new
+focused materiality gate.
+
+The first bounded/no-denominator grouped-BPref repair is also a review NO-GO
+before GPU execution.  Although it reuses the mature shared VDAM FFI and its
+focused helper tests pass, its advertised 1 GiB estimator omits wrapper-side
+stable image/CTF/noise buffers, generated rotation/replay operands, and native
+staging.  It also materializes the incoming bucket before flushing a previous
+near-cap group, so actual live memory can be the prior group plus the next
+bucket.  Fusion preserves logical source order but changes cross-bucket CUDA
+stream/atomic chronology; numerical equivalence must therefore use the
+repeat-controlled policy, never an exact-chronology claim.  Fusion-build time
+is missing from accounted EM time.  The active repair must establish a true
+wrapper-aware live-memory/preflush contract and production-stream tests before
+any H100 gate.
+
+The active performance hypothesis returns to execution topology: compare the
+mature supplied-map EM controller and persistent RELION CUDA lifecycle against
+InitialModel's remaining warm host/dispatch boundaries, and require a
+code-supported lever with at least a 10% end-to-end upper bound before another
+trajectory.  BPref-only fusion, selected-source scoring, ordinary callable
+caching, larger stable quanta, and small kernel-tail changes are already below
+that bar or rejected.
+
+### 2026-09-03 x-half 80M-to-160M capacity escalation preregistration
+
+The valid warm iteration-45 Nsight capture rules out resource caching alone as
+the next 10% lever.  Across 11 x-half callbacks, CUDA array allocation/free,
+stream creation/destruction, texture-object creation/destruction, and all but
+the one lazy `cudaMalloc` outlier total only about 5--6 ms.  The matched warm
+trajectory needs 6.297 s, or about 126 ms per iteration, to improve by 10%.
+Any native session experiment must therefore aggregate useful work or remove
+the surrounding dispatch topology; merely retaining textures, streams, or
+linear scratch is insufficient.
+
+The next bounded experiment instead escalates the already measured shared
+EM/VDAM x-half work-unit capacity.  Job `13260950` changed the row-pixel cap
+from 40M to 80M, reduced the frozen iteration-80 topology from five buckets to
+three, and improved median full `0 -> 80` wall from `310.949` to `287.444 s`
+(`8.18%`) with flat observed HBM.  The preregistered follow-up compares 80M
+control against 160M candidate in the same warmed A/B/B/A harness.  At the
+sealed iteration-80 layout, 160M reaches the existing upstream hypothesis cap
+and predicts two buckets (`266 + 94` particles) instead of three
+(`150 + 150 + 60`); larger row-pixel values cannot reduce that topology
+without separately changing the upstream safety cap.
+
+This is a performance-only rung.  Advance 160M to the repaired four-repeat
+science oracle only if the median incremental speedup is at least 2%, both
+paired speedups are at least 1%, the predicted three-to-two topology executes,
+no allocation/error path occurs, and peak HBM does not materially rise.  A 2%
+increment compounds with the sealed 40M-to-80M result to more than 10%; a miss
+stops row-pixel-cap escalation.  The historical two-repeat trajectory analyzer
+is retained diagnostically but cannot promote science or alter the frozen v3
+score.
+
+### 2026-08-31 late-trajectory one-iteration performance gate
+
+Validation scope is diagnostic/performance-only: it cannot promote science,
+change the frozen VDAM quality denominator, or change a production default.
+The frozen `vdam-gf46` run at RECOVAR commit `984637b7d` took `4388.59 s`
+versus native RELION's `480.65 s` (`9.13x`).  The gap becomes largest after
+the search changes from HEALPix order 2 (`36,864` fine rotations) to order 3
+(`294,912` fine rotations) while the gradient subset grows from 360 to 1000
+particles.  At iteration 180, RECOVAR's checkpoint-mtime interval is about
+`38.8 s`, while RELION reports `4.138 s` for expectation; at iteration 200
+the corresponding values are `25.9 s` and `3.468 s`.
+
+The candidate performance hypothesis is excessive host orchestration around
+the order-3 search: signature/bucket/chunk JAX and FFI calls, materializations,
+and synchronization boundaries may keep RECOVAR from matching RELION's
+persistent CUDA execution context.  This remains a hypothesis until the
+kernel/API trace measures invocation counts and GPU idle time.  In particular,
+the iteration-180 model's prior mode is 1 but its rot/tilt/psi widths are all
+zero; both engines therefore enumerate the full direction/psi grid.  The gap
+must not be attributed to RELION using a local angular cone.  The bounded discriminator starts native
+RELION and RECOVAR from the same hash-pinned `run_it180` optimiser/model/data/
+sampling state, executes exactly iteration 181 on the same H100, and records
+wall time, RECOVAR stage timers, and Nsight CUDA-kernel/API/NVTX summaries.
+The runner must fail closed on a missing gradient moment, mismatched schedule,
+dirty source, binary/hash drift, GPU UUID drift, or any output other than the
+single requested next iteration.  No 200-iteration trajectory or broad test
+suite is part of this gate.  The implementation target, if the trace supports
+the hypothesis, is a persistent macro-batched CUDA path that retains images,
+projector/cache state, candidate buffers, posterior reductions, and BPref
+accumulators across a pool of particles with one or a few launches rather than
+per-signature/per-chunk dispatch.
+
+### 2026-08-31 late-GF46 controller-topology discriminator
+
+The matched late-state profile rules out the shared fine-score CUDA primitive
+as the cause of the remaining runtime gap.  At GF46 iteration 150 the exact
+fine-diff2 kernel launches twice and consumes `27.44 ms`, while
+`local.run_local_em_exact` consumes `9.796 s`.  Two changing
+`jit_run_local_bucket_big_jit` programs compile for `5.114 s`, or `52.2%` of
+that local wall.  InitialModel's run-global radix-4 bucket unification pads
+captured layouts by `3.55x`--`16.0x`; exact per-size execution avoids that work
+but creates `67`--`120` changing shape/launch groups and is therefore not a
+candidate default.  The same trace observes `1,840` raw stack reads for `920`
+active particles because pass 1 and pass 2 load independently; mature EM's
+persistent raw-loader cache is not invoked by InitialModel.
+
+The active bounded hypothesis is that the mature supplied-map controller's
+physical-order macro-batching policy can remove most VDAM-specific shape churn
+without changing candidate arithmetic or BPref particle order.  The first
+candidate will extract one shared consecutive padded-batch planner, replace
+InitialModel's run-global maximum with chunk-local radix-2 maxima aligned to
+the native pool-of-three order, and reuse EM's persistent raw-image loader
+cache.  Admission requires identical candidate support, physical order, and
+best state at a fixed late checkpoint.  Floating-point accumulator differences
+may be nonzero only when they are bounded, repeatable, within the native-repeat
+envelope, and do not alter the trajectory basin; bitwise equality is not a
+requirement for a material speedup.  The candidate must also materially reduce
+unique XLA programs, padded rows, raw reads, and same-H100 steady-state wall
+time.  The existing CUDA scorers/posterior/Wavg kernels remain authoritative.
+No broad RECOVAR suite or long trajectory is part of this discriminator.
+
+Current continuation (2026-08-24): K=1 GUI-default qualification is running
+from immutable production head `1e499798c`.  Completed 200-iteration cases
+`vdam-gf01`--`vdam-gf11` all fail the unchanged `0.999` cross-engine FSC-AUC
+gate, first at iterations 31, 82, 68, 72, 33, 72, 57, 93, 35, 73, and 93.  Their
+minimum cross-engine FSC-AUC values are `0.66914`,
+`0.68797`, `0.55649`, `0.49680`, `0.66096`, `0.53190`, `0.57190`, `0.94109`,
+`0.04739`, `0.72508`, and `0.61528`.  Independent
+native-RELION triplets show that `vdam-gf02`, `vdam-gf03`, and `vdam-gf05`
+leave their sampled native-repeat envelopes; `vdam-gf03`, `vdam-gf04`, and
+`vdam-gf06`, `vdam-gf07`, `vdam-gf09`, and `vdam-gf11` also miss the `-0.002`
+GT-delta gate.  These are active parity
+failures, not tolerance candidates.  A bounded-memory change carried the
+20,000-particle severe-outlier/radial-noise `vdam-gf20` trajectory beyond its
+former iteration-110 OOM boundary through all 200 iterations at about 12.5 GB
+RSS.  Its frozen audit is a real parity failure: first failure at iteration 30
+(`0.99127` cross-engine FSC-AUC), minimum/final cross-engine FSC-AUC `0.15622`,
+and final RECOVAR-minus-RELION GT FSC-AUC `-0.01207`.  Runtime remains
+an independent failure: `vdam-gf06`, `vdam-gf09`, `vdam-gf10`, and
+`vdam-gf11` take `5.61x`, `6.51x`, `2.91x`, and `4.29x` RELION wall time,
+respectively, while the
+20,000-particle `vdam-gf20` case takes `7.07x`.  The earlier completed small
+cases span `2.36--2.88x`.
+
+### 2026-08-24 VDAM float32 fine-posterior default boundary
+
+The complete eight-repeat, 200-particle native ensemble invalidated the earlier
+two-repeat classification of 33 stable scoring defects: pooled RECOVAR
+posterior error is within the native repeat diameter in both halves, with
+`99.43%`/`99.62%` of coordinates inside the native envelope.  Two genuine
+stable-repeat outliers, `144@1127` and `179@115`, then closed projected
+references, score weights, priors, raw-particle preprocessing/translation,
+fine diff2, and the final float32 log-weight table to the live RECOVAR scores.
+
+The first BPref captures appeared to expose missing production wiring:
+InitialModel's local big-JIT diagnostic saved float64 reconstruction
+probabilities while the already qualified EM CUDA posterior remained behind a
+default-off switch.  Focused H100 jobs `12910179` and `12910180` passed 14/14
+tests and replayed the saved candidate scores through RELION's exact float32
+`expf`, Policy800 CUB sort/scan, divide, and significance path.  For both
+stable outliers, raw weights, sum weight, threshold, normalized posterior,
+reconstruction mask, and pruned reconstruction probabilities are bitwise
+identical to native RELION (2,720/2,720 and 512/512 values).  Padding the
+candidate tables to 118,784 slots does not change any native result, so
+candidate order/zero padding are excluded at this boundary.
+
+The bounded production change makes the source-matched float32 posterior the
+default for K=1 RELION x-half reconstruction while retaining the environment
+switch as an explicit `0` rollback.  A follow-up trace found that the
+big-JIT M-step was using the new float32 tensor, but its observational capture
+incorrectly rebuilt `reconstruction_probs` from the generic float64
+`debug_probs`.  Commit `3188c7e95` makes the capture rebuild the same exact
+tensor from its returned score boundary and fail closed if the mask differs.
+H100 unit job `12910923` passes 2/2 focused tests.  Fresh production captures
+`12911029` and `12911030` now retain float32 reconstruction probabilities in
+both halves.  Independent audits `12911086` and `12911087` pass 16/16 tests
+each and prove the live InitialModel probabilities and masks bitwise exact to
+the stable native outliers: 2,720/2,720 and 512/512 values, zero error.
+
+The posterior boundary is therefore closed in production, but the whole
+iteration-1 M-step is not: fresh-repeat raw accumulator relative-L2 remains
+about `8.91e-6`/`1.00e-5` for data and `2.04e-6`/`2.49e-6` for weights.  The
+accepted-posterior iteration-2 discriminator `12911356` completed `0:0` in
+63 seconds against the identical frozen native data/component capture used by
+the earlier control.  It leaves the causal raw-noise error effectively unchanged:
+`+1.60060e-5` becomes `+1.59974e-5` (only `0.054%` smaller).  The AA and XA
+signed errors remain `-3.87171e-6` and `-9.98757e-6`.  Its initially reported
+support-mass improvement was later superseded because that diagnostic mixed
+the generic posterior with the production mask; corrected job `12912049`
+measures the native-dtype reconstruction tensor and gives `+2.28470e-5`.
+Together with the direct operand decomposition, the unchanged AA/XA boundary
+confirms that the remaining iteration-2 cutoff/noise failure is propagated
+iteration-1 reference/BPref arithmetic rather than the accepted iteration-1
+posterior correction.  The next causal gate returns to that production
+accumulator/reference boundary; one
+representative 0..200 trajectory follows only after a bounded discriminator
+materially closes it, before promotion to the full 22-cell trajectory matrix.
+No generic RECOVAR suite is part of this gate.
+
+The source-faithful fused residual/scatter arm was then rebased onto the exact
+posterior head in an isolated worktree (`a1c05c69f`).  Build/provenance job
+`12911670` completed `0:0`, and focused H100 job `12911766` passed all five
+selected source-order, scatter-boundary, routing, and posterior-interaction
+tests.  Matched M-step job `12911801` rejects the combination.  Against the
+same native accumulator capture, the fused and ordinary exact-posterior
+accumulators are effectively indistinguishable: half-1 data relative-L2 is
+`9.24987e-6` versus `9.24949e-6`, and weight is `2.30800e-6` versus
+`2.30983e-6`.  The fused reconstructed reference is worse (`2.51023e-6`
+versus `2.22717e-6`).  Frozen-native cutoff reruns `12912049` and `12912050`
+likewise reduce the shell-15 raw-noise signed error by only `1.75107e-7`, from
+`+1.60217e-5` to `+1.58466e-5` (`1.09%`).  This is not material closure, so
+the fused arm is rejected without a 200-iteration trajectory and remains
+unpushed.
+
+Those reruns also corrected an observational gap in the cutoff harness.  The
+score dump previously stored only the generic float64 posterior plus the
+production reconstruction mask, so its reported support mass did not measure
+the float32 M-step tensor.  Commit `0065204d2` records
+`reconstruction_probs` at native dtype and makes the analyzer prefer it.
+Focused Slurm job `12911970` passes 4/4 tests; Ruff on the touched files,
+py_compile, and diff checks pass.  Direct AA/XA/noise terms were already
+production values and are unchanged by this diagnostic correction.
+
+Commit `e17ca882e` then makes the boundary harness's native thread count
+explicit and records it in provenance.  Focused H100 guard job `12912220`
+passes.  Independent full-schedule `--j 1` iteration-1 jobs `12912266` and
+`12912267` both complete `0:0` in 38--40 seconds, but one host thread does not
+make the native GPU accumulator deterministic.  Native repeat relative-L2 is
+`8.91445e-6`/`8.32194e-6` for data, `2.02839e-6`/`1.86395e-6` for weights,
+and `1.33450e-6` for the reconstructed reference.  The corresponding RECOVAR
+repeat distances are only `1.91104e-7`/`2.13117e-7`,
+`1.05739e-7`/`1.14044e-7`, and `5.61788e-7`.  Each paired cross-engine distance
+is `0.77--1.36x` its native-repeat distance.  Host thread count is therefore
+rejected as the missing mechanism: the remaining iteration-1 BPref distance
+is already at the device-side native atomic/reduction-order envelope, even
+under `--j 1`.  Exact equality to one arbitrary native accumulator realization
+is not a valid point gate; the next causal gate must test whether matching the
+native repeat distribution, rather than one draw, is sufficient to preserve
+the iteration-2 cutoff and long trajectory.
+
+The source-faithful fused arm also fails that repeat-distribution gate.  After
+qualified rebuild `12912585`, fresh full-schedule repeat `12912674` completes
+`0:0` in 52 seconds and is paired with the earlier fused capture `12911801`.
+Native repeat relative-L2 is `9.71544e-6`/`9.82039e-6` for data and
+`2.45064e-6`/`2.50817e-6` for weights, whereas fused RECOVAR remains much more
+deterministic at `1.72101e-7`/`1.52556e-7` and
+`7.96698e-8`/`7.88732e-8`.  Reconstructed-reference repeat distances are
+`1.92968e-6` native and `6.36606e-7` fused.  Its cross-engine distances remain
+`0.79--1.30x` one native-repeat distance, but fusion does not reproduce
+RELION's device-order distribution.  The arm remains rejected without a
+200-iteration run.  The next bounded implementation gate is the still-unmatched
+native accumulator storage topology: RELION atomically updates three disjoint
+real, imaginary, and weight arrays, while the candidate's complex accumulator
+interleaves real and imaginary values in one `float2` allocation.
+
+That storage-layout gate is also null.  Isolated commit `975500ffc` splits the
+fused accumulator into RELION-shaped real, imaginary, and weight allocations,
+aliases all three through the FFI, and recombines the data losslessly after the
+kernel.  H100 build `12913028` completes `0:0`; focused job `12913108` passes
+4/4 source, numerical-interior, native-y-boundary, and routing tests.  Paired
+full-schedule jobs `12913115`/`12913122` both complete `0:0`.  Candidate repeat
+relative-L2 remains only `1.52327e-7`/`1.87188e-7` for data and
+`8.24795e-8`/`8.99974e-8` for weights, versus native
+`9.33658e-6`/`1.07903e-5` and `2.43710e-6`/`2.12937e-6`.  Cross-engine
+distances remain `0.82--1.15x` one native-repeat distance.  Disjoint storage
+does not reproduce native atomic-order variance, so the commit remains
+unpushed and receives no trajectory.  The next implementation boundary is the
+native kernel's resource/occupancy topology (nine shared Euler values, inline
+projection, and exact compiled control flow), not host threads, source
+statement order, fused atomics, particle launch order, or output allocation
+layout.
+
+Source statement order alone is now rejected as sufficient.  Isolated commit
+`99681a33b` completed all 200 frozen `vdam-gf01` iterations (Slurm
+`12879549_1`): first strict failure is iteration 73, minimum/final cross-engine
+FSC-AUC is `0.82343`/`0.98281`, and runtime is `3.94x` RELION.  Its GT-quality
+gate remains within tolerance (minimum delta `-0.00153`), but hard-state
+divergence begins at iteration 24 and reaches all 1000 particles by iteration
+200.
+
+The active numerical hypothesis is the remaining kernel boundary: RELION
+forms the VDAM residual and scatters BPref in the same per-particle
+`cuda_kernel_backproject3D_SGD<DATA3D=false>` launch.  Isolated commit
+`45f794c62` fuses those operations, retains VDAM's native FFTW Nyquist and
+negative-y/x=0 semantics rather than inheriting the generic EM scatter's
+boundary convention, and removes the complex residual intermediate.  Focused
+CUDA build `12883311` and source/interior/native-boundary GPU gates `12883340`
+pass.  Executable inspection stopped the first full submission `12883623_1`
+at iteration 73 because its sparse buckets had never selected the fused
+target; those maps are quarantined as a source-order repeat.  Follow-up commit
+`f98530a42` carries raw VDAM operands through the established physical-particle
+sparse packing boundary.  Bounded job `12885370_1` completes with exact
+iteration-1 particle state and three compiled fused-target executables; the
+discriminating full frozen trajectory is `12885473_1`.  Executable inspection
+confirms three compiled `cuda_relion_vdam_mstep_fused_x_half` targets.  Its
+partial audit remains essentially exact through the old iteration-31 failure
+boundary (cross-engine FSC-AUC `0.999999999878`) with zero divergent particle
+states at iterations 1, 8, 16, 20, 24, and 31.  The complete audit rejects
+fusion alone: the first strict map failure is iteration 73 (`0.99878735`, GT
+delta `-0.00062945`), the minimum cross-engine FSC-AUC is `0.82180983` at
+iteration 127, and a separate minimum GT delta of `-0.00236361` at iteration
+142 also fails.  Final cross-engine FSC-AUC is `0.979021996`; RECOVAR takes
+`2922.56` seconds versus RELION's `794.48` seconds (`3.68x`).  A second
+isolated worktree tests
+the remaining shared boundary by projecting the reference inline in the same
+per-particle CUDA launch.  Isolated commit `c80a1b754` passes its CUDA build
+(`12887299`), focused zero-projector GPU equivalence gate (`12887554`), and
+bounded iteration-1 diagnostic (`12887823`: exact particle state,
+cross-engine FSC-AUC `0.999999999959`, GT delta `-1.50e-8`).  Its full frozen
+gf01 discriminator is Slurm `12887981_1`.  The executable cache contains the
+inline-projector target, and its complete 0--200 audit rejects this variant.
+Its first strict failure is iteration 31 (cross-engine FSC-AUC `0.99756656`,
+GT delta `-0.00068389`), materially earlier than the fused preprojected
+control's iteration-73 failure.  Minimum/final cross-engine FSC-AUC is
+`0.66418465`/`0.85468779`; minimum GT delta is `-0.00496323`; hard-state
+divergence begins at iteration 19.  RECOVAR takes `2931.63` seconds versus
+RELION's `810.62` seconds (`3.62x`).  Inline projection therefore worsens both
+trajectory stability and quality without resolving runtime.  The
+experimental commits remain unpushed.
+
+The authoritative full-schedule boundary is the sealed job `12869234`, not a
+continuation.  It used RELION's true 200-iteration schedule and exact
+iteration-32 optimiser plus the pinned `0.322510` perturbation.  Pose and
+translation assignments match for all 3,000 particles through iteration 32;
+iteration 33 first differs only for `1003@particles.128.mrcs` (pose error
+`3.75` degrees, translation error `3.00` Angstrom, Pmax absolute error about
+`2e-5`).  Its native and candidate posterior supports are exactly the same
+298 tuples.  The native top-pair log odds are `+0.0004577651`, while RECOVAR
+reverses their order at `-0.0001525879` (error `-0.000610353`).  Replaying
+only the live noise-derived score weights moves that pair by
+`+0.00048828125`; replaying only the live reference moves it by
+`+0.0001220703125`; the live image contributes exactly zero to the pair.
+Incoming iteration-32 `sigma2_noise` relative L2 is `1.994818e-5`, and the
+top-pair raw-score residual is `-0.0005912781`.  Noise accumulation is
+therefore the dominant causal defect, with a smaller inherited reference-map
+contribution.  This also explains why fused scatter and inline projection do
+not close the trajectory.
+
+The earliest deterministic precursor is already visible at iteration 2,
+shell 15: native raw numerator `0.124609` versus candidate
+`0.1246245131`, a `+1.55e-5` error, while the candidate sum-weight ratio is
+`0.999999589`.  Independent native repeat `12890438` follows the same true
+200-iteration schedule.  Audit `12890696` confirms all 3,000 poses and
+translations are identical between the two native runs through iterations 1
+and 2.  Their iteration-2 shell-15 raw totals are identical at the native
+capture's printed precision; across per-particle direct-residual rows the
+relative L2 is `4.80e-7`, but signed shell-15 differences cancel to less than
+`1.1e-19`.  The RECOVAR numerator error is consequently outside the observed
+native-repeat floor.  A source-order Wavg experiment (`4a7aa71f`, unpushed)
+passes its two focused ordering tests (`12891138`), but the paired iteration-2
+jobs reject it as a repair: shell-15 raw numerator is `0.1246246435` in
+`12891483`, versus `0.1246247254` for the same-head control `12891607` and
+`0.124609` natively.  It removes only `8.20e-8`, about `0.52%` of the error,
+so no 200-iteration trajectory was spent on it.
+
+The causal search has moved one boundary earlier.  Native StoreWavg particle
+`1140` already has a fine-posterior relative L2 error of `4.44e-7` at
+iteration 1.  Focused operand audit `12891847` covers all 480 fine candidates
+and 596 score pixels.  Candidate rotations, projected references, and score
+weights are bit-exact; native raw `diff2` is reproduced exactly by both the
+native-shift and fused-translation replays.  Replacing only the image operand
+reproduces the live centered score residual (RMS `3.10e-5`, maximum
+`1.25e-4`), while reference-only and weight-only replays are zero.  The
+iteration-1 target is therefore the corrected particle-image formation before
+fine scoring, not Wavg particle reduction or another projector/scatter
+composition.  A diagnostic-only capture of that operand is the next bounded
+experiment.
+
+That bounded capture is now complete.  Diagnostic commit `5df279bdb` passes
+the focused dump and big-JIT plumbing tests, then true-schedule iteration-1
+job `12892595` records the pre-correction FFT, pixel correction, and corrected
+score image for particle `1140`.  GPU audit `12892638` finds the live internal
+product bit-exact at all 596 score pixels, but only 486/596 final corrected
+pixels match native RELION (relative L2 `2.58e-8`, maximum `1.22e-4`).
+Reconstructing RELION's XFLOAT correction from its captured RFLOAT CTF, with
+the established RECOVAR sign conversion, leaves 114 one-ULP differences
+(relative L2 `3.86e-8`, maximum `9.54e-7`).  The pre-correction and correction
+errors partially cancel, so changing the reciprocal path alone is not yet an
+accepted fix.
+
+The same sealed native artifact already contains the missing uncorrected
+post-optics Fourier image, so no rebuilt RELION executable is required.
+Direct comparison finds 115/596 pre-correction score pixels unequal
+(relative L2 `2.61e-8`, maximum `1.53e-5`).  Audit `12893369` makes the
+upstream boundary exact: normalized/shifted real pixels match 16,384/16,384;
+native pre- and post-optics Fourier arrays match 760/760; and applying
+RECOVAR's FFT to the captured native masked real image matches native
+760/760.  The current deterministic block-first soft mask instead matches
+only 2,454/16,384 masked pixels (relative L2 `1.21e-9`), with its background
+mean two float32 ULP below native; that alone becomes a `2.92e-8` Fourier
+error.  The first causal operation is therefore the CUDA soft-mask background
+reduction.  Private build attempts `12893019`, `12893150`, `12893173`,
+`12893203`, and `12893255` all stopped during CMake dependency discovery and
+produced no executable or scientific evidence; that branch is abandoned.
+Failed setup jobs `12893490`, `12893600`, `12893669`, `12893744`, and
+`12894645` produced no science.  Valid same-H100 panels `12893945` and
+`12894797`, with audits `12894421`, `12894863`, and `12895553`, establish the
+repeat boundary.  For exact iteration-1 normalized input, stock RELION spans
+15 float32 ULP in the soft-mask background.  The deterministic block-first
+value is inside that range and one ULP from its nearest sampled value.  Across
+all 480 candidate scores, RECOVAR's nearest centered native RMS is `1.5012e-5`
+versus native/native maximum `2.7816e-5`; 296 candidates are inside the
+coordinatewise native envelope and 184 remain outside.  Native atomics add
+schedule dependence without guaranteeing a closer trajectory, so no
+production topology change is accepted.  The next discriminator is the
+aggregate iteration-2 noise update under deterministic-lane and native-atomic
+modes.
+
+The aggregate discriminator rejects those modes.  Isolated commit
+`f35844a9a` passes 4/4 focused routing tests; jobs `12896342`--`12896345`
+measure shell-15 raw-numerator errors `+1.5602497e-5` (block-first),
+`+1.5520540e-5` (native-lane), and `+1.5639750e-5` / `+1.5539167e-5`
+(native-atomic repeats).  The best change is only `8.20e-8` or 0.53 percent,
+so no 200-iteration candidate is warranted.  Controlled same-GPU gf01 repeat
+panel `12880351` independently first fails candidate-repeat/native-repeat
+equivalence at iteration 34; its worst repeat-floor margin is `-0.0452569`,
+and the iteration-200 candidate/native repeat floors are `0.8348111` and
+`0.8753012`.  RECOVAR repeat instability is therefore materially larger than
+stock RELION's sampled repeat spread.
+
+The 200-particle production big-JIT cutoff audit is complete for iteration 1
+(Slurm `12897360`, commit `f343c5bb3`).  At shell 19, RECOVAR's direct
+residual sums to `0.1293679055` versus native `0.1293675770`, only
+`+3.28e-7`.  Its `AA` is lower for all 200 particles (sum error `-5.77e-8`),
+while `XA` and inferred image-power sum errors are `+3.05e-7` and `+9.96e-7`;
+those terms substantially cancel in the coupled direct residual.  Retained
+support mass has relative L2 `2.90e-7`.  The known `+1.55e-5` iteration-2
+shell-15 aggregate defect is therefore not already present at comparable
+scale in iteration 1.  Job `12897360`
+captured all 200 production dumps before a post-analysis module-invocation
+setup error; the preserved artifacts analyzed successfully, and `d8314fb27`
+repairs the runner without changing science.
+
+The exact iteration-2 panel `12897664` completes cleanly and reproduces the
+material shell-15 defect: direct-residual sum error is `+1.6006e-5`.  Its
+`AA` error is `-3.8716e-6` and is negative for 197/200 particles; its `XA`
+error is `-9.9872e-6`.  Because the coupled residual is `AA - 2*XA`, the
+cross term contributes about `+1.9974e-5` and dominates, partly offset by
+`AA`.  Inferred image-power error is only `-8.64e-8`.  Per-particle direct
+error correlates `-0.9979` with `XA` error, while the one `2.11e-5`
+support-mass outlier contributes only `-1.10e-7` direct error.  The first
+material aggregate boundary is therefore the posterior-weighted
+image/reference cross term, with a smaller systematic reference-power
+deficit—not image-power formation, soft masking, or total support mass.  The
+next bounded experiment replays native versus candidate posteriors against
+the same captured operands for the largest `XA` contributors before changing
+production arithmetic.
+
+The replay closes that question.  Serial full-schedule native panel
+`12899028` captures the eight largest contributors without the shared-prefix
+race and reproduces every iteration-1/2 hard particle state.  Candidate versus
+native posterior changes on identical native operands sum to only `4.65e-11`
+for `XA` and `2.58e-12` for `AA`.  Substituting the production RECOVAR
+reference projection accounts for `-2.2125802e-6` and `-5.6053283e-7`, while
+the remaining replay residuals are `-3.63e-13` and `-4.00e-15`.  The
+iteration-2 cutoff error is therefore propagated reference-state error.  The
+active boundary moves back to the iteration-1 BPref/M-step accumulator, not
+posterior formation or Wavg image/CTF/translation/reduction arithmetic.
+
+The full iteration-1 M-step pair (`12901975`) makes that boundary quantitative.
+Incoming `Igrad1` for both pseudo-halfsets and `Igrad2` are bitwise exact, while
+the first nonexact state is the raw BPref accumulator: data relative L2 is
+`9.0248e-6`/`9.8267e-6` and weight relative L2 is
+`1.9306e-6`/`1.8982e-6`.  Independent native repeat `12902211` spans comparable
+data differences (`8.406e-6`/`1.071e-5`), so magnitude alone cannot identify a
+stable candidate defect.  Complete candidate contribution captures
+`12904449` and `12904491` contain all `20,856`/`27,264` active rows.  A native
+top-eight StoreWavg operand panel (`12906791`, `12906964`, and
+`12907034`--`12907045`) has exact support for every particle; substituting the
+candidate posterior into native image/CTF/translation/projector operands
+closes data rows to `7.52e-8`--`1.24e-7` and weight rows to
+`6.74e-8`--`9.69e-8`.  Fused StoreWavg arithmetic is therefore excluded for
+those sources.
+
+Native job `12907252` extends that panel to every one of the 200 selected
+particles in one three-second, one-thread, true-200-iteration-schedule capture.
+It records exactly 200 posterior tables, 200 rotation/translation/CTF bundles,
+and 200 uniquely named accelerated unmasked Fourier images; the comma-truncated
+predecessor `12907201` is rejected.  Complete aggregate replay `12907855`
+passes 22/22 focused tests and covers all 200 identities with no incomplete
+capture, no support mismatch, and no posterior argmax mismatch.  The native
+versus candidate pre-scatter data error is `1.06453e-5`/`1.02516e-5`; using the
+candidate posterior with otherwise native operands reduces it to
+`9.75268e-8`/`9.76784e-8`.  Through the same RELION-double scatter, data closes
+from `9.08620e-6`/`9.00707e-6` to `7.97858e-8`/`8.31516e-8`, and weight closes
+to `1.47e-8`/`1.52e-8`.  This excludes residual formation and scatter as the
+source of the panel gap and localizes it to posterior history.  Because this
+panel and the saved production accumulator are different native repeats, it
+does not yet distinguish a stable RECOVAR posterior error from native
+accelerator variability.  The next exact discriminator is one uninterrupted
+native iteration-1 run that captures both all 200 StoreWavg rows and its own
+two raw BPref accumulators; the runner now has a fail-closed combined-capture
+mode for that experiment.
+
+That matched capture is complete.  Native job `12908104` records all 200
+particle operands and both raw pseudo-halfset accumulators in one uninterrupted
+six-second iteration-1 run.  Aggregate job `12908179` then uses the
+corresponding same-run candidate accumulator for each half and passes 23/23
+focused tests.  The posterior-induced shared-scatter gap and the actual
+production-CUDA gap have data cosines `0.98359`/`0.97997` and weight cosines
+`0.98292`/`0.97525`.  Projection onto the production gap accounts for
+`96.66%`/`96.17%` of data and `96.33%`/`94.91%` of weight; the orthogonal
+component is `17.73%`/`19.54%` and `18.03%`/`21.52%`, respectively.  Posterior
+history is therefore the dominant causal component of the raw accumulator
+error.  The residual is now explicitly bounded to shared-double versus
+production-CUDA scatter topology.  Before changing scoring arithmetic, the
+next cheapest experiment compares the complete candidate posterior against
+both already captured 200-particle native repeats to determine whether it is a
+stable out-of-repeat error or part of RELION's accelerated repeat spread.
+
+That repeat comparison is complete in clean CPU-only Slurm job `12908333`
+(4/4 focused tests).  All 200 identities close with zero support or argmax
+mismatch.  Pooled candidate posterior error is `1.51727e-5`/`1.38283e-5`,
+versus native-repeat error `1.47685e-5`/`1.72423e-5`; 57/100 and 67/100
+candidate particles lie within their corresponding native-repeat distance.
+Magnitude alone is therefore not a stable out-of-repeat discriminator.  The
+residual direction is different: candidate-versus-native-A has cosine only
+`0.47655`/`0.48200` with the native-B-versus-native-A residual and an
+orthogonal component of `90.32%`/`70.27%` of the native-repeat norm.  More
+importantly, 23/100 and 14/100 particles are bitwise identical across the two
+native posterior captures but differ in RECOVAR.  The active bounded analysis
+then compared pre-threshold normalized raw weights and centered log weights for
+the same complete panel.  That split is decisive: raw-weight support is exact
+for all 200 particles, while pooled pre-threshold errors reproduce the final
+posterior errors (`1.51691e-5`/`1.38295e-5`).  Centered log-weight RMS is
+`3.20382e-5`/`3.22615e-5`; 20/100 and 13/100 particles have exactly identical
+normalized raw weights in both native repeats but nonexact candidate weights.
+Thus exponentiation, normalization, and significance truncation are excluded
+for 33 stable identities: their difference already exists in centered scoring
+log weights.  The next bounded experiment captures detailed scoring operands
+for the largest stable identities (`138`, `82`, `171`, and `125`, with matched
+controls) and replays image, reference, CTF/noise, translation, and reduction
+one at a time.  No production arithmetic change is justified before that
+operand split.
+
+The four-source operand panel and broader repeat calibration supersede that
+two-repeat inference.  Provenance typo job `12908715` stopped before science;
+corrected native panel `12908730` and GPU audits `12908752`--`12908755`,
+`12908853`--`12908856`, and `12909056`--`12909059` all complete.  Across parts
+138, 82, 171, and 125, projected references, score weights, and
+orientation/translation log priors are exact.  Candidate likelihood-score RMS
+is `1.54e-5`--`3.04e-5`.  Raw-particle replay `12909124`/`12909176` closes the
+part-82 live centered score exactly after normalization, block-first soft
+masking, FFT, correction, translation, and the fused scorer; only a constant
+high-resolution offset remains.  Thus the saved preweighted debug image was
+not an exact fused-score input and its apparent topology component is rejected.
+
+Eight independent native part-82 captures (`12909205`) show why two repeats
+were insufficient.  Native top-pair log odds span `6.109e-5`; RECOVAR is inside
+that range and only `2.999e-8` from a sampled native value.  Its nearest
+centered-score RMS is `2.953e-6`, versus native/native maximum `3.217e-5`, and
+85.4% of coordinates lie inside the native envelope.  The deterministic
+block-first background is one of the observed native values; native backgrounds
+span four float32 ULP.
+
+The complete eight-repeat, 200-particle, one-thread native ensemble
+(`12909370`) and audit `12909383` now provide the authoritative iteration-1
+calibration.  Pooled candidate posterior error is inside the native pair range
+for both halves: nearest/max ratios `0.7459`/`0.7566`, with 99.43%/99.62% of
+posterior coordinates inside the native envelope and 94/100 and 95/100
+particles individually inside the native maximum.  Centered log-score pooled
+nearest/max is `1.0118`/`0.9489`; the half-1 excess is only 1.18%, while 93/100
+and 92/100 particles pass individually.  Raw support is exact for every
+particle.  Therefore no global iteration-1 scoring change is justified.  The
+active stable outliers are native part 144/original 1127 and native part
+179/original 115 (zero sampled native score spread but nonzero candidate
+error), followed by parts 2 and 3.  Detailed raw-particle replays for those
+outliers are the next bounded discriminator.  Partial eight-thread panel
+`12909277` is rejected because its marker raced 32 asynchronous dumps; it
+contains only 168/200 particles and is excluded.
+
+Capture submissions `12889423` and `12889446` remain rejected by fail-closed
+provenance/native-state gates and provide no parity evidence.  Fresh paired
+full-schedule job `12889537_1` follows a different native trajectory by
+iteration 33 (its target posterior has 1,280 rather than 298 candidates), so
+it is retained only as an independent 0--200 repeat, not as causal evidence
+for the sealed particle-1003 boundary.
+
+In parallel, the immutable 22-case
+matrix, severe-memory case, and controlled same-GPU repeat panel continue as
+evidence collection; generic RECOVAR full/long tests are deliberately outside
+this EM-only validation scope.
+
+The native InitialModel/VDAM implementation checkpoint is
+`5a4c57839e50a46e47b2d25efb8d55744db04871`, on top of PR #158 head
+`b10412ca`.  Iteration-0 bootstrap state is exact, and identity-aligned
+iteration-1 particle pose/translation state is effectively exact, but the
+frozen tiny trajectory still misses the map gates (iteration-1 cross FSC-AUC
+`0.8274473`, GT delta `-0.0140749`).
+
+The particle-0 projected-reference hypothesis is now rejected as the dominant
+iteration-1 cause.  Against the current native RELION StoreWavg project panel,
+VDAM's reference has the expected `-N^2` frame/normalization conversion.  The
+converted reference differs by relative L2 `1.0028e-3`, but substituting the
+native reference changes the actual gradient numerator by only `5.6474e-5`.
+Replaying RELION's sequential translation accumulation with the current VDAM
+reference changes that numerator by only `7.5372e-8`.  The previously isolated
+scatter boundary remains machine precision (`4.78e-15` data, `2.87e-15`
+weight).  Therefore the next measurable hypothesis is that the first material
+iteration-1 divergence is in aggregate subset/pseudo-halfset routing or the
+VDAM moment/reconstruction update, not the shared fine posterior, image/CTF
+operands, projected-reference subtraction, or scatter arithmetic.
+
+The apparent subset-routing mismatch was a row-coordinate mistake and is
+rejected.  RELION writes its data STAR in lexicographic Experiment order, so
+RELION output row `0..199` is not input particle-table row `0..199`.
+Comparing stable `_rlnImageName` identities proves that the existing RECOVAR
+and RELION iteration-1 subsets are exactly equal.  A table-order
+counterfactual (Slurm job `12669580`, stopped after the result was known)
+makes 79 identities differ in each direction and moves iteration-1
+cross-engine FSC-AUC only from `0.8274473` to `0.8313125`, while worsening the
+GT delta slightly to about `-0.0143244`.  The lexicographic Experiment-order
+implementation is retained.  The frozen trajectory auditor now compares
+iteration-1 subsets by `_rlnImageName`, preventing either input-row/output-row
+coordinate system from passing accidentally.  The next measurable boundary
+is pseudo-halfset membership after the already exact particle-identity,
+posterior/scatter, and bootstrap controls.
+
+The apparent pseudo-halfset failure was another unsupported inference and is
+rejected.  A position-parity counterfactual made the nominal counts `100/100`,
+but direct native-vs-RECOVAR BPref errors remained essentially unchanged and
+the frozen trajectory did not improve.  Slurm job `12669867` produced
+iteration-1 cross-engine FSC-AUC `0.8247451` and GT delta `-0.0137202`; the
+minimum through iteration 8 was `0.6359682`.  The production global-particle
+parity routing is restored.
+
+The first direct aggregate boundary remains BPref.  Against native RELION's
+captured iteration-1 arrays, production RECOVAR half-0/half-1 BPref data have
+relative L2 `1.33211`/`1.33062` and cosine `0.10345`/`0.09585`; weights have
+relative L2 `0.78793`/`0.83375`.  The position-parity counterfactual changes
+these only marginally.  Downstream replay is not the cause: feeding RELION's
+native post-`applyMomenta` data, moment-noise power, reference, and exact
+parameters into the shared binding reproduces native `reconstructGrad` at
+`7.10e-8` relative L2.
+
+The particle-0 StoreWavg boundary is now closed with the actual unmasked
+reconstruction image.  A first replay using RELION's masked scoring image was
+invalid and produced numerator cosine `0.48068`; the analyzer now rejects that
+operand by construction.  RELION's accelerated path does not expose the
+unmasked Fourier image in the shared binary, so Slurm job `12671650` captured
+the same pre-StoreWavg operand through the already compiled CPU hook.  Using
+that image with the authoritative GPU posterior/projector gives numerator
+relative L2 `0.0077293`, cosine `0.9999703`, and denominator relative L2
+`0.0074343`, cosine `0.9999725` (analysis job `12671684`).  This rejects
+per-particle image, posterior, CTF/noise, residual subtraction, and scatter
+arithmetic as the dominant particle-0 cause.
+
+The stable-identity StoreWavg panel also agrees.  For input rows `0`, `100`,
+`277`, and `999` (native part IDs `0`, `4`, `199`, and `3`), numerator relative
+L2 is `0.00774`, `0.00701`, `0.00449`, and `0.00987`, with cosines from
+`0.999955` to `0.999992`; denominator results are comparable.  Slurm jobs
+`12671889`--`12671892` used RECOVAR contribution captures from jobs `12671818`
+and `12671819` and unmasked-image capture `12671784`.
+
+That panel accidentally sampled only identities for which input-row parity and
+RELION internal `part_id` parity agree.  Directly decoding RELION's frozen
+iteration-1 `sorted_idx` and mapping through lexicographic Experiment order
+shows `101/200` selected identities have different parities.  RELION source is
+explicit that StoreWavg routes by internal `part_id % 2`; current RECOVAR routes
+by original input-row parity.  The earlier position-parity trajectory is still
+valid negative whole-run evidence, but it cannot override this demonstrated
+first-boundary semantic mismatch while other aggregate defects remain.  The
+active bounded experiment is therefore one deliberately mismatched identity:
+native part ID `2` / input row `99`.  Capture its unmasked StoreWavg rows and
+show both their arithmetic agreement and their opposite current half routing
+before restoring Experiment-position parity as an independently tested fix.
+
+That mismatched-identity experiment passed its arithmetic controls and failed
+the routing control exactly as predicted.  Native part ID `2` / input row `99`
+has numerator relative L2 `0.003556`, cosine `0.999994`, and denominator
+relative L2 `0.001540`, cosine `0.999999` (Slurm job `12672040`), but the
+production capture records it in RECOVAR half 2 while RELION routes even
+internal part ID `2` to half 1.  RECOVAR now carries Experiment-position parity
+alongside the lexicographic row mapping through shuffle, prefix selection, and
+optics stable-sort.  Unit coverage pins the distinction.  The earlier
+position-parity trajectory (`12669867`) remains evidence that this necessary
+semantic correction does not by itself close aggregate or map parity; after
+the focused validation ladder, the next boundary is native-vs-RECOVAR partial
+accumulator sums in identical Experiment particle order.
+
+A direct replay rejects missing x=0 Hermitian enforcement as the aggregate
+cause.  Applying the existing shared RELION half-volume Hermitian helper to the
+corrected-position RECOVAR accumulator worsens relative error and leaves data
+cosines at only `0.1441`/`0.1136` and weight cosines at `0.6769`/`0.6530`.
+Exhaustive simple axis swaps, flips, conjugation, and circular y/z shifts also
+fail (best weight cosine below `0.717`; data below `0.17`).  No production
+Hermitian or layout change is justified by that evidence.
+
+The one-particle post-scatter boundary is also closed.  Slurm job `12672415`
+moved the already matched particle-99/native-part-ID-2 rows through RELION's
+CPU BackProjector in the same native layout.  Data relative L2 is `0.003511`
+with cosine `0.9999940`; weight relative L2 is `0.001431` with cosine
+`0.9999992`.  The scatter primitive and its native BPref layout are therefore
+not the aggregate cause.
+
+That closure exposed a separate adapter boundary.  The shared RELION x-half
+M-step returns a public full cube by expanding native `(z,y,xhalf)` storage and
+transposing it to RECOVAR `(x,y,z)`.  InitialModel then feeds that public cube
+to the generic centered-slab converter without undoing the transpose and also
+applies a projector-frame z flip.  A synthetic valid-Hermitian round trip has
+relative L2 `1.3923` and cosine `0.02118`, which is the same signature as the
+full aggregate mismatch.  Transposing the public cube back to `(z,y,x)` before
+extracting the positive-x slab is exact (`0.0` relative L2).  The active
+bounded fix is an explicit RELION-x-half-public-to-BPref inverse in the VDAM
+adapter, with a lossless round-trip unit test; the unrelated generic dense
+converter remains unchanged.  That fix is now implemented at `5a4c5783` and
+the focused layout/adapter tests are exact.  The frozen `vdam-08` autonomous
+trajectory (source EM case `k1-25`) passes unchanged gates in Slurm job
+`12672666`: cross-engine FSC-AUC is `0.99999964`, `0.99999931`, `0.99918555`,
+and `0.99900277` at iterations 1/2/4/8, respectively.  The worst RECOVAR-minus-
+RELION GT FSC-AUC is `-8.23e-6`, compared with the fixed `-0.002` gate.  This
+is the first accepted end-to-end VDAM checkpoint.  The active validation is
+the frozen fixed-12 matrix, using the same per-case runner and at most four
+simultaneous one-GPU Slurm tasks.
+
+The first fixed-12 matrix round is Slurm array `12672742`.  The early cases
+confirm the intended late-trajectory sensitivity: `vdam-03`, `vdam-04`,
+`vdam-05`, and `vdam-07` pass; `vdam-01`, `vdam-02`, `vdam-06`, and `vdam-10`
+miss only the fixed cross-engine FSC-AUC gate while retaining acceptable GT
+quality.  `vdam-09` did not reach an audit because its high-resolution local
+E-step exhausted the 40 GB GPU at the default 500-image batch.  `vdam-11`
+completed and misses only the fixed cross-engine gate (minimum FSC-AUC
+`0.99691967`) while retaining acceptable GT quality (minimum delta
+`-0.00018535`).  `vdam-12` independently exhausted the same 40 GB GPU boundary
+at the default batch.  Batch 200 closes the resource boundary for `vdam-09`,
+which then completes with minimum cross-engine FSC-AUC `0.99734426` and no
+negative GT delta.  For `vdam-12`, batch 200 reduces the failed allocation from
+`37.54` GiB to `29.33` GiB but still exhausts the device once resident buffers
+are included.  Batch 100 still requests `29.27` GiB, showing that the fused
+sparse-M-step tensor rather than the outer image batch controls this boundary.
+The runner records its resource/execution overrides; the matrix pins `vdam-09`
+to batch 200 and routes `vdam-12` through the shared exact deferred packed-
+M-step fallback by setting the sparse big-JIT tensor cap to zero.  The first
+deferred attempt reaches a later batch-dependent shifted-reconstruction
+tile and exhausts memory at 6.40 GiB with batch 100.  Pinning only `vdam-12`
+to batch 25 while retaining the deferred path completes in Slurm job
+`12673810` and passes every unchanged checkpoint: minimum cross-engine FSC-AUC
+`0.99931708`, minimum GT delta `-1.60e-7`.  The complete SHA-bound scorecard is
+now 6/12 passing with 12/12 evaluated.  Passing cases are `vdam-03`,
+`vdam-04`, `vdam-05`, `vdam-07`, `vdam-08`, and `vdam-12`; all six failures
+retain acceptable GT quality and fail only the strict cross-engine FSC-AUC
+gate.  Evidence is recorded in
+`docs/math/vdam_relion_parity_evidence_ledger_20260820_layoutfix.json`.
+
+The first remaining autonomous divergence is now identity-localized rather
+than inferred from maps.  The reusable STAR-to-STAR diagnostic
+`scripts/audit_vdam_particle_state_trajectory.py` aligns every row by exact
+`rlnImageName` and computes geodesic pose error, translation error, and
+absolute Pmax error without correlation or an acceptance gate.  For
+`vdam-01`, iteration 1 has exact pose/translation winners for all 3,000
+particles.  Iteration 2 has only six divergent identities:
+`1016@particles.128.mrcs`, `108@particles.128.mrcs`,
+`1085@particles.128.mrcs`, `1130@particles.128.mrcs`,
+`1137@particles.128.mrcs`, and `1171@particles.128.mrcs`.  The divergent count
+then grows to 104/182/359 at iterations 3/4/8, while Pmax MAE grows from
+`5.61e-5` at iteration 1 to `4.49e-4`, `0.01305`, `0.02358`, and `0.03399`.
+The next scientific boundary is the iteration-2 score/support decision for
+those six immutable original image identities; map tolerances remain frozen.
+
 ## Mode Contract
 
+- **Production precision (user decision 2026-09-08):** float32 remains the
+  intended EM execution path. Double precision is diagnostic only, used to
+  distinguish roundoff from implementation bugs with matched inputs and state.
+  It is not a substitute for a corrected and qualified float32 implementation.
+  Final K1/K4 quality and performance evidence must use the production path;
+  preserve deliberate higher-precision host/metadata operations. See the
+  [mandatory precision policy](../../recovar/em/AGENTS.md).
 - **Strict oracle:** the default during parity closure; pinned RELION GUI
   behavior and full iteration trajectory, including `firstiter_cc` hard-winner
   semantics.
@@ -3518,7 +4394,7 @@ its audit root is
 `/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/runtime/canonical_bpref_hardened_validation_20260715_175600/`.
 
 Coarse Gaussian score reductions have a separate fail-closed replay in
-`recovar/em/gaussian_reduction_replay.py`.  Its v1 schema is deliberately
+`recovar/em/diagnostics/gaussian_reduction_replay.py`.  Its v1 schema is deliberately
 pinned to the frozen K=1 row-7881 RELION boundary, including source and
 executable hashes, GPU UUID, scientific inputs, candidate geometry, and the
 exact CUDA lane layout.  It distinguishes production float32, reordered
@@ -22002,3 +22878,479 @@ no FSC or topology failure and a positive RECOVAR-minus-RELION merged GT
 FSC-AUC delta.  Cases 4 and 5 have entered physical iteration 2; the next
 decision is reserved for their complete map and source-ID-aligned particle
 state, not for a live-log or aggregate-only inference.
+## 2026-08-26/27 double-precision float32/complex64-forcing audit (`double_parity` branch)
+
+Separate track from the K=1 case-22 chain above: a user-directed audit of
+`recovar/em/` for places that hardcode `float32`/`complex64` regardless of
+`RECOVAR_USE_FLOAT64_SCORING`/`RECOVAR_USE_FLOAT64_PROJECTIONS`, cross-checked
+against RELION's own `ACC_DOUBLE_PRECISION` C++/CUDA source (newly available
+this session at `/gpfs/gibbs/project/lederman/ry295/relion`, branch
+`recovar_em_patch`). Full detail, RELION ground-truth findings, and a
+prioritized backlog of ~120 further sites are in
+`docs/math/relion_parity_agent_notes.md`'s 2026-08-26 "(continued 3)" entry
+-- summary here per this file's own update contract:
+
+- **Fixed and CPU-tested** (9 source files): cross-iteration pose/translation
+  state recurrence (the highest-impact category -- confirmed via RELION's
+  `exp_metadata`/`EMDL_DOUBLE`, never narrowed, but recovar was flooring it to
+  float32 every iteration), direction/translation-prior upstream narrowing,
+  `DenseScoreConstraints`, the local-search hot-path bucket-packing function
+  (`local_layout.py:bucket_local_hypothesis_layout`, was defeating all
+  upstream local-search double-precision threading), and
+  `mean_helpers.py:update_relion_norm_scale_corrections`.
+- **Not yet run**: the GPU fast parity tier
+  (`pixi run test-em-parity-fast`) and any FSC/quality gate against this
+  fix batch -- this is the mandatory next step before claiming the fixes are
+  quality-neutral-or-positive, and before any further fixing in this track.
+  Per the validation ladder, `pixi run test-em-fast-guard` (16/16) and four
+  directly-relevant CPU unit-test files were run instead as the cheap rung;
+  GPU parity was explicitly deferred per the user's "prioritize + backlog"
+  scope decision for this large a sweep.
+- **Backlog** (not yet fixed, prioritized P0/P1/P2 with file:line citations
+  in the notes entry): `local_em_engine.py` (largest remaining item, dozens
+  of sites in the default exact-local engine), the `sparse_pass2_bucketed.py`
+  "RELION-GPU exact diff2 (Gaussian)" scoring family (same bug class as the
+  already-fixed CC scorer, commit `8fc84499`, but currently only reachable
+  when `use_float64_scoring=False` so not itself corrupting double-precision
+  runs today -- open policy question: extend it or accept the algebraic path
+  as the double-precision default), the sparse pass-2 translation/prior
+  chain, remaining `local_layout.py` functions, `preprocessing.py`,
+  `image_shifts.py`, `projection.py`, `k_class.py:_assemble_result`,
+  `significance.py` output buffers, and `iteration_loop.py`'s
+  `current_translations` per-iteration scoring grid (flagged high-impact but
+  needs adjudication first -- a comment in that code offers a possible
+  intentional rationale for the asymmetry with `current_rotations`).
+- **Open question, not resolved**: an existing docstring in
+  `relion_metadata.py:_relion_rotation_grid_float32` claims RELION Euler
+  angles are always float32; RELION source read this session
+  (`EMDL_DOUBLE`/`std::vector<double>` MetaDataTable storage,
+  `rot_angles`/`tilt_angles` as `std::vector<RFLOAT>`) appears to contradict
+  this. Left unresolved and Euler-angle sites left untouched this session
+  pending either the missing justification or a correction.
+
+### 2026-08-27 continuation: local_em_engine.py (largest P0 item) fixed;
+### GPU/RELION parity check blocked by cluster resources this session
+
+8 more files fixed (`local_em_engine.py`, `local_big_jit.py`, `k_class.py`,
+`significance.py`, `preprocessing.py`, `image_shifts.py`, `projection.py`,
+`sparse_pass2_bucketed.py`) -- `local_em_engine.py` was the P0 backlog's
+largest single remaining item. Full detail in
+`docs/math/relion_parity_agent_notes.md`'s 2026-08-27 entry, including a
+real JAX scatter-add dtype-mismatch bug this round's own testing caught
+and fixed (several `array.at[idx].add(value)` calls needed an explicit
+`value.astype(target.dtype)` once an upstream forced-float32 cast was
+correctly removed -- `.at[].add()` requires an exact dtype match, unlike
+plain `+`/assignment).
+
+**GPU/RELION parity still not obtained.** Four CPU-only Slurm attempts (up
+to 300G requested) all hit `OUT_OF_MEMORY` at the same point regardless of
+allocation size -- likely `recovar.utils.helpers.get_gpu_memory_total`'s
+CPU-mode fallback reading the physical node's total RAM via
+`psutil.virtual_memory().available` rather than any cgroup-limited amount,
+which may be worth its own bug report/fix independent of this audit. A GPU
+job queued but stayed `PENDING` on `QOSMaxCpuPerUserLimit` (this account
+already had several other jobs running); not pursued further this session.
+**No FSC/RELION-comparison quality claim is made for this round's fixes
+(or the prior round's) -- only CPU-regression-clean, individually
+RELION-source-justified.** This remains the mandatory first step of any
+follow-up session before further fixing, per the validation ladder.
+
+### 2026-08-27 continuation 2: reference-volume dtype fixed (user-reported);
+### first GPU/RELION-oracle comparison this session obtained, resolving the
+### "GPU/RELION parity check blocked" item above
+
+User reported the actual volume being projected during EM scoring was still
+`complex64`, correctly hypothesizing the float32-on-disk MRC read was the
+root cause and that RELION widens to double after reading. Confirmed via
+source read and fixed two narrow-then-widen bugs: `scripts/run_full_
+refinement.py`'s initial-volume loading (all three branches: frozen-
+boundary, K=1, K-class), and `recovar/reconstruction/relion_functions.py:
+_pad_volume_for_projection_host` (the host-side FFT fallback for grids
+`>=~293^3` at `padding_factor=2` -- was unconditionally forcing complex64
+every iteration, independent of any upstream fix). Full detail, RELION
+source citations, and the diagnostic trail in `docs/math/relion_parity_
+agent_notes.md`'s 2026-08-27 "round 3" entry. Committed as `423b8d32`.
+
+**GPU/RELION parity obtained this session**, per the user's instruction to
+use the `gpu` Slurm partition (not `gpu_devel`, which round 2 found stuck
+pending on a CPU-quota QOS limit) with GPU support loaded via `.vscode/
+load_env.sh`'s exact module sequence. First attempt landed on a node
+(`r816u35n07`) with a broken CUDA driver (`nvidia-smi` OK, but `cuInit`-
+level `CUDA_ERROR_UNKNOWN`) that silently fell back to CPU and then hit the
+still-unfixed `get_gpu_memory_total` CPU-RAM-autodetection bug flagged in
+the entry above; root-caused via a dedicated diagnostic job (confirmed
+node-specific, not a module-loading issue) and worked around with
+`--exclude=r816u35n07` plus a fail-fast GPU-visibility assertion for future
+jobs. Two successful runs against `relion_em_test_double_seeded` (igg_1d
+K=1 `--firstiter_cc`) on a V100 node:
+
+- `--max_iter 1`: double-precision merged `corr=0.999999`, FSC-AUC
+  `0.999935`; float32 control merged `corr=0.999999`, FSC-AUC `0.999940`.
+- `--max_iter 2` (needed to actually exercise the `init_vol_ft` fix, since
+  `--firstiter_cc` iteration 1 uses an already-correct separate handoff):
+  double-precision merged `corr=0.999999`, FSC-AUC `0.999591`; float32
+  control merged `corr=0.999999`, FSC-AUC `0.999592`.
+
+Both precision modes clear the `>=0.999` parity gate with no regression
+from the fix, at this fixture's small (128^3) scale. This is the first
+actual RELION-compared quality evidence obtained in this `double_parity`
+audit track (rounds 1-2's fixes were CPU-regression-tested only, per their
+own entries' explicit caveats) -- it validates only this round's two fixes
+plus, incidentally, that the accumulated rounds 1-2 fixes (also active via
+`RECOVAR_USE_FLOAT64_SCORING=1` in the same runs) don't regress quality
+either, though rounds 1-2 were not isolated/attributed individually in
+this comparison.
+
+**Still open** (unchanged from the entry above except as noted): the P0/P1/
+P2 backlog list is untouched this round (out of scope -- this round was
+scoped to the user's specific volume-precision report); `get_gpu_memory_
+total`'s CPU-RAM bug is still unfixed (caused this round's first GPU-job
+attempt to crash once it silently fell back to CPU -- confirmed unrelated
+to precision correctness); bug #2's fix (`_pad_volume_for_projection_host`)
+has no GPU-scale empirical validation, only the CPU unit test, since this
+fixture (128^3) is well under its `>=293^3` host-path threshold.
+
+### 2026-08-28 correction: round 3's GPU validation didn't exercise its own
+### fix (run_multi_iter_parity.py has an independent, unfixed init_volume
+### path); fixed and re-validated genuinely this time
+
+User pushed back on round 3's approach (wanted the fix moved into
+`_run_relion_iteration_loop`), which on investigation surfaced two real
+problems, not just a design preference -- full detail in `docs/math/
+relion_parity_agent_notes.md`'s 2026-08-28 entry:
+
+1. `_run_relion_iteration_loop` receives `init_volume` already in Fourier
+   space; `jnp.fft` computes at whatever dtype the real-space array had
+   going in, so casting inside the iteration loop after the FFT already
+   ran (in the caller) cannot recover precision -- moving the fix there as
+   literally requested would have been a no-op.
+2. `scripts/run_multi_iter_parity.py` (the script this session's own GPU
+   validation jobs used) and `scripts/run_comparison.py` build
+   `init_volume` independently and call `refine_single_volume` directly,
+   bypassing `run_full_refinement.py` (and its `423b8d32` fix) entirely.
+   **Round 3's GPU validation numbers were real but did not exercise the
+   fix they were reported alongside** -- both the "double-precision" and
+   "control" runs were internally float32 the whole time for this
+   specific volume-loading step.
+
+Presented this to the user with three options; chose to keep `423b8d32`'s
+fix as-is and additionally apply the identical real-space-before-FFT
+pattern directly in `run_multi_iter_parity.py` (not `run_comparison.py`
+this round -- open gap). Fixed, verified via a standalone dtype check
+against the real oracle MRC (confirmed genuine float32->complex64 vs
+float64->complex128 behavior, not another no-op), and re-ran the GPU
+validation (job 60357525, this time actually exercising the fix):
+double-precision and float32-control merged `corr=0.999999`, FSC-AUC
+`0.999591` for both -- clears the parity gate, no regression, though at
+this small fixture's scale the two runs' numbers converge closely enough
+that the GPU comparison itself isn't strong evidence either way; the
+standalone dtype check is the real evidence the fix works. Also fixed an
+unrelated environment gap this surfaced along the way: recovar's custom
+CUDA extension's lazy `make`-based build needs `nvcc`, which `.vscode/
+load_env.sh`'s `module unload CUDA` removes from `PATH` -- worked around
+by building the extension explicitly once with CUDA still loaded (job
+60357511) before any runtime job unloads it.
+
+Committed as `bada1a2e`. **`scripts/run_comparison.py` still has the same
+unfixed independent init_volume path** -- open for a future session.
+
+### 2026-08-31 dense single-volume double-precision audit
+
+A complete static/call-chain audit of `recovar/em/**`
+removed additional live narrowing at shared stats, pass-1 priors,
+correction/pre-shift, global/replay translation, dense/local noise, sparse
+pass-2 geometry/prior/output, and K-class fallback boundaries. CPU fast guard
+passes 16/16. GPU job `60368743` on the `gpu` partition confirmed an idle A100
+and JAX GPU visibility, but all seven fast-parity cases skipped because this
+cluster lacks their `/scratch/gpfs/GILLES/mg6942` fixtures. The integrated
+batch is therefore not yet GPU quality-qualified. Detailed classifications
+and intentionally retained boundaries are in `relion_parity_agent_notes.md`.
+
+Clean three-iteration GPU replay `60374001` subsequently exercised the exact
+seeded dataset and requested command. Its residual iteration-3 parameter gaps
+were unchanged at displayed precision after the dtype audit. The next phase is
+therefore an implementation/routing investigation, starting with a complete
+inventory and controlled ablation of RELION-parity environment gates.
+
+### Active hypothesis: ACC_DOUBLE coordinate flooring
+
+The first controlled implementation-gap experiment tests
+`RECOVAR_RELION_ACC_DOUBLE_FLOORF_QUIRK=1`. RELION's accelerated double path
+still narrows interpolation coordinates before `floorf`, whereas RECOVAR's
+complex128/manual projector otherwise retains double coordinates. The
+disproof criterion is simple: if the iteration-1 shell/sigma residuals and
+iteration-2 Pmax/direction-prior residuals are unchanged versus GPU baseline
+`60374001`, reject this gate and move to fine-score execution ordering.
+
+Result: rejected by GPU job `60374288`. All displayed per-iteration fields and
+direction-prior differences were unchanged; saved state was identical apart
+from negligible reconstruction/noise roundoff and timing/provenance.
+
+### Active hypothesis: fine-rotation execution order
+
+Test `RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER=1` independently. It keeps
+the candidate set fixed but orders fine rotations by RELION parent execution
+order, potentially changing near-tie/reduction behavior. Reject if Pmax,
+direction-prior, and pose/state arrays remain unchanged versus `60374001`.
+
+Result: rejected by GPU job `60374344`. Pmax moved only at `1e-16`; all
+displayed parameters and direction priors were unchanged.
+
+### Active hypothesis: iteration-3 reference map
+
+Substitute only RELION's reference maps at iteration 3 using the existing
+fail-closed replay diagnostic. If the iteration-3 Pmax residual closes, trace
+the iteration-2 BPref/reconstruction boundary. If it remains, localize inside
+iteration-3 significance and fine Gaussian scoring.
+
+Result: confirmed by GPU job `60374396`. Iteration-3 `ave_Pmax` improved from
+`0.931704` to `0.932146` (RELION displays `0.9322`), and direction-prior
+relative L1 improved from `3.73e-4/4.14e-4` to `2.12e-4/1.18e-4`.
+
+### Active hypothesis: iteration-2 reconstruction boundary
+
+Capture iteration-2 post-join BPref accumulators, full-precision pre-mask
+Wiener maps, and post-mask per-iteration maps in one baseline run. Compare the
+post-mask maps directly to RELION and decompose global/shell scaling; use the
+pre-mask/BPref boundary to decide whether the next oracle instrumentation must
+target accumulation or reconstruction/postprocessing.
+
+Result: GPU job `60374462` captured the boundary. Iteration-2 post-mask maps
+already differ from RELION by scale-fitted relative L2 `1.28e-3` (half 1) and
+`2.70e-3` (half 2), while optimal global scale is `1.000013/0.999996`.
+Therefore the causal reference mismatch is structured rather than a global
+normalization error. Raw iteration-2 BPref and full-precision pre-mask dumps
+are preserved under
+`/home/ry295/palmer_scratch/tmp/recovar_em_it2_recon_60374462`.
+
+### Active hypothesis: exact fine Gaussian scoring route
+
+As a causal diagnostic, keep float64 projections and double x-half M-step but
+disable float64 scoring so the existing RELION-exact direct diff2/minimum
+route is exercised in iterations 2-3. Improvement in the iteration-2 map and
+iteration-3 Pmax will justify implementing the same direct ordering in
+float64; no improvement rejects scorer ordering as the map cause.
+
+Result: rejected by GPU job `60374528`. The exact float32 direct-diff2 route
+left iteration-2 map relative L2 at `1.28e-3/2.70e-3` and the displayed
+iteration-3 Pmax/direction-prior residuals unchanged.
+
+### Active hypothesis: inherited iteration-1 reference error
+
+Replay RELION reference maps only at iteration 2, capture the resulting
+iteration-2 post-mask maps, and compare them with RELION. A large reduction
+means the iteration-2 map gap is inherited from iteration 1; persistence
+places it within iteration-2 E/M accumulation or reconstruction.
+
+Result: GPU job `60374590` reduced the iteration-2 scale-fitted map relative
+L2 from `1.28e-3/2.70e-3` to `9.94e-4/1.24e-3`. Thus the first-iteration map
+accounts for a substantial fraction of the later residual, especially in
+half 2, while an approximately `1e-3` iteration-2 transition residual remains.
+
+### Production exact first-iteration fine CC routing
+
+The production K=1 first-iteration sparse pass did not request the literal
+RELION fine normalized-CC scorer, even though its coarse probe did. The route
+is now wired for K=1 and guarded by a focused unit test. GPU job `60374655`
+showed this is a null attribution for the seeded fixture: iteration-2 maps and
+iteration-3 Pmax, sigma-offset, and direction-prior residuals were unchanged.
+The correction is retained as a source-faithful routing fix, but it does not
+explain the measured map gap.
+
+### Sparse image-power precision boundary
+
+The sparse M-step still narrowed the support-weighted image-power vector and
+per-image norm sum to float32 before shell/noise and host-float64 accumulation.
+Those reductions now preserve the producer dtype; a focused float64 dtype test
+passes. GPU job `60374777` confirms the change is live in the noise trajectory
+(`noise_radial_iter_001` changes by up to `3.67e-2`, relative L2 `4.14e-8`),
+but the reconstruction/Pmax effect is only roundoff (`ave_Pmax` `1.1e-16`,
+final-map relative L2 below `6e-15`). It is a valid precision fix, not the
+cause of the remaining parity gap.
+
+### First-iteration pre-join BPref boundary
+
+An isolated double-precision RELION build dumped each half's raw `BPref.data`
+and `BPref.weight` immediately before `joinTwoHalvesAtLowResolution`; its
+iteration-1 maps are byte-identical to the saved oracle. RECOVAR job `60374928`
+captured the matching boundary. Both halves have identical support topology
+(`support_jaccard=1`, zero mismatched coordinates), proving the gap is not
+particle/pixel membership. After matched frame conversion/downsampling, half 1
+has numerator/denominator relative L2 `8.97e-3/2.55e-3`; half 2 has
+`4.53e-2/1.64e-2`. The asymmetry is explained largely by the known half-2
+near-tie pose/translation flips, while radial denominator shell-sum residuals
+remain only approximately `1e-6` to `4e-4` through shells 1-10. Thus the join
+is not the first divergent operation: raw weighted-image and weight
+backprojection inputs already differ, with the numerator the stronger signal.
+
+### Sampling perturbation precision
+
+The iteration loop still narrowed perturbed rotation matrices, working Eulers,
+and translation grids to float32. RELION uses RFLOAT for perturbation and
+working sampling coordinates, so these now follow the active scoring dtype in
+both ordinary and final-all-data paths. Default float32 behavior is retained.
+Focused tests pass 42/42. Fresh pre-join job `60375148` changed `Ft_y/Ft_ctf`
+only at relative `1.8e-15` to `3.5e-15`, and full GPU job `60375147` left the
+reported three-iteration trajectory unchanged. This is a real double-mode
+contract fix but a null attribution here because a separate preserved-float64
+M-step rotation path was already active and the winning candidates did not
+change.
+
+Follow-up found that this first patch was incomplete: the unperturbed Euler
+grid had already been narrowed in `_relion_rotation_grid_float32` (and in the
+sealed/final-grid variants) before reaching the newly dtype-aware perturbation
+helper. That array is a working RFLOAT operand because RELION perturbs it and
+reconstructs scoring matrices from it; it is not merely public STAR metadata.
+The base Euler and translation grids now preserve the active dtype from their
+point of construction.
+
+This correction is causal. GPU job `60375338` reduced iteration-1 pre-join
+numerator/denominator relative L2 from `8.97e-3/2.55e-3` to
+`7.18e-3/2.55e-3` in half 1 and from `4.53e-2/1.64e-2` to
+`5.66e-3/2.34e-3` in half 2, with support still exact. Full three-iteration
+job `60375361` improved iteration-3 optimizer Pmax from `0.9317` to `0.9320`
+versus RELION `0.9322`, sigma-offset mean from `1.4772` to `1.4768` versus
+`1.4769`, and direction-prior relative L1 from `3.73e-4/4.14e-4` to
+`2.23e-4/4.01e-4`. Iteration-1 direction priors and sigma offsets are now
+exact at the report's precision. The large half-2 improvement confirms that
+the earlier narrowing changed near-tie fine-pose winners.
+
+A matched-particle operand check separately showed that RECOVAR's complex64
+preprocessed Fourier image differs from RELION double by only `3.45e-8`
+relative L2, close to RELION-to-complex64 quantization alone (`2.56e-8`).
+That boundary is therefore not the source of the percent-scale pre-join gap.
+
+The RELION projector builder also contained an unconditional complex64 cast on
+`Projector::data`; this was removed so the binding's complex128 result reaches
+double projection unchanged. Combined-tree GPU job `60382385` reproduces the
+improved three-iteration trajectory above. Fresh pre-join job `60382549`
+reproduces numerator/denominator relative L2 `7.18e-3/2.55e-3` (half 1) and
+`5.66e-3/2.34e-3` (half 2). A complete iteration-1 particle audit now shows
+exact Pmax and significant-support arrays, with maximum pose error
+`1.52e-5` degrees and maximum translation error `2.42e-6` angstrom. Therefore
+the remaining pre-join residual is no longer attributable to discrete pose,
+translation, posterior-support, or particle/pixel membership differences; it
+is inside the per-hypothesis projection/CTF/weighted-backprojection arithmetic.
+
+### Double fused-scatter boundary result
+
+The RELION fused x-half CUDA target now has separate compiled
+complex64/float32 and complex128/float64 specializations selected by the FFI
+handler from the operand dtype. Its upstream sequential translation reduction
+likewise carries in RELION `XFLOAT` precision rather than forcing float32. With
+the double specialization active, shells 15--21 of the raw iteration-1 BPref
+match native RELION at roughly `1e-7`--`1e-6` relative L2. The residual is
+concentrated at shells 22--23, especially the exact outer cutoff.
+
+Two correctness issues in that path were also removed: the templated radius
+predicate retained a float temporary, and already-host-inverted M-step matrices
+were numerically inverted again by the generic scorer transform. After both
+fixes, job `60382778` measures numerator/denominator relative L2
+`9.21e-3/2.53e-3` (half 1) and `6.55e-3/2.25e-3` (half 2); shell 23 alone is
+`5.58e-2/1.54e-2` and `3.95e-2/1.40e-2`. This does not yet improve the full
+numerator metric, but it sharply localizes the next implementation check to the
+exact device Euler matrix and spherical-cutoff membership. It argues against a
+broad scatter/interpolation mismatch because the interior is already nearly
+closed.
+
+### Replay cutoff and serialized initialization boundary
+
+The `--replay-override-max-iter` cutoff now changes both replay sources at the
+same physical-iteration boundary: it stops explicit per-iteration model/data
+overrides and returns sampling, expected-accuracy, and convergence transitions
+to RECOVAR ownership. Focused cutoff tests pass 11/11. Jobs comparing cutoff 0
+and cutoff 1 are nevertheless identical through three numbered iterations
+(apart from approximately `1e-14` GPU scheduling noise). This is expected for
+the cold start used here: both runs bootstrap from `it000`, and RELION's first
+numbered sampling state is reproduced exactly from its optimizer seed. The
+cutoff does not, and cannot, undo precision already lost in the mandatory
+initial `it000` snapshot.
+
+Native RELION job `60426716` captured the full binary64 fine-score operands for
+particles 255, 311, 544, 652, and 719 at iteration 2. RECOVAR has exactly the
+same candidate topology, fine translation angles, and Euler matrices. Using
+the captured native image, noise/CTF weight, and projector in RECOVAR's packed
+candidate order reproduces RELION's centered raw `diff2` with standard
+deviation `4.2e-14`--`8.8e-14` and maximum error `1.2e-13`--`2.1e-13`.
+Conversely, rebuilding each score from RECOVAR's own dumped operands reproduces
+RECOVAR's stored score bit-for-bit. This closes candidate generation, fine
+geometry, translation, projector interpolation, pixel order, direct `diff2`,
+and the 256-lane reduction tree as possible algorithmic sources.
+
+The remaining ordinary-replay centered score residual is
+`1.5e-4`--`5.3e-4` RMS for the five-particle panel. Operand substitution
+localizes it: the native projector or corrected image alone has little effect,
+whereas substituting the native noise/CTF weight reduces the residual to
+`2.2e-5`--`4.0e-5`; substituting all native operands reaches the numerical
+closure above. RELION retains the initial double-precision noise spectrum in
+memory, but `run_it000_half{1,2}_model.star` serializes `rlnSigma2Noise` with
+six decimal places. The resulting shellwise relative error is approximately
+`1e-4` and explains nearly all of the observed weight discrepancy. Because
+first-iteration CC skips the first noise update, that rounded initialization
+continues to affect the second iteration and can flip later near-tie poses.
+
+This evidence classifies the remaining cutoff-run divergence as a serialized
+initial-state precision/provenance boundary, rather than a remaining scoring
+algorithm or forced-float32 mismatch. A meaningful uninterrupted double-parity
+comparison must either replay a captured full-precision startup state or
+recompute RELION's startup noise with source-identical reductions, without a
+STAR round trip.
+
+End-to-end validation job `60427343` initialized RECOVAR from the captured
+full-precision startup noise and repeated the iteration-2 five-particle panel.
+The centered raw-score RMS gap fell from `1.5e-4`--`5.3e-4` to
+`4.7e-7`--`2.1e-6`, while posterior relative L2 fell to
+`7.2e-8`--`3.7e-7`; all candidate and reconstruction masks remained exact.
+The remaining tiny residual is compatible with the other serialized inputs
+and accumulated arithmetic, while the approximately 70x--1100x improvement
+directly confirms startup-noise rounding as the dominant apparent divergence.
+
+### Default x-half accumulator dtype boundary
+
+The double-parity work exposed a default-mode regression when the scoring
+pipeline supplied complex128 reconstruction rows to the independently
+configured complex64/float32 x-half BPref accumulator. The fused CUDA wrapper
+correctly rejects mixed specializations, but its per-particle caller had
+assumed that scoring and M-step precision always matched. Reduced data and
+weight rows are now converted once to the selected accumulator dtype before
+the particle launch loop. This retains float32 production behavior, supports
+float64 scoring with a float32 M-step, and preserves the opt-in double M-step.
+
+Focused CPU tests pass 10/10, including a regression with complex128/float64
+rows and complex64/float32 accumulators. Default-precision GPU job `60441355`
+completed the replayed first iteration without the dtype exception; poses and
+translations matched the RELION boundary exactly. Job `60441232` was an
+infrastructure-only false start because this cluster does not expose the
+generic `/scratch/gpfs` runtime root.
+
+### Dataset and CTF evaluation precision boundary
+
+The double-scoring scripts previously changed the dataset/backend output dtype
+only after `load_dataset` had already rounded CTF parameters, poses, and
+translations to float32. CTF frequency grids were also constructed in float32,
+and several dense scoring paths evaluated the CTF before casting its result to
+float64. The dataset loader now has an explicit complex64/complex128 precision
+contract that propagates through the image source/backend, metadata, subsets,
+and independent reloads. Frequency grids and CTF evaluation use the parameter
+dtype, and dense preprocessing, significance, local scoring, and sparse pass-2
+cast CTF parameters before evaluation. The complex64 default remains unchanged.
+
+The seeded particle STAR stores CTF fields as decimal text (generally six
+digits after the decimal point). RECOVAR's STAR reader already parsed those
+fields as float64, and RELION registers defocus metadata as `EMDL_DOUBLE` and
+uses double `RFLOAT` unless built with `RELION_SINGLE_PRECISION`; the premature
+RECOVAR loader cast therefore discarded real source precision. On this fixture,
+rounding the loaded CTF metadata through float32 changes a defocus value by as
+much as `9.375e-4` Angstrom.
+
+Focused precision tests pass 7/7 and the CPU EM fast guard passes 16/16. GPU
+job `60477812` completed the three-iteration float64 replay on an A100 80 GB.
+Controlled job `60477853` repeated it with only the CTF metadata rounded through
+float32. The full-precision and ablation runs selected exactly the same poses
+and translations in all three iterations. Their BPref numerator and denominator
+differ by only about `3.1e-8`/`1.9e-8` relative L2 in iteration 1 and
+`6.8e-8`/`5.1e-8` by iteration 3; merged GT correlations differ by at most
+`3.8e-10`. Relative-L2 gaps to RELION in `tau2` and `sigma2` change by less
+than approximately `5e-9` absolute between the two arms. Thus this is a valid
+precision correction, but it is not the dominant cause of the remaining
+`tau2`, `sigma2`, or iteration-3 near-tie pose discrepancy.

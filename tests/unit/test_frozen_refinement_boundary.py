@@ -5,19 +5,19 @@ import hashlib
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.frozen_boundary import (
+from recovar.em.diagnostics.frozen_boundary import (
     FROZEN_BOUNDARY_FILENAME,
+    FROZEN_BOUNDARY_MANIFEST,
     FROZEN_BOUNDARY_NUMERICAL_CLASSIFICATION_SCOPE,
     FROZEN_BOUNDARY_PROVENANCE_VERIFICATION_SCOPE,
-    FROZEN_BOUNDARY_MANIFEST,
     FROZEN_BOUNDARY_SCHEMA,
     FROZEN_BOUNDARY_SCHEMA_V3,
     V3_REQUIRED_SOURCE_NAMES,
     load_frozen_refinement_boundary,
+    v3_source_role,
     validate_fixed_diagnostic_boundary_runtime_config,
     validate_fixed_diagnostic_boundary_sampling_state,
     verify_fixed_diagnostic_boundary_sources,
-    v3_source_role,
 )
 
 

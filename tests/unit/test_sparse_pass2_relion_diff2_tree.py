@@ -9,27 +9,29 @@ import pytest
 pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
-
-from recovar.em.dense_single_volume.helpers.half_spectrum import (
-    make_relion_noise_shell_indices_half,
+from helpers.sparse_pass2_test_support import (
+    _relion_cuda_fine_tree_sum,
+    _score_pass2_bucket_relion_gpu_diff2_single_cached,
 )
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
+
+from recovar.em.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.local.local_big_jit import _validate_relion_exact_fine_diff2_preconditions
+from recovar.em.local.local_bucket_stages import _relion_exact_fine_full_to_compact_lookup
+from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _RELION_CUDA_FINE_REF3D_BLOCK_SIZE,
     _RELION_CUDA_POWERCLASS_BLOCK_SIZE,
     _relion_cuda_fine_diff2_min,
     _relion_cuda_fine_diff2_sum,
     _relion_cuda_fine_diff2_to_scores,
-    _relion_cuda_fine_global_diff2_min,
     _relion_cuda_fine_full_to_compact_lookup,
+    _relion_cuda_fine_global_diff2_min,
     _relion_cuda_fine_log_evidence_offset,
     _relion_cuda_fine_pixel_weights,
-    _relion_cuda_fine_tree_sum,
     _relion_cuda_powerclass_highres_norm_units,
     _relion_cuda_powerclass_highres_xi2_half,
     _score_pass2_bucket_relion_gpu_diff2,
     _score_pass2_bucket_relion_gpu_diff2_from_raw,
     _score_pass2_bucket_relion_gpu_diff2_raw,
-    _score_pass2_bucket_relion_gpu_diff2_single_cached,
     _score_pass2_bucket_relion_gpu_diff2_single_cached_raw,
     _score_pass2_pairs_relion_gpu_diff2,
     _score_pass2_pairs_relion_gpu_diff2_raw,
@@ -98,6 +100,50 @@ def _numpy_cuda_powerclass_highres_half(centered_image, current_size):
     return np.float32(total * np.float32(0.5))
 
 
+def _numpy_cuda_powerclass_highres_half_double(centered_image, current_size):
+    centered_image = np.asarray(centered_image, dtype=np.complex128)
+    batch, height, half_width = centered_image.shape
+    relion_image = np.roll(centered_image, -(height // 2), axis=1)
+    relion_image = np.complex128(relion_image / np.float64(height * height))
+    lanes = np.zeros(
+        (
+            batch,
+            (height * half_width + _RELION_CUDA_POWERCLASS_BLOCK_SIZE - 1)
+            // _RELION_CUDA_POWERCLASS_BLOCK_SIZE,
+            _RELION_CUDA_POWERCLASS_BLOCK_SIZE,
+        ),
+        dtype=np.float64,
+    )
+    for voxel in range(height * half_width):
+        x = voxel % half_width
+        row = voxel // half_width
+        y = row if row < half_width else row - height
+        shell = int(np.rint(np.sqrt(np.float64(x * x + y * y))))
+        if shell <= 0 or shell >= half_width or (x == 0 and y < 0):
+            continue
+        if shell >= current_size // 2 + 1:
+            value = relion_image.reshape(batch, -1)[:, voxel]
+            power = np.float64(
+                np.float64(value.real * value.real)
+                + np.float64(value.imag * value.imag)
+            )
+            lanes[
+                :,
+                voxel // _RELION_CUDA_POWERCLASS_BLOCK_SIZE,
+                voxel % _RELION_CUDA_POWERCLASS_BLOCK_SIZE,
+            ] = power
+    width = _RELION_CUDA_POWERCLASS_BLOCK_SIZE // 2
+    while width:
+        lanes[..., :width] = np.float64(
+            lanes[..., :width] + lanes[..., width : 2 * width]
+        )
+        width //= 2
+    total = np.zeros((batch,), dtype=np.float64)
+    for block_sum in lanes[..., 0].T:
+        total = np.float64(total + block_sum)
+    return np.float64(total * np.float64(0.5))
+
+
 def test_relion_cuda_fine_tree_matches_256_lane_pass_and_tree_bitwise():
     # Alternating scales make sequential per-lane accumulation distinguishable
     # from a flat reduction while retaining deterministic float32 operands.
@@ -116,7 +162,7 @@ def test_relion_cuda_fine_tree_matches_256_lane_pass_and_tree_bitwise():
     assert actual.dtype == np.float32
 
 
-def test_relion_cuda_fine_diff2_casts_complex128_operands_to_xfloat():
+def test_relion_cuda_fine_diff2_preserves_acc_double_precision_operands():
     rng = np.random.default_rng(365)
     reference64 = (
         rng.normal(size=(2, 259)) + 1j * rng.normal(size=(2, 259))
@@ -141,23 +187,23 @@ def test_relion_cuda_fine_diff2_casts_complex128_operands_to_xfloat():
         )
     )
 
-    np.testing.assert_array_equal(actual, expected)
-    assert actual.dtype == np.float32
+    assert actual.dtype == np.float64
+    np.testing.assert_allclose(actual, expected.astype(np.float64), rtol=2e-7, atol=1e-7)
 
 
-def test_relion_cuda_fine_pixel_weight_casts_operands_before_multiply():
+def test_relion_cuda_fine_pixel_weight_preserves_acc_double_precision():
     corr = np.asarray([75351.31086994553], dtype=np.float64)
     half_weight = np.asarray([53814.33132654639], dtype=np.float64)
-    expected = np.float32(corr) * np.float32(half_weight)
-    wrong_float64_first = np.float32(corr * half_weight)
+    expected = corr * half_weight
+    narrowed = np.float32(corr) * np.float32(half_weight)
 
     actual = np.asarray(
         _relion_cuda_fine_pixel_weights(jnp.asarray(corr), jnp.asarray(half_weight))
     )
 
     np.testing.assert_array_equal(actual, expected)
-    assert actual.dtype == np.float32
-    assert not np.array_equal(actual, wrong_float64_first)
+    assert actual.dtype == np.float64
+    assert not np.array_equal(actual, narrowed)
 
 
 def test_relion_cuda_powerclass_highres_matches_128_lane_block_trees_bitwise():
@@ -181,7 +227,30 @@ def test_relion_cuda_powerclass_highres_matches_128_lane_block_trees_bitwise():
     assert actual.dtype == np.float32
 
 
-def test_relion_cuda_powerclass_norm_units_preserve_divide_before_square():
+def test_relion_cuda_powerclass_highres_preserves_acc_double_precision():
+    rng = np.random.default_rng(2298)
+    height = 32
+    centered = (
+        rng.normal(size=(2, height, height // 2 + 1))
+        + 1j * rng.normal(size=(2, height, height // 2 + 1))
+    ).astype(np.complex128) * np.float64(height * height)
+    centered += np.complex128(2.0**-35 + 1j * 2.0**-36)
+    current_size = 14
+    expected = _numpy_cuda_powerclass_highres_half_double(centered, current_size)
+    actual = np.asarray(
+        _relion_cuda_powerclass_highres_xi2_half(
+            jnp.asarray(centered.reshape(2, -1)),
+            image_shape=(height, height),
+            current_size=current_size,
+        )
+    )
+
+    np.testing.assert_array_equal(actual, expected)
+    assert actual.dtype == np.float64
+    assert not np.array_equal(actual, expected.astype(np.float32).astype(np.float64))
+
+
+def test_relion_cuda_powerclass_norm_units_match_randomized_reference():
     rng = np.random.default_rng(4021)
     height = 32
     centered = (
@@ -202,16 +271,31 @@ def test_relion_cuda_powerclass_norm_units_preserve_divide_before_square():
             current_size=current_size,
         )
     )
-    processed = jnp.asarray(centered.reshape(2, -1))
-    shells = jnp.asarray(make_relion_noise_shell_indices_half((height, height)))
-    high_shell = (shells >= 0) & (shells < height // 2 + 1) & (shells > current_size // 2)
-    generic_square_first = np.asarray(
-        jnp.sum(jnp.where(high_shell[None, :], jnp.abs(processed) ** 2, 0.0), axis=-1).astype(jnp.float32)
-    )
-
     np.testing.assert_array_equal(actual, expected)
     assert actual.dtype == np.float32
-    assert not np.array_equal(actual, generic_square_first)
+
+
+@pytest.mark.parametrize("height", [30, 32])
+def test_relion_cuda_powerclass_norm_units_preserve_divide_before_square(height):
+    # One high-shell pixel removes every reduction-order ambiguity. At 30x30,
+    # rounding 1/900 before squaring/rescaling gives the next float32 above 1.
+    # At 32x32, division by 1024 is exact: both orders legitimately give 1.
+    centered = np.zeros((1, height, height // 2 + 1), dtype=np.complex64)
+    centered[0, height // 2, 9] = 1.0  # ky=0, kx=9; above current_size/2=7.
+    expected = np.float32(1.0)
+    if height == 30:
+        expected = np.nextafter(expected, np.float32(2.0))
+
+    actual = np.asarray(
+        _relion_cuda_powerclass_highres_norm_units(
+            jnp.asarray(centered.reshape(1, -1)),
+            image_shape=(height, height),
+            current_size=14,
+        )
+    )
+
+    np.testing.assert_array_equal(actual, np.asarray([expected], dtype=np.float32))
+    assert actual.dtype == np.float32
 
 
 def test_relion_cuda_fine_raw_routes_add_powerclass_tail_once_per_hypothesis():
@@ -461,8 +545,7 @@ def test_relion_cuda_fine_common_min_ignores_invalid_partitions_and_nonfinite_pa
 
 
 def test_relion_cuda_fine_host_staged_common_min_serializes_raw_device_uploads(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
-
+    from recovar.em.sparse_pass2 import sparse_pass2_scoring as bucketed_mod
     original_partition_min = bucketed_mod._relion_cuda_fine_partition_diff2_min_or_inf
     raw_device_refs = []
     max_prior_raw_uploads_alive = 0
@@ -597,9 +680,7 @@ def test_relion_cuda_fine_diff2_preserves_full_grid_zero_gap_lane_topology():
 
 
 def test_case20_current_grid_lookup_has_relion_56_by_29_topology():
-    from recovar.em.dense_single_volume.helpers.fourier_window import (
-        make_fourier_window_indices_np,
-    )
+    from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
 
     compact_indices, count = make_fourier_window_indices_np((256, 256), 56)
     lookup = _relion_cuda_fine_full_to_compact_lookup(
@@ -610,6 +691,41 @@ def test_case20_current_grid_lookup_has_relion_56_by_29_topology():
     assert lookup.shape == (56 * 29,)
     assert np.count_nonzero(lookup >= 0) == count
     np.testing.assert_array_equal(np.sort(lookup[lookup >= 0]), np.arange(count, dtype=np.int32))
+
+
+def test_full_size_lookup_is_a_bijection_of_the_complete_half_spectrum():
+    image_shape = (8, 8)
+    n_half = image_shape[0] * (image_shape[1] // 2 + 1)
+    window_spec = make_fourier_window_spec(image_shape, image_shape[0], n_half)
+
+    assert window_spec.use_window is False
+    lookup = _relion_exact_fine_full_to_compact_lookup(
+        image_shape,
+        image_shape[0],
+        n_half,
+        window_spec,
+    )
+
+    assert lookup.shape == (n_half,)
+    np.testing.assert_array_equal(np.sort(lookup), np.arange(n_half, dtype=np.int32))
+
+    # At full size ``use_window`` is false, but the identity lookup above is a
+    # valid exact-fine representation. The big-JIT gate must therefore depend
+    # only on the exact operand/preprocessing contract.
+    _validate_relion_exact_fine_diff2_preconditions(
+        relion_exact_fine_diff2=True,
+        relion_exact_bpref_operands=True,
+        use_relion_cuda_preprocess=True,
+    )
+
+
+def test_exact_fine_big_jit_still_rejects_missing_exact_preprocessing():
+    with pytest.raises(ValueError, match="exact operands and CUDA preprocessing"):
+        _validate_relion_exact_fine_diff2_preconditions(
+            relion_exact_fine_diff2=True,
+            relion_exact_bpref_operands=True,
+            use_relion_cuda_preprocess=False,
+        )
 
 
 def test_dense_cached_and_compact_gaussian_routes_use_same_exact_scores():

@@ -30,7 +30,6 @@ else:
 
 
 _WDIFF_RE = re.compile(r"img(?P<img>\d+)_part(?P<part>\d+)_storeWavg_wdiff2_pixels\.bin")
-_PREPROCESS_RE = re.compile(r"part(?P<part>\d+)_stack(?P<stack>\d+)\.preprocess-v1\.bin")
 
 
 def _particle_row_for_stack(particles, stack_index_one_based: int):
@@ -203,9 +202,7 @@ def _translate_native_preprocess_hybrid(
     import jax.numpy as jnp
 
     from recovar import cuda_backproject
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-        _relion_translation_angles_f32,
-    )
+    from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
 
     translation_angles = _relion_translation_angles_f32(
         np.asarray(fine_translations, dtype=np.float32),
@@ -310,17 +307,6 @@ def _complex_comparison(
     }
 
 
-def _source_by_part(preprocess_dir: Path) -> dict[int, int]:
-    result: dict[int, int] = {}
-    for path in preprocess_dir.glob("*.preprocess-v1.bin"):
-        match = _PREPROCESS_RE.fullmatch(path.name)
-        if match:
-            result[int(match.group("part"))] = int(match.group("stack")) - 1
-    if not result:
-        raise ValueError(f"no native preprocess identity files in {preprocess_dir}")
-    return result
-
-
 def _exact_ppref_projections(
     ppref_path: Path,
     rotations: np.ndarray,
@@ -332,9 +318,7 @@ def _exact_ppref_projections(
     import jax
     import jax.numpy as jnp
 
-    from recovar.em.dense_single_volume.helpers.projection import (
-        compute_relion_projector_projections_block,
-    )
+    from recovar.em.helpers.projection import compute_relion_projector_projections_block
     if __package__:
         from scripts.analyze_k1_exact_ppref_fine_boundary import _load_ppref
     else:
@@ -552,9 +536,7 @@ def main() -> None:
         native_input_comparisons = None
         ppref_metadata = None
         if has_native_inputs:
-            from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-                _relion_translation_angles_f32,
-            )
+            from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
 
             orientation_num = int(native_scalar["orientation_num"])
             translation_num = int(native_scalar["translation_num"])

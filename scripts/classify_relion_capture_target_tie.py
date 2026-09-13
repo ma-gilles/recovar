@@ -10,7 +10,6 @@ ties in both captured RELION and RECOVAR.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 import subprocess
@@ -41,12 +40,13 @@ EXPECTED_EXACT_FIELDS = (
 )
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+# Support direct execution, sibling imports, and the scripts package.
+if not __package__:
+    from analyzer_provenance import clean_repo_head
+    from file_hash import sha256_file as _sha256
+else:
+    from scripts.analyzer_provenance import clean_repo_head
+    from scripts.file_hash import sha256_file as _sha256
 
 
 def _require(condition: bool, message: str) -> None:
@@ -332,13 +332,6 @@ def _load_relion(dump_dir: Path) -> dict[str, np.ndarray]:
     }
 
 
-def _clean_repo_head(repo: Path) -> str:
-    head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
-    status = subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain=v1"], text=True)
-    _require(not status, "analyzer repository is dirty")
-    return head
-
-
 def build_report(
     *,
     repo: Path,
@@ -372,7 +365,7 @@ def build_report(
             "sha256": _sha256(dump_manifest),
             "verified": True,
         },
-        "analyzer_repo_head": _clean_repo_head(repo),
+        "analyzer_repo_head": clean_repo_head(repo),
     }
     return report
 

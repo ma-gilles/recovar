@@ -19,6 +19,7 @@ The bridge between frontend and backend. Endpoints, request/response shapes, Web
 | Method | Path | Request | Response | Notes |
 |--------|------|---------|----------|-------|
 | `POST` | `/api/jobs` | `{ project_id, type, params: {...}, executor?: "slurm"\|"local" }` | `{ id, type, status, created, handle }` | Validates params, submits to executor. `executor` selects per-job; when omitted, uses server default. For local jobs, `params.local_opts` can contain `{ gpus, setup_command, env_vars }`. |
+| `GET` | `/api/jobs/initial-model/defaults` | — | Native InitialModel defaults mapping | Shared source for CLI, API command builder, and GUI form initialization. |
 | `GET` | `/api/jobs/:id` | — | `{ id, type, status, params, created, completed, handle, slurm_id, error, parent_jobs, output_dir }` | |
 | `POST` | `/api/jobs/:id/cancel` | — | `{ status: "cancelled" }` | Calls executor.cancel |
 | `DELETE` | `/api/jobs/:id` | — | `204` | Removes DB record + optionally output files |
