@@ -763,13 +763,6 @@ def _run_sparse_pass2_initial_model_estep(
 
         # RELION reuses the coarse pass-1 pdf_offset for all oversampled pass-2 children.
         pass2_translation_log_prior = pass1_translation_log_prior
-        pass2_fine_translation_log_prior = None
-        if pass2_translation_log_prior is None and (fallback := group_kwargs.get("translation_log_prior")) is not None:
-            fallback_np = np.asarray(fallback)
-            if fallback_np.ndim > 0 and fallback_np.shape[-1] == int(coarse_translations.shape[0]):
-                pass2_translation_log_prior = fallback
-            else:
-                pass2_fine_translation_log_prior = fallback
 
         if use_compact_sparse_pass2 and k1_zero_oversampling:
             raise ValueError("InitialModel compact sparse pass 2 does not yet support oversampling_order=0")
@@ -810,7 +803,7 @@ def _run_sparse_pass2_initial_model_estep(
                     translation_step=translation_step,
                     rotation_log_prior=_class_pass2_rotation_log_prior(group_kwargs, class_index),
                     translation_log_prior=pass2_translation_log_prior,
-                    fine_translation_log_prior=pass2_fine_translation_log_prior,
+                    fine_translation_log_prior=None,
                     random_perturbation=random_perturbation,
                     rotation_index_order="relion_hidden",
                     allow_empty=True,
@@ -867,14 +860,10 @@ def _run_sparse_pass2_initial_model_estep(
         )
         try:
             if use_compact_sparse_pass2:
-                if pass2_fine_translation_log_prior is not None:
-                    compact_translation_prior = pass2_fine_translation_log_prior
-                else:
-                    compact_translation_prior = pass2_translation_log_prior
                 compact_engine_kwargs = dict(group_kwargs)
                 compact_engine_kwargs.update(
                     {
-                        "translation_log_prior": compact_translation_prior,
+                        "translation_log_prior": pass2_translation_log_prior,
                         "mstep_relion_x_half": bool(config.relion_bpref_frame),
                         "mstep_subtract_ctf_projection": bool(
                             group_kwargs.get("reconstruction_subtract_projected_reference", False)
