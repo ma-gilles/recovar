@@ -1936,6 +1936,15 @@ def compute_pass2_stats_sparse_bucketed(
                     global_min_diff2,
                     jnp.asarray(0.0, dtype=precision_policy.score_real_dtype),
                 )
+            # Replace admitted raw-score slots with their prior-adjusted scores.
+            # Pruning consumes exactly these values below; retaining this small
+            # tensor avoids another projection/scoring sweep without caching
+            # projection slabs or increasing the admitted score population.
+            cached_pruning_scores = (
+                cached_raw_diff2_chunks
+                if use_relion_fine_mstep_prune and not score_only and not return_score_log_z_only
+                else None
+            )
             for chunk_idx, (start, stop) in enumerate(chunk_ranges):
                 if cached_raw_diff2_chunks is None:
                     scores_chunk = _score_rotation_chunk(
@@ -1952,7 +1961,9 @@ def compute_pass2_stats_sparse_bucketed(
                         jnp.asarray(candidate_mask[:, start:stop, :]),
                         global_min_diff2,
                     )
-                    cached_raw_diff2_chunks[chunk_idx] = None
+                    cached_raw_diff2_chunks[chunk_idx] = (
+                        scores_chunk if cached_pruning_scores is not None else None
+                    )
                 chunk_log_z, chunk_best_log_score, chunk_best_argmax, _ = _normalize_pass2_bucket_score_only(
                     scores_chunk,
                 )
@@ -2080,7 +2091,7 @@ def compute_pass2_stats_sparse_bucketed(
             chunk_reconstruction_sum_weight = None
             chunk_reconstruction_threshold = None
             if use_relion_fine_mstep_prune and not score_only:
-                score_chunks = [
+                score_chunks = cached_pruning_scores if cached_pruning_scores is not None else [
                     _score_rotation_chunk(
                         start,
                         stop,
@@ -2177,6 +2188,7 @@ def compute_pass2_stats_sparse_bucketed(
                         )
                     offset += width
                 del score_chunks
+            del cached_pruning_scores
             if accumulate_noise:
                 bucket_block_noise_shells = (
                     np.zeros(n_shells, dtype=np.float64)

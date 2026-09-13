@@ -6901,7 +6901,10 @@ def test_sparse_pass2_projection_cache_reuses_fine_grid_projection_chunks(monkey
     assert sum(projection_call_sizes) == fine_rotations.shape[0]
 
 
-def test_sparse_pass2_full_support_projection_cache_chunks_scores(monkeypatch):
+@pytest.mark.parametrize("fine_prune", [False, True])
+@pytest.mark.parametrize("raw_cache_bytes", [0, 512 * 1024**2])
+@pytest.mark.parametrize("chunk_rows", [4, 6])
+def test_sparse_pass2_full_support_projection_cache_chunks_scores(monkeypatch, fine_prune, raw_cache_bytes, chunk_rows):
     """Full-support cached buckets must stream score chunks without changing results."""
 
     n_images = 1
@@ -6928,8 +6931,9 @@ def test_sparse_pass2_full_support_projection_cache_chunks_scores(monkeypatch):
     )
 
     # Hold raw-diff2 cache admission constant across CPU-only and GPU runners.
-    # This test counts the two full-score passes caused by fine M-step pruning;
-    # cache fallback/recomputation has its own dedicated test below.
+    # Reuse must remove the pruning rescore only when the existing budget admits
+    # raw scores. Disabled admission retains the streaming recomputation path.
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_EXACT_RAW_DIFF2_CACHE_MAX_BYTES", str(raw_cache_bytes))
     ample_memory = 40 * 1024**3
     monkeypatch.setattr(sparse_pass2_window, "_device_memory_limit_bytes", lambda: ample_memory)
     monkeypatch.setattr(bucketed_mod, "_device_free_memory_bytes", lambda: ample_memory)
@@ -6965,7 +6969,7 @@ def test_sparse_pass2_full_support_projection_cache_chunks_scores(monkeypatch):
         return_score_log_z=True,
         accumulate_noise=True,
         half_spectrum_scoring=True,
-        relion_fine_mstep_prune=True,
+        relion_fine_mstep_prune=fine_prune,
         fine_rotations_override=fine_rotations,
         fine_rotation_parent_override=fine_parent,
         fine_translations_override=fine_translations,
@@ -7001,7 +7005,7 @@ def test_sparse_pass2_full_support_projection_cache_chunks_scores(monkeypatch):
 
     monkeypatch.setattr(bucketed_mod, "_score_pass2_bucket_relion_gpu_diff2", counting_score)
     monkeypatch.setattr(bucketed_mod, "_score_pass2_bucket_relion_gpu_diff2_raw", counting_raw_score)
-    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK", "4")
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_CACHED_SCORE_ROT_CHUNK", str(chunk_rows))
     chunked = compute_pass2_stats_sparse(**kwargs)
 
     np.testing.assert_allclose(np.asarray(chunked.Ft_y), np.asarray(unchunked.Ft_y), rtol=1e-5, atol=1e-5)
@@ -7013,17 +7017,28 @@ def test_sparse_pass2_full_support_projection_cache_chunks_scores(monkeypatch):
     _assert_relion_stats_close(chunked.relion_stats, unchunked.relion_stats, rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(np.asarray(chunked.score_log_z), np.asarray(unchunked.score_log_z), rtol=1e-6, atol=1e-6)
     _assert_noise_stats_close((chunked.noise_stats,), (unchunked.noise_stats,), rtol=1e-5, atol=1e-5)
-    # Exact-Gaussian scoring invokes the full scorer once per chunk to build
-    # the fine M-step pruning support, then once per chunk again while
-    # accumulating the final M-step/noise statistics.  The initial raw-diff2
-    # minimum pass is counted separately below.
-    assert score_chunk_sizes == [4, 4, 4, 4, 4, 4, 4, 4]
-    assert len(raw_score_refs) >= 4
-    assert max(raw_score_rotation_sizes) <= 4
+    # With admitted raw scores, normalization's converted scores are retained
+    # for pruning; only the final M-step/noise projection needs the full scorer.
+    # Without admission both normalization and pruning still recompute.
+    full_score_passes = 1 if raw_cache_bytes else 2 + int(fine_prune)
+    expected_chunks = [min(chunk_rows, 16 - start) for start in range(0, 16, chunk_rows)]
+    assert score_chunk_sizes == expected_chunks * full_score_passes
+    assert len(raw_score_refs) >= len(expected_chunks)
+    assert max(raw_score_rotation_sizes) <= chunk_rows
     # JAX may retain a few completed result wrappers in its dispatch cache;
     # require forward progress rather than assuming Python weak-reference
     # lifetime is identical to device-buffer lifetime.
     assert max_live_raw_score_arrays < len(raw_score_refs)
+
+    if raw_cache_bytes:
+        # Compare exactly at the same chunk boundaries: no tolerance is needed
+        # for retaining the scores instead of recomputing their unchanged ops.
+        monkeypatch.setenv("RECOVAR_SPARSE_PASS2_EXACT_RAW_DIFF2_CACHE_MAX_BYTES", "0")
+        fallback = compute_pass2_stats_sparse(**kwargs)
+        for field in ("Ft_y", "Ft_ctf", "hard_assignment", "best_rotations", "best_translations", "best_rotation_indices", "score_log_z"):
+            np.testing.assert_array_equal(np.asarray(getattr(chunked, field)), np.asarray(getattr(fallback, field)))
+        _assert_relion_stats_close(chunked.relion_stats, fallback.relion_stats, rtol=0, atol=0)
+        _assert_noise_stats_close((chunked.noise_stats,), (fallback.noise_stats,), rtol=0, atol=0)
 
 
 def test_sparse_pass2_projection_cache_chunks_non_identity_indices(monkeypatch):
