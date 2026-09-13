@@ -3934,102 +3934,51 @@ def compute_pass2_stats_sparse_bucketed(
             flat_summed = flatten_bucket_rows(summed)
             flat_ctf_probs = flatten_bucket_rows(ctf_probs)
             mstep_window_indices = relion_x_half_recon_indices if use_relion_x_half_mstep else recon_window_indices
-            if not live_per_particle_launches and use_window:
+            if not live_per_particle_launches:
+                if use_window:
+                    adjoint_window_indices = mstep_window_indices
+                    adjoint_max_r = float(mstep_current_size // 2)
+                    adjoint_layout = "window"
+                elif use_relion_x_half_mstep:
+                    adjoint_window_indices = relion_x_half_recon_indices
+                    adjoint_max_r = None
+                    adjoint_layout = "xhalf"
+                else:
+                    adjoint_window_indices = None
+                    adjoint_max_r = None
+                    adjoint_layout = "half"
+
                 Ft_y_total = _accumulate_adjoint_block_chunked(
                     flat_summed,
                     flat_backproject_rotations,
                     Ft_y_total,
-                    window_indices=mstep_window_indices,
-                    use_windowed_adjoint=True,
+                    window_indices=adjoint_window_indices,
+                    use_windowed_adjoint=use_window or use_relion_x_half_mstep,
                     image_shape=image_shape,
                     volume_shape=recon_volume_shape,
                     disc_type="linear_interp",
                     half_image=True,
                     half_volume=use_half_volume_mstep,
-                    max_r=float(mstep_current_size // 2),
+                    max_r=adjoint_max_r,
                     relion_x_half=use_relion_x_half_mstep,
                     max_block_bytes=max_adjoint_block_bytes,
-                    log_label="single-y-window",
+                    log_label=f"single-y-{adjoint_layout}",
                 )
                 Ft_ctf_total = _accumulate_adjoint_block_chunked(
                     flat_ctf_probs,
                     flat_backproject_rotations,
                     Ft_ctf_total,
-                    window_indices=mstep_window_indices,
-                    use_windowed_adjoint=True,
+                    window_indices=adjoint_window_indices,
+                    use_windowed_adjoint=use_window or use_relion_x_half_mstep,
                     image_shape=image_shape,
                     volume_shape=recon_volume_shape,
                     disc_type="linear_interp",
                     half_image=True,
                     half_volume=use_half_volume_mstep,
-                    max_r=float(mstep_current_size // 2),
+                    max_r=adjoint_max_r,
                     relion_x_half=use_relion_x_half_mstep,
                     max_block_bytes=max_adjoint_block_bytes,
-                    log_label="single-ctf-window",
-                )
-            elif not live_per_particle_launches and use_relion_x_half_mstep:
-                Ft_y_total = _accumulate_adjoint_block_chunked(
-                    flat_summed,
-                    flat_backproject_rotations,
-                    Ft_y_total,
-                    window_indices=relion_x_half_recon_indices,
-                    use_windowed_adjoint=True,
-                    image_shape=image_shape,
-                    volume_shape=recon_volume_shape,
-                    disc_type="linear_interp",
-                    half_image=True,
-                    half_volume=use_half_volume_mstep,
-                    max_r=None,
-                    relion_x_half=True,
-                    max_block_bytes=max_adjoint_block_bytes,
-                    log_label="single-y-xhalf",
-                )
-                Ft_ctf_total = _accumulate_adjoint_block_chunked(
-                    flat_ctf_probs,
-                    flat_backproject_rotations,
-                    Ft_ctf_total,
-                    window_indices=relion_x_half_recon_indices,
-                    use_windowed_adjoint=True,
-                    image_shape=image_shape,
-                    volume_shape=recon_volume_shape,
-                    disc_type="linear_interp",
-                    half_image=True,
-                    half_volume=use_half_volume_mstep,
-                    max_r=None,
-                    relion_x_half=True,
-                    max_block_bytes=max_adjoint_block_bytes,
-                    log_label="single-ctf-xhalf",
-                )
-            elif not live_per_particle_launches:
-                Ft_y_total = _accumulate_adjoint_block_chunked(
-                    flat_summed,
-                    flat_backproject_rotations,
-                    Ft_y_total,
-                    use_windowed_adjoint=False,
-                    image_shape=image_shape,
-                    volume_shape=recon_volume_shape,
-                    disc_type="linear_interp",
-                    half_image=True,
-                    half_volume=use_half_volume_mstep,
-                    max_r=None,
-                    relion_x_half=False,
-                    max_block_bytes=max_adjoint_block_bytes,
-                    log_label="single-y-half",
-                )
-                Ft_ctf_total = _accumulate_adjoint_block_chunked(
-                    flat_ctf_probs,
-                    flat_backproject_rotations,
-                    Ft_ctf_total,
-                    use_windowed_adjoint=False,
-                    image_shape=image_shape,
-                    volume_shape=recon_volume_shape,
-                    disc_type="linear_interp",
-                    half_image=True,
-                    half_volume=use_half_volume_mstep,
-                    max_r=None,
-                    relion_x_half=False,
-                    max_block_bytes=max_adjoint_block_bytes,
-                    log_label="single-ctf-half",
+                    log_label=f"single-ctf-{adjoint_layout}",
                 )
 
         # Noise accumulation
