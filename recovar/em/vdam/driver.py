@@ -921,7 +921,6 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         grad_fin_frac = float(opts.grad_fin_frac)
         continuation_phase_lengths = None
         sampling_state = _initial_sampling_state(opts, pixel_size=float(dataset.voxel_size))
-        sampling_plan = _build_sampling_plan(opts, iteration=1, sampling_state=sampling_state)
         state, optics_group_by_particle = _initial_state_from_particles(
             dataset,
             main_star,
