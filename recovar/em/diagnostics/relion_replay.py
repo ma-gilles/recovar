@@ -755,23 +755,8 @@ def _apply_replay_correction_overrides(*, relion_half_inputs, replay_override) -
     replay_image_value = replay_override.get("image_corrections")
     serialized_scale_value = replay_override.get("serialized_scale_corrections")
     scoring_scale_value = replay_override.get("scoring_scale_corrections")
-    legacy_scale_value = replay_override.get("scale_corrections")
-    if legacy_scale_value is not None:
-        if serialized_scale_value is not None or scoring_scale_value is not None:
-            raise ValueError(
-                "Legacy scale_corrections cannot be combined with serialized_scale_corrections "
-                "or scoring_scale_corrections"
-            )
-        logger.warning(
-            "Replay override: scale_corrections is deprecated; treating it as an explicit "
-            "scoring scale and, when paired with image_corrections, its source scale"
-        )
-        scoring_scale_value = legacy_scale_value
-        if replay_image_value is not None:
-            # Historical callers supplied image and scale as one paired state.
-            # Treating the legacy scale as both source and target preserves
-            # those exact arrays instead of rescaling against resident state.
-            serialized_scale_value = legacy_scale_value
+    if "scale_corrections" in replay_override:
+        raise ValueError("Replay scale requires serialized_scale_corrections or scoring_scale_corrections")
 
     resident_dtypes = [
         np.asarray(value).dtype
@@ -833,11 +818,11 @@ def _apply_replay_correction_overrides(*, relion_half_inputs, replay_override) -
     if replay_image_value is not None:
         applied_fields.append("image_corrections")
         logger.info("Replay override: image_corrections <- norm state rescaled to live scoring scale")
-    if serialized_scale_value is not None and legacy_scale_value is None:
+    if serialized_scale_value is not None:
         applied_fields.append("serialized_scale_corrections")
         logger.info("Replay provenance: serialized_scale_corrections recorded; resident scoring scale preserved")
     if scoring_scale_value is not None:
-        applied_fields.append("scale_corrections" if legacy_scale_value is not None else "scoring_scale_corrections")
+        applied_fields.append("scoring_scale_corrections")
         logger.info("Replay override: scoring scale corrections <- explicit scorer oracle")
     return applied_fields
 

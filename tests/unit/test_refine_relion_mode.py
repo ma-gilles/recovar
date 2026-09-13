@@ -1083,7 +1083,7 @@ def test_replay_cold_start_falls_back_to_serialized_scale():
 
 
 @pytest.mark.parametrize("with_resident_state", [False, True])
-def test_replay_legacy_paired_image_scale_state_remains_exact(with_resident_state):
+def test_replay_explicit_paired_image_scale_state_remains_exact(with_resident_state):
     relion_half_inputs = iteration_loop_module._RelionHalfInputState.from_initial_values(
         previous_best_translations=None,
         previous_best_rotation_eulers=None,
@@ -1099,11 +1099,18 @@ def test_replay_legacy_paired_image_scale_state_remains_exact(with_resident_stat
         ),
     )
 
+    with pytest.raises(ValueError, match="Replay scale requires"):
+        iteration_loop_module._apply_replay_correction_overrides(
+            relion_half_inputs=relion_half_inputs,
+            replay_override={"scale_corrections": [np.asarray([4.0, 5.0]), None]},
+        )
+
     iteration_loop_module._apply_replay_correction_overrides(
         relion_half_inputs=relion_half_inputs,
         replay_override={
             "image_corrections": [np.asarray([1.0, 2.0]), np.asarray([], dtype=np.float32)],
-            "scale_corrections": [np.asarray([4.0, 5.0]), np.asarray([], dtype=np.float32)],
+            "serialized_scale_corrections": [np.asarray([4.0, 5.0]), np.asarray([], dtype=np.float32)],
+            "scoring_scale_corrections": [np.asarray([4.0, 5.0]), np.asarray([], dtype=np.float32)],
         },
     )
 
