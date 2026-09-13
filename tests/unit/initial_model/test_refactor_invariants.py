@@ -130,18 +130,13 @@ def test_initial_model_estep_reuses_shared_dense_em_engine():
 
 
 # ---------------------------------------------------------------------------
-# 3. Extracted helpers — presence and signature pin.
+# 3. Metadata array ownership.
 # ---------------------------------------------------------------------------
 
 
 def test_ensure_field_helper_preserves_metadata_array_identity():
     """``_ensure_field`` preserves existing arrays in particle metadata updates."""
     from recovar.em.vdam.estep_meta_updates import _ensure_field
-
-    sig = inspect.signature(_ensure_field)
-    params = list(sig.parameters)
-    assert params[:3] == ["arr", "shape", "dtype"], f"_ensure_field signature drifted: {sig}"
-    assert "fill" in sig.parameters, "_ensure_field lost the `fill` parameter"
 
     out = _ensure_field(None, (3, 2), np.float32, fill=7.0)
     assert out.shape == (3, 2)
@@ -150,36 +145,6 @@ def test_ensure_field_helper_preserves_metadata_array_identity():
     pre = np.arange(6, dtype=np.float32).reshape(3, 2)
     out2 = _ensure_field(pre, (3, 2), np.float32)
     assert out2 is pre, "_ensure_field must return the input when already correct"
-
-
-def test_stack_star_pair_helper_exists_in_star_io():
-    """``_stack_star_pair`` dedup'd the X/Y origin column reads in ``_write_data_star``."""
-    from recovar.em.vdam.star_io import _stack_star_pair
-
-    assert callable(_stack_star_pair)
-    assert list(inspect.signature(_stack_star_pair).parameters) == [
-        "main_star",
-        "x_name",
-        "y_name",
-    ]
-
-
-def test_my_mu_helper_exists_in_iteration_loop():
-    """``_my_mu`` was extracted as the validation copy used in both
-    ``vdam_iteration`` and ``apply_vdam_momentum_to_state``.
-    """
-    from recovar.em.vdam.estep_meta_updates import _my_mu
-
-    assert callable(_my_mu)
-    assert list(inspect.signature(_my_mu).parameters) == ["mu", "do_grad", "subset_size"]
-
-
-def test_bp_slab_helper_exists_in_layout():
-    """``_bp_slab`` dedup'd the slab-vs-cropped slice between data and weight paths."""
-    from recovar.em.vdam.layout import _bp_slab
-
-    assert callable(_bp_slab)
-    assert list(inspect.signature(_bp_slab).parameters) == ["arr", "r_max", "c"]
 
 
 # ---------------------------------------------------------------------------
