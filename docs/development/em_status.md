@@ -64,8 +64,9 @@ but three original mean-FSC bands still fail: radial flags2 **0.0693 < 0.0719**,
 head-heavy flags1 **0.1104 < 0.1122**, uniform flags1 **0.0672 < 0.0685**.
 All ten fixed-head arms completed. Same-source controls **13814629–13814638**
 are diagnostic; they do not replace the original bands. Private speed integration
-remains held. The current VDAM size check still fails at **8756 > 6100** lines;
-individual file ceilings pass. The total budget remains unchanged.
+remains held. The current VDAM size check still fails at **8753 > 6100** lines;
+individual file ceilings pass. The total includes native M-step replay after
+its move into diagnostics; the budget remains unchanged.
 [Independent fixed-matrix review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_capacity_noise_review_20260913/fixed_matrix_review.json).
 
 ## Opt-in native startup noise — September 13
