@@ -10589,7 +10589,8 @@ def test_batch_prefetch_is_bit_identical(monkeypatch, defer_flag):
 
 @pytest.mark.gpu
 @pytest.mark.parametrize("defer_flag", ["0", "1"])
-def test_flat_real_rows_sums_and_noise_are_bit_identical(monkeypatch, custom_cuda_lib, gpu_device, defer_flag):
+@pytest.mark.parametrize("noise_mode", ["noise", "noise_with_scale_groups"])
+def test_flat_real_rows_sums_and_noise_are_bit_identical(monkeypatch, custom_cuda_lib, gpu_device, defer_flag, noise_mode):
     """RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_FLAT_ROWS computes the pair-sparse weighted sums,
     CTF sums and noise terms only for the real rotation rows (flat [rows, pixel] layout)
     instead of the padded [images, rows, pixel] layout. Each real row is the padded row
@@ -10623,6 +10624,10 @@ def test_flat_real_rows_sums_and_noise_are_bit_identical(monkeypatch, custom_cud
         bucketed_mod._compact_pair_weighted_sums_and_noise_native.clear_cache()
         kwargs = _fused_kclass_multibucket_fixture(n_images=13)
         kwargs["accumulate_noise"] = True
+        if noise_mode == "noise_with_scale_groups":
+            # the group-scale XA/AA terms take their own flat-row form (job 13829375 crashed here)
+            kwargs["group_ids"] = np.arange(13) % 3
+            kwargs["scale_corrections"] = np.linspace(0.9, 1.1, 13).astype(np.float32)
         # the fused native sums/noise path (a prerequisite) is the exact Gaussian x-half M-step contract
         kwargs["relion_x_half_mstep"] = True
         with jax.default_device(gpu_device):
@@ -10664,7 +10669,7 @@ def test_flat_real_rows_sums_and_noise_are_bit_identical(monkeypatch, custom_cud
     _assert_fused_arrays_identical(
         {k: v for k, v in padded.items() if k not in bounded},
         {k: v for k, v in flat.items() if k not in bounded},
-        f"flat real rows (defer={defer_flag})",
+        f"flat real rows ({noise_mode}, defer={defer_flag})",
     )
 
 

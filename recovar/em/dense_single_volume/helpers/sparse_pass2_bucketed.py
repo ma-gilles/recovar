@@ -6635,6 +6635,8 @@ def _compact_pair_weighted_sums_and_noise_native(
     shell_count: int,
     batch_size: int,
     flat_rows=None,
+    flat_scale_old_scale=None,
+    flat_scale_pixel_mask=None,
 ):
     """Fuse compact weighted sums with dense noise/norm sufficient statistics.
 
@@ -6664,6 +6666,8 @@ def _compact_pair_weighted_sums_and_noise_native(
             n_rotation_rows=n_rotation_rows,
             shell_count=shell_count,
             batch_size=batch_size,
+            scale_old_scale=flat_scale_old_scale,
+            scale_pixel_mask=flat_scale_pixel_mask,
         )
     (
         summed,
@@ -6772,13 +6776,17 @@ def _compact_pair_weighted_sums_and_noise_native_flat_rows(
     n_rotation_rows: int,
     shell_count: int,
     batch_size: int,
+    scale_old_scale=None,
+    scale_pixel_mask=None,
 ):
     """Flat real-row form of :func:`_compact_pair_weighted_sums_and_noise_native`.
 
     Returns ``(summed_flat, summed_image_flat, ctf_probs_flat, probs_sum_t,
-    translation_posterior, block_noise_shells, block_norm_residual)`` with the
-    first three as ``[rows, pixel]`` arrays over ``flat_rows``; rows whose mask
-    is false (shape padding) are exactly zero.
+    translation_posterior, block_noise_shells, block_norm_residual,
+    scale_xa_per_image, scale_aa_per_image)`` with the first three as
+    ``[rows, pixel]`` arrays over ``flat_rows``; rows whose mask is false (shape
+    padding) are exactly zero. The per-image group-scale terms are ``None`` unless
+    ``scale_old_scale`` is given.
     """
     from recovar.cuda_backproject import dual_weighted_sums_pairs_rows_f32
 
@@ -6832,6 +6840,20 @@ def _compact_pair_weighted_sums_and_noise_native_flat_rows(
         shell_count=int(shell_count),
         batch_size=int(batch_size),
     )
+    scale_xa_per_image = scale_aa_per_image = None
+    if scale_old_scale is not None:
+        scale_xa_per_image, scale_aa_per_image = _flat_rows_scale_correction_terms_per_image(
+            proj_for_noise,
+            proj_abs2_for_noise,
+            summed_image_flat,
+            ctf_probs_flat,
+            noise_variance_half,
+            scale_old_scale,
+            None if scale_pixel_mask is None else jnp.asarray(scale_pixel_mask, dtype=bool),
+            row_batch,
+            row_rotation,
+            batch_size=int(batch_size),
+        )
     return (
         summed_flat,
         summed_image_flat,
@@ -6840,7 +6862,43 @@ def _compact_pair_weighted_sums_and_noise_native_flat_rows(
         translation_posterior,
         block_noise_shells,
         block_norm_residual,
+        scale_xa_per_image,
+        scale_aa_per_image,
     )
+
+
+@partial(jax.jit, static_argnames=("batch_size",))
+def _flat_rows_scale_correction_terms_per_image(
+    proj_for_noise,
+    proj_abs2_for_noise,
+    summed_flat,
+    ctf_probs_flat,
+    noise_variance_half,
+    old_scale,
+    scale_pixel_mask,
+    row_batch,
+    row_rotation,
+    *,
+    batch_size: int,
+):
+    """Flat-row form of ``compute_scale_correction_terms_per_image`` (same terms, rows summed per image)."""
+    proj_flat = proj_for_noise[row_batch, row_rotation]
+    proj_abs2_flat = proj_abs2_for_noise[row_batch, row_rotation]
+    safe_scale = jnp.maximum(jnp.asarray(old_scale, dtype=proj_abs2_flat.real.dtype), 1e-30)
+    ctf_has_mass = ctf_probs_flat != 0.0
+    if scale_pixel_mask is not None:
+        ctf_has_mass = ctf_has_mass & scale_pixel_mask.reshape(-1)[None, :]
+    ctf_probs_raw = jnp.where(ctf_has_mass, ctf_probs_flat * noise_variance_half[None, :], 0.0)
+    aa_terms = jnp.where(ctf_has_mass, proj_abs2_flat * ctf_probs_raw, 0.0)
+    aa_rows = jnp.sum(aa_terms, axis=1)
+    cross_has_mass = summed_flat != 0.0
+    if scale_pixel_mask is not None:
+        cross_has_mass = cross_has_mass & scale_pixel_mask.reshape(-1)[None, :]
+    cross_terms = jnp.where(cross_has_mass, proj_flat * jnp.conj(summed_flat), 0.0)
+    xa_rows = jnp.sum(noise_variance_half[None, :] * cross_terms.real, axis=1)
+    aa_per_image = add_segment_sum(jnp.zeros(int(batch_size), dtype=aa_rows.dtype), row_batch, aa_rows)
+    xa_per_image = add_segment_sum(jnp.zeros(int(batch_size), dtype=xa_rows.dtype), row_batch, xa_rows)
+    return xa_per_image / safe_scale, aa_per_image / (safe_scale**2)
 
 
 def _compact_pair_weighted_rotation_and_image_sums(
@@ -15740,6 +15798,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             active_flat_rotations = None
             mstep_active_indices = None
             flat_rows_precomputed = None
+            flat_scale_terms_precomputed = None
             mstep_active_mask = None
             mstep_active_count = 0
             summed_masked_noise_precomputed = None
@@ -15851,15 +15910,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                                     jnp.asarray((_idx % int(class_bucket_size)).astype(np.int32)),
                                     jnp.asarray(np.asarray(mstep_active_mask, dtype=bool)),
                                 )
-                        (
-                            summed,
-                            summed_masked_noise_precomputed,
-                            ctf_probs,
-                            probs_sum_t_jax,
-                            translation_posterior_jax,
-                            block_noise_shells_precomputed,
-                            block_norm_residual_precomputed,
-                        ) = _compact_pair_weighted_sums_and_noise_native(
+                        _fused_outputs = _compact_pair_weighted_sums_and_noise_native(
                             mstep_probs,
                             jnp.asarray(pair_arrays["local_rotation_row"]),
                             jnp.asarray(pair_arrays["translation_idx"]),
@@ -15875,10 +15926,32 @@ def compute_k_class_pass2_stats_sparse_fused(
                             shell_count=n_shells,
                             batch_size=batch,
                             flat_rows=flat_rows_for_sums,
+                            flat_scale_old_scale=(
+                                bucket_scale_for_stats
+                                if flat_rows_for_sums is not None and noise_scale_correction_xa_total is not None
+                                else None
+                            ),
+                            flat_scale_pixel_mask=(
+                                scale_correction_pixel_masks[class_index]
+                                if flat_rows_for_sums is not None and noise_scale_correction_xa_total is not None
+                                else None
+                            ),
                         )
+                        (
+                            summed,
+                            summed_masked_noise_precomputed,
+                            ctf_probs,
+                            probs_sum_t_jax,
+                            translation_posterior_jax,
+                            block_noise_shells_precomputed,
+                            block_norm_residual_precomputed,
+                        ) = _fused_outputs[:7]
                         if flat_rows_for_sums is not None:
                             # summed / ctf_probs are already the masked flat real rows
                             flat_rows_precomputed = (summed, ctf_probs)
+                            flat_scale_terms_precomputed = (
+                                None if _fused_outputs[7] is None else (_fused_outputs[7], _fused_outputs[8])
+                            )
                             summed = None
                             ctf_probs = None
                     else:
@@ -16636,7 +16709,10 @@ def compute_k_class_pass2_stats_sparse_fused(
                 _add_sparse_group_timing(group_timing, "noise_power_shells", time.time() - noise_sub_t0)
                 noise_sub_t0 = time.time()
                 if noise_scale_correction_xa_total is not None:
-                    if ctf_probs_for_noise is None:
+                    if flat_scale_terms_precomputed is not None:
+                        scale_xa_per_image, scale_aa_per_image = flat_scale_terms_precomputed
+                        scale_summed_masked = scale_ctf_probs = None
+                    elif ctf_probs_for_noise is None:
                         scale_summed_masked = compute_local_weighted_sums(noise_probs, shifted_noise_split)
                         scale_ctf_probs = compute_local_ctf_sums_from_probs_sum_t(
                             noise_probs_sum_t,
@@ -16645,15 +16721,16 @@ def compute_k_class_pass2_stats_sparse_fused(
                     else:
                         scale_summed_masked = summed_masked_noise
                         scale_ctf_probs = ctf_probs_for_noise
-                    scale_xa_per_image, scale_aa_per_image = _compute_scale_correction_terms_per_image(
-                        proj_for_noise_by_class[class_index],
-                        proj_abs2_by_class[class_index],
-                        scale_summed_masked,
-                        scale_ctf_probs,
-                        noise_variance_for_noise,
-                        bucket_scale_for_stats,
-                        scale_correction_pixel_masks[class_index],
-                    )
+                    if flat_scale_terms_precomputed is None:
+                        scale_xa_per_image, scale_aa_per_image = _compute_scale_correction_terms_per_image(
+                            proj_for_noise_by_class[class_index],
+                            proj_abs2_by_class[class_index],
+                            scale_summed_masked,
+                            scale_ctf_probs,
+                            noise_variance_for_noise,
+                            bucket_scale_for_stats,
+                            scale_correction_pixel_masks[class_index],
+                        )
                     if defer_host_stats and not defer_host_stats_check:
                         deferred_host_records.append(
                             ("scale", class_index, bucket_group_ids, scale_xa_per_image, scale_aa_per_image)
