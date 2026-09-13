@@ -10,7 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-import recovar.em.refinement.iteration_loop as iteration_loop
+import recovar.em.sampling as sampling_module
 from recovar.em.sampling import (
     apply_relion_rotation_perturbation_to_eulers,
     apply_relion_translation_perturbation,
@@ -32,28 +32,28 @@ def _canonical_eulers(order):
 
 @pytest.fixture(autouse=True)
 def _fake_canonical_grid(monkeypatch):
-    monkeypatch.setattr(iteration_loop, "_get_relion_rotation_grid_eulers_float64", _canonical_eulers)
+    monkeypatch.setattr(sampling_module, "_get_relion_rotation_grid_eulers_float64", _canonical_eulers)
 
 
 def test_mstep_source_uses_the_canonical_grid_at_matching_size():
     eulers = np.zeros((N_ROT, 3), dtype=np.float32)
-    source = iteration_loop._relion_mstep_source_eulers(eulers, ORDER)
+    source = sampling_module._relion_mstep_source_eulers(eulers, ORDER)
     expected = _canonical_eulers(ORDER)
     assert source.dtype == np.float64 and source.tobytes() == expected.tobytes()
 
 
 def test_mstep_source_falls_back_to_the_grid_angles_when_sizes_differ():
     eulers = np.arange(15, dtype=np.float32).reshape(5, 3)
-    source = iteration_loop._relion_mstep_source_eulers(eulers, ORDER)
+    source = sampling_module._relion_mstep_source_eulers(eulers, ORDER)
     assert source.dtype == np.float64 and source.tolist() == eulers.astype(np.float64).tolist()
 
 
 def test_sealed_grid_supplies_its_own_angles(monkeypatch):
     eulers = np.arange(3 * N_ROT, dtype=np.float32).reshape(-1, 3)
     monkeypatch.setattr(
-        iteration_loop, "_get_relion_rotation_grid_eulers_float64", lambda order: pytest.fail("canonical grid must not be built")
+        sampling_module, "_get_relion_rotation_grid_eulers_float64", lambda order: pytest.fail("canonical grid must not be built")
     )
-    source = iteration_loop._relion_mstep_source_eulers(eulers, ORDER, use_grid_eulers=True)
+    source = sampling_module._relion_mstep_source_eulers(eulers, ORDER, use_grid_eulers=True)
     assert source.dtype == np.float64 and source.tolist() == eulers.astype(np.float64).tolist()
 
 
@@ -62,7 +62,7 @@ def test_perturbed_trial_grid_matches_the_separate_relion_calls(dtype):
     eulers = _canonical_eulers(ORDER).astype(np.float32)
     base_translations = np.asarray([[-1.0, 0.0], [0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
     angsamp = relion_angular_sampling_deg(ORDER, adaptive_oversampling=0)
-    grid = iteration_loop._perturbed_trial_grid(
+    grid = sampling_module._perturbed_trial_grid(
         rotation_eulers=eulers,
         mstep_source_eulers=_canonical_eulers(ORDER),
         base_translations=base_translations,
@@ -96,9 +96,9 @@ def test_perturbed_trial_grid_records_call_order(monkeypatch):
         calls.append(("trans", rp, step))
         return np.asarray(base) + rp
 
-    monkeypatch.setattr(iteration_loop, "apply_relion_rotation_perturbation_to_eulers", fake_rot)
-    monkeypatch.setattr(iteration_loop, "apply_relion_translation_perturbation", fake_trans)
-    grid = iteration_loop._perturbed_trial_grid(
+    monkeypatch.setattr(sampling_module, "apply_relion_rotation_perturbation_to_eulers", fake_rot)
+    monkeypatch.setattr(sampling_module, "apply_relion_translation_perturbation", fake_trans)
+    grid = sampling_module._perturbed_trial_grid(
         rotation_eulers=np.zeros((4, 3)),
         mstep_source_eulers=np.zeros((4, 3)),
         base_translations=np.zeros((2, 2)),

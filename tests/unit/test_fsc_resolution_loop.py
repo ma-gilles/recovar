@@ -3,6 +3,8 @@
 import numpy as np
 import pytest
 
+import recovar.em.sampling as sampling_module
+
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
@@ -219,7 +221,7 @@ def generated_relion_rotation_grid(monkeypatch):
         return rotations, eulers
 
     monkeypatch.setattr(
-        iteration_loop_module,
+        sampling_module,
         "_relion_rotation_grid_float32",
         fake_relion_rotation_grid_float32,
     )

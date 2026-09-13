@@ -4,7 +4,7 @@ import inspect
 
 import numpy as np
 
-from recovar.em.relion import relion_metadata
+import recovar.em.sampling as sampling_module
 from recovar.em.sampling import (
     _relion_adaptive_pass1_rotations,
     _relion_mstep_rotations_from_eulers,
@@ -365,19 +365,19 @@ def test_unperturbed_scorer_and_mstep_share_host_generated_path():
 def test_relion_global_grid_preserves_source_euler_precision_until_matrix_cast(monkeypatch):
     source_eulers = _UNPERTURBED_FINE_EULERS_F64[:2]
     monkeypatch.setattr(
-        relion_metadata,
+        sampling_module,
         "_get_relion_rotation_grid_eulers_float64",
         lambda _order: source_eulers,
     )
 
-    rotations, returned_eulers = relion_metadata._relion_rotation_grid_float32(3)
+    rotations, returned_eulers = sampling_module._relion_rotation_grid_float32(3)
 
     np.testing.assert_array_equal(rotations, _relion_mstep_rotations_from_eulers(source_eulers))
     np.testing.assert_array_equal(returned_eulers, source_eulers.astype(np.float32))
     late_cast_rotations = _relion_mstep_rotations_from_eulers(returned_eulers)
     assert np.any(rotations.view(np.uint32) != late_cast_rotations.view(np.uint32))
 
-    rotations_f64, returned_eulers_f64 = relion_metadata._relion_rotation_grid_float32(
+    rotations_f64, returned_eulers_f64 = sampling_module._relion_rotation_grid_float32(
         3, dtype=np.float64
     )
     np.testing.assert_array_equal(returned_eulers_f64, source_eulers)

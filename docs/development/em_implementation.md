@@ -69,7 +69,8 @@ both passes ([`test_local_search_sigma_owner.py`](../../tests/unit/test_local_se
 
 The [refinement controller](../../recovar/em/refinement/iteration_loop.py)
 owns iteration history, half-set dispatch, sampling updates, convergence and
-finalization scheduling/state mutation. Its module-level helpers
+finalization scheduling/state mutation. The existing [sampling module](../../recovar/em/sampling.py)
+owns pure grid construction. Its helpers
 `_relion_mstep_source_eulers` and `_perturbed_trial_grid` hold the two sampling rules
 both passes share: the exact M-step rotations are seeded from the sealed grid's own
 angles or RELION's canonical grid at the perturbation order (the scoring grid's
@@ -78,7 +79,7 @@ the trial orientations, rebuilds the M-step rotations and shifts the translation
 grid. `_initial_coarse_grids` materializes the first exhaustive grid from a
 sealed capture, a caller translation table or the RELION translation grid, and
 `_relion_base_translation_grid` is the only unperturbed translation-grid
-construction in the controller; [`test_initial_coarse_grid_owner.py`](../../tests/unit/test_initial_coarse_grid_owner.py)
+construction used by the controller; [`test_initial_coarse_grid_owner.py`](../../tests/unit/test_initial_coarse_grid_owner.py)
 pins both. `_ExpectedAccuracyInputs` bundles the run-constant inputs of RELION's
 expected-accuracy estimation, `_expected_accuracy_class_ids` gives the half-1 class
 labels, and `_estimate_half1_expected_accuracy` is the one call site shared by both
@@ -94,8 +95,8 @@ once with its perturbation and exact M-step rotations, and
 scoring grid; the final pass sizes its parent pass with
 `resolution.relion_local_pass1_current_size` only under adaptive oversampling
 ([`test_local_fine_grid_owner.py`](../../tests/unit/test_local_fine_grid_owner.py)).
-They stay in the controller module because the sampling primitives they
-call are the ones controller tests substitute. Its exact local-search stage is implemented in
+Grid tests substitute primitives at their sampling owner; sealed-state replay remains
+at the refinement boundary. The exact local-search stage is implemented in
 [`local_search_iteration`](../../recovar/em/local/local_search_iteration.py).
 That module builds local pose neighborhoods, asks
 [`batch_planning`](../../recovar/em/helpers/batch_planning.py) for

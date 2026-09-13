@@ -1,5 +1,6 @@
 import functools
 import os
+from typing import NamedTuple
 
 import healpy as hp
 import jax
@@ -1354,6 +1355,159 @@ def _get_relion_rotation_grid_eulers_float64(order, *, rotation_index_order: str
     n_dir = hp.nside2npix(2**order)
     n_psi = relion_euler.shape[0] // n_dir
     return relion_euler.reshape(n_dir, n_psi, 3).transpose(1, 0, 2).reshape(-1, 3)
+
+
+class _PerturbedTrialGrid(NamedTuple):
+    """One RELION SamplingPerturbation applied to a trial grid."""
+
+    rotations: np.ndarray
+    rotation_eulers: np.ndarray
+    mstep_rotations: np.ndarray
+    translations: jnp.ndarray
+
+
+def _relion_mstep_source_eulers(rotation_eulers, healpix_order, *, use_grid_eulers: bool = False):
+    """Euler angles that seed the exact RELION M-step rotations of a scoring grid.
+
+    RELION derives its M-step matrices from the sampling grid's native RFLOAT
+    angles. A sealed captured grid supplies its own angles; otherwise RELION's
+    canonical grid at ``healpix_order`` is used, unless its row count differs
+    from the scoring grid (capped orders, subsets), in which case the scoring
+    grid's own angles are used.
+    """
+
+    if use_grid_eulers:
+        return np.asarray(rotation_eulers, dtype=np.float64)
+    source = _get_relion_rotation_grid_eulers_float64(healpix_order)
+    if int(source.shape[0]) != int(rotation_eulers.shape[0]):
+        return np.asarray(rotation_eulers, dtype=np.float64)
+    return source
+
+
+def _perturbed_trial_grid(
+    *,
+    rotation_eulers,
+    mstep_source_eulers,
+    base_translations,
+    translation_step: float,
+    random_perturbation: float,
+    angular_sampling_deg: float,
+    dtype,
+) -> _PerturbedTrialGrid:
+    """Apply RELION's SamplingPerturbation to a trial grid.
+
+    ``healpix_sampling.cpp:1909-1934`` rotates every trial orientation by the
+    same rigid SO(3) perturbation after oversampling and ``1810-1820`` shifts the
+    translation grid; the exact M-step rotations are rebuilt from
+    ``mstep_source_eulers`` with the same perturbation. The regular iterations
+    and the final all-data pass share this rule.
+    """
+
+    rotations, rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
+        rotation_eulers,
+        random_perturbation,
+        angular_sampling_deg,
+        dtype=dtype,
+    )
+    _, _, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+        mstep_source_eulers,
+        random_perturbation,
+        angular_sampling_deg,
+        return_mstep_rotations=True,
+        dtype=dtype,
+    )
+    translations = jnp.asarray(
+        apply_relion_translation_perturbation(
+            np.asarray(base_translations),
+            random_perturbation,
+            translation_step,
+        ),
+        dtype=dtype,
+    )
+    return _PerturbedTrialGrid(rotations, rotation_eulers, mstep_rotations, translations)
+
+
+def _relion_base_translation_grid(translation_range, translation_step, *, n_classes, voxel_size):
+    """Unperturbed RELION translation grid in pixels as a host float64 array.
+
+    ``voxel_size`` (Angstrom) supplies the source units of the K=1 exact
+    enumeration; a non-positive value falls back to pixel units.  The grid is
+    kept in host double precision so every SamplingPerturbation starts from
+    the unrounded coordinates (see ``_perturbed_trial_grid``).
+    """
+
+    return _translation_grid_for_class_count(
+        translation_range,
+        translation_step,
+        n_classes=n_classes,
+        source_units_per_pixel=(voxel_size if voxel_size > 0 else 1.0),
+    ).astype(np.float64, copy=False)
+
+
+def _exact_local_fine_grid(*, healpix_order, angular_sampling_deg, random_perturbation, dtype=np.float32):
+    """Materialize RELION's fine local-search grid once, with its SamplingPerturbation.
+
+    RELION rotates every fine orientation by the iteration's perturbation
+    (``healpix_sampling.cpp:1909-1934``) and rebuilds the exact M-step matrices
+    from the canonical RFLOAT angles with the same perturbation.  ``None`` keeps
+    the unperturbed grid matrices for a pass that drew no perturbation.
+    Returns ``(rotations, rotation_eulers, mstep_rotations)``.
+    """
+
+    rotations, rotation_eulers = _relion_rotation_grid_float32(healpix_order, dtype=dtype)
+    if random_perturbation is not None:
+        rotations, rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
+            rotation_eulers,
+            float(random_perturbation),
+            angular_sampling_deg,
+        )
+    _, _, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+        _get_relion_rotation_grid_eulers_float64(healpix_order),
+        0.0 if random_perturbation is None else float(random_perturbation),
+        angular_sampling_deg,
+        return_mstep_rotations=True,
+    )
+    return rotations, rotation_eulers, mstep_rotations
+
+
+def _local_search_mstep_rotations(effective_mstep_rotations, rotation_eulers, healpix_order):
+    """Exact M-step rotations of a local search that reuses the scoring grid.
+
+    The perturbed trial grid already carries its M-step matrices; a grid
+    without them rebuilds RELION's host-inverse matrices from the M-step
+    source angles at ``healpix_order`` (no further perturbation).
+    """
+
+    if effective_mstep_rotations is not None:
+        return effective_mstep_rotations
+    _, _, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+        _relion_mstep_source_eulers(rotation_eulers, healpix_order),
+        0.0,
+        relion_angular_sampling_deg(healpix_order, adaptive_oversampling=0),
+        return_mstep_rotations=True,
+    )
+    return mstep_rotations
+
+
+def _relion_rotation_grid_float32(healpix_order: int, *, dtype: np.dtype = np.float32):
+    """Return scorer matrices/eulers using RELION's accelerated-path policy.
+
+    ``dtype`` controls the returned rotation matrices and working Euler grid. Under
+    ``ACC_DOUBLE_PRECISION`` RELION's host-side ``RFLOAT -> XFLOAT`` cast is a
+    no-op, so a caller running float64 scoring should pass ``dtype=np.float64``
+    here to keep the coarse scorer operands at full precision instead of the
+    single-precision default.  These Euler rows are subsequently perturbed and
+    converted back to matrices, so they are working RFLOAT values rather than
+    merely serialized metadata.
+    """
+    order = int(healpix_order)
+    source_eulers = _get_relion_rotation_grid_eulers_float64(order)
+    eulers = source_eulers.astype(dtype)
+    # RELION's accelerated expectation path constructs inverse projector
+    # matrices on the host in RFLOAT precision, casts to XFLOAT, then copies
+    # them to the device.  Preserve source Euler precision until that cast.
+    rotations = _relion_mstep_rotations_from_eulers(source_eulers, dtype=dtype)
+    return rotations, eulers
 
 
 def get_oversampled_relion_hidden_rotation_grid_from_samples(

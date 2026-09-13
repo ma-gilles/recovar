@@ -5,7 +5,8 @@
 ``half_scoring`` owns the per-half dense/local engine calls; ``scoring_policy``
 owns their shared execution defaults and diagnostic selectors. Local chunks
 are implemented in ``local_search_iteration``; state-swap diagnostics belong
-to ``helpers.state_swap_runtime``.
+to ``diagnostics.state_swap_runtime``. Pure trial-grid construction belongs to
+``sampling``.
 See ``docs/math/relion_refinement_algorithm.md`` for the algorithm map.
 """
 
@@ -22,6 +23,7 @@ import numpy as np
 from recovar import utils
 from recovar.core import fourier_transform_utils
 from recovar.data_io import cryoem_dataset
+from recovar.em import sampling
 from recovar.em.dense.half_scoring import _score_half_dense_in_bpref_scope, _score_half_local_in_bpref_scope
 from recovar.em.dense.score_outputs import (
     HalfScoreResult,
@@ -183,7 +185,7 @@ from recovar.em.refinement.projector_preparation import (
     prepare_initial_real_references,
 )
 from recovar.em.refinement.refinement_options import RefinementOptions, with_validated_sampling_schedule
-from recovar.em.relion.relion_metadata import _relion_metadata_translations, _relion_rotation_grid_float32
+from recovar.em.relion.relion_metadata import _relion_metadata_translations
 from recovar.em.relion.relion_normalization import update_relion_norm_scale_corrections
 from recovar.em.relion.relion_worker_scale import (
     _dispatch_relion_follower_scale_for_final_all_data,
@@ -194,13 +196,10 @@ from recovar.em.relion.relion_worker_scale import (
     setup_relion_follower_scale_state,
 )
 from recovar.em.sampling import (
-    _get_relion_rotation_grid_eulers_float64,
     _relion_adaptive_pass1_rotations,
-    _translation_grid_for_class_count,
     advance_relion_perturbation,
     advance_relion_perturbation_from_seed,
     apply_relion_rotation_perturbation,
-    apply_relion_rotation_perturbation_to_eulers,
     apply_relion_translation_perturbation,
     build_local_search_grid_metadata,
     read_relion_sampling_metadata,
@@ -247,76 +246,6 @@ def _kclass_replay_tau2_enabled() -> bool:
 RELION_MINRES_MAP = 5
 
 
-class _PerturbedTrialGrid(NamedTuple):
-    """One RELION SamplingPerturbation applied to a trial grid."""
-
-    rotations: np.ndarray
-    rotation_eulers: np.ndarray
-    mstep_rotations: np.ndarray
-    translations: jnp.ndarray
-
-
-def _relion_mstep_source_eulers(rotation_eulers, healpix_order, *, use_grid_eulers: bool = False):
-    """Euler angles that seed the exact RELION M-step rotations of a scoring grid.
-
-    RELION derives its M-step matrices from the sampling grid's native RFLOAT
-    angles. A sealed captured grid supplies its own angles; otherwise RELION's
-    canonical grid at ``healpix_order`` is used, unless its row count differs
-    from the scoring grid (capped orders, subsets), in which case the scoring
-    grid's own angles are used.
-    """
-
-    if use_grid_eulers:
-        return np.asarray(rotation_eulers, dtype=np.float64)
-    source = _get_relion_rotation_grid_eulers_float64(healpix_order)
-    if int(source.shape[0]) != int(rotation_eulers.shape[0]):
-        return np.asarray(rotation_eulers, dtype=np.float64)
-    return source
-
-
-def _perturbed_trial_grid(
-    *,
-    rotation_eulers,
-    mstep_source_eulers,
-    base_translations,
-    translation_step: float,
-    random_perturbation: float,
-    angular_sampling_deg: float,
-    dtype,
-) -> _PerturbedTrialGrid:
-    """Apply RELION's SamplingPerturbation to a trial grid.
-
-    ``healpix_sampling.cpp:1909-1934`` rotates every trial orientation by the
-    same rigid SO(3) perturbation after oversampling and ``1810-1820`` shifts the
-    translation grid; the exact M-step rotations are rebuilt from
-    ``mstep_source_eulers`` with the same perturbation. The regular iterations
-    and the final all-data pass share this rule.
-    """
-
-    rotations, rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
-        rotation_eulers,
-        random_perturbation,
-        angular_sampling_deg,
-        dtype=dtype,
-    )
-    _, _, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-        mstep_source_eulers,
-        random_perturbation,
-        angular_sampling_deg,
-        return_mstep_rotations=True,
-        dtype=dtype,
-    )
-    translations = jnp.asarray(
-        apply_relion_translation_perturbation(
-            np.asarray(base_translations),
-            random_perturbation,
-            translation_step,
-        ),
-        dtype=dtype,
-    )
-    return _PerturbedTrialGrid(rotations, rotation_eulers, mstep_rotations, translations)
-
-
 class _CoarseGrids(NamedTuple):
     """Exhaustive coarse trial grid of one RELION iteration."""
 
@@ -325,23 +254,6 @@ class _CoarseGrids(NamedTuple):
     base_translations: np.ndarray
     translations: jnp.ndarray
     healpix_order: int
-
-
-def _relion_base_translation_grid(translation_range, translation_step, *, n_classes, voxel_size):
-    """Unperturbed RELION translation grid in pixels as a host float64 array.
-
-    ``voxel_size`` (Angstrom) supplies the source units of the K=1 exact
-    enumeration; a non-positive value falls back to pixel units.  The grid is
-    kept in host double precision so every SamplingPerturbation starts from
-    the unrounded coordinates (see ``_perturbed_trial_grid``).
-    """
-
-    return _translation_grid_for_class_count(
-        translation_range,
-        translation_step,
-        n_classes=n_classes,
-        source_units_per_pixel=(voxel_size if voxel_size > 0 else 1.0),
-    ).astype(np.float64, copy=False)
 
 
 def _initial_coarse_grids(
@@ -385,8 +297,8 @@ def _initial_coarse_grids(
             int(current_translations.shape[0]),
         )
     elif translations is None:
-        rotations, rotation_eulers = _relion_rotation_grid_float32(healpix_order, dtype=dtype)
-        base_translations = _relion_base_translation_grid(
+        rotations, rotation_eulers = sampling._relion_rotation_grid_float32(healpix_order, dtype=dtype)
+        base_translations = sampling._relion_base_translation_grid(
             init_translation_range,
             init_translation_step,
             n_classes=n_classes,
@@ -394,55 +306,10 @@ def _initial_coarse_grids(
         )
         current_translations = jnp.asarray(base_translations, dtype=dtype)
     else:
-        rotations, rotation_eulers = _relion_rotation_grid_float32(healpix_order, dtype=dtype)
+        rotations, rotation_eulers = sampling._relion_rotation_grid_float32(healpix_order, dtype=dtype)
         base_translations = np.asarray(translations, dtype=np.float64)
         current_translations = jnp.asarray(translations, dtype=dtype)
     return _CoarseGrids(rotations, rotation_eulers, base_translations, current_translations, int(healpix_order))
-
-
-def _exact_local_fine_grid(*, healpix_order, angular_sampling_deg, random_perturbation, dtype=np.float32):
-    """Materialize RELION's fine local-search grid once, with its SamplingPerturbation.
-
-    RELION rotates every fine orientation by the iteration's perturbation
-    (``healpix_sampling.cpp:1909-1934``) and rebuilds the exact M-step matrices
-    from the canonical RFLOAT angles with the same perturbation.  ``None`` keeps
-    the unperturbed grid matrices for a pass that drew no perturbation.
-    Returns ``(rotations, rotation_eulers, mstep_rotations)``.
-    """
-
-    rotations, rotation_eulers = _relion_rotation_grid_float32(healpix_order, dtype=dtype)
-    if random_perturbation is not None:
-        rotations, rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
-            rotation_eulers,
-            float(random_perturbation),
-            angular_sampling_deg,
-        )
-    _, _, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-        _get_relion_rotation_grid_eulers_float64(healpix_order),
-        0.0 if random_perturbation is None else float(random_perturbation),
-        angular_sampling_deg,
-        return_mstep_rotations=True,
-    )
-    return rotations, rotation_eulers, mstep_rotations
-
-
-def _local_search_mstep_rotations(effective_mstep_rotations, rotation_eulers, healpix_order):
-    """Exact M-step rotations of a local search that reuses the scoring grid.
-
-    The perturbed trial grid already carries its M-step matrices; a grid
-    without them rebuilds RELION's host-inverse matrices from the M-step
-    source angles at ``healpix_order`` (no further perturbation).
-    """
-
-    if effective_mstep_rotations is not None:
-        return effective_mstep_rotations
-    _, _, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-        _relion_mstep_source_eulers(rotation_eulers, healpix_order),
-        0.0,
-        relion_angular_sampling_deg(healpix_order, adaptive_oversampling=0),
-        return_mstep_rotations=True,
-    )
-    return mstep_rotations
 
 
 class _ExpectedAccuracyInputs(NamedTuple):
@@ -1611,7 +1478,7 @@ def _run_relion_iteration_loop(
                     current_healpix_order,
                     new_order,
                 )
-                current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(
+                current_rotations, current_rotation_eulers = sampling._relion_rotation_grid_float32(
                     new_order, dtype=_dense_global_scoring_dtype()
                 )
                 current_healpix_order = new_order
@@ -1623,7 +1490,7 @@ def _run_relion_iteration_loop(
                 )
 
             # Regenerate translation grid based on updated parameters
-            base_translations = _relion_base_translation_grid(
+            base_translations = sampling._relion_base_translation_grid(
                 state.translation_range,
                 state.translation_step,
                 n_classes=n_classes,
@@ -1640,7 +1507,7 @@ def _run_relion_iteration_loop(
         elif perturb_replay_relion_dir is not None and sealed_sampling_state is None:
             # Translation params may have changed under replay without an
             # hp_order bump. Regenerate the translation grid to match RELION.
-            _new_t_source = _relion_base_translation_grid(
+            _new_t_source = sampling._relion_base_translation_grid(
                 state.translation_range,
                 state.translation_step,
                 n_classes=n_classes,
@@ -1743,9 +1610,9 @@ def _run_relion_iteration_loop(
             _angsamp_order = int(_replay_meta["healpix_order"]) if _replay_meta is not None else current_healpix_order
             angsamp_deg = relion_angular_sampling_deg(_angsamp_order, adaptive_oversampling=0)
             if effective_rotation_eulers is not None:
-                trial_grid = _perturbed_trial_grid(
+                trial_grid = sampling._perturbed_trial_grid(
                     rotation_eulers=effective_rotation_eulers,
-                    mstep_source_eulers=_relion_mstep_source_eulers(
+                    mstep_source_eulers=sampling._relion_mstep_source_eulers(
                         effective_rotation_eulers,
                         _angsamp_order,
                         use_grid_eulers=sealed_sampling_state is not None,
@@ -1882,7 +1749,7 @@ def _run_relion_iteration_loop(
                 )
                 if (not use_parent_expanded_local) and _precompute_exact_local_fine_grid_enabled(local_search_order):
                     local_search_rotations, local_search_rotation_eulers, local_search_mstep_rotations = (
-                        _exact_local_fine_grid(
+                        sampling._exact_local_fine_grid(
                             healpix_order=local_search_order,
                             angular_sampling_deg=local_search_angular_sampling_deg,
                             random_perturbation=float(random_perturbation),
@@ -1926,7 +1793,7 @@ def _run_relion_iteration_loop(
             else:
                 local_search_rotations = effective_rotations
                 local_search_rotation_eulers = None
-                local_search_mstep_rotations = _local_search_mstep_rotations(
+                local_search_mstep_rotations = sampling._local_search_mstep_rotations(
                     effective_mstep_rotations, effective_rotation_eulers, local_search_order
                 )
             logger.info(
@@ -4214,7 +4081,7 @@ def _run_relion_iteration_loop(
         final_current_rotations = current_rotations
         final_current_rotation_eulers = current_rotation_eulers
     else:
-        final_current_rotations, final_current_rotation_eulers = _relion_rotation_grid_float32(
+        final_current_rotations, final_current_rotation_eulers = sampling._relion_rotation_grid_float32(
             final_current_healpix_order, dtype=_dense_global_scoring_dtype()
         )
     final_effective_rotations = final_current_rotations
@@ -4224,7 +4091,7 @@ def _run_relion_iteration_loop(
     )
     final_effective_mstep_rotations = None
     final_base_translations = jnp.asarray(
-        _relion_base_translation_grid(
+        sampling._relion_base_translation_grid(
             state.translation_range,
             state.translation_step,
             n_classes=n_classes,
@@ -4300,13 +4167,13 @@ def _run_relion_iteration_loop(
                 numbered_meta = read_relion_sampling_metadata(numbered_sampling_path)
                 numbered_range = float(numbered_meta["offset_range"]) / px
                 numbered_step = float(numbered_meta["offset_step"]) / px
-                numbered_grid = _relion_base_translation_grid(
+                numbered_grid = sampling._relion_base_translation_grid(
                     numbered_range,
                     numbered_step,
                     n_classes=n_classes,
                     voxel_size=px,
                 ).astype(np.float32)
-                final_grid_preview = _relion_base_translation_grid(
+                final_grid_preview = sampling._relion_base_translation_grid(
                     final_translation_range,
                     final_translation_step,
                     n_classes=n_classes,
@@ -4336,7 +4203,7 @@ def _run_relion_iteration_loop(
                         final_perturbation_healpix_order,
                     )
             final_base_translations = jnp.asarray(
-                _relion_base_translation_grid(
+                sampling._relion_base_translation_grid(
                     final_translation_range,
                     final_translation_step,
                     n_classes=n_classes,
@@ -4395,9 +4262,9 @@ def _run_relion_iteration_loop(
             final_perturbation_healpix_order,
             adaptive_oversampling=0,
         )
-        final_trial_grid = _perturbed_trial_grid(
+        final_trial_grid = sampling._perturbed_trial_grid(
             rotation_eulers=final_effective_rotation_eulers,
-            mstep_source_eulers=_relion_mstep_source_eulers(
+            mstep_source_eulers=sampling._relion_mstep_source_eulers(
                 final_effective_rotation_eulers,
                 final_perturbation_healpix_order,
             ),
@@ -4457,7 +4324,7 @@ def _run_relion_iteration_loop(
                     _local_search_precision_flags(final_sampling_relion_iteration, pass_index=2)
                 )
                 final_local_search_rotations, _, final_local_search_mstep_rotations = (
-                    _exact_local_fine_grid(
+                    sampling._exact_local_fine_grid(
                         healpix_order=final_local_search_order,
                         angular_sampling_deg=final_local_search_angular_sampling_deg,
                         random_perturbation=(final_random_perturbation if final_perturbation_applied else None),
@@ -4485,7 +4352,7 @@ def _run_relion_iteration_loop(
                     )
         else:
             final_local_search_rotations = final_effective_rotations
-            final_local_search_mstep_rotations = _local_search_mstep_rotations(
+            final_local_search_mstep_rotations = sampling._local_search_mstep_rotations(
                 final_effective_mstep_rotations, final_effective_rotation_eulers, final_local_search_order
             )
         logger.info(

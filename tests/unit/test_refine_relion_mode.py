@@ -29,7 +29,6 @@ import recovar.em.helpers.orientation_priors as orientation_priors_module
 import recovar.em.local.local_layout as local_layout_module
 import recovar.em.refinement.iteration_loop as iteration_loop_module
 import recovar.em.refinement.projector_preparation as projector_preparation
-import recovar.em.relion.relion_metadata as relion_metadata_module
 import recovar.em.sampling as sampling_module
 import recovar.reconstruction.regularization as regularization_module
 from recovar import core
@@ -348,13 +347,13 @@ def test_relion_rotation_grid_float32_honors_explicit_float64_dtype(monkeypatch)
         [[13.123456789, 47.987654321, 91.234567891]], dtype=np.float64
     )
     monkeypatch.setattr(
-        relion_metadata_module,
+        sampling_module,
         "_get_relion_rotation_grid_eulers_float64",
         lambda _order: source_eulers,
     )
 
-    rotations_f32, eulers_f32 = iteration_loop_module._relion_rotation_grid_float32(2)
-    rotations_f64, eulers_f64 = iteration_loop_module._relion_rotation_grid_float32(2, dtype=np.float64)
+    rotations_f32, eulers_f32 = sampling_module._relion_rotation_grid_float32(2)
+    rotations_f64, eulers_f64 = sampling_module._relion_rotation_grid_float32(2, dtype=np.float64)
 
     assert rotations_f32.dtype == np.float32
     assert rotations_f64.dtype == np.float64
@@ -9824,7 +9823,7 @@ class TestRelionModeSmokeTest:
         """Zero initial offsets still have native accelerated pdf_offset, not a flat prior."""
         monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
         monkeypatch.setattr(
-            iteration_loop_module, "_relion_rotation_grid_float32",
+            sampling_module, "_relion_rotation_grid_float32",
             lambda order, dtype: (np.asarray(rotations, dtype=dtype), np.zeros((N_ROTATIONS, 3), dtype=dtype)),
         )
         for dataset in half_datasets:
@@ -10657,7 +10656,7 @@ class TestRelionModeSmokeTest:
         monkeypatch.setattr(iteration_loop_module, "rotation_grid_size", fake_rotation_grid_size)
         monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
         monkeypatch.setattr(
-            iteration_loop_module,
+            sampling_module,
             "_relion_rotation_grid_float32",
             lambda _order, dtype=None: (
                 np.asarray(rotations, dtype=np.float32),
@@ -10990,17 +10989,17 @@ class TestRelionModeSmokeTest:
         monkeypatch.setattr(iteration_loop_module, "rotation_grid_size", fake_rotation_grid_size)
         monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
         monkeypatch.setattr(
-            iteration_loop_module,
+            sampling_module,
             "_relion_rotation_grid_float32",
             fake_relion_rotation_grid_float32,
         )
         monkeypatch.setattr(
-            iteration_loop_module,
+            sampling_module,
             "_get_relion_rotation_grid_eulers_float64",
             lambda order: fake_get_relion_rotation_grid_eulers(order).astype(np.float64),
         )
         monkeypatch.setattr(
-            iteration_loop_module,
+            sampling_module,
             "apply_relion_rotation_perturbation_to_eulers",
             fake_apply_relion_rotation_perturbation_to_eulers,
         )
@@ -11467,7 +11466,7 @@ class TestRelionModeSmokeTest:
         init_noise = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
         init_tau = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
 
-        relion_rotations, _ = iteration_loop_module._relion_rotation_grid_float32(2)
+        relion_rotations, _ = sampling_module._relion_rotation_grid_float32(2)
         expected_per_half = []
         expected_mass_per_half = []
         for dataset in half_datasets:
@@ -13590,7 +13589,7 @@ class TestRelionModeSmokeTest:
         rotations_many = _make_rotations(20, seed=333)
 
         monkeypatch.setattr(
-            refine_mod,
+            sampling_module,
             "_relion_rotation_grid_float32",
             lambda _order, dtype=None: (rotations_many, np.zeros((len(rotations_many), 3), dtype=np.float32)),
         )
@@ -13733,7 +13732,6 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """The accepted K=1 os=0 path must remain on direct dense EM."""
-        import recovar.em.refinement.iteration_loop as refine_mod
 
         def fail_adaptive(*_args, **_kwargs):
             raise AssertionError("adaptive_oversampling=0 entered the adaptive K-class engine")
@@ -13741,7 +13739,7 @@ class TestRelionModeSmokeTest:
         rotations_many = _make_rotations(20, seed=334)
         monkeypatch.setattr(half_scoring, "run_dense_k_class_em_adaptive", fail_adaptive)
         monkeypatch.setattr(
-            refine_mod,
+            sampling_module,
             "_relion_rotation_grid_float32",
             lambda _order, dtype=None: (rotations_many, np.zeros((len(rotations_many), 3), dtype=np.float32)),
         )
@@ -14340,7 +14338,7 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
     monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
         "_relion_rotation_grid_float32",
         lambda order, *, dtype=np.float32: (
             fake_get_grid(order).astype(dtype),
@@ -14529,7 +14527,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
     monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
         "_relion_rotation_grid_float32",
         lambda order, *, dtype=np.float32: (
             fake_get_grid(order).astype(dtype),
@@ -14537,19 +14535,14 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         ),
     )
     monkeypatch.setattr(
-        refine_mod,
-        "_get_relion_rotation_grid_eulers_float64",
-        lambda order: fake_get_grid_eulers(order).astype(np.float64),
-    )
-    monkeypatch.setattr(
-        relion_metadata_module,
+        sampling_module,
         "_get_relion_rotation_grid_eulers_float64",
         lambda order: fake_get_grid_eulers(order).astype(np.float64),
     )
     monkeypatch.setattr(refine_mod, "advance_relion_perturbation", fake_advance_relion_perturbation)
     monkeypatch.setattr(refine_mod, "apply_relion_rotation_perturbation", fake_apply_relion_rotation_perturbation)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
         "apply_relion_rotation_perturbation_to_eulers",
         fake_apply_relion_rotation_perturbation_to_eulers,
     )
@@ -14683,7 +14676,7 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
     monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
         "_relion_rotation_grid_float32",
         lambda order, *, dtype=np.float32: (
             fake_get_grid(order).astype(dtype),
@@ -14815,7 +14808,7 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
     monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "_precompute_exact_local_fine_grid_enabled", lambda order: False)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
         "_relion_rotation_grid_float32",
         lambda order, *, dtype=np.float32: (
             fake_get_grid(order).astype(dtype),
@@ -14913,7 +14906,7 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
         "_relion_rotation_grid_float32",
         lambda order, *, dtype=np.float32: (
             fake_get_grid(order).astype(dtype),
@@ -14998,7 +14991,7 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
         "_relion_rotation_grid_float32",
         lambda order, *, dtype=np.float32: (
             fake_get_grid(order).astype(dtype),
@@ -15136,7 +15129,7 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
         "_relion_rotation_grid_float32",
         lambda order, *, dtype=np.float32: (
             fake_get_grid(order).astype(dtype),
@@ -15892,7 +15885,7 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(half_scoring, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(
-        refine_mod,
+        sampling_module,
         "_relion_rotation_grid_float32",
         lambda order, *, dtype=np.float32: (
             fake_get_grid(order).astype(dtype),
@@ -15958,5 +15951,5 @@ def test_canonical_rotation_grid_reuses_relion_euler_table(monkeypatch):
         raise AssertionError("generic R_to_relion should not be called for canonical grids")
 
     monkeypatch.setattr(iteration_loop_module.utils, "R_to_relion", fail_r_to_relion)
-    _, got = relion_metadata_module._relion_rotation_grid_float32(order)
+    _, got = sampling_module._relion_rotation_grid_float32(order)
     np.testing.assert_allclose(got, expected_eulers, rtol=0.0, atol=0.0)

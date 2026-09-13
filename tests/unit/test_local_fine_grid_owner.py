@@ -1,4 +1,4 @@
-"""The exact fine local-search grid and its M-step matrices have one owner in the controller module.
+"""The exact fine local-search grid and its M-step matrices are owned by the sampling module.
 
 Both the regular iterations and the final all-data pass call
 ``_exact_local_fine_grid`` (RELION SamplingPerturbation of the materialized
@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 import recovar.em.refinement.iteration_loop as iteration_loop
+import recovar.em.sampling as sampling_module
 from recovar.em.sampling import (
     _relion_mstep_rotations_from_eulers,
     apply_relion_rotation_perturbation_to_eulers,
@@ -47,13 +48,13 @@ def _same(x, y):
 
 @pytest.fixture(autouse=True)
 def _fake_canonical_grid(monkeypatch):
-    monkeypatch.setattr(iteration_loop, "_get_relion_rotation_grid_eulers_float64", _canonical_eulers)
-    monkeypatch.setattr(iteration_loop, "_relion_rotation_grid_float32", _fake_grid)
+    monkeypatch.setattr(sampling_module, "_get_relion_rotation_grid_eulers_float64", _canonical_eulers)
+    monkeypatch.setattr(sampling_module, "_relion_rotation_grid_float32", _fake_grid)
 
 
 @pytest.mark.parametrize("random_perturbation", [0.3, -0.125, 0.0])
 def test_fine_grid_is_perturbed_with_exact_mstep_rotations(random_perturbation):
-    rotations, eulers, mstep = iteration_loop._exact_local_fine_grid(
+    rotations, eulers, mstep = sampling_module._exact_local_fine_grid(
         healpix_order=ORDER, angular_sampling_deg=ANGULAR_SAMPLING, random_perturbation=random_perturbation
     )
     _, grid_eulers = _fake_grid(ORDER)
@@ -67,7 +68,7 @@ def test_fine_grid_is_perturbed_with_exact_mstep_rotations(random_perturbation):
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_pass_without_perturbation_keeps_the_grid_matrices(dtype):
-    rotations, eulers, mstep = iteration_loop._exact_local_fine_grid(
+    rotations, eulers, mstep = sampling_module._exact_local_fine_grid(
         healpix_order=ORDER, angular_sampling_deg=ANGULAR_SAMPLING, random_perturbation=None, dtype=dtype
     )
     grid_rot, grid_eulers = _fake_grid(ORDER, dtype=dtype)
@@ -81,15 +82,15 @@ def test_pass_without_perturbation_keeps_the_grid_matrices(dtype):
 def test_reused_grid_keeps_its_own_mstep_rotations():
     mstep = np.repeat(np.eye(3, dtype=np.float32)[None], N_ROT, axis=0)
     eulers = np.zeros((N_ROT, 3), dtype=np.float32)
-    assert iteration_loop._local_search_mstep_rotations(mstep, eulers, ORDER) is mstep
+    assert sampling_module._local_search_mstep_rotations(mstep, eulers, ORDER) is mstep
 
 
 @pytest.mark.parametrize("n_rows", [N_ROT, N_ROT + 3])
 def test_reused_grid_without_mstep_rotations_rebuilds_them_from_source_angles(n_rows):
     eulers = (np.arange(3 * n_rows, dtype=np.float64).reshape(n_rows, 3) / 3.0).astype(np.float32)
-    got = iteration_loop._local_search_mstep_rotations(None, eulers, ORDER)
+    got = sampling_module._local_search_mstep_rotations(None, eulers, ORDER)
     _, _, expected = apply_relion_rotation_perturbation_to_eulers(
-        iteration_loop._relion_mstep_source_eulers(eulers, ORDER), 0.0, ANGULAR_SAMPLING, return_mstep_rotations=True
+        sampling_module._relion_mstep_source_eulers(eulers, ORDER), 0.0, ANGULAR_SAMPLING, return_mstep_rotations=True
     )
     assert _same(got, expected) and got.shape == (n_rows, 3, 3)
 

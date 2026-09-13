@@ -1,4 +1,4 @@
-"""RELION translation, rotation-grid and noise-shell metadata helpers."""
+"""RELION translation and noise-shell metadata helpers."""
 
 from __future__ import annotations
 
@@ -6,10 +6,6 @@ import numpy as np
 
 from recovar.core import fourier_transform_utils
 from recovar.em.helpers.orientation_priors import relion_translation_search_base
-from recovar.em.sampling import (
-    _get_relion_rotation_grid_eulers_float64,
-    _relion_mstep_rotations_from_eulers,
-)
 
 
 def _relion_metadata_translations(
@@ -54,27 +50,6 @@ def _relion_half_plane_shell_counts(image_shape):
             if shell < n_shells:
                 counts[shell] += 1.0
     return counts
-
-
-def _relion_rotation_grid_float32(healpix_order: int, *, dtype: np.dtype = np.float32):
-    """Return scorer matrices/eulers using RELION's accelerated-path policy.
-
-    ``dtype`` controls the returned rotation matrices and working Euler grid. Under
-    ``ACC_DOUBLE_PRECISION`` RELION's host-side ``RFLOAT -> XFLOAT`` cast is a
-    no-op, so a caller running float64 scoring should pass ``dtype=np.float64``
-    here to keep the coarse scorer operands at full precision instead of the
-    single-precision default.  These Euler rows are subsequently perturbed and
-    converted back to matrices, so they are working RFLOAT values rather than
-    merely serialized metadata.
-    """
-    order = int(healpix_order)
-    source_eulers = _get_relion_rotation_grid_eulers_float64(order)
-    eulers = source_eulers.astype(dtype)
-    # RELION's accelerated expectation path constructs inverse projector
-    # matrices on the host in RFLOAT precision, casts to XFLOAT, then copies
-    # them to the device.  Preserve source Euler precision until that cast.
-    rotations = _relion_mstep_rotations_from_eulers(source_eulers, dtype=dtype)
-    return rotations, eulers
 
 
 def _radial_profile_from_noise_variance(noise_variance, image_shape):
