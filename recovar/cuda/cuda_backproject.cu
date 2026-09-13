@@ -7179,17 +7179,16 @@ ffi::Error RelionCoarseDiff2RectangularF32Common(
             "RelionCoarseDiff2RectangularF32: block count exceeds CUDA grid");
     cudaError_t err;
     if (shared_pretranslated) {
-        err = launch_relion_coarse_diff2_fused_translate_rectangular_f32<false>(
+        err = launch_relion_coarse_diff2_shared_pretranslated_f32(
             stream,
             reinterpret_cast<const float2*>(reference.untyped_data()),
             reinterpret_cast<const float2*>(shifted_image.untyped_data()),
-            nullptr,
             static_cast<const float*>(weight.untyped_data()),
             static_cast<const float*>(initial_diff2.untyped_data()),
             static_cast<const int32_t*>(full_to_compact.untyped_data()),
             static_cast<float*>(output->untyped_data()),
             image_dims[0], reference_dims[0], image_dims[1],
-            reference_dims[1], lookup_dims[0], 0,
+            reference_dims[1], lookup_dims[0],
             static_cast<const int32_t*>(
                 runtime_full_pixel_count->untyped_data()));
     } else {
