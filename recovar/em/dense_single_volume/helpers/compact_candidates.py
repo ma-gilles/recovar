@@ -159,9 +159,12 @@ def _batched_compact_candidate_indices(candidate_masks):
     if not modes <= {"coarse", "coarse_exclude", "full", "empty"}:
         return None
     first = candidate_masks[0]
-    n_rows, n_trans = int(first.n_rows), int(first.n_fine_trans)
-    if any(int(m.n_rows) != n_rows or int(m.n_fine_trans) != n_trans for m in candidate_masks):
+    n_trans = int(first.n_fine_trans)
+    if any(int(m.n_fine_trans) != n_trans for m in candidate_masks):
         return None
+    # Images keep their own rotation-row counts (the bucket pads rows separately);
+    # requiring equal n_rows made every real-size bucket fall back to the
+    # per-image dense path (build stage unchanged at 141 s, jobs 13808173/13808781).
     # A coarse_exclude spec is the all-ones coarse table with the excluded
     # (coarse rotation, coarse translation) cells cleared; expressing it as a
     # coarse table lets it share the per-coarse-row expansion below instead of
@@ -198,7 +201,7 @@ def _batched_compact_candidate_indices(candidate_masks):
                     table[rot[keep], trans[keep]] = False
                 coarse_tables[i] = table
     batch = len(candidate_masks)
-    if n_rows == 0 or n_trans == 0:
+    if n_trans == 0:
         empty = np.zeros(0, dtype=np.int64)
         return tuple((empty, empty) for _ in candidate_masks)
 
@@ -213,15 +216,16 @@ def _batched_compact_candidate_indices(candidate_masks):
     # ``(Bc, cR, T)`` is coarse-row major, translation minor, so the expanded
     # order is exactly the per-image rotation-major, translation-minor order.
     out: list = [None] * batch
-    full_pairs = None
+    full_pairs: dict = {}
     for i, m in enumerate(candidate_masks):
         if m.mode == "full":
-            if full_pairs is None:
-                full_pairs = (
-                    np.repeat(np.arange(n_rows, dtype=np.int64), n_trans),
-                    np.tile(np.arange(n_trans, dtype=np.int64), n_rows),
+            rows_i = int(m.n_rows)
+            if rows_i not in full_pairs:
+                full_pairs[rows_i] = (
+                    np.repeat(np.arange(rows_i, dtype=np.int64), n_trans),
+                    np.tile(np.arange(n_trans, dtype=np.int64), rows_i),
                 )
-            out[i] = full_pairs
+            out[i] = full_pairs[rows_i]
         elif m.mode == "empty":
             out[i] = (np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64))
     coarse_rows = sorted(coarse_tables)
@@ -244,15 +248,16 @@ def _batched_compact_candidate_indices(candidate_masks):
         t_idx = t_idx.astype(np.int64, copy=False)
         for k, i in enumerate(coarse_rows):
             parents = np.asarray(candidate_masks[i].parent_map, dtype=np.int64)
-            if parents.shape[0] != n_rows:
+            n_rows_i = int(candidate_masks[i].n_rows)
+            if parents.shape[0] != n_rows_i:
                 return None
             flat_parents = k * c_rot + parents
-            row_counts = coarse_counts[flat_parents]  # (R,)
+            row_counts = coarse_counts[flat_parents]  # (R_i,)
             total = int(row_counts.sum())
             if total == 0:
                 out[i] = (np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64))
                 continue
-            rotation_row = np.repeat(np.arange(n_rows, dtype=np.int64), row_counts)
+            rotation_row = np.repeat(np.arange(n_rows_i, dtype=np.int64), row_counts)
             row_starts = np.concatenate(([0], np.cumsum(row_counts)[:-1]))
             within = np.arange(total, dtype=np.int64) - np.repeat(row_starts, row_counts)
             translation_id = t_idx[np.repeat(coarse_starts[flat_parents], row_counts) + within]

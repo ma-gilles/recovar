@@ -104,8 +104,8 @@ def test_unsupported_buckets_fall_back_to_the_per_image_path(case, monkeypatch):
     elif case == "different_translation_parent":
         masks[2] = _coarse_mask(rng, n_rows, n_trans, 3, 2, 0.5, np.array([1, 0, 1, 0]))
     elif case == "different_shape":
-        masks[2] = _coarse_mask(rng, n_rows + 1, n_trans, 3, 2, 0.5, ftp)
-        # per-image reference needs a common capacity; compare the fast-path decision only
+        masks[2] = _coarse_mask(rng, n_rows, n_trans + 1, 3, 2, 0.5, np.array([0, 1, 0, 1, 1]))
+        # a different translation count cannot share one bucket
         assert _batched_compact_candidate_indices(masks) is None
         return
     assert _batched_compact_candidate_indices(masks) is None, "fast path must decline"
@@ -154,3 +154,30 @@ def test_coarse_exclude_specs_take_the_batched_path_and_match_per_image(seed, mo
     monkeypatch.setattr(cc, "compact_candidate_indices_in_source_order", lambda m: (calls.append(m) or orig(m)))
     _assert_same(masks, pair_bucket_size=n_rows * n_trans)
     assert not calls, "no per-image fallback expected"
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_images_with_different_rotation_row_counts_share_the_batched_path(seed, monkeypatch):
+    """Real-size buckets mix images with different rotation counts (the bucket pads rows
+    separately); the batched enumerator must accept them and stay byte-identical."""
+    rng = np.random.default_rng(seed)
+    n_trans, n_coarse_rot, n_coarse_trans = 8, 6, 4
+    ftp = np.repeat(np.arange(n_coarse_trans), 2).astype(np.int32)
+    masks = []
+    for n_rows in (5, 17, 9, 33, 1):
+        n_excl = int(rng.integers(0, n_coarse_rot * n_coarse_trans))
+        excluded = np.sort(rng.choice(n_coarse_rot * n_coarse_trans, size=n_excl, replace=False)).astype(np.int32)
+        masks.append(SparseCandidateMask(
+            mode="coarse_exclude", n_rows=n_rows, n_fine_trans=n_trans,
+            parent_map=rng.integers(0, n_coarse_rot, size=n_rows), coarse_excluded=excluded,
+            fine_translation_parent=ftp,
+        ))
+    masks.append(_coarse_mask(rng, 12, n_trans, n_coarse_rot, n_coarse_trans, 0.5, ftp))
+    masks.append(SparseCandidateMask(mode="full", n_rows=7, n_fine_trans=n_trans))
+    masks.append(SparseCandidateMask(mode="empty", n_rows=3, n_fine_trans=n_trans))
+    assert _batched_compact_candidate_indices(masks) is not None
+    calls = []
+    orig = cc.compact_candidate_indices_in_source_order
+    monkeypatch.setattr(cc, "compact_candidate_indices_in_source_order", lambda m: (calls.append(m) or orig(m)))
+    _assert_same(masks, pair_bucket_size=33 * n_trans)
+    assert not calls
