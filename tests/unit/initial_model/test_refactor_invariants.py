@@ -391,7 +391,6 @@ def test_bootstrap_iref_pure_python_fallback_stays_deleted():
 # must not undo the cuts. Per-file ceilings allow generous headroom (~50%)
 # because merges legitimately add code; the TOTAL ceiling is the real guard.
 LOC_PER_FILE_CEILING = {
-    "align_symmetry.py": 100,
     "avg_unaligned.py": 220,
     "bootstrap_iref.py": 280,
     "dense_adapter.py": 1500,
