@@ -10,6 +10,7 @@ import json
 import logging
 import operator
 import os
+import time
 from enum import Enum
 from functools import partial
 from typing import NamedTuple
@@ -5926,6 +5927,15 @@ def _compute_k_class_significance_batched(
     from recovar.em.dense_single_volume.helpers.batch_fetch import prefetch_depth as _prefetch_depth_fn
     from recovar.em.dense_single_volume.helpers.batch_fetch import prefetch_iterator as _prefetch_iterator
 
+    # Pass 1 emits no per-batch timing, so occupancy sampling could localise it no further
+    # than "43.7 s at 24.9 percent device occupancy" for the whole coarse stage. Its body
+    # is about 1900 lines of Python executed once per image batch, which is the shape that
+    # produced the same starvation in pass 2, but that is a hypothesis until measured.
+    # Recorded as batch START timestamps rather than per-batch deltas: the body contains a
+    # ``continue``, so anything appended at the end of the body would silently miss a batch
+    # and undercount. Consecutive starts, plus the loop end for the last batch, cannot.
+    _coarse_batch_starts = []
+    _coarse_loop_t0 = time.time()
     for batch_data, _, _, ctf_params, _, _, indices in _prefetch_iterator(
         experiment_dataset.iter_batches(
             image_batch_size,
@@ -5934,6 +5944,7 @@ def _compute_k_class_significance_batched(
         ),
         _prefetch_depth_fn(),
     ):
+        _coarse_batch_starts.append(time.time())
         actual_batch_size = len(indices)
         end_idx = start_idx + actual_batch_size
         coarse_gaussian_gemm_hybrid_batch_result = None
@@ -7873,6 +7884,26 @@ def _compute_k_class_significance_batched(
                         )
         start_idx = end_idx
 
+    if _coarse_batch_starts:
+        _loop_end = time.time()
+        _loop_s = _loop_end - _coarse_loop_t0
+        _coarse_batch_walls = [
+            b - a for a, b in zip(_coarse_batch_starts, _coarse_batch_starts[1:])
+        ] + [_loop_end - _coarse_batch_starts[-1]]
+        _tot = sum(_coarse_batch_walls)
+        _srt = sorted(_coarse_batch_walls)
+        logger.info(
+            "K-class coarse pass-1 batch timing: batches=%d images=%d loop=%.2fs "
+            "covered=%.2fs uncovered=%.2fs mean=%.3fs median=%.3fs max=%.3fs",
+            len(_coarse_batch_walls),
+            int(n_images),
+            _loop_s,
+            _tot,
+            _loop_s - _tot,
+            _tot / len(_coarse_batch_walls),
+            _srt[len(_srt) // 2],
+            _srt[-1],
+        )
     coarse_gaussian_gemm_hybrid_full_dense_batch_count = (
         coarse_gaussian_gemm_hybrid_static_dense_batch_count
         + coarse_gaussian_gemm_hybrid_fallback_batch_count
