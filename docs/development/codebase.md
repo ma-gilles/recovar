@@ -121,6 +121,12 @@ See [GT reporting owners](em_implementation.md#ground-truth-reporting) and
 [the reporting guide](gt_reporting.md). Rigid fit-once/apply-many reporting is
 opt-in; it does not change E/M execution or scientific acceptance gates.
 
+The completion reporter and final-BPref replay share NumPy FSC calculations in
+[`scripts/fsc_metrics.py`](../../scripts/fsc_metrics.py). This module remains
+independent of production scoring and does not select a JAX backend. Include it
+in source manifests when freezing or copying either reporter; the reporter file
+alone no longer contains the full metric implementation.
+
 Shared RELION projector construction lives in
 [`relion_projector_setup.py`](../../recovar/em/relion/relion_projector_setup.py):
 `reference_to_relion_projector_half_maps_and_power` selects native/JAX setup and
