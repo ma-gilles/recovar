@@ -476,12 +476,6 @@ def _materialize_fixed_capacity_local_call_view(
     if ctf_params_active.shape[0] != plan.valid_image_count:
         raise ValueError("fixed-capacity call CTF parameters do not match the sealed active image prefix")
     _require_fixed_capacity_call_array(
-        "local_rotation_ids",
-        active.local_rotation_ids,
-        dtype=np.int32,
-        shape=(plan.valid_row_count,),
-    )
-    _require_fixed_capacity_call_array(
         "local_rotations",
         active.local_rotations,
         dtype=np.float32,
@@ -510,13 +504,6 @@ def _materialize_fixed_capacity_local_call_view(
     n_translations = int(translation_log_prior_active.shape[1])
     if n_translations <= 0:
         raise ValueError("fixed-capacity call translation prior must have a nonempty translation axis")
-    if active.local_rotation_posterior_ids is not None:
-        _require_fixed_capacity_call_array(
-            "local_rotation_posterior_ids",
-            active.local_rotation_posterior_ids,
-            dtype=np.int32,
-            shape=(plan.valid_row_count,),
-        )
     if active.local_sample_mask is not None:
         _require_fixed_capacity_call_array(
             "local_sample_mask",
@@ -527,7 +514,9 @@ def _materialize_fixed_capacity_local_call_view(
 
     image_indices = image_indices_active.astype(np.int32, copy=True)
     row_counts = row_counts_int64.astype(np.int32, copy=True)
-    rotation_ids = np.full((valid_images, physical_rotations), -1, dtype=np.int32)
+    # Bundle validation already checks integer ID shapes. Preserve host widths
+    # for the mature-call comparison; common padding owns the device int32 cast.
+    rotation_ids = np.full((valid_images, physical_rotations), -1, dtype=active.local_rotation_ids.dtype)
     rotations = np.broadcast_to(
         np.eye(3, dtype=np.float32),
         (valid_images, physical_rotations, 3, 3),
@@ -538,7 +527,7 @@ def _materialize_fixed_capacity_local_call_view(
     posterior_ids = (
         None
         if active.local_rotation_posterior_ids is None
-        else np.full((valid_images, physical_rotations), -1, dtype=np.int32)
+        else np.full((valid_images, physical_rotations), -1, dtype=active.local_rotation_posterior_ids.dtype)
     )
     sample_mask = (
         None
@@ -842,7 +831,6 @@ def _validate_fixed_capacity_padded_call(
         )
     array_specs = (
         ("actual_rotation_counts", padded_bucket.actual_rotation_counts, np.int32, (B,)),
-        ("local_rotation_ids", padded_bucket.local_rotation_ids, np.int32, (B, R)),
         ("local_rotations", padded_bucket.local_rotations, np.float32, (B, R, 3, 3)),
         ("local_mstep_rotations", padded_bucket.local_mstep_rotations, np.float32, (B, R, 3, 3)),
         ("local_rotation_log_prior", padded_bucket.local_rotation_log_prior, np.float32, (B, R)),
@@ -855,6 +843,16 @@ def _validate_fixed_capacity_padded_call(
                 f"fixed-capacity padded call {call_index} {field_name} has noncanonical dtype or shape",
             )
     fixed_bucket = view.bucket
+    # Padding is a no-op for a full batch, otherwise it casts IDs to int32.
+    # Compare values across that boundary, including detection of overflow.
+    padded_ids = np.asarray(padded_bucket.local_rotation_ids)
+    expected_id_dtype = fixed_bucket.local_rotation_ids.dtype if b == B else np.dtype(np.int32)
+    if (
+        padded_ids.dtype != expected_id_dtype
+        or padded_ids.shape != (B, R)
+        or not np.array_equal(padded_ids[:b], fixed_bucket.local_rotation_ids)
+    ):
+        raise ValueError(f"fixed-capacity padded call {call_index} rotation IDs changed during padding")
     if (
         np.asarray(padded_bucket.image_indices).dtype != np.dtype(np.int32)
         or np.asarray(padded_bucket.image_indices).shape != (b,)
@@ -865,7 +863,6 @@ def _validate_fixed_capacity_padded_call(
     prefix_pairs = (
         ("image_indices", padded_bucket.image_indices, fixed_bucket.image_indices),
         ("actual_rotation_counts", np.asarray(padded_bucket.actual_rotation_counts)[:b], fixed_bucket.actual_rotation_counts),
-        ("local_rotation_ids", np.asarray(padded_bucket.local_rotation_ids)[:b], fixed_bucket.local_rotation_ids),
         ("local_rotations", np.asarray(padded_bucket.local_rotations)[:b], fixed_bucket.local_rotations),
         (
             "local_mstep_rotations",
@@ -971,7 +968,13 @@ def _validate_fixed_capacity_padded_call(
         )
     if padded_bucket.local_rotation_posterior_ids is not None:
         posterior_ids = np.asarray(padded_bucket.local_rotation_posterior_ids)
-        if posterior_ids.dtype != np.dtype(np.int32) or posterior_ids.shape != (B, R):
+        original_ids = fixed_bucket.local_rotation_posterior_ids
+        if original_ids is None:
+            raise ValueError(
+                f"fixed-capacity padded call {call_index} posterior-ID topology changed during padding"
+            )
+        expected_dtype = original_ids.dtype if b == B else np.dtype(np.int32)
+        if posterior_ids.dtype != expected_dtype or posterior_ids.shape != (B, R):
             raise ValueError(
                 f"fixed-capacity padded call {call_index} posterior IDs have noncanonical dtype or shape"
             )
@@ -979,15 +982,8 @@ def _validate_fixed_capacity_padded_call(
             raise ValueError(
                 f"fixed-capacity padded call {call_index} posterior-ID padding is not -1"
             )
-        if fixed_bucket.local_rotation_posterior_ids is None:
-            raise ValueError(
-                f"fixed-capacity padded call {call_index} posterior-ID topology changed during padding"
-            )
-        _fixed_capacity_call_arrays_match(
-            "padded posterior-ID prefix",
-            posterior_ids[:b],
-            fixed_bucket.local_rotation_posterior_ids,
-        )
+        if not np.array_equal(posterior_ids[:b], original_ids):
+            raise ValueError(f"fixed-capacity padded call {call_index} posterior IDs changed during padding")
     elif fixed_bucket.local_rotation_posterior_ids is not None:
         raise ValueError(f"fixed-capacity padded call {call_index} lost posterior IDs during padding")
     if padded_bucket.local_sample_mask is not None:

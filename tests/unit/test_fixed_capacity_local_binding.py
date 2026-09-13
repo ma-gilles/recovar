@@ -5,8 +5,8 @@ from __future__ import annotations
 import inspect
 from dataclasses import replace
 
-import jax.numpy as jnp
 import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
 
@@ -533,8 +533,23 @@ def _assert_bucket_arrays_equal(actual, expected):
     assert actual.bucket_rotation_count == expected.bucket_rotation_count
 
 
-def test_fixed_and_mature_call0_use_identical_common_padding_inputs():
-    _, _, _, bundle, mature_bucket, image_pre_shifts = _call0_fixture()
+@pytest.mark.parametrize("id_dtype", (np.int32, np.int64))
+@pytest.mark.parametrize("image_capacity", (2, 4))
+def test_fixed_and_mature_call0_use_identical_common_padding_inputs(id_dtype, image_capacity):
+    plan, operands, hypotheses, _, mature_bucket, image_pre_shifts = _call0_fixture(
+        call0_image_capacity=image_capacity,
+    )
+    # Packing preserves host ID widths; common padding owns the device int32 cast.
+    fields = ("local_rotation_ids", "local_rotation_posterior_ids")
+    packed_ids = {name: getattr(hypotheses, name).astype(id_dtype) for name in fields}
+    for value in packed_ids.values():
+        value.setflags(write=False)
+    hypotheses = replace(hypotheses, **packed_ids)
+    bundle = _bind_fixed_capacity_local_execution(plan, operands, hypotheses, enabled=True)
+    mature_bucket = replace(
+        mature_bucket,
+        **{name: getattr(mature_bucket, name).astype(id_dtype) for name in fields},
+    )
     view = _select_call0(bundle, mature_bucket, image_pre_shifts)
     dataset = _IndexedDataset()
     mature_raw = dataset.images[mature_bucket.image_indices]
@@ -562,10 +577,10 @@ def test_fixed_and_mature_call0_use_identical_common_padding_inputs():
     _assert_bucket_arrays_equal(fixed_padded[0], mature_padded[0])
     for fixed_value, mature_value in zip(fixed_padded[1:4], mature_padded[1:4], strict=True):
         np.testing.assert_array_equal(fixed_value, mature_value)
-    assert fixed_padded[4] == mature_padded[4] == 4
+    assert fixed_padded[4] == mature_padded[4] == image_capacity
     fixed_capacity_local._validate_fixed_capacity_padded_call(view, *fixed_padded)
     padded_bucket, padded_raw, padded_ctf, valid_image_mask, _ = fixed_padded
-    np.testing.assert_array_equal(valid_image_mask, [True, True, False, False])
+    np.testing.assert_array_equal(valid_image_mask, np.arange(image_capacity) < 2)
     assert np.all(padded_bucket.translation_log_prior[2:] == 0)
     assert np.all(padded_raw[2:] == 0)
     np.testing.assert_array_equal(padded_ctf[2:], np.broadcast_to(padded_ctf[0], padded_ctf[2:].shape))
