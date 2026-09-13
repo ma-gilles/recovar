@@ -260,4 +260,3 @@ def update_posterior_noise_variance(
         previous_noise_radial=new_previous_noise_radial,
         previous_noise_radial_per_half=noise_from_res_per_half,
     )
-
