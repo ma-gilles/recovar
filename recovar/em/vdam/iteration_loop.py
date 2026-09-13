@@ -28,7 +28,7 @@ from typing import Callable, Literal, Sequence
 
 import numpy as np
 
-from recovar.em.refinement.mean_helpers import _relion_optimizer_average_pmax
+from recovar.em.helpers.convergence import _relion_optimizer_average_pmax
 from recovar.em.vdam.estep_meta_updates import update_noise_from_estep_meta, update_probabilities_from_estep_meta
 from recovar.em.vdam.m_step import vdam_m_step
 from recovar.em.vdam.schedules import (

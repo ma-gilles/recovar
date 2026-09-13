@@ -21,7 +21,7 @@ it compares decoded rotation indices, with no angular-distance threshold.
 both half-sets' int32 assignment indices for that comparison; the strict form
 is used for the current iteration and the tolerant form for a previous
 iteration that may not have recorded assignments. The optimizer Pmax
-normalization mass comes from `mean_helpers._relion_pmax_normalization_mass_per_half`:
+normalization mass comes from `convergence._relion_pmax_normalization_mass_per_half`:
 Class3D uses each half's retained M-step posterior mass, K=1 the half's noise
 `sumw`, and `_relion_optimizer_average_pmax` divides half 1's Pmax sum by it.
 

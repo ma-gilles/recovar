@@ -327,7 +327,7 @@ at `auto_local_healpix_order`. Its local sigma is
 [`expected_accuracy.py`](../../recovar/em/helpers/expected_accuracy.py)
 owns the RELION-style accuracy trial calculation. The approximate posterior
 helper `calculate_expected_angular_errors` is a different route. Likewise,
-`mean_helpers._relion_optimizer_average_pmax` uses the split-half optimizer's
+`convergence._relion_optimizer_average_pmax` uses the split-half optimizer's
 mass normalization, rather than just averaging all recorded Pmax values.
 
 ## 7. Final output and validation boundaries
