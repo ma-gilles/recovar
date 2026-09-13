@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import os
-import time
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Iterable, Literal
@@ -726,33 +725,13 @@ def _native_expectation_step(
     return _expectation_step
 
 
-class _StageProfile:
-    """Optional elapsed-stage report for InitialModel startup and its driver."""
-
-    def __init__(self):
-        self.enabled = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
-        self.started = self.stage_started = time.perf_counter()
-        self.values = {}
-
-    def record(self, name):
-        if self.enabled:
-            now = time.perf_counter()
-            self.values[f"{name}_time_s"] = float(now - self.stage_started)
-            self.stage_started = now
-
-    def report(self, label):
-        if self.enabled:
-            self.values["total_time_s"] = float(time.perf_counter() - self.started)
-            print(f"VDAM {label} profile: {json.dumps(self.values, sort_keys=True)}", flush=True)
-
-
 def _initial_state_from_particles(
     dataset,
     main_star,
     optics_star,
     opts: NativeInitialModelOptions,
 ) -> tuple[InitialModelState, np.ndarray]:
-    profile = _StageProfile()
+    profile = star_io._StageProfile()
 
     ori_size = int(dataset.grid_size)
     pixel_size = float(dataset.voxel_size)
@@ -960,7 +939,7 @@ def _prepare_mstep_state_precision(state, mstep_compute_dtype):
 def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialModelResult:
     """Run native recovar InitialModel refinement."""
 
-    profile = _StageProfile()
+    profile = star_io._StageProfile()
 
     from recovar.em.vdam.mstep_single_class import _validate_mstep_precision_route
 

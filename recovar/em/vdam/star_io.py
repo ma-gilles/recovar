@@ -507,6 +507,26 @@ def _write_data_star(path: str, main_star, optics_star, dataset, particle_state:
     write_star(str(out_path), table, optics_star.copy() if optics_star is not None else None, **writer_kwargs)
 
 
+class _StageProfile:
+    """Optional elapsed-stage report for InitialModel startup and artifact I/O."""
+
+    def __init__(self):
+        self.enabled = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
+        self.started = self.stage_started = time.perf_counter()
+        self.values = {}
+
+    def record(self, name):
+        if self.enabled:
+            now = time.perf_counter()
+            self.values[f"{name}_time_s"] = float(now - self.stage_started)
+            self.stage_started = now
+
+    def report(self, label):
+        if self.enabled:
+            self.values["total_time_s"] = float(time.perf_counter() - self.started)
+            print(f"VDAM {label} profile: {json.dumps(self.values, sort_keys=True)}", flush=True)
+
+
 def _write_iteration_artifacts(
     output_prefix: str,
     state: InitialModelState,
@@ -518,33 +538,22 @@ def _write_iteration_artifacts(
     dataset=None,
     particle_state: NativeParticleState | None = None,
 ) -> None:
-    profile_artifacts = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
-    artifact_started = time.perf_counter()
-    stage_started = artifact_started
-    artifact_profile: dict[str, float] = {}
-
-    def _record_artifact_stage(name: str) -> None:
-        nonlocal stage_started
-        if not profile_artifacts:
-            return
-        now = time.perf_counter()
-        artifact_profile[f"{name}_time_s"] = float(now - stage_started)
-        stage_started = now
+    profile = _StageProfile()
 
     out_dir = Path(output_prefix).parent
     out_dir.mkdir(parents=True, exist_ok=True)
     class_mrcs = _class_mrc_paths(output_prefix, iteration, int(state.K))
-    _record_artifact_stage("setup")
+    profile.record("setup")
     for k, class_mrc in enumerate(class_mrcs):
         write_relion_mrc(class_mrc, np.asarray(state.Iref[k]), voxel_size=float(state.pixel_size))
-    _record_artifact_stage("class_mrc")
+    profile.record("class_mrc")
     model_star = f"{output_prefix}_it{iteration:03d}_model.star"
     _write_model_star(model_star, state, class_mrcs)
-    _record_artifact_stage("model_star")
+    profile.record("model_star")
     meta_path = f"{output_prefix}_it{iteration:03d}_recovar_meta.json"
     with open(meta_path, "w") as f:
         json.dump(_json_ready(meta), f, indent=2, sort_keys=True)
-    _record_artifact_stage("meta_json")
+    profile.record("meta_json")
     if main_star is not None and dataset is not None and particle_state is not None:
         _write_data_star(
             f"{output_prefix}_it{iteration:03d}_data.star",
@@ -553,14 +562,8 @@ def _write_iteration_artifacts(
             dataset,
             particle_state,
         )
-    _record_artifact_stage("data_star")
-    if profile_artifacts:
-        artifact_profile["total_time_s"] = float(time.perf_counter() - artifact_started)
-        print(
-            f"VDAM iteration {iteration} artifact profile: "
-            f"{json.dumps(artifact_profile, sort_keys=True)}",
-            flush=True,
-        )
+    profile.record("data_star")
+    profile.report(f"iteration {iteration} artifact")
 
 
 def _json_ready(value):
