@@ -1,6 +1,6 @@
-"""Phase-1 subset/ordering tests (pure Python, no RELION binding).
+"""Subset primitives and an independent Fisher-Yates reference.
 
-The RELION-generator binding lands in Phase 2. Here we cover:
+Production shuffling uses the native binding, tested separately. Here we cover:
 
   - `randomise_particles_order` is a bijection (permutation) and reproduces
     Fisher-Yates semantics against a deterministic `rnd_unif` stream.
@@ -15,12 +15,11 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from helpers.vdam import numpy_rnd_unif_factory
+from helpers.vdam import numpy_rnd_unif_factory, randomise_particles_order
 
 from recovar.em.vdam.subset import (
     assign_pseudo_halfsets_for_particle_ids,
     pseudo_halfsets_active,
-    randomise_particles_order,
     select_vdam_subset,
 )
 

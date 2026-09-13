@@ -17,6 +17,18 @@ def numpy_rnd_unif_factory(seed: int) -> Callable[[int], float]:
     return _rnd
 
 
+def randomise_particles_order(nr_particles: int, rnd_unif: Callable[[int], float]) -> np.ndarray:
+    """Independent Fisher-Yates reference; not bit-exact to native std::shuffle."""
+    if nr_particles <= 0:
+        return np.zeros(0, dtype=np.int64)
+    order = np.arange(nr_particles, dtype=np.int64)
+    for call_idx, i in enumerate(range(nr_particles - 1, 0, -1)):
+        j = max(0, min(i, int(rnd_unif(call_idx) * i + 0.5)))  # ROUND = floor(x+0.5)
+        if j != i:
+            order[i], order[j] = order[j], order[i]
+    return order
+
+
 def relative_metrics(left, right):
     left, right = np.asarray(left, np.complex128), np.asarray(right, np.complex128)
     delta = np.abs(left - right)

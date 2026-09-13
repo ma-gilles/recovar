@@ -3,7 +3,6 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
-from helpers.vdam import numpy_rnd_unif_factory
 
 from recovar.em.vdam import dense_adapter as adapter
 from recovar.em.vdam import driver
@@ -146,7 +145,7 @@ def test_loop_callback_is_once_before_estep_and_respects_disabled(monkeypatch, r
     loop.run_vdam_iterations(
         state, nr_particles=20, optics_group_by_particle=[0] * 20,
         grad_ini_subset_size=10, grad_fin_subset_size=10, tau2_fudge_arg=4.0,
-        grad_em_iters=0, random_seed=29, rnd_unif_factory=numpy_rnd_unif_factory,
+        grad_em_iters=0, random_seed=29,
         expectation_step=estep, refresh_tau2_from_projector=refresh_enabled,
         projector_refresh_fn=refresh, mstep_backend=mstep_backend,
     )

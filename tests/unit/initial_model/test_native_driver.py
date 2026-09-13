@@ -370,7 +370,7 @@ def test_experiment_read_order_uses_micrograph_lexicographic_order():
     assert star_io._experiment_read_order(main).tolist() == [0, 2, 3, 4, 1]
 
 
-def test_seed_zero_halfsets_use_relion_experiment_position_parity():
+def test_seed_zero_halfsets_use_relion_experiment_position_parity(monkeypatch):
     main = pd.DataFrame(
         {
             "_rlnMicrographName": ["1", "2", "10", "100", "11"],
@@ -387,15 +387,18 @@ def test_seed_zero_halfsets_use_relion_experiment_position_parity():
     )
     state.subset_size = len(main)
 
-    def fail_if_called(seed):
+    from recovar.relion_bind import _relion_bind_core as bind
+
+    def fail_if_called(nr_particles, seed):
         raise AssertionError(f"unexpected randomization for seed {seed}")
+
+    monkeypatch.setattr(bind, "vdam_randomise_particles_order", fail_if_called)
 
     out = select_subset_for_iter(
         state,
         iter=1,
         nr_particles=len(main),
         optics_group_by_particle=np.zeros(len(main), dtype=np.int64),
-        rnd_unif_factory=fail_if_called,
         random_seed=0,
         do_grad=True,
         particle_order=star_io._experiment_read_order(main),

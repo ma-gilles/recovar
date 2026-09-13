@@ -8,7 +8,7 @@ subset for every iteration through these owners.
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Callable, Sequence
+from typing import Sequence
 
 import numpy as np
 
@@ -19,7 +19,7 @@ from recovar.em.vdam.schedules import (
     compute_subset_size,
 )
 from recovar.em.vdam.state import InitialModelState
-from recovar.em.vdam.subset import RndUnifFn, pseudo_halfsets_active, randomise_particles_order, select_vdam_subset
+from recovar.em.vdam.subset import pseudo_halfsets_active, select_vdam_subset
 
 
 def _resolve_phase_lengths(
@@ -47,7 +47,6 @@ def select_subset_for_iter(
     iter: int,
     nr_particles: int,
     optics_group_by_particle: Sequence[int],
-    rnd_unif_factory: Callable[[int], RndUnifFn],
     random_seed: int,
     do_grad: bool,
     particle_order: Sequence[int] | None = None,
@@ -100,15 +99,12 @@ def select_subset_for_iter(
         shuffled = base_order.copy()
         shuffled_halfset_ids = base_halfset_ids.copy()
     else:
-        # C++ binding does std::shuffle byte-exact vs RELION; Python is a fallback.
-        try:
-            from recovar.relion_bind import _relion_bind_core as _bind
+        # Preserve RELION's std::shuffle ordering; missing bindings must fail.
+        from recovar.relion_bind import _relion_bind_core as _bind
 
-            permutation = np.asarray(
-                _bind.vdam_randomise_particles_order(int(nr_particles), int(random_seed + iter)), dtype=np.int64
-            )
-        except (ImportError, AttributeError):
-            permutation = randomise_particles_order(nr_particles, rnd_unif_factory(random_seed + iter))
+        permutation = np.asarray(
+            _bind.vdam_randomise_particles_order(int(nr_particles), int(random_seed + iter)), dtype=np.int64
+        )
         shuffled = base_order[permutation]
         shuffled_halfset_ids = base_halfset_ids[permutation]
 
@@ -142,7 +138,6 @@ def restore_subset_order_for_continuation(
     grad_ini_subset_size: int,
     grad_fin_subset_size: int,
     random_seed: int,
-    rnd_unif_factory: Callable[[int], RndUnifFn],
     particle_order: Sequence[int] | None = None,
     grad_ini_frac: float = 0.3,
     grad_fin_frac: float = 0.2,
@@ -214,7 +209,6 @@ def restore_subset_order_for_continuation(
             iter=iteration,
             nr_particles=nr_particles,
             optics_group_by_particle=optics_group_by_particle,
-            rnd_unif_factory=rnd_unif_factory,
             random_seed=int(random_seed),
             do_grad=do_grad,
             particle_order=particle_order,

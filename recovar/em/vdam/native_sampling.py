@@ -27,7 +27,6 @@ from recovar.em.helpers.expected_accuracy import (
 from recovar.em.vdam.native_options import InitialModelDefaults, NativeInitialModelOptions
 from recovar.em.vdam.star_io import NativeOpticsState
 from recovar.em.vdam.state import InitialModelState, NativeParticleState
-from recovar.em.vdam.subset import RndUnifFn
 from recovar.utils.helpers import R_to_relion, recovar_volume_to_relion
 
 RELION_INITIALMODEL_LOCAL_SEARCH_HEALPIX_ORDER = 4
@@ -121,23 +120,6 @@ class NativeSamplingState:
     @property
     def effective_offset_step_angstrom(self) -> float:
         return float(self.offset_step_angstrom) / (2 ** int(self.adaptive_oversampling))
-
-
-def _relion_rnd_unif_factory(seed: int) -> RndUnifFn:
-    """Return a RELION ``rnd_unif`` source using the local C++ binding."""
-
-    from recovar.relion_bind import _relion_bind_core as bind
-
-    cache = np.asarray(bind.vdam_rnd_unif_sequence(int(seed), 1024), dtype=np.float64)
-
-    def _rnd(call_idx: int) -> float:
-        nonlocal cache
-        if call_idx >= cache.size:
-            new_size = max(call_idx + 1, cache.size * 2)
-            cache = np.asarray(bind.vdam_rnd_unif_sequence(int(seed), int(new_size)), dtype=np.float64)
-        return float(cache[call_idx])
-
-    return _rnd
 
 
 def _initial_sampling_state(opts: NativeInitialModelOptions, *, pixel_size: float) -> NativeSamplingState:

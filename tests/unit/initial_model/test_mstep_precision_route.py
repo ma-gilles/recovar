@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
-from helpers.vdam import numpy_rnd_unif_factory
 
 from recovar.em.diagnostics import vdam_mstep_replay
 from recovar.commands import initial_model as initial_model_command
@@ -279,7 +278,6 @@ def test_actual_loop_forwards_f32_to_m_without_changing_authoritative_state(monk
         tau2_fudge_arg=4.0,
         grad_em_iters=0,
         random_seed=29,
-        rnd_unif_factory=numpy_rnd_unif_factory,
         expectation_step=lambda current, ids, halves: (
             [_accum(current), _accum(current)],
             {"max_posterior_per_image": np.ones(len(ids))},

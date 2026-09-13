@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from helpers.vdam import numpy_rnd_unif_factory
 
 from recovar.em.vdam.estep_meta_updates import update_noise_from_estep_meta, update_probabilities_from_estep_meta
 from recovar.em.vdam.init import initialise_denovo_state
@@ -133,7 +132,6 @@ def test_vdam_iteration_loop_can_execute_exactly_one_absolute_restart_iteration(
         tau2_fudge_arg=4.0,
         grad_em_iters=0,
         random_seed=29,
-        rnd_unif_factory=numpy_rnd_unif_factory,
         expectation_step=estep,
         refresh_tau2_from_projector=False,
         start_iteration=180,
@@ -165,7 +163,6 @@ def test_vdam_iteration_loop_restart_rejects_state_iteration_mismatch():
             tau2_fudge_arg=4.0,
             grad_em_iters=0,
             random_seed=29,
-            rnd_unif_factory=numpy_rnd_unif_factory,
             expectation_step=lambda *_args: ([], {}),
             refresh_tau2_from_projector=False,
             start_iteration=179,
@@ -301,7 +298,6 @@ class TestRunVdamIterations:
             tau2_fudge_arg=4.0,
             grad_em_iters=0,
             random_seed=0,
-            rnd_unif_factory=numpy_rnd_unif_factory,
             expectation_step=estep,
         )
 
@@ -336,7 +332,6 @@ class TestRunVdamIterations:
             tau2_fudge_arg=4.0,
             grad_em_iters=0,
             random_seed=0,
-            rnd_unif_factory=numpy_rnd_unif_factory,
             expectation_step=estep,
             refresh_tau2_from_projector=False,
             diagnostic_stop_after_iteration=2,
@@ -365,7 +360,6 @@ class TestRunVdamIterations:
                 tau2_fudge_arg=4.0,
                 grad_em_iters=0,
                 random_seed=0,
-                rnd_unif_factory=numpy_rnd_unif_factory,
                 expectation_step=lambda current, particle_ids, halfset_ids: ([], {}),
                 diagnostic_stop_after_iteration=201,
             )
@@ -412,7 +406,6 @@ class TestRunVdamIterations:
             tau2_fudge_arg=4.0,
             grad_em_iters=0,
             random_seed=0,
-            rnd_unif_factory=numpy_rnd_unif_factory,
             expectation_step=estep,
         )
 
@@ -450,7 +443,6 @@ class TestRunVdamIterations:
             tau2_fudge_arg=4.0,
             grad_em_iters=0,
             random_seed=0,
-            rnd_unif_factory=numpy_rnd_unif_factory,
             expectation_step=estep,
             refresh_tau2_from_projector=False,
             projector_padding_factor=2,
@@ -488,7 +480,6 @@ class TestRunVdamIterations:
             tau2_fudge_arg=4.0,
             grad_em_iters=0,
             random_seed=0,
-            rnd_unif_factory=numpy_rnd_unif_factory,
             expectation_step=lambda current, particle_ids, halfset_ids: ([], {}),
             iter_artifact_sink=sink,
             refresh_tau2_from_projector=False,
@@ -581,7 +572,6 @@ class TestRunVdamIterations:
             tau2_fudge_arg=4.0,
             grad_em_iters=0,
             random_seed=1,
-            rnd_unif_factory=numpy_rnd_unif_factory,
             expectation_step=_stub_estep_factory(ori),
             iter_artifact_sink=sink,
             post_mstep_update=post_update,
@@ -775,7 +765,6 @@ class TestRunVdamIterations:
             tau2_fudge_arg=4.0,
             grad_em_iters=0,
             random_seed=0,
-            rnd_unif_factory=numpy_rnd_unif_factory,
             expectation_step=estep,
             refresh_tau2_from_projector=False,
         )
@@ -839,7 +828,7 @@ class TestRunVdamIterations:
 
         np.testing.assert_allclose(out.pdf_class, [0.0, 1.0])
 
-    def test_random_seed_zero_skips_particle_shuffle(self):
+    def test_random_seed_zero_skips_particle_shuffle(self, monkeypatch):
         state = initialise_denovo_state(
             ori_size=8,
             pixel_size=1.0,
@@ -850,15 +839,18 @@ class TestRunVdamIterations:
         )
         state.subset_size = 4
 
-        def fail_if_called(seed):
+        from recovar.relion_bind import _relion_bind_core as bind
+
+        def fail_if_called(nr_particles, seed):
             raise AssertionError(f"unexpected randomization for seed {seed}")
+
+        monkeypatch.setattr(bind, "vdam_randomise_particles_order", fail_if_called)
 
         out = select_subset_for_iter(
             state,
             iter=1,
             nr_particles=6,
             optics_group_by_particle=[0, 1, 0, 1, 0, 1],
-            rnd_unif_factory=fail_if_called,
             random_seed=0,
             do_grad=True,
         )
@@ -866,7 +858,7 @@ class TestRunVdamIterations:
         np.testing.assert_array_equal(out.subset_particle_ids, np.array([0, 2, 1, 3]))
         np.testing.assert_array_equal(out.subset_halfset_ids, np.array([0, 0, 1, 1], dtype=np.int8))
 
-    def test_random_seed_zero_preserves_relion_sorted_idx_base_order(self):
+    def test_random_seed_zero_preserves_relion_sorted_idx_base_order(self, monkeypatch):
         state = initialise_denovo_state(
             ori_size=8,
             pixel_size=1.0,
@@ -877,15 +869,18 @@ class TestRunVdamIterations:
         )
         state.subset_size = 6
 
-        def fail_if_called(seed):
+        from recovar.relion_bind import _relion_bind_core as bind
+
+        def fail_if_called(nr_particles, seed):
             raise AssertionError(f"unexpected randomization for seed {seed}")
+
+        monkeypatch.setattr(bind, "vdam_randomise_particles_order", fail_if_called)
 
         out = select_subset_for_iter(
             state,
             iter=1,
             nr_particles=6,
             optics_group_by_particle=[0, 1, 0, 1, 0, 1],
-            rnd_unif_factory=fail_if_called,
             random_seed=0,
             do_grad=True,
             particle_order=np.array([5, 0, 3, 4, 1, 2], dtype=np.int64),
@@ -911,7 +906,6 @@ class TestRunVdamIterations:
                 iter=1,
                 nr_particles=4,
                 optics_group_by_particle=[0, 0, 0, 0],
-                rnd_unif_factory=numpy_rnd_unif_factory,
                 random_seed=0,
                 do_grad=True,
                 particle_order=np.array([0, 1, 1, 3], dtype=np.int64),
@@ -934,7 +928,6 @@ class TestRunVdamIterations:
             iter=1,
             nr_particles=6,
             optics_group_by_particle=[0, 1, 0, 1, 0, 1],
-            rnd_unif_factory=numpy_rnd_unif_factory,
             random_seed=7,
             do_grad=True,
             particle_order=particle_order,
@@ -944,7 +937,6 @@ class TestRunVdamIterations:
             iter=2,
             nr_particles=6,
             optics_group_by_particle=[0, 1, 0, 1, 0, 1],
-            rnd_unif_factory=numpy_rnd_unif_factory,
             random_seed=7,
             do_grad=True,
             particle_order=particle_order,
@@ -973,7 +965,6 @@ class TestRunVdamIterations:
             iter=1,
             nr_particles=6,
             optics_group_by_particle=optics,
-            rnd_unif_factory=numpy_rnd_unif_factory,
             random_seed=7,
             do_grad=True,
             particle_order=particle_order,
@@ -983,7 +974,6 @@ class TestRunVdamIterations:
             iter=2,
             nr_particles=6,
             optics_group_by_particle=optics,
-            rnd_unif_factory=numpy_rnd_unif_factory,
             random_seed=7,
             do_grad=True,
             particle_order=particle_order,
@@ -1022,7 +1012,6 @@ class TestRunVdamIterations:
             grad_ini_subset_size=2,
             grad_fin_subset_size=5,
             random_seed=7,
-            rnd_unif_factory=numpy_rnd_unif_factory,
             particle_order=particle_order,
             grad_ini_frac=0.2,
             grad_fin_frac=0.2,
@@ -1060,7 +1049,6 @@ class TestRunVdamIterations:
             iter=6,
             nr_particles=6,
             optics_group_by_particle=optics,
-            rnd_unif_factory=numpy_rnd_unif_factory,
             random_seed=7,
             do_grad=True,
             particle_order=particle_order,
@@ -1108,7 +1096,6 @@ class TestRunVdamIterations:
                 grad_ini_subset_size=4,
                 grad_fin_subset_size=5,
                 random_seed=7,
-                rnd_unif_factory=numpy_rnd_unif_factory,
             )
 
     def test_5_iter_smoke(self, bind):
@@ -1152,7 +1139,6 @@ class TestRunVdamIterations:
             tau2_fudge_arg=4.0,
             grad_em_iters=0,
             random_seed=42,
-            rnd_unif_factory=numpy_rnd_unif_factory,
             expectation_step=_stub_estep_factory(ori),
             iter_artifact_sink=sink,
             grad_stepsize=0.25,
@@ -1200,7 +1186,6 @@ class TestRunVdamIterations:
             tau2_fudge_arg=4.0,
             grad_em_iters=2,
             random_seed=1,
-            rnd_unif_factory=numpy_rnd_unif_factory,
             expectation_step=_stub_estep_factory(ori),
             iter_artifact_sink=sink,
         )
@@ -1241,7 +1226,6 @@ class TestRunVdamIterations:
             tau2_fudge_arg=4.0,
             grad_em_iters=0,
             random_seed=7,
-            rnd_unif_factory=numpy_rnd_unif_factory,
             expectation_step=_stub_estep_factory(ori),
             iter_artifact_sink=sink,
         )

@@ -41,7 +41,6 @@ from recovar.em.vdam.schedules import (
     compute_tau2_fudge,
 )
 from recovar.em.vdam.state import InitialModelState
-from recovar.em.vdam.subset import RndUnifFn
 from recovar.em.vdam.subset_schedule import _resolve_phase_lengths, select_subset_for_iter
 
 # Callback signatures
@@ -295,7 +294,6 @@ def run_vdam_iterations(
     tau2_fudge_arg: float,
     grad_em_iters: int,
     random_seed: int,
-    rnd_unif_factory: Callable[[int], RndUnifFn],
     expectation_step: ExpectationStepFn,
     iter_artifact_sink: IterArtifactSink = lambda *args, **kw: None,
     post_mstep_update: PostMstepUpdateFn | None = None,
@@ -371,7 +369,6 @@ def run_vdam_iterations(
             iter=it,
             nr_particles=nr_particles,
             optics_group_by_particle=optics_group_by_particle,
-            rnd_unif_factory=rnd_unif_factory,
             random_seed=random_seed,
             do_grad=do_grad,
             particle_order=particle_order,

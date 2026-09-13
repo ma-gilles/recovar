@@ -2,21 +2,16 @@
 
 Mirrors RELION's ``randomiseParticlesOrder`` → first ``subset_size`` → stable-sort by
 optics group (ml_optimiser.cpp:4907) → ``part_id % 2`` pseudo-halfset assignment
-(:10349). The native parity path calls the C++ binding; the Python helpers below
-are a deterministic fallback and unit-testable subset primitive.
+(:10349). The scheduler calls the native shuffle binding; this module owns
+prefix selection, optics ordering and halfset assignment.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Sequence
+from typing import Sequence
 
 import numpy as np
-
-RndUnifFn = Callable[[int], float]
-"""``rnd_unif(call_idx)`` returning the next U(0,1). Tests use a NumPy PRNG;
-production wraps RELION's ``init_random_generator(seed) + ran1()``."""
-
 
 @dataclass(frozen=True)
 class SubsetPlan:
@@ -25,18 +20,6 @@ class SubsetPlan:
     particle_ids: np.ndarray
     part_ids: np.ndarray
     halfset_ids: np.ndarray
-
-
-def randomise_particles_order(nr_particles: int, rnd_unif: RndUnifFn) -> np.ndarray:
-    """Fisher-Yates fallback (not bit-exact to RELION; use ``vdam_randomise_particles_order`` for parity)."""
-    if nr_particles <= 0:
-        return np.zeros(0, dtype=np.int64)
-    order = np.arange(nr_particles, dtype=np.int64)
-    for call_idx, i in enumerate(range(nr_particles - 1, 0, -1)):
-        j = max(0, min(i, int(rnd_unif(call_idx) * i + 0.5)))  # ROUND = floor(x+0.5)
-        if j != i:
-            order[i], order[j] = order[j], order[i]
-    return order
 
 
 def pseudo_halfsets_active(gradient_refine: bool, do_split_random_halves: bool) -> bool:

@@ -2997,7 +2997,6 @@ def _run_transition_arm(
             tau2_fudge_arg=float(opts.tau2_fudge),
             grad_em_iters=int(opts.grad_em_iters),
             random_seed=int(opts.random_seed),
-            rnd_unif_factory=native_sampling._relion_rnd_unif_factory,
             expectation_step=capture_expectation,
             iter_artifact_sink=capture_artifact,
             post_mstep_update=post_mstep_update,

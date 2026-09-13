@@ -49,7 +49,6 @@ from recovar.em.vdam.native_sampling import (
     _prepare_native_sampling_for_iteration,
     _record_native_sampling_assignment_changes,
     _record_native_sampling_post_iteration,
-    _relion_rnd_unif_factory,
 )
 from recovar.em.vdam.schedules import (
     DEFAULT_GRAD_EM_ITERS,
@@ -1060,7 +1059,6 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             grad_ini_subset_size=grad_ini_subset_size,
             grad_fin_subset_size=grad_fin_subset_size,
             random_seed=int(opts.random_seed),
-            rnd_unif_factory=_relion_rnd_unif_factory,
             particle_order=particle_order,
             grad_ini_frac=grad_ini_frac,
             grad_fin_frac=grad_fin_frac,
@@ -1196,7 +1194,6 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         tau2_fudge_arg=float(opts.tau2_fudge),
         grad_em_iters=int(opts.grad_em_iters),
         random_seed=int(opts.random_seed),
-        rnd_unif_factory=_relion_rnd_unif_factory,
         expectation_step=expectation_step,
         iter_artifact_sink=artifact_sink,
         post_mstep_update=post_mstep_update,
