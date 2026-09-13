@@ -9,7 +9,6 @@ uses shellwise FSC and FSC-AUC.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import zipfile
@@ -24,6 +23,7 @@ from recovar.em.relion.relion_worker_scale import (
     relion_class3d_follower_owners_from_schedule,
     verify_relion_dispatch_schedule_oracle,
 )
+from recovar.utils.file_hash import sha256_file as _sha256_file
 
 SCHEMA = "em_k4_control_topology_audit_v1"
 N_CLASSES = 4
@@ -31,14 +31,6 @@ N_CLASSES = 4
 
 class AuditError(RuntimeError):
     """Raised when a required control artifact is missing or malformed."""
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _particle_table(path: Path):

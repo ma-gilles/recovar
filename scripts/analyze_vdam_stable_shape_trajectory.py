@@ -9,7 +9,6 @@ loader and GPU-monitor parser; no scientific update is reimplemented here.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -18,6 +17,7 @@ from typing import Any, Sequence
 import numpy as np
 
 from recovar.em.helpers.fourier_window import make_stable_fourier_window_shape_plan
+from recovar.utils.file_hash import sha256_file as _sha256
 from scripts.analyze_vdam_coarse_combined_true200 import (
     GateSetupError,
     _load_json,
@@ -30,14 +30,6 @@ SCHEMA = "recovar.vdam_stable_shape_trajectory.v3"
 ARM_ORDER = ("stable_off_1", "stable_on_1", "stable_on_2", "stable_off_2")
 CONTROL_ARMS = ("stable_off_1", "stable_off_2")
 CANDIDATE_ARMS = ("stable_on_1", "stable_on_2")
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _numeric_array(value: Any, label: str) -> np.ndarray:

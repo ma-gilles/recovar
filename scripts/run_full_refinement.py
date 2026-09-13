@@ -67,6 +67,7 @@ from recovar.em.relion.relion_worker_scale import (
     validate_relion_follower_scale_replay,
     verify_relion_dispatch_schedule_oracle,
 )
+from recovar.utils.file_hash import sha256_file as _sha256_file
 from recovar.utils.parity_provenance import _safe_git_commit, git_worktree_provenance
 
 logging.basicConfig(
@@ -182,14 +183,6 @@ def _shell_index_to_resolution_angstrom(shell_index, grid_size, voxel_size):
     if shell_index <= 0:
         return float("inf")
     return float(grid_size) * float(voxel_size) / shell_index
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _verify_frozen_boundary_source_hashes(

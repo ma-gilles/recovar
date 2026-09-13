@@ -4,13 +4,13 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
 import numpy as np
 
 from recovar.em.diagnostics import vdam_replay
+from recovar.utils.file_hash import sha256_file as _sha256
 
 MAGIC = vdam_replay.VDAM_CANDIDATE_BLOCK_MAP_MAGIC
 HEADER_DTYPE = vdam_replay.VDAM_CANDIDATE_BLOCK_MAP_HEADER_DTYPE
@@ -24,14 +24,6 @@ BLOCK_NO_ATOMIC = np.uint32(1 << 3)
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for payload in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(payload)
-    return digest.hexdigest()
 
 
 def load_map(path: Path) -> tuple[dict[str, int], np.ndarray]:
