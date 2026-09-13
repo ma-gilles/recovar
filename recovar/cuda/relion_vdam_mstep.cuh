@@ -506,6 +506,12 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
                             zp = -zp;
                             imag = -imag;
                         }
+                        // Native trace marks entry to interpolation, not the
+                        // later scatter (which may wait for an ordered warp).
+                        if constexpr (Trace)
+                            if (trace_record != nullptr && trace_first_atomic_claimed == 0 &&
+                                atomicCAS(&trace_first_atomic_claimed, 0, 1) == 0)
+                                trace_record->first_atomic_globaltimer = vdam_candidate_globaltimer();
                         x0 = floorf(xp);
                         fx = xp - x0;
                         x1 = x0 + 1;
@@ -532,10 +538,6 @@ __global__ void relion_vdam_native_sgd_f32_kernel(
     atomicAdd(&model_weight[(Z) * model_x * model_y + (Y) * model_x + (X)],        \
               static_cast<Accumulator>((COEFFICIENT) * Fweight))
 #define RELION_VDAM_NATIVE_SCATTER_PIXEL()                                          \
-    if constexpr (Trace)                                                            \
-        if (trace_record != nullptr && trace_first_atomic_claimed == 0 &&           \
-            atomicCAS(&trace_first_atomic_claimed, 0, 1) == 0)                      \
-            trace_record->first_atomic_globaltimer = vdam_candidate_globaltimer();  \
     float dd000 = mfz * mfy * mfx;                                                  \
     RELION_VDAM_NATIVE_ATOMIC_TRIPLET(z0, y0, x0, dd000);                           \
     float dd001 = mfz * mfy * fx;                                                   \
