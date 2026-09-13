@@ -79,6 +79,7 @@ def relion_solvent_flatten_state(
 
     return replace(state, Iref=(iref * mask[None, :, :, :]).astype(iref.dtype, copy=False))
 
+
 def vdam_m_step(
     state: InitialModelState,
     accumulators: list[VdamAccumulator],
