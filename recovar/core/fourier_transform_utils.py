@@ -214,6 +214,63 @@ def get_k_coordinate_of_each_pixel_half(image_shape, voxel_size, scaled=True, dt
     return full[_half_image_pixel_indices(image_shape)]
 
 
+def _concrete_scalar(value):
+    """Return ``float(value)`` for a Python/NumPy scalar or 0-d concrete array, else ``None``."""
+    import jax
+
+    if isinstance(value, jax.core.Tracer):
+        return None
+    try:
+        arr = np.asarray(value)
+    except Exception:  # noqa: BLE001 - anything non-concrete falls back to recomputation
+        return None
+    if arr.ndim != 0 or not np.issubdtype(arr.dtype, np.number):
+        return None
+    return float(arr)
+
+
+def _default_device_key():
+    import jax
+
+    device = jax.config.jax_default_device
+    if device is None:
+        device = jax.devices()[0]
+    return str(device)
+
+
+_frequency_grid_cache: dict = {}
+
+
+def cached_k_coordinate_of_each_pixel(image_shape, voxel_size, *, scaled=True, dtype=jnp.float32, half_image=False):
+    """Memoized :func:`get_k_coordinate_of_each_pixel` / ``..._half`` for concrete inputs.
+
+    The grid is a pure function of ``(image_shape, voxel_size, scaled, dtype)``;
+    callers such as the per-batch CTF evaluation rebuilt it with a chain of eager
+    JAX primitives on every call (5.5 % of a 100k/256 K=4 run, job 13826196).
+    The cached array is the very object the first computation produced on the
+    current default device, so every later caller sees bit-identical values.
+    Non-concrete inputs (tracers) and non-scalar voxel sizes recompute as before.
+    """
+    voxel = _concrete_scalar(voxel_size)
+    if voxel is None:
+        fn = get_k_coordinate_of_each_pixel_half if half_image else get_k_coordinate_of_each_pixel
+        return fn(image_shape, voxel_size, scaled, dtype=dtype)
+    key = (
+        tuple(int(size) for size in image_shape),
+        voxel,
+        bool(scaled),
+        jnp.dtype(dtype).name,
+        bool(half_image),
+        _default_device_key(),
+    )
+    grid = _frequency_grid_cache.get(key)
+    if grid is None:
+        fn = get_k_coordinate_of_each_pixel_half if half_image else get_k_coordinate_of_each_pixel
+        grid = fn(image_shape, voxel_size, scaled, dtype=dtype)
+        _frequency_grid_cache[key] = grid
+    return grid
+
+
 @functools.lru_cache(maxsize=None)
 def _get_k_coordinate_of_each_pixel_half_np_cached(image_shape):
     """Build immutable packed-half coordinates without dispatching JAX work."""

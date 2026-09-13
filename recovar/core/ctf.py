@@ -259,20 +259,15 @@ def _compute_spa_ctf(CTF_params, image_shape, voxel_size, *, half_image=False):
     """Standard single-particle CTF evaluation on a frequency grid."""
     CTF_params = jnp.asarray(CTF_params)
     real_dtype = jnp.result_type(CTF_params, jnp.float32)
-    if half_image:
-        psi = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
-            image_shape,
-            voxel_size,
-            scaled=True,
-            dtype=real_dtype,
-        )
-    else:
-        psi = fourier_transform_utils.get_k_coordinate_of_each_pixel(
-            image_shape,
-            voxel_size,
-            scaled=True,
-            dtype=real_dtype,
-        )
+    # The frequency grid depends only on (shape, voxel size, dtype): memoized, so
+    # per-batch CTF evaluation stops rebuilding it with eager primitives.
+    psi = fourier_transform_utils.cached_k_coordinate_of_each_pixel(
+        image_shape,
+        voxel_size,
+        scaled=True,
+        dtype=real_dtype,
+        half_image=half_image,
+    )
     return evaluate_ctf(psi, CTF_params)
 
 

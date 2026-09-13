@@ -763,3 +763,25 @@ def test_get_k_coordinate_of_each_pixel_gpu(gpu_device):
         )
 
     np.testing.assert_allclose(cpu_coords, gpu_coords, atol=1e-5, rtol=1e-5)
+
+
+def test_cached_k_coordinates_are_the_same_object_and_bitwise_equal_to_fresh():
+    import jax
+    import jax.numpy as jnp
+    import numpy as np
+    from recovar.core import fourier_transform_utils as ftu
+
+    with jax.default_device(jax.devices("cpu")[0]):
+        for half in (False, True):
+            fresh = (ftu.get_k_coordinate_of_each_pixel_half if half else ftu.get_k_coordinate_of_each_pixel)(
+                (12, 10), 1.7, True, dtype=jnp.float32
+            )
+            a = ftu.cached_k_coordinate_of_each_pixel((12, 10), 1.7, scaled=True, dtype=jnp.float32, half_image=half)
+            b = ftu.cached_k_coordinate_of_each_pixel((12, 10), np.float64(1.7), scaled=True, dtype=jnp.float32, half_image=half)
+            assert a is b, "second call must return the cached object"
+            np.testing.assert_array_equal(np.asarray(a), np.asarray(fresh))
+            assert a.dtype == fresh.dtype and a.shape == fresh.shape
+        # a traced voxel size recomputes instead of caching
+        out = jax.jit(lambda v: ftu.cached_k_coordinate_of_each_pixel((12, 10), v, scaled=True, dtype=jnp.float32))(jnp.float32(1.7))
+        np.testing.assert_allclose(np.asarray(out), np.asarray(ftu.get_k_coordinate_of_each_pixel((12, 10), 1.7, True)), rtol=0, atol=0)
+
