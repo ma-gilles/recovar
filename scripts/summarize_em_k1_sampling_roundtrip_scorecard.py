@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import re
 from pathlib import Path
@@ -12,13 +11,15 @@ from pathlib import Path
 if __name__ == "__main__" and not __package__:
     from scorecard_validation import (
         require as _require,
-        paired_transition as _transition,
+    )
+    from scorecard_validation import (
         validate_paired_cases as _validate_cases,
     )
 else:
     from scripts.scorecard_validation import (
         require as _require,
-        paired_transition as _transition,
+    )
+    from scripts.scorecard_validation import (
         validate_paired_cases as _validate_cases,
     )
 
@@ -192,20 +193,12 @@ def render_markdown(scorecard: dict) -> str:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--scorecard", type=Path, default=DEFAULT_SCORECARD)
-    parser.add_argument("--output", type=Path, default=DEFAULT_MARKDOWN)
-    parser.add_argument("--check", action="store_true")
-    args = parser.parse_args()
-    rendered = render_markdown(load_and_validate(args.scorecard))
-    if args.check:
-        if not args.output.is_file() or args.output.read_text() != rendered:
-            raise SystemExit(f"stale generated scorecard: {args.output}")
+    if __name__ == "__main__" and not __package__:
+        from scorecard_cli import run_scorecard_cli
     else:
-        if args.output.exists():
-            raise SystemExit(f"refusing to overwrite {args.output}")
-        args.output.write_text(rendered)
-    print(rendered, end="")
+        from scripts.scorecard_cli import run_scorecard_cli
+
+    run_scorecard_cli(DEFAULT_SCORECARD, DEFAULT_MARKDOWN, load_and_validate, render_markdown)
 
 
 if __name__ == "__main__":
