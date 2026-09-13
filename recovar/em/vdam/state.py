@@ -18,7 +18,7 @@ import numpy as np
 MOM2_INIT_CONSTANT: float = 1.0  # ml_model.cpp:23
 
 
-@dataclass
+@dataclass(kw_only=True)
 class InitialModelState:
     """Plain dataclass (not Equinox) so tests run CPU-only without JAX tracing."""
 
@@ -29,13 +29,9 @@ class InitialModelState:
     pixel_size: float = 1.0
     pseudo_halfsets: bool = True
 
-    Iref: np.ndarray = field(default_factory=lambda: np.zeros((1, 64, 64, 64)))
-    Igrad1: np.ndarray = field(default_factory=lambda: np.zeros((2, 64, 64, 33), dtype=np.complex128))
-    Igrad2: np.ndarray = field(
-        default_factory=lambda: np.full(
-            (1, 64, 64, 33), MOM2_INIT_CONSTANT + 1j * MOM2_INIT_CONSTANT, dtype=np.complex128
-        )
-    )
+    Iref: np.ndarray
+    Igrad1: np.ndarray
+    Igrad2: np.ndarray
 
     sigma2_noise: np.ndarray = field(default_factory=lambda: np.zeros((1, 33)))
     tau2_class: np.ndarray = field(default_factory=lambda: np.zeros((1, 33)))
