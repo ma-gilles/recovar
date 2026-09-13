@@ -368,6 +368,34 @@ def _bpref_required_stack_checksum() -> str:
     return checksum
 
 
+def flush_selected_bpref_device_panel(*, iteration_index: int, half_index: int) -> None:
+    """Flush the requested numbered capture, given zero-based loop indices."""
+
+    _device_signature_target_iteration = os.environ.get(
+        "RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION"
+    )
+    _device_signature_target_half = os.environ.get(
+        "RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF"
+    )
+    if _device_signature_target_half and int(_device_signature_target_half) not in {1, 2}:
+        raise ValueError("RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF must be 1 or 2")
+    if (
+        os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR")
+        and (
+            not _device_signature_target_iteration
+            or int(_device_signature_target_iteration) == iteration_index + 1
+        )
+        and (
+            not _device_signature_target_half
+            or int(_device_signature_target_half) == half_index + 1
+        )
+    ):
+        flush_bpref_device_panel_accumulator(
+            iteration=iteration_index + 1,
+            half=half_index + 1,
+        )
+
+
 def flush_bpref_device_panel_accumulator(*, iteration: int, half: int) -> None:
     """Write and release every exact native class panel for one half."""
 

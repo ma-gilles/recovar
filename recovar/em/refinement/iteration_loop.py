@@ -2372,29 +2372,9 @@ def _run_relion_iteration_loop(
             else:
                 Ft_y_1, Ft_ctf_1 = Ft_y_k, Ft_ctf_k
 
-            _device_signature_target_iteration = os.environ.get(
-                "RECOVAR_BPREF_CONTRIBUTION_DUMP_ITERATION"
+            bpref_diagnostics.flush_selected_bpref_device_panel(
+                iteration_index=iteration, half_index=k
             )
-            _device_signature_target_half = os.environ.get(
-                "RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF"
-            )
-            if _device_signature_target_half and int(_device_signature_target_half) not in {1, 2}:
-                raise ValueError("RECOVAR_BPREF_CONTRIBUTION_DUMP_HALF must be 1 or 2")
-            if (
-                os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR")
-                and (
-                    not _device_signature_target_iteration
-                    or int(_device_signature_target_iteration) == iteration + 1
-                )
-                and (
-                    not _device_signature_target_half
-                    or int(_device_signature_target_half) == k + 1
-                )
-            ):
-                bpref_diagnostics.flush_bpref_device_panel_accumulator(
-                    iteration=iteration + 1,
-                    half=k + 1,
-                )
 
             # Capture original-stack image indices for the half so dumps can be
             # matched to RELION's data.star image_name ordering.
