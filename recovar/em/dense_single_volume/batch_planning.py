@@ -982,6 +982,26 @@ def _estimate_relion_em_batch_sizes(
     usable_from_total_gb = max(1.0, gpu_memory_gb * _RELION_EM_BATCH_USABLE_FRACTION - persistent_gb)
     usable_from_runtime_gb = max(1.0, runtime_free_gb * _RELION_EM_BATCH_RUNTIME_FREE_FRACTION)
     usable_gb = min(usable_from_total_gb, usable_from_runtime_gb)
+    # The usable estimate drives every batch size in this planner, and at 100k/256 it came
+    # out at 16.56 GB on a card where RELION holds 77.7 GiB. Neither branch above could be
+    # reconciled with that number from the logged gpu_used estimate and the device total
+    # read from nvidia-smi, which means the inputs have to be recorded rather than inferred.
+    # Log them and say which branch bound.
+    logger.info(
+        "RELION EM batch planner memory inputs: gpu_total=%.2f GB gpu_used=%.2f GB "
+        "runtime_free=%.2f GB persistent=%.2f GB | from_total=%.2f GB (fraction %.2f) "
+        "from_runtime=%.2f GB (fraction %.2f) -> usable=%.2f GB, bound by %s",
+        gpu_memory_gb,
+        gpu_used_gb,
+        runtime_free_gb,
+        persistent_gb,
+        usable_from_total_gb,
+        _RELION_EM_BATCH_USABLE_FRACTION,
+        usable_from_runtime_gb,
+        _RELION_EM_BATCH_RUNTIME_FREE_FRACTION,
+        usable_gb,
+        "total" if usable_from_total_gb <= usable_from_runtime_gb else "runtime_free",
+    )
 
     score_float_budget = int(
         max(
