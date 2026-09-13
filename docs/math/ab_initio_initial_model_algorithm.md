@@ -463,10 +463,10 @@ Do not mix this dense-frame conversion with a path that already emits native
 RELION BPref arrays. Frame/sign mistakes usually show up as good score parity
 but bad `BPref` or `Iref` parity.
 
-`gpu_pipeline.py` used to contain the old monolithic GPU path. On this branch it
-only re-exports `DenseInitialModelEstepConfig`, `run_dense_initial_model_estep`,
-and the layout helpers for compatibility. New InitialModel work should not add
-logic there.
+The dense E-step entry point lives in
+[`vdam/dense_adapter.py`](../../recovar/em/vdam/dense_adapter.py);
+[`vdam/estep_common.py`](../../recovar/em/vdam/estep_common.py) owns its configuration
+and result records. The old `gpu_pipeline.py` compatibility shim is removed.
 
 ## Detail: M-Step Math and VDAM Momenta
 
@@ -810,7 +810,7 @@ state, and RELION volume frame.
 
 These are code-level limitations in the current branch:
 
-- `run_native_initial_model` rejects `padding_factor != 1`.
+- `run_native_initial_model` supports padding factors 1 and 2 only.
 - Native execution does not spawn RELION's post-run symmetry-alignment tool.
 - `run_native_initial_model` rejects tilt-series datasets.
 - `_initial_state_from_particles` rejects multiple optics groups because
@@ -821,8 +821,6 @@ These are code-level limitations in the current branch:
 - The dense adapter is K-aware, but multiclass quality parity still depends on
   RELION support, bootstrap class assignment, and VDAM state parity; do not
   claim K>1 parity from type support alone.
-- `gpu_pipeline.py` is a compatibility shim. Any reference to
-  `run_iter_gpu_vdam` is stale for this branch.
 - The final native `initial_model.mrc` is selected by largest `pdf_class`; it is
   not postprocessed by native `relion_align_symmetry`.
 
