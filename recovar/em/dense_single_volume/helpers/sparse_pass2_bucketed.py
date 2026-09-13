@@ -2264,6 +2264,10 @@ def _log_sparse_kclass_group_timing(
             "noise_sums",
             "noise_power_shells",
             "noise_scale_correction",
+            "build_kclass_arrays",
+            "build_compact_pairs",
+            "pipeline_throttle",
+            "chunk_total",
         )
     )
     total_profiled_s = build_s + fetch_s + prepare_s + score_s + mstep_noise_stats_s
@@ -14886,6 +14890,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             )
             if _cap > int(image_indices.shape[0]):
                 build_capacity_rows = int(_cap)
+        build_sub_t0 = time.time()
         class_bucket_arrays = _build_k_class_bucket_arrays(
             bucket_meta,
             per_image_inputs_by_class,
@@ -14894,6 +14899,9 @@ def compute_k_class_pass2_stats_sparse_fused(
             include_dense_score_fields=not bucket_uses_compact_pairs,
             rotation_block_size_for_quantization=rotation_block_size_for_quantization,
             capacity_rows=build_capacity_rows,
+        )
+        _add_sparse_group_timing(
+            group_timing, "build_kclass_arrays", time.time() - build_sub_t0
         )
         if parse_env_flag(
             _SPARSE_KCLASS_EXECUTION_SIGNATURES_ENV,
@@ -14908,6 +14916,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                 flush=True,
             )
         compact_pair_arrays_by_class = None
+        build_sub_t0 = time.time()
         if bucket_uses_compact_pairs:
             compact_pair_arrays_by_class = [
                 _build_compact_pair_bucket_arrays_from_per_image_inputs(
@@ -14918,6 +14927,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                 )
                 for class_index, per_image_inputs in enumerate(per_image_inputs_by_class)
             ]
+        _add_sparse_group_timing(
+            group_timing, "build_compact_pairs", time.time() - build_sub_t0
+        )
         batch = int(image_indices.shape[0])
         _add_sparse_group_timing(group_timing, "build", time.time() - stage_t0)
         if bucket_uses_compact_pairs:
@@ -17479,10 +17491,19 @@ def compute_k_class_pass2_stats_sparse_fused(
             # Without host pulls the loop would queue device work without bound
             # while the host builds ahead; wait on one small leaf every
             # ``pipeline_depth`` buckets to cap the in-flight buffers.
+            #
+            # This wait sits outside every stage timer, so whatever the loop
+            # stops pulling per chunk reappears here rather than vanishing;
+            # time it so the two can be told apart.
+            throttle_t0 = time.time()
             buckets_in_flight += 1
             if buckets_in_flight >= pipeline_depth:
                 jax.block_until_ready(probs_sum_t_jax)
                 buckets_in_flight = 0
+            _add_sparse_group_timing(
+                group_timing, "pipeline_throttle", time.time() - throttle_t0
+            )
+        _add_sparse_group_timing(group_timing, "chunk_total", time.time() - stage_t0)
         if _profile_active:
             jax.block_until_ready((Ft_y_total, Ft_ctf_total))
             jax.profiler.stop_trace()

@@ -10913,8 +10913,15 @@ def test_defer_fused_noise_totals_is_bit_identical_and_defers_two_leaves(
     """RECOVAR_SPARSE_KCLASS_DEFER_FUSED_NOISE_TOTALS turns the per-class-chunk host pull
     of the fused-native noise shells and norm residual into an ordinary deferred ``wsum``
     record. The replay runs ``_apply_wsum_host`` with the same arguments in the same order,
-    so every output must be bit-identical; the flag must also actually defer, which is two
-    extra device leaves in the single batched transfer for every class-chunk."""
+    so the noise accumulators and every other host statistic must be bit-identical. The
+    flag must also actually defer, which is two extra device leaves in the single batched
+    transfer for every class-chunk.
+
+    The control is run twice so the test measures, rather than assumes, which outputs this
+    configuration reproduces. Outputs it reproduces bit for bit are held to equality. The
+    x-half BPref adjoint volumes accumulate with CUDA atomics and are order-dependent
+    between processes; they are bounded the same way the padded-versus-flat-rows test
+    bounds them for the same quantities."""
     import recovar.cuda_backproject as cuda_backproject
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
@@ -10952,11 +10959,48 @@ def test_defer_fused_noise_totals_is_bit_identical_and_defers_two_leaves(
             )
         return result, sum(leaves)
 
-    off, leaves_off = run("0")
+    off_a, leaves_off = run("0")
+    off_b, _ = run("0")
     on, leaves_on = run("1")
+    label = f"RECOVAR_SPARSE_KCLASS_DEFER_FUSED_NOISE_TOTALS ({noise_mode})"
+    # The x-half BPref adjoint accumulates with CUDA atomics, so its volumes are
+    # order-dependent between processes even at unchanged configuration. Measure that
+    # spread here rather than assuming it: the same control is run twice, and only the
+    # keys it actually reproduces bit for bit are held to equality. Everything the flag
+    # touches -- the noise shells and the norm correction -- is in the strict set.
+    volume_keys = {k for k in off_a if k.startswith(("Ft_y", "Ft_ctf"))}
+    control_spread = {}
+    for name in sorted(volume_keys):
+        a = np.nan_to_num(np.asarray(off_a[name]).astype(np.complex128))
+        b = np.nan_to_num(np.asarray(off_b[name]).astype(np.complex128))
+        control_spread[name] = float(np.max(np.abs(a - b))) if a.shape == b.shape else float("inf")
     _assert_fused_arrays_identical(
-        off, on, f"RECOVAR_SPARSE_KCLASS_DEFER_FUSED_NOISE_TOTALS ({noise_mode})"
+        {k: v for k, v in off_a.items() if k not in volume_keys},
+        {k: v for k, v in on.items() if k not in volume_keys},
+        label,
     )
+    for name in sorted(volume_keys):
+        a = np.nan_to_num(np.asarray(off_a[name]).astype(np.complex128))
+        c = np.nan_to_num(np.asarray(on[name]).astype(np.complex128))
+        assert a.shape == c.shape, name
+        flag_delta = float(np.max(np.abs(a - c)))
+        if control_spread[name] == 0.0:
+            # This volume is reproducible at unchanged configuration, so the flag must
+            # not move it at all.
+            assert flag_delta == 0.0, (
+                f"{label}: {name} is bit-reproducible between two control runs "
+                f"(spread 0.0) but the flag moved it by {flag_delta:.3e}"
+            )
+        else:
+            # Atomics-order differences are bounded the same way the already-reviewed
+            # padded-versus-flat-rows test bounds them for these same volumes.
+            scale = max(1.0, float(np.max(np.abs(a))))
+            bound = 4 * np.finfo(np.float32).eps * scale
+            assert flag_delta <= bound, (
+                f"{label}: {name} moved by {flag_delta:.3e}, beyond the "
+                f"{bound:.3e} atomics bound; the control-run spread was "
+                f"{control_spread[name]:.3e}"
+            )
     assert leaves_on > leaves_off, (
         "the flag must actually defer the fused noise totals; the batched transfer "
         f"carried {leaves_on} leaves with the flag on and {leaves_off} with it off, so "
