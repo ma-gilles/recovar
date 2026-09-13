@@ -33,6 +33,11 @@ from pathlib import Path
 
 import numpy as np
 
+try:
+    from scripts.relion_reference import euler_matrix
+except ModuleNotFoundError:
+    from relion_reference import euler_matrix
+
 FIXTURE_DIR = Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run")
 PARTICLES_STAR = Path(
     "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar/.tmp/"
@@ -66,27 +71,6 @@ def read_meta(p: Path) -> dict:
         k, v = line.split("=")
         out[k] = v
     return out
-
-
-def euler_to_R(rot_d, tilt_d, psi_d):
-    """RELION's Euler convention (matches Euler_angles2matrix)."""
-    rot = np.deg2rad(rot_d)
-    tilt = np.deg2rad(tilt_d)
-    psi = np.deg2rad(psi_d)
-    ca, sa = np.cos(rot), np.sin(rot)
-    cb, sb = np.cos(tilt), np.sin(tilt)
-    cg, sg = np.cos(psi), np.sin(psi)
-    cc = cb * ca
-    cs = cb * sa
-    sc = sb * ca
-    ss = sb * sa
-    return np.array(
-        [
-            [cg * cc - sg * sa, cg * cs + sg * ca, -cg * sb],
-            [-sg * cc - cg * sa, -sg * cs + cg * ca, sg * sb],
-            [sc, ss, cb],
-        ]
-    )
 
 
 def main():
@@ -169,7 +153,7 @@ def main():
     vol_half = np.asarray(centered_full_to_relion_half(F_centered))
     print(f"  iref FT half: {vol_half.shape}")
 
-    R0 = euler_to_R(*eulers[0, 0])
+    R0 = euler_matrix(*eulers[0, 0])
     proj0 = np.array(
         relion_project_half(
             jnp.asarray(vol_half, dtype=jnp.complex128),
@@ -226,7 +210,7 @@ def main():
         idir = orient_idx // 12
         ipsi = orient_idx % 12
         eu = eulers[orient_idx, iover_rot]
-        R = euler_to_R(*eu)
+        R = euler_matrix(*eu)
         p = np.asarray(proj_fn(jnp.asarray(R, dtype=jnp.float64)))
         rot_to_proj[(orient_idx, iover_rot)] = p / (N * N)
         if k < 3 or k % 100 == 0:

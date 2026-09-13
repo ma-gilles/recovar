@@ -16,6 +16,11 @@ from pathlib import Path
 
 import numpy as np
 
+try:
+    from scripts.relion_reference import euler_matrix
+except ModuleNotFoundError:
+    from relion_reference import euler_matrix
+
 FIXTURE_DIR = Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run")
 PARTICLES_STAR = Path(
     "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar/.tmp/"
@@ -44,26 +49,6 @@ def _cc(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.real(np.vdot(af, bf)) / (np.linalg.norm(af) * np.linalg.norm(bf) + 1e-30))
 
 
-def _euler_to_matrix(rot_deg: float, tilt_deg: float, psi_deg: float) -> np.ndarray:
-    rot = np.deg2rad(rot_deg)
-    tilt = np.deg2rad(tilt_deg)
-    psi = np.deg2rad(psi_deg)
-    ca, sa = np.cos(rot), np.sin(rot)
-    cb, sb = np.cos(tilt), np.sin(tilt)
-    cg, sg = np.cos(psi), np.sin(psi)
-    cc = cb * ca
-    cs = cb * sa
-    sc = sb * ca
-    ss = sb * sa
-    return np.array(
-        [
-            [cg * cc - sg * sa, cg * cs + sg * ca, -cg * sb],
-            [-sg * cc - cg * sa, -sg * cs + cg * ca, sg * sb],
-            [sc, ss, cb],
-        ]
-    )
-
-
 def _read_relion_posterior(part_id: int) -> np.ndarray:
     """Return posterior table reshaped to (n_rot=4608, n_trans=116)."""
     with open(DUMP_DIR / f"p{part_id}_exp_Mweight.bin", "rb") as f:
@@ -87,7 +72,7 @@ def main() -> None:
     with open(DUMP_DIR / "p0_oversampled_translations.bin", "rb") as f:
         h = struct.unpack("qqq", f.read(24))
         trans_3d = np.fromfile(f, dtype=np.float64, count=h[0] * h[1] * h[2]).reshape(-1, 3)
-    rotations = np.array([_euler_to_matrix(*e) for e in eulers]).astype(np.float64)
+    rotations = np.array([euler_matrix(*e) for e in eulers]).astype(np.float64)
     translations = trans_3d[:, :2].astype(np.float64)
     n_rot = rotations.shape[0]
     n_trans = translations.shape[0]

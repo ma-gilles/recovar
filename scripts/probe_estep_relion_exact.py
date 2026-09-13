@@ -34,6 +34,11 @@ from pathlib import Path
 
 import numpy as np
 
+try:
+    from scripts.relion_reference import euler_matrix
+except ModuleNotFoundError:
+    from relion_reference import euler_matrix
+
 FIXTURE_DIR = Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run")
 PARTICLES_STAR = Path(
     "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar/.tmp/"
@@ -75,26 +80,6 @@ def _read_iter0_sigma2(n: int) -> np.ndarray:
     return v
 
 
-def euler_to_R(rot_d, tilt_d, psi_d):
-    rot = np.deg2rad(rot_d)
-    tilt = np.deg2rad(tilt_d)
-    psi = np.deg2rad(psi_d)
-    ca, sa = np.cos(rot), np.sin(rot)
-    cb, sb = np.cos(tilt), np.sin(tilt)
-    cg, sg = np.cos(psi), np.sin(psi)
-    cc = cb * ca
-    cs = cb * sa
-    sc = sb * ca
-    ss = sb * sa
-    return np.array(
-        [
-            [cg * cc - sg * sa, cg * cs + sg * ca, -cg * sb],
-            [-sg * cc - cg * sa, -sg * cs + cg * ca, sg * sb],
-            [sc, ss, cb],
-        ]
-    )
-
-
 def main():
     import jax.numpy as jnp
     import mrcfile
@@ -130,7 +115,7 @@ def main():
     print(f"Total: {n_rot} rotations × {n_trans} translations = {n_rot * n_trans:,} cells/particle")
 
     # Pre-build all rotation matrices
-    R_all = np.array([euler_to_R(*e) for e in eulers])
+    R_all = np.array([euler_matrix(*e) for e in eulers])
 
     # ------------------------------------------------------------------
     # 2. Build RELION-frame volume (gridding-corrected, half-complex)
