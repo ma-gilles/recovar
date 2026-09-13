@@ -14,8 +14,14 @@ from typing import Any
 import numpy as np
 
 from recovar.em.classification.k_class import run_dense_k_class_em
+from recovar.em.helpers.orientation_priors import (
+    relion_round_away_from_zero,
+    relion_sigma_offset_prior_center,
+    relion_translation_prior_center,
+)
 from recovar.em.relion import relion_projector_setup
 from recovar.em.relion.relion_projector_setup import ProjectorSetupBackend
+from recovar.em.vdam import native_sampling
 from recovar.em.vdam.estep_common import (
     _PARTICLE_RESULT_FIELDS,
     DenseInitialModelEstepConfig,
@@ -27,8 +33,14 @@ from recovar.em.vdam.estep_common import (
     _group_local_kwargs,
     _relion_projector_dense_rotations,
 )
+from recovar.em.vdam.native_options import NativeInitialModelOptions
+from recovar.em.vdam.native_sampling import NativeSamplingPlan
 from recovar.em.vdam.sparse_pass2_estep import _run_sparse_pass2_initial_model_estep
 from recovar.em.vdam.state import InitialModelState, VdamAccumulator
+from recovar.utils.helpers import get_gpu_memory_total
+
+INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE = 256
+INITIAL_MODEL_LOCAL_BATCH_REFERENCE_COUNT_40GB = 32
 
 _INACTIVE_CLASS_LOG_PRIOR = -1.0e30
 _EXACT_RELION_PROJECTOR_ENV = "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR"
@@ -36,6 +48,160 @@ _RELION_PROJECTOR_DUMP_DIR_ENV = "RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR"
 
 
 logger = logging.getLogger(__name__)
+
+
+def _effective_initial_model_image_batch_size(
+    requested: int,
+    *,
+    grid_size: int,
+    gpu_memory_gb: float,
+) -> int:
+    """Conservatively cap exact-local batches for large InitialModel grids.
+
+    Exact fine search has a transient that scales approximately with
+    ``batch * grid_size**2`` in addition to its resident projector/cache
+    state.  The user-facing batch remains an upper bound; 128-pixel jobs keep
+    their established behavior, while 256+ grids scale from 32 images on a
+    40 GB accelerator.
+    """
+
+    if requested < 1:
+        raise ValueError(f"image_batch_size must be positive, got {requested}")
+    if grid_size < 1:
+        raise ValueError(f"grid_size must be positive, got {grid_size}")
+    if gpu_memory_gb <= 0:
+        raise ValueError(f"gpu_memory_gb must be positive, got {gpu_memory_gb}")
+    if grid_size < INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE:
+        return int(requested)
+    scaled_cap = int(
+        INITIAL_MODEL_LOCAL_BATCH_REFERENCE_COUNT_40GB
+        * (INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE / float(grid_size)) ** 2
+        * (float(gpu_memory_gb) / 40.0)
+    )
+    return min(int(requested), max(1, scaled_cap))
+
+
+def _dense_estep_config(
+    dataset,
+    opts: NativeInitialModelOptions,
+    noise_variance: np.ndarray,
+    sampling_plan: NativeSamplingPlan,
+    translation_offsets: np.ndarray,
+    sigma_offset_angstrom: float,
+    class_log_priors: np.ndarray,
+    pass1_healpix_order: int,
+) -> DenseInitialModelEstepConfig:
+    image_pre_shifts = relion_round_away_from_zero(translation_offsets)
+    coarse_translations = np.asarray(
+        sampling_plan.coarse_translations
+        if sampling_plan.coarse_translations is not None
+        else sampling_plan.translations,
+        dtype=np.float32,
+    )
+    coarse_prior_translations = np.asarray(
+        sampling_plan.coarse_prior_translations
+        if sampling_plan.coarse_prior_translations is not None
+        else coarse_translations,
+        dtype=np.float32,
+    )
+    sigma_angstrom = float(sigma_offset_angstrom)
+    # InitialModel uses the same accelerated ``pdf_offset`` convention as the
+    # supplied-map EM path: the sampling grid is represented in projection
+    # pixels, while RELION applies its source-faithful pixel_size**4 scale.
+    translation_prior_centers = relion_translation_prior_center(
+        translation_offsets,
+        float(dataset.voxel_size),
+    )
+    _prior_kwargs = dict(
+        voxel_size=float(dataset.voxel_size),
+        sigma_angstrom=sigma_angstrom,
+        centers=translation_prior_centers,
+    )
+    coarse_translation_log_prior = native_sampling._translation_log_prior(coarse_prior_translations, **_prior_kwargs)
+    translation_log_prior = native_sampling._translation_log_prior(sampling_plan.translations, **_prior_kwargs)
+
+    sparse_pass2_enabled = os.environ.get("RECOVAR_DISABLE_SPARSE_PASS2", "") not in (
+        "1",
+        "true",
+        "TRUE",
+    )
+    if sampling_plan.rotations is None and not sparse_pass2_enabled:
+        raise ValueError("Deferred fine rotations require sparse pass 2")
+    engine_kwargs: dict = {
+        "score_with_masked_images": True,
+        "reconstruct_with_masked_images": False,
+        # VDAM --grad subtracts Frefctf (ml_optimiser.cpp:10092-10105); lifts BPref CC +0.91→+0.996.
+        "reconstruction_subtract_projected_reference": True,
+        "relion_firstiter_score_mode": "gaussian",
+        "image_pre_shifts": image_pre_shifts,
+        "translation_prior_centers": relion_sigma_offset_prior_center(translation_offsets),
+        # RECOVAR_DISABLE_SPARSE_PASS2=1 forces dense path (cuFFT plan OOM at 256²+).
+        # Oversampling zero is still RELION's adaptive two-pass algorithm: its
+        # fine children are the coarse samples themselves.  Keep it on the
+        # same exact significance/local route as positive oversampling instead
+        # of falling back to RECOVAR's algebraic dense engine.
+        "sparse_pass2": sparse_pass2_enabled,
+    }
+    if sparse_pass2_enabled or int(sampling_plan.oversampling) > 0:
+        engine_kwargs.update(
+            healpix_order=int(sampling_plan.healpix_order),
+            oversampling_order=int(sampling_plan.oversampling),
+            translation_step=float(sampling_plan.offset_step_px),
+            random_perturbation=float(sampling_plan.random_perturbation),
+            coarse_translations=coarse_translations,
+            particle_diameter_ang=float(opts.particle_diameter),
+            pass1_healpix_order=int(pass1_healpix_order),
+            return_profile=bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE")),
+        )
+        if _af := os.environ.get("RECOVAR_ADAPTIVE_FRACTION"):
+            engine_kwargs["adaptive_fraction"] = float(_af)
+    for env_var, kwarg in (
+        ("RECOVAR_USE_FLOAT64_SCORING", "use_float64_scoring"),
+        ("RECOVAR_HALF_SPECTRUM_SCORING", "half_spectrum_scoring"),
+        ("RECOVAR_SQUARE_WINDOW", "square_window"),
+    ):
+        if os.environ.get(env_var):
+            engine_kwargs[kwarg] = True
+    if (_recon_sq := os.environ.get("RECOVAR_RECON_SQUARE_WINDOW")) is not None:
+        engine_kwargs["recon_square_window"] = bool(int(_recon_sq))
+    if os.environ.get("RECOVAR_DISABLE_SUBTRACT_PROJECTED_REFERENCE"):
+        engine_kwargs["reconstruction_subtract_projected_reference"] = False
+    if translation_log_prior is not None:
+        engine_kwargs["translation_log_prior"] = translation_log_prior
+    if coarse_translation_log_prior is not None:
+        engine_kwargs["coarse_translation_log_prior"] = coarse_translation_log_prior
+
+    grid_size = int(dataset.image_shape[0])
+    gpu_memory_gb = (
+        float(get_gpu_memory_total())
+        if grid_size >= INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE
+        else 40.0
+    )
+    effective_image_batch_size = _effective_initial_model_image_batch_size(
+        int(opts.image_batch_size),
+        grid_size=grid_size,
+        gpu_memory_gb=gpu_memory_gb,
+    )
+    return DenseInitialModelEstepConfig(
+        noise_variance=noise_variance,
+        rotations=sampling_plan.rotations,
+        translations=sampling_plan.translations,
+        image_batch_size=effective_image_batch_size,
+        rotation_block_size=int(opts.rotation_block_size),
+        pass2_engine=str(opts.pass2_engine),
+        relion_wavg_sequential_cuda=bool(opts.relion_wavg_sequential_cuda),
+        exact_local_bucket_radix=int(opts.exact_local_bucket_radix),
+        exact_local_physical_order_chunk_size=int(
+            opts.exact_local_physical_order_chunk_size
+        ),
+        stable_fourier_window_shapes=bool(opts.stable_fourier_window_shapes),
+        padding_factor=int(opts.padding_factor),
+        projector_setup_backend=opts.projector_setup_backend,
+        relion_bpref_frame=True,
+        relion_projector_frame=True,
+        class_log_priors=class_log_priors,
+        engine_kwargs=engine_kwargs,
+    )
 
 
 def class_log_priors_from_state(state: InitialModelState) -> np.ndarray:

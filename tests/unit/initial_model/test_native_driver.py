@@ -16,8 +16,17 @@ from recovar.data_io.starfile import read_star
 from recovar.em import sampling
 from recovar.em.diagnostics import vdam_mstep_replay
 from recovar.em.helpers.batch_planning import maybe_cache_raw_image_loaders
+from recovar.em.helpers.orientation_priors import relion_round_away_from_zero
 from recovar.em.relion import vdam_checkpoint
-from recovar.em.vdam import bootstrap_iref, estep_meta_updates, native_options, native_sampling, schedules, star_io
+from recovar.em.vdam import (
+    bootstrap_iref,
+    dense_adapter,
+    estep_meta_updates,
+    native_options,
+    native_sampling,
+    schedules,
+    star_io,
+)
 from recovar.em.vdam.init import initialise_denovo_state
 from recovar.em.vdam.state import NativeParticleState
 from recovar.em.vdam.subset_schedule import select_subset_for_iter
@@ -48,7 +57,7 @@ def test_noise_variance_preserves_relion_rfloat_shell_values():
 )
 def test_effective_initial_model_image_batch_size(requested, grid_size, gpu_memory_gb, expected):
     assert (
-        driver._effective_initial_model_image_batch_size(
+        dense_adapter._effective_initial_model_image_batch_size(
             requested,
             grid_size=grid_size,
             gpu_memory_gb=gpu_memory_gb,
@@ -439,7 +448,7 @@ def test_image_pre_shifts_from_star_converts_angstrom_origins_to_rounded_pixels(
     )
 
     raw = star_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
-    shifts = driver.relion_round_away_from_zero(
+    shifts = relion_round_away_from_zero(
         star_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
     )
 
@@ -458,7 +467,7 @@ def test_image_pre_shifts_from_star_converts_angstrom_origins_to_rounded_pixels(
 def test_image_pre_shifts_from_star_uses_legacy_pixel_origins():
     main = pd.DataFrame({"_rlnOriginX": ["0.5", "-1.5"], "_rlnOriginY": ["1.6", "-0.49"]})
 
-    shifts = driver.relion_round_away_from_zero(
+    shifts = relion_round_away_from_zero(
         star_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
     )
 
@@ -473,7 +482,7 @@ def test_image_pre_shifts_from_star_rounds_before_float32_downcast():
         }
     )
 
-    shifts = driver.relion_round_away_from_zero(
+    shifts = relion_round_away_from_zero(
         star_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
     )
 
@@ -483,7 +492,7 @@ def test_image_pre_shifts_from_star_rounds_before_float32_downcast():
 def test_image_pre_shifts_from_star_defaults_to_zero_without_origins():
     main = pd.DataFrame({"_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs"]})
 
-    shifts = driver.relion_round_away_from_zero(
+    shifts = relion_round_away_from_zero(
         star_io._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
     )
 
@@ -2243,7 +2252,7 @@ def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
         coarse_prior_translations=np.asarray([[1.0, 0.0]], dtype=np.float32),
     )
 
-    config = driver._dense_estep_config(
+    config = dense_adapter._dense_estep_config(
         dataset,
         opts,
         np.ones(5, dtype=np.float32),
@@ -2276,7 +2285,7 @@ def test_dense_estep_config_propagates_public_pass2_engine():
         random_perturbation=0.0,
     )
 
-    config = driver._dense_estep_config(
+    config = dense_adapter._dense_estep_config(
         dataset,
         opts,
         np.ones(5, dtype=np.float32),
@@ -2307,7 +2316,7 @@ def test_dense_estep_config_keeps_zero_oversampling_on_exact_adaptive_route():
         coarse_translations=np.asarray([[0.0, 0.0], [2.0, 0.0]], dtype=np.float32),
     )
 
-    config = driver._dense_estep_config(
+    config = dense_adapter._dense_estep_config(
         dataset,
         opts,
         np.ones(5, dtype=np.float32),

@@ -150,10 +150,10 @@ structural guard; numerical tolerances, baselines and scientific gates are uncha
 
 | Responsibility | Audited lines | Budget | Retained scope |
 | --- | ---: | ---: | --- |
-| Controller and schedules | 2,053 | 1,890 | Driver, iteration/subset schedules, options and launcher defaults |
+| Controller and schedules | 2,053 | 1,730 | Driver, iteration/subset schedules, options and launcher defaults |
 | Initialization | 467 | 500 | Bootstrap, initial state and shared initial-reference filter |
 | Sampling and layout | 818 | 950 | Native sampling updates, canonical pose metadata and frame conversions |
-| E-step | 2,370 | 2,290 | Dense/local/compact routing, statistics, coarse/fine support and shared projector setup |
+| E-step | 2,370 | 2,450 | E-step configuration, batching, dense/local/compact routing, statistics, support and projector setup |
 | Reconstruction and state | 684 | 790 | Single-class M-step transaction, precision checks, state and class dispatch |
 | Input/output | 1,218 | 1,270 | STAR metadata, startup artifacts, RELION checkpoint import and initial noise |
 | Diagnostics | 1,016 | 1,160 | GT registration, native moment/reference replay and coarse report bookkeeping |

@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from recovar.em import sampling
-from recovar.em.vdam import driver, native_options, native_sampling
+from recovar.em.vdam import dense_adapter, driver, native_options, native_sampling
 from recovar.em.vdam.init import initialise_denovo_state
 from recovar.em.vdam.state import NativeParticleState
 
@@ -45,7 +45,7 @@ def test_deferred_plan_cannot_enter_dense_execution(monkeypatch):
     opts = native_options.NativeInitialModelOptions(fn_img="particles.star", healpix_order=0)
     plan = native_sampling._build_sampling_plan(opts, defer_fine_rotations=True)
     with pytest.raises(ValueError, match="Deferred fine rotations require sparse"):
-        driver._dense_estep_config(
+        dense_adapter._dense_estep_config(
             SimpleNamespace(voxel_size=1.0, n_images=2),
             opts,
             np.ones(33, dtype=np.float32),
