@@ -4337,6 +4337,7 @@ def test_texture_projector_compact_indices_bypass_full_scatter(monkeypatch):
 
 
 def test_texture_projector_compact_implementation_never_builds_full_box(monkeypatch):
+    from recovar import cuda_backproject
     from recovar.em.helpers import projection as projection_helpers
 
     crop = jnp.asarray([[0.0 + 1.0j, 1.0 + 2.0j, 2.0 + 3.0j, 3.0 + 4.0j]])
@@ -4349,6 +4350,11 @@ def test_texture_projector_compact_implementation_never_builds_full_box(monkeypa
     monkeypatch.setattr(
         projection_helpers,
         "project_half_spectrum",
+        lambda *args, **kwargs: crop,
+    )
+    monkeypatch.setattr(
+        cuda_backproject,
+        "project_relion_half_capacity",
         lambda *args, **kwargs: crop,
     )
     monkeypatch.setattr(
