@@ -163,26 +163,10 @@ def _should_update_native_sampling(*, iteration: int, nr_iter: int, do_grad: boo
     return iteration <= int(nr_iter)
 
 
-def _record_resolution_stall_for_sampling(
-    sampling_state: NativeSamplingState,
-    state: InitialModelState,
-    *,
-    iteration: int,
-) -> None:
-    """Track RELION's post-maximization resolution-stall counter."""
-    current_resolution = float(state.current_resolution)
-    if current_resolution <= float(sampling_state.last_current_resolution) + 0.0001:
-        sampling_state.nr_iter_wo_resol_gain += 1
-    else:
-        sampling_state.nr_iter_wo_resol_gain = 0
-    sampling_state.last_current_resolution = current_resolution
-
-
 def _record_native_sampling_post_iteration(
     sampling_state: NativeSamplingState,
     state: InitialModelState,
     *,
-    iteration: int,
     meta: dict,
 ) -> None:
     """Record sampling-controller state after the completed M-step.
@@ -192,7 +176,12 @@ def _record_native_sampling_post_iteration(
     the sampling decision for iteration ``N`` must only see the stall counter
     written by iteration ``N - 1``.
     """
-    _record_resolution_stall_for_sampling(sampling_state, state, iteration=iteration)
+    current_resolution = float(state.current_resolution)
+    if current_resolution <= float(sampling_state.last_current_resolution) + 0.0001:
+        sampling_state.nr_iter_wo_resol_gain += 1
+    else:
+        sampling_state.nr_iter_wo_resol_gain = 0
+    sampling_state.last_current_resolution = current_resolution
     meta["sampling_nr_iter_wo_resol_gain"] = int(sampling_state.nr_iter_wo_resol_gain)
     meta["sampling_nr_iter_wo_large_hidden_variable_changes"] = int(
         sampling_state.nr_iter_wo_large_hidden_variable_changes

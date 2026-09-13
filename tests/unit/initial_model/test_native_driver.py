@@ -1188,7 +1188,6 @@ def test_native_sampling_uses_previous_completed_resolution_counter():
     native_sampling._record_native_sampling_post_iteration(
         sampling_state,
         state,
-        iteration=40,
         meta=meta,
     )
     assert sampling_state.nr_iter_wo_resol_gain == 1
@@ -1234,7 +1233,6 @@ def test_native_sampling_burnin_resets_before_decision_then_records_checkpoint()
     native_sampling._record_native_sampling_post_iteration(
         sampling_state,
         state,
-        iteration=9,
         meta={},
     )
     assert sampling_state.nr_iter_wo_resol_gain == 1

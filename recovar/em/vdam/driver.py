@@ -210,11 +210,6 @@ def _active_relion_initialmodel_max_significants(state: InitialModelState, *, do
     return int(RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS) * int(state.K)
 
 
-def _should_record_native_sampling_changes(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
-    """Per-iteration ``monitorHiddenVariableChanges`` cadence (must NOT defer to autosampling)."""
-    return int(iteration) <= int(nr_iter)
-
-
 def _should_estimate_native_sampling_accuracy(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
     """RELION's ``calculateExpectedAngularErrors`` cadence."""
     iteration = int(iteration)
@@ -695,11 +690,8 @@ def _native_expectation_step(
                 else sampling_plan.metadata_translations
             ),
         )
-        if sampling_state is not None and _should_record_native_sampling_changes(
-            iteration=iteration,
-            nr_iter=int(state.nr_iter),
-            do_grad=do_grad,
-        ):
+        # Monitor hidden-variable changes every iteration, independently of autosampling.
+        if sampling_state is not None and int(iteration) <= int(state.nr_iter):
             _record_native_sampling_assignment_changes(
                 sampling_state,
                 particle_ids=result.meta.get("selected_particle_ids"),
@@ -1180,7 +1172,6 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         _record_native_sampling_post_iteration(
             sampling_state,
             current,
-            iteration=iteration,
             meta=meta,
         )
         if not opts.write_iter_artifacts or not _should_write_iteration_artifacts(

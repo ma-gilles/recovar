@@ -2891,7 +2891,6 @@ def _run_transition_arm(
         native_sampling._record_native_sampling_post_iteration(
             sampling_state,
             _current,
-            iteration=int(_iteration),
             meta=meta,
         )
 
