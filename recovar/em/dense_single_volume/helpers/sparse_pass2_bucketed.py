@@ -7125,10 +7125,14 @@ def _real_flat_row_indices_from_actual_counts(
         - np.repeat(starts, counts)
     ).astype(np.int32, copy=False)
     pad_multiple = max(1, int(pad_multiple))
-    padded_count = min(
-        int(counts.size) * n_rotation_rows,
-        ((total + pad_multiple - 1) // pad_multiple) * pad_multiple,
-    )
+    # Power-of-two ladder above the multiple: the linear ladder gave the
+    # active-row selection 84 distinct compiled shapes in one iteration at
+    # 100k/256 K=4 (12 s of XLA compile, census job 13837258). Padded slots
+    # repeat the first index under a zero mask, so only the shape changes.
+    padded_count = ((total + pad_multiple - 1) // pad_multiple) * pad_multiple
+    if pad_multiple > 1:
+        padded_count = max(pad_multiple, 1 << (padded_count - 1).bit_length())
+    padded_count = min(int(counts.size) * n_rotation_rows, padded_count)
     if padded_count <= total:
         return real_indices, np.ones((total,), dtype=np.float32), total
     padded_indices = np.empty((padded_count,), dtype=np.int32)
