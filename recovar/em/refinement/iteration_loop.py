@@ -1787,7 +1787,18 @@ def _run_relion_iteration_loop(
                     ),
                     dtype=_dense_global_scoring_dtype(),
                 )
-        if not use_local and int(state.adaptive_oversampling) > 0:
+        # RELION's coarse device geometry also applies at OS0. Keep this
+        # separate from host fine/M-step geometry; see docs/math/zero_coarse_geometry.md.
+        if not use_local and (
+            int(state.adaptive_oversampling) > 0
+            or (
+                int(state.adaptive_oversampling) == 0
+                and n_classes == 1
+                and firstiter_score_mode_this_iter == "gaussian"
+                and not firstiter_winner_take_all_this_iter
+                and not _DENSE_EM_STATIC_KWARGS["use_float64_scoring"]
+            )
+        ):
             adaptive_pass1_order = (
                 int(_replay_meta["healpix_order"])
                 if _replay_meta is not None
@@ -2457,6 +2468,9 @@ def _run_relion_iteration_loop(
                     relion_projector_r_max=relion_projector_r_max_by_half[k],
                     debug_iteration=numbered_relion_iteration,
                     coarse_rotation_ids=coarse_rotation_ids_for_scoring,
+                    coarse_scoring_rotations=(
+                        adaptive_pass1_rotations if int(state.adaptive_oversampling) == 0 else None
+                    ),
                 )
                 if use_adaptive:
                     dense_result = _score_half_dense_in_bpref_scope(

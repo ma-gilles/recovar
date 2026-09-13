@@ -301,6 +301,7 @@ def _score_half_dense(
     coarse_rotation_ids=None,
     preserve_bpref_particle_order: bool = False,
     source_faithful_spectrum_norm: bool = False,
+    coarse_scoring_rotations=None,
 ) -> HalfScoreResult:
     """Dense (non-local-search) E+M scoring for one half-set.
 
@@ -696,7 +697,16 @@ def _score_half_dense(
                 means_single,
                 mean_variance,
                 noise_variance_k,
-                pass2_grids.coarse_rotations,
+                (
+                    coarse_scoring_rotations
+                    if coarse_scoring_rotations is not None
+                    and adaptive_os_local == 0
+                    and k1_sparse_pass2
+                    and k1_relion_x_half_mstep
+                    and firstiter_score_mode_this_iter == "gaussian"
+                    and not diagnostic_float64_pass2
+                    else pass2_grids.coarse_rotations
+                ),
                 pass2_grids.coarse_translations,
                 pass2_grids.fine_rotations,
                 pass2_grids.fine_translations,
