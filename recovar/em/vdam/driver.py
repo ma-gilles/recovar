@@ -271,12 +271,12 @@ def _class_direction_rotation_log_prior(state: InitialModelState, healpix_order:
 
 def _class_rotation_log_prior_for_sampling(
     state: InitialModelState,
-    sampling_state: NativeSamplingState | None,
+    sampling_state: NativeSamplingState,
     healpix_order: int,
 ) -> np.ndarray:
     """Select the live RELION orientation-prior source for this sampling state."""
 
-    if sampling_state is not None and bool(sampling_state.uniform_local_orientation_prior):
+    if bool(sampling_state.uniform_local_orientation_prior):
         n_rot = int(sampling.rotation_grid_size(int(healpix_order)))
         return np.zeros((int(state.K), n_rot), dtype=np.float32)
     return _class_direction_rotation_log_prior(state, int(healpix_order))
@@ -507,7 +507,6 @@ def _native_expectation_step(
             iteration,
             grad_em_iters=int(opts.grad_em_iters),
         )
-        sampling_updated = False
         accuracy_meta = None
         prepared_projector_inputs = (
             None if projector_context is None else projector_context.take(

@@ -111,6 +111,8 @@ per-half-summary Pmax controller fallbacks are retired.
 VDAM startup uses the loaded image backend directly and requires the native
 particle shuffle; obsolete mask-backend and Python-shuffle fallbacks are retired.
 The independent shuffle reference remains in `tests/helpers/vdam.py`.
+The E-step requires the sampling state already created by startup or continuation;
+its unused no-state branch is retired. Gradient mode directly controls pseudo-halfsets.
 [Shuffle evidence](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_shuffle_contract_cleanup_20260913/result.json)
 and [backend evidence](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_image_backend_contract_cleanup_20260913/result.json)
 record unchanged numerical calls, surviving coverage and the failing size gate.
@@ -281,7 +283,7 @@ this page does not schedule or authorize duplicate runs.
 
 Finish the existing dtype-repair CUDA guard and peer bisections, then continue
 selective integration and the scientific ladder in the coordination queue. Do not
-restart or duplicate live candidates. The latest VDAM size check still fails at8669>6100 lines; moving code into
+restart or duplicate live candidates. The latest VDAM size check still fails at8654>6100 lines; moving code into
 another owner does not remove it from the budget.
 
 Preserve the distinct numerical routes while reducing structural overhead. Big-JIT
