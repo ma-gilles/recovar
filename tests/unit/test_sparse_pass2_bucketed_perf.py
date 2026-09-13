@@ -10406,6 +10406,53 @@ def test_lazy_compact_pair_tables_are_bit_identical(monkeypatch, noise_mode, def
     _assert_fused_arrays_identical(eager, lazy, f"lazy compact pair tables ({noise_mode}, defer={defer_flag})")
 
 
+@pytest.mark.parametrize("defer_flag", ["0", "1"])
+@pytest.mark.parametrize("capacity_flag", ["0", "1"])
+@pytest.mark.parametrize("noise_mode", ["no_noise", "noise"])
+def test_device_pair_index_arrays_are_bit_identical(monkeypatch, noise_mode, capacity_flag, defer_flag):
+    """RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_DEVICE_INDEX builds local_rotation_row /
+    translation_idx / pair_mask on the device from the coarse tables (the host built
+    and uploaded them for every chunk: 215 s of the 788 s iteration 2 at 100k/256, job
+    13812775). The pair ids are integers, so every output must be bit-identical, with
+    and without deferral and image-axis capacity padding; the deferred replay must use
+    the device-gathered best pair instead of pulling the tables back."""
+    from recovar.em.dense_single_volume.helpers import sparse_bucket_arrays as sba
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    engaged = []
+    original = sba.compact_pair_index_arrays_device
+
+    def spy(*a, **kw):
+        out = original(*a, **kw)
+        engaged.append(out is not None)
+        return out
+
+    def run(device_index):
+        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "4")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_DEFERRED_HOST_STATS", defer_flag)
+        monkeypatch.setenv("RECOVAR_SPARSE_PASS2_IMAGE_CAPACITY", capacity_flag)
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_LAZY_TABLES", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_DEVICE_INDEX", device_index)
+        monkeypatch.setattr(sba, "compact_pair_index_arrays_device", spy)
+        kwargs = _fused_kclass_multibucket_fixture(n_images=13)
+        if noise_mode == "noise":
+            kwargs["accumulate_noise"] = True
+        return _fused_kclass_result_arrays(
+            bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs)
+        )
+
+    host = run("0")
+    assert not engaged, "the device builder must not run with the flag off"
+    device = run("1")
+    assert engaged and all(engaged), "every compact bucket must take the device path in this fixture"
+    _assert_fused_arrays_identical(
+        host, device, f"device pair index arrays ({noise_mode}, capacity={capacity_flag}, defer={defer_flag})"
+    )
+
+
 def test_lazy_pair_tables_builder_skips_per_pair_tables():
     from recovar.em.dense_single_volume.helpers import sparse_bucket_arrays as sba
     from recovar.em.dense_single_volume.helpers.compact_candidates import SparseCandidateMask

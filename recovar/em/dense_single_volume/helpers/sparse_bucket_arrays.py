@@ -19,6 +19,7 @@ from recovar.em.dense_single_volume.helpers.compact_candidates import (
     _candidate_mask_to_dense,
     build_compact_pair_index_arrays,
     compact_candidate_indices_in_source_order,
+    compact_pair_index_arrays_device,
 )
 from recovar.em.dense_single_volume.helpers.significant_samples import ComplementSignificantSampleIndices
 from recovar.em.dense_single_volume.local_layout import _exact_bucket_rotation_size
@@ -953,6 +954,18 @@ def pad_compact_pair_arrays_to_image_capacity(pair_arrays, capacity):
 
 
 COMPACT_PAIR_LAZY_TABLES_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_LAZY_TABLES"
+COMPACT_PAIR_DEVICE_INDEX_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_DEVICE_INDEX"
+
+
+def compact_pair_device_index_enabled() -> bool:
+    """Build the compact pair index arrays on the device from the coarse tables.
+
+    Requires the lazy pair tables (the per-pair host tables need host indices).
+    The host otherwise allocates, fills and uploads ``(images, pairs)`` int32/bool
+    arrays for every chunk: ~215 s of "build" in the 788 s iteration 2 at 100k/256
+    (job 13812775). See ``compact_pair_index_arrays_device``.
+    """
+    return parse_env_binary_flag(COMPACT_PAIR_DEVICE_INDEX_ENV)
 
 
 def compact_pair_lazy_tables_enabled() -> bool:
@@ -978,7 +991,7 @@ def _rows_at_capacity(values, capacity_rows, fill):
 
 
 def _build_compact_pair_bucket_arrays_from_per_image_inputs(
-    bucket, per_image_inputs, *, lazy_pair_tables=None, capacity_rows=None
+    bucket, per_image_inputs, *, lazy_pair_tables=None, capacity_rows=None, rows_capacity=None, device_index=None
 ):
     """Stack/pad compact candidate pairs for one class and bucket on demand.
 
@@ -991,17 +1004,37 @@ def _build_compact_pair_bucket_arrays_from_per_image_inputs(
 
     pair_bucket_size = int(bucket["pair_bucket_size"])
     image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
-    index_arrays = build_compact_pair_index_arrays(
-        (per_image_inputs["candidate_mask"][int(image_idx)] for image_idx in image_indices),
-        pair_bucket_size=pair_bucket_size,
-    )
     batch = int(image_indices.shape[0])
     if lazy_pair_tables is None:
         lazy_pair_tables = compact_pair_lazy_tables_enabled()
+    if device_index is None:
+        device_index = compact_pair_device_index_enabled()
     n_alloc = batch if capacity_rows is None else max(batch, int(capacity_rows))
     padded_image_indices = image_indices
     if n_alloc > batch:
         padded_image_indices = np.concatenate([image_indices, np.repeat(image_indices[-1:], n_alloc - batch)])
+    if lazy_pair_tables and device_index:
+        device_arrays = compact_pair_index_arrays_device(
+            [per_image_inputs["candidate_mask"][int(image_idx)] for image_idx in image_indices],
+            pair_bucket_size=pair_bucket_size,
+            n_alloc=n_alloc,
+            rows_capacity=rows_capacity,
+        )
+        if device_arrays is not None:
+            return {
+                "image_indices": padded_image_indices,
+                "pair_bucket_size": pair_bucket_size,
+                "pair_counts": device_arrays["pair_counts"],
+                "local_rotation_row": device_arrays["local_rotation_row"],
+                "translation_idx": device_arrays["translation_idx"],
+                "rotation_index": None,
+                "log_prior": None,
+                "pair_mask": device_arrays["pair_mask"],
+            }
+    index_arrays = build_compact_pair_index_arrays(
+        (per_image_inputs["candidate_mask"][int(image_idx)] for image_idx in image_indices),
+        pair_bucket_size=pair_bucket_size,
+    )
     if lazy_pair_tables:
         return {
             "image_indices": padded_image_indices,

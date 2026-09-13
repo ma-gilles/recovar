@@ -7729,7 +7729,7 @@ def _reorder_to_indices(image_indices_returned, requested_image_indices, *arrays
     def _reorder(arr):
         if arr is None:
             return None
-        n_rows = int(np.asarray(arr).shape[0])
+        n_rows = int(arr.shape[0])
         if n_rows > order.size:
             # arrays allocated at image capacity: permute the real rows, keep the padding
             return arr[np.concatenate([order, np.arange(order.size, n_rows, dtype=np.int64)])]
@@ -14015,10 +14015,14 @@ def compute_k_class_pass2_stats_sparse_fused(
         probs_sum_t_host,
         log_score_offset,
         targets=None,
+        best_pair_indices=None,
     ):
         """Per-bucket, per-class statistics on host values. Called immediately when
         the pull is not deferred, or replayed in bucket order after one transfer.
-        ``targets`` redirects the writes (used by the check mode's shadow copies)."""
+        ``targets`` redirects the writes (used by the check mode's shadow copies).
+        ``best_pair_indices`` carries the best pair's ``(local rotation row,
+        translation id)`` per image, gathered on the device when the compact pair
+        tables live there, so the replay never pulls the full tables back."""
         if targets is not None:
             class_hard_assignments = targets["class_hard_assignments"]
             best_rotations = targets["best_rotations"]
@@ -14067,18 +14071,30 @@ def compute_k_class_pass2_stats_sparse_fused(
             # bucket's size and a single-image last bucket would broadcast every
             # row's argmax against row 0's pair table (job 13802221).
             row_index_np = np.arange(batch_rows, dtype=np.int64)
-            pair_local_rotation_row = np.asarray(pair_arrays["local_rotation_row"], dtype=np.int32)
-            pair_translation_idx = np.asarray(pair_arrays["translation_idx"], dtype=np.int32)
-            best_rot_idx = np.where(
-                has_best_pose_np,
-                pair_local_rotation_row[row_index_np, safe_best_argmax_np],
-                0,
-            ).astype(np.int64, copy=False)
-            best_trans_idx = np.where(
-                has_best_pose_np,
-                pair_translation_idx[row_index_np, safe_best_argmax_np],
-                0,
-            ).astype(np.int64, copy=False)
+            if best_pair_indices is not None:
+                best_rot_idx = np.where(
+                    has_best_pose_np,
+                    np.asarray(best_pair_indices[0], dtype=np.int64),
+                    0,
+                ).astype(np.int64, copy=False)
+                best_trans_idx = np.where(
+                    has_best_pose_np,
+                    np.asarray(best_pair_indices[1], dtype=np.int64),
+                    0,
+                ).astype(np.int64, copy=False)
+            else:
+                pair_local_rotation_row = np.asarray(pair_arrays["local_rotation_row"], dtype=np.int32)
+                pair_translation_idx = np.asarray(pair_arrays["translation_idx"], dtype=np.int32)
+                best_rot_idx = np.where(
+                    has_best_pose_np,
+                    pair_local_rotation_row[row_index_np, safe_best_argmax_np],
+                    0,
+                ).astype(np.int64, copy=False)
+                best_trans_idx = np.where(
+                    has_best_pose_np,
+                    pair_translation_idx[row_index_np, safe_best_argmax_np],
+                    0,
+                ).astype(np.int64, copy=False)
             rotation_indices_np = np.asarray(arrays["rotation_indices"], dtype=np.int64)
             if pair_arrays["rotation_index"] is None:
                 # rotation_index[b, p] == rotation_indices[b, local_rotation_row[b, p]];
@@ -14285,9 +14301,12 @@ def compute_k_class_pass2_stats_sparse_fused(
         if bucket_uses_compact_pairs:
             compact_pair_arrays_by_class = [
                 _build_compact_pair_bucket_arrays_from_per_image_inputs(
-                    bucket_meta, per_image_inputs, capacity_rows=build_capacity_rows
+                    bucket_meta,
+                    per_image_inputs,
+                    capacity_rows=build_capacity_rows,
+                    rows_capacity=int(class_bucket_arrays[class_index]["bucket_size"]),
                 )
-                for per_image_inputs in per_image_inputs_by_class
+                for class_index, per_image_inputs in enumerate(per_image_inputs_by_class)
             ]
         batch = int(image_indices.shape[0])
         _add_sparse_group_timing(group_timing, "build", time.time() - stage_t0)
@@ -16628,6 +16647,18 @@ def compute_k_class_pass2_stats_sparse_fused(
                 _add_sparse_group_timing(group_timing, "noise", time.time() - substage_t0)
 
             substage_t0 = time.time()
+            best_pair_indices_dev = None
+            if bucket_uses_compact_pairs and isinstance(pair_arrays["local_rotation_row"], jax.Array):
+                # Device-built pair tables: gather the best pair's ids here (two
+                # small leaves) instead of pulling the (images, pairs) tables back.
+                _safe_argmax = jnp.where(
+                    jnp.isfinite(best_log_score_bucket), best_argmax, 0
+                ).astype(jnp.int32)
+                _rows = jnp.arange(_safe_argmax.shape[0], dtype=jnp.int32)
+                best_pair_indices_dev = (
+                    pair_arrays["local_rotation_row"][_rows, _safe_argmax],
+                    pair_arrays["translation_idx"][_rows, _safe_argmax],
+                )
             if defer_host_stats_check:
                 _apply_stats_host(
                     class_index,
@@ -16642,6 +16673,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                     class_score_log_z_bucket[class_index],
                     probs_sum_t_jax,
                     log_score_offset,
+                    best_pair_indices=best_pair_indices_dev,
                 )
             if defer_host_stats:
                 deferred_host_records.append(
@@ -16660,6 +16692,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         probs_sum_t_jax,
                         log_score_offset,
                     )
+                    + (best_pair_indices_dev if best_pair_indices_dev is not None else ())
                 )
                 if defer_host_stats_check:
                     # Snapshot what the immediate path saw, so the replay can say whether a
@@ -16692,6 +16725,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                     class_score_log_z_bucket[class_index],
                     probs_sum_t_jax,
                     log_score_offset,
+                    best_pair_indices=best_pair_indices_dev,
                 )
             _add_sparse_group_timing(group_timing, "stats", time.time() - substage_t0)
         _add_sparse_group_timing(group_timing, "mstep_noise_stats", time.time() - stage_t0)
@@ -16770,6 +16804,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                 device_leaves.extend(record[3:5])
             elif kind == "stats":
                 device_leaves.extend(record[7:12])
+                device_leaves.extend(record[13:15])  # best pair ids when the tables are on device
         # One transfer per chunk of leaves, not one call over every leaf:
         # jax.device_get(list) schedules an async copy per array and at
         # 100k/256 (34k buckets x 4 classes x 5 leaves) that exhausted the
@@ -16829,7 +16864,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                     np.asarray(next(host_leaves), dtype=np.float64),
                 )
             elif kind == "stats":
-                pulled = [next(host_leaves) for _ in range(5)]
+                pulled = [next(host_leaves) for _ in range(5 + len(record[13:15]))]
+                _best_pair_indices = tuple(pulled[5:7]) if len(record) > 13 else None
+                pulled = pulled[:5]
                 if defer_host_stats_check:
                     _snap_leaves, _snap_hashes = deferred_check_snapshots[_check_record_index]
                     for _name, _live_leaf, _replay_leaf in zip(
@@ -16861,7 +16898,8 @@ def compute_k_class_pass2_stats_sparse_fused(
                             "deferred host statistics CHECK: HOST ARRAY MUTATED after the record was taken -- "
                             f"record {_check_record_index} class {record[1] + 1}: {_changed}"
                         )
-                    _apply_stats_host(*record[1:7], *pulled, record[12], targets=shadow_stats)
+                    _apply_stats_host(*record[1:7], *pulled, record[12], targets=shadow_stats,
+                                      best_pair_indices=_best_pair_indices)
                     _check_record_index += 1
                     _cls = record[1]
                     _rows = np.asarray(record[5])[: int(record[6])]
@@ -16880,7 +16918,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                                 f"replay {_shadow_v[_bad].tolist()[:4]})"
                             )
                 else:
-                    _apply_stats_host(*record[1:7], *pulled, record[12])
+                    _apply_stats_host(*record[1:7], *pulled, record[12], best_pair_indices=_best_pair_indices)
         deferred_host_records.clear()
         deferred_check_snapshots.clear()
         logger.info(

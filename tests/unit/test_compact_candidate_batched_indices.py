@@ -181,3 +181,115 @@ def test_images_with_different_rotation_row_counts_share_the_batched_path(seed, 
     monkeypatch.setattr(cc, "compact_candidate_indices_in_source_order", lambda m: (calls.append(m) or orig(m)))
     _assert_same(masks, pair_bucket_size=33 * n_trans)
     assert not calls
+
+
+# ---------------------------------------------------------------------------
+# Device-built pair index arrays (RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_DEVICE_INDEX)
+# ---------------------------------------------------------------------------
+
+
+def _host_reference_at_capacity(masks, pair_bucket_size, n_alloc):
+    from recovar.em.dense_single_volume.helpers.sparse_bucket_arrays import _rows_at_capacity
+
+    host = build_compact_pair_index_arrays(masks, pair_bucket_size=pair_bucket_size)
+    return {
+        "pair_counts": _rows_at_capacity(host["pair_counts"], n_alloc, 0),
+        "local_rotation_row": _rows_at_capacity(host["local_rotation_row"], n_alloc, 0),
+        "translation_idx": _rows_at_capacity(host["translation_idx"], n_alloc, 0),
+        "pair_mask": _rows_at_capacity(host["pair_mask"], n_alloc, False),
+    }
+
+
+def _assert_device_matches_host(masks, pair_bucket_size, n_alloc=None, rows_capacity=None):
+    jax = pytest.importorskip("jax")
+    with jax.default_device(jax.devices("cpu")[0]):
+        got = cc.compact_pair_index_arrays_device(
+            masks, pair_bucket_size=pair_bucket_size, n_alloc=n_alloc, rows_capacity=rows_capacity
+        )
+    assert got is not None, "device path must engage for this bucket"
+    want = _host_reference_at_capacity(masks, pair_bucket_size, len(masks) if n_alloc is None else n_alloc)
+    for k in ("pair_counts", "local_rotation_row", "translation_idx", "pair_mask"):
+        np.testing.assert_array_equal(np.asarray(got[k]), want[k], err_msg=k)
+        assert np.asarray(got[k]).dtype == want[k].dtype, k
+    for k in ("local_rotation_row", "translation_idx", "pair_mask"):
+        assert isinstance(got[k], jax.Array), k
+    assert isinstance(got["pair_counts"], np.ndarray)
+
+
+def _coarse_exclude_mask(rng, n_rows, n_trans, n_coarse_rot, n_coarse_trans, n_excluded, ftp):
+    parent_map = rng.integers(0, n_coarse_rot, size=n_rows)
+    excluded = np.unique(rng.integers(0, n_coarse_rot * n_coarse_trans, size=n_excluded)).astype(np.int32)
+    return SparseCandidateMask(
+        mode="coarse_exclude", n_rows=n_rows, n_fine_trans=n_trans,
+        parent_map=parent_map, coarse_excluded=excluded, fine_translation_parent=ftp,
+    )
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_device_index_arrays_match_the_host_builder_bitwise(seed):
+    """Same ids, order, dtypes and padding as build_compact_pair_index_arrays + _rows_at_capacity."""
+    rng = np.random.default_rng(seed)
+    n_trans, n_coarse_trans = 7, 3
+    ftp = rng.integers(0, n_coarse_trans, size=n_trans)
+    masks = []
+    for _ in range(9):
+        n_rows = int(rng.integers(1, 40))
+        kind = rng.choice(["coarse", "coarse_exclude", "full", "empty"], p=[0.4, 0.4, 0.1, 0.1])
+        if kind == "coarse":
+            masks.append(_coarse_mask(rng, n_rows, n_trans, int(rng.integers(2, 12)), n_coarse_trans, rng.uniform(0.1, 0.9), ftp))
+        elif kind == "coarse_exclude":
+            masks.append(_coarse_exclude_mask(rng, n_rows, n_trans, int(rng.integers(2, 12)), n_coarse_trans, int(rng.integers(0, 20)), ftp))
+        else:
+            masks.append(SparseCandidateMask(mode=kind, n_rows=n_rows, n_fine_trans=n_trans))
+    required = max(m.count for m in masks)
+    pair_bucket_size = int(rng.integers(required, required + 37)) if required else 8
+    _assert_device_matches_host(masks, pair_bucket_size)
+    # image-axis capacity: padded image rows are 0 / 0 / False with count 0
+    _assert_device_matches_host(masks, pair_bucket_size, n_alloc=len(masks) + int(rng.integers(1, 6)))
+    # class row capacity larger than every image's row count
+    _assert_device_matches_host(masks, pair_bucket_size, n_alloc=len(masks) + 2, rows_capacity=64)
+
+
+def test_device_index_arrays_source_order_and_row_padding_values():
+    rng = np.random.default_rng(11)
+    ftp = np.array([0, 1, 1, 0, 2])
+    masks = [_coarse_mask(rng, 12, 5, 6, 3, 0.5, ftp) for _ in range(3)]
+    masks.append(SparseCandidateMask(mode="empty", n_rows=12, n_fine_trans=5))
+    jax = pytest.importorskip("jax")
+    with jax.default_device(jax.devices("cpu")[0]):
+        got = cc.compact_pair_index_arrays_device(masks, pair_bucket_size=64, n_alloc=6)
+    lrr = np.asarray(got["local_rotation_row"]); tid = np.asarray(got["translation_idx"]); pm = np.asarray(got["pair_mask"])
+    for i, m in enumerate(masks):
+        c = int(m.count)
+        assert got["pair_counts"][i] == c
+        flat = lrr[i, :c].astype(np.int64) * 5 + tid[i, :c]
+        assert np.all(np.diff(flat) > 0), "ids must be strictly increasing in C order"
+        assert np.all(lrr[i, c:] == -1) and np.all(tid[i, c:] == -1) and not pm[i, c:].any()
+        assert pm[i, :c].all()
+    assert np.all(lrr[4:] == 0) and np.all(tid[4:] == 0) and not pm[4:].any()
+    assert np.all(got["pair_counts"][4:] == 0)
+
+
+@pytest.mark.parametrize("case", ["dense_numpy", "different_translation_parent", "different_translation_count"])
+def test_device_index_arrays_decline_unsupported_buckets(case):
+    rng = np.random.default_rng(5)
+    ftp = np.array([0, 1, 0, 1])
+    masks = [_coarse_mask(rng, 6, 4, 3, 2, 0.5, ftp) for _ in range(3)]
+    if case == "dense_numpy":
+        masks[1] = rng.random((6, 4)) < 0.5
+    elif case == "different_translation_parent":
+        masks[2] = _coarse_mask(rng, 6, 4, 3, 2, 0.5, np.array([1, 0, 1, 0]))
+    else:
+        masks[2] = _coarse_mask(rng, 6, 5, 3, 2, 0.5, np.array([0, 1, 0, 1, 1]))
+    jax = pytest.importorskip("jax")
+    with jax.default_device(jax.devices("cpu")[0]):
+        assert cc.compact_pair_index_arrays_device(masks, pair_bucket_size=32) is None
+
+
+def test_device_index_arrays_reject_too_small_bucket():
+    rng = np.random.default_rng(2)
+    masks = [SparseCandidateMask(mode="full", n_rows=4, n_fine_trans=3)]
+    jax = pytest.importorskip("jax")
+    with jax.default_device(jax.devices("cpu")[0]), pytest.raises(ValueError, match="smaller than the source-ordered"):
+        cc.compact_pair_index_arrays_device(masks, pair_bucket_size=11)
+

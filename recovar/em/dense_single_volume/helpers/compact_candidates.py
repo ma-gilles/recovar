@@ -334,6 +334,213 @@ def build_compact_pair_index_arrays(
     }
 
 
+def _quantize_up(value: int, quantum: int) -> int:
+    value = int(value)
+    quantum = int(quantum)
+    return max(quantum, ((value + quantum - 1) // quantum) * quantum)
+
+
+_DEVICE_INDEX_ROW_QUANTUM = 64
+_DEVICE_INDEX_COARSE_ROW_QUANTUM = 64
+
+
+def compact_pair_index_arrays_device(
+    candidate_masks,
+    *,
+    pair_bucket_size: int,
+    n_alloc: int | None = None,
+    rows_capacity: int | None = None,
+):
+    """Build the compact pair index arrays on the device from the coarse tables.
+
+    Returns ``{"pair_counts", "local_rotation_row", "translation_idx", "pair_mask",
+    "pair_bucket_size"}`` with the three ``(n_alloc, pair_bucket_size)`` arrays as
+    device arrays and ``pair_counts`` as a host ``int32`` vector, or ``None`` when
+    the bucket cannot take this path (a dense NumPy mask, an unknown mode, or
+    images that disagree on the translation count or translation parent).
+
+    Values, order, dtypes and padding are those of ``build_compact_pair_index_arrays``
+    followed by ``_rows_at_capacity``: valid pairs form a source-ordered prefix
+    (rotation-major, translation-minor) of each real image row, the remainder of a
+    real row is ``-1``/``False``, and rows beyond the real images are ``0``/``False``
+    with count ``0``.
+
+    Why: at 100k/256 the host allocated and filled these arrays for every chunk
+    (``np.full`` + prefix copies, then a host-to-device copy of the same bytes),
+    about 100 GB of memset per iteration across ~5 000 chunks; the "build" stage
+    was 215 s of the 788 s iteration 2 (job 13812775). The device needs only the
+    per-image coarse tables, the per-row parent map and the translation parent.
+
+    Shapes are quantized so the jitted kernel compiles once per
+    ``(n_alloc, rows, coarse rows, T, cT, pair_bucket_size)`` family: rows come from
+    ``rows_capacity`` (the class bucket size) or a 64-row quantum, coarse rows from a
+    64-row quantum.
+    """
+
+    candidate_masks = tuple(candidate_masks)
+    if not candidate_masks:
+        return None
+    if not all(isinstance(m, SparseCandidateMask) for m in candidate_masks):
+        return None
+    if not {m.mode for m in candidate_masks} <= {"coarse", "coarse_exclude", "full", "empty"}:
+        return None
+    first = candidate_masks[0]
+    n_trans = int(first.n_fine_trans)
+    if n_trans <= 0 or any(int(m.n_fine_trans) != n_trans for m in candidate_masks):
+        return None
+    batch = len(candidate_masks)
+    n_alloc = batch if n_alloc is None else max(batch, int(n_alloc))
+    pair_bucket_size = int(pair_bucket_size)
+    counts = np.zeros(n_alloc, dtype=np.int32)
+    for i, m in enumerate(candidate_masks):
+        counts[i] = int(m.count)
+    if int(counts.max(initial=0)) > pair_bucket_size:
+        raise ValueError(
+            "compact pair bucket is smaller than the source-ordered candidate "
+            f"prefix: required={int(counts.max())}, capacity={pair_bucket_size}"
+        )
+
+    coarse = [m for m in candidate_masks if m.mode in ("coarse", "coarse_exclude")]
+    ftp = None
+    c_trans = 1
+    if coarse:
+        ftp = np.asarray(coarse[0].fine_translation_parent, dtype=np.int32)
+        if ftp is None or ftp.shape != (n_trans,):
+            return None
+        for m in coarse:
+            if m.parent_map is None or m.fine_translation_parent is None:
+                return None
+            if not np.array_equal(np.asarray(m.fine_translation_parent), ftp):
+                return None
+        c_trans_exclude = int(ftp.max(initial=-1) + 1)
+        c_trans_valid = [int(m.coarse_valid.shape[1]) for m in coarse if m.mode == "coarse" and m.coarse_valid is not None]
+        if any(m.mode == "coarse" and m.coarse_valid is None for m in coarse):
+            return None
+        if any(m.mode == "coarse_exclude" and m.coarse_excluded is None for m in coarse):
+            return None
+        if c_trans_valid and any(c != c_trans_valid[0] for c in c_trans_valid):
+            return None
+        c_trans = c_trans_valid[0] if c_trans_valid else c_trans_exclude
+        if c_trans <= 0 or c_trans_exclude > c_trans:
+            return None
+    else:
+        ftp = np.zeros(n_trans, dtype=np.int32)
+
+    max_rows = max(int(m.n_rows) for m in candidate_masks)
+    if rows_capacity is not None and int(rows_capacity) >= max_rows:
+        rows = int(rows_capacity)
+    else:
+        rows = _quantize_up(max_rows, _DEVICE_INDEX_ROW_QUANTUM)
+    c_rot_needed = 1
+    for m in candidate_masks:
+        if m.mode == "coarse":
+            c_rot_needed = max(c_rot_needed, int(m.coarse_valid.shape[0]))
+        elif m.mode == "coarse_exclude":
+            c_rot_needed = max(c_rot_needed, int(np.asarray(m.parent_map).max(initial=-1) + 1))
+    c_rot = _quantize_up(c_rot_needed, _DEVICE_INDEX_COARSE_ROW_QUANTUM)
+
+    tables = np.zeros((n_alloc, c_rot, c_trans), dtype=bool)
+    parents = np.full((n_alloc, rows), -1, dtype=np.int32)
+    for i, m in enumerate(candidate_masks):
+        n_rows_i = int(m.n_rows)
+        if m.mode == "full":
+            tables[i, 0, :] = True
+            parents[i, :n_rows_i] = 0
+        elif m.mode == "empty":
+            continue
+        elif m.mode == "coarse":
+            table = np.asarray(m.coarse_valid, dtype=bool)
+            tables[i, : table.shape[0], :] = table
+            parents[i, :n_rows_i] = np.asarray(m.parent_map, dtype=np.int32)
+        else:  # coarse_exclude
+            parent_map = np.asarray(m.parent_map, dtype=np.int32)
+            n_coarse_rot = int(parent_map.max(initial=-1) + 1)
+            n_coarse_trans = int(ftp.max(initial=-1) + 1)
+            if parent_map.shape[0] != n_rows_i or n_coarse_rot <= 0 or n_coarse_trans <= 0:
+                return None
+            table = np.ones((n_coarse_rot, n_coarse_trans), dtype=bool)
+            excluded = np.asarray(m.coarse_excluded, dtype=np.int64).reshape(-1)
+            if excluded.size:
+                rot, trans = excluded // n_coarse_trans, excluded % n_coarse_trans
+                keep = (rot >= 0) & (rot < n_coarse_rot) & (trans >= 0) & (trans < n_coarse_trans)
+                table[rot[keep], trans[keep]] = False
+            tables[i, :n_coarse_rot, :n_coarse_trans] = table
+            parents[i, :n_rows_i] = parent_map
+    real_rows = np.zeros(n_alloc, dtype=bool)
+    real_rows[:batch] = True
+
+    import jax.numpy as jnp
+
+    local_rotation_row, translation_idx, pair_mask = _compact_pair_index_arrays_jit(
+        jnp.asarray(tables),
+        jnp.asarray(parents),
+        jnp.asarray(ftp),
+        jnp.asarray(counts),
+        jnp.asarray(real_rows),
+        pair_bucket_size=pair_bucket_size,
+    )
+    return {
+        "pair_bucket_size": pair_bucket_size,
+        "pair_counts": counts,
+        "local_rotation_row": local_rotation_row,
+        "translation_idx": translation_idx,
+        "pair_mask": pair_mask,
+    }
+
+
+def _compact_pair_index_arrays_impl(tables, parents, ftp, counts, real_rows, *, pair_bucket_size):
+    """Source-ordered pair prefix per image from ``(B, cR, cT)`` coarse tables.
+
+    Pair ``p`` of image ``b`` is the ``p``-th ``True`` of the dense ``(R, T)`` mask in
+    C order: its row is the last row whose exclusive start is ``<= p``, its
+    translation the ``(p - start)``-th valid translation of that row's coarse row.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    n_alloc, rows = parents.shape
+    n_trans = int(ftp.shape[0])
+    fine = jnp.take(tables, ftp, axis=2)  # (B, cR, T)
+    coarse_counts = jnp.sum(fine, axis=-1, dtype=jnp.int32)  # (B, cR)
+    valid_translations = jnp.sort(
+        jnp.where(fine, jnp.arange(n_trans, dtype=jnp.int32)[None, None, :], jnp.int32(n_trans)),
+        axis=-1,
+    )  # (B, cR, T), valid ids ascending then n_trans padding
+    has_parent = parents >= 0
+    safe_parent = jnp.where(has_parent, parents, 0)
+    row_counts = jnp.where(
+        has_parent, jnp.take_along_axis(coarse_counts, safe_parent, axis=1), jnp.int32(0)
+    )  # (B, R)
+    row_starts = jnp.cumsum(row_counts, axis=1, dtype=jnp.int32) - row_counts  # exclusive
+    slots = jnp.arange(pair_bucket_size, dtype=jnp.int32)  # (P,)
+    row = jax.vmap(lambda starts: jnp.searchsorted(starts, slots, side="right").astype(jnp.int32) - 1)(
+        row_starts
+    )  # (B, P): last row whose start <= p
+    row = jnp.clip(row, 0, rows - 1)
+    within = slots[None, :] - jnp.take_along_axis(row_starts, row, axis=1)
+    coarse_row = jnp.take_along_axis(safe_parent, row, axis=1)  # (B, P)
+    translation = valid_translations[
+        jnp.arange(n_alloc, dtype=jnp.int32)[:, None],
+        coarse_row,
+        jnp.clip(within, 0, n_trans - 1),
+    ]
+    valid = (slots[None, :] < counts.astype(jnp.int32)[:, None]) & real_rows[:, None]
+    padding_value = jnp.where(real_rows, jnp.int32(-1), jnp.int32(0))[:, None]
+    local_rotation_row = jnp.where(valid, row, padding_value).astype(jnp.int32)
+    translation_idx = jnp.where(valid, translation, padding_value).astype(jnp.int32)
+    return local_rotation_row, translation_idx, valid
+
+
+def _compact_pair_index_arrays_jit(tables, parents, ftp, counts, real_rows, *, pair_bucket_size):
+    import jax
+
+    fn = _compact_pair_index_arrays_jit.__dict__.get("_compiled")
+    if fn is None:
+        fn = jax.jit(_compact_pair_index_arrays_impl, static_argnames=("pair_bucket_size",))
+        _compact_pair_index_arrays_jit.__dict__["_compiled"] = fn
+    return fn(tables, parents, ftp, counts, real_rows, pair_bucket_size=int(pair_bucket_size))
+
+
 def build_compact_fine_job_plan(
     candidate_masks,
     reference_row_lookup,
