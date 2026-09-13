@@ -1058,3 +1058,32 @@ def _build_k_class_bucket_arrays(
             )
         )
     return class_arrays
+
+
+def coarse_winner_local_pose_ids(per_image_inputs, coarse_pose_ids, fine_translation_parent, n_coarse_trans):
+    """Locate retained coarse winners without reconstructing canonical Euler angles.
+
+    Only the one-child-per-parent, zero-oversampling layout is supported.
+    The returned local IDs index the existing per-image source-Euler/pose rows.
+    """
+    poses = np.asarray(coarse_pose_ids)
+    if poses.shape != (len(per_image_inputs["unique_rot"]),) or not np.all(np.isfinite(poses)):
+        raise ValueError("coarse winners must be one finite pose ID per image")
+    if np.any(poses < 0) or not np.array_equal(poses, poses.astype(np.int64)):
+        raise ValueError("coarse winners must be nonnegative integer pose IDs")
+    trans_parents = np.asarray(fine_translation_parent, dtype=np.int64)
+    output = np.empty(poses.size, dtype=np.int64)
+    for image_index, pose_id in enumerate(poses.astype(np.int64)):
+        coarse_rot, coarse_trans = divmod(int(pose_id), int(n_coarse_trans))
+        rotation_parents = np.asarray(per_image_inputs["unique_rot"][image_index])[
+            np.asarray(per_image_inputs["parent_map"][image_index])
+        ]
+        rotation_rows = np.flatnonzero(rotation_parents == coarse_rot)
+        translation_rows = np.flatnonzero(trans_parents == coarse_trans)
+        if rotation_rows.size != 1 or translation_rows.size != 1:
+            raise ValueError("zero-oversampling coarse winner must have exactly one selected fine child")
+        r, t = int(rotation_rows[0]), int(translation_rows[0])
+        if not _candidate_mask_to_dense(per_image_inputs["candidate_mask"][image_index])[r, t]:
+            raise ValueError("coarse winner is missing from selected fine support")
+        output[image_index] = r * trans_parents.size + t
+    return output

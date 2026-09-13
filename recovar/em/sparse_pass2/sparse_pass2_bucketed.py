@@ -106,6 +106,7 @@ from recovar.em.scoring.sparse_bucket_arrays import (
     _compact_pair_image_mask_for_threshold,
     _prepare_per_image_compact_candidate_pairs,
     _prepare_per_image_pass2_inputs,
+    coarse_winner_local_pose_ids,
 )
 from recovar.em.sparse_pass2.sparse_pass2_adjoint import (
     _accumulate_active_flat_rows_adjoint_chunked,
@@ -410,6 +411,9 @@ def compute_pass2_stats_sparse_bucketed(
     scale_correction_group_count=None,
     scale_correction_data_vs_prior=None,
     normalization_log_z=None,
+    relion_f32_normalization_sum_weight=None,
+    relion_coarse_hard_assignment=None,
+    relion_coarse_max_posterior=None,
     normalization_other_score_log_z=None,
     normalization_score_mode=None,
     return_score_log_z=False,
@@ -631,6 +635,20 @@ def compute_pass2_stats_sparse_bucketed(
         )
     )
     use_half_volume_mstep = bool(relion_half_volume_mstep) or use_relion_x_half_mstep
+    reuse_coarse_normalization = relion_f32_normalization_sum_weight is not None
+    retain_coarse_winner = relion_coarse_hard_assignment is not None
+    if retain_coarse_winner != (relion_coarse_max_posterior is not None) or (
+        retain_coarse_winner and not reuse_coarse_normalization
+    ):
+        raise ValueError("coarse winner and Pmax require each other and the coarse normalization sum")
+    if reuse_coarse_normalization and (
+        int(oversampling_order) != 0
+        or not use_relion_f32_fine_posterior
+        or use_float64_scoring
+        or relion_firstiter_score_mode != "gaussian"
+        or score_only
+    ):
+        raise ValueError("coarse normalization requires zero-oversampling float32 soft x-half accumulation")
     # Preserve early mode validation; compact-pair dispatch is owned by the K-class path.
     _compact_pair_mstep_mode_for_pass()
     recon_accum_shape = half_volume_accumulator_shape(recon_volume_shape) if use_half_volume_mstep else recon_volume_shape
@@ -742,6 +760,23 @@ def compute_pass2_stats_sparse_bucketed(
         dtype=precision_policy.score_real_dtype,
     )
     prep_s = time.time() - prep_t0
+
+    coarse_local_pose_ids = (
+        coarse_winner_local_pose_ids(
+            per_image_inputs, relion_coarse_hard_assignment, fine_translation_parent,
+            int(np.asarray(translations).shape[0]),
+        )
+        if retain_coarse_winner else None
+    )
+    coarse_max_posterior_np = optional_normalization_vector(
+        relion_coarse_max_posterior, name="relion_coarse_max_posterior", n_images=n_images,
+    )
+    if retain_coarse_winner and (
+        not np.all(np.isfinite(coarse_max_posterior_np))
+        or np.any(coarse_max_posterior_np < 0)
+        or np.any(coarse_max_posterior_np > 1)
+    ):
+        raise ValueError("coarse Pmax must be finite and lie in [0, 1]")
 
     local_rot_counts = [int(rots.shape[0]) for rots in per_image_inputs["oversampled_rots"]]
     valid_candidate_counts = [_candidate_mask_count(m) for m in per_image_inputs["candidate_mask"]]
@@ -1081,6 +1116,11 @@ def compute_pass2_stats_sparse_bucketed(
 
     normalization_log_z_np = optional_normalization_vector(
         normalization_log_z, name="normalization_log_z", n_images=n_images,
+    )
+    coarse_sum_weight_np = optional_normalization_vector(
+        relion_f32_normalization_sum_weight,
+        name="relion_f32_normalization_sum_weight",
+        n_images=n_images,
     )
     normalization_other_score_log_z_np = optional_normalization_vector(
         normalization_other_score_log_z, name="normalization_other_score_log_z", n_images=n_images,
@@ -2061,7 +2101,20 @@ def compute_pass2_stats_sparse_bucketed(
                     ) = _relion_f32_fine_reconstruction_probs(
                         all_scores_flat,
                         adaptive_fraction=float(adaptive_fraction),
+                        normalization_sum_weight=(
+                            None if coarse_sum_weight_np is None else coarse_sum_weight_np[image_indices]
+                        ),
+                        keep_all=reuse_coarse_normalization,
                     )
+                    if reuse_coarse_normalization:
+                        global_max_posterior = jnp.max(reconstruction_probs_flat, axis=1)
+                        exponent_add = jnp.float32(50.0) - global_best_log_score.astype(jnp.float32)
+                        bucket_log_z = jnp.log(jnp.asarray(coarse_sum_weight_np[image_indices], dtype=jnp.float64))
+                        bucket_log_z = bucket_log_z - exponent_add.astype(jnp.float64)
+                        local_score_log_z = None
+                        if retain_coarse_winner:
+                            global_best_argmax = coarse_local_pose_ids[image_indices]
+                            global_max_posterior = coarse_max_posterior_np[image_indices]
                 else:
                     mask_flat_chunks = []
                     for scores_chunk in score_chunks:
@@ -2217,6 +2270,10 @@ def compute_pass2_stats_sparse_bucketed(
                         jnp.asarray(start, dtype=jnp.int32),
                         global_best_log_score.astype(scores_chunk.real.dtype),
                     )
+                if reuse_coarse_normalization:
+                    # At oversampling zero all positive selected fine weights
+                    # survive, so reconstruction and full posterior coincide.
+                    probs = reconstruction_prob_chunks[chunk_idx]
                 if contribution_chunked_bucket:
                     contribution_score_chunks.append(scores_chunk)
                     if relion_firstiter_score_mode == "normalized_cc":
@@ -3459,6 +3516,10 @@ def compute_pass2_stats_sparse_bucketed(
                     use_relion_x_half_mstep=use_relion_x_half_mstep,
                     use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
                     winner_take_all=winner_take_all,
+                    normalization_sum_weight=(
+                        None if coarse_sum_weight_np is None else coarse_sum_weight_np[image_indices]
+                    ),
+                    keep_all=reuse_coarse_normalization,
                 )
             )
             if use_relion_f32_fine_posterior:
@@ -3485,6 +3546,10 @@ def compute_pass2_stats_sparse_bucketed(
                     use_relion_f32_fine_posterior=use_relion_f32_fine_posterior,
                     winner_take_all=winner_take_all,
                     return_diagnostics=True,
+                    normalization_sum_weight=(
+                        None if coarse_sum_weight_np is None else coarse_sum_weight_np[image_indices]
+                    ),
+                    keep_all=reuse_coarse_normalization,
                 )
                 bpref_diagnostics._require_bpref_shadow_exact(
                     "reconstruction probabilities",
@@ -3501,6 +3566,17 @@ def compute_pass2_stats_sparse_bucketed(
                     reconstruction_n_significant,
                     shadow_reconstruction_n_significant,
                 )
+        if reuse_coarse_normalization:
+            probs = reconstruction_probs
+            # RELION retains the coarse numeric sum but uses the fine pass's
+            # own exponent shift in dLL = log(sum_weight) - min_diff2 - logsigma2.
+            exponent_add = jnp.float32(50.0) - best_log_score_bucket.astype(jnp.float32)
+            log_Z = jnp.log(jnp.asarray(coarse_sum_weight_np[image_indices], dtype=jnp.float64))
+            log_Z = log_Z - exponent_add.astype(jnp.float64)
+            local_score_log_z = None
+            if retain_coarse_winner:
+                best_argmax = coarse_local_pose_ids[image_indices]
+                max_posterior_bucket = coarse_max_posterior_np[image_indices]
         shifted_recon_split_for_dump = None
         ctf2_over_nv_recon_for_dump = None
         recon_window_indices_for_dump = None

@@ -31,7 +31,13 @@ from recovar.em.helpers.orientation_priors import (
     normalize_class_direction_prior_per_half,
 )
 from recovar.em.helpers.oversampling import build_adaptive_pass2_grids
-from recovar.em.helpers.types import SparsePass2Output, DenseEMResult, LocalEMResult, make_noise_stats, make_relion_stats
+from recovar.em.helpers.types import (
+    DenseEMResult,
+    LocalEMResult,
+    SparsePass2Output,
+    make_noise_stats,
+    make_relion_stats,
+)
 from recovar.em.local.local_layout import LocalHypothesisLayout
 from recovar.em.refinement.mean_helpers import update_c1_sigma_offset_from_posterior
 from recovar.em.sampling import read_relion_direction_priors
@@ -91,6 +97,70 @@ def _control_coarse_selector_audit(score_mode: str, translation_count: int) -> d
             "native_atomic_selected_calls": 0,
         },
     }
+
+
+@pytest.mark.parametrize("n_classes,order,winner,score_mode,double,enabled", [
+    (1, 0, False, "gaussian", False, True),
+    (1, 1, False, "gaussian", False, False),
+    (4, 0, False, "gaussian", False, False),
+    (4, 1, False, "gaussian", False, False),
+    (1, 0, True, "normalized_cc", False, False),
+    (1, 0, True, "gaussian", False, False),
+    (1, 0, False, "gaussian", True, False),
+])
+def test_adaptive_coarse_state_activation_is_zero_soft_k1_only(
+    monkeypatch, n_classes, order, winner, score_mode, double, enabled,
+):
+    from recovar.em.scoring import significance
+
+    coarse_calls, fine_calls = [], []
+    coarse_sum = np.asarray([123.0], dtype=np.float32)
+    coarse_pmax = np.asarray([0.123], dtype=np.float32)
+    coarse_pose = np.asarray([0], dtype=np.int32)
+
+    def coarse(*args, **kwargs):
+        coarse_calls.append(kwargs)
+        return (None, np.ones(1, dtype=np.int32), coarse_pose, np.zeros(1, dtype=np.int32),
+                [[np.asarray([0], dtype=np.int32)] for _ in range(n_classes)],
+                {"significant_cutoff_counts": np.ones(1, dtype=np.int32),
+                 "relion_f32_sum_weight": coarse_sum, "relion_f32_max_posterior": coarse_pmax,
+                 "coarse_selector_audit": _control_coarse_selector_audit(score_mode, 1)})
+
+    result = _assemble_result(
+        class_log_evidence=np.zeros((n_classes, 1)), new_means=None,
+        Ft_y=[jnp.ones(4, dtype=jnp.complex64)] * n_classes,
+        Ft_ctf=[jnp.ones(4, dtype=jnp.float32)] * n_classes,
+        per_class_hard_assignments=np.zeros((n_classes, 1), dtype=np.int32),
+        per_class_stats=tuple(_stats([0], [0], [1], n_rot=1) for _ in range(n_classes)), noise_stats=None,
+    )
+
+    def fine(*args, **kwargs):
+        fine_calls.append(kwargs)
+        return result
+
+    monkeypatch.setattr(significance, "_compute_k_class_significance_batched", coarse)
+    monkeypatch.setattr(k_class_module, "_run_sparse_k_class_adaptive_pass2", fine)
+    monkeypatch.setenv("RECOVAR_K_CLASS_DENSE_PASS2_SUPPORT_FRACTION", "0")
+    actual = run_dense_k_class_em_adaptive(
+        SimpleNamespace(n_images=1), jnp.zeros((n_classes, 4), dtype=jnp.complex64),
+        jnp.ones(4), jnp.ones(1), np.eye(3)[None], np.zeros((1, 2)),
+        np.eye(3)[None], np.zeros((1, 2)), np.zeros(1, dtype=np.int64), np.zeros(1, dtype=np.int64),
+        "linear_interp", coarse_healpix_order=0, oversampling_order=order, sparse_pass2=True,
+        mstep_relion_x_half=True, relion_firstiter_score_mode=score_mode,
+        relion_firstiter_winner_take_all=winner, use_float64_scoring=double,
+    )
+    assert len(coarse_calls) == len(fine_calls) == 1
+    assert coarse_calls[0].get("return_relion_f32_normalization", False) is enabled
+    fine_kwargs = fine_calls[0]["engine_kwargs"]
+    for key, value in (("relion_f32_normalization_sum_weight", coarse_sum),
+                       ("relion_coarse_hard_assignment", coarse_pose),
+                       ("relion_coarse_max_posterior", coarse_pmax)):
+        if enabled:
+            np.testing.assert_array_equal(fine_kwargs[key], value)
+        else:
+            assert key not in fine_kwargs
+    np.testing.assert_array_equal(actual.Ft_y, result.Ft_y)
+    np.testing.assert_array_equal(actual.Ft_ctf, result.Ft_ctf)
 
 
 def test_large_k_class_prefers_compact_sparse_pass2_over_dense_fallback(monkeypatch):

@@ -17,6 +17,63 @@ from recovar.em.sparse_pass2.sparse_pass2_posterior import (
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("keep_all", [False, True])
+@pytest.mark.parametrize("external_sum", [False, True])
+@pytest.mark.parametrize("diagnostics", [False, True])
+def test_reconstruction_wrapper_preserves_coarse_normalization_controls(
+    monkeypatch,
+    keep_all,
+    external_sum,
+    diagnostics,
+):
+    """The ordinary K1 wrapper must not drop the existing primitive's controls."""
+    monkeypatch.setenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, "0")
+    scores = jnp.asarray([[[0.0, -1.0, -4.0, -np.inf]], [[0.0, -0.5, -6.0, -np.inf]]], dtype=jnp.float32)
+    ordinary = _relion_f32_fine_posterior(scores, adaptive_fraction=0.8)
+    denominator = ordinary[4] * jnp.float32(2.0) if external_sum else None
+    expected = _relion_f32_fine_posterior(
+        scores,
+        adaptive_fraction=0.8,
+        normalization_sum_weight=denominator,
+        keep_all=keep_all,
+    )[1:]
+    actual = _relion_pass2_reconstruction_probs_for_mstep(
+        scores,
+        ordinary[0],
+        adaptive_fraction=0.8,
+        use_relion_x_half_mstep=True,
+        use_relion_f32_fine_posterior=True,
+        normalization_sum_weight=denominator,
+        keep_all=keep_all,
+        return_diagnostics=diagnostics,
+    )
+    for got, wanted in zip(actual, expected if diagnostics else expected[:3], strict=True):
+        np.testing.assert_array_equal(got, wanted)
+    if keep_all:
+        np.testing.assert_array_equal(actual[1], np.isfinite(scores))
+        np.testing.assert_array_equal(actual[2], [3, 3])
+    if diagnostics and external_sum:
+        np.testing.assert_array_equal(actual[3], denominator)
+
+
+@pytest.mark.parametrize("mode", ["no_xhalf", "legacy", "winner"])
+def test_reconstruction_wrapper_rejects_unhandled_coarse_normalization(monkeypatch, mode):
+    """Do not silently ignore controls on a path with different semantics."""
+    monkeypatch.setenv(_RELION_X_HALF_F32_FINE_POSTERIOR_ENV, "0")
+    scores = jnp.asarray([[[0.0, -1.0]]], dtype=jnp.float32)
+    with pytest.raises(ValueError, match="coarse normalization.*float32"):
+        _relion_pass2_reconstruction_probs_for_mstep(
+            scores,
+            jnp.ones_like(scores),
+            adaptive_fraction=0.8,
+            use_relion_x_half_mstep=mode != "no_xhalf",
+            use_relion_f32_fine_posterior=mode != "legacy",
+            winner_take_all=mode == "winner",
+            normalization_sum_weight=jnp.asarray([1.0], dtype=jnp.float32),
+            keep_all=True,
+        )
+
+
 def _numpy_relion_f32_reference(scores, adaptive_fraction):
     scores = np.asarray(scores, dtype=np.float32)
     flat = scores.reshape(scores.shape[0], -1)

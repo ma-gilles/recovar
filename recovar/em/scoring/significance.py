@@ -983,6 +983,7 @@ def _compute_k_class_significance_batched(
     relion_projector_texture_interp: bool | None = None,
     score_mode: str = "gaussian",
     collect_significance: bool = True,
+    return_relion_f32_normalization: bool = False,
     return_class_best: bool = False,
     return_class_second: bool = False,
     debug_iteration: int | None = None,
@@ -999,6 +1000,10 @@ def _compute_k_class_significance_batched(
 
     if return_class_second and not return_class_best:
         raise ValueError("return_class_second requires return_class_best")
+    if return_relion_f32_normalization and (
+        not collect_significance or score_mode != "gaussian" or use_float64_scoring
+    ):
+        raise ValueError("RELION float32 normalization requires Gaussian float32 significance")
 
     from recovar import core
     from recovar.core.configs import ForwardModelConfig
@@ -2650,8 +2655,11 @@ def _compute_k_class_significance_batched(
     max_posterior = np.empty(n_images, dtype=score_real_dtype)
     relion_f32_sum_weight = (
         np.empty(n_images, dtype=np.float32)
-        if relion_f32_coarse_support_enabled and collect_significance
+        if (relion_f32_coarse_support_enabled or return_relion_f32_normalization) and collect_significance
         else None
+    )
+    relion_f32_max_posterior = (
+        np.empty(n_images, dtype=np.float32) if return_relion_f32_normalization else None
     )
     class_log_evidence = np.empty((n_classes, n_images), dtype=np.float64)
     class_best_log_score = (
@@ -4050,6 +4058,7 @@ def _compute_k_class_significance_batched(
         ]
 
         class_weight_mats = []
+        normalization_score_mats = []
         compact_support_pose_ids = None
         if collect_significance:
             if compact_hybrid_scores is not None:
@@ -4057,6 +4066,7 @@ def _compute_k_class_significance_batched(
             else:
                 for class_index, mean_for_proj in enumerate(means_for_proj):
                     class_weight_blocks = []
+                    normalization_score_blocks = []
                     for block_index in range(n_blocks):
                         r0 = block_index * rotation_block_size
                         r1 = r0 + rotation_block_size
@@ -4093,6 +4103,10 @@ def _compute_k_class_significance_batched(
                         else:
                             scores = cached_class_score_blocks[class_index][block_index]
                         actual_rot = min(rotation_block_size, n_rot - r0)
+                        if return_relion_f32_normalization and not relion_f32_coarse_support_enabled:
+                            normalization_score_blocks.append(
+                                scores[:, :actual_rot, :].reshape(batch_size, -1),
+                            )
                         if relion_f32_coarse_support_enabled:
                             class_weight_blocks.append(
                                 scores[:, :actual_rot, :].reshape(batch_size, -1),
@@ -4105,6 +4119,8 @@ def _compute_k_class_significance_batched(
                     class_weight_mats.append(
                         jnp.concatenate(class_weight_blocks, axis=1),
                     )
+                    if normalization_score_blocks:
+                        normalization_score_mats.append(jnp.concatenate(normalization_score_blocks, axis=1))
 
                 batch_values = jnp.concatenate(class_weight_mats, axis=1)
             if relion_f32_coarse_support_enabled:
@@ -4139,6 +4155,10 @@ def _compute_k_class_significance_batched(
                     _batch_sum_weight[:actual_batch_size],
                     dtype=np.float32,
                 )
+                if return_relion_f32_normalization:
+                    relion_f32_max_posterior[start_idx:end_idx] = np.asarray(
+                        jnp.max(batch_weights[:actual_batch_size], axis=1), dtype=np.float32,
+                    )
                 if compact_hybrid_scores is None:
                     batch_sig_rot_mask = jnp.any(
                         batch_sig_mask.reshape(
@@ -4150,6 +4170,24 @@ def _compute_k_class_significance_batched(
                     )
             else:
                 batch_weights = batch_values
+                if return_relion_f32_normalization:
+                    from recovar.em.sparse_pass2.sparse_pass2_posterior import _relion_f32_fine_posterior
+
+                    # Retain the existing coarse selector and all of its outputs.
+                    # The symbolic fine pass needs the numeric maximum-shifted
+                    # denominator, not exp(logZ) or a second normalized support.
+                    # See docs/math/zero_oversampling.md.
+                    normalization_probs, _, _, _, normalization_sum, _ = _relion_f32_fine_posterior(
+                        jnp.concatenate(normalization_score_mats, axis=1),
+                        adaptive_fraction=adaptive_fraction,
+                        keep_all=True,
+                    )
+                    relion_f32_sum_weight[start_idx:end_idx] = np.asarray(
+                        normalization_sum[:actual_batch_size], dtype=np.float32,
+                    )
+                    relion_f32_max_posterior[start_idx:end_idx] = np.asarray(
+                        jnp.max(normalization_probs[:actual_batch_size], axis=1), dtype=np.float32,
+                    )
                 (
                     batch_sig_mask,
                     batch_sig_rot_mask,
@@ -5233,6 +5271,8 @@ def _compute_k_class_significance_batched(
         # interchangeable with a log-evidence value because the fine pass
         # independently shifts its own maximum to 50 before division.
         full_stats["relion_f32_sum_weight"] = relion_f32_sum_weight
+    if relion_f32_max_posterior is not None:
+        full_stats["relion_f32_max_posterior"] = relion_f32_max_posterior
     if return_class_best:
         full_stats["class_best_log_score_per_image"] = class_best_log_score
         full_stats["class_best_offset_free_log_score_per_image"] = class_best_offset_free_log_score

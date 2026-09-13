@@ -649,6 +649,9 @@ def compute_pass2_stats_sparse(
     random_perturbation=0.0,
     translation_prior_centers=None,
     normalization_log_z=None,
+    relion_f32_normalization_sum_weight=None,
+    relion_coarse_hard_assignment=None,
+    relion_coarse_max_posterior=None,
     normalization_other_score_log_z=None,
     normalization_score_mode=None,
     return_score_log_z=False,
@@ -748,6 +751,7 @@ def compute_pass2_stats_sparse(
         and not return_score_log_z
         and not return_score_log_z_only
         and normalization_log_z is None
+        and relion_f32_normalization_sum_weight is None
         and normalization_other_score_log_z is None
         and normalization_score_mode is None
         and group_ids is None
@@ -806,6 +810,9 @@ def compute_pass2_stats_sparse(
             square_window=square_window,
             random_perturbation=random_perturbation,
             normalization_log_z=normalization_log_z,
+            relion_f32_normalization_sum_weight=relion_f32_normalization_sum_weight,
+            relion_coarse_hard_assignment=relion_coarse_hard_assignment,
+            relion_coarse_max_posterior=relion_coarse_max_posterior,
             normalization_other_score_log_z=normalization_other_score_log_z,
             normalization_score_mode=normalization_score_mode,
             return_score_log_z=return_score_log_z,
@@ -839,6 +846,10 @@ def compute_pass2_stats_sparse(
             source_faithful_spectrum_norm=source_faithful_spectrum_norm,
         )
 
+    if any(value is not None for value in (
+        relion_f32_normalization_sum_weight, relion_coarse_hard_assignment, relion_coarse_max_posterior,
+    )):
+        raise NotImplementedError("coarse float32 normalization requires bucketed sparse pass 2")
     if relion_projector_half is not None:
         raise NotImplementedError("RELION projector sparse pass-2 requires the bucketed implementation")
     if reconstruction_current_size is not None:

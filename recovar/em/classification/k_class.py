@@ -828,6 +828,10 @@ def _run_sparse_k_class_adaptive_pass2(
         ),
         source_faithful_spectrum_norm=source_faithful_spectrum_norm,
     )
+    if n_classes == 1 and base_engine_kwargs.get("relion_f32_normalization_sum_weight") is not None:
+        common["relion_f32_normalization_sum_weight"] = base_engine_kwargs["relion_f32_normalization_sum_weight"]
+        common["relion_coarse_hard_assignment"] = base_engine_kwargs.get("relion_coarse_hard_assignment")
+        common["relion_coarse_max_posterior"] = base_engine_kwargs.get("relion_coarse_max_posterior")
     preserve_bpref_particle_order = _apply_bpref_particle_order_policy(
         common,
         base_engine_kwargs,
@@ -2642,6 +2646,19 @@ def run_dense_k_class_em_adaptive(
     )
 
     coarse_class_assignments_for_override = None
+    reuse_zero_oversampling_coarse_state = bool(
+        n_classes == 1
+        and _resolved_oversampling_order() == 0
+        and sparse_pass2_requested
+        and engine_kwargs.get("mstep_relion_x_half", False)
+        and not firstiter_cc_pass2_only_best_coarse
+        and not skip_significance_pruning
+        and not engine_kwargs.get("relion_firstiter_winner_take_all", False)
+        and engine_kwargs.get("relion_firstiter_score_mode", "gaussian") == "gaussian"
+        and not engine_kwargs.get("use_float64_scoring", False)
+        and not (pass2_use_float64_scoring if pass2_use_float64_scoring is not None
+                 else engine_kwargs.get("use_float64_scoring", False))
+    )
     significant_counts_for_result = None
     coarse_selector_audit = None
     coarse_significance_support_audit = None
@@ -2751,6 +2768,8 @@ def run_dense_k_class_em_adaptive(
             ),
         )
         _top2_debug_indices = _pass1_top2_debug_target_indices()
+        if reuse_zero_oversampling_coarse_state:
+            sig_kwargs["return_relion_f32_normalization"] = True
         if _top2_debug_indices:
             sig_kwargs["return_class_best"] = True
             sig_kwargs["return_class_second"] = True
@@ -2821,6 +2840,10 @@ def run_dense_k_class_em_adaptive(
 
     mask_t0 = time.time()
     pass2_kwargs = dict(engine_kwargs)
+    if reuse_zero_oversampling_coarse_state:
+        pass2_kwargs["relion_f32_normalization_sum_weight"] = _full_coarse_stats["relion_f32_sum_weight"]
+        pass2_kwargs["relion_coarse_max_posterior"] = _full_coarse_stats["relion_f32_max_posterior"]
+        pass2_kwargs["relion_coarse_hard_assignment"] = _coarse_hard_assignment
     if pass2_use_float64_scoring is not None:
         pass2_kwargs["use_float64_scoring"] = bool(pass2_use_float64_scoring)
     if pass2_use_float64_projections is not None:
@@ -2949,6 +2972,7 @@ def run_dense_k_class_em_adaptive(
         and not firstiter_cc_pass2_only_best_coarse
         and not skip_significance_pruning
         and not strict_exact_fine_gaussian
+        and not reuse_zero_oversampling_coarse_state
     ):
         dense_mean_support_threshold = _positive_k_class_threshold(
             n_classes, "RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION", 0.15,

@@ -30,6 +30,32 @@ from recovar.em.helpers.oversampling import (
 pytestmark = pytest.mark.unit
 
 
+@pytest.mark.parametrize("invalid", [None, "missing", "duplicate", "fractional", "nonfinite"])
+def test_coarse_winner_local_pose_mapping(invalid):
+    from recovar.em.scoring.sparse_bucket_arrays import coarse_winner_local_pose_ids
+
+    inputs = {
+        "unique_rot": [np.asarray([4, 2])],
+        "parent_map": [np.asarray([1, 0])],
+        "candidate_mask": [np.ones((2, 2), dtype=bool)],
+    }
+    # Coarse (rotation=4, translation=1) maps to local (1, 0).
+    poses = np.asarray([9.0])
+    if invalid == "missing":
+        inputs["candidate_mask"][0][1, 0] = False
+    elif invalid == "duplicate":
+        inputs["parent_map"][0] = np.asarray([0, 0])
+    elif invalid == "fractional":
+        poses[0] = 9.5
+    elif invalid == "nonfinite":
+        poses[0] = np.nan
+    if invalid is None:
+        np.testing.assert_array_equal(coarse_winner_local_pose_ids(inputs, poses, [1, 0], 2), [2])
+    else:
+        with pytest.raises(ValueError, match="coarse winner"):
+            coarse_winner_local_pose_ids(inputs, poses, [1, 0], 2)
+
+
 # ---------------------------------------------------------------------------
 # Test constants
 # ---------------------------------------------------------------------------
@@ -91,6 +117,259 @@ def _raw_real_process_half(batch, apply_image_mask=False):
     _ = apply_image_mask
     images = jnp.asarray(batch)
     return ftu.get_dft2_real(images).reshape((images.shape[0], -1)).astype(jnp.complex64)
+
+
+@pytest.mark.parametrize("n_classes", [1, 4])
+@pytest.mark.parametrize("cache_mode", ["off", "force"])
+@pytest.mark.parametrize("pad_tail", [False, True])
+def test_coarse_numeric_normalization_preserves_selection(monkeypatch, n_classes, cache_mode, pad_tail):
+    """Return raw F32 normalization without selecting from a different posterior."""
+    from recovar.em.scoring import significance
+    from recovar.em.sparse_pass2 import sparse_pass2_posterior
+
+    monkeypatch.setenv("RECOVAR_SIGNIFICANCE_SCORE_CACHE", cache_mode)
+    monkeypatch.setattr(significance, "_k1_relion_f32_coarse_support_enabled", lambda **kwargs: False)
+    captured = []
+    original = sparse_pass2_posterior._relion_f32_fine_posterior
+
+    def record(scores, **kwargs):
+        result = original(scores, **kwargs)
+        captured.append((np.asarray(scores), result))
+        return result
+
+    monkeypatch.setattr(sparse_pass2_posterior, "_relion_f32_fine_posterior", record)
+    volume = _hermitian_volume(VOLUME_SHAPE, seed=913)
+    args = (
+        MockDataset(n_images=3, seed=911),
+        jnp.stack([volume * (1.0 + 0.01 * k) for k in range(n_classes)]),
+        jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        _make_rotations(5, seed=917),
+        jnp.array([[0.0, 0.0], [1.0, -1.0]], dtype=jnp.float32),
+        "linear_interp",
+    )
+    kwargs = dict(
+        class_log_priors=np.log(np.arange(1, n_classes + 1) / sum(range(1, n_classes + 1))),
+        rotation_log_prior=np.linspace(0, -0.4, 5, dtype=np.float32),
+        translation_log_prior=np.array([[0, -0.1], [-0.2, 0], [0, -0.3]], dtype=np.float32),
+        adaptive_fraction=0.9,
+        max_significants=4,
+        image_batch_size=2,
+        rotation_block_size=2,
+        current_size=None,
+        pad_final_image_batch=pad_tail,
+    )
+    control = significance._compute_k_class_significance_batched(*args, **kwargs)
+    assert not captured
+    candidate = significance._compute_k_class_significance_batched(
+        *args,
+        **kwargs,
+        return_relion_f32_normalization=True,
+    )
+    assert len(captured) == 2
+    for actual, expected in zip(candidate[:4], control[:4]):
+        np.testing.assert_array_equal(actual, expected)
+    for actual_class, expected_class in zip(candidate[4], control[4]):
+        for actual, expected in zip(actual_class, expected_class):
+            np.testing.assert_array_equal(actual, expected)
+    for key in (
+        "normalization_log_z",
+        "normalization_log_evidence",
+        "max_posterior_per_image",
+        "best_log_score_per_image",
+        "significant_cutoff_counts",
+        "class_log_evidence_per_image",
+    ):
+        np.testing.assert_array_equal(candidate[5][key], control[5][key])
+    assert "relion_f32_sum_weight" not in control[5]
+    assert "relion_f32_max_posterior" not in control[5]
+    expected_sums, expected_maxima = [], []
+    for batch_index, (scores, result) in enumerate(captured):
+        assert scores.shape[1] == n_classes * 5 * 2  # Exclude padded rotations.
+        assert np.any(scores < 0)  # Raw scores, not normalized probabilities/logZ.
+        actual_rows = min(2, 3 - batch_index * 2)
+        expected_sums.extend(np.asarray(result[4])[:actual_rows])
+        expected_maxima.extend(np.asarray(result[0]).max(axis=1)[:actual_rows])
+    np.testing.assert_array_equal(candidate[5]["relion_f32_sum_weight"], expected_sums)
+    np.testing.assert_array_equal(candidate[5]["relion_f32_max_posterior"], expected_maxima)
+    assert candidate[5]["relion_f32_sum_weight"].dtype == np.float32
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"collect_significance": False},
+        {"score_mode": "normalized_cc"},
+        {"use_float64_scoring": True},
+    ],
+)
+def test_coarse_numeric_normalization_rejects_incompatible_modes(kwargs):
+    from recovar.em.scoring.significance import _compute_k_class_significance_batched
+
+    with pytest.raises(ValueError, match="requires Gaussian float32 significance"):
+        _compute_k_class_significance_batched(
+            None,
+            None,
+            None,
+            None,
+            None,
+            "linear_interp",
+            class_log_priors=None,
+            adaptive_fraction=0.999,
+            max_significants=-1,
+            image_batch_size=1,
+            rotation_block_size=1,
+            current_size=None,
+            return_relion_f32_normalization=True,
+            **kwargs,
+        )
+
+
+@pytest.mark.parametrize("chunked", [False, True])
+@pytest.mark.parametrize("retain_winner", [False, True])
+def test_sparse_coarse_normalization_reaches_accumulator_inputs(monkeypatch, chunked, retain_winner):
+    from recovar.em.helpers.oversampling import compute_pass2_stats_sparse
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucket
+
+    monkeypatch.setattr(bucket, "_projection_rotation_chunk_size", lambda *a, **k: 1 if chunked else None)
+    monkeypatch.setattr(bucket, "_cached_score_rotation_chunk_size_for_pass", lambda *a, **k: 1 if chunked else None)
+    accumulator_inputs = []
+
+    def record_adjoint(flat_block, flat_rotations, volume, **kwargs):
+        # Native x-half deposition is GPU-only. Inspect its real weighted
+        # operands here; this unit test does not qualify the CUDA scatter.
+        accumulator_inputs.append((np.asarray(flat_block), np.asarray(flat_rotations)))
+        return volume
+
+    monkeypatch.setattr(bucket, "_accumulate_adjoint_block_chunked", record_adjoint)
+    prepared_inputs = []
+    prepare = bucket._prepare_per_image_pass2_inputs
+
+    def record_prepare(*args, **kwargs):
+        result = prepare(*args, **kwargs)
+        prepared_inputs.append(result)
+        return result
+
+    monkeypatch.setattr(bucket, "_prepare_per_image_pass2_inputs", record_prepare)
+    calls = []
+    for name in ("_relion_f32_fine_reconstruction_probs", "_relion_pass2_reconstruction_probs_for_mstep"):
+        original = getattr(bucket, name)
+
+        def record(*args, _original=original, _name=name, **kwargs):
+            result = _original(*args, **kwargs)
+            calls.append((_name, kwargs, result))
+            return result
+
+        monkeypatch.setattr(bucket, name, record)
+    ds = MockDataset(n_images=2, seed=923)
+    denominator = np.exp(np.float32(50.0)) * np.asarray([30, 50], dtype=np.float32)
+    kwargs = dict(
+        significant_sample_indices=[np.arange(6, dtype=np.int32)] * 2,
+        nside_level=0,
+        disc_type="linear_interp",
+        oversampling_order=0,
+        current_size=6,
+        return_stats=True,
+        accumulate_noise=True,
+        half_spectrum_scoring=True,
+        relion_x_half_mstep=True,
+        relion_f32_fine_posterior=True,
+        relion_exact_fine_gaussian=False,
+        return_source_eulers=True,
+        fine_rotations_override=_make_rotations(3, seed=937),
+        fine_rotation_parent_override=np.asarray([2, 0, 1], dtype=np.int32),
+        fine_source_eulers_override=np.asarray(
+            [[0.1234567890123, 10.0, 0.0], [20.0, 30.0, 0.0], [40.0, 50.0, 0.0]], dtype=np.float64,
+        ),
+    )
+    coarse_poses = np.asarray([3, 2], dtype=np.int32)
+    coarse_pmax = np.asarray([0.12, 0.23], dtype=np.float32)
+    if retain_winner:
+        kwargs.update(relion_coarse_hard_assignment=coarse_poses, relion_coarse_max_posterior=coarse_pmax)
+    args = (
+        ds,
+        _hermitian_volume(VOLUME_SHAPE, seed=929) * np.float32(0.01),
+        jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
+        jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        jnp.asarray([[0, 0], [1, 0]], dtype=jnp.float32),
+    )
+    first = compute_pass2_stats_sparse(*args, **kwargs, relion_f32_normalization_sum_weight=denominator)
+    first_calls = list(calls)
+    first_inputs = list(accumulator_inputs)
+    accumulator_inputs.clear()
+    calls.clear()
+    second = compute_pass2_stats_sparse(*args, **kwargs, relion_f32_normalization_sum_weight=2 * denominator)
+    assert first_calls and len(calls) == len(first_calls)
+    for name, passed, result in first_calls + calls:
+        assert (name == "_relion_f32_fine_reconstruction_probs") == chunked
+        assert passed["keep_all"] is True
+        assert passed["normalization_sum_weight"] is not None
+        assert not np.any((np.asarray(result[0]) > 0) & ~np.asarray(result[1]))
+        mask = np.asarray(result[1])
+        np.testing.assert_array_equal(np.asarray(result[2]), mask.reshape(mask.shape[0], -1).sum(axis=1))
+    # A power-of-two denominator change must scale the native scatter inputs,
+    # not only Pmax metadata; hard poses must stay unchanged.
+    assert first_inputs and len(first_inputs) == len(accumulator_inputs)
+    assert any(np.any(block != 0) for block, _ in first_inputs)
+    for (actual, actual_rots), (expected, expected_rots) in zip(accumulator_inputs, first_inputs):
+        np.testing.assert_array_equal(actual, expected * 0.5)
+        np.testing.assert_array_equal(actual_rots, expected_rots)
+    for name in ("hard_assignment", "best_rotations", "best_translations", "best_rotation_indices"):
+        np.testing.assert_array_equal(getattr(second, name), getattr(first, name))
+    for name in ("rotation_posterior_sums",):
+        np.testing.assert_array_equal(getattr(second.relion_stats, name), np.asarray(getattr(first.relion_stats, name)) * 0.5)
+    if retain_winner:
+        np.testing.assert_array_equal(second.relion_stats.max_posterior_per_image, coarse_pmax)
+        np.testing.assert_array_equal(first.relion_stats.max_posterior_per_image, coarse_pmax)
+        np.testing.assert_array_equal(second.best_translations, np.asarray(args[4])[coarse_poses % 2])
+        for i, local_pose in enumerate(np.asarray(second.hard_assignment)):
+            row = int(local_pose) // 2
+            np.testing.assert_array_equal(second.source_eulers[i], prepared_inputs[1]["source_eulers"][i][row])
+            np.testing.assert_array_equal(second.best_rotations[i], prepared_inputs[1]["oversampled_rots"][i][row])
+    else:
+        np.testing.assert_array_equal(second.relion_stats.max_posterior_per_image, first.relion_stats.max_posterior_per_image * 0.5)
+    # Evidence uses the retained sum in the fine frame, not the fine support's
+    # own normalizer and not the coarse absolute log evidence.
+    log_first = np.asarray(first.relion_stats.log_evidence_per_image)
+    log_second = np.asarray(second.relion_stats.log_evidence_per_image)
+    publication_bound = np.abs(np.spacing(log_first)) + np.abs(np.spacing(log_second))
+    error = np.abs(log_second.astype(np.float64) - log_first.astype(np.float64) - np.log(2.0))
+    assert np.all(error <= publication_bound + np.finfo(np.float64).eps)
+    np.testing.assert_array_equal(second.noise_stats.sumw, np.asarray(first.noise_stats.sumw) * 0.5)
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [
+        {"oversampling_order": 1},
+        {"use_float64_scoring": True},
+        {"relion_firstiter_winner_take_all": True},
+        {"relion_x_half_mstep": False},
+    ],
+)
+def test_sparse_coarse_normalization_rejects_incompatible_execution(mode):
+    from recovar.em.helpers.oversampling import compute_pass2_stats_sparse
+
+    kwargs = dict(
+        oversampling_order=0,
+        relion_x_half_mstep=True,
+        relion_f32_fine_posterior=True,
+        relion_exact_fine_gaussian=False,
+        half_spectrum_scoring=True,
+    )
+    kwargs.update(mode)
+    with pytest.raises(ValueError, match="coarse normalization requires zero-oversampling"):
+        compute_pass2_stats_sparse(
+            MockDataset(n_images=1),
+            _hermitian_volume(VOLUME_SHAPE),
+            jnp.ones(VOLUME_SIZE),
+            jnp.ones(IMAGE_SIZE),
+            jnp.zeros((1, 2)),
+            [np.asarray([0], dtype=np.int32)],
+            0,
+            "linear_interp",
+            relion_f32_normalization_sum_weight=np.asarray([1.0], dtype=np.float32),
+            **kwargs,
+        )
 
 
 class MockDataset:

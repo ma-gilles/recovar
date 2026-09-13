@@ -359,12 +359,20 @@ def _relion_f32_fine_posterior(
     )
 
 
-def _relion_f32_fine_reconstruction_probs(scores, *, adaptive_fraction: float):
+def _relion_f32_fine_reconstruction_probs(
+    scores,
+    *,
+    adaptive_fraction: float,
+    normalization_sum_weight=None,
+    keep_all: bool = False,
+):
     """Return the legacy pruned view of :func:`_relion_f32_fine_posterior`."""
 
     full = _relion_f32_fine_posterior(
         scores,
         adaptive_fraction=adaptive_fraction,
+        normalization_sum_weight=normalization_sum_weight,
+        keep_all=keep_all,
     )
     return full[1:]
 
@@ -400,22 +408,29 @@ def _relion_pass2_reconstruction_probs_for_mstep(
     use_relion_f32_fine_posterior: bool = False,
     winner_take_all: bool = False,
     return_diagnostics: bool = False,
+    normalization_sum_weight=None,
+    keep_all: bool = False,
 ):
-    """Select the default or diagnostic fine-posterior reconstruction path."""
+    """Select reconstruction weights, optionally retaining a coarse denominator.
 
-    if (
+    The caller owns the coarse weight frame and zero-oversampling policy. These
+    controls preserve the primitive described in docs/math/zero_oversampling.md;
+    they must never be silently ignored on a different reconstruction path.
+    """
+
+    use_f32_path = (
         use_relion_x_half_mstep
         and not winner_take_all
-        and (
-            bool(use_relion_f32_fine_posterior)
-            or relion_x_half_f32_fine_posterior_enabled()
-        )
-    ):
-        reconstruction_probs, mask, n_significant, sum_weight, threshold = (
-            _relion_f32_fine_reconstruction_probs(
-                scores,
-                adaptive_fraction=float(adaptive_fraction),
-            )
+        and (bool(use_relion_f32_fine_posterior) or relion_x_half_f32_fine_posterior_enabled())
+    )
+    if (normalization_sum_weight is not None or keep_all) and not use_f32_path:
+        raise ValueError("coarse normalization controls require the float32 soft x-half path")
+    if use_f32_path:
+        reconstruction_probs, mask, n_significant, sum_weight, threshold = _relion_f32_fine_reconstruction_probs(
+            scores,
+            adaptive_fraction=float(adaptive_fraction),
+            normalization_sum_weight=normalization_sum_weight,
+            keep_all=keep_all,
         )
         if return_diagnostics:
             return reconstruction_probs, mask, n_significant, sum_weight, threshold
