@@ -49,6 +49,13 @@ from recovar.em.diagnostics.frozen_boundary import (
     _frozen_scoring_state_arrays,
     _restore_diagnostic_frozen_boundary_state,
 )
+from recovar.em.diagnostics.iteration import (
+    _bpref_device_signature_active_for_numbered_half,
+    _maybe_dump_noise_update_debug,
+    _save_bpref_accumulators,
+    _save_iteration_intermediates,
+    _significance_dump_half_indices,
+)
 from recovar.em.diagnostics.relion_replay import (
     _apply_replay_correction_overrides,
     _has_numbered_replay_iteration_overrides,
@@ -234,14 +241,6 @@ def _kclass_replay_tau2_enabled() -> bool:
 
     return parse_env_flag_or_false(_KCLASS_REPLAY_TAU2_ENV, logger=logger)
 
-
-from recovar.em.diagnostics.iteration import (  # noqa: F401
-    _bpref_device_signature_active_for_numbered_half,
-    _maybe_dump_noise_update_debug,
-    _save_bpref_accumulators,
-    _save_iteration_intermediates,
-    _significance_dump_half_indices,
-)
 
 # RELION's --minres_map default: do not add the Wiener prior term to the
 # lowest Fourier shells during MAP reconstruction.
