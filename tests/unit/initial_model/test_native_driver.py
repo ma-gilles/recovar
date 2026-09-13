@@ -13,11 +13,11 @@ import pytest
 import recovar.em.vdam.driver as driver
 from recovar.commands import initial_model
 from recovar.data_io.starfile import read_star
+from recovar.em.diagnostics import vdam_mstep_replay
 from recovar.em.helpers.batch_planning import maybe_cache_raw_image_loaders
 from recovar.em.relion import vdam_checkpoint
 from recovar.em.vdam import estep_meta_updates, native_options, native_sampling, star_io
 from recovar.em.vdam.init import initialise_denovo_state
-from recovar.em.diagnostics import vdam_mstep_replay
 from recovar.em.vdam.state import NativeParticleState
 from recovar.em.vdam.subset_schedule import select_subset_for_iter
 from recovar.utils.helpers import R_from_relion, write_relion_mrc
