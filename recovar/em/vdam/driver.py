@@ -726,24 +726,33 @@ def _native_expectation_step(
     return _expectation_step
 
 
+class _StageProfile:
+    """Optional elapsed-stage report for InitialModel startup and its driver."""
+
+    def __init__(self):
+        self.enabled = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
+        self.started = self.stage_started = time.perf_counter()
+        self.values = {}
+
+    def record(self, name):
+        if self.enabled:
+            now = time.perf_counter()
+            self.values[f"{name}_time_s"] = float(now - self.stage_started)
+            self.stage_started = now
+
+    def report(self, label):
+        if self.enabled:
+            self.values["total_time_s"] = float(time.perf_counter() - self.started)
+            print(f"VDAM {label} profile: {json.dumps(self.values, sort_keys=True)}", flush=True)
+
+
 def _initial_state_from_particles(
     dataset,
     main_star,
     optics_star,
     opts: NativeInitialModelOptions,
 ) -> tuple[InitialModelState, np.ndarray]:
-    profile_initial_state = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
-    initial_state_started = time.perf_counter()
-    stage_started = initial_state_started
-    initial_state_profile: dict[str, float] = {}
-
-    def _record_initial_state_stage(name: str) -> None:
-        nonlocal stage_started
-        if not profile_initial_state:
-            return
-        now = time.perf_counter()
-        initial_state_profile[f"{name}_time_s"] = float(now - stage_started)
-        stage_started = now
+    profile = _StageProfile()
 
     ori_size = int(dataset.grid_size)
     pixel_size = float(dataset.voxel_size)
@@ -752,7 +761,7 @@ def _initial_state_from_particles(
     nr_optics_groups = int(np.unique(optics_group_by_particle).size)
     if nr_optics_groups != 1:
         raise NotImplementedError("native InitialModel currently supports one optics group")
-    _record_initial_state_stage("setup")
+    profile.record("setup")
 
     Mavg, sigma2_per_group = compute_avg_unaligned_and_sigma2(
         _image_sigma2_iter(
@@ -769,15 +778,15 @@ def _initial_state_from_particles(
         nr_optics_groups=nr_optics_groups,
         minimum_nr_particles=int(opts.sigma2_min_particles),
     )
-    _record_initial_state_stage("average_unaligned")
+    profile.record("average_unaligned")
 
     bootstrap_count = min(len(order), int(opts.bootstrap_min_particles))
     bootstrap_order = order[:bootstrap_count]
     images = _load_raw_images(dataset, bootstrap_order, batch_size=max(1, int(opts.image_batch_size)))
-    _record_initial_state_stage("raw_images")
+    profile.record("raw_images")
     sorted_star = main_star.iloc[bootstrap_order]
     voltage, Cs, Q0, pixel_size = star_io._single_optics_scalars(sorted_star, optics_star, dataset)
-    _record_initial_state_stage("optics_metadata")
+    profile.record("optics_metadata")
 
     iref = compute_bootstrap_iref_via_cpp(
         images=images,
@@ -800,7 +809,7 @@ def _initial_state_from_particles(
         current_size=-1,
         minimum_nr_particles=int(opts.bootstrap_min_particles),
     )
-    _record_initial_state_stage("bootstrap")
+    profile.record("bootstrap")
 
     state = initialise_denovo_state(
         ori_size=ori_size,
@@ -818,7 +827,7 @@ def _initial_state_from_particles(
     )
     state.sigma2_offset = float(init_sigma_offset_angstrom) ** 2
     state.Mavg = Mavg
-    _record_initial_state_stage("state_init")
+    profile.record("state_init")
     # RECOVAR_INITIAL_IREF_OVERRIDE lets a parity caller swap in RELION's
     # iter000 ref directly when isolating E/M-step behavior from bootstrap.
     override_path = os.environ.get("RECOVAR_INITIAL_IREF_OVERRIDE")
@@ -850,19 +859,14 @@ def _initial_state_from_particles(
             do_init_blobs=True,
             is_helical_segment=False,
         )
-    _record_initial_state_stage("initial_reference")
+    profile.record("initial_reference")
     state = initialise_data_vs_prior_from_references(
         state,
         nr_particles=len(main_star),
         fix_tau=False,
     )
-    _record_initial_state_stage("data_vs_prior")
-    if profile_initial_state:
-        initial_state_profile["total_time_s"] = float(time.perf_counter() - initial_state_started)
-        print(
-            f"VDAM initial state profile: {json.dumps(initial_state_profile, sort_keys=True)}",
-            flush=True,
-        )
+    profile.record("data_vs_prior")
+    profile.report("initial state")
     return state, optics_group_by_particle
 
 
@@ -956,18 +960,7 @@ def _prepare_mstep_state_precision(state, mstep_compute_dtype):
 def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialModelResult:
     """Run native recovar InitialModel refinement."""
 
-    profile_driver = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
-    driver_started = time.perf_counter()
-    stage_started = driver_started
-    driver_profile: dict[str, float] = {}
-
-    def _record_driver_stage(name: str) -> None:
-        nonlocal stage_started
-        if not profile_driver:
-            return
-        now = time.perf_counter()
-        driver_profile[f"{name}_time_s"] = float(now - stage_started)
-        stage_started = now
+    profile = _StageProfile()
 
     from recovar.em.vdam.mstep_single_class import _validate_mstep_precision_route
 
@@ -1009,11 +1002,11 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             "native InitialModel direct refinement currently supports C1 only; "
             "use the GUI-default do_run_C1 mode until symmetry-restricted sampling is implemented"
         )
-    _record_driver_stage("validation")
+    profile.record("validation")
 
     main_star, optics_star = read_star(opts.fn_img)
     particle_order = _experiment_read_order(main_star)
-    _record_driver_stage("input_star")
+    profile.record("input_star")
     dataset = load_dataset(
         opts.fn_img,
         lazy=bool(opts.lazy),
@@ -1022,9 +1015,9 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     )
     if getattr(dataset, "tilt_series_flag", False):
         raise NotImplementedError("native InitialModel currently supports SPA particle STAR files, not tilt-series")
-    _record_driver_stage("dataset_load")
+    profile.record("dataset_load")
     maybe_cache_raw_image_loaders((dataset,))
-    _record_driver_stage("raw_cache_setup")
+    profile.record("raw_cache_setup")
 
     _configure_relion_image_mask(dataset, opts)
     optics_state = star_io._native_optics_state(main_star, optics_star, dataset)
@@ -1097,7 +1090,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         )
         sampling_state = continuation.sampling_state
     state = _prepare_mstep_state_precision(state, opts.mstep_compute_dtype)
-    _record_driver_stage("state_setup")
+    profile.record("state_setup")
     exact_projector_setting = os.environ.get(
         "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR", "1"
     ).strip().lower()
@@ -1113,7 +1106,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         optics_state,
         projector_context=projector_context,
     )
-    _record_driver_stage("expectation_setup")
+    profile.record("expectation_setup")
 
     if opts.write_iter_artifacts:
         Path(opts.outputname).parent.mkdir(parents=True, exist_ok=True)
@@ -1163,7 +1156,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
                     sort_keys=True,
                 )
                 f.write("\n")
-    _record_driver_stage("initial_artifacts")
+    profile.record("initial_artifacts")
 
     def artifact_sink(current, iteration, meta):
         _record_native_sampling_post_iteration(
@@ -1213,7 +1206,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
                 iteration=int(_iteration),
                 meta=_meta,
             )
-    _record_driver_stage("iteration_setup")
+    profile.record("iteration_setup")
 
     final_state = run_vdam_iterations(
         state,
@@ -1241,15 +1234,13 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         start_iteration=int(state.iter),
         diagnostic_stop_after_iteration=opts.diagnostic_stop_after_iteration,
     )
-    _record_driver_stage("iterations")
+    profile.record("iterations")
     final_mrc, class_mrcs = _write_final_outputs(opts.outputname, final_state)
     final_model_star = f"{opts.outputname}_it{final_state.iter:03d}_model.star"
     if not os.path.exists(final_model_star):
         _write_model_star(final_model_star, final_state, class_mrcs)
-    _record_driver_stage("final_artifacts")
-    if profile_driver:
-        driver_profile["total_time_s"] = float(time.perf_counter() - driver_started)
-        print(f"VDAM driver profile: {json.dumps(driver_profile, sort_keys=True)}", flush=True)
+    profile.record("final_artifacts")
+    profile.report("driver")
     return NativeInitialModelResult(
         state=final_state,
         output_prefix=opts.outputname,
