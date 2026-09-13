@@ -1501,7 +1501,6 @@ def test_initial_state_applies_relion_bootstrap_postprocess(monkeypatch, capsys)
         main,
         optics,
         opts,
-        rotations=np.zeros((3, 3, 3), dtype=np.float64),
     )
 
     np.testing.assert_array_equal(state.Iref, post_iref)

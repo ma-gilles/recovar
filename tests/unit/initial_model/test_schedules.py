@@ -570,7 +570,6 @@ class TestHelpers:
         v = _step_sigmoid_value(
             iter=1_000_000,
             grad_ini_iter=60,
-            grad_inbetween_iter=100,
             base=0.5,
             inflated=0.9,
             sigmoid_length=50.0,
@@ -581,7 +580,6 @@ class TestHelpers:
         v2 = _step_sigmoid_value(
             iter=-1_000_000,
             grad_ini_iter=60,
-            grad_inbetween_iter=100,
             base=0.5,
             inflated=0.9,
             sigmoid_length=50.0,
@@ -589,11 +587,10 @@ class TestHelpers:
         assert abs(v2 - 0.9) < 1e-9
 
     def test_step_sigmoid_degenerate_a_zero(self):
-        # Inbetween phase is 0 --> fall through to base
+        # Zero sigmoid length falls through to base
         v = _step_sigmoid_value(
             iter=100,
             grad_ini_iter=60,
-            grad_inbetween_iter=0,
             base=0.5,
             inflated=0.9,
             sigmoid_length=0.0,

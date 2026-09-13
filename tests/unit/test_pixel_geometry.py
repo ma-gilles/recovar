@@ -207,6 +207,6 @@ def test_initial_model_consumers_receive_one_loaded_scalar(tmp_path, monkeypatch
     monkeypatch.setattr(driver, "compute_avg_unaligned_and_sigma2", average)
     monkeypatch.setattr(driver, "compute_bootstrap_iref_via_cpp", bootstrap)
     with pytest.raises(CapturedBootstrap):
-        driver._initial_state_from_particles(ds, sf.df, sf.data_optics, opts, ds.rotation_matrices)
+        driver._initial_state_from_particles(ds, sf.df, sf.data_optics, opts)
     assert seen["average"]["pixel_size"] == PIXEL
     assert seen["bootstrap"]["pixel_size"] == PIXEL

@@ -178,7 +178,6 @@ def compute_stepsize(
         return _step_sigmoid_value(
             iter=iter,
             grad_ini_iter=phase_lengths.grad_ini_iter,
-            grad_inbetween_iter=phase_lengths.grad_inbetween_iter,
             base=_stepsize,
             inflated=_stepsize * inflate,
             sigmoid_length=sigmoid_len,
@@ -224,7 +223,6 @@ def compute_tau2_fudge(
         return _step_sigmoid_value(
             iter=iter,
             grad_ini_iter=phase_lengths.grad_ini_iter,
-            grad_inbetween_iter=phase_lengths.grad_inbetween_iter,
             base=_fudge,
             inflated=_fudge / deflate,
             sigmoid_length=sigmoid_len,
@@ -235,7 +233,6 @@ def compute_tau2_fudge(
 def _step_sigmoid_value(
     iter: int,
     grad_ini_iter: int,
-    grad_inbetween_iter: int,
     base: float,
     inflated: float,
     sigmoid_length: float,

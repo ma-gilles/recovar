@@ -103,16 +103,6 @@ def _get_bindings():
     return m
 
 
-def _r_max_from_state(state: InitialModelState, padding_factor: int) -> int:
-    """`r_max = current_size / 2` at padding_factor=1; RELION's
-    `initZeros(-1)` computes `r_max = ori_size / (padding_factor * 2)` so
-    we pass the current-size equivalent explicitly.
-
-    Source: backprojector.cpp::initZeros and ml_optimiser.cpp:5846.
-    """
-    return state.current_size // 2
-
-
 def _relion_resolution_shell(ori_size: int, pixel_size: float, resolution_angstrom: float) -> int:
     """RELION ``MlModel::getPixelFromResolution(1./resolution_angstrom)``."""
     if resolution_angstrom <= 0.0:
@@ -478,7 +468,9 @@ def vdam_m_step_single_class(
     if mstep_compute_dtype == "float32" and not hasattr(bind, "vdam_m_step_transaction"):
         raise RuntimeError("float32 M-step requires transaction-capable native certificates")
     ori_size = state.ori_size
-    r_max = _r_max_from_state(state, padding_factor)
+    # Pass the current-size radius explicitly instead of initZeros(-1)
+    # (backprojector.cpp::initZeros; ml_optimiser.cpp:5846).
+    r_max = state.current_size // 2
     min_resol_shell = _grad_min_resol_shell_from_state(state, grad_min_resol_shell)
     # backprojector.h:335/343 EMA defaults
     mu_first, mu_second = 0.9, 0.999

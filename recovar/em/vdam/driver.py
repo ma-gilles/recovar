@@ -731,7 +731,6 @@ def _initial_state_from_particles(
     main_star,
     optics_star,
     opts: NativeInitialModelOptions,
-    rotations: np.ndarray,
 ) -> tuple[InitialModelState, np.ndarray]:
     profile_initial_state = bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE"))
     initial_state_started = time.perf_counter()
@@ -1063,7 +1062,6 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             main_star,
             optics_star,
             opts,
-            sampling_plan.rotations,
         )
         sampling_state.last_current_resolution = float(state.current_resolution)
     else:
