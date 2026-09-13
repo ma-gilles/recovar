@@ -27,7 +27,7 @@ def test_runner_captures_production_fused_scores_for_native_particle_set():
 
 def test_runner_stops_after_iteration_one_and_reuses_compile_cache():
     text = _runner_text()
-    assert "--diagnostic_stop_after_iteration 1" in text
+    assert "--diagnostic-stop-after-iteration 1" in text
     assert "shared_jax_cache=${VDAM_PANEL_ROOT}/jax_cache" in text
     assert "JAX_COMPILATION_CACHE_DIR=${shared_jax_cache}" in text
 

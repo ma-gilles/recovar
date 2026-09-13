@@ -2617,8 +2617,8 @@ def _capture_direct_checkpoint(
     native_data_dir: Path | None = None,
 ) -> dict[str, Any]:
     import recovar.em.vdam.driver as driver
+    from recovar.commands import initial_model as initial_model_command
     from recovar.em.relion import vdam_checkpoint
-    from scripts import run_ab_initio
     from scripts.run_vdam_relion_parity_case import build_recovar_command
 
     native_mode = native_checkpoint_optimiser is not None
@@ -2647,15 +2647,15 @@ def _capture_direct_checkpoint(
     if native_mode:
         argv.extend(
             (
-                "--diagnostic_continue_optimiser",
+                "--diagnostic-continue-optimiser",
                 str(native_checkpoint_optimiser),
-                "--diagnostic_stop_after_iteration",
+                "--diagnostic-stop-after-iteration",
                 str(checkpoint_iteration + 1),
-                "--no_iter_artifacts",
+                "--no-write-iter-artifacts",
             )
         )
     else:
-        argv.extend(("--diagnostic_stop_after_iteration", str(checkpoint_iteration)))
+        argv.extend(("--diagnostic-stop-after-iteration", str(checkpoint_iteration)))
     if (
         checkpoint_candidate_mode == "all_optimized_stable_shapes"
         and checkpoint_candidate_enabled
@@ -2730,7 +2730,7 @@ def _capture_direct_checkpoint(
             captured["effective_environment"] = {
                 name: os.environ.get(name) for name in checkpoint_environment
             }
-            status = int(run_ab_initio.main(argv))
+            status = int(initial_model_command.main(argv))
     finally:
         driver._native_expectation_step = original_expectation_factory
         driver.run_native_initial_model = original_run

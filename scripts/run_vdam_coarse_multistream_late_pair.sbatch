@@ -71,7 +71,6 @@ SOURCE_FILES=(
   recovar/em/vdam/schedules.py
   tests/conftest.py
   tests/unit/test_cuda_relion_fine_diff2.py
-  scripts/run_ab_initio.py
   scripts/run_vdam_late_iteration_profile.py
   scripts/summarize_vdam_nsys_sqlite.py
   scripts/run_vdam_coarse_multistream_late_pair.sbatch

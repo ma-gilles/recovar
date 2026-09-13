@@ -63,7 +63,7 @@ def _run_arm(
     expected_representation: str | None = None,
     expected_fallback: int | None = None,
 ) -> dict:
-    from scripts.run_ab_initio import main as run_ab_initio
+    from recovar.commands.initial_model import main as initial_model_command
 
     output_prefix = args.output_root / "arms" / label / "run"
     output_prefix.parent.mkdir(parents=True, exist_ok=False)
@@ -71,7 +71,7 @@ def _run_arm(
         capacity
     )
     started = time.perf_counter()
-    status = int(run_ab_initio(_recovar_argv(args=args, output_prefix=output_prefix)))
+    status = int(initial_model_command(_recovar_argv(args=args, output_prefix=output_prefix)))
     jax.effects_barrier()
     wall_s = float(time.perf_counter() - started)
     if status != 0:

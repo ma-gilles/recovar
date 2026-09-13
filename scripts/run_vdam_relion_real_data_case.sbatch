@@ -144,15 +144,15 @@ RELION_CMD=(
 )
 
 RECOVAR_CMD=(
-  "${PIXI_PY}" -m scripts.run_ab_initio
+  "${PIXI_PY}" -m recovar.commands.initial_model
   --i "${INPUT_STAR}" --o "${OUTPUT_ROOT}/recovar/run"
   --nr_iter "${NR_ITER}" --grad_write_iter 1 --K "${K}" --tau2_fudge "${TAU2_FUDGE}"
-  --sym "${SYM}" --do_run_C1 1 --particle_diameter "${PARTICLE_DIAMETER}"
+  --sym "${SYM}" --run-in-c1 --particle_diameter "${PARTICLE_DIAMETER}"
   --random_seed "${RANDOM_SEED}" --healpix_order "${HEALPIX_ORDER}"
   --oversampling "${OVERSAMPLING}" --offset_range "${OFFSET_RANGE}"
   --offset_step "${OFFSET_STEP}" --padding_factor "${PAD}"
   --image_batch_size "${IMAGE_BATCH_SIZE}" --datadir "${DATA_DIR}"
-  --gpu 0 --require_custom_cuda
+  --gpu 0 --require-custom-cuda
   "${RECOVAR_CUDA_MODE_ARGS[@]}"
 )
 

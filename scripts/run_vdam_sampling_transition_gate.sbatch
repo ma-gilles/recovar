@@ -83,7 +83,7 @@ printf 'audit_mode=%s\nstop_iteration=%s\nprofile_iterations=%s\nrandom_seed=%s\
   > "${PROVENANCE_DIR}/run_mode.txt"
 
 COMMAND=(
-  "${PIXI_PY}" -m scripts.run_ab_initio
+  "${PIXI_PY}" -m recovar.commands.initial_model
   --i "${DATA_DIR}/particles.star"
   --o "${RECOVAR_DIR}/run"
   --nr_iter 200
@@ -91,7 +91,7 @@ COMMAND=(
   --K 1
   --tau2_fudge 4
   --sym C1
-  --do_run_C1 1
+  --run-in-c1
   --particle_diameter 200.0
   --random_seed "${RANDOM_SEED}"
   --healpix_order 1
@@ -102,8 +102,8 @@ COMMAND=(
   --image_batch_size 500
   --datadir "${DATA_DIR}"
   --gpu 0
-  --require_custom_cuda
-  --diagnostic_stop_after_iteration "${STOP_ITERATION}"
+  --require-custom-cuda
+  --diagnostic-stop-after-iteration "${STOP_ITERATION}"
 )
 printf '%q ' "${COMMAND[@]}" > "${PROVENANCE_DIR}/recovar_command.sh"
 printf '\n' >> "${PROVENANCE_DIR}/recovar_command.sh"

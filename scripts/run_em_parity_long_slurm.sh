@@ -3,7 +3,7 @@
 #
 # Runs ONLY the EM-long parity regression tests:
 #   - K=1 256² 50k run_full_refinement parity against RELION auto-refine
-#   - K=1 256² 50k native InitialModel/run_ab_initio quality against a
+#   - K=1 256² 50k native InitialModel quality against a
 #     RELION --grad --denovo_3dref reference
 #   - K=4 256² 50k K-class parity
 # Disjoint from ./scripts/run_tests_parallel.sh long-test by design — that one

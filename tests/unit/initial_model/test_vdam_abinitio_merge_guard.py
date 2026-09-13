@@ -183,16 +183,17 @@ def test_native_vdam_subset_order_uses_relion_sorted_idx_base_order():
 def test_native_vdam_solvent_flattening_is_separate_from_zero_mask():
     driver = (REPO_ROOT / "recovar/em/vdam/driver.py").read_text()
     iteration_loop = (REPO_ROOT / "recovar/em/vdam/iteration_loop.py").read_text()
-    run_ab_initio = (REPO_ROOT / "scripts/run_ab_initio.py").read_text()
+    command = (REPO_ROOT / "recovar/commands/initial_model.py").read_text()
+    options = (REPO_ROOT / "recovar/em/vdam/native_options.py").read_text()
 
     expected_tokens = [
         "do_solvent: bool = INITIAL_MODEL_GUI_DEFAULTS.do_solvent",
         "if opts.do_solvent",
         "relion_solvent_mask",
         "relion_solvent_flatten_state",
-        "do_solvent=opts.do_solvent",
+        '"do_solvent": args.solvent',
     ]
-    haystack = "\n".join([driver, iteration_loop, run_ab_initio])
+    haystack = "\n".join([driver, iteration_loop, command, options])
     missing = [token for token in expected_tokens if token not in haystack]
     assert not missing, f"native InitialModel lost RELION --flatten_solvent post-M-step wiring: {missing}"
 
@@ -225,7 +226,7 @@ def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
         "test_run_vdam_relion_parity_case.py",
         "build_relion_command",
         "build_recovar_command",
-        "--require_custom_cuda",
+        "--require-custom-cuda",
         'env["JAX_PLATFORMS"] = "cuda,cpu"',
         "runtime_environment.json",
         "materialize(",
@@ -516,7 +517,7 @@ def test_vdam_first_state_boundary_capture_preserves_full_schedule():
 
     expected_tokens = [
         '--nr_iter "${NR_ITER_SCHEDULE}"',
-        '--diagnostic_stop_after_iteration "${TARGET_ITERATION}"',
+        '--diagnostic-stop-after-iteration "${TARGET_ITERATION}"',
         "VDAM_RELION_CONT_OPTIMISER=${RELION_OPTIMISER}",
         "VDAM_RELION_CONT_NR_ITER_SCHEDULE=${NR_ITER_SCHEDULE}",
         "VDAM_RELION_CONT_CAPTURE=1",
@@ -546,7 +547,7 @@ def test_vdam_first_state_boundary_capture_preserves_full_schedule():
         "build_recovar_command",
         'int(definition["nr_classes"]) != 1',
         'int(definition["nr_iter"]) != nr_iter_schedule',
-        'command.extend(["--diagnostic_stop_after_iteration", str(target_iteration)])',
+        'command.extend(["--diagnostic-stop-after-iteration", str(target_iteration)])',
         'STATIC_INPUTS+=("${VDAM_SCORECARD}")',
         "CAPTURE_LOCAL_SCORE=${CAPTURE_LOCAL_SCORE:-0}",
         "CAPTURE_NATIVE_REPLAY=${CAPTURE_NATIVE_REPLAY:-1}",
@@ -625,7 +626,7 @@ def test_vdam_sampling_gate_can_stop_at_pretransition_boundary():
         "pretransition_maps.json",
         "pretransition_particles.json",
         "if (( STOP_ITERATION >= 90 )); then",
-        '--diagnostic_stop_after_iteration "${STOP_ITERATION}"',
+        '--diagnostic-stop-after-iteration "${STOP_ITERATION}"',
         'RANDOM_SEED=${RANDOM_SEED:-0}',
         '--random_seed "${RANDOM_SEED}"',
     ]
@@ -682,7 +683,7 @@ def test_vdam_mstep_boundary_capture_preserves_full_schedule_in_both_engines():
         '--cpus-per-task="${RELION_THREADS}"',
         '--j "${RELION_THREADS}"',
         '--nr_iter "${NR_ITER_SCHEDULE}"',
-        '--diagnostic_stop_after_iteration "${TARGET_ITERATION}"',
+        '--diagnostic-stop-after-iteration "${TARGET_ITERATION}"',
         'RECOVAR_DEBUG_DUMP_DIR=${NATIVE_MSTEP}',
         'RECOVAR_DEBUG_DUMP_MSTEP_ITER=${TARGET_ITERATION}',
         'RECOVAR_MSTEP_DUMP_DIR=${RECOVAR_MSTEP}',

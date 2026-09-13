@@ -222,7 +222,7 @@ for arm in "${ARM_ORDER[@]}"; do
   mkdir -p "${output}" "${cache}" "${tmp}"
   touch "${cache}/SAFE_TO_DELETE" "${tmp}/SAFE_TO_DELETE"
   command=(
-    "${PIXI_PY}" -m scripts.run_ab_initio
+    "${PIXI_PY}" -m recovar.commands.initial_model
     --i "${FIXTURE}/particles.star"
     --o "${output}/run"
     --nr_iter 200
@@ -230,7 +230,7 @@ for arm in "${ARM_ORDER[@]}"; do
     --K 1
     --tau2_fudge 4
     --sym C1
-    --do_run_C1 1
+    --run-in-c1
     --particle_diameter 200
     --random_seed 29
     --healpix_order 1
@@ -241,8 +241,8 @@ for arm in "${ARM_ORDER[@]}"; do
     --image_batch_size 500
     --datadir "${FIXTURE}"
     --gpu 0
-    --require_custom_cuda
-    --diagnostic_stop_after_iteration "${LAST_ITERATION}"
+    --require-custom-cuda
+    --diagnostic-stop-after-iteration "${LAST_ITERATION}"
   )
   stable=0
   stable_flat=0

@@ -455,7 +455,7 @@ Precision907 remains excluded.
 Select the capability explicitly with:
 
 ```bash
-pixi run python scripts/run_ab_initio.py <existing-run-arguments> \
+pixi run python -m recovar.commands.initial_model <existing-run-arguments> \
   --mstep-backend jax --mstep-compute-dtype float32
 ```
 

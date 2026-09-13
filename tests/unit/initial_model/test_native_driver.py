@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +11,7 @@ import pandas as pd
 import pytest
 
 import recovar.em.vdam.driver as driver
+from recovar.commands import initial_model
 from recovar.data_io.starfile import read_star
 from recovar.em.helpers.batch_planning import maybe_cache_raw_image_loaders
 from recovar.em.relion import vdam_checkpoint
@@ -21,23 +21,7 @@ from recovar.em.vdam.state import NativeParticleState
 from recovar.em.vdam.subset_schedule import select_subset_for_iter
 from recovar.utils.helpers import R_from_relion, write_relion_mrc
 
-SCRIPT_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_ab_initio.py"
-
 pytestmark = pytest.mark.unit
-
-
-def _load_run_ab_initio():
-    import sys
-
-    spec = importlib.util.spec_from_file_location("run_ab_initio_native_test", SCRIPT_PATH)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["run_ab_initio_native_test"] = module
-    try:
-        spec.loader.exec_module(module)
-    except Exception:
-        sys.modules.pop("run_ab_initio_native_test", None)
-        raise
-    return module
 
 
 def test_micrograph_sort_order_matches_relion_experiment_order():
@@ -2529,7 +2513,6 @@ def test_data_star_zeros_unvisited_rows_and_writes_best_pose_eulers(tmp_path, mo
 
 
 def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
-    run_ab_initio = _load_run_ab_initio()
     calls = {}
 
     def fake_run_native(opts):
@@ -2538,9 +2521,9 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
 
     monkeypatch.setattr(driver, "run_native_initial_model", fake_run_native)
 
-    rc = run_ab_initio.main(
+    rc = initial_model.main(
         [
-            "--i",
+            "--no-require-custom-cuda", "--no-jax-compilation-cache", "--gpu", "", "--i",
             "particles.star",
             "--o",
             "out/run",
@@ -2570,9 +2553,9 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
             "220",
             "--translation_sigma_angstrom",
             "6.5",
-            "--diagnostic_stop_after_iteration",
+            "--diagnostic-stop-after-iteration",
             "2",
-            "--no_iter_artifacts",
+            "--no-write-iter-artifacts",
         ]
     )
 
@@ -2600,7 +2583,6 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
 
 
 def test_cli_gpu_defaults_to_async_relion_cuda_image_backend(monkeypatch):
-    run_ab_initio = _load_run_ab_initio()
     calls = {}
     monkeypatch.delenv("CUDA_LAUNCH_BLOCKING", raising=False)
 
@@ -2610,14 +2592,13 @@ def test_cli_gpu_defaults_to_async_relion_cuda_image_backend(monkeypatch):
 
     monkeypatch.setattr(driver, "run_native_initial_model", fake_run_native)
 
-    assert run_ab_initio.main(["--i", "particles.star", "--gpu", "0", "--nr_iter", "1"]) == 0
+    assert initial_model.main(["--no-require-custom-cuda", "--no-jax-compilation-cache", "--gpu", "", "--i", "particles.star", "--gpu", "0", "--nr_iter", "1"]) == 0
     assert calls["opts"].image_fourier_backend == "relion_cuda"
     assert calls["opts"].deterministic_cuda is False
-    assert run_ab_initio.os.environ["CUDA_LAUNCH_BLOCKING"] == "0"
+    assert initial_model.os.environ["CUDA_LAUNCH_BLOCKING"] == "0"
 
 
 def test_cli_gpu_allows_explicit_deterministic_cuda(monkeypatch):
-    run_ab_initio = _load_run_ab_initio()
     calls = {}
     monkeypatch.delenv("CUDA_LAUNCH_BLOCKING", raising=False)
 
@@ -2628,10 +2609,10 @@ def test_cli_gpu_allows_explicit_deterministic_cuda(monkeypatch):
     monkeypatch.setattr(driver, "run_native_initial_model", fake_run_native)
 
     assert (
-        run_ab_initio.main(
-            ["--i", "particles.star", "--gpu", "0", "--nr_iter", "1", "--deterministic_cuda"]
+        initial_model.main(
+            ["--no-require-custom-cuda", "--no-jax-compilation-cache", "--gpu", "", "--i", "particles.star", "--gpu", "0", "--nr_iter", "1", "--deterministic-cuda"]
         )
         == 0
     )
     assert calls["opts"].deterministic_cuda is True
-    assert run_ab_initio.os.environ["CUDA_LAUNCH_BLOCKING"] == "1"
+    assert initial_model.os.environ["CUDA_LAUNCH_BLOCKING"] == "1"

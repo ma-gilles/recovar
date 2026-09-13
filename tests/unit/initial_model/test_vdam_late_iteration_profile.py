@@ -1256,7 +1256,7 @@ def test_late_profile_slurm_gate_is_one_iteration_and_fail_closed():
     assert "status --porcelain=v1 --untracked-files=no" in launcher
     assert "test ! -e" in launcher
     assert 'test ! -e "${NATIVE_PROFILE}/run_it' in launcher
-    assert "--diagnostic_continue_optimiser" in (ROOT / "scripts" / "run_vdam_late_iteration_profile.py").read_text()
+    assert "--diagnostic-continue-optimiser" in (ROOT / "scripts" / "run_vdam_late_iteration_profile.py").read_text()
     assert "VDAM_GDB_FIRST_EXPECTATION" in gdb_commands
     assert "VDAM_GDB_SECOND_EXPECTATION" in gdb_commands
     assert "cudaProfilerStart" in gdb_commands

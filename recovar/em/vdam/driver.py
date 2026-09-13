@@ -1,7 +1,6 @@
 """Native InitialModel / ab-initio K-class driver.
 
-This module owns the executable recovar path behind ``scripts/run_ab_initio``.
-The script remains a thin argparse and RELION-command-snapshot layer; all
+This module owns the executable path behind ``recovar.commands.initial_model``; all
 data loading, denovo seeding, dense K-class E-step wiring, VDAM iteration and
 artifact writing are coordinated here through their implementation owners.
 """

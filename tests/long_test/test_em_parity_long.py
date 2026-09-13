@@ -12,7 +12,7 @@ Tests:
    ``1e-3`` of RELION at every iteration AND final FSC@0.5 vs GT within
    ``±0.5 Å`` of RELION.
 2. K=1 256² 50k native InitialModel/VDAM cold-start (8 iters) — run the
-   GUI-facing ``scripts/run_ab_initio.py`` path and assert GT quality is close
+   GUI-facing ``recovar.commands.initial_model`` path and assert GT quality is close
    to a RELION ``--grad --denovo_3dref`` iter-8 reference.
 3. K=4 256² 50k full ab-initio (15 iters) — same per-class.
 
@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -40,7 +41,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PARITY_SCRIPT = REPO_ROOT / "scripts" / "run_multi_iter_parity.py"
 KCLASS_SCRIPT = REPO_ROOT / "scripts" / "run_k_class_parity.py"
 REFINE_SCRIPT = REPO_ROOT / "scripts" / "run_full_refinement.py"
-ABINITIO_SCRIPT = REPO_ROOT / "scripts" / "run_ab_initio.py"
+ABINITIO_SCRIPT = REPO_ROOT / "recovar" / "commands" / "initial_model.py"
 
 FIXTURE_BASE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj")
 
@@ -383,7 +384,7 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
 
     This is intentionally separate from ``test_em_parity_long_k1_full``.
     ``run_full_refinement.py`` and replay-style tests can pass while the
-    GUI-facing native InitialModel path in ``scripts/run_ab_initio.py`` stalls
+    GUI-facing native InitialModel path in ``recovar.commands.initial_model`` stalls
     after the first few VDAM iterations. This test guards the exact production
     command shape users get from RELION InitialModel parity work.
 
@@ -417,7 +418,12 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
 
     cmd = [
         sys.executable,
-        str(ABINITIO_SCRIPT),
+        "-m",
+        "recovar.commands.initial_model",
+        "--jax-compilation-cache" if os.environ.get("JAX_COMPILATION_CACHE_DIR") else "--no-jax-compilation-cache",
+        "--no-require-custom-cuda",
+        "--gpu",
+        "",
         "--i",
         str(K1_LONG_DATA_STAR),
         "--datadir",
@@ -450,7 +456,7 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
         "256",
         "--padding_factor",
         "1",
-        "--eager_images",
+        "--no-lazy",
     ]
     logger.info("K=1 native InitialModel cmd: %s", " ".join(cmd))
 
@@ -458,7 +464,7 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
     proc = subprocess.run(cmd, capture_output=True, text=True, env=gpu_subprocess_env())
     elapsed = time.time() - t0
     assert proc.returncode == 0, (
-        f"run_ab_initio.py exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        f"initial_model exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     )
 
     from scripts.evaluate_ab_initio_gt import evaluate

@@ -144,10 +144,10 @@ for iter = 1 .. nr_iter:
 
 The native RECOVAR entry point is
 [`driver.py::run_native_initial_model`](../../recovar/em/vdam/driver.py).
-The command-line options in
-[`scripts/run_ab_initio.py::InitialModelJobOptions`](../../scripts/run_ab_initio.py)
+The independent command-reference options in
+[`tests/helpers/relion_initial_model_command.py::InitialModelJobOptions`](../../tests/helpers/relion_initial_model_command.py)
 mirror the RELION GUI command, while
-[`scripts/run_ab_initio.py::build_command`](../../scripts/run_ab_initio.py)
+[`tests/helpers/relion_initial_model_command.py::build_command`](../../tests/helpers/relion_initial_model_command.py)
 is only a command snapshot for parity/debugging.
 
 The loop is in
@@ -221,8 +221,10 @@ this branch show:
 
 Use this index only after reading the algorithm sections above.
 
-- GUI command snapshot:
-  [`scripts/run_ab_initio.py`](../../scripts/run_ab_initio.py)
+- RECOVAR execution command:
+  [`recovar.commands.initial_model`](../../recovar/commands/initial_model.py)
+- Independent RELION GUI command snapshot:
+  [`relion_initial_model_command.py`](../../tests/helpers/relion_initial_model_command.py)
 - Native InitialModel driver:
   [`driver.py::run_native_initial_model`](../../recovar/em/vdam/driver.py)
 - Denovo state:
@@ -671,7 +673,7 @@ the opaque RELION binding's per-class regularization behavior.
 ### Solvent flattening, spherical masks, grid correction, and BPref weights
 
 RELION GUI InitialModel command construction in
-[`scripts/run_ab_initio.py::build_command`](../../scripts/run_ab_initio.py)
+[`tests/helpers/relion_initial_model_command.py::build_command`](../../tests/helpers/relion_initial_model_command.py)
 adds `--flatten_solvent` by default when `InitialModelJobOptions.do_solvent` is
 true, and also adds `--zero_mask`. In native RECOVAR InitialModel, image masking
 is configured in `driver.py::_configure_relion_image_mask`, but the final
@@ -831,7 +833,7 @@ These are code-level limitations in the current branch:
 When RECOVAR diverges from RELION InitialModel, isolate the first mismatch:
 
 1. Confirm the RELION command flags produced by
-   `scripts/run_ab_initio.py::build_command`.
+   `tests/helpers/relion_initial_model_command.py::build_command`.
 2. Confirm the input order: micrograph stable sort, bootstrap first-N selection,
    VDAM shuffle seed `random_seed + iter`, optics stable sort, and pseudo-halfset
    alternation are separate ordering rules.

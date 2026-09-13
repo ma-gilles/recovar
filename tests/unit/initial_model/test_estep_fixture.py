@@ -333,7 +333,7 @@ def test_estep_bpref_forward_parity():
     Phase C refactor (2026-04-28): the test now exercises the production
     dense K-class adapter instead of calling `run_em` directly with a bespoke
     recipe. This guarantees the test gate covers the same code path that
-    downstream consumers (e.g. `scripts/run_ab_initio.py`) will hit.
+    downstream consumers (e.g. `recovar.commands.initial_model`) will hit.
 
     With pseudo_halfsets=1, RELION accumulates two BPref instances by
     alternating particles across halfset slots. We mirror that via

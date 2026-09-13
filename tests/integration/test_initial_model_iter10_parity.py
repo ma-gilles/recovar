@@ -47,7 +47,7 @@ from conftest import gpu_subprocess_env
 logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-RUN_AB_INITIO = REPO_ROOT / "scripts" / "run_ab_initio.py"
+RUN_AB_INITIO = REPO_ROOT / "recovar" / "commands" / "initial_model.py"
 # Baselines stay inline below; results live in each case's temporary output.
 
 FIXTURE_BASE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj")
@@ -163,7 +163,12 @@ def _run_recovar_iter10(
     """Run K=K InitialModel for nr_iter=10 and return (wall_time, class MRC paths)."""
     cmd = [
         sys.executable,
-        str(RUN_AB_INITIO),
+        "-m",
+        "recovar.commands.initial_model",
+        "--jax-compilation-cache" if os.environ.get("JAX_COMPILATION_CACHE_DIR") else "--no-jax-compilation-cache",
+        "--no-require-custom-cuda",
+        "--gpu",
+        "",
         "--i",
         str(data_dir / "particles.star"),
         "--datadir",
@@ -198,7 +203,7 @@ def _run_recovar_iter10(
         "1000",
         "--padding_factor",
         "1",
-        "--eager_images",
+        "--no-lazy",
         "--image_batch_size",
         "250",
     ]
@@ -211,7 +216,7 @@ def _run_recovar_iter10(
     elapsed = time.time() - t0
     if proc.returncode != 0:
         log_text = log_path.read_text()[-4000:]
-        pytest.fail(f"run_ab_initio.py exited {proc.returncode} for {case_label}\nlog tail:\n{log_text}")
+        pytest.fail(f"initial_model exited {proc.returncode} for {case_label}\nlog tail:\n{log_text}")
     rec_paths = [output_dir / "recovar" / f"run_it010_class{c:03d}.mrc" for c in range(1, K + 1)]
     missing_recs = [str(p) for p in rec_paths if not p.exists()]
     if missing_recs:

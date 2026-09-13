@@ -1251,6 +1251,7 @@ def _recovar_argv(
 ) -> list[str]:
     stop_iteration = int(args.checkpoint_iteration) + 1
     command = [
+        "--jax-compilation-cache" if os.environ.get("JAX_COMPILATION_CACHE_DIR") else "--no-jax-compilation-cache",
         "--i",
         str(args.input_star),
         "--o",
@@ -1265,8 +1266,7 @@ def _recovar_argv(
         "4",
         "--sym",
         "C1",
-        "--do_run_C1",
-        "1",
+        "--run-in-c1",
         "--particle_diameter",
         "200.0",
         "--random_seed",
@@ -1287,10 +1287,10 @@ def _recovar_argv(
         str(args.data_dir),
         "--gpu",
         "0",
-        "--require_custom_cuda",
-        "--diagnostic_continue_optimiser",
+        "--require-custom-cuda",
+        "--diagnostic-continue-optimiser",
         str(args.checkpoint_optimiser),
-        "--diagnostic_stop_after_iteration",
+        "--diagnostic-stop-after-iteration",
         str(stop_iteration),
     ]
     # The frozen pre-candidate control does not expose these knobs.  Omit its
@@ -1882,7 +1882,7 @@ def main(argv: list[str] | None = None) -> int:
             str(input_star): _sha256(input_star),
         }
     )
-    run_ab_initio: Callable[[list[str]], int] | None = None
+    initial_model_command: Callable[[list[str]], int] | None = None
     with _capture_raw_image_cache_loads(bool(args.audit_raw_image_cache)) as cache_events:
         for label in ("cold", "warm"):
             stage_profile_enabled = stage_profile_enabled_by_arm[label]
@@ -1918,12 +1918,12 @@ def main(argv: list[str] | None = None) -> int:
                 profiler_start()
             compile_log = args.cold_compile_callsite_log if label == "cold" else None
             with _capture_cold_compile_calls(compile_log) as compile_records:
-                if run_ab_initio is None:
-                    from scripts.run_ab_initio import main as imported_run_ab_initio
+                if initial_model_command is None:
+                    from recovar.commands.initial_model import main as imported_initial_model_command
 
-                    run_ab_initio = imported_run_ab_initio
+                    initial_model_command = imported_initial_model_command
                 try:
-                    status = int(run_ab_initio(command))
+                    status = int(initial_model_command(command))
                     _effects_barrier()
                 finally:
                     if capture:

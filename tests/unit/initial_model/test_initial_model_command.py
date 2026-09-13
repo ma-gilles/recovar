@@ -320,10 +320,6 @@ def test_rejects_mpi_before_cuda_runtime_gate(monkeypatch):
             ["recovar.commands.initial_model", "--i", "particles.star"],
             ["python", "-m", "recovar.commands.initial_model", "--i", "particles.star"],
         ),
-        (
-            ["scripts/run_ab_initio.py", "--i", "particles.star"],
-            ["python", "scripts/run_ab_initio.py", "--i", "particles.star"],
-        ),
     ],
 )
 def test_initial_model_bootstrap_keeps_default_allocator(argv, orig_argv):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 from dataclasses import asdict
@@ -12,6 +13,38 @@ from typing import Sequence
 from recovar.em.vdam.schedules import GuiInitialModelDefaults
 
 DEFAULTS = GuiInitialModelDefaults()
+
+_CONCRETE_RECOVAR_PROVENANCE_MODULES = (
+    "recovar.em.vdam.schedules",
+    "recovar.em.vdam.driver",
+    "recovar.em.vdam.iteration_loop",
+    "recovar.em.vdam.dense_adapter",
+)
+
+
+def _assert_expected_repo_imports() -> dict[str, str]:
+    """Fail fast when InitialModel resolves through another editable checkout."""
+    expected_root_value = os.environ.get("RECOVAR_EXPECTED_REPO_ROOT")
+    if not expected_root_value:
+        return {}
+
+    expected_root = Path(expected_root_value).expanduser().resolve()
+    imported: dict[str, str] = {}
+    failures: list[str] = []
+    for module_name in _CONCRETE_RECOVAR_PROVENANCE_MODULES:
+        module = importlib.import_module(module_name)
+        module_file_value = getattr(module, "__file__", None)
+        module_file = Path(module_file_value).resolve() if module_file_value else None
+        imported[module_name] = str(module_file)
+        print(f"InitialModel import provenance: {module_name}={module_file}", flush=True)
+        if module_file is None or not module_file.is_relative_to(expected_root):
+            failures.append(f"{module_name}={module_file}")
+    if failures:
+        raise RuntimeError(
+            "RECOVAR InitialModel import provenance failure: expected every concrete module under "
+            f"{expected_root}, found " + ", ".join(failures)
+        )
+    return imported
 
 
 def initial_model_defaults_dict() -> dict[str, object]:
@@ -332,6 +365,26 @@ def make_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--dry-run", action="store_true", help="Print the resolved native options without running")
+    parser.add_argument(
+        "--projector-setup-backend", choices=("native", "jax"), default="native",
+        help="Reference projector preparation backend.",
+    )
+    parser.add_argument(
+        "--mstep-backend", choices=("native", "jax"), default="native",
+        help="VDAM M-step transaction backend.",
+    )
+    parser.add_argument(
+        "--mstep-compute-dtype", choices=("float32", "float64"), default="float64",
+        help="M-owned state precision; float32 requires the JAX M-step.",
+    )
+    parser.add_argument(
+        "--diagnostic-continue-optimiser",
+        help="Native RELION VDAM checkpoint for exactly one next diagnostic iteration.",
+    )
+    parser.add_argument(
+        "--diagnostic-stop-after-iteration", type=_positive_int,
+        help="Diagnostic stopping iteration; nr_iter still controls the full schedule.",
+    )
     return parser
 
 
@@ -411,6 +464,11 @@ def _native_options_dict(args: argparse.Namespace) -> dict[str, object]:
     if backend == "auto":
         backend = "relion_cuda" if args.gpu_ids else "host_numpy"
     return {
+        "projector_setup_backend": args.projector_setup_backend,
+        "mstep_backend": args.mstep_backend,
+        "mstep_compute_dtype": args.mstep_compute_dtype,
+        "diagnostic_continue_optimiser": args.diagnostic_continue_optimiser,
+        "diagnostic_stop_after_iteration": args.diagnostic_stop_after_iteration,
         "fn_img": args.fn_img,
         "outputname": args.outputname,
         "nr_iter": args.nr_iter,
@@ -458,7 +516,11 @@ def _native_options_dict(args: argparse.Namespace) -> dict[str, object]:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = make_parser().parse_args(argv)
+    _assert_expected_repo_imports()
+    parser = make_parser()
+    args = parser.parse_args(argv)
+    if args.mstep_compute_dtype == "float32" and args.mstep_backend != "jax":
+        parser.error("--mstep-compute-dtype float32 requires --mstep-backend jax")
     if args.nr_mpi > 1:
         raise SystemExit("ERROR: Gradient refinement is not supported together with MPI.")
     if args.gpu_ids:

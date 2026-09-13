@@ -8,9 +8,9 @@ import pandas as pd
 import pytest
 from helpers.vdam import numpy_rnd_unif_factory
 
+from recovar.commands import initial_model as initial_model_command
 from recovar.em.vdam import driver, iteration_loop, m_step, mstep_single_class, native_options, star_io
 from recovar.em.vdam.init import initialise_denovo_state
-from scripts import run_ab_initio
 
 pytestmark = pytest.mark.unit
 
@@ -52,10 +52,10 @@ def test_cli_forwards_explicit_precision_and_keeps_legacy_default(monkeypatch, d
         "run_native_initial_model",
         lambda opts: calls.append(opts) or SimpleNamespace(final_mrc="a.mrc", final_model_star="a.star"),
     )
-    argv = ["--i", "missing.star"]
+    argv = ["--no-require-custom-cuda", "--no-jax-compilation-cache", "--gpu", "", "--i", "missing.star"]
     if dtype == "float32":
         argv += ["--mstep-compute-dtype", dtype, "--mstep-backend", "jax"]
-    assert run_ab_initio.main(argv) == 0
+    assert initial_model_command.main(argv) == 0
     assert calls[0].mstep_compute_dtype == dtype
     assert calls[0].mstep_backend == ("jax" if dtype == "float32" else "native")
 
@@ -63,7 +63,7 @@ def test_cli_forwards_explicit_precision_and_keeps_legacy_default(monkeypatch, d
 def test_cli_rejects_native_float32_before_driver(monkeypatch):
     monkeypatch.setattr(driver, "run_native_initial_model", lambda *_: pytest.fail("driver called"))
     with pytest.raises(SystemExit):
-        run_ab_initio.main(["--i", "missing.star", "--mstep-compute-dtype", "float32"])
+        initial_model_command.main(["--i", "missing.star", "--mstep-compute-dtype", "float32"])
 
 
 @pytest.mark.parametrize("K", [1, 4])

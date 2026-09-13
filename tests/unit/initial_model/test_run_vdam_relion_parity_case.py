@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts import run_ab_initio
+from recovar.commands import initial_model as initial_model_command
 from scripts import run_vdam_relion_parity_case as runner
 
 pytestmark = pytest.mark.unit
@@ -70,7 +70,7 @@ def test_recovar_command_maps_the_same_frozen_definition(monkeypatch):
         definition=DEFINITION,
     )
 
-    assert argv[:3] == ["/env/python", "-m", "scripts.run_ab_initio"]
+    assert argv[:3] == ["/env/python", "-m", "recovar.commands.initial_model"]
     assert _value(argv, "--nr_iter") == "8"
     assert _value(argv, "--grad_write_iter") == "1"
     assert _value(argv, "--K") == "1"
@@ -85,7 +85,7 @@ def test_recovar_command_maps_the_same_frozen_definition(monkeypatch):
     assert _value(argv, "--padding_factor") == "1"
     assert _value(argv, "--image_batch_size") == "500"
     assert _value(argv, "--gpu") == "0"
-    assert "--require_custom_cuda" in argv
+    assert "--require-custom-cuda" in argv
 
 
 def test_command_builders_map_configurable_symmetry_and_particle_diameter(monkeypatch):
@@ -112,7 +112,7 @@ def test_command_builders_map_configurable_symmetry_and_particle_diameter(monkey
 
     assert _value(relion, "--sym") == "C1"
     assert _value(recovar, "--sym") == "C2"
-    assert _value(recovar, "--do_run_C1") == "1"
+    assert "--run-in-c1" in recovar
     for argv in (relion, recovar):
         assert _value(argv, "--particle_diameter") == "144.0"
 
@@ -137,7 +137,7 @@ def test_command_builders_can_refine_directly_in_requested_symmetry(monkeypatch)
 
     assert _value(relion, "--sym") == "C2"
     assert _value(recovar, "--sym") == "C2"
-    assert _value(recovar, "--do_run_C1") == "0"
+    assert "--no-run-in-c1" in recovar
 
 
 def test_recovar_command_accepts_resource_only_batch_override(monkeypatch):
@@ -332,16 +332,16 @@ def test_initial_model_import_provenance_accepts_active_checkout(monkeypatch):
     repo = Path(__file__).resolve().parents[3]
     monkeypatch.setenv("RECOVAR_EXPECTED_REPO_ROOT", str(repo))
 
-    imported = run_ab_initio._assert_expected_repo_imports()
+    imported = initial_model_command._assert_expected_repo_imports()
 
-    assert set(imported) == set(run_ab_initio._CONCRETE_RECOVAR_PROVENANCE_MODULES)
+    assert set(imported) == set(initial_model_command._CONCRETE_RECOVAR_PROVENANCE_MODULES)
 
 
 def test_initial_model_import_provenance_rejects_sibling_checkout(monkeypatch, tmp_path):
     monkeypatch.setenv("RECOVAR_EXPECTED_REPO_ROOT", str(tmp_path))
 
     with pytest.raises(RuntimeError, match="InitialModel import provenance failure"):
-        run_ab_initio._assert_expected_repo_imports()
+        initial_model_command._assert_expected_repo_imports()
 
 
 def test_parity_cuda_environment_supports_explicit_deterministic_launches():
@@ -385,7 +385,7 @@ def test_native_cli_custom_cuda_gate_primes_shared_slicing_dispatch(monkeypatch)
     monkeypatch.setattr(cuda_backproject, "custom_cuda_requested", lambda: True)
     monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: True)
 
-    report = run_ab_initio._require_custom_cuda_runtime()
+    report = initial_model_command._require_custom_cuda_runtime()
 
     assert report == {
         "default_backend": "gpu",
@@ -410,5 +410,5 @@ def test_native_cli_custom_cuda_gate_rejects_cpu_only_runtime(monkeypatch):
     monkeypatch.setattr(cuda_backproject, "cuda_available", lambda: False)
 
     with pytest.raises(RuntimeError, match="requires a visible GPU"):
-        run_ab_initio._require_custom_cuda_runtime()
+        initial_model_command._require_custom_cuda_runtime()
     slicing._on_gpu.cache_clear()

@@ -102,6 +102,7 @@ SEALED_NORMALIZED_OPTIONS = {
 }
 
 SEALED_NORMALIZED_RECOVAR_ARGV = [
+    "--jax-compilation-cache" if os.environ.get("JAX_COMPILATION_CACHE_DIR") else "--no-jax-compilation-cache",
     "--i",
     "<INPUT_STAR>",
     "--o",
@@ -116,8 +117,7 @@ SEALED_NORMALIZED_RECOVAR_ARGV = [
     "4",
     "--sym",
     "C1",
-    "--do_run_C1",
-    "1",
+    "--run-in-c1",
     "--particle_diameter",
     "200.0",
     "--random_seed",
@@ -138,10 +138,10 @@ SEALED_NORMALIZED_RECOVAR_ARGV = [
     "<DATA_DIR>",
     "--gpu",
     "0",
-    "--require_custom_cuda",
-    "--diagnostic_continue_optimiser",
+    "--require-custom-cuda",
+    "--diagnostic-continue-optimiser",
     "<CHECKPOINT_OPTIMISER>",
-    "--diagnostic_stop_after_iteration",
+    "--diagnostic-stop-after-iteration",
     "181",
 ]
 
@@ -1152,7 +1152,7 @@ def main(argv: list[str] | None = None) -> int:
     args.output_root.mkdir(parents=True)
     (args.output_root / "SAFE_TO_DELETE").touch()
 
-    from scripts.run_ab_initio import main as run_ab_initio
+    from recovar.commands.initial_model import main as initial_model_command
 
     target_iteration = int(args.checkpoint_iteration) + 1
     phase_reports: dict[str, dict[str, Any]] = {}
@@ -1184,7 +1184,7 @@ def main(argv: list[str] | None = None) -> int:
 
             resources_before = _process_resource_snapshot()
             started = time.perf_counter()
-            status = int(run_ab_initio(command))
+            status = int(initial_model_command(command))
             _effects_barrier()
             wall_s = float(time.perf_counter() - started)
             resources_after = _process_resource_snapshot()

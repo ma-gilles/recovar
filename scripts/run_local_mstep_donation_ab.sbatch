@@ -187,7 +187,7 @@ readonly -a SOURCE_FILES=(
   recovar/em/vdam/iteration_loop.py
   recovar/em/vdam/schedules.py
   recovar/utils/parity_provenance.py
-  scripts/run_ab_initio.py
+  recovar/commands/initial_model.py
   scripts/run_vdam_late_iteration_profile.py
   scripts/run_local_mstep_donation_ab.py
   scripts/analyze_local_mstep_donation_ab.py

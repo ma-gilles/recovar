@@ -240,7 +240,8 @@ def build_recovar_command(
     return [
         sys.executable,
         "-m",
-        "scripts.run_ab_initio",
+        "recovar.commands.initial_model",
+        "--jax-compilation-cache" if os.environ.get("JAX_COMPILATION_CACHE_DIR") else "--no-jax-compilation-cache",
         "--i",
         str(input_star),
         "--o",
@@ -255,8 +256,7 @@ def build_recovar_command(
         str(definition["tau2_fudge"]),
         "--sym",
         symmetry,
-        "--do_run_C1",
-        "1" if do_run_c1 else "0",
+        "--run-in-c1" if do_run_c1 else "--no-run-in-c1",
         "--particle_diameter",
         str(particle_diameter),
         "--random_seed",
@@ -277,7 +277,7 @@ def build_recovar_command(
         str(fixture_dir),
         "--gpu",
         "0",
-        "--require_custom_cuda",
+        "--require-custom-cuda",
     ]
 
 
@@ -431,7 +431,7 @@ def run_case(args: argparse.Namespace) -> dict[str, Any]:
     if allow_async_cuda and deterministic_cuda:
         raise RunError("VDAM_ALLOW_ASYNC_CUDA and VDAM_DETERMINISTIC_CUDA are mutually exclusive")
     if deterministic_cuda:
-        recovar_argv.append("--deterministic_cuda")
+        recovar_argv.append("--deterministic-cuda")
     (relion_dir / "relion_command.json").write_text(
         json.dumps({"argv": relion_argv}, indent=2, sort_keys=True) + "\n"
     )

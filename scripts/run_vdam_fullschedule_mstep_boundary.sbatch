@@ -736,7 +736,7 @@ PY
 fi
 
 RECOVAR_COMMAND=(
-  "${PIXI_PY}" -m scripts.run_ab_initio
+  "${PIXI_PY}" -m recovar.commands.initial_model
   --i "${DATA_DIR}/particles.star"
   --o "${RECOVAR_OUTPUT}/run"
   --nr_iter "${NR_ITER_SCHEDULE}"
@@ -744,7 +744,7 @@ RECOVAR_COMMAND=(
   --K 1
   --tau2_fudge 4
   --sym C1
-  --do_run_C1 1
+  --run-in-c1
   --particle_diameter 200
   --random_seed "${RANDOM_SEED}"
   --healpix_order 1
@@ -755,8 +755,8 @@ RECOVAR_COMMAND=(
   --image_batch_size 500
   --datadir "${DATA_DIR}"
   --gpu 0
-  --require_custom_cuda
-  --diagnostic_stop_after_iteration "${TARGET_ITERATION}"
+  --require-custom-cuda
+  --diagnostic-stop-after-iteration "${TARGET_ITERATION}"
 )
 printf '%q ' "${RECOVAR_COMMAND[@]}" > "${PROVENANCE}/recovar_command.sh"
 printf '\n' >> "${PROVENANCE}/recovar_command.sh"

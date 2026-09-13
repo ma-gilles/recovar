@@ -106,7 +106,7 @@ unset RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT RECOVAR_LOCAL_SCORE_DUMP_TARGET_ONLY
 mkdir -p "${JAX_COMPILATION_CACHE_DIR}" "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}"
 
 COMMAND=(
-  "${PIXI_PY}" -m scripts.run_ab_initio
+  "${PIXI_PY}" -m recovar.commands.initial_model
   --i "${DATA_DIR}/particles.star"
   --o "${RECOVAR_ROOT}/run"
   --nr_iter 200
@@ -114,7 +114,7 @@ COMMAND=(
   --K 1
   --tau2_fudge 4
   --sym C1
-  --do_run_C1 1
+  --run-in-c1
   --particle_diameter 200
   --random_seed 0
   --healpix_order 1
@@ -125,8 +125,8 @@ COMMAND=(
   --image_batch_size 500
   --datadir "${DATA_DIR}"
   --gpu 0
-  --require_custom_cuda
-  --diagnostic_stop_after_iteration "${TARGET_ITERATION}"
+  --require-custom-cuda
+  --diagnostic-stop-after-iteration "${TARGET_ITERATION}"
 )
 printf '%q ' "${COMMAND[@]}" > "${PROVENANCE}/recovar_command.sh"
 printf '\n' >> "${PROVENANCE}/recovar_command.sh"

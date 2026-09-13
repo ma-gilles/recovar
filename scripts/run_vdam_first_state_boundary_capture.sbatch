@@ -339,7 +339,7 @@ command = build_recovar_command(
     definition=definition,
     image_batch_size=500,
 )
-command.extend(["--diagnostic_stop_after_iteration", str(target_iteration)])
+command.extend(["--diagnostic-stop-after-iteration", str(target_iteration)])
 output_json.write_text(json.dumps({"argv": command}, indent=2, sort_keys=True) + "\n")
 PY
   mapfile -d '' -t COMMAND < <("${PIXI_PY}" - "${command_json}" <<'PY'
@@ -353,7 +353,7 @@ PY
   )
 else
   COMMAND=(
-    "${PIXI_PY}" -m scripts.run_ab_initio
+    "${PIXI_PY}" -m recovar.commands.initial_model
     --i "${DATA_DIR}/particles.star"
     --o "${RECOVAR_ROOT}/run"
     --nr_iter "${NR_ITER_SCHEDULE}"
@@ -361,7 +361,7 @@ else
     --K 1
     --tau2_fudge 4
     --sym C1
-    --do_run_C1 1
+    --run-in-c1
     --particle_diameter 200
     --random_seed 0
     --healpix_order 1
@@ -372,8 +372,8 @@ else
     --image_batch_size 500
     --datadir "${DATA_DIR}"
     --gpu 0
-    --require_custom_cuda
-    --diagnostic_stop_after_iteration "${TARGET_ITERATION}"
+    --require-custom-cuda
+    --diagnostic-stop-after-iteration "${TARGET_ITERATION}"
   )
 fi
 if [[ "${BOUNDARY_DETERMINISTIC_CUDA}" == 1 ]]; then

@@ -130,7 +130,7 @@ for repeat in $(seq 1 "${REPEAT_COUNT}"); do
   mkdir -p "${TMPDIR}" "${PIXI_HOME}" "${RATTLER_CACHE_DIR}"
 
   start_epoch=$(date +%s)
-  "${PIXI_PY}" -m scripts.run_ab_initio \
+  "${PIXI_PY}" -m recovar.commands.initial_model \
     --i "${VDAM_DATA_DIR}/particles.star" \
     --o "${recovar_root}/run" \
     --nr_iter 200 \
@@ -138,7 +138,7 @@ for repeat in $(seq 1 "${REPEAT_COUNT}"); do
     --K 1 \
     --tau2_fudge 4 \
     --sym C1 \
-    --do_run_C1 1 \
+    --run-in-c1 \
     --particle_diameter 200 \
     --random_seed 0 \
     --healpix_order 1 \
@@ -149,8 +149,8 @@ for repeat in $(seq 1 "${REPEAT_COUNT}"); do
     --image_batch_size 500 \
     --datadir "${VDAM_DATA_DIR}" \
     --gpu 0 \
-    --require_custom_cuda \
-    --diagnostic_stop_after_iteration 1 \
+    --require-custom-cuda \
+    --diagnostic-stop-after-iteration 1 \
       > "${output_root}/runner.stdout" \
       2> "${output_root}/runner.stderr"
   wall_s=$(( $(date +%s) - start_epoch ))
