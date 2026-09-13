@@ -606,3 +606,15 @@ def _projection_budget_pixels_for_pass(
     if bool(use_window) and bool(use_relion_projector):
         return max(1, 8 * pixels)
     return max(1, pixels)
+
+
+def _kclass_raw_diff2_bytes(class_bucket_arrays, compact_pair_arrays, *, n_fine_trans, dtype):
+    """Bytes of all raw class scores, using the actual padded bucket shapes."""
+    if compact_pair_arrays is not None:
+        elements = sum(int(arrays["pair_mask"].size) for arrays in compact_pair_arrays)
+    else:
+        elements = sum(
+            int(arrays["rotations"].shape[0]) * int(arrays["rotations"].shape[1]) * int(n_fine_trans)
+            for arrays in class_bucket_arrays
+        )
+    return elements * np.dtype(dtype).itemsize

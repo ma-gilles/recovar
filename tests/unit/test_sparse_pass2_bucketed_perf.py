@@ -9853,7 +9853,8 @@ def test_compact_pair_filter_routes_complement_masks_to_rectangular():
     np.testing.assert_array_equal(filtered, np.asarray([False]))
 
 
-def test_compact_pair_xhalf_gpu_matches_rectangular_fused(monkeypatch):
+@pytest.mark.parametrize("raw_device_budget", [0, 16 * 1024**2])
+def test_compact_pair_xhalf_gpu_matches_rectangular_fused(monkeypatch, raw_device_budget):
     """GPU-only guard for compact-pair parity in RELION x-half M-step mode."""
 
     if os.environ.get("RECOVAR_RUN_CUDA_XHALF_TEST") != "1":
@@ -9869,6 +9870,9 @@ def test_compact_pair_xhalf_gpu_matches_rectangular_fused(monkeypatch):
     if not cb.cuda_available():
         pytest.skip(cb.cuda_unavailable_error())
 
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
+
+    monkeypatch.setattr(bucketed_mod, "_exact_raw_diff2_cache_limit_bytes", lambda *a, **k: raw_device_budget)
     n_images = 5
     n_coarse_rot = rotation_grid_size(1)
     fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 6, axis=0)
@@ -9937,6 +9941,14 @@ def test_compact_pair_xhalf_gpu_matches_rectangular_fused(monkeypatch):
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
     compact_pairs = _run_sparse_k_class_adaptive_pass2(**kwargs)
+
+    for result in (fused, compact_pairs):
+        profile = result.profile_summary
+        device_bytes = int(profile["sparse_kclass_raw_device_total_bytes"])
+        host_bytes = int(profile["sparse_kclass_raw_host_staging_total_bytes"])
+        assert (device_bytes > 0) == bool(raw_device_budget)
+        assert (host_bytes > 0) == (raw_device_budget == 0)
+        assert 2 * profile["sparse_kclass_raw_device_peak_bytes"] <= raw_device_budget
 
     np.testing.assert_allclose(np.asarray(compact_pairs.Ft_y), np.asarray(fused.Ft_y), rtol=1e-5, atol=1e-5)
     np.testing.assert_allclose(np.asarray(compact_pairs.Ft_ctf), np.asarray(fused.Ft_ctf), rtol=1e-5, atol=1e-5)
@@ -10019,3 +10031,15 @@ def test_bucketed_call_count_bounded_versus_perimage():
         "— expected fewer (one per bucket)."
     )
     print(f"Bucketed: {score_call_count['n']} score calls for {n_images} images")
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_kclass_raw_bucket_bytes_include_every_padded_class(dtype):
+    from recovar.em.sparse_pass2.sparse_pass2_budget import _kclass_raw_diff2_bytes
+
+    classes = [dict(rotations=np.empty((5, rows, 3, 3))) for rows in (4, 7)]
+    compact = [dict(pair_mask=np.zeros((5, pairs), dtype=bool)) for pairs in (8, 9)]
+    itemsize = np.dtype(dtype).itemsize
+    assert _kclass_raw_diff2_bytes(classes, None, n_fine_trans=3, dtype=dtype) == 165 * itemsize
+    # Masked padding occupies storage even though it contributes no probability.
+    assert _kclass_raw_diff2_bytes(classes, compact, n_fine_trans=3, dtype=dtype) == 85 * itemsize

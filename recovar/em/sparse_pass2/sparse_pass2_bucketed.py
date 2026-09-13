@@ -148,6 +148,7 @@ from recovar.em.sparse_pass2.sparse_pass2_budget import (
     _exact_raw_diff2_cache_estimated_bytes,
     _exact_raw_diff2_cache_fits_budget,
     _exact_raw_diff2_cache_limit_bytes,
+    _kclass_raw_diff2_bytes,
     _jax_allocator_free_memory_bytes,
     _max_adjoint_block_bytes_for_pass,
     _max_hypotheses_per_microbatch_for_pass,
@@ -5632,19 +5633,32 @@ def compute_k_class_pass2_stats_sparse_fused(
     )
     if raw_host_staging_max_bytes is None:
         raw_host_staging_max_bytes = _DEFAULT_KCLASS_RAW_HOST_STAGING_MAX_BYTES
+    raw_device_budget = (
+        _exact_raw_diff2_cache_limit_bytes(
+            device_memory_bytes,
+            _device_free_memory_bytes(),
+            _jax_allocator_free_memory_bytes(),
+            max_cache_bytes=min(_EXACT_RAW_DIFF2_CACHE_MAX_BYTES, raw_host_staging_max_bytes),
+        )
+        if use_exact_relion_gaussian and device_memory_bytes is not None
+        else 0
+    )
+    raw_device_total_bytes = 0
+    raw_device_peak_bytes = 0
     raw_host_staging_total_bytes = 0
     raw_host_staging_peak_bytes = 0
     raw_host_staging_s = 0.0
-    raw_host_staging_dtype = np.dtype(
+    raw_score_dtype = np.dtype(
         np.float64 if precision_policy.use_float64_scoring else np.float32
     )
 
-    def _stage_raw_diff2_on_host(raw_diff2, current_bucket_bytes):
+    def _retain_raw_diff2(raw_diff2, current_bucket_bytes):
+        nonlocal raw_device_total_bytes, raw_device_peak_bytes
         nonlocal raw_host_staging_total_bytes
         nonlocal raw_host_staging_peak_bytes
         nonlocal raw_host_staging_s
 
-        raw_nbytes = int(raw_diff2.size) * raw_host_staging_dtype.itemsize
+        raw_nbytes = int(raw_diff2.size) * raw_score_dtype.itemsize
         next_bucket_bytes = int(current_bucket_bytes) + raw_nbytes
         if next_bucket_bytes > int(raw_host_staging_max_bytes):
             raise MemoryError(
@@ -5653,12 +5667,18 @@ def compute_k_class_pass2_stats_sparse_fused(
                 f"Increase {_SPARSE_KCLASS_RAW_HOST_STAGING_MAX_BYTES_ENV} or lower the "
                 "sparse pass-2 hypothesis microbatch cap."
             )
+        if raw_diff2_device_resident:
+            if 2 * next_bucket_bytes > raw_device_budget:
+                raise MemoryError("raw class scores exceed the planned device residency budget")
+            raw_device_total_bytes += raw_nbytes
+            raw_device_peak_bytes = max(raw_device_peak_bytes, next_bucket_bytes)
+            return jnp.asarray(raw_diff2, dtype=raw_score_dtype), next_bucket_bytes
         stage_t0 = time.time()
-        raw_host = np.asarray(raw_diff2, dtype=raw_host_staging_dtype)
+        retained_raw = np.asarray(raw_diff2, dtype=raw_score_dtype)
         raw_host_staging_s += time.time() - stage_t0
         raw_host_staging_total_bytes += raw_nbytes
         raw_host_staging_peak_bytes = max(raw_host_staging_peak_bytes, next_bucket_bytes)
-        return raw_host, next_bucket_bytes
+        return retained_raw, next_bucket_bytes
 
     host_updates = DeferredHostUpdates()
     noise_statistics = SparseKClassNoiseStatistics(
@@ -5685,7 +5705,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     native_dual_weighted_sums_used = False
     fused_mstep_noise_used = False
     for bucket_meta in execution_buckets:
-        bucket_raw_host_staging_bytes = 0
+        bucket_raw_score_bytes = 0
         execution_mode = str(bucket_meta["_execution_mode"])
         execution_bucket_size_key = str(bucket_meta["_execution_size_key"])
         bucket_uses_compact_pairs = execution_mode == "compact_pair"
@@ -5827,6 +5847,17 @@ def compute_k_class_pass2_stats_sparse_fused(
                     )
                 compact_pair_arrays_by_class = reordered_compact_pairs
             image_indices = fetched_indices_np
+        raw_score_bytes = _kclass_raw_diff2_bytes(
+            class_bucket_arrays,
+            compact_pair_arrays_by_class,
+            n_fine_trans=n_fine_trans,
+            dtype=raw_score_dtype,
+        )
+        # Reserve both raw scores and their converted score tensors. Retained
+        # projections remain covered by the existing gather/microbatch budget.
+        raw_diff2_device_resident = bool(
+            use_exact_relion_gaussian and 0 < 2 * raw_score_bytes <= raw_device_budget
+        )
         pass2_dump_rows = (
             pass2_diagnostics._pass2_dump_target_rows(
                 experiment_dataset=experiment_dataset,
@@ -6180,11 +6211,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                     # scored. Offload each raw partition immediately so K
                     # device-resident raw tensors cannot overlap the K score
                     # tensors built below.
-                    raw_host, bucket_raw_host_staging_bytes = _stage_raw_diff2_on_host(
+                    retained_raw, bucket_raw_score_bytes = _retain_raw_diff2(
                         raw_diff2,
-                        bucket_raw_host_staging_bytes,
+                        bucket_raw_score_bytes,
                     )
-                    raw_diff2_by_class.append(raw_host)
+                    raw_diff2_by_class.append(retained_raw)
                     raw_diff2_masks_by_class.append(pair_mask)
                     raw_diff2_rotation_priors_by_class.append(
                         _gather_pair_rotation_log_prior(
@@ -6260,14 +6291,13 @@ def compute_k_class_pass2_stats_sparse_fused(
                             relion_highres_xi2_half,
                             use_fused_ffi=use_relion_fine_diff2_fused_ffi,
                         )
-                    # Keep the inter-class staging on the host. The score
-                    # microbatch cap applies to device residency; retaining
-                    # all raw class tensors here would nearly double its peak.
-                    raw_host, bucket_raw_host_staging_bytes = _stage_raw_diff2_on_host(
+                    # Keep fitting buckets on device; stage larger buckets
+                    # on host under the existing hard cap.
+                    retained_raw, bucket_raw_score_bytes = _retain_raw_diff2(
                         raw_diff2,
-                        bucket_raw_host_staging_bytes,
+                        bucket_raw_score_bytes,
                     )
-                    raw_diff2_by_class.append(raw_host)
+                    raw_diff2_by_class.append(retained_raw)
                     raw_diff2_masks_by_class.append(jnp.asarray(arrays["candidate_mask"]))
                     raw_diff2_rotation_priors_by_class.append(
                         jnp.asarray(
@@ -6462,7 +6492,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         or int(target_dump_class) == class_index + 1
                     )
                 ):
-                    raw_diff2_np = np.asarray(raw_diff2, dtype=raw_host_staging_dtype)
+                    raw_diff2_np = np.asarray(raw_diff2, dtype=raw_score_dtype)
                     raw_diff2_dump_by_class[class_index] = {
                         int(row): np.array(raw_diff2_np[int(row)], copy=True)
                         for row in pass2_dump_rows
@@ -6475,7 +6505,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                     min_diff2=global_min_diff2,
                 )
                 scores_by_class.append(score)
-                bucket_raw_host_staging_bytes -= int(raw_diff2.nbytes)
+                bucket_raw_score_bytes -= int(raw_diff2.nbytes)
                 raw_diff2_by_class[class_index] = None
                 if bucket_uses_compact_pairs:
                     class_log_z_for_bucket = _logsumexp_pass2_pairs_score_only(
@@ -6552,13 +6582,13 @@ def compute_k_class_pass2_stats_sparse_fused(
             if any(rows is not None for rows in raw_diff2_dump_by_class):
                 relion_min_diff2_dump = np.asarray(
                     global_min_diff2,
-                    dtype=raw_host_staging_dtype,
+                    dtype=raw_score_dtype,
                 )
             del raw_diff2_by_class
-            if bucket_raw_host_staging_bytes != 0:
+            if bucket_raw_score_bytes != 0:
                 raise RuntimeError(
-                    "fused K-class raw diff2 host staging accounting did not return to zero: "
-                    f"{bucket_raw_host_staging_bytes} bytes"
+                    "fused K-class raw diff2 retention accounting did not return to zero: "
+                    f"{bucket_raw_score_bytes} bytes"
                 )
         _add_sparse_group_timing(group_timing, "score", time.time() - stage_t0)
 
@@ -8169,6 +8199,9 @@ def compute_k_class_pass2_stats_sparse_fused(
         "sparse_kclass_compact_pair_dense_mstep_max_bytes": np.int64(compact_pair_dense_mstep_max_bytes),
         "sparse_kclass_max_noise_block_bytes": np.int64(max_noise_block_bytes),
         "sparse_kclass_max_adjoint_block_bytes": np.int64(max_adjoint_block_bytes),
+        "sparse_kclass_raw_device_budget_bytes": np.int64(raw_device_budget),
+        "sparse_kclass_raw_device_total_bytes": np.int64(raw_device_total_bytes),
+        "sparse_kclass_raw_device_peak_bytes": np.int64(raw_device_peak_bytes),
         "sparse_kclass_raw_host_staging_max_bytes": np.int64(raw_host_staging_max_bytes),
         "sparse_kclass_raw_host_staging_total_bytes": np.int64(raw_host_staging_total_bytes),
         "sparse_kclass_raw_host_staging_peak_bytes": np.int64(raw_host_staging_peak_bytes),
