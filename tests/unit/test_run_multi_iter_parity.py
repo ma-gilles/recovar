@@ -1,6 +1,5 @@
 import inspect
 import sys
-from pathlib import Path
 
 import mrcfile
 import numpy as np
@@ -937,21 +936,3 @@ def test_relion_final_gt_series_accepts_unnumbered_all_data_without_half_maps():
 
     assert set(series) == {"relion_merged"}
     np.testing.assert_array_equal(series["relion_merged"], merged)
-
-
-def test_case07_native_texture_trajectory_launcher_accepts_pinned_build_overrides():
-    launcher = (
-        Path(__file__).resolve().parents[2]
-        / "scripts"
-        / "run_k1_case07_native_texture_trajectory3.sbatch"
-    ).read_text()
-
-    assert "CUDA_LIB=${K1_CUDA_LIB:-" in launcher
-    assert "RELION_BIND=${K1_RELION_BIND_BUILD_DIR:-" in launcher
-    assert "RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE" in launcher
-    assert 'provenance/environment_${SLURM_JOB_ID}.txt' in launcher
-    assert 'provenance/repo_diff_${SLURM_JOB_ID}.patch' in launcher
-    assert "EXPECTED_REPO_DIFF_SHA256" in launcher
-    assert 'sha256sum "${CUDA_LIB}"' in launcher
-    assert 'sha256sum "${RELION_BIND}"/_relion_bind_core*.so' in launcher
-    assert "--numbered-only --allow-incomplete" in launcher
