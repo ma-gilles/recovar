@@ -104,9 +104,16 @@ def _squared_path_distances(positions: np.ndarray) -> np.ndarray:
     return np.square(delta)
 
 
+def _analyze_maps(maps, labels=LABELS):
+    return analyzer.analyze_map_panel_from_loader(
+        lambda iteration: maps[:, ITERATIONS.index(iteration)],
+        labels, BLOCKS, ITERATIONS, thresholds=THRESHOLDS, loo_multiplier=1.0,
+    )
+
+
 def test_exact_map_equality_passes_without_requiring_bitwise_policy() -> None:
     maps = np.repeat(_base_maps()[None, ...], len(LABELS), axis=0)
-    result = analyzer.analyze_map_panel(maps, LABELS, BLOCKS, ITERATIONS, thresholds=THRESHOLDS)
+    result = _analyze_maps(maps)
     assert result["pass"]
     assert result["trajectory_permutation"]["joint_max_one_sided_permutation_p"] == 1.0
     assert result["no_growth"]["joint_max_one_sided_permutation_p"] == 1.0
@@ -838,7 +845,7 @@ def test_single_checkpoint_map_spike_cannot_hide_inside_small_trajectory_rms() -
 def test_exchangeable_null_is_not_rejected_by_pointwise_conjunction() -> None:
     rng = np.random.default_rng(20)
     noise = rng.normal(scale=1e-7, size=(len(LABELS), len(ITERATIONS)))
-    result = analyzer.analyze_map_panel(_map_panel(noise), LABELS, BLOCKS, ITERATIONS, thresholds=THRESHOLDS)
+    result = _analyze_maps(_map_panel(noise))
     assert result["pass"]
     assert not result["pointwise_serial_leave_one_out_diagnostic_only"]["used_for_candidate_acceptance"]
 
@@ -858,7 +865,7 @@ def _growth_panel(alternative: str) -> dict[str, object]:
         noise[lane_indices] += coefficients[:, None] * ramp[None, :]
     else:
         raise AssertionError(alternative)
-    result = analyzer.analyze_map_panel(_map_panel(noise), LABELS, BLOCKS, ITERATIONS, thresholds=THRESHOLDS)
+    result = _analyze_maps(_map_panel(noise))
     return result
 
 
@@ -1111,16 +1118,10 @@ def test_checkpoint_map_scale_is_all_arm_pooled_and_permutation_invariant() -> N
     rng = np.random.default_rng(31)
     noise = rng.normal(scale=1e-7, size=(len(LABELS), len(ITERATIONS)))
     maps = _map_panel(noise)
-    original = analyzer.analyze_map_panel(maps, LABELS, BLOCKS, ITERATIONS, thresholds=THRESHOLDS)
+    original = _analyze_maps(maps)
     permutation = np.asarray((3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8))
     permuted_labels = tuple(LABELS[index] for index in permutation)
-    permuted = analyzer.analyze_map_panel(
-        maps[permutation],
-        permuted_labels,
-        BLOCKS,
-        ITERATIONS,
-        thresholds=THRESHOLDS,
-    )
+    permuted = _analyze_maps(maps[permutation], permuted_labels)
     original_scales = [row["pooled_all_arm_map_norm_scale"] for row in original["checkpoints"]]
     permuted_scales = [row["pooled_all_arm_map_norm_scale"] for row in permuted["checkpoints"]]
     assert original_scales == permuted_scales

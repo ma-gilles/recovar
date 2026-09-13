@@ -841,33 +841,6 @@ def analyze_map_panel_from_loader(
     }
 
 
-def analyze_map_panel(
-    maps: np.ndarray,
-    labels: Sequence[str],
-    blocks: Sequence[Sequence[int]],
-    iterations: Sequence[int],
-    *,
-    thresholds: dict[str, Any],
-    loo_multiplier: float = 1.0,
-    exact_witness: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Small-array adapter used by focused analyzer tests."""
-
-    values = _finite_array(maps, "map panel")
-    _require(values.ndim >= 3, "map panel must have arm, iteration, and feature dimensions")
-    _require(values.shape[0] == len(labels), "map panel arm count differs from labels")
-    _require(values.shape[1] == len(iterations), "map panel iteration count differs")
-    return analyze_map_panel_from_loader(
-        lambda iteration: values[:, tuple(iterations).index(iteration)],
-        labels,
-        blocks,
-        iterations,
-        thresholds=thresholds,
-        loo_multiplier=loo_multiplier,
-        exact_witness=exact_witness,
-    )
-
-
 def _has_nonfinite_numeric(value: Any) -> bool:
     """Return whether any numeric leaf is NaN or infinite.
 
