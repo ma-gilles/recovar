@@ -54,6 +54,7 @@ from scripts.run_ppca_dense_os_local_from_init_npz import (
     _build_top_p_layout_from_arrays,
     _layout_summary,
     _pose_selection,
+    _save_pose_npz,
     _top_p_subset_summary,
 )
 from scripts.run_ppca_local_from_init_npz import (
@@ -160,18 +161,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--postprocess-gridding-order", type=int, default=1)
     parser.add_argument("--postprocess-gridding-correct", choices=("radial", "square"), default="radial")
     return parser.parse_args()
-
-
-def _save_pose_npz(path: Path, *, mu, W, image_indices, pose_arrays, extra=None):
-    payload = {
-        "mu_half": np.asarray(mu),
-        "W_half": np.asarray(W),
-        "image_indices": np.asarray(image_indices, dtype=np.int64),
-    }
-    payload.update({k: np.asarray(v) for k, v in pose_arrays.items()})
-    if extra:
-        payload.update({k: np.asarray(v) for k, v in extra.items()})
-    np.savez_compressed(path, **payload)
 
 
 def _load_os_pose_arrays(os_npz_path: Path, n_images: int) -> tuple[dict[str, np.ndarray], np.ndarray, np.ndarray]:
