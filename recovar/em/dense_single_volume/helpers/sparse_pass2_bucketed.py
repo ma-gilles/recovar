@@ -5428,12 +5428,18 @@ def _accumulate_noise_totals_device(wsum_total, norm_total, image_indices, n_rea
     residual = jnp.asarray(block_norm_residual, dtype=jnp.float64)
     rows = jnp.arange(residual.shape[0], dtype=jnp.int32)
     real = rows < n_real_images
-    norm_total = norm_total.at[image_indices].add(jnp.where(real, residual, 0.0), unique_indices=True)
+    # The unique-index promise is only valid when the scatter indices really do
+    # not overlap (JAX: overlapping updates are undefined even when zero), so
+    # padded rows are routed to an out-of-bounds slot and dropped; the real
+    # rows' indices are unique within a chunk.
+    out_of_bounds = jnp.int32(norm_total.shape[0])
+    scatter_indices = jnp.where(real, image_indices, out_of_bounds)
+    norm_total = norm_total.at[scatter_indices].add(residual, unique_indices=True, mode="drop")
 
     def _add_padded_row(i, total):
-        return total.at[image_indices[i]].add(jnp.where(real[i], 0.0, residual[i]))
+        return total.at[image_indices[i]].add(residual[i])
 
-    norm_total = jax.lax.fori_loop(0, residual.shape[0], _add_padded_row, norm_total)
+    norm_total = jax.lax.fori_loop(n_real_images, residual.shape[0], _add_padded_row, norm_total)
     return wsum_total, norm_total
 
 
