@@ -108,6 +108,12 @@ with reconstruction boundary calls remaining in their production owners. Native
 M-step replay is separated from VDAM reconstruction and still counted by the size
 gate. The explicit `pass2_engine` option owns routing; legacy environment and
 per-half-summary Pmax controller fallbacks are retired.
+VDAM startup uses the loaded image backend directly and requires the native
+particle shuffle; obsolete mask-backend and Python-shuffle fallbacks are retired.
+The independent shuffle reference remains in `tests/helpers/vdam.py`.
+[Shuffle evidence](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_shuffle_contract_cleanup_20260913/result.json)
+and [backend evidence](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_image_backend_contract_cleanup_20260913/result.json)
+record unchanged numerical calls, surviving coverage and the failing size gate.
 
 The [published engineering history](https://github.com/ma-gilles/recovar/blob/00f319ca0e74816f3a4edb58d126bd14ede7e8ae/docs/development/em_status.md#engineering-work-and-recent-evidence)
 preserves the takeover's original failures, their repairs, deleted-file evidence,
@@ -275,7 +281,7 @@ this page does not schedule or authorize duplicate runs.
 
 Finish the existing dtype-repair CUDA guard and peer bisections, then continue
 selective integration and the scientific ladder in the coordination queue. Do not
-restart or duplicate live candidates. The latest VDAM size check still fails at8741>6100 lines; moving code into
+restart or duplicate live candidates. The latest VDAM size check still fails at8669>6100 lines; moving code into
 another owner does not remove it from the budget.
 
 Preserve the distinct numerical routes while reducing structural overhead. Big-JIT
