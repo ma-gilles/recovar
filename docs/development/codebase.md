@@ -41,6 +41,8 @@ their semantics already match:
 | `reference/` | Independent earlier EM/covariance formulations and their example notebook |
 | `ppca_refinement/` | Pose-marginal PPCA workflow and its K-class bridge |
 
+RELION diagnostic checkpoint restoration lives in [`relion/vdam_checkpoint.py`](../../recovar/em/relion/vdam_checkpoint.py), separate from the VDAM execution driver.
+
 There is no second EM stack for VDAM. Its adapters supply the existing shared
 kernels with VDAM-specific inputs. Scheduling and state transitions remain with
 their workflow. The retired `dense_single_volume/` and `initial_model/` source

@@ -52,7 +52,7 @@ for helper in (
     "diagnostics.relion_replay", "relion.relion_normalization", "refinement.projector_preparation",
     "dense.score_outputs", "local.local_batch_planning", "classification.k_class_results", "classification.k_class_inputs", "dense.scoring_policy", "helpers.resolution", "diagnostics.bpref_diagnostics",
     "helpers.expected_accuracy", "scoring.significant_samples", "diagnostics.coarse_score_diagnostics", "scoring.sparse_bucket_arrays", "scoring.compact_candidates", "relion.relion_ctf", "helpers.scale_groups", "helpers.normalization_inputs",
-    "diagnostics.vdam_replay", "local.fixed_capacity_local", "local.local_layout", "diagnostics.local_debug", "local.local_projection_cache", "local.local_timing",
+    "diagnostics.vdam_replay", "relion.vdam_checkpoint", "local.fixed_capacity_local", "local.local_layout", "diagnostics.local_debug", "local.local_projection_cache", "local.local_timing",
 ):
     importlib.import_module(f"recovar.em.{helper}")
 for diagnostic in ("iteration", "pass2", "norm_scale", "reconstruction"):

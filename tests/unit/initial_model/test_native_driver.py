@@ -14,6 +14,7 @@ import pytest
 import recovar.em.vdam.driver as driver
 from recovar.data_io.starfile import read_star
 from recovar.em.helpers.batch_planning import maybe_cache_raw_image_loaders
+from recovar.em.relion import vdam_checkpoint
 from recovar.em.vdam import native_options, native_sampling, star_io
 from recovar.em.vdam.init import initialise_denovo_state
 from recovar.em.vdam.subset_schedule import select_subset_for_iter
@@ -260,7 +261,7 @@ def test_native_vdam_diagnostic_continuation_loads_complete_gradient_state(tmp_p
         diagnostic_stop_after_iteration=181,
     )
 
-    checkpoint = driver._load_native_vdam_continuation(
+    checkpoint = vdam_checkpoint._load_native_vdam_continuation(
         optimiser,
         expected_data_star=data,
         opts=opts,
@@ -306,7 +307,7 @@ def test_native_vdam_diagnostic_continuation_fails_without_second_pseudo_half(tm
     )
 
     with pytest.raises(FileNotFoundError):
-        driver._load_native_vdam_continuation(
+        vdam_checkpoint._load_native_vdam_continuation(
             optimiser,
             expected_data_star=data,
             opts=opts,
@@ -328,7 +329,7 @@ def test_continuation_order_replay_rejects_local_search_history(
     )
 
     with pytest.raises(NotImplementedError, match="before the first local-search"):
-        driver._validate_continuation_order_replay(checkpoint)
+        vdam_checkpoint._validate_continuation_order_replay(checkpoint)
 
 
 def test_continuation_order_replay_accepts_pre_local_checkpoint():
@@ -337,7 +338,7 @@ def test_continuation_order_replay_accepts_pre_local_checkpoint():
         grad_suspended_local_searches_iter=-1,
     )
 
-    driver._validate_continuation_order_replay(checkpoint)
+    vdam_checkpoint._validate_continuation_order_replay(checkpoint)
 
 
 def test_iteration_reference_replay_expands_iteration_and_class(monkeypatch, tmp_path):

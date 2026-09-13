@@ -345,11 +345,11 @@ def _resolve_gf46_consumed_inputs(
     import starfile
 
     from recovar.data_io.image_loader import StarLoader
-    from recovar.em.vdam.driver import (
-        _relion_star_list_value,
+    from recovar.em.relion.vdam_checkpoint import (
         _resolve_relion_checkpoint_path,
         _second_pseudo_half_moment_path,
     )
+    from recovar.em.vdam.star_io import _relion_star_list_value
 
     checkpoint_optimiser = checkpoint_optimiser.resolve(strict=True)
     input_star = input_star.resolve(strict=True)

@@ -2095,11 +2095,10 @@ def _native_checkpoint_file_manifests(
     data_dir: Path,
 ) -> dict[str, Any]:
     """Hash every STAR, reference, and gradient moment consumed by restart."""
-
     import starfile
 
-    import recovar.em.vdam.driver as driver
     from recovar.data_io.starfile import read_star
+    from recovar.em.relion import vdam_checkpoint
 
     files: dict[str, Path] = {
         "optimiser_star": continuation.optimiser_star,
@@ -2113,22 +2112,22 @@ def _native_checkpoint_file_manifests(
         raise RuntimeError("native checkpoint model class table changed after load")
     for class_offset, (_row_index, row) in enumerate(classes.iterrows()):
         class_number = class_offset + 1
-        reference = driver._resolve_relion_checkpoint_path(
+        reference = vdam_checkpoint._resolve_relion_checkpoint_path(
             str(row["rlnReferenceImage"]),
             owner=continuation.model_star,
         )
-        moment1 = driver._resolve_relion_checkpoint_path(
+        moment1 = vdam_checkpoint._resolve_relion_checkpoint_path(
             str(row["rlnGradMoment1"]),
             owner=continuation.model_star,
         )
-        moment2 = driver._resolve_relion_checkpoint_path(
+        moment2 = vdam_checkpoint._resolve_relion_checkpoint_path(
             str(row["rlnGradMoment2"]),
             owner=continuation.model_star,
         )
         files[f"class_{class_number:03d}_reference"] = reference
         files[f"class_{class_number:03d}_grad_moment1_half1"] = moment1
         files[f"class_{class_number:03d}_grad_moment1_half2"] = (
-            driver._second_pseudo_half_moment_path(
+            vdam_checkpoint._second_pseudo_half_moment_path(
                 moment1,
                 nr_classes=int(continuation.state.K),
             )
@@ -2618,6 +2617,7 @@ def _capture_direct_checkpoint(
     native_data_dir: Path | None = None,
 ) -> dict[str, Any]:
     import recovar.em.vdam.driver as driver
+    from recovar.em.relion import vdam_checkpoint
     from scripts import run_ab_initio
     from scripts.run_vdam_relion_parity_case import build_recovar_command
 
@@ -2669,7 +2669,7 @@ def _capture_direct_checkpoint(
     }
     original_expectation_factory = driver._native_expectation_step
     original_run = driver.run_native_initial_model
-    original_continuation_loader = driver._load_native_vdam_continuation
+    original_continuation_loader = vdam_checkpoint._load_native_vdam_continuation
     original_iteration_loop = driver.run_vdam_iterations
 
     def capture_expectation_factory(dataset, opts, noise_variance, particle_state, sampling_state=None, optics_state=None):
@@ -2722,7 +2722,7 @@ def _capture_direct_checkpoint(
     driver._native_expectation_step = capture_expectation_factory
     driver.run_native_initial_model = capture_run
     if native_mode:
-        driver._load_native_vdam_continuation = capture_continuation
+        vdam_checkpoint._load_native_vdam_continuation = capture_continuation
         driver.run_vdam_iterations = capture_loaded_state
     try:
         with _temporary_environment(
@@ -2735,7 +2735,7 @@ def _capture_direct_checkpoint(
     finally:
         driver._native_expectation_step = original_expectation_factory
         driver.run_native_initial_model = original_run
-        driver._load_native_vdam_continuation = original_continuation_loader
+        vdam_checkpoint._load_native_vdam_continuation = original_continuation_loader
         driver.run_vdam_iterations = original_iteration_loop
     if status != 0:
         raise RuntimeError(f"direct checkpoint trajectory exited with status {status}")
