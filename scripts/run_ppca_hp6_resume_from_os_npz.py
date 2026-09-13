@@ -25,6 +25,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from recovar.data_io.cryoem_dataset import load_dataset
+from recovar.utils.json_utils import to_jsonable
 from recovar.em.sampling import get_relion_rotation_grid
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
@@ -52,7 +53,6 @@ from recovar.em.ppca_refinement.initialization import (
 from scripts.run_ppca_local_from_init_npz import (
     _half_size,
     _image_ordered_pose_arrays,
-    _jsonable,
     _load_init,
     _load_noise_variance,
     _load_simulation_info,
@@ -527,7 +527,7 @@ def main() -> None:
         **_top_p_subset_summary(current_pose, report_widths),
     }
     summary["stages"].append(final_pose_stage)
-    print(json.dumps(_jsonable(final_pose_stage), indent=2, sort_keys=True), flush=True)
+    print(json.dumps(to_jsonable(final_pose_stage), indent=2, sort_keys=True), flush=True)
 
     current_mu = np.asarray(mu)
     current_W = np.asarray(W)
@@ -647,7 +647,7 @@ def main() -> None:
         }
         em_results.append(em_stage)
         summary["stages"].append(em_stage)
-        print(json.dumps(_jsonable(em_stage), indent=2, sort_keys=True), flush=True)
+        print(json.dumps(to_jsonable(em_stage), indent=2, sort_keys=True), flush=True)
 
     final_npz = output_dir / "final_ppca_dense_os_local.npz"
     _save_pose_npz(
@@ -663,8 +663,8 @@ def main() -> None:
     summary["em_iters_completed"] = int(len(em_results))
     summary["passed"] = bool(np.all(np.isfinite(current_mu)) and np.all(np.isfinite(current_W)))
     summary_path = output_dir / "summary.json"
-    summary_path.write_text(json.dumps(_jsonable(summary), indent=2, sort_keys=True) + "\n")
-    print(json.dumps(_jsonable({"summary": summary_path, "final_npz": final_npz, "passed": summary["passed"]}), indent=2))
+    summary_path.write_text(json.dumps(to_jsonable(summary), indent=2, sort_keys=True) + "\n")
+    print(json.dumps(to_jsonable({"summary": summary_path, "final_npz": final_npz, "passed": summary["passed"]}), indent=2))
 
 
 if __name__ == "__main__":
