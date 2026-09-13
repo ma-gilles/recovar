@@ -1,8 +1,9 @@
-"""Device-resident RELION projector setup, independent of EM/VDAM policy.
+"""RELION projector construction shared by EM and VDAM.
 
 Matches Projector::computeFourierTransformMap for a 3-D RELION-frame real
 reference, data_dim=2 and trilinear gridding correction. No axis/contrast
-conversion is performed here. The FFT and output capacity depend only on the
+conversion is performed by the device kernel. Host wrappers below convert
+RECOVAR references and select the native or JAX implementation. The FFT and output capacity depend only on the
 original size and padding; the logical radius remains a device scalar.
 
 For M=padding_factor*ori_size, output capacity is
@@ -12,9 +13,11 @@ workspace and compiler temporaries. One reference is processed per call.
 """
 
 from functools import partial
+from typing import Literal
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from recovar.core import fourier_transform_utils as ftu
 from recovar.core.relion_project import gridding_correct_volume_real
@@ -144,3 +147,106 @@ def _project_reference(reference, r_max, ori_size, padding_factor):
         )
     spectrum = jnp.where(counts >= 1, sums / jnp.maximum(counts, 1), jnp.zeros((), dtype=reference.dtype))
     return projector, spectrum
+
+
+ProjectorSetupBackend = Literal["native", "jax"]
+
+
+def reference_to_relion_projector_half_maps(
+    references: np.ndarray,
+    *,
+    current_size: int,
+    padding_factor: int = 1,
+    interpolator: int = 1,
+    projector_setup_backend: ProjectorSetupBackend = "native",
+) -> tuple[np.ndarray, int]:
+    """Convert references to RELION half maps without retaining their spectrum."""
+    half_maps, _power, r_max = reference_to_relion_projector_half_maps_and_power(
+        references,
+        current_size=current_size,
+        padding_factor=padding_factor,
+        interpolator=interpolator,
+        projector_setup_backend=projector_setup_backend,
+    )
+    return half_maps, r_max
+
+
+def reference_to_relion_projector_half_maps_and_power(
+    references: np.ndarray,
+    *,
+    current_size: int,
+    padding_factor: int = 1,
+    interpolator: int = 1,
+    projector_setup_backend: ProjectorSetupBackend = "native",
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Convert references to native-layout half maps and their corrected spectrum.
+
+    The opt-in JAX backend keeps its FP64 FFT at full capacity as current_size
+    changes. Only the logical crop and complex64 consumer conversion vary.
+    Unsupported projector geometry retains the native implementation.
+    """
+    from recovar.utils.helpers import recovar_volume_to_relion
+
+    if projector_setup_backend not in {"native", "jax"}:
+        raise ValueError(f"Unknown projector_setup_backend: {projector_setup_backend!r}")
+    refs = np.asarray(references)
+    if refs.ndim != 4:
+        raise ValueError(f"references must have shape (K, N, N, N), got {refs.shape}")
+    n = int(refs.shape[-1])
+    use_jax = (
+        projector_setup_backend == "jax"
+        and n > 0 and n % 2 == 0
+        and refs.shape[1:] == (n, n, n)
+        and int(padding_factor) in {1, 2}
+        and int(interpolator) == 1
+    )
+    if use_jax:
+        import jax
+        import jax.numpy as jnp
+
+    else:
+        from recovar.relion_bind import _relion_bind_core as bind
+
+    halves = []
+    power_spectra = []
+    r_max_values = []
+    for ref in refs:
+        ref_relion = np.asarray(recovar_volume_to_relion(ref), dtype=np.float64)
+        if use_jax:
+            # Projector::initialiseData uses a negative size for full resolution;
+            # zero means radius zero here (state wrappers retain their defaults).
+            r_max = n // 2 if int(current_size) < 0 else min(int(current_size) // 2, n // 2)
+            projector_data, power = setup_relion_projector(
+                ref_relion, np.int32(r_max), ori_size=n,
+                padding_factor=int(padding_factor),
+            )
+            logical_size = 2 * (int(padding_factor) * r_max + 1) + 1
+            start = projector_data.shape[0] // 2 - logical_size // 2
+            projector_data = projector_data[
+                start : start + logical_size, start : start + logical_size,
+                : logical_size // 2 + 1,
+            ].astype(jnp.complex64)
+            projector_data, power = jax.device_get((projector_data, power))
+        else:
+            (
+                projector_data, power, _ori_size, _padding_factor_out,
+                r_max, _r_min_nn, _interpolator_out,
+            ) = bind.compute_fourier_transform_map(
+                ref_relion,
+                n,
+                int(padding_factor),
+                int(interpolator),
+                int(current_size),
+                True,
+                2,
+            )
+        halves.append(np.asarray(projector_data))
+        power_spectra.append(np.asarray(power, dtype=np.float64))
+        r_max_values.append(int(r_max))
+    if len(set(r_max_values)) != 1:
+        raise ValueError(f"RELION projector maps disagree on r_max: {r_max_values}")
+    return (
+        np.asarray(halves),
+        np.asarray(power_spectra, dtype=np.float64),
+        int(r_max_values[0]),
+    )

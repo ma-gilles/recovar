@@ -103,7 +103,7 @@ def _relion_projector_half_maps_for_scoring(
     """Build RELION ``Projector::data`` slabs from current Fourier references."""
 
     from recovar.core import fourier_transform_utils as ftu
-    from recovar.em.vdam.dense_adapter import reference_to_relion_projector_half_maps
+    from recovar.em.relion.relion_projector_setup import reference_to_relion_projector_half_maps
 
     refs_ft = np.asarray(means_k)
     if int(n_classes) == 1 and refs_ft.ndim == 1:

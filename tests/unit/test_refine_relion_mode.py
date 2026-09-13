@@ -4669,7 +4669,7 @@ def test_dense_and_local_noise_mask_asymmetric_current_crop():
 
 
 def test_relion_projector_cache_reuses_cached_projector_data(monkeypatch, tmp_path):
-    import recovar.em.vdam.dense_adapter as dense_adapter
+    import recovar.em.relion.relion_projector_setup as projector_setup
 
     calls = []
 
@@ -4678,7 +4678,7 @@ def test_relion_projector_cache_reuses_cached_projector_data(monkeypatch, tmp_pa
         projector_half = np.full((refs_real.shape[0], 3, 3, 2), 7.0 + len(calls), dtype=np.complex64)
         return projector_half, int(current_size // 2)
 
-    monkeypatch.setattr(dense_adapter, "reference_to_relion_projector_half_maps", fake_projector_builder)
+    monkeypatch.setattr(projector_setup, "reference_to_relion_projector_half_maps", fake_projector_builder)
     monkeypatch.setenv("RECOVAR_RELION_PROJECTOR_CACHE_DIR", str(tmp_path))
 
     mean_ft = np.zeros((4, 4, 4), dtype=np.complex64)
@@ -4706,7 +4706,7 @@ def test_relion_projector_cache_reuses_cached_projector_data(monkeypatch, tmp_pa
 
 
 def test_relion_projector_direct_real_reference_bypasses_fourier_roundtrip(monkeypatch):
-    import recovar.em.vdam.dense_adapter as dense_adapter
+    import recovar.em.relion.relion_projector_setup as projector_setup
 
     captured_real = []
 
@@ -4716,7 +4716,7 @@ def test_relion_projector_direct_real_reference_bypasses_fourier_roundtrip(monke
         return projector_half, int(current_size // 2)
 
     monkeypatch.setattr(
-        dense_adapter,
+        projector_setup,
         "reference_to_relion_projector_half_maps",
         fake_projector_builder,
     )

@@ -71,8 +71,8 @@ def analyze(
     from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
     from recovar.em.helpers.half_spectrum import make_scoring_half_image_weights
     from recovar.em.helpers.projection import compute_relion_projector_projections_block
+    from recovar.em.relion.relion_projector_setup import reference_to_relion_projector_half_maps
     from recovar.em.sparse_pass2.sparse_pass2_scoring import _relion_cuda_fine_full_to_compact_lookup
-    from recovar.em.vdam.dense_adapter import reference_to_relion_projector_half_maps
     from recovar.utils.helpers import load_relion_volume
 
     with np.load(live_score_path, allow_pickle=False) as archive:

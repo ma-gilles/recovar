@@ -69,7 +69,7 @@ def test_unwindowed_spec_has_no_projector_crop():
 def _synthetic_relion_half_projector(r_max, padding_factor):
     """Small Hermitian-consistent PPref-like half volume with structure."""
 
-    from recovar.em.vdam.dense_adapter import reference_to_relion_projector_half_maps
+    from recovar.em.relion.relion_projector_setup import reference_to_relion_projector_half_maps
 
     rng = np.random.default_rng(7)
     grid = np.indices((IMAGE, IMAGE, IMAGE)) - IMAGE // 2

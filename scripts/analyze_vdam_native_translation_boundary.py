@@ -515,7 +515,7 @@ def _projection_source_boundary(
     """Locate a projected-reference gap across map, PPref, and texture stages."""
 
     from recovar.em.helpers.projection import compute_relion_projector_projections_block
-    from recovar.em.vdam.dense_adapter import reference_to_relion_projector_half_maps
+    from recovar.em.relion.relion_projector_setup import reference_to_relion_projector_half_maps
     from recovar.utils.helpers import load_relion_volume
     from scripts.analyze_em_k1_fine_ppref_source_boundary import (
         classify_source_boundary,

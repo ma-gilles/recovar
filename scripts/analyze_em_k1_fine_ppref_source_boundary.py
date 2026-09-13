@@ -256,7 +256,7 @@ def build_report(
         _relion_projector_texture_enabled,
         compute_relion_projector_projections_block,
     )
-    from recovar.em.vdam.dense_adapter import reference_to_relion_projector_half_maps
+    from recovar.em.relion.relion_projector_setup import reference_to_relion_projector_half_maps
     from recovar.relion_bind import _relion_bind_core as relion_bind
 
     paths = [

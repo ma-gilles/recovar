@@ -120,3 +120,12 @@ and projector preparation. Read these contracts before changing those boundaries
 See [GT reporting owners](em_implementation.md#ground-truth-reporting) and
 [the reporting guide](gt_reporting.md). Rigid fit-once/apply-many reporting is
 opt-in; it does not change E/M execution or scientific acceptance gates.
+
+Shared RELION projector construction lives in
+[`relion_projector_setup.py`](../../recovar/em/relion/relion_projector_setup.py):
+`reference_to_relion_projector_half_maps_and_power` selects native/JAX setup and
+performs the established frame and dtype conversion; the maps-only wrapper
+releases the unused power spectrum. EM projector caching and VDAM both use this
+owner directly. VDAM's `dense_adapter` retains state-specific preparation and
+accumulator conversion, so EM no longer imports the VDAM execution adapter to
+construct projectors.

@@ -1209,6 +1209,7 @@ def main() -> None:
     )
     from recovar.em.helpers.oversampling import compute_pass2_stats_sparse
     from recovar.em.refinement.iteration_loop import RELION_MINRES_MAP, _reconstruct_volume_eager
+    from recovar.em.relion.relion_projector_setup import reference_to_relion_projector_half_maps
     from recovar.em.sampling import (
         apply_relion_rotation_perturbation_to_eulers,
         apply_relion_translation_perturbation,
@@ -1219,7 +1220,6 @@ def main() -> None:
         relion_angular_sampling_deg,
     )
     from recovar.em.scoring.significance import _compute_k_class_significance_batched
-    from recovar.em.vdam.dense_adapter import reference_to_relion_projector_half_maps
     from recovar.reconstruction import noise as recon_noise
     from recovar.utils import helpers
     from recovar.utils.helpers import write_relion_mrc

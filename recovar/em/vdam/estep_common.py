@@ -10,15 +10,13 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 
+from recovar.em.relion.relion_projector_setup import ProjectorSetupBackend
 from recovar.em.vdam.layout import relion_bpref_frame_scales, relion_x_public_output_to_bpref, run_em_output_to_bpref
 from recovar.em.vdam.state import InitialModelState, VdamAccumulator
-
-ProjectorSetupBackend = Literal["native", "jax"]
-
 
 _PARTICLE_RESULT_FIELDS: tuple[tuple[str, type], ...] = (
     ("pose_assignments", np.int32),

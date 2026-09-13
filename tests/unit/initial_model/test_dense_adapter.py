@@ -8,12 +8,12 @@ import numpy as np
 import pytest
 
 from recovar.em.local.local_layout import LocalHypothesisLayout
+from recovar.em.relion.relion_projector_setup import reference_to_relion_projector_half_maps
 from recovar.em.vdam.dense_adapter import (
     _relion_projector_to_dense_volume,
     _resolve_class_inputs,
     class_log_priors_from_state,
     reference_to_dense_means,
-    reference_to_relion_projector_half_maps,
     relion_projector_half_maps_to_dense_means,
     run_dense_initial_model_estep,
 )
@@ -807,7 +807,7 @@ def test_resolve_class_inputs_relion_projector_uses_exact_path_by_default(monkey
     dense_means = np.full((1, 8**3), 2.0 + 0.5j, dtype=np.complex64)
 
     monkeypatch.setattr(
-        "recovar.em.vdam.dense_adapter.reference_to_relion_projector_half_maps",
+        "recovar.em.relion.relion_projector_setup.reference_to_relion_projector_half_maps",
         lambda *args, **kwargs: (projector_half, 2),
     )
     monkeypatch.setattr(
@@ -840,7 +840,7 @@ def test_resolve_class_inputs_reuses_prebuilt_production_projector(monkeypatch):
     dense_means = np.full((1, 8**3), 2.0 + 0.5j, dtype=np.complex64)
     mean_variance = np.abs(dense_means) ** 2
     monkeypatch.setattr(
-        "recovar.em.vdam.dense_adapter.reference_to_relion_projector_half_maps",
+        "recovar.em.relion.relion_projector_setup.reference_to_relion_projector_half_maps",
         lambda *args, **kwargs: pytest.fail("prebuilt production projector was rebuilt"),
     )
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=1, n_directions=4)
@@ -867,7 +867,7 @@ def test_resolve_class_inputs_can_dump_exact_projector_operand(monkeypatch, tmp_
     projector_half = np.arange(54, dtype=np.float32).reshape(1, 3, 3, 6)[..., :2].astype(np.complex64)
     dense_means = np.zeros((1, 8**3), dtype=np.complex64)
     monkeypatch.setattr(
-        "recovar.em.vdam.dense_adapter.reference_to_relion_projector_half_maps",
+        "recovar.em.relion.relion_projector_setup.reference_to_relion_projector_half_maps",
         lambda *args, **kwargs: (projector_half, 2),
     )
     monkeypatch.setattr(

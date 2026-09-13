@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from helpers.vdam import relative_metrics
 
+from recovar.em.relion import relion_projector_setup
 from recovar.em.vdam import dense_adapter as adapter
 from recovar.em.vdam.init import initialise_denovo_state
 from recovar.utils.helpers import recovar_volume_to_relion
@@ -54,9 +55,9 @@ def test_adapter_native_radius_layout_frame_and_consumer_policy(size, padding, c
 
     monkeypatch.setattr(setup, "setup_relion_projector", capture)
     kwargs = dict(current_size=current_size, padding_factor=padding)
-    controls = [adapter.reference_to_relion_projector_half_maps_and_power(references, **kwargs) for _ in range(2)]
+    controls = [relion_projector_setup.reference_to_relion_projector_half_maps_and_power(references, **kwargs) for _ in range(2)]
     candidates = [
-        adapter.reference_to_relion_projector_half_maps_and_power(references, **kwargs, projector_setup_backend="jax")
+        relion_projector_setup.reference_to_relion_projector_half_maps_and_power(references, **kwargs, projector_setup_backend="jax")
         for _ in range(2)
     ]
     assert len(raw) == 4  # Native-default calls never enter the device helper.
@@ -99,8 +100,8 @@ def test_unsupported_projector_geometry_uses_native(size, padding, interpolator,
     monkeypatch.setattr(setup, "setup_relion_projector", forbidden)
     refs = np.random.default_rng(31).normal(size=(1, size, size, size))
     kwargs = dict(current_size=size, padding_factor=padding, interpolator=interpolator)
-    native = adapter.reference_to_relion_projector_half_maps_and_power(refs, **kwargs)
-    requested = adapter.reference_to_relion_projector_half_maps_and_power(refs, **kwargs, projector_setup_backend="jax")
+    native = relion_projector_setup.reference_to_relion_projector_half_maps_and_power(refs, **kwargs)
+    requested = relion_projector_setup.reference_to_relion_projector_half_maps_and_power(refs, **kwargs, projector_setup_backend="jax")
     for left, right in zip(native, requested):
         np.testing.assert_array_equal(left, right)
 
@@ -135,6 +136,6 @@ def test_config_opt_in_state_default_size_and_dump(monkeypatch, tmp_path):
 
 def test_unknown_backend_rejected():
     with pytest.raises(ValueError, match="Unknown projector_setup_backend"):
-        adapter.reference_to_relion_projector_half_maps_and_power(
+        relion_projector_setup.reference_to_relion_projector_half_maps_and_power(
             np.zeros((1, 8, 8, 8)), current_size=8, projector_setup_backend="typo"
         )

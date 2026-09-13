@@ -14,11 +14,12 @@ from typing import Any
 import numpy as np
 
 from recovar.em.classification.k_class import run_dense_k_class_em
+from recovar.em.relion import relion_projector_setup
+from recovar.em.relion.relion_projector_setup import ProjectorSetupBackend
 from recovar.em.vdam.estep_common import (
     _PARTICLE_RESULT_FIELDS,
     DenseInitialModelEstepConfig,
     DenseInitialModelEstepResult,
-    ProjectorSetupBackend,
     _add_accumulator_weight_meta,
     _arrays_to_accumulators,
     _empty_accumulator,
@@ -139,9 +140,6 @@ def _dense_run_em_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in kwargs.items() if k not in _DENSE_RUN_EM_REJECT}
 
 
-# Kept as this module's patch point for tests; the rule lives with the preprocessing helpers.
-
-
 def _relion_projector_to_dense_volume(projector_data: np.ndarray, ori_size: int) -> np.ndarray:
     """Embed cropped RELION ``Projector::data`` half-complex slab into dense full-centered Fourier cube.
 
@@ -168,107 +166,6 @@ def _relion_projector_to_dense_volume(projector_data: np.ndarray, ori_size: int)
             if 0 <= y < n:
                 half[z, y, :x_max] = slab[iz, iy, :x_max]
     return np.asarray(ftu.half_volume_to_full_volume(half, (n, n, n)), dtype=np.complex128)
-
-
-def reference_to_relion_projector_half_maps(
-    references: np.ndarray,
-    *,
-    current_size: int,
-    padding_factor: int = 1,
-    interpolator: int = 1,
-    projector_setup_backend: ProjectorSetupBackend = "native",
-) -> tuple[np.ndarray, int]:
-    """Convert references to RELION half maps without retaining their spectrum."""
-    half_maps, _power, r_max = reference_to_relion_projector_half_maps_and_power(
-        references,
-        current_size=current_size,
-        padding_factor=padding_factor,
-        interpolator=interpolator,
-        projector_setup_backend=projector_setup_backend,
-    )
-    return half_maps, r_max
-
-
-def reference_to_relion_projector_half_maps_and_power(
-    references: np.ndarray,
-    *,
-    current_size: int,
-    padding_factor: int = 1,
-    interpolator: int = 1,
-    projector_setup_backend: ProjectorSetupBackend = "native",
-) -> tuple[np.ndarray, np.ndarray, int]:
-    """Convert references to native-layout half maps and their corrected spectrum.
-
-    The opt-in JAX backend keeps its FP64 FFT at full capacity as current_size
-    changes. Only the logical crop and complex64 consumer conversion vary.
-    Unsupported projector geometry retains the native implementation.
-    """
-    from recovar.utils.helpers import recovar_volume_to_relion
-
-    if projector_setup_backend not in {"native", "jax"}:
-        raise ValueError(f"Unknown projector_setup_backend: {projector_setup_backend!r}")
-    refs = np.asarray(references)
-    if refs.ndim != 4:
-        raise ValueError(f"references must have shape (K, N, N, N), got {refs.shape}")
-    n = int(refs.shape[-1])
-    use_jax = (
-        projector_setup_backend == "jax"
-        and n > 0 and n % 2 == 0
-        and refs.shape[1:] == (n, n, n)
-        and int(padding_factor) in {1, 2}
-        and int(interpolator) == 1
-    )
-    if use_jax:
-        import jax
-        import jax.numpy as jnp
-
-        from recovar.em.relion.relion_projector_setup import setup_relion_projector
-    else:
-        from recovar.relion_bind import _relion_bind_core as bind
-
-    halves = []
-    power_spectra = []
-    r_max_values = []
-    for ref in refs:
-        ref_relion = np.asarray(recovar_volume_to_relion(ref), dtype=np.float64)
-        if use_jax:
-            # Projector::initialiseData uses a negative size for full resolution;
-            # zero means radius zero here (state wrappers retain their defaults).
-            r_max = n // 2 if int(current_size) < 0 else min(int(current_size) // 2, n // 2)
-            projector_data, power = setup_relion_projector(
-                ref_relion, np.int32(r_max), ori_size=n,
-                padding_factor=int(padding_factor),
-            )
-            logical_size = 2 * (int(padding_factor) * r_max + 1) + 1
-            start = projector_data.shape[0] // 2 - logical_size // 2
-            projector_data = projector_data[
-                start : start + logical_size, start : start + logical_size,
-                : logical_size // 2 + 1,
-            ].astype(jnp.complex64)
-            projector_data, power = jax.device_get((projector_data, power))
-        else:
-            (
-                projector_data, power, _ori_size, _padding_factor_out,
-                r_max, _r_min_nn, _interpolator_out,
-            ) = bind.compute_fourier_transform_map(
-                ref_relion,
-                n,
-                int(padding_factor),
-                int(interpolator),
-                int(current_size),
-                True,
-                2,
-            )
-        halves.append(np.asarray(projector_data))
-        power_spectra.append(np.asarray(power, dtype=np.float64))
-        r_max_values.append(int(r_max))
-    if len(set(r_max_values)) != 1:
-        raise ValueError(f"RELION projector maps disagree on r_max: {r_max_values}")
-    return (
-        np.asarray(halves),
-        np.asarray(power_spectra, dtype=np.float64),
-        int(r_max_values[0]),
-    )
 
 
 def relion_projector_half_maps_to_dense_means(projector_half_maps: np.ndarray, ori_size: int) -> np.ndarray:
@@ -322,7 +219,7 @@ def prepare_relion_projector_class_inputs(
     projector_setup_backend: ProjectorSetupBackend = "native",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     """Build InitialModel's production RELION projector once per iteration."""
-    projector_half_by_class, projector_r_max = reference_to_relion_projector_half_maps(
+    projector_half_by_class, projector_r_max = relion_projector_setup.reference_to_relion_projector_half_maps(
         state.Iref,
         current_size=state.current_size if state.current_size > 0 else state.ori_size,
         padding_factor=padding_factor,
@@ -341,7 +238,7 @@ def prepare_relion_projector_class_inputs_and_power(
     interpolator: int = 1,
 ) -> tuple[tuple[np.ndarray, np.ndarray, np.ndarray, int], np.ndarray]:
     """Produce scoring operands and tau2 from the identical corrected FFT."""
-    half_maps, power, r_max = reference_to_relion_projector_half_maps_and_power(
+    half_maps, power, r_max = relion_projector_setup.reference_to_relion_projector_half_maps_and_power(
         state.Iref,
         current_size=state.current_size if state.current_size > 0 else state.ori_size,
         padding_factor=padding_factor,

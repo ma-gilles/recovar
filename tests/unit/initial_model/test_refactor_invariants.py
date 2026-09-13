@@ -21,6 +21,7 @@ import pytest
 
 import recovar.em.vdam as init_model
 from recovar.em.helpers.expected_accuracy import estimate_relion_expected_accuracy_from_prepared_inputs
+from recovar.em.relion import relion_projector_setup
 from recovar.em.vdam.init import compute_current_size_for_denovo, compute_ini_high_angstrom, compute_ini_high_shell
 from recovar.em.vdam.layout import relion_bpref_frame_scales
 from recovar.em.vdam.schedules import (
@@ -444,6 +445,11 @@ def test_total_package_loc_within_budget():
     # Shared diagnostics remain counted after their responsibility move.
     total += sum(_file_loc(PACKAGE_DIR.parent / "diagnostics" / name)
                  for name in ("gt_metrics.py", "gt_registration.py"))
+    total += 1  # ProjectorSetupBackend alias now lives in the shared owner.
+    # Shared projector wrappers remain counted after leaving dense_adapter.
+    total += sum(len(inspect.getsourcelines(getattr(relion_projector_setup, name))[0]) + 2
+                 for name in ("reference_to_relion_projector_half_maps",
+                              "reference_to_relion_projector_half_maps_and_power"))
     assert total <= TOTAL_LOC_CEILING, (
         f"InitialModel total LOC = {total} > ceiling {TOTAL_LOC_CEILING}; "
         f"refactor savings are being eroded. Identify the merge that bloated the package."
