@@ -10453,6 +10453,86 @@ def test_device_pair_index_arrays_are_bit_identical(monkeypatch, noise_mode, cap
     )
 
 
+@pytest.mark.parametrize("defer_flag", ["0", "1"])
+@pytest.mark.parametrize("noise_mode", ["no_noise", "noise"])
+def test_device_bucket_rotations_are_bit_identical(monkeypatch, noise_mode, defer_flag):
+    """RECOVAR_SPARSE_KCLASS_BUCKET_ROTATIONS_DEVICE uploads only the real rotation rows
+    and pads to the class bucket shape on the device (identity fill), instead of the
+    host allocating and filling (images, rows, 3, 3) twice per class and chunk. The
+    rows are copied, so every output must be bit-identical."""
+    from recovar.em.dense_single_volume.helpers import sparse_bucket_arrays as sba
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    calls = []
+    original = sba.padded_rows_from_flat_device
+
+    def spy(*a, **kw):
+        calls.append(1)
+        return original(*a, **kw)
+
+    def run(flag):
+        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "4")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_DEFERRED_HOST_STATS", defer_flag)
+        monkeypatch.setenv("RECOVAR_SPARSE_PASS2_IMAGE_CAPACITY", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_LAZY_TABLES", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_DEVICE_INDEX", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_BUCKET_ROTATIONS_DEVICE", flag)
+        monkeypatch.setattr(sba, "padded_rows_from_flat_device", spy)
+        kwargs = _fused_kclass_multibucket_fixture(n_images=13)
+        if noise_mode == "noise":
+            kwargs["accumulate_noise"] = True
+        return _fused_kclass_result_arrays(
+            bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs)
+        )
+
+    host = run("0")
+    assert not calls, "the device padder must not run with the flag off"
+    device = run("1")
+    assert calls, "the device padder must run with the flag on"
+    _assert_fused_arrays_identical(host, device, f"device bucket rotations ({noise_mode}, defer={defer_flag})")
+
+
+def test_device_bucket_rotations_builder_matches_host_bitwise():
+    """_build_bucket_arrays(device_rotations=True) returns device rotations equal to the
+    host arrays, keeps the shared-M-step-rotation identity, and leaves the host fields."""
+    jax = pytest.importorskip("jax")
+    from recovar.em.dense_single_volume.helpers import sparse_bucket_arrays as sba
+    from recovar.em.dense_single_volume.helpers.compact_candidates import SparseCandidateMask
+
+    rng = np.random.default_rng(3)
+    counts = [3, 1, 4]
+    rots = [rng.normal(size=(c, 3, 3)) for c in counts]
+    mstep = [rng.normal(size=(c, 3, 3)) for c in counts]
+    per_image = {
+        "candidate_mask": [SparseCandidateMask(mode="full", n_rows=c, n_fine_trans=2) for c in counts],
+        "oversampled_rots": rots,
+        "oversampled_mstep_rots": mstep,
+        "oversampled_rot_indices": [np.arange(c) + 10 for c in counts],
+        "log_prior": [np.linspace(-1, 0, c) for c in counts],
+        "parent_map": [np.zeros(c, dtype=np.int32) for c in counts],
+    }
+    bucket = {"bucket_size": 8, "image_indices": np.array([0, 1, 2])}
+    with jax.default_device(jax.devices("cpu")[0]):
+        for shared in (False, True):
+            if shared:
+                per_image["oversampled_mstep_rots"] = rots
+            host = sba._build_bucket_arrays(bucket, per_image, 2, capacity_rows=5, device_rotations=False)
+            dev = sba._build_bucket_arrays(bucket, per_image, 2, capacity_rows=5, device_rotations=True)
+            assert isinstance(dev["rotations"], jax.Array)
+            assert (dev["mstep_rotations"] is dev["rotations"]) == shared
+            for key in ("rotations", "mstep_rotations"):
+                np.testing.assert_array_equal(np.asarray(dev[key]), host[key], err_msg=key)
+                assert np.asarray(dev[key]).dtype == host[key].dtype
+            for key in ("actual_counts", "rotation_indices", "row_log_prior", "image_indices"):
+                np.testing.assert_array_equal(np.asarray(dev[key]), np.asarray(host[key]), err_msg=key)
+                assert isinstance(dev[key], np.ndarray), key
+            assert dev["rotations"].shape == (5, 8, 3, 3)
+            np.testing.assert_array_equal(np.asarray(dev["rotations"])[3:], np.broadcast_to(np.eye(3), (2, 8, 3, 3)))
+
+
 def test_lazy_pair_tables_builder_skips_per_pair_tables():
     from recovar.em.dense_single_volume.helpers import sparse_bucket_arrays as sba
     from recovar.em.dense_single_volume.helpers.compact_candidates import SparseCandidateMask

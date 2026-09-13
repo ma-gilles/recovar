@@ -893,10 +893,10 @@ def _pad_rows(values, capacity, fill):
 
     if values is None:
         return None
-    values = np.asarray(values)
     pad = int(capacity) - int(values.shape[0])
     if pad <= 0:
-        return values
+        return values  # device arrays stay on the device when nothing is padded
+    values = np.asarray(values)
     tail = np.full((pad,) + values.shape[1:], fill, dtype=values.dtype)
     return np.concatenate([values, tail], axis=0)
 
@@ -966,6 +966,77 @@ def compact_pair_device_index_enabled() -> bool:
     (job 13812775). See ``compact_pair_index_arrays_device``.
     """
     return parse_env_binary_flag(COMPACT_PAIR_DEVICE_INDEX_ENV)
+
+
+BUCKET_ROTATIONS_DEVICE_ENV = "RECOVAR_SPARSE_KCLASS_BUCKET_ROTATIONS_DEVICE"
+
+
+def bucket_rotations_device_enabled() -> bool:
+    """Assemble the padded ``(images, rows, 3, 3)`` bucket rotations on the device.
+
+    The host otherwise allocates the identity-filled array at the class bucket
+    size and copies every image's rows into it (twice when M-step rotations
+    differ), then uploads it; only the real rows travel with this flag and the
+    device pads them. Values are copied, not recomputed, so the arrays are
+    bit-identical to the host build.
+    """
+    return parse_env_binary_flag(BUCKET_ROTATIONS_DEVICE_ENV)
+
+
+def _flat_rows_quantum(n_rows: int) -> int:
+    n_rows = max(1, int(n_rows))
+    if n_rows <= 4096:
+        return 1 << (n_rows - 1).bit_length()
+    return ((n_rows + 4095) // 4096) * 4096
+
+
+def _padded_rows_from_flat_impl(flat, starts, counts, fill, *, rows):
+    """``out[b, r] = flat[starts[b] + r]`` for ``r < counts[b]``, else ``fill``."""
+    import jax.numpy as jnp
+
+    slots = jnp.arange(int(rows), dtype=jnp.int32)[None, :]
+    src = jnp.clip(starts[:, None] + slots, 0, int(flat.shape[0]) - 1)
+    valid = slots < counts[:, None]
+    gathered = jnp.take(flat, src, axis=0)
+    return jnp.where(valid.reshape(valid.shape + (1,) * (flat.ndim - 1)), gathered, fill)
+
+
+def padded_rows_from_flat_device(per_row_values, counts, rows, fill):
+    """Stack per-image row blocks into a device ``(images, rows, ...)`` array.
+
+    ``per_row_values`` is a sequence of ``(count_i, ...)`` host arrays (one per
+    real image), ``counts`` the ``(images,)`` int vector including capacity rows
+    (zero), ``fill`` the value for padding slots (identity for rotations). One
+    upload of the concatenated real rows, padded to a size ladder so the jitted
+    padder compiles once per ``(images, rows, ladder step)``.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    counts = np.asarray(counts, dtype=np.int32)
+    real = [np.asarray(v) for v in per_row_values]
+    if real:
+        flat = np.concatenate(real, axis=0)
+    else:
+        flat = np.zeros((0,) + np.asarray(fill).shape, dtype=np.asarray(fill).dtype)
+    n_flat = int(flat.shape[0])
+    n_pad = _flat_rows_quantum(n_flat)
+    if n_pad > n_flat:
+        tail = np.empty((n_pad - n_flat,) + flat.shape[1:], dtype=flat.dtype)
+        tail[...] = fill
+        flat = np.concatenate([flat, tail], axis=0)
+    starts = (np.cumsum(counts, dtype=np.int64) - counts).astype(np.int32)
+    fn = padded_rows_from_flat_device.__dict__.get("_compiled")
+    if fn is None:
+        fn = jax.jit(_padded_rows_from_flat_impl, static_argnames=("rows",))
+        padded_rows_from_flat_device.__dict__["_compiled"] = fn
+    return fn(
+        jnp.asarray(flat),
+        jnp.asarray(starts),
+        jnp.asarray(counts),
+        jnp.asarray(np.asarray(fill, dtype=flat.dtype)),
+        rows=int(rows),
+    )
 
 
 def compact_pair_lazy_tables_enabled() -> bool:
@@ -1100,6 +1171,7 @@ def _build_bucket_arrays(
     *,
     include_dense_score_fields: bool = True,
     capacity_rows=None,
+    device_rotations: bool = False,
 ):
     """Stack/pad per-image arrays into batched bucket tensors.
 
@@ -1120,10 +1192,14 @@ def _build_bucket_arrays(
     rotation_dtype = np.result_type(
         *(np.asarray(per_image_inputs["oversampled_rots"][int(image_idx)]).dtype for image_idx in image_indices)
     )
-    padded_rotations = np.broadcast_to(
-        np.eye(3, dtype=rotation_dtype),
-        (batch, bucket_size, 3, 3),
-    ).copy()
+    padded_rotations = (
+        None
+        if device_rotations
+        else np.broadcast_to(
+            np.eye(3, dtype=rotation_dtype),
+            (batch, bucket_size, 3, 3),
+        ).copy()
+    )
     separate_mstep_rotations = any(
         per_image_inputs["oversampled_mstep_rots"][int(image_idx)]
         is not per_image_inputs["oversampled_rots"][int(image_idx)]
@@ -1133,10 +1209,14 @@ def _build_bucket_arrays(
         *(np.asarray(per_image_inputs["oversampled_mstep_rots"][int(image_idx)]).dtype for image_idx in image_indices)
     )
     padded_mstep_rotations = (
-        np.broadcast_to(
-            np.eye(3, dtype=mstep_rotation_dtype),
-            (batch, bucket_size, 3, 3),
-        ).copy()
+        (
+            None
+            if device_rotations
+            else np.broadcast_to(
+                np.eye(3, dtype=mstep_rotation_dtype),
+                (batch, bucket_size, 3, 3),
+            ).copy()
+        )
         if separate_mstep_rotations
         else padded_rotations
     )
@@ -1170,9 +1250,10 @@ def _build_bucket_arrays(
         rots = per_image_inputs["oversampled_rots"][image_idx]
         cnt = int(rots.shape[0])
         actual_counts[row] = cnt
-        padded_rotations[row, :cnt] = rots
-        if separate_mstep_rotations:
-            padded_mstep_rotations[row, :cnt] = per_image_inputs["oversampled_mstep_rots"][image_idx]
+        if not device_rotations:
+            padded_rotations[row, :cnt] = rots
+            if separate_mstep_rotations:
+                padded_mstep_rotations[row, :cnt] = per_image_inputs["oversampled_mstep_rots"][image_idx]
         if include_dense_score_fields:
             padded_log_prior[row, :cnt] = per_image_inputs["log_prior"][image_idx]
             padded_candidate_mask[row, :cnt, :] = _candidate_mask_to_dense(
@@ -1181,6 +1262,25 @@ def _build_bucket_arrays(
             padded_parent_map[row, :cnt] = per_image_inputs["parent_map"][image_idx]
         padded_rotation_indices[row, :cnt] = per_image_inputs["oversampled_rot_indices"][image_idx]
         padded_row_log_prior[row, :cnt] = per_image_inputs["log_prior"][image_idx]
+
+    if device_rotations:
+        real_images = image_indices[:n_real].tolist()
+        padded_rotations = padded_rows_from_flat_device(
+            [np.asarray(per_image_inputs["oversampled_rots"][i], dtype=rotation_dtype) for i in real_images],
+            actual_counts,
+            bucket_size,
+            np.eye(3, dtype=rotation_dtype),
+        )
+        padded_mstep_rotations = (
+            padded_rows_from_flat_device(
+                [np.asarray(per_image_inputs["oversampled_mstep_rots"][i], dtype=mstep_rotation_dtype) for i in real_images],
+                actual_counts,
+                bucket_size,
+                np.eye(3, dtype=mstep_rotation_dtype),
+            )
+            if separate_mstep_rotations
+            else padded_rotations
+        )
 
     return {
         "image_indices": image_indices,
@@ -1231,6 +1331,7 @@ def _build_k_class_bucket_arrays(
     """
 
     class_arrays = []
+    device_rotations = bucket_rotations_device_enabled()
     forced_class_bucket_sizes = bucket.get("class_bucket_sizes") if compact_buckets else None
     for class_index, per_image_inputs in enumerate(per_image_inputs_by_class):
         class_bucket = bucket
@@ -1252,6 +1353,7 @@ def _build_k_class_bucket_arrays(
                 n_fine_trans,
                 include_dense_score_fields=include_dense_score_fields,
                 capacity_rows=capacity_rows,
+                device_rotations=device_rotations,
             )
         )
     return class_arrays
