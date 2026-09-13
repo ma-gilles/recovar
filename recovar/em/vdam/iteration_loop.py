@@ -86,9 +86,7 @@ def refresh_tau2_from_projector_power(
             ),
             dtype=np.float64,
         )
-    out = replace(state)
-    out.tau2_class = new_tau2
-    return out
+    return replace(state, tau2_class=new_tau2)
 
 
 def default_schedule_update(
@@ -130,12 +128,9 @@ def default_schedule_update(
         ref_dim=3,
         tau2_fudge_arg=tau2_fudge_arg,
     )
-    new_state = replace(state)
-    new_state.iter = iter
-    new_state.subset_size = subset_size
-    new_state.grad_current_stepsize = stepsize
-    new_state.tau2_fudge_factor = tau2_fudge
-    return new_state
+    return replace(
+        state, iter=iter, subset_size=subset_size, grad_current_stepsize=stepsize, tau2_fudge_factor=tau2_fudge
+    )
 
 
 def _resolution_shell_from_data_vs_prior(data_vs_prior: np.ndarray, ori_size: int) -> int:
@@ -168,10 +163,11 @@ def update_current_resolution_from_data_vs_prior(
         maxres = max(maxres, _resolution_shell_from_data_vs_prior(state.data_vs_prior_class[k], state.ori_size))
     maxres = max(maxres, int(minres_map))
 
-    new_state = replace(state)
-    new_state.current_resolution_shell = int(maxres)
-    new_state.current_resolution = float(maxres) / (float(state.pixel_size) * float(state.ori_size))
-    return new_state
+    return replace(
+        state,
+        current_resolution_shell=int(maxres),
+        current_resolution=float(maxres) / (float(state.pixel_size) * float(state.ori_size)),
+    )
 
 
 def update_image_size_and_resolution_pointers(state: InitialModelState) -> InitialModelState:
@@ -188,9 +184,7 @@ def update_image_size_and_resolution_pointers(state: InitialModelState) -> Initi
         current_size += 1
     current_size = min(current_size, int(state.ori_size))
 
-    new_state = replace(state)
-    new_state.current_size = int(current_size)
-    return new_state
+    return replace(state, current_size=int(current_size))
 
 
 def _ave_pmax_from_meta(meta: dict) -> float | None:
@@ -279,9 +273,7 @@ def relion_solvent_flatten_state(
     if mask.shape != (state.ori_size,) * 3:
         raise ValueError(f"mask must have shape ({state.ori_size},)*3, got {mask.shape}")
 
-    new_state = replace(state)
-    new_state.Iref = (iref * mask[None, :, :, :]).astype(iref.dtype, copy=False)
-    return new_state
+    return replace(state, Iref=(iref * mask[None, :, :, :]).astype(iref.dtype, copy=False))
 
 
 def run_vdam_iterations(
