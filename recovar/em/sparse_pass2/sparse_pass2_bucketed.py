@@ -35,7 +35,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.classification.k_class_results import DeferredHostUpdates, SparseKClassHostStatistics
+from recovar.em.classification.k_class_results import (
+    DeferredHostUpdates,
+    SparseKClassHostStatistics,
+    SparseKClassNoiseStatistics,
+)
 from recovar.em.diagnostics import bpref_diagnostics
 from recovar.em.diagnostics import norm_scale as norm_scale_diagnostics
 from recovar.em.diagnostics import pass2 as pass2_diagnostics
@@ -5656,7 +5660,17 @@ def compute_k_class_pass2_stats_sparse_fused(
         raw_host_staging_peak_bytes = max(raw_host_staging_peak_bytes, next_bucket_bytes)
         return raw_host, next_bucket_bytes
 
-    deferred_statistics = DeferredHostUpdates()
+    host_updates = DeferredHostUpdates()
+    noise_statistics = SparseKClassNoiseStatistics(
+        class_posterior_sums_mstep,
+        noise_img_power_total,
+        noise_norm_correction_total,
+        noise_sumw_total,
+        noise_sigma2_offset_total,
+        noise_scale_correction_xa_total,
+        noise_scale_correction_aa_total,
+        noise_wsum_total,
+    )
     host_statistics = SparseKClassHostStatistics(
         class_hard_assignments,
         best_rotations,
@@ -7562,8 +7576,10 @@ def compute_k_class_pass2_stats_sparse_fused(
                     log_label=f"kclass{class_index + 1}-ctf-half",
                 )
             _add_sparse_group_timing(group_timing, "mstep_adjoint", time.time() - substage_t0)
-            class_posterior_sums_mstep[class_index] += float(
-                np.sum(np.asarray(probs_sum_t_jax, dtype=np.float64))
+            host_updates.append(
+                noise_statistics.posterior,
+                host=dict(class_index=class_index),
+                device=dict(probs_sum_t_jax=probs_sum_t_jax),
             )
             if (
                 accumulate_noise
@@ -7589,7 +7605,6 @@ def compute_k_class_pass2_stats_sparse_fused(
                 substage_t0 = time.time()
                 if bucket_uses_compact_pairs:
                     noise_probs = mstep_probs
-                    translation_posterior = np.asarray(translation_posterior_jax, dtype=np.float64)
                     if compact_noise_sums_match_mstep:
                         summed_masked_noise = summed
                         ctf_probs_for_noise = ctf_probs
@@ -7628,7 +7643,6 @@ def compute_k_class_pass2_stats_sparse_fused(
                         )
                 else:
                     noise_probs = reconstruction_probs if relion_fine_mstep_prune else probs
-                    translation_posterior = np.asarray(translation_posterior_jax, dtype=np.float64)
                     noise_probs_sum_t = probs_sum_t_jax
                     if bucket_uses_active_rows and active_rows_precomputed:
                         summed_masked_noise = _rectangular_active_weighted_image_sums_or_none(
@@ -7642,8 +7656,10 @@ def compute_k_class_pass2_stats_sparse_fused(
                         summed_masked_noise = compute_local_weighted_sums(noise_probs, shifted_noise_split)
                         ctf_probs_for_noise = ctf_probs
                 if translation_sqdist_ang is not None:
-                    noise_sigma2_offset_total[class_index] += float(
-                        np.sum(translation_posterior * translation_sqdist_ang, dtype=np.float64)
+                    host_updates.append(
+                        noise_statistics.offset,
+                        host=dict(class_index=class_index, translation_sqdist_ang=translation_sqdist_ang),
+                        device=dict(translation_posterior_jax=translation_posterior_jax),
                     )
                 support_mass = jnp.sum(noise_probs_sum_t, axis=1)
                 # RELION adds power_img outside the class loop, once per image.
@@ -7658,13 +7674,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                     norm_unweighted_high_shell=relion_norm_high_shell,
                     include_unweighted_high_shell=class_index == 0,
                 )
-                support_mass_np = np.asarray(support_mass, dtype=np.float64)
-                noise_img_power_total[class_index] += np.asarray(weighted_img_shells, dtype=np.float64)
-                noise_norm_correction_total[class_index][image_indices] += np.asarray(
-                    weighted_img_per_image,
-                    dtype=np.float64,
+                host_updates.append(
+                    noise_statistics.power,
+                    host=dict(class_index=class_index, image_indices=image_indices),
+                    device=dict(support_mass=support_mass, weighted_img_shells=weighted_img_shells, weighted_img_per_image=weighted_img_per_image),
                 )
-                noise_sumw_total[class_index] += float(np.sum(support_mass_np, dtype=np.float64))
                 if noise_scale_correction_xa_total is not None:
                     if ctf_probs_for_noise is None:
                         scale_summed_masked = compute_local_weighted_sums(noise_probs, shifted_noise_split)
@@ -7684,15 +7698,10 @@ def compute_k_class_pass2_stats_sparse_fused(
                         bucket_scale_for_stats,
                         scale_correction_pixel_masks[class_index],
                     )
-                    np.add.at(
-                        noise_scale_correction_xa_total[class_index],
-                        np.asarray(bucket_group_ids, dtype=np.int64),
-                        np.asarray(scale_xa_per_image, dtype=np.float64),
-                    )
-                    np.add.at(
-                        noise_scale_correction_aa_total[class_index],
-                        np.asarray(bucket_group_ids, dtype=np.int64),
-                        np.asarray(scale_aa_per_image, dtype=np.float64),
+                    host_updates.append(
+                        noise_statistics.scale,
+                        host=dict(class_index=class_index, bucket_group_ids=bucket_group_ids),
+                        device=dict(scale_xa_per_image=scale_xa_per_image, scale_aa_per_image=scale_aa_per_image),
                     )
                 if block_noise_shells_precomputed is not None:
                     flat_proj_for_noise = None
@@ -7782,13 +7791,10 @@ def compute_k_class_pass2_stats_sparse_fused(
                         summed_masked_noise.dtype,
                     )
                 if block_noise_shells_precomputed is not None:
-                    noise_wsum_total[class_index] += np.asarray(
-                        block_noise_shells_precomputed,
-                        dtype=np.float64,
-                    )
-                    noise_norm_correction_total[class_index][image_indices] += np.asarray(
-                        block_norm_residual_precomputed,
-                        dtype=np.float64,
+                    host_updates.append(
+                        noise_statistics.residual,
+                        host=dict(class_index=class_index, image_indices=image_indices),
+                        device=dict(block_noise_shells=block_noise_shells_precomputed, block_norm_residual=block_norm_residual_precomputed),
                     )
                 elif bucket_uses_active_rows and bucket_uses_compact_pairs:
                     block_noise_shells, block_norm_residual = _compute_active_noise_rows_chunked(
@@ -7810,10 +7816,10 @@ def compute_k_class_pass2_stats_sparse_fused(
                             "RECOVAR_NOISE_DTYPE_DEBUG(fused): block_noise_shells=%s",
                             block_noise_shells.dtype,
                         )
-                    noise_wsum_total[class_index] += np.asarray(block_noise_shells, dtype=np.float64)
-                    noise_norm_correction_total[class_index][image_indices] += np.asarray(
-                        block_norm_residual,
-                        dtype=np.float64,
+                    host_updates.append(
+                        noise_statistics.residual,
+                        host=dict(class_index=class_index, image_indices=image_indices),
+                        device=dict(block_noise_shells=block_noise_shells, block_norm_residual=block_norm_residual),
                     )
                 elif flat_summed_masked_noise is not None:
                     if bucket_uses_active_rows:
@@ -7879,15 +7885,15 @@ def compute_k_class_pass2_stats_sparse_fused(
                             "RECOVAR_NOISE_DTYPE_DEBUG(fused): block_noise_shells=%s",
                             block_noise_shells.dtype,
                         )
-                    noise_wsum_total[class_index] += np.asarray(block_noise_shells, dtype=np.float64)
-                    noise_norm_correction_total[class_index][image_indices] += np.asarray(
-                        block_norm_residual,
-                        dtype=np.float64,
+                    host_updates.append(
+                        noise_statistics.residual,
+                        host=dict(class_index=class_index, image_indices=image_indices),
+                        device=dict(block_noise_shells=block_noise_shells, block_norm_residual=block_norm_residual),
                     )
                 _add_sparse_group_timing(group_timing, "noise", time.time() - substage_t0)
 
             substage_t0 = time.time()
-            deferred_statistics.append(
+            host_updates.append(
                 host_statistics.update_bucket,
                 host=dict(
                     class_index=class_index,
@@ -7913,7 +7919,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             _add_sparse_group_timing(group_timing, "stats", time.time() - substage_t0)
         _add_sparse_group_timing(group_timing, "mstep_noise_stats", time.time() - stage_t0)
 
-    deferred_statistics.flush()
+    host_updates.flush()
 
     if last_bucket_size_logged is not None and group_t0 is not None:
         group_chunks, group_images = bucket_group_stats[last_bucket_size_logged]

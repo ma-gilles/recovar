@@ -704,3 +704,55 @@ class DeferredHostUpdates:
         self.pending_bytes = 0
         for (update, host, _), device in zip(records, pulled, strict=True):
             update(**host, **device)
+
+
+class SparseKClassNoiseStatistics(NamedTuple):
+    """Source-order host updates for class mass and noise sufficient statistics."""
+
+    class_posterior_sums_mstep: np.ndarray
+    noise_img_power_total: list[np.ndarray | None]
+    noise_norm_correction_total: list[np.ndarray | None]
+    noise_sumw_total: np.ndarray
+    noise_sigma2_offset_total: np.ndarray
+    noise_scale_correction_xa_total: np.ndarray | None
+    noise_scale_correction_aa_total: np.ndarray | None
+    noise_wsum_total: list[np.ndarray | None]
+
+    def posterior(self, *, class_index, probs_sum_t_jax):
+        self.class_posterior_sums_mstep[class_index] += float(
+            np.sum(np.asarray(probs_sum_t_jax, dtype=np.float64))
+        )
+
+    def offset(self, *, class_index, translation_sqdist_ang, translation_posterior_jax):
+        translation_posterior = np.asarray(translation_posterior_jax, dtype=np.float64)
+        self.noise_sigma2_offset_total[class_index] += float(
+            np.sum(translation_posterior * translation_sqdist_ang, dtype=np.float64)
+        )
+
+    def power(self, *, class_index, image_indices, support_mass, weighted_img_shells, weighted_img_per_image):
+        support_mass_np = np.asarray(support_mass, dtype=np.float64)
+        self.noise_img_power_total[class_index] += np.asarray(weighted_img_shells, dtype=np.float64)
+        self.noise_norm_correction_total[class_index][image_indices] += np.asarray(
+            weighted_img_per_image,
+            dtype=np.float64,
+        )
+        self.noise_sumw_total[class_index] += float(np.sum(support_mass_np, dtype=np.float64))
+
+    def scale(self, *, class_index, bucket_group_ids, scale_xa_per_image, scale_aa_per_image):
+        np.add.at(
+            self.noise_scale_correction_xa_total[class_index],
+            np.asarray(bucket_group_ids, dtype=np.int64),
+            np.asarray(scale_xa_per_image, dtype=np.float64),
+        )
+        np.add.at(
+            self.noise_scale_correction_aa_total[class_index],
+            np.asarray(bucket_group_ids, dtype=np.int64),
+            np.asarray(scale_aa_per_image, dtype=np.float64),
+        )
+
+    def residual(self, *, class_index, image_indices, block_noise_shells, block_norm_residual):
+        self.noise_wsum_total[class_index] += np.asarray(block_noise_shells, dtype=np.float64)
+        self.noise_norm_correction_total[class_index][image_indices] += np.asarray(
+            block_norm_residual,
+            dtype=np.float64,
+        )

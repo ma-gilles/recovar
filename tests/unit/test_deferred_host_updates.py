@@ -67,3 +67,34 @@ def test_duplicate_input_names_fail_before_enqueueing():
     with pytest.raises(ValueError, match="disjoint"):
         queue.append(None, host=dict(values=1), device=dict(values=np.ones(1)))
     assert not queue.records
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_noise_offset_replay_uses_each_buckets_distance_table(dtype):
+    from recovar.em.classification.k_class_results import SparseKClassNoiseStatistics
+
+    target = np.zeros(2, np.float64)
+    noise = SparseKClassNoiseStatistics(
+        class_posterior_sums_mstep=np.zeros(2),
+        noise_img_power_total=[np.zeros(5) for _ in range(2)],
+        noise_norm_correction_total=[np.zeros(13) for _ in range(2)],
+        noise_sumw_total=np.zeros(2),
+        noise_sigma2_offset_total=target,
+        noise_scale_correction_xa_total=np.zeros((2, 4)),
+        noise_scale_correction_aa_total=np.zeros((2, 4)),
+        noise_wsum_total=[np.zeros(5) for _ in range(2)],
+    )
+    queue = DeferredHostUpdates()
+    expected = np.zeros(2, np.float64)
+    for batch in (12, 13):
+        for class_index in range(2):
+            distances = np.arange(batch * 3).reshape(batch, 3) / (batch + 0.5)
+            values = np.full((batch, 3), 1 / (class_index + 3), dtype=dtype)
+            expected[class_index] += float(np.sum(values.astype(np.float64) * distances, dtype=np.float64))
+            queue.append(
+                noise.offset,
+                host=dict(class_index=class_index, translation_sqdist_ang=distances),
+                device=dict(translation_posterior_jax=jnp.asarray(values)),
+            )
+    queue.flush()
+    np.testing.assert_array_equal(target.view(np.uint8), expected.view(np.uint8))
