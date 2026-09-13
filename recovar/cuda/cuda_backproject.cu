@@ -4356,6 +4356,13 @@ constexpr int kRelionFineDiff2BlockSize = 256;
 // translations. Preserve both observable constants here.
 constexpr int kRelionFineDiff2TranslationCapacity = 7;
 constexpr int kRelionFineDiff2Ref3dJobChunk = 4;
+// The pair-indexed fused kernel is not bound by RELION's job grouping: each
+// pair's 256-lane accumulation is independent of how many pairs share a block,
+// so packing more pairs per block only amortizes the per-pixel image/weight
+// loads and the block launch (at current_size 38 a pair is ~700 pixels, three
+// passes). Results are bit-identical for any value here.
+constexpr int kRelionFineDiff2PairsPerBlock = 16;
+constexpr int kRelionFineDiff2PairCapacity = kRelionFineDiff2PairsPerBlock;
 constexpr int kRelionPowerClassBlockSize = 128;
 
 template <typename T, bool DoRight>
@@ -10629,25 +10636,25 @@ void relion_fine_diff2_fused_translate_pairs_f32_kernel(
     // each lane keeps its own reference id, which preserves arbitrary compact
     // masks while still sharing the image/weight fetch and launch overhead.
     const int64_t pair_chunks =
-        (pair_count + kRelionFineDiff2Ref3dJobChunk - 1) /
-        kRelionFineDiff2Ref3dJobChunk;
+        (pair_count + kRelionFineDiff2PairsPerBlock - 1) /
+        kRelionFineDiff2PairsPerBlock;
     const int64_t flat_block = static_cast<int64_t>(blockIdx.x);
     const int64_t batch = flat_block / pair_chunks;
     const int64_t pair_chunk = flat_block % pair_chunks;
     if (batch >= batch_size) return;
     const int64_t pair_start =
-        pair_chunk * kRelionFineDiff2Ref3dJobChunk;
+        pair_chunk * kRelionFineDiff2PairsPerBlock;
     const int pairs_in_chunk = static_cast<int>(min(
-        static_cast<int64_t>(kRelionFineDiff2Ref3dJobChunk),
+        static_cast<int64_t>(kRelionFineDiff2PairsPerBlock),
         pair_count - pair_start));
 
-    int32_t reference_rows[kRelionFineDiff2TranslationCapacity];
-    int32_t translations[kRelionFineDiff2TranslationCapacity];
-    bool valid_pairs[kRelionFineDiff2TranslationCapacity];
+    int32_t reference_rows[kRelionFineDiff2PairCapacity];
+    int32_t translations[kRelionFineDiff2PairCapacity];
+    bool valid_pairs[kRelionFineDiff2PairCapacity];
     bool any_valid_pair = false;
     #pragma unroll
     for (int pair_offset = 0;
-         pair_offset < kRelionFineDiff2TranslationCapacity;
+         pair_offset < kRelionFineDiff2PairCapacity;
          ++pair_offset) {
         const bool in_chunk = pair_offset < pairs_in_chunk;
         const int64_t hypothesis =
@@ -10694,11 +10701,11 @@ void relion_fine_diff2_fused_translate_pairs_f32_kernel(
     }
 
     __shared__ float lane_sums[
-        kRelionFineDiff2BlockSize * kRelionFineDiff2TranslationCapacity];
-    float pair_sums[kRelionFineDiff2TranslationCapacity];
+        kRelionFineDiff2BlockSize * kRelionFineDiff2PairCapacity];
+    float pair_sums[kRelionFineDiff2PairCapacity];
     #pragma unroll
     for (int pair_offset = 0;
-         pair_offset < kRelionFineDiff2TranslationCapacity;
+         pair_offset < kRelionFineDiff2PairCapacity;
          ++pair_offset) {
         pair_sums[pair_offset] = 0.0f;
     }
@@ -10722,7 +10729,7 @@ void relion_fine_diff2_fused_translate_pairs_f32_kernel(
                 const float pixel_weight = weight[image_index];
                 #pragma unroll
                 for (int pair_offset = 0;
-                     pair_offset < kRelionFineDiff2TranslationCapacity;
+                     pair_offset < kRelionFineDiff2PairCapacity;
                      ++pair_offset) {
                     if (pair_offset >= pairs_in_chunk ||
                         !valid_pairs[pair_offset])
@@ -10749,7 +10756,7 @@ void relion_fine_diff2_fused_translate_pairs_f32_kernel(
     }
     #pragma unroll
     for (int pair_offset = 0;
-         pair_offset < kRelionFineDiff2TranslationCapacity;
+         pair_offset < kRelionFineDiff2PairCapacity;
          ++pair_offset) {
         if (pair_offset < pairs_in_chunk && valid_pairs[pair_offset]) {
             lane_sums[
@@ -10762,7 +10769,7 @@ void relion_fine_diff2_fused_translate_pairs_f32_kernel(
         if (threadIdx.x < width) {
             #pragma unroll
             for (int pair_offset = 0;
-                 pair_offset < kRelionFineDiff2TranslationCapacity;
+                 pair_offset < kRelionFineDiff2PairCapacity;
                  ++pair_offset) {
                 if (pair_offset >= pairs_in_chunk ||
                     !valid_pairs[pair_offset])
@@ -11301,8 +11308,8 @@ cudaError_t launch_relion_fine_diff2_fused_translate_pairs_f32(
     const int32_t* runtime_current_size)
 {
     const int64_t pair_chunks =
-        (pair_count + kRelionFineDiff2Ref3dJobChunk - 1) /
-        kRelionFineDiff2Ref3dJobChunk;
+        (pair_count + kRelionFineDiff2PairsPerBlock - 1) /
+        kRelionFineDiff2PairsPerBlock;
     const int64_t total_blocks = batch_size * pair_chunks;
     if (total_blocks == 0) return cudaSuccess;
     relion_fine_diff2_fused_translate_pairs_f32_kernel<<<
