@@ -19,7 +19,9 @@ def _array_finite_summary(name: str, value: object, *, max_indices: int = 5) -> 
         values = arr.astype(np.float64, copy=False).reshape(-1)
         if values.size == 0:
             return f"{name}: shape={arr.shape}, empty"
-        return f"{name}: shape={arr.shape}, all finite, min={float(np.min(values)):.6g}, max={float(np.max(values)):.6g}"
+        return (
+            f"{name}: shape={arr.shape}, all finite, min={float(np.min(values)):.6g}, max={float(np.max(values)):.6g}"
+        )
     finite_values = arr[np.isfinite(arr)].astype(np.float64, copy=False)
     finite_range = (
         f"finite_min={float(np.min(finite_values)):.6g}, finite_max={float(np.max(finite_values)):.6g}"
@@ -92,9 +94,7 @@ def _maybe_dump_noise_update_boundary(
         "iteration": np.asarray([int(state.iter)], dtype=np.int32),
         "current_size": np.asarray([int(state.current_size)], dtype=np.int32),
         "image_shape": np.asarray([int(state.ori_size), int(state.ori_size)], dtype=np.int32),
-        "relion_half_plane_shell_counts": _relion_half_plane_shell_counts(
-            (int(state.ori_size), int(state.ori_size))
-        ),
+        "relion_half_plane_shell_counts": _relion_half_plane_shell_counts((int(state.ori_size), int(state.ori_size))),
         "half0_wsum_sigma2_noise": residual,
         "half0_wsum_img_power": image_power,
         "half0_wsum_total": residual + image_power,
@@ -113,5 +113,3 @@ def _maybe_dump_noise_update_boundary(
         payload["half0_wsum_noise_xa"] = noise_xa
     np.savez_compressed(dump_path, **payload)
     return str(dump_path)
-
-
