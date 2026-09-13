@@ -534,7 +534,7 @@ def test_iteration_loop_updates_definition_ownership():
     assert iteration_loop.update_noise_from_estep_meta is estep_meta_updates.update_noise_from_estep_meta
     assert iteration_loop.select_subset_for_iter is subset_schedule.select_subset_for_iter
     for mod in (estep_meta_updates, subset_schedule):
-        assert "initial_model.iteration_loop import" not in inspect.getsource(mod)
+        assert "vdam.iteration_loop import" not in inspect.getsource(mod)
 
 
 def test_mstep_single_class_definition_ownership():
@@ -544,7 +544,7 @@ def test_mstep_single_class_definition_ownership():
     assert inspect.getmodule(state.VdamAccumulator) is state and "\nclass VdamAccumulator" not in src
     assert m_step.vdam_m_step_single_class is mstep_single_class.vdam_m_step_single_class
     assert m_step.VdamAccumulator is state.VdamAccumulator
-    assert "initial_model.m_step import" not in inspect.getsource(mstep_single_class)
+    assert "vdam.m_step import" not in inspect.getsource(mstep_single_class)
 
 
 def test_star_io_owns_the_cluster_and_driver_only_imports_it():
@@ -581,4 +581,4 @@ def test_sparse_pass2_estep_definition_ownership():
     assert dense_adapter._run_sparse_pass2_initial_model_estep is sparse_pass2_estep._run_sparse_pass2_initial_model_estep
     assert dense_adapter.DenseInitialModelEstepConfig is estep_common.DenseInitialModelEstepConfig
     for mod in (sparse_pass2_estep, estep_common):
-        assert "initial_model.dense_adapter import" not in inspect.getsource(mod)
+        assert "vdam.dense_adapter import" not in inspect.getsource(mod)
