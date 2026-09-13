@@ -4,6 +4,8 @@ Keep these references separate from production geometry implementations.
 """
 
 import re
+import struct
+from pathlib import Path
 
 import numpy as np
 
@@ -47,3 +49,16 @@ def centered_correlation(a: np.ndarray, b: np.ndarray) -> float:
     af = a.ravel() - a.mean()
     bf = b.ravel() - b.mean()
     return float(np.real(np.vdot(af, bf)) / (np.linalg.norm(af) * np.linalg.norm(bf) + 1e-30))
+
+
+def read_bpref_dump(p: Path) -> np.ndarray:
+    with open(p, "rb") as f:
+        nz, ny, nx = struct.unpack("qqq", f.read(24))
+        pos = f.tell()
+        f.seek(0, 2)
+        rem = f.tell() - pos
+        f.seek(pos)
+        bp = rem // (nz * ny * nx)
+        dt = np.complex128 if bp == 16 else np.float64
+        return np.fromfile(f, dtype=dt, count=nz * ny * nx).reshape(nz, ny, nx)
+

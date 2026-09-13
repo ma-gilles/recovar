@@ -23,9 +23,14 @@ from pathlib import Path
 import numpy as np
 
 try:
-    from scripts.relion_reference import centered_correlation, euler_matrix, read_initial_noise_variance
+    from scripts.relion_reference import (
+        centered_correlation,
+        euler_matrix,
+        read_bpref_dump,
+        read_initial_noise_variance,
+    )
 except ModuleNotFoundError:
-    from relion_reference import centered_correlation, euler_matrix, read_initial_noise_variance
+    from relion_reference import centered_correlation, euler_matrix, read_bpref_dump, read_initial_noise_variance
 
 FIXTURE_DIR = Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run")
 PARTICLES_STAR = Path(
@@ -35,18 +40,6 @@ PARTICLES_STAR = Path(
 )
 DUMP_DIR = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_dump_small")
 RELION_BPREF = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_debug_dump")
-
-
-def _read_bin(p: Path) -> np.ndarray:
-    with open(p, "rb") as f:
-        nz, ny, nx = struct.unpack("qqq", f.read(24))
-        pos = f.tell()
-        f.seek(0, 2)
-        rem = f.tell() - pos
-        f.seek(pos)
-        bp = rem // (nz * ny * nx)
-        dt = np.complex128 if bp == 16 else np.float64
-        return np.fromfile(f, dtype=dt, count=nz * ny * nx).reshape(nz, ny, nx)
 
 
 def main() -> None:
@@ -118,8 +111,8 @@ def main() -> None:
     bp_data = -np.transpose(Fy[sl], (2, 0, 1)).astype(np.complex128)
     bp_weight = np.transpose(Fc[sl], (2, 0, 1)).real.astype(np.float64)
 
-    target_data = _read_bin(RELION_BPREF / "pipe_it1_c0_bp_data_pre_reweight.bin")
-    target_weight = _read_bin(RELION_BPREF / "pipe_it1_c0_bp_weight.bin")
+    target_data = read_bpref_dump(RELION_BPREF / "pipe_it1_c0_bp_data_pre_reweight.bin")
+    target_weight = read_bpref_dump(RELION_BPREF / "pipe_it1_c0_bp_weight.bin")
 
     print("\nB-PROBE RESULT (RELION-exact rotations + translations, h0):")
     print(f"  bp_data    CC = {centered_correlation(bp_data, target_data):+.6f}")

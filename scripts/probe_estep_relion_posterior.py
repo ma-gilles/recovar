@@ -31,18 +31,6 @@ DUMP_DIR = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_dump_sm
 RELION_BPREF = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_debug_dump")
 
 
-def _read_bin(p: Path) -> np.ndarray:
-    with open(p, "rb") as f:
-        nz, ny, nx = struct.unpack("qqq", f.read(24))
-        pos = f.tell()
-        f.seek(0, 2)
-        rem = f.tell() - pos
-        f.seek(pos)
-        bp = rem // (nz * ny * nx)
-        dt = np.complex128 if bp == 16 else np.float64
-        return np.fromfile(f, dtype=dt, count=nz * ny * nx).reshape(nz, ny, nx)
-
-
 def _read_relion_posterior(part_id: int) -> np.ndarray:
     """Return posterior table reshaped to (n_rot=4608, n_trans=116)."""
     with open(DUMP_DIR / f"p{part_id}_exp_Mweight.bin", "rb") as f:
