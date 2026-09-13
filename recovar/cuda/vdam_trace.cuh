@@ -168,4 +168,3 @@ static __device__ __forceinline__ std::uint32_t vdam_candidate_smid()
     asm volatile("mov.u32 %0, %%smid;" : "=r"(value));
     return value;
 }
-
