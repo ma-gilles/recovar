@@ -124,7 +124,7 @@ from recovar.em.sparse_pass2.sparse_pass2_compact_pair_sums import (
     _active_image_indices_for_rotation_rows,
     _active_row_grouping_for_canonical_matmul,
     _active_row_grouping_shape,
-    _compact_pair_dense_probs_and_reductions,
+    _compact_pair_dense_probs,
     _compact_pair_weighted_image_sums,
     _compact_pair_weighted_image_sums_dense,
     _compact_pair_weighted_image_sums_pair_sparse,
@@ -4286,7 +4286,7 @@ def test_compact_pair_weighted_rotation_sums_match_dense_mstep_helpers():
     dense_ctf_probs = compute_local_ctf_sums(jnp.asarray(dense_probs), jnp.asarray(ctf2_over_nv))
     dense_probs_sum_t = jnp.sum(jnp.asarray(dense_probs), axis=-1)
     dense_translation_posterior = jnp.sum(jnp.asarray(dense_probs), axis=1)
-    compact_dense_probs = _compact_pair_dense_probs_and_reductions(
+    compact_dense_probs = _compact_pair_dense_probs(
         jnp.asarray(pair_probs),
         jnp.asarray(arrays["local_rotation_row"]),
         jnp.asarray(arrays["translation_idx"]),

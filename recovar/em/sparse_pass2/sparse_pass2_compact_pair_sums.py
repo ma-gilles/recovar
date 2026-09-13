@@ -86,7 +86,7 @@ def _compact_pair_valid_weights_and_indices(
 
 
 @partial(jax.jit, static_argnames=("n_rotation_rows", "n_trans"))
-def _compact_pair_dense_probs_and_reductions(
+def _compact_pair_dense_probs(
     pair_probs,
     local_rotation_row,
     translation_idx,
@@ -194,7 +194,7 @@ def _compact_pair_weighted_rotation_sums_dense(
     plus ``probs_sum_t`` and ``translation_posterior``.
     """
 
-    dense_probs = _compact_pair_dense_probs_and_reductions(
+    dense_probs = _compact_pair_dense_probs(
         pair_probs,
         local_rotation_row,
         translation_idx,
@@ -299,27 +299,14 @@ def _compact_pair_weighted_image_sums_dense(
     reused from the M-step.
     """
 
-    batch, n_pairs = pair_probs.shape
-    n_trans = shifted_recon_split.shape[1]
-    batch_idx = jnp.broadcast_to(jnp.arange(batch, dtype=jnp.int32)[:, None], (batch, n_pairs))
-
-    finite_pair_probs = jnp.isfinite(pair_probs)
-    safe_rotation_row = jnp.where(pair_mask, local_rotation_row, 0).astype(jnp.int32)
-    safe_translation_idx = jnp.where(pair_mask, translation_idx, 0).astype(jnp.int32)
-    valid_pair = (
-        pair_mask
-        & finite_pair_probs
-        & (safe_rotation_row >= 0)
-        & (safe_rotation_row < int(n_rotation_rows))
-        & (safe_translation_idx >= 0)
-        & (safe_translation_idx < n_trans)
+    dense_probs = _compact_pair_dense_probs(
+        pair_probs,
+        local_rotation_row,
+        translation_idx,
+        pair_mask,
+        n_rotation_rows=n_rotation_rows,
+        n_trans=shifted_recon_split.shape[1],
     )
-    weights = jnp.where(valid_pair, pair_probs, 0.0)
-    scatter_rotation_row = jnp.where(valid_pair, safe_rotation_row, 0)
-    scatter_translation_idx = jnp.where(valid_pair, safe_translation_idx, 0)
-
-    dense_probs = jnp.zeros((batch, int(n_rotation_rows), n_trans), dtype=weights.dtype)
-    dense_probs = dense_probs.at[batch_idx, scatter_rotation_row, scatter_translation_idx].add(weights)
     return compute_local_weighted_sums(dense_probs, shifted_recon_split)
 
 
@@ -387,7 +374,7 @@ def _compact_pair_weighted_rotation_and_image_sums_legacy(
     identical to ``_compact_pair_weighted_rotation_sums``.
     """
 
-    dense_probs = _compact_pair_dense_probs_and_reductions(
+    dense_probs = _compact_pair_dense_probs(
         pair_probs,
         local_rotation_row,
         translation_idx,
@@ -447,7 +434,7 @@ def _compact_pair_weighted_rotation_and_image_sums_fused_image_sums(
 ):
     """Accumulate compact-pair M-step and image sums in one weighted reduction."""
 
-    dense_probs = _compact_pair_dense_probs_and_reductions(
+    dense_probs = _compact_pair_dense_probs(
         pair_probs,
         local_rotation_row,
         translation_idx,
@@ -482,7 +469,7 @@ def _compact_pair_weighted_rotation_and_image_sums_native(
 
     from recovar.cuda_backproject import dual_weighted_sums_f32
 
-    dense_probs = _compact_pair_dense_probs_and_reductions(
+    dense_probs = _compact_pair_dense_probs(
         pair_probs,
         local_rotation_row,
         translation_idx,
