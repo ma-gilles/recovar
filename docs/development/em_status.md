@@ -15,8 +15,11 @@ from peer `83fc89583` is integrated separately from its noise/speed ancestry.
 Seven new regression cases fail before the repair;29 focused projection checks
 and90 CPU fast-guard checks pass afterward. The [radius formulation and scoped
 four-particle evidence](../math/sparse_projection_radius.md) explain the cause.
-A fresh current-source three-iteration integration is being prepared; trajectory,
-strict-state and performance acceptance remain open. [Integration receipts](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_radius_integration_20260913/plan.json).
+H100 job **13811687** runs the frozen integrated source `52d06bebb` against the
+existing three-iteration regression, retaining its legacy particle ordering and
+pipeline startup noise for comparison with job13808717. This is separate from
+strict-oracle qualification with mt19937 ordering. Trajectory, strict-state and
+performance acceptance remain open. [Submission and pinned source](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_radius_integration_20260913/submission.json).
 
 ## Integrated K1 prior correction — September 12
 
