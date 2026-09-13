@@ -95,21 +95,13 @@ def _selection_records(selection: dict[str, object]) -> list[dict[str, object]]:
 
 # Support both direct execution and package imports.
 if __package__:
-    from .file_hash import sha256_file as _sha256
+    from .file_hash import fnv1a64, sha256_file as _sha256
 else:
-    from file_hash import sha256_file as _sha256
+    from file_hash import fnv1a64, sha256_file as _sha256
 
 
 def _float32_from_bits(value: int) -> np.float32:
     return np.float32(struct.unpack("<f", struct.pack("<I", value & 0xFFFFFFFF))[0])
-
-
-def fnv1a64(text: str) -> int:
-    value = 14695981039346656037
-    for byte in text.encode():
-        value ^= byte
-        value = (value * 1099511628211) & 0xFFFFFFFFFFFFFFFF
-    return value
 
 
 def _finite_float32_tolerance(reference: np.ndarray, *, ulps: int = 4) -> np.ndarray:

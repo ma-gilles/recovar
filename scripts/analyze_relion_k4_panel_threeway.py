@@ -44,18 +44,10 @@ def _require(condition: bool, message: str) -> None:
 # Support direct execution, sibling imports, and the scripts package.
 if not __package__:
     from analyzer_provenance import clean_repo_head
-    from file_hash import sha256_file as _sha256
+    from file_hash import fnv1a64 as _fnv1a64, sha256_file as _sha256
 else:
     from scripts.analyzer_provenance import clean_repo_head
-    from scripts.file_hash import sha256_file as _sha256
-
-
-def _fnv1a64(text: str) -> int:
-    value = 14695981039346656037
-    for byte in text.encode():
-        value ^= byte
-        value = (value * 1099511628211) & 0xFFFFFFFFFFFFFFFF
-    return value
+    from scripts.file_hash import fnv1a64 as _fnv1a64, sha256_file as _sha256
 
 
 def _float32_from_bits(value: int) -> np.float32:
