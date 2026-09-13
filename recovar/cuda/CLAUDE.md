@@ -50,6 +50,9 @@ private namespace; the host replay C ABI and argument record have external
 linkage so nvcc emits the callable export. `noise_residual.cuh` owns shared noise
 reductions. `vdam_trace.cuh` owns optional block-trace records, file writing and
 device timestamp helpers; inclusion preserves their original translation-unit order.
+`relion_preprocess.cuh` owns RELION image normalization, translation and soft-mask
+kernels and their launcher; its include retains the original anonymous-namespace
+position. FFI handlers remain in the translation unit.
 `relion_scoring.cuh` owns shared EM/VDAM coarse and fine scoring,
 translation and power-spectrum kernels; its common coarse projector body is
 `relion_coarse_diff2_projector_body.inc`. Keep build, packaging and loader-staleness inputs aligned

@@ -57,6 +57,7 @@ _PACKAGE_LIB_PATH = _LIB_DIR / "libcuda_backproject.so"
 _CUDA_BUILD_SOURCE_NAMES = (
     "noise_residual.cuh",
     "vdam_trace.cuh",
+    "relion_preprocess.cuh",
     "relion_vdam_mstep.cuh",
     "relion_scoring.cuh",
     "cuda_backproject.cu",
