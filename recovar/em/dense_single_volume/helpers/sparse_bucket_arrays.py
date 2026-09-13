@@ -534,6 +534,14 @@ def _prepare_coarse_images_vectorized(
         else np.zeros(0, dtype=np.int64)
     )
     sig_img = np.repeat(np.arange(n_images, dtype=np.int64), lengths)
+    # The loop marks a boolean (coarse rotation, coarse translation) table, so a
+    # significant index listed twice for one image counts once; dedupe here so
+    # the per-pair sample sums below give the loop's ``count`` (lead review
+    # em_clean_vectorized_hypothesis_duplicate_20260913).
+    total_cells = int(n_coarse_rot) * int(n_coarse_trans)
+    unique_cells = np.unique(sig_img * total_cells + flat_sig)
+    sig_img = unique_cells // total_cells
+    flat_sig = unique_cells % total_cells
     coarse_rot = flat_sig // int(n_coarse_trans)
     coarse_trans = flat_sig % int(n_coarse_trans)
     pair_key, sig_pair = np.unique(sig_img * int(n_coarse_rot) + coarse_rot, return_inverse=True)

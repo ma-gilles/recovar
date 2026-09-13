@@ -106,6 +106,21 @@ def test_vectorized_hypothesis_prep_matches_loop(monkeypatch, dtype, prior, mste
     _assert_same(loop, fast)
 
 
+def test_vectorized_hypothesis_prep_matches_loop_with_duplicate_significant_indices(monkeypatch):
+    """Duplicate significant indices count once, as in the loop's boolean coarse table."""
+
+    rng = np.random.default_rng(9)
+    n_coarse_rot, n_coarse_trans, children = 2, 2, 1
+    grid = _fine_grid(rng, n_coarse_rot, children, np.float32)
+    ftp = np.array([0, 1], dtype=np.int32)
+    samples = [np.array(s, dtype=np.int32) for s in ([0], [0, 0], [0, 1, 0], [3, 0, 3], [1, 1, 1, 2])]
+    kwargs = dict(n_coarse_rot=n_coarse_rot, n_coarse_trans=n_coarse_trans, n_fine_trans=2, ftp=ftp, prior=None, mstep=False, eulers=False, dtype=np.float32)
+    loop = _run(monkeypatch, False, samples, grid, **kwargs)
+    fast = _run(monkeypatch, True, samples, grid, **kwargs)
+    assert [m.count for m in loop["candidate_mask"]] == [1, 1, 2, 2, 2]  # one fine row per parent, one fine translation per coarse translation
+    _assert_same(loop, fast)
+
+
 def test_vectorized_hypothesis_prep_falls_back_when_grid_is_not_parent_major(monkeypatch):
     rng = np.random.default_rng(5)
     n_coarse_rot, n_coarse_trans, children = 12, 3, 4
