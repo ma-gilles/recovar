@@ -45,7 +45,10 @@ multiplication. Effective paired environments differ only in runtime paths;
 declared CUDA libraries hash identically. Current lead source retains generic
 division. These observations do not qualify either precision or the optional speed
 changes: same-source replicate variability and original acceptance bands remain.
-The existing radial-knob matrix continues; private speed integration is held.
+The radial-knob matrices are terminal. Integration proceeds proposal by proposal:
+the user retained fused scoring, and the lead adapted sparse sums and bounded
+statistics transfers. Row-selection, capacity and chunk-budget proposals still
+require their individual numerical reviews; there is no blanket speed admission.
 [Completed base and source review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_capacity_noise_review_20260913/base_source_environment_review.json),
 [all terminal base metrics](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_capacity_noise_review_20260913/base_all_terminal.json),
 [terminal control review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_capacity_noise_review_20260913/control_matrix_terminal.json).
@@ -321,6 +324,31 @@ versus rectangular x-half path. Source, harness and loaded library were verified
 ([GPU receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/compact_fused_scoring_integration_20260913/gpu_terminal_review.json)).
 This qualifies the focused checks only; full trajectories and matched speed remain open.
 
+Deferred sparse statistics now share one bounded transfer queue and explicit
+producer-bucket inputs. Pose updates retain the four arrays they use, rather
+than whole bucket dictionaries. Raw scores stay on device only when the existing
+conservative free-memory budget admits both raw and converted storage; unknown
+telemetry or oversize buckets use host storage. Original host math and update
+order are preserved. The combined K1 regression remains pinned to `ecc9ba6ff`,
+which predates the subsequent projector and structural changes; it cannot qualify
+the current tip. Large-data peak memory and full trajectories remain open.
+[Transfer and reconstruction guard](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/raw_score_residency_20260913/gpu_terminal_review.json),
+[explicit metadata review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/deferred_pose_metadata_cleanup_20260913/result.json).
+
+Eligible complex64 texture projectors now use the existing direct half-storage
+primitive, avoiding the cubic staging buffer. Masking, gather and scaling remain
+in place; this is separate from the proposed complex128 consumer repair.
+See [eligibility and qualification limits](em_half_texture_staging.md) and the
+[independent peer/integration review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_half_staging_lead_review_20260913/integration.json).
+The combined source `89cd157cc` passed all 15 focused H100 GPU cases, with no
+skips; source, submitted harness and loaded binary were independently verified
+([combined GPU receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_clean_combined_gpu_20260913/gpu_terminal_review.json)).
+These checks do not establish a complete E-step trajectory or speed acceptance.
+The single-class and K-class controllers also select adjoint layout once,
+removing 147 repeated lines while preserving distinct execution routes.
+[Single-class dispatch evidence](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/single_adjoint_dispatch_cleanup_20260913/result.json),
+[K-class dispatch evidence](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/adjoint_dispatch_cleanup_20260913/result.json).
+
 The tiny dtype-repair CUDA guard is complete on its frozen source. Continue
 strict K1 state closure and the existing peer attribution jobs before advancing
 the scientific ladder in the coordination queue. Do not restart completed checks
@@ -337,8 +365,9 @@ passing and 75 unchanged routing comparisons
 The bounded v6 native capture passed live rank/library and closed-payload checks.
 The subsequent six-call rectangular scorer check passed on those captured inputs,
 but the hybrid support still differs: 52,884 versus 52,883 selected candidates.
-The next private capture targets the full candidate population for one particle
-using actual RECOVAR production inputs; its worker still requires qualification.
+The production-boundary worker packet is frozen and its input/source pins have
+been reviewed. Its diagnostic GPU execution is not approved; the existing EM peer
+continues the separately scoped projector and substep work.
 Neither bounded result establishes completed-refinement or strict-state acceptance
 ([primitive receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/native_rectangular_terminal_lead_review_20260913/result.json)).
 
