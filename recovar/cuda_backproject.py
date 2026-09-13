@@ -4447,6 +4447,51 @@ def relion_coarse_diff2_rectangular_f64(
     )(reference, shifted_image, weight, initial_diff2, full_to_compact)
 
 
+def _validate_relion_fine_rectangular_shapes(reference, shifted_image, weight):
+    """Validate the rectangular candidate layout shared by both precisions."""
+    if reference.ndim != 3 or shifted_image.ndim != 3 or weight.ndim != 2:
+        raise ValueError(
+            "rectangular fine diff2 expects reference/shifted rank 3 and "
+            f"weight rank 2, got {reference.shape}, {shifted_image.shape}, "
+            f"{weight.shape}"
+        )
+    if (
+        reference.shape[0] != shifted_image.shape[0]
+        or reference.shape[0] != weight.shape[0]
+        or reference.shape[2] != shifted_image.shape[2]
+        or reference.shape[2] != weight.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or shifted_image.shape[1] <= 0
+        or reference.shape[2] <= 0
+    ):
+        raise ValueError(
+            "rectangular fine diff2 operands have inconsistent shapes: "
+            f"{reference.shape}, {shifted_image.shape}, {weight.shape}"
+        )
+
+
+def _validate_relion_fine_pairs_shapes(reference, shifted_image, weight):
+    """Validate the pairs candidate layout shared by both precisions."""
+    if reference.ndim != 3 or shifted_image.ndim != 3 or weight.ndim != 2:
+        raise ValueError(
+            "pair fine diff2 expects reference/shifted rank 3 and weight rank "
+            f"2, got {reference.shape}, {shifted_image.shape}, {weight.shape}"
+        )
+    if (
+        reference.shape != shifted_image.shape
+        or reference.shape[0] != weight.shape[0]
+        or reference.shape[2] != weight.shape[1]
+        or reference.shape[0] <= 0
+        or reference.shape[1] <= 0
+        or reference.shape[2] <= 0
+    ):
+        raise ValueError(
+            "pair fine diff2 operands have inconsistent shapes: "
+            f"{reference.shape}, {shifted_image.shape}, {weight.shape}"
+        )
+
+
 @jax.jit
 def relion_fine_diff2_rectangular_f32(
     reference: jax.Array,
@@ -4470,26 +4515,7 @@ def relion_fine_diff2_rectangular_f32(
         weight,
         full_to_compact,
     )
-    if reference.ndim != 3 or shifted_image.ndim != 3 or weight.ndim != 2:
-        raise ValueError(
-            "rectangular fine diff2 expects reference/shifted rank 3 and "
-            f"weight rank 2, got {reference.shape}, {shifted_image.shape}, "
-            f"{weight.shape}"
-        )
-    if (
-        reference.shape[0] != shifted_image.shape[0]
-        or reference.shape[0] != weight.shape[0]
-        or reference.shape[2] != shifted_image.shape[2]
-        or reference.shape[2] != weight.shape[1]
-        or reference.shape[0] <= 0
-        or reference.shape[1] <= 0
-        or shifted_image.shape[1] <= 0
-        or reference.shape[2] <= 0
-    ):
-        raise ValueError(
-            "rectangular fine diff2 operands have inconsistent shapes: "
-            f"{reference.shape}, {shifted_image.shape}, {weight.shape}"
-        )
+    _validate_relion_fine_rectangular_shapes(reference, shifted_image, weight)
     if initial_diff2 is None:
         initial_diff2 = jnp.zeros((reference.shape[0],), dtype=jnp.float32)
     else:
@@ -5435,23 +5461,7 @@ def relion_fine_diff2_pairs_f32(
         weight,
         full_to_compact,
     )
-    if reference.ndim != 3 or shifted_image.ndim != 3 or weight.ndim != 2:
-        raise ValueError(
-            "pair fine diff2 expects reference/shifted rank 3 and weight rank "
-            f"2, got {reference.shape}, {shifted_image.shape}, {weight.shape}"
-        )
-    if (
-        reference.shape != shifted_image.shape
-        or reference.shape[0] != weight.shape[0]
-        or reference.shape[2] != weight.shape[1]
-        or reference.shape[0] <= 0
-        or reference.shape[1] <= 0
-        or reference.shape[2] <= 0
-    ):
-        raise ValueError(
-            "pair fine diff2 operands have inconsistent shapes: "
-            f"{reference.shape}, {shifted_image.shape}, {weight.shape}"
-        )
+    _validate_relion_fine_pairs_shapes(reference, shifted_image, weight)
     out_type = jax.ShapeDtypeStruct(reference.shape[:2], jnp.float32)
     return jax.ffi.ffi_call(
         _TARGET_RELION_FINE_DIFF2_PAIRS_F32,
@@ -5473,26 +5483,7 @@ def relion_fine_diff2_rectangular_f64(
         reference, shifted_image, weight, full_to_compact,
         real_dtype=jnp.float64,
     )
-    if reference.ndim != 3 or shifted_image.ndim != 3 or weight.ndim != 2:
-        raise ValueError(
-            "rectangular fine diff2 expects reference/shifted rank 3 and "
-            f"weight rank 2, got {reference.shape}, {shifted_image.shape}, "
-            f"{weight.shape}"
-        )
-    if (
-        reference.shape[0] != shifted_image.shape[0]
-        or reference.shape[0] != weight.shape[0]
-        or reference.shape[2] != shifted_image.shape[2]
-        or reference.shape[2] != weight.shape[1]
-        or reference.shape[0] <= 0
-        or reference.shape[1] <= 0
-        or shifted_image.shape[1] <= 0
-        or reference.shape[2] <= 0
-    ):
-        raise ValueError(
-            "rectangular fine diff2 operands have inconsistent shapes: "
-            f"{reference.shape}, {shifted_image.shape}, {weight.shape}"
-        )
+    _validate_relion_fine_rectangular_shapes(reference, shifted_image, weight)
     out_type = jax.ShapeDtypeStruct(
         (reference.shape[0], reference.shape[1], shifted_image.shape[1]),
         jnp.float64,
@@ -5517,23 +5508,7 @@ def relion_fine_diff2_pairs_f64(
         reference, shifted_image, weight, full_to_compact,
         real_dtype=jnp.float64,
     )
-    if reference.ndim != 3 or shifted_image.ndim != 3 or weight.ndim != 2:
-        raise ValueError(
-            "pair fine diff2 expects reference/shifted rank 3 and weight rank "
-            f"2, got {reference.shape}, {shifted_image.shape}, {weight.shape}"
-        )
-    if (
-        reference.shape != shifted_image.shape
-        or reference.shape[0] != weight.shape[0]
-        or reference.shape[2] != weight.shape[1]
-        or reference.shape[0] <= 0
-        or reference.shape[1] <= 0
-        or reference.shape[2] <= 0
-    ):
-        raise ValueError(
-            "pair fine diff2 operands have inconsistent shapes: "
-            f"{reference.shape}, {shifted_image.shape}, {weight.shape}"
-        )
+    _validate_relion_fine_pairs_shapes(reference, shifted_image, weight)
     out_type = jax.ShapeDtypeStruct(reference.shape[:2], jnp.float64)
     return jax.ffi.ffi_call(
         _TARGET_RELION_FINE_DIFF2_PAIRS_F64,
