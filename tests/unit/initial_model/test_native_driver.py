@@ -693,7 +693,7 @@ def test_sampling_accuracy_uses_seeded_star_eulers_before_particles_are_visited(
     particle_state = star_io._particle_state_from_star(main, SimpleNamespace(voxel_size=2.0, n_images=3))
     state = initialise_denovo_state(ori_size=8, pixel_size=2.0, K=1, nr_iter=200, n_directions=1)
     state.Iref[:] = 1.0
-    optics_state = native_sampling.NativeOpticsState(
+    optics_state = star_io.NativeOpticsState(
         voltage=300.0,
         Cs=2.7,
         Q0=0.07,
@@ -1921,7 +1921,7 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
     sampling_state.nr_iter_wo_resol_gain = 1
     sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
 
-    optics_state = native_sampling.NativeOpticsState(
+    optics_state = star_io.NativeOpticsState(
         voltage=300.0,
         Cs=2.7,
         Q0=0.07,
@@ -2027,7 +2027,7 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
         max_posterior=np.ones(2, dtype=np.float32),
         best_pose_rotations=best_rotations,
     )
-    optics_state = native_sampling.NativeOpticsState(
+    optics_state = star_io.NativeOpticsState(
         voltage=300.0,
         Cs=2.7,
         Q0=0.07,

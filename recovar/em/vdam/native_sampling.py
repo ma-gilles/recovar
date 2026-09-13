@@ -31,7 +31,7 @@ from recovar.em.vdam.native_options import (
     DEFAULT_OVERSAMPLING,
     NativeInitialModelOptions,
 )
-from recovar.em.vdam.star_io import NativeParticleState
+from recovar.em.vdam.star_io import NativeOpticsState, NativeParticleState
 from recovar.em.vdam.state import InitialModelState
 from recovar.em.vdam.subset import RndUnifFn
 from recovar.utils.helpers import R_to_relion, recovar_volume_to_relion
@@ -127,20 +127,6 @@ class NativeSamplingState:
     @property
     def effective_offset_step_angstrom(self) -> float:
         return float(self.offset_step_angstrom) / (2 ** int(self.adaptive_oversampling))
-
-
-@dataclass(frozen=True)
-class NativeOpticsState:
-    """Scalar optics plus per-particle CTF parameters for the SPA InitialModel path."""
-
-    voltage: float
-    Cs: float
-    Q0: float
-    pixel_size: float
-    defU: np.ndarray
-    defV: np.ndarray
-    defAngle: np.ndarray
-    phase_shift: np.ndarray
 
 
 def _relion_rnd_unif_factory(seed: int) -> RndUnifFn:

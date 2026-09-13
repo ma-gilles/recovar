@@ -1,6 +1,6 @@
 """STAR-file and artifact I/O of the native InitialModel driver.
 
-Particle state read from the data STAR, the model and data STAR writers, the
+Optics and particle state read from the data STAR, the model and data STAR writers, the
 per-iteration artifact bundle and the final outputs live here; ``driver``
 orchestrates and imports what it publishes.
 """
@@ -20,6 +20,92 @@ from recovar.em import sampling
 from recovar.em.vdam.state import InitialModelState
 from recovar.utils.helpers import R_from_relion, R_to_relion, write_relion_mrc
 
+
+@dataclass(frozen=True)
+class NativeOpticsState:
+    """Scalar optics plus per-particle CTF parameters for the SPA InitialModel path."""
+
+    voltage: float
+    Cs: float
+    Q0: float
+    pixel_size: float
+    defU: np.ndarray
+    defV: np.ndarray
+    defAngle: np.ndarray
+    phase_shift: np.ndarray
+
+
+def _optics_group_indices(main_star) -> np.ndarray:
+    if "_rlnOpticsGroup" not in main_star.columns:
+        return np.zeros(len(main_star), dtype=np.int64)
+    raw = main_star["_rlnOpticsGroup"].to_numpy()
+    try:
+        numeric = np.asarray(raw, dtype=np.int64)
+        unique = {value: i for i, value in enumerate(sorted(np.unique(numeric).tolist()))}
+        return np.asarray([unique[int(value)] for value in numeric], dtype=np.int64)
+    except (TypeError, ValueError):
+        labels = np.asarray(raw, dtype=str)
+        unique = {value: i for i, value in enumerate(sorted(np.unique(labels).tolist()))}
+        return np.asarray([unique[str(value)] for value in labels], dtype=np.int64)
+
+
+def _single_optics_scalars(main_star, optics_star, ds) -> tuple[float, float, float, float]:
+    """Return voltage, Cs, amplitude contrast, and pixel size.
+
+    The current C++ bootstrap binding takes scalar optics parameters. To avoid
+    wrong native output, reject genuinely multi-optics inputs until the binding
+    grows per-particle voltage/Cs/Q0 support.
+    """
+
+    pixel_size = float(ds.voxel_size)
+    if optics_star is None:
+        required = ("_rlnVoltage", "_rlnSphericalAberration", "_rlnAmplitudeContrast")
+        missing = [name for name in required if name not in main_star.columns]
+        if missing:
+            raise ValueError(
+                "native InitialModel needs voltage/Cs/amplitude contrast in the STAR file; "
+                f"missing {', '.join(missing)}"
+            )
+        values = tuple(float(main_star[name].astype(float).iloc[0]) for name in required)
+        return values[0], values[1], values[2], pixel_size
+
+    groups = _optics_group_indices(main_star)
+    if np.unique(groups).size != 1 or len(optics_star) != 1:
+        raise NotImplementedError(
+            "native InitialModel bootstrap currently supports one optics group; "
+            "multi-optics support needs per-particle optics in the RELION bootstrap binding"
+        )
+    row = optics_star.iloc[0]
+    return (
+        float(row["_rlnVoltage"]),
+        float(row["_rlnSphericalAberration"]),
+        float(row["_rlnAmplitudeContrast"]),
+        pixel_size,
+    )
+
+
+def _phase_shift(main_star) -> np.ndarray:
+    if "_rlnPhaseShift" not in main_star.columns:
+        return np.zeros(len(main_star), dtype=np.float64)
+    return np.asarray(main_star["_rlnPhaseShift"].astype(float).to_numpy(), dtype=np.float64)
+
+
+def _native_optics_state(main_star, optics_star, dataset) -> NativeOpticsState:
+    voltage, Cs, Q0, pixel_size = _single_optics_scalars(main_star, optics_star, dataset)
+    required = ("_rlnDefocusU", "_rlnDefocusV", "_rlnDefocusAngle")
+    missing = [name for name in required if name not in main_star.columns]
+    if missing:
+        raise ValueError(f"native InitialModel needs per-particle CTF columns: {', '.join(missing)}")
+    return NativeOpticsState(
+        voltage=float(voltage),
+        Cs=float(Cs),
+        Q0=float(Q0),
+        pixel_size=float(pixel_size),
+        defU=np.asarray(main_star["_rlnDefocusU"].astype(float).to_numpy(), dtype=np.float64),
+        defV=np.asarray(main_star["_rlnDefocusV"].astype(float).to_numpy(), dtype=np.float64),
+        defAngle=np.asarray(main_star["_rlnDefocusAngle"].astype(float).to_numpy(), dtype=np.float64),
+        phase_shift=_phase_shift(main_star),
+    )
 
 @dataclass
 class NativeParticleState:

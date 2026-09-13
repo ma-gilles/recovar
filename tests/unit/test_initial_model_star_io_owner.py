@@ -4,7 +4,7 @@ import inspect
 
 from recovar.em.vdam import driver, star_io
 
-MOVED = ("NativeParticleState", "_particle_state_from_star", "_write_model_star", "_write_data_star", "_write_iteration_artifacts", "_write_final_outputs", "_star_column", "_stack_star_pair", "_experiment_read_order", "_micrograph_sort_order")
+MOVED = ("NativeOpticsState", "_optics_group_indices", "_single_optics_scalars", "_phase_shift", "_native_optics_state", "NativeParticleState", "_particle_state_from_star", "_write_model_star", "_write_data_star", "_write_iteration_artifacts", "_write_final_outputs", "_star_column", "_stack_star_pair", "_experiment_read_order", "_micrograph_sort_order")
 
 
 def test_star_io_owns_the_cluster_and_driver_only_imports_it():

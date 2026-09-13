@@ -2,8 +2,8 @@
 
 This module owns the executable recovar path behind ``scripts/run_ab_initio``.
 The script remains a thin argparse and RELION-command-snapshot layer; all
-data loading, denovo seeding, dense K-class E-step wiring, VDAM iteration, and
-artifact writing lives here so InitialModel does not grow a second EM stack.
+data loading, denovo seeding, dense K-class E-step wiring, VDAM iteration and
+artifact writing are coordinated here through their implementation owners.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ from recovar.em.helpers.orientation_priors import (
     relion_translation_prior_center,
 )
 from recovar.em.relion import vdam_checkpoint
+from recovar.em.vdam import star_io
 from recovar.em.vdam.avg_unaligned import compute_avg_unaligned_and_sigma2
 from recovar.em.vdam.bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstrap_iref_via_cpp
 from recovar.em.vdam.dense_adapter import (
@@ -40,7 +41,6 @@ from recovar.em.vdam.init import initialise_data_vs_prior_from_references, initi
 from recovar.em.vdam.iteration_loop import relion_solvent_flatten_state, relion_solvent_mask, run_vdam_iterations
 from recovar.em.vdam.native_options import NativeInitialModelOptions
 from recovar.em.vdam.native_sampling import (
-    NativeOpticsState,
     NativeSamplingPlan,
     NativeSamplingState,
     _build_sampling_plan,
@@ -59,6 +59,7 @@ from recovar.em.vdam.schedules import (
     phase_lengths_from_effective_fractions,
 )
 from recovar.em.vdam.star_io import (
+    NativeOpticsState,
     NativeParticleState,
     _experiment_read_order,
     _micrograph_sort_order,
@@ -123,79 +124,6 @@ class NativeInitialModelResult:
     final_model_star: str
     final_mrc: str
     class_mrcs: tuple[str, ...]
-
-
-def _optics_group_indices(main_star) -> np.ndarray:
-    if "_rlnOpticsGroup" not in main_star.columns:
-        return np.zeros(len(main_star), dtype=np.int64)
-    raw = main_star["_rlnOpticsGroup"].to_numpy()
-    try:
-        numeric = np.asarray(raw, dtype=np.int64)
-        unique = {value: i for i, value in enumerate(sorted(np.unique(numeric).tolist()))}
-        return np.asarray([unique[int(value)] for value in numeric], dtype=np.int64)
-    except (TypeError, ValueError):
-        labels = np.asarray(raw, dtype=str)
-        unique = {value: i for i, value in enumerate(sorted(np.unique(labels).tolist()))}
-        return np.asarray([unique[str(value)] for value in labels], dtype=np.int64)
-
-
-def _single_optics_scalars(main_star, optics_star, ds) -> tuple[float, float, float, float]:
-    """Return voltage, Cs, amplitude contrast, and pixel size.
-
-    The current C++ bootstrap binding takes scalar optics parameters. To avoid
-    wrong native output, reject genuinely multi-optics inputs until the binding
-    grows per-particle voltage/Cs/Q0 support.
-    """
-
-    pixel_size = float(ds.voxel_size)
-    if optics_star is None:
-        required = ("_rlnVoltage", "_rlnSphericalAberration", "_rlnAmplitudeContrast")
-        missing = [name for name in required if name not in main_star.columns]
-        if missing:
-            raise ValueError(
-                "native InitialModel needs voltage/Cs/amplitude contrast in the STAR file; "
-                f"missing {', '.join(missing)}"
-            )
-        values = tuple(float(main_star[name].astype(float).iloc[0]) for name in required)
-        return values[0], values[1], values[2], pixel_size
-
-    groups = _optics_group_indices(main_star)
-    if np.unique(groups).size != 1 or len(optics_star) != 1:
-        raise NotImplementedError(
-            "native InitialModel bootstrap currently supports one optics group; "
-            "multi-optics support needs per-particle optics in the RELION bootstrap binding"
-        )
-    row = optics_star.iloc[0]
-    return (
-        float(row["_rlnVoltage"]),
-        float(row["_rlnSphericalAberration"]),
-        float(row["_rlnAmplitudeContrast"]),
-        pixel_size,
-    )
-
-
-def _phase_shift(main_star) -> np.ndarray:
-    if "_rlnPhaseShift" not in main_star.columns:
-        return np.zeros(len(main_star), dtype=np.float64)
-    return np.asarray(main_star["_rlnPhaseShift"].astype(float).to_numpy(), dtype=np.float64)
-
-
-def _native_optics_state(main_star, optics_star, dataset) -> NativeOpticsState:
-    voltage, Cs, Q0, pixel_size = _single_optics_scalars(main_star, optics_star, dataset)
-    required = ("_rlnDefocusU", "_rlnDefocusV", "_rlnDefocusAngle")
-    missing = [name for name in required if name not in main_star.columns]
-    if missing:
-        raise ValueError(f"native InitialModel needs per-particle CTF columns: {', '.join(missing)}")
-    return NativeOpticsState(
-        voltage=float(voltage),
-        Cs=float(Cs),
-        Q0=float(Q0),
-        pixel_size=float(pixel_size),
-        defU=np.asarray(main_star["_rlnDefocusU"].astype(float).to_numpy(), dtype=np.float64),
-        defV=np.asarray(main_star["_rlnDefocusV"].astype(float).to_numpy(), dtype=np.float64),
-        defAngle=np.asarray(main_star["_rlnDefocusAngle"].astype(float).to_numpy(), dtype=np.float64),
-        phase_shift=_phase_shift(main_star),
-    )
 
 
 def _load_raw_images(dataset, image_indices: np.ndarray, *, batch_size: int) -> np.ndarray:
@@ -914,7 +842,7 @@ def _initial_state_from_particles(
     ori_size = int(dataset.grid_size)
     pixel_size = float(dataset.voxel_size)
     order = _experiment_read_order(main_star)
-    optics_group_by_particle = _optics_group_indices(main_star)
+    optics_group_by_particle = star_io._optics_group_indices(main_star)
     nr_optics_groups = int(np.unique(optics_group_by_particle).size)
     if nr_optics_groups != 1:
         raise NotImplementedError("native InitialModel currently supports one optics group")
@@ -942,7 +870,7 @@ def _initial_state_from_particles(
     images = _load_raw_images(dataset, bootstrap_order, batch_size=max(1, int(opts.image_batch_size)))
     _record_initial_state_stage("raw_images")
     sorted_star = main_star.iloc[bootstrap_order]
-    voltage, Cs, Q0, pixel_size = _single_optics_scalars(sorted_star, optics_star, dataset)
+    voltage, Cs, Q0, pixel_size = star_io._single_optics_scalars(sorted_star, optics_star, dataset)
     _record_initial_state_stage("optics_metadata")
 
     iref = compute_bootstrap_iref_via_cpp(
@@ -950,7 +878,7 @@ def _initial_state_from_particles(
         defU=np.asarray(sorted_star["_rlnDefocusU"].astype(float).to_numpy(), dtype=np.float64),
         defV=np.asarray(sorted_star["_rlnDefocusV"].astype(float).to_numpy(), dtype=np.float64),
         defAngle=np.asarray(sorted_star["_rlnDefocusAngle"].astype(float).to_numpy(), dtype=np.float64),
-        phase_shift=_phase_shift(sorted_star),
+        phase_shift=star_io._phase_shift(sorted_star),
         voltage=voltage,
         Cs=Cs,
         Q0=Q0,
@@ -1195,7 +1123,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     _record_driver_stage("raw_cache_setup")
 
     _configure_relion_image_mask(dataset, opts)
-    optics_state = _native_optics_state(main_star, optics_star, dataset)
+    optics_state = star_io._native_optics_state(main_star, optics_star, dataset)
     continuation = None
     if opts.diagnostic_continue_optimiser is not None:
         continuation = vdam_checkpoint._load_native_vdam_continuation(
@@ -1244,7 +1172,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             grad_ini_frac,
             grad_fin_frac,
         )
-        optics_group_by_particle = _optics_group_indices(main_star)
+        optics_group_by_particle = star_io._optics_group_indices(main_star)
         if int(np.unique(optics_group_by_particle).size) != 1:
             raise NotImplementedError(
                 "diagnostic native VDAM continuation currently supports one optics group"

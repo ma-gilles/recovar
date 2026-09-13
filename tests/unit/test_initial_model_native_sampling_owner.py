@@ -4,7 +4,7 @@ import inspect
 
 from recovar.em.vdam import driver, native_options, native_sampling
 
-SAMPLING = ("NativeOpticsState", "NativeSamplingPlan", "NativeSamplingState", "_build_sampling_plan", "_initial_sampling_state", "_estimate_native_sampling_accuracy", "_relion_update_native_sampling_state", "_prepare_native_sampling_for_iteration", "_random_perturbation_for_iteration")
+SAMPLING = ("NativeSamplingPlan", "NativeSamplingState", "_build_sampling_plan", "_initial_sampling_state", "_estimate_native_sampling_accuracy", "_relion_update_native_sampling_state", "_prepare_native_sampling_for_iteration", "_random_perturbation_for_iteration")
 
 
 def test_owners_hold_the_definitions_and_driver_only_imports_them():

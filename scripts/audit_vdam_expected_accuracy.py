@@ -12,8 +12,8 @@ import numpy as np
 import starfile
 
 from recovar.data_io.cryoem_dataset import load_dataset
-from recovar.em.vdam.driver import _native_optics_state, read_star
-from recovar.em.vdam.star_io import _micrograph_sort_order
+from recovar.data_io.starfile import read_star
+from recovar.em.vdam.star_io import _micrograph_sort_order, _native_optics_state
 from recovar.relion_bind import _relion_bind_core as bind
 
 

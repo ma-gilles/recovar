@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 from helpers.vdam import numpy_rnd_unif_factory
 
-from recovar.em.vdam import driver, iteration_loop, m_step, mstep_single_class, native_options
+from recovar.em.vdam import driver, iteration_loop, m_step, mstep_single_class, native_options, star_io
 from recovar.em.vdam.init import initialise_denovo_state
 from scripts import run_ab_initio
 
@@ -99,7 +99,7 @@ def test_driver_converts_before_initial_artifact_and_forwards_loop(monkeypatch, 
     monkeypatch.setattr(driver, "load_dataset", lambda *a, **k: dataset)
     monkeypatch.setattr(driver, "maybe_cache_raw_image_loaders", lambda _: None)
     monkeypatch.setattr(driver, "_configure_relion_image_mask", lambda *a: None)
-    monkeypatch.setattr(driver, "_native_optics_state", lambda *a: None)
+    monkeypatch.setattr(star_io, "_native_optics_state", lambda *a: None)
     monkeypatch.setattr(driver, "_particle_state_from_star", lambda *a, **k: None)
     monkeypatch.setattr(driver, "_initial_sampling_state", lambda *a, **k: SimpleNamespace())
     monkeypatch.setattr(driver, "_build_sampling_plan", lambda *a, **k: SimpleNamespace(rotations=None))
