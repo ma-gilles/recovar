@@ -512,6 +512,7 @@ def compute_pass2_stats_sparse_bucketed(
         )
     from recovar.em.sampling import (
         get_oversampled_translation_grid,
+        infer_translation_step,
         rotation_grid_size,
     )
 
@@ -692,10 +693,7 @@ def compute_pass2_stats_sparse_bucketed(
     translations_source_np = np.asarray(translations)
     translations_np = np.asarray(translations_source_np, dtype=precision_policy.score_real_dtype)
     if translation_step is None:
-        unique_vals = np.unique(translations_np)
-        diffs = np.diff(np.sort(unique_vals))
-        diffs = diffs[diffs > 1e-6]
-        translation_step = float(diffs.min()) if diffs.size else 1.0
+        translation_step = infer_translation_step(translations_np)
     if fine_translations_override is None and fine_translation_parent_override is None:
         fine_translations_source, fine_translation_parent = get_oversampled_translation_grid(
             translations_source_np,
@@ -4569,6 +4567,7 @@ def compute_k_class_pass2_stats_sparse_fused(
 
     from recovar.em.sampling import (
         get_oversampled_translation_grid,
+        infer_translation_step,
         rotation_grid_size,
     )
 
@@ -4751,10 +4750,7 @@ def compute_k_class_pass2_stats_sparse_fused(
 
     translations_np = np.asarray(translations, dtype=precision_policy.score_real_dtype)
     if translation_step is None:
-        unique_vals = np.unique(translations_np)
-        diffs = np.diff(np.sort(unique_vals))
-        diffs = diffs[diffs > 1e-6]
-        translation_step = float(diffs.min()) if diffs.size else 1.0
+        translation_step = infer_translation_step(translations_np)
     if fine_translations_override is None and fine_translation_parent_override is None:
         fine_translations, fine_translation_parent = get_oversampled_translation_grid(
             translations_np,

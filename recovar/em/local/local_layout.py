@@ -30,6 +30,7 @@ from recovar.em.sampling import (
     get_local_rotation_grid_fast,
     get_oversampled_rotation_grid_from_samples,
     get_oversampled_translation_grid,
+    infer_translation_step,
     rotation_grid_n_in_planes,
     rotation_grid_size,
     rotation_indices_to_relion_eulers,
@@ -1250,7 +1251,7 @@ def build_local_hypothesis_layout(
     if int(local_parent_oversampling_order) > 0:
         translation_grid, translation_parent = get_oversampled_translation_grid(
             translations,
-            _infer_translation_step(translations),
+            infer_translation_step(translations),
             oversampling_order=int(local_parent_oversampling_order),
         )
         translation_grid = np.asarray(translation_grid, dtype=dtype)
@@ -1349,7 +1350,7 @@ def build_local_adaptive_pass2_hypothesis_layout(
     coarse_translations = np.asarray(parent_layout.translation_grid, dtype=dtype)
     n_coarse_trans = int(coarse_translations.shape[0])
     if translation_step is None:
-        translation_step = _infer_translation_step(coarse_translations)
+        translation_step = infer_translation_step(coarse_translations)
     fine_translations, fine_translation_parent = get_oversampled_translation_grid(
         coarse_translations,
         float(translation_step),
@@ -1501,16 +1502,6 @@ def build_local_adaptive_pass2_hypothesis_layout(
     )
 
 
-def _infer_translation_step(translations: np.ndarray) -> float:
-    # This helper only inspects an already-materialized grid.  Narrowing it
-    # first can merge distinct double-precision grid points and infer the
-    # wrong child spacing.
-    unique_vals = np.unique(np.asarray(translations))
-    diffs = np.diff(np.sort(unique_vals))
-    diffs = diffs[diffs > 1e-6]
-    return float(diffs.min()) if diffs.size else 1.0
-
-
 def _lookup_values_by_id(ids: np.ndarray, values: np.ndarray, query_ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Return ``values`` for integer ids without allocating a global id table."""
 
@@ -1638,7 +1629,7 @@ def build_pass2_hypothesis_layout(
     dtype = np.dtype(dtype)
     translations_np = np.asarray(translations, dtype=dtype)
     if translation_step is None:
-        translation_step = _infer_translation_step(translations_np)
+        translation_step = infer_translation_step(translations_np)
     fine_translations, fine_translation_parent = get_oversampled_translation_grid(
         translations_np,
         float(translation_step),

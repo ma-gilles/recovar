@@ -1253,6 +1253,14 @@ def get_oversampled_rotation_grid_from_samples(
     return tuple(outputs)
 
 
+def infer_translation_step(translations: np.ndarray) -> float:
+    """Infer spacing from an existing grid without narrowing its precision."""
+    unique_vals = np.unique(np.asarray(translations))
+    diffs = np.diff(np.sort(unique_vals))
+    diffs = diffs[diffs > 1e-6]
+    return float(diffs.min()) if diffs.size else 1.0
+
+
 def get_oversampled_translation_grid(parent_translations, pixel_offset, oversampling_order=1):
     """Generate a finer translation grid by subdividing each parent cell.
 
