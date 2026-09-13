@@ -215,14 +215,14 @@ def test_dense_run_em_reject_is_frozenset_with_pinned_contents():
 
 
 def test_sparse_pass2_result_fields_is_tuple_of_typed_attrs():
-    """``_SPARSE_PASS2_RESULT_FIELDS`` is the single source of truth for which
+    """``_PARTICLE_RESULT_FIELDS`` is the single source of truth for which
     estep meta attributes get concatenated across sparse pass-2 batches.
     """
-    from recovar.em.vdam.sparse_pass2_estep import _SPARSE_PASS2_RESULT_FIELDS
+    from recovar.em.vdam.estep_common import _PARTICLE_RESULT_FIELDS
 
-    assert isinstance(_SPARSE_PASS2_RESULT_FIELDS, tuple)
-    assert all(isinstance(item, tuple) and len(item) == 2 for item in _SPARSE_PASS2_RESULT_FIELDS)
-    for attr, dtype in _SPARSE_PASS2_RESULT_FIELDS:
+    assert isinstance(_PARTICLE_RESULT_FIELDS, tuple)
+    assert all(isinstance(item, tuple) and len(item) == 2 for item in _PARTICLE_RESULT_FIELDS)
+    for attr, dtype in _PARTICLE_RESULT_FIELDS:
         assert isinstance(attr, str), f"expected attr name str, got {attr!r}"
         assert isinstance(dtype, type), f"expected dtype to be a type, got {dtype!r}"
 

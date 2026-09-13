@@ -38,6 +38,7 @@ from recovar.em.sampling import (
 )
 from recovar.em.scoring.significance import _compute_k_class_significance_batched
 from recovar.em.vdam.estep_common import (
+    _PARTICLE_RESULT_FIELDS,
     DenseInitialModelEstepConfig,
     DenseInitialModelEstepResult,
     _add_accumulator_weight_meta,
@@ -311,16 +312,6 @@ def _coarse_translations_from_config(
     return get_translation_grid(max_pixel=max_offset, pixel_offset=step).astype(np.float32)
 
 
-_SPARSE_PASS2_RESULT_FIELDS: tuple[tuple[str, type], ...] = (
-    ("pose_assignments", np.int32),
-    ("class_assignments", np.int32),
-    ("best_pose_rotations", np.float32),
-    ("best_pose_translations", np.float32),
-    ("best_pose_rotation_ids", np.int32),
-    ("significant_counts", np.int32),
-)
-
-
 def _sparse_pass2_estep_meta(
     halfset_results: dict[int, Any],
     selected_particle_ids_by_halfset: dict[int, np.ndarray],
@@ -332,7 +323,7 @@ def _sparse_pass2_estep_meta(
     source_euler_valid = []
     selected_particle_ids: list[np.ndarray] = []
     max_posterior: list[np.ndarray] = []
-    field_lists: dict[str, list[np.ndarray]] = {attr: [] for attr, _ in _SPARSE_PASS2_RESULT_FIELDS}
+    field_lists: dict[str, list[np.ndarray]] = {attr: [] for attr, _ in _PARTICLE_RESULT_FIELDS}
 
     for halfset_idx, result in sorted(halfset_results.items()):
         image_ids = np.asarray(selected_particle_ids_by_halfset[int(halfset_idx)], dtype=np.int64)
@@ -344,7 +335,7 @@ def _sparse_pass2_estep_meta(
                 raise ValueError("source Euler rows must match their pseudo-halfset particle IDs")
         source_euler_rows.append(np.zeros((image_ids.size, 3), dtype=np.float64) if source is None else source)
         source_euler_valid.append(np.full(image_ids.size, source is not None, dtype=bool))
-        for attr, dtype in _SPARSE_PASS2_RESULT_FIELDS:
+        for attr, dtype in _PARTICLE_RESULT_FIELDS:
             value = getattr(result, attr, None)
             if value is not None:
                 field_lists[attr].append(np.asarray(value, dtype=dtype))
@@ -363,7 +354,7 @@ def _sparse_pass2_estep_meta(
         meta["best_pose_eulers_deg"] = np.concatenate(source_euler_rows)
         meta["best_pose_eulers_valid"] = np.concatenate(source_euler_valid)
     _merge(selected_particle_ids, "selected_particle_ids", np.int64)
-    for attr, dtype in _SPARSE_PASS2_RESULT_FIELDS:
+    for attr, dtype in _PARTICLE_RESULT_FIELDS:
         _merge(field_lists[attr], attr, dtype)
     _merge(max_posterior, "max_posterior_per_image", np.float32)
     meta["sparse_pass2"] = True

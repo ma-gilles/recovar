@@ -20,6 +20,15 @@ from recovar.em.vdam.state import InitialModelState, VdamAccumulator
 ProjectorSetupBackend = Literal["native", "jax"]
 
 
+_PARTICLE_RESULT_FIELDS: tuple[tuple[str, type], ...] = (
+    ("pose_assignments", np.int32),
+    ("class_assignments", np.int32),
+    ("best_pose_rotations", np.float32),
+    ("best_pose_translations", np.float32),
+    ("best_pose_rotation_ids", np.int32),
+    ("significant_counts", np.int32),
+)
+
 @dataclass(frozen=True, kw_only=True)
 class DenseInitialModelEstepConfig:
     """Configuration for one InitialModel dense K-class E-step."""

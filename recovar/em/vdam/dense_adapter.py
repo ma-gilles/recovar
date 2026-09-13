@@ -15,6 +15,7 @@ import numpy as np
 
 from recovar.em.classification.k_class import run_dense_k_class_em
 from recovar.em.vdam.estep_common import (
+    _PARTICLE_RESULT_FIELDS,
     DenseInitialModelEstepConfig,
     DenseInitialModelEstepResult,
     ProjectorSetupBackend,
@@ -25,7 +26,7 @@ from recovar.em.vdam.estep_common import (
     _group_local_kwargs,
     _relion_projector_dense_rotations,
 )
-from recovar.em.vdam.sparse_pass2_estep import _SPARSE_PASS2_RESULT_FIELDS, _run_sparse_pass2_initial_model_estep
+from recovar.em.vdam.sparse_pass2_estep import _run_sparse_pass2_initial_model_estep
 from recovar.em.vdam.state import InitialModelState, VdamAccumulator
 
 _ENGINE_DEFAULTS: dict[str, Any] = {
@@ -528,19 +529,19 @@ def run_dense_initial_model_estep(
         accumulators.extend(by_halfset[halfset_idx])
 
     selected_particle_ids: list[np.ndarray] = []
-    field_lists: dict[str, list[np.ndarray]] = {attr: [] for attr, _ in _SPARSE_PASS2_RESULT_FIELDS}
+    field_lists: dict[str, list[np.ndarray]] = {attr: [] for attr, _ in _PARTICLE_RESULT_FIELDS}
     max_posterior: list[np.ndarray] = []
     for halfset_idx, image_indices in groups:
         result = halfset_results.get(halfset_idx)
         if result is None:
             continue
-        attrs = {attr: getattr(result, attr, None) for attr, _ in _SPARSE_PASS2_RESULT_FIELDS}
+        attrs = {attr: getattr(result, attr, None) for attr, _ in _PARTICLE_RESULT_FIELDS}
         stats = getattr(result, "stats", None)
         pmax = None if stats is None else getattr(stats, "max_posterior_per_image", None)
         if pmax is None and all(v is None for v in attrs.values()):
             continue
         selected_particle_ids.append(np.asarray(image_indices, dtype=np.int64))
-        for attr, dtype in _SPARSE_PASS2_RESULT_FIELDS:
+        for attr, dtype in _PARTICLE_RESULT_FIELDS:
             if attrs[attr] is not None:
                 field_lists[attr].append(np.asarray(attrs[attr], dtype=dtype))
         if pmax is not None:
@@ -550,7 +551,7 @@ def run_dense_initial_model_estep(
     _add_accumulator_weight_meta(meta, accumulators, state.K)
     if selected_particle_ids:
         meta["selected_particle_ids"] = np.concatenate(selected_particle_ids).astype(np.int64, copy=False)
-    for attr, dtype in _SPARSE_PASS2_RESULT_FIELDS:
+    for attr, dtype in _PARTICLE_RESULT_FIELDS:
         if field_lists[attr]:
             meta[attr] = np.concatenate(field_lists[attr]).astype(dtype, copy=False)
     if max_posterior:
