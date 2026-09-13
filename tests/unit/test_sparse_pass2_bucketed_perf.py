@@ -10052,14 +10052,19 @@ def test_image_axis_capacity_padding_does_not_change_fused_kclass_results(monkey
         lambda n, **_kwargs: max(16, 1 << (int(n) - 1).bit_length()) if int(n) > 0 else 0,
     )
     pads = []
-    original_pad = bucketed_mod.pad_compact_pair_arrays_to_image_capacity
+    # Padding now happens inside the builders (arrays are allocated at capacity),
+    # so record the capacity the builder was asked for against the real row count.
+    original_build = bucketed_mod._build_compact_pair_bucket_arrays_from_per_image_inputs
 
-    def recording_pad(pair_arrays, capacity):
-        out = original_pad(pair_arrays, capacity)
-        pads.append((int(np.asarray(pair_arrays["image_indices"]).shape[0]), int(capacity)))
-        return out
+    def recording_build(bucket, per_image_inputs, *args, capacity_rows=None, **kwargs):
+        real = int(np.asarray(bucket["image_indices"]).shape[0])
+        if capacity_rows is not None:
+            pads.append((real, int(capacity_rows)))
+        return original_build(bucket, per_image_inputs, *args, capacity_rows=capacity_rows, **kwargs)
 
-    monkeypatch.setattr(bucketed_mod, "pad_compact_pair_arrays_to_image_capacity", recording_pad)
+    monkeypatch.setattr(
+        bucketed_mod, "_build_compact_pair_bucket_arrays_from_per_image_inputs", recording_build
+    )
 
     def run(capacity_flag):
         monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")

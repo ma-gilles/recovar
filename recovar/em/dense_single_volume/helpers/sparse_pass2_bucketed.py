@@ -7725,7 +7725,17 @@ def _reorder_to_indices(image_indices_returned, requested_image_indices, *arrays
         return arrays
     position = {int(idx): pos for pos, idx in enumerate(np.asarray(requested_image_indices).tolist())}
     order = np.array([position[int(idx)] for idx in np.asarray(image_indices_returned).tolist()], dtype=np.int64)
-    return tuple(None if arr is None else arr[order] for arr in arrays)
+
+    def _reorder(arr):
+        if arr is None:
+            return None
+        n_rows = int(np.asarray(arr).shape[0])
+        if n_rows > order.size:
+            # arrays allocated at image capacity: permute the real rows, keep the padding
+            return arr[np.concatenate([order, np.arange(order.size, n_rows, dtype=np.int64)])]
+        return arr[order]
+
+    return tuple(_reorder(arr) for arr in arrays)
 
 
 def _pass2_dump_requested_for_bucket(
@@ -14234,6 +14244,16 @@ def compute_k_class_pass2_stats_sparse_fused(
             group_t0 = time.time()
             group_timing = {} if profile_group_timing else None
         stage_t0 = time.time()
+        # Allocate the image axis at its quantized capacity inside the builders so
+        # the later capacity block finds nothing to copy.
+        build_capacity_rows = None
+        if bucket_uses_compact_pairs and image_capacity_enabled():
+            _cap = quantized_image_capacity(
+                int(image_indices.shape[0]),
+                max_images=bucket_meta.get("image_capacity_budget"),
+            )
+            if _cap > int(image_indices.shape[0]):
+                build_capacity_rows = int(_cap)
         class_bucket_arrays = _build_k_class_bucket_arrays(
             bucket_meta,
             per_image_inputs_by_class,
@@ -14241,6 +14261,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             compact_buckets=bucket_uses_compact_pairs or compact_buckets,
             include_dense_score_fields=not bucket_uses_compact_pairs,
             rotation_block_size_for_quantization=rotation_block_size_for_quantization,
+            capacity_rows=build_capacity_rows,
         )
         if parse_env_flag(
             _SPARSE_KCLASS_EXECUTION_SIGNATURES_ENV,
@@ -14257,7 +14278,9 @@ def compute_k_class_pass2_stats_sparse_fused(
         compact_pair_arrays_by_class = None
         if bucket_uses_compact_pairs:
             compact_pair_arrays_by_class = [
-                _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket_meta, per_image_inputs)
+                _build_compact_pair_bucket_arrays_from_per_image_inputs(
+                    bucket_meta, per_image_inputs, capacity_rows=build_capacity_rows
+                )
                 for per_image_inputs in per_image_inputs_by_class
             ]
         batch = int(image_indices.shape[0])

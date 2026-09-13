@@ -967,8 +967,27 @@ def compact_pair_lazy_tables_enabled() -> bool:
     return parse_env_binary_flag(COMPACT_PAIR_LAZY_TABLES_ENV)
 
 
-def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_inputs, *, lazy_pair_tables=None):
-    """Stack/pad compact candidate pairs for one class and bucket on demand."""
+def _rows_at_capacity(values, capacity_rows, fill):
+    """Return ``values`` extended along axis 0 to ``capacity_rows`` rows of ``fill`` (or as is)."""
+    values = np.asarray(values)
+    if capacity_rows is None or int(capacity_rows) <= int(values.shape[0]):
+        return values
+    out = np.full((int(capacity_rows),) + values.shape[1:], fill, dtype=values.dtype)
+    out[: values.shape[0]] = values
+    return out
+
+
+def _build_compact_pair_bucket_arrays_from_per_image_inputs(
+    bucket, per_image_inputs, *, lazy_pair_tables=None, capacity_rows=None
+):
+    """Stack/pad compact candidate pairs for one class and bucket on demand.
+
+    ``capacity_rows`` allocates the image axis at the quantized capacity directly
+    (padded rows: counts 0, mask False, indices 0, prior -1e30, image index =
+    last real image), which is exactly what ``pad_compact_pair_arrays_to_image_capacity``
+    produced afterwards by copying every array (12 % of host time at 100k/256,
+    job 13808609).
+    """
 
     pair_bucket_size = int(bucket["pair_bucket_size"])
     image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
@@ -979,22 +998,26 @@ def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_in
     batch = int(image_indices.shape[0])
     if lazy_pair_tables is None:
         lazy_pair_tables = compact_pair_lazy_tables_enabled()
+    n_alloc = batch if capacity_rows is None else max(batch, int(capacity_rows))
+    padded_image_indices = image_indices
+    if n_alloc > batch:
+        padded_image_indices = np.concatenate([image_indices, np.repeat(image_indices[-1:], n_alloc - batch)])
     if lazy_pair_tables:
         return {
-            "image_indices": image_indices,
+            "image_indices": padded_image_indices,
             "pair_bucket_size": pair_bucket_size,
-            "pair_counts": index_arrays["pair_counts"],
-            "local_rotation_row": index_arrays["local_rotation_row"],
-            "translation_idx": index_arrays["translation_idx"],
+            "pair_counts": _rows_at_capacity(index_arrays["pair_counts"], n_alloc, 0),
+            "local_rotation_row": _rows_at_capacity(index_arrays["local_rotation_row"], n_alloc, 0),
+            "translation_idx": _rows_at_capacity(index_arrays["translation_idx"], n_alloc, 0),
             "rotation_index": None,
             "log_prior": None,
-            "pair_mask": index_arrays["pair_mask"],
+            "pair_mask": _rows_at_capacity(index_arrays["pair_mask"], n_alloc, False),
         }
-    padded_rotation_index = np.zeros((batch, pair_bucket_size), dtype=np.int64)
+    padded_rotation_index = np.zeros((n_alloc, pair_bucket_size), dtype=np.int64)
     log_prior_dtype = np.result_type(
         *(np.asarray(per_image_inputs["log_prior"][int(image_idx)]).dtype for image_idx in image_indices)
     )
-    padded_log_prior = np.full((batch, pair_bucket_size), -1e30, dtype=log_prior_dtype)
+    padded_log_prior = np.full((n_alloc, pair_bucket_size), -1e30, dtype=log_prior_dtype)
 
     # One flat gather per field instead of a Python loop of per-image gathers and
     # slice assignments. Measured 2026-09-12 on the 100k/256 K=4 fixture: the loop
@@ -1026,14 +1049,14 @@ def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_in
         padded_log_prior[dest_rows, dest_cols] = np.concatenate(prior_rows)[gather]
 
     return {
-        "image_indices": image_indices,
+        "image_indices": padded_image_indices,
         "pair_bucket_size": pair_bucket_size,
-        "pair_counts": index_arrays["pair_counts"],
-        "local_rotation_row": index_arrays["local_rotation_row"],
-        "translation_idx": index_arrays["translation_idx"],
+        "pair_counts": _rows_at_capacity(index_arrays["pair_counts"], n_alloc, 0),
+        "local_rotation_row": _rows_at_capacity(index_arrays["local_rotation_row"], n_alloc, 0),
+        "translation_idx": _rows_at_capacity(index_arrays["translation_idx"], n_alloc, 0),
         "rotation_index": padded_rotation_index,
         "log_prior": padded_log_prior,
-        "pair_mask": index_arrays["pair_mask"],
+        "pair_mask": _rows_at_capacity(index_arrays["pair_mask"], n_alloc, False),
     }
 
 
@@ -1043,11 +1066,21 @@ def _build_bucket_arrays(
     n_fine_trans,
     *,
     include_dense_score_fields: bool = True,
+    capacity_rows=None,
 ):
-    """Stack/pad per-image arrays into batched bucket tensors."""
+    """Stack/pad per-image arrays into batched bucket tensors.
+
+    ``capacity_rows`` allocates the image axis at the quantized capacity up front
+    (identity rotations, zero counts/indices, -1e30 priors, false masks, -1
+    parents, image index = last real image), matching what
+    ``pad_bucket_arrays_to_image_capacity`` produced afterwards by copying.
+    """
     bucket_size = int(bucket["bucket_size"])
     image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
-    batch = int(image_indices.shape[0])
+    n_real = int(image_indices.shape[0])
+    batch = n_real if capacity_rows is None else max(n_real, int(capacity_rows))
+    if batch > n_real:
+        image_indices = np.concatenate([image_indices, np.repeat(image_indices[-1:], batch - n_real)])
 
     # padded_rotations: identity-fill — projection of identity is harmless
     # because we mask via candidate_mask=False everywhere for padded rows.
@@ -1100,7 +1133,7 @@ def _build_bucket_arrays(
     )
     padded_rotation_indices = np.zeros((batch, bucket_size), dtype=np.int64)
     actual_counts = np.zeros(batch, dtype=np.int32)
-    for row, image_idx in enumerate(image_indices.tolist()):
+    for row, image_idx in enumerate(image_indices[:n_real].tolist()):
         rots = per_image_inputs["oversampled_rots"][image_idx]
         cnt = int(rots.shape[0])
         actual_counts[row] = cnt
@@ -1154,6 +1187,7 @@ def _build_k_class_bucket_arrays(
     compact_buckets: bool = False,
     include_dense_score_fields: bool = True,
     rotation_block_size_for_quantization=5000,
+    capacity_rows=None,
 ):
     """Build per-class padded arrays for fused sparse K-class pass 2.
 
@@ -1184,6 +1218,7 @@ def _build_k_class_bucket_arrays(
                 per_image_inputs,
                 n_fine_trans,
                 include_dense_score_fields=include_dense_score_fields,
+                capacity_rows=capacity_rows,
             )
         )
     return class_arrays
