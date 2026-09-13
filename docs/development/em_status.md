@@ -287,8 +287,12 @@ this page does not schedule or authorize duplicate runs.
 The tiny dtype-repair CUDA guard is complete on its frozen source. Continue
 strict K1 state closure and the existing peer attribution jobs before advancing
 the scientific ladder in the coordination queue. Do not restart completed checks
-or duplicate live candidates. The latest VDAM size check still fails at8634>6100 lines; moving code into
+or duplicate live candidates. The latest VDAM size check still fails at 8624 > 6100 lines; moving code into
 another owner does not remove it from the budget.
+The bounded v6 native capture passed live rank/library and closed-payload checks;
+all 184 files and three ranks were independently verified. This supplies qualified
+operands for score/support diagnosis, not completed-refinement or strict-state
+acceptance. See the [capture receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/native_v6_terminal_lead_review_20260913/result.json).
 
 Preserve the distinct numerical routes while reducing structural overhead. Big-JIT
 argument lists define static/dynamic compilation boundaries. Bucketed and fused
