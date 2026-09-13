@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from recovar.em import sampling
 from recovar.em.vdam import driver, native_options, native_sampling
 from recovar.em.vdam.init import initialise_denovo_state
 from recovar.em.vdam.state import NativeParticleState
@@ -27,7 +28,7 @@ def test_deferred_plan_preserves_geometry(monkeypatch, order, oversampling, pert
     def forbidden(*args, **kwargs):
         raise AssertionError("Unused full fine grid was materialized")
 
-    monkeypatch.setattr(driver.sampling, "get_oversampled_relion_hidden_rotation_grid_from_samples", forbidden)
+    monkeypatch.setattr(sampling, "get_oversampled_relion_hidden_rotation_grid_from_samples", forbidden)
     sparse = native_sampling._build_sampling_plan(opts, iteration=3, defer_fine_rotations=True)
     assert sparse.n_rotations == dense.n_rotations == len(dense.rotations)
     if oversampling:
@@ -86,7 +87,7 @@ def test_expectation_deferred_plan_routing_and_metadata(monkeypatch, selector):
         def forbidden(*args, **kwargs):
             raise AssertionError("Sparse E-step built a full fine grid")
 
-        monkeypatch.setattr(driver.sampling, "get_oversampled_relion_hidden_rotation_grid_from_samples", forbidden)
+        monkeypatch.setattr(sampling, "get_oversampled_relion_hidden_rotation_grid_from_samples", forbidden)
     dataset = SimpleNamespace(image_shape=(8, 8), voxel_size=1.0, n_images=2)
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=3, n_directions=3)
     state.iter = 3

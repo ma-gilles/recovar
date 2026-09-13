@@ -15,20 +15,18 @@ import numpy as np
 
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.data_io.starfile import read_star
-from recovar.em import sampling
 from recovar.em.diagnostics.vdam_mstep_replay import (
     INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV,
     _maybe_replay_iteration_references,
 )
 from recovar.em.helpers.batch_planning import maybe_cache_raw_image_loaders
 from recovar.em.helpers.orientation_priors import (
-    make_relion_translation_log_prior,
     relion_round_away_from_zero,
     relion_sigma_offset_prior_center,
     relion_translation_prior_center,
 )
 from recovar.em.relion import vdam_checkpoint
-from recovar.em.vdam import estep_meta_updates, star_io
+from recovar.em.vdam import estep_meta_updates, native_sampling, star_io
 from recovar.em.vdam.bootstrap_iref import _initial_state_from_particles
 from recovar.em.vdam.dense_adapter import (
     prepare_relion_projector_class_inputs,
@@ -47,7 +45,6 @@ from recovar.em.vdam.native_sampling import (
     _estimate_native_sampling_accuracy,
     _initial_sampling_state,
     _isolate_native_sampling_accuracy_diagnostic,
-    _n_directions_for_healpix_order,
     _prepare_native_sampling_for_iteration,
     _record_native_sampling_assignment_changes,
     _record_native_sampling_post_iteration,
@@ -168,29 +165,6 @@ def _skip_native_sampling_accuracy_diagnostic() -> bool:
     return value == "1"
 
 
-def _translation_log_prior(
-    translations: np.ndarray,
-    *,
-    voxel_size: float,
-    sigma_angstrom: float | None,
-    centers: np.ndarray | None = None,
-) -> np.ndarray | None:
-    """Build InitialModel's RELION accelerated-path ``pdf_offset`` values."""
-
-    if sigma_angstrom is None:
-        return None
-    translations = np.asarray(translations, dtype=np.float32)
-    shared = centers is None
-    centers_arr = np.zeros(2, dtype=np.float32) if shared else np.asarray(centers, dtype=np.float32)
-    log_prior = make_relion_translation_log_prior(
-        translations,
-        voxel_size=float(voxel_size),
-        sigma_offset_angstrom=float(sigma_angstrom),
-        prior_centers=centers_arr,
-    )
-    return np.asarray(log_prior, dtype=np.float32)
-
-
 def _noise_variance_from_sigma2(sigma2_noise: np.ndarray, ori_size: int) -> np.ndarray:
     """Convert RELION normalized shell power to engine-frame radial noise (unnormalised FFT)."""
     n4 = int(ori_size) ** 4
@@ -205,71 +179,6 @@ def _noise_variance_from_sigma2(sigma2_noise: np.ndarray, ori_size: int) -> np.n
         ),
         dtype=np.float64,
     ).reshape(-1)
-
-
-def _class_direction_rotation_log_prior(state: InitialModelState, healpix_order: int) -> np.ndarray:
-    """Return RELION's class-specific direction prior over coarse rotations.
-
-    RELION copies ``pdf_direction`` into an ``RFLOAT`` buffer and its CUDA
-    ``initOrientations`` kernel stores ``log(pdf)`` directly in ``XFLOAT``.
-    Do not remove the class-common scale before taking the logarithm.  Although
-    that scale cancels analytically, changing it changes float32 addition and
-    adaptive-significance ties.
-    """
-
-    n_psi = int(sampling.rotation_grid_n_in_planes(int(healpix_order)))
-    n_dir = _n_directions_for_healpix_order(int(healpix_order))
-    n_rot = int(n_dir * n_psi)
-    pdf_direction = np.asarray(state.pdf_direction, dtype=np.float64)
-    if pdf_direction.shape != (int(state.K), n_dir):
-        pdf_direction = np.full((int(state.K), n_dir), 1.0 / float(int(state.K) * n_dir), dtype=np.float64)
-    direction_ids = np.arange(n_rot, dtype=np.int64) // n_psi
-    values = pdf_direction[:, direction_ids]
-    out = np.full(values.shape, -1.0e30, dtype=np.float64)
-    positive = values > 0.0
-    out[positive] = np.log(values[positive])
-    return out.astype(np.float32)
-
-
-def _class_rotation_log_prior_for_sampling(
-    state: InitialModelState,
-    sampling_state: NativeSamplingState,
-    healpix_order: int,
-) -> np.ndarray:
-    """Select the live RELION orientation-prior source for this sampling state."""
-
-    if bool(sampling_state.uniform_local_orientation_prior):
-        n_rot = int(sampling.rotation_grid_size(int(healpix_order)))
-        return np.zeros((int(state.K), n_rot), dtype=np.float32)
-    return _class_direction_rotation_log_prior(state, int(healpix_order))
-
-
-def _expand_class_rotation_log_prior_for_dense_fine_grid(
-    class_rotation_log_prior: np.ndarray,
-    sampling_plan: NativeSamplingPlan,
-) -> np.ndarray:
-    """Broadcast coarse direction priors onto dense oversampled rotations."""
-
-    prior = np.asarray(class_rotation_log_prior, dtype=np.float32)
-    if int(sampling_plan.oversampling) <= 0:
-        return prior
-    if prior.ndim != 2:
-        raise ValueError(f"class_rotation_log_prior must be 2D, got {prior.ndim} dimensions")
-
-    _rotations, parent_map = sampling.get_oversampled_relion_hidden_rotation_grid_from_samples(
-        np.arange(prior.shape[1], dtype=np.int64),
-        parent_nside_level=int(sampling_plan.healpix_order),
-        oversampling_order=int(sampling_plan.oversampling),
-        random_perturbation=float(sampling_plan.random_perturbation),
-    )
-    parent_map = np.asarray(parent_map, dtype=np.int64)
-    expected = int(np.asarray(sampling_plan.rotations).shape[0])
-    if parent_map.shape != (expected,):
-        raise ValueError(
-            "oversampled rotation parent map shape does not match dense rotations: "
-            f"got {parent_map.shape}, expected ({expected},)",
-        )
-    return prior[:, parent_map].astype(np.float32, copy=False)
 
 
 def _dense_estep_config(
@@ -308,8 +217,8 @@ def _dense_estep_config(
         sigma_angstrom=sigma_angstrom,
         centers=translation_prior_centers,
     )
-    coarse_translation_log_prior = _translation_log_prior(coarse_prior_translations, **_prior_kwargs)
-    translation_log_prior = _translation_log_prior(sampling_plan.translations, **_prior_kwargs)
+    coarse_translation_log_prior = native_sampling._translation_log_prior(coarse_prior_translations, **_prior_kwargs)
+    translation_log_prior = native_sampling._translation_log_prior(sampling_plan.translations, **_prior_kwargs)
 
     sparse_pass2_enabled = os.environ.get("RECOVAR_DISABLE_SPARSE_PASS2", "") not in (
         "1",
@@ -526,13 +435,13 @@ def _native_expectation_step(
                 relion_projector_half_by_class=prepared_half,
                 relion_projector_r_max=prepared_r_max,
             )
-        class_rotation_log_prior = _class_rotation_log_prior_for_sampling(
+        class_rotation_log_prior = native_sampling._class_rotation_log_prior_for_sampling(
             state,
             sampling_state,
             int(sampling_plan.healpix_order),
         )
         if not bool(config.engine_kwargs.get("sparse_pass2", False)):
-            class_rotation_log_prior = _expand_class_rotation_log_prior_for_dense_fine_grid(
+            class_rotation_log_prior = native_sampling._expand_class_rotation_log_prior_for_dense_fine_grid(
                 class_rotation_log_prior,
                 sampling_plan,
             )

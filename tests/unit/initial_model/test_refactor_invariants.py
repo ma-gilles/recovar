@@ -362,17 +362,17 @@ def test_bootstrap_iref_pure_python_fallback_stays_deleted():
 # (8626). See docs/development/codebase.md#vdam-code-budgets for retained growth
 # and the accounting contract. Budgets allow 224 total lines of headroom.
 LOC_BUDGETS = {
-    "controller": (2010, (
+    "controller": (1890, (
         "__init__.py", "driver.py", "iteration_loop.py", "native_options.py",
         "schedules.py", "subset.py", "subset_schedule.py",
     )),
     "initialization": (500, ("bootstrap_iref.py", "init.py")),
-    "sampling_layout": (850, ("native_sampling.py", "layout.py")),
+    "sampling_layout": (950, ("native_sampling.py", "layout.py")),
     "estep": (2290, (
         "dense_adapter.py", "estep_common.py", "estep_meta_updates.py", "sparse_pass2_estep.py",
     )),
     "reconstruction_state": (790, ("m_step.py", "mstep_single_class.py", "state.py")),
-    "input_output": (1250, (
+    "input_output": (1270, (
         "star_io.py", "../relion/vdam_checkpoint.py", "../relion/initial_noise.py",
     )),
     "diagnostics": (1160, (

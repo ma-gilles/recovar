@@ -13,6 +13,7 @@ import pytest
 import recovar.em.vdam.driver as driver
 from recovar.commands import initial_model
 from recovar.data_io.starfile import read_star
+from recovar.em import sampling
 from recovar.em.diagnostics import vdam_mstep_replay
 from recovar.em.helpers.batch_planning import maybe_cache_raw_image_loaders
 from recovar.em.relion import vdam_checkpoint
@@ -412,11 +413,11 @@ def test_seed_zero_halfsets_use_relion_experiment_position_parity(monkeypatch):
 def test_translation_log_prior_matches_relion_pdf_offset_scaling():
     translations = np.asarray([[0.0, 0.0], [2.0, 0.0], [0.0, -1.0]], dtype=np.float32)
 
-    prior = driver._translation_log_prior(translations, voxel_size=3.0, sigma_angstrom=6.0)
+    prior = native_sampling._translation_log_prior(translations, voxel_size=3.0, sigma_angstrom=6.0)
 
     np.testing.assert_allclose(prior, np.asarray([0.0, -4.5, -1.125], dtype=np.float32), rtol=1e-6)
 
-    centered = driver._translation_log_prior(
+    centered = native_sampling._translation_log_prior(
         translations,
         voxel_size=3.0,
         sigma_angstrom=6.0,
@@ -1336,9 +1337,9 @@ def test_uniform_local_orientation_prior_replaces_learned_direction_prior():
         uniform_local_orientation_prior=True,
     )
 
-    prior = driver._class_rotation_log_prior_for_sampling(state, sampling_state, healpix_order=0)
+    prior = native_sampling._class_rotation_log_prior_for_sampling(state, sampling_state, healpix_order=0)
 
-    assert prior.shape == (1, driver.sampling.rotation_grid_size(0))
+    assert prior.shape == (1, sampling.rotation_grid_size(0))
     np.testing.assert_array_equal(prior, np.zeros_like(prior))
 
 
@@ -1355,9 +1356,9 @@ def test_noprior_sampling_uses_learned_direction_prior(monkeypatch):
         pixel_size=2.0,
     )
 
-    monkeypatch.setattr(driver, "_class_direction_rotation_log_prior", lambda _state, _order: expected)
+    monkeypatch.setattr(native_sampling, "_class_direction_rotation_log_prior", lambda _state, _order: expected)
 
-    prior = driver._class_rotation_log_prior_for_sampling(state, sampling_state, healpix_order=0)
+    prior = native_sampling._class_rotation_log_prior_for_sampling(state, sampling_state, healpix_order=0)
 
     assert prior is expected
 
@@ -1373,8 +1374,8 @@ def test_direction_prior_preserves_relion_absolute_log_scale_and_cutoff_tie():
     state.pdf_direction[0, 9] = 0.0194935499409
     state.pdf_direction[0, 10] = 0.0206643770425
 
-    prior = driver._class_direction_rotation_log_prior(state, healpix_order=0)
-    n_psi = driver.sampling.rotation_grid_n_in_planes(0)
+    prior = native_sampling._class_direction_rotation_log_prior(state, healpix_order=0)
+    n_psi = sampling.rotation_grid_n_in_planes(0)
 
     expected_9 = np.float32(np.log(state.pdf_direction[0, 9]))
     expected_10 = np.float32(np.log(state.pdf_direction[0, 10]))
@@ -1721,10 +1722,10 @@ def test_update_particle_state_preserves_best_pose_metadata():
 
 
 def test_best_eulers_from_particle_state_prefers_stored_rotation_matrices():
-    grid_eulers = driver.sampling.get_relion_rotation_grid_eulers(1, rotation_index_order="relion")
-    grid_rotations = driver.sampling.get_relion_rotation_grid(1, rotation_index_order="relion")
+    grid_eulers = sampling.get_relion_rotation_grid_eulers(1, rotation_index_order="relion")
+    grid_rotations = sampling.get_relion_rotation_grid(1, rotation_index_order="relion")
     perturbed_euler = np.asarray([[33.0, 44.0, 55.0]], dtype=np.float64)
-    perturbed_rotation = driver.sampling._relion_euler_angles_to_matrix(perturbed_euler)[0].astype(np.float32)
+    perturbed_rotation = sampling._relion_euler_angles_to_matrix(perturbed_euler)[0].astype(np.float32)
     particle_state = NativeParticleState(
         translation_offsets=np.zeros((2, 2), dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
@@ -1742,7 +1743,7 @@ def test_best_eulers_from_particle_state_prefers_stored_rotation_matrices():
     assert eulers is not None
     assert not np.allclose(eulers[0], grid_eulers[5])
     np.testing.assert_allclose(
-        driver.sampling._relion_euler_angles_to_matrix(eulers),
+        sampling._relion_euler_angles_to_matrix(eulers),
         np.stack([perturbed_rotation, grid_rotations[7]], axis=0),
         atol=1e-5,
     )
@@ -2002,7 +2003,7 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
     state.tau2_fudge_factor = 3.995253
     state.sorted_particle_ids = np.asarray([1, 0], dtype=np.int64)
     state.sorted_particle_part_ids = np.asarray([9, 4], dtype=np.int64)
-    best_rotations = driver.sampling._relion_euler_angles_to_matrix(
+    best_rotations = sampling._relion_euler_angles_to_matrix(
         np.asarray([[10.0, 30.0, 20.0], [40.0, 60.0, 50.0]])
     )
     particle_state = NativeParticleState(
@@ -2166,8 +2167,8 @@ def test_native_expectation_step_expands_class_rotation_prior_for_dense_fallback
         )
 
     monkeypatch.setattr(driver, "_build_sampling_plan", fake_build_sampling_plan)
-    monkeypatch.setattr(driver, "_class_direction_rotation_log_prior", fake_class_direction_rotation_log_prior)
-    monkeypatch.setattr(driver, "_expand_class_rotation_log_prior_for_dense_fine_grid", fake_expand)
+    monkeypatch.setattr(native_sampling, "_class_direction_rotation_log_prior", fake_class_direction_rotation_log_prior)
+    monkeypatch.setattr(native_sampling, "_expand_class_rotation_log_prior_for_dense_fine_grid", fake_expand)
     monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
 
     opts = native_options.NativeInitialModelOptions(fn_img="particles.star", oversampling=1)
@@ -2209,7 +2210,7 @@ def test_expand_class_rotation_prior_for_dense_fine_grid_uses_parent_map(monkeyp
         return np.zeros((6, 3, 3), dtype=np.float32), parent_map
 
     monkeypatch.setattr(
-        driver.sampling,
+        sampling,
         "get_oversampled_relion_hidden_rotation_grid_from_samples",
         fake_oversampled,
     )
@@ -2222,7 +2223,7 @@ def test_expand_class_rotation_prior_for_dense_fine_grid_uses_parent_map(monkeyp
         oversampling=1,
     )
 
-    expanded = driver._expand_class_rotation_log_prior_for_dense_fine_grid(prior, plan)
+    expanded = native_sampling._expand_class_rotation_log_prior_for_dense_fine_grid(prior, plan)
 
     np.testing.assert_allclose(expanded, prior[:, parent_map])
 
@@ -2509,7 +2510,7 @@ def test_data_star_zeros_unvisited_rows_and_writes_best_pose_eulers(tmp_path, mo
     )
 
     data, _ = read_star(str(out))
-    expected_eulers = driver.sampling.get_relion_rotation_grid_eulers(1, rotation_index_order="relion")
+    expected_eulers = sampling.get_relion_rotation_grid_eulers(1, rotation_index_order="relion")
     assert data["_rlnImageName"].tolist() == ["1@stack.mrcs", "2@stack.mrcs", "3@stack.mrcs"]
     np.testing.assert_array_equal(data["_rlnClassNumber"].astype(int).to_numpy(), [0, 1, 1])
     np.testing.assert_array_equal(data["_rlnRandomSubset"].astype(int).to_numpy(), [1, 2, 1])

@@ -150,12 +150,12 @@ structural guard; numerical tolerances, baselines and scientific gates are uncha
 
 | Responsibility | Audited lines | Budget | Retained scope |
 | --- | ---: | ---: | --- |
-| Controller and schedules | 2,053 | 2,010 | Driver, iteration/subset schedules, options and launcher defaults |
+| Controller and schedules | 2,053 | 1,890 | Driver, iteration/subset schedules, options and launcher defaults |
 | Initialization | 467 | 500 | Bootstrap, initial state and shared initial-reference filter |
-| Sampling and layout | 818 | 850 | Native sampling updates, canonical pose metadata and frame conversions |
+| Sampling and layout | 818 | 950 | Native sampling updates, canonical pose metadata and frame conversions |
 | E-step | 2,370 | 2,290 | Dense/local/compact routing, statistics, coarse/fine support and shared projector setup |
 | Reconstruction and state | 684 | 790 | Single-class M-step transaction, precision checks, state and class dispatch |
-| Input/output | 1,218 | 1,250 | STAR metadata, startup artifacts, RELION checkpoint import and initial noise |
+| Input/output | 1,218 | 1,270 | STAR metadata, startup artifacts, RELION checkpoint import and initial noise |
 | Diagnostics | 1,016 | 1,160 | GT registration, native moment/reference replay and coarse report bookkeeping |
 | **Total** | **8,626** | **8,850** | **224 lines of total headroom (2.6%)** |
 
@@ -167,6 +167,12 @@ Solvent masking now lives with reconstruction in `vdam/m_step.py`; state precisi
 preparation lives beside its dtype definitions in `vdam/mstep_single_class.py`.
 Their move transfers 90 budget lines from controllers to reconstruction/state,
 again preserving the 8,850 total.
+VDAM translation and class-orientation prior construction now lives beside the
+sampling state/plan in `vdam/native_sampling.py`; this transfers 100 budget lines
+from controller to sampling. The earlier `deeb4b5ed` noise-adapter extraction
+added 55 shared lines to the counted input/output owner, reaching 1,269; 20 more
+lines of controller headroom now cover that responsibility (1,270 allowance).
+The combined allowance remains 8,850.
 The audited counts and headroom above describe the original snapshot, not the current tip.
 
 The largest retained routine grew from 228 to 733 lines before the recent

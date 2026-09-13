@@ -24,6 +24,7 @@ from recovar.em.helpers.expected_accuracy import (
     estimate_relion_expected_accuracy_from_prepared_inputs,
     estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs,
 )
+from recovar.em.helpers.orientation_priors import make_relion_translation_log_prior
 from recovar.em.vdam.native_options import InitialModelDefaults, NativeInitialModelOptions
 from recovar.em.vdam.star_io import NativeOpticsState
 from recovar.em.vdam.state import InitialModelState, NativeParticleState
@@ -682,3 +683,94 @@ def _random_perturbation_sequence(random_seed: int, perturbation_factor: float, 
         int(random_seed),
         max(1, int(n_steps)),
     )
+
+
+def _translation_log_prior(
+    translations: np.ndarray,
+    *,
+    voxel_size: float,
+    sigma_angstrom: float | None,
+    centers: np.ndarray | None = None,
+) -> np.ndarray | None:
+    """Build InitialModel's RELION accelerated-path ``pdf_offset`` values."""
+
+    if sigma_angstrom is None:
+        return None
+    translations = np.asarray(translations, dtype=np.float32)
+    shared = centers is None
+    centers_arr = np.zeros(2, dtype=np.float32) if shared else np.asarray(centers, dtype=np.float32)
+    log_prior = make_relion_translation_log_prior(
+        translations,
+        voxel_size=float(voxel_size),
+        sigma_offset_angstrom=float(sigma_angstrom),
+        prior_centers=centers_arr,
+    )
+    return np.asarray(log_prior, dtype=np.float32)
+
+
+
+def _class_direction_rotation_log_prior(state: InitialModelState, healpix_order: int) -> np.ndarray:
+    """Return RELION's class-specific direction prior over coarse rotations.
+
+    RELION copies ``pdf_direction`` into an ``RFLOAT`` buffer and its CUDA
+    ``initOrientations`` kernel stores ``log(pdf)`` directly in ``XFLOAT``.
+    Do not remove the class-common scale before taking the logarithm.  Although
+    that scale cancels analytically, changing it changes float32 addition and
+    adaptive-significance ties.
+    """
+
+    n_psi = int(sampling.rotation_grid_n_in_planes(int(healpix_order)))
+    n_dir = _n_directions_for_healpix_order(int(healpix_order))
+    n_rot = int(n_dir * n_psi)
+    pdf_direction = np.asarray(state.pdf_direction, dtype=np.float64)
+    if pdf_direction.shape != (int(state.K), n_dir):
+        pdf_direction = np.full((int(state.K), n_dir), 1.0 / float(int(state.K) * n_dir), dtype=np.float64)
+    direction_ids = np.arange(n_rot, dtype=np.int64) // n_psi
+    values = pdf_direction[:, direction_ids]
+    out = np.full(values.shape, -1.0e30, dtype=np.float64)
+    positive = values > 0.0
+    out[positive] = np.log(values[positive])
+    return out.astype(np.float32)
+
+
+
+def _class_rotation_log_prior_for_sampling(
+    state: InitialModelState,
+    sampling_state: NativeSamplingState,
+    healpix_order: int,
+) -> np.ndarray:
+    """Select the live RELION orientation-prior source for this sampling state."""
+
+    if bool(sampling_state.uniform_local_orientation_prior):
+        n_rot = int(sampling.rotation_grid_size(int(healpix_order)))
+        return np.zeros((int(state.K), n_rot), dtype=np.float32)
+    return _class_direction_rotation_log_prior(state, int(healpix_order))
+
+
+
+def _expand_class_rotation_log_prior_for_dense_fine_grid(
+    class_rotation_log_prior: np.ndarray,
+    sampling_plan: NativeSamplingPlan,
+) -> np.ndarray:
+    """Broadcast coarse direction priors onto dense oversampled rotations."""
+
+    prior = np.asarray(class_rotation_log_prior, dtype=np.float32)
+    if int(sampling_plan.oversampling) <= 0:
+        return prior
+    if prior.ndim != 2:
+        raise ValueError(f"class_rotation_log_prior must be 2D, got {prior.ndim} dimensions")
+
+    _rotations, parent_map = sampling.get_oversampled_relion_hidden_rotation_grid_from_samples(
+        np.arange(prior.shape[1], dtype=np.int64),
+        parent_nside_level=int(sampling_plan.healpix_order),
+        oversampling_order=int(sampling_plan.oversampling),
+        random_perturbation=float(sampling_plan.random_perturbation),
+    )
+    parent_map = np.asarray(parent_map, dtype=np.int64)
+    expected = int(np.asarray(sampling_plan.rotations).shape[0])
+    if parent_map.shape != (expected,):
+        raise ValueError(
+            "oversampled rotation parent map shape does not match dense rotations: "
+            f"got {parent_map.shape}, expected ({expected},)",
+        )
+    return prior[:, parent_map].astype(np.float32, copy=False)
