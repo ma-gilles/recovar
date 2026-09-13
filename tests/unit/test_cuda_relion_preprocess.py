@@ -116,6 +116,67 @@ def test_relion_cuda_softmask_repeats_bit_exactly(gpu_device, native_lane_reduct
         np.testing.assert_array_equal(repeat, masked_repeats[0])
 
 
+@pytest.mark.parametrize("native_lane_reduction", [False, True])
+def test_relion_cuda_softmask_batch_matches_single_image_bitwise(gpu_device, native_lane_reduction):
+    """Batched soft-masking must equal the per-image result bit for bit.
+
+    The launcher runs one background/fill launch for the whole batch and keeps
+    the device-side per-image CUB sums, so an image's masked pixels may not
+    depend on which other images share its batch.
+    """
+
+    from recovar.cuda_backproject import relion_preprocess_real_f32
+
+    rng = np.random.default_rng(20260913)
+    images = rng.standard_normal((5, 64, 64)).astype(np.float32)
+    factors = rng.uniform(0.9, 1.1, size=5).astype(np.float32)
+    shifts = rng.integers(-3, 4, size=(5, 2)).astype(np.int32)
+
+    with jax.default_device(gpu_device):
+        batched = relion_preprocess_real_f32(
+            jnp.asarray(images),
+            jnp.asarray(factors),
+            jnp.asarray(shifts),
+            radius=20.0,
+            cosine_width=5.0,
+            apply_mask=True,
+            native_lane_reduction=native_lane_reduction,
+        )
+        batched = tuple(np.asarray(value) for value in batched)
+        for row in range(images.shape[0]):
+            single = relion_preprocess_real_f32(
+                jnp.asarray(images[row : row + 1]),
+                jnp.asarray(factors[row : row + 1]),
+                jnp.asarray(shifts[row : row + 1]),
+                radius=20.0,
+                cosine_width=5.0,
+                apply_mask=True,
+                native_lane_reduction=native_lane_reduction,
+            )
+            for batched_value, single_value in zip(batched, single):
+                np.testing.assert_array_equal(batched_value[row], np.asarray(single_value)[0])
+
+
+def test_relion_cuda_softmask_non_finite_image_fails_closed(gpu_device):
+    """A non-finite image still aborts the batched call, as the per-image launcher did."""
+
+    from recovar.cuda_backproject import relion_preprocess_real_f32
+
+    rng = np.random.default_rng(3)
+    images = rng.standard_normal((3, 32, 32)).astype(np.float32)
+    images[1, 5, 7] = np.nan
+    with jax.default_device(gpu_device), pytest.raises(jax.errors.JaxRuntimeError, match="CUDA: invalid argument"):
+        _normalized_shifted, masked = relion_preprocess_real_f32(
+            jnp.asarray(images),
+            jnp.ones(3, dtype=jnp.float32),
+            jnp.zeros((3, 2), dtype=jnp.int32),
+            radius=10.0,
+            cosine_width=3.0,
+            apply_mask=True,
+        )
+        masked.block_until_ready()
+
+
 @pytest.mark.parametrize("radius,cosine_width", [(1.0e-6, 1.0), (15.999, 1.0e-4)])
 def test_relion_cuda_softmask_boundary_radii_remain_finite(radius, cosine_width, gpu_device):
     from recovar.cuda_backproject import relion_preprocess_real_f32

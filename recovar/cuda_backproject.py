@@ -5546,6 +5546,43 @@ def relion_fine_diff2_pairs_f64(
     )(reference, shifted_image, weight, full_to_compact)
 
 
+_RELION_PREPROCESS_BLOCK_SIZE = 128      # kRelionPreprocessBlockSize in cuda_backproject.cu
+_RELION_SOFTMASK_BLOCKS = 128            # kRelionSoftMaskBlocks
+_RELION_PREPROCESS_CUB_TEMP_BYTES = 1 << 16  # budget for one small cub::DeviceReduce::Sum
+
+
+def _relion_preprocess_workspace_bytes(
+    batch_size: int,
+    *,
+    native_lane_reduction: bool,
+    native_atomic_reduction: bool,
+) -> int:
+    """Byte size of the soft-mask workspace output, mirroring the C++ scratch layout.
+
+    Per image: two primary sum arrays (one entry per soft-mask block, or per
+    lane for the native-atomic tree) plus, for the lane tree, two lane arrays
+    ahead of the block-by-lane partials; then two floats of reduced sums per
+    image; then the CUB temporary budget.  Each region is 256-byte aligned.
+    The handler recomputes its own layout and fails closed if this is short.
+    """
+
+    if native_lane_reduction:
+        per_image = 2 * _RELION_SOFTMASK_BLOCKS * _RELION_PREPROCESS_BLOCK_SIZE + 2 * _RELION_PREPROCESS_BLOCK_SIZE
+    elif native_atomic_reduction:
+        per_image = 2 * _RELION_PREPROCESS_BLOCK_SIZE
+    else:
+        per_image = 2 * _RELION_SOFTMASK_BLOCKS
+
+    def _align(nbytes: int) -> int:
+        return (nbytes + 255) // 256 * 256
+
+    return (
+        _align(int(batch_size) * per_image * 4)
+        + _align(2 * int(batch_size) * 4)
+        + _align(_RELION_PREPROCESS_CUB_TEMP_BYTES)
+    )
+
+
 @functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7))
 def relion_preprocess_real_f32(
     images: jax.Array,
@@ -5568,6 +5605,13 @@ def relion_preprocess_real_f32(
     native observer's lane-across-blocks tree before its final CUB sum. The
     diagnostic ``native_atomic_reduction`` mode reproduces RELION's actual
     schedule-dependent atomic lane accumulation.
+
+    The soft-mask launch is batched: the background sums stay on the device
+    and the fill kernel forms the same float32 quotient there, so the masked
+    images are bit-identical to the former per-image launch.  Failure
+    semantics are unchanged: a mask with no exterior texel, or a non-finite
+    image, fails closed with ``CUDA: invalid argument`` after one per-call
+    read-back of the per-image sums.
     """
 
     if jax.default_backend() != "gpu":
@@ -5596,6 +5640,16 @@ def relion_preprocess_real_f32(
         raise ValueError("native lane and native atomic reductions are mutually exclusive")
 
     out_type = jax.ShapeDtypeStruct(images.shape, jnp.float32)
+    workspace_type = jax.ShapeDtypeStruct(
+        (
+            _relion_preprocess_workspace_bytes(
+                batch_size,
+                native_lane_reduction=native_lane_reduction,
+                native_atomic_reduction=native_atomic_reduction,
+            ),
+        ),
+        jnp.uint8,
+    )
     target = (
         _TARGET_RELION_PREPROCESS_REAL_F32_NATIVE_ATOMIC
         if native_atomic_reduction
@@ -5605,9 +5659,9 @@ def relion_preprocess_real_f32(
             else _TARGET_RELION_PREPROCESS_REAL_F32
         )
     )
-    return jax.ffi.ffi_call(
+    normalized_shifted, masked, _workspace = jax.ffi.ffi_call(
         target,
-        (out_type, out_type),
+        (out_type, out_type, workspace_type),
         vmap_method="sequential",
     )(
         images,
@@ -5617,6 +5671,7 @@ def relion_preprocess_real_f32(
         cosine_width=np.float32(cosine_width),
         apply_mask=np.int64(int(apply_mask)),
     )
+    return normalized_shifted, masked
 
 
 @functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))

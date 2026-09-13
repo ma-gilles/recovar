@@ -11421,7 +11421,7 @@ __global__ void relion_translate2d_f32_kernel(
 }
 
 __global__ void relion_softmask_background_f32_kernel(
-    const float* image,
+    const float* images,
     int64_t image_size,
     int image_w,
     int image_h,
@@ -11430,9 +11430,14 @@ __global__ void relion_softmask_background_f32_kernel(
     float radius,
     float radius_p,
     float cosine_width,
-    float* block_sum,
-    float* block_sum_bg)
+    float* block_sums,
+    int64_t block_sum_stride)
 {
+    // One image per blockIdx.y.  Every block keeps the exact texel range and
+    // addition order of the per-image launch, so batching changes no bits.
+    const float* image = images + static_cast<int64_t>(blockIdx.y) * image_size;
+    float* block_sum = block_sums + static_cast<int64_t>(blockIdx.y) * block_sum_stride;
+    float* block_sum_bg = block_sum + kRelionSoftMaskBlocks;
     int tid = threadIdx.x;
     int bid = blockIdx.x;
     float partial_sum = 0.0f;
@@ -11474,7 +11479,7 @@ __global__ void relion_softmask_background_f32_kernel(
 }
 
 __global__ void relion_softmask_background_lane_partials_f32_kernel(
-    const float* image,
+    const float* images,
     int64_t image_size,
     int image_w,
     int image_h,
@@ -11483,9 +11488,14 @@ __global__ void relion_softmask_background_lane_partials_f32_kernel(
     float radius,
     float radius_p,
     float cosine_width,
-    float* block_lane_sum,
-    float* block_lane_sum_bg)
+    float* block_lane_sums,
+    int64_t block_lane_sum_stride)
 {
+    const float* image = images + static_cast<int64_t>(blockIdx.y) * image_size;
+    float* block_lane_sum =
+        block_lane_sums + static_cast<int64_t>(blockIdx.y) * block_lane_sum_stride;
+    float* block_lane_sum_bg =
+        block_lane_sum + kRelionSoftMaskBlocks * kRelionPreprocessBlockSize;
     int tid = threadIdx.x;
     int bid = blockIdx.x;
     float partial_sum = 0.0f;
@@ -11517,7 +11527,7 @@ __global__ void relion_softmask_background_lane_partials_f32_kernel(
 }
 
 __global__ void relion_softmask_background_native_atomic_f32_kernel(
-    const float* image,
+    const float* images,
     int64_t image_size,
     int image_w,
     int image_h,
@@ -11526,9 +11536,12 @@ __global__ void relion_softmask_background_native_atomic_f32_kernel(
     float radius,
     float radius_p,
     float cosine_width,
-    float* lane_sum,
-    float* lane_sum_bg)
+    float* lane_sums,
+    int64_t lane_sum_stride)
 {
+    const float* image = images + static_cast<int64_t>(blockIdx.y) * image_size;
+    float* lane_sum = lane_sums + static_cast<int64_t>(blockIdx.y) * lane_sum_stride;
+    float* lane_sum_bg = lane_sum + kRelionPreprocessBlockSize;
     int tid = threadIdx.x;
     int bid = blockIdx.x;
     float partial_sum = 0.0f;
@@ -11561,11 +11574,19 @@ __global__ void relion_softmask_background_native_atomic_f32_kernel(
 }
 
 __global__ void relion_softmask_finalize_lane_partials_f32_kernel(
-    const float* block_lane_sum,
-    const float* block_lane_sum_bg,
-    float* lane_sum,
-    float* lane_sum_bg)
+    const float* block_lane_sums,
+    int64_t block_lane_sum_stride,
+    float* lane_sums,
+    int64_t lane_sum_stride)
 {
+    // One block per image (blockIdx.x); the per-lane serial block sum is the
+    // native observer's tree and must stay a volatile serial loop.
+    const float* block_lane_sum =
+        block_lane_sums + static_cast<int64_t>(blockIdx.x) * block_lane_sum_stride;
+    const float* block_lane_sum_bg =
+        block_lane_sum + kRelionSoftMaskBlocks * kRelionPreprocessBlockSize;
+    float* lane_sum = lane_sums + static_cast<int64_t>(blockIdx.x) * lane_sum_stride;
+    float* lane_sum_bg = lane_sum + kRelionPreprocessBlockSize;
     int tid = threadIdx.x;
     volatile float total = 0.0f;
     volatile float total_bg = 0.0f;
@@ -11579,7 +11600,7 @@ __global__ void relion_softmask_finalize_lane_partials_f32_kernel(
 }
 
 __global__ void relion_cosine_fill_f32_kernel(
-    float* image,
+    float* images,
     int64_t image_size,
     int image_w,
     int image_h,
@@ -11588,8 +11609,19 @@ __global__ void relion_cosine_fill_f32_kernel(
     float radius,
     float radius_p,
     float cosine_width,
-    float bg_value)
+    const float* background_sums)
 {
+    // One image per blockIdx.y.  The background value is the same IEEE
+    // float32 quotient the host used to form, now taken from the device-side
+    // CUB sums so the fill needs no per-image host round trip.  A
+    // non-positive or non-finite weight sum writes NaN here; the launcher's
+    // host check turns that case into the same error as before.
+    float* image = images + static_cast<int64_t>(blockIdx.y) * image_size;
+    float weight_sum = background_sums[2 * blockIdx.y];
+    float weighted_bg = background_sums[2 * blockIdx.y + 1];
+    float bg_value = (weight_sum > 0.0f && isfinite(weight_sum) && isfinite(weighted_bg))
+        ? weighted_bg / weight_sum
+        : __int_as_float(0x7fc00000);
     int tid = threadIdx.x;
     int bid = blockIdx.x;
     int64_t passes = (image_size + kRelionPreprocessBlockSize * gridDim.x - 1) /
@@ -11613,6 +11645,51 @@ __global__ void relion_cosine_fill_f32_kernel(
     }
 }
 
+// Scratch layout for launch_relion_preprocess_real_f32 (floats, then CUB temp bytes).
+struct RelionPreprocessScratchLayout {
+    int primary_count;          // per-image entries in each primary sum array
+    int reduction_input_count;  // values fed to each CUB device sum
+    int64_t per_image_storage;  // floats of reduction storage per image
+    int64_t storage_floats;     // batch * per_image_storage
+    int64_t values_floats;      // 2 * batch (weight sum, weighted background)
+    size_t reduce_temp_bytes;   // CUB temporary storage (one reduction at a time)
+    size_t total_bytes;         // storage + values + temp with 256-byte alignment
+};
+
+cudaError_t relion_preprocess_scratch_layout(
+    int64_t batch_size,
+    int reduction_mode,
+    RelionPreprocessScratchLayout* layout)
+{
+    constexpr int kRelionSoftMaskLanePartials =
+        kRelionSoftMaskBlocks * kRelionPreprocessBlockSize;
+    bool deterministic_lane_reduction = reduction_mode == 1;
+    bool native_atomic_reduction = reduction_mode == 2;
+    layout->primary_count = deterministic_lane_reduction
+        ? kRelionSoftMaskLanePartials
+        : (native_atomic_reduction ? kRelionPreprocessBlockSize : kRelionSoftMaskBlocks);
+    layout->reduction_input_count = deterministic_lane_reduction
+        ? kRelionPreprocessBlockSize
+        : layout->primary_count;
+    layout->per_image_storage = 2 * static_cast<int64_t>(layout->primary_count);
+    if (deterministic_lane_reduction)
+        layout->per_image_storage += 2 * kRelionPreprocessBlockSize;
+    layout->storage_floats = batch_size * layout->per_image_storage;
+    layout->values_floats = 2 * batch_size;
+    layout->reduce_temp_bytes = 0;
+    cudaError_t err = cub::DeviceReduce::Sum(
+        nullptr, layout->reduce_temp_bytes, static_cast<float*>(nullptr),
+        static_cast<float*>(nullptr), layout->reduction_input_count, nullptr);
+    if (err != cudaSuccess) return err;
+    if (layout->reduce_temp_bytes == 0) layout->reduce_temp_bytes = 1;
+    auto align256 = [](size_t bytes) { return (bytes + 255) / 256 * 256; };
+    layout->total_bytes =
+        align256(static_cast<size_t>(layout->storage_floats) * sizeof(float)) +
+        align256(static_cast<size_t>(layout->values_floats) * sizeof(float)) +
+        align256(layout->reduce_temp_bytes);
+    return cudaSuccess;
+}
+
 cudaError_t launch_relion_preprocess_real_f32(
     cudaStream_t stream,
     const float* images,
@@ -11626,7 +11703,9 @@ cudaError_t launch_relion_preprocess_real_f32(
     float radius,
     float cosine_width,
     bool apply_mask,
-    int reduction_mode)
+    int reduction_mode,
+    void* scratch,
+    const RelionPreprocessScratchLayout& layout)
 {
     int64_t pixels_per_image = static_cast<int64_t>(image_h) * image_w;
     int64_t total_pixels = batch_size * pixels_per_image;
@@ -11648,121 +11727,108 @@ cudaError_t launch_relion_preprocess_real_f32(
     err = cudaMemcpyAsync(masked, normalized_shifted, image_bytes, cudaMemcpyDeviceToDevice, stream);
     if (err != cudaSuccess || !apply_mask) return err;
 
-    constexpr int kRelionSoftMaskLanePartials =
-        kRelionSoftMaskBlocks * kRelionPreprocessBlockSize;
+    // The soft-mask background weight is a pure function of the geometry:
+    // the farthest texel from the centre is (0, 0).  RELION's mask has no
+    // exterior when even that texel lies inside ``radius``; fail closed here
+    // instead of reading the reduced weight back on the host per image.
+    {
+        int xinit = image_w / 2;
+        int yinit = image_h / 2;
+        float r_max = sqrtf(static_cast<float>(xinit * xinit + yinit * yinit));
+        if (!(r_max > radius)) return cudaErrorInvalidValue;
+    }
+
     bool deterministic_lane_reduction = reduction_mode == 1;
     bool native_atomic_reduction = reduction_mode == 2;
-    int primary_count = deterministic_lane_reduction
-        ? kRelionSoftMaskLanePartials
-        : (native_atomic_reduction ? kRelionPreprocessBlockSize : kRelionSoftMaskBlocks);
-    int reduction_input_count = deterministic_lane_reduction
-        ? kRelionPreprocessBlockSize
-        : primary_count;
-    size_t reduction_storage_count = 2 * static_cast<size_t>(primary_count);
-    if (deterministic_lane_reduction)
-        reduction_storage_count += 2 * kRelionPreprocessBlockSize;
-
-    float* reduction_storage = nullptr;
-    float* reduce_values = nullptr;
-    void* reduce_temp = nullptr;
-    size_t reduce_temp_bytes = 0;
-    err = cudaMalloc(
-        reinterpret_cast<void**>(&reduction_storage),
-        reduction_storage_count * sizeof(float));
-    if (err != cudaSuccess) return err;
-    err = cudaMalloc(reinterpret_cast<void**>(&reduce_values), 2 * sizeof(float));
-    if (err != cudaSuccess) {
-        cudaFree(reduction_storage);
-        return err;
-    }
-    float* reduction_input = deterministic_lane_reduction
-        ? reduction_storage + 2 * primary_count
-        : reduction_storage;
-    err = cub::DeviceReduce::Sum(
-        nullptr, reduce_temp_bytes, reduction_input, reduce_values,
-        reduction_input_count, stream);
-    if (err == cudaSuccess)
-        err = cudaMalloc(&reduce_temp, reduce_temp_bytes == 0 ? 1 : reduce_temp_bytes);
-    if (err != cudaSuccess) {
-        cudaFree(reduce_values);
-        cudaFree(reduction_storage);
-        return err;
-    }
+    if (scratch == nullptr) return cudaErrorInvalidValue;
+    auto align256 = [](size_t bytes) { return (bytes + 255) / 256 * 256; };
+    char* scratch_bytes = static_cast<char*>(scratch);
+    float* reduction_storage = reinterpret_cast<float*>(scratch_bytes);
+    scratch_bytes += align256(static_cast<size_t>(layout.storage_floats) * sizeof(float));
+    float* reduce_values = reinterpret_cast<float*>(scratch_bytes);
+    scratch_bytes += align256(static_cast<size_t>(layout.values_floats) * sizeof(float));
+    void* reduce_temp = scratch_bytes;
+    size_t reduce_temp_bytes = layout.reduce_temp_bytes;
+    const int primary_count = layout.primary_count;
+    const int reduction_input_count = layout.reduction_input_count;
+    const int64_t per_image_storage = layout.per_image_storage;
 
     float radius_p = radius + cosine_width;
-    for (int64_t image = 0; image < batch_size; ++image) {
-        float* primary_sum = reduction_storage;
-        float* primary_sum_bg = reduction_storage + primary_count;
-        float* sum_input = primary_sum;
-        float* sum_input_bg = primary_sum_bg;
-        float* image_ptr = masked + image * pixels_per_image;
-        if (deterministic_lane_reduction) {
-            float* lane_sum = reduction_storage + 2 * primary_count;
-            float* lane_sum_bg = lane_sum + kRelionPreprocessBlockSize;
-            relion_softmask_background_lane_partials_f32_kernel<<<
-                kRelionSoftMaskBlocks, kRelionPreprocessBlockSize, 0, stream>>>(
-                image_ptr, pixels_per_image, image_w, image_h, image_w / 2, image_h / 2,
-                radius, radius_p, cosine_width, primary_sum, primary_sum_bg);
-            err = cudaGetLastError();
-            if (err != cudaSuccess) break;
-            relion_softmask_finalize_lane_partials_f32_kernel<<<
-                1, kRelionPreprocessBlockSize, 0, stream>>>(
-                primary_sum, primary_sum_bg, lane_sum, lane_sum_bg);
-            sum_input = lane_sum;
-            sum_input_bg = lane_sum_bg;
-        } else if (native_atomic_reduction) {
-            err = cudaMemsetAsync(
-                reduction_storage,
-                0,
-                2 * kRelionPreprocessBlockSize * sizeof(float),
-                stream);
-            if (err != cudaSuccess) break;
-            relion_softmask_background_native_atomic_f32_kernel<<<
-                kRelionSoftMaskBlocks, kRelionPreprocessBlockSize, 0, stream>>>(
-                image_ptr, pixels_per_image, image_w, image_h, image_w / 2, image_h / 2,
-                radius, radius_p, cosine_width, primary_sum, primary_sum_bg);
-        } else {
-            relion_softmask_background_f32_kernel<<<
-                kRelionSoftMaskBlocks, kRelionPreprocessBlockSize, 0, stream>>>(
-                image_ptr, pixels_per_image, image_w, image_h, image_w / 2, image_h / 2,
-                radius, radius_p, cosine_width, primary_sum, primary_sum_bg);
-        }
+    dim3 mask_grid(kRelionSoftMaskBlocks, static_cast<unsigned int>(batch_size));
+    if (deterministic_lane_reduction) {
+        // Lane partials live after the two lane-sum arrays inside each
+        // image's storage: [lane_sum | lane_sum_bg | partials | partials_bg].
+        relion_softmask_background_lane_partials_f32_kernel<<<
+            mask_grid, kRelionPreprocessBlockSize, 0, stream>>>(
+            masked, pixels_per_image, image_w, image_h, image_w / 2, image_h / 2,
+            radius, radius_p, cosine_width,
+            reduction_storage + 2 * kRelionPreprocessBlockSize, per_image_storage);
         err = cudaGetLastError();
-        if (err != cudaSuccess) break;
-        err = cub::DeviceReduce::Sum(
-            reduce_temp, reduce_temp_bytes, sum_input, reduce_values,
-            reduction_input_count, stream);
-        if (err != cudaSuccess) break;
-        err = cub::DeviceReduce::Sum(
-            reduce_temp, reduce_temp_bytes, sum_input_bg, reduce_values + 1,
-            reduction_input_count, stream);
-        if (err != cudaSuccess) break;
-        float host_sums[2];
-        err = cudaMemcpyAsync(
-            host_sums, reduce_values, 2 * sizeof(float), cudaMemcpyDeviceToHost, stream);
-        if (err != cudaSuccess) break;
-        err = cudaStreamSynchronize(stream);
-        if (err != cudaSuccess) break;
-        if (!(host_sums[0] > 0.0f) || !std::isfinite(host_sums[0]) || !std::isfinite(host_sums[1])) {
-            err = cudaErrorInvalidValue;
-            break;
-        }
-        float bg_value = host_sums[1] / host_sums[0];
-        relion_cosine_fill_f32_kernel<<<
-            kRelionSoftMaskBlocks, kRelionPreprocessBlockSize, 0, stream>>>(
-            image_ptr, pixels_per_image, image_w, image_h, image_w / 2, image_h / 2,
-            radius, radius_p, cosine_width, bg_value);
-        err = cudaGetLastError();
-        if (err != cudaSuccess) break;
+        if (err != cudaSuccess) return err;
+        relion_softmask_finalize_lane_partials_f32_kernel<<<
+            static_cast<unsigned int>(batch_size), kRelionPreprocessBlockSize, 0, stream>>>(
+            reduction_storage + 2 * kRelionPreprocessBlockSize, per_image_storage,
+            reduction_storage, per_image_storage);
+    } else if (native_atomic_reduction) {
+        err = cudaMemsetAsync(
+            reduction_storage,
+            0,
+            static_cast<size_t>(layout.storage_floats) * sizeof(float),
+            stream);
+        if (err != cudaSuccess) return err;
+        relion_softmask_background_native_atomic_f32_kernel<<<
+            mask_grid, kRelionPreprocessBlockSize, 0, stream>>>(
+            masked, pixels_per_image, image_w, image_h, image_w / 2, image_h / 2,
+            radius, radius_p, cosine_width, reduction_storage, per_image_storage);
+    } else {
+        relion_softmask_background_f32_kernel<<<
+            mask_grid, kRelionPreprocessBlockSize, 0, stream>>>(
+            masked, pixels_per_image, image_w, image_h, image_w / 2, image_h / 2,
+            radius, radius_p, cosine_width, reduction_storage, per_image_storage);
     }
-
-    cudaError_t free_temp_err = cudaFree(reduce_temp);
-    cudaError_t free_values_err = cudaFree(reduce_values);
-    cudaError_t free_storage_err = cudaFree(reduction_storage);
+    err = cudaGetLastError();
     if (err != cudaSuccess) return err;
-    if (free_temp_err != cudaSuccess) return free_temp_err;
-    if (free_values_err != cudaSuccess) return free_values_err;
-    return free_storage_err;
+
+    // The final device-wide CUB sum keeps the accepted per-image tree: one
+    // DeviceReduce::Sum over the same input count per image, stream-ordered.
+    for (int64_t image = 0; image < batch_size; ++image) {
+        float* sum_input = reduction_storage + image * per_image_storage;
+        float* sum_input_bg = sum_input + (deterministic_lane_reduction
+            ? kRelionPreprocessBlockSize
+            : primary_count);
+        err = cub::DeviceReduce::Sum(
+            reduce_temp, reduce_temp_bytes, sum_input, reduce_values + 2 * image,
+            reduction_input_count, stream);
+        if (err != cudaSuccess) return err;
+        err = cub::DeviceReduce::Sum(
+            reduce_temp, reduce_temp_bytes, sum_input_bg, reduce_values + 2 * image + 1,
+            reduction_input_count, stream);
+        if (err != cudaSuccess) return err;
+    }
+    relion_cosine_fill_f32_kernel<<<mask_grid, kRelionPreprocessBlockSize, 0, stream>>>(
+        masked, pixels_per_image, image_w, image_h, image_w / 2, image_h / 2,
+        radius, radius_p, cosine_width, reduce_values);
+    err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
+
+    // Failure semantics are unchanged from the per-image launcher: a
+    // non-positive or non-finite background weight, or a non-finite weighted
+    // background, aborts the call.  One read-back per call replaces one per
+    // image; removing it entirely is a separate, explicitly gated change.
+    std::vector<float> host_sums(static_cast<size_t>(2 * batch_size));
+    err = cudaMemcpyAsync(
+        host_sums.data(), reduce_values, host_sums.size() * sizeof(float),
+        cudaMemcpyDeviceToHost, stream);
+    if (err != cudaSuccess) return err;
+    err = cudaStreamSynchronize(stream);
+    if (err != cudaSuccess) return err;
+    for (int64_t image = 0; image < batch_size; ++image) {
+        float weight_sum = host_sums[2 * image];
+        float weighted_bg = host_sums[2 * image + 1];
+        if (!(weight_sum > 0.0f) || !std::isfinite(weight_sum) || !std::isfinite(weighted_bg))
+            return cudaErrorInvalidValue;
+    }
+    return cudaSuccess;
 }
 
 }  // namespace
@@ -16881,6 +16947,7 @@ ffi::Error RelionPreprocessRealF32ImplWithReduction(
     ffi::AnyBuffer integer_shifts,
     ffi::Result<ffi::AnyBuffer> normalized_shifted_out,
     ffi::Result<ffi::AnyBuffer> masked_out,
+    ffi::Result<ffi::AnyBuffer> workspace_out,
     int reduction_mode)
 {
     if (images.element_type() != ffi::DataType::F32 ||
@@ -16912,7 +16979,22 @@ ffi::Error RelionPreprocessRealF32ImplWithReduction(
     if (apply_mask != 0 && apply_mask != 1)
         return ffi::Error::InvalidArgument("RelionPreprocessRealF32: apply_mask must be 0 or 1");
 
-    cudaError_t err = launch_relion_preprocess_real_f32(
+    RelionPreprocessScratchLayout layout;
+    cudaError_t err = relion_preprocess_scratch_layout(image_dims[0], reduction_mode, &layout);
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    // XLA provisions the soft-mask workspace as an output buffer sized by the
+    // Python wrapper from the same layout constants; fail closed if it is
+    // smaller than this build's layout (for example a larger CUB temporary).
+    if (workspace_out->element_type() != ffi::DataType::U8 || workspace_out->dimensions().size() != 1)
+        return ffi::Error::InvalidArgument("RelionPreprocessRealF32: workspace must be U8 with shape (bytes,)");
+    size_t workspace_bytes = static_cast<size_t>(workspace_out->dimensions()[0]);
+    if (apply_mask != 0 && workspace_bytes < layout.total_bytes)
+        return ffi::Error::InvalidArgument(
+            "RelionPreprocessRealF32: workspace too small: need " + std::to_string(layout.total_bytes) +
+            " bytes, got " + std::to_string(workspace_bytes));
+    void* scratch_ptr = apply_mask != 0 ? workspace_out->untyped_data() : nullptr;
+    err = launch_relion_preprocess_real_f32(
         stream,
         static_cast<const float*>(images.untyped_data()),
         static_cast<const float*>(normalization_factors.untyped_data()),
@@ -16920,7 +17002,7 @@ ffi::Error RelionPreprocessRealF32ImplWithReduction(
         static_cast<float*>(normalized_shifted_out->untyped_data()),
         static_cast<float*>(masked_out->untyped_data()),
         image_dims[0], static_cast<int>(image_dims[1]), static_cast<int>(image_dims[2]),
-        radius, cosine_width, apply_mask != 0, reduction_mode);
+        radius, cosine_width, apply_mask != 0, reduction_mode, scratch_ptr, layout);
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
@@ -16935,11 +17017,12 @@ ffi::Error RelionPreprocessRealF32Impl(
     ffi::AnyBuffer normalization_factors,
     ffi::AnyBuffer integer_shifts,
     ffi::Result<ffi::AnyBuffer> normalized_shifted_out,
-    ffi::Result<ffi::AnyBuffer> masked_out)
+    ffi::Result<ffi::AnyBuffer> masked_out,
+    ffi::Result<ffi::AnyBuffer> workspace_out)
 {
     return RelionPreprocessRealF32ImplWithReduction(
         stream, radius, cosine_width, apply_mask, images, normalization_factors,
-        integer_shifts, normalized_shifted_out, masked_out, 0);
+        integer_shifts, normalized_shifted_out, masked_out, workspace_out, 0);
 }
 
 ffi::Error RelionPreprocessRealF32NativeLaneImpl(
@@ -16951,11 +17034,12 @@ ffi::Error RelionPreprocessRealF32NativeLaneImpl(
     ffi::AnyBuffer normalization_factors,
     ffi::AnyBuffer integer_shifts,
     ffi::Result<ffi::AnyBuffer> normalized_shifted_out,
-    ffi::Result<ffi::AnyBuffer> masked_out)
+    ffi::Result<ffi::AnyBuffer> masked_out,
+    ffi::Result<ffi::AnyBuffer> workspace_out)
 {
     return RelionPreprocessRealF32ImplWithReduction(
         stream, radius, cosine_width, apply_mask, images, normalization_factors,
-        integer_shifts, normalized_shifted_out, masked_out, 1);
+        integer_shifts, normalized_shifted_out, masked_out, workspace_out, 1);
 }
 
 ffi::Error RelionPreprocessRealF32NativeAtomicImpl(
@@ -16967,11 +17051,12 @@ ffi::Error RelionPreprocessRealF32NativeAtomicImpl(
     ffi::AnyBuffer normalization_factors,
     ffi::AnyBuffer integer_shifts,
     ffi::Result<ffi::AnyBuffer> normalized_shifted_out,
-    ffi::Result<ffi::AnyBuffer> masked_out)
+    ffi::Result<ffi::AnyBuffer> masked_out,
+    ffi::Result<ffi::AnyBuffer> workspace_out)
 {
     return RelionPreprocessRealF32ImplWithReduction(
         stream, radius, cosine_width, apply_mask, images, normalization_factors,
-        integer_shifts, normalized_shifted_out, masked_out, 2);
+        integer_shifts, normalized_shifted_out, masked_out, workspace_out, 2);
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -16984,6 +17069,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
 );
@@ -17000,6 +17086,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
 );
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -17012,6 +17099,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
 );
