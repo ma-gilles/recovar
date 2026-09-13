@@ -340,6 +340,20 @@ def _quantize_up(value: int, quantum: int) -> int:
     return max(quantum, ((value + quantum - 1) // quantum) * quantum)
 
 
+def _quantize_pow2(value: int, floor: int) -> int:
+    """Round up to a power of two (at least ``floor``).
+
+    The device index builder compiles one program per (images, rows, coarse
+    rows, T, cT, pairs) family; the 64-row quantum still produced dozens of
+    families per iteration and 30 s of XLA compile in the 100k/256 K=4 pass-2
+    loop (job 13834297 stack samples).  Padded rows/coarse rows are inert
+    (parents -1, tables False), so the ladder changes shapes only.
+    """
+
+    value = max(int(value), int(floor))
+    return 1 << (value - 1).bit_length()
+
+
 _DEVICE_INDEX_ROW_QUANTUM = 64
 _DEVICE_INDEX_COARSE_ROW_QUANTUM = 64
 
@@ -430,14 +444,14 @@ def compact_pair_index_arrays_device(
     if rows_capacity is not None and int(rows_capacity) >= max_rows:
         rows = int(rows_capacity)
     else:
-        rows = _quantize_up(max_rows, _DEVICE_INDEX_ROW_QUANTUM)
+        rows = _quantize_pow2(max_rows, _DEVICE_INDEX_ROW_QUANTUM)
     c_rot_needed = 1
     for m in candidate_masks:
         if m.mode == "coarse":
             c_rot_needed = max(c_rot_needed, int(m.coarse_valid.shape[0]))
         elif m.mode == "coarse_exclude":
             c_rot_needed = max(c_rot_needed, int(np.asarray(m.parent_map).max(initial=-1) + 1))
-    c_rot = _quantize_up(c_rot_needed, _DEVICE_INDEX_COARSE_ROW_QUANTUM)
+    c_rot = _quantize_pow2(c_rot_needed, _DEVICE_INDEX_COARSE_ROW_QUANTUM)
 
     tables = np.zeros((n_alloc, c_rot, c_trans), dtype=bool)
     parents = np.full((n_alloc, rows), -1, dtype=np.int32)

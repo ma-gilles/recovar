@@ -5356,6 +5356,95 @@ def _relion_cuda_fine_log_evidence_offset(min_diff2):
     return -jnp.asarray(min_diff2)
 
 
+_SPARSE_KCLASS_DEVICE_CHUNK_SCALARS_ENV = "RECOVAR_SPARSE_KCLASS_DEVICE_CHUNK_SCALARS"
+
+
+def device_chunk_scalars_enabled() -> bool:
+    """Keep the per-chunk log-score offset and the noise totals on the device.
+
+    The fused loop pulled ``log_score_offset`` (one float64 per image) to the
+    host at every chunk and the fused noise shells / norm residuals at every
+    class-chunk; each pull blocks the host until the device has finished the
+    chunk's score or M-step work, so the host never runs ahead.  At 100k/256
+    K=4 the offset pull was 26 s and the noise pulls 10 s of iteration 2 (job
+    13834297, stack samples).  With this flag the offset stays a device leaf
+    (the deferred statistics convert it once at replay) and the noise totals
+    accumulate on the device in float64 in the same chunk order, pulled once
+    after the loop.
+    """
+
+    return parse_env_flag(_SPARSE_KCLASS_DEVICE_CHUNK_SCALARS_ENV, default=False)
+
+
+@jax.jit
+def _log_score_offset_from_min_diff2_device(global_min_diff2):
+    """float64 ``-min_diff2`` on the device (host path: ``np.asarray(-x, float64)``)."""
+
+    return (-jnp.asarray(global_min_diff2)).astype(jnp.float64)
+
+
+@jax.jit
+def _log_score_offset_from_batch_norm_device(batch_norm):
+    """float64 ``-0.5 * squeeze(batch_norm)`` on the device, host operation order."""
+
+    return -0.5 * jnp.squeeze(batch_norm, axis=1).astype(jnp.float64)
+
+
+@jax.jit
+def _absolute_log_z_to_score_frame_device(absolute_log_evidence, log_score_offset):
+    """``absolute - offset`` in float64 on the device (host: NumPy float64 subtraction)."""
+
+    return jnp.asarray(absolute_log_evidence, dtype=jnp.float64) - log_score_offset
+
+
+@jax.jit
+def _accumulate_noise_totals_device(wsum_total, norm_total, image_indices, block_shells, block_norm_residual):
+    """float64 ``wsum += shells`` and ``norm[image] += residual`` on the device.
+
+    Image indices are unique within a chunk, so the scatter-add is a plain
+    per-element add and the result equals the host ``+=`` / ``np.add.at`` in
+    the same chunk order bit for bit.
+    """
+
+    wsum_total = wsum_total + jnp.asarray(block_shells, dtype=jnp.float64)
+    norm_total = norm_total.at[image_indices].add(
+        jnp.asarray(block_norm_residual, dtype=jnp.float64), unique_indices=True
+    )
+    return wsum_total, norm_total
+
+
+@jax.jit
+def _best_pair_indices_device(best_log_score, best_argmax, local_rotation_row, translation_idx):
+    """Gather the best pair's (row, translation) ids in one program."""
+
+    safe_argmax = jnp.where(jnp.isfinite(best_log_score), best_argmax, 0).astype(jnp.int32)
+    rows = jnp.arange(safe_argmax.shape[0], dtype=jnp.int32)
+    return local_rotation_row[rows, safe_argmax], translation_idx[rows, safe_argmax]
+
+
+@partial(jax.jit, static_argnames=("pad_rows",))
+def _pad_rows_repeat_last_device(values, *, pad_rows: int):
+    """Append ``pad_rows`` copies of the last row in one program (image-capacity padding)."""
+
+    return jnp.concatenate([values, jnp.repeat(values[-1:], pad_rows, axis=0)], axis=0)
+
+
+_REAL_IMAGE_MASK_CACHE: dict = {}
+
+
+def _real_image_mask_device(batch: int, n_real_images: int):
+    """Device ``arange(batch) < n_real`` mask, uploaded once per distinct pair."""
+
+    key = (int(batch), int(n_real_images))
+    mask = _REAL_IMAGE_MASK_CACHE.get(key)
+    if mask is None:
+        if len(_REAL_IMAGE_MASK_CACHE) >= 4096:
+            _REAL_IMAGE_MASK_CACHE.clear()
+        mask = jnp.asarray(np.arange(key[0], dtype=np.int32) < key[1])
+        _REAL_IMAGE_MASK_CACHE[key] = mask
+    return mask
+
+
 @jax.jit
 def _relion_cuda_fine_diff2_to_scores(
     diff2,
@@ -13904,6 +13993,10 @@ def compute_k_class_pass2_stats_sparse_fused(
     noise_wsum_total = [None] * n_classes
     noise_img_power_total = [None] * n_classes
     noise_norm_correction_total = [None] * n_classes
+    # RECOVAR_SPARSE_KCLASS_DEVICE_CHUNK_SCALARS: per-class (wsum, norm) device
+    # accumulators for the fused noise path, pulled once after the loop.
+    device_chunk_scalars = device_chunk_scalars_enabled()
+    noise_totals_device = [None] * n_classes
     noise_sumw_total = np.zeros(n_classes, dtype=np.float64)
     noise_sigma2_offset_total = np.zeros(n_classes, dtype=np.float64)
     if accumulate_noise:
@@ -14840,9 +14933,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                 image_indices = np.concatenate(
                     [image_indices, np.repeat(image_indices[-1:], pad_rows)]
                 )
-                batch_data = jnp.concatenate(
-                    [batch_data, jnp.repeat(batch_data[-1:], pad_rows, axis=0)], axis=0
-                )
+                batch_data = _pad_rows_repeat_last_device(batch_data, pad_rows=int(pad_rows))
                 ctf_params_np = np.asarray(ctf_params)
                 ctf_params = np.concatenate(
                     [ctf_params_np, np.repeat(ctf_params_np[-1:], pad_rows, axis=0)], axis=0
@@ -15554,17 +15645,30 @@ def compute_k_class_pass2_stats_sparse_fused(
                 )
         _add_sparse_group_timing(group_timing, "score", time.time() - stage_t0)
 
-        log_score_offset = (
-            np.asarray(
-                _relion_cuda_fine_log_evidence_offset(global_min_diff2),
-                dtype=np.float64,
+        if device_chunk_scalars:
+            # Device leaf: no per-chunk host pull; the statistics convert it once.
+            log_score_offset = (
+                _log_score_offset_from_min_diff2_device(global_min_diff2)
+                if use_exact_relion_gaussian
+                else _log_score_offset_from_batch_norm_device(batch_norm)
             )
-            if use_exact_relion_gaussian
-            else -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
-        )
+        else:
+            log_score_offset = (
+                np.asarray(
+                    _relion_cuda_fine_log_evidence_offset(global_min_diff2),
+                    dtype=np.float64,
+                )
+                if use_exact_relion_gaussian
+                else -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+            )
         if normalization_log_evidence_np is None:
             global_score_log_z_bucket = _logsumexp_class_log_z(
                 jnp.stack(class_score_log_z_bucket, axis=0)
+            )
+        elif device_chunk_scalars:
+            global_score_log_z_bucket = _absolute_log_z_to_score_frame_device(
+                normalization_log_evidence_np[image_indices],
+                log_score_offset,
             )
         else:
             # RELION's oversampling-zero symbolic second pass reuses the
@@ -16736,7 +16840,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                     if int(n_real_images) >= int(batch)
                     # host-built: jnp.int32(n_real_images) was a value-dependent scalar
                     # convert that missed the dispatch cache on every class-chunk (job 13830354)
-                    else jnp.asarray(np.arange(int(batch), dtype=np.int32) < int(n_real_images))
+                    else _real_image_mask_device(int(batch), int(n_real_images))
                 )
                 masked_norm_high_shell = relion_norm_high_shell
                 if relion_norm_high_shell is not None and real_image_mask is not None:
@@ -16888,7 +16992,20 @@ def compute_k_class_pass2_stats_sparse_fused(
                         noise_variance_for_noise.dtype,
                         summed_masked_noise.dtype,
                     )
-                if block_noise_shells_precomputed is not None:
+                if block_noise_shells_precomputed is not None and device_chunk_scalars:
+                    if noise_totals_device[class_index] is None:
+                        noise_totals_device[class_index] = (
+                            jnp.asarray(noise_wsum_total[class_index], dtype=jnp.float64),
+                            jnp.asarray(noise_norm_correction_total[class_index], dtype=jnp.float64),
+                        )
+                    noise_totals_device[class_index] = _accumulate_noise_totals_device(
+                        noise_totals_device[class_index][0],
+                        noise_totals_device[class_index][1],
+                        jnp.asarray(image_indices, dtype=jnp.int32),
+                        block_noise_shells_precomputed,
+                        block_norm_residual_precomputed,
+                    )
+                elif block_noise_shells_precomputed is not None:
                     noise_wsum_total[class_index] += np.asarray(
                         block_noise_shells_precomputed,
                         dtype=np.float64,
@@ -17017,13 +17134,11 @@ def compute_k_class_pass2_stats_sparse_fused(
             if bucket_uses_compact_pairs and isinstance(pair_arrays["local_rotation_row"], jax.Array):
                 # Device-built pair tables: gather the best pair's ids here (two
                 # small leaves) instead of pulling the (images, pairs) tables back.
-                _safe_argmax = jnp.where(
-                    jnp.isfinite(best_log_score_bucket), best_argmax, 0
-                ).astype(jnp.int32)
-                _rows = jnp.arange(_safe_argmax.shape[0], dtype=jnp.int32)
-                best_pair_indices_dev = (
-                    pair_arrays["local_rotation_row"][_rows, _safe_argmax],
-                    pair_arrays["translation_idx"][_rows, _safe_argmax],
+                best_pair_indices_dev = _best_pair_indices_device(
+                    best_log_score_bucket,
+                    best_argmax,
+                    pair_arrays["local_rotation_row"],
+                    pair_arrays["translation_idx"],
                 )
             if defer_host_stats_check:
                 _apply_stats_host(
@@ -17490,6 +17605,11 @@ def compute_k_class_pass2_stats_sparse_fused(
     )
     noise_stats = None
     if accumulate_noise:
+        for class_index in range(n_classes):
+            if noise_totals_device[class_index] is not None:
+                wsum_dev, norm_dev = noise_totals_device[class_index]
+                noise_wsum_total[class_index] = np.asarray(wsum_dev, dtype=np.float64)
+                noise_norm_correction_total[class_index] = np.asarray(norm_dev, dtype=np.float64)
         noise_stats = tuple(
             make_noise_stats(
                 wsum_sigma2_noise=noise_wsum_total[class_index],
