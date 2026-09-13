@@ -5,7 +5,6 @@ import numpy as np
 import pytest
 
 from recovar.em.vdam import dense_adapter as adapter
-from recovar.em.vdam import driver
 from recovar.em.vdam import iteration_loop as loop
 from recovar.em.vdam.init import initialise_denovo_state
 from recovar.utils.helpers import recovar_volume_to_relion
@@ -79,8 +78,8 @@ def test_context_builds_once_and_consumes_once(monkeypatch, backend):
         calls.append((current.iter, current.Iref.copy()))
         return (None, None, current.Iref.copy(), 4), np.full((1, 5), current.iter)
 
-    monkeypatch.setattr(driver, "prepare_relion_projector_class_inputs_and_power", prepare)
-    ctx = driver._IterationProjectorContext(projector_setup_backend=backend)
+    monkeypatch.setattr(adapter, "prepare_relion_projector_class_inputs_and_power", prepare)
+    ctx = adapter._IterationProjectorContext(projector_setup_backend=backend)
     for iteration in (1, 2):
         state = replace(state, iter=iteration, Iref=state.Iref + 1)
         before = state.tau2_class.copy()
@@ -101,9 +100,9 @@ def test_context_rejects_stale_handoff_and_clears(monkeypatch, change):
         ori_size=8, pixel_size=1.0, K=1, nr_iter=2,
         n_directions=3, pseudo_halfsets=True,
     )
-    monkeypatch.setattr(driver, "prepare_relion_projector_class_inputs_and_power",
+    monkeypatch.setattr(adapter, "prepare_relion_projector_class_inputs_and_power",
                         lambda *a, **k: ((None, None, None, 4), np.ones((1, 5))))
-    ctx = driver._IterationProjectorContext()
+    ctx = adapter._IterationProjectorContext()
     current = ctx.refresh(state, padding_factor=1, interpolator=1)
     kwargs = {"padding_factor": 1}
     if change == "reference":

@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, replace
-from typing import Literal
 
 import numpy as np
 
@@ -25,7 +24,6 @@ from recovar.em.vdam import dense_adapter, estep_meta_updates, native_sampling, 
 from recovar.em.vdam.bootstrap_iref import _initial_state_from_particles
 from recovar.em.vdam.dense_adapter import (
     prepare_relion_projector_class_inputs,
-    prepare_relion_projector_class_inputs_and_power,
     run_dense_initial_model_estep,
 )
 from recovar.em.vdam.iteration_loop import run_vdam_iterations
@@ -109,44 +107,6 @@ def _noise_variance_from_sigma2(sigma2_noise: np.ndarray, ori_size: int) -> np.n
     ).reshape(-1)
 
 
-@dataclass
-class _IterationProjectorContext:
-    """One refresh-to-E-step handoff; never a cache across iterations."""
-
-    projector_setup_backend: Literal["native", "jax"] = "native"
-    prepared: tuple | None = None
-    reference: np.ndarray | None = None
-    geometry: tuple | None = None
-
-    def refresh(self, state, *, padding_factor, interpolator):
-        # Clear even if construction fails, so stale data cannot survive a retry.
-        self.prepared = self.reference = self.geometry = None
-        inputs, power = prepare_relion_projector_class_inputs_and_power(
-            state, padding_factor=padding_factor, interpolator=interpolator,
-            projector_setup_backend=self.projector_setup_backend,
-        )
-        self.prepared = inputs
-        self.reference = state.Iref
-        self.geometry = (
-            int(state.iter), int(state.ori_size), int(state.current_size),
-            int(state.K), int(padding_factor), int(interpolator),
-        )
-        return replace(state, tau2_class=power)
-
-    def take(self, state, *, padding_factor, interpolator=1):
-        if self.prepared is None:
-            return None  # No refresh callback: preserve standalone/disabled behavior.
-        inputs, reference, geometry = self.prepared, self.reference, self.geometry
-        self.prepared = self.reference = self.geometry = None
-        expected = (
-            int(state.iter), int(state.ori_size), int(state.current_size),
-            int(state.K), int(padding_factor), int(interpolator),
-        )
-        if reference is not state.Iref or geometry != expected:
-            raise ValueError("projector refresh/E-step reference or geometry changed")
-        return inputs
-
-
 def _native_expectation_step(
     dataset,
     opts: NativeInitialModelOptions,
@@ -154,7 +114,7 @@ def _native_expectation_step(
     sampling_state: NativeSamplingState,
     optics_state: NativeOpticsState | None = None,
     *,
-    projector_context: _IterationProjectorContext | None = None,
+    projector_context: dense_adapter._IterationProjectorContext | None = None,
 ):
     def _expectation_step(state: InitialModelState, particle_ids: np.ndarray, halfset_ids: np.ndarray):
         defer_token = os.environ.get("RECOVAR_VDAM_DEFER_SPARSE_ROTATIONS", "0").strip()
@@ -462,7 +422,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     ).strip().lower()
     projector_context = (
         None if exact_projector_setting in {"0", "false", "no", "off"}
-        else _IterationProjectorContext(projector_setup_backend=opts.projector_setup_backend)
+        else dense_adapter._IterationProjectorContext(projector_setup_backend=opts.projector_setup_backend)
     )
     expectation_step = _native_expectation_step(
         dataset,

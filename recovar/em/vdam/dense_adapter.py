@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import Any, Literal
 
 import numpy as np
 
@@ -48,6 +49,44 @@ _RELION_PROJECTOR_DUMP_DIR_ENV = "RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR"
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _IterationProjectorContext:
+    """One refresh-to-E-step handoff; never a cache across iterations."""
+
+    projector_setup_backend: Literal["native", "jax"] = "native"
+    prepared: tuple | None = None
+    reference: np.ndarray | None = None
+    geometry: tuple | None = None
+
+    def refresh(self, state, *, padding_factor, interpolator):
+        # Clear even if construction fails, so stale data cannot survive a retry.
+        self.prepared = self.reference = self.geometry = None
+        inputs, power = prepare_relion_projector_class_inputs_and_power(
+            state, padding_factor=padding_factor, interpolator=interpolator,
+            projector_setup_backend=self.projector_setup_backend,
+        )
+        self.prepared = inputs
+        self.reference = state.Iref
+        self.geometry = (
+            int(state.iter), int(state.ori_size), int(state.current_size),
+            int(state.K), int(padding_factor), int(interpolator),
+        )
+        return replace(state, tau2_class=power)
+
+    def take(self, state, *, padding_factor, interpolator=1):
+        if self.prepared is None:
+            return None  # No refresh callback: preserve standalone/disabled behavior.
+        inputs, reference, geometry = self.prepared, self.reference, self.geometry
+        self.prepared = self.reference = self.geometry = None
+        expected = (
+            int(state.iter), int(state.ori_size), int(state.current_size),
+            int(state.K), int(padding_factor), int(interpolator),
+        )
+        if reference is not state.Iref or geometry != expected:
+            raise ValueError("projector refresh/E-step reference or geometry changed")
+        return inputs
 
 
 def _effective_initial_model_image_batch_size(
