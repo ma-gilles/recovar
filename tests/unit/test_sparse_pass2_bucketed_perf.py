@@ -4584,10 +4584,10 @@ def test_compact_pair_mstep_pair_sparse_env_matches_dense_cpu_float64(monkeypatc
 
 
 def test_compact_pair_mstep_default_remains_dense(monkeypatch):
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
     from recovar.em.sparse_pass2 import (
         sparse_pass2_compact_pair_sums,
     )
-    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     case = _make_compact_pair_sparse_mstep_case(dtype=np.float64)
     monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MSTEP", raising=False)
@@ -5604,6 +5604,7 @@ def test_native_dual_dispatch_checks_actual_operand_dtypes(
 ):
     import ast
     from types import SimpleNamespace
+
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed
 
     tree = ast.parse(inspect.getsource(sparse_pass2_bucketed.compute_k_class_pass2_stats_sparse_fused))
@@ -6921,10 +6922,10 @@ def test_sparse_pass2_full_support_projection_cache_chunks_scores(monkeypatch):
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_PROJECTION_CACHE_MAX_BYTES", str(1024**3))
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", "1000000")
 
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
     from recovar.em.sparse_pass2 import (
         sparse_pass2_window,
     )
-    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     # Hold raw-diff2 cache admission constant across CPU-only and GPU runners.
     # This test counts the two full-score passes caused by fine M-step pruning;
@@ -7670,10 +7671,10 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
 
 
 def test_exact_raw_diff2_cache_matches_fallback_bitwise_and_removes_recompute(monkeypatch):
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
     from recovar.em.sparse_pass2 import (
         sparse_pass2_window,
     )
-    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", "512")
@@ -7766,10 +7767,10 @@ def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonm
     shadow_only,
 ):
     from recovar.em.diagnostics import bpref_diagnostics
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
     from recovar.em.sparse_pass2 import (
         sparse_pass2_window,
     )
-    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
     monkeypatch.setenv("RECOVAR_PASS2_DUMP_DIR", str(tmp_path))

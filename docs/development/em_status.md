@@ -284,6 +284,29 @@ this page does not schedule or authorize duplicate runs.
 
 ## Next action and efficient execution
 
+Compact native weighted sums now consume the source-ordered pair list directly
+(`2e6601b28`), preserving float32 probability rejection and both complex value
+precisions. The existing dense wrapper and its JIT boundary remain unchanged.
+50 CPU tests and 45 builder-contract cases passed. H100 job **13827004** passed
+all nine GPU cases without skips: raw sums match dense native bitwise, while
+metadata reductions retain the previously reviewed ULP bound. Source, harness
+and the loaded library were verified
+([GPU receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/pair_sparse_sums_integration_20260913/gpu_terminal_review.json)).
+Full trajectories and matched speed remain open.
+
+Recent structural cleanup consolidated the compact probability scatter, removed
+235 unused test lines while retaining all 175 test functions, moved direct Wavg
+norm serialization into its existing diagnostics owner, and consolidated
+translation-spacing inference in sampling. The per-image reference remains
+independent, and caller precision casts are unchanged. The last change passed
+90 EM fast-guard cases, 32 layout cases (three required a separate pinned-binding
+rerun), and 40 exact spacing comparisons
+([spacing receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/translation_spacing_owner_20260913/result.json)).
+The diagnostic move preserved all 36 compared payloads and passed 33 focused
+checks ([diagnostic receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/sparse_norm_diagnostic_owner_20260913/result.json)).
+Continue controller cleanup and individually reviewed VDAM integrations under
+the full coordination queue; these checks do not close scientific acceptance.
+
 The user retained the fused compact-pair scoring route. It is integrated at
 `6458ee41d` into the sparse scoring owner, without a new experimental switch.
 Supported float32 GPU compact pairs use the fused kernel; CPU and diagnostic

@@ -6823,23 +6823,24 @@ def dual_weighted_sums_pairs_f32(
     first_values = jnp.asarray(first_values)
     second_values = jnp.asarray(second_values)
     if pair_probabilities.dtype != jnp.float32 or pair_probabilities.ndim != 2:
-        raise ValueError(
-            "dual_weighted_sums_pairs_f32 expects float32 pair probabilities [batch, pair]"
-        )
+        raise ValueError("dual_weighted_sums_pairs_f32 expects float32 pair probabilities [batch, pair]")
     if pair_translation_ids.dtype != jnp.int32 or pair_translation_ids.shape != pair_probabilities.shape:
-        raise ValueError(
-            "dual_weighted_sums_pairs_f32 expects int32 pair translations shaped like the probabilities"
-        )
-    if row_offsets.dtype != jnp.int32 or row_offsets.ndim != 2 or row_offsets.shape[0] != pair_probabilities.shape[0] or row_offsets.shape[1] < 2:
-        raise ValueError(
-            "dual_weighted_sums_pairs_f32 expects int32 row offsets [batch, rotation + 1]"
-        )
+        raise ValueError("dual_weighted_sums_pairs_f32 expects int32 pair translations shaped like the probabilities")
+    if (
+        row_offsets.dtype != jnp.int32
+        or row_offsets.ndim != 2
+        or row_offsets.shape[0] != pair_probabilities.shape[0]
+        or row_offsets.shape[1] < 2
+    ):
+        raise ValueError("dual_weighted_sums_pairs_f32 expects int32 row offsets [batch, rotation + 1]")
     if first_values.dtype not in (jnp.complex64, jnp.complex128) or second_values.dtype != first_values.dtype:
-        raise ValueError(
-            "dual_weighted_sums_pairs_f32 expects two complex value arrays of one dtype"
-        )
+        raise ValueError("dual_weighted_sums_pairs_f32 expects two complex value arrays of one dtype")
     for name, values in (("first_values", first_values), ("second_values", second_values)):
-        if values.ndim != 3 or values.shape[0] != pair_probabilities.shape[0] or values.shape[1] != first_values.shape[1]:
+        if (
+            values.ndim != 3
+            or values.shape[0] != pair_probabilities.shape[0]
+            or values.shape[1] != first_values.shape[1]
+        ):
             raise ValueError(
                 f"dual_weighted_sums_pairs_f32 {name} must be [batch, translation, pixel] "
                 f"with the pair batch, got {values.shape}"

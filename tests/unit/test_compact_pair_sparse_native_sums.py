@@ -39,13 +39,23 @@ def test_sorted_csr_matches_dense_probabilities_in_ascending_translation_order()
     rows, trans, mask, probs = _random_unique_pairs(rng, batch, n_rows, n_trans, n_pairs)
     probs[1, 0] = np.inf  # non-finite pairs are dropped exactly like the dense path
     sorted_probs, sorted_trans, offsets = spb._compact_pair_sorted_csr(
-        jnp.asarray(probs), jnp.asarray(rows), jnp.asarray(trans), jnp.asarray(mask),
-        n_rotation_rows=n_rows, n_trans=n_trans,
+        jnp.asarray(probs),
+        jnp.asarray(rows),
+        jnp.asarray(trans),
+        jnp.asarray(mask),
+        n_rotation_rows=n_rows,
+        n_trans=n_trans,
     )
-    dense = np.asarray(spb._compact_pair_dense_probs(
-        jnp.asarray(probs), jnp.asarray(rows), jnp.asarray(trans), jnp.asarray(mask),
-        n_rotation_rows=n_rows, n_trans=n_trans,
-    ))
+    dense = np.asarray(
+        spb._compact_pair_dense_probs(
+            jnp.asarray(probs),
+            jnp.asarray(rows),
+            jnp.asarray(trans),
+            jnp.asarray(mask),
+            n_rotation_rows=n_rows,
+            n_trans=n_trans,
+        )
+    )
     sorted_probs, sorted_trans, offsets = map(np.asarray, (sorted_probs, sorted_trans, offsets))
     assert offsets.dtype == np.int32 and offsets.shape == (batch, n_rows + 1)
     assert sorted_probs.dtype == np.float32 and sorted_trans.dtype == np.int32
@@ -60,21 +70,28 @@ def test_sorted_csr_matches_dense_probabilities_in_ascending_translation_order()
             np.testing.assert_array_equal(t[w != 0], np.flatnonzero(dense[b, r]))
             np.testing.assert_array_equal(w[w != 0], dense[b, r, t[w != 0]])
         # padding sits after the last row; the non-finite pair keeps its slot with zero weight
-        assert np.all(sorted_probs[b, int(offsets[b, -1]):] == 0.0)
+        assert np.all(sorted_probs[b, int(offsets[b, -1]) :] == 0.0)
     assert sorted_probs[1, 0] == 0.0 and offsets[1, rows[1, 0]] <= 0 < offsets[1, rows[1, 0] + 1]
 
 
 def test_builder_emits_source_order_the_csr_helper_relies_on():
     from recovar.em.scoring.compact_candidates import (
-        SparseCandidateMask, build_compact_pair_index_arrays,
+        SparseCandidateMask,
+        build_compact_pair_index_arrays,
     )
+
     rng = np.random.default_rng(3)
     n_rows, n_trans, c_rot, c_trans = 15, 8, 5, 4
     ftp = np.repeat(np.arange(c_trans), 2).astype(np.int32)
     masks = [
-        SparseCandidateMask(mode="coarse", n_rows=n_rows, n_fine_trans=n_trans,
-                            parent_map=rng.integers(0, c_rot, n_rows), coarse_valid=rng.random((c_rot, c_trans)) < 0.5,
-                            fine_translation_parent=ftp)
+        SparseCandidateMask(
+            mode="coarse",
+            n_rows=n_rows,
+            n_fine_trans=n_trans,
+            parent_map=rng.integers(0, c_rot, n_rows),
+            coarse_valid=rng.random((c_rot, c_trans)) < 0.5,
+            fine_translation_parent=ftp,
+        )
         for _ in range(3)
     ] + [SparseCandidateMask(mode="full", n_rows=n_rows, n_fine_trans=n_trans)]
     arrays = build_compact_pair_index_arrays(masks, pair_bucket_size=n_rows * n_trans)
@@ -88,7 +105,9 @@ def test_builder_emits_source_order_the_csr_helper_relies_on():
 @pytest.mark.gpu
 @pytest.mark.parametrize("value_dtype", [np.complex64, np.complex128])
 @pytest.mark.parametrize("empty", [False, True])
-def test_pair_sparse_native_sums_match_dense_native_bitwise(monkeypatch, custom_cuda_lib, gpu_device, value_dtype, empty):
+def test_pair_sparse_native_sums_match_dense_native_bitwise(
+    monkeypatch, custom_cuda_lib, gpu_device, value_dtype, empty
+):
     import recovar.cuda_backproject as cuda_backproject
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
@@ -103,25 +122,44 @@ def test_pair_sparse_native_sums_match_dense_native_bitwise(monkeypatch, custom_
     else:
         probs[0, 1] = np.nan
         probs[1, 0] = 0
-    recon = (rng.normal(0, 1, (batch, n_trans, n_recon)) + 1j * rng.normal(0, 1, (batch, n_trans, n_recon))).astype(value_dtype)
-    image = (rng.normal(0, 1, (batch, n_trans, n_img)) + 1j * rng.normal(0, 1, (batch, n_trans, n_img))).astype(value_dtype)
+    recon = (rng.normal(0, 1, (batch, n_trans, n_recon)) + 1j * rng.normal(0, 1, (batch, n_trans, n_recon))).astype(
+        value_dtype
+    )
+    image = (rng.normal(0, 1, (batch, n_trans, n_img)) + 1j * rng.normal(0, 1, (batch, n_trans, n_img))).astype(
+        value_dtype
+    )
     ctf2 = rng.uniform(0.5, 2.0, (batch, n_recon)).astype(np.float32)
-    args = (jnp.asarray(probs), jnp.asarray(rows), jnp.asarray(trans), jnp.asarray(mask), jnp.asarray(recon), jnp.asarray(image), jnp.asarray(ctf2))
+    args = (
+        jnp.asarray(probs),
+        jnp.asarray(rows),
+        jnp.asarray(trans),
+        jnp.asarray(mask),
+        jnp.asarray(recon),
+        jnp.asarray(image),
+        jnp.asarray(ctf2),
+    )
     with jax.default_device(gpu_device):
         # Independent dense native contraction remains the numerical reference.
         dense_probs = spb._compact_pair_dense_probs(
-            *args[:4], n_rotation_rows=n_rows, n_trans=n_trans,
+            *args[:4],
+            n_rotation_rows=n_rows,
+            n_trans=n_trans,
         )
         summed, summed_image = cuda_backproject.dual_weighted_sums_f32(dense_probs, args[4], args[5])
         probs_sum_t = jnp.sum(dense_probs, axis=-1)
-        dense = (summed, summed_image,
-                 spb.compute_local_ctf_sums_from_probs_sum_t(probs_sum_t, args[6]),
-                 probs_sum_t, jnp.sum(dense_probs, axis=1))
+        dense = (
+            summed,
+            summed_image,
+            spb.compute_local_ctf_sums_from_probs_sum_t(probs_sum_t, args[6]),
+            probs_sum_t,
+            jnp.sum(dense_probs, axis=1),
+        )
         sparse = spb._compact_pair_weighted_rotation_and_image_sums_native(*args, n_rotation_rows=n_rows)
         dense, sparse = jax.block_until_ready((dense, sparse))
     names = ("summed", "summed_image", "ctf_probs", "probs_sum_t", "translation_posterior")
     for name, a, b in zip(names, dense, sparse):
-        a = np.asarray(a); b = np.asarray(b)
+        a = np.asarray(a)
+        b = np.asarray(b)
         assert a.shape == b.shape and a.dtype == b.dtype, name
         if name in ("summed", "summed_image"):
             # The claim: the pair-sparse kernel reproduces the dense kernel exactly.
@@ -139,7 +177,10 @@ def test_pair_sparse_native_sums_match_dense_native_bitwise(monkeypatch, custom_
 def test_csr_rejects_probability_narrowing(dtype):
     with pytest.raises(ValueError, match="float32 probabilities"):
         spb._compact_pair_sorted_csr(
-            jnp.ones((1, 1), dtype=dtype), jnp.zeros((1, 1), dtype=jnp.int32),
-            jnp.zeros((1, 1), dtype=jnp.int32), jnp.ones((1, 1), dtype=bool),
-            n_rotation_rows=1, n_trans=1,
+            jnp.ones((1, 1), dtype=dtype),
+            jnp.zeros((1, 1), dtype=jnp.int32),
+            jnp.zeros((1, 1), dtype=jnp.int32),
+            jnp.ones((1, 1), dtype=bool),
+            n_rotation_rows=1,
+            n_trans=1,
         )
