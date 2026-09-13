@@ -10495,6 +10495,45 @@ def test_device_bucket_rotations_are_bit_identical(monkeypatch, noise_mode, defe
     _assert_fused_arrays_identical(host, device, f"device bucket rotations ({noise_mode}, defer={defer_flag})")
 
 
+@pytest.mark.parametrize("defer_flag", ["0", "1"])
+@pytest.mark.parametrize(
+    "flag_env",
+    [
+        "RECOVAR_SPARSE_KCLASS_DEVICE_CHUNK_SCALARS",
+        "RECOVAR_SPARSE_KCLASS_ROTATIONS_BY_INDEX",
+        "RECOVAR_SPARSE_KCLASS_RESIDENT_HYPOTHESIS_TABLES",
+    ],
+)
+def test_host_marshalling_flags_are_bit_identical(monkeypatch, flag_env, defer_flag):
+    """Each host-marshalling flag (device log-score offset and noise totals; rotations
+    gathered from the fine-grid table; device-resident hypothesis tables) copies or
+    re-orders nothing numerically, so every fused K-class output must be bit-identical
+    to the same run with the flag off, with and without deferred host statistics."""
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    def run(flag):
+        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "4")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_DEFERRED_HOST_STATS", defer_flag)
+        monkeypatch.setenv("RECOVAR_SPARSE_PASS2_IMAGE_CAPACITY", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_LAZY_TABLES", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_DEVICE_INDEX", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_BUCKET_ROTATIONS_DEVICE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_PASS2_VECTORIZED_HYPOTHESIS_PREP", "1")
+        monkeypatch.setenv(flag_env, flag)
+        kwargs = _fused_kclass_multibucket_fixture(n_images=13)
+        kwargs["accumulate_noise"] = True
+        return _fused_kclass_result_arrays(
+            bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs)
+        )
+
+    off = run("0")
+    on = run("1")
+    _assert_fused_arrays_identical(off, on, f"{flag_env} (defer={defer_flag})")
+
+
 def test_device_bucket_rotations_builder_matches_host_bitwise():
     """_build_bucket_arrays(device_rotations=True) returns device rotations equal to the
     host arrays, keeps the shared-M-step-rotation identity, and leaves the host fields."""

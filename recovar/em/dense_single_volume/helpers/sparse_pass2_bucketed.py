@@ -14406,6 +14406,9 @@ def compute_k_class_pass2_stats_sparse_fused(
             best_log_score = _live_stats["best_log_score"]
             max_posterior = _live_stats["max_posterior"]
             rotation_posterior_sums = _live_stats["rotation_posterior_sums"]
+        # RECOVAR_SPARSE_KCLASS_DEVICE_CHUNK_SCALARS hands a device float64 leaf;
+        # convert once here (the per-row loop below must not index a device array).
+        log_score_offset = np.asarray(log_score_offset, dtype=np.float64)
         batch_rows = int(np.asarray(image_indices).shape[0])
         for _name, _value in (
             ("best_argmax", best_argmax_host),
