@@ -284,9 +284,10 @@ this page does not schedule or authorize duplicate runs.
 
 ## Next action and efficient execution
 
-Finish the existing dtype-repair CUDA guard and peer bisections, then continue
-selective integration and the scientific ladder in the coordination queue. Do not
-restart or duplicate live candidates. The latest VDAM size check still fails at8634>6100 lines; moving code into
+The tiny dtype-repair CUDA guard is complete on its frozen source. Continue
+strict K1 state closure and the existing peer attribution jobs before advancing
+the scientific ladder in the coordination queue. Do not restart completed checks
+or duplicate live candidates. The latest VDAM size check still fails at8634>6100 lines; moving code into
 another owner does not remove it from the budget.
 
 Preserve the distinct numerical routes while reducing structural overhead. Big-JIT
