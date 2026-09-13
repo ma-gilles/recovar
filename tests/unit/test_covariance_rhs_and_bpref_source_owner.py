@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 import recovar.em.reference.heterogeneity as hetero
-from recovar.em.vdam import layout, relion_layout
+from recovar.em.vdam import layout
 
 
 def test_covariance_accumulators_share_the_image_owner():
@@ -64,10 +64,10 @@ def test_bpref_slab_outputs_cast_and_clamp():
 
 
 def test_converters_use_the_owners():
-    for fn in (layout.run_em_output_to_bpref, relion_layout.relion_x_public_output_to_bpref):
+    for fn in (layout.run_em_output_to_bpref, layout.relion_x_public_output_to_bpref):
         source = inspect.getsource(fn)
         assert source.count("_centered_bpref_sources(") == 1
         assert source.count("_bpref_slab_outputs(") == 1
         assert "_as_centered_bpref_source(" not in source and "1e-15" not in source
-    assert "transpose(2, 1, 0)" in inspect.getsource(relion_layout.relion_x_public_output_to_bpref)
+    assert "transpose(2, 1, 0)" in inspect.getsource(layout.relion_x_public_output_to_bpref)
     assert "transpose" not in inspect.getsource(layout.run_em_output_to_bpref)
