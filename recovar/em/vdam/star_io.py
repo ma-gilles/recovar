@@ -17,7 +17,7 @@ import numpy as np
 
 from recovar.data_io.starfile import write_star
 from recovar.em import sampling
-from recovar.em.vdam.state import InitialModelState
+from recovar.em.vdam.state import InitialModelState, NativeParticleState
 from recovar.utils.helpers import R_from_relion, R_to_relion, write_relion_mrc
 
 
@@ -106,23 +106,6 @@ def _native_optics_state(main_star, optics_star, dataset) -> NativeOpticsState:
         defAngle=np.asarray(main_star["_rlnDefocusAngle"].astype(float).to_numpy(), dtype=np.float64),
         phase_shift=_phase_shift(main_star),
     )
-
-@dataclass
-class NativeParticleState:
-    """Per-particle metadata carried between native InitialModel iterations."""
-
-    translation_offsets: np.ndarray
-    class_assignments: np.ndarray
-    max_posterior: np.ndarray
-    pose_assignments: np.ndarray | None = None
-    best_pose_rotations: np.ndarray | None = None
-    best_pose_translations: np.ndarray | None = None
-    best_pose_rotation_ids: np.ndarray | None = None
-    best_pose_rotation_orders: np.ndarray | None = None
-    visited: np.ndarray | None = None
-    best_pose_eulers_deg: np.ndarray | None = None
-    best_pose_eulers_valid: np.ndarray | None = None
-
 
 def _relion_star_list_value(text: str, label: str, cast=str):
     """Read one required scalar from a RELION list-style STAR block."""

@@ -15,8 +15,9 @@ import recovar.em.vdam.driver as driver
 from recovar.data_io.starfile import read_star
 from recovar.em.helpers.batch_planning import maybe_cache_raw_image_loaders
 from recovar.em.relion import vdam_checkpoint
-from recovar.em.vdam import native_options, native_sampling, star_io
+from recovar.em.vdam import estep_meta_updates, native_options, native_sampling, star_io
 from recovar.em.vdam.init import initialise_denovo_state
+from recovar.em.vdam.state import NativeParticleState
 from recovar.em.vdam.subset_schedule import select_subset_for_iter
 from recovar.utils.helpers import R_from_relion, write_relion_mrc
 
@@ -798,7 +799,7 @@ def test_native_expectation_step_uses_rfloat_metadata_translations(monkeypatch):
 
     monkeypatch.setattr(driver, "_build_sampling_plan", fake_build_sampling_plan)
     monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
-    particle_state = star_io.NativeParticleState(
+    particle_state = NativeParticleState(
         translation_offsets=np.zeros((1, 2), dtype=np.float64),
         class_assignments=np.zeros(1, dtype=np.int32),
         max_posterior=np.zeros(1, dtype=np.float32),
@@ -1627,7 +1628,7 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
     monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
     dataset = SimpleNamespace(voxel_size=1.0, n_images=2)
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=2, n_directions=1)
-    particle_state = star_io.NativeParticleState(
+    particle_state = NativeParticleState(
         translation_offsets=np.asarray([[0.0, 0.0], [1.1, -1.0]], dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
         max_posterior=np.zeros(2, dtype=np.float32),
@@ -1680,7 +1681,7 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
 
 
 def test_update_particle_state_preserves_best_pose_metadata():
-    particle_state = star_io.NativeParticleState(
+    particle_state = NativeParticleState(
         translation_offsets=np.zeros((3, 2), dtype=np.float32),
         class_assignments=np.zeros(3, dtype=np.int32),
         max_posterior=np.zeros(3, dtype=np.float32),
@@ -1694,7 +1695,7 @@ def test_update_particle_state_preserves_best_pose_metadata():
         axis=0,
     )
 
-    driver._update_particle_state_from_estep_meta(
+    estep_meta_updates._update_particle_state_from_estep_meta(
         particle_state,
         {
             "selected_particle_ids": np.asarray([2, 0], dtype=np.int64),
@@ -1718,7 +1719,7 @@ def test_update_particle_state_preserves_best_pose_metadata():
     np.testing.assert_array_equal(particle_state.best_pose_rotation_orders, [2, -1, 2])
     np.testing.assert_array_equal(particle_state.visited, [True, False, True])
 
-    driver._update_particle_state_from_estep_meta(
+    estep_meta_updates._update_particle_state_from_estep_meta(
         particle_state,
         {
             "selected_particle_ids": np.asarray([1], dtype=np.int64),
@@ -1739,7 +1740,7 @@ def test_best_eulers_from_particle_state_prefers_stored_rotation_matrices():
     grid_rotations = driver.sampling.get_relion_rotation_grid(1, rotation_index_order="relion")
     perturbed_euler = np.asarray([[33.0, 44.0, 55.0]], dtype=np.float64)
     perturbed_rotation = driver.sampling._relion_euler_angles_to_matrix(perturbed_euler)[0].astype(np.float32)
-    particle_state = star_io.NativeParticleState(
+    particle_state = NativeParticleState(
         translation_offsets=np.zeros((2, 2), dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
         max_posterior=np.ones(2, dtype=np.float32),
@@ -1797,7 +1798,7 @@ def test_native_expectation_step_uses_autosampling_state_at_iteration_ten(monkey
 
     opts = native_options.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200)
     sampling_state = native_sampling._initial_sampling_state(opts, pixel_size=2.125)
-    particle_state = star_io.NativeParticleState(
+    particle_state = NativeParticleState(
         translation_offsets=np.zeros((1, 2), dtype=np.float32),
         class_assignments=np.zeros(1, dtype=np.int32),
         max_posterior=np.zeros(1, dtype=np.float32),
@@ -1908,7 +1909,7 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
     opts = native_options.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200, random_seed=17, padding_factor=2, projector_setup_backend=backend)
     sampling_state = native_sampling._initial_sampling_state(opts, pixel_size=2.125)
     sampling_state.current_changes_optimal_offsets_angstrom = 10.366644 / 5.0
-    particle_state = star_io.NativeParticleState(
+    particle_state = NativeParticleState(
         translation_offsets=np.zeros((2, 2), dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
         max_posterior=np.zeros(2, dtype=np.float32),
@@ -2021,7 +2022,7 @@ def test_sampling_accuracy_binding_uses_sigma2_fudge_not_dynamic_tau2(monkeypatc
     best_rotations = driver.sampling._relion_euler_angles_to_matrix(
         np.asarray([[10.0, 30.0, 20.0], [40.0, 60.0, 50.0]])
     )
-    particle_state = star_io.NativeParticleState(
+    particle_state = NativeParticleState(
         translation_offsets=np.zeros((2, 2), dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
         max_posterior=np.ones(2, dtype=np.float32),
@@ -2105,7 +2106,7 @@ def test_native_expectation_step_records_sampling_changes_each_gradient_iteratio
 
     opts = native_options.NativeInitialModelOptions(fn_img="particles.star", nr_iter=200, oversampling=0)
     sampling_state = native_sampling._initial_sampling_state(opts, pixel_size=2.0)
-    particle_state = star_io.NativeParticleState(
+    particle_state = NativeParticleState(
         translation_offsets=np.zeros((2, 2), dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
         max_posterior=np.zeros(2, dtype=np.float32),
@@ -2188,7 +2189,7 @@ def test_native_expectation_step_expands_class_rotation_prior_for_dense_fallback
     monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
 
     opts = native_options.NativeInitialModelOptions(fn_img="particles.star", oversampling=1)
-    particle_state = star_io.NativeParticleState(
+    particle_state = NativeParticleState(
         translation_offsets=np.zeros((2, 2), dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
         max_posterior=np.zeros(2, dtype=np.float32),
@@ -2387,7 +2388,7 @@ def test_iteration_zero_artifacts_use_the_normal_iteration_writer(monkeypatch, t
             "_rlnOpticsGroup": ["1", "1"],
         }
     )
-    particle_state = star_io.NativeParticleState(
+    particle_state = NativeParticleState(
         translation_offsets=np.zeros((2, 2), dtype=np.float32),
         class_assignments=np.zeros(2, dtype=np.int32),
         max_posterior=np.zeros(2, dtype=np.float32),
@@ -2452,7 +2453,7 @@ def test_data_star_preserves_optics_and_updates_particle_metadata(tmp_path, monk
         }
     )
     optics = pd.DataFrame({"_rlnOpticsGroup": ["1"], "_rlnImageSize": ["8"]})
-    particle_state = star_io.NativeParticleState(
+    particle_state = NativeParticleState(
         translation_offsets=np.asarray([[2.0, -1.0], [0.5, 1.25]], dtype=np.float32),
         class_assignments=np.asarray([1, 0], dtype=np.int32),
         max_posterior=np.asarray([0.875, 0.25], dtype=np.float32),
@@ -2497,7 +2498,7 @@ def test_data_star_zeros_unvisited_rows_and_writes_best_pose_eulers(tmp_path, mo
             "_rlnMaxValueProbDistribution": ["0.5", "0.0", "0.0"],
         }
     )
-    particle_state = star_io.NativeParticleState(
+    particle_state = NativeParticleState(
         translation_offsets=np.zeros((3, 2), dtype=np.float32),
         class_assignments=np.asarray([0, 0, 0], dtype=np.int32),
         max_posterior=np.asarray([0.75, 0.0, 0.625], dtype=np.float32),

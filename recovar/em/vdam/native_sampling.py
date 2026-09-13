@@ -31,8 +31,8 @@ from recovar.em.vdam.native_options import (
     DEFAULT_OVERSAMPLING,
     NativeInitialModelOptions,
 )
-from recovar.em.vdam.star_io import NativeOpticsState, NativeParticleState
-from recovar.em.vdam.state import InitialModelState
+from recovar.em.vdam.star_io import NativeOpticsState
+from recovar.em.vdam.state import InitialModelState, NativeParticleState
 from recovar.em.vdam.subset import RndUnifFn
 from recovar.utils.helpers import R_to_relion, recovar_volume_to_relion
 

@@ -115,9 +115,9 @@ def test_initial_model_estep_reuses_shared_dense_em_engine():
 # ---------------------------------------------------------------------------
 
 
-def test_ensure_field_helper_exists_in_driver():
-    """``_ensure_field`` dedup'd 6 lazy-init blocks in ``driver.py``."""
-    from recovar.em.vdam.driver import _ensure_field
+def test_ensure_field_helper_preserves_metadata_array_identity():
+    """``_ensure_field`` preserves existing arrays in particle metadata updates."""
+    from recovar.em.vdam.estep_meta_updates import _ensure_field
 
     sig = inspect.signature(_ensure_field)
     params = list(sig.parameters)

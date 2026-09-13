@@ -7,21 +7,22 @@ import pandas as pd
 import pytest
 
 from recovar.em.classification import k_class_results
-from recovar.em.vdam import dense_adapter, driver, native_sampling, sparse_pass2_estep, star_io
+from recovar.em.vdam import estep_meta_updates, native_sampling, sparse_pass2_estep, star_io
+from recovar.em.vdam.state import NativeParticleState
 from recovar.utils.helpers import R_from_relion, R_to_relion
 
 pytestmark = pytest.mark.unit
 
 
 def state(n=3):
-    return star_io.NativeParticleState(np.zeros((n, 2)), np.zeros(n, np.int32), np.zeros(n, np.float32))
+    return NativeParticleState(np.zeros((n, 2)), np.zeros(n, np.int32), np.zeros(n, np.float32))
 
 
 def test_subset_source_validity_and_mixed_legacy_rows():
     value = state()
     value.best_pose_rotations = np.zeros((3, 3, 3), np.float32)
     eulers = np.array([[159.3271497477632, 126.91279408422895, 85.75518260708287], [-2.0, 30.0, 7.0]])
-    driver._update_particle_state_from_estep_meta(
+    estep_meta_updates._update_particle_state_from_estep_meta(
         value,
         dict(
             selected_particle_ids=np.array([2, 0]),
@@ -38,14 +39,14 @@ def test_subset_source_validity_and_mixed_legacy_rows():
         got[1], R_to_relion(value.best_pose_rotations[[0]].astype(np.float64), degrees=True)[0]
     )
     # A matrix-only replacement invalidates that row, never a different particle.
-    driver._update_particle_state_from_estep_meta(
+    estep_meta_updates._update_particle_state_from_estep_meta(
         value,
         dict(selected_particle_ids=np.array([0]), best_pose_rotations=np.eye(3, dtype=np.float32)[None]),
         np.zeros((1, 2)),
     )
     np.testing.assert_array_equal(value.best_pose_eulers_valid, [False, False, True])
     np.testing.assert_array_equal(value.best_pose_eulers_deg[2], eulers[0])
-    driver._update_particle_state_from_estep_meta(
+    estep_meta_updates._update_particle_state_from_estep_meta(
         value,
         dict(selected_particle_ids=np.array([2]), best_pose_rotations=np.eye(3, dtype=np.float32)[None]),
         np.zeros((1, 2)),
@@ -96,7 +97,7 @@ def test_mixed_halfset_rows_keep_identity_and_validity():
     np.testing.assert_array_equal(meta["best_pose_eulers_valid"], [False, False, True])
     np.testing.assert_array_equal(meta["best_pose_eulers_deg"][2], source[0])
     value = state()
-    driver._update_particle_state_from_estep_meta(value, meta, np.zeros((1, 2)))
+    estep_meta_updates._update_particle_state_from_estep_meta(value, meta, np.zeros((1, 2)))
     np.testing.assert_array_equal(value.best_pose_eulers_valid, [False, False, True])
     np.testing.assert_array_equal(value.best_pose_eulers_deg[2], source[0])
 

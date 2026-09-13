@@ -104,3 +104,20 @@ class VdamAccumulator:
     weight: np.ndarray  # float64, same shape
     class_idx: int
     halfset_idx: int
+
+
+@dataclass
+class NativeParticleState:
+    """Per-particle metadata carried between native InitialModel iterations."""
+
+    translation_offsets: np.ndarray
+    class_assignments: np.ndarray
+    max_posterior: np.ndarray
+    pose_assignments: np.ndarray | None = None
+    best_pose_rotations: np.ndarray | None = None
+    best_pose_translations: np.ndarray | None = None
+    best_pose_rotation_ids: np.ndarray | None = None
+    best_pose_rotation_orders: np.ndarray | None = None
+    visited: np.ndarray | None = None
+    best_pose_eulers_deg: np.ndarray | None = None
+    best_pose_eulers_valid: np.ndarray | None = None

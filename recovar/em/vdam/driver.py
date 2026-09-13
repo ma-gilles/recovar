@@ -28,7 +28,7 @@ from recovar.em.helpers.orientation_priors import (
     relion_translation_prior_center,
 )
 from recovar.em.relion import vdam_checkpoint
-from recovar.em.vdam import star_io
+from recovar.em.vdam import estep_meta_updates, star_io
 from recovar.em.vdam.avg_unaligned import compute_avg_unaligned_and_sigma2
 from recovar.em.vdam.bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstrap_iref_via_cpp
 from recovar.em.vdam.dense_adapter import (
@@ -60,7 +60,6 @@ from recovar.em.vdam.schedules import (
 )
 from recovar.em.vdam.star_io import (
     NativeOpticsState,
-    NativeParticleState,
     _experiment_read_order,
     _micrograph_sort_order,
     _output_dir_from_prefix,
@@ -69,7 +68,7 @@ from recovar.em.vdam.star_io import (
     _write_iteration_artifacts,
     _write_model_star,
 )
-from recovar.em.vdam.state import InitialModelState
+from recovar.em.vdam.state import InitialModelState, NativeParticleState
 from recovar.em.vdam.subset_schedule import restore_subset_order_for_continuation
 from recovar.reconstruction.noise import make_radial_noise
 from recovar.utils.helpers import (
@@ -697,7 +696,7 @@ def _native_expectation_step(
                 orientational_prior_mode=int(sampling_state.orientational_prior_mode),
                 uniform_local_orientation_prior=bool(sampling_state.uniform_local_orientation_prior),
             )
-        _update_particle_state_from_estep_meta(
+        estep_meta_updates._update_particle_state_from_estep_meta(
             particle_state,
             result.meta,
             (
@@ -744,79 +743,6 @@ def _native_expectation_step(
         return result.accumulators, result.meta
 
     return _expectation_step
-
-
-def _ensure_field(arr: np.ndarray | None, shape: tuple, dtype, fill=0) -> np.ndarray:
-    if arr is None or arr.shape != shape:
-        return np.full(shape, fill, dtype=dtype) if fill != 0 else np.zeros(shape, dtype=dtype)
-    return arr
-
-
-def _update_particle_state_from_estep_meta(
-    particle_state: NativeParticleState,
-    meta: dict,
-    translations: np.ndarray,
-) -> None:
-    selected = meta.get("selected_particle_ids")
-    if selected is None:
-        return
-    ids = np.asarray(selected, dtype=np.int64).reshape(-1)
-    if ids.size == 0:
-        return
-    N = particle_state.translation_offsets.shape[0]
-    if np.any(ids < 0) or np.any(ids >= N):
-        raise ValueError("selected_particle_ids contains entries outside the particle state table")
-    if particle_state.visited is None or np.asarray(particle_state.visited).shape != (N,):
-        particle_state.visited = np.zeros(N, dtype=bool)
-    particle_state.visited[ids] = True
-
-    if (pose := meta.get("pose_assignments")) is not None:
-        assignments = np.asarray(pose, dtype=np.int64).reshape(-1)
-        trans = np.asarray(translations, dtype=np.float64)
-        translation_ids = np.mod(assignments, int(trans.shape[0]))
-        base = relion_round_away_from_zero(particle_state.translation_offsets[ids])
-        particle_state.translation_offsets[ids] = base + trans[translation_ids, :2]
-        particle_state.pose_assignments = _ensure_field(particle_state.pose_assignments, (N,), np.int32, -1)
-        particle_state.pose_assignments[ids] = assignments.astype(np.int32, copy=False)
-
-    if (rot := meta.get("best_pose_rotations")) is not None:
-        particle_state.best_pose_rotations = _ensure_field(particle_state.best_pose_rotations, (N, 3, 3), np.float32)
-        particle_state.best_pose_rotations[ids] = np.asarray(rot, dtype=np.float32)
-
-    source_eulers = meta.get("best_pose_eulers_deg")
-    if rot is not None or source_eulers is not None:
-        particle_state.best_pose_eulers_valid = _ensure_field(particle_state.best_pose_eulers_valid, (N,), bool, False)
-        particle_state.best_pose_eulers_valid[ids] = False
-    if source_eulers is not None:
-        eulers = np.asarray(source_eulers)
-        if eulers.dtype != np.float64 or eulers.shape != (ids.size, 3) or not np.all(np.isfinite(eulers)):
-            raise ValueError("source Euler metadata must be finite float64 [selected_particles, 3]")
-        particle_state.best_pose_eulers_deg = _ensure_field(particle_state.best_pose_eulers_deg, (N, 3), np.float64)
-        particle_state.best_pose_eulers_deg[ids] = eulers
-        valid = np.asarray(meta.get("best_pose_eulers_valid", np.ones(ids.size, dtype=bool)))
-        if valid.dtype != bool or valid.shape != (ids.size,):
-            raise ValueError("source Euler validity must be boolean [selected_particles]")
-        particle_state.best_pose_eulers_valid[ids] = valid
-
-    if (bt := meta.get("best_pose_translations")) is not None:
-        particle_state.best_pose_translations = _ensure_field(particle_state.best_pose_translations, (N, 2), np.float32)
-        particle_state.best_pose_translations[ids] = np.asarray(bt, dtype=np.float32)
-
-    if (rid := meta.get("best_pose_rotation_ids")) is not None:
-        particle_state.best_pose_rotation_ids = _ensure_field(particle_state.best_pose_rotation_ids, (N,), np.int32, -1)
-        particle_state.best_pose_rotation_ids[ids] = np.asarray(rid, dtype=np.int32).reshape(-1)
-        particle_state.best_pose_rotation_orders = _ensure_field(
-            particle_state.best_pose_rotation_orders, (N,), np.int32, -1
-        )
-        particle_state.best_pose_rotation_orders[ids] = int(meta.get("healpix_order", 0)) + int(
-            meta.get("oversampling", 0)
-        )
-
-    if (cls := meta.get("class_assignments")) is not None:
-        particle_state.class_assignments[ids] = np.asarray(cls, dtype=np.int32).reshape(-1)
-
-    if (pmax := meta.get("max_posterior_per_image")) is not None:
-        particle_state.max_posterior[ids] = np.asarray(pmax, dtype=np.float32).reshape(-1)
 
 
 def _initial_state_from_particles(
