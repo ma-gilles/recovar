@@ -141,6 +141,7 @@ from recovar.em.sparse_pass2.sparse_pass2_bucket_plan import (
     _validate_k_class_execution_bucket_partition,
 )
 from recovar.em.sparse_pass2.sparse_pass2_budget import (
+    quantized_image_capacity,
     _EXACT_RAW_DIFF2_CACHE_MAX_BYTES,
     _compact_pair_dense_mstep_max_bytes_for_pass,
     _device_free_memory_bytes,
@@ -5709,12 +5710,18 @@ def compute_k_class_pass2_stats_sparse_fused(
             group_t0 = time.time()
             group_timing = {} if profile_group_timing else None
         stage_t0 = time.time()
+        n_real_images = int(image_indices.size)
+        capacity_rows = (
+            quantized_image_capacity(n_real_images, max_images=bucket_meta.get("image_capacity_budget"))
+            if bucket_uses_compact_pairs else n_real_images
+        )
         class_bucket_arrays = _build_k_class_bucket_arrays(
             bucket_meta,
             per_image_inputs_by_class,
             n_fine_trans,
             compact_buckets=bucket_uses_compact_pairs or compact_buckets,
             include_dense_score_fields=not bucket_uses_compact_pairs,
+            capacity_rows=capacity_rows,
             rotation_block_size_for_quantization=rotation_block_size_for_quantization,
         )
         if parse_env_flag(
@@ -5732,7 +5739,9 @@ def compute_k_class_pass2_stats_sparse_fused(
         compact_pair_arrays_by_class = None
         if bucket_uses_compact_pairs:
             compact_pair_arrays_by_class = [
-                _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket_meta, per_image_inputs)
+                _build_compact_pair_bucket_arrays_from_per_image_inputs(
+                    bucket_meta, per_image_inputs, capacity_rows=capacity_rows
+                )
                 for per_image_inputs in per_image_inputs_by_class
             ]
         batch = int(image_indices.shape[0])
@@ -5796,6 +5805,19 @@ def compute_k_class_pass2_stats_sparse_fused(
                     )
                 compact_pair_arrays_by_class = reordered_compact_pairs
             image_indices = fetched_indices_np
+        if capacity_rows > n_real_images:
+            pad_rows = capacity_rows - n_real_images
+            image_indices = np.pad(image_indices, (0, pad_rows), mode="edge")
+            batch_data = jnp.concatenate((batch_data, jnp.repeat(batch_data[-1:], pad_rows, axis=0)))
+            ctf_params = jnp.concatenate((ctf_params, jnp.repeat(ctf_params[-1:], pad_rows, axis=0)))
+            for arrays in class_bucket_arrays:
+                arrays["image_indices"] = image_indices
+            for pairs in compact_pair_arrays_by_class:
+                pairs["image_indices"] = image_indices
+            batch = capacity_rows
+        valid_image_mask = (
+            jnp.arange(batch, dtype=jnp.int32) < n_real_images if batch > n_real_images else None
+        )
         raw_score_bytes = _kclass_raw_diff2_bytes(
             class_bucket_arrays,
             compact_pair_arrays_by_class,
@@ -7554,7 +7576,12 @@ def compute_k_class_pass2_stats_sparse_fused(
                     support_mass,
                     shell_count=n_shells,
                     norm_unweighted_shell_cutoff=None if current_size is None else int(current_size // 2),
-                    norm_unweighted_high_shell=relion_norm_high_shell,
+                    norm_unweighted_high_shell=(
+                        jnp.where(valid_image_mask, relion_norm_high_shell, 0)
+                        if valid_image_mask is not None and relion_norm_high_shell is not None
+                        else relion_norm_high_shell
+                    ),
+                    valid_image_mask=valid_image_mask,
                     include_unweighted_high_shell=class_index == 0,
                 )
                 host_updates.append(
@@ -7786,6 +7813,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                     local_rotation_row=pair_arrays["local_rotation_row"] if bucket_uses_compact_pairs else None,
                     translation_idx=pair_arrays["translation_idx"] if bucket_uses_compact_pairs else None,
                     bucket_uses_compact_pairs=bucket_uses_compact_pairs,
+                    n_real_images=n_real_images,
                     batch=batch,
                     n_fine_trans=n_fine_trans,
                     score_real_dtype=precision_policy.score_real_dtype,

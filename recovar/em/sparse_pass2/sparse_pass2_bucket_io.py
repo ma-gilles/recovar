@@ -137,7 +137,10 @@ def _reorder_to_indices(image_indices_returned, requested_image_indices, *arrays
         return arrays
     position = {int(idx): pos for pos, idx in enumerate(np.asarray(requested_image_indices).tolist())}
     order = np.array([position[int(idx)] for idx in np.asarray(image_indices_returned).tolist()], dtype=np.int64)
-    return tuple(arr[order] for arr in arrays)
+    return tuple(
+        arr[np.concatenate((order, np.arange(order.size, arr.shape[0], dtype=np.int64)))]
+        for arr in arrays
+    )
 
 
 @jax.jit

@@ -563,6 +563,7 @@ class SparseKClassHostStatistics(NamedTuple):
         local_rotation_row,
         translation_idx,
         bucket_uses_compact_pairs,
+        n_real_images,
         batch,
         n_fine_trans,
         best_argmax,
@@ -618,8 +619,9 @@ class SparseKClassHostStatistics(NamedTuple):
             row_index_np,
             best_rot_idx,
         ]
-        if np.any(best_rot_idx >= actual_counts_arr):
-            bad = np.flatnonzero(best_rot_idx >= actual_counts_arr)
+        invalid_real_rows = best_rot_idx[:n_real_images] >= actual_counts_arr[:n_real_images]
+        if np.any(invalid_real_rows):
+            bad = np.flatnonzero(invalid_real_rows)
             raise RuntimeError(
                 "Fused sparse K-class pass-2: best rotation index points into padding for "
                 f"class {class_index + 1}, images {bad.tolist()}",
@@ -630,7 +632,7 @@ class SparseKClassHostStatistics(NamedTuple):
         )
         class_log_z_np = np.asarray(class_log_z, dtype=np.float64)
         probs_sum_t = np.asarray(probs_sum_t_jax, dtype=np.float64)
-        for row, image_idx in enumerate(image_indices.tolist()):
+        for row, image_idx in enumerate(image_indices[:n_real_images].tolist()):
             r = int(best_rot_idx[row])
             t = int(best_trans_idx[row])
             fine_rot_idx = int(best_fine_rot_idx[row])
@@ -734,9 +736,9 @@ class SparseKClassNoiseStatistics(NamedTuple):
     def power(self, *, class_index, image_indices, support_mass, weighted_img_shells, weighted_img_per_image):
         support_mass_np = np.asarray(support_mass, dtype=np.float64)
         self.noise_img_power_total[class_index] += np.asarray(weighted_img_shells, dtype=np.float64)
-        self.noise_norm_correction_total[class_index][image_indices] += np.asarray(
-            weighted_img_per_image,
-            dtype=np.float64,
+        np.add.at(
+            self.noise_norm_correction_total[class_index], image_indices,
+            np.asarray(weighted_img_per_image, dtype=np.float64),
         )
         self.noise_sumw_total[class_index] += float(np.sum(support_mass_np, dtype=np.float64))
 
@@ -754,7 +756,7 @@ class SparseKClassNoiseStatistics(NamedTuple):
 
     def residual(self, *, class_index, image_indices, block_noise_shells, block_norm_residual):
         self.noise_wsum_total[class_index] += np.asarray(block_noise_shells, dtype=np.float64)
-        self.noise_norm_correction_total[class_index][image_indices] += np.asarray(
-            block_norm_residual,
-            dtype=np.float64,
+        np.add.at(
+            self.noise_norm_correction_total[class_index], image_indices,
+            np.asarray(block_norm_residual, dtype=np.float64),
         )

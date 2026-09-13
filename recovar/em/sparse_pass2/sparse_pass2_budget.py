@@ -618,3 +618,12 @@ def _kclass_raw_diff2_bytes(class_bucket_arrays, compact_pair_arrays, *, n_fine_
             for arrays in class_bucket_arrays
         )
     return elements * np.dtype(dtype).itemsize
+
+
+def quantized_image_capacity(n_images, *, max_images):
+    """Round image rows up within both the byte budget and a twofold growth bound."""
+    n_images = int(n_images)
+    if n_images <= 0 or max_images is None:
+        return n_images
+    capacity = max(16, 1 << (n_images - 1).bit_length())
+    return capacity if capacity <= min(int(max_images), 2 * n_images) else n_images

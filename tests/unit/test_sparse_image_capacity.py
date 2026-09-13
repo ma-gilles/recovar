@@ -52,3 +52,26 @@ def test_capacity_allocations_preserve_real_rows(dtype, dense_fields):
     assert not padded_pairs["pair_mask"][2:].any()
     for name in ["local_rotation_row", "translation_idx"]:
         np.testing.assert_array_equal(padded_pairs[name][2:], -1)
+
+
+def test_capacity_respects_byte_and_growth_limits():
+    from recovar.em.sparse_pass2.sparse_pass2_budget import quantized_image_capacity
+
+    for n in range(1, 600):
+        for limit in [1, 16, 64, 128, 512, 1000, None]:
+            capacity = quantized_image_capacity(n, max_images=limit)
+            assert n <= capacity <= 2 * n
+            if capacity > n:
+                assert limit is not None and capacity <= limit
+                assert capacity >= 16 and capacity & (capacity - 1) == 0
+    assert quantized_image_capacity(20, max_images=24) == 20
+    assert quantized_image_capacity(20, max_images=32) == 32
+    assert quantized_image_capacity(0, max_images=64) == 0
+
+
+def test_fetch_reordering_preserves_padding_rows():
+    from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _reorder_to_indices
+
+    values = np.array([[10, 11], [20, 21], [30, 31], [-1, -1], [-2, -2]])
+    reordered, = _reorder_to_indices(np.array([8, 3, 1]), np.array([1, 8, 3]), values)
+    np.testing.assert_array_equal(reordered, [[20, 21], [30, 31], [10, 11], [-1, -1], [-2, -2]])

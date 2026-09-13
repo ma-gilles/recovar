@@ -10043,3 +10043,102 @@ def test_kclass_raw_bucket_bytes_include_every_padded_class(dtype):
     assert _kclass_raw_diff2_bytes(classes, None, n_fine_trans=3, dtype=dtype) == 165 * itemsize
     # Masked padding occupies storage even though it contributes no probability.
     assert _kclass_raw_diff2_bytes(classes, compact, n_fine_trans=3, dtype=dtype) == 85 * itemsize
+
+
+def _fused_kclass_result_arrays(result):
+    """Every array-valued field of a fused pass-2 result, for exact comparison."""
+
+    arrays = {}
+    for name in dir(result):
+        if name.startswith("_"):
+            continue
+        value = getattr(result, name)
+        if callable(value):
+            continue
+        if isinstance(value, (list, tuple)):
+            for i, item in enumerate(value):
+                if hasattr(item, "shape") or isinstance(item, (int, float)):
+                    arrays[f"{name}[{i}]"] = np.asarray(item)
+                elif item is not None and not isinstance(item, (str, bytes, dict)):
+                    # one level into per-class records (noise statistics carry the
+                    # translation-prior sigma2 offset as a scalar attribute)
+                    for sub in dir(item):
+                        if sub.startswith("_"):
+                            continue
+                        sub_value = getattr(item, sub)
+                        if callable(sub_value):
+                            continue
+                        if hasattr(sub_value, "shape") or isinstance(sub_value, (int, float)):
+                            arrays[f"{name}[{i}].{sub}"] = np.asarray(sub_value)
+        elif hasattr(value, "shape") or isinstance(value, (int, float)):
+            arrays[name] = np.asarray(value)
+    return arrays
+
+def _fused_kclass_capacity_fixture():
+    """Small exactly-K2 fused pass-2 call used to compare image-axis capacities."""
+
+    from recovar.em.sampling import rotation_grid_size
+
+    n_images = 3
+    n_classes = 2
+    rotation_grid_size(0)
+    fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 3, axis=0)
+    fine_parent = np.asarray([0, 1, 2], dtype=np.int64)
+    fine_translations = np.asarray([[0.0, 0.0], [0.25, 0.0]], dtype=np.float32)
+    fine_translation_parent = np.zeros(2, dtype=np.int32)
+    significant_by_class = [
+        [np.asarray([0, 1], dtype=np.int32), np.asarray([1, 2], dtype=np.int32), np.asarray([0, 2], dtype=np.int32)],
+        [np.asarray([0, 2], dtype=np.int32), np.asarray([0, 1], dtype=np.int32), np.asarray([1, 2], dtype=np.int32)],
+    ]
+    volumes = jnp.stack(
+        [_hermitian_volume(VOLUME_SHAPE, seed=2027), _hermitian_volume(VOLUME_SHAPE, seed=2029)]
+    )
+    return dict(
+        experiment_dataset=MockDataset(n_images=n_images, seed=2039),
+        volumes=volumes,
+        noise_variance=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        translations=np.asarray([[0.0, 0.0]], dtype=np.float32),
+        significant_sample_indices_by_class=significant_by_class,
+        rotation_log_priors_by_class=[None] * n_classes,
+        translation_log_prior=np.array([-0.25], dtype=np.float32),
+        nside_level=0,
+        disc_type="linear_interp",
+        oversampling_order=0,
+        current_size=4,
+        half_spectrum_scoring=True,
+        fine_rotations_override=fine_rotations,
+        fine_rotation_parent_override=fine_parent,
+        fine_translations_override=fine_translations,
+        fine_translation_parent_override=fine_translation_parent,
+        relion_x_half_mstep=False,
+        relion_fine_mstep_prune_mode="joint",
+        adaptive_fraction=0.9,
+    )
+
+@pytest.mark.parametrize("noise_mode", ["off", "noise"])
+def test_image_capacity_preserves_fused_results(monkeypatch, noise_mode):
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as owner
+
+    monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+    observed = []
+    build = owner._build_compact_pair_bucket_arrays_from_per_image_inputs
+
+    def recording_build(bucket, inputs, *, capacity_rows=None):
+        observed.append((len(bucket["image_indices"]), capacity_rows))
+        return build(bucket, inputs, capacity_rows=capacity_rows)
+
+    monkeypatch.setattr(owner, "_build_compact_pair_bucket_arrays_from_per_image_inputs", recording_build)
+    kwargs = _fused_kclass_capacity_fixture()
+    kwargs["accumulate_noise"] = noise_mode == "noise"
+    monkeypatch.setattr(owner, "quantized_image_capacity", lambda n, **_: n)
+    baseline = _fused_kclass_result_arrays(owner.compute_k_class_pass2_stats_sparse_fused(**kwargs))
+    assert observed and all(real == cap for real, cap in observed)
+    observed.clear()
+    monkeypatch.setattr(owner, "quantized_image_capacity", lambda n, **_: 16)
+    padded = _fused_kclass_result_arrays(owner.compute_k_class_pass2_stats_sparse_fused(**kwargs))
+    assert observed and all(real < cap for real, cap in observed)
+    assert baseline and baseline.keys() == padded.keys()
+    for name, expected in baseline.items():
+        np.testing.assert_array_equal(padded[name], expected, err_msg=name)

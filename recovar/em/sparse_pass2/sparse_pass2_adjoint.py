@@ -626,15 +626,7 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
     for bucket in compact_buckets:
         image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
         original_max_images = max(original_max_images, int(image_indices.size))
-        if image_indices.size <= 1:
-            split_buckets.append(bucket)
-            split_max_images = max(split_max_images, int(image_indices.size))
-            continue
-        max_images = int(image_indices.size)
-        max_images = min(
-            max_images,
-            original_pair_bucket_max_images[int(bucket["pair_bucket_size"])],
-        )
+        max_images = original_pair_bucket_max_images[int(bucket["pair_bucket_size"])]
         if max_gather_bytes is not None or max_dense_mstep_bytes is not None:
             if "class_bucket_sizes" in bucket:
                 max_class_bucket_size = max(int(value) for value in bucket["class_bucket_sizes"])
@@ -656,6 +648,9 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
             max_images = min(max_images, max(1, max_dense_mstep_bytes // dense_bytes_per_image))
         if max_prepare_images is not None:
             max_images = min(max_images, max_prepare_images)
+        # Retain the budget before clamping to the actual chunk length, so
+        # shape padding cannot exceed gather, preparation or dense-M-step limits.
+        bucket = {**bucket, "image_capacity_budget": int(max_images)}
         if image_indices.size <= max_images:
             split_buckets.append(bucket)
             split_max_images = max(split_max_images, int(image_indices.size))
