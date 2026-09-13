@@ -754,7 +754,7 @@ def test_sampling_plan_oversamples_relion_grid():
 def test_native_expectation_step_uses_rfloat_metadata_translations(monkeypatch):
     metadata_translation = np.float64(1.00000006)
 
-    def fake_build_sampling_plan(opts, *, iteration):
+    def fake_build_sampling_plan(opts, *, iteration, sampling_state):
         return native_sampling.NativeSamplingPlan(
             rotations=np.zeros((1, 3, 3), dtype=np.float32),
             translations=np.asarray([[0.0, 0.0], [metadata_translation, 0.0]], dtype=np.float32),
@@ -787,6 +787,9 @@ def test_native_expectation_step_uses_rfloat_metadata_translations(monkeypatch):
         SimpleNamespace(voxel_size=1.0, n_images=1),
         native_options.NativeInitialModelOptions(fn_img="particles.star", nr_iter=1),
         particle_state,
+        sampling_state=native_sampling._initial_sampling_state(
+            native_options.NativeInitialModelOptions(fn_img="particles.star", nr_iter=1), pixel_size=1.0,
+        ),
     )
     expectation_step(state, np.asarray([0]), np.asarray([0], dtype=np.int8))
 
@@ -1530,7 +1533,7 @@ def test_initial_state_applies_relion_bootstrap_postprocess(monkeypatch, capsys)
 def test_native_expectation_step_rebuilds_sampling_per_iteration(monkeypatch):
     calls = []
 
-    def fake_build_sampling_plan(opts, *, iteration):
+    def fake_build_sampling_plan(opts, *, iteration, sampling_state):
         calls.append(iteration)
         return native_sampling.NativeSamplingPlan(
             rotations=np.zeros((iteration, 3, 3), dtype=np.float32),
@@ -1563,6 +1566,9 @@ def test_native_expectation_step_rebuilds_sampling_per_iteration(monkeypatch):
             max_posterior=np.zeros(2, dtype=np.float32),
             pose_assignments=np.full(2, -1, dtype=np.int32),
         ),
+        sampling_state=native_sampling._initial_sampling_state(
+            native_options.NativeInitialModelOptions(fn_img="particles.star"), pixel_size=1.0,
+        ),
     )
     accumulators, meta = expectation_step(state, np.asarray([0, 1]), np.asarray([0, 1], dtype=np.int8))
 
@@ -1576,7 +1582,7 @@ def test_native_expectation_step_rebuilds_sampling_per_iteration(monkeypatch):
 def test_native_expectation_step_updates_translation_offsets_between_iterations(monkeypatch):
     calls = []
 
-    def fake_build_sampling_plan(opts, *, iteration):
+    def fake_build_sampling_plan(opts, *, iteration, sampling_state):
         return native_sampling.NativeSamplingPlan(
             rotations=np.zeros((1, 3, 3), dtype=np.float32),
             translations=np.asarray([[0.0, 0.0], [2.0, -1.0], [4.0, 0.0]], dtype=np.float32),
@@ -1613,6 +1619,9 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
         dataset,
         native_options.NativeInitialModelOptions(fn_img="particles.star", translation_sigma_angstrom=2.0),
         particle_state,
+        sampling_state=native_sampling._initial_sampling_state(
+            native_options.NativeInitialModelOptions(fn_img="particles.star", translation_sigma_angstrom=2.0), pixel_size=1.0,
+        ),
     )
 
     expectation_step(state, np.asarray([0, 1]), np.asarray([0, 1], dtype=np.int8))
@@ -2172,6 +2181,9 @@ def test_native_expectation_step_expands_class_rotation_prior_for_dense_fallback
         SimpleNamespace(voxel_size=2.0, n_images=2),
         opts,
         particle_state,
+        sampling_state=native_sampling._initial_sampling_state(
+            opts, pixel_size=1.0,
+        ),
     )
 
     _accumulators, _meta = expectation_step(state, np.asarray([0, 1]), np.asarray([0, 1], dtype=np.int8))

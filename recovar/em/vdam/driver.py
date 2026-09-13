@@ -491,7 +491,7 @@ def _native_expectation_step(
     dataset,
     opts: NativeInitialModelOptions,
     particle_state: NativeParticleState,
-    sampling_state: NativeSamplingState | None = None,
+    sampling_state: NativeSamplingState,
     optics_state: NativeOpticsState | None = None,
     *,
     projector_context: _IterationProjectorContext | None = None,
@@ -514,57 +514,50 @@ def _native_expectation_step(
                 state, padding_factor=int(opts.padding_factor)
             )
         )
-        pass1_healpix_order = (
-            int(opts.healpix_order)
-            if sampling_state is None
-            else int(sampling_state.healpix_order)
-        )
-        if sampling_state is None:
-            sampling_plan = _build_sampling_plan(opts, iteration=iteration, **sampling_kwargs)
-        else:
-            skip_expected_accuracy = _skip_native_sampling_accuracy_diagnostic()
-            if (
-                optics_state is not None
-                and not skip_expected_accuracy
-                and _should_estimate_native_sampling_accuracy(
-                    iteration=iteration,
-                    nr_iter=int(state.nr_iter),
-                    do_grad=do_grad,
-                )
-            ):
-                # RELION expectationSetup constructs the production PPref
-                # before calculateExpectedAngularErrors and reuses that PPref
-                # for scoring. Build RECOVAR's production projector in the
-                # same order and pass it through the shared E-step adapter so
-                # the accuracy helper cannot perturb a later rebuild.
-                if prepared_projector_inputs is None:
-                    prepared_projector_inputs = prepare_relion_projector_class_inputs(
-                        state,
-                        padding_factor=int(opts.padding_factor),
-                        projector_setup_backend=opts.projector_setup_backend,
-                    )
-                accuracy_meta = _estimate_native_sampling_accuracy(
-                    sampling_state,
-                    state,
-                    particle_state,
-                    optics_state,
-                    particle_order=np.asarray(particle_ids, dtype=np.int64),
-                    random_seed=int(opts.random_seed),
-                    padding_factor=int(opts.padding_factor),
-                    sigma2_fudge=DEFAULT_SIGMA2_FUDGE,
-                )
-            sampling_updated = _prepare_native_sampling_for_iteration(
-                sampling_state,
-                state,
+        pass1_healpix_order = int(sampling_state.healpix_order)
+        skip_expected_accuracy = _skip_native_sampling_accuracy_diagnostic()
+        if (
+            optics_state is not None
+            and not skip_expected_accuracy
+            and _should_estimate_native_sampling_accuracy(
                 iteration=iteration,
+                nr_iter=int(state.nr_iter),
                 do_grad=do_grad,
             )
-            sampling_plan = _build_sampling_plan(
-                opts,
-                iteration=iteration,
-                sampling_state=sampling_state,
-                **sampling_kwargs,
+        ):
+            # RELION expectationSetup constructs the production PPref
+            # before calculateExpectedAngularErrors and reuses that PPref
+            # for scoring. Build RECOVAR's production projector in the
+            # same order and pass it through the shared E-step adapter so
+            # the accuracy helper cannot perturb a later rebuild.
+            if prepared_projector_inputs is None:
+                prepared_projector_inputs = prepare_relion_projector_class_inputs(
+                    state,
+                    padding_factor=int(opts.padding_factor),
+                    projector_setup_backend=opts.projector_setup_backend,
+                )
+            accuracy_meta = _estimate_native_sampling_accuracy(
+                sampling_state,
+                state,
+                particle_state,
+                optics_state,
+                particle_order=np.asarray(particle_ids, dtype=np.int64),
+                random_seed=int(opts.random_seed),
+                padding_factor=int(opts.padding_factor),
+                sigma2_fudge=DEFAULT_SIGMA2_FUDGE,
             )
+        sampling_updated = _prepare_native_sampling_for_iteration(
+            sampling_state,
+            state,
+            iteration=iteration,
+            do_grad=do_grad,
+        )
+        sampling_plan = _build_sampling_plan(
+            opts,
+            iteration=iteration,
+            sampling_state=sampling_state,
+            **sampling_kwargs,
+        )
         sigma_offset_angstrom = float(np.sqrt(max(float(state.sigma2_offset), 0.0)))
         current_noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
         config = _dense_estep_config(
@@ -635,24 +628,23 @@ def _native_expectation_step(
             sigma_offset_angstrom=sigma_offset_angstrom,
             sigma2_offset_before=float(state.sigma2_offset),
         )
-        if sampling_state is not None:
-            result.meta["sampling_accuracy_estimated"] = accuracy_meta is not None
-            result.meta["sampling_accuracy_skipped_by_diagnostic"] = bool(skip_expected_accuracy)
-            result.meta["sampling_accuracy_isolated_by_diagnostic"] = bool(
-                _isolate_native_sampling_accuracy_diagnostic()
-            )
-            if accuracy_meta is not None:
-                result.meta.update(accuracy_meta)
-            result.meta.update(
-                sampling_updated=bool(sampling_updated),
-                effective_offset_step_angstrom=float(sampling_state.effective_offset_step_angstrom),
-                sampling_acc_rot=float(sampling_state.acc_rot),
-                sampling_acc_trans_angstrom=float(sampling_state.acc_trans_angstrom),
-                sampling_nr_iter_wo_resol_gain=int(sampling_state.nr_iter_wo_resol_gain),
-                sampling_has_fine_enough_angular_sampling=bool(sampling_state.has_fine_enough_angular_sampling),
-                orientational_prior_mode=int(sampling_state.orientational_prior_mode),
-                uniform_local_orientation_prior=bool(sampling_state.uniform_local_orientation_prior),
-            )
+        result.meta["sampling_accuracy_estimated"] = accuracy_meta is not None
+        result.meta["sampling_accuracy_skipped_by_diagnostic"] = bool(skip_expected_accuracy)
+        result.meta["sampling_accuracy_isolated_by_diagnostic"] = bool(
+            _isolate_native_sampling_accuracy_diagnostic()
+        )
+        if accuracy_meta is not None:
+            result.meta.update(accuracy_meta)
+        result.meta.update(
+            sampling_updated=bool(sampling_updated),
+            effective_offset_step_angstrom=float(sampling_state.effective_offset_step_angstrom),
+            sampling_acc_rot=float(sampling_state.acc_rot),
+            sampling_acc_trans_angstrom=float(sampling_state.acc_trans_angstrom),
+            sampling_nr_iter_wo_resol_gain=int(sampling_state.nr_iter_wo_resol_gain),
+            sampling_has_fine_enough_angular_sampling=bool(sampling_state.has_fine_enough_angular_sampling),
+            orientational_prior_mode=int(sampling_state.orientational_prior_mode),
+            uniform_local_orientation_prior=bool(sampling_state.uniform_local_orientation_prior),
+        )
         estep_meta_updates._update_particle_state_from_estep_meta(
             particle_state,
             result.meta,
@@ -663,7 +655,7 @@ def _native_expectation_step(
             ),
         )
         # Monitor hidden-variable changes every iteration, independently of autosampling.
-        if sampling_state is not None and int(iteration) <= int(state.nr_iter):
+        if int(iteration) <= int(state.nr_iter):
             _record_native_sampling_assignment_changes(
                 sampling_state,
                 particle_ids=result.meta.get("selected_particle_ids"),
@@ -674,26 +666,25 @@ def _native_expectation_step(
                 previous_classes=previous_classes,
                 current_classes=particle_state.class_assignments,
             )
-        if sampling_state is not None:
-            result.meta["current_changes_optimal_offsets_angstrom"] = float(
-                sampling_state.current_changes_optimal_offsets_angstrom
-            )
-            result.meta["current_changes_optimal_orientations"] = float(
-                sampling_state.current_changes_optimal_orientations
-            )
-            result.meta["current_changes_optimal_classes"] = float(sampling_state.current_changes_optimal_classes)
-            result.meta["sampling_nr_iter_wo_large_hidden_variable_changes"] = int(
-                sampling_state.nr_iter_wo_large_hidden_variable_changes
-            )
-            result.meta["sampling_smallest_changes_optimal_offsets_angstrom"] = float(
-                sampling_state.smallest_changes_optimal_offsets_angstrom
-            )
-            result.meta["sampling_smallest_changes_optimal_orientations"] = float(
-                sampling_state.smallest_changes_optimal_orientations
-            )
-            result.meta["sampling_smallest_changes_optimal_classes"] = float(
-                sampling_state.smallest_changes_optimal_classes
-            )
+        result.meta["current_changes_optimal_offsets_angstrom"] = float(
+            sampling_state.current_changes_optimal_offsets_angstrom
+        )
+        result.meta["current_changes_optimal_orientations"] = float(
+            sampling_state.current_changes_optimal_orientations
+        )
+        result.meta["current_changes_optimal_classes"] = float(sampling_state.current_changes_optimal_classes)
+        result.meta["sampling_nr_iter_wo_large_hidden_variable_changes"] = int(
+            sampling_state.nr_iter_wo_large_hidden_variable_changes
+        )
+        result.meta["sampling_smallest_changes_optimal_offsets_angstrom"] = float(
+            sampling_state.smallest_changes_optimal_offsets_angstrom
+        )
+        result.meta["sampling_smallest_changes_optimal_orientations"] = float(
+            sampling_state.smallest_changes_optimal_orientations
+        )
+        result.meta["sampling_smallest_changes_optimal_classes"] = float(
+            sampling_state.smallest_changes_optimal_classes
+        )
         return result.accumulators, result.meta
 
     return _expectation_step

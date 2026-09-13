@@ -96,6 +96,9 @@ def test_expectation_deferred_plan_routing_and_metadata(monkeypatch, selector):
             max_posterior=np.zeros(2, dtype=np.float32),
             pose_assignments=np.full(2, -1, dtype=np.int32),
         ),
+        sampling_state=native_sampling._initial_sampling_state(
+            opts, pixel_size=1.0,
+        ),
     )
     args = (state, np.asarray([0, 1]), np.asarray([0, 1], dtype=np.int8))
     if selector == "invalid":
