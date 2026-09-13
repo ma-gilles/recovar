@@ -1,14 +1,12 @@
-"""F9 parity test: multi-iteration VDAM loop.
+"""Historical ten-iteration plain-EM blend fixture.
 
-Full 200-iter run is ~80 min on CPU. This test runs 10 iters (short
-smoke) and checks:
-  - plumbing survives multiple iterations without NaN/Inf
-  - CC trajectory against RELION's iter1/iter2 improves monotonically
-  - final state stays finite and bounded
+Checks finite, non-trivial state and the saved correlation trajectory using
+plain-EM E/M calls followed by a fixed real-space blend. VDAM schedule values
+are diagnostic snapshots; this test does not exercise the native VDAM M-step.
 
-The full 200-iter run + FSC comparison against initial_model.mrc is
-invoked as a separate Slurm job via scripts/run_vdam_f9_slurm.sh
-(deferred — not part of this test).
+The obsolete F9/F10 launch and timing scripts are archived at
+/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/obsolete_vdam_blend_benchmarks_cleanup_20260913/.
+Their retirement leaves this numerical coverage unchanged.
 """
 
 from __future__ import annotations
