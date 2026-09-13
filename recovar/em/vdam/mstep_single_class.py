@@ -148,7 +148,8 @@ def _replay_iteration_selected(env_name: str, iteration: int) -> bool:
     return replay_iteration is None or int(iteration) == replay_iteration
 
 
-def _read_native_complex_replay(path: Path, *, expected_shape: tuple[int, ...]) -> np.ndarray:
+def _read_native_replay(path: Path, *, expected_shape: tuple[int, ...], dtype) -> np.ndarray:
+    """Read a native F64 or interleaved C128 replay with its three-int64 header."""
     if not path.is_file():
         raise FileNotFoundError(path)
     with path.open("rb") as stream:
@@ -156,31 +157,12 @@ def _read_native_complex_replay(path: Path, *, expected_shape: tuple[int, ...]) 
         values = np.fromfile(stream, dtype=np.float64)
     if shape.size != 3 or np.any(shape <= 0):
         raise ValueError(f"{path}: invalid three-int64 shape header")
-    value_count = int(np.prod(shape, dtype=np.int64))
-    if values.size != 2 * value_count:
-        raise ValueError(
-            f"{path}: expected {2 * value_count} float64 components, got {values.size}"
-        )
-    replay = values.view(np.complex128).reshape(tuple(int(value) for value in shape))
-    if replay.shape != expected_shape:
-        raise ValueError(f"{path}: replay shape {replay.shape} does not match {expected_shape}")
-    if not np.all(np.isfinite(replay)):
-        raise ValueError(f"{path}: replay contains non-finite values")
-    return replay
-
-
-def _read_native_real_replay(path: Path, *, expected_shape: tuple[int, ...]) -> np.ndarray:
-    if not path.is_file():
-        raise FileNotFoundError(path)
-    with path.open("rb") as stream:
-        shape = np.fromfile(stream, dtype=np.int64, count=3)
-        replay = np.fromfile(stream, dtype=np.float64)
-    if shape.size != 3 or np.any(shape <= 0):
-        raise ValueError(f"{path}: invalid three-int64 shape header")
-    value_count = int(np.prod(shape, dtype=np.int64))
-    if replay.size != value_count:
-        raise ValueError(f"{path}: expected {value_count} float64 values, got {replay.size}")
-    replay = replay.reshape(tuple(int(value) for value in shape))
+    components = np.dtype(dtype).itemsize // np.dtype(np.float64).itemsize
+    value_count = components * int(np.prod(shape, dtype=np.int64))
+    if values.size != value_count:
+        kind = "components" if components == 2 else "values"
+        raise ValueError(f"{path}: expected {value_count} float64 {kind}, got {values.size}")
+    replay = values.view(dtype).reshape(tuple(int(value) for value in shape))
     if replay.shape != expected_shape:
         raise ValueError(f"{path}: replay shape {replay.shape} does not match {expected_shape}")
     if not np.all(np.isfinite(replay)):
@@ -220,11 +202,11 @@ def _maybe_replay_native_bpref_accumulators(
         outputs.append(
             replace(
                 accumulator,
-                data=_read_native_complex_replay(
-                    data_path, expected_shape=np.asarray(accumulator.data).shape
+                data=_read_native_replay(
+                    data_path, expected_shape=np.asarray(accumulator.data).shape, dtype=np.complex128
                 ),
-                weight=_read_native_real_replay(
-                    weight_path, expected_shape=np.asarray(accumulator.weight).shape
+                weight=_read_native_replay(
+                    weight_path, expected_shape=np.asarray(accumulator.weight).shape, dtype=np.float64
                 ),
             )
         )
@@ -249,7 +231,7 @@ def _maybe_replay_native_reference_input(
         replay_template.format(iteration=int(iteration), class_idx=int(class_idx))
     )
     computed = np.asarray(computed)
-    return _read_native_real_replay(replay_path, expected_shape=computed.shape)
+    return _read_native_replay(replay_path, expected_shape=computed.shape, dtype=np.float64)
 
 
 def _maybe_replay_native_first_moments(
@@ -279,7 +261,7 @@ def _maybe_replay_native_first_moments(
             )
         )
         outputs.append(
-            _read_native_complex_replay(path, expected_shape=np.asarray(computed).shape)
+            _read_native_replay(path, expected_shape=np.asarray(computed).shape, dtype=np.complex128)
         )
     replay_h1 = None if computed_h1 is None else outputs[1]
     return outputs[0], replay_h1
@@ -309,7 +291,7 @@ def _maybe_replay_native_second_moment(
         replay_template.format(iteration=int(iteration), class_idx=int(class_idx))
     )
     computed = np.asarray(computed)
-    return _read_native_complex_replay(replay_path, expected_shape=computed.shape)
+    return _read_native_replay(replay_path, expected_shape=computed.shape, dtype=np.complex128)
 
 
 def _copy_mstep_untouched_slots(values: np.ndarray, updated_slots: tuple[int, ...]) -> np.ndarray:
