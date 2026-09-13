@@ -127,9 +127,6 @@ def compact_candidate_indices_in_source_order(candidate_mask):
             rows = np.repeat(np.arange(candidate_mask.n_rows, dtype=np.int64), candidate_mask.n_fine_trans)
             trans = np.tile(np.arange(candidate_mask.n_fine_trans, dtype=np.int64), candidate_mask.n_rows)
             return rows, trans
-        if candidate_mask.mode == "coarse_exclude":
-            dense = _dense_candidate_mask_from_spec(candidate_mask)
-            return np.nonzero(dense)
     return np.nonzero(_candidate_mask_to_dense(candidate_mask))
 
 
