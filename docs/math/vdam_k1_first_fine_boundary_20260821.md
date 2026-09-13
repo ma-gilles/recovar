@@ -713,7 +713,8 @@ Evidence root:
 InitialModel's qualified exact-local route pads each image's retained fine
 rotations to a bounded rectangular bucket.  As a performance experiment, the
 adapter can instead call the shared supplied-map EM compact sparse pass 2 with
-`RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2=1`.  The experiment reuses the
+`--pass2-engine compact` (the historical run used the now-retired
+`RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2=1` override). The experiment reuses the
 same coarse significance lists and RELION child grids.  The shared sparse
 engine gained one explicit VDAM operation that it previously lacked: before
 backprojection it can subtract

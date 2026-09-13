@@ -23,22 +23,16 @@ from recovar.em.vdam.sparse_pass2_estep import (
 pytestmark = pytest.mark.unit
 
 
-def test_compact_sparse_pass2_auto_routes_k1_local_and_kclass_compact(monkeypatch):
-    monkeypatch.delenv("RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2", raising=False)
+def test_compact_sparse_pass2_auto_routes_k1_local_and_kclass_compact():
     assert _compact_sparse_pass2_enabled(1) is False
     assert _compact_sparse_pass2_enabled(2) is True
     assert _compact_sparse_pass2_enabled(4) is True
 
-    for value in ("1", "true", "YES", "on"):
-        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2", value)
-        assert _compact_sparse_pass2_enabled(1) is True
 
-
-def test_explicit_pass2_engine_overrides_legacy_environment(monkeypatch):
-    monkeypatch.setenv("RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2", "0")
-    assert _compact_sparse_pass2_enabled(2, "compact") is True
-    monkeypatch.setenv("RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2", "1")
-    assert _compact_sparse_pass2_enabled(2, "local") is False
+def test_explicit_pass2_engine_selects_local_or_compact():
+    for n_classes in (1, 2, 4):
+        assert _compact_sparse_pass2_enabled(n_classes, "compact") is True
+        assert _compact_sparse_pass2_enabled(n_classes, "local") is False
 
     with pytest.raises(ValueError, match="pass2_engine"):
         _compact_sparse_pass2_enabled(2, "unknown")

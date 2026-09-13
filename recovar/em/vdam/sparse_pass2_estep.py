@@ -78,9 +78,6 @@ _PACKED_FINAL_NOISE_ENV = "RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE"
 _UNIFY_LOCAL_BUCKET_SIZES_ENV = "RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES"
 
 
-_COMPACT_SPARSE_PASS2_ENV = "RECOVAR_INITIAL_MODEL_COMPACT_SPARSE_PASS2"
-
-
 _RELION_F32_COARSE_TIE_ULPS_ENV = "RECOVAR_INITIAL_MODEL_RELION_F32_COARSE_TIE_ULPS"
 
 
@@ -159,8 +156,8 @@ def _compact_sparse_pass2_enabled(n_classes: int, pass2_engine: str = "auto") ->
     """Resolve the InitialModel pass-2 engine without changing K=1 defaults.
 
     ``auto`` keeps the source-faithful local K=1 reduction and uses the joint
-    class-by-pose compact engine for K>1.  The legacy environment variable is
-    retained as an explicit diagnostic override only when ``auto`` is used.
+    class-by-pose compact engine for K>1. Explicit modes use this same option
+    for diagnostic comparisons.
     """
 
     engine = str(pass2_engine).strip().lower()
@@ -171,9 +168,6 @@ def _compact_sparse_pass2_enabled(n_classes: int, pass2_engine: str = "auto") ->
         )
     if engine != "auto":
         return engine == "compact"
-    setting = os.environ.get(_COMPACT_SPARSE_PASS2_ENV)
-    if setting is not None and setting.strip():
-        return setting.strip().lower() not in {"0", "false", "no", "off"}
     return int(n_classes) > 1
 
 
