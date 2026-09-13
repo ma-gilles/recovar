@@ -505,7 +505,12 @@ def compact_pair_index_arrays_device(
         elif m.mode == "coarse_exclude":
             c_rot_needed = max(c_rot_needed, int(np.asarray(m.parent_map).max(initial=-1) + 1))
     c_rot = _quantize_pow2(c_rot_needed, _DEVICE_INDEX_COARSE_ROW_QUANTUM)
-    if coarse_rows_capacity is not None and int(coarse_rows_capacity) >= c_rot:
+    if coarse_rows_capacity is not None and c_rot <= int(coarse_rows_capacity) <= 2 * c_rot:
+        # One capacity for the whole pass collapses the remaining shape families, but the
+        # builder materializes (images, coarse rows, coarse translations) tables, so an
+        # unbounded capacity (full-support images publish the whole coarse grid) would
+        # inflate that allocation by more than an order of magnitude on chunks whose
+        # images have few unique rotations. Take it only when it stays within 2x.
         c_rot = int(coarse_rows_capacity)
 
     if resident is not None and resident_positions is not None:

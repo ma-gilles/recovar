@@ -7137,7 +7137,14 @@ def _real_flat_row_indices_from_actual_counts(
     # repeat the first index under a zero mask, so only the shape changes.
     padded_count = ((total + pad_multiple - 1) // pad_multiple) * pad_multiple
     if pad_multiple > 1:
-        padded_count = max(pad_multiple, 1 << (padded_count - 1).bit_length())
+        # Snap to a power of two only when it wastes at most an eighth of the rows.
+        # Padded rows are gathered and multiplied through the M step, so an unbounded
+        # snap buys ~12 s of XLA compile with up to 88 % more real work per chunk
+        # (census job 13837258: 28 distinct active-row counts, mean +34 %, max +88 %,
+        # +37 % rows overall).
+        pow2_count = max(pad_multiple, 1 << (padded_count - 1).bit_length())
+        if pow2_count <= padded_count + padded_count // 8:
+            padded_count = pow2_count
     padded_count = min(int(counts.size) * n_rotation_rows, padded_count)
     if padded_count <= total:
         return real_indices, np.ones((total,), dtype=np.float32), total

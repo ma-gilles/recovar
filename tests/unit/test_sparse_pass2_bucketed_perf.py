@@ -10488,12 +10488,17 @@ def test_real_flat_row_indices_from_actual_counts_layout():
     assert count == 5
     idx, mask, count = bucketed_mod._real_flat_row_indices_from_actual_counts([0, 0], 4)
     assert idx.size == 0 and mask.size == 0 and count == 0
-    # pad_multiple > 1 pads to a power of two at or above the multiple (5 rows, multiple 3 -> 8),
-    # never beyond the flat row count (3 images x 4 rows = 12).
+    # pad_multiple > 1 pads to the multiple, and snaps to a power of two only when that
+    # wastes at most an eighth of the rows: 5 rows at multiple 3 -> 6 (a snap to 8 would
+    # waste a third), 11 rows at multiple 3 -> 12 (already the row ceiling).
     idx, mask, count = bucketed_mod._real_flat_row_indices_from_actual_counts([2, 0, 3], 4, pad_multiple=3)
-    assert idx.shape == (8,) and count == 5 and mask.sum() == 5
+    assert idx.shape == (6,) and count == 5 and mask.sum() == 5
     idx, mask, count = bucketed_mod._real_flat_row_indices_from_actual_counts([4, 4, 3], 4, pad_multiple=3)
     assert idx.shape == (12,) and count == 11
+    # a count just below a power of two does snap (15 rows at multiple 1 stays 15; at
+    # multiple 5 -> 15 -> 16 wastes a fifteenth)
+    idx, mask, count = bucketed_mod._real_flat_row_indices_from_actual_counts([5, 5, 5], 8, pad_multiple=5)
+    assert idx.shape == (16,) and count == 15 and mask.sum() == 15
 
 
 @pytest.mark.parametrize("defer_flag", ["0", "1"])
