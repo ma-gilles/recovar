@@ -15,8 +15,6 @@ RELION fixture in Phase 4. Here we validate:
   - `hermitian_weights_relion` produces all-ones half-complex map.
   - `fourier_crop_half` keeps low-|k| rows from the top and high-|k| rows
     from the tail.
-  - `build_posterior_summary` extracts Pmax / argmax correctly on a
-    synthetic posterior tensor.
 """
 
 from __future__ import annotations
@@ -25,7 +23,6 @@ import numpy as np
 import pytest
 
 from recovar.em.vdam.e_step import (
-    build_posterior_summary,
     fourier_crop_half,
     hermitian_weights_relion,
     minvsigma2_with_dc_zero,
@@ -355,48 +352,3 @@ class TestFourierCropHalf:
             fourier_crop_half(np.zeros(5, dtype=np.complex128), current_size=4)
         with pytest.raises(ValueError):
             fourier_crop_half(np.zeros((8, 6), dtype=np.complex128), current_size=4)
-
-
-# ---------------------------------------------------------------------------
-# Posterior summary
-# ---------------------------------------------------------------------------
-
-
-class TestBuildPosteriorSummary:
-    def test_basic_extraction(self):
-        N, K, n_rot, n_trans = 3, 2, 4, 5
-        # Force argmax at (img=0, k=1, r=2, t=3) for image 0
-        weights = np.zeros((N, K, n_rot, n_trans))
-        weights[0, 1, 2, 3] = 0.7
-        weights[0, 0, 0, 0] = 0.3
-        weights[1, 0, 1, 1] = 1.0
-        weights[2, 1, 3, 4] = 0.4  # Not unique across image 2
-        weights[2, 0, 0, 0] = 0.6  # argmax here for image 2
-
-        post = build_posterior_summary(weights, significance_threshold=0.1)
-        np.testing.assert_allclose(post.pmax, [0.7, 1.0, 0.6])
-
-        # Image 0: best is (k=1, r=2, t=3)
-        assert post.best_class[0] == 1
-        assert post.best_euler[0, 0] == 2  # rot_idx
-        assert post.best_trans[0, 0] == 3  # trans_idx
-
-        # Image 1: best is (k=0, r=1, t=1)
-        assert post.best_class[1] == 0
-        assert post.best_euler[1, 0] == 1
-        assert post.best_trans[1, 0] == 1
-
-        # Image 2: best is (k=0, r=0, t=0)
-        assert post.best_class[2] == 0
-        assert post.best_euler[2, 0] == 0
-        assert post.best_trans[2, 0] == 0
-
-        # Significance counts
-        # image 0: 2 entries > 0.1 (0.7, 0.3)
-        # image 1: 1 entry > 0.1 (1.0)
-        # image 2: 2 entries > 0.1 (0.6, 0.4)
-        np.testing.assert_array_equal(post.nr_significant, [2, 1, 2])
-
-    def test_bad_shape(self):
-        with pytest.raises(ValueError):
-            build_posterior_summary(np.zeros((3, 4, 5)))

@@ -1,12 +1,10 @@
 """VDAM E-step helpers (RELION conventions: pad=1, Minvsigma2[0]=0, half-complex w=1).
 
 Production E-step wiring is in ``dense_adapter.py``; this module exposes the
-small convention helpers and a posterior container used by tests/debugging.
+small convention helpers used by tests and debugging.
 """
 
 from __future__ import annotations
-
-from dataclasses import dataclass
 
 import numpy as np
 
@@ -51,37 +49,3 @@ def fourier_crop_half(image_half: np.ndarray, current_size: int) -> np.ndarray:
     out[:half_cs, :out_x] = image_half[:half_cs, :out_x]
     out[half_cs:, :out_x] = image_half[ori_size - (out_y - half_cs) :, :out_x]
     return out
-
-
-@dataclass
-class VdamPosterior:
-    """E-step batch output: posteriors + per-image Pmax/nr_significant/argmax summaries."""
-
-    weights: np.ndarray
-    pmax: np.ndarray
-    nr_significant: np.ndarray
-    best_class: np.ndarray
-    best_euler: np.ndarray
-    best_trans: np.ndarray
-
-
-def build_posterior_summary(weights: np.ndarray, significance_threshold: float = 1e-8) -> VdamPosterior:
-    """Build a ``VdamPosterior`` from a ``(N, K, n_rot, n_trans)`` weight tensor (argmax → opaque indices)."""
-    if weights.ndim != 4:
-        raise ValueError(f"weights must be 4D (N, K, n_rot, n_trans), got {weights.shape}")
-    N = weights.shape[0]
-    flat = weights.reshape(N, -1)
-    argmax = flat.argmax(axis=1)
-    K, n_rot, n_trans = weights.shape[1:]
-    best_class = argmax // (n_rot * n_trans)
-    rest = argmax % (n_rot * n_trans)
-    best_rot_idx = rest // n_trans
-    best_trans_idx = rest % n_trans
-    return VdamPosterior(
-        weights=weights,
-        pmax=flat.max(axis=1),
-        nr_significant=(flat > significance_threshold).sum(axis=1),
-        best_class=best_class,
-        best_euler=np.column_stack([best_rot_idx.astype(np.float64), np.zeros(N), np.zeros(N)]),
-        best_trans=np.column_stack([best_trans_idx.astype(np.float64), np.zeros(N)]),
-    )
