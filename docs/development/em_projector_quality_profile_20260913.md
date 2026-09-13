@@ -155,3 +155,38 @@ Reproduce the read-only comparison with the frozen pixi Python and
 output copy). `preparation.json` pins the exact bounded GPU command. Do not rerun
 the consumed output root. Next isolate the new posterior deltas on the same
 saved input before broader staging qualification or another speed change.
+
+## Projection population and posterior-repeat attribution
+
+Two bounded diagnostics narrow the extra posterior differences without changing
+production code, masks, scoring, native libraries or frozen sources.
+
+First, session63415 completed0 in15.861s (8.928s projection loop). It compares
+the exact5e helper body extracted from Git against32a on the saved real C64
+projector, rmax100,pf2, all36,864 coarse rotations at80 and294,912 fine rotations
+at202. All6,197,280,768 complex outputs are **bitwise identical** across324
+blocks/648 helper calls, including signed-zero checks. CPU preparation85643
+tests actual helper wiring and bitwise/nonfinite detection; terminal coverage
+audit60088 verifies every block and unchanged pins. This excludes changed
+projector values at that geometry, not downstream scaling/fusion or scheduling.
+[Population audit](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_real_projection_population_20260913/audit.json).
+
+Second, session93955 completed0 in24.049s. One actual E-step prefix stops at
+the first fine-posterior boundary, before downstream M-step work. The original
+helper receives the exact same1,376,256 float32 scores three times; probabilities,
+full fine masks, counts, denominator and threshold are bitwise identical.
+Each returns8045 significant fine candidates and retained mass0.999000481368.
+These fine reconstruction counts are not the controller's coarse-support count.
+CPU observer check90096 covers actual helper calls, early stop, repeat bounds,
+input mutation rejection and caller wiring; terminal audit21183 passes.
+[Posterior-repeat audit and saved scores](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_real_posterior_repeat_20260913/audit.json).
+
+Both use immediately idle A1001, sealed unchanged dependencies, bounded cleanup
+and no surviving processes. The posterior result is a null finding over three
+repeats, not proof of determinism under all scheduling conditions. It does not
+retroactively identify the prior between-source delta. Source inspection shows
+the measured rectangular fine scorer uses an explicit fixed reduction tree,
+not unordered score atomics; the posterior uses the existing native float32
+sort/scan. Next compare actual scorer operands and score surfaces between the
+control and staging prefixes, including processed images and weights, to find
+the first divergence. No fitted offsets, tolerances or production flags changed.
