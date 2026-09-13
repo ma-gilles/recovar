@@ -784,7 +784,7 @@ def test_native_expectation_step_uses_rfloat_metadata_translations(monkeypatch):
     state.iter = 1
 
     expectation_step = driver._native_expectation_step(
-        SimpleNamespace(voxel_size=1.0, n_images=1),
+        SimpleNamespace(image_shape=(8, 8), voxel_size=1.0, n_images=1),
         native_options.NativeInitialModelOptions(fn_img="particles.star", nr_iter=1),
         particle_state,
         sampling_state=native_sampling._initial_sampling_state(
@@ -1553,7 +1553,7 @@ def test_native_expectation_step_rebuilds_sampling_per_iteration(monkeypatch):
 
     monkeypatch.setattr(driver, "_build_sampling_plan", fake_build_sampling_plan)
     monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
-    dataset = SimpleNamespace(voxel_size=1.0, n_images=2)
+    dataset = SimpleNamespace(image_shape=(8, 8), voxel_size=1.0, n_images=2)
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=3, n_directions=3)
     state.iter = 3
 
@@ -1608,7 +1608,7 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
 
     monkeypatch.setattr(driver, "_build_sampling_plan", fake_build_sampling_plan)
     monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
-    dataset = SimpleNamespace(voxel_size=1.0, n_images=2)
+    dataset = SimpleNamespace(image_shape=(8, 8), voxel_size=1.0, n_images=2)
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=2, n_directions=1)
     particle_state = NativeParticleState(
         translation_offsets=np.asarray([[0.0, 0.0], [1.1, -1.0]], dtype=np.float32),
@@ -1794,7 +1794,7 @@ def test_native_expectation_step_uses_autosampling_state_at_iteration_ten(monkey
     sampling_state.nr_iter_wo_large_hidden_variable_changes = 1
 
     expectation_step = driver._native_expectation_step(
-        SimpleNamespace(voxel_size=2.125, n_images=1),
+        SimpleNamespace(image_shape=(8, 8), voxel_size=2.125, n_images=1),
         opts,
         particle_state,
         sampling_state,
@@ -1916,7 +1916,7 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
         phase_shift=np.zeros(2, dtype=np.float64),
     )
     expectation_step = driver._native_expectation_step(
-        SimpleNamespace(voxel_size=2.125, n_images=2),
+        SimpleNamespace(image_shape=(8, 8), voxel_size=2.125, n_images=2),
         opts,
         particle_state,
         sampling_state,
@@ -2100,7 +2100,7 @@ def test_native_expectation_step_records_sampling_changes_each_gradient_iteratio
     sampling_state.last_current_resolution = float(state.current_resolution)
 
     expectation_step = driver._native_expectation_step(
-        SimpleNamespace(voxel_size=2.0, n_images=2),
+        SimpleNamespace(image_shape=(8, 8), voxel_size=2.0, n_images=2),
         opts,
         particle_state,
         sampling_state,
@@ -2178,7 +2178,7 @@ def test_native_expectation_step_expands_class_rotation_prior_for_dense_fallback
     )
     state = initialise_denovo_state(ori_size=8, pixel_size=2.0, K=1, nr_iter=1, n_directions=1)
     expectation_step = driver._native_expectation_step(
-        SimpleNamespace(voxel_size=2.0, n_images=2),
+        SimpleNamespace(image_shape=(8, 8), voxel_size=2.0, n_images=2),
         opts,
         particle_state,
         sampling_state=native_sampling._initial_sampling_state(

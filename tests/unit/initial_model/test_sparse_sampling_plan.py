@@ -87,7 +87,7 @@ def test_expectation_deferred_plan_routing_and_metadata(monkeypatch, selector):
             raise AssertionError("Sparse E-step built a full fine grid")
 
         monkeypatch.setattr(driver.sampling, "get_oversampled_relion_hidden_rotation_grid_from_samples", forbidden)
-    dataset = SimpleNamespace(voxel_size=1.0, n_images=2)
+    dataset = SimpleNamespace(image_shape=(8, 8), voxel_size=1.0, n_images=2)
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=3, n_directions=3)
     state.iter = 3
     expectation = driver._native_expectation_step(
