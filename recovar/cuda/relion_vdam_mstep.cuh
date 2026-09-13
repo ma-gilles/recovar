@@ -2439,7 +2439,13 @@ cudaError_t launch_relion_vdam_mstep_fused_projector_x_half(
                             decltype(persistent_tag)::value;
                         constexpr bool fixed_warp_order =
                             decltype(fixed_warp_order_tag)::value;
-                        if constexpr (fixed_warp_order)
+                        // Host dispatch cannot combine persistent serial execution
+                        // with captured-order or tracing template parameters.
+                        if constexpr (persistent_serial && (use_captured_order || use_trace))
+                        {
+                            return cudaErrorInvalidValue;
+                        }
+                        else if constexpr (fixed_warp_order)
                         {
                             if constexpr (
                                 use_captured_order || use_trace ||
