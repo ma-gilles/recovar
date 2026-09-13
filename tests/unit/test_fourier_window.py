@@ -1049,7 +1049,6 @@ class TestIterationAtEachCurrentSize:
         )
         new_mean_none = em_result.mean
         ha_none = em_result.hard_assignments
-        Ft_y_none = em_result.Ft_y
         _ = em_result.Ft_ctf
         del em_result
 
@@ -1068,7 +1067,6 @@ class TestIterationAtEachCurrentSize:
         )
         new_mean_8 = em_result.mean
         ha_8 = em_result.hard_assignments
-        Ft_y_8 = em_result.Ft_y
         _ = em_result.Ft_ctf
         del em_result
 
@@ -1159,7 +1157,6 @@ class TestWindowedMultipleBlocks:
         )
         new_mean_1 = em_result.mean
         ha_1 = em_result.hard_assignments
-        Ft_y_1 = em_result.Ft_y
         _ = em_result.Ft_ctf
         del em_result
 
@@ -1178,7 +1175,6 @@ class TestWindowedMultipleBlocks:
         )
         new_mean_2 = em_result.mean
         ha_2 = em_result.hard_assignments
-        Ft_y_2 = em_result.Ft_y
         _ = em_result.Ft_ctf
         del em_result
 

@@ -886,7 +886,6 @@ class TestFullIterationHalfMatches:
             rotation_block_size=N_ROTATIONS,
         )
         new_mean = em_result.mean
-        ha = em_result.hard_assignments
         Ft_y = em_result.Ft_y
         Ft_ctf = em_result.Ft_ctf
         del em_result
@@ -1539,8 +1538,6 @@ class TestFullIterationHalfMatches:
         )
         new_mean_1 = em_result.mean
         ha_1 = em_result.hard_assignments
-        Ft_y_1 = em_result.Ft_y
-        Ft_ctf_1 = em_result.Ft_ctf
         del em_result
 
         # Images in batches of 1
@@ -1557,8 +1554,6 @@ class TestFullIterationHalfMatches:
         )
         new_mean_2 = em_result.mean
         ha_2 = em_result.hard_assignments
-        Ft_y_2 = em_result.Ft_y
-        Ft_ctf_2 = em_result.Ft_ctf
         del em_result
 
         np.testing.assert_allclose(

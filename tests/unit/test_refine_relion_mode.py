@@ -5795,10 +5795,6 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     )
     _ = em_result.mean
     ha_dense = em_result.hard_assignments
-    Ft_y_dense = em_result.Ft_y
-    Ft_ctf_dense = em_result.Ft_ctf
-    stats_dense = em_result.stats
-    noise_dense = em_result.noise_stats
     del em_result
 
     Ft_y_exact = exact_outputs.Ft_y
@@ -7411,8 +7407,6 @@ def test_run_local_em_exact_windowed_with_pre_shifts_matches_dense_engine(rng):
     ha_dense = em_result.hard_assignments
     Ft_y_dense = em_result.Ft_y
     Ft_ctf_dense = em_result.Ft_ctf
-    stats_dense = em_result.stats
-    noise_dense = em_result.noise_stats
     del em_result
 
     Ft_y_exact = exact_outputs.Ft_y

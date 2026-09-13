@@ -781,7 +781,6 @@ class TestSparsePass2Bucketed:
     def test_with_per_image_translation_log_prior_match(self):
         """Per-image translation log-prior must be reindexed identically."""
         # Coarse trans count = 2 in mock, fine = 2 * 4^1 = 8
-        n_images = 3
         sig_indices = [
             np.array([0, 1, 2], dtype=np.int32),
             np.array([0, 3, 4, 5], dtype=np.int32),

@@ -871,7 +871,6 @@ class TestSignificantCountsReasonable:
         """Posterior weights from compute_e_step_weights should sum to ~1 per image."""
         n_images = 5
         n_rot = 10
-        n_trans = 3
 
         ds = MockDataset(n_images=n_images, seed=42)
         volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
@@ -905,7 +904,6 @@ class TestSignificantCountsReasonable:
         """Hard assignments from compute_e_step_weights should match argmax of weights."""
         n_images = 5
         n_rot = 10
-        n_trans = 3
 
         ds = MockDataset(n_images=n_images, seed=42)
         volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
@@ -1402,7 +1400,6 @@ class TestRefineWithAdaptive:
         """adaptive_oversampling=0 should give identical results to standard path."""
         n_images = 5
         n_rot = 10
-        n_trans = 3
 
         ds = MockDataset(n_images=n_images, seed=42)
         volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
@@ -1426,10 +1423,7 @@ class TestRefineWithAdaptive:
             image_batch_size=n_images,
             rotation_block_size=n_rot,
         )
-        new_mean_std = em_result.mean
         ha_std = em_result.hard_assignments
-        Ft_y_std = em_result.Ft_y
-        Ft_ctf_std = em_result.Ft_ctf
         del em_result
 
         # Weights path
@@ -1464,7 +1458,6 @@ class TestEStepWeightsWindowed:
         """Weights should sum to ~1 even with Fourier windowing enabled."""
         n_images = 5
         n_rot = 10
-        n_trans = 3
 
         ds = MockDataset(n_images=n_images, seed=42)
         volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
@@ -1502,7 +1495,6 @@ class TestEStepWeightsWindowed:
         """Weights should be identical regardless of rotation block size."""
         n_images = 5
         n_rot = 10
-        n_trans = 3
 
         ds = MockDataset(n_images=n_images, seed=42)
         volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
@@ -1553,7 +1545,6 @@ class TestEStepWeightsWindowed:
         """Weights should be identical regardless of image batch size."""
         n_images = 6
         n_rot = 10
-        n_trans = 3
 
         ds = MockDataset(n_images=n_images, seed=42)
         volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
