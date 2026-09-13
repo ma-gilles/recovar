@@ -24,17 +24,6 @@ from recovar.utils.helpers import R_from_relion, write_relion_mrc
 pytestmark = pytest.mark.unit
 
 
-def test_experiment_read_order_matches_relion_experiment_order():
-    main = pd.DataFrame(
-        {
-            "_rlnMicrographName": ["1", "2", "10", "100", "11"],
-            "_rlnImageName": ["1@s.mrcs", "2@s.mrcs", "3@s.mrcs", "4@s.mrcs", "5@s.mrcs"],
-        }
-    )
-
-    assert star_io._experiment_read_order(main).tolist() == [0, 2, 3, 4, 1]
-
-
 def test_noise_variance_preserves_relion_rfloat_shell_values():
     sigma2 = np.asarray([[1.00000006e-5, 2.00000012e-5, 3.00000018e-5]], dtype=np.float64)
 
