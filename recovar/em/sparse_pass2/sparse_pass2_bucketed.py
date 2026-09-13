@@ -35,6 +35,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.classification.k_class_results import SparseKClassHostStatistics
 from recovar.em.diagnostics import bpref_diagnostics
 from recovar.em.diagnostics import norm_scale as norm_scale_diagnostics
 from recovar.em.diagnostics import pass2 as pass2_diagnostics
@@ -5655,6 +5656,17 @@ def compute_k_class_pass2_stats_sparse_fused(
         raw_host_staging_peak_bytes = max(raw_host_staging_peak_bytes, next_bucket_bytes)
         return raw_host, next_bucket_bytes
 
+    host_statistics = SparseKClassHostStatistics(
+        class_hard_assignments,
+        best_rotations,
+        best_eulers,
+        best_rotation_indices,
+        class_log_evidence,
+        class_score_log_z,
+        best_log_score,
+        max_posterior,
+        rotation_posterior_sums,
+    )
     native_dual_weighted_sums_used = False
     fused_mstep_noise_used = False
     for bucket_meta in execution_buckets:
@@ -7874,81 +7886,24 @@ def compute_k_class_pass2_stats_sparse_fused(
                 _add_sparse_group_timing(group_timing, "noise", time.time() - substage_t0)
 
             substage_t0 = time.time()
-            actual_counts_arr = np.asarray(arrays["actual_counts"], dtype=np.int64)
-            best_argmax_np = np.asarray(best_argmax, dtype=np.int64)
-            best_log_score_np = np.asarray(best_log_score_bucket, dtype=np.float64)
-            has_best_pose_np = np.isfinite(best_log_score_np)
-            if bucket_uses_compact_pairs:
-                safe_best_argmax_np = np.where(has_best_pose_np, best_argmax_np, 0)
-                row_index_np = np.arange(batch, dtype=np.int64)
-                pair_local_rotation_row = np.asarray(pair_arrays["local_rotation_row"], dtype=np.int32)
-                pair_translation_idx = np.asarray(pair_arrays["translation_idx"], dtype=np.int32)
-                best_rot_idx = np.where(
-                    has_best_pose_np,
-                    pair_local_rotation_row[row_index_np, safe_best_argmax_np],
-                    0,
-                ).astype(np.int64, copy=False)
-                best_trans_idx = np.where(
-                    has_best_pose_np,
-                    pair_translation_idx[row_index_np, safe_best_argmax_np],
-                    0,
-                ).astype(np.int64, copy=False)
-            else:
-                best_rot_idx = best_argmax_np // n_fine_trans
-                best_trans_idx = best_argmax_np % n_fine_trans
-                row_index_np = np.arange(batch, dtype=np.int64)
-            best_fine_rot_idx = np.asarray(arrays["rotation_indices"], dtype=np.int64)[
-                row_index_np,
-                best_rot_idx,
-            ]
-            if np.any(best_rot_idx >= actual_counts_arr):
-                bad = np.flatnonzero(best_rot_idx >= actual_counts_arr)
-                raise RuntimeError(
-                    "Fused sparse K-class pass-2: best rotation index points into padding for "
-                    f"class {class_index + 1}, images {bad.tolist()}",
-                )
-            max_posterior_np = np.asarray(
-                max_posterior_bucket,
-                dtype=precision_policy.score_real_dtype,
+            host_statistics.update_bucket(
+                class_index=class_index,
+                arrays=arrays,
+                image_indices=image_indices,
+                pair_arrays=pair_arrays if bucket_uses_compact_pairs else None,
+                bucket_uses_compact_pairs=bucket_uses_compact_pairs,
+                batch=batch,
+                n_fine_trans=n_fine_trans,
+                best_argmax=best_argmax,
+                best_log_score_bucket=best_log_score_bucket,
+                max_posterior_bucket=max_posterior_bucket,
+                class_log_z=class_score_log_z_bucket[class_index],
+                probs_sum_t_jax=probs_sum_t_jax,
+                score_real_dtype=precision_policy.score_real_dtype,
+                log_score_offset=log_score_offset,
+                use_exact_relion_gaussian=use_exact_relion_gaussian,
+                per_image_inputs_by_class=per_image_inputs_by_class,
             )
-            class_log_z_np = np.asarray(class_score_log_z_bucket[class_index], dtype=np.float64)
-            probs_sum_t = np.asarray(probs_sum_t_jax, dtype=np.float64)
-            for row, image_idx in enumerate(image_indices.tolist()):
-                r = int(best_rot_idx[row])
-                t = int(best_trans_idx[row])
-                fine_rot_idx = int(best_fine_rot_idx[row])
-                class_hard_assignments[class_index, image_idx] = fine_rot_idx * n_fine_trans + t
-                best_rotations[class_index][image_idx] = per_image_inputs_by_class[class_index]["oversampled_rots"][
-                    image_idx
-                ][r]
-                if best_eulers is not None:
-                    best_eulers[class_index][image_idx] = per_image_inputs_by_class[class_index]["source_eulers"][
-                        image_idx
-                    ][r]
-                best_rotation_indices[class_index][image_idx] = fine_rot_idx
-                if np.isfinite(class_log_z_np[row]):
-                    class_log_evidence[class_index, image_idx] = float(class_log_z_np[row] + log_score_offset[row])
-                    class_score_log_z[class_index, image_idx] = float(
-                        class_log_z_np[row] + log_score_offset[row]
-                        if use_exact_relion_gaussian
-                        else class_log_z_np[row]
-                    )
-                else:
-                    class_log_evidence[class_index, image_idx] = -np.inf
-                    class_score_log_z[class_index, image_idx] = -np.inf
-                best_log_score[class_index, image_idx] = float(best_log_score_np[row] + log_score_offset[row])
-                max_posterior[class_index, image_idx] = float(max_posterior_np[row])
-                cnt = int(actual_counts_arr[row])
-                if cnt == 0:
-                    continue
-                unique_rot_image = per_image_inputs_by_class[class_index]["unique_rot"][image_idx]
-                parent_map_image = per_image_inputs_by_class[class_index]["parent_map"][image_idx]
-                coarse_rot_indices = unique_rot_image[parent_map_image]
-                np.add.at(
-                    rotation_posterior_sums[class_index],
-                    coarse_rot_indices,
-                    probs_sum_t[row, :cnt],
-                )
             _add_sparse_group_timing(group_timing, "stats", time.time() - substage_t0)
         _add_sparse_group_timing(group_timing, "mstep_noise_stats", time.time() - stage_t0)
 
