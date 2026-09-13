@@ -9,12 +9,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.helpers.convergence import healpix_angular_step
 
-# Re-import so callers can get it from this module.
 from recovar.em.helpers.fourier_window import quantize_current_size
 from recovar.reconstruction.regularization import (
     compute_current_size_relion,
