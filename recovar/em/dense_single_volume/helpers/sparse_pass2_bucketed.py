@@ -2156,6 +2156,17 @@ def _group_timing_device_barrier_s() -> float:
     return time.time() - t0
 
 
+_DEFERRED_DEVICE_GET_CHUNK = 256
+
+
+def _device_get_in_chunks(leaves, chunk: int = _DEFERRED_DEVICE_GET_CHUNK):
+    """Pull device leaves to host a bounded number at a time, preserving order."""
+    out = []
+    for start in range(0, len(leaves), int(chunk)):
+        out.extend(jax.device_get(leaves[start : start + int(chunk)]))
+    return out
+
+
 def _add_sparse_group_timing(group_timing: dict[str, float] | None, key: str, elapsed_s: float) -> None:
     if group_timing is None:
         return
@@ -16465,7 +16476,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                 device_leaves.extend(record[3:5])
             elif kind == "stats":
                 device_leaves.extend(record[7:12])
-        host_leaves = iter(jax.device_get(device_leaves))
+        # One transfer per chunk of leaves, not one call over every leaf:
+        # jax.device_get(list) schedules an async copy per array and at
+        # 100k/256 (34k buckets x 4 classes x 5 leaves) that exhausted the
+        # process thread limit (pthread_create EAGAIN, job 13803792).
+        host_leaves = iter(_device_get_in_chunks(device_leaves))
         shadow_stats = None
         _check_record_index = 0
         if defer_host_stats_check:
