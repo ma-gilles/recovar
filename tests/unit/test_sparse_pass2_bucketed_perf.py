@@ -10318,7 +10318,19 @@ def test_compact_adjoint_real_rows_matches_dense_rows(monkeypatch, noise_mode):
     assert not calls
     real = run("1")
     assert calls and all(c > 0 for c in calls), "real-rows adjoint never engaged"
-    _assert_fused_arrays_identical(dense, real, f"real-rows adjoint ({noise_mode})")
+    # Everything except the two adjoint volumes is bit-identical. Gathering the
+    # real rows changes the XLA scatter's reduction order, which on CPU moved 7
+    # of 512 Ft_y voxels by one float64 ULP (rel 2e-16); bound that explicitly.
+    volumes = {k for k in dense if k.startswith(("Ft_y", "Ft_ctf"))}
+    _assert_fused_arrays_identical(
+        {k: v for k, v in dense.items() if k not in volumes},
+        {k: v for k, v in real.items() if k not in volumes},
+        f"real-rows adjoint ({noise_mode})",
+    )
+    for k in sorted(volumes):
+        x = np.asarray(dense[k]); y = np.asarray(real[k])
+        assert x.shape == y.shape and x.dtype == y.dtype
+        np.testing.assert_allclose(y, x, rtol=4e-16 * 8, atol=0.0, err_msg=k)
 
 
 def test_real_flat_row_indices_from_actual_counts_layout():
