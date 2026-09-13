@@ -410,7 +410,7 @@ def _project_relion_projector_texture(
 ):
     """Project one RELION ``PPref`` block with RELION's CUDA texture arithmetic.
 
-    Equal-extent F32 inputs use direct half storage; see
+    Eligible F32 inputs use direct half storage; see
     ``docs/development/em_half_texture_staging.md`` for eligibility and gates.
     """
 
@@ -429,7 +429,8 @@ def _project_relion_projector_texture(
         runtime_r_max is None
         and int(padding_factor) in (1, 2)
         and int(r_max) > 0
-        and int(projector_output_size) == 2 * int(r_max)
+        and 0 < int(projector_output_size) <= 4096
+        and int(projector_output_size) % 2 == 0
         and volume_relion_half.dtype == jnp.complex64
         and volume_relion_half.shape == (
             2 * int(r_max) * int(padding_factor) + 3,
@@ -440,10 +441,9 @@ def _project_relion_projector_texture(
         and rotations_block.dtype == jnp.float32
         and 0 < rotations_block.shape[0] <= 65535
     ):
-        # At equal physical/logical extent the existing half-storage kernel
-        # stages the same texels without a cubic transpose/zero-fill buffer.
-        # Keep all current crop, mask, gather and scaling operations below.
-        # Other output/radius layouts retain their separately qualified route.
+        # The half-storage kernel stages the same texels without a cubic
+        # transpose/zero-fill buffer. Output image extent is independent of
+        # model radius; keep crop, mask, gather and scaling unchanged below.
         from recovar.cuda_backproject import project_relion_half_capacity
 
         projection_crop = project_relion_half_capacity(
