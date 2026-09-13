@@ -25,7 +25,7 @@ from recovar.em.diagnostics.frozen_boundary import (
     _frozen_scoring_state_arrays,
 )
 from recovar.em.refinement.mean_helpers import _mean_variance_for_scoring_half, _updated_mean_variance_per_half
-from recovar.em.vdam.avg_unaligned import compute_avg_unaligned_and_sigma2
+from recovar.em.relion.initial_noise import compute_avg_unaligned_and_sigma2
 from scripts import run_full_refinement
 from scripts.run_full_refinement import (
     _assert_frozen_replay_slots_projector_only,
@@ -1046,7 +1046,7 @@ def test_stop_after_local_search_score_only_passes_to_refinement_loop():
 
 def test_stop_after_local_search_score_only_is_diagnostic_score_only_path():
     source = ITERATION_LOOP.read_text()
-    half_scoring_source = ITERATION_LOOP.with_name("half_scoring.py").read_text()
+    half_scoring_source = (ITERATION_LOOP.parent.parent / "dense" / "half_scoring.py").read_text()
     # stop_after_local_search{,_score_only} are read off the EngineDebugOptions
     # bundle (`debug.*`) inside the iteration loop now, rather than being bare
     # locals bound from flat refine_single_volume kwargs.

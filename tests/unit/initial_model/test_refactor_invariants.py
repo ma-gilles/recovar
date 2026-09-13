@@ -393,7 +393,7 @@ def test_bootstrap_iref_pure_python_fallback_stays_deleted():
 # must not undo the cuts. Per-file ceilings allow generous headroom (~50%)
 # because merges legitimately add code; the TOTAL ceiling is the real guard.
 LOC_PER_FILE_CEILING = {
-    "avg_unaligned.py": 220,
+    "../relion/initial_noise.py": 220,
     "bootstrap_iref.py": 280,
     "dense_adapter.py": 1500,
     "driver.py": 1960,
@@ -442,7 +442,8 @@ def test_per_file_loc_ceilings():
 def test_total_package_loc_within_budget():
     """Count VDAM, its checkpoint adapter and the extracted shared diagnostics."""
     total = sum(_file_loc(p) for p in PACKAGE_DIR.glob("*.py"))
-    total += _file_loc(PACKAGE_DIR.parent / "relion" / "vdam_checkpoint.py")
+    total += sum(_file_loc(PACKAGE_DIR.parent / "relion" / name)
+                 for name in ("vdam_checkpoint.py", "initial_noise.py"))
     # Shared diagnostics remain counted after their responsibility move.
     total += sum(_file_loc(PACKAGE_DIR.parent / "diagnostics" / name)
                  for name in ("gt_metrics.py", "gt_registration.py"))

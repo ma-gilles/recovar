@@ -229,7 +229,7 @@ Use this index only after reading the algorithm sections above.
   [`state.py::InitialModelState`](../../recovar/em/vdam/state.py),
   [`init.py::initialise_denovo_state`](../../recovar/em/vdam/init.py)
 - Bootstrap and noise:
-  [`avg_unaligned.py::compute_avg_unaligned_and_sigma2`](../../recovar/em/vdam/avg_unaligned.py),
+  [`initial_noise.py::compute_avg_unaligned_and_sigma2`](../../recovar/em/relion/initial_noise.py),
   [`bootstrap_iref.py::compute_bootstrap_iref_via_cpp`](../../recovar/em/vdam/bootstrap_iref.py)
 - VDAM loop and schedules:
   [`iteration_loop.py::run_vdam_iterations`](../../recovar/em/vdam/iteration_loop.py),
@@ -569,7 +569,7 @@ Native InitialModel starts cold. In
 zeros for every class. The initial class prior is uniform (`pdf_class[k]=1/K`),
 and the initial direction prior is uniform over class x direction. The first
 data-dependent spectral state is `sigma2_noise`, estimated by
-[`avg_unaligned.py::compute_avg_unaligned_and_sigma2`](../../recovar/em/vdam/avg_unaligned.py).
+[`initial_noise.py::compute_avg_unaligned_and_sigma2`](../../recovar/em/relion/initial_noise.py).
 
 The InitialModel M-step in this branch does not explicitly compute and store a
 new `tau2_class` array after each native iteration. Instead,

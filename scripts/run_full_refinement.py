@@ -60,6 +60,7 @@ from recovar.em.diagnostics.state_swap_probe import (
     state_swap_probe_loop_index,
     validate_state_swap_probe_application,
 )
+from recovar.em.relion.initial_noise import compute_avg_unaligned_and_sigma2
 from recovar.em.relion.relion_worker_scale import (
     load_relion_dispatch_schedule,
     load_relion_follower_scale_replay,
@@ -68,7 +69,6 @@ from recovar.em.relion.relion_worker_scale import (
     validate_relion_follower_scale_replay,
     verify_relion_dispatch_schedule_oracle,
 )
-from recovar.em.vdam.avg_unaligned import compute_avg_unaligned_and_sigma2
 from recovar.utils.parity_provenance import _safe_git_commit, git_worktree_provenance
 
 logging.basicConfig(

@@ -28,8 +28,8 @@ from recovar.em.helpers.orientation_priors import (
     relion_translation_prior_center,
 )
 from recovar.em.relion import vdam_checkpoint
+from recovar.em.relion.initial_noise import compute_avg_unaligned_and_sigma2
 from recovar.em.vdam import estep_meta_updates, star_io
-from recovar.em.vdam.avg_unaligned import compute_avg_unaligned_and_sigma2
 from recovar.em.vdam.bootstrap_iref import compute_bootstrap_iref_via_cpp, postprocess_bootstrap_iref_via_cpp
 from recovar.em.vdam.dense_adapter import (
     prepare_relion_projector_class_inputs,
