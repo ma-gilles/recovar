@@ -5383,6 +5383,9 @@ def _relion_cuda_fine_log_evidence_offset(min_diff2):
 
 _SPARSE_KCLASS_DEVICE_CHUNK_SCALARS_ENV = "RECOVAR_SPARSE_KCLASS_DEVICE_CHUNK_SCALARS"
 _SPARSE_KCLASS_VECTORIZED_STATS_REPLAY_ENV = "RECOVAR_SPARSE_KCLASS_VECTORIZED_STATS_REPLAY"
+_SPARSE_KCLASS_DEFER_FUSED_NOISE_TOTALS_ENV = (
+    "RECOVAR_SPARSE_KCLASS_DEFER_FUSED_NOISE_TOTALS"
+)
 
 
 def vectorized_stats_replay_enabled() -> bool:
@@ -5397,6 +5400,31 @@ def vectorized_stats_replay_enabled() -> bool:
     """
 
     return parse_env_flag(_SPARSE_KCLASS_VECTORIZED_STATS_REPLAY_ENV, default=False)
+
+
+def defer_fused_noise_totals_enabled() -> bool:
+    """Defer the fused-native noise totals instead of pulling them per class-chunk.
+
+    ``_compact_pair_weighted_sums_and_noise_native`` returns the chunk's noise
+    shells and per-image norm residual on the device.  The branch that consumes
+    them added both to the host accumulators immediately with ``np.asarray``,
+    ignoring the deferred-host-statistics setting that every neighbouring branch
+    honours.  Each of those pulls blocks the host until the device has finished
+    that class-chunk's fused M-step kernel, so the host cannot dispatch the next
+    chunk while the current one runs.  At 100k/256 K=4 the enclosing
+    ``noise_scale_correction`` stage was 49.7 s of the 306 s iteration-2 loop and
+    73.4 s of the 346 s iteration-3 loop (job 13841646), while the chunk count
+    fell from 5204 to 4713, which is the signature of waiting on device work
+    rather than of per-chunk host work.
+
+    With this flag the two arrays become an ordinary ``wsum`` deferred record.
+    The replay calls ``_apply_wsum_host`` with the same arguments in the same
+    order as the loop would have, so the accumulators are bit-identical; only
+    the moment of the transfer changes.  The records hold about 1 KiB per
+    class-chunk, some 25 MiB per iteration at this size.
+    """
+
+    return parse_env_flag(_SPARSE_KCLASS_DEFER_FUSED_NOISE_TOTALS_ENV, default=False)
 
 
 def device_chunk_scalars_enabled() -> bool:
@@ -14457,6 +14485,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     defer_host_stats_check = _defer_token == "check"
     defer_host_stats = _defer_token in {"1", "check"}
     vectorized_stats_replay = vectorized_stats_replay_enabled()
+    defer_fused_noise_totals = defer_fused_noise_totals_enabled()
     _depth = parse_env_nonnegative_int(_SPARSE_KCLASS_PIPELINE_DEPTH_ENV)
     pipeline_depth = 4 if _depth is None else int(_depth)
     buckets_in_flight = 0
@@ -17208,18 +17237,33 @@ def compute_k_class_pass2_stats_sparse_fused(
                         block_norm_residual_precomputed,
                     )
                 elif block_noise_shells_precomputed is not None:
-                    noise_wsum_total[class_index] += np.asarray(
-                        block_noise_shells_precomputed,
-                        dtype=np.float64,
-                    )
-                    np.add.at(
-                        noise_norm_correction_total[class_index],
-                        image_indices,
-                        np.asarray(
-                        block_norm_residual_precomputed,
-                        dtype=np.float64,
-                    )
-                    )
+                    if (
+                        defer_fused_noise_totals
+                        and defer_host_stats
+                        and not defer_host_stats_check
+                    ):
+                        deferred_host_records.append(
+                            (
+                                "wsum",
+                                class_index,
+                                image_indices,
+                                block_noise_shells_precomputed,
+                                block_norm_residual_precomputed,
+                            )
+                        )
+                    else:
+                        _apply_wsum_host(
+                            class_index,
+                            image_indices,
+                            np.asarray(
+                                block_noise_shells_precomputed,
+                                dtype=np.float64,
+                            ),
+                            np.asarray(
+                                block_norm_residual_precomputed,
+                                dtype=np.float64,
+                            ),
+                        )
                 elif bucket_uses_active_rows and bucket_uses_compact_pairs:
                     block_noise_shells, block_norm_residual = _compute_active_noise_rows_chunked(
                         proj_for_noise_by_class[class_index],

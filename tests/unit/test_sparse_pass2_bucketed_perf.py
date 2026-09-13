@@ -10641,6 +10641,7 @@ def build_device_chunk_scalars_gpu_fixture():
         "RECOVAR_SPARSE_KCLASS_RESIDENT_HYPOTHESIS_TABLES",
         "RECOVAR_SPARSE_KCLASS_VECTORIZED_STATS_REPLAY",
         "RECOVAR_SPARSE_KCLASS_DEVICE_ACTIVE_ROW_INDICES",
+        "RECOVAR_SPARSE_KCLASS_DEFER_FUSED_NOISE_TOTALS",
     ],
 )
 def test_host_marshalling_flags_are_bit_identical(monkeypatch, flag_env, defer_flag, fused_noise):
@@ -10901,6 +10902,69 @@ def test_flat_real_rows_sums_and_noise_are_bit_identical(monkeypatch, custom_cud
         {k: v for k, v in padded.items() if k not in bounded},
         {k: v for k, v in flat.items() if k not in bounded},
         f"flat real rows ({noise_mode}, defer={defer_flag})",
+    )
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("noise_mode", ["noise", "noise_with_scale_groups"])
+def test_defer_fused_noise_totals_is_bit_identical_and_defers_two_leaves(
+    monkeypatch, custom_cuda_lib, gpu_device, noise_mode
+):
+    """RECOVAR_SPARSE_KCLASS_DEFER_FUSED_NOISE_TOTALS turns the per-class-chunk host pull
+    of the fused-native noise shells and norm residual into an ordinary deferred ``wsum``
+    record. The replay runs ``_apply_wsum_host`` with the same arguments in the same order,
+    so every output must be bit-identical; the flag must also actually defer, which is two
+    extra device leaves in the single batched transfer for every class-chunk."""
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
+    def run(flag):
+        leaves = []
+        original = bucketed_mod._device_get_in_chunks
+
+        def spy(device_leaves, *a, **kw):
+            leaves.append(len(device_leaves))
+            return original(device_leaves, *a, **kw)
+
+        monkeypatch.setattr(bucketed_mod, "_device_get_in_chunks", spy)
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "4")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_DEFERRED_HOST_STATS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_PASS2_IMAGE_CAPACITY", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_LAZY_TABLES", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_NATIVE_PAIR_SPARSE_SUMS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_DEFER_FUSED_NOISE_TOTALS", flag)
+        kwargs = _fused_kclass_multibucket_fixture(n_images=13)
+        kwargs["accumulate_noise"] = True
+        if noise_mode == "noise_with_scale_groups":
+            kwargs["group_ids"] = np.arange(13) % 3
+            kwargs["scale_corrections"] = np.linspace(0.9, 1.1, 13).astype(np.float32)
+        kwargs["relion_x_half_mstep"] = True
+        with jax.default_device(gpu_device):
+            result = _fused_kclass_result_arrays(
+                bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs)
+            )
+        return result, sum(leaves)
+
+    off, leaves_off = run("0")
+    on, leaves_on = run("1")
+    _assert_fused_arrays_identical(
+        off, on, f"RECOVAR_SPARSE_KCLASS_DEFER_FUSED_NOISE_TOTALS ({noise_mode})"
+    )
+    assert leaves_on > leaves_off, (
+        "the flag must actually defer the fused noise totals; the batched transfer "
+        f"carried {leaves_on} leaves with the flag on and {leaves_off} with it off, so "
+        "the fused-native branch this flag guards never ran"
+    )
+    assert (leaves_on - leaves_off) % 2 == 0, (
+        "each deferred fused-noise record contributes exactly two leaves (shells and "
+        f"norm residual); saw {leaves_on - leaves_off} extra"
     )
 
 
