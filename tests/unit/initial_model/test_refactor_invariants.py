@@ -396,7 +396,6 @@ LOC_PER_FILE_CEILING = {
     "dense_adapter.py": 1500,
     "driver.py": 1960,
     "../relion/vdam_checkpoint.py": 440,  # Split from driver; combined allowance unchanged.
-    "e_step.py": 140,
     "gt_metrics.py": 400,
     "__init__.py": 160,
     "init.py": 280,

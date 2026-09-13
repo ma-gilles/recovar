@@ -775,8 +775,9 @@ The native path intentionally encodes these RELION GUI InitialModel assumptions:
   for reconstruction accumulation, matching the dense-engine contract.
 - The dense scoring noise uses `sigma2_noise * N^4` via
   `driver.py::_noise_variance_from_sigma2`.
-- `e_step.py::minvsigma2_with_dc_zero` documents the RELION DC-exclusion
-  convention; use it when debugging direct InitialModel half-spectrum scoring.
+- The independent `minvsigma2_with_dc_zero` reference in
+  [the VDAM test helpers](../../tests/helpers/vdam.py) documents the RELION
+  DC-exclusion convention. It is not part of production E-step execution.
 - RELION/RECOVAR volume frames differ. Use the helpers documented in
   [`recovar/CLAUDE.md`](../../recovar/CLAUDE.md), not raw MRC loading, when
   comparing RELION and RECOVAR volumes.

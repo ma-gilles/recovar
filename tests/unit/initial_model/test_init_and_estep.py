@@ -21,12 +21,12 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-
-from recovar.em.vdam.e_step import (
+from helpers.vdam import (
     fourier_crop_half,
     hermitian_weights_relion,
     minvsigma2_with_dc_zero,
 )
+
 from recovar.em.vdam.init import (
     compute_current_size_for_denovo,
     compute_ini_high_angstrom,
