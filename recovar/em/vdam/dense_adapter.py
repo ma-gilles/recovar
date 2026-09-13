@@ -150,17 +150,14 @@ def _relion_projector_to_dense_volume(projector_data: np.ndarray, ori_size: int)
     center = n // 2
     half = np.zeros((n, n, center + 1), dtype=np.complex128)
     slab = ppref[::-1, :, :]
-    z_center = slab.shape[0] // 2
-    y_center = slab.shape[1] // 2
-    x_max = min(slab.shape[2], center + 1)
-    for iz in range(slab.shape[0]):
-        z = (iz - z_center) + center
-        if z < 0 or z >= n:
-            continue
-        for iy in range(slab.shape[1]):
-            y = (iy - y_center) + center
-            if 0 <= y < n:
-                half[z, y, :x_max] = slab[iz, iy, :x_max]
+    source_slices, target_slices = [], []
+    for slab_size in slab.shape[:2]:
+        offset = center - slab_size // 2
+        start, stop = max(0, offset), min(n, offset + slab_size)
+        source_slices.append(slice(start - offset, stop - offset))
+        target_slices.append(slice(start, stop))
+    x_slice = (slice(0, min(slab.shape[2], center + 1)),)
+    half[tuple(target_slices) + x_slice] = slab[tuple(source_slices) + x_slice]
     return np.asarray(ftu.half_volume_to_full_volume(half, (n, n, n)), dtype=np.complex128)
 
 
