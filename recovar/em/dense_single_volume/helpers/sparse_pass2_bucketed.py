@@ -6479,13 +6479,17 @@ def _compact_pair_sorted_csr(
     n_rotation_rows,
     n_trans,
 ):
-    """Sort compact pairs by (rotation row, translation) and return CSR row offsets.
+    """CSR row offsets for compact pairs that are already in source order.
 
-    Returns float32 probabilities and int32 translations in sorted order plus
-    int32 ``(batch, n_rotation_rows + 1)`` offsets; invalid pairs sort last with
-    zero weight. Sorting by the unique key ``row * n_trans + translation`` makes
-    the per-row translation order ascending regardless of the input order, which
-    is what the pair-sparse native kernel needs to reproduce the dense sums.
+    ``build_compact_pair_index_arrays`` emits each image's valid pairs as a
+    rotation-major, translation-minor prefix (C order of the ``(R, T)`` mask)
+    followed by ``-1`` padding, so no sort is needed: masked pairs are mapped
+    to row ``n_rotation_rows`` (they sit after every real row) and the offsets
+    are one ``searchsorted`` per image. Non-finite or out-of-range pairs keep
+    their position with zero weight, which the kernel skips exactly like the
+    dense kernel skips zero table entries. A sort over the padded ``(B, P)``
+    keys was tried first and cost more than it saved at 100k/256 (job
+    13806345: wide-pair class 630 -> 756 s).
     """
     weights, safe_rotation_row, safe_translation_idx, valid_pair = _compact_pair_valid_weights_and_indices(
         pair_probs,
@@ -6496,23 +6500,18 @@ def _compact_pair_sorted_csr(
         n_trans=n_trans,
     )
     n_rotation_rows = int(n_rotation_rows)
-    n_trans = int(n_trans)
-    sentinel = jnp.int32(n_rotation_rows * n_trans)
-    keys = jnp.where(
-        valid_pair,
-        safe_rotation_row.astype(jnp.int32) * jnp.int32(n_trans) + safe_translation_idx.astype(jnp.int32),
-        sentinel,
+    rows_in_order = jnp.where(
+        pair_mask,
+        jnp.asarray(local_rotation_row).astype(jnp.int32),
+        jnp.int32(n_rotation_rows),
     )
-    order = jnp.argsort(keys, axis=1)
-    sorted_keys = jnp.take_along_axis(keys, order, axis=1)
-    sorted_rows = jnp.where(
-        sorted_keys < sentinel, sorted_keys // jnp.int32(n_trans), jnp.int32(n_rotation_rows)
-    ).astype(jnp.int32)
-    sorted_probs = jnp.take_along_axis(weights, order, axis=1).astype(jnp.float32)
-    sorted_translations = jnp.take_along_axis(safe_translation_idx, order, axis=1).astype(jnp.int32)
     row_ids = jnp.arange(n_rotation_rows + 1, dtype=jnp.int32)
-    row_offsets = jax.vmap(lambda rows: jnp.searchsorted(rows, row_ids, side="left"))(sorted_rows)
-    return sorted_probs, sorted_translations, row_offsets.astype(jnp.int32)
+    row_offsets = jax.vmap(lambda rows: jnp.searchsorted(rows, row_ids, side="left"))(rows_in_order)
+    return (
+        weights.astype(jnp.float32),
+        safe_translation_idx.astype(jnp.int32),
+        row_offsets.astype(jnp.int32),
+    )
 
 
 @partial(jax.jit, static_argnames=("n_rotation_rows",))
