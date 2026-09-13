@@ -122,9 +122,9 @@ _CONTINUOUS_DIAGNOSTIC_FIELDS = (
 
 # Keep this synchronized with ``run_local_bucket_big_jit``'s
 # ``donate_argnums``.  Every gate invocation supplies fresh accumulators, and
-# the focused source contract verifies that the donated positions still name
-# the two loop-carried outputs described by the implementation comment.
-CURRENT_DONATED_POSITIONAL_NAMES = (
+# the focused source contract verifies that the donated record contains
+# exactly the two reconstruction buffers described by the implementation comment.
+DONATED_ACCUMULATOR_NAMES = (
     "Ft_y",
     "Ft_ctf",
 )
@@ -409,11 +409,14 @@ def _capture_shared_numeric_call(
         if bool(bound.arguments["return_debug_operands"]):
             raise RuntimeError("score gate requires production operand dumps to be disabled")
 
-        input_values: dict[str, np.ndarray | None] = {}
+        accumulator_values = {**bound.arguments["mstep"]._asdict(), **bound.arguments["noise"]._asdict()}
+        input_values: dict[str, np.ndarray | None] = {
+            name: _to_host_array(value) for name, value in accumulator_values.items()
+        }
         for name, parameter in signature.parameters.items():
             if parameter.kind is inspect.Parameter.KEYWORD_ONLY:
                 continue
-            if name == "config":
+            if name in {"config", "mstep", "noise"}:
                 continue
             value = bound.arguments[name]
             input_values[name] = None if value is None else _to_host_array(value)
@@ -432,12 +435,12 @@ def _capture_shared_numeric_call(
             if name == "config" or value is None:
                 replay_positional.append(value)
             else:
-                replay_positional.append(_to_host_array(value))
+                replay_positional.append(jax.tree_util.tree_map(_to_host_array, value))
         prepared_call = local_big_jit._prepare_fixed_capacity_local_call(
             *replay_positional
         )
         initial_carry = tuple(
-            _to_host_array(bound.arguments[name])
+            _to_host_array(accumulator_values[name])
             for name in (
                 "Ft_y",
                 "Ft_ctf",
@@ -452,8 +455,8 @@ def _capture_shared_numeric_call(
             )
         )
         donated_input_object_ids = {}
-        for name in CURRENT_DONATED_POSITIONAL_NAMES:
-            value = bound.arguments[name]
+        for name in DONATED_ACCUMULATOR_NAMES:
+            value = accumulator_values[name]
             if any(value is prior for prior in donated_input_objects):
                 raise RuntimeError(f"score gate reused donated input object {name}")
             donated_input_objects.append(value)
@@ -779,7 +782,8 @@ def _run_prepared_calls_individually(
     for prepared_call in call_program:
         result = local_big_jit.run_local_bucket_big_jit(
             *prepared_call.leading_arguments,
-            *carry,
+            local_big_jit._LocalMstepAccumulators(*carry[:2]),
+            local_big_jit._LocalNoiseAccumulators(*carry[2:]),
             *prepared_call.trailing_arguments,
             **static_options,
         )
@@ -1324,8 +1328,8 @@ def run_gate(
             "jax_backend": jax.default_backend(),
             "jax_enable_x64": bool(jax.config.jax_enable_x64),
             "devices": [str(device) for device in jax.devices()],
-            "donated_argnums": [7, 8],
-            "donated_positional_names": list(CURRENT_DONATED_POSITIONAL_NAMES),
+            "donated_argnums": [7],
+            "donated_accumulator_names": list(DONATED_ACCUMULATOR_NAMES),
             "fresh_donated_input_objects_per_invocation": True,
         },
         "comparisons": comparisons,

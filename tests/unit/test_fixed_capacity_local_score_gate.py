@@ -109,8 +109,8 @@ def test_fixture_has_two_authoritative_calls_with_a_default_off_selector():
 def test_gate_donation_contract_tracks_signature_positions_and_fresh_objects():
     parameter_names = tuple(inspect.signature(local_big_jit.run_local_bucket_big_jit).parameters)
 
-    assert parameter_names[7:9] == score_gate.CURRENT_DONATED_POSITIONAL_NAMES
-    assert score_gate.CURRENT_DONATED_POSITIONAL_NAMES == ("Ft_y", "Ft_ctf")
+    assert parameter_names[7:9] == ("mstep", "noise")
+    assert score_gate.DONATED_ACCUMULATOR_NAMES == ("Ft_y", "Ft_ctf")
 
 
 def test_slurm_runner_is_fail_closed_and_forbids_speed_or_default_claims():

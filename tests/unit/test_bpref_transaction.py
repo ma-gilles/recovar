@@ -48,8 +48,11 @@ def test_deferred_scorer_donation_cannot_replace_pending_accumulators():
     options = dict(return_deferred_mstep_inputs=True, disable_adjoint_y=True, disable_adjoint_ctf=True)
     shapes = []
 
-    @partial(jax.jit, donate_argnums=(7, 8), static_argnames=tuple(options))
-    def scorer(a, b, c, d, e, f, g, data, weight, **options):
+    from recovar.em.local.local_big_jit import _LocalMstepAccumulators
+
+    @partial(jax.jit, donate_argnums=(7,), static_argnames=tuple(options))
+    def scorer(a, b, c, d, e, f, g, mstep, **options):
+        data, weight = mstep
         shapes.append((data.shape, weight.shape))
         from recovar.em.local.local_big_jit import _LocalBigJitCore, _LocalBigJitResult
 
@@ -62,7 +65,7 @@ def test_deferred_scorer_donation_cannot_replace_pending_accumulators():
     for first in (0, 2):
         args, kwargs = operands(2, first, common, data, weight)
         data, weight, _ = queue.accumulate(callback, *args, **kwargs)
-        result = queue.run_deferred_scorer(scorer, (None,) * 7 + (data, weight), options)
+        result = queue.run_deferred_scorer(scorer, (None,) * 7 + (_LocalMstepAccumulators(data, weight),), options)
         assert result.core.Ft_y is data and result.core.Ft_ctf is weight and int(result.core.noise_wsum) == 19
         assert not data.is_deleted() and not weight.is_deleted()
     assert shapes == [((0,), (0,))]

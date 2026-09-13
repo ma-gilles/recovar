@@ -120,13 +120,13 @@ class BprefTransactionQueue:
             for name in ("return_deferred_mstep_inputs", "disable_adjoint_y", "disable_adjoint_ctf")
         ):
             raise ValueError("Queued BPref requires a deferred scorer with both adjoints disabled")
-        carry = arguments[7:9]
+        carry = arguments[7]
         self._check_carry(*carry)
         if self._scorer_carry is None:
             self._scorer_carry = tuple(jnp.zeros((0,), dtype=value.dtype) for value in carry)
         if any(dummy.dtype != value.dtype for dummy, value in zip(self._scorer_carry, carry, strict=True)):
             raise ValueError("Queued BPref scorer carry dtype changed")
-        result = callback(*arguments[:7], *self._scorer_carry, *arguments[9:], **options)
+        result = callback(*arguments[:7], carry._make(self._scorer_carry), *arguments[8:], **options)
         self._scorer_carry = (result.core.Ft_y, result.core.Ft_ctf)
         return result._replace(core=result.core._replace(Ft_y=carry[0], Ft_ctf=carry[1]))
 

@@ -453,8 +453,8 @@ def test_control_and_donated_wrappers_share_one_sealed_numeric_source():
 
     assert control.selected.__wrapped__ is donated.selected.__wrapped__
     assert control.contract()["selected_donate_argnums"] == []
-    assert donated.contract()["selected_donate_argnums"] == [7, 8]
-    assert donated.contract()["selected_donate_argnames"] == ["Ft_y", "Ft_ctf"]
+    assert donated.contract()["selected_donate_argnums"] == [7]
+    assert donated.contract()["selected_donate_argnames"] == ["mstep"]
     assert tuple(donated.contract()["static_argnames"]) == runner.SEALED_STATIC_ARGNAMES
 
 

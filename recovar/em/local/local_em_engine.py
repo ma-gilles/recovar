@@ -113,6 +113,8 @@ from recovar.em.local.local_batch_planning import (
 )
 from recovar.em.local.local_big_jit import (
     _LocalBigJitDebug,
+    _LocalMstepAccumulators,
+    _LocalNoiseAccumulators,
     _noise_image_power_shells_and_per_image,
     _partition_uniform_fixed_capacity_calls,
     _prepare_fixed_capacity_local_call,
@@ -2108,16 +2110,17 @@ def run_local_em_exact(
                 corr_img_rfloat_square_arg,
                 mean_for_proj_big_jit,
                 local_projection_half_arg,
-                Ft_y,
-                Ft_ctf,
-                noise_wsum_arg,
-                noise_img_power_arg,
-                noise_a2_arg,
-                noise_xa_arg,
-                noise_scale_xa_arg,
-                noise_scale_aa_arg,
-                noise_sigma2_offset,
-                noise_sumw,
+                _LocalMstepAccumulators(Ft_y, Ft_ctf),
+                _LocalNoiseAccumulators(
+                    noise_wsum_arg,
+                    noise_img_power_arg,
+                    noise_a2_arg,
+                    noise_xa_arg,
+                    noise_scale_xa_arg,
+                    noise_scale_aa_arg,
+                    noise_sigma2_offset,
+                    noise_sumw,
+                ),
                 big_jit_image_mask_arg,
                 integer_pre_shifts_arg,
                 fourier_pre_shifts_arg,
@@ -2243,8 +2246,8 @@ def run_local_em_exact(
             if fixed_capacity_whole_boundary_enabled:
                 fixed_capacity_whole_preparation_s += time.time() - big_jit_t0
                 if fixed_capacity_whole_initial_carry is None:
-                    fixed_capacity_whole_initial_carry = tuple(
-                        big_jit_arguments[7:17]
+                    fixed_capacity_whole_initial_carry = (
+                        *big_jit_arguments[7], *big_jit_arguments[8]
                     )
                     fixed_capacity_whole_static_options = big_jit_static_options
                 elif big_jit_static_options != fixed_capacity_whole_static_options:

@@ -38,8 +38,8 @@ INPUT_MANIFEST_SCHEMA = "recovar.local_mstep_donation_gf46_inputs.v2"
 RESOLVED_INPUT_CONTRACT_SCHEMA = "recovar.local_mstep_donation_gf46_resolved_inputs.v1"
 LAUNCH_MANIFEST_SCHEMA = "recovar.local_mstep_donation_launch_manifest.v1"
 SEALED_ARM_ENVIRONMENT_SCHEMA = "recovar.local_mstep_donation_arm_environment.v1"
-DONATED_POSITIONAL_NAMES = ("Ft_y", "Ft_ctf")
-DONATED_ARGNUMS = (7, 8)
+DONATED_POSITIONAL_NAMES = ("mstep",)
+DONATED_ARGNUMS = (7,)
 GF46_CHECKPOINT_ITERATION = 180
 GF46_PROFILED_ITERATION = 181
 GF46_NR_ITER_SCHEDULE = 200
@@ -899,7 +899,7 @@ class LocalMstepDonationMonitor:
         production = local_big_jit.run_local_bucket_big_jit
         info = production._jit_info
         parameter_names = tuple(inspect.signature(production).parameters)
-        if parameter_names[7:9] != DONATED_POSITIONAL_NAMES:
+        if parameter_names[7:8] != DONATED_POSITIONAL_NAMES:
             raise RuntimeError("local accumulator signature positions changed")
         if tuple(info.static_argnames) != SEALED_STATIC_ARGNAMES:
             raise RuntimeError("local big-JIT static argument contract changed")
@@ -953,9 +953,9 @@ class LocalMstepDonationMonitor:
                 "first_phase": self.phase,
                 "signature": signature,
                 "accumulator_bytes": {
-                    "Ft_y": _array_nbytes(args[7]),
-                    "Ft_ctf": _array_nbytes(args[8]),
-                    "total": _array_nbytes(args[7]) + _array_nbytes(args[8]),
+                    "Ft_y": _array_nbytes(args[7].Ft_y),
+                    "Ft_ctf": _array_nbytes(args[7].Ft_ctf),
+                    "total": _array_nbytes(args[7].Ft_y) + _array_nbytes(args[7].Ft_ctf),
                 },
                 "adjoints_enabled": bool((not kwargs["disable_adjoint_y"]) or (not kwargs["disable_adjoint_ctf"])),
                 "mstep_relion_x_half": bool(kwargs["mstep_relion_x_half"]),

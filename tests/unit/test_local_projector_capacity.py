@@ -137,21 +137,11 @@ def test_positional_radius_preserves_fixed_capacity_carry():
     names = [p.name for p in positional]
     assert names[-2:] == ["config", "runtime_projector_r_max"]
     assert "runtime_projector_r_max" not in [p.name for p in keyword]
-    assert names[7:17] == [
-        "Ft_y",
-        "Ft_ctf",
-        "noise_wsum",
-        "noise_img_power",
-        "noise_a2",
-        "noise_xa",
-        "noise_scale_xa",
-        "noise_scale_aa",
-        "noise_sigma2_offset",
-        "noise_sumw",
-    ]
+    assert names[7:9] == ["mstep", "noise"]
+    assert big._LocalMstepAccumulators._fields + big._LocalNoiseAccumulators._fields == big._LOCAL_BIG_JIT_CARRY_FIELDS
     args = tuple(object() for _ in positional)
     prepared = big._prepare_fixed_capacity_local_call(*args)
-    assert prepared.leading_arguments + args[7:17] + prepared.trailing_arguments == args
+    assert prepared.leading_arguments + args[7:9] + prepared.trailing_arguments == args
     assert prepared.trailing_arguments[-1] is args[-1]
 
 

@@ -1516,6 +1516,26 @@ def _project_local_half_spectrum(
     )
 
 
+class _LocalMstepAccumulators(NamedTuple):
+    """The two reconstruction buffers donated at the local JIT boundary."""
+
+    Ft_y: jax.Array
+    Ft_ctf: jax.Array
+
+
+class _LocalNoiseAccumulators(NamedTuple):
+    """Noise and scale state in chronological carry order; never donated."""
+
+    noise_wsum: jax.Array
+    noise_img_power: jax.Array
+    noise_a2: jax.Array
+    noise_xa: jax.Array
+    noise_scale_xa: jax.Array
+    noise_scale_aa: jax.Array
+    noise_sigma2_offset: jax.Array
+    noise_sumw: jax.Array
+
+
 class _LocalBigJitCore(NamedTuple):
     """Named numerical outputs shared by every local bucket execution route."""
 
@@ -1610,7 +1630,7 @@ def _split_local_big_jit_carry(result):
     # Ft_y and Ft_ctf are loop-carried M-step accumulators.  Donating them
     # lets XLA update multi-GB full-Nyquist BPref buffers in place instead of
     # allocating a same-sized output for every local-search bucket.
-    donate_argnums=(7, 8),
+    donate_argnums=(7,),
     static_argnames=(
         "mask_mode",
         "score_with_masked_images",
@@ -1687,16 +1707,8 @@ def run_local_bucket_big_jit(
     corr_img_rfloat_square_half,
     mean_for_proj,
     relion_projector_half,
-    Ft_y,
-    Ft_ctf,
-    noise_wsum,
-    noise_img_power,
-    noise_a2,
-    noise_xa,
-    noise_scale_xa,
-    noise_scale_aa,
-    noise_sigma2_offset,
-    noise_sumw,
+    mstep: _LocalMstepAccumulators,
+    noise: _LocalNoiseAccumulators,
     image_mask,
     integer_pre_shifts,
     fourier_pre_shifts,
@@ -1817,6 +1829,18 @@ def run_local_bucket_big_jit(
     score/probability tensors and, for targeted operand dumps, the already
     computed projection/preprocessing operands.
     """
+
+    Ft_y, Ft_ctf = mstep
+    (
+        noise_wsum,
+        noise_img_power,
+        noise_a2,
+        noise_xa,
+        noise_scale_xa,
+        noise_scale_aa,
+        noise_sigma2_offset,
+        noise_sumw,
+    ) = noise
 
     runtime_logical_current_size = jnp.asarray(
         runtime_logical_current_size,
@@ -3210,7 +3234,7 @@ class _FixedCapacityPreparedLocalCall(NamedTuple):
 
 
 _FIXED_CAPACITY_CARRY_START = 7
-_FIXED_CAPACITY_CARRY_STOP = 17
+_FIXED_CAPACITY_CARRY_STOP = 9
 
 
 def _local_bucket_big_jit_signature_parts():
@@ -3249,18 +3273,7 @@ def _prepare_fixed_capacity_local_call(*arguments) -> _FixedCapacityPreparedLoca
             _FIXED_CAPACITY_CARRY_START:_FIXED_CAPACITY_CARRY_STOP
         ]
     )
-    if carry_names != (
-        "Ft_y",
-        "Ft_ctf",
-        "noise_wsum",
-        "noise_img_power",
-        "noise_a2",
-        "noise_xa",
-        "noise_scale_xa",
-        "noise_scale_aa",
-        "noise_sigma2_offset",
-        "noise_sumw",
-    ):
+    if carry_names != ("mstep", "noise"):
         raise RuntimeError(
             "mature local big-JIT carry topology changed; update the whole-local executor"
         )
@@ -3322,7 +3335,8 @@ def _run_fixed_capacity_whole_local_program(
     for call_index, prepared_call in enumerate(call_program):
         result = numeric_call(
             *prepared_call.leading_arguments,
-            *carry,
+            _LocalMstepAccumulators(*carry[:2]),
+            _LocalNoiseAccumulators(*carry[2:]),
             *prepared_call.trailing_arguments,
             **options,
         )
@@ -3411,7 +3425,8 @@ def _run_fixed_capacity_uniform_local_scan_program(
     def scan_step(current_carry, prepared_call):
         result = numeric_call(
             *prepared_call.leading_arguments,
-            *current_carry,
+            _LocalMstepAccumulators(*current_carry[:2]),
+            _LocalNoiseAccumulators(*current_carry[2:]),
             *prepared_call.trailing_arguments,
             **options,
         )

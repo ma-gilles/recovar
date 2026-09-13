@@ -867,8 +867,9 @@ def test_local_big_jit_donates_the_two_loop_carried_accumulators_by_signature_in
     parameter_names = tuple(inspect.signature(local_big_jit.run_local_bucket_big_jit).parameters)
     source = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
 
-    assert parameter_names[7:9] == ("Ft_y", "Ft_ctf")
-    assert "donate_argnums=(7, 8)" in source
+    assert parameter_names[7:9] == ("mstep", "noise")
+    assert local_big_jit._LocalMstepAccumulators._fields == ("Ft_y", "Ft_ctf")
+    assert "donate_argnums=(7,)" in source
     assert "donate_argnums=(4, 5)" not in source
 
 
@@ -888,7 +889,7 @@ def test_local_em_caller_allocates_and_forwards_fresh_donated_accumulators_per_r
     positional_lines = [
         line.strip().rstrip(",") for line in argument_source.splitlines()[1:11]
     ]
-    assert positional_lines[7:9] == ["Ft_y", "Ft_ctf"]
+    assert positional_lines[7] == "_LocalMstepAccumulators(Ft_y, Ft_ctf)"
 
 
 def test_fixed_capacity_selector_is_private_default_off_and_uses_shared_mature_call():
@@ -953,7 +954,7 @@ def test_whole_local_call_preparation_removes_only_invariant_carry_positions():
     prepared = local_big_jit._prepare_fixed_capacity_local_call(*arguments)
 
     assert prepared.leading_arguments == arguments[:7]
-    assert prepared.trailing_arguments == arguments[17:]
+    assert prepared.trailing_arguments == arguments[9:]
     with pytest.raises(ValueError, match="every mature positional argument"):
         local_big_jit._prepare_fixed_capacity_local_call(*arguments[:-1])
 
@@ -972,9 +973,8 @@ def test_whole_local_program_threads_all_ten_state_values_in_call_order():
     initial_carry = tuple(jnp.asarray(value, dtype=jnp.int32) for value in range(10))
     received_carries = []
 
-    def fake_numeric_call(delta, *arguments, scale):
-        carry = arguments[:10]
-        tag = arguments[10]
+    def fake_numeric_call(delta, mstep, noise, tag, *, scale):
+        carry = (*mstep, *noise)
         received_carries.append(tuple(int(value) for value in carry))
         increment = delta * scale
         next_first_eight = tuple(value + increment for value in carry[:8])
@@ -1057,9 +1057,8 @@ def test_uniform_local_scan_threads_carry_with_one_stacked_call_axis():
     )
     initial_carry = tuple(jnp.asarray(value, dtype=jnp.int32) for value in range(10))
 
-    def fake_numeric_call(delta, *arguments, scale):
-        carry = arguments[:10]
-        tag = arguments[10]
+    def fake_numeric_call(delta, mstep, noise, tag, *, scale):
+        carry = (*mstep, *noise)
         increment = delta * scale
         next_first_eight = tuple(value + increment for value in carry[:8])
         next_last_two = tuple(value + increment for value in carry[8:])
