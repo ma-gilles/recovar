@@ -16251,8 +16251,10 @@ def compute_k_class_pass2_stats_sparse_fused(
                     # here was a per-class-bucket device sync (200 s of iteration 2,
                     # job 13805735). Defer the leaf with the other statistics.
                     if defer_host_stats and not defer_host_stats_check:
+                        # translation_sqdist_ang is per bucket (prior centres per image):
+                        # carry it in the record, never read it back at replay time.
                         deferred_host_records.append(
-                            ("sigma2_offset", class_index, translation_posterior_jax)
+                            ("sigma2_offset", class_index, translation_posterior_jax, translation_sqdist_ang)
                         )
                     else:
                         noise_sigma2_offset_total[class_index] += float(
@@ -16704,7 +16706,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             elif kind == "sigma2_offset":
                 noise_sigma2_offset_total[record[1]] += float(
                     np.sum(
-                        np.asarray(next(host_leaves), dtype=np.float64) * translation_sqdist_ang,
+                        np.asarray(next(host_leaves), dtype=np.float64) * record[3],
                         dtype=np.float64,
                     )
                 )

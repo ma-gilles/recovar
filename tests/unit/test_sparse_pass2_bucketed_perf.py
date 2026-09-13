@@ -10015,6 +10015,17 @@ def _fused_kclass_result_arrays(result):
             for i, item in enumerate(value):
                 if hasattr(item, "shape") or isinstance(item, (int, float)):
                     arrays[f"{name}[{i}]"] = np.asarray(item)
+                elif item is not None and not isinstance(item, (str, bytes, dict)):
+                    # one level into per-class records (noise statistics carry the
+                    # translation-prior sigma2 offset as a scalar attribute)
+                    for sub in dir(item):
+                        if sub.startswith("_"):
+                            continue
+                        sub_value = getattr(item, sub)
+                        if callable(sub_value):
+                            continue
+                        if hasattr(sub_value, "shape") or isinstance(sub_value, (int, float)):
+                            arrays[f"{name}[{i}].{sub}"] = np.asarray(sub_value)
         elif hasattr(value, "shape") or isinstance(value, (int, float)):
             arrays[name] = np.asarray(value)
     return arrays
@@ -10226,7 +10237,7 @@ def _fused_kclass_multibucket_fixture(n_images=12, seed=5):
 
 
 @pytest.mark.parametrize("defer_flag", ["1", "check"])
-@pytest.mark.parametrize("noise_mode", ["no_noise", "noise", "noise_with_scale_groups"])
+@pytest.mark.parametrize("noise_mode", ["no_noise", "noise", "noise_with_scale_groups", "noise_with_translation_prior"])
 @pytest.mark.parametrize("n_images", [12, 13])
 def test_deferred_host_statistics_match_across_several_buckets(
     monkeypatch, caplog, noise_mode, defer_flag, n_images
@@ -10253,6 +10264,13 @@ def test_deferred_host_statistics_match_across_several_buckets(
         if noise_mode == "noise_with_scale_groups":
             kwargs["group_ids"] = np.arange(n_images) % 3
             kwargs["scale_corrections"] = np.linspace(0.9, 1.1, n_images).astype(np.float32)
+        if noise_mode == "noise_with_translation_prior":
+            # Per-bucket translation distance table: the InitialModel path carries
+            # one (the flags quality matrix failed here, jobs 13807907-13807916)
+            # while run_full_refinement does not, so the CPU fixture must.
+            kwargs["translation_prior_centers"] = np.stack(
+                [np.linspace(-1.0, 1.0, n_images), np.linspace(0.5, -0.5, n_images)], axis=1
+            ).astype(np.float64)
         return _fused_kclass_result_arrays(
             bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs)
         )
