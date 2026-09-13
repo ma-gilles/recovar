@@ -173,13 +173,13 @@ from recovar.em.refinement.mean_helpers import (
     compute_unregularized_halfmaps_and_align_signs,
     join_half_accumulators_at_low_resolution,
     prepare_initial_mean_variance,
-    update_c1_sigma_offset_from_posterior,
     update_learned_direction_priors,
 )
 from recovar.em.refinement.noise_updates import (
     _mean_noise_variance,
     _noise_radial_history,
     _normalize_noise_variance_per_half,
+    update_c1_sigma_offset_from_posterior,
     update_posterior_noise_variance,
 )
 from recovar.em.refinement.projector_preparation import (

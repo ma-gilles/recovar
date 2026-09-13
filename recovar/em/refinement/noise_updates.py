@@ -17,6 +17,142 @@ from recovar.em.helpers.types import make_noise_stats
 logger = logging.getLogger(__name__)
 
 
+@_dataclass
+class SigmaOffsetUpdateResult:
+    """Posterior-weighted ``sigma_offset`` update result.
+
+    RELION gold-standard refinement has one model per half-set, so each half
+    updates and consumes its own sigma offset. The scalar value remains the
+    mean of the pair for backward-compatible telemetry only.
+    """
+
+    current_sigma_offset_angstrom: float
+    current_sigma_offset_angstrom_per_half: list[float]
+    per_class_sigma_offset_angstrom: np.ndarray | None
+
+
+def _sigma_offset_from_moment(
+    wsum: float,
+    sumw: float,
+    *,
+    current_sigma_offset_angstrom: float,
+    state_fallback_offsets_angstrom: float,
+) -> float:
+    min_sigma2_angstrom2 = 2.0
+    if wsum > 0.0 and sumw > 0.0:
+        return float(np.sqrt(max(wsum / (2.0 * sumw), min_sigma2_angstrom2)))
+    if np.isfinite(state_fallback_offsets_angstrom) and state_fallback_offsets_angstrom > 0.0:
+        return max(float(state_fallback_offsets_angstrom), float(np.sqrt(min_sigma2_angstrom2)))
+    return float(current_sigma_offset_angstrom)
+
+
+def update_c1_sigma_offset_from_posterior(
+    *,
+    noise_stats_per_half,
+    noise_stats_per_half_per_class,
+    current_sigma_offset_angstrom: float | None = None,
+    current_sigma_offset_angstrom_per_half=None,
+    n_classes: int,
+    k_class_enabled: bool,
+    state_fallback_offsets_angstrom: float,
+) -> SigmaOffsetUpdateResult:
+    """RELION C1 posterior-weighted ``sigma_offset`` update per half-set.
+
+    Prefer RELION's posterior-weighted sufficient statistic:
+
+        sigma2_offset_new = wsum_sigma2_offset / (2 * sum_weight)
+
+    for 2D single-particle data. A half without a propagated posterior moment
+    uses the hard-assignment fallback independently; pooling the other half's
+    posterior into it would not match RELION's gold-standard models.
+    """
+
+    if current_sigma_offset_angstrom_per_half is None:
+        if current_sigma_offset_angstrom is None:
+            raise ValueError("a scalar or per-half current sigma offset is required")
+        current_per_half = np.full(2, float(current_sigma_offset_angstrom), dtype=np.float64)
+    else:
+        current_per_half = np.asarray(current_sigma_offset_angstrom_per_half, dtype=np.float64).reshape(-1)
+        if current_per_half.size != 2 or not np.all(np.isfinite(current_per_half)):
+            raise ValueError("current_sigma_offset_angstrom_per_half must contain two finite values")
+    per_half_values = []
+    pooled_wsum = 0.0
+    pooled_sumw = 0.0
+    for half_idx, stats_k in enumerate(noise_stats_per_half):
+        if stats_k is None:
+            per_half_values.append(
+                _sigma_offset_from_moment(
+                    0.0,
+                    0.0,
+                    current_sigma_offset_angstrom=float(current_per_half[half_idx]),
+                    state_fallback_offsets_angstrom=state_fallback_offsets_angstrom,
+                )
+            )
+            continue
+        wsum_k = float(getattr(stats_k, "wsum_sigma2_offset", 0.0))
+        sumw_k = float(getattr(stats_k, "sumw", 0.0))
+        pooled_wsum += wsum_k
+        pooled_sumw += sumw_k
+        per_half_values.append(
+            _sigma_offset_from_moment(
+                wsum_k,
+                sumw_k,
+                current_sigma_offset_angstrom=float(current_per_half[half_idx]),
+                state_fallback_offsets_angstrom=state_fallback_offsets_angstrom,
+            )
+        )
+    if len(per_half_values) != 2:
+        raise ValueError(f"noise_stats_per_half must contain two halves, got {len(per_half_values)}")
+    per_half_sigma_offset = np.asarray(per_half_values, dtype=np.float64)
+    if k_class_enabled:
+        shared_sigma_offset = _sigma_offset_from_moment(
+            pooled_wsum,
+            pooled_sumw,
+            current_sigma_offset_angstrom=float(np.mean(current_per_half)),
+            state_fallback_offsets_angstrom=state_fallback_offsets_angstrom,
+        )
+        per_half_sigma_offset[:] = shared_sigma_offset
+    current_sigma_offset_angstrom = float(np.mean(per_half_sigma_offset))
+    # D.2: per-class sigma_offset diagnostic. RELION Class3D maintains one
+    # shared sigma2_offset in model_general; per-class values here are logged
+    # only to help diagnose skewed class posteriors without changing the live
+    # shared translation prior.
+    per_class_sigma_offset = None
+    if k_class_enabled:
+        per_class_w = np.zeros(n_classes, dtype=np.float64)
+        per_class_n = np.zeros(n_classes, dtype=np.float64)
+        for half_per_class in noise_stats_per_half_per_class:
+            if half_per_class is None:
+                continue
+            for c, stats_c in enumerate(half_per_class):
+                if stats_c is None:
+                    continue
+                per_class_w[c] += float(getattr(stats_c, "wsum_sigma2_offset", 0.0))
+                per_class_n[c] += float(getattr(stats_c, "sumw", 0.0))
+        min_sigma2 = 2.0
+        per_class_sigma_offset = np.full(n_classes, current_sigma_offset_angstrom, dtype=np.float64)
+        for c in range(n_classes):
+            if per_class_w[c] > 0.0 and per_class_n[c] > 0.0:
+                s2 = max(per_class_w[c] / (2.0 * per_class_n[c]), min_sigma2)
+                per_class_sigma_offset[c] = float(np.sqrt(s2))
+        logger.info(
+            "C1: per-class sigma_offset = [%s] (cross-class aggregate %.3f Å)",
+            ", ".join(f"{s:.3f}" for s in per_class_sigma_offset),
+            current_sigma_offset_angstrom,
+        )
+    logger.info(
+        "C1: sigma_offset updated per half [%.3f, %.3f] Å (mean %.3f Å)",
+        per_half_sigma_offset[0],
+        per_half_sigma_offset[1],
+        current_sigma_offset_angstrom,
+    )
+    return SigmaOffsetUpdateResult(
+        current_sigma_offset_angstrom=current_sigma_offset_angstrom,
+        current_sigma_offset_angstrom_per_half=per_half_sigma_offset.tolist(),
+        per_class_sigma_offset_angstrom=per_class_sigma_offset,
+    )
+
+
 def _normalize_noise_variance_per_half(init_noise_variance, n_halves=2):
     """Return a list of per-half flattened noise-variance arrays.
 

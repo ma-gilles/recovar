@@ -270,11 +270,11 @@ public layouts. Do not assume all accumulators have the full native volume
 shape: padding and current-size backprojector grids change their dimensions.
 
 [`mean_helpers.py`](../../recovar/em/refinement/mean_helpers.py) owns
-`compute_unregularized_halfmaps_and_align_signs`,
-`_reconstruct_and_postprocess_means`, and
-`update_c1_sigma_offset_from_posterior`.
+`compute_unregularized_halfmaps_and_align_signs` and
+`_reconstruct_and_postprocess_means`.
 [`noise_updates.py`](../../recovar/em/refinement/noise_updates.py) owns
-`update_posterior_noise_variance` and the half-set noise helpers.
+`update_posterior_noise_variance`, `update_c1_sigma_offset_from_posterior`
+and the half-set noise helpers.
 These updates consume posterior-weighted residual and moment statistics as
 well as accumulators. The input noise representation can be a per-pixel array
 or separate half-set inputs; radial statistics and group corrections have

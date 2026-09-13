@@ -41,7 +41,7 @@ from recovar.em.helpers.types import (
     make_relion_stats,
 )
 from recovar.em.local.local_layout import LocalHypothesisLayout
-from recovar.em.refinement.mean_helpers import update_c1_sigma_offset_from_posterior
+from recovar.em.refinement.noise_updates import update_c1_sigma_offset_from_posterior
 from recovar.em.sampling import read_relion_direction_priors
 from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
 
