@@ -13809,7 +13809,11 @@ def compute_k_class_pass2_stats_sparse_fused(
         has_best_pose_np = np.isfinite(best_log_score_np)
         if bucket_uses_compact_pairs:
             safe_best_argmax_np = np.where(has_best_pose_np, best_argmax_np, 0)
-            row_index_np = np.arange(batch, dtype=np.int64)
+            # ``batch_rows`` from the record, never the enclosing ``batch``: the
+            # closure is replayed after the loop, when ``batch`` is the last
+            # bucket's size and a single-image last bucket would broadcast every
+            # row's argmax against row 0's pair table (job 13802221).
+            row_index_np = np.arange(batch_rows, dtype=np.int64)
             pair_local_rotation_row = np.asarray(pair_arrays["local_rotation_row"], dtype=np.int32)
             pair_translation_idx = np.asarray(pair_arrays["translation_idx"], dtype=np.int32)
             pair_rotation_index = np.asarray(pair_arrays["rotation_index"], dtype=np.int64)
@@ -13831,7 +13835,11 @@ def compute_k_class_pass2_stats_sparse_fused(
         else:
             best_rot_idx = best_argmax_np // n_fine_trans
             best_trans_idx = best_argmax_np % n_fine_trans
-            row_index_np = np.arange(batch, dtype=np.int64)
+            # ``batch_rows`` from the record, never the enclosing ``batch``: the
+            # closure is replayed after the loop, when ``batch`` is the last
+            # bucket's size and a single-image last bucket would broadcast every
+            # row's argmax against row 0's pair table (job 13802221).
+            row_index_np = np.arange(batch_rows, dtype=np.int64)
             best_fine_rot_idx = np.asarray(arrays["rotation_indices"], dtype=np.int64)[
                 row_index_np,
                 best_rot_idx,

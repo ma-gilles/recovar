@@ -10227,10 +10227,17 @@ def _fused_kclass_multibucket_fixture(n_images=12, seed=5):
 
 @pytest.mark.parametrize("defer_flag", ["1", "check"])
 @pytest.mark.parametrize("noise_mode", ["no_noise", "noise", "noise_with_scale_groups"])
-def test_deferred_host_statistics_match_across_several_buckets(monkeypatch, caplog, noise_mode, defer_flag):
+@pytest.mark.parametrize("n_images", [12, 13])
+def test_deferred_host_statistics_match_across_several_buckets(
+    monkeypatch, caplog, noise_mode, defer_flag, n_images
+):
     """Real size (job 13799858) raised the padding guard only in the deferred replay, and
     only once noise accumulation added the power/scale/wsum record kinds the CPU
-    fixtures never exercised. Cover every record kind across several buckets."""
+    fixtures never exercised. Cover every record kind across several buckets.
+
+    ``n_images=13`` with four images per microbatch leaves a single-image LAST bucket:
+    job 13802221 showed the replay closure late-binding the enclosing ``batch`` (then
+    1), which broadcast every row's argmax against row 0's pair table."""
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
     def run(flag):
@@ -10240,11 +10247,10 @@ def test_deferred_host_statistics_match_across_several_buckets(monkeypatch, capl
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_DEFERRED_HOST_STATS", flag)
         # Force chunking so the replay spans several buckets, as it does in production.
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "4")
-        kwargs = _fused_kclass_multibucket_fixture()
+        kwargs = _fused_kclass_multibucket_fixture(n_images=n_images)
         if noise_mode != "no_noise":
             kwargs["accumulate_noise"] = True
         if noise_mode == "noise_with_scale_groups":
-            n_images = kwargs["experiment_dataset"].n_images
             kwargs["group_ids"] = np.arange(n_images) % 3
             kwargs["scale_corrections"] = np.linspace(0.9, 1.1, n_images).astype(np.float32)
         return _fused_kclass_result_arrays(
@@ -10257,7 +10263,8 @@ def test_deferred_host_statistics_match_across_several_buckets(monkeypatch, capl
     original_build = bucketed_mod._build_k_class_bucket_arrays
 
     def counting_build(*a, **kw):
-        built.append(1)
+        bucket = kw.get("bucket", a[0] if a else None)
+        built.append(int(np.asarray(bucket["image_indices"]).shape[0]) if isinstance(bucket, dict) else -1)
         return original_build(*a, **kw)
 
     monkeypatch.setattr(bucketed_mod, "_build_k_class_bucket_arrays", counting_build)
@@ -10267,5 +10274,7 @@ def test_deferred_host_statistics_match_across_several_buckets(monkeypatch, capl
         caplog.clear()
         deferred = run(defer_flag)  # "check" applies live AND replays into shadows, raising on any divergence
     assert n_buckets >= 2, f"fixture produced only {n_buckets} bucket(s); the test would prove nothing"
+    if n_images == 13:
+        assert built[n_buckets - 1] == 1, f"expected a single-image last bucket, got sizes {built[:n_buckets]}"
     assert any("deferred host statistics: replayed" in r.getMessage() for r in caplog.records)
     _assert_fused_arrays_identical(baseline, deferred, f"deferred host statistics (multi-bucket, {defer_flag})")
