@@ -28,6 +28,7 @@ from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _relion_cuda_pixel_correction_from_rfloat_ctf,
     _relion_cuda_powerclass_highres_xi2_half,
 )
+from recovar.em.diagnostics.bpref_contribution_replay import native_current_fft_rows  # noqa: E402
 from scripts.analyze_em_k1_native_fine_operands import (
     _center,
     _flat_memmap,
@@ -437,20 +438,6 @@ def _preprocess_capture(
         ).astype(np.complex64),
         "background": float(np.float32(background[0])),
     }
-
-
-def _native_current_fft_rows(*, full_size: int, current_size: int) -> np.ndarray:
-    """Map RELION's standard current-size FFTW grid into a centered full FFT."""
-
-    logical_y = np.where(
-        np.arange(current_size) <= current_size // 2,
-        np.arange(current_size),
-        np.arange(current_size) - current_size,
-    )
-    return (
-        (logical_y[:, None] + full_size // 2) * (full_size // 2 + 1)
-        + np.arange(current_size // 2 + 1)[None, :]
-    ).astype(np.int32).reshape(-1)
 
 
 def _native_crop_rows(score_indices: np.ndarray, full_size: int, current_size: int) -> np.ndarray:
@@ -1134,7 +1121,7 @@ def analyze(
             if native_preprocess_dir is not None
             else None
         )
-        current_fft_rows = _native_current_fft_rows(
+        current_fft_rows = native_current_fft_rows(
             full_size=full_size,
             current_size=current_size,
         )

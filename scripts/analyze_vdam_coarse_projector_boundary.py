@@ -17,6 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from recovar.em.diagnostics.bpref_contribution_replay import native_current_fft_rows  # noqa: E402
 from recovar import cuda_backproject  # noqa: E402
 from recovar.em.helpers.projection import (  # noqa: E402
     compute_relion_projector_projections_block,
@@ -124,18 +125,6 @@ def _complex_metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, f
         "max_abs": float(np.max(np.abs(residual))),
         "relative_l2": float(np.linalg.norm(residual.reshape(-1)) / denominator),
     }
-
-
-def _native_current_fft_rows(*, full_size: int, current_size: int) -> np.ndarray:
-    logical_y = np.where(
-        np.arange(current_size) <= current_size // 2,
-        np.arange(current_size),
-        np.arange(current_size) - current_size,
-    )
-    return (
-        (logical_y[:, None] + full_size // 2) * (full_size // 2 + 1)
-        + np.arange(current_size // 2 + 1)[None, :]
-    ).astype(np.int32).reshape(-1)
 
 
 def _coarse_lane_cutoff_report(
@@ -291,7 +280,7 @@ def _fine_projector_checks(
     native_reference = -scale * (
         native_real.astype(np.float32) + np.complex64(1j) * native_imag.astype(np.float32)
     ).reshape(rotation_indices.size, native_pixel_count)
-    rows = _native_current_fft_rows(
+    rows = native_current_fft_rows(
         full_size=physical_image_size,
         current_size=fine_size,
     )

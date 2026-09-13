@@ -5,6 +5,7 @@ from recovar.em.diagnostics.bpref_contribution_replay import (
     BPrefAccumulatorReplay,
     accumulator_replay_metrics,
     dense_fftw_half_rows,
+    native_current_fft_rows,
     exact_array_metrics,
     load_bpref_contribution_bundle,
     load_bpref_contribution_shard,
@@ -285,3 +286,12 @@ def test_replay_classification_identifies_precision_dominated_difference():
 
     assert result["classification"] == "scatter_precision"
     assert result["precision_control_unregularized_map_fsc_auc"] == pytest.approx(0.998)
+
+
+def test_native_current_fft_rows_map_native_order_into_centered_full_rows():
+    rows = native_current_fft_rows(full_size=8, current_size=4)
+
+    np.testing.assert_array_equal(
+        rows.reshape(4, 3),
+        np.asarray([[20, 21, 22], [25, 26, 27], [30, 31, 32], [15, 16, 17]]),
+    )

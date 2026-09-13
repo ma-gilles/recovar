@@ -17,7 +17,6 @@ from scripts.analyze_vdam_native_translation_boundary import (
     _load_native_projector,
     _metric,
     _native_crop_rows,
-    _native_current_fft_rows,
     _noise_weight_ratio_boundary,
     _positive_weight_metric,
     _preprocess_capture,
@@ -47,15 +46,6 @@ def test_current_crop_to_compact_preserves_native_pixel_lanes():
     assert lookup.shape == (12,)
     np.testing.assert_array_equal(lookup[[0, 5, 10]], np.asarray([1, 2, 0]))
     assert np.count_nonzero(lookup < 0) == 9
-
-
-def test_native_current_fft_rows_map_standard_rows_into_centered_full_fft():
-    rows = _native_current_fft_rows(full_size=8, current_size=4)
-
-    np.testing.assert_array_equal(
-        rows.reshape(4, 3),
-        np.asarray([[20, 21, 22], [25, 26, 27], [30, 31, 32], [15, 16, 17]]),
-    )
 
 
 def test_metric_reports_exact_complex_values_and_residual():

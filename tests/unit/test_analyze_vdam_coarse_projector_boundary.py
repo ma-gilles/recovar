@@ -10,7 +10,6 @@ from scripts.analyze_vdam_coarse_projector_boundary import (
     _flat_dump,
     _load_captured_recovar_projector,
     _load_projector,
-    _native_current_fft_rows,
 )
 
 pytestmark = pytest.mark.unit
@@ -90,15 +89,6 @@ def test_complex_metric_reports_exact_values_and_relative_error():
 
     assert result["exact_count"] == 1
     assert result["max_abs"] == pytest.approx(1.0)
-
-
-def test_native_current_fft_rows_map_native_order_into_centered_full_rows():
-    rows = _native_current_fft_rows(full_size=8, current_size=4)
-
-    np.testing.assert_array_equal(
-        rows.reshape(4, 3),
-        np.asarray([[20, 21, 22], [25, 26, 27], [30, 31, 32], [15, 16, 17]]),
-    )
 
 
 def test_coarse_lane_cutoff_report_reuses_exact_atomic_enumeration():

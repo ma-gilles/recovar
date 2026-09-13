@@ -366,6 +366,20 @@ def accumulator_replay_metrics(
     }
 
 
+def native_current_fft_rows(*, full_size: int, current_size: int) -> np.ndarray:
+    """Map RELION's standard current-size FFTW grid into a centered full FFT."""
+
+    logical_y = np.where(
+        np.arange(current_size) <= current_size // 2,
+        np.arange(current_size),
+        np.arange(current_size) - current_size,
+    )
+    return (
+        (logical_y[:, None] + full_size // 2) * (full_size // 2 + 1)
+        + np.arange(current_size // 2 + 1)[None, :]
+    ).astype(np.int32).reshape(-1)
+
+
 def dense_fftw_half_rows(
     rows: np.ndarray,
     pixel_indices: np.ndarray,
