@@ -105,7 +105,6 @@ from recovar.em.helpers.convergence import (
     update_refinement_state,
 )
 from recovar.em.helpers.dtype_policy import _local_search_precision_flags
-from recovar.em.helpers.env_flags import parse_env_flag_or_false
 from recovar.em.helpers.expected_accuracy import (
     Half1AccuracyInputs,
     _expected_accuracy_class_ids,
@@ -222,7 +221,6 @@ logger = logging.getLogger(__name__)
 _FINAL_ALL_DATA_USE_MERGED_REFERENCE_ENV = "RECOVAR_FINAL_ALL_DATA_USE_MERGED_REFERENCE"
 _FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE_ENV = "RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE"
 _FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE_ENV = "RECOVAR_FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE"
-_KCLASS_REPLAY_TAU2_ENV = "RECOVAR_KCLASS_REPLAY_TAU2"
 
 
 def _fresh_k1_spectrum_norm_default(
@@ -235,12 +233,6 @@ def _fresh_k1_spectrum_norm_default(
     return bool(
         preserve_bpref_particle_order and not allow_replayed_bpref_particle_order
     )
-
-
-def _kclass_replay_tau2_enabled() -> bool:
-    """Diagnostic switch: use RELION replayed Class3D tau2 spectra directly."""
-
-    return parse_env_flag_or_false(_KCLASS_REPLAY_TAU2_ENV, logger=logger)
 
 
 # RELION's --minres_map default: do not add the Wiener prior term to the
@@ -2589,55 +2581,13 @@ def _run_relion_iteration_loop(
             # before the Wiener solve. See initial_model/gpu_pipeline.py's
             # bp_weight_frame_scale for the same frame conversion.
             kclass_tau2_frame_scale = float(grid_size) ** 4
-            kclass_tau2_source = "previous Iref power spectra"
-            replay_class_tau2 = None
-            replay_tau2_enabled = _kclass_replay_tau2_enabled()
-            tau2_replay_override = iter_replay_override
-            tau2_replay_label = "current replay override"
-            if replay_tau2_enabled:
-                # RELION updates mymodel.tau2_class during expectation setup
-                # from the current Iref, then uses that same model state for
-                # maximization. Therefore run_itNNN_model.star contains the
-                # tau2 prior used by iteration NNN, not the prior for NNN+1.
-                same_iter_index = iteration + 1
-                tau2_replay_override = None
-                if replay.replay_iteration_overrides is not None and same_iter_index < len(replay.replay_iteration_overrides):
-                    tau2_replay_override = replay.replay_iteration_overrides[same_iter_index]
-                    tau2_replay_label = f"same-iteration replay override index={same_iter_index}"
-                if tau2_replay_override is None or tau2_replay_override.get("class_tau2") is None:
-                    logger.warning(
-                        "Diagnostic %s=1 requested same-numbered Class3D tau2 at iter=%d, "
-                        "but replay override index %d is unavailable; falling back to current override",
-                        _KCLASS_REPLAY_TAU2_ENV,
-                        iteration + 1,
-                        same_iter_index,
-                    )
-                    tau2_replay_override = iter_replay_override
-                    tau2_replay_label = "current replay override fallback"
-            if tau2_replay_override is not None and tau2_replay_override.get("class_tau2") is not None:
-                replay_class_tau2 = np.asarray(tau2_replay_override["class_tau2"], dtype=np.float64)
-                replay_class_tau2_shape = replay_class_tau2.shape
-                if len(replay_class_tau2_shape) != 2 or replay_class_tau2_shape[0] != n_classes:
-                    raise ValueError(
-                        "class_tau2 replay override must have shape "
-                        f"({n_classes}, n_shells), got {replay_class_tau2_shape}",
-                    )
-                if replay_tau2_enabled:
-                    kclass_tau2_source = f"RELION replay class_tau2 ({tau2_replay_label})"
-                    logger.info(
-                        "Diagnostic %s=1: Class3D tau2 replay override used at iter=%d from %s with shape=%s",
-                        _KCLASS_REPLAY_TAU2_ENV,
-                        iteration + 1,
-                        tau2_replay_label,
-                        replay_class_tau2_shape,
-                    )
-                else:
-                    logger.info(
-                        "Class3D tau2 replay override available at iter=%d with shape=%s; "
-                        "M-step tau2 is recomputed from previous Iref power spectra",
-                        iteration + 1,
-                        replay_class_tau2_shape,
-                    )
+            replay_class_tau2, replay_tau2_enabled, kclass_tau2_source = replay_policy._class_tau2_replay(
+                iteration=iteration,
+                n_classes=n_classes,
+                iter_replay_override=iter_replay_override,
+                replay=replay,
+                logger=logger,
+            )
             if iteration == 0:
                 mean_variance_arr = jnp.asarray(mean_variance)
                 expected_shape = (n_classes, int(np.prod(volume_shape)))

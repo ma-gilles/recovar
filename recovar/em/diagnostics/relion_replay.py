@@ -17,6 +17,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.helpers.convergence import healpix_angular_step
+from recovar.em.helpers.env_flags import parse_env_flag_or_false
 from recovar.em.helpers.orientation_priors import (
     class_weights_from_direction_prior,
     infer_direction_prior_healpix_order,
@@ -54,6 +55,67 @@ _DEBUG_REPLAY_RELION_REFERENCES_ENV = "RECOVAR_DEBUG_REPLAY_RELION_REFERENCES"
 _DEBUG_REPLAY_RELION_REFERENCES_ITERATION_ENV = "RECOVAR_DEBUG_REPLAY_RELION_REFERENCES_ITERATION"
 # Reference replay rejects unknown tokens; the permissive diagnostic parser does not.
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+_KCLASS_REPLAY_TAU2_ENV = "RECOVAR_KCLASS_REPLAY_TAU2"
+
+
+def _class_tau2_replay(*, iteration, n_classes, iter_replay_override, replay, logger):
+    """Select captured Class3D priors without changing the normal Iref-derived policy.
+
+    Return spectra, the diagnostic enable flag and its source label. A captured
+    array is validated even when diagnostic use is disabled.
+    """
+    kclass_tau2_source = "previous Iref power spectra"
+    replay_class_tau2 = None
+    replay_tau2_enabled = parse_env_flag_or_false(_KCLASS_REPLAY_TAU2_ENV, logger=logger)
+    tau2_replay_override = iter_replay_override
+    tau2_replay_label = "current replay override"
+    if replay_tau2_enabled:
+        # RELION updates mymodel.tau2_class during expectation setup
+        # from the current Iref, then uses that same model state for
+        # maximization. Therefore run_itNNN_model.star contains the
+        # tau2 prior used by iteration NNN, not the prior for NNN+1.
+        same_iter_index = iteration + 1
+        tau2_replay_override = None
+        if replay.replay_iteration_overrides is not None and same_iter_index < len(replay.replay_iteration_overrides):
+            tau2_replay_override = replay.replay_iteration_overrides[same_iter_index]
+            tau2_replay_label = f"same-iteration replay override index={same_iter_index}"
+        if tau2_replay_override is None or tau2_replay_override.get("class_tau2") is None:
+            logger.warning(
+                "Diagnostic %s=1 requested same-numbered Class3D tau2 at iter=%d, "
+                "but replay override index %d is unavailable; falling back to current override",
+                _KCLASS_REPLAY_TAU2_ENV,
+                iteration + 1,
+                same_iter_index,
+            )
+            tau2_replay_override = iter_replay_override
+            tau2_replay_label = "current replay override fallback"
+    if tau2_replay_override is not None and tau2_replay_override.get("class_tau2") is not None:
+        replay_class_tau2 = np.asarray(tau2_replay_override["class_tau2"], dtype=np.float64)
+        replay_class_tau2_shape = replay_class_tau2.shape
+        if len(replay_class_tau2_shape) != 2 or replay_class_tau2_shape[0] != n_classes:
+            raise ValueError(
+                "class_tau2 replay override must have shape "
+                f"({n_classes}, n_shells), got {replay_class_tau2_shape}",
+            )
+        if replay_tau2_enabled:
+            kclass_tau2_source = f"RELION replay class_tau2 ({tau2_replay_label})"
+            logger.info(
+                "Diagnostic %s=1: Class3D tau2 replay override used at iter=%d from %s with shape=%s",
+                _KCLASS_REPLAY_TAU2_ENV,
+                iteration + 1,
+                tau2_replay_label,
+                replay_class_tau2_shape,
+            )
+        else:
+            logger.info(
+                "Class3D tau2 replay override available at iter=%d with shape=%s; "
+                "M-step tau2 is recomputed from previous Iref power spectra",
+                iteration + 1,
+                replay_class_tau2_shape,
+            )
+    return replay_class_tau2, replay_tau2_enabled, kclass_tau2_source
 
 
 def _numbered_relion_iteration(init_relion_iteration: int, local_iteration: int) -> int:
