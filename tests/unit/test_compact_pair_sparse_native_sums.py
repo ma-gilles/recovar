@@ -56,8 +56,9 @@ def test_sorted_csr_matches_dense_probabilities_in_ascending_translation_order()
             t = sorted_trans[b, seg]
             w = sorted_probs[b, seg]
             assert np.all(np.diff(t) > 0), "translations must be strictly ascending within a row"
-            np.testing.assert_array_equal(t, np.flatnonzero(dense[b, r]))
-            np.testing.assert_array_equal(w, dense[b, r, t])
+            # a zero-weight slot (the non-finite pair) stays in its row; the kernel skips it
+            np.testing.assert_array_equal(t[w != 0], np.flatnonzero(dense[b, r]))
+            np.testing.assert_array_equal(w[w != 0], dense[b, r, t[w != 0]])
         # padding sits after the last row; the non-finite pair keeps its slot with zero weight
         assert np.all(sorted_probs[b, int(offsets[b, -1]):] == 0.0)
     assert sorted_probs[1, 0] == 0.0 and offsets[1, rows[1, 0]] <= 0 < offsets[1, rows[1, 0] + 1]
