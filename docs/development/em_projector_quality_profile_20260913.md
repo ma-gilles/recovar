@@ -217,3 +217,27 @@ scan determinism. Preserve earlier non-exact full-call outputs. Reproduction
 uses the pinned `compare_pair.py` and `audit.py` in the candidate artifact root
 with frozen pixi CPU Python; exclusive-create reports require a fresh output
 copy. Consumed GPU roots must not be rerun.
+
+## Pruning-score reuse: fewer calls, mixed timing evidence
+
+Private82399613b on32a retains the existing budget-admitted prior-adjusted
+scores for pruning instead of projecting/scoring again. No numerical kernel,
+GEMM, preprocessing, projection slab cache or native library change. Existing
+actual normalization/pruning arrays match byte-for-byte across45 chunks;
+retention is5.25MiB. Expanded CPU tests pass9 cases and fast guard90, after the
+parent fails the new redundant-call assertion. Unchanged parent RuffI001 remains.
+
+Short A100 session16287 completed0 in110s with sealed source/input/library checks
+and no survivors. Projection calls135→90, fine score kernel time.28946→.19324s,
+device-to-array logical bytes36.74→24.93GB. Traced call2.7825→2.3268s is16.4%
+lower, but untraced warm2.895→4.850s is higher: robust wall-time improvement is
+not established. Separate processes, three calls each, third profiled. Next use
+short repeated warm measurements without Nsight, not another full trajectory.
+
+Saved best scores/Pmax/poses/significant counts match; only26/41 fields are
+byte-exact between sources.15 aggregate/accumulation fields differ, including
+posterior total6.25e-8 and rotation sums7.45e-9. Within candidate warm/traced,
+35/41 fields match. Full support/margins and FSC are absent; preserve differences
+and do not attribute them to harmless roundoff without evidence.
+[Paired profile and full difference inventory](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_pruning_score_reuse_profile_20260913/comparison.json),
+[reproduction, source, tests and remaining gates](/scratch/gpfs/CRYOEM/gilleslab/mg6942/em_dev/pr179_coordination/handoffs/em_pruning_score_reuse_terminal_20260913.md).
