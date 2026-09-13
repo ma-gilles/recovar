@@ -58,11 +58,20 @@ def _run(monkeypatch, enabled, samples, grid, *, n_coarse_rot, n_coarse_trans, n
     )
 
 
+_PER_IMAGE_KEYS = ("source_eulers", "oversampled_rots", "oversampled_mstep_rots", "parent_map", "oversampled_rot_indices", "unique_rot", "log_prior", "candidate_mask")
+
+
 def _assert_same(loop, fast):
     assert loop.keys() == fast.keys()
     n = len(loop["oversampled_rots"])
-    for key in loop:
+    for key in _PER_IMAGE_KEYS:
         assert len(fast[key]) == n, key
+    for key in ("rotation_table", "mstep_rotation_table"):
+        if loop[key] is None:
+            assert fast[key] is None
+        else:
+            np.testing.assert_array_equal(loop[key], fast[key])
+            assert loop[key].dtype == fast[key].dtype
     for i in range(n):
         for key in ("oversampled_rots", "oversampled_mstep_rots", "parent_map", "oversampled_rot_indices", "unique_rot", "log_prior"):
             a, b = loop[key][i], fast[key][i]
@@ -142,3 +151,40 @@ def test_vectorized_hypothesis_prep_flag_is_strict(monkeypatch):
         sba.vectorized_hypothesis_prep_enabled()
     monkeypatch.delenv(sba.VECTORIZED_HYPOTHESIS_PREP_ENV)
     assert sba.vectorized_hypothesis_prep_enabled() is False
+
+
+def test_resident_hypothesis_tables_match_host_device_index_build(monkeypatch):
+    """The device index builder fed from the resident flat tables equals the host-built
+    (images, cR, cT)/(images, rows) path bitwise, including capacity rows and the
+    fall-back for chunks that contain a non-vectorized image."""
+
+    jax = pytest.importorskip("jax")
+    rng = np.random.default_rng(31)
+    n_coarse_rot, n_coarse_trans, children = 24, 4, 3
+    n_fine_trans = 10
+    ftp = rng.integers(0, n_coarse_trans, size=n_fine_trans).astype(np.int32)
+    grid = _fine_grid(rng, n_coarse_rot, children, np.float32)
+    samples = _samples(rng, 30, n_coarse_rot, n_coarse_trans, with_specials=True)
+    kwargs = dict(n_coarse_rot=n_coarse_rot, n_coarse_trans=n_coarse_trans, n_fine_trans=n_fine_trans, ftp=ftp, prior=None, mstep=False, eulers=False, dtype=np.float32)
+    fast = _run(monkeypatch, True, samples, grid, **kwargs)
+    assert fast["resident_hypothesis"] is not None
+    positions = fast["resident_hypothesis"]["positions"]
+    vectorized_images = np.flatnonzero(positions >= 0)
+    special_images = np.flatnonzero(positions < 0)
+    assert vectorized_images.size >= 8 and special_images.size >= 1
+    monkeypatch.setenv(sba.COMPACT_PAIR_DEVICE_INDEX_ENV, "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_LAZY_TABLES", "1")
+    chunk = np.sort(vectorized_images[:6])
+    pair_bucket_size = 1 << int(max(m.count for m in fast["candidate_mask"]) - 1).bit_length()
+    with jax.default_device(jax.devices("cpu")[0]):
+        for image_indices in (chunk, np.concatenate([chunk[:3], special_images[:1]])):
+            bucket = {"pair_bucket_size": pair_bucket_size, "image_indices": image_indices}
+            monkeypatch.setenv(sba.RESIDENT_HYPOTHESIS_TABLES_ENV, "0")
+            host = sba._build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, fast, capacity_rows=8)
+            monkeypatch.setenv(sba.RESIDENT_HYPOTHESIS_TABLES_ENV, "1")
+            resident = sba._build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, fast, capacity_rows=8)
+            for key in ("pair_counts", "local_rotation_row", "translation_idx", "pair_mask", "image_indices"):
+                a, b = np.asarray(host[key]), np.asarray(resident[key])
+                assert a.dtype == b.dtype, key
+                np.testing.assert_array_equal(a, b, err_msg=key)
+            assert np.asarray(resident["local_rotation_row"]).shape == (8, pair_bucket_size)

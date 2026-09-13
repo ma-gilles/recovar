@@ -358,12 +358,64 @@ _DEVICE_INDEX_ROW_QUANTUM = 64
 _DEVICE_INDEX_COARSE_ROW_QUANTUM = 64
 
 
+_RESIDENT_TABLE_DEVICE_CACHE: dict = {}
+
+
+def _resident_tables_device(resident):
+    """Device copies of one class's flat hypothesis tables, keyed by the prep token."""
+
+    import jax.numpy as jnp
+
+    key = resident["token"]
+    cached = _RESIDENT_TABLE_DEVICE_CACHE.get(key)
+    if cached is None:
+        if len(_RESIDENT_TABLE_DEVICE_CACHE) >= 8:
+            _RESIDENT_TABLE_DEVICE_CACHE.clear()
+        cached = (
+            jnp.asarray(np.asarray(resident["coarse_valid_flat"], dtype=bool)),
+            jnp.asarray(np.asarray(resident["parent_map_flat"], dtype=np.int32)),
+            jnp.asarray(np.asarray(resident["pair_bounds"], dtype=np.int32)),
+            jnp.asarray(np.asarray(resident["row_bounds"], dtype=np.int32)),
+        )
+        _RESIDENT_TABLE_DEVICE_CACHE[key] = cached
+    return cached
+
+
+def _gather_resident_tables_impl(valid_flat, parent_flat, pair_bounds, row_bounds, positions, *, c_rot, rows):
+    """``(B, cR, cT)`` tables and ``(B, rows)`` parents for a chunk from the flat arrays.
+
+    ``positions`` are the images' positions in the flat arrays (-1 for capacity
+    rows): their coarse rows are the consecutive pair slots between the pair
+    bounds and their rows the consecutive parent entries between the row
+    bounds; everything else is False / -1, as the host build leaves it.
+    """
+    import jax.numpy as jnp
+
+    safe = jnp.clip(positions, 0, pair_bounds.shape[0] - 2)
+    present = positions >= 0
+    p0 = pair_bounds[safe]
+    n_pairs = pair_bounds[safe + 1] - p0
+    r_idx = jnp.arange(c_rot, dtype=jnp.int32)[None, :]
+    pair_valid = present[:, None] & (r_idx < n_pairs[:, None])
+    pair_src = jnp.clip(p0[:, None] + r_idx, 0, valid_flat.shape[0] - 1)
+    tables = jnp.where(pair_valid[:, :, None], jnp.take(valid_flat, pair_src, axis=0), False)
+    q0 = row_bounds[safe]
+    n_rows = row_bounds[safe + 1] - q0
+    k_idx = jnp.arange(rows, dtype=jnp.int32)[None, :]
+    row_valid = present[:, None] & (k_idx < n_rows[:, None])
+    row_src = jnp.clip(q0[:, None] + k_idx, 0, parent_flat.shape[0] - 1)
+    parents = jnp.where(row_valid, jnp.take(parent_flat, row_src, axis=0), jnp.int32(-1))
+    return tables, parents
+
+
 def compact_pair_index_arrays_device(
     candidate_masks,
     *,
     pair_bucket_size: int,
     n_alloc: int | None = None,
     rows_capacity: int | None = None,
+    resident=None,
+    resident_positions=None,
 ):
     """Build the compact pair index arrays on the device from the coarse tables.
 
@@ -452,6 +504,41 @@ def compact_pair_index_arrays_device(
         elif m.mode == "coarse_exclude":
             c_rot_needed = max(c_rot_needed, int(np.asarray(m.parent_map).max(initial=-1) + 1))
     c_rot = _quantize_pow2(c_rot_needed, _DEVICE_INDEX_COARSE_ROW_QUANTUM)
+
+    if resident is not None and resident_positions is not None:
+        if int(resident["n_coarse_trans"]) != int(c_trans):
+            raise ValueError("resident hypothesis tables disagree with the chunk's coarse translation count")
+        import jax
+        import jax.numpy as jnp
+
+        valid_dev, parent_dev, pair_bounds_dev, row_bounds_dev = _resident_tables_device(resident)
+        positions_np = np.full(n_alloc, -1, dtype=np.int32)
+        positions_np[:batch] = np.asarray(resident_positions, dtype=np.int32)
+        fn = compact_pair_index_arrays_device.__dict__.get("_resident_gather")
+        if fn is None:
+            fn = jax.jit(_gather_resident_tables_impl, static_argnames=("c_rot", "rows"))
+            compact_pair_index_arrays_device.__dict__["_resident_gather"] = fn
+        tables, parents = fn(
+            valid_dev, parent_dev, pair_bounds_dev, row_bounds_dev, jnp.asarray(positions_np),
+            c_rot=int(c_rot), rows=int(rows),
+        )
+        real_rows = np.zeros(n_alloc, dtype=bool)
+        real_rows[:batch] = True
+        local_rotation_row, translation_idx, pair_mask = _compact_pair_index_arrays_jit(
+            tables,
+            parents,
+            jnp.asarray(ftp),
+            jnp.asarray(counts),
+            jnp.asarray(real_rows),
+            pair_bucket_size=pair_bucket_size,
+        )
+        return {
+            "pair_bucket_size": pair_bucket_size,
+            "pair_counts": counts,
+            "local_rotation_row": local_rotation_row,
+            "translation_idx": translation_idx,
+            "pair_mask": pair_mask,
+        }
 
     tables = np.zeros((n_alloc, c_rot, c_trans), dtype=bool)
     parents = np.full((n_alloc, rows), -1, dtype=np.int32)

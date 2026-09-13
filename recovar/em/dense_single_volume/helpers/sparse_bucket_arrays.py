@@ -539,9 +539,13 @@ def _prepare_coarse_images_vectorized(
     # the per-pair sample sums below give the loop's ``count`` (lead review
     # em_clean_vectorized_hypothesis_duplicate_20260913).
     total_cells = int(n_coarse_rot) * int(n_coarse_trans)
-    unique_cells = np.unique(sig_img * total_cells + flat_sig)
-    sig_img = unique_cells // total_cells
-    flat_sig = unique_cells % total_cells
+    cell_keys = sig_img * total_cells + flat_sig
+    if cell_keys.size > 1 and not bool(np.all(np.diff(cell_keys) > 0)):
+        # Only sort when some image lists an index twice or out of order; the
+        # significance pass emits sorted unique indices, so this is the rare path.
+        cell_keys = np.unique(cell_keys)
+        sig_img = cell_keys // total_cells
+        flat_sig = cell_keys % total_cells
     coarse_rot = flat_sig // int(n_coarse_trans)
     coarse_trans = flat_sig % int(n_coarse_trans)
     pair_key, sig_pair = np.unique(sig_img * int(n_coarse_rot) + coarse_rot, return_inverse=True)
@@ -602,6 +606,20 @@ def _prepare_coarse_images_vectorized(
         "unique_rot": [],
         "log_prior": [],
         "candidate_mask": [],
+    }
+    # Flat coarse tables and row parents for the device index builder
+    # (RECOVAR_SPARSE_KCLASS_RESIDENT_HYPOTHESIS_TABLES): one upload per class
+    # and iteration instead of a host (images, cR, cT)/(images, rows) build and
+    # upload per class-chunk. ``token`` identifies this content for the cache.
+    import uuid
+
+    out["_resident"] = {
+        "coarse_valid_flat": coarse_valid_flat,
+        "parent_map_flat": flat_parent_map,
+        "pair_bounds": pair_bounds,
+        "row_bounds": row_bounds,
+        "n_coarse_trans": int(n_coarse_trans),
+        "token": uuid.uuid4().hex,
     }
     for i in range(n_images):
         r0, r1 = int(row_bounds[i]), int(row_bounds[i + 1])
@@ -790,6 +808,11 @@ def _prepare_per_image_pass2_inputs(
         )
     vectorized_set = set(vectorized_indices)
     vectorized_position = {image_idx: position for position, image_idx in enumerate(vectorized_indices)}
+    resident_hypothesis = None
+    if vectorized is not None:
+        positions = np.full(n_images, -1, dtype=np.int64)
+        positions[np.asarray(vectorized_indices, dtype=np.int64)] = np.arange(len(vectorized_indices), dtype=np.int64)
+        resident_hypothesis = dict(vectorized.pop("_resident"), positions=positions)
 
     for image_idx, sig_samples in enumerate(significant_sample_indices):
         if image_idx in vectorized_set:
@@ -1003,6 +1026,7 @@ def _prepare_per_image_pass2_inputs(
         "rotation_table_key": None if rotation_table is None else _rotation_table_key(rotation_table),
         "mstep_rotation_table": mstep_rotation_table,
         "mstep_rotation_table_key": None if mstep_rotation_table is None else _rotation_table_key(mstep_rotation_table),
+        "resident_hypothesis": resident_hypothesis,
     }
 
 
@@ -1200,6 +1224,23 @@ def bucket_rotations_device_enabled() -> bool:
 
 
 ROTATIONS_BY_INDEX_ENV = "RECOVAR_SPARSE_KCLASS_ROTATIONS_BY_INDEX"
+RESIDENT_HYPOTHESIS_TABLES_ENV = "RECOVAR_SPARSE_KCLASS_RESIDENT_HYPOTHESIS_TABLES"
+
+
+def resident_hypothesis_tables_enabled() -> bool:
+    """Feed the device index builder from device-resident flat hypothesis tables.
+
+    With the vectorized hypothesis preparation the coarse validity table and
+    the row parent map of every image already exist as one flat array per
+    class; the device index builder otherwise rebuilt a padded
+    ``(images, cR, cT)``/``(images, rows)`` pair on the host and uploaded it for
+    every class-chunk (7.7 s of device_put plus the host fill in the 100k/256
+    K=4 iteration 2, job 13834297).  Chunks whose images all took the
+    vectorized path gather those tables on the device instead; values are
+    identical, so the pair index arrays are bit-identical.
+    """
+
+    return parse_env_binary_flag(RESIDENT_HYPOTHESIS_TABLES_ENV)
 
 
 def rotations_by_index_enabled() -> bool:
@@ -1378,11 +1419,21 @@ def _build_compact_pair_bucket_arrays_from_per_image_inputs(
     if n_alloc > batch:
         padded_image_indices = np.concatenate([image_indices, np.repeat(image_indices[-1:], n_alloc - batch)])
     if lazy_pair_tables and device_index:
+        resident = None
+        resident_positions = None
+        if resident_hypothesis_tables_enabled() and isinstance(per_image_inputs, dict):
+            candidate = per_image_inputs.get("resident_hypothesis")
+            if candidate is not None:
+                positions = np.asarray(candidate["positions"], dtype=np.int64)[image_indices]
+                if np.all(positions >= 0):
+                    resident, resident_positions = candidate, positions
         device_arrays = compact_pair_index_arrays_device(
             [per_image_inputs["candidate_mask"][int(image_idx)] for image_idx in image_indices],
             pair_bucket_size=pair_bucket_size,
             n_alloc=n_alloc,
             rows_capacity=rows_capacity,
+            resident=resident,
+            resident_positions=resident_positions,
         )
         if device_arrays is not None:
             return {
