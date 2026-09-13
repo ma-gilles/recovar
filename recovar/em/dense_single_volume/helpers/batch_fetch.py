@@ -2,7 +2,73 @@
 
 from __future__ import annotations
 
+import os
+import queue
+import threading
+
 import numpy as np
+
+PREFETCH_BATCHES_ENV = "RECOVAR_EM_PREFETCH_BATCHES"
+
+
+def prefetch_depth() -> int:
+    """Number of image batches to read ahead on a worker thread (0 = off).
+
+    The pass-2 chunk loop and the coarse significance pass fetch each batch
+    synchronously (page-cache read, collation, host->device copy) before the
+    device can start on it: ~25 s per 100k/256 K=4 iteration in pass 2 plus the
+    coarse pass's share (job 13826984). Reading the next batch while the device
+    works on the current one hides that; the batches and their order are
+    unchanged, so every result is bit-identical.
+    """
+    raw = os.environ.get(PREFETCH_BATCHES_ENV, "0").strip()
+    if raw == "":
+        return 0
+    try:
+        depth = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{PREFETCH_BATCHES_ENV} must be a non-negative integer, got {raw!r}") from exc
+    if depth < 0:
+        raise ValueError(f"{PREFETCH_BATCHES_ENV} must be a non-negative integer, got {raw!r}")
+    return depth
+
+
+_END = object()
+
+
+def prefetch_iterator(iterable, depth: int):
+    """Yield ``iterable``'s items in order, produced ``depth`` items ahead on a thread.
+
+    ``depth <= 0`` returns the iterable unchanged. Exceptions raised by the
+    producer are re-raised in the consumer at the item where they occurred.
+    """
+    if depth <= 0:
+        return iterable
+
+    def _generator():
+        items = queue.Queue(maxsize=int(depth))
+
+        def _produce():
+            try:
+                for item in iterable:
+                    items.put((False, item))
+            except BaseException as exc:  # noqa: BLE001 - forwarded to the consumer
+                items.put((True, exc))
+            finally:
+                items.put((False, _END))
+
+        worker = threading.Thread(target=_produce, name="recovar-batch-prefetch", daemon=True)
+        worker.start()
+        while True:
+            failed, item = items.get()
+            if failed:
+                raise item
+            if item is _END:
+                break
+            yield item
+        worker.join()
+
+    return _generator()
 
 
 def fetch_indexed_batch(experiment_dataset, image_indices):

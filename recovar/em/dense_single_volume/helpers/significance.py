@@ -5923,10 +5923,16 @@ def _compute_k_class_significance_batched(
 
     start_idx = 0
     image_indices = np.arange(n_images)
-    for batch_data, _, _, ctf_params, _, _, indices in experiment_dataset.iter_batches(
-        image_batch_size,
-        indices=image_indices,
-        by_image=False,
+    from recovar.em.dense_single_volume.helpers.batch_fetch import prefetch_depth as _prefetch_depth_fn
+    from recovar.em.dense_single_volume.helpers.batch_fetch import prefetch_iterator as _prefetch_iterator
+
+    for batch_data, _, _, ctf_params, _, _, indices in _prefetch_iterator(
+        experiment_dataset.iter_batches(
+            image_batch_size,
+            indices=image_indices,
+            by_image=False,
+        ),
+        _prefetch_depth_fn(),
     ):
         actual_batch_size = len(indices)
         end_idx = start_idx + actual_batch_size

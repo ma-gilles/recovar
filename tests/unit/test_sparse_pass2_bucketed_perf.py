@@ -10533,6 +10533,60 @@ def test_device_bucket_rotations_builder_matches_host_bitwise():
             np.testing.assert_array_equal(np.asarray(dev["rotations"])[3:], np.broadcast_to(np.eye(3), (2, 8, 3, 3)))
 
 
+def test_prefetch_iterator_preserves_order_and_forwards_errors():
+    from recovar.em.dense_single_volume.helpers.batch_fetch import prefetch_iterator
+
+    assert list(prefetch_iterator(iter(range(10)), 3)) == list(range(10))
+    src = iter(range(5))
+    assert prefetch_iterator(src, 0) is src
+
+    def failing():
+        yield 1
+        yield 2
+        raise RuntimeError("boom")
+
+    out = []
+    with pytest.raises(RuntimeError, match="boom"):
+        for item in prefetch_iterator(failing(), 2):
+            out.append(item)
+    assert out == [1, 2]
+
+
+@pytest.mark.parametrize("defer_flag", ["0", "1"])
+def test_batch_prefetch_is_bit_identical(monkeypatch, defer_flag):
+    """RECOVAR_EM_PREFETCH_BATCHES reads the next chunk's images on a worker thread; the
+    batches and their order are unchanged, so every output must be bit-identical."""
+    from recovar.em.dense_single_volume.helpers import batch_fetch
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    calls = []
+    original = batch_fetch.prefetch_iterator
+
+    def spy(iterable, depth):
+        calls.append(depth)
+        return original(iterable, depth)
+
+    def run(depth):
+        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "4")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_DEFERRED_HOST_STATS", defer_flag)
+        monkeypatch.setenv("RECOVAR_EM_PREFETCH_BATCHES", depth)
+        monkeypatch.setattr(bucketed_mod, "prefetch_iterator", spy)
+        kwargs = _fused_kclass_multibucket_fixture(n_images=13)
+        kwargs["accumulate_noise"] = True
+        return _fused_kclass_result_arrays(
+            bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs)
+        )
+
+    sync = run("0")
+    assert not calls
+    prefetched = run("2")
+    assert calls == [2], calls
+    _assert_fused_arrays_identical(sync, prefetched, f"batch prefetch (defer={defer_flag})")
+
+
 def test_lazy_pair_tables_builder_skips_per_pair_tables():
     from recovar.em.dense_single_volume.helpers import sparse_bucket_arrays as sba
     from recovar.em.dense_single_volume.helpers.compact_candidates import SparseCandidateMask

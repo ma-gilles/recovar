@@ -52,7 +52,12 @@ from recovar.em.dense_single_volume.helpers.adjoint import (
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
 )
-from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch, original_image_indices
+from recovar.em.dense_single_volume.helpers.batch_fetch import (
+    fetch_indexed_batch,
+    original_image_indices,
+    prefetch_depth,
+    prefetch_iterator,
+)
 from recovar.em.dense_single_volume.helpers.compact_candidate_capture import (
     compact_capture_requested_for_original_indices,
     compact_capture_requested_particle_count,
@@ -14201,6 +14206,20 @@ def compute_k_class_pass2_stats_sparse_fused(
         raw_host_staging_peak_bytes = max(raw_host_staging_peak_bytes, next_bucket_bytes)
         return raw_host, next_bucket_bytes
 
+    _prefetch_depth = prefetch_depth()
+    _prefetched_batches = (
+        iter(
+            prefetch_iterator(
+                (
+                    fetch_indexed_batch(experiment_dataset, np.asarray(_meta["image_indices"], dtype=np.int64))
+                    for _meta in execution_buckets
+                ),
+                _prefetch_depth,
+            )
+        )
+        if _prefetch_depth > 0
+        else None
+    )
     for bucket_meta in execution_buckets:
         bucket_raw_host_staging_bytes = 0
         execution_mode = str(bucket_meta["_execution_mode"])
@@ -14320,7 +14339,10 @@ def compute_k_class_pass2_stats_sparse_fused(
             rectangular_rotation_slots += int(n_classes) * int(bucket_size) * batch
         compact_rotation_slots += sum(int(arrays["bucket_size"]) for arrays in class_bucket_arrays) * batch
         stage_t0 = time.time()
-        batch_data, ctf_params, fetched_indices = fetch_indexed_batch(experiment_dataset, image_indices)
+        if _prefetched_batches is not None:
+            batch_data, ctf_params, fetched_indices = next(_prefetched_batches)
+        else:
+            batch_data, ctf_params, fetched_indices = fetch_indexed_batch(experiment_dataset, image_indices)
         batch_data = jnp.asarray(batch_data)
         if not np.array_equal(np.asarray(fetched_indices), image_indices):
             fetched_indices_np = np.asarray(fetched_indices)
