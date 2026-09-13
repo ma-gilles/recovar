@@ -14031,6 +14031,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     # accumulators for the fused noise path, pulled once after the loop.
     device_chunk_scalars = device_chunk_scalars_enabled()
     noise_totals_device = [None] * n_classes
+    noise_totals_host_snapshot = [None] * n_classes
     noise_sumw_total = np.zeros(n_classes, dtype=np.float64)
     noise_sigma2_offset_total = np.zeros(n_classes, dtype=np.float64)
     if accumulate_noise:
@@ -17074,8 +17075,16 @@ def compute_k_class_pass2_stats_sparse_fused(
                         noise_variance_for_noise.dtype,
                         summed_masked_noise.dtype,
                     )
-                if block_noise_shells_precomputed is not None and device_chunk_scalars:
+                if block_noise_shells_precomputed is not None and device_chunk_scalars and defer_host_stats:
                     if noise_totals_device[class_index] is None:
+                        # Every other noise-total addition is a deferred record replayed
+                        # after the loop, so the device copy taken here is the only
+                        # accumulator until the fold below the loop; the snapshot lets
+                        # the fold fail closed if that assumption is ever violated.
+                        noise_totals_host_snapshot[class_index] = (
+                            noise_wsum_total[class_index].copy(),
+                            noise_norm_correction_total[class_index].copy(),
+                        )
                         noise_totals_device[class_index] = (
                             jnp.asarray(noise_wsum_total[class_index], dtype=jnp.float64),
                             jnp.asarray(noise_norm_correction_total[class_index], dtype=jnp.float64),
@@ -17377,6 +17386,26 @@ def compute_k_class_pass2_stats_sparse_fused(
         rectangular_rotation_slots,
         compact_slot_ratio,
     )
+    # RECOVAR_SPARSE_KCLASS_DEVICE_CHUNK_SCALARS: the fused-path residuals were
+    # accumulated on the device in chunk order; fold them into the host arrays
+    # here, before the deferred replay adds the image-power and non-fused terms
+    # in record order, exactly where the host path holds the same values.
+    for class_index in range(n_classes):
+        if noise_totals_device[class_index] is None:
+            continue
+        wsum_snapshot, norm_snapshot = noise_totals_host_snapshot[class_index]
+        if not (
+            np.array_equal(noise_wsum_total[class_index], wsum_snapshot)
+            and np.array_equal(noise_norm_correction_total[class_index], norm_snapshot)
+        ):
+            raise RuntimeError(
+                "device chunk scalars: the host noise totals changed while the device "
+                f"accumulated class {class_index + 1}; refusing to fold (would drop additions)"
+            )
+        wsum_dev, norm_dev = noise_totals_device[class_index]
+        noise_wsum_total[class_index][...] = np.asarray(wsum_dev, dtype=np.float64)
+        noise_norm_correction_total[class_index][...] = np.asarray(norm_dev, dtype=np.float64)
+        noise_totals_device[class_index] = None
     if deferred_host_records:
         # One transfer for everything the loop deferred, then the same host
         # statements in the same order the loop would have run them.
@@ -17688,11 +17717,6 @@ def compute_k_class_pass2_stats_sparse_fused(
     )
     noise_stats = None
     if accumulate_noise:
-        for class_index in range(n_classes):
-            if noise_totals_device[class_index] is not None:
-                wsum_dev, norm_dev = noise_totals_device[class_index]
-                noise_wsum_total[class_index] = np.asarray(wsum_dev, dtype=np.float64)
-                noise_norm_correction_total[class_index] = np.asarray(norm_dev, dtype=np.float64)
         noise_stats = tuple(
             make_noise_stats(
                 wsum_sigma2_noise=noise_wsum_total[class_index],
