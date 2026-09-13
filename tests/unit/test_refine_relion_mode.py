@@ -15431,12 +15431,30 @@ def test_relion_mode_writes_absolute_translations_from_previous_offset(
     )
 
 
+@pytest.mark.parametrize("capture_dump", [False, True])
 def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
     rng,
     init_volume,
     monkeypatch,
+    tmp_path,
+    capture_dump,
 ):
     """Class3D M-step tau2 comes from current Iref power, not previous model.star."""
+
+    if capture_dump:
+        monkeypatch.setenv("RECOVAR_KCLASS_DUMP_DIR", str(tmp_path))
+    else:
+        monkeypatch.delenv("RECOVAR_KCLASS_DUMP_DIR", raising=False)
+    floor_calls = []
+    shell_stats = regularization_module._compute_relion_weight_shell_stats
+
+    def record_shell_stats(*args, **kwargs):
+        result = shell_stats(*args, **kwargs)
+        if kwargs.get("shell_rounding") == "floor" and inspect.currentframe().f_back.f_code.co_name == "_run_relion_iteration_loop":
+            floor_calls.append(result)
+        return result
+
+    monkeypatch.setattr(regularization_module, "_compute_relion_weight_shell_stats", record_shell_stats)
 
     half_datasets = [MockDataset(1, rng), MockDataset(1, rng)]
     n_classes = 2
@@ -15650,6 +15668,13 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
         atol=1e-5,
     )
     assert iref_tau2_calls == [0, 1, 0, 1]
+
+    assert len(floor_calls) == (8 if capture_dump else 0)
+    if capture_dump:
+        for class_idx, stats in enumerate(floor_calls[-2:]):
+            with np.load(tmp_path / f"recovar_kclass_mstep_it001_c{class_idx + 1:02d}.npz") as saved:
+                np.testing.assert_array_equal(saved["reconstruct_floor_avg_weight_shells"], stats["avg_weight_shells"])
+                np.testing.assert_array_equal(saved["reconstruct_floor_shell_count"], stats["shell_count"])
 
 
 def test_relion_mode_dense_k_class_writes_absolute_translations_from_previous_offset(

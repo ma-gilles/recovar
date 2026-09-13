@@ -2645,15 +2645,6 @@ def _run_relion_iteration_loop(
                     full_half_axis=mstep_full_half_axis,
                     accumulator_volume_shape=mstep_accumulator_shape,
                 )
-                reconstruct_floor_stats_k = regularization._compute_relion_weight_shell_stats(
-                    Ft_ctf_combined[class_idx],
-                    volume_shape,
-                    padding_factor=PADDING_FACTOR,
-                    r_max=current_size // 2,
-                    shell_rounding="floor",
-                    full_half_axis=mstep_full_half_axis,
-                    accumulator_volume_shape=mstep_accumulator_shape,
-                )
                 data_vs_prior_k, class_tau2_details_k = _class_tau2_update_details(
                     Ft_ctf_combined[class_idx],
                     tau2_shells_recovar_frame_k,
@@ -2671,6 +2662,15 @@ def _run_relion_iteration_loop(
                 tau2_update_details_per_class.append(class_tau2_details_k)
                 _kclass_dump_dir = os.environ.get("RECOVAR_KCLASS_DUMP_DIR")
                 if _kclass_dump_dir:
+                    reconstruct_floor_stats_k = regularization._compute_relion_weight_shell_stats(
+                        Ft_ctf_combined[class_idx],
+                        volume_shape,
+                        padding_factor=PADDING_FACTOR,
+                        r_max=current_size // 2,
+                        shell_rounding="floor",
+                        full_half_axis=mstep_full_half_axis,
+                        accumulator_volume_shape=mstep_accumulator_shape,
+                    )
                     reconstruction_diagnostics.write_kclass_mstep(
                         Ft_ctf_0=Ft_ctf_0,
                         Ft_ctf_1=Ft_ctf_1,
