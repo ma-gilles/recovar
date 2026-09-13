@@ -40,13 +40,11 @@ def _optics_group_indices(main_star) -> np.ndarray:
         return np.zeros(len(main_star), dtype=np.int64)
     raw = main_star["_rlnOpticsGroup"].to_numpy()
     try:
-        numeric = np.asarray(raw, dtype=np.int64)
-        unique = {value: i for i, value in enumerate(sorted(np.unique(numeric).tolist()))}
-        return np.asarray([unique[int(value)] for value in numeric], dtype=np.int64)
+        labels = np.asarray(raw, dtype=np.int64)
     except (TypeError, ValueError):
         labels = np.asarray(raw, dtype=str)
-        unique = {value: i for i, value in enumerate(sorted(np.unique(labels).tolist()))}
-        return np.asarray([unique[str(value)] for value in labels], dtype=np.int64)
+    _, indices = np.unique(labels, return_inverse=True)
+    return indices.astype(np.int64, copy=False)
 
 
 def _single_optics_scalars(main_star, optics_star, ds) -> tuple[float, float, float, float]:
