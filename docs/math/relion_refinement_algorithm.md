@@ -1,5 +1,25 @@
 # RELION-style refinement: algorithm and code map
 
+## Noise-only bootstrap qualification
+
+`scripts/run_full_refinement.py --initial-noise-bootstrap relion` is an opt-in
+fresh, single-optics K1 diagnostic. The default `pipeline` estimator is unchanged.
+Unlike complete iteration-0 replay, this mode computes only initial noise from
+the particles: stable subset-1 then subset-2 source order, up to 1000 particles,
+and rounded-radius half-spectrum shell power. It does not load oracle tau2,
+poses, priors or normalization corrections. Conflicting replay/cache inputs and
+unsupported optics/K-class modes are rejected.
+
+[`_compute_relion_noise_only_bootstrap`](../../scripts/run_full_refinement.py)
+uses the existing host float64 bootstrap, scales its native sigma2 by the image
+side length to the fourth power, and supplies a float32 pixel-noise array to
+the controller. Deliberate host precision and the separate diagnostic NPZ
+loader remain unchanged. Tests in
+[`test_k1_noise_only_bootstrap.py`](../../tests/unit/test_k1_noise_only_bootstrap.py)
+check ordering, units/dtype and mode exclusions. GPU source-wiring, state and
+trajectory qualification are still required; the option is not a new default
+or a claim that the remaining parity gap is closed.
+
 This page describes RECOVAR's current dense-volume refinement implementation,
 including its K-class and exact local-search routes. Function names identify
 implementation owners; line numbers are deliberately omitted because code moves

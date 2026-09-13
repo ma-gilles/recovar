@@ -1326,6 +1326,39 @@ def _compute_relion_fresh_k1_initial_sigma2(
     return sigma2_per_group
 
 
+def _compute_relion_noise_only_bootstrap(
+    dataset, *, args, frozen_boundary, source_rows, optics_group_ids, mask_params,
+):
+    """Compute startup noise without replaying any model/particle state.
+
+    Qualification-only single-optics K1 path; preserve the existing host F64
+    bootstrap and explicitly supply F32 noise to production scoring. See
+    docs/math/relion_refinement_algorithm.md#noise-only-bootstrap-qualification.
+    """
+    if (
+        int(args.n_classes) != 1 or int(args.init_relion_iteration) != 0
+        or frozen_boundary is not None or args.perturb_replay_relion_dir is not None
+        or args.relion_init_dir is not None or args.init_noise_from_npz is not None
+        or args.initial_noise_cache_dir is not None or args.relion_half_sets is None
+        or source_rows is None or optics_group_ids is None or mask_params is None
+    ):
+        raise ValueError(
+            "RELION noise-only bootstrap requires a fresh K1 start with half-set "
+            "order/mask metadata and no state replay, noise replay or noise cache"
+        )
+    if np.unique(optics_group_ids).size != 1:
+        raise ValueError("RELION noise-only bootstrap currently requires one optics group")
+    sigma2 = _compute_relion_fresh_k1_initial_sigma2(
+        dataset, source_rows=source_rows, optics_group_ids=optics_group_ids,
+        particle_diameter_ang=float(mask_params[0]), width_mask_edge_px=int(mask_params[1]),
+    )[0]
+    radial = sigma2 * float(dataset.grid_size) ** 4
+    noise = _relion_sigma2_to_native_noise_variance(
+        sigma2, grid_size=int(dataset.grid_size), output_dtype=np.float32,
+    )
+    return radial, noise
+
+
 def _relion_sigma2_to_native_noise_variance(
     sigma2,
     *,
@@ -2949,6 +2982,15 @@ def main():
         ),
     )
     parser.add_argument(
+        "--initial-noise-bootstrap",
+        choices=("pipeline", "relion"), default="pipeline",
+        help=(
+            "Initial noise estimator. Default pipeline preserves existing behavior. "
+            "relion is an opt-in noise-only qualification path for fresh single-optics "
+            "K1 with supplied halfsets; no model or particle-state replay."
+        ),
+    )
+    parser.add_argument(
         "--init_noise_from_npz",
         default=None,
         help=(
@@ -3367,7 +3409,7 @@ def main():
                 relion_fresh_initial_noise_optics_group_ids,
             ) = _relion_fresh_initial_noise_layout(our_particles, relion_particles)
         if (
-            use_relion_live_initial_noise
+            (use_relion_live_initial_noise or args.initial_noise_bootstrap == "relion")
             and relion_fresh_initial_noise_source_rows is None
         ):
             (
@@ -3982,7 +4024,18 @@ def main():
 
     from recovar.reconstruction import noise as recon_noise
 
-    if frozen_boundary is not None:
+    if args.initial_noise_bootstrap == "relion":
+        if _double_image_preprocessing or use_relion_live_initial_noise:
+            raise ValueError("RELION noise-only bootstrap requires production image precision and no live-noise replay")
+        initial_noise_radial, noise_variance = _compute_relion_noise_only_bootstrap(
+            ds, args=args, frozen_boundary=frozen_boundary,
+            source_rows=relion_fresh_initial_noise_source_rows,
+            optics_group_ids=relion_fresh_initial_noise_optics_group_ids,
+            mask_params=relion_mask_params,
+        )
+        logger.info("Noise-only RELION bootstrap: %d shells, scoring dtype=%s; no state replay",
+                    initial_noise_radial.size, noise_variance.dtype)
+    elif frozen_boundary is not None:
         noise_variance = _make_frozen_boundary_noise_variance(
             frozen_boundary.noise_radial_per_half,
             ds.image_shape,
@@ -4959,6 +5012,7 @@ def main():
     # ---- Save results ----
     save_dict = {
         "relion_particle_shuffle": np.asarray(args.relion_particle_shuffle),
+        "initial_noise_bootstrap": np.asarray(args.initial_noise_bootstrap),
         "relion_fresh_particle_order_applied": np.bool_(use_fresh_auto_refine_order),
         "current_sizes": np.array(result["current_sizes"]),
         "pixel_resolutions": np.array(result["pixel_resolutions"]),
