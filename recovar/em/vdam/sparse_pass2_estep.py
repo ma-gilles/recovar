@@ -109,59 +109,12 @@ def _safe_coarse_significance_image_batch_size(
     return min(requested, pose_tensor_cap)
 
 
-def _exact_relion_fine_diff2_enabled() -> bool:
-    """Use RELION's CUDA fine-score arithmetic unless explicitly disabled."""
+def _env_enabled(name: str, *, default: bool = False) -> bool:
+    """Preserve VDAM probe flags: only explicit false tokens disable a set value.
 
-    setting = os.environ.get(_EXACT_RELION_FINE_DIFF2_ENV, "1").strip().lower()
-    return setting not in {"0", "false", "no", "off"}
-
-
-def _flat_local_rows_enabled() -> bool:
-    """Enable the packed-row exact scorer for controlled InitialModel A/B runs."""
-
-    setting = os.environ.get(_FLAT_LOCAL_ROWS_ENV, "0").strip().lower()
-    return setting not in {"0", "false", "no", "off"}
-
-
-def _stable_flat_row_capacity_enabled() -> bool:
-    """Use the mature dense bucket ABI as the packed-row physical capacity."""
-
-    setting = os.environ.get(_STABLE_FLAT_ROW_CAPACITY_ENV, "0").strip().lower()
-    return setting not in {"0", "false", "no", "off"}
-
-
-def _packed_local_projection_enabled() -> bool:
-    """Project packed fine rows directly for controlled InitialModel A/B runs."""
-
-    setting = os.environ.get(_PACKED_LOCAL_PROJECTION_ENV, "0").strip().lower()
-    return setting not in {"0", "false", "no", "off"}
-
-
-def _fused_pair_fine_score_enabled() -> bool:
-    """Enable the shared selected-pair exact-local scorer for controlled A/B runs."""
-
-    setting = os.environ.get(_FUSED_PAIR_FINE_SCORE_ENV, "0").strip().lower()
-    return setting not in {"0", "false", "no", "off"}
-
-
-def _defer_packed_vdam_enabled() -> bool:
-    """Defer VDAM noise/M-step work onto final packed support for A/B runs."""
-
-    setting = os.environ.get(_DEFER_PACKED_VDAM_ENV, "0").strip().lower()
-    return setting not in {"0", "false", "no", "off"}
-
-
-def _packed_final_noise_enabled() -> bool:
-    """Reduce deferred VDAM noise on final nonzero rows for controlled A/B runs."""
-
-    setting = os.environ.get(_PACKED_FINAL_NOISE_ENV, "0").strip().lower()
-    return setting not in {"0", "false", "no", "off"}
-
-
-def _unify_local_bucket_sizes_enabled() -> bool:
-    """Keep the proven single-shape policy unless a performance probe disables it."""
-
-    setting = os.environ.get(_UNIFY_LOCAL_BUCKET_SIZES_ENV, "1").strip().lower()
+    Unlike other EM flag readers, blank and unrecognized values enable it.
+    """
+    setting = os.environ.get(name, "1" if default else "0").strip().lower()
     return setting not in {"0", "false", "no", "off"}
 
 
@@ -637,9 +590,9 @@ def _run_sparse_pass2_initial_model_estep(
     pass1_time_s = 0.0
     pass2_time_s = 0.0
     exact_local_runtime_policy_active = False
-    requested_stable_flat_row_capacity = _stable_flat_row_capacity_enabled()
+    requested_stable_flat_row_capacity = _env_enabled(_STABLE_FLAT_ROW_CAPACITY_ENV)
     effective_stable_flat_row_capacity = False
-    requested_fused_pair_fine_score = _fused_pair_fine_score_enabled()
+    requested_fused_pair_fine_score = _env_enabled(_FUSED_PAIR_FINE_SCORE_ENV)
     effective_fused_pair_fine_score = False
     coarse_gemm_aggregate_manifest_path = None
     coarse_gemm_stream_aggregate_manifest_path = None
@@ -653,7 +606,7 @@ def _run_sparse_pass2_initial_model_estep(
         or not config.relion_bpref_frame
         or not use_exact_relion_projector
         or not config.relion_wavg_sequential_cuda
-        or not _exact_relion_fine_diff2_enabled()
+        or not _env_enabled(_EXACT_RELION_FINE_DIFF2_ENV, default=True)
     ):
         raise ValueError(
             "stable Fourier-window shapes are supported only by K=1 local "
@@ -981,10 +934,10 @@ def _run_sparse_pass2_initial_model_estep(
         use_exact_fine_diff2 = bool(
             state.K == 1
             and use_exact_local_relion_operands
-            and _exact_relion_fine_diff2_enabled()
+            and _env_enabled(_EXACT_RELION_FINE_DIFF2_ENV, default=True)
         )
         use_flat_local_rows = bool(
-            use_exact_fine_diff2 and _flat_local_rows_enabled()
+            use_exact_fine_diff2 and _env_enabled(_FLAT_LOCAL_ROWS_ENV)
         )
         if requested_fused_pair_fine_score and not use_flat_local_rows:
             raise ValueError(
@@ -997,7 +950,7 @@ def _run_sparse_pass2_initial_model_estep(
             effective_stable_flat_row_capacity or use_stable_flat_row_capacity
         )
         use_packed_local_projection = bool(
-            use_flat_local_rows and _packed_local_projection_enabled()
+            use_flat_local_rows and _env_enabled(_PACKED_LOCAL_PROJECTION_ENV)
         )
         use_fused_pair_fine_score = bool(
             use_flat_local_rows and requested_fused_pair_fine_score
@@ -1147,7 +1100,7 @@ def _run_sparse_pass2_initial_model_estep(
                     unify_local_bucket_sizes=(
                         int(config.exact_local_physical_order_chunk_size) == 0
                         if reconstruction_group_ids is not None
-                        else _unify_local_bucket_sizes_enabled()
+                        else _env_enabled(_UNIFY_LOCAL_BUCKET_SIZES_ENV, default=True)
                     ),
                     stats_use_reconstruction_probs=True,
                     class_posterior_sums_from_noise=False,
@@ -1177,14 +1130,14 @@ def _run_sparse_pass2_initial_model_estep(
                     fused_pair_fine_score=use_fused_pair_fine_score,
                     _defer_packed_vdam_enabled=bool(
                         use_packed_local_projection
-                        and _defer_packed_vdam_enabled()
+                        and _env_enabled(_DEFER_PACKED_VDAM_ENV)
                     ),
                     _packed_final_noise_enabled=bool(
                         use_exact_fine_diff2
-                        and _flat_local_rows_enabled()
-                        and _packed_local_projection_enabled()
-                        and _defer_packed_vdam_enabled()
-                        and _packed_final_noise_enabled()
+                        and _env_enabled(_FLAT_LOCAL_ROWS_ENV)
+                        and _env_enabled(_PACKED_LOCAL_PROJECTION_ENV)
+                        and _env_enabled(_DEFER_PACKED_VDAM_ENV)
+                        and _env_enabled(_PACKED_FINAL_NOISE_ENV)
                     ),
                     relion_wavg_sequential_cuda=(
                         bool(config.relion_wavg_sequential_cuda)

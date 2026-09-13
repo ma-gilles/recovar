@@ -1238,94 +1238,6 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
     np.testing.assert_allclose(result.meta["best_pose_translations"], [[0, 1], [2, 3]])
 
 
-def test_exact_relion_fine_diff2_can_be_disabled(monkeypatch):
-    from recovar.em.vdam.sparse_pass2_estep import _exact_relion_fine_diff2_enabled
-
-    for value in ("0", "false", "NO", "Off"):
-        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_EXACT_FINE_DIFF2", value)
-        assert _exact_relion_fine_diff2_enabled() is False
-
-
-def test_initial_model_flat_local_rows_are_explicit_opt_in(monkeypatch):
-    from recovar.em.vdam.sparse_pass2_estep import _flat_local_rows_enabled
-
-    monkeypatch.delenv("RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS", raising=False)
-    assert _flat_local_rows_enabled() is False
-    for value in ("1", "true", "YES", "On"):
-        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS", value)
-        assert _flat_local_rows_enabled() is True
-    for value in ("0", "false", "NO", "Off"):
-        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS", value)
-        assert _flat_local_rows_enabled() is False
-
-
-def test_initial_model_stable_flat_row_capacity_is_explicit_opt_in(monkeypatch):
-    from recovar.em.vdam.sparse_pass2_estep import _stable_flat_row_capacity_enabled
-
-    variable = "RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY"
-    monkeypatch.delenv(variable, raising=False)
-    assert _stable_flat_row_capacity_enabled() is False
-    for value in ("1", "true", "YES", "On"):
-        monkeypatch.setenv(variable, value)
-        assert _stable_flat_row_capacity_enabled() is True
-    for value in ("0", "false", "NO", "Off"):
-        monkeypatch.setenv(variable, value)
-        assert _stable_flat_row_capacity_enabled() is False
-
-
-def test_initial_model_packed_local_projection_is_explicit_opt_in(monkeypatch):
-    from recovar.em.vdam.sparse_pass2_estep import _packed_local_projection_enabled
-
-    monkeypatch.delenv("RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION", raising=False)
-    assert _packed_local_projection_enabled() is False
-    for value in ("1", "true", "YES", "On"):
-        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION", value)
-        assert _packed_local_projection_enabled() is True
-    for value in ("0", "false", "NO", "Off"):
-        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PACKED_LOCAL_PROJECTION", value)
-        assert _packed_local_projection_enabled() is False
-
-
-def test_shared_fused_pair_fine_score_is_explicit_opt_in(monkeypatch):
-    from recovar.em.vdam.sparse_pass2_estep import _fused_pair_fine_score_enabled
-
-    variable = "RECOVAR_EXACT_LOCAL_FUSED_PAIR_FINE_SCORE"
-    monkeypatch.delenv(variable, raising=False)
-    assert _fused_pair_fine_score_enabled() is False
-    for value in ("1", "true", "YES", "On"):
-        monkeypatch.setenv(variable, value)
-        assert _fused_pair_fine_score_enabled() is True
-    for value in ("0", "false", "NO", "Off"):
-        monkeypatch.setenv(variable, value)
-        assert _fused_pair_fine_score_enabled() is False
-
-
-def test_initial_model_deferred_packed_vdam_is_explicit_opt_in(monkeypatch):
-    from recovar.em.vdam.sparse_pass2_estep import _defer_packed_vdam_enabled
-
-    monkeypatch.delenv("RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM", raising=False)
-    assert _defer_packed_vdam_enabled() is False
-    for value in ("1", "true", "YES", "On"):
-        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM", value)
-        assert _defer_packed_vdam_enabled() is True
-    for value in ("0", "false", "NO", "Off"):
-        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_DEFER_PACKED_VDAM", value)
-        assert _defer_packed_vdam_enabled() is False
-
-
-def test_initial_model_packed_final_noise_is_explicit_opt_in(monkeypatch):
-    from recovar.em.vdam.sparse_pass2_estep import _packed_final_noise_enabled
-
-    monkeypatch.delenv("RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE", raising=False)
-    assert _packed_final_noise_enabled() is False
-    for value in ("1", "true", "YES", "On"):
-        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE", value)
-        assert _packed_final_noise_enabled() is True
-    for value in ("0", "false", "NO", "Off"):
-        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_PACKED_FINAL_NOISE", value)
-        assert _packed_final_noise_enabled() is False
-
-
 def test_dense_initial_model_estep_os0_uses_device_coarse_rotations(monkeypatch):
     """Equal coarse/fine grid sizes must not bypass AccProjectorPlan arithmetic."""
 
@@ -1404,16 +1316,6 @@ def test_dense_initial_model_estep_os0_uses_device_coarse_rotations(monkeypatch)
     assert calls["random_perturbation"] == 0.25
     assert calls["angular_sampling_deg"] == 60.0
     np.testing.assert_array_equal(calls["pass1_rotations"], device_rotations)
-
-
-def test_initial_model_local_bucket_unification_can_be_disabled(monkeypatch):
-    from recovar.em.vdam.sparse_pass2_estep import _unify_local_bucket_sizes_enabled
-
-    monkeypatch.delenv("RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES", raising=False)
-    assert _unify_local_bucket_sizes_enabled() is True
-    for value in ("0", "false", "NO", "Off"):
-        monkeypatch.setenv("RECOVAR_INITIAL_MODEL_UNIFY_LOCAL_BUCKET_SIZES", value)
-        assert _unify_local_bucket_sizes_enabled() is False
 
 
 def test_dense_initial_model_estep_os0_keeps_coarse_normalization_pose_and_support(monkeypatch):
@@ -2219,3 +2121,21 @@ def test_initial_model_pass2_layout_uses_relion_direction_ids_for_posterior_bins
     assert out.n_global_rotations == 2
     np.testing.assert_array_equal(out.rotation_posterior_ids_flat, np.array([0, 0, 1, 1], dtype=np.int32))
     np.testing.assert_array_equal(out.rotation_ids_flat, layout.rotation_ids_flat)
+
+
+@pytest.mark.parametrize("default", [False, True])
+@pytest.mark.parametrize("value, expected", [
+    (None, None),
+    ("0", False), ("false", False), ("NO", False), ("Off", False),
+    ("1", True), ("true", True), ("YES", True), ("On", True),
+    ("", True), ("  ", True), ("unknown", True), ("  Off  ", False),
+])
+def test_vdam_probe_flag_parsing(monkeypatch, default, value, expected):
+    from recovar.em.vdam.sparse_pass2_estep import _env_enabled
+
+    variable = "RECOVAR_INITIAL_MODEL_FLAT_LOCAL_ROWS"
+    if value is None:
+        monkeypatch.delenv(variable, raising=False)
+    else:
+        monkeypatch.setenv(variable, value)
+    assert _env_enabled(variable, default=default) is (default if value is None else expected)
