@@ -4,7 +4,12 @@ The [projector dtype history audit](em_projector_dtype_history_20260913.md)
 identifies7e9e5c3c9 as the producer cast removal: actual before/after function
 bodies reproduce C64→C128 and lost texture eligibility. This is source-level
 attribution, not a historical whole-run timing claim. Matched parent/repaired
-three-iteration K1 job13829869 is running; full FSC/state/K4 gates remain open.
+three-iteration K1 job13829869 and K4 job13832403 are terminal. K1 regression
+does not exercise the affected PPref path; K4 early state and all four
+cross-native AUCs improve, but class1 and iteration3 still miss gates.
+[Corrected canonical report, coverage limits and short-profile outcome](em_projector_quality_profile_20260913.md).
+Full quality and general speed remain open; next separate real-input preparation
+from the bounded warm profile rather than repeat expensive controller startup.
 
 ## Private projector consumer repair — September 13
 
