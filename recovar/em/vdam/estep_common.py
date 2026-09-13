@@ -93,14 +93,9 @@ def _group_local_kwargs(
     # A shared translation prior is 1D; only 2D priors have an image axis.
     prior_np = None if prior is None else np.asarray(prior)
     if prior_np is not None and prior_np.ndim == 2:
-        image_indices = np.asarray(image_indices, dtype=np.int64)
-        if prior_np.shape[0] == int(n_images):
-            out["translation_log_prior"] = prior_np[image_indices]
-        elif prior_np.shape[0] != int(image_indices.size):
-            raise ValueError(
-                "translation_log_prior must be shared, selected-image, or full-dataset shaped; "
-                f"got first axis {prior_np.shape[0]} for {image_indices.size} selected images and {n_images} total images"
-            )
+        out["translation_log_prior"] = _select_image_rows(
+            prior, image_indices, n_images=n_images, name="translation_log_prior"
+        )
     for name in ("image_pre_shifts", "image_corrections", "scale_corrections", "translation_prior_centers"):
         out[name] = _select_image_rows(out.get(name), image_indices, n_images=n_images, name=name)
     return out
