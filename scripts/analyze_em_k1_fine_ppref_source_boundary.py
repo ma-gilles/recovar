@@ -24,7 +24,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import mrcfile
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -99,13 +98,12 @@ def classify_source_boundary(
 
 
 def _read_relion_map(path: Path) -> np.ndarray:
-    from recovar.utils.helpers import relion_volume_to_recovar
+    from recovar.utils.helpers import load_relion_volume
 
-    with mrcfile.open(path, permissive=False) as handle:
-        raw = np.asarray(handle.data, dtype=np.float32).copy()
-    _require(raw.ndim == 3 and len(set(raw.shape)) == 1, f"RELION map is not cubic: {path}")
-    _require(np.all(np.isfinite(raw)), f"RELION map contains non-finite values: {path}")
-    return np.asarray(relion_volume_to_recovar(raw), dtype=np.float32)
+    volume = np.asarray(load_relion_volume(path), dtype=np.float32)
+    _require(volume.ndim == 3 and len(set(volume.shape)) == 1, f"RELION map is not cubic: {path}")
+    _require(np.all(np.isfinite(volume)), f"RELION map contains non-finite values: {path}")
+    return volume
 
 
 def _read_recovar_map(path: Path) -> np.ndarray:
