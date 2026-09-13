@@ -20,7 +20,7 @@ import numpy as np
 from scipy import ndimage, optimize, signal
 from scipy.spatial.transform import Rotation
 
-from recovar.em.vdam.gt_metrics import centered_correlation, lowpass_volume_by_shell
+from recovar.em.diagnostics.gt_metrics import centered_correlation, lowpass_volume_by_shell
 
 
 @dataclass(frozen=True)

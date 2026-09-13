@@ -21,7 +21,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.core import fourier_transform_utils as ftu
-from recovar.em.vdam.gt_metrics import (
+from recovar.em.diagnostics.gt_metrics import (
     DEFAULT_GT_ALIGN_HEALPIX_ORDER,
     DEFAULT_GT_ALIGN_MAX_SHELL,
     align_volume_to_reference,
@@ -265,7 +265,7 @@ def _add_metric_set(
 
 def _common_rigid_transform(document: dict[str, Any]):
     """Load the evaluator's transport record without invoking the fitter."""
-    from recovar.em.vdam.gt_registration import RigidVolumeTransform
+    from recovar.em.diagnostics.gt_registration import RigidVolumeTransform
 
     expected = {"transform", "identity_sha256", "fit_receipt", "fit_reference"}
     if not isinstance(document, dict) or set(document) != expected:
@@ -346,7 +346,7 @@ def evaluate(
     shared_transform = None
     shared_document = gt_align_transform
     if gt_align_rigid:
-        from recovar.em.vdam.gt_registration import (
+        from recovar.em.diagnostics.gt_registration import (
             RigidFitControls,
             RigidVolumeTransform,
             align_volume_rigid_to_reference,
@@ -431,7 +431,7 @@ def evaluate(
                 mirror_x, sign, score = shared_transform.mirror_x, 1, None
                 translation = np.asarray(shared_transform.translation_voxels)
             elif gt_align_rigid:
-                from recovar.em.vdam.gt_registration import RigidFitControls, align_volume_rigid_to_reference
+                from recovar.em.diagnostics.gt_registration import RigidFitControls, align_volume_rigid_to_reference
 
                 alignment = align_volume_rigid_to_reference(
                     real,

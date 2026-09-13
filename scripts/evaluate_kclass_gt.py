@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """K-class GT FSC evaluation with best-permutation matching.
 
-Wraps :mod:`recovar.em.vdam.gt_metrics` to handle the K-class
+Wraps :mod:`recovar.em.diagnostics.gt_metrics` to handle the K-class
 case end-to-end:
 
 * takes ``--volume`` MRCs (one per class) and ``--gt_volume`` MRCs (one
@@ -31,7 +31,7 @@ from typing import Any
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from recovar.em.vdam.gt_metrics import (
+from recovar.em.diagnostics.gt_metrics import (
     DEFAULT_GT_ALIGN_HEALPIX_ORDER,
     DEFAULT_GT_ALIGN_MAX_SHELL,
     align_volume_to_reference,

@@ -5,7 +5,7 @@ import json
 import numpy as np
 import pytest
 
-from recovar.em.vdam import gt_registration
+from recovar.em.diagnostics import gt_registration
 from recovar.utils import helpers
 from scripts import evaluate_ab_initio_gt as evaluator
 from scripts.evaluate_ab_initio_gt import main

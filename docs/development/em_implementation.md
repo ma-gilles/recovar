@@ -733,9 +733,9 @@ the definitions and their serialized module identities are unchanged.
 
 ## Ground-truth reporting
 
-[`vdam/gt_registration.py`](../../recovar/em/vdam/gt_registration.py)
+[`diagnostics/gt_registration.py`](../../recovar/em/diagnostics/gt_registration.py)
 owns the optional CPU rigid fitter and immutable fit-once transform. The existing
-[`gt_metrics.py`](../../recovar/em/vdam/gt_metrics.py) keeps its legacy
+[`gt_metrics.py`](../../recovar/em/diagnostics/gt_metrics.py) keeps its legacy
 rotation-only alignment API and result type. The reporting CLI
 [`evaluate_ab_initio_gt.py`](../../scripts/evaluate_ab_initio_gt.py) opts into the
 new fitter or applies a saved transform without fitting. [The reporting guide](gt_reporting.md)

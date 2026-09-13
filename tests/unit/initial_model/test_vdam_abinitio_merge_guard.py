@@ -5,7 +5,7 @@ import json
 import sys
 from pathlib import Path
 
-from recovar.em.vdam.gt_metrics import (
+from recovar.em.diagnostics.gt_metrics import (
     DEFAULT_GT_ALIGN_HEALPIX_ORDER,
     DEFAULT_GT_ALIGN_MAX_SHELL,
     relion_alignment_rotations,

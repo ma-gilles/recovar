@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 from scipy.spatial.transform import Rotation
 
-from recovar.em.vdam import gt_registration as rigid
+from recovar.em.diagnostics import gt_registration as rigid
 
 pytestmark = pytest.mark.unit
 
@@ -93,7 +93,7 @@ def test_known_rigid_fit_and_no_mutation(case, hand, save):
     moving = analytic_volume(transform=transform, translation=translation)
     # Arbitrary rotations use the validated production order2/4608 grid.
     # A 24-rotation cube grid previously failed these arbitrary-rotation controls.
-    from recovar.em.vdam.gt_metrics import relion_alignment_rotations
+    from recovar.em.diagnostics.gt_metrics import relion_alignment_rotations
 
     grid = Rotation.create_group("O").as_matrix() if case == "translation" else relion_alignment_rotations(2)
     original = [v.copy() for v in (moving, reference, grid)]

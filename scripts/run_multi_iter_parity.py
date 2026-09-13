@@ -21,13 +21,13 @@ from pathlib import Path
 
 import numpy as np
 
+from recovar.em.diagnostics.gt_metrics import DEFAULT_GT_ALIGN_HEALPIX_ORDER, DEFAULT_GT_ALIGN_MAX_SHELL
 from recovar.em.diagnostics.relion_replay import (
     read_relion_single_optics_sigma2_noise as _read_relion_single_optics_sigma2_noise,
 )
 from recovar.em.diagnostics.relion_replay import (
     relion_mpi_process_start_scoring_noise_pair as _relion_mpi_process_start_scoring_noise_pair,
 )
-from recovar.em.vdam.gt_metrics import DEFAULT_GT_ALIGN_HEALPIX_ORDER, DEFAULT_GT_ALIGN_MAX_SHELL
 from recovar.utils.parity_provenance import (
     _safe_git_commit,
 )
@@ -2325,7 +2325,7 @@ def main():
         gt_ft = np.asarray(ftu.get_dft3(jnp.asarray(gt_real))).reshape(-1)
         print(f"  GT volume: {gt_path}")
         if args.gt_align:
-            from recovar.em.vdam.gt_metrics import relion_alignment_rotations
+            from recovar.em.diagnostics.gt_metrics import relion_alignment_rotations
 
             gt_align_rotations = relion_alignment_rotations(args.gt_align_healpix_order)
             print(
@@ -2779,7 +2779,7 @@ def main():
     gt_ledger_summary = {}
     if gt_ft is not None:
         print("\n=== Final FSC vs GT ===")
-        from recovar.em.vdam.gt_metrics import align_volume_to_reference
+        from recovar.em.diagnostics.gt_metrics import align_volume_to_reference
 
         gt_summary = {}
         recovar_final_series = {

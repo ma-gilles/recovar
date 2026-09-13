@@ -396,7 +396,7 @@ LOC_PER_FILE_CEILING = {
     "dense_adapter.py": 1500,
     "driver.py": 1960,
     "../relion/vdam_checkpoint.py": 440,  # Split from driver; combined allowance unchanged.
-    "gt_metrics.py": 400,
+    "../diagnostics/gt_metrics.py": 400,
     "__init__.py": 160,
     "init.py": 280,
     "iteration_loop.py": 870,
@@ -438,9 +438,12 @@ def test_per_file_loc_ceilings():
 
 
 def test_total_package_loc_within_budget():
-    """Count the VDAM package and its extracted RELION checkpoint adapter."""
+    """Count VDAM, its checkpoint adapter and the extracted shared diagnostics."""
     total = sum(_file_loc(p) for p in PACKAGE_DIR.glob("*.py"))
     total += _file_loc(PACKAGE_DIR.parent / "relion" / "vdam_checkpoint.py")
+    # Shared diagnostics remain counted after their responsibility move.
+    total += sum(_file_loc(PACKAGE_DIR.parent / "diagnostics" / name)
+                 for name in ("gt_metrics.py", "gt_registration.py"))
     assert total <= TOTAL_LOC_CEILING, (
         f"InitialModel total LOC = {total} > ceiling {TOTAL_LOC_CEILING}; "
         f"refactor savings are being eroded. Identify the merge that bloated the package."

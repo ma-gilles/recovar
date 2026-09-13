@@ -172,7 +172,7 @@ def _real_space_shell_fsc(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
 
 def _relion_frame_map_similarity(lhs_path: Path, rhs_path: Path) -> dict[str, float]:
     """Same-frame map parity metrics; no GT alignment or handedness search."""
-    from recovar.em.vdam.gt_metrics import centered_correlation, first_shell_below_threshold
+    from recovar.em.diagnostics.gt_metrics import centered_correlation, first_shell_below_threshold
     from recovar.utils import helpers
 
     lhs, _lhs_voxel = helpers.load_relion_volume(str(lhs_path), return_voxel_size=True)
