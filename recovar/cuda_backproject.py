@@ -683,6 +683,7 @@ _TARGET_RELION_WAVG_NATIVE_PREFIX_DEBUG_F32 = "cuda_relion_wavg_native_prefix_de
 _wavg_native_prefix_ffi_registered = False
 
 _TARGET_DUAL_WEIGHTED_SUMS_F32 = "cuda_dual_weighted_sums_f32"
+_TARGET_DUAL_WEIGHTED_SUMS_PAIRS_F32 = "cuda_dual_weighted_sums_pairs_f32"
 
 # Single source of truth: (FFI target name, C symbol exported by libcuda_backproject.so).
 # Used by ``_ensure_ffi`` to register kernels AND by ``_lib_missing_required_symbols``
@@ -873,6 +874,7 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         "RelionWavgSequentialRuntimeTripletF32",
     ),
     (_TARGET_DUAL_WEIGHTED_SUMS_F32, "DualWeightedSumsF32"),
+    (_TARGET_DUAL_WEIGHTED_SUMS_PAIRS_F32, "DualWeightedSumsPairsF32"),
 )
 
 
@@ -6794,6 +6796,70 @@ def relion_wavg_sequential_runtime_triplet_f32(
         posterior,
         logical_pixel_count,
     )
+
+
+@jax.jit
+def dual_weighted_sums_pairs_f32(
+    pair_probabilities: jax.Array,
+    pair_translation_ids: jax.Array,
+    row_offsets: jax.Array,
+    first_values: jax.Array,
+    second_values: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Pair-sparse form of :func:`dual_weighted_sums_f32`.
+
+    ``pair_probabilities`` and ``pair_translation_ids`` are ``[batch, pair]``
+    sorted by (rotation row, translation) within each image; ``row_offsets`` is
+    ``[batch, rotation + 1]`` with row ``r`` owning pairs
+    ``offsets[b, r]:offsets[b, r + 1]``. Each output pixel accumulates its row's
+    pairs in that order with the same fma as the dense kernel, so results are
+    bit-identical to the dense form when every (row, translation) is unique.
+    Zero weights and out-of-range translations are skipped.
+    """
+    _ensure_ffi()
+    pair_probabilities = jnp.asarray(pair_probabilities)
+    pair_translation_ids = jnp.asarray(pair_translation_ids)
+    row_offsets = jnp.asarray(row_offsets)
+    first_values = jnp.asarray(first_values)
+    second_values = jnp.asarray(second_values)
+    if pair_probabilities.dtype != jnp.float32 or pair_probabilities.ndim != 2:
+        raise ValueError(
+            "dual_weighted_sums_pairs_f32 expects float32 pair probabilities [batch, pair]"
+        )
+    if pair_translation_ids.dtype != jnp.int32 or pair_translation_ids.shape != pair_probabilities.shape:
+        raise ValueError(
+            "dual_weighted_sums_pairs_f32 expects int32 pair translations shaped like the probabilities"
+        )
+    if row_offsets.dtype != jnp.int32 or row_offsets.ndim != 2 or row_offsets.shape[0] != pair_probabilities.shape[0] or row_offsets.shape[1] < 2:
+        raise ValueError(
+            "dual_weighted_sums_pairs_f32 expects int32 row offsets [batch, rotation + 1]"
+        )
+    if first_values.dtype not in (jnp.complex64, jnp.complex128) or second_values.dtype != first_values.dtype:
+        raise ValueError(
+            "dual_weighted_sums_pairs_f32 expects two complex value arrays of one dtype"
+        )
+    for name, values in (("first_values", first_values), ("second_values", second_values)):
+        if values.ndim != 3 or values.shape[0] != pair_probabilities.shape[0] or values.shape[1] != first_values.shape[1]:
+            raise ValueError(
+                f"dual_weighted_sums_pairs_f32 {name} must be [batch, translation, pixel] "
+                f"with the pair batch, got {values.shape}"
+            )
+    rotation_count = int(row_offsets.shape[1]) - 1
+    output_types = (
+        jax.ShapeDtypeStruct(
+            (pair_probabilities.shape[0], rotation_count, first_values.shape[2]),
+            first_values.dtype,
+        ),
+        jax.ShapeDtypeStruct(
+            (pair_probabilities.shape[0], rotation_count, second_values.shape[2]),
+            second_values.dtype,
+        ),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_DUAL_WEIGHTED_SUMS_PAIRS_F32,
+        output_types,
+        vmap_method="sequential",
+    )(pair_probabilities, pair_translation_ids, row_offsets, first_values, second_values)
 
 
 @jax.jit

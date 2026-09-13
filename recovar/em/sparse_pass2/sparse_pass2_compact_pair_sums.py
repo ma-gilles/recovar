@@ -454,6 +454,51 @@ def _compact_pair_weighted_rotation_and_image_sums_fused_image_sums(
     return summed, summed_image, ctf_probs, probs_sum_t, translation_posterior
 
 
+def _compact_pair_sorted_csr(
+    pair_probs,
+    local_rotation_row,
+    translation_idx,
+    pair_mask,
+    *,
+    n_rotation_rows,
+    n_trans,
+):
+    """CSR row offsets for compact pairs that are already in source order.
+
+    ``build_compact_pair_index_arrays`` emits each image's valid pairs as a
+    rotation-major, translation-minor prefix (C order of the ``(R, T)`` mask)
+    followed by ``-1`` padding, so no sort is needed: masked pairs are mapped
+    to row ``n_rotation_rows`` (they sit after every real row) and the offsets
+    are one ``searchsorted`` per image. Non-finite or out-of-range pairs keep
+    their position with zero weight, which the kernel skips exactly like the
+    dense kernel skips zero table entries. A sort over the padded ``(B, P)``
+    keys was tried first and cost more than it saved at 100k/256 (job
+    13806345: wide-pair class 630 -> 756 s).
+    """
+    if jnp.asarray(pair_probs).dtype != jnp.float32:
+        raise ValueError("native pair-sparse sums require float32 probabilities")
+    weights, _safe_rotation_row, safe_translation_idx, _valid_pair = _compact_pair_valid_weights_and_indices(
+        pair_probs,
+        local_rotation_row,
+        translation_idx,
+        pair_mask,
+        n_rotation_rows=n_rotation_rows,
+        n_trans=n_trans,
+    )
+    n_rotation_rows = int(n_rotation_rows)
+    rows_in_order = jnp.where(
+        pair_mask,
+        jnp.asarray(local_rotation_row).astype(jnp.int32),
+        jnp.int32(n_rotation_rows),
+    )
+    row_ids = jnp.arange(n_rotation_rows + 1, dtype=jnp.int32)
+    row_offsets = jax.vmap(lambda rows: jnp.searchsorted(rows, row_ids, side="left"))(rows_in_order)
+    return (
+        weights,
+        safe_translation_idx.astype(jnp.int32),
+        row_offsets.astype(jnp.int32),
+    )
+
 @partial(jax.jit, static_argnames=("n_rotation_rows",))
 def _compact_pair_weighted_rotation_and_image_sums_native(
     pair_probs,
@@ -467,7 +512,7 @@ def _compact_pair_weighted_rotation_and_image_sums_native(
 ):
     """Use one native launch boundary for two independent weighted sums."""
 
-    from recovar.cuda_backproject import dual_weighted_sums_f32
+    from recovar.cuda_backproject import dual_weighted_sums_pairs_f32
 
     dense_probs = _compact_pair_dense_probs(
         pair_probs,
@@ -477,8 +522,18 @@ def _compact_pair_weighted_rotation_and_image_sums_native(
         n_rotation_rows=n_rotation_rows,
         n_trans=shifted_recon_split.shape[1],
     )
-    summed, summed_image = dual_weighted_sums_f32(
-        dense_probs,
+    weights, pair_translations, row_offsets = _compact_pair_sorted_csr(
+        pair_probs,
+        local_rotation_row,
+        translation_idx,
+        pair_mask,
+        n_rotation_rows=n_rotation_rows,
+        n_trans=shifted_recon_split.shape[1],
+    )
+    summed, summed_image = dual_weighted_sums_pairs_f32(
+        weights,
+        pair_translations,
+        row_offsets,
         shifted_recon_split,
         shifted_image_split,
     )
