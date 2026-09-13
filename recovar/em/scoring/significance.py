@@ -2776,7 +2776,7 @@ def _compute_k_class_significance_batched(
                 relion_preprocess_kwargs,
                 target_size=int(image_batch_size),
             )
-        batch_size = int(np.asarray(batch_data).shape[0])
+        batch_size = int(batch_data.shape[0])
         if coarse_gaussian_gemm_hybrid_requested:
             coarse_gaussian_gemm_hybrid_actual_image_batch_sizes.append(
                 int(actual_batch_size),
