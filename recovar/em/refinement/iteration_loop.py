@@ -213,7 +213,6 @@ _FINAL_ALL_DATA_USE_MERGED_REFERENCE_ENV = "RECOVAR_FINAL_ALL_DATA_USE_MERGED_RE
 _FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE_ENV = "RECOVAR_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE"
 _FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE_ENV = "RECOVAR_FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE"
 _KCLASS_REPLAY_TAU2_ENV = "RECOVAR_KCLASS_REPLAY_TAU2"
-_KCLASS_REPLAY_TAU2_SAME_ITER_ENV = "RECOVAR_KCLASS_REPLAY_TAU2_SAME_ITER"
 
 
 def _fresh_k1_spectrum_norm_default(
@@ -232,17 +231,6 @@ def _kclass_replay_tau2_enabled() -> bool:
     """Diagnostic switch: use RELION replayed Class3D tau2 spectra directly."""
 
     return parse_env_flag_or_false(_KCLASS_REPLAY_TAU2_ENV, logger=logger)
-
-
-def _kclass_replay_tau2_same_iter_enabled() -> bool:
-    """Compatibility switch for same-numbered Class3D tau2 replay.
-
-    ``RECOVAR_KCLASS_REPLAY_TAU2`` now uses same-numbered model.star tau2 by
-    default, matching RELION's expectation-setup timing.  Keep this parser so
-    existing diagnostic scripts that also set the flag continue to work.
-    """
-
-    return parse_env_flag_or_false(_KCLASS_REPLAY_TAU2_SAME_ITER_ENV, logger=logger)
 
 
 from recovar.em.diagnostics.iteration import (  # noqa: F401
@@ -2816,7 +2804,6 @@ def _run_relion_iteration_loop(
                 # from the current Iref, then uses that same model state for
                 # maximization. Therefore run_itNNN_model.star contains the
                 # tau2 prior used by iteration NNN, not the prior for NNN+1.
-                _kclass_replay_tau2_same_iter_enabled()
                 same_iter_index = iteration + 1
                 tau2_replay_override = None
                 if replay.replay_iteration_overrides is not None and same_iter_index < len(replay.replay_iteration_overrides):

@@ -15614,7 +15614,6 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
     np.testing.assert_allclose(replay_result["tau2_radial_trajectory"][0], same_iter_tau2, rtol=0.0, atol=1e-5)
     assert iref_tau2_calls == [0, 1, 0, 1]
 
-    monkeypatch.setenv("RECOVAR_KCLASS_REPLAY_TAU2_SAME_ITER", "1")
     same_iter_replay_result = refine_single_volume(
         half_datasets,
         init_volume,
