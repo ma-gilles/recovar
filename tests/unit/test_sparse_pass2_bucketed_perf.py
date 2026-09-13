@@ -9908,46 +9908,7 @@ def test_device_chunk_scalars_gpu_fused_noise_accumulator_calls(monkeypatch):
     if not cb.cuda_available():
         pytest.skip(cb.cuda_unavailable_error())
 
-    n_images = 7
-    n_coarse_rot = rotation_grid_size(1)
-    fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 6, axis=0)
-    fine_parent = np.asarray([0, 1, 2, 3, 4, 5], dtype=np.int64)
-    fine_translations = np.asarray([[0.0, 0.0], [0.5, 0.0], [0.0, 1.0], [0.5, 1.0]], dtype=np.float32)
-    fine_translation_parent = np.asarray([0, 0, 1, 1], dtype=np.int32)
-    coarse_translations = np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
-    rng = np.random.default_rng(5)
-    significant_by_class = [
-        [np.sort(rng.choice(12, size=int(rng.integers(2, 5)), replace=False)).astype(np.int32) for _ in range(n_images)]
-        for _ in range(2)
-    ]
-    ds = MockDataset(n_images=n_images, seed=93)
-    volumes = jnp.stack([_hermitian_volume(VOLUME_SHAPE, seed=111), _hermitian_volume(VOLUME_SHAPE, seed=113)])
-    kwargs = dict(
-        experiment_dataset=ds,
-        means_array=volumes,
-        mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0,
-        noise_variance=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-        coarse_rotations_np=np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
-        coarse_translations_np=coarse_translations,
-        fine_rotations_np=fine_rotations,
-        fine_mstep_rotations_np=None,
-        rot_parent_map_np=fine_parent,
-        fine_translations_np=fine_translations,
-        trans_parent_map_np=fine_translation_parent,
-        sig_sample_indices_by_class=significant_by_class,
-        disc_type="linear_interp",
-        class_log_priors=np.log(np.asarray([0.45, 0.55], dtype=np.float64)),
-        accumulate_noise=True,
-        return_best_pose_details=True,
-        oversampling_order=1,
-        random_perturbation=0.0,
-        engine_kwargs={
-            "current_size": None,
-            "relion_half_volume_mstep": False,
-            "mstep_relion_x_half": True,
-            "adaptive_fraction": 0.75,
-        },
-    )
+    kwargs = build_device_chunk_scalars_gpu_fixture()
     calls = []
     original = bucketed_mod._accumulate_noise_totals_device
 
@@ -10617,6 +10578,57 @@ def test_device_bucket_rotations_are_bit_identical(monkeypatch, noise_mode, defe
     device = run("1")
     assert calls, "the device padder must run with the flag on"
     _assert_fused_arrays_identical(host, device, f"device bucket rotations ({noise_mode}, defer={defer_flag})")
+
+
+def build_device_chunk_scalars_gpu_fixture():
+    """Inputs of the fused-noise device-chunk-scalars guard.
+
+    Module level so the GPU guard and the atomic-spread probe that measures the
+    unchanged-source run-to-run band use byte-identical inputs.
+    """
+
+    from recovar.em.sampling import rotation_grid_size
+
+    n_images = 7
+    n_coarse_rot = rotation_grid_size(1)
+    fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 6, axis=0)
+    fine_parent = np.asarray([0, 1, 2, 3, 4, 5], dtype=np.int64)
+    fine_translations = np.asarray([[0.0, 0.0], [0.5, 0.0], [0.0, 1.0], [0.5, 1.0]], dtype=np.float32)
+    fine_translation_parent = np.asarray([0, 0, 1, 1], dtype=np.int32)
+    coarse_translations = np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+    rng = np.random.default_rng(5)
+    significant_by_class = [
+        [np.sort(rng.choice(12, size=int(rng.integers(2, 5)), replace=False)).astype(np.int32) for _ in range(n_images)]
+        for _ in range(2)
+    ]
+    ds = MockDataset(n_images=n_images, seed=93)
+    volumes = jnp.stack([_hermitian_volume(VOLUME_SHAPE, seed=111), _hermitian_volume(VOLUME_SHAPE, seed=113)])
+    return dict(
+        experiment_dataset=ds,
+        means_array=volumes,
+        mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0,
+        noise_variance=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        coarse_rotations_np=np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
+        coarse_translations_np=coarse_translations,
+        fine_rotations_np=fine_rotations,
+        fine_mstep_rotations_np=None,
+        rot_parent_map_np=fine_parent,
+        fine_translations_np=fine_translations,
+        trans_parent_map_np=fine_translation_parent,
+        sig_sample_indices_by_class=significant_by_class,
+        disc_type="linear_interp",
+        class_log_priors=np.log(np.asarray([0.45, 0.55], dtype=np.float64)),
+        accumulate_noise=True,
+        return_best_pose_details=True,
+        oversampling_order=1,
+        random_perturbation=0.0,
+        engine_kwargs={
+            "current_size": None,
+            "relion_half_volume_mstep": False,
+            "mstep_relion_x_half": True,
+            "adaptive_fraction": 0.75,
+        },
+    )
 
 
 @pytest.mark.parametrize("fused_noise", ["0", "1"])
