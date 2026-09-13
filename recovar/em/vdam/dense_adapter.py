@@ -30,23 +30,6 @@ from recovar.em.vdam.estep_common import (
 from recovar.em.vdam.sparse_pass2_estep import _run_sparse_pass2_initial_model_estep
 from recovar.em.vdam.state import InitialModelState, VdamAccumulator
 
-_ENGINE_DEFAULTS: dict[str, Any] = {
-    "current_size": None,
-    "projection_padding_factor": None,
-    "reconstruction_padding_factor": None,
-    "half_spectrum_scoring": True,
-    "score_with_masked_images": True,
-    "reconstruct_with_masked_images": True,
-    "sparse_pass2": False,
-    # RELION InitialModel BPref uses the rounded radial reconstruction support
-    # encoded by Minvsigma2, not the full square Fourier crop.
-    "recon_square_window": False,
-    "recon_exact_radius": False,
-    "reconstruction_subtract_projected_reference": True,
-    # RELION InitialModel scores the full rounded Fourier crop emitted by its
-    # CUDA projector, including the few crop-corner pixels outside r_max.
-    "projection_mask_current_image_disk": False,
-}
 _INACTIVE_CLASS_LOG_PRIOR = -1.0e30
 _EXACT_RELION_PROJECTOR_ENV = "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR"
 _RELION_PROJECTOR_DUMP_DIR_ENV = "RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR"
@@ -100,10 +83,23 @@ def _image_groups(
 
 
 def _dense_engine_kwargs(state: InitialModelState, config: DenseInitialModelEstepConfig) -> dict[str, Any]:
-    engine_kwargs = dict(_ENGINE_DEFAULTS)
-    engine_kwargs["current_size"] = None if state.current_size <= 0 else state.current_size
-    engine_kwargs["projection_padding_factor"] = config.padding_factor
-    engine_kwargs["reconstruction_padding_factor"] = config.padding_factor
+    engine_kwargs = {
+        "current_size": None if state.current_size <= 0 else state.current_size,
+        "projection_padding_factor": config.padding_factor,
+        "reconstruction_padding_factor": config.padding_factor,
+        "half_spectrum_scoring": True,
+        "score_with_masked_images": True,
+        "reconstruct_with_masked_images": True,
+        "sparse_pass2": False,
+        # RELION InitialModel BPref uses the rounded radial reconstruction support
+        # encoded by Minvsigma2, not the full square Fourier crop.
+        "recon_square_window": False,
+        "recon_exact_radius": False,
+        "reconstruction_subtract_projected_reference": True,
+        # RELION InitialModel scores the full rounded Fourier crop emitted by its
+        # CUDA projector, including the few crop-corner pixels outside r_max.
+        "projection_mask_current_image_disk": False,
+    }
     engine_kwargs.update(config.engine_kwargs)
 
     controlled = ("image_indices", "reconstruction_group_ids", "reconstruction_group_count")
