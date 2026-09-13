@@ -2361,7 +2361,6 @@ def _run_relion_iteration_loop(
                     noise_variance_k=noise_variance_k,
                     previous_best_rotation_eulers_k=relion_half_inputs.previous_best_rotation_eulers[k],
                     local_search_rotations=local_search_rotations,
-                    local_search_rotation_eulers=local_search_rotation_eulers,
                     local_search_mstep_rotations=local_search_mstep_rotations,
                     local_search_order=local_search_order,
                     sigma_rot=sigma_rot,
@@ -2371,7 +2370,6 @@ def _run_relion_iteration_loop(
                     trans_prior_center=local_trans_prior_center,
                     trans_prior_center_for_engine=trans_prior_center_for_engine,
                     current_sigma_offset_angstrom=sigma_offset_k,
-                    current_translation_range=current_translation_range,
                     disc_type=options.disc_type,
                     cs_for_engine=cs_for_engine,
                     model_current_size_for_engine=model_current_size_for_engine,
@@ -4418,7 +4416,6 @@ def _run_relion_iteration_loop(
     )
     final_local_search_order = None
     final_local_search_rotations = None
-    final_local_search_rotation_eulers = None
     final_local_search_mstep_rotations = None
     final_local_search_random_perturbation = 0.0
     final_local_search_angular_sampling_deg = None
@@ -4455,7 +4452,7 @@ def _run_relion_iteration_loop(
                 _final_local_search_use_float64_scoring, _final_local_search_use_float64_projections = (
                     _local_search_precision_flags(final_sampling_relion_iteration, pass_index=2)
                 )
-                final_local_search_rotations, final_local_search_rotation_eulers, final_local_search_mstep_rotations = (
+                final_local_search_rotations, _, final_local_search_mstep_rotations = (
                     _exact_local_fine_grid(
                         healpix_order=final_local_search_order,
                         angular_sampling_deg=final_local_search_angular_sampling_deg,
@@ -4469,7 +4466,6 @@ def _run_relion_iteration_loop(
                 )
             else:
                 final_local_search_rotations = None
-                final_local_search_rotation_eulers = None
                 if final_perturbation_applied:
                     final_local_search_random_perturbation = float(final_random_perturbation)
                 if use_parent_expanded_final_local:
@@ -4485,7 +4481,6 @@ def _run_relion_iteration_loop(
                     )
         else:
             final_local_search_rotations = final_effective_rotations
-            final_local_search_rotation_eulers = final_effective_rotation_eulers
             final_local_search_mstep_rotations = _local_search_mstep_rotations(
                 final_effective_mstep_rotations, final_effective_rotation_eulers, final_local_search_order
             )
@@ -4643,7 +4638,6 @@ def _run_relion_iteration_loop(
                 noise_variance_k=final_noise_variance_per_half[k],
                 previous_best_rotation_eulers_k=relion_half_inputs.previous_best_rotation_eulers[k],
                 local_search_rotations=final_local_search_rotations,
-                local_search_rotation_eulers=final_local_search_rotation_eulers,
                 local_search_mstep_rotations=final_local_search_mstep_rotations,
                 local_search_order=final_local_search_order,
                 sigma_rot=final_sigma_rot,
@@ -4653,7 +4647,6 @@ def _run_relion_iteration_loop(
                 trans_prior_center=final_local_trans_prior_center,
                 trans_prior_center_for_engine=final_trans_prior_center_for_engine,
                 current_sigma_offset_angstrom=final_sigma_offset_k,
-                current_translation_range=final_translation_range,
                 disc_type=options.disc_type,
                 cs_for_engine=final_current_size,
                 local_pass1_current_size=final_local_pass1_current_size,

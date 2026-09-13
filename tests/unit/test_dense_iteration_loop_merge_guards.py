@@ -473,7 +473,6 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
         noise_variance_k="noise_variance",
         previous_best_rotation_eulers_k=np.zeros((1, 3), dtype=np.float32),
         local_search_rotations=np.eye(3, dtype=np.float32)[None, :, :],
-        local_search_rotation_eulers=np.zeros((1, 3), dtype=np.float32),
         local_search_order=0,
         sigma_rot=0.1,
         sigma_psi=0.1,
@@ -482,7 +481,6 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
         trans_prior_center=np.zeros((1, 2), dtype=np.float32),
         trans_prior_center_for_engine=np.zeros((1, 2), dtype=np.float32),
         current_sigma_offset_angstrom=1.0,
-        current_translation_range=1.0,
         disc_type="linear_interp",
         cs_for_engine=8,
         model_current_size_for_engine=8,
@@ -601,7 +599,6 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(
         noise_variance_k="noise_variance",
         previous_best_rotation_eulers_k=np.zeros((2, 3), dtype=np.float32),
         local_search_rotations=np.broadcast_to(np.eye(3, dtype=np.float32), (2, 3, 3)).copy(),
-        local_search_rotation_eulers=np.zeros((2, 3), dtype=np.float32),
         local_search_order=1,
         sigma_rot=0.1,
         sigma_psi=0.1,
@@ -610,7 +607,6 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(
         trans_prior_center=np.zeros((2, 2), dtype=np.float32),
         trans_prior_center_for_engine=np.zeros((2, 2), dtype=np.float32),
         current_sigma_offset_angstrom=1.0,
-        current_translation_range=1.0,
         disc_type="linear_interp",
         cs_for_engine=8,
         local_pass1_current_size=8,
@@ -714,7 +710,6 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
         noise_variance_k="noise_variance",
         previous_best_rotation_eulers_k=np.zeros((1, 3), dtype=np.float32),
         local_search_rotations=np.eye(3, dtype=np.float32)[None, :, :],
-        local_search_rotation_eulers=np.zeros((1, 3), dtype=np.float32),
         local_search_order=0,
         sigma_rot=0.1,
         sigma_psi=0.1,
@@ -723,7 +718,6 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
         trans_prior_center=np.zeros((1, 2), dtype=np.float32),
         trans_prior_center_for_engine=np.zeros((1, 2), dtype=np.float32),
         current_sigma_offset_angstrom=1.0,
-        current_translation_range=1.0,
         disc_type="linear_interp",
         cs_for_engine=8,
         model_current_size_for_engine=8,
@@ -872,8 +866,12 @@ def test_final_all_data_local_search_uses_replayed_translation_range():
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
     final_call_idx = source.index("final_result = _score_half_local_in_bpref_scope(")
     final_call = source[final_call_idx : source.index("            )", final_call_idx)]
-    assert "current_translation_range=final_translation_range" in final_call
-    assert "current_translation_range=float(state.translation_range)" not in final_call
+    assert "current_translations=final_current_translations" in final_call
+    replay_start = source.index('final_translation_range = float(final_replay_meta["offset_range"]) / px')
+    grid_start = source.index("final_base_translations = jnp.asarray(", replay_start)
+    grid = source[grid_start : source.index("final_current_translations = final_base_translations", grid_start)]
+    assert "final_translation_range," in grid
+    assert "final_translation_step," in grid
     assert "debug_iteration=final_sampling_relion_iteration" in final_call
 
 
