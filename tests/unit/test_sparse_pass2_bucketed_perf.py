@@ -1242,6 +1242,27 @@ def test_capacity_derived_hypothesis_budget_follows_free_memory(monkeypatch):
     monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_CAPACITY_DERIVED_HYPOTHESES", raising=False)
     assert not bucketed_mod.capacity_derived_hypotheses_enabled(), "the flag must default off"
 
+    # The free-memory share is the lever, not the rule: the measured headroom at
+    # 100k/256 gave only a 1.14x budget at the 0.25 default (job 13844994), so a sweep
+    # has to be possible without a commit per value. The ceiling is below 1.0 because
+    # the budget is the total live bytes for the score gathers.
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_CAPACITY_FREE_FRACTION", raising=False)
+    assert bucketed_mod._capacity_free_fraction() == pytest.approx(0.25)
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_CAPACITY_FREE_FRACTION", "0.4")
+    assert bucketed_mod._capacity_free_fraction() == pytest.approx(0.4)
+    swept = bucketed_mod._auto_hypotheses_per_microbatch(
+        **common,
+        capacity_derived_hypotheses=True,
+        free_device_memory_bytes=int(0.9 * device_memory),
+        allocator_free_memory_bytes=int(0.9 * device_memory),
+    )
+    assert swept > idle, "a larger free share must raise the budget"
+    for bad in ("0", "-0.1", "0.9", "1.0"):
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_CAPACITY_FREE_FRACTION", bad)
+        with pytest.raises(ValueError, match="must be in"):
+            bucketed_mod._capacity_free_fraction()
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_CAPACITY_FREE_FRACTION", raising=False)
+
 
 def test_score_only_sparse_pass_uses_larger_default_bucket_budget(monkeypatch):
     monkeypatch.delenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", raising=False)

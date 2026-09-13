@@ -229,6 +229,36 @@ def _fused_kclass_score_gather_device_fraction() -> float:
         )
     return value
 _AUTO_FUSED_KCLASS_SCORE_GATHER_FREE_FRACTION = 0.25
+_FUSED_KCLASS_CAPACITY_FREE_FRACTION_ENV = (
+    "RECOVAR_SPARSE_KCLASS_CAPACITY_FREE_FRACTION"
+)
+
+
+def _capacity_free_fraction() -> float:
+    """Share of free device memory the capacity-derived hypothesis budget may use.
+
+    The measured headroom is much smaller than a naive reading suggests. At 100k/256
+    K=4 the card reports 79.6 GiB total but only 46.5 GiB free and 36.3 GiB free to the
+    JAX allocator by the time pass 2 plans, so the default 0.25 gives a budget only 1.14
+    times the flat rule's (job 13844994). Sweeping this fraction is therefore the lever,
+    not the rule, and it needs to be an environment override so a sweep costs no commits.
+
+    Raising it is not free: the budget is the total live bytes for the score gathers, so
+    a large fraction of an already half-full card risks the out-of-memory failure the
+    16.30 GiB compact-pair diff2 gather produced at this size before. The ceiling here
+    is deliberately below 1.0 for that reason.
+    """
+
+    raw = os.environ.get(_FUSED_KCLASS_CAPACITY_FREE_FRACTION_ENV)
+    if raw is None or not raw.strip():
+        return _AUTO_FUSED_KCLASS_SCORE_GATHER_FREE_FRACTION
+    value = float(raw)
+    if not (0.0 < value <= 0.6):
+        raise ValueError(
+            f"{_FUSED_KCLASS_CAPACITY_FREE_FRACTION_ENV} must be in (0, 0.6], got {raw!r}; "
+            "the budget is the total live bytes for the score gathers"
+        )
+    return value
 _FUSED_KCLASS_CAPACITY_DERIVED_HYPOTHESES_ENV = (
     "RECOVAR_SPARSE_KCLASS_CAPACITY_DERIVED_HYPOTHESES"
 )
@@ -1847,8 +1877,8 @@ def _auto_hypotheses_per_microbatch(
         ):
             budget_bytes = float(
                 min(
-                    int(float(free_device_memory_bytes) * _AUTO_FUSED_KCLASS_SCORE_GATHER_FREE_FRACTION),
-                    int(float(allocator_free_memory_bytes) * _AUTO_FUSED_KCLASS_SCORE_GATHER_FREE_FRACTION),
+                    int(float(free_device_memory_bytes) * _capacity_free_fraction()),
+                    int(float(allocator_free_memory_bytes) * _capacity_free_fraction()),
                 )
             )
         return max(
