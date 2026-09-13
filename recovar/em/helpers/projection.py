@@ -408,7 +408,11 @@ def _project_relion_projector_texture(
     padding_factor=1,
     image_r_max=None,
 ):
-    """Project one RELION ``PPref`` block with RELION's CUDA texture arithmetic."""
+    """Project one RELION ``PPref`` block with RELION's CUDA texture arithmetic.
+
+    Equal-extent F32 inputs use direct half storage; see
+    ``docs/development/em_half_texture_staging.md`` for eligibility and gates.
+    """
 
     if image_r_max is not None:
         if mask_current_image_disk:
@@ -420,6 +424,32 @@ def _project_relion_projector_texture(
             jnp.asarray(r_max, jnp.int32) if runtime_r_max is None else runtime_r_max,
             image_shape=(int(projector_output_size), int(projector_output_size)),
             padding_factor=int(padding_factor), image_r_max=image_r_max,
+        )
+    elif (
+        runtime_r_max is None
+        and int(padding_factor) in (1, 2)
+        and int(r_max) > 0
+        and int(projector_output_size) == 2 * int(r_max)
+        and volume_relion_half.dtype == jnp.complex64
+        and volume_relion_half.shape == (
+            2 * int(r_max) * int(padding_factor) + 3,
+            2 * int(r_max) * int(padding_factor) + 3,
+            int(r_max) * int(padding_factor) + 2,
+        )
+        and volume_relion_half.shape[0] <= 1025
+        and rotations_block.dtype == jnp.float32
+        and 0 < rotations_block.shape[0] <= 65535
+    ):
+        # At equal physical/logical extent the existing half-storage kernel
+        # stages the same texels without a cubic transpose/zero-fill buffer.
+        # Keep all current crop, mask, gather and scaling operations below.
+        # Other output/radius layouts retain their separately qualified route.
+        from recovar.cuda_backproject import project_relion_half_capacity
+
+        projection_crop = project_relion_half_capacity(
+            volume_relion_half, rotations_block, jnp.asarray(r_max, jnp.int32),
+            image_shape=(int(projector_output_size), int(projector_output_size)),
+            padding_factor=int(padding_factor),
         )
     elif runtime_r_max is None:
         projector_full = relion_projector_half_to_texture_full(volume_relion_half)
@@ -530,6 +560,8 @@ def compute_relion_projector_projections_block(
             "r_max": int(r_max),
             "projector_output_size": resolved_output_size,
         }
+        if int(padding_factor) != 1:
+            texture_kwargs["padding_factor"] = int(padding_factor)
         if image_r_max is not None:
             texture_kwargs["image_r_max"] = image_r_max
             texture_kwargs["padding_factor"] = int(padding_factor)
