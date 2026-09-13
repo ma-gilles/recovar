@@ -15,7 +15,6 @@ from typing import Iterable, Literal
 
 import numpy as np
 
-from recovar.core import mask as core_mask
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.data_io.starfile import read_star
 from recovar.em import sampling
@@ -157,37 +156,13 @@ def _image_sigma2_iter(
 def _configure_relion_image_mask(dataset, opts: NativeInitialModelOptions) -> None:
     """Configure dataset preprocessing to match InitialModel scoring masks."""
 
-    source = dataset.image_source
-    backend = getattr(source, "backend", source)
-    if backend is None:
-        return
-    if hasattr(backend, "set_relion_image_mask"):
-        backend.set_relion_image_mask(
-            pixel_size=float(dataset.voxel_size),
-            particle_diameter_ang=float(opts.particle_diameter),
-            width_mask_edge_px=float(opts.width_mask_edge_px),
-        )
-    else:
-        image_mask = core_mask.relion_soft_image_mask(
-            int(dataset.grid_size),
-            float(dataset.voxel_size),
-            float(opts.particle_diameter),
-            float(opts.width_mask_edge_px),
-        )
-        if hasattr(backend, "image_mask"):
-            backend.image_mask = image_mask
-        if hasattr(backend, "mask"):
-            backend.mask = image_mask
-        if hasattr(backend, "image_mask_mode"):
-            backend.image_mask_mode = "relion_background_fill"
-
-    if hasattr(backend, "set_relion_fourier_backend"):
-        backend.set_relion_fourier_backend(opts.image_fourier_backend)
-    elif opts.image_fourier_backend != "host_numpy":
-        raise ValueError(
-            "InitialModel image_fourier_backend requires a compatible image backend; "
-            f"got {opts.image_fourier_backend!r}",
-        )
+    backend = dataset.image_source.backend
+    backend.set_relion_image_mask(
+        pixel_size=float(dataset.voxel_size),
+        particle_diameter_ang=float(opts.particle_diameter),
+        width_mask_edge_px=float(opts.width_mask_edge_px),
+    )
+    backend.set_relion_fourier_backend(opts.image_fourier_backend)
 
 
 def _native_initialmodel_do_grad(
