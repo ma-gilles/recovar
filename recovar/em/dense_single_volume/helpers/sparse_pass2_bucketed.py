@@ -7146,6 +7146,24 @@ def device_active_row_indices_enabled() -> bool:
     return parse_env_flag(_SPARSE_KCLASS_DEVICE_ACTIVE_ROW_INDICES_ENV, default=False)
 
 
+@partial(jax.jit, static_argnames=("class_bucket_size",))
+def _flat_rows_split_device(active_indices, active_mask, *, class_bucket_size: int):
+    """Split flat active-row indices into (image row, rotation column) plus a bool mask.
+
+    The host form is ``idx // bucket``, ``idx % bucket`` in int64 then cast to int32, and
+    ``mask.astype(bool)``; indices are non-negative and below ``images * bucket``, so the
+    int32 division here gives the same integers. Used when the indices are already device
+    arrays, where the host form would pull them back and re-upload three arrays.
+    """
+
+    active_indices = active_indices.astype(jnp.int32)
+    return (
+        (active_indices // jnp.int32(class_bucket_size)).astype(jnp.int32),
+        (active_indices % jnp.int32(class_bucket_size)).astype(jnp.int32),
+        active_mask.astype(bool),
+    )
+
+
 @partial(jax.jit, static_argnames=("n_rotation_rows", "padded_count"))
 def _active_flat_row_indices_device(counts, *, n_rotation_rows: int, padded_count: int):
     """``(padded_count,)`` flat row indices and float32 mask from per-image counts.
@@ -16229,12 +16247,21 @@ def compute_k_class_pass2_stats_sparse_fused(
                                 group_timing, "mstep_active_row_sync", time.time() - active_rows_t0
                             )
                             if int(mstep_active_indices.size) > 0:
-                                _idx = np.asarray(mstep_active_indices, dtype=np.int64)
-                                flat_rows_for_sums = (
-                                    jnp.asarray((_idx // int(class_bucket_size)).astype(np.int32)),
-                                    jnp.asarray((_idx % int(class_bucket_size)).astype(np.int32)),
-                                    jnp.asarray(np.asarray(mstep_active_mask, dtype=bool)),
-                                )
+                                if isinstance(mstep_active_indices, jax.Array):
+                                    # Already on the device (RECOVAR_SPARSE_KCLASS_DEVICE_ACTIVE_ROW_INDICES):
+                                    # splitting on the host would pull them back and re-upload.
+                                    flat_rows_for_sums = _flat_rows_split_device(
+                                        mstep_active_indices,
+                                        mstep_active_mask,
+                                        class_bucket_size=int(class_bucket_size),
+                                    )
+                                else:
+                                    _idx = np.asarray(mstep_active_indices, dtype=np.int64)
+                                    flat_rows_for_sums = (
+                                        jnp.asarray((_idx // int(class_bucket_size)).astype(np.int32)),
+                                        jnp.asarray((_idx % int(class_bucket_size)).astype(np.int32)),
+                                        jnp.asarray(np.asarray(mstep_active_mask, dtype=bool)),
+                                    )
                         _fused_outputs = _compact_pair_weighted_sums_and_noise_native(
                             mstep_probs,
                             jnp.asarray(pair_arrays["local_rotation_row"]),

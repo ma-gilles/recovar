@@ -11017,3 +11017,23 @@ def test_fused_kclass_score_gather_fraction_env(monkeypatch):
     monkeypatch.setenv(bucketed_mod._FUSED_KCLASS_SCORE_GATHER_FRACTION_ENV, "0.9")
     with pytest.raises(ValueError, match="must be in"):
         bucketed_mod._max_hypotheses_per_microbatch_for_pass(**kwargs)
+
+
+def test_flat_rows_split_device_matches_the_host_split():
+    """The device split of the flat active-row indices equals the host int64 form."""
+    jax = pytest.importorskip("jax")
+    import jax.numpy as jnp
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    bucket = 8192
+    idx = np.array([0, 1, 8191, 8192, 20000, 3 * bucket + 17], dtype=np.int32)
+    mask = np.array([1.0, 1.0, 1.0, 1.0, 0.0, 1.0], dtype=np.float32)
+    host = ((idx.astype(np.int64) // bucket).astype(np.int32),
+            (idx.astype(np.int64) % bucket).astype(np.int32),
+            mask.astype(bool))
+    with jax.default_device(jax.devices("cpu")[0]):
+        got = bucketed_mod._flat_rows_split_device(jnp.asarray(idx), jnp.asarray(mask), class_bucket_size=bucket)
+    for g, h, name in zip(got, host, ("row", "column", "mask")):
+        g = np.asarray(g)
+        assert g.dtype == h.dtype, name
+        np.testing.assert_array_equal(g, h, err_msg=name)
