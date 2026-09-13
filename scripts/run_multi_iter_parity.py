@@ -282,6 +282,7 @@ def particle_half_indices(
     fresh_order_seed: int | None = None,
     optics_group_ids=None,
     first_iteration: int = 1,
+    shuffle_algorithm: str = "legacy",
 ):
     """Return source-order or reconstructed fresh RELION half orders."""
 
@@ -294,6 +295,7 @@ def particle_half_indices(
             int(fresh_order_seed),
             int(first_iteration),
             optics_group_ids=optics_group_ids,
+            shuffle_algorithm=shuffle_algorithm,
         )
     return (
         np.flatnonzero(subsets == 1).astype(np.int64),
@@ -1029,6 +1031,10 @@ def main():
             "sigma2_noise as used by an uninterrupted RELION trajectory. The default "
             "emulates a true RELION MPI restart, which broadcasts half-1 noise to both halves."
         ),
+    )
+    parser.add_argument(
+        "--relion-particle-shuffle", choices=("legacy", "mt19937"), default="legacy",
+        help="Shuffle for reconstructed diagnostic particle order; use mt19937 for RELION 5.0.1.",
     )
     parser.add_argument(
         "--diagnostic-fresh-particle-order-seed",
@@ -1818,6 +1824,7 @@ def main():
             relion_subsets,
             fresh_order_seed=selected_order_seed,
             optics_group_ids=relion_optics,
+            shuffle_algorithm=args.relion_particle_shuffle,
         )
         half1_indices, half2_indices = map_relion_half_orders_to_dataset_rows(
             our_names,

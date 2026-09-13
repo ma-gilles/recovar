@@ -169,17 +169,19 @@ def test_particle_half_indices_preserve_source_order_and_int64_dtype():
     assert half2.dtype == np.int64
 
 
-def test_particle_half_indices_can_reconstruct_fresh_relion_order(monkeypatch):
+@pytest.mark.parametrize("shuffle_algorithm", ["legacy", "mt19937"])
+def test_particle_half_indices_can_reconstruct_fresh_relion_order(monkeypatch, shuffle_algorithm):
     from recovar.em.helpers import expected_accuracy
 
     observed = {}
 
-    def fake_orders(subsets, seed, first_iteration, *, optics_group_ids=None):
+    def fake_orders(subsets, seed, first_iteration, *, optics_group_ids=None, shuffle_algorithm):
         observed.update(
             subsets=np.asarray(subsets),
             seed=seed,
             first_iteration=first_iteration,
             optics=np.asarray(optics_group_ids),
+            shuffle_algorithm=shuffle_algorithm,
         )
         return (
             np.asarray([4, 1, 3], dtype=np.int64),
@@ -194,6 +196,7 @@ def test_particle_half_indices_can_reconstruct_fresh_relion_order(monkeypatch):
         subsets,
         fresh_order_seed=1707,
         optics_group_ids=optics,
+        shuffle_algorithm=shuffle_algorithm,
     )
 
     np.testing.assert_array_equal(half1, np.asarray([4, 1, 3]))
@@ -202,6 +205,7 @@ def test_particle_half_indices_can_reconstruct_fresh_relion_order(monkeypatch):
     np.testing.assert_array_equal(observed["optics"], optics)
     assert observed["seed"] == 1707
     assert observed["first_iteration"] == 1
+    assert observed["shuffle_algorithm"] == shuffle_algorithm
 
 
 def test_map_relion_half_orders_to_dataset_rows_uses_image_identity():
