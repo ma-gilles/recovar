@@ -9,6 +9,7 @@ from typing import NamedTuple
 import numpy as np
 import pytest
 
+from recovar.em.diagnostics import coarse_score_diagnostics
 from recovar.em.diagnostics.coarse_score_diagnostics import _with_coarse_selector_audit
 from recovar.em.vdam import dense_adapter, sparse_pass2_estep
 
@@ -120,7 +121,7 @@ def test_sparse_adapter_propagates_real_coarse_support_hybrid_and_counts():
         pose_assignments=np.asarray([3, 7], dtype=np.int32),
     )
 
-    sealed = sparse_pass2_estep._with_initial_model_coarse_diagnostics(
+    sealed = coarse_score_diagnostics._with_initial_model_coarse_diagnostics(
         result,
         full_stats={
             "significant_cutoff_counts": np.asarray([17, 23], dtype=np.int32),
@@ -149,7 +150,7 @@ def test_sparse_adapter_rejects_coarse_count_shape_drift():
     )
 
     with pytest.raises(RuntimeError, match="significant counts.*pass-2 images"):
-        sparse_pass2_estep._with_initial_model_coarse_diagnostics(
+        coarse_score_diagnostics._with_initial_model_coarse_diagnostics(
             result,
             full_stats={"significant_cutoff_counts": np.asarray([17], dtype=np.int32)},
             selector_audit=None,

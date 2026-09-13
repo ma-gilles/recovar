@@ -6,6 +6,7 @@ significance batch dumps and the env-gated stop after a dump. None of this
 changes production arithmetic.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -1389,3 +1390,56 @@ def _maybe_dump_k_class_significance_batch(
             current_size=current_size,
             debug_iteration=debug_iteration,
         )
+
+
+def _initial_model_coarse_gemm_diagnostic_scopes(
+    processing_groups,
+    *,
+    debug_iteration: int | None,
+    current_size: int | None,
+    n_classes: int,
+) -> dict[int, CoarseGaussianGemmDiagnosticScope]:
+    """Name every non-empty InitialModel pass-1 call without collisions."""
+
+    nonempty_groups = []
+    digest = hashlib.sha256()
+    for processing_index, (halfset_idx, image_indices, reconstruction_group_ids) in enumerate(
+        processing_groups
+    ):
+        image_indices = np.asarray(image_indices, dtype=np.int64).reshape(-1)
+        if image_indices.size == 0:
+            continue
+        digest.update(np.asarray([processing_index, halfset_idx], dtype="<i8").tobytes())
+        digest.update(image_indices.astype("<i8", copy=False).tobytes())
+        if reconstruction_group_ids is not None:
+            digest.update(
+                np.asarray(reconstruction_group_ids, dtype="<i4").reshape(-1).tobytes()
+            )
+            halfset_label = "joint"
+        else:
+            halfset_label = f"h{int(halfset_idx):02d}"
+        nonempty_groups.append((processing_index, halfset_label))
+    if not nonempty_groups:
+        return {}
+
+    iteration = -1 if debug_iteration is None else int(debug_iteration)
+    iteration_token = f"m{-iteration:04d}" if iteration < 0 else f"{iteration:04d}"
+    size = -1 if current_size is None else int(current_size)
+    size_token = f"m{-size:04d}" if size < 0 else f"{size:04d}"
+    run_id = (
+        f"initial_model_it{iteration_token}_cs{size_token}_k{int(n_classes):03d}_"
+        f"particles{digest.hexdigest()[:16]}"
+    )
+    call_ids = tuple(
+        f"call{call_ordinal:04d}_group{processing_index:04d}_halfset{halfset_label}"
+        for call_ordinal, (processing_index, halfset_label) in enumerate(nonempty_groups)
+    )
+    return {
+        processing_index: CoarseGaussianGemmDiagnosticScope(
+            run_id=run_id,
+            call_id=call_ids[call_ordinal],
+            expected_call_ids=call_ids,
+            finalize=call_ordinal == len(call_ids) - 1,
+        )
+        for call_ordinal, (processing_index, _halfset_label) in enumerate(nonempty_groups)
+    }

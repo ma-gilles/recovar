@@ -21,10 +21,10 @@ import pytest
 
 import recovar.em.vdam as init_model
 from recovar.commands.initial_model import GuiInitialModelDefaults
+from recovar.em.diagnostics import vdam_mstep_replay
 from recovar.em.helpers.expected_accuracy import estimate_relion_expected_accuracy_from_prepared_inputs
 from recovar.em.refinement.mean_helpers import initial_low_pass_filter_references
 from recovar.em.relion import relion_projector_setup
-from recovar.em.diagnostics import vdam_mstep_replay
 from recovar.em.vdam import (
     dense_adapter,
     driver,
@@ -416,6 +416,11 @@ def test_total_package_loc_within_budget():
     # Shared diagnostics remain counted after their responsibility move.
     total += sum(_file_loc(PACKAGE_DIR.parent / "diagnostics" / name)
                  for name in ("gt_metrics.py", "gt_registration.py", "vdam_mstep_replay.py"))
+    from recovar.em.diagnostics.coarse_gaussian_diagnostics import _initial_model_coarse_gemm_diagnostic_scopes
+    from recovar.em.diagnostics.coarse_score_diagnostics import _with_initial_model_coarse_diagnostics
+    total += sum(len(inspect.getsourcelines(fn)[0]) + 2 for fn in (
+        _initial_model_coarse_gemm_diagnostic_scopes, _with_initial_model_coarse_diagnostics,
+    )) + 2  # Their diagnostic-owner imports remain counted too.
     total += len(inspect.getsourcelines(GuiInitialModelDefaults)[0]) + 2  # Extracted launcher defaults remain counted.
     total += 1  # ProjectorSetupBackend alias now lives in the shared owner.
     # Shared projector wrappers remain counted after leaving dense_adapter.

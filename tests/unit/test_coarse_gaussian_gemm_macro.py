@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 from helpers import score_diagnostics
 
-from recovar.em.diagnostics import coarse_score_diagnostics
+from recovar.em.diagnostics import coarse_gaussian_diagnostics, coarse_score_diagnostics
 from recovar.em.relion import relion_ctf
 from recovar.em.scoring import coarse_gaussian_gemm, scoring, significance
 from recovar.em.scoring.coarse_gemm_streaming import COARSE_GEMM_STREAMING_SCHEMA
@@ -510,19 +510,18 @@ def test_coarse_gaussian_gemm_resource_gate_records_full_transient_and_host_sync
 
 
 def test_initial_model_multigroup_diagnostic_scopes_are_deterministic_and_unique():
-    from recovar.em.vdam import dense_adapter, sparse_pass2_estep
 
     groups = [
         (0, np.asarray([0, 2], dtype=np.int64), None),
         (1, np.asarray([1], dtype=np.int64), None),
     ]
-    first = sparse_pass2_estep._initial_model_coarse_gemm_diagnostic_scopes(
+    first = coarse_gaussian_diagnostics._initial_model_coarse_gemm_diagnostic_scopes(
         groups,
         debug_iteration=3,
         current_size=8,
         n_classes=2,
     )
-    second = sparse_pass2_estep._initial_model_coarse_gemm_diagnostic_scopes(
+    second = coarse_gaussian_diagnostics._initial_model_coarse_gemm_diagnostic_scopes(
         groups,
         debug_iteration=3,
         current_size=8,
@@ -1143,7 +1142,7 @@ def test_coarse_gaussian_gemm_macro_projects_once_and_binds_all_image_lanes(
 
 def test_coarse_gaussian_gemm_macro_is_shared_by_em_and_initial_model():
     from recovar.em.classification import k_class
-    from recovar.em.vdam import dense_adapter, sparse_pass2_estep
+    from recovar.em.vdam import sparse_pass2_estep
 
     assert (
         sparse_pass2_estep._compute_k_class_significance_batched

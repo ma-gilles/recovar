@@ -7,7 +7,6 @@ metadata/profile summaries. ``dense_adapter`` routes to it.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 import time
@@ -18,10 +17,10 @@ import numpy as np
 
 from recovar.em.classification.k_class import _run_sparse_k_class_adaptive_pass2, run_local_k_class_em
 from recovar.em.diagnostics import bpref_diagnostics
-from recovar.em.diagnostics.coarse_gaussian_diagnostics import CoarseGaussianGemmDiagnosticScope
+from recovar.em.diagnostics.coarse_gaussian_diagnostics import _initial_model_coarse_gemm_diagnostic_scopes
 from recovar.em.diagnostics.coarse_score_diagnostics import (
     _coarse_selector_audit_from_full_stats,
-    _with_coarse_significance_diagnostics,
+    _with_initial_model_coarse_diagnostics,
 )
 from recovar.em.helpers.batch_planning import RELION_SCORE_TENSOR_FLOAT_BUDGET
 from recovar.em.helpers.convergence import healpix_angular_step
@@ -187,58 +186,6 @@ _SPARSE_PASS2_CONTROL_KEYS = {
 }
 
 
-def _initial_model_coarse_gemm_diagnostic_scopes(
-    processing_groups,
-    *,
-    debug_iteration: int | None,
-    current_size: int | None,
-    n_classes: int,
-) -> dict[int, CoarseGaussianGemmDiagnosticScope]:
-    """Name every non-empty InitialModel pass-1 call without collisions."""
-
-    nonempty_groups = []
-    digest = hashlib.sha256()
-    for processing_index, (halfset_idx, image_indices, reconstruction_group_ids) in enumerate(
-        processing_groups
-    ):
-        image_indices = np.asarray(image_indices, dtype=np.int64).reshape(-1)
-        if image_indices.size == 0:
-            continue
-        digest.update(np.asarray([processing_index, halfset_idx], dtype="<i8").tobytes())
-        digest.update(image_indices.astype("<i8", copy=False).tobytes())
-        if reconstruction_group_ids is not None:
-            digest.update(
-                np.asarray(reconstruction_group_ids, dtype="<i4").reshape(-1).tobytes()
-            )
-            halfset_label = "joint"
-        else:
-            halfset_label = f"h{int(halfset_idx):02d}"
-        nonempty_groups.append((processing_index, halfset_label))
-    if not nonempty_groups:
-        return {}
-
-    iteration = -1 if debug_iteration is None else int(debug_iteration)
-    iteration_token = f"m{-iteration:04d}" if iteration < 0 else f"{iteration:04d}"
-    size = -1 if current_size is None else int(current_size)
-    size_token = f"m{-size:04d}" if size < 0 else f"{size:04d}"
-    run_id = (
-        f"initial_model_it{iteration_token}_cs{size_token}_k{int(n_classes):03d}_"
-        f"particles{digest.hexdigest()[:16]}"
-    )
-    call_ids = tuple(
-        f"call{call_ordinal:04d}_group{processing_index:04d}_halfset{halfset_label}"
-        for call_ordinal, (processing_index, halfset_label) in enumerate(nonempty_groups)
-    )
-    return {
-        processing_index: CoarseGaussianGemmDiagnosticScope(
-            run_id=run_id,
-            call_id=call_ids[call_ordinal],
-            expected_call_ids=call_ids,
-            finalize=call_ordinal == len(call_ids) - 1,
-        )
-        for call_ordinal, (processing_index, _halfset_label) in enumerate(nonempty_groups)
-    }
-
 
 def _pop_sparse_pass2_options(engine_kwargs: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     """Split shared dense/local-engine kwargs from InitialModel pass-2 controls."""
@@ -354,35 +301,6 @@ def _sparse_pass2_estep_meta(
     meta["sparse_pass2"] = True
     return meta
 
-
-def _with_initial_model_coarse_diagnostics(
-    result,
-    *,
-    full_stats: dict[str, Any] | None,
-    selector_audit: dict[str, Any] | None,
-):
-    """Carry the shared coarse result diagnostics through InitialModel pass 2."""
-
-    stats = {} if full_stats is None else full_stats
-    significant_counts = stats.get("significant_cutoff_counts")
-    if significant_counts is not None:
-        counts = np.asarray(significant_counts, dtype=np.int32)
-        n_images = int(np.asarray(result.pose_assignments).size)
-        if counts.shape != (n_images,):
-            raise RuntimeError(
-                "InitialModel coarse significant counts do not match pass-2 images: "
-                f"{counts.shape} vs ({n_images},)",
-            )
-        result = result._replace(significant_counts=counts)
-    return _with_coarse_significance_diagnostics(
-        result,
-        selector_audit=selector_audit,
-        support_audit=stats.get("coarse_significance_support_audit"),
-        hybrid_stats=stats.get("coarse_gaussian_gemm_hybrid"),
-        exact_coarse_operand_assembly=stats.get(
-            "exact_coarse_operand_assembly",
-        ),
-    )
 
 
 def _sparse_pass2_profile_summary(

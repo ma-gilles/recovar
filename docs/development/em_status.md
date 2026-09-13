@@ -287,7 +287,7 @@ this page does not schedule or authorize duplicate runs.
 The tiny dtype-repair CUDA guard is complete on its frozen source. Continue
 strict K1 state closure and the existing peer attribution jobs before advancing
 the scientific ladder in the coordination queue. Do not restart completed checks
-or duplicate live candidates. The latest VDAM size check still fails at 8621 > 6100 lines; moving code into
+or duplicate live candidates. The latest VDAM size check still fails at 8633 > 6100 lines; moving code into
 another owner does not remove it from the budget.
 The bounded v6 native capture passed live rank/library and closed-payload checks;
 all 184 files and three ranks were independently verified. This supplies qualified

@@ -6,6 +6,7 @@ These reports do not establish scientific or performance acceptance by themselve
 
 import hashlib
 import operator
+from typing import Any
 
 import numpy as np
 
@@ -589,3 +590,33 @@ def _with_coarse_significance_diagnostics(
     profile_summary = dict(result.profile_summary or {})
     profile_summary.update(additions)
     return result._replace(profile_summary=profile_summary)
+
+
+def _with_initial_model_coarse_diagnostics(
+    result,
+    *,
+    full_stats: dict[str, Any] | None,
+    selector_audit: dict[str, Any] | None,
+):
+    """Carry the shared coarse result diagnostics through InitialModel pass 2."""
+
+    stats = {} if full_stats is None else full_stats
+    significant_counts = stats.get("significant_cutoff_counts")
+    if significant_counts is not None:
+        counts = np.asarray(significant_counts, dtype=np.int32)
+        n_images = int(np.asarray(result.pose_assignments).size)
+        if counts.shape != (n_images,):
+            raise RuntimeError(
+                "InitialModel coarse significant counts do not match pass-2 images: "
+                f"{counts.shape} vs ({n_images},)",
+            )
+        result = result._replace(significant_counts=counts)
+    return _with_coarse_significance_diagnostics(
+        result,
+        selector_audit=selector_audit,
+        support_audit=stats.get("coarse_significance_support_audit"),
+        hybrid_stats=stats.get("coarse_gaussian_gemm_hybrid"),
+        exact_coarse_operand_assembly=stats.get(
+            "exact_coarse_operand_assembly",
+        ),
+    )
