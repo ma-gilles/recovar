@@ -9951,9 +9951,13 @@ def test_device_chunk_scalars_gpu_fused_noise_accumulator_calls(monkeypatch):
     calls = []
     original = bucketed_mod._accumulate_noise_totals_device
 
-    def spy(*args):
-        calls.append(int(np.asarray(args[2]).shape[0]) - int(args[3]))
-        return original(*args)
+    # Named parameters, not *args: the accumulator's signature gained the leak flag and a
+    # positional spy silently mis-indexed it (job 13838987).
+    def spy(wsum_total, norm_total, padded_leak, image_indices, n_real_images, block_shells, block_norm_residual):
+        calls.append(int(np.asarray(image_indices).shape[0]) - int(n_real_images))
+        return original(
+            wsum_total, norm_total, padded_leak, image_indices, n_real_images, block_shells, block_norm_residual
+        )
 
     def run(flag):
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED", "1")
