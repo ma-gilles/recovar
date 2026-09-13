@@ -7,9 +7,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from recovar.em.diagnostics import vdam_mstep_replay
 from recovar.commands import initial_model as initial_model_command
-from recovar.em.vdam import driver, iteration_loop, m_step, mstep_single_class, native_options, star_io
+from recovar.em.diagnostics import vdam_mstep_replay
+from recovar.em.vdam import dense_adapter, driver, iteration_loop, m_step, mstep_single_class, native_options, star_io
 from recovar.em.vdam.init import initialise_denovo_state
 
 pytestmark = pytest.mark.unit
@@ -98,7 +98,7 @@ def test_driver_converts_before_initial_artifact_and_forwards_loop(monkeypatch, 
     monkeypatch.setattr(driver, "read_star", lambda _: (pd.DataFrame(index=range(20)), None))
     monkeypatch.setattr(driver, "load_dataset", lambda *a, **k: dataset)
     monkeypatch.setattr(driver, "maybe_cache_raw_image_loaders", lambda _: None)
-    monkeypatch.setattr(driver, "_configure_relion_image_mask", lambda *a: None)
+    monkeypatch.setattr(dense_adapter, "_configure_relion_image_mask", lambda *a: None)
     monkeypatch.setattr(star_io, "_native_optics_state", lambda *a: None)
     monkeypatch.setattr(driver, "_particle_state_from_star", lambda *a, **k: None)
     monkeypatch.setattr(driver, "_initial_sampling_state", lambda *a, **k: SimpleNamespace())

@@ -38,7 +38,7 @@ pytestmark = pytest.mark.unit
 def test_noise_variance_preserves_relion_rfloat_shell_values():
     sigma2 = np.asarray([[1.00000006e-5, 2.00000012e-5, 3.00000018e-5]], dtype=np.float64)
 
-    noise = driver._noise_variance_from_sigma2(sigma2, 4)
+    noise = dense_adapter._noise_variance_from_sigma2(sigma2, 4)
 
     assert noise.dtype == np.float64
     assert np.any(noise != noise.astype(np.float32).astype(np.float64))
@@ -969,7 +969,7 @@ def test_configure_relion_image_mask_forwards_image_backend():
         image_fourier_backend="relion_cuda",
     )
 
-    driver._configure_relion_image_mask(dataset, opts)
+    dense_adapter._configure_relion_image_mask(dataset, opts)
 
     assert calls["mask"] == {
         "pixel_size": 2.125,

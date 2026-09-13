@@ -150,10 +150,10 @@ structural guard; numerical tolerances, baselines and scientific gates are uncha
 
 | Responsibility | Audited lines | Budget | Retained scope |
 | --- | ---: | ---: | --- |
-| Controller and schedules | 2,053 | 1,690 | Driver, iteration/subset schedules, options and launcher defaults |
+| Controller and schedules | 2,053 | 1,655 | Driver, iteration/subset schedules, options and launcher defaults |
 | Initialization | 467 | 500 | Bootstrap, initial state and shared initial-reference filter |
 | Sampling and layout | 818 | 950 | Native sampling updates, canonical pose metadata and frame conversions |
-| E-step | 2,370 | 2,490 | E-step configuration, batching, dense/local/compact routing, statistics, support and projector setup |
+| E-step | 2,370 | 2,525 | E-step configuration, batching, dense/local/compact routing, statistics, support and projector setup |
 | Reconstruction and state | 684 | 790 | Single-class M-step transaction, precision checks, state and class dispatch |
 | Input/output | 1,218 | 1,270 | STAR metadata, startup artifacts, RELION checkpoint import and initial noise |
 | Diagnostics | 1,016 | 1,160 | GT registration, native moment/reference replay and coarse report bookkeeping |
@@ -176,6 +176,8 @@ The combined allowance remains 8,850.
 Projector refresh/consume lifecycle now lives beside its builders in
 `vdam/dense_adapter.py`; its unchanged stale-state checks and single-use handoff
 transfer 40 budget lines from controllers to E-step, preserving the total.
+Image-mask setup and normalized-spectrum conversion also live in the E-step
+adapter; this transfers another 35 budget lines from controllers to E-step.
 The audited counts and headroom above describe the original snapshot, not the current tip.
 
 The largest retained routine grew from 228 to 733 lines before the recent

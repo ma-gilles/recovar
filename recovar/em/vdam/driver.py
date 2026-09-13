@@ -55,7 +55,6 @@ from recovar.em.vdam.star_io import (
 )
 from recovar.em.vdam.state import InitialModelState, NativeParticleState
 from recovar.em.vdam.subset_schedule import restore_subset_order_for_continuation
-from recovar.reconstruction.noise import make_radial_noise
 
 INITIAL_MODEL_SKIP_EXPECTED_ACCURACY_ENV = "RECOVAR_INITIALMODEL_SKIP_EXPECTED_ACCURACY"
 
@@ -71,40 +70,12 @@ class NativeInitialModelResult:
     class_mrcs: tuple[str, ...]
 
 
-def _configure_relion_image_mask(dataset, opts: NativeInitialModelOptions) -> None:
-    """Configure dataset preprocessing to match InitialModel scoring masks."""
-
-    backend = dataset.image_source.backend
-    backend.set_relion_image_mask(
-        pixel_size=float(dataset.voxel_size),
-        particle_diameter_ang=float(opts.particle_diameter),
-        width_mask_edge_px=float(opts.width_mask_edge_px),
-    )
-    backend.set_relion_fourier_backend(opts.image_fourier_backend)
-
-
 def _skip_native_sampling_accuracy_diagnostic() -> bool:
     """Return whether the focused controller discriminator skips accuracy estimation."""
     value = os.environ.get(INITIAL_MODEL_SKIP_EXPECTED_ACCURACY_ENV, "").strip()
     if value not in {"", "0", "1"}:
         raise ValueError(f"{INITIAL_MODEL_SKIP_EXPECTED_ACCURACY_ENV} must be 0 or 1")
     return value == "1"
-
-
-def _noise_variance_from_sigma2(sigma2_noise: np.ndarray, ori_size: int) -> np.ndarray:
-    """Convert RELION normalized shell power to engine-frame radial noise (unnormalised FFT)."""
-    n4 = int(ori_size) ** 4
-    # Keep RELION's RFLOAT shell spectrum through the reciprocal used by the
-    # guarded exact coarse path.  The downstream float32 kernels already cast
-    # their ordinary operands explicitly; narrowing here first loses up to a
-    # few ULP in Minvsigma2 and changes near-threshold candidate weights.
-    return np.asarray(
-        make_radial_noise(
-            np.asarray(sigma2_noise, dtype=np.float64)[0] * n4,
-            (ori_size, ori_size),
-        ),
-        dtype=np.float64,
-    ).reshape(-1)
 
 
 def _native_expectation_step(
@@ -178,7 +149,7 @@ def _native_expectation_step(
             **sampling_kwargs,
         )
         sigma_offset_angstrom = float(np.sqrt(max(float(state.sigma2_offset), 0.0)))
-        current_noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
+        current_noise_variance = dense_adapter._noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
         config = dense_adapter._dense_estep_config(
             dataset,
             opts,
@@ -347,7 +318,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     maybe_cache_raw_image_loaders((dataset,))
     profile.record("raw_cache_setup")
 
-    _configure_relion_image_mask(dataset, opts)
+    dense_adapter._configure_relion_image_mask(dataset, opts)
     optics_state = star_io._native_optics_state(main_star, optics_star, dataset)
     continuation = None
     if opts.diagnostic_continue_optimiser is not None:

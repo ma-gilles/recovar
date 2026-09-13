@@ -676,7 +676,7 @@ RELION GUI InitialModel command construction in
 [`tests/helpers/relion_initial_model_command.py::build_command`](../../tests/helpers/relion_initial_model_command.py)
 adds `--flatten_solvent` by default when `InitialModelJobOptions.do_solvent` is
 true, and also adds `--zero_mask`. In native RECOVAR InitialModel, image masking
-is configured in `driver.py::_configure_relion_image_mask`, but the final
+is configured in `dense_adapter.py::_configure_relion_image_mask`, but the final
 native `initial_model.mrc` is written directly from `state.Iref[best_class]`;
 there is no separate native `relion_align_symmetry` postprocess or documented
 Python-side solvent-flattening pass for the final selected InitialModel map in
@@ -776,7 +776,7 @@ The native path intentionally encodes these RELION GUI InitialModel assumptions:
 - The current scoring path uses masked images for scores but unmasked images
   for reconstruction accumulation, matching the dense-engine contract.
 - The dense scoring noise uses `sigma2_noise * N^4` via
-  `driver.py::_noise_variance_from_sigma2`.
+  `dense_adapter.py::_noise_variance_from_sigma2`.
 - The independent `minvsigma2_with_dc_zero` reference in
   [the VDAM test helpers](../../tests/helpers/vdam.py) documents the RELION
   DC-exclusion convention. It is not part of production E-step execution.
