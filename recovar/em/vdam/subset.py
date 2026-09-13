@@ -85,13 +85,3 @@ def select_vdam_subset(
         else np.zeros(sorted_prefix.size, dtype=np.int8)
     )
     return SubsetPlan(particle_ids=sorted_prefix, halfset_ids=halfsets)
-
-
-def numpy_rnd_unif_factory(seed: int) -> RndUnifFn:
-    """Deterministic NumPy-backed ``rnd_unif`` for tests (not bit-exact to RELION)."""
-    rng = np.random.default_rng(seed)
-
-    def _rnd(_call_idx: int) -> float:
-        return float(rng.random())
-
-    return _rnd

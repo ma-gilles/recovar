@@ -15,10 +15,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from helpers.vdam import numpy_rnd_unif_factory
 
 from recovar.em.vdam.subset import (
     assign_pseudo_halfsets_for_particle_ids,
-    numpy_rnd_unif_factory,
     pseudo_halfsets_active,
     randomise_particles_order,
     select_vdam_subset,

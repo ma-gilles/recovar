@@ -4,23 +4,13 @@ from copy import deepcopy
 
 import numpy as np
 import pytest
+from helpers.vdam import relative_metrics
 
 from recovar.em.relion.relion_vdam_mstep import relion_vdam_m_step_device, relion_vdam_m_step_host
 
 pytestmark = pytest.mark.unit
 
 
-def _metrics(left, right):
-    left, right = np.asarray(left, np.complex128), np.asarray(right, np.complex128)
-    delta = np.abs(left - right)
-    tiny = np.finfo(np.float64).tiny
-    return np.array(
-        [
-            np.linalg.norm(delta.ravel()) / max(np.linalg.norm(left.ravel()), np.linalg.norm(right.ravel()), tiny),
-            np.max(delta) / max(np.max(np.abs(left)), np.max(np.abs(right)), tiny),
-            np.mean(delta) / max(np.mean(np.abs(left)), np.mean(np.abs(right)), tiny),
-        ]
-    )
 
 
 def _case(size=8, padding=1, radius=2, pseudo=True, moments="populated"):
@@ -107,7 +97,7 @@ def _assert_case(bind, case):
             continue
         assert actual[key].dtype == expected[key].dtype
         assert actual[key].shape == expected[key].shape
-        metrics = _metrics(expected[key], actual[key])
+        metrics = relative_metrics(expected[key], actual[key])
         # Existing native-projector FP64 contract; never widened for this port.
         assert np.all(metrics < 1e-12), (key, metrics)
     np.testing.assert_array_equal(actual["tau2"], case["tau2"])
@@ -221,7 +211,7 @@ def test_host_backend_capability_attestation(bind, monkeypatch, size, padding, e
         elif expected_backend == "native":
             np.testing.assert_array_equal(actual[key], expected[key])
         else:
-            assert np.all(_metrics(actual[key], expected[key]) < 1e-12)
+            assert np.all(relative_metrics(actual[key], expected[key]) < 1e-12)
 
 
 def test_pure_device_rejects_unsupported_small_fft():

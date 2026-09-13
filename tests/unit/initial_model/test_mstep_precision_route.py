@@ -6,10 +6,10 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
+from helpers.vdam import numpy_rnd_unif_factory
 
 from recovar.em.vdam import driver, iteration_loop, m_step, mstep_single_class, native_options
 from recovar.em.vdam.init import initialise_denovo_state
-from recovar.em.vdam.subset import numpy_rnd_unif_factory
 from scripts import run_ab_initio
 
 pytestmark = pytest.mark.unit

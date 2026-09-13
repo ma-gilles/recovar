@@ -4,6 +4,7 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from helpers.vdam import relative_metrics
 
 from recovar.em.vdam import dense_adapter as adapter
 from recovar.em.vdam.init import initialise_denovo_state
@@ -12,28 +13,17 @@ from recovar.utils.helpers import recovar_volume_to_relion
 pytestmark = pytest.mark.unit
 
 
-def _relative_metrics(left, right):
-    left, right = np.asarray(left, np.complex128), np.asarray(right, np.complex128)
-    delta = np.abs(left - right)
-    tiny = np.finfo(np.float64).tiny
-    return np.array(
-        [
-            np.linalg.norm(delta.ravel()) / max(np.linalg.norm(left.ravel()), np.linalg.norm(right.ravel()), tiny),
-            np.max(delta) / max(np.max(np.abs(left)), np.max(np.abs(right)), tiny),
-            np.mean(delta) / max(np.mean(np.abs(left)), np.mean(np.abs(right)), tiny),
-        ]
-    )
 
 
 def _assert_existing_consumer_policy(control1, candidate1, candidate2, control2):
     # Immutable static-key ABBA policy: control repeat <= 4eps-f32, paired
     # and candidate-repeat <= min(control repeat + 4eps-f32, 8eps-f32).
     floor = 4 * np.finfo(np.float32).eps
-    repeat = _relative_metrics(control1, control2)
+    repeat = relative_metrics(control1, control2)
     assert np.all(repeat <= floor)
     limit = np.nextafter(np.minimum(repeat + floor, 2 * floor), np.inf)
     for left, right in [(control1, candidate1), (control2, candidate2), (candidate1, candidate2)]:
-        metrics = _relative_metrics(left, right)
+        metrics = relative_metrics(left, right)
         assert np.all(metrics <= limit), metrics
 
 
@@ -94,8 +84,8 @@ def test_adapter_native_radius_layout_frame_and_consumer_policy(size, padding, c
         logical_size = native[0].shape[0]
         start = full.shape[0] // 2 - logical_size // 2
         cropped = full[start : start + logical_size, start : start + logical_size, : native[0].shape[2]]
-        assert np.all(_relative_metrics(native[0], cropped) < 1e-12)
-        assert np.all(_relative_metrics(native[1], power) < 1e-12)
+        assert np.all(relative_metrics(native[0], cropped) < 1e-12)
+        assert np.all(relative_metrics(native[1], power) < 1e-12)
     np.testing.assert_array_equal(references, before)
 
 

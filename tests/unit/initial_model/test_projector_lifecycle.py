@@ -3,12 +3,12 @@ from dataclasses import replace
 
 import numpy as np
 import pytest
+from helpers.vdam import numpy_rnd_unif_factory
 
 from recovar.em.vdam import dense_adapter as adapter
 from recovar.em.vdam import driver
 from recovar.em.vdam import iteration_loop as loop
 from recovar.em.vdam.init import initialise_denovo_state
-from recovar.em.vdam.subset import numpy_rnd_unif_factory
 from recovar.utils.helpers import recovar_volume_to_relion
 
 pytestmark = pytest.mark.unit

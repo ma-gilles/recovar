@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from helpers.vdam import numpy_rnd_unif_factory
 
 from recovar.em.vdam.estep_meta_updates import update_noise_from_estep_meta, update_probabilities_from_estep_meta
 from recovar.em.vdam.init import initialise_denovo_state
@@ -23,7 +24,6 @@ from recovar.em.vdam.iteration_loop import (
     update_image_size_and_resolution_pointers,
 )
 from recovar.em.vdam.state import VdamAccumulator
-from recovar.em.vdam.subset import numpy_rnd_unif_factory
 from recovar.em.vdam.subset_schedule import restore_subset_order_for_continuation, select_subset_for_iter
 
 pytestmark = pytest.mark.unit
