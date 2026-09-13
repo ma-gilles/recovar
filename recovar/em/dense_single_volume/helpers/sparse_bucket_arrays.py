@@ -922,6 +922,7 @@ def pad_bucket_arrays_to_image_capacity(arrays, capacity):
     padded["rotation_indices"] = _pad_rows(arrays["rotation_indices"], capacity, 0)
     padded["actual_counts"] = _pad_rows(arrays["actual_counts"], capacity, 0)
     padded["log_prior"] = _pad_rows(arrays["log_prior"], capacity, -1e30)
+    padded["row_log_prior"] = _pad_rows(arrays.get("row_log_prior"), capacity, -1e30)
     padded["candidate_mask"] = _pad_rows(arrays["candidate_mask"], capacity, False)
     padded["parent_map"] = _pad_rows(arrays["parent_map"], capacity, -1)
     return padded
@@ -949,7 +950,22 @@ def pad_compact_pair_arrays_to_image_capacity(pair_arrays, capacity):
     return padded
 
 
-def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_inputs):
+COMPACT_PAIR_LAZY_TABLES_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_LAZY_TABLES"
+
+
+def compact_pair_lazy_tables_enabled() -> bool:
+    """Skip the per-pair ``rotation_index``/``log_prior`` host tables.
+
+    Both are pure gathers of per-row tables (``rotation_indices`` and
+    ``row_log_prior`` of the class bucket) along ``local_rotation_row``; the
+    consumers gather them on device or per argmax row instead. At 100k/256 the
+    wide-pair class holds tens of thousands of pairs per image and building the
+    int64/float64 tables was 167 s of iteration 2 on the host (job 13805735).
+    """
+    return parse_env_binary_flag(COMPACT_PAIR_LAZY_TABLES_ENV)
+
+
+def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_inputs, *, lazy_pair_tables=None):
     """Stack/pad compact candidate pairs for one class and bucket on demand."""
 
     pair_bucket_size = int(bucket["pair_bucket_size"])
@@ -959,6 +975,19 @@ def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_in
         pair_bucket_size=pair_bucket_size,
     )
     batch = int(image_indices.shape[0])
+    if lazy_pair_tables is None:
+        lazy_pair_tables = compact_pair_lazy_tables_enabled()
+    if lazy_pair_tables:
+        return {
+            "image_indices": image_indices,
+            "pair_bucket_size": pair_bucket_size,
+            "pair_counts": index_arrays["pair_counts"],
+            "local_rotation_row": index_arrays["local_rotation_row"],
+            "translation_idx": index_arrays["translation_idx"],
+            "rotation_index": None,
+            "log_prior": None,
+            "pair_mask": index_arrays["pair_mask"],
+        }
     padded_rotation_index = np.zeros((batch, pair_bucket_size), dtype=np.int64)
     log_prior_dtype = np.result_type(
         *(np.asarray(per_image_inputs["log_prior"][int(image_idx)]).dtype for image_idx in image_indices)
@@ -1058,6 +1087,15 @@ def _build_bucket_arrays(
         np.zeros((batch, bucket_size, n_fine_trans), dtype=bool) if include_dense_score_fields else None
     )
     padded_parent_map = np.full((batch, bucket_size), -1, dtype=np.int32) if include_dense_score_fields else None
+    # Per-row rotation prior, always present: the compact-pair path gathers its
+    # per-pair prior from this table instead of materializing one per pair.
+    padded_row_log_prior = np.full(
+        (batch, bucket_size),
+        -1e30,
+        dtype=np.result_type(
+            *(np.asarray(per_image_inputs["log_prior"][int(image_idx)]).dtype for image_idx in image_indices)
+        ),
+    )
     padded_rotation_indices = np.zeros((batch, bucket_size), dtype=np.int64)
     actual_counts = np.zeros(batch, dtype=np.int32)
     for row, image_idx in enumerate(image_indices.tolist()):
@@ -1074,6 +1112,7 @@ def _build_bucket_arrays(
             )
             padded_parent_map[row, :cnt] = per_image_inputs["parent_map"][image_idx]
         padded_rotation_indices[row, :cnt] = per_image_inputs["oversampled_rot_indices"][image_idx]
+        padded_row_log_prior[row, :cnt] = per_image_inputs["log_prior"][image_idx]
 
     return {
         "image_indices": image_indices,
@@ -1082,6 +1121,7 @@ def _build_bucket_arrays(
         "rotations": padded_rotations,
         "mstep_rotations": padded_mstep_rotations,
         "rotation_indices": padded_rotation_indices,
+        "row_log_prior": padded_row_log_prior,
         "log_prior": padded_log_prior,
         "candidate_mask": padded_candidate_mask,
         "parent_map": padded_parent_map,

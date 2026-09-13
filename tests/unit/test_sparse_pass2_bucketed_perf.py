@@ -10346,3 +10346,51 @@ def test_real_flat_row_indices_from_actual_counts_layout():
     assert count == 5
     idx, mask, count = bucketed_mod._real_flat_row_indices_from_actual_counts([0, 0], 4)
     assert idx.size == 0 and mask.size == 0 and count == 0
+
+
+@pytest.mark.parametrize("defer_flag", ["0", "1"])
+@pytest.mark.parametrize("noise_mode", ["no_noise", "noise"])
+def test_lazy_compact_pair_tables_are_bit_identical(monkeypatch, noise_mode, defer_flag):
+    """The per-pair rotation_index/log_prior host tables are pure gathers of per-row
+    tables along local_rotation_row. Building them cost 167 s of iteration 2 at
+    100k/256 (job 13805735). With RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_LAZY_TABLES=1 the
+    builder skips them and the consumers gather on device (prior) or per argmax row
+    (rotation index); every output must be bit-identical, with and without deferral."""
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    def run(lazy):
+        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "4")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_DEFERRED_HOST_STATS", defer_flag)
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_LAZY_TABLES", lazy)
+        kwargs = _fused_kclass_multibucket_fixture(n_images=13)
+        if noise_mode == "noise":
+            kwargs["accumulate_noise"] = True
+        return _fused_kclass_result_arrays(
+            bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs)
+        )
+
+    eager = run("0")
+    lazy = run("1")
+    _assert_fused_arrays_identical(eager, lazy, f"lazy compact pair tables ({noise_mode}, defer={defer_flag})")
+
+
+def test_lazy_pair_tables_builder_skips_per_pair_tables():
+    from recovar.em.dense_single_volume.helpers import sparse_bucket_arrays as sba
+    from recovar.em.dense_single_volume.helpers.compact_candidates import SparseCandidateMask
+
+    per_image = {
+        "candidate_mask": [SparseCandidateMask(mode="full", n_rows=3, n_fine_trans=2)],
+        "oversampled_rot_indices": [np.array([5, 6, 7])],
+        "log_prior": [np.array([0.1, 0.2, 0.3])],
+    }
+    bucket = {"pair_bucket_size": 6, "image_indices": np.array([0])}
+    eager = sba._build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image, lazy_pair_tables=False)
+    lazy = sba._build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image, lazy_pair_tables=True)
+    assert lazy["rotation_index"] is None and lazy["log_prior"] is None
+    for key in ("pair_counts", "local_rotation_row", "translation_idx", "pair_mask"):
+        np.testing.assert_array_equal(lazy[key], eager[key])
+    np.testing.assert_array_equal(eager["rotation_index"][0], [5, 5, 6, 6, 7, 7])
+    np.testing.assert_allclose(eager["log_prior"][0], [0.1, 0.1, 0.2, 0.2, 0.3, 0.3])

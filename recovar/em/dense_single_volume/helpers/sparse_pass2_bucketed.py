@@ -269,6 +269,7 @@ _SPARSE_KCLASS_RECTANGULAR_ACTIVE_PREMATMUL_MAX_GROUPED_DENSE_RATIO_ENV = (
     "RECOVAR_SPARSE_KCLASS_RECTANGULAR_ACTIVE_PREMATMUL_MAX_GROUPED_DENSE_RATIO"
 )
 _SPARSE_KCLASS_ACTIVE_ROW_PAD_MULTIPLE_ENV = "RECOVAR_SPARSE_KCLASS_ACTIVE_ROW_PAD_MULTIPLE"
+_SPARSE_KCLASS_PIPELINE_DEPTH_ENV = "RECOVAR_SPARSE_KCLASS_PIPELINE_DEPTH"
 _SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS_ENV = (
     "RECOVAR_SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS"
 )
@@ -6449,6 +6450,25 @@ def _compact_pair_weighted_rotation_and_image_sums_fused_image_sums(
     return summed, summed_image, ctf_probs, probs_sum_t, translation_posterior
 
 
+def _compact_pair_log_prior_device(compact_arrays, arrays, dtype=None):
+    """Per-pair rotation prior ``(batch, pair)`` on device.
+
+    Uses the materialized ``compact_arrays["log_prior"]`` when the builder made
+    one; otherwise gathers the class bucket's per-row ``row_log_prior`` along
+    ``local_rotation_row`` and fills masked pairs with the same ``-1e30`` the
+    host table used, so both forms hold identical values.
+    """
+    table = compact_arrays["log_prior"]
+    if table is not None:
+        return jnp.asarray(table) if dtype is None else jnp.asarray(table, dtype=dtype)
+    row_log_prior = jnp.asarray(arrays["row_log_prior"])
+    pair_mask = jnp.asarray(compact_arrays["pair_mask"])
+    rows = jnp.where(pair_mask, jnp.asarray(compact_arrays["local_rotation_row"]), 0).astype(jnp.int32)
+    gathered = jnp.take_along_axis(row_log_prior, rows, axis=1)
+    out = jnp.where(pair_mask, gathered, jnp.asarray(-1e30, dtype=row_log_prior.dtype))
+    return out if dtype is None else out.astype(dtype)
+
+
 @partial(jax.jit, static_argnames=("n_rotation_rows", "n_trans"))
 def _compact_pair_sorted_csr(
     pair_probs,
@@ -7655,7 +7675,7 @@ def _reorder_to_indices(image_indices_returned, requested_image_indices, *arrays
         return arrays
     position = {int(idx): pos for pos, idx in enumerate(np.asarray(requested_image_indices).tolist())}
     order = np.array([position[int(idx)] for idx in np.asarray(image_indices_returned).tolist()], dtype=np.int64)
-    return tuple(arr[order] for arr in arrays)
+    return tuple(None if arr is None else arr[order] for arr in arrays)
 
 
 def _pass2_dump_requested_for_bucket(
@@ -13879,10 +13899,15 @@ def compute_k_class_pass2_stats_sparse_fused(
     # diverge, so a real-size failure of the deferral can be localized on the run itself.
     defer_host_stats_check = _defer_token == "check"
     defer_host_stats = _defer_token in {"1", "check"}
+    _depth = parse_env_nonnegative_int(_SPARSE_KCLASS_PIPELINE_DEPTH_ENV)
+    pipeline_depth = 4 if _depth is None else int(_depth)
+    buckets_in_flight = 0
     deferred_host_records: list[tuple] = []
     deferred_check_snapshots: list[tuple] = []
 
     def _fingerprint(value):
+        if value is None:
+            return ("None",)
         arr = np.ascontiguousarray(np.asarray(value))
         return (arr.shape, str(arr.dtype), hashlib.sha1(arr.view(np.uint8)).hexdigest())
     _live_stats = {
@@ -13978,7 +14003,6 @@ def compute_k_class_pass2_stats_sparse_fused(
             row_index_np = np.arange(batch_rows, dtype=np.int64)
             pair_local_rotation_row = np.asarray(pair_arrays["local_rotation_row"], dtype=np.int32)
             pair_translation_idx = np.asarray(pair_arrays["translation_idx"], dtype=np.int32)
-            pair_rotation_index = np.asarray(pair_arrays["rotation_index"], dtype=np.int64)
             best_rot_idx = np.where(
                 has_best_pose_np,
                 pair_local_rotation_row[row_index_np, safe_best_argmax_np],
@@ -13989,10 +14013,19 @@ def compute_k_class_pass2_stats_sparse_fused(
                 pair_translation_idx[row_index_np, safe_best_argmax_np],
                 0,
             ).astype(np.int64, copy=False)
+            rotation_indices_np = np.asarray(arrays["rotation_indices"], dtype=np.int64)
+            if pair_arrays["rotation_index"] is None:
+                # rotation_index[b, p] == rotation_indices[b, local_rotation_row[b, p]];
+                # only the argmax column is needed here.
+                rotation_at_best = rotation_indices_np[row_index_np, best_rot_idx]
+            else:
+                rotation_at_best = np.asarray(pair_arrays["rotation_index"], dtype=np.int64)[
+                    row_index_np, safe_best_argmax_np
+                ]
             best_fine_rot_idx = np.where(
                 has_best_pose_np,
-                pair_rotation_index[row_index_np, safe_best_argmax_np],
-                np.asarray(arrays["rotation_indices"], dtype=np.int64)[:, 0],
+                rotation_at_best,
+                rotation_indices_np[:, 0],
             ).astype(np.int64, copy=False)
         else:
             best_rot_idx = best_argmax_np // n_fine_trans
@@ -14739,8 +14772,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                     raw_diff2_by_class.append(raw_host)
                     raw_diff2_masks_by_class.append(pair_mask)
                     raw_diff2_rotation_priors_by_class.append(
-                        jnp.asarray(
-                            compact_arrays["log_prior"],
+                        _compact_pair_log_prior_device(
+                            compact_arrays,
+                            arrays,
                             dtype=precision_policy.score_real_dtype,
                         )
                     )
@@ -14760,7 +14794,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         ctf2_over_nv_score,
                         proj_half,
                         direct_half_weights,
-                        jnp.asarray(compact_arrays["log_prior"]),
+                        _compact_pair_log_prior_device(compact_arrays, arrays),
                         bucket_translation_prior,
                         jnp.asarray(compact_arrays["local_rotation_row"]),
                         jnp.asarray(compact_arrays["translation_idx"]),
@@ -14922,7 +14956,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                     ctf2_over_nv_score,
                     proj_half,
                     direct_half_weights,
-                    jnp.asarray(compact_arrays["log_prior"]),
+                    _compact_pair_log_prior_device(compact_arrays, arrays),
                     bucket_translation_prior,
                     jnp.asarray(compact_arrays["local_rotation_row"]),
                     jnp.asarray(compact_arrays["translation_idx"]),
@@ -15064,8 +15098,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                     )
                     compact_scores = _relion_cuda_fine_diff2_to_scores(
                         compact_raw_diff2,
-                        jnp.asarray(
-                            compact_arrays["log_prior"],
+                        _compact_pair_log_prior_device(
+                            compact_arrays,
+                            arrays,
                             dtype=precision_policy.score_real_dtype,
                         ),
                         _gather_pair_translation_log_prior(
@@ -16160,7 +16195,6 @@ def compute_k_class_pass2_stats_sparse_fused(
                 noise_sub_t0 = substage_t0
                 if bucket_uses_compact_pairs:
                     noise_probs = mstep_probs
-                    translation_posterior = np.asarray(translation_posterior_jax, dtype=np.float64)
                     if compact_noise_sums_match_mstep:
                         summed_masked_noise = summed
                         ctf_probs_for_noise = ctf_probs
@@ -16199,7 +16233,6 @@ def compute_k_class_pass2_stats_sparse_fused(
                         )
                 else:
                     noise_probs = reconstruction_probs if relion_fine_mstep_prune else probs
-                    translation_posterior = np.asarray(translation_posterior_jax, dtype=np.float64)
                     noise_probs_sum_t = probs_sum_t_jax
                     if bucket_uses_active_rows and active_rows_precomputed:
                         summed_masked_noise = _rectangular_active_weighted_image_sums_or_none(
@@ -16215,9 +16248,21 @@ def compute_k_class_pass2_stats_sparse_fused(
                 _add_sparse_group_timing(group_timing, "noise_sums", time.time() - noise_sub_t0)
                 noise_sub_t0 = time.time()
                 if translation_sqdist_ang is not None:
-                    noise_sigma2_offset_total[class_index] += float(
-                        np.sum(translation_posterior * translation_sqdist_ang, dtype=np.float64)
-                    )
+                    # The only host use of the translation posterior; pulling it
+                    # here was a per-class-bucket device sync (200 s of iteration 2,
+                    # job 13805735). Defer the leaf with the other statistics.
+                    if defer_host_stats and not defer_host_stats_check:
+                        deferred_host_records.append(
+                            ("sigma2_offset", class_index, translation_posterior_jax)
+                        )
+                    else:
+                        noise_sigma2_offset_total[class_index] += float(
+                            np.sum(
+                                np.asarray(translation_posterior_jax, dtype=np.float64)
+                                * translation_sqdist_ang,
+                                dtype=np.float64,
+                            )
+                        )
                 support_mass = jnp.sum(noise_probs_sum_t, axis=1)
                 # RELION adds power_img outside the class loop, once per image.
                 # Keep the shared high-shell term on class zero so downstream
@@ -16550,6 +16595,14 @@ def compute_k_class_pass2_stats_sparse_fused(
                 )
             _add_sparse_group_timing(group_timing, "stats", time.time() - substage_t0)
         _add_sparse_group_timing(group_timing, "mstep_noise_stats", time.time() - stage_t0)
+        if defer_host_stats and pipeline_depth > 0:
+            # Without host pulls the loop would queue device work without bound
+            # while the host builds ahead; wait on one small leaf every
+            # ``pipeline_depth`` buckets to cap the in-flight buffers.
+            buckets_in_flight += 1
+            if buckets_in_flight >= pipeline_depth:
+                jax.block_until_ready(probs_sum_t_jax)
+                buckets_in_flight = 0
 
     if last_bucket_size_logged is not None and group_t0 is not None:
         group_chunks, group_images = bucket_group_stats[last_bucket_size_logged]
@@ -16611,6 +16664,8 @@ def compute_k_class_pass2_stats_sparse_fused(
                 device_leaves.append(record[2])
             elif kind in ("power",):
                 device_leaves.extend(record[3:6])
+            elif kind == "sigma2_offset":
+                device_leaves.append(record[2])
             elif kind in ("scale", "wsum"):
                 device_leaves.extend(record[3:5])
             elif kind == "stats":
@@ -16639,13 +16694,20 @@ def compute_k_class_pass2_stats_sparse_fused(
             kind = record[0]
             if defer_host_stats_check and kind != "stats":
                 # already applied live in check mode; just consume the leaves
-                n_leaves = {"posterior": 1, "power": 3, "scale": 2, "wsum": 2}[kind]
+                n_leaves = {"posterior": 1, "power": 3, "scale": 2, "wsum": 2, "sigma2_offset": 1}[kind]
                 for _ in range(n_leaves):
                     next(host_leaves)
                 continue
             if kind == "posterior":
                 class_posterior_sums_mstep[record[1]] += float(
                     np.sum(np.asarray(next(host_leaves), dtype=np.float64))
+                )
+            elif kind == "sigma2_offset":
+                noise_sigma2_offset_total[record[1]] += float(
+                    np.sum(
+                        np.asarray(next(host_leaves), dtype=np.float64) * translation_sqdist_ang,
+                        dtype=np.float64,
+                    )
                 )
             elif kind == "power":
                 _apply_noise_power_host(
