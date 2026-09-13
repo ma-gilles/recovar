@@ -674,39 +674,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV, ""
     ).strip():
         raise ValueError("float32 M-step is incompatible with iteration reference replay")
-    if opts.nr_classes < 1:
-        raise ValueError("nr_classes must be >= 1")
-    if opts.nr_iter < 1:
-        raise ValueError("nr_iter must be >= 1")
-    if opts.grad_write_iter < 1:
-        raise ValueError("grad_write_iter must be >= 1")
-    if int(opts.exact_local_bucket_radix) not in (2, 4):
-        raise ValueError("exact_local_bucket_radix must be 2 or 4")
-    if int(opts.exact_local_physical_order_chunk_size) not in (0,) and int(
-        opts.exact_local_physical_order_chunk_size
-    ) < 3:
-        raise ValueError(
-            "exact_local_physical_order_chunk_size must be 0 (disabled) or at least 3"
-        )
-    if opts.diagnostic_stop_after_iteration is not None and not (
-        1 <= int(opts.diagnostic_stop_after_iteration) <= int(opts.nr_iter)
-    ):
-        raise ValueError("diagnostic_stop_after_iteration must be between 1 and nr_iter")
-    if (
-        opts.diagnostic_continue_optimiser is not None
-        and opts.diagnostic_stop_after_iteration is None
-    ):
-        raise ValueError(
-            "diagnostic_continue_optimiser requires diagnostic_stop_after_iteration; "
-            "unbounded continuation is intentionally unsupported"
-        )
-    if opts.padding_factor not in (1, 2):
-        raise NotImplementedError("native InitialModel currently supports RELION GUI --pad 1 or 2 only")
-    if not opts.do_run_C1 and opts.sym_name.lower() != "c1":
-        raise NotImplementedError(
-            "native InitialModel direct refinement currently supports C1 only; "
-            "use the GUI-default do_run_C1 mode until symmetry-restricted sampling is implemented"
-        )
+    opts.validate_run()
     profile.record("validation")
 
     main_star, optics_star = read_star(opts.fn_img)

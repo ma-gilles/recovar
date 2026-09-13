@@ -79,3 +79,39 @@ class NativeInitialModelOptions(InitialModelDefaults):
     # surface: the caller must also stop at checkpoint_iteration + 1.
     diagnostic_continue_optimiser: str | None = None
     diagnostic_stop_after_iteration: int | None = None
+
+    def validate_run(self) -> None:
+        """Check supported settings before loading particles or creating run state."""
+        if self.nr_classes < 1:
+            raise ValueError("nr_classes must be >= 1")
+        if self.nr_iter < 1:
+            raise ValueError("nr_iter must be >= 1")
+        if self.grad_write_iter < 1:
+            raise ValueError("grad_write_iter must be >= 1")
+        if int(self.exact_local_bucket_radix) not in (2, 4):
+            raise ValueError("exact_local_bucket_radix must be 2 or 4")
+        if int(self.exact_local_physical_order_chunk_size) not in (0,) and int(
+            self.exact_local_physical_order_chunk_size
+        ) < 3:
+            raise ValueError(
+                "exact_local_physical_order_chunk_size must be 0 (disabled) or at least 3"
+            )
+        if self.diagnostic_stop_after_iteration is not None and not (
+            1 <= int(self.diagnostic_stop_after_iteration) <= int(self.nr_iter)
+        ):
+            raise ValueError("diagnostic_stop_after_iteration must be between 1 and nr_iter")
+        if (
+            self.diagnostic_continue_optimiser is not None
+            and self.diagnostic_stop_after_iteration is None
+        ):
+            raise ValueError(
+                "diagnostic_continue_optimiser requires diagnostic_stop_after_iteration; "
+                "unbounded continuation is intentionally unsupported"
+            )
+        if self.padding_factor not in (1, 2):
+            raise NotImplementedError("native InitialModel currently supports RELION GUI --pad 1 or 2 only")
+        if not self.do_run_C1 and self.sym_name.lower() != "c1":
+            raise NotImplementedError(
+                "native InitialModel direct refinement currently supports C1 only; "
+                "use the GUI-default do_run_C1 mode until symmetry-restricted sampling is implemented"
+            )

@@ -289,7 +289,10 @@ strict K1 state closure and the existing peer attribution jobs before advancing
 the scientific ladder in the coordination queue. Do not restart completed checks
 or duplicate live candidates. The user approved replacing the historical VDAM
 size cap after the growth audit. The [responsibility budgets](codebase.md#vdam-code-budgets)
-count 8,626 lines against 8,850 combined, including all shared extractions.
+count 8,630 lines against 8,850 combined, including all shared extractions.
+Option validation now lives on `NativeInitialModelOptions`: 32 controller lines
+removed, four net lines added, 164 focused tests and 582 exact option comparisons
+passed ([receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_option_validation_owner_20260913/result.json)).
 This budget revision does not close the remaining cleanup or scientific gates.
 The unreachable VDAM fine-prior fallback was removed with 223 focused tests
 passing and 75 unchanged routing comparisons
