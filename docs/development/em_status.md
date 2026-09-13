@@ -287,12 +287,18 @@ this page does not schedule or authorize duplicate runs.
 The tiny dtype-repair CUDA guard is complete on its frozen source. Continue
 strict K1 state closure and the existing peer attribution jobs before advancing
 the scientific ladder in the coordination queue. Do not restart completed checks
-or duplicate live candidates. The latest VDAM size check still fails at 8633 > 6100 lines; moving code into
+or duplicate live candidates. The latest VDAM size check still fails at 8622 > 6100 lines; moving code into
 another owner does not remove it from the budget.
-The bounded v6 native capture passed live rank/library and closed-payload checks;
-all 184 files and three ranks were independently verified. This supplies qualified
-operands for score/support diagnosis, not completed-refinement or strict-state
-acceptance. See the [capture receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/native_v6_terminal_lead_review_20260913/result.json).
+The unreachable VDAM fine-prior fallback was removed with 223 focused tests
+passing and 75 unchanged routing comparisons; the size gate remains open
+([cleanup receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_dead_prior_fallback_20260913/result.json)).
+The bounded v6 native capture passed live rank/library and closed-payload checks.
+The subsequent six-call rectangular scorer check passed on those captured inputs,
+but the hybrid support still differs: 52,884 versus 52,883 selected candidates.
+The next private capture targets the full candidate population for one particle
+using actual RECOVAR production inputs; its worker still requires qualification.
+Neither bounded result establishes completed-refinement or strict-state acceptance
+([primitive receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/native_rectangular_terminal_lead_review_20260913/result.json)).
 
 Preserve the distinct numerical routes while reducing structural overhead. Big-JIT
 argument lists define static/dynamic compilation boundaries. Bucketed and fused
