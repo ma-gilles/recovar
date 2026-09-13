@@ -36,6 +36,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import starfile
 from conftest import gpu_subprocess_env
 
 logger = logging.getLogger(__name__)
@@ -151,7 +152,8 @@ def test_em_parity_fast_k1_replay(tmp_path):
     Walltime budget: ~3 min on a single A100 (cold compile included).
     """
     _assert_parity_ancestors_or_skip()
-    _require_fixture(PARITY_SCRIPT, K1_RELION_DIR, K1_DATA_STAR, K1_GT_VOLUME)
+    model_path = K1_RELION_DIR / "run_it004_half1_model.star"
+    _require_fixture(PARITY_SCRIPT, K1_RELION_DIR, K1_DATA_STAR, K1_GT_VOLUME, model_path)
 
     output_dir = tmp_path / "k1_replay"
     output_dir.mkdir()
@@ -197,12 +199,7 @@ def test_em_parity_fast_k1_replay(tmp_path):
     pmax_traj = np.asarray(npz["ave_Pmax_trajectory"], dtype=np.float64)
     recovar_pmax = float(pmax_traj[0])
 
-    # RELION it004 ave_Pmax from RELION's run_it004_optimiser.star — we read it
-    # back from the npz where the script logs RELION's reference value.
-    # The script prints "RELION ave_Pmax=..." but doesn't always save it;
-    # use the documented value 0.9735 from the verified baseline as a sanity
-    # band, and rely on map correlation for the strong assertion.
-    relion_pmax_reference = 0.9735  # data_noise1_5k_normalized RELION it004 ave_Pmax
+    relion_pmax_reference = float(starfile.read(model_path)["model_general"]["rlnAveragePmax"])
     pmax_abs_diff = abs(recovar_pmax - relion_pmax_reference)
 
     baseline_h1 = _read_baseline("em_parity_quality_fast_baseline.json", "k1_replay_half1_corr_vs_relion")
