@@ -18,10 +18,10 @@ import math
 
 import pytest
 
+from recovar.em.vdam.native_options import InitialModelDefaults
 from recovar.em.vdam.schedules import (
     DEFAULT_STEPSIZE_3D_INITIAL_MODEL,
     DEFAULT_TAU2_FUDGE_3D_INITIAL_MODEL,
-    GuiInitialModelDefaults,
     _relion_round,
     _step_sigmoid_value,
     compute_phase_lengths,
@@ -608,7 +608,7 @@ class TestHelpers:
 
 def test_gui_initial_model_defaults_produce_plan_trajectory():
     """Quick visual check: at GUI defaults, step 0.9->0.5 and tau 1->4."""
-    defaults = GuiInitialModelDefaults()
+    defaults = InitialModelDefaults()
     p = compute_phase_lengths(
         defaults.nr_iter,
         defaults.grad_ini_frac,

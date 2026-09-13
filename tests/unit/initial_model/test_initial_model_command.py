@@ -11,8 +11,8 @@ import pytest
 
 import recovar
 from recovar.commands import initial_model
+from recovar.commands.initial_model import GuiInitialModelDefaults
 from recovar.em.vdam import driver, native_options
-from recovar.em.vdam.schedules import GuiInitialModelDefaults
 
 
 @pytest.mark.unit

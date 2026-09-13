@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 
 import recovar.em.vdam as init_model
+from recovar.commands.initial_model import GuiInitialModelDefaults
 from recovar.em.helpers.expected_accuracy import estimate_relion_expected_accuracy_from_prepared_inputs
 from recovar.em.refinement.mean_helpers import initial_low_pass_filter_references
 from recovar.em.relion import relion_projector_setup
@@ -447,6 +448,7 @@ def test_total_package_loc_within_budget():
     # Shared diagnostics remain counted after their responsibility move.
     total += sum(_file_loc(PACKAGE_DIR.parent / "diagnostics" / name)
                  for name in ("gt_metrics.py", "gt_registration.py"))
+    total += len(inspect.getsourcelines(GuiInitialModelDefaults)[0]) + 2  # Extracted launcher defaults remain counted.
     total += 1  # ProjectorSetupBackend alias now lives in the shared owner.
     # Shared projector wrappers remain counted after leaving dense_adapter.
     total += sum(len(inspect.getsourcelines(getattr(relion_projector_setup, name))[0]) + 2

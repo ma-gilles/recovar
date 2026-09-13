@@ -6,11 +6,23 @@ import argparse
 import importlib
 import json
 import os
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Sequence
 
-from recovar.em.vdam.schedules import GuiInitialModelDefaults
+from recovar.em.vdam.native_options import InitialModelDefaults
+
+
+@dataclass(frozen=True)
+class GuiInitialModelDefaults(InitialModelDefaults):
+    """Launcher settings added to the shared native run defaults."""
+
+    image_fourier_backend: str = "auto"
+    gpu_ids: str = "0"
+    require_custom_cuda: bool = True
+    use_jax_compilation_cache: bool = True
+    jax_compilation_cache_dir: str = ""
+
 
 DEFAULTS = GuiInitialModelDefaults()
 

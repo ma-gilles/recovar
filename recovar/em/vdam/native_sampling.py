@@ -24,13 +24,7 @@ from recovar.em.helpers.expected_accuracy import (
     estimate_relion_expected_accuracy_from_prepared_inputs,
     estimate_relion_expected_accuracy_in_spawned_process_from_prepared_inputs,
 )
-from recovar.em.vdam.native_options import (
-    DEFAULT_HEALPIX_ORDER,
-    DEFAULT_OFFSET_RANGE_PX,
-    DEFAULT_OFFSET_STEP_PX,
-    DEFAULT_OVERSAMPLING,
-    NativeInitialModelOptions,
-)
+from recovar.em.vdam.native_options import InitialModelDefaults, NativeInitialModelOptions
 from recovar.em.vdam.star_io import NativeOpticsState
 from recovar.em.vdam.state import InitialModelState, NativeParticleState
 from recovar.em.vdam.subset import RndUnifFn
@@ -70,12 +64,12 @@ class NativeSamplingPlan:
     rotations: np.ndarray | None
     translations: np.ndarray
     random_perturbation: float
-    healpix_order: int = DEFAULT_HEALPIX_ORDER
-    oversampling: int = DEFAULT_OVERSAMPLING
-    offset_range_px: float = DEFAULT_OFFSET_RANGE_PX
-    offset_step_px: float = DEFAULT_OFFSET_STEP_PX
-    offset_range_angstrom: float = DEFAULT_OFFSET_RANGE_PX
-    offset_step_angstrom: float = DEFAULT_OFFSET_STEP_PX
+    healpix_order: int = InitialModelDefaults.healpix_order
+    oversampling: int = InitialModelDefaults.oversampling
+    offset_range_px: float = InitialModelDefaults.offset_range_px
+    offset_step_px: float = InitialModelDefaults.offset_step_px
+    offset_range_angstrom: float = InitialModelDefaults.offset_range_px
+    offset_step_angstrom: float = InitialModelDefaults.offset_step_px
     coarse_translations: np.ndarray | None = None
     coarse_prior_translations: np.ndarray | None = None
     translation_parent: np.ndarray | None = None

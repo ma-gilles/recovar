@@ -187,7 +187,7 @@ def test_native_vdam_solvent_flattening_is_separate_from_zero_mask():
     options = (REPO_ROOT / "recovar/em/vdam/native_options.py").read_text()
 
     expected_tokens = [
-        "do_solvent: bool = INITIAL_MODEL_GUI_DEFAULTS.do_solvent",
+        "do_solvent: bool = True",
         "if opts.do_solvent",
         "relion_solvent_mask",
         "relion_solvent_flatten_state",

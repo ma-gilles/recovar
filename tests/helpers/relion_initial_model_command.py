@@ -7,7 +7,7 @@ These builders mirror the RELION GUI; RECOVAR executes through
 from dataclasses import dataclass
 from typing import List
 
-from recovar.em.vdam.schedules import GuiInitialModelDefaults
+from recovar.commands.initial_model import GuiInitialModelDefaults
 
 INITIAL_MODEL_GUI_DEFAULTS = GuiInitialModelDefaults()
 
