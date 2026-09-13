@@ -461,46 +461,24 @@ def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, s
         values[PACKED_DEFERRED_ENVIRONMENT] = "1"
         return values
     if enabled:
-        if candidate_mode == "hybrid":
-            values.update({name: "1" for name in HYBRID_ENVIRONMENT})
-        elif candidate_mode == "flat_rows":
-            values[FLAT_ROW_ENVIRONMENT] = "1"
-        elif candidate_mode == "packed_projection":
-            values[FLAT_ROW_ENVIRONMENT] = "1"
-            values[PACKED_PROJECTION_ENVIRONMENT] = "1"
-        elif candidate_mode == "packed_deferred":
-            values[FLAT_ROW_ENVIRONMENT] = "1"
-            values[PACKED_PROJECTION_ENVIRONMENT] = "1"
-            values[PACKED_DEFERRED_ENVIRONMENT] = "1"
-        elif candidate_mode == "packed_final_noise":
-            values[FLAT_ROW_ENVIRONMENT] = "1"
-            values[PACKED_PROJECTION_ENVIRONMENT] = "1"
-            values[PACKED_DEFERRED_ENVIRONMENT] = "1"
-            values[PACKED_FINAL_NOISE_ENVIRONMENT] = "1"
-        elif candidate_mode == "hybrid_packed_deferred":
-            values.update({name: "1" for name in HYBRID_ENVIRONMENT})
-            values[FLAT_ROW_ENVIRONMENT] = "1"
-            values[PACKED_PROJECTION_ENVIRONMENT] = "1"
-            values[PACKED_DEFERRED_ENVIRONMENT] = "1"
-        elif candidate_mode == "compact_posterior":
-            values.update({name: "1" for name in HYBRID_ENVIRONMENT})
-            values[COMPACT_POSTERIOR_ENVIRONMENT] = "1"
-        elif candidate_mode == "compact_packed_deferred":
-            values.update({name: "1" for name in HYBRID_ENVIRONMENT})
-            values[COMPACT_POSTERIOR_ENVIRONMENT] = "1"
-            values[FLAT_ROW_ENVIRONMENT] = "1"
-            values[PACKED_PROJECTION_ENVIRONMENT] = "1"
-            values[PACKED_DEFERRED_ENVIRONMENT] = "1"
-        elif candidate_mode == "all_optimized":
-            values.update({name: "1" for name in HYBRID_ENVIRONMENT})
-            values[COMPACT_POSTERIOR_ENVIRONMENT] = "1"
-            values[FLAT_ROW_ENVIRONMENT] = "1"
-            values[STABLE_FLAT_CAPACITY_ENVIRONMENT] = "1"
-            values[PACKED_PROJECTION_ENVIRONMENT] = "1"
-            values[PACKED_DEFERRED_ENVIRONMENT] = "1"
-            values[PACKED_FINAL_NOISE_ENVIRONMENT] = "1"
-        else:
+        packed_projection = (FLAT_ROW_ENVIRONMENT, PACKED_PROJECTION_ENVIRONMENT)
+        packed_deferred = (*packed_projection, PACKED_DEFERRED_ENVIRONMENT)
+        hybrid = tuple(HYBRID_ENVIRONMENT)
+        compact = (*hybrid, COMPACT_POSTERIOR_ENVIRONMENT)
+        mode_flags = {
+            "hybrid": hybrid,
+            "flat_rows": (FLAT_ROW_ENVIRONMENT,),
+            "packed_projection": packed_projection,
+            "packed_deferred": packed_deferred,
+            "packed_final_noise": (*packed_deferred, PACKED_FINAL_NOISE_ENVIRONMENT),
+            "hybrid_packed_deferred": (*hybrid, *packed_deferred),
+            "compact_posterior": compact,
+            "compact_packed_deferred": (*compact, *packed_deferred),
+            "all_optimized": (*compact, *packed_deferred, STABLE_FLAT_CAPACITY_ENVIRONMENT, PACKED_FINAL_NOISE_ENVIRONMENT),
+        }
+        if candidate_mode not in mode_flags:
             raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
+        values.update({name: "1" for name in mode_flags[candidate_mode]})
     return values
 
 
