@@ -188,3 +188,46 @@ def test_resident_hypothesis_tables_match_host_device_index_build(monkeypatch):
                 assert a.dtype == b.dtype, key
                 np.testing.assert_array_equal(a, b, err_msg=key)
             assert np.asarray(resident["local_rotation_row"]).shape == (8, pair_bucket_size)
+
+
+def test_resident_row_indices_gather_matches_index_array_build(monkeypatch):
+    """Gathering the padded rotations from the resident per-row index table must equal the
+    build that uploads an (images, rows) index array, bitwise, including identity padding,
+    capacity rows and the shared-M-step identity; a chunk containing a loop-prepared image
+    falls back to the index-array build."""
+
+    jax = pytest.importorskip("jax")
+    rng = np.random.default_rng(41)
+    n_coarse_rot, n_coarse_trans, children = 24, 4, 3
+    n_fine_trans = 10
+    ftp = rng.integers(0, n_coarse_trans, size=n_fine_trans).astype(np.int32)
+    grid = _fine_grid(rng, n_coarse_rot, children, np.float32)
+    samples = _samples(rng, 26, n_coarse_rot, n_coarse_trans, with_specials=True)
+    kwargs = dict(n_coarse_rot=n_coarse_rot, n_coarse_trans=n_coarse_trans, n_fine_trans=n_fine_trans,
+                  ftp=ftp, prior=None, mstep=True, eulers=False, dtype=np.float32)
+    fast = _run(monkeypatch, True, samples, grid, **kwargs)
+    resident = fast["resident_hypothesis"]
+    assert resident is not None and resident.get("rot_indices_flat") is not None
+    positions = resident["positions"]
+    vectorized = np.flatnonzero(positions >= 0)
+    special = np.flatnonzero(positions < 0)
+    assert vectorized.size >= 6 and special.size >= 1
+
+    monkeypatch.setenv(sba.ROTATIONS_BY_INDEX_ENV, "1")
+    bucket_size = int(max(int(np.asarray(r).shape[0]) for r in fast["oversampled_rots"]))
+    with jax.default_device(jax.devices("cpu")[0]):
+        for image_indices, expect_resident in ((np.sort(vectorized[:5]), True),
+                                               (np.concatenate([vectorized[:3], special[:1]]), False)):
+            bucket = {"bucket_size": bucket_size, "image_indices": image_indices}
+            monkeypatch.setenv(sba.RESIDENT_HYPOTHESIS_TABLES_ENV, "0")
+            by_index = sba._build_bucket_arrays(bucket, fast, n_fine_trans, capacity_rows=8, device_rotations=True)
+            monkeypatch.setenv(sba.RESIDENT_HYPOTHESIS_TABLES_ENV, "1")
+            resident_build = sba._build_bucket_arrays(bucket, fast, n_fine_trans, capacity_rows=8, device_rotations=True)
+            for key in ("rotations", "mstep_rotations"):
+                a, b = np.asarray(by_index[key]), np.asarray(resident_build[key])
+                assert a.dtype == b.dtype, key
+                np.testing.assert_array_equal(b, a, err_msg=f"{key} (resident expected={expect_resident})")
+            assert (resident_build["mstep_rotations"] is resident_build["rotations"]) == (
+                by_index["mstep_rotations"] is by_index["rotations"])
+            np.testing.assert_array_equal(np.asarray(resident_build["rotations"])[len(image_indices):],
+                                          np.broadcast_to(np.eye(3, dtype=np.float32), (8 - len(image_indices), bucket_size, 3, 3)))

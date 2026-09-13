@@ -621,6 +621,7 @@ def _prepare_coarse_images_vectorized(
     out["_resident"] = {
         "coarse_valid_flat": coarse_valid_flat,
         "parent_map_flat": flat_parent_map,
+        "rot_indices_flat": flat_rot_indices.astype(np.int32, copy=False),
         "pair_bounds": pair_bounds,
         "row_bounds": row_bounds,
         "n_coarse_trans": int(n_coarse_trans),
@@ -1304,6 +1305,68 @@ def _padded_rotations_from_table_impl(table, rotation_indices, counts, fill, *, 
     return jnp.where(valid[:, :, None, None], gathered, fill[None, None])
 
 
+_RESIDENT_ROW_INDEX_CACHE: dict = {}
+
+
+def _resident_row_indices_device(resident):
+    """Device copy of one class's flat per-row global rotation indices, keyed by prep token."""
+
+    import jax.numpy as jnp
+
+    key = resident["token"]
+    cached = _RESIDENT_ROW_INDEX_CACHE.get(key)
+    if cached is None:
+        if len(_RESIDENT_ROW_INDEX_CACHE) >= 8:
+            _RESIDENT_ROW_INDEX_CACHE.clear()
+        cached = (
+            jnp.asarray(np.asarray(resident["rot_indices_flat"], dtype=np.int32)),
+            jnp.asarray(np.asarray(resident["row_bounds"], dtype=np.int32)),
+        )
+        _RESIDENT_ROW_INDEX_CACHE[key] = cached
+    return cached
+
+
+def _padded_rotations_from_resident_impl(table, rot_flat, row_bounds, positions, counts, fill, *, rows):
+    import jax.numpy as jnp
+
+    safe = jnp.clip(positions, 0, row_bounds.shape[0] - 2)
+    start = row_bounds[safe]
+    offsets = jnp.arange(rows, dtype=jnp.int32)[None, :]
+    valid = offsets < counts[:, None]
+    source = jnp.clip(start[:, None] + offsets, 0, rot_flat.shape[0] - 1)
+    gathered = jnp.take(table, jnp.where(valid, jnp.take(rot_flat, source), 0), axis=0)
+    return jnp.where(valid[:, :, None, None], gathered, fill[None, None])
+
+
+def padded_rotations_from_resident_device(table, table_key, resident, positions, counts, rows, fill):
+    """``(images, rows, 3, 3)`` rotations gathered entirely on the device.
+
+    The per-row global rotation indices live in one resident int32 table per class and
+    iteration, so a chunk uploads only its per-image positions and counts instead of an
+    ``(images, rows)`` index array. At 100k/256 K=4 that index upload was ~17 s of the
+    iteration (job 13838987 stack samples: padded_rotations_from_table_device). Requires
+    every image of the chunk to have come from the vectorized preparation; the values are
+    the same table entries, so the result is bit-identical to the index-array gather.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    fn = padded_rotations_from_resident_device.__dict__.get("_compiled")
+    if fn is None:
+        fn = jax.jit(_padded_rotations_from_resident_impl, static_argnames=("rows",))
+        padded_rotations_from_resident_device.__dict__["_compiled"] = fn
+    rot_flat, row_bounds = _resident_row_indices_device(resident)
+    return fn(
+        _rotation_table_device(table, table_key),
+        rot_flat,
+        row_bounds,
+        jnp.asarray(np.asarray(positions, dtype=np.int32)),
+        jnp.asarray(np.asarray(counts, dtype=np.int32)),
+        jnp.asarray(np.asarray(fill, dtype=table.dtype)),
+        rows=int(rows),
+    )
+
+
 def padded_rotations_from_table_device(table, table_key, rotation_indices, counts, rows, fill):
     """``(images, rows, 3, 3)`` device rotations gathered from a resident table.
 
@@ -1622,20 +1685,40 @@ def _build_bucket_arrays(
         padded_row_log_prior[row, :cnt] = per_image_inputs["log_prior"][image_idx]
 
     rotation_table = per_image_inputs.get("rotation_table") if isinstance(per_image_inputs, dict) else None
+    resident_rows = None
+    if isinstance(per_image_inputs, dict) and resident_hypothesis_tables_enabled():
+        candidate = per_image_inputs.get("resident_hypothesis")
+        if candidate is not None and candidate.get("rot_indices_flat") is not None:
+            row_positions = np.asarray(candidate["positions"], dtype=np.int64)[image_indices[:n_real]]
+            if np.all(row_positions >= 0):
+                resident_rows = (candidate, np.concatenate(
+                    [row_positions, np.full(batch - n_real, -1, dtype=np.int64)]
+                ) if batch > n_real else row_positions)
     if (
         device_rotations
         and rotation_table is not None
         and np.dtype(rotation_table.dtype) == np.dtype(rotation_dtype)
         and rotations_by_index_enabled()
     ):
-        padded_rotations = padded_rotations_from_table_device(
-            rotation_table,
-            per_image_inputs["rotation_table_key"],
-            padded_rotation_indices,
-            actual_counts,
-            bucket_size,
-            np.eye(3, dtype=rotation_dtype),
-        )
+        if resident_rows is not None:
+            padded_rotations = padded_rotations_from_resident_device(
+                rotation_table,
+                per_image_inputs["rotation_table_key"],
+                resident_rows[0],
+                resident_rows[1],
+                actual_counts,
+                bucket_size,
+                np.eye(3, dtype=rotation_dtype),
+            )
+        else:
+            padded_rotations = padded_rotations_from_table_device(
+                rotation_table,
+                per_image_inputs["rotation_table_key"],
+                padded_rotation_indices,
+                actual_counts,
+                bucket_size,
+                np.eye(3, dtype=rotation_dtype),
+            )
         mstep_table = per_image_inputs.get("mstep_rotation_table")
         if not separate_mstep_rotations:
             padded_mstep_rotations = padded_rotations
