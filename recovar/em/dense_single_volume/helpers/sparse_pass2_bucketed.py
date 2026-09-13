@@ -14867,9 +14867,25 @@ def compute_k_class_pass2_stats_sparse_fused(
     if _profile_spec:
         # "<call_index>:<bucket_index>[:<log_dir>]": trace one chunk of one pass-2 call with the
         # JAX profiler (perfetto trace) to inventory the executables it launches (diagnostic).
+        # The call index is "*" to mean the first call that actually has that many buckets.
+        # Two attempts to trace the 100k/256 loop missed because the call index has to be
+        # guessed from outside: iteration 1 does not use this engine at all, so its counter
+        # does not start where an iteration count would. Always log what this call is, so a
+        # spec that does not match says why instead of silently doing nothing.
         _parts = _profile_spec.split(":")
-        if int(_parts[0]) == _profile_call_index:
-            _profile_bucket_index = int(_parts[1])
+        _want_bucket = int(_parts[1])
+        _matches = _parts[0] == "*" or int(_parts[0]) == _profile_call_index
+        logger.info(
+            "Sparse fused K-class pass-2 profile spec %r: this call is index %d with %d buckets; %s",
+            _profile_spec,
+            _profile_call_index,
+            len(execution_buckets),
+            "tracing bucket %d" % _want_bucket
+            if _matches and _want_bucket < len(execution_buckets)
+            else "not tracing",
+        )
+        if _matches and _want_bucket < len(execution_buckets):
+            _profile_bucket_index = _want_bucket
             _profile_log_dir = _parts[2] if len(_parts) > 2 else os.path.join(os.getcwd(), "jax_profile_chunk")
     _profile_active = False
     for _bucket_index, bucket_meta in enumerate(execution_buckets):
