@@ -11645,6 +11645,25 @@ __global__ void relion_cosine_fill_f32_kernel(
     }
 }
 
+__global__ void relion_softmask_count_invalid_backgrounds_kernel(
+    const float* background_sums,
+    int64_t batch_size,
+    int32_t* invalid_count)
+{
+    // Single block: count images whose background weight is non-positive or
+    // whose sums are non-finite.  Consumed by the deferred host check.
+    int local = 0;
+    for (int64_t image = threadIdx.x; image < batch_size; image += blockDim.x) {
+        float weight_sum = background_sums[2 * image];
+        float weighted_bg = background_sums[2 * image + 1];
+        if (!(weight_sum > 0.0f) || !isfinite(weight_sum) || !isfinite(weighted_bg)) ++local;
+    }
+    using BlockReduce = cub::BlockReduce<int, kRelionPreprocessBlockSize>;
+    __shared__ typename BlockReduce::TempStorage reduce_storage;
+    int total = BlockReduce(reduce_storage).Sum(local);
+    if (threadIdx.x == 0) invalid_count[0] = total;
+}
+
 // Scratch layout for launch_relion_preprocess_real_f32 (floats, then CUB temp bytes).
 struct RelionPreprocessScratchLayout {
     int primary_count;          // per-image entries in each primary sum array
@@ -11704,6 +11723,8 @@ cudaError_t launch_relion_preprocess_real_f32(
     float cosine_width,
     bool apply_mask,
     int reduction_mode,
+    bool host_check,
+    int32_t* invalid_count,
     void* scratch,
     const RelionPreprocessScratchLayout& layout)
 {
@@ -11725,7 +11746,8 @@ cudaError_t launch_relion_preprocess_real_f32(
     err = cudaGetLastError();
     if (err != cudaSuccess) return err;
     err = cudaMemcpyAsync(masked, normalized_shifted, image_bytes, cudaMemcpyDeviceToDevice, stream);
-    if (err != cudaSuccess || !apply_mask) return err;
+    if (err != cudaSuccess) return err;
+    if (!apply_mask) return cudaMemsetAsync(invalid_count, 0, sizeof(int32_t), stream);
 
     // The soft-mask background weight is a pure function of the geometry:
     // the farthest texel from the centre is (0, 0).  RELION's mask has no
@@ -11811,10 +11833,20 @@ cudaError_t launch_relion_preprocess_real_f32(
     err = cudaGetLastError();
     if (err != cudaSuccess) return err;
 
-    // Failure semantics are unchanged from the per-image launcher: a
+    // The invalid-image count is always produced on the device so the
+    // deferred check (host_check == false) can read it later without a
+    // per-call synchronization.
+    relion_softmask_count_invalid_backgrounds_kernel<<<1, kRelionPreprocessBlockSize, 0, stream>>>(
+        reduce_values, batch_size, invalid_count);
+    err = cudaGetLastError();
+    if (err != cudaSuccess || !host_check) return err;
+
+    // Default failure semantics are those of the per-image launcher: a
     // non-positive or non-finite background weight, or a non-finite weighted
     // background, aborts the call.  One read-back per call replaces one per
-    // image; removing it entirely is a separate, explicitly gated change.
+    // image.  Deferring it (RECOVAR_RELION_PREPROCESS_DEFERRED_CHECK) moves
+    // the same check to the caller's drain point; NaN fills the affected
+    // exterior in the meantime.
     std::vector<float> host_sums(static_cast<size_t>(2 * batch_size));
     err = cudaMemcpyAsync(
         host_sums.data(), reduce_values, host_sums.size() * sizeof(float),
@@ -16942,14 +16974,21 @@ ffi::Error RelionPreprocessRealF32ImplWithReduction(
     float radius,
     float cosine_width,
     int64_t apply_mask,
+    int64_t host_check,
     ffi::AnyBuffer images,
     ffi::AnyBuffer normalization_factors,
     ffi::AnyBuffer integer_shifts,
     ffi::Result<ffi::AnyBuffer> normalized_shifted_out,
     ffi::Result<ffi::AnyBuffer> masked_out,
     ffi::Result<ffi::AnyBuffer> workspace_out,
+    ffi::Result<ffi::AnyBuffer> invalid_count_out,
     int reduction_mode)
 {
+    if (invalid_count_out->element_type() != ffi::DataType::S32 ||
+        invalid_count_out->dimensions().size() != 1 || invalid_count_out->dimensions()[0] != 1)
+        return ffi::Error::InvalidArgument("RelionPreprocessRealF32: invalid_count must be S32 with shape (1,)");
+    if (host_check != 0 && host_check != 1)
+        return ffi::Error::InvalidArgument("RelionPreprocessRealF32: host_check must be 0 or 1");
     if (images.element_type() != ffi::DataType::F32 ||
         normalization_factors.element_type() != ffi::DataType::F32 ||
         normalized_shifted_out->element_type() != ffi::DataType::F32 ||
@@ -17002,7 +17041,8 @@ ffi::Error RelionPreprocessRealF32ImplWithReduction(
         static_cast<float*>(normalized_shifted_out->untyped_data()),
         static_cast<float*>(masked_out->untyped_data()),
         image_dims[0], static_cast<int>(image_dims[1]), static_cast<int>(image_dims[2]),
-        radius, cosine_width, apply_mask != 0, reduction_mode, scratch_ptr, layout);
+        radius, cosine_width, apply_mask != 0, reduction_mode, host_check != 0,
+        static_cast<int32_t*>(invalid_count_out->untyped_data()), scratch_ptr, layout);
     if (err != cudaSuccess)
         return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
     return ffi::Error::Success();
@@ -17013,16 +17053,18 @@ ffi::Error RelionPreprocessRealF32Impl(
     float radius,
     float cosine_width,
     int64_t apply_mask,
+    int64_t host_check,
     ffi::AnyBuffer images,
     ffi::AnyBuffer normalization_factors,
     ffi::AnyBuffer integer_shifts,
     ffi::Result<ffi::AnyBuffer> normalized_shifted_out,
     ffi::Result<ffi::AnyBuffer> masked_out,
-    ffi::Result<ffi::AnyBuffer> workspace_out)
+    ffi::Result<ffi::AnyBuffer> workspace_out,
+    ffi::Result<ffi::AnyBuffer> invalid_count_out)
 {
     return RelionPreprocessRealF32ImplWithReduction(
-        stream, radius, cosine_width, apply_mask, images, normalization_factors,
-        integer_shifts, normalized_shifted_out, masked_out, workspace_out, 0);
+        stream, radius, cosine_width, apply_mask, host_check, images, normalization_factors,
+        integer_shifts, normalized_shifted_out, masked_out, workspace_out, invalid_count_out, 0);
 }
 
 ffi::Error RelionPreprocessRealF32NativeLaneImpl(
@@ -17030,16 +17072,18 @@ ffi::Error RelionPreprocessRealF32NativeLaneImpl(
     float radius,
     float cosine_width,
     int64_t apply_mask,
+    int64_t host_check,
     ffi::AnyBuffer images,
     ffi::AnyBuffer normalization_factors,
     ffi::AnyBuffer integer_shifts,
     ffi::Result<ffi::AnyBuffer> normalized_shifted_out,
     ffi::Result<ffi::AnyBuffer> masked_out,
-    ffi::Result<ffi::AnyBuffer> workspace_out)
+    ffi::Result<ffi::AnyBuffer> workspace_out,
+    ffi::Result<ffi::AnyBuffer> invalid_count_out)
 {
     return RelionPreprocessRealF32ImplWithReduction(
-        stream, radius, cosine_width, apply_mask, images, normalization_factors,
-        integer_shifts, normalized_shifted_out, masked_out, workspace_out, 1);
+        stream, radius, cosine_width, apply_mask, host_check, images, normalization_factors,
+        integer_shifts, normalized_shifted_out, masked_out, workspace_out, invalid_count_out, 1);
 }
 
 ffi::Error RelionPreprocessRealF32NativeAtomicImpl(
@@ -17047,16 +17091,18 @@ ffi::Error RelionPreprocessRealF32NativeAtomicImpl(
     float radius,
     float cosine_width,
     int64_t apply_mask,
+    int64_t host_check,
     ffi::AnyBuffer images,
     ffi::AnyBuffer normalization_factors,
     ffi::AnyBuffer integer_shifts,
     ffi::Result<ffi::AnyBuffer> normalized_shifted_out,
     ffi::Result<ffi::AnyBuffer> masked_out,
-    ffi::Result<ffi::AnyBuffer> workspace_out)
+    ffi::Result<ffi::AnyBuffer> workspace_out,
+    ffi::Result<ffi::AnyBuffer> invalid_count_out)
 {
     return RelionPreprocessRealF32ImplWithReduction(
-        stream, radius, cosine_width, apply_mask, images, normalization_factors,
-        integer_shifts, normalized_shifted_out, masked_out, workspace_out, 2);
+        stream, radius, cosine_width, apply_mask, host_check, images, normalization_factors,
+        integer_shifts, normalized_shifted_out, masked_out, workspace_out, invalid_count_out, 2);
 }
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
@@ -17066,9 +17112,11 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("radius")
         .Attr<float>("cosine_width")
         .Attr<int64_t>("apply_mask")
+        .Attr<int64_t>("host_check")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
@@ -17081,9 +17129,11 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("radius")
         .Attr<float>("cosine_width")
         .Attr<int64_t>("apply_mask")
+        .Attr<int64_t>("host_check")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
@@ -17096,9 +17146,11 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<float>("radius")
         .Attr<float>("cosine_width")
         .Attr<int64_t>("apply_mask")
+        .Attr<int64_t>("host_check")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>()

@@ -2989,6 +2989,11 @@ def _run_relion_iteration_loop(
 
         # E-step + per-half M-step accumulators are now both populated.
         _parity_dump.mark_stage(iteration, "e_step")
+        # Deferred RELION soft-mask checks (RECOVAR_RELION_PREPROCESS_DEFERRED_CHECK)
+        # must fail closed before this iteration's accumulators are consumed.
+        from recovar import cuda_backproject as _cuda_preprocess_checks
+
+        _cuda_preprocess_checks.drain_relion_preprocess_checks()
         if iter_sig_count_parts:
             iter_sig_counts = np.concatenate(iter_sig_count_parts, axis=0)
         if iter_recorded_sig_count_parts:

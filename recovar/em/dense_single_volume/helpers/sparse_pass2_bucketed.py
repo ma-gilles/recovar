@@ -14538,6 +14538,11 @@ def compute_k_class_pass2_stats_sparse_fused(
         if group_key != last_bucket_size_logged:
             if last_bucket_size_logged is not None and group_t0 is not None:
                 prev_chunks, prev_images = bucket_group_stats[last_bucket_size_logged]
+                # Deferred soft-mask checks (RECOVAR_RELION_PREPROCESS_DEFERRED_CHECK)
+                # fail closed here, at the group boundary, instead of per call.
+                from recovar import cuda_backproject as _cuda_preprocess_checks
+
+                _cuda_preprocess_checks.drain_relion_preprocess_checks()
                 prev_wall = time.time() - group_t0
                 logger.info(
                     "Sparse fused K-class pass-2 bucket group done: mode=%s %s=%d chunks=%d images=%d wall=%.1fs images/s=%.1f",
@@ -17122,6 +17127,9 @@ def compute_k_class_pass2_stats_sparse_fused(
             jax.profiler.stop_trace()
             _profile_active = False
 
+    from recovar import cuda_backproject as _cuda_preprocess_checks
+
+    _cuda_preprocess_checks.drain_relion_preprocess_checks()
     if last_bucket_size_logged is not None and group_t0 is not None:
         group_chunks, group_images = bucket_group_stats[last_bucket_size_logged]
         group_wall = time.time() - group_t0

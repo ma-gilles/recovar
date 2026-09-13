@@ -5583,8 +5583,7 @@ def _relion_preprocess_workspace_bytes(
     )
 
 
-@functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7))
-def relion_preprocess_real_f32(
+def _relion_preprocess_real_f32_impl(
     images: jax.Array,
     normalization_factors: jax.Array,
     integer_shifts: jax.Array,
@@ -5593,26 +5592,9 @@ def relion_preprocess_real_f32(
     apply_mask: bool = True,
     native_lane_reduction: bool = False,
     native_atomic_reduction: bool = False,
-) -> tuple[jax.Array, jax.Array]:
-    """Apply RELION's accelerated float32 real-space preprocessing.
-
-    Returns ``(normalized_shifted, masked)`` so captured operand tests can
-    gate both stored RELION boundaries.  The implementation preserves
-    RELION's separate float32 normalization and zero-filled translation and
-    CUDA ``sqrtf``/``cospif`` mask arithmetic.  The default uses RECOVAR's
-    accepted deterministic block-first addition tree.  The diagnostic-only
-    ``native_lane_reduction`` mode instead deterministically reproduces the
-    native observer's lane-across-blocks tree before its final CUB sum. The
-    diagnostic ``native_atomic_reduction`` mode reproduces RELION's actual
-    schedule-dependent atomic lane accumulation.
-
-    The soft-mask launch is batched: the background sums stay on the device
-    and the fill kernel forms the same float32 quotient there, so the masked
-    images are bit-identical to the former per-image launch.  Failure
-    semantics are unchanged: a mask with no exterior texel, or a non-finite
-    image, fails closed with ``CUDA: invalid argument`` after one per-call
-    read-back of the per-image sums.
-    """
+    host_check: bool = True,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    """Traced body of :func:`relion_preprocess_real_f32`; also returns the invalid-image count."""
 
     if jax.default_backend() != "gpu":
         raise RuntimeError("RELION CUDA preprocessing requires a JAX GPU backend")
@@ -5640,6 +5622,7 @@ def relion_preprocess_real_f32(
         raise ValueError("native lane and native atomic reductions are mutually exclusive")
 
     out_type = jax.ShapeDtypeStruct(images.shape, jnp.float32)
+    count_type = jax.ShapeDtypeStruct((1,), jnp.int32)
     workspace_type = jax.ShapeDtypeStruct(
         (
             _relion_preprocess_workspace_bytes(
@@ -5659,9 +5642,10 @@ def relion_preprocess_real_f32(
             else _TARGET_RELION_PREPROCESS_REAL_F32
         )
     )
-    normalized_shifted, masked, _workspace = jax.ffi.ffi_call(
+    # Result order matches the handler binding: images, masked, workspace, count.
+    normalized_shifted, masked, _workspace, invalid_count = jax.ffi.ffi_call(
         target,
-        (out_type, out_type, workspace_type),
+        (out_type, out_type, workspace_type, count_type),
         vmap_method="sequential",
     )(
         images,
@@ -5670,8 +5654,133 @@ def relion_preprocess_real_f32(
         radius=np.float32(radius),
         cosine_width=np.float32(cosine_width),
         apply_mask=np.int64(int(apply_mask)),
+        host_check=np.int64(int(bool(host_check))),
     )
+    return normalized_shifted, masked, invalid_count
+
+
+_relion_preprocess_real_f32_jit = jax.jit(
+    _relion_preprocess_real_f32_impl, static_argnums=(3, 4, 5, 6, 7, 8)
+)
+
+
+def relion_preprocess_real_f32(
+    images: jax.Array,
+    normalization_factors: jax.Array,
+    integer_shifts: jax.Array,
+    radius: float,
+    cosine_width: float,
+    apply_mask: bool = True,
+    native_lane_reduction: bool = False,
+    native_atomic_reduction: bool = False,
+    deferred_finite_check: bool | None = None,
+) -> tuple[jax.Array, jax.Array]:
+    """Apply RELION's accelerated float32 real-space preprocessing.
+
+    Returns ``(normalized_shifted, masked)`` so captured operand tests can
+    gate both stored RELION boundaries.  The implementation preserves
+    RELION's separate float32 normalization and zero-filled translation and
+    CUDA ``sqrtf``/``cospif`` mask arithmetic.  The default uses RECOVAR's
+    accepted deterministic block-first addition tree.  The diagnostic-only
+    ``native_lane_reduction`` mode instead deterministically reproduces the
+    native observer's lane-across-blocks tree before its final CUB sum. The
+    diagnostic ``native_atomic_reduction`` mode reproduces RELION's actual
+    schedule-dependent atomic lane accumulation.
+
+    The soft-mask launch is batched: the background sums stay on the device
+    and the fill kernel forms the same float32 quotient there, so the masked
+    images are bit-identical to the former per-image launch.  Default failure
+    semantics are unchanged: a mask with no exterior texel, or a non-finite
+    image, fails closed with ``CUDA: invalid argument`` after one per-call
+    read-back of the per-image sums.
+
+    ``deferred_finite_check`` (default from
+    ``RECOVAR_RELION_PREPROCESS_DEFERRED_CHECK``, off) removes that per-call
+    read-back and stream synchronization: the device counts invalid images
+    into a small array that is queued for
+    :func:`drain_relion_preprocess_checks`, which the K-class pass-2 loop
+    calls at every bucket-group boundary and the iteration loop after each
+    E-step.  Until the drain, an invalid image carries NaN in its masked
+    exterior; the drain then raises the same failure, later.
+    """
+
+    if deferred_finite_check is None:
+        deferred_finite_check = relion_preprocess_deferred_check_requested()
+    normalized_shifted, masked, invalid_count = _relion_preprocess_real_f32_jit(
+        images,
+        normalization_factors,
+        integer_shifts,
+        radius,
+        cosine_width,
+        apply_mask,
+        native_lane_reduction,
+        native_atomic_reduction,
+        not deferred_finite_check,
+    )
+    if deferred_finite_check and apply_mask:
+        _queue_relion_preprocess_check(invalid_count)
     return normalized_shifted, masked
+
+
+# Tests bypass the JIT through ``__wrapped__`` to exercise the eager guards.
+relion_preprocess_real_f32.__wrapped__ = _relion_preprocess_real_f32_impl
+
+
+RELION_PREPROCESS_DEFERRED_CHECK_ENV = "RECOVAR_RELION_PREPROCESS_DEFERRED_CHECK"
+_RELION_PREPROCESS_PENDING_CHECKS: list[jax.Array] = []
+_RELION_PREPROCESS_PENDING_LOCK = threading.Lock()
+_RELION_PREPROCESS_PENDING_LIMIT = 1024
+
+
+def relion_preprocess_deferred_check_requested() -> bool:
+    """Strict 0/1 read of ``RECOVAR_RELION_PREPROCESS_DEFERRED_CHECK`` (unset is off)."""
+
+    token = os.environ.get(RELION_PREPROCESS_DEFERRED_CHECK_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{RELION_PREPROCESS_DEFERRED_CHECK_ENV} must be 0 or 1")
+    return token == "1"
+
+
+def _queue_relion_preprocess_check(invalid_count: jax.Array) -> None:
+    """Queue one device invalid-image count; drain when the queue is full."""
+
+    with _RELION_PREPROCESS_PENDING_LOCK:
+        _RELION_PREPROCESS_PENDING_CHECKS.append(invalid_count)
+        full = len(_RELION_PREPROCESS_PENDING_CHECKS) >= _RELION_PREPROCESS_PENDING_LIMIT
+    if full:
+        drain_relion_preprocess_checks()
+
+
+def pending_relion_preprocess_checks() -> int:
+    """Number of queued deferred soft-mask checks (test and diagnostics hook)."""
+
+    with _RELION_PREPROCESS_PENDING_LOCK:
+        return len(_RELION_PREPROCESS_PENDING_CHECKS)
+
+
+def drain_relion_preprocess_checks() -> int:
+    """Wait on every queued deferred soft-mask check and fail closed on invalid images.
+
+    Returns the number of drained checks.  Raises ``RuntimeError`` when any
+    batch contained an image whose soft-mask background weight was
+    non-positive or whose sums were non-finite; this is the deferred form of
+    the ``CUDA: invalid argument`` failure of the synchronous check.
+    """
+
+    with _RELION_PREPROCESS_PENDING_LOCK:
+        pending = list(_RELION_PREPROCESS_PENDING_CHECKS)
+        _RELION_PREPROCESS_PENDING_CHECKS.clear()
+    if not pending:
+        return 0
+    counts = np.asarray(jnp.concatenate(pending)).astype(np.int64)
+    invalid_images = int(counts.sum())
+    if invalid_images:
+        raise RuntimeError(
+            "RELION CUDA preprocessing (deferred check): "
+            f"{invalid_images} image(s) in {int((counts > 0).sum())} batch(es) had a "
+            "non-positive or non-finite soft-mask background"
+        )
+    return len(pending)
 
 
 @functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9, 10))
