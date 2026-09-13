@@ -6,29 +6,39 @@ every test or publication. Detailed receipts belong behind links. The
 at `a2ab056cb`, including one paragraph per earlier checkpoint; its historical
 next actions are superseded here.
 
-## Coarse geometry and compact prior ownership — September 13
+## Geometry validation and compact dtype repair — September 13
 
-The narrow [zero-oversampling geometry correction](../math/zero_coarse_geometry.md)
-is integrated at `c5559c7aa`. Coarse device matrices change only for the eligible
-F32 K1 sparse Gaussian route; fine scoring and M-step geometry stay unchanged.
-The actual-source peer replay reduces the selected particle's support flips from
-five to three, but its count remains 52884 versus native 52883. CPU routing
-checks pass; matched H100 trajectory **13816465** is pending on frozen `c5559c7aa`.
-[Integration and validation receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_zero_geometry_integration_20260913/result.json).
+The [zero-oversampling geometry correction](../math/zero_coarse_geometry.md)
+at `c5559c7aa` passed matched H100 job **13816465**: one three-iteration K1
+regression, zero skips, 25m36s. Source, inputs, harness and loaded-binary checks
+pass. Against controller 13814090, first-iteration Pmax RMSE improves from
+0.0000146878 to 0.0000090670 and significant-count mismatches fall from 1454
+to 1121. Later count mismatches are 658/9 versus 654/9; strict state remains open.
+Signed merged cross-engine FSC-AUC is 0.999619283464, a change of +3.4481e-8.
+[Canonical reports and matched command comparison](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_zero_geometry_integration_20260913/result.json).
 
-Compact execution now gathers rotation priors from one row table (`bdee41a78`),
-while independent diagnostic materialization is retained. Reorder assembly and
-VDAM startup profiling duplication are also removed. Fresh tiny K2 CUDA guard
-**13816668** is pending on `bdee41a78`; earlier guard **13815504** remains pinned
-to `a38f75764`. Neither is a full trajectory, exact-K4 or speed qualification.
-[Prior comparisons and focused checks](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/compact_lazy_prior_integration_20260913/result.json).
+Both compact CUDA guards 13815504/a38 and13816668/bdee failed: compact execution
+sent float64 probabilities to the F32-only native dual sums, after the rectangular
+reference completed. Separate repair `58aa58131` checks actual per-class operand
+dtypes and retains the existing precision-preserving reduction for unsupported
+types. Profiles distinguish requested from executed native dispatch. CPU checks
+pass; unchanged tiny K2 guard **13817137** is queued on frozen 58aa58131. This is
+not yet GPU-qualified and cannot substitute for exactly K4 or full completion.
+[Failure, repair and validation evidence](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/compact_native_dtype_repair_20260913/result.json).
 
-Six of ten same-source VDAM controls are complete at this checkpoint. Both
-head-heavy controls pass the original mean-FSC band, but kent-offset control1
-and uniform control2 fall below their bands. Optional flags alone do not explain
-all failures. Remaining controls and bisections are diagnostic; original bands
-and the held speed-integration decision remain unchanged.
-[Recorded control review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_capacity_noise_review_20260913/control_matrix_progress.json).
+VDAM row selection, native binary replay readers and artifact profiling now
+share their existing owners. Two diagnostic analyzers also share one FFT row
+mapping, with its explicit expected-array reference preserved. Duplicate tests
+were removed only where inputs, implementation and assertions matched.
+[Replay-reader checks](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_native_replay_reader_20260913/result.json),
+[artifact checks](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_artifact_profile_cleanup_20260913/result.json),
+[FFT diagnostic checks](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_fft_replay_layout_cleanup_20260913/result.json).
+
+All ten same-source VDAM controls are terminal. Seven distinct arms miss at
+least one original two-sided mean or weighted-FSC band. Controls and ongoing
+bisections establish attribution, not replacement acceptance bands. Private speed
+integration remains held; no tolerance has changed.
+[Terminal control review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_capacity_noise_review_20260913/control_matrix_terminal.json).
 
 ## Zero-oversampling controller integration — September 13
 
@@ -54,8 +64,8 @@ but three original mean-FSC bands still fail: radial flags2 **0.0693 < 0.0719**,
 head-heavy flags1 **0.1104 < 0.1122**, uniform flags1 **0.0672 < 0.0685**.
 All ten fixed-head arms completed. Same-source controls **13814629–13814638**
 are diagnostic; they do not replace the original bands. Private speed integration
-remains held. The last recorded VDAM size check failed at **8806 > 6100** lines; the
-subsequent profiling cleanup does not close that gap.
+remains held. The current VDAM size check still fails at **8756 > 6100** lines;
+individual file ceilings pass. The total budget remains unchanged.
 [Independent fixed-matrix review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_capacity_noise_review_20260913/fixed_matrix_review.json).
 
 ## Opt-in native startup noise — September 13
