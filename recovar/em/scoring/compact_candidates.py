@@ -168,6 +168,7 @@ def build_compact_pair_index_arrays(
     candidate_masks,
     *,
     pair_bucket_size: int | None = None,
+    capacity_rows: int | None = None,
     pair_block_size_for_quantization: int = 5000,
 ):
     """Pack candidate masks with the mature compact-pass-2 pair ABI.
@@ -175,17 +176,17 @@ def build_compact_pair_index_arrays(
     Valid pairs occupy a source-ordered prefix of each image row. Padding uses
     ``-1`` indices plus a false ``pair_mask``.  When no explicit capacity is
     supplied, use the same compile-friendly bucket quantization as compact
-    pass 2 instead of creating exact-count shape families.
+    pass 2 instead of creating exact-count shape families. ``capacity_rows``
+    allocates masked image rows directly, without copying packed pair tables.
     """
 
     candidate_masks = tuple(candidate_masks)
     compact_indices = tuple(
         compact_candidate_indices_in_source_order(candidate_mask) for candidate_mask in candidate_masks
     )
-    pair_counts = np.asarray(
-        [rotation_rows.shape[0] for rotation_rows, _ in compact_indices],
-        dtype=np.int32,
-    )
+    batch_size = len(candidate_masks) if capacity_rows is None else max(len(candidate_masks), int(capacity_rows))
+    pair_counts = np.zeros(batch_size, dtype=np.int32)
+    pair_counts[:len(candidate_masks)] = [rows.shape[0] for rows, _ in compact_indices]
     required_capacity = int(pair_counts.max(initial=0))
     if pair_bucket_size is None:
         pair_bucket_size = _exact_bucket_rotation_size(
@@ -201,7 +202,6 @@ def build_compact_pair_index_arrays(
             f"prefix: required={required_capacity}, capacity={pair_bucket_size}"
         )
 
-    batch_size = len(candidate_masks)
     local_rotation_row = np.full(
         (batch_size, pair_bucket_size),
         -1,

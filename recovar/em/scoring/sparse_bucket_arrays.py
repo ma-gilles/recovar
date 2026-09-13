@@ -871,7 +871,7 @@ def _build_compact_pair_bucket_arrays(bucket, compact_inputs):
     }
 
 
-def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_inputs):
+def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_inputs, *, capacity_rows=None):
     """Stack/pad compact candidate pairs for one class and bucket on demand."""
 
     pair_bucket_size = int(bucket["pair_bucket_size"])
@@ -879,7 +879,11 @@ def _build_compact_pair_bucket_arrays_from_per_image_inputs(bucket, per_image_in
     index_arrays = build_compact_pair_index_arrays(
         (per_image_inputs["candidate_mask"][int(image_idx)] for image_idx in image_indices),
         pair_bucket_size=pair_bucket_size,
+        capacity_rows=capacity_rows,
     )
+    n_alloc = len(index_arrays["pair_counts"])
+    if n_alloc > image_indices.size:
+        image_indices = np.pad(image_indices, (0, n_alloc - image_indices.size), mode="edge")
     return {
         "image_indices": image_indices,
         "pair_bucket_size": pair_bucket_size,
@@ -896,11 +900,13 @@ def _build_bucket_arrays(
     n_fine_trans,
     *,
     include_dense_score_fields: bool = True,
+    capacity_rows=None,
 ):
     """Stack/pad per-image arrays into batched bucket tensors."""
     bucket_size = int(bucket["bucket_size"])
     image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
-    batch = int(image_indices.shape[0])
+    n_real = int(image_indices.shape[0])
+    batch = n_real if capacity_rows is None else max(n_real, int(capacity_rows))
 
     # padded_rotations: identity-fill — projection of identity is harmless
     # because we mask via candidate_mask=False everywhere for padded rows.
@@ -955,6 +961,8 @@ def _build_bucket_arrays(
             padded_parent_map[row, :cnt] = per_image_inputs["parent_map"][image_idx]
         padded_rotation_indices[row, :cnt] = per_image_inputs["oversampled_rot_indices"][image_idx]
 
+    if batch > n_real:
+        image_indices = np.pad(image_indices, (0, batch - n_real), mode="edge")
     return {
         "image_indices": image_indices,
         "bucket_size": bucket_size,
@@ -992,6 +1000,7 @@ def _build_k_class_bucket_arrays(
     compact_buckets: bool = False,
     include_dense_score_fields: bool = True,
     rotation_block_size_for_quantization=5000,
+    capacity_rows=None,
 ):
     """Build per-class padded arrays for fused sparse K-class pass 2.
 
@@ -1022,6 +1031,7 @@ def _build_k_class_bucket_arrays(
                 per_image_inputs,
                 n_fine_trans,
                 include_dense_score_fields=include_dense_score_fields,
+                capacity_rows=capacity_rows,
             )
         )
     return class_arrays
