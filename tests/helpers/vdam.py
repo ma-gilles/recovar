@@ -70,3 +70,47 @@ def fourier_crop_half(image_half: np.ndarray, current_size: int) -> np.ndarray:
     out[:half_cs, :out_x] = image_half[:half_cs, :out_x]
     out[half_cs:, :out_x] = image_half[ori_size - (out_y - half_cs) :, :out_x]
     return out
+
+
+def bpref_to_run_em_output(
+    bp_data: np.ndarray,
+    bp_weight: np.ndarray,
+    ori_size: int,
+    r_max: int,
+    padding_factor: int = 1,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Embed a RELION BPref slab back into RECOVAR's centered full layout."""
+    if padding_factor != 1:
+        raise NotImplementedError("padding_factor must be 1")
+    if r_max < 0:
+        raise ValueError(f"r_max must be non-negative, got {r_max}")
+
+    N = int(ori_size)
+    c = N // 2
+    Fy = np.zeros((N, N, N), dtype=np.complex128)
+    Fc = np.zeros((N, N, N), dtype=np.float64)
+    data = np.asarray(bp_data, dtype=np.complex128)
+    weight = np.asarray(bp_weight, dtype=np.float64)
+
+    if r_max >= c:
+        expected = (N, N, c + 1)
+        if data.shape != expected or weight.shape != expected:
+            raise ValueError(f"full-resolution BPref shape must be {expected}, got {data.shape} and {weight.shape}")
+        Fy[:, :, c:] = data[:, :, :-1]
+        Fy[:, :, :1] = data[:, :, -1:]
+        Fc[:, :, c:] = weight[:, :, :-1]
+        Fc[:, :, :1] = weight[:, :, -1:]
+    else:
+        half_ps = r_max + 1
+        expected = (2 * half_ps + 1, 2 * half_ps + 1, half_ps + 1)
+        if data.shape != expected or weight.shape != expected:
+            raise ValueError(f"cropped BPref shape must be {expected}, got {data.shape} and {weight.shape}")
+        sl = (
+            slice(c - half_ps, c + half_ps + 1),
+            slice(c - half_ps, c + half_ps + 1),
+            slice(c, c + half_ps + 1),
+        )
+        Fy[sl] = data
+        Fc[sl] = weight
+
+    return Fy, Fc

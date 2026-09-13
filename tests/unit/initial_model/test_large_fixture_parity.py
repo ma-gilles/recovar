@@ -504,7 +504,9 @@ def test_layout_converter_roundtrip():
     embed into a zero-filled centered full (N, N, N) spectrum, then crop
     back: must match byte-for-byte.
     """
-    from recovar.em.vdam.layout import bpref_to_run_em_output, run_em_output_to_bpref
+    from helpers.vdam import bpref_to_run_em_output
+
+    from recovar.em.vdam.layout import run_em_output_to_bpref
 
     bp_data = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_bp_data_pre_reweight.bin")
     bp_weight = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_bp_weight.bin")
@@ -528,7 +530,9 @@ def test_layout_converter_vdam_mstep_chain():
     adapter. If the E-step reaches machine-precision parity against RELION,
     this same chain produces the final iter-1 Iref to machine precision.
     """
-    from recovar.em.vdam.layout import bpref_to_run_em_output, run_em_output_to_bpref
+    from helpers.vdam import bpref_to_run_em_output
+
+    from recovar.em.vdam.layout import run_em_output_to_bpref
     from recovar.relion_bind import _relion_bind_core as bind
 
     # Load RELION's per-halfset BP data (pre-reweight)

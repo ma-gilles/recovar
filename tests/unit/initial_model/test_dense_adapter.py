@@ -16,7 +16,6 @@ from recovar.em.vdam.dense_adapter import (
     reference_to_relion_projector_half_maps,
     relion_projector_half_maps_to_dense_means,
     run_dense_initial_model_estep,
-    split_pseudo_halfset_particle_ids,
 )
 from recovar.em.vdam.estep_common import DenseInitialModelEstepConfig, _arrays_to_accumulators, _estep_meta
 from recovar.em.vdam.init import initialise_denovo_state
@@ -27,6 +26,7 @@ from recovar.em.vdam.sparse_pass2_estep import (
     _resolve_sparse_pass1_current_size,
     _safe_coarse_significance_image_batch_size,
 )
+from recovar.em.vdam.subset import split_pseudo_halfset_particle_ids
 
 pytestmark = pytest.mark.unit
 

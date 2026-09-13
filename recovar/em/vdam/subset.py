@@ -85,3 +85,13 @@ def select_vdam_subset(
         else np.zeros(sorted_prefix.size, dtype=np.int8)
     )
     return SubsetPlan(particle_ids=sorted_prefix, halfset_ids=halfsets)
+
+
+def split_pseudo_halfset_particle_ids(n_images: int) -> tuple[np.ndarray, np.ndarray]:
+    """Return RELION-style pseudo-halfset image indices.
+
+    RELION's InitialModel BPref path routes pseudo-halfsets by global
+    ``part_id % 2`` in ``storeWeightedSums``.
+    """
+    ids = np.arange(int(n_images), dtype=np.int64)
+    return ids[0::2], ids[1::2]

@@ -79,7 +79,7 @@ def main() -> None:
     from recovar.core import fourier_transform_utils as ftu
     from recovar.data_io.cryoem_dataset import load_dataset
     from recovar.em.dense.em_engine import run_em
-    from recovar.em.vdam.dense_adapter import split_pseudo_halfset_particle_ids as _split_halfset_particle_ids
+    from recovar.em.vdam.subset import split_pseudo_halfset_particle_ids as _split_halfset_particle_ids
     from recovar.reconstruction.noise import make_radial_noise
     from recovar.utils.helpers import R_from_relion, load_relion_volume
 

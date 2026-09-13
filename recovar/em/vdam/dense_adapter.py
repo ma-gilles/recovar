@@ -54,16 +54,6 @@ _RELION_PROJECTOR_DUMP_DIR_ENV = "RECOVAR_INITIAL_MODEL_PROJECTOR_DUMP_DIR"
 logger = logging.getLogger(__name__)
 
 
-def split_pseudo_halfset_particle_ids(n_images: int) -> tuple[np.ndarray, np.ndarray]:
-    """Return RELION-style pseudo-halfset image indices.
-
-    RELION's InitialModel BPref path routes pseudo-halfsets by global
-    ``part_id % 2`` in ``storeWeightedSums``.
-    """
-    ids = np.arange(int(n_images), dtype=np.int64)
-    return ids[0::2], ids[1::2]
-
-
 def class_log_priors_from_state(state: InitialModelState) -> np.ndarray:
     """Log class priors from ``state.pdf_class`` (collapsed classes get a finite sentinel)."""
     weights = np.asarray(state.pdf_class, dtype=np.float64)

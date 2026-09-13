@@ -11,8 +11,9 @@ These pin behavior that's load-bearing for InitialModel/VDAM RELION parity:
 from __future__ import annotations
 
 import numpy as np
+from helpers.vdam import bpref_to_run_em_output
 
-from recovar.em.vdam.layout import bpref_to_run_em_output, relion_x_public_output_to_bpref, run_em_output_to_bpref
+from recovar.em.vdam.layout import relion_x_public_output_to_bpref, run_em_output_to_bpref
 
 
 def _make_full_with_centered_slab(ori_size: int, r_max: int, slab: np.ndarray) -> np.ndarray:
