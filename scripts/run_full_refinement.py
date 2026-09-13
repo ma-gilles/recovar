@@ -4010,8 +4010,6 @@ def main():
     # Use a RELION-style initial sigma2 estimate from particle power spectra
     # instead of a flat unit spectrum, so iteration 1 starts on a comparable
     # likelihood scale.
-    image_size = ds.image_size
-    volume_size = ds.volume_size
 
     from recovar.reconstruction import noise as recon_noise
 
