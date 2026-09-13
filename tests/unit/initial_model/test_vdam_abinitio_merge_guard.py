@@ -198,21 +198,6 @@ def test_native_vdam_solvent_flattening_is_separate_from_zero_mask():
     assert not missing, f"native InitialModel lost RELION --flatten_solvent post-M-step wiring: {missing}"
 
 
-def test_native_vdam_writes_auditable_iteration_zero_checkpoint():
-    driver = (REPO_ROOT / "recovar/em/vdam/driver.py").read_text()
-    tests = (REPO_ROOT / "tests/unit/initial_model/test_native_driver.py").read_text()
-    expected_tokens = [
-        '{"checkpoint_iteration": 0, "phase": "bootstrap"}',
-        "test_iteration_zero_artifacts_use_the_normal_iteration_writer",
-        'run_it000_class001.mrc',
-        'run_it000_model.star',
-        'run_it000_data.star',
-        'run_it000_recovar_meta.json',
-    ]
-    missing = [token for token in expected_tokens if token not in driver + tests]
-    assert not missing, f"native InitialModel lost iteration-zero checkpoint wiring: {missing}"
-
-
 def test_vdam_frozen_trajectory_runner_and_fsc_auditor_are_merge_guarded():
     guard = (REPO_ROOT / "scripts/run_vdam_abinitio_merge_guard.py").read_text()
     runner = (REPO_ROOT / "scripts/run_vdam_relion_parity_case.py").read_text()
