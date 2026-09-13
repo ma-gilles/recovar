@@ -1426,6 +1426,34 @@ def _use_fresh_auto_refine_particle_order(
     )
 
 
+def _diagnostic_restart_particle_order_iteration(args, frozen_boundary) -> int | None:
+    """Physical shuffle iteration for an explicitly bounded MPI restart replay.
+
+    This is not fresh initialization or a frozen uninterrupted boundary.
+    The ordinary replay path retains its process-start noise broadcast.
+    """
+    if not getattr(args, "diagnostic_restart_particle_order", False):
+        return None
+    if (
+        int(args.n_classes) != 1
+        or int(args.init_relion_iteration) < 1
+        or int(args.max_iter) != 1
+        or not args.skip_final_iteration
+        or args.perturb_replay_relion_dir is None
+        or args.relion_half_sets is None
+        or args.relion_particle_shuffle != "mt19937"
+        or frozen_boundary is not None
+        or getattr(args, "state_swap_variant", None) is not None
+        or getattr(args, "state_swap_target_relion_iteration", None) is not None
+    ):
+        raise ValueError(
+            "diagnostic restart particle order requires K=1, a positive restart iteration, "
+            "one iteration with finalization skipped, RELION replay and half-set STARs, "
+            "mt19937, and no frozen-boundary or state-swap intervention"
+        )
+    return int(args.init_relion_iteration) + 1
+
+
 def _refine_sampling_kwargs(args, init_healpix_order):
     """Return sampling kwargs forwarded from the CLI into ``refine_single_volume``."""
     return {
@@ -2609,6 +2637,14 @@ def main():
         "trial particles. Legacy remains default while the correction is qualified.",
     )
     parser.add_argument(
+        "--diagnostic-restart-particle-order",
+        action="store_true",
+        help="Diagnostic one-iteration K=1 MPI restart: shuffle with seed + "
+        "init_relion_iteration + 1, retain that order for BPref, and keep ordinary "
+        "replay startup-noise semantics. Requires mt19937 and skipped finalization. "
+        "Not an autonomous or uninterrupted-trajectory quality run.",
+    )
+    parser.add_argument(
         "--perturb_replay_relion_dir",
         default=None,
         help="Controlled RELION trajectory replay: read SamplingPerturbInstance "
@@ -3346,6 +3382,8 @@ def main():
     relion_group_particles = None
     relion_group_source = None
     use_fresh_auto_refine_order = False
+    restart_order_iteration = _diagnostic_restart_particle_order_iteration(args, frozen_boundary)
+    apply_particle_order = restart_order_iteration is not None
 
     if args.relion_half_sets is not None:
         # Use RELION's half-set split from rlnRandomSubset
@@ -3380,6 +3418,7 @@ def main():
             args,
             frozen_boundary,
         )
+        apply_particle_order = use_fresh_auto_refine_order or restart_order_iteration is not None
         (
             half1_idx,
             half2_idx,
@@ -3389,10 +3428,11 @@ def main():
         ) = _relion_halfset_and_accuracy_layout(
             our_particles,
             relion_particles,
-            random_seed=args.seed if use_fresh_auto_refine_order else None,
+            random_seed=args.seed if apply_particle_order else None,
+            first_iteration=restart_order_iteration or 1,
             shuffle_algorithm=args.relion_particle_shuffle,
         )
-        if use_fresh_auto_refine_order:
+        if apply_particle_order:
             expected_accuracy_half1_trial_order_local = np.arange(
                 half1_idx.size,
                 dtype=np.int64,
@@ -3434,6 +3474,13 @@ def main():
                 args.relion_particle_shuffle,
                 int(args.seed) + 1,
             )
+        elif restart_order_iteration is not None:
+            logger.info(
+                "Diagnostic MPI restart paired mt19937 order: physical iteration %d, effective seed %d; "
+                "BPref preserves this order, fresh initialization remains disabled",
+                restart_order_iteration,
+                int(args.seed) + restart_order_iteration,
+            )
     else:
         half1_idx, half2_idx = _default_refinement_subsets(n_images, args.seed, args.n_classes)
         if args.n_classes > 1:
@@ -3442,7 +3489,7 @@ def main():
                 len(half1_idx),
             )
 
-    if args.relion_particle_shuffle != "legacy" and not use_fresh_auto_refine_order:
+    if args.relion_particle_shuffle != "legacy" and not apply_particle_order:
         raise ValueError("--relion-particle-shuffle requires fresh K=1 AutoRefine ordering")
 
     local_stop_requested = (
@@ -4810,7 +4857,7 @@ def main():
                 use_per_half_mean_variance=(
                     frozen_boundary is not None and frozen_boundary.fixed_diagnostic_arm
                 ),
-                preserve_bpref_particle_order=use_fresh_auto_refine_order,
+                preserve_bpref_particle_order=apply_particle_order,
             ),
             local_search=LocalSearchOptions(
                 auto_local_healpix_order=sampling_kwargs["auto_local_healpix_order"],
@@ -5014,6 +5061,8 @@ def main():
         "relion_particle_shuffle": np.asarray(args.relion_particle_shuffle),
         "initial_noise_bootstrap": np.asarray(args.initial_noise_bootstrap),
         "relion_fresh_particle_order_applied": np.bool_(use_fresh_auto_refine_order),
+        "relion_diagnostic_restart_particle_order_applied": np.bool_(restart_order_iteration is not None),
+        "relion_diagnostic_restart_shuffle_iteration": np.int64(restart_order_iteration or 0),
         "current_sizes": np.array(result["current_sizes"]),
         "pixel_resolutions": np.array(result["pixel_resolutions"]),
         "wall_times": np.array(result["wall_times"]),
