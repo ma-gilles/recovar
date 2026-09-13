@@ -6,6 +6,25 @@ every test or publication. Detailed receipts belong behind links. The
 at `a2ab056cb`, including one paragraph per earlier checkpoint; its historical
 next actions are superseded here.
 
+## Opt-in native startup noise — September 13
+
+The narrow peer noise bootstrap is integrated at `cbae8e27d` behind
+`--initial-noise-bootstrap relion`; the pipeline default is unchanged. H100 job
+**13812841** completed its three-iteration K1 regression in **25m06s**, with one
+test passed and zero skips. Independent postchecks verify frozen source, inputs,
+harness, loaded binaries, child imports and the saved native-noise/mt19937 modes.
+
+Signed cross-engine FSC-AUC is **0.99939792 / 0.99984473** for the halves and
+**0.99961947** merged. Particle Pmax RMSE is **0.00005598 / 0.00273680 / 0.00293278**
+across iterations; no first-iteration particle differs by more than 0.001.
+Significant-count mismatches remain **1454 / 692 / 9**. Half assignments agree,
+but strict state does not. Compared with job13811687, both startup noise and
+particle ordering differ; this comparison does not isolate the noise effect.
+The run has no convergence or final-all-data phase. Only the existing regression
+is accepted; strict state, full production float32 completion, large K1, exactly
+K4, shared/downstream and speed qualification remain open.
+[Source, canonical curves, saved-state comparisons and reproduction commands](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_noise_integration_20260913/result.json).
+
 ## Sparse projection radius correction — September 13
 
 The generic sparse pass-2 projector must retain `max_r` when forwarding to the
