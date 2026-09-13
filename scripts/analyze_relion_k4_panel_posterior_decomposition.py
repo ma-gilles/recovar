@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import subprocess
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -59,8 +58,10 @@ def _require(condition: bool, message: str) -> None:
 
 # Support direct execution, sibling imports, and the scripts package.
 if not __package__:
+    from analyzer_provenance import clean_repo_head
     from file_hash import sha256_file as _sha256
 else:
+    from scripts.analyzer_provenance import clean_repo_head
     from scripts.file_hash import sha256_file as _sha256
 
 
@@ -660,19 +661,6 @@ def analyze(
     }
 
 
-def _clean_repo_head(repo: Path) -> str:
-    head = subprocess.check_output(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        text=True,
-    ).strip()
-    status = subprocess.check_output(
-        ["git", "-C", str(repo), "status", "--porcelain=v1"],
-        text=True,
-    )
-    _require(not status, "analyzer repository is dirty")
-    return head
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
@@ -714,7 +702,7 @@ def main() -> None:
         "capture_a_directory": str(args.capture_a_directory.resolve()),
         "capture_b_directory": str(args.capture_b_directory.resolve()),
         "preprocess_root": str(args.preprocess_root.resolve()),
-        "analyzer_repo_head": _clean_repo_head(args.repo),
+        "analyzer_repo_head": clean_repo_head(args.repo),
     }
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

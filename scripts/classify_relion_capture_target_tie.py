@@ -42,8 +42,10 @@ EXPECTED_EXACT_FIELDS = (
 
 # Support direct execution, sibling imports, and the scripts package.
 if not __package__:
+    from analyzer_provenance import clean_repo_head
     from file_hash import sha256_file as _sha256
 else:
+    from scripts.analyzer_provenance import clean_repo_head
     from scripts.file_hash import sha256_file as _sha256
 
 
@@ -330,13 +332,6 @@ def _load_relion(dump_dir: Path) -> dict[str, np.ndarray]:
     }
 
 
-def _clean_repo_head(repo: Path) -> str:
-    head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
-    status = subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain=v1"], text=True)
-    _require(not status, "analyzer repository is dirty")
-    return head
-
-
 def build_report(
     *,
     repo: Path,
@@ -370,7 +365,7 @@ def build_report(
             "sha256": _sha256(dump_manifest),
             "verified": True,
         },
-        "analyzer_repo_head": _clean_repo_head(repo),
+        "analyzer_repo_head": clean_repo_head(repo),
     }
     return report
 

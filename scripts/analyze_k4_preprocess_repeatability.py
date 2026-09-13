@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import subprocess
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -22,8 +21,10 @@ FILENAME_PATTERN = re.compile(
 
 # Support direct execution, sibling imports, and the scripts package.
 if not __package__:
+    from analyzer_provenance import clean_repo_head
     from file_hash import sha256_file as _sha256
 else:
+    from scripts.analyzer_provenance import clean_repo_head
     from scripts.file_hash import sha256_file as _sha256
 
 
@@ -281,13 +282,6 @@ def analyze(
     }
 
 
-def _clean_repo_head(repo: Path) -> str:
-    head = subprocess.check_output(["git", "-C", str(repo), "rev-parse", "HEAD"], text=True).strip()
-    status = subprocess.check_output(["git", "-C", str(repo), "status", "--porcelain=v1"], text=True)
-    _require(not status, "analyzer repository is dirty")
-    return head
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
@@ -311,7 +305,7 @@ def main() -> None:
         expected_class_count=args.expected_class_count,
         expected_current_size=args.expected_current_size,
     )
-    report["analyzer_repo_head"] = _clean_repo_head(args.repo)
+    report["analyzer_repo_head"] = clean_repo_head(args.repo)
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     print(json.dumps({"status": report["status"], "classification": report["classification"], **report["scope"]}, indent=2))
