@@ -773,7 +773,7 @@ def test_cached_k_coordinates_are_the_same_object_and_bitwise_equal_to_fresh():
 
     with jax.default_device(jax.devices("cpu")[0]):
         for half in (False, True):
-            fresh = (ftu.get_k_coordinate_of_each_pixel_half if half else ftu.get_k_coordinate_of_each_pixel)(
+            fresh = (ftu._get_k_coordinate_of_each_pixel_half_uncached if half else ftu._get_k_coordinate_of_each_pixel_uncached)(
                 (12, 10), 1.7, True, dtype=jnp.float32
             )
             a = ftu.cached_k_coordinate_of_each_pixel((12, 10), 1.7, scaled=True, dtype=jnp.float32, half_image=half)
@@ -784,4 +784,12 @@ def test_cached_k_coordinates_are_the_same_object_and_bitwise_equal_to_fresh():
         # a traced voxel size recomputes instead of caching
         out = jax.jit(lambda v: ftu.cached_k_coordinate_of_each_pixel((12, 10), v, scaled=True, dtype=jnp.float32))(jnp.float32(1.7))
         np.testing.assert_allclose(np.asarray(out), np.asarray(ftu.get_k_coordinate_of_each_pixel((12, 10), 1.7, True)), rtol=0, atol=0)
+        # the public functions return the cached object for concrete inputs
+        assert ftu.get_k_coordinate_of_each_pixel_half((12, 10), 1.7, True, dtype=jnp.float32) is a
+        # a first call from inside a trace must not poison the cache with a tracer
+        ftu._frequency_grid_cache.clear()
+        traced = jax.jit(lambda: ftu.get_k_coordinate_of_each_pixel((6, 4), 2.0, True, dtype=jnp.float32))()
+        eager = ftu.get_k_coordinate_of_each_pixel((6, 4), 2.0, True, dtype=jnp.float32)
+        assert not isinstance(eager, jax.core.Tracer)
+        np.testing.assert_array_equal(np.asarray(traced), np.asarray(eager))
 

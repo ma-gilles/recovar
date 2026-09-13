@@ -31,10 +31,21 @@ def get_1d_frequency_grid_rfft(n, voxel_size=1, scaled=False, dtype=jnp.float32)
     return grid
 
 
-def get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=True, dtype=jnp.float32):
+def _get_k_coordinate_of_each_pixel_uncached(image_shape, voxel_size, scaled=True, dtype=jnp.float32):
     one_d_grids = [get_1d_frequency_grid(sh, voxel_size, scaled, dtype=dtype) for sh in image_shape]
     grids = jnp.meshgrid(*one_d_grids, indexing="xy")
     return jnp.stack([g.ravel() for g in grids], axis=-1)
+
+
+def get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=True, dtype=jnp.float32):
+    """Frequency coordinate of every pixel of a centered ``image_shape`` grid.
+
+    Memoized for concrete inputs (see :func:`cached_k_coordinate_of_each_pixel`):
+    the grid is pure geometry, and rebuilding it per image batch was a chain of
+    eager primitives on every call (5.5 % of a 100k/256 K=4 run, job 13826196;
+    13k Python-path dispatches from other callers, job 13830354).
+    """
+    return cached_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=scaled, dtype=dtype, half_image=False)
 
 
 def get_k_coordinate_of_each_pixel_3d(image_shape, voxel_size, scaled=True):
@@ -208,10 +219,14 @@ def _half_image_pixel_indices(image_shape):
     return (row_idx * W + packed_col[None, :]).ravel()
 
 
-def get_k_coordinate_of_each_pixel_half(image_shape, voxel_size, scaled=True, dtype=jnp.float32):
-    """Half-image frequency coords consistent with ``full_image_to_half_image``."""
-    full = get_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled, dtype=dtype)
+def _get_k_coordinate_of_each_pixel_half_uncached(image_shape, voxel_size, scaled=True, dtype=jnp.float32):
+    full = _get_k_coordinate_of_each_pixel_uncached(image_shape, voxel_size, scaled, dtype=dtype)
     return full[_half_image_pixel_indices(image_shape)]
+
+
+def get_k_coordinate_of_each_pixel_half(image_shape, voxel_size, scaled=True, dtype=jnp.float32):
+    """Half-image frequency coords consistent with ``full_image_to_half_image`` (memoized for concrete inputs)."""
+    return cached_k_coordinate_of_each_pixel(image_shape, voxel_size, scaled=scaled, dtype=dtype, half_image=True)
 
 
 def _concrete_scalar(value):
@@ -252,8 +267,8 @@ def cached_k_coordinate_of_each_pixel(image_shape, voxel_size, *, scaled=True, d
     Non-concrete inputs (tracers) and non-scalar voxel sizes recompute as before.
     """
     voxel = _concrete_scalar(voxel_size)
+    fn = _get_k_coordinate_of_each_pixel_half_uncached if half_image else _get_k_coordinate_of_each_pixel_uncached
     if voxel is None:
-        fn = get_k_coordinate_of_each_pixel_half if half_image else get_k_coordinate_of_each_pixel
         return fn(image_shape, voxel_size, scaled, dtype=dtype)
     key = (
         tuple(int(size) for size in image_shape),
@@ -265,8 +280,11 @@ def cached_k_coordinate_of_each_pixel(image_shape, voxel_size, *, scaled=True, d
     )
     grid = _frequency_grid_cache.get(key)
     if grid is None:
-        fn = get_k_coordinate_of_each_pixel_half if half_image else get_k_coordinate_of_each_pixel
+        import jax
+
         grid = fn(image_shape, voxel_size, scaled, dtype=dtype)
+        if isinstance(grid, jax.core.Tracer):
+            return grid  # built inside a trace: a constant of that trace, never cache it
         _frequency_grid_cache[key] = grid
     return grid
 

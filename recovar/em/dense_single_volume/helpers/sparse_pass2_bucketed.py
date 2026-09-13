@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import itertools
 import os
 import subprocess
 import time
@@ -283,6 +284,7 @@ _SPARSE_KCLASS_FUSED_NOISE_NORM_ENV = "RECOVAR_SPARSE_KCLASS_FUSED_NOISE_NORM"
 _SPARSE_KCLASS_RESIDUAL_TERMS_FUSED_ENV = "RECOVAR_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED"
 _SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS_ENV = "RECOVAR_SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS"
 _SPARSE_KCLASS_COMPACT_PAIR_FLAT_ROWS_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_FLAT_ROWS"
+_FUSED_PASS2_CALL_COUNTER = itertools.count()
 _SPARSE_KCLASS_NATIVE_PAIR_SPARSE_SUMS_ENV = (
     "RECOVAR_SPARSE_KCLASS_NATIVE_PAIR_SPARSE_SUMS"
 )
@@ -5089,9 +5091,15 @@ def _relion_powerclass_highres_xi2_half_to_norm_units(highres_xi2_half, image_sh
     image_height = int(image_shape[0])
     image_width = int(image_shape[1])
     highres = jnp.asarray(highres_xi2_half)
+    return _powerclass_norm_units_jit(highres, float((image_height * image_width) ** 2))
+
+
+@partial(jax.jit, static_argnums=(1,))
+def _powerclass_norm_units_jit(highres, pixel_count_sq: float):
+    """``highres * 2 * (H*W)**2`` with the barrier in between (one program instead of two eager converts + two multiplies)."""
     highres = highres * jnp.asarray(2.0, dtype=highres.dtype)
     highres = jax.lax.optimization_barrier(highres)
-    return highres * jnp.asarray((image_height * image_width) ** 2, dtype=highres.dtype)
+    return highres * jnp.asarray(pixel_count_sq, dtype=highres.dtype)
 
 
 @partial(jax.jit, static_argnames=("image_shape", "current_size"))
@@ -14450,7 +14458,24 @@ def compute_k_class_pass2_stats_sparse_fused(
         if _prefetch_depth > 0
         else None
     )
-    for bucket_meta in execution_buckets:
+    _profile_spec = os.environ.get("RECOVAR_SPARSE_KCLASS_PROFILE_CHUNK", "").strip()
+    _profile_call_index = next(_FUSED_PASS2_CALL_COUNTER)
+    _profile_bucket_index = None
+    if _profile_spec:
+        # "<call_index>:<bucket_index>[:<log_dir>]": trace one chunk of one pass-2 call with the
+        # JAX profiler (perfetto trace) to inventory the executables it launches (diagnostic).
+        _parts = _profile_spec.split(":")
+        if int(_parts[0]) == _profile_call_index:
+            _profile_bucket_index = int(_parts[1])
+            _profile_log_dir = _parts[2] if len(_parts) > 2 else os.path.join(os.getcwd(), "jax_profile_chunk")
+    _profile_active = False
+    for _bucket_index, bucket_meta in enumerate(execution_buckets):
+        if _profile_bucket_index is not None and _bucket_index == _profile_bucket_index:
+            jax.block_until_ready(Ft_y_total)
+            jax.profiler.start_trace(_profile_log_dir, create_perfetto_trace=True)
+            _profile_active = True
+            logger.info("Sparse fused K-class pass-2: profiling chunk %d of call %d into %s",
+                        _bucket_index, _profile_call_index, _profile_log_dir)
         bucket_raw_host_staging_bytes = 0
         execution_mode = str(bucket_meta["_execution_mode"])
         execution_bucket_size_key = str(bucket_meta["_execution_size_key"])
@@ -16677,7 +16702,9 @@ def compute_k_class_pass2_stats_sparse_fused(
                 real_image_mask = (
                     None
                     if int(n_real_images) >= int(batch)
-                    else jnp.arange(int(batch), dtype=jnp.int32) < jnp.int32(n_real_images)
+                    # host-built: jnp.int32(n_real_images) was a value-dependent scalar
+                    # convert that missed the dispatch cache on every class-chunk (job 13830354)
+                    else jnp.asarray(np.arange(int(batch), dtype=np.int32) < int(n_real_images))
                 )
                 masked_norm_high_shell = relion_norm_high_shell
                 if relion_norm_high_shell is not None and real_image_mask is not None:
@@ -17063,6 +17090,10 @@ def compute_k_class_pass2_stats_sparse_fused(
             if buckets_in_flight >= pipeline_depth:
                 jax.block_until_ready(probs_sum_t_jax)
                 buckets_in_flight = 0
+        if _profile_active:
+            jax.block_until_ready((Ft_y_total, Ft_ctf_total))
+            jax.profiler.stop_trace()
+            _profile_active = False
 
     if last_bucket_size_logged is not None and group_t0 is not None:
         group_chunks, group_images = bucket_group_stats[last_bucket_size_logged]
