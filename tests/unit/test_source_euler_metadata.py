@@ -4,6 +4,7 @@ import copy
 import json
 import logging
 from collections import defaultdict
+from dataclasses import replace
 from types import SimpleNamespace
 
 import numpy as np
@@ -25,7 +26,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 @pytest.mark.parametrize("with_source", [False, True])
-def test_class_prior_override_preserves_source_eulers(dtype, with_source):
+def test_per_class_layout_selection_preserves_source_eulers(dtype, with_source):
     source = (
         np.array([[159.3271497477632, 126.91279408422895, 85.75518260708287]]) if with_source else None
     )
@@ -37,10 +38,12 @@ def test_class_prior_override_preserves_source_eulers(dtype, with_source):
         translation_grid=np.zeros((1, 2), dtype), translation_log_priors=np.zeros((1, 1), dtype),
         source_eulers_flat=source,
     )
-    assert k_class_inputs._local_layout_for_class(layout, None, 0, 4) is layout
+    assert k_class_inputs._select_local_layout_for_class(layout, 0, 4) is layout
     priors = np.arange(4, dtype=dtype).reshape(4, 1)
+    layouts = [replace(layout, rotation_log_priors_flat=prior) for prior in priors]
     for class_id in range(4):
-        result = k_class_inputs._local_layout_for_class(layout, priors, class_id, 4)
+        result = k_class_inputs._select_local_layout_for_class(layouts, class_id, 4)
+        assert result is layouts[class_id]
         assert result.source_eulers_flat is source
         assert result.rotations_flat is layout.rotations_flat
         np.testing.assert_array_equal(result.rotation_log_priors_flat, priors[class_id])

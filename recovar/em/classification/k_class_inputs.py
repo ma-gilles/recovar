@@ -81,65 +81,13 @@ def _local_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_clas
     return kwargs
 
 
-def _local_layout_for_class(
-    local_layout: LocalHypothesisLayout,
-    class_local_rotation_log_prior,
-    class_index: int,
-    n_classes: int,
-) -> LocalHypothesisLayout:
-    if class_local_rotation_log_prior is None:
-        return local_layout
-    # Preserve local_layout.rotation_log_priors_flat's own dtype (float64
-    # under double-precision scoring) rather than hardcoding float32 --
-    # this field is being replaced in place, so forcing a fixed dtype here
-    # would silently downgrade the layout bucket_local_hypothesis_layout
-    # was built to preserve.
-    class_prior = np.asarray(
-        _select_required_class_value(
-            class_local_rotation_log_prior,
-            class_index,
-            n_classes,
-            "class_local_rotation_log_prior",
-        ),
-        dtype=np.asarray(local_layout.rotation_log_priors_flat).dtype,
-    ).reshape(-1)
-    if class_prior.shape != local_layout.rotation_log_priors_flat.shape:
-        raise ValueError(
-            "class_local_rotation_log_prior per-class values must have shape "
-            f"{local_layout.rotation_log_priors_flat.shape}, got {class_prior.shape}",
-        )
-    return LocalHypothesisLayout(
-        n_global_rotations=local_layout.n_global_rotations,
-        n_pixels=local_layout.n_pixels,
-        n_psi=local_layout.n_psi,
-        rotation_offsets=local_layout.rotation_offsets,
-        rotation_ids_flat=local_layout.rotation_ids_flat,
-        rotations_flat=local_layout.rotations_flat,
-        rotation_log_priors_flat=class_prior,
-        rotation_counts=local_layout.rotation_counts,
-        translation_grid=local_layout.translation_grid,
-        translation_log_priors=local_layout.translation_log_priors,
-        rotation_posterior_ids_flat=local_layout.rotation_posterior_ids_flat,
-        sample_mask_flat=local_layout.sample_mask_flat,
-        source_eulers_flat=local_layout.source_eulers_flat,
-    )
-
-
 def _select_local_layout_for_class(
     local_layout,
-    class_local_rotation_log_prior,
     class_index: int,
     n_classes: int,
 ) -> LocalHypothesisLayout:
     if isinstance(local_layout, (list, tuple)):
         if len(local_layout) != n_classes:
             raise ValueError(f"local_layout must contain {n_classes} per-class layouts, got {len(local_layout)}")
-        if class_local_rotation_log_prior is not None:
-            raise ValueError("class_local_rotation_log_prior is redundant with per-class local layouts")
         return local_layout[class_index]
-    return _local_layout_for_class(
-        local_layout,
-        class_local_rotation_log_prior,
-        class_index,
-        n_classes,
-    )
+    return local_layout

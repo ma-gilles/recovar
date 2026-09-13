@@ -2100,7 +2100,6 @@ def run_local_k_class_em(
     if publish_host_result:
         base_engine_kwargs["host_stats_publication"] = True
     return_profile = bool(base_engine_kwargs.pop("return_profile", False))
-    class_local_rotation_log_prior = base_engine_kwargs.pop("class_local_rotation_log_prior", None)
 
     def _class_posterior_sums_override(noise_values: tuple[NoiseStats, ...] | None):
         if not class_posterior_sums_from_noise:
@@ -2137,7 +2136,6 @@ def run_local_k_class_em(
         if n_classes == 1 and normalization_log_evidence_np is None and normalization_max_posterior_np is None:
             class_layout = _select_local_layout_for_class(
                 local_layout,
-                class_local_rotation_log_prior,
                 0,
                 n_classes,
             )
@@ -2195,7 +2193,6 @@ def run_local_k_class_em(
         for class_index in range(n_classes):
             class_layout = _select_local_layout_for_class(
                 local_layout,
-                class_local_rotation_log_prior,
                 class_index,
                 n_classes,
             )
@@ -2235,7 +2232,6 @@ def run_local_k_class_em(
         for class_index in range(n_classes):
             _select_local_layout_for_class(
                 local_layout,
-                class_local_rotation_log_prior,
                 class_index,
                 n_classes,
             )
@@ -2252,7 +2248,6 @@ def run_local_k_class_em(
     for class_index in range(n_classes):
         class_layout = _select_local_layout_for_class(
             local_layout,
-            class_local_rotation_log_prior,
             class_index,
             n_classes,
         )
