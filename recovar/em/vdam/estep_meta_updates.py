@@ -22,23 +22,9 @@ from recovar.em.vdam.state import InitialModelState, NativeParticleState
 MIN_SIGMA2_OFFSET_ANGSTROM2: float = 2.0
 
 
-def _halfset_values(meta: dict, key: str) -> list:
-    suffix = f"_{key}"
-    return [meta[name] for name in sorted(meta) if name.startswith("halfset_") and name.endswith(suffix)]
-
-
 def _posterior_sums_from_meta(meta: dict, key: str) -> np.ndarray | None:
-    if (value := meta.get(key)) is not None:
-        return np.asarray(value, dtype=np.float64)
-    values = [np.asarray(v, dtype=np.float64) for v in _halfset_values(meta, key)]
-    return sum(values[1:], values[0].copy()) if values else None
-
-
-def _scalar_sum_from_meta(meta: dict, key: str) -> float | None:
-    if (value := meta.get(key)) is not None:
-        return float(value)
-    values = _halfset_values(meta, key)
-    return float(sum(float(v) for v in values)) if values else None
+    value = meta.get(key)
+    return None if value is None else np.asarray(value, dtype=np.float64)
 
 
 def _my_mu(mu: float, do_grad: bool, subset_size: int) -> float:
@@ -163,7 +149,9 @@ def update_noise_from_estep_meta(
     wsum_img_power = _posterior_sums_from_meta(meta, "wsum_img_power")
     wsum_noise_a2 = _posterior_sums_from_meta(meta, "wsum_noise_a2")
     wsum_noise_xa = _posterior_sums_from_meta(meta, "wsum_noise_xa")
-    noise_sumw = _scalar_sum_from_meta(meta, "noise_sumw")
+    noise_sumw = meta.get("noise_sumw")
+    if noise_sumw is not None:
+        noise_sumw = float(noise_sumw)
     if wsum_sigma2_noise is None or wsum_img_power is None or noise_sumw is None:
         return state
     if noise_sumw <= 0.0 or not np.isfinite(noise_sumw):

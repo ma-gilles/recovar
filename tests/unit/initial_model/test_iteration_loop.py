@@ -831,8 +831,7 @@ class TestRunVdamIterations:
         out = update_probabilities_from_estep_meta(
             state,
             {
-                "halfset_0_class_posterior_sums": np.asarray([0.0, 4.0]),
-                "halfset_1_class_posterior_sums": np.asarray([0.0, 6.0]),
+                "class_posterior_sums": np.asarray([0.0, 10.0]),
             },
             do_grad=True,
             mu=0.9,

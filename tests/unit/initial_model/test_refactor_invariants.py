@@ -164,19 +164,6 @@ def test_stack_star_pair_helper_exists_in_star_io():
     ]
 
 
-def test_halfset_values_helper_exists_in_iteration_loop():
-    """``_halfset_values`` dedup'd ``_posterior_sums_from_meta`` and ``_scalar_sum_from_meta``."""
-    from recovar.em.vdam.estep_meta_updates import _halfset_values
-
-    assert callable(_halfset_values)
-    assert list(inspect.signature(_halfset_values).parameters) == ["meta", "key"]
-
-    # Convention: keys named "halfset_{i}_{key}" — _halfset_values collects them in sorted order.
-    meta = {"halfset_0_a": [1, 2], "halfset_1_a": [3, 4], "halfset_0_b": [99]}
-    assert _halfset_values(meta, "a") == [[1, 2], [3, 4]]
-    assert _halfset_values(meta, "missing") == []
-
-
 def test_my_mu_helper_exists_in_iteration_loop():
     """``_my_mu`` was extracted as the validation copy used in both
     ``vdam_iteration`` and ``apply_vdam_momentum_to_state``.
