@@ -113,6 +113,9 @@ particle shuffle; obsolete mask-backend and Python-shuffle fallbacks are retired
 The independent shuffle reference remains in `tests/helpers/vdam.py`.
 The E-step requires the sampling state already created by startup or continuation;
 its unused no-state branch is retired. Gradient mode directly controls pseudo-halfsets.
+The private configuration builder requires iteration-owned priors, sigma offset,
+pass-1 order and dataset geometry. Reference and momentum arrays are required
+state inputs; initialization and checkpoint loading supply them explicitly.
 [Shuffle evidence](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_shuffle_contract_cleanup_20260913/result.json)
 and [backend evidence](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_image_backend_contract_cleanup_20260913/result.json)
 record unchanged numerical calls, surviving coverage and the failing size gate.
@@ -283,7 +286,7 @@ this page does not schedule or authorize duplicate runs.
 
 Finish the existing dtype-repair CUDA guard and peer bisections, then continue
 selective integration and the scientific ladder in the coordination queue. Do not
-restart or duplicate live candidates. The latest VDAM size check still fails at8654>6100 lines; moving code into
+restart or duplicate live candidates. The latest VDAM size check still fails at8634>6100 lines; moving code into
 another owner does not remove it from the budget.
 
 Preserve the distinct numerical routes while reducing structural overhead. Big-JIT
