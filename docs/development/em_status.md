@@ -1,5 +1,11 @@
 # Current EM development scope
 
+The [projector dtype history audit](em_projector_dtype_history_20260913.md)
+identifies7e9e5c3c9 as the producer cast removal: actual before/after function
+bodies reproduce C64→C128 and lost texture eligibility. This is source-level
+attribution, not a historical whole-run timing claim. Matched parent/repaired
+three-iteration K1 job13829869 is running; full FSC/state/K4 gates remain open.
+
 ## Private projector consumer repair — September 13
 
 Private candidate on shared parent `37faa4998` restores the explicit
