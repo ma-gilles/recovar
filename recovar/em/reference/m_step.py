@@ -11,9 +11,9 @@ import numpy as np
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, utils
 from recovar.core.configs import ForwardModelConfig
+from recovar.em.sampling import translations_to_indices
 
 from .core import VOL_AXIS
-from recovar.em.sampling import translations_to_indices
 
 logger = logging.getLogger(__name__)
 

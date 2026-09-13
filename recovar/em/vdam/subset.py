@@ -13,6 +13,7 @@ from typing import Sequence
 
 import numpy as np
 
+
 @dataclass(frozen=True)
 class SubsetPlan:
     """Selected input rows and RELION part IDs (int64), with halfset IDs (int8)."""

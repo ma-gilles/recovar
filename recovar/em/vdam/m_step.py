@@ -11,8 +11,8 @@ from typing import Literal
 
 import numpy as np
 
-from recovar.em.vdam.state import InitialModelState, VdamAccumulator
 from recovar.em.vdam.mstep_single_class import vdam_m_step_single_class
+from recovar.em.vdam.state import InitialModelState, VdamAccumulator
 
 
 def relion_solvent_mask(

@@ -9,6 +9,7 @@ import numpy as np
 
 from recovar import core, utils
 from recovar.core.configs import ForwardModelConfig
+from recovar.em.sampling import translations_to_indices
 
 from .core import (
     NORM_FFT,
@@ -19,7 +20,6 @@ from .core import (
     norm_squared_residuals_from_ft,
 )
 from .heterogeneity import compute_bHb_terms
-from recovar.em.sampling import translations_to_indices
 
 logger = logging.getLogger(__name__)
 

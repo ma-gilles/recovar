@@ -148,8 +148,8 @@ from recovar.em.sparse_pass2.sparse_pass2_budget import (
     _exact_raw_diff2_cache_estimated_bytes,
     _exact_raw_diff2_cache_fits_budget,
     _exact_raw_diff2_cache_limit_bytes,
-    _kclass_raw_diff2_bytes,
     _jax_allocator_free_memory_bytes,
+    _kclass_raw_diff2_bytes,
     _max_adjoint_block_bytes_for_pass,
     _max_hypotheses_per_microbatch_for_pass,
     _max_images_for_translation_tile,
@@ -249,6 +249,7 @@ from recovar.em.sparse_pass2.sparse_pass2_projection_blocks import (
     _projection_kwargs_for_relion_score_window,
 )
 from recovar.em.sparse_pass2.sparse_pass2_scoring import (
+    _compact_fused_translate_scoring_enabled,
     _gather_pair_rotation_log_prior,
     _gather_pair_translation_log_prior,
     _gather_projection_cache_rows,
@@ -274,7 +275,6 @@ from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _score_pass2_pairs_relion_gpu_diff2,
     _score_pass2_pairs_relion_gpu_diff2_raw,
     _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate,
-    _compact_fused_translate_scoring_enabled,
 )
 from recovar.em.sparse_pass2.sparse_pass2_wavg import (
     _make_relion_wavg_rectangle,
