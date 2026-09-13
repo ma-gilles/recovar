@@ -26,7 +26,7 @@ from recovar.em.helpers.orientation_priors import (
     relion_translation_prior_center,
 )
 from recovar.em.relion import vdam_checkpoint
-from recovar.em.vdam import estep_meta_updates, native_sampling, star_io
+from recovar.em.vdam import estep_meta_updates, native_sampling, schedules, star_io
 from recovar.em.vdam.bootstrap_iref import _initial_state_from_particles
 from recovar.em.vdam.dense_adapter import (
     prepare_relion_projector_class_inputs,
@@ -50,7 +50,6 @@ from recovar.em.vdam.native_sampling import (
     _record_native_sampling_post_iteration,
 )
 from recovar.em.vdam.schedules import (
-    DEFAULT_GRAD_EM_ITERS,
     DEFAULT_SIGMA2_FUDGE,
     default_subset_sizes_for_3d_initial_model,
     phase_lengths_from_effective_fractions,
@@ -70,7 +69,6 @@ from recovar.utils.helpers import (
     get_gpu_memory_total,
 )
 
-RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS = 100
 INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE = 256
 INITIAL_MODEL_LOCAL_BATCH_REFERENCE_COUNT_40GB = 32
 INITIAL_MODEL_SKIP_EXPECTED_ACCURACY_ENV = "RECOVAR_INITIALMODEL_SKIP_EXPECTED_ACCURACY"
@@ -128,33 +126,6 @@ def _configure_relion_image_mask(dataset, opts: NativeInitialModelOptions) -> No
         width_mask_edge_px=float(opts.width_mask_edge_px),
     )
     backend.set_relion_fourier_backend(opts.image_fourier_backend)
-
-
-def _native_initialmodel_do_grad(
-    state: InitialModelState,
-    iteration: int,
-    *,
-    grad_em_iters: int = DEFAULT_GRAD_EM_ITERS,
-) -> bool:
-    return ((int(state.nr_iter) - int(iteration)) >= int(grad_em_iters)) and not bool(state.has_converged)
-
-
-def _active_relion_initialmodel_max_significants(state: InitialModelState, *, do_grad: bool) -> int:
-    """Runtime maximum_significants used by RELION gradient InitialModel."""
-
-    if not bool(do_grad):
-        return -1
-    return int(RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS) * int(state.K)
-
-
-def _should_estimate_native_sampling_accuracy(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
-    """RELION's ``calculateExpectedAngularErrors`` cadence."""
-    iteration = int(iteration)
-    if iteration <= 1:
-        return True
-    if bool(do_grad) and iteration % 10 != 0:
-        return False
-    return iteration <= int(nr_iter)
 
 
 def _skip_native_sampling_accuracy_diagnostic() -> bool:
@@ -357,7 +328,7 @@ def _native_expectation_step(
             raise ValueError("RECOVAR_VDAM_DEFER_SPARSE_ROTATIONS must be 0 or 1")
         sampling_kwargs = {"defer_fine_rotations": True} if defer_token == "1" else {}
         iteration = max(1, int(state.iter))
-        do_grad = _native_initialmodel_do_grad(
+        do_grad = schedules._native_initialmodel_do_grad(
             state,
             iteration,
             grad_em_iters=int(opts.grad_em_iters),
@@ -373,7 +344,7 @@ def _native_expectation_step(
         if (
             optics_state is not None
             and not skip_expected_accuracy
-            and _should_estimate_native_sampling_accuracy(
+            and schedules._should_estimate_native_sampling_accuracy(
                 iteration=iteration,
                 nr_iter=int(state.nr_iter),
                 do_grad=do_grad,
@@ -448,7 +419,7 @@ def _native_expectation_step(
         config.engine_kwargs["class_rotation_log_prior"] = class_rotation_log_prior
         config.engine_kwargs.setdefault(
             "max_significants",
-            _active_relion_initialmodel_max_significants(state, do_grad=do_grad),
+            schedules._active_relion_initialmodel_max_significants(state, do_grad=do_grad),
         )
         config.engine_kwargs["debug_iteration"] = iteration
         previous_translations = np.asarray(particle_state.translation_offsets, dtype=np.float64).copy()

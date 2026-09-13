@@ -13,6 +13,8 @@ from typing import Optional
 
 import numpy as np
 
+from recovar.em.vdam.state import InitialModelState
+
 # GUI InitialModel defaults (pipeline_jobs.cpp::initialiseInimodelJob,
 # parseInitial ml_optimiser.cpp:978-1098, updateStepSize :10287, updateTau2Fudge :10340).
 DEFAULT_GRAD_INI_FRAC: float = 0.3
@@ -25,6 +27,34 @@ GUI_DEFAULT_TAU2_FUDGE: float = 4.0
 DEFAULT_SIGMA2_FUDGE: float = 1.0
 DEFAULT_STEPSIZE_3D_INITIAL_MODEL: float = 0.5
 DEFAULT_TAU2_FUDGE_3D_INITIAL_MODEL: float = 4.0
+RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS = 100
+
+
+def _native_initialmodel_do_grad(
+    state: InitialModelState,
+    iteration: int,
+    *,
+    grad_em_iters: int = DEFAULT_GRAD_EM_ITERS,
+) -> bool:
+    return ((int(state.nr_iter) - int(iteration)) >= int(grad_em_iters)) and not bool(state.has_converged)
+
+
+def _active_relion_initialmodel_max_significants(state: InitialModelState, *, do_grad: bool) -> int:
+    """Runtime maximum_significants used by RELION gradient InitialModel."""
+
+    if not bool(do_grad):
+        return -1
+    return int(RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS) * int(state.K)
+
+
+def _should_estimate_native_sampling_accuracy(*, iteration: int, nr_iter: int, do_grad: bool) -> bool:
+    """RELION's ``calculateExpectedAngularErrors`` cadence."""
+    iteration = int(iteration)
+    if iteration <= 1:
+        return True
+    if bool(do_grad) and iteration % 10 != 0:
+        return False
+    return iteration <= int(nr_iter)
 
 
 @dataclass(frozen=True)

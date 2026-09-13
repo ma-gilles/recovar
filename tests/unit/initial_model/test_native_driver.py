@@ -17,7 +17,7 @@ from recovar.em import sampling
 from recovar.em.diagnostics import vdam_mstep_replay
 from recovar.em.helpers.batch_planning import maybe_cache_raw_image_loaders
 from recovar.em.relion import vdam_checkpoint
-from recovar.em.vdam import bootstrap_iref, estep_meta_updates, native_options, native_sampling, star_io
+from recovar.em.vdam import bootstrap_iref, estep_meta_updates, native_options, native_sampling, schedules, star_io
 from recovar.em.vdam.init import initialise_denovo_state
 from recovar.em.vdam.state import NativeParticleState
 from recovar.em.vdam.subset_schedule import select_subset_for_iter
@@ -1394,16 +1394,16 @@ def test_direction_prior_preserves_relion_absolute_log_scale_and_cutoff_tie():
 def test_active_relion_initialmodel_max_significants_matches_gradient_default():
     state = initialise_denovo_state(ori_size=16, pixel_size=1.0, K=3, nr_iter=8, n_directions=1)
 
-    assert driver._active_relion_initialmodel_max_significants(state, do_grad=True) == 300
-    assert driver._active_relion_initialmodel_max_significants(state, do_grad=False) == -1
+    assert schedules._active_relion_initialmodel_max_significants(state, do_grad=True) == 300
+    assert schedules._active_relion_initialmodel_max_significants(state, do_grad=False) == -1
 
 
 def test_native_initialmodel_do_grad_honors_terminal_em_iterations():
     state = initialise_denovo_state(ori_size=16, pixel_size=1.0, K=1, nr_iter=8, n_directions=1)
 
-    assert driver._native_initialmodel_do_grad(state, 6, grad_em_iters=2)
-    assert not driver._native_initialmodel_do_grad(state, 7, grad_em_iters=2)
-    assert not driver._native_initialmodel_do_grad(state, 8, grad_em_iters=2)
+    assert schedules._native_initialmodel_do_grad(state, 6, grad_em_iters=2)
+    assert not schedules._native_initialmodel_do_grad(state, 7, grad_em_iters=2)
+    assert not schedules._native_initialmodel_do_grad(state, 8, grad_em_iters=2)
 
 
 def test_random_perturbation_override_is_fixed():
