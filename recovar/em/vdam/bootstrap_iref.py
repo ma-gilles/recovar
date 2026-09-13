@@ -13,28 +13,6 @@ import numpy as np
 WIDTH_FMASK_EDGE: float = 2.0  # ml_optimiser.h:91
 
 
-def reorder_particles_relion_style(
-    main_star,
-    images: np.ndarray,
-    defU: np.ndarray,
-    defV: np.ndarray,
-    defAngle: np.ndarray,
-    phase_shift: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Stable-sort by ``_rlnMicrographName`` and re-index by stack frame (matches ``Experiment::read``)."""
-    img_names = main_star["_rlnImageName"].tolist()
-    mic_names = main_star["_rlnMicrographName"].tolist()
-    order = sorted(range(len(mic_names)), key=lambda i: mic_names[i])
-    frame_ids = [int(img_names[i].split("@")[0]) - 1 for i in order]
-    return (
-        np.ascontiguousarray(images[frame_ids]),
-        np.ascontiguousarray(defU[order]),
-        np.ascontiguousarray(defV[order]),
-        np.ascontiguousarray(defAngle[order]),
-        np.ascontiguousarray(phase_shift[order]),
-    )
-
-
 def compute_bootstrap_iref_via_cpp(
     *,
     images: np.ndarray,

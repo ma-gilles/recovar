@@ -43,11 +43,6 @@ def pseudo_halfsets_active(gradient_refine: bool, do_split_random_halves: bool) 
     return gradient_refine and not do_split_random_halves
 
 
-def assign_pseudo_halfsets(n: int) -> np.ndarray:
-    """Alternating 0/1 halfset ids; production routing uses ``assign_pseudo_halfsets_for_particle_ids``."""
-    return (np.arange(max(0, n), dtype=np.int64) % 2).astype(np.int8)
-
-
 def assign_pseudo_halfsets_for_particle_ids(particle_ids: np.ndarray) -> np.ndarray:
     """RELION BPref pseudo-halfset ids: ``global part_id % 2``."""
     return (np.asarray(particle_ids, dtype=np.int64) % 2).astype(np.int8, copy=False)
