@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from recovar.em.vdam.bootstrap_iref import initial_low_pass_filter_references
+from recovar.em.refinement.mean_helpers import initial_low_pass_filter_references
 
 FIXTURE_DIR = Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run")
 PARTICLES_STAR = Path(

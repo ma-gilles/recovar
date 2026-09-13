@@ -3799,7 +3799,7 @@ def main():
     _RELION_FMASK_EDGE = 2
 
     def _apply_ini_high_lowpass_real(volume_real, volume_shape, voxel_size, ini_high):
-        from recovar.em.vdam.bootstrap_iref import initial_low_pass_filter_references
+        from recovar.em.refinement.mean_helpers import initial_low_pass_filter_references
 
         filtered = initial_low_pass_filter_references(
             np.asarray(volume_real, dtype=np.float64)[None, ...],

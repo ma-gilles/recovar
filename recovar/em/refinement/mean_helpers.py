@@ -27,6 +27,8 @@ from recovar.reconstruction import regularization
 
 logger = logging.getLogger(__name__)
 
+WIDTH_FMASK_EDGE: float = 2.0  # ml_optimiser.h:91
+
 
 def prepare_initial_mean_variance(
     initial_mean_variance, *, use_per_half_mean_variance, k_class_enabled, log
@@ -640,14 +642,42 @@ def _reconstruct_volume_eager(
     )
 
 
+def initial_low_pass_filter_references(
+    Iref: np.ndarray,
+    *,
+    ori_size: int,
+    pixel_size: float,
+    ini_high_ang: float,
+    filter_edgewidth: float = WIDTH_FMASK_EDGE,
+) -> np.ndarray:
+    """``initialLowPassFilterReferences`` (ml_optimiser.cpp:3336): cosine-taper from r=radius outward to r=radius_p."""
+    edge_width = float(filter_edgewidth)
+    radius = ori_size * pixel_size / ini_high_ang - edge_width / 2.0
+    radius_p = radius + edge_width
+    N = Iref.shape[1]
+    kz = np.fft.fftfreq(N, d=1.0) * N
+    kx = np.arange(N // 2 + 1, dtype=np.float64)
+    r = np.sqrt(kz[:, None, None] ** 2 + kz[None, :, None] ** 2 + kx[None, None, :] ** 2)
+    mask = np.zeros_like(r)
+    mask[r < radius] = 1.0
+    edge = (r >= radius) & (r <= radius_p)
+    if edge_width > 0:
+        mask[edge] = 0.5 - 0.5 * np.cos(np.pi * (radius_p - r[edge]) / edge_width)
+
+    out = np.zeros_like(Iref)
+    for k in range(Iref.shape[0]):
+        vol = Iref[k]
+        F = np.fft.rfftn(vol, axes=(0, 1, 2), norm=None) / vol.size
+        out[k] = np.fft.irfftn(F * mask * vol.size, s=vol.shape, axes=(0, 1, 2), norm=None)
+    return out
+
+
 def _apply_relion_initial_lowpass_filter(
     volume_ft_flat, volume_shape, voxel_size, ini_high_angstrom, filter_edgewidth=5
 ):
     """Apply RELION's ``initialLowPassFilterReferences`` to a full Fourier volume."""
     if ini_high_angstrom is None or float(ini_high_angstrom) <= 0.0:
         return volume_ft_flat
-    from recovar.em.vdam.bootstrap_iref import initial_low_pass_filter_references
-
     original = jnp.asarray(volume_ft_flat).reshape(volume_shape)
     volume_real = np.real(np.asarray(fourier_transform_utils.get_idft3(original))).astype(
         np.float64,

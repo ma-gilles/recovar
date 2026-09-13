@@ -21,6 +21,7 @@ import pytest
 
 import recovar.em.vdam as init_model
 from recovar.em.helpers.expected_accuracy import estimate_relion_expected_accuracy_from_prepared_inputs
+from recovar.em.refinement.mean_helpers import initial_low_pass_filter_references
 from recovar.em.relion import relion_projector_setup
 from recovar.em.vdam.init import compute_current_size_for_denovo, compute_ini_high_angstrom, compute_ini_high_shell
 from recovar.em.vdam.layout import relion_bpref_frame_scales
@@ -450,6 +451,7 @@ def test_total_package_loc_within_budget():
     total += sum(len(inspect.getsourcelines(getattr(relion_projector_setup, name))[0]) + 2
                  for name in ("reference_to_relion_projector_half_maps",
                               "reference_to_relion_projector_half_maps_and_power"))
+    total += len(inspect.getsourcelines(initial_low_pass_filter_references)[0]) + 3  # helper, spacing, edge constant
     assert total <= TOTAL_LOC_CEILING, (
         f"InitialModel total LOC = {total} > ceiling {TOTAL_LOC_CEILING}; "
         f"refactor savings are being eroded. Identify the merge that bloated the package."

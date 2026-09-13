@@ -639,7 +639,7 @@ def filter_fresh_initial_reference(
     its binary64 real-space result directly to the initial projector.
     """
 
-    from recovar.em.vdam.bootstrap_iref import initial_low_pass_filter_references
+    from recovar.em.refinement.mean_helpers import initial_low_pass_filter_references
 
     volume_real = np.asarray(volume_real, dtype=np.float64)
     if volume_real.ndim != 3 or len(set(volume_real.shape)) != 1:

@@ -10,8 +10,6 @@ from __future__ import annotations
 
 import numpy as np
 
-WIDTH_FMASK_EDGE: float = 2.0  # ml_optimiser.h:91
-
 
 def compute_bootstrap_iref_via_cpp(
     *,
@@ -109,33 +107,3 @@ def postprocess_bootstrap_iref_via_cpp(
         dtype=np.float64,
     )
     return np.asarray([relion_volume_to_recovar(vol) for vol in post_relion], dtype=np.float64)
-
-
-def initial_low_pass_filter_references(
-    Iref: np.ndarray,
-    *,
-    ori_size: int,
-    pixel_size: float,
-    ini_high_ang: float,
-    filter_edgewidth: float = WIDTH_FMASK_EDGE,
-) -> np.ndarray:
-    """``initialLowPassFilterReferences`` (ml_optimiser.cpp:3336): cosine-taper from r=radius outward to r=radius_p."""
-    edge_width = float(filter_edgewidth)
-    radius = ori_size * pixel_size / ini_high_ang - edge_width / 2.0
-    radius_p = radius + edge_width
-    N = Iref.shape[1]
-    kz = np.fft.fftfreq(N, d=1.0) * N
-    kx = np.arange(N // 2 + 1, dtype=np.float64)
-    r = np.sqrt(kz[:, None, None] ** 2 + kz[None, :, None] ** 2 + kx[None, None, :] ** 2)
-    mask = np.zeros_like(r)
-    mask[r < radius] = 1.0
-    edge = (r >= radius) & (r <= radius_p)
-    if edge_width > 0:
-        mask[edge] = 0.5 - 0.5 * np.cos(np.pi * (radius_p - r[edge]) / edge_width)
-
-    out = np.zeros_like(Iref)
-    for k in range(Iref.shape[0]):
-        vol = Iref[k]
-        F = np.fft.rfftn(vol, axes=(0, 1, 2), norm=None) / vol.size
-        out[k] = np.fft.irfftn(F * mask * vol.size, s=vol.shape, axes=(0, 1, 2), norm=None)
-    return out
