@@ -256,4 +256,3 @@ def _initial_state_from_particles(
     profile.record("data_vs_prior")
     profile.report("initial state")
     return state, optics_group_by_particle
-

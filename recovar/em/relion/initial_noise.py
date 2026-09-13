@@ -155,4 +155,3 @@ def _image_sigma2_iter(
         local_indices = np.asarray(local_indices, dtype=np.int64).reshape(-1)
         for image, local_idx in zip(batch_images, local_indices):
             yield int(optics_group_by_particle[int(local_idx)]), image
-
