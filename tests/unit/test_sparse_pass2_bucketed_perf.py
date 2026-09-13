@@ -369,12 +369,7 @@ def test_compute_local_ctf_sums_from_probs_sum_t_matches_dense_helper():
 def test_k_class_pass2_dump_stop_is_env_gated_diagnostic_only():
     from recovar.em.diagnostics import sparse_pass2_dump
     from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
         sparse_pass2_bucketed,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
     )
 
     source = inspect.getsource(sparse_pass2_bucketed)
@@ -719,13 +714,6 @@ def test_rectangular_active_prematmul_guard_rejects_near_dense_grouping() -> Non
 
 
 def test_active_row_selection_does_not_flatten_full_bucket(monkeypatch) -> None:
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     values = jnp.arange(3 * 4 * 2, dtype=jnp.float32).reshape(3, 4, 2)
@@ -2313,12 +2301,7 @@ def test_sparse_pass2_residual_terms_fused_matches_legacy_nonfinite_masks(monkey
 def test_sparse_pass2_adjoint_block_chunking_accumulates_all_rows(monkeypatch):
     from recovar.em.sparse_pass2 import (
         sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
     )
-    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     flat_block = jnp.arange(30, dtype=jnp.float32).reshape(10, 3)
     rotations = jnp.zeros((10, 3, 3), dtype=jnp.float32)
@@ -2422,10 +2405,6 @@ def test_relion_x_half_bp_fused_atomics_is_off_by_default(monkeypatch):
 def test_relion_x_half_bp_per_particle_launch_preserves_ownership_and_order(monkeypatch):
     from recovar.em.sparse_pass2 import (
         sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
     )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
@@ -2484,13 +2463,6 @@ def test_relion_x_half_bp_per_particle_launch_preserves_ownership_and_order(monk
 
 def test_relion_x_half_bp_fused_atomics_threads_both_accumulators_per_particle(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     values = jnp.arange(2 * 3 * 2, dtype=jnp.float32).reshape(2, 3, 2).astype(jnp.complex64)
@@ -2556,13 +2528,6 @@ def test_relion_x_half_bp_fused_atomics_threads_both_accumulators_per_particle(m
 
 def test_fresh_k1_particle_pool_preserves_consecutive_particle_order(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     values = jnp.arange(2 * 3 * 2, dtype=jnp.float32).reshape(2, 3, 2).astype(jnp.complex64)
@@ -2626,13 +2591,6 @@ def test_fresh_k1_particle_pool_preserves_consecutive_particle_order(monkeypatch
 
 
 def test_particle_pool_rejects_non_fresh_k1_path(monkeypatch):
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_K1_RELION_X_HALF_BP_PARTICLE_POOL_SIZE", "3")
@@ -2656,13 +2614,6 @@ def test_particle_pool_rejects_non_fresh_k1_path(monkeypatch):
 
 def test_fresh_k1_firstiter_cc_uses_fused_atomics_without_diagnostic_env(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", raising=False)
@@ -2707,13 +2658,6 @@ def test_fresh_k1_firstiter_cc_uses_fused_atomics_without_diagnostic_env(monkeyp
 
 def test_fresh_k1_firstiter_cc_casts_rows_to_bpref_accumulator_dtype(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", raising=False)
@@ -2755,13 +2699,6 @@ def test_fresh_k1_firstiter_cc_casts_rows_to_bpref_accumulator_dtype(monkeypatch
 
 def test_relion_x_half_bp_fused_atomics_requires_block_topology(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_RELION_X_HALF_BP_PER_PARTICLE_LAUNCH", "1")
@@ -2797,13 +2734,6 @@ def test_later_soft_posterior_scoped_fused_signature_fixture(
     """Separate translation-order, scatter-topology, and signature effects."""
 
     import recovar.cuda_backproject as cuda_backproject
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
@@ -3181,10 +3111,6 @@ def test_later_soft_posterior_scoped_fused_signature_fixture(
 def test_sparse_pass2_active_flat_row_gather_chunking_matches_full_gather(monkeypatch):
     from recovar.em.sparse_pass2 import (
         sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
     )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
@@ -3255,13 +3181,6 @@ def test_sparse_pass2_active_flat_row_gather_chunking_matches_full_gather(monkey
 
 
 def test_sparse_pass2_rotation_chunked_xhalf_uses_relion_recon_indices():
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     source = inspect.getsource(bucketed_mod.compute_pass2_stats_sparse_bucketed)
@@ -4666,11 +4585,7 @@ def test_compact_pair_mstep_pair_sparse_env_matches_dense_cpu_float64(monkeypatc
 
 def test_compact_pair_mstep_default_remains_dense(monkeypatch):
     from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
         sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
     )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
@@ -5143,13 +5058,6 @@ def test_weighted_image_power_excludes_sentinel_from_normcorr_but_keeps_valid_ou
 
 
 def test_k1_relion_fine_mstep_prune_keeps_unweighted_high_shell_image_power(monkeypatch):
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
@@ -5831,13 +5739,8 @@ def test_compact_pair_planner_is_opt_in_and_can_be_disabled(monkeypatch):
 
 def test_sparse_pass2_projection_cap_chunks_projection_calls(monkeypatch):
     from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
         sparse_pass2_projection_blocks,
-        sparse_pass2_window,
     )
-    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     calls = []
 
@@ -5872,13 +5775,8 @@ def test_sparse_pass2_projection_cap_chunks_projection_calls(monkeypatch):
 
 def test_sparse_pass2_windowed_projection_cap_keeps_only_requested_pixels(monkeypatch):
     from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
         sparse_pass2_projection_blocks,
-        sparse_pass2_window,
     )
-    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     calls = []
 
@@ -5915,13 +5813,8 @@ def test_sparse_pass2_windowed_projection_cap_keeps_only_requested_pixels(monkey
 
 def test_sparse_pass2_windowed_projection_uses_relion_projector_branch(monkeypatch):
     from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
         sparse_pass2_projection_blocks,
-        sparse_pass2_window,
     )
-    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     calls = []
     relion_projector_half = jnp.ones((4, 4, 3), dtype=jnp.complex64)
@@ -6020,13 +5913,8 @@ def test_relion_score_window_keeps_particle_crop_separate_from_model_radius():
 
 def test_sparse_pass2_windowed_projection_cap_casts_chunks_before_concat(monkeypatch):
     from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
         sparse_pass2_projection_blocks,
-        sparse_pass2_window,
     )
-    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     def fake_project(volume_block, rotations_block, image_shape, volume_shape, disc_type, **kwargs):
         del volume_block, image_shape, volume_shape, disc_type, kwargs
@@ -6062,11 +5950,7 @@ def test_prepare_bucket_io_windowed_shifted_matches_full_half_slice(monkeypatch)
     """Opt-in windowed prepare must match full-half prepare followed by gather."""
 
     from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
         sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
     )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
@@ -6418,13 +6302,8 @@ def test_prepare_bucket_io_windowed_reuses_unmasked_recon_shift_for_noise(monkey
     """Unmasked windowed prepare can reuse the recon-window shifted image."""
 
     from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
         sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
     )
-    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     ds = MockDataset(n_images=4, seed=613)
     batch_indices = np.asarray([0, 1, 2], dtype=np.int64)
@@ -6503,13 +6382,6 @@ def test_prepare_bucket_io_windowed_shifted_score_modes_match_full_half_slice(
 ):
     """Windowed prepare must preserve score-only and normalized-CC modes."""
 
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     ds = MockDataset(n_images=4, seed=713)
@@ -6651,13 +6523,6 @@ def test_sparse_pass2_device_memory_probe_honors_visible_device():
 
 
 def test_exact_raw_diff2_cache_budget_admission_and_fallback(monkeypatch):
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     gib = 1024**3
@@ -6882,13 +6747,6 @@ def test_fine_rotation_override_can_follow_relion_parent_execution_order():
 
 
 def test_exact_relion_fine_posterior_implies_relion_parent_execution_order(monkeypatch):
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.delenv("RECOVAR_RELION_FINE_ROTATION_EXECUTION_ORDER", raising=False)
@@ -6976,7 +6834,6 @@ def test_sparse_pass2_projection_cache_reuses_fine_grid_projection_chunks(monkey
     """Fine-grid override projections are shared across sparse buckets."""
 
     n_images = 8
-    n_coarse_rot = 48
     n_coarse_trans = 2
     fine_rotations = np.tile(np.eye(3, dtype=np.float32), (10, 1, 1))
     fine_parent = np.array([0, 0, 1, 1, 2, 3, 3, 4, 5, 7], dtype=np.int64)
@@ -7002,13 +6859,8 @@ def test_sparse_pass2_projection_cache_reuses_fine_grid_projection_chunks(monkey
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_PROJECTION_CACHE_MAX_BYTES", str(1024**3))
 
     from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
         sparse_pass2_projection_blocks,
-        sparse_pass2_window,
     )
-    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     projection_call_sizes = []
 
@@ -7070,10 +6922,6 @@ def test_sparse_pass2_full_support_projection_cache_chunks_scores(monkeypatch):
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", "1000000")
 
     from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
         sparse_pass2_window,
     )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
@@ -7205,13 +7053,6 @@ def test_sparse_pass2_projection_cache_chunks_non_identity_indices(monkeypatch):
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_PROJECTION_CACHE_MAX_BYTES", str(1024**3))
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", "1000000")
 
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     def fake_window_project(volume_block, rotations_block, image_shape, volume_shape, disc_type, **kwargs):
@@ -7502,13 +7343,6 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
 ):
     from recovar.em.diagnostics import bpref_diagnostics
     from recovar.em.diagnostics import compact_candidate_capture as capture_mod
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
@@ -7837,10 +7671,6 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
 
 def test_exact_raw_diff2_cache_matches_fallback_bitwise_and_removes_recompute(monkeypatch):
     from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
         sparse_pass2_window,
     )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
@@ -7937,10 +7767,6 @@ def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonm
 ):
     from recovar.em.diagnostics import bpref_diagnostics
     from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
         sparse_pass2_window,
     )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
@@ -8122,13 +7948,6 @@ def test_sparse_pass2_rotation_chunking_applies_to_relion_x_half_mstep_with_nonm
 
 
 def test_sparse_pass2_chunked_fine_mstep_prune_is_uncapped(monkeypatch):
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
@@ -8209,13 +8028,6 @@ def test_fused_sparse_k_class_pass2_matches_existing_two_pass_path(monkeypatch):
     """Default fused Class3D pass-2 must preserve the legacy sparse semantics."""
 
     from recovar.em.sampling import rotation_grid_size
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
@@ -8235,7 +8047,6 @@ def test_fused_sparse_k_class_pass2_matches_existing_two_pass_path(monkeypatch):
     )
 
     n_images = 5
-    n_classes = 2
     n_coarse_rot = rotation_grid_size(1)
     fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 6, axis=0)
     fine_parent = np.asarray([0, 1, 2, 3, 4, 5], dtype=np.int64)
@@ -9075,13 +8886,6 @@ def test_fused_sparse_k1_default_compact_pairs_matches_existing_sparse_path(monk
 def test_fused_sparse_k_class_capture_requires_companion_contribution_dump(monkeypatch):
     """Fused K-class device capture fails closed without its operand bundle."""
 
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     signature = inspect.signature(bucketed_mod.compute_k_class_pass2_stats_sparse_fused)
@@ -9157,13 +8961,6 @@ def test_fused_sparse_k_class_capture_is_observational(monkeypatch, tmp_path, tr
 
     from recovar.em.diagnostics import bpref_diagnostics
     from recovar.em.sampling import rotation_grid_size
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
@@ -9264,13 +9061,6 @@ def test_compact_pair_half_spectrum_reuses_mstep_sums_for_noise(monkeypatch):
     """Compact-pair noise can reuse M-step sums when score/recon images match."""
 
     from recovar.em.sampling import rotation_grid_size
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
@@ -9282,7 +9072,6 @@ def test_compact_pair_half_spectrum_reuses_mstep_sums_for_noise(monkeypatch):
     monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK", raising=False)
 
     n_images = 5
-    n_classes = 2
     n_coarse_rot = rotation_grid_size(1)
     fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 6, axis=0)
     fine_parent = np.asarray([0, 1, 2, 3, 4, 5], dtype=np.int64)
@@ -9414,7 +9203,6 @@ def test_compact_pair_tail_coalesced_execution_matches_uncoalesced(monkeypatch):
     monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK", raising=False)
 
     n_images = 4
-    n_classes = 2
     n_coarse_rot = rotation_grid_size(1)
     n_coarse_trans = 4
     fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 64, axis=0)
@@ -9535,13 +9323,6 @@ def test_compact_pair_masked_scoring_reuses_noise_ctf_sums(monkeypatch):
     """Masked compact-pair noise recomputes image sums but reuses CTF/prob sums."""
 
     from recovar.em.sampling import rotation_grid_size
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
@@ -9553,7 +9334,6 @@ def test_compact_pair_masked_scoring_reuses_noise_ctf_sums(monkeypatch):
     monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK", raising=False)
 
     n_images = 5
-    n_classes = 2
     n_coarse_rot = rotation_grid_size(1)
     fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 6, axis=0)
     fine_parent = np.asarray([0, 1, 2, 3, 4, 5], dtype=np.int64)
@@ -9699,13 +9479,6 @@ def test_fused_sparse_k_class_relion_half_mstep_keeps_half_accumulators(monkeypa
     """K-class sparse fused pass-2 should not expand RELION half accumulators on return."""
 
     from recovar.em.sampling import rotation_grid_size
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
@@ -10096,7 +9869,6 @@ def test_compact_pair_xhalf_gpu_matches_rectangular_fused(monkeypatch):
         pytest.skip(cb.cuda_unavailable_error())
 
     n_images = 5
-    n_classes = 2
     n_coarse_rot = rotation_grid_size(1)
     fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 6, axis=0)
     fine_parent = np.asarray([0, 1, 2, 3, 4, 5], dtype=np.int64)
@@ -10214,13 +9986,6 @@ def test_bucketed_call_count_bounded_versus_perimage():
     )
 
     # Count score-bucket invocations
-    from recovar.em.sparse_pass2 import (
-        sparse_pass2_adjoint,
-        sparse_pass2_bucket_io,
-        sparse_pass2_compact_pair_sums,
-        sparse_pass2_projection_blocks,
-        sparse_pass2_window,
-    )
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     original_score = bucketed_mod._score_pass2_bucket_relion_gpu_diff2
