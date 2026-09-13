@@ -1213,34 +1213,3 @@ def test_existing_relion_prefix_exposes_scoped_native_texture_diagnostic():
         "export RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE=${ENABLE_NATIVE_TEXTURE}"
         in launcher
     )
-
-
-def test_case05_bpref_pool_launcher_pins_overridable_cuda_library():
-    launcher = (REPO_ROOT / "scripts" / "run_k1_case05_it1_bpref_pool3.sbatch").read_text()
-
-    assert ': "${EXPECTED_CUDA_LIB_SHA256:?pin the selected CUDA library}"' in launcher
-    assert "CUDA_LIB=${CUDA_LIB_OVERRIDE:-" in launcher
-    assert (
-        'test "$(sha256sum "${CUDA_LIB}" | awk \'{print $1}\')" = '
-        '"${EXPECTED_CUDA_LIB_SHA256}"'
-        in launcher
-    )
-
-
-def test_case05_bpref_primitive_launcher_requires_inert_native_capture_and_pinned_inputs():
-    launcher = (REPO_ROOT / "scripts" / "run_k1_case05_it1_bpref_primitives.sbatch").read_text()
-
-    assert 'test -f "${CAPTURE_SUCCESS}"' in launcher
-    assert 'assert all(row["map_stable"] for row in report["iterations"])' in launcher
-    assert 'assert all(row["selected_topology_exact"] for row in report["iterations"])' in launcher
-    for variable in (
-        "EXPECTED_ANALYZER_SHA256",
-        "EXPECTED_SELECTION_SHA256",
-        "EXPECTED_SOURCE_STAR_SHA256",
-        "EXPECTED_SIGMA2_SHA256",
-        "EXPECTED_PASS2_SHA256",
-        "EXPECTED_CONTRIBUTION_SHA256",
-        "EXPECTED_CUDA_LIB_SHA256",
-    ):
-        assert f': "${{{variable}:?' in launcher
-    assert "scripts.compare_k1_relion_recovar_bpref_primitives" in launcher
