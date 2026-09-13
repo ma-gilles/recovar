@@ -10495,6 +10495,7 @@ def test_device_bucket_rotations_are_bit_identical(monkeypatch, noise_mode, defe
     _assert_fused_arrays_identical(host, device, f"device bucket rotations ({noise_mode}, defer={defer_flag})")
 
 
+@pytest.mark.parametrize("fused_noise", ["0", "1"])
 @pytest.mark.parametrize("defer_flag", ["0", "1"])
 @pytest.mark.parametrize(
     "flag_env",
@@ -10505,7 +10506,7 @@ def test_device_bucket_rotations_are_bit_identical(monkeypatch, noise_mode, defe
         "RECOVAR_SPARSE_KCLASS_VECTORIZED_STATS_REPLAY",
     ],
 )
-def test_host_marshalling_flags_are_bit_identical(monkeypatch, flag_env, defer_flag):
+def test_host_marshalling_flags_are_bit_identical(monkeypatch, flag_env, defer_flag, fused_noise):
     """Each host-marshalling flag (device log-score offset and noise totals; rotations
     gathered from the fine-grid table; device-resident hypothesis tables) copies or
     re-orders nothing numerically, so every fused K-class output must be bit-identical
@@ -10523,6 +10524,12 @@ def test_host_marshalling_flags_are_bit_identical(monkeypatch, flag_env, defer_f
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_DEVICE_INDEX", "1")
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_BUCKET_ROTATIONS_DEVICE", "1")
         monkeypatch.setenv("RECOVAR_SPARSE_PASS2_VECTORIZED_HYPOTHESIS_PREP", "1")
+        # The production run fuses the weighted sums with the noise statistics; the
+        # device noise totals only exist on that path, and image-capacity padding
+        # repeats the last image's index (jobs 13837222/13837223 failed the
+        # non-negative norm-correction guard when the device scatter assumed unique
+        # indices).
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED_MSTEP_NOISE", fused_noise)
         monkeypatch.setenv(flag_env, flag)
         kwargs = _fused_kclass_multibucket_fixture(n_images=13)
         kwargs["accumulate_noise"] = True
@@ -10532,7 +10539,7 @@ def test_host_marshalling_flags_are_bit_identical(monkeypatch, flag_env, defer_f
 
     off = run("0")
     on = run("1")
-    _assert_fused_arrays_identical(off, on, f"{flag_env} (defer={defer_flag})")
+    _assert_fused_arrays_identical(off, on, f"{flag_env} (defer={defer_flag}, fused_noise={fused_noise})")
 
 
 def test_device_bucket_rotations_builder_matches_host_bitwise():

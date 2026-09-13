@@ -5413,18 +5413,27 @@ def _absolute_log_z_to_score_frame_device(absolute_log_evidence, log_score_offse
 
 
 @jax.jit
-def _accumulate_noise_totals_device(wsum_total, norm_total, image_indices, block_shells, block_norm_residual):
+def _accumulate_noise_totals_device(wsum_total, norm_total, image_indices, n_real_images, block_shells, block_norm_residual):
     """float64 ``wsum += shells`` and ``norm[image] += residual`` on the device.
 
-    Image indices are unique within a chunk, so the scatter-add is a plain
-    per-element add and the result equals the host ``+=`` / ``np.add.at`` in
-    the same chunk order bit for bit.
+    The chunk's first ``n_real_images`` indices are unique, so their scatter-add
+    is a plain per-element add.  Image-capacity padding repeats the last real
+    index; the host ``np.add.at`` folds those rows into the last image one
+    after another, so the padded rows are added sequentially here in the same
+    order (a scatter with duplicates would use atomics of unspecified order).
+    The result equals the host accumulation bit for bit.
     """
 
     wsum_total = wsum_total + jnp.asarray(block_shells, dtype=jnp.float64)
-    norm_total = norm_total.at[image_indices].add(
-        jnp.asarray(block_norm_residual, dtype=jnp.float64), unique_indices=True
-    )
+    residual = jnp.asarray(block_norm_residual, dtype=jnp.float64)
+    rows = jnp.arange(residual.shape[0], dtype=jnp.int32)
+    real = rows < n_real_images
+    norm_total = norm_total.at[image_indices].add(jnp.where(real, residual, 0.0), unique_indices=True)
+
+    def _add_padded_row(i, total):
+        return total.at[image_indices[i]].add(jnp.where(real[i], 0.0, residual[i]))
+
+    norm_total = jax.lax.fori_loop(0, residual.shape[0], _add_padded_row, norm_total)
     return wsum_total, norm_total
 
 
@@ -17065,6 +17074,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         noise_totals_device[class_index][0],
                         noise_totals_device[class_index][1],
                         jnp.asarray(image_indices, dtype=jnp.int32),
+                        jnp.int32(int(n_real_images)),
                         block_noise_shells_precomputed,
                         block_norm_residual_precomputed,
                     )
