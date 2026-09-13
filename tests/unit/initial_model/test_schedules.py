@@ -19,6 +19,8 @@ import math
 import pytest
 
 from recovar.em.vdam.schedules import (
+    DEFAULT_STEPSIZE_3D_INITIAL_MODEL,
+    DEFAULT_TAU2_FUDGE_3D_INITIAL_MODEL,
     GuiInitialModelDefaults,
     _relion_round,
     _step_sigmoid_value,
@@ -26,9 +28,7 @@ from recovar.em.vdam.schedules import (
     compute_stepsize,
     compute_subset_size,
     compute_tau2_fudge,
-    default_step_size_for_3d_initial_model,
     default_subset_sizes_for_3d_initial_model,
-    default_tau2_fudge_for_3d_initial_model,
     phase_lengths_from_effective_fractions,
 )
 
@@ -315,7 +315,7 @@ class TestSubsetSizeSchedule:
 
 class TestStepSizeSchedule:
     def test_default_3d_initial_model_stepsize(self):
-        assert default_step_size_for_3d_initial_model() == 0.5
+        assert DEFAULT_STEPSIZE_3D_INITIAL_MODEL == 0.5
 
     def test_3d_initial_model_default_scheme_decays_0p9_to_0p5(self):
         """For is_3d_model=True, ref_dim=3, default stepsize=0.5, default scheme=1.8-step.
@@ -443,7 +443,7 @@ class TestStepSizeSchedule:
 
 class TestTau2FudgeSchedule:
     def test_default_3d_initial_model_fudge(self):
-        assert default_tau2_fudge_for_3d_initial_model() == 4.0
+        assert DEFAULT_TAU2_FUDGE_3D_INITIAL_MODEL == 4.0
 
     def test_3d_initial_model_default_scheme_grows_1_to_4(self):
         """Default scheme = "4-step" -> deflate=4.

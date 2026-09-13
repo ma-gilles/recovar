@@ -146,14 +146,6 @@ def default_subset_sizes_for_3d_initial_model(dataset_size: int) -> tuple[int, i
     return ini, fin
 
 
-def default_step_size_for_3d_initial_model() -> float:
-    return DEFAULT_STEPSIZE_3D_INITIAL_MODEL
-
-
-def default_tau2_fudge_for_3d_initial_model() -> float:
-    return DEFAULT_TAU2_FUDGE_3D_INITIAL_MODEL
-
-
 def compute_subset_size(
     iter: int,
     phase_lengths: VdamPhaseLengths,

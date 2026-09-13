@@ -28,9 +28,7 @@ from recovar.em.vdam.schedules import (
     compute_stepsize,
     compute_subset_size,
     compute_tau2_fudge,
-    default_step_size_for_3d_initial_model,
     default_subset_sizes_for_3d_initial_model,
-    default_tau2_fudge_for_3d_initial_model,
 )
 
 pytestmark = pytest.mark.unit
@@ -278,10 +276,6 @@ class TestScheduleGoldenValues:
     def test_default_subsets_scale_with_nr_particles(self):
         assert default_subset_sizes_for_3d_initial_model(5000) == (200, 1000)
         assert default_subset_sizes_for_3d_initial_model(50000) == (250, 5000)
-
-    def test_default_step_and_tau2(self):
-        assert default_step_size_for_3d_initial_model() == 0.5
-        assert default_tau2_fudge_for_3d_initial_model() == 4.0
 
     def test_relion_round_banker_semantics(self):
         from recovar.em.vdam.schedules import _relion_round

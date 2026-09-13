@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 
@@ -25,8 +25,8 @@ from recovar.em.vdam.estep_common import (
     _group_local_kwargs,
     _relion_projector_dense_rotations,
 )
-from recovar.em.vdam.state import InitialModelState, VdamAccumulator
 from recovar.em.vdam.sparse_pass2_estep import _SPARSE_PASS2_RESULT_FIELDS, _run_sparse_pass2_initial_model_estep
+from recovar.em.vdam.state import InitialModelState, VdamAccumulator
 
 _ENGINE_DEFAULTS: dict[str, Any] = {
     "current_size": None,
@@ -560,22 +560,3 @@ def run_dense_initial_model_estep(
         meta=meta,
         halfset_results=halfset_results,
     )
-
-
-def dense_initial_model_expectation_step(
-    experiment_dataset,
-    config: DenseInitialModelEstepConfig,
-) -> Callable[[InitialModelState, np.ndarray, np.ndarray], tuple[list[VdamAccumulator], dict[str, Any]]]:
-    """Build an ``iteration_loop`` expectation-step callback."""
-
-    def _expectation_step(state: InitialModelState, particle_ids: np.ndarray, halfset_ids: np.ndarray):
-        result = run_dense_initial_model_estep(
-            experiment_dataset,
-            state,
-            config,
-            particle_ids=particle_ids,
-            halfset_ids=halfset_ids,
-        )
-        return result.accumulators, result.meta
-
-    return _expectation_step
