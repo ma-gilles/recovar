@@ -19,6 +19,7 @@ from recovar.em.helpers.batch_planning import _estimate_relion_em_batch_sizes
 from recovar.em.helpers.types import LocalEMResult, NoiseStats, RelionStats
 from recovar.em.local.local_em_engine import run_local_em_exact
 from recovar.em.local.local_layout import _local_search_engine_rotation_block_size, build_local_hypothesis_layout
+from recovar.em.refinement.projector_preparation import prepare_scoring_projector
 from recovar.em.sampling import build_local_search_grid_metadata
 
 logger = logging.getLogger(__name__)
@@ -383,7 +384,11 @@ def _run_local_search_iteration(
             projection_relion_acc_double_floorf_quirk=projection_relion_acc_double_floorf_quirk,
             projection_force_jax=projection_force_jax,
             projection_mask_current_image_disk=projection_mask_current_image_disk,
-            relion_projector_half=relion_projector_half,
+            relion_projector_half=prepare_scoring_projector(
+                relion_projector_half,
+                use_float64_scoring=use_float64_scoring,
+                use_float64_projections=use_float64_projections,
+            ),
             relion_projector_r_max=relion_projector_r_max,
             use_float64_scoring=use_float64_scoring,
             # Keep posterior/log-Z reductions in float64 even when score/projection

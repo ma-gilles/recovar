@@ -43,6 +43,7 @@ from recovar.em.helpers.scale_groups import prepare_scale_correction_groups
 from recovar.em.helpers.types import NoiseStats, RelionStats, make_relion_stats
 from recovar.em.local.local_em_engine import run_local_em_exact
 from recovar.em.local.local_layout import LocalHypothesisLayout
+from recovar.em.refinement.projector_preparation import prepare_scoring_projector
 from recovar.em.scoring.significant_samples import ComplementSignificantSampleIndices, significant_sample_count
 from recovar.utils.nvtx_shim import nvtx
 
@@ -732,7 +733,11 @@ def _run_sparse_k_class_adaptive_pass2(
         else _infer_healpix_order_from_rotation_count(n_rot_coarse)
     )
     base_engine_kwargs = dict(engine_kwargs)
-    relion_projector_half_by_class = base_engine_kwargs.get("relion_projector_half")
+    relion_projector_half_by_class = prepare_scoring_projector(
+        base_engine_kwargs.get("relion_projector_half"),
+        use_float64_scoring=base_engine_kwargs.get("use_float64_scoring", False),
+        use_float64_projections=base_engine_kwargs.get("use_float64_projections", False),
+    )
     relion_projector_r_max = base_engine_kwargs.get("relion_projector_r_max")
     use_k1_fine_diff2_ffi = False
     if n_classes == 1:
@@ -1282,7 +1287,11 @@ def _run_dense_k_class_joint_firstiter_score_probe(
         do_gridding_correction=bool(engine_kwargs.get("do_gridding_correction", False)),
         square_window=bool(engine_kwargs.get("square_window", False)),
         use_float64_scoring=bool(engine_kwargs.get("use_float64_scoring", False)),
-        relion_projector_half=engine_kwargs.get("relion_projector_half"),
+        relion_projector_half=prepare_scoring_projector(
+            engine_kwargs.get("relion_projector_half"),
+            use_float64_scoring=engine_kwargs.get("use_float64_scoring", False),
+            use_float64_projections=engine_kwargs.get("use_float64_projections", False),
+        ),
         relion_projector_r_max=engine_kwargs.get("relion_projector_r_max"),
         relion_projector_texture_interp=engine_kwargs.get(
             "coarse_relion_projector_texture_interp",
@@ -1718,7 +1727,11 @@ def _run_sparse_firstiter_global_winner_subset_pass2(
 
     n_classes = int(means_array.shape[0])
     n_images = int(coarse_class_assignments.shape[0])
-    relion_projector_half_by_class = pass2_kwargs.get("relion_projector_half")
+    relion_projector_half_by_class = prepare_scoring_projector(
+        pass2_kwargs.get("relion_projector_half"),
+        use_float64_scoring=pass2_kwargs.get("use_float64_scoring", False),
+        use_float64_projections=pass2_kwargs.get("use_float64_projections", False),
+    )
     relion_projector_r_max = pass2_kwargs.get("relion_projector_r_max")
     source_faithful_spectrum_norm = bool(
         pass2_kwargs.get("source_faithful_spectrum_norm", False)
@@ -2097,6 +2110,12 @@ def run_local_k_class_em(
         and n_classes == 1
         and bool(base_engine_kwargs.get("host_accumulator_finalize", False))
     )
+    if base_engine_kwargs.get("relion_projector_half") is not None:
+        base_engine_kwargs["relion_projector_half"] = prepare_scoring_projector(
+            base_engine_kwargs["relion_projector_half"],
+            use_float64_scoring=base_engine_kwargs.get("use_float64_scoring", False),
+            use_float64_projections=base_engine_kwargs.get("use_float64_projections", False),
+        )
     if publish_host_result:
         base_engine_kwargs["host_stats_publication"] = True
     return_profile = bool(base_engine_kwargs.pop("return_profile", False))
@@ -2552,6 +2571,13 @@ def run_dense_k_class_em_adaptive(
         # as an explicit coarse-pass argument above.
         engine_kwargs["relion_projector_half"] = relion_projector_half
         engine_kwargs["relion_projector_r_max"] = relion_projector_r_max
+        # Preserve the host slab for independently selected pass-2 diagnostics;
+        # only this coarse consumer is rounded here.
+        relion_projector_half = prepare_scoring_projector(
+            relion_projector_half,
+            use_float64_scoring=engine_kwargs.get("use_float64_scoring", False),
+            use_float64_projections=engine_kwargs.get("use_float64_projections", False),
+        )
     logger.info(
         "Adaptive K-class coarse projector: supplied_ppref=%s texture_interp=%s",
         relion_projector_half is not None,

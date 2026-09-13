@@ -1,5 +1,17 @@
 # Current EM development scope
 
+## Private projector consumer repair — September 13
+
+Private candidate on shared parent `37faa4998` restores the explicit
+float32 projector upload boundary, without the separate half-staging speed
+patch. [Boundary policy and tests](em_projector_consumer_precision.md) preserve
+native host preparation and independent double diagnostics. Three focused
+pre-wiring failures reproduced the missing dispatch policy; 81 focused cases
+and the unchanged 90-case CPU fast guard pass after wiring. These are CPU
+dtype/dispatch checks, not GPU score/support, FSC, trajectory or speed admission.
+The EM-clean lead remains sole shared integrator; current-source matched GPU
+qualification is next. No existing jobs or sealed libraries were changed.
+
 Current decisions belong here; update this page when a decision changes, not for
 every test or publication. Detailed receipts belong behind links. The
 [previous page is preserved byte-for-byte](em_cleanup_history_20260910_a2ab056cb.md)

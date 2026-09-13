@@ -296,6 +296,8 @@ def test_adaptive_exact_fine_gaussian_retains_sparse_on_broad_support(monkeypatc
     monkeypatch.setattr(k_class_module, "run_dense_k_class_em", fail_dense)
     monkeypatch.setattr(k_class_module, "_positive_k_class_threshold", lambda *_args, **_kwargs: 0.0)
 
+    source_projector = np.full((1, 7, 7, 4), 1.234567890123 + .987654321j, dtype=np.complex128)
+    source_before = source_projector.copy()
     result = run_dense_k_class_em_adaptive(
         TinyDataset(),
         jnp.zeros((1, 4), dtype=jnp.complex64),
@@ -314,10 +316,18 @@ def test_adaptive_exact_fine_gaussian_retains_sparse_on_broad_support(monkeypatc
         relion_exact_fine_gaussian=True,
         pass2_use_float64_scoring=True,
         pass2_use_float64_projections=True,
+        relion_projector_half=source_projector,
+        relion_projector_r_max=2,
     )
 
     assert len(sparse_calls) == 1
     assert significance_calls[0]["use_float64_scoring"] is False
+    assert significance_calls[0]["relion_projector_half"].dtype == np.complex64
+    np.testing.assert_array_equal(
+        significance_calls[0]["relion_projector_half"], source_before.astype(np.complex64),
+    )
+    assert sparse_calls[0][1]["engine_kwargs"]["relion_projector_half"] is source_projector
+    np.testing.assert_array_equal(source_projector, source_before)
     assert sparse_calls[0][1]["engine_kwargs"]["use_float64_scoring"] is True
     assert sparse_calls[0][1]["engine_kwargs"]["use_float64_projections"] is True
     np.testing.assert_array_equal(np.asarray(result.significant_counts), np.array([5], dtype=np.int32))

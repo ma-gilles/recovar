@@ -20,6 +20,28 @@ from recovar.em.diagnostics.relion_replay import RelionProjectorReplayState
 logger = logging.getLogger(__name__)
 
 
+def prepare_scoring_projector(
+    projector_half, *, use_float64_scoring=False, use_float64_projections=False,
+):
+    """Select the consumer dtype without changing native host preparation.
+
+    The single-precision RELION accelerator casts host Projector::data to
+    XFLOAT on upload. Production EM likewise needs complex64 here; preserving
+    a native complex128 slab silently disables the texture path. Explicit
+    double projection promotes the slab, while score-only double diagnostics
+    preserve its supplied precision. Do not apply this policy to the builder,
+    disk cache, power spectrum or canonical host reference. See
+    docs/development/em_projector_consumer_precision.md for boundary coverage.
+    """
+    if projector_half is None:
+        return None
+    if use_float64_projections:
+        return jnp.asarray(projector_half, dtype=jnp.complex128)
+    if use_float64_scoring:
+        return jnp.asarray(projector_half)
+    return jnp.asarray(projector_half, dtype=jnp.complex64)
+
+
 def prepare_initial_real_references(init_reference_real, *, volume_shape, n_classes, log):
     """Normalize direct real references to half/class axes without Fourier conversion.
 
