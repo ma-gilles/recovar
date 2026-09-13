@@ -19,7 +19,7 @@ from recovar.em.vdam.schedules import (
     compute_subset_size,
 )
 from recovar.em.vdam.state import InitialModelState
-from recovar.em.vdam.subset import pseudo_halfsets_active, select_vdam_subset
+from recovar.em.vdam.subset import select_vdam_subset
 
 
 def _resolve_phase_lengths(
@@ -109,7 +109,7 @@ def select_subset_for_iter(
         shuffled_halfset_ids = base_halfset_ids[permutation]
 
     # `-1` (all particles) still needs to be translated via select_vdam_subset
-    pseudo = do_grad and pseudo_halfsets_active(gradient_refine=True, do_split_random_halves=False)
+    pseudo = do_grad
     plan = select_vdam_subset(
         shuffled_particle_ids=shuffled,
         subset_size=subset_size,

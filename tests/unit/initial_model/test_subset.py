@@ -7,7 +7,6 @@ Production shuffling uses the native binding, tested separately. Here we cover:
   - `select_vdam_subset` stable-sorts the prefix by optics group and emits
     RELION BPref pseudo-halfset ids of length `subset_size`.
   - `assign_pseudo_halfsets_for_particle_ids` produces `part_id % 2` ids.
-  - `pseudo_halfsets_active` matches RELION's activation logic
     (ml_optimiser.cpp:1920).
 """
 
@@ -19,7 +18,6 @@ from helpers.vdam import numpy_rnd_unif_factory, randomise_particles_order
 
 from recovar.em.vdam.subset import (
     assign_pseudo_halfsets_for_particle_ids,
-    pseudo_halfsets_active,
     select_vdam_subset,
 )
 
@@ -179,29 +177,6 @@ class TestSelectVdamSubset:
 
         # RELION's BPref pseudo-halfsets route by global particle id parity.
         np.testing.assert_array_equal(plan.halfset_ids, plan.particle_ids % 2)
-
-
-# ---------------------------------------------------------------------------
-# Pseudo-halfset activation
-# ---------------------------------------------------------------------------
-
-
-class TestPseudoHalfsetsActive:
-    def test_gui_initial_model_path(self):
-        # ml_optimiser.cpp:1920 with --grad, no --split_random_halves
-        assert pseudo_halfsets_active(gradient_refine=True, do_split_random_halves=False) is True
-
-    def test_auto_refine_path(self):
-        # ml_optimiser.cpp:1920 with --auto_refine (which adds --split_random_halves)
-        # grad off, real halves on
-        assert pseudo_halfsets_active(gradient_refine=False, do_split_random_halves=True) is False
-
-    def test_em_no_halves(self):
-        assert pseudo_halfsets_active(gradient_refine=False, do_split_random_halves=False) is False
-
-    def test_grad_with_split_halves_is_not_pseudo(self):
-        # Odd combination but RELION's logic still says no
-        assert pseudo_halfsets_active(gradient_refine=True, do_split_random_halves=True) is False
 
 
 class TestAssignPseudoHalfsetsForParticleIds:

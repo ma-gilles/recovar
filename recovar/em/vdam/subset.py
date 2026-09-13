@@ -22,11 +22,6 @@ class SubsetPlan:
     halfset_ids: np.ndarray
 
 
-def pseudo_halfsets_active(gradient_refine: bool, do_split_random_halves: bool) -> bool:
-    """ml_optimiser.cpp:1920 ``grad_pseudo_halfsets = do_grad && !do_split_random_halves`` (always True for GUI InitialModel)."""
-    return gradient_refine and not do_split_random_halves
-
-
 def assign_pseudo_halfsets_for_particle_ids(particle_ids: np.ndarray) -> np.ndarray:
     """RELION BPref pseudo-halfset ids: ``global part_id % 2``."""
     return (np.asarray(particle_ids, dtype=np.int64) % 2).astype(np.int8, copy=False)
