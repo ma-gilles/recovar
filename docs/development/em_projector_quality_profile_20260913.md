@@ -94,10 +94,64 @@ this route; the next discriminator is its actual-input replay, not a new
 implementation or full refinement. The lead's6118f0207 port is separate from
 the frozen5e source measured here.
 
-Warm/traced scores, Pmax, poses and support are byte-exact;35/41 fields match.
+Warm/traced best scores, Pmax, poses and significant counts are byte-exact;35/41 fields match.
 Six accumulation/noise fields differ. Against the original real replay,33/41
 fields match; eight accumulation/noise fields differ. All arrays and differences
 are retained; no full quality or general speed admission follows.
 [Trace analysis](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_real_checkpoint_profile_20260913/analysis.json),
 [output comparisons](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_real_checkpoint_profile_20260913/output_audit.json),
 [terminal/source/library receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_real_checkpoint_profile_20260913/supervisor/result.json).
+
+## Actual-input half-staging comparison
+
+Fresh private candidate `32a636925fbd064cbd166377adfdf09a1f75397f` adds only
+the existing b9/8dd staging package to frozen5e. The helper and staging tests
+are byte-identical to8dd. No native source, binary, precision policy or scoring
+formula changed.51 focused CPU tests,90 fast-guard cases and checkpoint/source/
+command checks passed. Session38327 completed0 in110.215s, no survivors or
+changed pins, on the same immediately idle physical A1001 UUID as control31150.
+All three calls use the identical trusted actual-controller checkpoint; only
+the third is traced. The frozen control and protected13785908 are unchanged.
+
+| Measurement | Control5e | Half-staging32a | Direction |
+| --- | ---: | ---: | --- |
+| Traced call wall | 3.6182s | 2.7825s | Better,23.1% lower |
+| Sparse projection helper,135 calls | 1.5194s | 0.8602s | Better |
+| Logical device-to-device bytes | 308.02GB | 51.36GB | Better |
+| Texture fill device time,140 calls | 0.2139s | 0.0484s | Better |
+| Texture sampling device time,140 calls | 0.0330s | 0.0339s | Slightly worse |
+| Rectangular fine-score device time,135 calls | 0.28943s | 0.28946s | Essentially same |
+| Device-to-array bytes | 36.74GB | 36.74GB | Same |
+| Stream synchronization API wall,142 calls | 1.0263s | 0.5864s | Better |
+
+Cold/warm/traced calls were64.770/2.895/2.782s, versus60.303/5.650/3.618s
+in the control. These separately launched, three-call arms are not a replicated
+wall-time benchmark or a full-refinement speed ratio. GPU activity union falls
+from1.550 to0.829s (42.8% to29.8% of wall), because unnecessary GPU work was
+removed; this is not an occupancy measurement. Nested host/API/device times
+overlap. Logical copy bytes are not measured DRAM traffic. Repeated texture
+allocation, staging, synchronization and cleanup remain in the existing FFI.
+
+The saved best scores, Pmax, poses and significant counts are byte-exact between arms.
+However,26/41 output fields match, not all41: posterior totals and accumulation/
+noise fields differ. Maximum rotation-posterior-sum delta is7.45e-9 and M-step
+weight-total delta6.25e-8; scale-correction AA has maximum absolute delta1.928
+and relative L2 delta1.04e-7. Within the candidate, warm/traced35/41 fields match,
+with the six previously observed accumulation/noise differences. The extra
+between-arm differences are retained and need first-operation attribution;
+no bitwise, full-quality or general performance admission follows. Full support
+masks and full score surfaces were not saved here. A measured
+total-weight ratio does not explain all changed aggregates, so no correction
+or fitted score offset is applied.
+
+CPU analysis78419, output audit82374 and posterior audit99371 completed.
+[Paired trace and output comparison](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_real_half_staging_profile_20260913/comparison.json),
+[all saved-array differences](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_real_half_staging_profile_20260913/output_audit.json),
+[posterior magnitudes](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_real_half_staging_profile_20260913/posterior_audit.json),
+[terminal provenance](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_real_half_staging_profile_20260913/supervisor/result.json).
+Comparison SHA256:`10b4dddd94de19211c6bdf843d971abf5b18c1f465244380b7c19b351050b342`.
+Reproduce the read-only comparison with the frozen pixi Python and
+`compare_profile.py` in that artifact root (exclusive-create report: use a fresh
+output copy). `preparation.json` pins the exact bounded GPU command. Do not rerun
+the consumed output root. Next isolate the new posterior deltas on the same
+saved input before broader staging qualification or another speed change.
