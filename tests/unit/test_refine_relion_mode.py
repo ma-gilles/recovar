@@ -10463,7 +10463,7 @@ class TestRelionModeSmokeTest:
             lambda n_particles, *_args, **_kwargs: np.arange(n_particles, dtype=np.int64),
         )
         monkeypatch.setattr(
-            iteration_loop_module,
+            expected_accuracy_module,
             "estimate_relion_expected_accuracy",
             fake_expected_accuracy,
         )

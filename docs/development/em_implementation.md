@@ -80,10 +80,9 @@ grid. `_initial_coarse_grids` materializes the first exhaustive grid from a
 sealed capture, a caller translation table or the RELION translation grid, and
 `_relion_base_translation_grid` is the only unperturbed translation-grid
 construction used by the controller; [`test_initial_coarse_grid_owner.py`](../../tests/unit/test_initial_coarse_grid_owner.py)
-pins both. `_ExpectedAccuracyInputs` bundles the run-constant inputs of RELION's
-expected-accuracy estimation, `_expected_accuracy_class_ids` gives the half-1 class
-labels, and `_estimate_half1_expected_accuracy` is the one call site shared by both
-passes ([`test_expected_accuracy_inputs_owner.py`](../../tests/unit/test_expected_accuracy_inputs_owner.py)).
+pins both. `expected_accuracy.Half1AccuracyInputs` bundles the run-constant inputs of RELION's
+expected-accuracy estimation and owns the `estimate` method used by both passes.
+The same module owns `_expected_accuracy_class_ids`, which supplies half-1 class labels ([`test_expected_accuracy_inputs_owner.py`](../../tests/unit/test_expected_accuracy_inputs_owner.py)).
 `_advance_relion_perturbation` advances RELION's SamplingPerturbation to an iteration
 (seeded `random_seed + iteration`, or the run's generator) for both passes
 ([`test_perturbation_advance_owner.py`](../../tests/unit/test_perturbation_advance_owner.py)).

@@ -106,7 +106,11 @@ from recovar.em.helpers.convergence import (
 )
 from recovar.em.helpers.dtype_policy import _local_search_precision_flags
 from recovar.em.helpers.env_flags import parse_env_flag_or_false
-from recovar.em.helpers.expected_accuracy import estimate_relion_expected_accuracy, prepare_relion_half1_trial_order
+from recovar.em.helpers.expected_accuracy import (
+    Half1AccuracyInputs,
+    _expected_accuracy_class_ids,
+    prepare_relion_half1_trial_order,
+)
 from recovar.em.helpers.fourier_window import quantize_current_size
 from recovar.em.helpers.half_volume_mstep import (
     half_volume_accumulator_shape,
@@ -310,64 +314,6 @@ def _initial_coarse_grids(
         base_translations = np.asarray(translations, dtype=np.float64)
         current_translations = jnp.asarray(translations, dtype=dtype)
     return _CoarseGrids(rotations, rotation_eulers, base_translations, current_translations, int(healpix_order))
-
-
-class _ExpectedAccuracyInputs(NamedTuple):
-    """Run-constant inputs of RELION's expected-accuracy estimation on half 1."""
-
-    trial_order_local: object
-    dataset: object
-    volume_shape: tuple
-    padding_factor: float
-    tau2_fudge: float
-    optimizer_random_seed: object
-    expected_accuracy: object
-
-
-def _expected_accuracy_class_ids(class_assignments_half1, *, k_class_enabled, n_units):
-    """Half-1 class labels of the accuracy trials: K-class assignments when present, else class 0."""
-
-    if k_class_enabled and class_assignments_half1 is not None:
-        return class_assignments_half1
-    return np.zeros(int(n_units), dtype=np.int32)
-
-
-def _estimate_half1_expected_accuracy(
-    inputs: _ExpectedAccuracyInputs,
-    *,
-    reference_fourier,
-    best_eulers_deg,
-    class_ids,
-    class_weights,
-    sigma2_noise_native,
-    current_image_size,
-):
-    """RELION's expected angular/translational accuracy of half 1 at one image size.
-
-    ``calculateExpectedAngularErrors`` samples trial particles of half 1 from the
-    run's optimizer seed and scores them against the current reference; the
-    regular iterations and the final all-data pass supply the reference, the
-    previous best angles, class labels, class weights, half-1 noise and the
-    image size, and share the run-constant inputs.
-    """
-
-    return estimate_relion_expected_accuracy(
-        reference_fourier=reference_fourier,
-        volume_shape=tuple(inputs.volume_shape),
-        best_eulers_deg=best_eulers_deg,
-        class_ids=class_ids,
-        class_weights=class_weights,
-        sigma2_noise_native=sigma2_noise_native,
-        dataset=inputs.dataset,
-        trial_order_local=inputs.trial_order_local,
-        current_image_size=int(current_image_size),
-        padding_factor=inputs.padding_factor,
-        sigma2_fudge=float(inputs.tau2_fudge),
-        random_seed=int(inputs.optimizer_random_seed),
-        random_seed_particle_ids=inputs.expected_accuracy.half1_particle_ids,
-        ctf_params_override=inputs.expected_accuracy.half1_ctf_params,
-        do_ctf_correction=inputs.expected_accuracy.do_ctf_correction,
-    )
 
 
 def _advance_relion_perturbation(random_perturbation, *, perturb_factor, perturb_seed, relion_iteration, rng):
@@ -820,7 +766,7 @@ def _run_relion_iteration_loop(
         init_relion_iteration=init_relion_iteration,
         log=logger,
     )
-    expected_accuracy_inputs = _ExpectedAccuracyInputs(
+    expected_accuracy_inputs = Half1AccuracyInputs(
         trial_order_local=expected_accuracy_trial_order,
         dataset=experiment_datasets[0],
         volume_shape=volume_shape,
@@ -1374,8 +1320,7 @@ def _run_relion_iteration_loop(
                     n_units=experiment_datasets[0].n_units,
                 )
                 try:
-                    accuracy = _estimate_half1_expected_accuracy(
-                        expected_accuracy_inputs,
+                    accuracy = expected_accuracy_inputs.estimate(
                         reference_fourier=means[0],
                         best_eulers_deg=previous_eulers_half1,
                         class_ids=accuracy_class_ids,
@@ -4049,8 +3994,7 @@ def _run_relion_iteration_loop(
                 n_units=experiment_datasets[0].n_units,
             )
             try:
-                final_expected_accuracy = _estimate_half1_expected_accuracy(
-                    expected_accuracy_inputs,
+                final_expected_accuracy = expected_accuracy_inputs.estimate(
                     reference_fourier=final_join_means[0],
                     best_eulers_deg=final_eulers_half1,
                     class_ids=final_accuracy_class_ids,

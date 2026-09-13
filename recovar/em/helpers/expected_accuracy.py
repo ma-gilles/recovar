@@ -6,7 +6,7 @@ import logging
 import multiprocessing
 import traceback
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, NamedTuple
 
 import numpy as np
 
@@ -24,6 +24,63 @@ class ExpectedAccuracy:
     class_counts: np.ndarray
     trial_local_indices: np.ndarray
     trial_particle_ids: np.ndarray
+
+
+class Half1AccuracyInputs(NamedTuple):
+    """Run-constant inputs of RELION's expected-accuracy estimation on half 1."""
+
+    trial_order_local: object
+    dataset: object
+    volume_shape: tuple
+    padding_factor: float
+    tau2_fudge: float
+    optimizer_random_seed: object
+    expected_accuracy: object
+
+    def estimate(
+        self,
+        *,
+        reference_fourier,
+        best_eulers_deg,
+        class_ids,
+        class_weights,
+        sigma2_noise_native,
+        current_image_size,
+    ):
+        """RELION's expected angular/translational accuracy of half 1 at one image size.
+
+        ``calculateExpectedAngularErrors`` samples trial particles of half 1 from the
+        run's optimizer seed and scores them against the current reference; the
+        regular iterations and the final all-data pass supply the reference, the
+        previous best angles, class labels, class weights, half-1 noise and the
+        image size, and share the run-constant inputs.
+        """
+
+        return estimate_relion_expected_accuracy(
+            reference_fourier=reference_fourier,
+            volume_shape=tuple(self.volume_shape),
+            best_eulers_deg=best_eulers_deg,
+            class_ids=class_ids,
+            class_weights=class_weights,
+            sigma2_noise_native=sigma2_noise_native,
+            dataset=self.dataset,
+            trial_order_local=self.trial_order_local,
+            current_image_size=int(current_image_size),
+            padding_factor=self.padding_factor,
+            sigma2_fudge=float(self.tau2_fudge),
+            random_seed=int(self.optimizer_random_seed),
+            random_seed_particle_ids=self.expected_accuracy.half1_particle_ids,
+            ctf_params_override=self.expected_accuracy.half1_ctf_params,
+            do_ctf_correction=self.expected_accuracy.do_ctf_correction,
+        )
+
+
+def _expected_accuracy_class_ids(class_assignments_half1, *, k_class_enabled, n_units):
+    """Half-1 class labels of the accuracy trials: K-class assignments when present, else class 0."""
+
+    if k_class_enabled and class_assignments_half1 is not None:
+        return class_assignments_half1
+    return np.zeros(int(n_units), dtype=np.int32)
 
 
 def estimate_relion_expected_accuracy_from_prepared_inputs(
