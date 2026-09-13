@@ -17,16 +17,15 @@ Requires:
 
 from __future__ import annotations
 
-import re
 import struct
 from pathlib import Path
 
 import numpy as np
 
 try:
-    from scripts.relion_reference import euler_matrix
+    from scripts.relion_reference import euler_matrix, read_initial_noise_variance
 except ModuleNotFoundError:
-    from relion_reference import euler_matrix
+    from relion_reference import euler_matrix, read_initial_noise_variance
 
 FIXTURE_DIR = Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run")
 PARTICLES_STAR = Path(
@@ -56,20 +55,6 @@ def _cc(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.real(np.vdot(af, bf)) / (np.linalg.norm(af) * np.linalg.norm(bf) + 1e-30))
 
 
-def _read_iter0_sigma2(n: int) -> np.ndarray:
-    txt = (FIXTURE_DIR / "run_it000_model.star").read_text()
-    m = re.search(r"data_model_optics_group_1\n(.*?)(?:\ndata_)", txt, re.DOTALL)
-    v = np.zeros(n, dtype=np.float64)
-    for line in m.group(1).strip().split("\n"):
-        toks = line.split()
-        if len(toks) == 3:
-            try:
-                v[int(toks[0])] = float(toks[2])
-            except ValueError:
-                pass
-    return v
-
-
 def main() -> None:
     import jax.numpy as jnp
 
@@ -96,7 +81,7 @@ def main() -> None:
     ori = int(ds.grid_size)
     iref_real = np.asarray(load_relion_volume(str(FIXTURE_DIR / "run_it000_class001.mrc")), dtype=np.float64)
     iref_ft = np.asarray(ftu.get_dft3(jnp.asarray(iref_real))).reshape(-1)
-    sigma2 = _read_iter0_sigma2(ori // 2 + 1)
+    sigma2 = read_initial_noise_variance(FIXTURE_DIR, ori // 2 + 1)
     n4 = ori**4
     nv = np.asarray(make_radial_noise(sigma2 * n4, (ori, ori))).astype(np.float32).reshape(-1)
     r_max = 14
