@@ -43,6 +43,8 @@ their semantics already match:
 
 RELION diagnostic checkpoint restoration lives in [`relion/vdam_checkpoint.py`](../../recovar/em/relion/vdam_checkpoint.py), separate from the VDAM execution driver. Native moment/reference and BPref overrides, including post-M-step reference-map replay, live in [`diagnostics/vdam_mstep_replay.py`](../../recovar/em/diagnostics/vdam_mstep_replay.py); [`vdam/mstep_single_class.py`](../../recovar/em/vdam/mstep_single_class.py) retains the reconstruction transaction and its numerical boundary calls.
 
+Particle bootstrap is owned by [`vdam/bootstrap_iref.py`](../../recovar/em/vdam/bootstrap_iref.py): it loads the bootstrap images and constructs the initial reference/state. [`vdam/init.py`](../../recovar/em/vdam/init.py) contains the state-only initialization formulas, while [`relion/initial_noise.py`](../../recovar/em/relion/initial_noise.py) owns the image iterator and initial noise estimate. The driver coordinates these stages; sampling geometry stays in [`vdam/native_sampling.py`](../../recovar/em/vdam/native_sampling.py).
+
 There is no second EM stack for VDAM. Its adapters supply the existing shared
 kernels with VDAM-specific inputs. Scheduling and state transitions remain with
 their workflow. The retired `dense_single_volume/` and `initial_model/` source

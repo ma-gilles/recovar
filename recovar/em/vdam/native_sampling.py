@@ -121,6 +121,12 @@ class NativeSamplingState:
         return float(self.offset_step_angstrom) / (2 ** int(self.adaptive_oversampling))
 
 
+def _n_directions_for_healpix_order(healpix_order: int) -> int:
+    return int(
+        sampling.rotation_grid_size(int(healpix_order)) // sampling.rotation_grid_n_in_planes(int(healpix_order))
+    )
+
+
 def _initial_sampling_state(opts: NativeInitialModelOptions, *, pixel_size: float) -> NativeSamplingState:
     pixel_size = float(pixel_size)
     if pixel_size <= 0.0:

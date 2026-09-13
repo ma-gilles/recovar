@@ -16,7 +16,7 @@ from recovar.data_io.starfile import read_star
 from recovar.em.diagnostics import vdam_mstep_replay
 from recovar.em.helpers.batch_planning import maybe_cache_raw_image_loaders
 from recovar.em.relion import vdam_checkpoint
-from recovar.em.vdam import estep_meta_updates, native_options, native_sampling, star_io
+from recovar.em.vdam import bootstrap_iref, estep_meta_updates, native_options, native_sampling, star_io
 from recovar.em.vdam.init import initialise_denovo_state
 from recovar.em.vdam.state import NativeParticleState
 from recovar.em.vdam.subset_schedule import select_subset_for_iter
@@ -1460,10 +1460,10 @@ def test_initial_state_applies_relion_bootstrap_postprocess(monkeypatch, capsys)
         calls.append(kwargs)
         return post_iref.copy()
 
-    monkeypatch.setattr(driver, "compute_avg_unaligned_and_sigma2", fake_avg)
-    monkeypatch.setattr(driver, "_load_raw_images", fake_load_raw_images)
-    monkeypatch.setattr(driver, "compute_bootstrap_iref_via_cpp", fake_bootstrap)
-    monkeypatch.setattr(driver, "postprocess_bootstrap_iref_via_cpp", fake_postprocess)
+    monkeypatch.setattr(bootstrap_iref, "compute_avg_unaligned_and_sigma2", fake_avg)
+    monkeypatch.setattr(bootstrap_iref, "_load_raw_images", fake_load_raw_images)
+    monkeypatch.setattr(bootstrap_iref, "compute_bootstrap_iref_via_cpp", fake_bootstrap)
+    monkeypatch.setattr(bootstrap_iref, "postprocess_bootstrap_iref_via_cpp", fake_postprocess)
 
     main = pd.DataFrame(
         {
@@ -1492,7 +1492,7 @@ def test_initial_state_applies_relion_bootstrap_postprocess(monkeypatch, capsys)
         bootstrap_min_particles=2,
     )
 
-    state, optics_groups = driver._initial_state_from_particles(
+    state, optics_groups = bootstrap_iref._initial_state_from_particles(
         dataset,
         main,
         optics,

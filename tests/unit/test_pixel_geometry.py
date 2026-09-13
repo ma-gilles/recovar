@@ -176,7 +176,7 @@ def test_cs_scaling_preserves_serialized_pixel_value(tmp_path):
 
 def test_initial_model_consumers_receive_one_loaded_scalar(tmp_path, monkeypatch):
     from recovar.em.helpers.resolution import shell_index_to_resolution_angstrom
-    from recovar.em.vdam import driver, native_options, native_sampling, star_io
+    from recovar.em.vdam import bootstrap_iref, driver, native_options, native_sampling, star_io
 
     path = _star(tmp_path)
     sf = StarFile.load(path)
@@ -204,9 +204,9 @@ def test_initial_model_consumers_receive_one_loaded_scalar(tmp_path, monkeypatch
         seen["bootstrap"] = kwargs
         raise CapturedBootstrap
 
-    monkeypatch.setattr(driver, "compute_avg_unaligned_and_sigma2", average)
-    monkeypatch.setattr(driver, "compute_bootstrap_iref_via_cpp", bootstrap)
+    monkeypatch.setattr(bootstrap_iref, "compute_avg_unaligned_and_sigma2", average)
+    monkeypatch.setattr(bootstrap_iref, "compute_bootstrap_iref_via_cpp", bootstrap)
     with pytest.raises(CapturedBootstrap):
-        driver._initial_state_from_particles(ds, sf.df, sf.data_optics, opts)
+        bootstrap_iref._initial_state_from_particles(ds, sf.df, sf.data_optics, opts)
     assert seen["average"]["pixel_size"] == PIXEL
     assert seen["bootstrap"]["pixel_size"] == PIXEL

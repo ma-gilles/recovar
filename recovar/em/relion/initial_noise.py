@@ -12,7 +12,7 @@ Public API: ``compute_avg_unaligned_and_sigma2``.
 
 from __future__ import annotations
 
-from typing import Iterator, Tuple
+from typing import Iterable, Iterator, Tuple
 
 import numpy as np
 
@@ -137,3 +137,22 @@ def compute_avg_unaligned_and_sigma2(
         sigma2_per_group[g] = _fix_negative_sigma2(sigma2_per_group[g])
 
     return Mavg, sigma2_per_group
+
+
+def _image_sigma2_iter(
+    dataset,
+    image_indices: np.ndarray,
+    optics_group_by_particle: np.ndarray,
+    *,
+    batch_size: int,
+) -> Iterable[tuple[int, np.ndarray]]:
+    for batch_images, _particle_indices, local_indices in dataset.image_source.iter_batches(
+        batch_size=batch_size,
+        batch_mode="images",
+        subset_indices=np.asarray(image_indices, dtype=np.int64),
+    ):
+        batch_images = np.asarray(batch_images)
+        local_indices = np.asarray(local_indices, dtype=np.int64).reshape(-1)
+        for image, local_idx in zip(batch_images, local_indices):
+            yield int(optics_group_by_particle[int(local_idx)]), image
+
