@@ -645,6 +645,7 @@ _TARGET_RELION_FINE_DIFF2_FUSED_TRANSLATE_RUNTIME_JOBS_F32 = (
     "cuda_relion_fine_diff2_fused_translate_runtime_jobs_f32"
 )
 _TARGET_RELION_FINE_DIFF2_PAIRS_F32 = "cuda_relion_fine_diff2_pairs_f32"
+_TARGET_RELION_ORDERED_SUM_F32 = "cuda_relion_ordered_sum_f32"
 _TARGET_RELION_POWERCLASS_SPECTRUM_HIGHRES_F32 = (
     "cuda_relion_powerclass_spectrum_highres_f32"
 )
@@ -826,6 +827,7 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
         "RelionFineDiff2FusedTranslateRuntimeJobsF32",
     ),
     (_TARGET_RELION_FINE_DIFF2_PAIRS_F32, "RelionFineDiff2PairsF32"),
+    (_TARGET_RELION_ORDERED_SUM_F32, "RelionOrderedSumF32"),
     (
         _TARGET_RELION_POWERCLASS_SPECTRUM_HIGHRES_F32,
         "RelionPowerClassSpectrumHighresF32",
@@ -1729,6 +1731,31 @@ def relion_exponentiate_f32(values: jax.Array, add: jax.Array) -> jax.Array:
         output_type,
         vmap_method="sequential",
     )(values, add)
+
+
+@jax.jit
+def relion_ordered_sum_f32(values: jax.Array) -> jax.Array:
+    """Fold each F32 row left to right, starting at positive zero.
+
+    This is not a parallel reduction: every addition rounds separately in
+    ascending column order. Used by the deterministic powerClass block sum;
+    the preceding pixel powers and 128-lane trees are unchanged.
+    See ``docs/development/em_powerclass_ordered_fold.md``.
+    """
+    if values.dtype != jnp.float32:
+        raise TypeError(f"values must be float32, got {values.dtype}")
+    if values.ndim != 2 or min(values.shape) < 1:
+        raise ValueError(f"values must be a nonempty matrix, got {values.shape}")
+    if jax.default_backend() != "gpu":
+        raise RuntimeError("RELION ordered float32 sum requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError("RELION ordered float32 sum requires custom CUDA")
+    _ensure_ffi()
+    return jax.ffi.ffi_call(
+        _TARGET_RELION_ORDERED_SUM_F32,
+        jax.ShapeDtypeStruct((values.shape[0],), jnp.float32),
+        vmap_method="sequential",
+    )(values)
 
 
 @jax.jit

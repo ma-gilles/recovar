@@ -2759,6 +2759,20 @@ cudaError_t launch_relion_fine_diff2_rectangular(
     return cudaGetLastError();
 }
 
+// One thread per row preserves the JAX left-fold order without a host-driven
+// device while loop. Explicit round-to-nearest addition forbids reassociation.
+__global__ void relion_ordered_sum_f32_kernel(
+    const float* values, float* output, int64_t rows, int64_t columns)
+{
+    const int64_t row = static_cast<int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (row >= rows) return;
+    float total = 0.0f;
+    #pragma unroll 1
+    for (int64_t column = 0; column < columns; ++column)
+        total = __fadd_rn(total, values[row * columns + column]);
+    output[row] = total;
+}
+
 __global__ __launch_bounds__(kRelionPowerClassBlockSize)
 void relion_powerclass_spectrum_highres_f32_kernel(
     const float2* image,

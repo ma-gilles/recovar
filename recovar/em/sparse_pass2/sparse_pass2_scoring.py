@@ -708,6 +708,9 @@ def _relion_cuda_powerclass_highres_xi2_half(
     accumulation uses ascending block order; RELION's atomic arrival order is
     not specified, so its last bit may vary between launches while the
     per-block arithmetic is fixed.
+
+    The ordered F32 GPU fold preserves that recurrence inside one kernel;
+    see ``docs/development/em_powerclass_ordered_fold.md`` for its contract.
     """
 
     operands = _relion_powerclass_operands(
@@ -735,6 +738,16 @@ def _relion_cuda_powerclass_highres_xi2_half(
         block_lanes = block_lanes[..., :width] + block_lanes[..., width : 2 * width]
         block_lanes = jax.lax.optimization_barrier(block_lanes)
     block_sums = block_lanes[..., 0]
+
+    # Keep the ascending-block F32 recurrence, but execute it within one device
+    # kernel instead of hundreds of host-driven XLA while-loop iterations.
+    # CPU, explicit non-CUDA execution and diagnostic F64 retain the reference.
+    if real_dtype == jnp.float32 and block_sums.shape[0] > 0 and jax.default_backend() == "gpu":
+        from recovar import cuda_backproject
+
+        if cuda_backproject.custom_cuda_requested():
+            highres_xi2 = cuda_backproject.relion_ordered_sum_f32(block_sums)
+            return highres_xi2 * jnp.asarray(0.5, dtype=real_dtype)
 
     def add_block(block_index, total):
         total = total + block_sums[:, block_index]

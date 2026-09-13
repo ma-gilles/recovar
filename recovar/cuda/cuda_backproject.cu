@@ -9100,6 +9100,38 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
 );
 
+ffi::Error RelionOrderedSumF32Impl(
+    cudaStream_t stream, ffi::AnyBuffer values, ffi::Result<ffi::AnyBuffer> output)
+{
+    if (values.element_type() != ffi::DataType::F32 ||
+        output->element_type() != ffi::DataType::F32)
+        return ffi::Error::InvalidArgument("RelionOrderedSumF32: expected F32 buffers");
+    const auto dims = values.dimensions();
+    const auto out_dims = output->dimensions();
+    if (dims.size() != 2 || out_dims.size() != 1 ||
+        dims[0] <= 0 || dims[1] <= 0 || out_dims[0] != dims[0])
+        return ffi::Error::InvalidArgument("RelionOrderedSumF32: inconsistent dimensions");
+    if (dims[0] > static_cast<int64_t>(std::numeric_limits<int>::max()) ||
+        dims[1] > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return ffi::Error::InvalidArgument("RelionOrderedSumF32: dimensions exceed CUDA limits");
+    const int blocks = static_cast<int>((dims[0] + 127) / 128);
+    relion_ordered_sum_f32_kernel<<<blocks, 128, 0, stream>>>(
+        static_cast<const float*>(values.untyped_data()),
+        static_cast<float*>(output->untyped_data()), dims[0], dims[1]);
+    const cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    RelionOrderedSumF32, RelionOrderedSumF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+);
+
 ffi::Error RelionPowerClassSpectrumHighresF32Impl(
     cudaStream_t stream,
     int64_t xdim,
