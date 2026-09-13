@@ -983,6 +983,13 @@ def _prepare_per_image_pass2_inputs(
         per_image_candidate_mask.append(candidate_mask)
 
     assert len(per_image_oversampled_rots) == n_images
+    # Global fine-grid tables (paired override only): every image's rows are
+    # gathers of these by ``oversampled_rot_indices``, so the device can gather
+    # them from one resident copy instead of receiving the rows per chunk.
+    rotation_table = None if fine_rotations_np is None else np.asarray(fine_rotations_np, dtype=dtype)
+    mstep_rotation_table = (
+        None if fine_mstep_rotations_np is None else np.asarray(fine_mstep_rotations_np, dtype=dtype)
+    )
     return {
         "source_eulers": per_image_source_eulers,
         "oversampled_rots": per_image_oversampled_rots,
@@ -992,6 +999,10 @@ def _prepare_per_image_pass2_inputs(
         "unique_rot": per_image_unique_rot,
         "log_prior": per_image_log_prior,
         "candidate_mask": per_image_candidate_mask,
+        "rotation_table": rotation_table,
+        "rotation_table_key": None if rotation_table is None else _rotation_table_key(rotation_table),
+        "mstep_rotation_table": mstep_rotation_table,
+        "mstep_rotation_table_key": None if mstep_rotation_table is None else _rotation_table_key(mstep_rotation_table),
     }
 
 
@@ -1186,6 +1197,83 @@ def bucket_rotations_device_enabled() -> bool:
     bit-identical to the host build.
     """
     return parse_env_binary_flag(BUCKET_ROTATIONS_DEVICE_ENV)
+
+
+ROTATIONS_BY_INDEX_ENV = "RECOVAR_SPARSE_KCLASS_ROTATIONS_BY_INDEX"
+
+
+def rotations_by_index_enabled() -> bool:
+    """Gather the padded bucket rotations from a device-resident fine-grid table.
+
+    With ``RECOVAR_SPARSE_KCLASS_BUCKET_ROTATIONS_DEVICE`` the host still
+    concatenates every image's (rows, 3, 3) float32 rows per class-chunk and
+    uploads them (13.6 s of device_put plus ~7 s of host concatenation in the
+    100k/256 K=4 iteration 2, job 13834297).  When the per-image inputs carry
+    the fine-grid table (paired RELION override), the rows are gathers of that
+    table by ``oversampled_rot_indices``; this flag uploads the table once per
+    distinct content and gathers on the device from the padded rotation index
+    array the builder already forms.  Values are copied, so bit-identical.
+    """
+
+    return parse_env_binary_flag(ROTATIONS_BY_INDEX_ENV)
+
+
+def _rotation_table_key(table) -> tuple:
+    """Content key for the device table cache: shape, dtype and a SHA-1 of the bytes."""
+
+    import hashlib
+
+    table = np.ascontiguousarray(table)
+    return (table.shape, str(table.dtype), hashlib.sha1(table.view(np.uint8)).hexdigest())
+
+
+_ROTATION_TABLE_DEVICE_CACHE: dict = {}
+
+
+def _rotation_table_device(table, key):
+    """Device copy of a fine-grid rotation table, keyed by content (bounded cache)."""
+
+    import jax.numpy as jnp
+
+    cached = _ROTATION_TABLE_DEVICE_CACHE.get(key)
+    if cached is None:
+        if len(_ROTATION_TABLE_DEVICE_CACHE) >= 8:
+            _ROTATION_TABLE_DEVICE_CACHE.clear()
+        cached = jnp.asarray(np.ascontiguousarray(table))
+        _ROTATION_TABLE_DEVICE_CACHE[key] = cached
+    return cached
+
+
+def _padded_rotations_from_table_impl(table, rotation_indices, counts, fill, *, rows):
+    import jax.numpy as jnp
+
+    gathered = jnp.take(table, jnp.clip(rotation_indices, 0, table.shape[0] - 1), axis=0)
+    valid = jnp.arange(rows, dtype=jnp.int32)[None, :] < counts[:, None]
+    return jnp.where(valid[:, :, None, None], gathered, fill[None, None])
+
+
+def padded_rotations_from_table_device(table, table_key, rotation_indices, counts, rows, fill):
+    """``(images, rows, 3, 3)`` device rotations gathered from a resident table.
+
+    ``rotation_indices`` is the host ``(images, rows)`` int64 padded index array
+    (zeros beyond ``counts``); padded slots receive ``fill`` (identity).  Equals
+    :func:`padded_rows_from_flat_device` on the concatenated per-image rows.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    fn = padded_rotations_from_table_device.__dict__.get("_compiled")
+    if fn is None:
+        fn = jax.jit(_padded_rotations_from_table_impl, static_argnames=("rows",))
+        padded_rotations_from_table_device.__dict__["_compiled"] = fn
+    table_dev = _rotation_table_device(table, table_key)
+    return fn(
+        table_dev,
+        jnp.asarray(np.asarray(rotation_indices, dtype=np.int32)),
+        jnp.asarray(np.asarray(counts, dtype=np.int32)),
+        jnp.asarray(np.asarray(fill, dtype=table.dtype)),
+        rows=int(rows),
+    )
 
 
 def _flat_rows_quantum(n_rows: int) -> int:
@@ -1468,7 +1556,41 @@ def _build_bucket_arrays(
         padded_rotation_indices[row, :cnt] = per_image_inputs["oversampled_rot_indices"][image_idx]
         padded_row_log_prior[row, :cnt] = per_image_inputs["log_prior"][image_idx]
 
-    if device_rotations:
+    rotation_table = per_image_inputs.get("rotation_table") if isinstance(per_image_inputs, dict) else None
+    if (
+        device_rotations
+        and rotation_table is not None
+        and np.dtype(rotation_table.dtype) == np.dtype(rotation_dtype)
+        and rotations_by_index_enabled()
+    ):
+        padded_rotations = padded_rotations_from_table_device(
+            rotation_table,
+            per_image_inputs["rotation_table_key"],
+            padded_rotation_indices,
+            actual_counts,
+            bucket_size,
+            np.eye(3, dtype=rotation_dtype),
+        )
+        mstep_table = per_image_inputs.get("mstep_rotation_table")
+        if not separate_mstep_rotations:
+            padded_mstep_rotations = padded_rotations
+        elif mstep_table is not None and np.dtype(mstep_table.dtype) == np.dtype(mstep_rotation_dtype):
+            padded_mstep_rotations = padded_rotations_from_table_device(
+                mstep_table,
+                per_image_inputs["mstep_rotation_table_key"],
+                padded_rotation_indices,
+                actual_counts,
+                bucket_size,
+                np.eye(3, dtype=mstep_rotation_dtype),
+            )
+        else:
+            padded_mstep_rotations = padded_rows_from_flat_device(
+                [np.asarray(per_image_inputs["oversampled_mstep_rots"][i], dtype=mstep_rotation_dtype) for i in image_indices[:n_real].tolist()],
+                actual_counts,
+                bucket_size,
+                np.eye(3, dtype=mstep_rotation_dtype),
+            )
+    elif device_rotations:
         real_images = image_indices[:n_real].tolist()
         padded_rotations = padded_rows_from_flat_device(
             [np.asarray(per_image_inputs["oversampled_rots"][i], dtype=rotation_dtype) for i in real_images],

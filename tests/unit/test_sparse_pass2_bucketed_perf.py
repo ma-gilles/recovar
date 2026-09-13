@@ -10533,6 +10533,53 @@ def test_device_bucket_rotations_builder_matches_host_bitwise():
             np.testing.assert_array_equal(np.asarray(dev["rotations"])[3:], np.broadcast_to(np.eye(3), (2, 8, 3, 3)))
 
 
+def test_rotations_by_index_builder_matches_flat_rows_bitwise(monkeypatch):
+    """With RECOVAR_SPARSE_KCLASS_ROTATIONS_BY_INDEX the builder gathers the padded
+    rotations from the fine-grid table and equals the flat-row device build bitwise,
+    including identity padding, capacity rows and the shared-M-step identity."""
+    jax = pytest.importorskip("jax")
+    from recovar.em.dense_single_volume.helpers import sparse_bucket_arrays as sba
+    from recovar.em.dense_single_volume.helpers.compact_candidates import SparseCandidateMask
+
+    rng = np.random.default_rng(7)
+    table = rng.normal(size=(40, 3, 3)).astype(np.float32)
+    mstep_table = rng.normal(size=(40, 3, 3)).astype(np.float32)
+    counts = [3, 1, 4]
+    idx = [np.sort(rng.choice(40, size=c, replace=False)).astype(np.int64) for c in counts]
+    per_image = {
+        "candidate_mask": [SparseCandidateMask(mode="full", n_rows=c, n_fine_trans=2) for c in counts],
+        "oversampled_rots": [table[i] for i in idx],
+        "oversampled_mstep_rots": [mstep_table[i] for i in idx],
+        "oversampled_rot_indices": idx,
+        "log_prior": [np.linspace(-1, 0, c, dtype=np.float32) for c in counts],
+        "parent_map": [np.zeros(c, dtype=np.int32) for c in counts],
+        "rotation_table": table,
+        "rotation_table_key": sba._rotation_table_key(table),
+        "mstep_rotation_table": mstep_table,
+        "mstep_rotation_table_key": sba._rotation_table_key(mstep_table),
+    }
+    bucket = {"bucket_size": 8, "image_indices": np.array([0, 1, 2])}
+    with jax.default_device(jax.devices("cpu")[0]):
+        for shared in (False, True):
+            if shared:
+                per_image["oversampled_mstep_rots"] = per_image["oversampled_rots"]
+            monkeypatch.setenv(sba.ROTATIONS_BY_INDEX_ENV, "0")
+            flat = sba._build_bucket_arrays(bucket, per_image, 2, capacity_rows=5, device_rotations=True)
+            monkeypatch.setenv(sba.ROTATIONS_BY_INDEX_ENV, "1")
+            gathered = sba._build_bucket_arrays(bucket, per_image, 2, capacity_rows=5, device_rotations=True)
+            assert isinstance(gathered["rotations"], jax.Array)
+            assert (gathered["mstep_rotations"] is gathered["rotations"]) == shared
+            for key in ("rotations", "mstep_rotations"):
+                np.testing.assert_array_equal(np.asarray(gathered[key]), np.asarray(flat[key]), err_msg=key)
+                assert np.asarray(gathered[key]).dtype == np.asarray(flat[key]).dtype
+            np.testing.assert_array_equal(np.asarray(gathered["rotations"])[3:], np.broadcast_to(np.eye(3, dtype=np.float32), (2, 8, 3, 3)))
+        # a table of another dtype than the rows falls back to the flat-row build
+        per_image["rotation_table"] = table.astype(np.float64)
+        per_image["rotation_table_key"] = sba._rotation_table_key(per_image["rotation_table"])
+        fallback = sba._build_bucket_arrays(bucket, per_image, 2, capacity_rows=5, device_rotations=True)
+        np.testing.assert_array_equal(np.asarray(fallback["rotations"]), np.asarray(flat["rotations"]))
+
+
 def test_prefetch_iterator_preserves_order_and_forwards_errors():
     from recovar.em.dense_single_volume.helpers.batch_fetch import prefetch_iterator
 
