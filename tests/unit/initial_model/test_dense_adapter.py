@@ -681,7 +681,7 @@ def test_relion_projector_to_dense_volume_handles_ori_size_boundary(monkeypatch)
 
     # ori_size=4 → r_max=2 → cropped shape (5, 5, 3)
     slab = np.arange(5 * 5 * 3, dtype=np.float64).reshape(5, 5, 3).astype(np.complex128)
-    out = _relion_projector_to_dense_volume(slab, 4)
+    _relion_projector_to_dense_volume(slab, 4)
 
     half = captured["half"]
     assert half.shape == (4, 4, 3)
@@ -705,7 +705,7 @@ def test_relion_projector_to_dense_volume_truncates_oversize(monkeypatch):
     monkeypatch.setattr("recovar.core.fourier_transform_utils.half_volume_to_full_volume", fake_half_to_full)
     # ori_size=4 → max half (4, 4, 3). Pass an even larger (7, 7, 4) slab.
     slab = np.arange(7 * 7 * 4, dtype=np.float64).reshape(7, 7, 4).astype(np.complex128)
-    out = _relion_projector_to_dense_volume(slab, 4)
+    _relion_projector_to_dense_volume(slab, 4)
     half = captured["half"]
     assert half.shape == (4, 4, 3)
     # Center of slab (index 3) maps to center of half (index 2).

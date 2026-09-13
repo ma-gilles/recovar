@@ -1094,7 +1094,8 @@ def test_deferred_packed_vdam_keeps_dense_oracle_and_packed_final_noise_lane():
     assert "_relion_wavg_direct_triplet_shells(" in engine
     assert "materialize_shifted_recon = not return_deferred_source_vdam_operands" in big_jit
     assert "deferred_flat_proj_for_noise = proj_half_flat[" in big_jit
-    assert "processed_score_half_for_return,\n            deferred_flat_proj_for_noise," in big_jit
+    assert "processed_score_half=processed_score_half_for_return," in big_jit
+    assert "flat_proj_for_noise=deferred_flat_proj_for_noise," in big_jit
     assert "relion_vdam_mstep_denominator_f32(" in big_jit
     assert "if packed_deferred_source_vdam_noise:" in big_jit
     assert big_jit.count("and (not accumulate_noise or return_deferred_source_vdam_operands)") == 3
