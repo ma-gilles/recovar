@@ -119,3 +119,40 @@ def test_pair_sparse_native_sums_match_dense_native_bitwise(monkeypatch, custom_
             # H100 moved ctf_probs by 1-2 float32 ULP (job 13806345). Bound, not pin.
             np.testing.assert_allclose(b, a, rtol=8 * np.finfo(np.float32).eps, atol=0.0, err_msg=name)
     assert np.asarray(sparse[0]).shape == (batch, n_rows, n_recon)
+
+
+@pytest.mark.gpu
+def test_pair_sparse_flat_rows_kernel_matches_padded_rows_bitwise(monkeypatch, custom_cuda_lib, gpu_device):
+    """dual_weighted_sums_pairs_rows_f32 computes only the listed (batch, row) pairs; each
+    listed row must equal the padded kernel's row bitwise, rows outside the bucket are zero,
+    and the listed order is arbitrary (real rows of every image, then a few repeats)."""
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(11)
+    batch, n_rows, n_trans, n_pairs, n_recon, n_img = 4, 33, 9, 120, 41, 26
+    rows, trans, mask, probs = _random_unique_pairs(rng, batch, n_rows, n_trans, n_pairs)
+    recon = (rng.normal(0, 1, (batch, n_trans, n_recon)) + 1j * rng.normal(0, 1, (batch, n_trans, n_recon))).astype(np.complex64)
+    image = (rng.normal(0, 1, (batch, n_trans, n_img)) + 1j * rng.normal(0, 1, (batch, n_trans, n_img))).astype(np.complex64)
+    counts = rng.integers(0, n_rows + 1, size=batch)
+    row_batch = np.concatenate([np.full(int(c), b, np.int32) for b, c in enumerate(counts)] + [np.array([1, 2, 0], np.int32)])
+    row_rotation = np.concatenate([np.arange(int(c), dtype=np.int32) for c in counts] + [np.array([5, n_rows, 0], np.int32)])
+    with jax.default_device(gpu_device):
+        sorted_probs, sorted_trans, offsets = spb._compact_pair_sorted_csr(
+            jnp.asarray(probs), jnp.asarray(rows), jnp.asarray(trans), jnp.asarray(mask), n_rotation_rows=n_rows, n_trans=n_trans
+        )
+        padded = cuda_backproject.dual_weighted_sums_pairs_f32(sorted_probs, sorted_trans, offsets, jnp.asarray(recon), jnp.asarray(image))
+        flat = cuda_backproject.dual_weighted_sums_pairs_rows_f32(
+            sorted_probs, sorted_trans, offsets, jnp.asarray(row_batch), jnp.asarray(row_rotation), jnp.asarray(recon), jnp.asarray(image)
+        )
+        padded, flat = jax.block_until_ready((padded, flat))
+    for padded_out, flat_out, n_pix in zip(padded, flat, (n_recon, n_img)):
+        padded_out = np.asarray(padded_out); flat_out = np.asarray(flat_out)
+        assert flat_out.shape == (row_batch.size, n_pix) and flat_out.dtype == padded_out.dtype
+        valid = row_rotation < n_rows
+        expect = padded_out[row_batch[valid], row_rotation[valid]]
+        np.testing.assert_array_equal(flat_out[valid].view(np.uint8), expect.view(np.uint8))
+        assert np.all(flat_out[~valid] == 0)
+

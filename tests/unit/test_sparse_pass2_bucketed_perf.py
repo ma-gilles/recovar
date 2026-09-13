@@ -10587,6 +10587,64 @@ def test_batch_prefetch_is_bit_identical(monkeypatch, defer_flag):
     _assert_fused_arrays_identical(sync, prefetched, f"batch prefetch (defer={defer_flag})")
 
 
+@pytest.mark.gpu
+@pytest.mark.parametrize("defer_flag", ["0", "1"])
+def test_flat_real_rows_sums_and_noise_are_bit_identical(monkeypatch, custom_cuda_lib, gpu_device, defer_flag):
+    """RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_FLAT_ROWS computes the pair-sparse weighted sums,
+    CTF sums and noise terms only for the real rotation rows (flat [rows, pixel] layout)
+    instead of the padded [images, rows, pixel] layout. Each real row is the padded row
+    bit for bit and padded rows carry exactly zero mass, so every output must be
+    bit-identical to the padded path with the real-rows adjoint."""
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    calls = []
+    original = cuda_backproject.dual_weighted_sums_pairs_rows_f32
+
+    def spy(*a, **kw):
+        calls.append(1)
+        return original(*a, **kw)
+
+    def run(flat):
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "4")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_DEFERRED_HOST_STATS", defer_flag)
+        monkeypatch.setenv("RECOVAR_SPARSE_PASS2_IMAGE_CAPACITY", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_LAZY_TABLES", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_NATIVE_PAIR_SPARSE_SUMS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_FLAT_ROWS", flat)
+        monkeypatch.setattr(cuda_backproject, "dual_weighted_sums_pairs_rows_f32", spy)
+        kwargs = _fused_kclass_multibucket_fixture(n_images=13)
+        kwargs["accumulate_noise"] = True
+        with jax.default_device(gpu_device):
+            return _fused_kclass_result_arrays(
+                bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs)
+            )
+
+    padded = run("0")
+    assert not calls, "the flat-row kernel must not run with the flag off"
+    flat = run("1")
+    assert calls, "the flat-row kernel must run with the flag on"
+    _assert_fused_arrays_identical(padded, flat, f"flat real rows (defer={defer_flag})")
+
+
+def test_flat_real_rows_flag_requires_its_prerequisites(monkeypatch):
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_FLAT_ROWS", "1")
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS", raising=False)
+    kwargs = _fused_kclass_multibucket_fixture(n_images=6)
+    with pytest.raises(ValueError, match="COMPACT_PAIR_FLAT_ROWS=1 requires"):
+        bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs)
+
+
 def test_lazy_pair_tables_builder_skips_per_pair_tables():
     from recovar.em.dense_single_volume.helpers import sparse_bucket_arrays as sba
     from recovar.em.dense_single_volume.helpers.compact_candidates import SparseCandidateMask

@@ -683,6 +683,7 @@ _wavg_native_prefix_ffi_registered = False
 
 _TARGET_DUAL_WEIGHTED_SUMS_F32 = "cuda_dual_weighted_sums_f32"
 _TARGET_DUAL_WEIGHTED_SUMS_PAIRS_F32 = "cuda_dual_weighted_sums_pairs_f32"
+_TARGET_DUAL_WEIGHTED_SUMS_PAIRS_ROWS_F32 = "cuda_dual_weighted_sums_pairs_rows_f32"
 
 # Single source of truth: (FFI target name, C symbol exported by libcuda_backproject.so).
 # Used by ``_ensure_ffi`` to register kernels AND by ``_lib_missing_required_symbols``
@@ -875,6 +876,7 @@ _FFI_REGISTRATIONS: tuple[tuple[str, str], ...] = (
     ),
     (_TARGET_DUAL_WEIGHTED_SUMS_F32, "DualWeightedSumsF32"),
     (_TARGET_DUAL_WEIGHTED_SUMS_PAIRS_F32, "DualWeightedSumsPairsF32"),
+    (_TARGET_DUAL_WEIGHTED_SUMS_PAIRS_ROWS_F32, "DualWeightedSumsPairsRowsF32"),
 )
 
 
@@ -6942,6 +6944,60 @@ def dual_weighted_sums_pairs_f32(
         output_types,
         vmap_method="sequential",
     )(pair_probabilities, pair_translation_ids, row_offsets, first_values, second_values)
+
+
+def dual_weighted_sums_pairs_rows_f32(
+    pair_probabilities: jax.Array,
+    pair_translation_ids: jax.Array,
+    row_offsets: jax.Array,
+    row_batch: jax.Array,
+    row_rotation: jax.Array,
+    first_values: jax.Array,
+    second_values: jax.Array,
+) -> tuple[jax.Array, jax.Array]:
+    """Flat real-row form of :func:`dual_weighted_sums_pairs_f32`.
+
+    ``row_batch`` and ``row_rotation`` are ``[rows]`` int32 lists of the
+    ``(batch, rotation row)`` pairs to accumulate; the outputs are
+    ``[rows, pixel]`` and ``out[f]`` is bit-identical to the padded kernel's
+    output at ``(row_batch[f], row_rotation[f])`` (same pair order, same fma).
+    Rows that point outside the bucket produce zeros. Padded rotation rows
+    (about 71 % of the slots at 100k/256 K=4) are never computed or written.
+    """
+    _ensure_ffi()
+    pair_probabilities = jnp.asarray(pair_probabilities)
+    pair_translation_ids = jnp.asarray(pair_translation_ids)
+    row_offsets = jnp.asarray(row_offsets)
+    row_batch = jnp.asarray(row_batch)
+    row_rotation = jnp.asarray(row_rotation)
+    first_values = jnp.asarray(first_values)
+    second_values = jnp.asarray(second_values)
+    if pair_probabilities.dtype != jnp.float32 or pair_probabilities.ndim != 2:
+        raise ValueError("dual_weighted_sums_pairs_rows_f32 expects float32 pair probabilities [batch, pair]")
+    if pair_translation_ids.dtype != jnp.int32 or pair_translation_ids.shape != pair_probabilities.shape:
+        raise ValueError("dual_weighted_sums_pairs_rows_f32 expects int32 pair translations shaped like the probabilities")
+    if row_offsets.dtype != jnp.int32 or row_offsets.ndim != 2 or row_offsets.shape[0] != pair_probabilities.shape[0] or row_offsets.shape[1] < 2:
+        raise ValueError("dual_weighted_sums_pairs_rows_f32 expects int32 row offsets [batch, rotation + 1]")
+    if row_batch.dtype != jnp.int32 or row_rotation.dtype != jnp.int32 or row_batch.ndim != 1 or row_batch.shape != row_rotation.shape:
+        raise ValueError("dual_weighted_sums_pairs_rows_f32 expects int32 row_batch and row_rotation lists of one length")
+    if first_values.dtype not in (jnp.complex64, jnp.complex128) or second_values.dtype != first_values.dtype:
+        raise ValueError("dual_weighted_sums_pairs_rows_f32 expects two complex value arrays of one dtype")
+    for name, values in (("first_values", first_values), ("second_values", second_values)):
+        if values.ndim != 3 or values.shape[0] != pair_probabilities.shape[0] or values.shape[1] != first_values.shape[1]:
+            raise ValueError(
+                f"dual_weighted_sums_pairs_rows_f32 {name} must be [batch, translation, pixel] "
+                f"with the pair batch, got {values.shape}"
+            )
+    rows = int(row_batch.shape[0])
+    output_types = (
+        jax.ShapeDtypeStruct((rows, first_values.shape[2]), first_values.dtype),
+        jax.ShapeDtypeStruct((rows, second_values.shape[2]), second_values.dtype),
+    )
+    return jax.ffi.ffi_call(
+        _TARGET_DUAL_WEIGHTED_SUMS_PAIRS_ROWS_F32,
+        output_types,
+        vmap_method="sequential",
+    )(pair_probabilities, pair_translation_ids, row_offsets, row_batch, row_rotation, first_values, second_values)
 
 
 @functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))

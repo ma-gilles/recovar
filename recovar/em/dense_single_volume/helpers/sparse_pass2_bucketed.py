@@ -282,6 +282,7 @@ _SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS_ENV = (
 _SPARSE_KCLASS_FUSED_NOISE_NORM_ENV = "RECOVAR_SPARSE_KCLASS_FUSED_NOISE_NORM"
 _SPARSE_KCLASS_RESIDUAL_TERMS_FUSED_ENV = "RECOVAR_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED"
 _SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS_ENV = "RECOVAR_SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS"
+_SPARSE_KCLASS_COMPACT_PAIR_FLAT_ROWS_ENV = "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_FLAT_ROWS"
 _SPARSE_KCLASS_NATIVE_PAIR_SPARSE_SUMS_ENV = (
     "RECOVAR_SPARSE_KCLASS_NATIVE_PAIR_SPARSE_SUMS"
 )
@@ -6633,9 +6634,37 @@ def _compact_pair_weighted_sums_and_noise_native(
     n_rotation_rows: int,
     shell_count: int,
     batch_size: int,
+    flat_rows=None,
 ):
-    """Fuse compact weighted sums with dense noise/norm sufficient statistics."""
+    """Fuse compact weighted sums with dense noise/norm sufficient statistics.
 
+    ``flat_rows = (row_batch, row_rotation, active_mask)`` (device int32/bool
+    vectors over the bucket's real rotation rows, padded to a stable length with
+    a false mask) switches to the flat real-row kernel: the weighted sums, CTF
+    sums, and noise terms are computed only for the listed rows and returned as
+    ``[rows, pixel]`` arrays. Each listed row is bit-identical to the padded
+    layout's row; padded rows (about 71 % of the slots at 100k/256 K=4, job
+    13827488) are never computed or written.
+    """
+
+    if flat_rows is not None:
+        return _compact_pair_weighted_sums_and_noise_native_flat_rows(
+            pair_probs,
+            local_rotation_row,
+            translation_idx,
+            pair_mask,
+            shifted_recon_split,
+            shifted_image_split,
+            ctf2_over_nv_recon,
+            proj_for_noise,
+            proj_abs2_for_noise,
+            noise_variance_half,
+            shell_indices,
+            flat_rows,
+            n_rotation_rows=n_rotation_rows,
+            shell_count=shell_count,
+            batch_size=batch_size,
+        )
     (
         summed,
         summed_image,
@@ -6673,6 +6702,140 @@ def _compact_pair_weighted_sums_and_noise_native(
         summed,
         summed_image,
         ctf_probs,
+        probs_sum_t,
+        translation_posterior,
+        block_noise_shells,
+        block_norm_residual,
+    )
+
+
+@partial(jax.jit, static_argnames=("n_rotation_rows", "shell_count", "batch_size"))
+def _flat_rows_noise_and_ctf_from_dense_probs(
+    dense_probs,
+    ctf2_over_nv_recon,
+    summed_image_flat,
+    proj_for_noise,
+    proj_abs2_for_noise,
+    noise_variance_half,
+    shell_indices,
+    row_batch,
+    row_rotation,
+    active_mask,
+    *,
+    n_rotation_rows: int,
+    shell_count: int,
+    batch_size: int,
+):
+    """Flat-row CTF sums, posterior reductions and noise terms (same arithmetic as the padded path)."""
+    probs_sum_t = jnp.sum(dense_probs, axis=-1)  # (B, R)
+    translation_posterior = jnp.sum(dense_probs, axis=1)
+    mask = jnp.asarray(active_mask, dtype=ctf2_over_nv_recon.dtype)
+    probs_sum_t_flat = probs_sum_t[row_batch, row_rotation] * mask  # masked rows carry zero mass
+    ctf2_flat = ctf2_over_nv_recon[row_batch]  # (F, N)
+    ctf_probs_flat = jnp.where(
+        probs_sum_t_flat[:, None] != 0.0,
+        probs_sum_t_flat[:, None] * ctf2_flat,
+        0.0,
+    )
+    proj_flat = proj_for_noise[row_batch, row_rotation]
+    proj_abs2_flat = proj_abs2_for_noise[row_batch, row_rotation]
+    block_noise_shells, block_norm_residual = (
+        _compute_noise_block_and_norm_residual_from_flat_rows_residual_terms(
+            proj_flat,
+            proj_abs2_flat,
+            summed_image_flat,
+            ctf_probs_flat,
+            noise_variance_half,
+            shell_indices,
+            row_batch,
+            shell_count=int(shell_count),
+            batch_size=int(batch_size),
+        )
+    )
+    return probs_sum_t, translation_posterior, ctf_probs_flat, block_noise_shells, block_norm_residual
+
+
+def _compact_pair_weighted_sums_and_noise_native_flat_rows(
+    pair_probs,
+    local_rotation_row,
+    translation_idx,
+    pair_mask,
+    shifted_recon_split,
+    shifted_image_split,
+    ctf2_over_nv_recon,
+    proj_for_noise,
+    proj_abs2_for_noise,
+    noise_variance_half,
+    shell_indices,
+    flat_rows,
+    *,
+    n_rotation_rows: int,
+    shell_count: int,
+    batch_size: int,
+):
+    """Flat real-row form of :func:`_compact_pair_weighted_sums_and_noise_native`.
+
+    Returns ``(summed_flat, summed_image_flat, ctf_probs_flat, probs_sum_t,
+    translation_posterior, block_noise_shells, block_norm_residual)`` with the
+    first three as ``[rows, pixel]`` arrays over ``flat_rows``; rows whose mask
+    is false (shape padding) are exactly zero.
+    """
+    from recovar.cuda_backproject import dual_weighted_sums_pairs_rows_f32
+
+    row_batch, row_rotation, active_mask = flat_rows
+    n_trans = int(shifted_recon_split.shape[1])
+    dense_probs = _compact_pair_dense_probs_and_reductions(
+        pair_probs,
+        local_rotation_row,
+        translation_idx,
+        pair_mask,
+        n_rotation_rows=n_rotation_rows,
+        n_trans=n_trans,
+    )
+    sorted_probs, sorted_translations, row_offsets = _compact_pair_sorted_csr(
+        pair_probs,
+        local_rotation_row,
+        translation_idx,
+        pair_mask,
+        n_rotation_rows=n_rotation_rows,
+        n_trans=n_trans,
+    )
+    summed_flat, summed_image_flat = dual_weighted_sums_pairs_rows_f32(
+        sorted_probs,
+        sorted_translations,
+        row_offsets,
+        row_batch,
+        row_rotation,
+        shifted_recon_split,
+        shifted_image_split,
+    )
+    summed_flat = _apply_active_row_mask_jit(summed_flat, active_mask)
+    summed_image_flat = _apply_active_row_mask_jit(summed_image_flat, active_mask)
+    (
+        probs_sum_t,
+        translation_posterior,
+        ctf_probs_flat,
+        block_noise_shells,
+        block_norm_residual,
+    ) = _flat_rows_noise_and_ctf_from_dense_probs(
+        dense_probs,
+        ctf2_over_nv_recon,
+        summed_image_flat,
+        proj_for_noise,
+        proj_abs2_for_noise,
+        noise_variance_half,
+        shell_indices,
+        row_batch,
+        row_rotation,
+        active_mask,
+        n_rotation_rows=int(n_rotation_rows),
+        shell_count=int(shell_count),
+        batch_size=int(batch_size),
+    )
+    return (
+        summed_flat,
+        summed_image_flat,
+        ctf_probs_flat,
         probs_sum_t,
         translation_posterior,
         block_noise_shells,
@@ -13280,6 +13443,15 @@ def compute_k_class_pass2_stats_sparse_fused(
     if rectangular_active_rows_min_bucket_size is None:
         rectangular_active_rows_min_bucket_size = _DEFAULT_RECTANGULAR_ACTIVE_ROWS_MIN_BUCKET_SIZE
     active_row_pad_multiple = _active_row_pad_multiple_for_pass()
+    compact_pair_flat_rows = parse_env_flag(_SPARSE_KCLASS_COMPACT_PAIR_FLAT_ROWS_ENV, default=False)
+    if compact_pair_flat_rows and not (
+        compact_adjoint_real_rows and native_dual_weighted_sums and fused_mstep_noise
+    ):
+        raise ValueError(
+            f"{_SPARSE_KCLASS_COMPACT_PAIR_FLAT_ROWS_ENV}=1 requires the real-rows adjoint "
+            f"({_SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS_ENV}), the native pair-sparse sums "
+            f"({_SPARSE_KCLASS_NATIVE_PAIR_SPARSE_SUMS_ENV}) and the fused M-step noise path"
+        )
     compact_pair_buckets = None
     compact_pair_report_buckets = None
     compact_pair_min_bucket_size = None
@@ -15567,6 +15739,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             flat_ctf_probs = None
             active_flat_rotations = None
             mstep_active_indices = None
+            flat_rows_precomputed = None
             mstep_active_mask = None
             mstep_active_count = 0
             summed_masked_noise_precomputed = None
@@ -15658,6 +15831,26 @@ def compute_k_class_pass2_stats_sparse_fused(
                 ):
                     compact_pair_noise_image_sum_precomputes += 1
                     if fused_mstep_noise:
+                        flat_rows_for_sums = None
+                        if compact_pair_flat_rows and bucket_adjoint_real_rows and mstep_active_indices is None:
+                            active_rows_t0 = time.time()
+                            mstep_active_indices, mstep_active_mask, mstep_active_count = (
+                                _real_flat_row_indices_from_actual_counts(
+                                    arrays["actual_counts"],
+                                    class_bucket_size,
+                                    pad_multiple=active_row_pad_multiple,
+                                )
+                            )
+                            _add_sparse_group_timing(
+                                group_timing, "mstep_active_row_sync", time.time() - active_rows_t0
+                            )
+                            if int(mstep_active_indices.size) > 0:
+                                _idx = np.asarray(mstep_active_indices, dtype=np.int64)
+                                flat_rows_for_sums = (
+                                    jnp.asarray((_idx // int(class_bucket_size)).astype(np.int32)),
+                                    jnp.asarray((_idx % int(class_bucket_size)).astype(np.int32)),
+                                    jnp.asarray(np.asarray(mstep_active_mask, dtype=bool)),
+                                )
                         (
                             summed,
                             summed_masked_noise_precomputed,
@@ -15681,7 +15874,13 @@ def compute_k_class_pass2_stats_sparse_fused(
                             n_rotation_rows=class_bucket_size,
                             shell_count=n_shells,
                             batch_size=batch,
+                            flat_rows=flat_rows_for_sums,
                         )
+                        if flat_rows_for_sums is not None:
+                            # summed / ctf_probs are already the masked flat real rows
+                            flat_rows_precomputed = (summed, ctf_probs)
+                            summed = None
+                            ctf_probs = None
                     else:
                         (
                             summed,
@@ -16038,6 +16237,15 @@ def compute_k_class_pass2_stats_sparse_fused(
 
             if active_rows_precomputed:
                 pass
+            elif flat_rows_precomputed is not None:
+                flat_summed, flat_ctf_probs = flat_rows_precomputed
+                active_flat_rotations = flat_backproject_rotations_by_class[class_index][
+                    jnp.asarray(mstep_active_indices, dtype=jnp.int32)
+                ]
+                active_flat_rows_chunked = False
+                compact_mstep_active_rows += int(mstep_active_count)
+                compact_mstep_padded_active_rows += int(mstep_active_indices.size)
+                compact_mstep_rectangular_rows += int(batch * class_bucket_size)
             elif bucket_uses_active_rows or bucket_adjoint_real_rows:
                 if mstep_active_indices is None:
                     active_rows_t0 = time.time()

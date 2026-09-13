@@ -18876,6 +18876,209 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Ret<ffi::AnyBuffer>()
         .Ret<ffi::AnyBuffer>());
 
+// Flat real-row form of the pair-sparse dual weighted sums: one output row per
+// listed (batch, rotation) pair instead of the padded [B, R, N] layout. At
+// 100k/256 K=4 about 71 % of the padded rows are padding (mean local rotation
+// count 559 in buckets of up to a few thousand rows), and the padded kernel spent
+// most of its threads and all of its output bandwidth on them. Each listed row
+// accumulates its pairs in the same order with the same fma as the padded
+// kernel, so out[f] is bit-identical to the padded output at (row_batch[f],
+// row_rotation[f]).
+template <typename T>
+__global__ void dual_weighted_sums_pairs_rows_f32_kernel(
+    const float* pair_probabilities,
+    const int32_t* pair_translations,
+    const int32_t* row_offsets,
+    const int32_t* row_batch,
+    const int32_t* row_rotation,
+    const vec2_t<T>* values,
+    vec2_t<T>* output,
+    int64_t batch_size,
+    int64_t rotation_count,
+    int64_t translation_count,
+    int64_t pair_count,
+    int64_t pixel_count,
+    int64_t row_count,
+    int64_t pixel_blocks)
+{
+    const int64_t flat_row = static_cast<int64_t>(blockIdx.x) / pixel_blocks;
+    const int64_t pixel =
+        (static_cast<int64_t>(blockIdx.x) % pixel_blocks) * blockDim.x + threadIdx.x;
+    if (flat_row >= row_count || pixel >= pixel_count) return;
+    const int64_t batch = row_batch[flat_row];
+    const int64_t rotation = row_rotation[flat_row];
+    T sum_real = static_cast<T>(0);
+    T sum_imag = static_cast<T>(0);
+    if (batch >= 0 && batch < batch_size && rotation >= 0 && rotation < rotation_count) {
+        const int64_t offset_base = batch * (rotation_count + 1) + rotation;
+        int64_t start = row_offsets[offset_base];
+        int64_t end = row_offsets[offset_base + 1];
+        if (start < 0) start = 0;
+        if (end > pair_count) end = pair_count;
+        const int64_t pair_base = batch * pair_count;
+        const int64_t value_base = batch * translation_count * pixel_count + pixel;
+        for (int64_t pair = start; pair < end; ++pair) {
+            const float weight = pair_probabilities[pair_base + pair];
+            if (weight == 0.0f) continue;
+            const int64_t translation = pair_translations[pair_base + pair];
+            if (translation < 0 || translation >= translation_count) continue;
+            const vec2_t<T> value = values[value_base + translation * pixel_count];
+            sum_real = dual_weighted_fma(weight, value.x, sum_real);
+            sum_imag = dual_weighted_fma(weight, value.y, sum_imag);
+        }
+    }
+    output[flat_row * pixel_count + pixel] = make_v2(sum_real, sum_imag);
+}
+
+template <typename T>
+cudaError_t launch_dual_weighted_sums_pairs_rows_f32(
+    cudaStream_t stream,
+    const float* pair_probabilities,
+    const int32_t* pair_translations,
+    const int32_t* row_offsets,
+    const int32_t* row_batch,
+    const int32_t* row_rotation,
+    const vec2_t<T>* first_values,
+    const vec2_t<T>* second_values,
+    vec2_t<T>* first_output,
+    vec2_t<T>* second_output,
+    int64_t batch_size,
+    int64_t rotation_count,
+    int64_t translation_count,
+    int64_t pair_count,
+    int64_t row_count,
+    int64_t first_pixel_count,
+    int64_t second_pixel_count)
+{
+    constexpr int threads = 256;
+    if (row_count <= 0) return cudaSuccess;
+    const int64_t first_pixel_blocks = (first_pixel_count + threads - 1) / threads;
+    const int64_t second_pixel_blocks = (second_pixel_count + threads - 1) / threads;
+    const int64_t first_blocks = row_count * first_pixel_blocks;
+    const int64_t second_blocks = row_count * second_pixel_blocks;
+    if (first_blocks > static_cast<int64_t>(std::numeric_limits<int>::max()) ||
+        second_blocks > static_cast<int64_t>(std::numeric_limits<int>::max()))
+        return cudaErrorInvalidConfiguration;
+    dual_weighted_sums_pairs_rows_f32_kernel<T><<<static_cast<int>(first_blocks), threads, 0, stream>>>(
+        pair_probabilities, pair_translations, row_offsets, row_batch, row_rotation,
+        first_values, first_output, batch_size, rotation_count, translation_count,
+        pair_count, first_pixel_count, row_count, first_pixel_blocks);
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) return err;
+    dual_weighted_sums_pairs_rows_f32_kernel<T><<<static_cast<int>(second_blocks), threads, 0, stream>>>(
+        pair_probabilities, pair_translations, row_offsets, row_batch, row_rotation,
+        second_values, second_output, batch_size, rotation_count, translation_count,
+        pair_count, second_pixel_count, row_count, second_pixel_blocks);
+    return cudaGetLastError();
+}
+
+ffi::Error DualWeightedSumsPairsRowsF32Impl(
+    cudaStream_t stream,
+    ffi::AnyBuffer pair_probabilities,
+    ffi::AnyBuffer pair_translations,
+    ffi::AnyBuffer row_offsets,
+    ffi::AnyBuffer row_batch,
+    ffi::AnyBuffer row_rotation,
+    ffi::AnyBuffer first_values,
+    ffi::AnyBuffer second_values,
+    ffi::Result<ffi::AnyBuffer> first_output,
+    ffi::Result<ffi::AnyBuffer> second_output)
+{
+    const auto value_type = first_values.element_type();
+    if (pair_probabilities.element_type() != ffi::DataType::F32 ||
+        pair_translations.element_type() != ffi::DataType::S32 ||
+        row_offsets.element_type() != ffi::DataType::S32 ||
+        row_batch.element_type() != ffi::DataType::S32 ||
+        row_rotation.element_type() != ffi::DataType::S32 ||
+        (value_type != ffi::DataType::C64 && value_type != ffi::DataType::C128) ||
+        second_values.element_type() != value_type ||
+        first_output->element_type() != value_type ||
+        second_output->element_type() != value_type)
+        return ffi::Error::InvalidArgument(
+            "DualWeightedSumsPairsRowsF32: expected F32 pair probabilities, S32 pair "
+            "translations, row offsets and row lists, and matching C64/C128 values/outputs");
+    const auto probability_dims = pair_probabilities.dimensions();
+    const auto translation_dims = pair_translations.dimensions();
+    const auto offset_dims = row_offsets.dimensions();
+    const auto row_batch_dims = row_batch.dimensions();
+    const auto row_rotation_dims = row_rotation.dimensions();
+    const auto first_dims = first_values.dimensions();
+    const auto second_dims = second_values.dimensions();
+    const auto first_output_dims = first_output->dimensions();
+    const auto second_output_dims = second_output->dimensions();
+    if (probability_dims.size() != 2 || translation_dims.size() != 2 ||
+        offset_dims.size() != 2 || row_batch_dims.size() != 1 || row_rotation_dims.size() != 1 ||
+        first_dims.size() != 3 || second_dims.size() != 3 ||
+        first_output_dims.size() != 2 || second_output_dims.size() != 2 ||
+        probability_dims[0] <= 0 || probability_dims[1] <= 0 ||
+        translation_dims[0] != probability_dims[0] ||
+        translation_dims[1] != probability_dims[1] ||
+        offset_dims[0] != probability_dims[0] || offset_dims[1] < 2 ||
+        row_rotation_dims[0] != row_batch_dims[0] ||
+        first_dims[0] != probability_dims[0] || second_dims[0] != probability_dims[0] ||
+        first_dims[1] != second_dims[1] || first_dims[1] <= 0 ||
+        first_dims[2] <= 0 || second_dims[2] <= 0 ||
+        first_output_dims[0] != row_batch_dims[0] ||
+        first_output_dims[1] != first_dims[2] ||
+        second_output_dims[0] != row_batch_dims[0] ||
+        second_output_dims[1] != second_dims[2])
+        return ffi::Error::InvalidArgument(
+            "DualWeightedSumsPairsRowsF32: inconsistent [B,P], [B,R+1], [F], [B,T,N] and [F,N] shapes");
+    const int64_t batch_size = probability_dims[0];
+    const int64_t pair_count = probability_dims[1];
+    const int64_t rotation_count = offset_dims[1] - 1;
+    const int64_t translation_count = first_dims[1];
+    const int64_t row_count = row_batch_dims[0];
+    cudaError_t err;
+    if (value_type == ffi::DataType::C64) {
+        err = launch_dual_weighted_sums_pairs_rows_f32<float>(
+            stream,
+            static_cast<const float*>(pair_probabilities.untyped_data()),
+            static_cast<const int32_t*>(pair_translations.untyped_data()),
+            static_cast<const int32_t*>(row_offsets.untyped_data()),
+            static_cast<const int32_t*>(row_batch.untyped_data()),
+            static_cast<const int32_t*>(row_rotation.untyped_data()),
+            reinterpret_cast<const float2*>(first_values.untyped_data()),
+            reinterpret_cast<const float2*>(second_values.untyped_data()),
+            reinterpret_cast<float2*>(first_output->untyped_data()),
+            reinterpret_cast<float2*>(second_output->untyped_data()),
+            batch_size, rotation_count, translation_count, pair_count, row_count,
+            first_dims[2], second_dims[2]);
+    } else {
+        err = launch_dual_weighted_sums_pairs_rows_f32<double>(
+            stream,
+            static_cast<const float*>(pair_probabilities.untyped_data()),
+            static_cast<const int32_t*>(pair_translations.untyped_data()),
+            static_cast<const int32_t*>(row_offsets.untyped_data()),
+            static_cast<const int32_t*>(row_batch.untyped_data()),
+            static_cast<const int32_t*>(row_rotation.untyped_data()),
+            reinterpret_cast<const double2*>(first_values.untyped_data()),
+            reinterpret_cast<const double2*>(second_values.untyped_data()),
+            reinterpret_cast<double2*>(first_output->untyped_data()),
+            reinterpret_cast<double2*>(second_output->untyped_data()),
+            batch_size, rotation_count, translation_count, pair_count, row_count,
+            first_dims[2], second_dims[2]);
+    }
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    DualWeightedSumsPairsRowsF32, DualWeightedSumsPairsRowsF32Impl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Arg<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>()
+        .Ret<ffi::AnyBuffer>());
+
+
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     ProjectIndexed, ProjectIndexedImpl,
     ffi::Ffi::Bind()
