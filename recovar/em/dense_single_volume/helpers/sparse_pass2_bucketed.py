@@ -253,6 +253,7 @@ _SPARSE_KCLASS_COMPACT_PAIRS_THRESHOLD_REPORT_ENV = (
     "RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_THRESHOLD_REPORT"
 )
 _SPARSE_KCLASS_GROUP_TIMING_ENV = "RECOVAR_SPARSE_KCLASS_GROUP_TIMING"
+_SPARSE_KCLASS_GROUP_TIMING_SYNC_ENV = "RECOVAR_SPARSE_KCLASS_GROUP_TIMING_SYNC"
 _SPARSE_KCLASS_EXECUTION_SIGNATURES_ENV = (
     "RECOVAR_SPARSE_KCLASS_EXECUTION_SIGNATURES"
 )
@@ -2128,9 +2129,38 @@ def _compact_pair_hybrid_threshold_reports(
     return reports
 
 
+_GROUP_TIMING_SYNC_STATE: dict[str, object] = {}
+
+
+def _group_timing_device_barrier_s() -> float:
+    """Wait for every computation dispatched so far; return the wait in seconds.
+
+    Diagnostic only (``RECOVAR_SPARSE_KCLASS_GROUP_TIMING_SYNC=1``). JAX
+    dispatches asynchronously, so a host-side stage timer otherwise charges
+    the GPU work of one stage to whichever later stage first pulls a value.
+    XLA:GPU executes on one compute stream per device, so blocking on a tiny
+    computation enqueued now waits for everything enqueued before it.
+    """
+    enabled = _GROUP_TIMING_SYNC_STATE.get("enabled")
+    if enabled is None:
+        enabled = parse_env_flag(_SPARSE_KCLASS_GROUP_TIMING_SYNC_ENV, default=False)
+        _GROUP_TIMING_SYNC_STATE["enabled"] = enabled
+    if not enabled:
+        return 0.0
+    token = _GROUP_TIMING_SYNC_STATE.get("token")
+    if token is None:
+        token = jnp.asarray(0.0, dtype=jnp.float32)
+        _GROUP_TIMING_SYNC_STATE["token"] = token
+    t0 = time.time()
+    (token + jnp.float32(1.0)).block_until_ready()
+    return time.time() - t0
+
+
 def _add_sparse_group_timing(group_timing: dict[str, float] | None, key: str, elapsed_s: float) -> None:
     if group_timing is None:
         return
+    # With the sync knob the stage also absorbs the GPU work it dispatched.
+    elapsed_s = float(elapsed_s) + _group_timing_device_barrier_s()
     group_timing[key] = group_timing.get(key, 0.0) + float(elapsed_s)
 
 
