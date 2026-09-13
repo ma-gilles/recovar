@@ -284,6 +284,20 @@ this page does not schedule or authorize duplicate runs.
 
 ## Next action and efficient execution
 
+The user retained the fused compact-pair scoring route. It is integrated at
+`6458ee41d` into the sparse scoring owner, without a new experimental switch.
+Supported float32 GPU compact pairs use the fused kernel; CPU and diagnostic
+double routes retain their existing implementations. Masked pairs return positive
+infinity and the CUDA kernel groups 16 independent pairs per block. The scorer
+matches the gathered CUDA reference bitwise; its known few-ULP differences from
+the JAX emulation remain a numerical-policy distinction, not strict parity.
+191 CPU tests passed; the one CUDA-only skip was covered by frozen H100 job
+**13826292**, which passed all 16 GPU cases without skips in 20 seconds. Tests
+cover partial groups, masking, posterior ties, runtime compilation and the compact
+versus rectangular x-half path. Source, harness and loaded library were verified
+([GPU receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/compact_fused_scoring_integration_20260913/gpu_terminal_review.json)).
+This qualifies the focused checks only; full trajectories and matched speed remain open.
+
 The tiny dtype-repair CUDA guard is complete on its frozen source. Continue
 strict K1 state closure and the existing peer attribution jobs before advancing
 the scientific ladder in the coordination queue. Do not restart completed checks
