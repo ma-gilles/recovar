@@ -83,5 +83,12 @@ def test_pair_sparse_native_sums_match_dense_native_bitwise(monkeypatch, custom_
     for name, a, b in zip(names, dense, sparse):
         a = np.asarray(a); b = np.asarray(b)
         assert a.shape == b.shape and a.dtype == b.dtype, name
-        np.testing.assert_array_equal(a.view(np.uint8), b.view(np.uint8), err_msg=name)
+        if name in ("summed", "summed_image"):
+            # The claim: the pair-sparse kernel reproduces the dense kernel exactly.
+            np.testing.assert_array_equal(a.view(np.uint8), b.view(np.uint8), err_msg=name)
+        else:
+            # These come from the same dense-table reductions in both variants, but
+            # XLA fuses them differently once the consumer graph changes, which on
+            # H100 moved ctf_probs by 1-2 float32 ULP (job 13806345). Bound, not pin.
+            np.testing.assert_allclose(b, a, rtol=8 * np.finfo(np.float32).eps, atol=0.0, err_msg=name)
     assert np.asarray(sparse[0]).shape == (batch, n_rows, n_recon)
