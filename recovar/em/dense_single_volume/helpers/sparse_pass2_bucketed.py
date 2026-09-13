@@ -5357,6 +5357,21 @@ def _relion_cuda_fine_log_evidence_offset(min_diff2):
 
 
 _SPARSE_KCLASS_DEVICE_CHUNK_SCALARS_ENV = "RECOVAR_SPARSE_KCLASS_DEVICE_CHUNK_SCALARS"
+_SPARSE_KCLASS_VECTORIZED_STATS_REPLAY_ENV = "RECOVAR_SPARSE_KCLASS_VECTORIZED_STATS_REPLAY"
+
+
+def vectorized_stats_replay_enabled() -> bool:
+    """Write the per-image statistics of a class-chunk with array operations.
+
+    ``_apply_stats_host`` otherwise loops over the chunk's images in Python
+    (scalar float64 adds, per-image np.add.at); at 100k/256 K=4 the deferred
+    replay took 18 s per iteration (jobs 13832892/13834297).  The vectorized
+    form performs the same float64 operations elementwise and one
+    ``np.add.at`` over the concatenated per-image coarse indices, which numpy
+    applies sequentially in the same order, so every statistic is identical.
+    """
+
+    return parse_env_flag(_SPARSE_KCLASS_VECTORIZED_STATS_REPLAY_ENV, default=False)
 
 
 def device_chunk_scalars_enabled() -> bool:
@@ -14322,6 +14337,7 @@ def compute_k_class_pass2_stats_sparse_fused(
     # diverge, so a real-size failure of the deferral can be localized on the run itself.
     defer_host_stats_check = _defer_token == "check"
     defer_host_stats = _defer_token in {"1", "check"}
+    vectorized_stats_replay = vectorized_stats_replay_enabled()
     _depth = parse_env_nonnegative_int(_SPARSE_KCLASS_PIPELINE_DEPTH_ENV)
     pipeline_depth = 4 if _depth is None else int(_depth)
     buckets_in_flight = 0
@@ -14502,6 +14518,50 @@ def compute_k_class_pass2_stats_sparse_fused(
         )
         class_log_z_np = np.asarray(class_log_z_host, dtype=np.float64)
         probs_sum_t = np.asarray(probs_sum_t_host, dtype=np.float64)
+        if vectorized_stats_replay:
+            n_real = int(n_real_images)
+            img = np.asarray(image_indices[:n_real], dtype=np.int64)
+            per_image_inputs = per_image_inputs_by_class[class_index]
+            fine_rot = best_fine_rot_idx[:n_real].astype(np.int64)
+            trans = best_trans_idx[:n_real].astype(np.int64)
+            rot_local = best_rot_idx[:n_real].astype(np.int64)
+            class_hard_assignments[class_index, img] = fine_rot * n_fine_trans + trans
+            rotation_table = per_image_inputs.get("rotation_table") if isinstance(per_image_inputs, dict) else None
+            if rotation_table is not None:
+                best_rotations[class_index][img] = np.asarray(rotation_table)[fine_rot]
+            else:
+                for row, image_idx in enumerate(img.tolist()):
+                    best_rotations[class_index][image_idx] = per_image_inputs["oversampled_rots"][image_idx][int(rot_local[row])]
+            if best_eulers is not None:
+                for row, image_idx in enumerate(img.tolist()):
+                    best_eulers[class_index][image_idx] = per_image_inputs["source_eulers"][image_idx][int(rot_local[row])]
+            best_rotation_indices[class_index][img] = fine_rot
+            finite_z = np.isfinite(class_log_z_np[:n_real])
+            evidence = class_log_z_np[:n_real] + log_score_offset[:n_real]
+            class_log_evidence[class_index, img] = np.where(finite_z, evidence, -np.inf)
+            class_score_log_z[class_index, img] = np.where(
+                finite_z, evidence if use_exact_relion_gaussian else class_log_z_np[:n_real], -np.inf
+            )
+            best_log_score[class_index, img] = best_log_score_np[:n_real] + log_score_offset[:n_real]
+            max_posterior[class_index, img] = max_posterior_np[:n_real]
+            counts = actual_counts_arr[:n_real]
+            active = np.flatnonzero(counts > 0)
+            if active.size:
+                coarse_parts = []
+                prob_parts = []
+                for row in active.tolist():
+                    image_idx = int(img[row])
+                    cnt = int(counts[row])
+                    coarse_parts.append(
+                        per_image_inputs["unique_rot"][image_idx][per_image_inputs["parent_map"][image_idx]]
+                    )
+                    prob_parts.append(probs_sum_t[row, :cnt])
+                np.add.at(
+                    rotation_posterior_sums[class_index],
+                    np.concatenate(coarse_parts).astype(np.int64, copy=False),
+                    np.concatenate(prob_parts),
+                )
+            return
         for row, image_idx in enumerate(image_indices[:n_real_images].tolist()):
             r = int(best_rot_idx[row])
             t = int(best_trans_idx[row])

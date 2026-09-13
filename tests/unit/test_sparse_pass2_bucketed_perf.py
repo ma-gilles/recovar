@@ -10502,6 +10502,7 @@ def test_device_bucket_rotations_are_bit_identical(monkeypatch, noise_mode, defe
         "RECOVAR_SPARSE_KCLASS_DEVICE_CHUNK_SCALARS",
         "RECOVAR_SPARSE_KCLASS_ROTATIONS_BY_INDEX",
         "RECOVAR_SPARSE_KCLASS_RESIDENT_HYPOTHESIS_TABLES",
+        "RECOVAR_SPARSE_KCLASS_VECTORIZED_STATS_REPLAY",
     ],
 )
 def test_host_marshalling_flags_are_bit_identical(monkeypatch, flag_env, defer_flag):
