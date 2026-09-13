@@ -10640,6 +10640,7 @@ def build_device_chunk_scalars_gpu_fixture():
         "RECOVAR_SPARSE_KCLASS_ROTATIONS_BY_INDEX",
         "RECOVAR_SPARSE_KCLASS_RESIDENT_HYPOTHESIS_TABLES",
         "RECOVAR_SPARSE_KCLASS_VECTORIZED_STATS_REPLAY",
+        "RECOVAR_SPARSE_KCLASS_DEVICE_ACTIVE_ROW_INDICES",
     ],
 )
 def test_host_marshalling_flags_are_bit_identical(monkeypatch, flag_env, defer_flag, fused_noise):
@@ -10969,3 +10970,31 @@ def test_pair_bucket_quantum_coarsens_widths_without_changing_results(monkeypatc
     assert coarse_sizes != base_sizes or all(v <= 16 for v in base_sizes)
     assert all(v % 7 == 0 or v <= 16 for v in coarse_sizes)
     _assert_fused_arrays_identical(base, coarse, "pair bucket quantum")
+
+
+@pytest.mark.parametrize("case", [([2, 0, 3], 4, 1), ([2, 0, 3], 4, 4), ([5, 5, 5], 8, 5), ([0, 0], 4, 1), ([7], 8, 3)])
+def test_device_active_flat_row_indices_match_the_host_build(monkeypatch, case):
+    """RECOVAR_SPARSE_KCLASS_DEVICE_ACTIVE_ROW_INDICES builds the same index vector and
+    mask on the device: the real prefix is element-for-element identical, the padded tail
+    is masked to exactly zero and its indices stay in range, and the count is unchanged."""
+    jax = pytest.importorskip("jax")
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    counts, rows, pad_multiple = case
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_DEVICE_ACTIVE_ROW_INDICES", "0")
+    host_idx, host_mask, host_count = bucketed_mod._real_flat_row_indices_from_actual_counts(
+        counts, rows, pad_multiple=pad_multiple)
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_DEVICE_ACTIVE_ROW_INDICES", "1")
+    with jax.default_device(jax.devices("cpu")[0]):
+        dev_idx, dev_mask, dev_count = bucketed_mod._real_flat_row_indices_from_actual_counts(
+            counts, rows, pad_multiple=pad_multiple)
+        dev_idx = np.asarray(dev_idx); dev_mask = np.asarray(dev_mask)
+    assert dev_count == host_count
+    if host_count == 0:
+        assert dev_idx.size == 0 or dev_mask.sum() == 0
+        return
+    assert dev_idx.shape == host_idx.shape and dev_mask.shape == host_mask.shape
+    assert dev_idx.dtype == host_idx.dtype and dev_mask.dtype == host_mask.dtype
+    np.testing.assert_array_equal(dev_idx[:host_count], host_idx[:host_count])
+    np.testing.assert_array_equal(dev_mask, host_mask)
+    assert dev_idx.min() >= 0 and dev_idx.max() < len(counts) * rows

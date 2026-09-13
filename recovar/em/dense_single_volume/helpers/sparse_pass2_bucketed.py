@@ -7104,6 +7104,48 @@ def _active_flat_row_indices_from_probs_sum_t(
     return padded_indices, active_mask, active_count
 
 
+_SPARSE_KCLASS_DEVICE_ACTIVE_ROW_INDICES_ENV = "RECOVAR_SPARSE_KCLASS_DEVICE_ACTIVE_ROW_INDICES"
+
+
+def device_active_row_indices_enabled() -> bool:
+    """Build the active flat-row index vector and mask on the device.
+
+    They are a pure function of the bucket's per-image row counts, which are small
+    host metadata, but the host materialised both ``(active rows,)`` arrays and
+    uploaded them for every selection call: ~17 s of an iteration at 100k/256 K=4
+    (job 13838987 stack samples, ``_select_active_flat_rows`` /
+    ``_select_active_flat_values``). Returning device arrays from the builder makes
+    the later ``jnp.asarray`` calls no-ops, so no call site changes.
+    """
+
+    return parse_env_flag(_SPARSE_KCLASS_DEVICE_ACTIVE_ROW_INDICES_ENV, default=False)
+
+
+@partial(jax.jit, static_argnames=("n_rotation_rows", "padded_count"))
+def _active_flat_row_indices_device(counts, *, n_rotation_rows: int, padded_count: int):
+    """``(padded_count,)`` flat row indices and float32 mask from per-image counts.
+
+    Equals the host construction element for element: image ``b`` contributes its
+    ``counts[b]`` rows ``b * n_rotation_rows + j`` in order, images with zero count
+    contribute nothing (``searchsorted`` on the inclusive prefix ends skips them),
+    and the padded tail is masked to zero. The padded slots' indices are clamped
+    in range; their gathered values are multiplied by a zero mask exactly as the
+    host path's repeated first index is.
+    """
+
+    counts = counts.astype(jnp.int32)
+    ends = jnp.cumsum(counts, dtype=jnp.int32)
+    starts = ends - counts
+    slots = jnp.arange(padded_count, dtype=jnp.int32)
+    row = jnp.minimum(jnp.searchsorted(ends, slots, side="right"), counts.shape[0] - 1)
+    flat = jnp.clip(
+        row * jnp.int32(n_rotation_rows) + (slots - starts[row]),
+        0,
+        counts.shape[0] * n_rotation_rows - 1,
+    )
+    return flat, (slots < ends[-1]).astype(jnp.float32)
+
+
 def _real_flat_row_indices_from_actual_counts(
     actual_counts,
     n_rotation_rows: int,
@@ -7146,6 +7188,13 @@ def _real_flat_row_indices_from_actual_counts(
         if pow2_count <= padded_count + padded_count // 8:
             padded_count = pow2_count
     padded_count = min(int(counts.size) * n_rotation_rows, padded_count)
+    if device_active_row_indices_enabled():
+        device_indices, device_mask = _active_flat_row_indices_device(
+            jnp.asarray(counts.astype(np.int32, copy=False)),
+            n_rotation_rows=n_rotation_rows,
+            padded_count=int(max(padded_count, total)),
+        )
+        return device_indices, device_mask, total
     if padded_count <= total:
         return real_indices, np.ones((total,), dtype=np.float32), total
     padded_indices = np.empty((padded_count,), dtype=np.int32)
