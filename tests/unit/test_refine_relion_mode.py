@@ -19,7 +19,6 @@ import pytest
 pytest.importorskip("jax")
 import healpy as hp
 import jax.numpy as jnp
-from recovar.em.local.local_search_iteration import _LocalSearchIterationResult
 
 import recovar.core.fourier_transform_utils as ftu
 import recovar.em.diagnostics.relion_replay as relion_replay_module
@@ -155,6 +154,7 @@ from recovar.em.local.local_score_pass import (
     score_local_bucket,
     score_local_bucket_abs2_weighted_on_demand,
 )
+from recovar.em.local.local_search_iteration import _LocalSearchIterationResult
 from recovar.em.refinement import finalization_policy
 from recovar.em.refinement import mean_helpers as mean_helpers_module
 from recovar.em.refinement.iteration_loop import (
@@ -165,6 +165,8 @@ from recovar.em.refinement.iteration_loop import (
 from recovar.em.refinement.mean_helpers import (
     _align_fourier_volume_sign_to_reference,
     _combined_class_direction_prior_from_halves,
+)
+from recovar.em.refinement.noise_updates import (
     _combined_noise_stats,
 )
 from recovar.em.refinement.refinement_options import (

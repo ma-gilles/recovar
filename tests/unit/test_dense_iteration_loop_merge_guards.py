@@ -14,17 +14,17 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-import recovar.em.local.local_search_iteration as local_search_iteration
-from recovar.em.local.local_search_iteration import _LocalSearchIterationResult
 
+import recovar.em.local.local_search_iteration as local_search_iteration
 import recovar.em.refinement.iteration_loop as iteration_loop
 from recovar.em.dense import half_scoring, score_outputs, scoring_policy
 from recovar.em.diagnostics import local_debug, relion_replay
 from recovar.em.diagnostics import reconstruction as reconstruction_diagnostics
 from recovar.em.helpers import orientation_priors
 from recovar.em.helpers.convergence import _native_final_perturbation_healpix_order
+from recovar.em.local.local_search_iteration import _LocalSearchIterationResult
 from recovar.em.ppca_refinement import ppca_bridge
-from recovar.em.refinement import finalization_policy, mean_helpers
+from recovar.em.refinement import finalization_policy, mean_helpers, noise_updates
 from recovar.em.relion import relion_worker_scale
 from recovar.em.vdam.iteration_loop import run_vdam_iterations
 
@@ -915,7 +915,7 @@ def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
     assert callable(local_search_iteration.run_local_em_exact)
     assert callable(local_search_iteration.run_local_k_class_em)
     assert callable(mean_helpers._align_fourier_volume_sign_to_reference)
-    assert callable(mean_helpers._combined_noise_stats)
+    assert callable(noise_updates._combined_noise_stats)
     assert callable(relion_replay._replay_control_model_iteration)
     # The numbered optimiser accuracy override belongs to the replay owner.
     assert callable(relion_replay.read_relion_optimiser_metadata)

@@ -147,12 +147,9 @@ from recovar.em.refinement.mean_helpers import (
     _class_tau2_update_details,
     _class_weights_from_posterior,
     _initialize_class_log_priors,
-    _mean_noise_variance,
     _mean_variance_for_scoring_half,
     _merged_mean_from_halves,
-    _noise_radial_history,
     _normalize_initial_means,
-    _normalize_noise_variance_per_half,
     _reconstruct_and_postprocess_means,
     _reconstruct_volume_eager,
     _relion_optimizer_average_pmax,
@@ -164,6 +161,11 @@ from recovar.em.refinement.mean_helpers import (
     prepare_initial_mean_variance,
     update_c1_sigma_offset_from_posterior,
     update_learned_direction_priors,
+)
+from recovar.em.refinement.noise_updates import (
+    _mean_noise_variance,
+    _noise_radial_history,
+    _normalize_noise_variance_per_half,
     update_posterior_noise_variance,
 )
 from recovar.em.refinement.projector_preparation import (

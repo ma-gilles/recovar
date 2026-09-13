@@ -668,7 +668,7 @@ not trigger these checks. `helpers/iteration_history.py` owns the per-iteration
 history lists and their established result-dictionary keys. Its noise/tau2 recorder
 also owns host diagnostic formatting: it prepares all float64 shell fields
 before appending, retains aliases to existing float64 shell arrays, and stacks
-the halves into a fresh array. `mean_helpers._noise_radial_history` constructs
+the halves into a fresh array. `noise_updates._noise_radial_history` constructs
 the radial history used by initialization and replay; pixel-noise normalization
 and estimation remain with their callers. The controller
 still chooses when each snapshot is recorded.
@@ -741,3 +741,8 @@ rotation-only alignment API and result type. The reporting CLI
 new fitter or applies a saved transform without fitting. [The reporting guide](gt_reporting.md)
 explains geometry, common-frame comparisons and limitations. These are diagnostic
 reporting tools; E/M execution, precision and quality gates are independent.
+
+Noise initialization, half-set aggregation and posterior updates live in
+[`refinement/noise_updates.py`](../../recovar/em/refinement/noise_updates.py).
+The refinement controller and replay diagnostics import that owner directly;
+volume reconstruction remains in `refinement/mean_helpers.py`.

@@ -25,7 +25,7 @@ from recovar.em.helpers.orientation_priors import (
     normalize_direction_prior_per_half,
     remap_half_direction_prior_to_healpix_order,
 )
-from recovar.em.refinement.mean_helpers import (
+from recovar.em.refinement.noise_updates import (
     _mean_noise_variance,
     _noise_radial_history,
     _normalize_noise_variance_per_half,
