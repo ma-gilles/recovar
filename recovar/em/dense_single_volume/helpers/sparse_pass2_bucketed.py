@@ -4100,8 +4100,14 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
     prob_dtype=np.float64,
     max_prepare_images_per_microbatch: int | None = None,
     rotation_block_size_for_quantization: int,
+    skip_diff2_gather_budget: bool = False,
 ):
-    """Split compact-pair execution buckets by gather/prep/dense-M-step memory."""
+    """Split compact-pair execution buckets by gather/prep/dense-M-step memory.
+
+    ``skip_diff2_gather_budget`` drops the ``(B, P, N)`` diff2-gather term from
+    the per-image footprint; the fused translate route never allocates it, so
+    its chunks are bounded by the projection rows and the M-step only.
+    """
 
     group_by_rotation_signature = parse_env_flag(
         _SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE_ENV,
@@ -4255,10 +4261,11 @@ def _split_compact_pair_buckets_by_projection_gather_budget(
             image_byte_budget = _tighten(image_byte_budget, max(1, max_gather_bytes // per_image_bytes))
             # The diff2 gather is the tensor that actually exhausts memory when the
             # image axis is padded; bound the capacity budget by it as well.
-            diff2_bytes = _compact_pair_diff2_gather_bytes_per_image(
-                bucket["pair_bucket_size"], n_score_pixels, projection_complex_dtype
-            )
-            image_byte_budget = _tighten(image_byte_budget, max(1, max_gather_bytes // diff2_bytes))
+            if not skip_diff2_gather_budget:
+                diff2_bytes = _compact_pair_diff2_gather_bytes_per_image(
+                    bucket["pair_bucket_size"], n_score_pixels, projection_complex_dtype
+                )
+                image_byte_budget = _tighten(image_byte_budget, max(1, max_gather_bytes // diff2_bytes))
         if max_dense_mstep_bytes is not None:
             dense_bytes_per_image = max(1, int(max_class_bucket_size) * n_fine_trans_int * prob_item_bytes)
             if not single_image_bucket:
@@ -13032,6 +13039,31 @@ def compute_k_class_pass2_stats_sparse_fused(
     compact_plan_t0 = time.time()
     compact_pair_plan_stats = None
     compact_pair_threshold_reports = []
+    # Resolved before the chunk splitter: the fused route has no pair gathers,
+    # so its chunks must not be tightened by the diff2 gather footprint.
+    relion_score_translation_angles = (
+        _relion_cuda_score_translation_angles_if_available(
+            fine_translations,
+            image_shape,
+            enabled=use_exact_relion_gaussian,
+            dtype=np.float64 if use_float64_scoring else np.float32,
+        )
+    )
+    fused_translate_current_size = (
+        int(image_shape[0]) if current_size is None else int(current_size)
+    )
+    use_compact_fused_translate_scoring = _compact_fused_translate_scoring_enabled(
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        use_float64_scoring=use_float64_scoring,
+        relion_score_translation_angles=relion_score_translation_angles,
+        current_size=fused_translate_current_size,
+    )
+    if use_compact_fused_translate_scoring:
+        logger.info(
+            "sparse K-class compact pairs: fused translate diff2 kernel enabled "
+            "(current_size=%d)",
+            fused_translate_current_size,
+        )
     (
         compact_pair_tail_coalesce_max_images,
         compact_pair_tail_coalesce_max_inflation,
@@ -13121,6 +13153,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                 compact_pair_max_images_per_microbatch=compact_pair_max_images_per_microbatch,
             ),
             rotation_block_size_for_quantization=rotation_block_size_for_quantization,
+            skip_diff2_gather_budget=use_compact_fused_translate_scoring,
         )
     else:
         compact_pair_plan_stats = _maybe_prepare_sparse_k_class_compact_pair_plan(
@@ -13588,29 +13621,6 @@ def compute_k_class_pass2_stats_sparse_fused(
             for bucket in buckets
         ]
     _validate_k_class_execution_bucket_partition(execution_buckets, n_images=n_images)
-    relion_score_translation_angles = (
-        _relion_cuda_score_translation_angles_if_available(
-            fine_translations,
-            image_shape,
-            enabled=use_exact_relion_gaussian,
-            dtype=np.float64 if use_float64_scoring else np.float32,
-        )
-    )
-    fused_translate_current_size = (
-        int(image_shape[0]) if current_size is None else int(current_size)
-    )
-    use_compact_fused_translate_scoring = _compact_fused_translate_scoring_enabled(
-        use_exact_relion_gaussian=use_exact_relion_gaussian,
-        use_float64_scoring=use_float64_scoring,
-        relion_score_translation_angles=relion_score_translation_angles,
-        current_size=fused_translate_current_size,
-    )
-    if use_compact_fused_translate_scoring:
-        logger.info(
-            "sparse K-class compact pairs: fused translate diff2 kernel enabled "
-            "(current_size=%d)",
-            fused_translate_current_size,
-        )
     translation_phases_half = None if windowed_prepare else half_translation_phase_table(fine_translations, image_shape)
     score_translation_phases = None
     recon_translation_phases = None

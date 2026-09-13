@@ -15,16 +15,26 @@ import pytest
 from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as spb
 
 
-def _compact_window(image_shape, current_size, *, include_nyquist_row):
-    """Half-layout pixels of the full image inside the current-size crop."""
+def _compact_window(image_shape, current_size):
+    """Half-layout pixels of the current-size crop, in production row order.
+
+    ``_relion_half_layout_mask`` keeps rows ``ky = -(cs/2 - 1) .. cs/2``: the
+    FFTW row ``cs/2`` is the positive Nyquist frequency, which is what both
+    RELION's fine kernel (``y > maxR`` wrap, ``maxR = cs/2``) and the fused
+    kernel use for the translation phase. The ``ky = -cs/2`` row is never in
+    a production window; with it the two conventions would disagree.
+    """
     n_rows, n_cols = image_shape
     half_width = n_cols // 2 + 1
     flat = np.arange(n_rows * half_width)
     ky = flat // half_width - n_rows // 2
     kx = flat % half_width
-    low = -(current_size // 2) if include_nyquist_row else -(current_size // 2) + 1
-    keep = (ky >= low) & (ky < current_size // 2) & (kx < current_size // 2 + 1)
+    keep = (ky >= -(current_size // 2) + 1) & (ky <= current_size // 2) & (kx <= current_size // 2)
     return flat[keep].astype(np.int32)
+
+
+def _ulp_distance(a, b):
+    return np.abs(a.view(np.int32).astype(np.int64) - b.view(np.int32).astype(np.int64))
 
 
 def test_fused_translate_route_is_off_by_default_and_fails_closed(monkeypatch):
@@ -66,27 +76,36 @@ def test_fused_translate_route_is_off_by_default_and_fails_closed(monkeypatch):
 
 
 @pytest.mark.gpu
-@pytest.mark.parametrize("include_nyquist_row", [False, True])
-def test_fused_translate_compact_pairs_match_gathered_path_bitwise(
+@pytest.mark.parametrize("translation_mode", ["zero", "random"])
+def test_fused_translate_compact_pairs_match_gathered_path(
     monkeypatch,
     custom_cuda_lib,
     gpu_device,
-    include_nyquist_row,
+    translation_mode,
 ):
+    """Fused route == FFI pairs kernel bitwise; <= 1 ULP from the JAX emulation.
+
+    The pure-JAX 256-lane emulation used by the gathered path when
+    ``RECOVAR_RELION_FINE_DIFF2_FUSED_FFI`` is off differs from the CUDA
+    kernels by one binary32 ULP on a minority of pairs even with zero
+    translations, so the kernel, not the emulation, is the bitwise reference.
+    """
     import recovar.cuda_backproject as cuda_backproject
 
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
     monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
-    rng = np.random.default_rng(20260912 + int(include_nyquist_row))
+    rng = np.random.default_rng(20260912 + (translation_mode == "random"))
     image_shape = (32, 32)
     current_size = 24
-    window = _compact_window(
-        image_shape, current_size, include_nyquist_row=include_nyquist_row
-    )
+    window = _compact_window(image_shape, current_size)
     n_pixels = int(window.size)
-    batch, n_rows, n_trans, n_pairs = 3, 5, 4, 9
-    fine_translations = rng.uniform(-2.5, 2.5, (n_trans, 2))
+    batch, n_rows, n_trans, n_pairs = 4, 6, 5, 64
+    fine_translations = (
+        np.zeros((n_trans, 2))
+        if translation_mode == "zero"
+        else rng.uniform(-2.5, 2.5, (n_trans, 2))
+    )
     angles = spb._relion_cuda_score_translation_angles_if_available(
         fine_translations, image_shape, enabled=True, dtype=np.float32
     )
@@ -138,7 +157,6 @@ def test_fused_translate_compact_pairs_match_gathered_path_bitwise(
     fused = np.asarray(fused)
     assert fused.dtype == np.float32 and fused.shape == (batch, n_pairs)
     assert np.all(np.isfinite(fused))
-    np.testing.assert_array_equal(
-        gathered_ffi.view(np.uint32), gathered_jax.view(np.uint32)
-    )
-    np.testing.assert_array_equal(fused.view(np.uint32), gathered_jax.view(np.uint32))
+    np.testing.assert_array_equal(fused.view(np.uint32), gathered_ffi.view(np.uint32))
+    assert int(_ulp_distance(fused, gathered_jax).max()) <= 1
+    assert int(_ulp_distance(gathered_ffi, gathered_jax).max()) <= 1
