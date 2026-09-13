@@ -287,10 +287,12 @@ this page does not schedule or authorize duplicate runs.
 The tiny dtype-repair CUDA guard is complete on its frozen source. Continue
 strict K1 state closure and the existing peer attribution jobs before advancing
 the scientific ladder in the coordination queue. Do not restart completed checks
-or duplicate live candidates. The latest VDAM size check still fails at 8622 > 6100 lines; moving code into
-another owner does not remove it from the budget.
+or duplicate live candidates. The user approved replacing the historical VDAM
+size cap after the growth audit. The [responsibility budgets](codebase.md#vdam-code-budgets)
+count 8,626 lines against 8,850 combined, including all shared extractions.
+This budget revision does not close the remaining cleanup or scientific gates.
 The unreachable VDAM fine-prior fallback was removed with 223 focused tests
-passing and 75 unchanged routing comparisons; the size gate remains open
+passing and 75 unchanged routing comparisons
 ([cleanup receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_dead_prior_fallback_20260913/result.json)).
 The bounded v6 native capture passed live rank/library and closed-payload checks.
 The subsequent six-call rectangular scorer check passed on those captured inputs,

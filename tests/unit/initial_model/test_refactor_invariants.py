@@ -6,7 +6,7 @@ Pins the work landed on ``claude/refactor-initial-model``:
 - Single source of truth for ``_relion_round`` (was duplicated in iteration_loop).
 - Pure-function outputs (schedules, init, layout) are byte-identical.
 - Dead code paths deleted during refactor stay deleted (no zombie wrappers).
-- Total package LOC stays at most ~6 kLOC (preserves ≥half of the −2119 LOC cut).
+- Reviewed responsibility budgets count every VDAM module and extracted owner.
 
 Run: ``pixi run python -m pytest tests/unit/initial_model/test_refactor_invariants.py -v``
 """
@@ -354,83 +354,69 @@ def test_bootstrap_iref_pure_python_fallback_stays_deleted():
 
 
 # ---------------------------------------------------------------------------
-# 7. LOC budget — preserve ≥half of the refactor's −2119 LOC reduction.
+# 7. Reviewed responsibility budgets, including extracted shared owners.
 # ---------------------------------------------------------------------------
 
 
-# Snapshot at fbdf23f9 (post-refactor). A merge can grow files modestly but
-# must not undo the cuts. Per-file ceilings allow generous headroom (~50%)
-# because merges legitimately add code; the TOTAL ceiling is the real guard.
-LOC_PER_FILE_CEILING = {
-    "../relion/initial_noise.py": 220,
-    "bootstrap_iref.py": 280,
-    "dense_adapter.py": 1500,
-    "driver.py": 1960,
-    "../relion/vdam_checkpoint.py": 440,  # Split from driver; combined allowance unchanged.
-    "../diagnostics/gt_metrics.py": 400,
-    "__init__.py": 160,
-    "init.py": 280,
-    "iteration_loop.py": 870,
-    "layout.py": 186,  # Includes the former 36-line relion_layout.py; total budget unchanged.
-    "m_step.py": 450,
-    "schedules.py": 400,
-    "state.py": 130,
-    "subset.py": 150,
+# User-approved revision after auditing fbdf23f9 (5014 lines) against afa3d6d46
+# (8626). See docs/development/codebase.md#vdam-code-budgets for retained growth
+# and the accounting contract. Budgets allow 224 total lines of headroom.
+LOC_BUDGETS = {
+    "controller": (2100, (
+        "__init__.py", "driver.py", "iteration_loop.py", "native_options.py",
+        "schedules.py", "subset.py", "subset_schedule.py",
+    )),
+    "initialization": (500, ("bootstrap_iref.py", "init.py")),
+    "sampling_layout": (850, ("native_sampling.py", "layout.py")),
+    "estep": (2400, (
+        "dense_adapter.py", "estep_common.py", "estep_meta_updates.py", "sparse_pass2_estep.py",
+    )),
+    "reconstruction_state": (700, ("m_step.py", "mstep_single_class.py", "state.py")),
+    "input_output": (1250, (
+        "star_io.py", "../relion/vdam_checkpoint.py", "../relion/initial_noise.py",
+    )),
+    "diagnostics": (1050, (
+        "../diagnostics/gt_metrics.py", "../diagnostics/gt_registration.py",
+        "../diagnostics/vdam_mstep_replay.py",
+    )),
 }
 
-# Pre-refactor total was 7133 LOC; post-refactor was 5014. Exact RELION
-# InitialModel parity added the native dense adapter and layout bridge; a 6100
-# ceiling still preserves more than 1000 lines of the refactor savings.
-TOTAL_LOC_CEILING = 6100
+
+def test_loc_budget_inventory_covers_every_vdam_module():
+    paths = [(PACKAGE_DIR / name).resolve() for _, names in LOC_BUDGETS.values() for name in names]
+    assert len(paths) == len(set(paths)), "A module must have exactly one budget owner"
+    assert all(path.is_file() for path in paths), "Update budget ownership when moving a module"
+    listed = {path for path in paths if path.is_relative_to(PACKAGE_DIR)}
+    assert listed == set(PACKAGE_DIR.rglob("*.py")), "Assign every VDAM module to a responsibility budget"
 
 
-def _file_loc(path: Path) -> int:
-    return sum(1 for _ in path.open("rb"))
-
-
-def test_per_file_loc_ceilings():
-    """Each module stays below its post-refactor ceiling.
-
-    Adjust the ceiling deliberately if a feature legitimately needs more lines
-    — never widen blindly.
-    """
-    over = {}
-    for filename, ceiling in LOC_PER_FILE_CEILING.items():
-        path = PACKAGE_DIR / filename
-        if not path.exists():
-            continue
-        loc = _file_loc(path)
-        if loc > ceiling:
-            over[filename] = (loc, ceiling)
-    assert not over, (
-        f"InitialModel files exceed LOC ceiling: {over}\n"
-        f"Investigate which merge brought in the bloat before raising the ceiling."
-    )
-
-
-def test_total_package_loc_within_budget():
-    """Count VDAM, its checkpoint adapter and the extracted shared diagnostics."""
-    total = sum(_file_loc(p) for p in PACKAGE_DIR.glob("*.py"))
-    total += sum(_file_loc(PACKAGE_DIR.parent / "relion" / name)
-                 for name in ("vdam_checkpoint.py", "initial_noise.py"))
-    # Shared diagnostics remain counted after their responsibility move.
-    total += sum(_file_loc(PACKAGE_DIR.parent / "diagnostics" / name)
-                 for name in ("gt_metrics.py", "gt_registration.py", "vdam_mstep_replay.py"))
+@pytest.mark.parametrize("responsibility", LOC_BUDGETS)
+def test_responsibility_loc_budget(responsibility):
+    """Moving code must preserve its accounting; review growth before revising a cap."""
     from recovar.em.diagnostics.coarse_gaussian_diagnostics import _initial_model_coarse_gemm_diagnostic_scopes
     from recovar.em.diagnostics.coarse_score_diagnostics import _with_initial_model_coarse_diagnostics
-    total += sum(len(inspect.getsourcelines(fn)[0]) + 2 for fn in (
-        _initial_model_coarse_gemm_diagnostic_scopes, _with_initial_model_coarse_diagnostics,
-    )) + 2  # Their diagnostic-owner imports remain counted too.
-    total += len(inspect.getsourcelines(GuiInitialModelDefaults)[0]) + 2  # Extracted launcher defaults remain counted.
-    total += 1  # ProjectorSetupBackend alias now lives in the shared owner.
-    # Shared projector wrappers remain counted after leaving dense_adapter.
-    total += sum(len(inspect.getsourcelines(getattr(relion_projector_setup, name))[0]) + 2
-                 for name in ("reference_to_relion_projector_half_maps",
-                              "reference_to_relion_projector_half_maps_and_power"))
-    total += len(inspect.getsourcelines(initial_low_pass_filter_references)[0]) + 3  # helper, spacing, edge constant
-    assert total <= TOTAL_LOC_CEILING, (
-        f"InitialModel total LOC = {total} > ceiling {TOTAL_LOC_CEILING}; "
-        f"refactor savings are being eroded. Identify the merge that bloated the package."
+
+    def source_lines(fn):
+        return len(inspect.getsourcelines(fn)[0])
+
+    # Preserve the previous accounting for functions moved into shared modules,
+    # including their spacing, owner imports, projector alias and filter constant.
+    shared = {
+        "controller": source_lines(GuiInitialModelDefaults) + 2,
+        "initialization": source_lines(initial_low_pass_filter_references) + 3,
+        "estep": 1 + sum(source_lines(getattr(relion_projector_setup, name)) + 2 for name in (
+            "reference_to_relion_projector_half_maps", "reference_to_relion_projector_half_maps_and_power",
+        )),
+        "diagnostics": sum(source_lines(fn) + 2 for fn in (
+            _initial_model_coarse_gemm_diagnostic_scopes, _with_initial_model_coarse_diagnostics,
+        )) + 2,
+    }
+    ceiling, names = LOC_BUDGETS[responsibility]
+    total = sum(len((PACKAGE_DIR / name).read_bytes().splitlines()) for name in names)
+    total += shared.get(responsibility, 0)
+    assert total <= ceiling, (
+        f"VDAM {responsibility}: {total} lines > reviewed budget {ceiling}. "
+        "Remove redundant code or document and review the added responsibility."
     )
 
 

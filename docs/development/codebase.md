@@ -139,3 +139,47 @@ releases the unused power spectrum. EM projector caching and VDAM both use this
 owner directly. VDAM's `dense_adapter` retains state-specific preparation and
 accumulator conversion, so EM no longer imports the VDAM execution adapter to
 construct projectors.
+
+## VDAM code budgets
+
+The original `fbdf23f9` InitialModel snapshot contains 5,014 Python lines.
+At `afa3d6d46`, the same accounting scope contains 8,626, including code moved
+into shared owners. The user approved replacing the inherited 6,100-line cap
+with audited responsibility budgets on September 13, 2026. This revises a
+structural guard; numerical tolerances, baselines and scientific gates are unchanged.
+
+| Responsibility | Audited lines | Budget | Retained scope |
+| --- | ---: | ---: | --- |
+| Controller and schedules | 2,053 | 2,100 | Driver, iteration/subset schedules, options and launcher defaults |
+| Initialization | 467 | 500 | Bootstrap, initial state and shared initial-reference filter |
+| Sampling and layout | 818 | 850 | Native sampling updates, canonical pose metadata and frame conversions |
+| E-step | 2,370 | 2,400 | Dense/local/compact routing, statistics, coarse/fine support and shared projector setup |
+| Reconstruction and state | 684 | 700 | Single-class M-step transaction, precision checks, state and class dispatch |
+| Input/output | 1,218 | 1,250 | STAR metadata, startup artifacts, RELION checkpoint import and initial noise |
+| Diagnostics | 1,016 | 1,050 | GT registration, native moment/reference replay and coarse report bookkeeping |
+| **Total** | **8,626** | **8,850** | **224 lines of total headroom (2.6%)** |
+
+The largest retained routine grew from 228 to 733 lines before the recent
+11-line dead-prior cleanup: sparse pass-2 orchestration now covers additional
+compact/local, zero-oversampling, exact-operand and execution-policy cases.
+Other identifiable additions include the 430-line native checkpoint adapter,
+96-line continuation subset-order replay, 409-line rigid-registration owner,
+and native M-step/reference replay diagnostics. These have distinct scientific
+or diagnostic consumers; their size alone does not justify deletion. The audit
+also identifies controller, particle-input and reconstruction growth for further
+simplification. The budgets are limits, not a declaration that all code is necessary.
+
+The [budget guard](../../tests/unit/initial_model/test_refactor_invariants.py)
+assigns every VDAM Python module to exactly one responsibility, requires all
+listed files to exist, and counts shared extractions with the previous spacing,
+import and alias allowances. A move must migrate its accounting; a new module
+must receive an explicit owner. Each responsibility must fit independently, so
+spare diagnostic budget cannot conceal growth in the E-step. Review justified
+new functionality before revising any budget. Preserve separate numerical paths
+when merging them would complicate control flow or change arithmetic.
+
+The [source inventory and growth audit](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_budget_history_audit_20260913/REVIEW.md)
+records the original comparison at `4f83abed4` (8,633 lines). The subsequent
+prior cleanup removed 11 lines and the startup metadata boundary added four;
+the table above accounts for both. Historical file/name counts distinguish
+relocation from new names but are not a semantic proof of dead-code completeness.
