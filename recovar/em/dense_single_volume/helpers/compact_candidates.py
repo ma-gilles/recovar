@@ -156,20 +156,47 @@ def _batched_compact_candidate_indices(candidate_masks):
     if not all(isinstance(m, SparseCandidateMask) for m in candidate_masks):
         return None
     modes = {m.mode for m in candidate_masks}
-    if not modes <= {"coarse", "full", "empty"}:
+    if not modes <= {"coarse", "coarse_exclude", "full", "empty"}:
         return None
     first = candidate_masks[0]
     n_rows, n_trans = int(first.n_rows), int(first.n_fine_trans)
     if any(int(m.n_rows) != n_rows or int(m.n_fine_trans) != n_trans for m in candidate_masks):
         return None
-    coarse = [m for m in candidate_masks if m.mode == "coarse"]
+    # A coarse_exclude spec is the all-ones coarse table with the excluded
+    # (coarse rotation, coarse translation) cells cleared; expressing it as a
+    # coarse table lets it share the per-coarse-row expansion below instead of
+    # the per-image dense nonzero (80 s per 100k/256 iteration, job 13808173:
+    # the real-size masks are complement specs, so the batched path never ran).
+    coarse_tables = {}
+    coarse = [m for m in candidate_masks if m.mode in ("coarse", "coarse_exclude")]
     if coarse:
         ftp = np.asarray(coarse[0].fine_translation_parent)
-        for m in coarse:
-            if m.coarse_valid is None or m.parent_map is None or m.fine_translation_parent is None:
+        for i, m in enumerate(candidate_masks):
+            if m.mode not in ("coarse", "coarse_exclude"):
+                continue
+            if m.parent_map is None or m.fine_translation_parent is None:
                 return None
             if not np.array_equal(np.asarray(m.fine_translation_parent), ftp):
                 return None
+            if m.mode == "coarse":
+                if m.coarse_valid is None:
+                    return None
+                coarse_tables[i] = np.asarray(m.coarse_valid, dtype=bool)
+            else:
+                if m.coarse_excluded is None:
+                    return None
+                n_coarse_trans = int(ftp.max(initial=-1) + 1)
+                parents = np.asarray(m.parent_map, dtype=np.int64)
+                n_coarse_rot = int(parents.max(initial=-1) + 1)
+                if n_coarse_trans <= 0 or n_coarse_rot <= 0:
+                    return None
+                table = np.ones((n_coarse_rot, n_coarse_trans), dtype=bool)
+                excluded = np.asarray(m.coarse_excluded, dtype=np.int64).reshape(-1)
+                if excluded.size:
+                    rot, trans = excluded // n_coarse_trans, excluded % n_coarse_trans
+                    keep = (rot >= 0) & (rot < n_coarse_rot) & (trans >= 0) & (trans < n_coarse_trans)
+                    table[rot[keep], trans[keep]] = False
+                coarse_tables[i] = table
     batch = len(candidate_masks)
     if n_rows == 0 or n_trans == 0:
         empty = np.zeros(0, dtype=np.int64)
@@ -197,12 +224,12 @@ def _batched_compact_candidate_indices(candidate_masks):
             out[i] = full_pairs
         elif m.mode == "empty":
             out[i] = (np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64))
-    coarse_rows = [i for i, m in enumerate(candidate_masks) if m.mode == "coarse"]
+    coarse_rows = sorted(coarse_tables)
     if coarse_rows:
         # Pad every image's coarse-validity table to the bucket's largest coarse
         # rotation count. Padded rows are False and are never addressed, because
         # each image's parent_map only points into its own table.
-        tables = [np.asarray(candidate_masks[i].coarse_valid, dtype=bool) for i in coarse_rows]
+        tables = [coarse_tables[i] for i in coarse_rows]
         c_rot = max(t.shape[0] for t in tables)
         c_trans = tables[0].shape[1]
         if any(t.shape[1] != c_trans for t in tables):

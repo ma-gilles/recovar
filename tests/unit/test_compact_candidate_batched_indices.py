@@ -92,7 +92,7 @@ def test_source_order_is_rotation_major_translation_minor():
 
 
 @pytest.mark.parametrize(
-    "case", ["dense_numpy", "coarse_exclude", "different_translation_parent", "different_shape"]
+    "case", ["dense_numpy", "different_translation_parent", "different_shape"]
 )
 def test_unsupported_buckets_fall_back_to_the_per_image_path(case, monkeypatch):
     rng = np.random.default_rng(3)
@@ -101,12 +101,6 @@ def test_unsupported_buckets_fall_back_to_the_per_image_path(case, monkeypatch):
     masks = [_coarse_mask(rng, n_rows, n_trans, 3, 2, 0.5, ftp) for _ in range(3)]
     if case == "dense_numpy":
         masks[1] = rng.random((n_rows, n_trans)) < 0.5
-    elif case == "coarse_exclude":
-        masks[1] = SparseCandidateMask(
-            mode="coarse_exclude", n_rows=n_rows, n_fine_trans=n_trans,
-            parent_map=rng.integers(0, 3, size=n_rows), coarse_excluded=np.array([1]),
-            fine_translation_parent=ftp,
-        )
     elif case == "different_translation_parent":
         masks[2] = _coarse_mask(rng, n_rows, n_trans, 3, 2, 0.5, np.array([1, 0, 1, 0]))
     elif case == "different_shape":
@@ -133,3 +127,30 @@ def test_all_empty_bucket_and_zero_size_axes():
         [SparseCandidateMask(mode="full", n_rows=0, n_fine_trans=3)]
     )
     assert out is not None and out[0][0].size == 0
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2, 3])
+def test_coarse_exclude_specs_take_the_batched_path_and_match_per_image(seed, monkeypatch):
+    """Real-size buckets carry complement (coarse_exclude) specs; the batched path
+    must accept them (job 13808173 fell back to per-image dense nonzero, 80 s per
+    iteration) and stay byte-identical to the per-image encoder."""
+    rng = np.random.default_rng(seed)
+    n_rows, n_trans, n_coarse_rot, n_coarse_trans = 30, 8, 5, 4
+    ftp = np.repeat(np.arange(n_coarse_trans), 2).astype(np.int32)
+    masks = []
+    for k in range(5):
+        n_excl = int(rng.integers(0, n_coarse_rot * n_coarse_trans))
+        excluded = np.sort(rng.choice(n_coarse_rot * n_coarse_trans, size=n_excl, replace=False)).astype(np.int32)
+        masks.append(SparseCandidateMask(
+            mode="coarse_exclude", n_rows=n_rows, n_fine_trans=n_trans,
+            parent_map=rng.integers(0, n_coarse_rot, size=n_rows), coarse_excluded=excluded,
+            fine_translation_parent=ftp,
+        ))
+    masks.append(_coarse_mask(rng, n_rows, n_trans, n_coarse_rot, n_coarse_trans, 0.5, ftp))  # mixed bucket
+    masks.append(SparseCandidateMask(mode="full", n_rows=n_rows, n_fine_trans=n_trans))
+    assert _batched_compact_candidate_indices(masks) is not None, "batched path must accept coarse_exclude"
+    calls = []
+    orig = cc.compact_candidate_indices_in_source_order
+    monkeypatch.setattr(cc, "compact_candidate_indices_in_source_order", lambda m: (calls.append(m) or orig(m)))
+    _assert_same(masks, pair_bucket_size=n_rows * n_trans)
+    assert not calls, "no per-image fallback expected"

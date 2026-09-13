@@ -754,7 +754,9 @@ def _prepare_per_image_pass2_inputs(
         else:
             coarse_valid = np.zeros((unique_rot.size, n_coarse_trans), dtype=bool)
             coarse_valid[np.searchsorted(unique_rot, coarse_rot), coarse_trans] = True
-            translated_valid = coarse_valid[:, fine_translation_parent]
+            # count = sum over fine rows of the parent coarse row's fine-translation
+            # count; O(cR*T + R) instead of expanding the (R, T) table per image.
+            fine_per_coarse_row = coarse_valid[:, fine_translation_parent].sum(axis=1, dtype=np.int64)
             candidate_mask = SparseCandidateMask(
                 mode="coarse",
                 n_rows=oversampled_rots.shape[0],
@@ -762,7 +764,7 @@ def _prepare_per_image_pass2_inputs(
                 parent_map=parent_map,
                 coarse_valid=coarse_valid,
                 fine_translation_parent=fine_translation_parent,
-                count=int(translated_valid[parent_map].sum()),
+                count=int(fine_per_coarse_row[parent_map].sum()),
             )
 
         per_image_source_eulers.append(source_eulers)
