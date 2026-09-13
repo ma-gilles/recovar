@@ -5680,6 +5680,36 @@ def test_native_dual_weighted_sums_defaults_only_on_exact_gpu_contract(monkeypat
     assert _native_dual_weighted_sums_enabled_for_pass(**kwargs)
 
 
+@pytest.mark.parametrize(
+    "requested,noise,prob_dtype,recon_dtype,noise_dtype,expected",
+    [
+        (True, True, jnp.float32, jnp.complex64, jnp.complex64, True),
+        (True, True, jnp.float64, jnp.complex64, jnp.complex64, False),
+        (True, True, jnp.float32, jnp.complex128, jnp.complex64, False),
+        (True, True, jnp.float32, jnp.complex64, jnp.complex128, False),
+        (False, True, jnp.float32, jnp.complex64, jnp.complex64, False),
+        (True, False, jnp.float32, jnp.complex64, jnp.complex64, False),
+    ],
+)
+def test_native_dual_dispatch_checks_actual_operand_dtypes(
+    requested, noise, prob_dtype, recon_dtype, noise_dtype, expected,
+):
+    import ast
+    from types import SimpleNamespace
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed
+
+    tree = ast.parse(inspect.getsource(sparse_pass2_bucketed.compute_k_class_pass2_stats_sparse_fused))
+    gates = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign)
+             and any(isinstance(t, ast.Name) and t.id == "class_native_dual_weighted_sums" for t in n.targets)
+             and isinstance(n.value, ast.Call)]
+    assert len(gates) == 1
+    scope = dict(jnp=jnp, native_dual_weighted_sums=requested, accumulate_noise=noise,
+                 mstep_probs=SimpleNamespace(dtype=prob_dtype),
+                 shifted_recon_split=SimpleNamespace(dtype=recon_dtype),
+                 shifted_noise_split=SimpleNamespace(dtype=noise_dtype))
+    assert eval(compile(ast.Expression(gates[0]), "<native-dispatch>", "eval"), scope) is expected
+
+
 def test_fused_mstep_noise_defaults_on_and_rejects_incompatible_contracts(monkeypatch):
     monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_FUSED_MSTEP_NOISE", raising=False)
     monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED", raising=False)

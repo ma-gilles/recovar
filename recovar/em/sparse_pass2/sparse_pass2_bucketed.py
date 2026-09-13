@@ -5679,6 +5679,8 @@ def compute_k_class_pass2_stats_sparse_fused(
         raw_host_staging_peak_bytes = max(raw_host_staging_peak_bytes, next_bucket_bytes)
         return raw_host, next_bucket_bytes
 
+    native_dual_weighted_sums_used = False
+    fused_mstep_noise_used = False
     for bucket_meta in execution_buckets:
         bucket_raw_host_staging_bytes = 0
         execution_mode = str(bucket_meta["_execution_mode"])
@@ -6840,6 +6842,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             summed_masked_noise_precomputed = None
             block_noise_shells_precomputed = None
             block_norm_residual_precomputed = None
+            class_native_dual_weighted_sums = False
             if bucket_uses_compact_pairs:
                 pair_arrays = compact_pair_arrays_by_class[class_index]
                 pair_mask = jnp.asarray(pair_arrays["pair_mask"])
@@ -6894,6 +6897,15 @@ def compute_k_class_pass2_stats_sparse_fused(
                 else:
                     reconstruction_probs = None
                     mstep_probs = pair_probs
+                # The native primitive accepts only F32 probabilities and C64 images.
+                # Exact Gaussian scoring can still produce an F64 posterior.
+                class_native_dual_weighted_sums = bool(
+                    native_dual_weighted_sums
+                    and mstep_probs.dtype == jnp.float32
+                    and shifted_recon_split.dtype == jnp.complex64
+                    and accumulate_noise
+                    and shifted_noise_split.dtype == jnp.complex64
+                )
                 pass2_diagnostics._maybe_dump_k_class_pass2_bucket(
                     experiment_dataset=experiment_dataset,
                     image_indices=image_indices,
@@ -6921,11 +6933,13 @@ def compute_k_class_pass2_stats_sparse_fused(
                 )
                 if (
                     accumulate_noise
-                    and (reuse_compact_noise_sums or native_dual_weighted_sums)
+                    and (reuse_compact_noise_sums or class_native_dual_weighted_sums)
                     and not compact_noise_sums_match_mstep
                 ):
                     compact_pair_noise_image_sum_precomputes += 1
-                    if fused_mstep_noise:
+                    native_dual_weighted_sums_used |= class_native_dual_weighted_sums
+                    fused_mstep_noise_used |= fused_mstep_noise and class_native_dual_weighted_sums
+                    if fused_mstep_noise and class_native_dual_weighted_sums:
                         (
                             summed,
                             summed_masked_noise_precomputed,
@@ -6968,7 +6982,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                                 ctf2_over_nv_recon,
                                 n_rotation_rows=class_bucket_size,
                             )
-                            if native_dual_weighted_sums
+                            if class_native_dual_weighted_sums
                             else _compact_pair_weighted_rotation_and_image_sums(
                                 mstep_probs,
                                 jnp.asarray(pair_arrays["local_rotation_row"]),
@@ -7544,7 +7558,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                 accumulate_noise
                 and bucket_uses_compact_pairs
                 and not reuse_compact_noise_sums
-                and not native_dual_weighted_sums
+                and not class_native_dual_weighted_sums
                 and not compact_noise_sums_match_mstep
             ):
                 # The compact-pair noise path recomputes weighted image sums with
@@ -7571,7 +7585,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                         noise_probs_sum_t = probs_sum_t_jax
                         compact_pair_noise_sum_reuses += 1
                         compact_pair_noise_ctf_sum_reuses += 1
-                    elif reuse_compact_noise_sums or native_dual_weighted_sums:
+                    elif reuse_compact_noise_sums or class_native_dual_weighted_sums:
                         if summed_masked_noise_precomputed is None:
                             summed_masked_noise = _compact_pair_weighted_image_sums(
                                 noise_probs,
@@ -8215,8 +8229,10 @@ def compute_k_class_pass2_stats_sparse_fused(
         "sparse_kclass_mstep_class_posterior_sums": class_posterior_sums_mstep.astype(np.float64, copy=True),
         "sparse_kclass_mstep_class_posterior_sum_total": np.float64(np.sum(class_posterior_sums_mstep)),
         "sparse_kclass_compact_pairs": bool(compact_pairs),
-        "sparse_kclass_native_dual_weighted_sums": bool(native_dual_weighted_sums),
-        "sparse_kclass_fused_mstep_noise": bool(fused_mstep_noise),
+        "sparse_kclass_native_dual_weighted_sums": bool(native_dual_weighted_sums_used),
+        "sparse_kclass_native_dual_weighted_sums_requested": bool(native_dual_weighted_sums),
+        "sparse_kclass_fused_mstep_noise": bool(fused_mstep_noise_used),
+        "sparse_kclass_fused_mstep_noise_requested": bool(fused_mstep_noise),
         "sparse_kclass_compact_pair_mstep_pair_sparse_requested": bool(
             compact_pair_pair_sparse_requested,
         ),
