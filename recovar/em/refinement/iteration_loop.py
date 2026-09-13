@@ -201,8 +201,6 @@ from recovar.em.relion.relion_worker_scale import (
 )
 from recovar.em.sampling import (
     _relion_adaptive_pass1_rotations,
-    advance_relion_perturbation,
-    advance_relion_perturbation_from_seed,
     apply_relion_rotation_perturbation,
     apply_relion_translation_perturbation,
     build_local_search_grid_metadata,
@@ -314,22 +312,6 @@ def _initial_coarse_grids(
         base_translations = np.asarray(translations, dtype=np.float64)
         current_translations = jnp.asarray(translations, dtype=dtype)
     return _CoarseGrids(rotations, rotation_eulers, base_translations, current_translations, int(healpix_order))
-
-
-def _advance_relion_perturbation(random_perturbation, *, perturb_factor, perturb_seed, relion_iteration, rng):
-    """Advance RELION's SamplingPerturbation to ``relion_iteration``.
-
-    With an explicit seed RELION draws the iteration's perturbation from
-    ``random_seed + iteration``; without one the run's generator draws it.
-    Returns ``(random_perturbation, seed)`` with ``seed`` ``None`` on the
-    generator path. The regular iterations and the final all-data pass share
-    this rule.
-    """
-
-    if perturb_seed is not None:
-        seed = int(perturb_seed) + int(relion_iteration)
-        return advance_relion_perturbation_from_seed(random_perturbation, perturb_factor, seed=seed), seed
-    return advance_relion_perturbation(random_perturbation, perturb_factor, rng), None
 
 
 def _sigma_offset_for_half(current_sigma_offset_angstrom, current_sigma_offset_angstrom_per_half, half_index):
@@ -1532,7 +1514,7 @@ def _run_relion_iteration_loop(
             )
         elif parity.perturb_factor > 0:
             relion_iter = int(init_relion_iteration) + iteration + 1
-            random_perturbation, seed = _advance_relion_perturbation(
+            random_perturbation, seed = sampling._advance_relion_perturbation(
                 random_perturbation,
                 perturb_factor=parity.perturb_factor,
                 perturb_seed=parity.perturb_seed,
@@ -4178,7 +4160,7 @@ def _run_relion_iteration_loop(
             )
             final_sampling_star = None
     elif parity.perturb_factor > 0:
-        final_random_perturbation, seed = _advance_relion_perturbation(
+        final_random_perturbation, seed = sampling._advance_relion_perturbation(
             random_perturbation,
             perturb_factor=parity.perturb_factor,
             perturb_seed=parity.perturb_seed,

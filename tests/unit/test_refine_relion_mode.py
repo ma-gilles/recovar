@@ -14539,7 +14539,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         "_get_relion_rotation_grid_eulers_float64",
         lambda order: fake_get_grid_eulers(order).astype(np.float64),
     )
-    monkeypatch.setattr(refine_mod, "advance_relion_perturbation", fake_advance_relion_perturbation)
+    monkeypatch.setattr(sampling_module, "advance_relion_perturbation", fake_advance_relion_perturbation)
     monkeypatch.setattr(refine_mod, "apply_relion_rotation_perturbation", fake_apply_relion_rotation_perturbation)
     monkeypatch.setattr(
         sampling_module,

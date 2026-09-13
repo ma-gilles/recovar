@@ -83,7 +83,7 @@ construction used by the controller; [`test_initial_coarse_grid_owner.py`](../..
 pins both. `expected_accuracy.Half1AccuracyInputs` bundles the run-constant inputs of RELION's
 expected-accuracy estimation and owns the `estimate` method used by both passes.
 The same module owns `_expected_accuracy_class_ids`, which supplies half-1 class labels ([`test_expected_accuracy_inputs_owner.py`](../../tests/unit/test_expected_accuracy_inputs_owner.py)).
-`_advance_relion_perturbation` advances RELION's SamplingPerturbation to an iteration
+`sampling._advance_relion_perturbation` owns the update beside its seeded and generator primitives, and advances RELION's SamplingPerturbation to an iteration
 (seeded `random_seed + iteration`, or the run's generator) for both passes
 ([`test_perturbation_advance_owner.py`](../../tests/unit/test_perturbation_advance_owner.py)).
 The controller's adaptive and single-pass dense half-scoring calls share one keyword

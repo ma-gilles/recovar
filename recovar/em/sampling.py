@@ -451,6 +451,23 @@ def advance_relion_perturbation_from_seed(prev_random_perturbation, perturbation
     return _wrap_relion_perturbation(new, pf)
 
 
+def _advance_relion_perturbation(random_perturbation, *, perturb_factor, perturb_seed, relion_iteration, rng):
+    """Advance RELION's SamplingPerturbation to ``relion_iteration``.
+
+    With an explicit seed RELION draws the iteration's perturbation from
+    ``random_seed + iteration``; without one the run's generator draws it.
+    Returns ``(random_perturbation, seed)`` with ``seed`` ``None`` on the
+    generator path. The regular iterations and the final all-data pass share
+    this rule.
+    """
+
+    if perturb_seed is not None:
+        seed = int(perturb_seed) + int(relion_iteration)
+        return advance_relion_perturbation_from_seed(random_perturbation, perturb_factor, seed=seed), seed
+    return advance_relion_perturbation(random_perturbation, perturb_factor, rng), None
+
+
+
 def relion_sampling_perturbation_for_iteration(
     perturbation_factor,
     random_seed,
