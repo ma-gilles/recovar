@@ -416,6 +416,7 @@ def compact_pair_index_arrays_device(
     rows_capacity: int | None = None,
     resident=None,
     resident_positions=None,
+    coarse_rows_capacity: int | None = None,
 ):
     """Build the compact pair index arrays on the device from the coarse tables.
 
@@ -504,6 +505,8 @@ def compact_pair_index_arrays_device(
         elif m.mode == "coarse_exclude":
             c_rot_needed = max(c_rot_needed, int(np.asarray(m.parent_map).max(initial=-1) + 1))
     c_rot = _quantize_pow2(c_rot_needed, _DEVICE_INDEX_COARSE_ROW_QUANTUM)
+    if coarse_rows_capacity is not None and int(coarse_rows_capacity) >= c_rot:
+        c_rot = int(coarse_rows_capacity)
 
     if resident is not None and resident_positions is not None:
         if int(resident["n_coarse_trans"]) != int(c_trans):

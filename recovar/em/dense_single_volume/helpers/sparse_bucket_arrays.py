@@ -491,6 +491,11 @@ def vectorized_hypothesis_prep_enabled() -> bool:
     return parse_env_binary_flag(VECTORIZED_HYPOTHESIS_PREP_ENV)
 
 
+def _pow2_at_least(value: int, floor: int) -> int:
+    value = max(int(value), int(floor))
+    return 1 << (value - 1).bit_length()
+
+
 def _fine_children_ranges(fine_parent_np, n_coarse_rot):
     """``(child_start, child_count)`` per coarse rotation, or ``None`` if not parent-major."""
 
@@ -1027,6 +1032,12 @@ def _prepare_per_image_pass2_inputs(
         "mstep_rotation_table": mstep_rotation_table,
         "mstep_rotation_table_key": None if mstep_rotation_table is None else _rotation_table_key(mstep_rotation_table),
         "resident_hypothesis": resident_hypothesis,
+        # One coarse-row capacity for the whole pass: the device index builder
+        # otherwise compiled a family per chunk-wise coarse-row count (census job
+        # 13837258: 28 compiles, 18.7 s). Padded coarse rows are inert.
+        "coarse_rows_capacity": _pow2_at_least(
+            max((int(np.asarray(u).shape[0]) for u in per_image_unique_rot), default=1), 64
+        ),
     }
 
 
@@ -1434,6 +1445,9 @@ def _build_compact_pair_bucket_arrays_from_per_image_inputs(
             rows_capacity=rows_capacity,
             resident=resident,
             resident_positions=resident_positions,
+            coarse_rows_capacity=(
+                per_image_inputs.get("coarse_rows_capacity") if isinstance(per_image_inputs, dict) else None
+            ),
         )
         if device_arrays is not None:
             return {

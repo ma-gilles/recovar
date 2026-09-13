@@ -9958,7 +9958,10 @@ def test_device_chunk_scalars_gpu_fused_noise_accumulator_calls(monkeypatch):
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED", "1")
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
-        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "3")
+        # 7 images in one microbatch of up to 16: the capacity ladder floor is 16, the
+        # growth limit max(16, 2*7) = 16 and the budget 16, so the chunk pads to 16 images
+        # (nine duplicate indices).
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "16")
         monkeypatch.setenv("RECOVAR_SPARSE_PASS2_IMAGE_CAPACITY", "1")
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_NATIVE_PAIR_SPARSE_SUMS", "1")
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_NATIVE_DUAL_WEIGHTED_SUMS", "1")
