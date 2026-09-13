@@ -75,7 +75,6 @@ class NativeInitialModelOptions(InitialModelDefaults):
     mstep_compute_dtype: Literal["float32", "float64"] = "float64"
     datadir: str | None = None
     strip_prefix: str | None = None
-    run_relion_align_symmetry: bool = False
     # Diagnostic-only, one-next-iteration restart from a native RELION VDAM
     # optimiser.  This is deliberately not a general production continuation
     # surface: the caller must also stop at checkpoint_iteration + 1.

@@ -811,9 +811,7 @@ state, and RELION volume frame.
 These are code-level limitations in the current branch:
 
 - `run_native_initial_model` rejects `padding_factor != 1`.
-- `run_native_initial_model` rejects `run_relion_align_symmetry=True`; the
-  command can be built, but native execution does not spawn RELION's symmetry
-  tool.
+- Native execution does not spawn RELION's post-run symmetry-alignment tool.
 - `run_native_initial_model` rejects tilt-series datasets.
 - `_initial_state_from_particles` rejects multiple optics groups because
   `compute_bootstrap_iref_via_cpp` currently takes scalar optics parameters.

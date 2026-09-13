@@ -1014,8 +1014,6 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         )
     if opts.padding_factor not in (1, 2):
         raise NotImplementedError("native InitialModel currently supports RELION GUI --pad 1 or 2 only")
-    if opts.run_relion_align_symmetry:
-        raise NotImplementedError("native post-run relion_align_symmetry execution is not wired yet")
     if not opts.do_run_C1 and opts.sym_name.lower() != "c1":
         raise NotImplementedError(
             "native InitialModel direct refinement currently supports C1 only; "
