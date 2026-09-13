@@ -16,12 +16,11 @@ from recovar.em.vdam.init import initialise_denovo_state
 from recovar.em.vdam.iteration_loop import (
     _ave_pmax_from_meta,
     refresh_tau2_from_projector_power,
-    relion_solvent_flatten_state,
-    relion_solvent_mask,
     run_vdam_iterations,
     update_current_resolution_from_data_vs_prior,
     update_image_size_and_resolution_pointers,
 )
+from recovar.em.vdam.m_step import relion_solvent_flatten_state, relion_solvent_mask
 from recovar.em.vdam.state import VdamAccumulator
 from recovar.em.vdam.subset_schedule import restore_subset_order_for_continuation, select_subset_for_iter
 

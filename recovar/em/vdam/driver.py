@@ -36,7 +36,9 @@ from recovar.em.vdam.dense_adapter import (
     run_dense_initial_model_estep,
 )
 from recovar.em.vdam.estep_common import DenseInitialModelEstepConfig
-from recovar.em.vdam.iteration_loop import relion_solvent_flatten_state, relion_solvent_mask, run_vdam_iterations
+from recovar.em.vdam.iteration_loop import run_vdam_iterations
+from recovar.em.vdam.m_step import relion_solvent_flatten_state, relion_solvent_mask
+from recovar.em.vdam.mstep_single_class import _prepare_mstep_state_precision
 from recovar.em.vdam.native_options import NativeInitialModelOptions
 from recovar.em.vdam.native_sampling import (
     NativeSamplingPlan,
@@ -639,27 +641,6 @@ def _should_write_iteration_artifacts(iteration: int, nr_iter: int, grad_write_i
     if grad_write_iter < 1:
         raise ValueError("grad_write_iter must be >= 1")
     return (iteration % grad_write_iter) == 0 or iteration == nr_iter
-
-
-def _prepare_mstep_state_precision(state, mstep_compute_dtype):
-    """Convert M-owned numerical state once after bootstrap or continuation.
-
-    FSC, authoritative tau2, noise and priors retain their existing precision.
-    Bootstrap and projector refresh are not part of this F32 transaction route.
-    """
-    from recovar.em.vdam.mstep_single_class import _MSTEP_F32_STATE_DTYPES
-
-    if mstep_compute_dtype == "float64":
-        return state
-    if mstep_compute_dtype != "float32":
-        raise ValueError(f"Unknown mstep_compute_dtype: {mstep_compute_dtype!r}")
-    return replace(
-        state,
-        **{
-            name: np.asarray(getattr(state, name)).astype(dtype, copy=True)
-            for name, dtype in _MSTEP_F32_STATE_DTYPES.items()
-        },
-    )
 
 
 def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialModelResult:

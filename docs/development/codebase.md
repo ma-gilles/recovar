@@ -150,11 +150,11 @@ structural guard; numerical tolerances, baselines and scientific gates are uncha
 
 | Responsibility | Audited lines | Budget | Retained scope |
 | --- | ---: | ---: | --- |
-| Controller and schedules | 2,053 | 2,100 | Driver, iteration/subset schedules, options and launcher defaults |
+| Controller and schedules | 2,053 | 2,010 | Driver, iteration/subset schedules, options and launcher defaults |
 | Initialization | 467 | 500 | Bootstrap, initial state and shared initial-reference filter |
 | Sampling and layout | 818 | 850 | Native sampling updates, canonical pose metadata and frame conversions |
 | E-step | 2,370 | 2,290 | Dense/local/compact routing, statistics, coarse/fine support and shared projector setup |
-| Reconstruction and state | 684 | 700 | Single-class M-step transaction, precision checks, state and class dispatch |
+| Reconstruction and state | 684 | 790 | Single-class M-step transaction, precision checks, state and class dispatch |
 | Input/output | 1,218 | 1,250 | STAR metadata, startup artifacts, RELION checkpoint import and initial noise |
 | Diagnostics | 1,016 | 1,160 | GT registration, native moment/reference replay and coarse report bookkeeping |
 | **Total** | **8,626** | **8,850** | **224 lines of total headroom (2.6%)** |
@@ -163,6 +163,10 @@ Noise failure reports and optional noise-boundary captures now live in
 [`diagnostics/vdam_noise.py`](../../recovar/em/diagnostics/vdam_noise.py);
 `vdam/estep_meta_updates.py` owns the numerical update. This move transfers
 110 budget lines from E-step to diagnostics without increasing the 8,850 total.
+Solvent masking now lives with reconstruction in `vdam/m_step.py`; state precision
+preparation lives beside its dtype definitions in `vdam/mstep_single_class.py`.
+Their move transfers 90 budget lines from controllers to reconstruction/state,
+again preserving the 8,850 total.
 The audited counts and headroom above describe the original snapshot, not the current tip.
 
 The largest retained routine grew from 228 to 733 lines before the recent

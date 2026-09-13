@@ -35,6 +35,25 @@ _MSTEP_F32_STATE_DTYPES = {
 }
 
 
+def _prepare_mstep_state_precision(state, mstep_compute_dtype):
+    """Convert M-owned numerical state once after bootstrap or continuation.
+
+    FSC, authoritative tau2, noise and priors retain their existing precision.
+    Bootstrap and projector refresh are not part of this F32 transaction route.
+    """
+    if mstep_compute_dtype == "float64":
+        return state
+    if mstep_compute_dtype != "float32":
+        raise ValueError(f"Unknown mstep_compute_dtype: {mstep_compute_dtype!r}")
+    return replace(
+        state,
+        **{
+            name: np.asarray(getattr(state, name)).astype(dtype, copy=True)
+            for name, dtype in _MSTEP_F32_STATE_DTYPES.items()
+        },
+    )
+
+
 def _validate_mstep_precision_route(
     mstep_compute_dtype: Literal["float32", "float64"],
     mstep_backend: Literal["native", "jax"],

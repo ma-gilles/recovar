@@ -75,8 +75,8 @@ def test_one_time_conversion_only_changes_m_owned_state(K):
         for f in fields(state)
         if isinstance(getattr(state, f.name), np.ndarray)
     }
-    assert driver._prepare_mstep_state_precision(state, "float64") is state
-    converted = driver._prepare_mstep_state_precision(state, "float32")
+    assert mstep_single_class._prepare_mstep_state_precision(state, "float64") is state
+    converted = mstep_single_class._prepare_mstep_state_precision(state, "float32")
     for f in fields(state):
         original, actual = getattr(state, f.name), getattr(converted, f.name)
         if f.name in F32_STATE:
@@ -179,7 +179,7 @@ def test_float32_rejects_diagnostics_before_replay_consumption(monkeypatch, env)
         vdam_mstep_replay, "_maybe_replay_native_bpref_accumulators", lambda *a, **k: pytest.fail("consumed replay")
     )
     with pytest.raises(ValueError, match=env):
-        _call(driver._prepare_mstep_state_precision(_state(), "float32"))
+        _call(mstep_single_class._prepare_mstep_state_precision(_state(), "float32"))
 
 
 def test_float32_rejects_primitive_route_before_overrides(monkeypatch):
@@ -187,12 +187,12 @@ def test_float32_rejects_primitive_route_before_overrides(monkeypatch):
         vdam_mstep_replay, "_maybe_replay_native_bpref_accumulators", lambda *a, **k: pytest.fail("consumed replay")
     )
     with pytest.raises(ValueError, match="transaction"):
-        _call(driver._prepare_mstep_state_precision(_state(), "float32"), use_native_transaction=False)
+        _call(mstep_single_class._prepare_mstep_state_precision(_state(), "float32"), use_native_transaction=False)
 
 
 @pytest.mark.parametrize("field", list(F32_STATE))
 def test_float32_rejects_mixed_publication_state_before_execution(monkeypatch, field):
-    state = driver._prepare_mstep_state_precision(_state(), "float32")
+    state = mstep_single_class._prepare_mstep_state_precision(_state(), "float32")
     value = getattr(state, field)
     setattr(state, field, value.astype(np.complex128 if np.iscomplexobj(value) else np.float64))
     monkeypatch.setattr(mstep_single_class, "_get_bindings", lambda: pytest.fail("entered transaction"))
@@ -203,7 +203,7 @@ def test_float32_rejects_mixed_publication_state_before_execution(monkeypatch, f
 def test_real_host_device_transaction_publishes_f32_and_preserves_k4_other_slots(monkeypatch):
     from recovar.em.relion import relion_vdam_mstep as helper
 
-    state = driver._prepare_mstep_state_precision(_state(4), "float32")
+    state = mstep_single_class._prepare_mstep_state_precision(_state(4), "float32")
     state.Iref[:] = np.arange(1, 5, dtype=np.float32)[:, None, None, None]
     before = {name: getattr(state, name).copy() for name in F32_STATE}
     # Exact-zero first moments have an unambiguous native initialization certificate.
@@ -228,7 +228,7 @@ def test_real_host_device_transaction_publishes_f32_and_preserves_k4_other_slots
 
 @pytest.mark.parametrize("bad_field", ["iref", "mom1_h0", "sigma2", "tau2"])
 def test_publication_rejects_wrong_result_dtype_or_rounded_prior(bad_field):
-    state = driver._prepare_mstep_state_precision(_state(), "float32")
+    state = mstep_single_class._prepare_mstep_state_precision(_state(), "float32")
     result = dict(
         iref=state.Iref[0],
         mom1_h0=state.Igrad1[0],
@@ -259,7 +259,7 @@ def test_publication_rejects_wrong_result_dtype_or_rounded_prior(bad_field):
 
 
 def test_actual_loop_forwards_f32_to_m_without_changing_authoritative_state(monkeypatch):
-    state = driver._prepare_mstep_state_precision(_state(), "float32")
+    state = mstep_single_class._prepare_mstep_state_precision(_state(), "float32")
     calls = []
 
     def step(current, **kwargs):
@@ -290,17 +290,17 @@ def test_actual_loop_forwards_f32_to_m_without_changing_authoritative_state(monk
 
 
 def test_solvent_route_uses_explicit_f32_product_and_preserves_default():
-    state = driver._prepare_mstep_state_precision(_state(), "float32")
+    state = mstep_single_class._prepare_mstep_state_precision(_state(), "float32")
     state.Iref[:] = np.float32(1.0000001192092896)
     mask = np.full((16,) * 3, 1.0000000596046446, dtype=np.float64)
-    default = iteration_loop.relion_solvent_flatten_state(state, mask=mask)
-    actual = iteration_loop.relion_solvent_flatten_state(state, mask=mask, compute_dtype="float32")
+    default = m_step.relion_solvent_flatten_state(state, mask=mask)
+    actual = m_step.relion_solvent_flatten_state(state, mask=mask, compute_dtype="float32")
     np.testing.assert_array_equal(default.Iref, (state.Iref * mask).astype(np.float32))
     np.testing.assert_array_equal(actual.Iref, state.Iref * mask.astype(np.float32))
     assert actual.Iref.dtype == np.float32 and actual.tau2_class is state.tau2_class
     assert np.any(default.Iref != actual.Iref)
     with pytest.raises(ValueError, match="float32 state.Iref"):
-        iteration_loop.relion_solvent_flatten_state(_state(), mask=mask, compute_dtype="float32")
+        m_step.relion_solvent_flatten_state(_state(), mask=mask, compute_dtype="float32")
 
 
 @pytest.mark.parametrize("missing", ["vdam_m_step_transaction", "vdam_first_moment_initializes"])
@@ -312,4 +312,4 @@ def test_float32_missing_native_certificate_capability_never_falls_back(monkeypa
     del bindings[missing]
     monkeypatch.setattr(mstep_single_class, "_get_bindings", lambda: SimpleNamespace(**bindings))
     with pytest.raises(RuntimeError, match="requires"):
-        _call(driver._prepare_mstep_state_precision(_state(), "float32"))
+        _call(mstep_single_class._prepare_mstep_state_precision(_state(), "float32"))

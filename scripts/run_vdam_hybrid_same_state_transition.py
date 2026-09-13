@@ -2808,7 +2808,7 @@ def _run_transition_arm(
 ) -> dict[str, Any]:
     import recovar.em.vdam.driver as driver
     from recovar.data_io.starfile import read_star
-    from recovar.em.vdam import native_sampling, star_io
+    from recovar.em.vdam import m_step, native_sampling, star_io
     from recovar.em.vdam.schedules import (
         default_subset_sizes_for_3d_initial_model,
         phase_lengths_from_effective_fractions,
@@ -2874,7 +2874,7 @@ def _run_transition_arm(
 
     post_mstep_update = None
     if opts.do_solvent:
-        solvent_mask = driver.relion_solvent_mask(
+        solvent_mask = m_step.relion_solvent_mask(
             ori_size=int(state.ori_size),
             pixel_size=float(state.pixel_size),
             particle_diameter_ang=float(opts.particle_diameter),
@@ -2882,7 +2882,7 @@ def _run_transition_arm(
         )
 
         def post_mstep_update(current, iteration, meta):
-            current = driver.relion_solvent_flatten_state(current, mask=solvent_mask)
+            current = m_step.relion_solvent_flatten_state(current, mask=solvent_mask)
             return driver._maybe_replay_iteration_references(current, iteration=iteration, meta=meta)
 
     main_star, _optics_star = read_star(opts.fn_img)
