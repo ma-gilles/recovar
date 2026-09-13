@@ -328,25 +328,25 @@ def run_dense_initial_model_estep(
         n_images=int(experiment_dataset.n_images),
         pseudo_halfsets=state.pseudo_halfsets,
     )
-    selected_particle_ids = (
-        np.arange(int(experiment_dataset.n_images), dtype=np.int64)
-        if particle_ids is None
-        else np.asarray(particle_ids, dtype=np.int64)
-    )
-    if state.pseudo_halfsets:
-        selected_halfset_ids = (
-            np.arange(selected_particle_ids.size, dtype=np.int32) % 2
-            if halfset_ids is None
-            else np.asarray(halfset_ids, dtype=np.int32)
-        )
-    else:
-        selected_halfset_ids = None
     engine_kwargs = _dense_engine_kwargs(state, config)
     means, mean_variance, relion_projector_half_by_class, relion_projector_r_max = _resolve_class_inputs(
         state,
         config,
     )
     if bool(engine_kwargs.get("sparse_pass2", False)):
+        selected_particle_ids = (
+            np.arange(int(experiment_dataset.n_images), dtype=np.int64)
+            if particle_ids is None
+            else np.asarray(particle_ids, dtype=np.int64)
+        )
+        if state.pseudo_halfsets:
+            selected_halfset_ids = (
+                np.arange(selected_particle_ids.size, dtype=np.int32) % 2
+                if halfset_ids is None
+                else np.asarray(halfset_ids, dtype=np.int32)
+            )
+        else:
+            selected_halfset_ids = None
         return _run_sparse_pass2_initial_model_estep(
             experiment_dataset,
             state,
@@ -367,10 +367,10 @@ def run_dense_initial_model_estep(
         raise ValueError("Dense execution requires materialized rotations")
     dense_rotations = _dense_rotations_for_config(config.rotations, config)
     halfset_results: dict[int, Any] = {}
-    by_halfset: dict[int, list[VdamAccumulator]] = {}
+    accumulators: list[VdamAccumulator] = []
     for halfset_idx, image_indices in groups:
         if image_indices.size == 0:
-            by_halfset[halfset_idx] = [_empty_accumulator(state, k, halfset_idx) for k in range(state.K)]
+            accumulators.extend(_empty_accumulator(state, k, halfset_idx) for k in range(state.K))
             continue
         result = run_dense_k_class_em(
             experiment_dataset,
@@ -394,19 +394,17 @@ def run_dense_initial_model_estep(
             ),
         )
         halfset_results[halfset_idx] = result
-        by_halfset[halfset_idx] = _arrays_to_accumulators(
-            result.Ft_y,
-            result.Ft_ctf,
-            state,
-            halfset_idx=halfset_idx,
-            relion_bpref_frame=config.relion_bpref_frame,
-            relion_projector_frame=config.relion_projector_frame,
-            padding_factor=config.padding_factor,
+        accumulators.extend(
+            _arrays_to_accumulators(
+                result.Ft_y,
+                result.Ft_ctf,
+                state,
+                halfset_idx=halfset_idx,
+                relion_bpref_frame=config.relion_bpref_frame,
+                relion_projector_frame=config.relion_projector_frame,
+                padding_factor=config.padding_factor,
+            )
         )
-
-    accumulators: list[VdamAccumulator] = []
-    for halfset_idx in sorted(by_halfset):
-        accumulators.extend(by_halfset[halfset_idx])
 
     selected_particle_ids: list[np.ndarray] = []
     field_lists: dict[str, list[np.ndarray]] = {attr: [] for attr, _ in _PARTICLE_RESULT_FIELDS}
