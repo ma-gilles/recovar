@@ -5660,8 +5660,8 @@ ffi::Error RelionCubSortScanBatchedF32Impl(
     return ffi::Error::Success();
 }
 
-// Explicit, unused score-to-support transaction. Keep the exact existing CUB
-// sort and Ampere scan, but compile the surrounding row algebra once in CUDA.
+// Opt-in grouped coarse score-to-support transaction. Keep the existing CUB
+// sort and Ampere scan; coarse_publication.py selects this CUDA backend.
 // Support capacity is B*N: threshold ties are never truncated to maxsig.
 struct CoarsePosteriorFiniteMax {
     __device__ float operator()(float a, float b) const { return fmaxf(a, b); }
