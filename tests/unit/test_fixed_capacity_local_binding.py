@@ -6,6 +6,7 @@ import inspect
 from dataclasses import replace
 
 import jax.numpy as jnp
+import jax
 import numpy as np
 import pytest
 
@@ -963,13 +964,14 @@ def test_whole_local_program_threads_all_ten_state_values_in_call_order():
         increment = delta * scale
         next_first_eight = tuple(value + increment for value in carry[:8])
         next_last_two = tuple(value + increment for value in carry[8:])
-        return (
+        return local_big_jit._LocalBigJitResult(local_big_jit._LocalBigJitCore(
             *next_first_eight,
             delta * 100,
             *next_last_two,
             tag,
             delta * 1000,
-        )
+            *([None] * 9),
+        ))
 
     final_carry, call_outputs = local_big_jit._run_fixed_capacity_whole_local_program(
         call_program,
@@ -982,7 +984,7 @@ def test_whole_local_program_threads_all_ten_state_values_in_call_order():
     assert tuple(int(value) for value in final_carry) == tuple(
         value + 9 for value in range(10)
     )
-    assert tuple(tuple(int(value) for value in output) for output in call_outputs) == (
+    assert tuple(tuple(int(value) for value in jax.tree_util.tree_leaves(output)) for output in call_outputs) == (
         (100, 101, 1000),
         (200, 202, 2000),
     )
@@ -1046,13 +1048,14 @@ def test_uniform_local_scan_threads_carry_with_one_stacked_call_axis():
         increment = delta * scale
         next_first_eight = tuple(value + increment for value in carry[:8])
         next_last_two = tuple(value + increment for value in carry[8:])
-        return (
+        return local_big_jit._LocalBigJitResult(local_big_jit._LocalBigJitCore(
             *next_first_eight,
             delta * 100,
             *next_last_two,
             tag,
             delta * 1000,
-        )
+            *([None] * 9),
+        ))
 
     final_carry, stacked_outputs = (
         local_big_jit._run_fixed_capacity_uniform_local_scan_program(
@@ -1066,7 +1069,7 @@ def test_uniform_local_scan_threads_carry_with_one_stacked_call_axis():
     assert tuple(int(value) for value in final_carry) == tuple(
         value + 9 for value in range(10)
     )
-    assert tuple(np.asarray(value).tolist() for value in stacked_outputs) == (
+    assert tuple(np.asarray(value).tolist() for value in jax.tree_util.tree_leaves(stacked_outputs)) == (
         [100, 200],
         [101, 202],
         [1000, 2000],

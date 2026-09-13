@@ -1,64 +1,41 @@
-"""The 22-value big-JIT core layout has one named owner on both sides of the JIT boundary."""
+"""Named local results preserve compiled leaves and carry-buffer ownership."""
 
-import inspect
+import jax
+import pytest
 
-from recovar.em.local import local_big_jit, local_em_engine
-
-CORE_FIELDS = (
-    "Ft_y",
-    "Ft_ctf",
-    "noise_wsum",
-    "noise_img_power",
-    "noise_a2",
-    "noise_xa",
-    "noise_scale_xa",
-    "noise_scale_aa",
-    "bucket_norm_correction",
-    "noise_sigma2_offset",
-    "noise_sumw",
-    "batch_norm",
-    "log_Z",
-    "best_log_score",
-    "best_argmax",
-    "max_posterior",
-    "probs_sum_t",
-    "reconstruction_probs_sum_t",
-    "n_significant_samples",
-    "reconstruction_sample_mask",
-    "reconstruction_rotation_mask",
-    "reconstruction_row_count",
-)
+from recovar.em.local import local_big_jit as bucket
 
 
-def test_core_layout_names_and_fixed_capacity_carry_window():
-    assert local_big_jit._LocalBigJitCore._fields == CORE_FIELDS
-    # The fixed-capacity scan carries slots 7..17 of this layout; the layout owner must keep them in place.
-    carry = CORE_FIELDS[local_big_jit._FIXED_CAPACITY_CARRY_START : local_big_jit._FIXED_CAPACITY_CARRY_STOP]
-    assert carry[0] == "noise_scale_aa" and carry[-1] == "probs_sum_t" and len(carry) == 10
+@pytest.mark.parametrize("route", ["score", "deferred", "source_vdam", "mstep"])
+@pytest.mark.parametrize("debug_count", [0, 2, 9])
+def test_named_result_preserves_leaf_order_and_carry_identity(route, debug_count):
+    values = [object() for _ in range(41)]
+    core = bucket._LocalBigJitCore(*values[:22])
+    payload = {}
+    count = 0
+    if route == "deferred":
+        count = 10
+        payload["deferred_mstep"] = bucket._LocalDeferredMstep(*values[22:32])
+    elif route == "source_vdam":
+        count = 6
+        payload["source_vdam"] = bucket._LocalSourceVdam(*values[22:28])
+    elif route == "mstep":
+        count = 2
+        payload["mstep_tensors"] = bucket._LocalMstepTensors(*values[22:24])
+    if debug_count:
+        payload["debug"] = bucket._LocalBigJitDebug(*values[22 + count:22 + count + debug_count])
+    result = bucket._LocalBigJitResult(core, **payload)
+    expected = values[:22 + count + debug_count]
+    assert jax.tree_util.tree_leaves(result) == expected
+    carry, local = bucket._split_local_big_jit_carry(result)
+    assert list(carry) == values[:8] + values[9:11]
+    assert jax.tree_util.tree_leaves(local) == [values[8], *expected[11:]]
+    assert all(value not in jax.tree_util.tree_leaves(local) for value in carry)
+    restored = bucket._reconstruct_fixed_capacity_score_only_result(carry, local)
+    assert jax.tree_util.tree_structure(restored) == jax.tree_util.tree_structure(result)
+    assert all(a is b for a, b in zip(jax.tree_util.tree_leaves(restored), expected, strict=True))
 
 
-def test_producer_builds_every_result_from_the_core_and_returns_plain_tuples():
-    source = inspect.getsource(local_big_jit.run_local_bucket_big_jit)
-    assert source.count("*_LocalBigJitCore(") == 4
-    assert source.count("result = (\n") == 4
-    # No positional 22-tuple literal remains.
-    assert "        result = (\n            Ft_y,\n" not in source
-    assert "    result = (\n        Ft_y,\n" not in source
-
-
-def test_engine_unpacks_the_core_once_and_the_extras_per_layout():
-    source = inspect.getsource(local_em_engine)
-    assert source.count("big_jit_core = _LocalBigJitCore._make(") == 1
-    assert source.count(") = big_jit_core") == 1
-    assert source.count(") = big_jit_extras") == 2
-    assert source.count("summed, ctf_probs = big_jit_extras") == 1
-    assert source.count("\n                ) = big_jit_result\n") == 0
-
-
-def test_core_flattens_to_the_same_leaves_as_the_tuple():
-    import jax
-
-    values = tuple(range(22))
-    core = local_big_jit._LocalBigJitCore(*values)
-    assert tuple(core) == values
-    assert jax.tree_util.tree_leaves((*core, "extra")) == [*values, "extra"]
+def test_reconstruct_rejects_incomplete_carry():
+    with pytest.raises(ValueError, match="ten carry values"):
+        bucket._reconstruct_fixed_capacity_score_only_result((), None)

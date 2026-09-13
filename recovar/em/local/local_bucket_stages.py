@@ -782,34 +782,21 @@ def _postprocess_fixed_capacity_whole_score_calls(
             final_carry,
             call_output,
         )
-        if len(result) != 22:
+        if any(value is not None for value in result[1:]):
             raise RuntimeError(
                 "fixed-capacity whole-local score call returned a non-production topology"
             )
-        (
-            _Ft_y,
-            _Ft_ctf,
-            _noise_wsum,
-            _noise_img_power,
-            _noise_a2,
-            _noise_xa,
-            _noise_scale_xa,
-            _noise_scale_aa,
-            _bucket_norm_correction,
-            _noise_sigma2_offset,
-            _noise_sumw,
-            batch_norm,
-            log_Z,
-            best_log_score,
-            best_argmax,
-            max_posterior,
-            probs_sum_t,
-            reconstruction_probs_sum_t,
-            n_significant_samples,
-            reconstruction_sample_mask,
-            reconstruction_rotation_mask,
-            reconstruction_row_count_jax,
-        ) = result
+        batch_norm = result.core.batch_norm
+        log_Z = result.core.log_Z
+        best_log_score = result.core.best_log_score
+        best_argmax = result.core.best_argmax
+        max_posterior = result.core.max_posterior
+        probs_sum_t = result.core.probs_sum_t
+        reconstruction_probs_sum_t = result.core.reconstruction_probs_sum_t
+        n_significant_samples = result.core.n_significant_samples
+        reconstruction_sample_mask = result.core.reconstruction_sample_mask
+        reconstruction_rotation_mask = result.core.reconstruction_rotation_mask
+        reconstruction_row_count_jax = result.core.reconstruction_row_count
         bucket = context.padded_bucket
         unpadded_bucket = context.unpadded_bucket
         unpadded_batch_size = int(context.unpadded_batch_size)

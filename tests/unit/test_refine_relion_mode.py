@@ -9153,7 +9153,7 @@ def test_skip_deferred_zero_norm_preserves_real_local_outputs(
         # Inspect the real compiled return, not a simulated zero operand.
         assert kwargs["return_deferred_mstep_inputs"] is deferred
         assert kwargs["accumulate_noise"] is (not deferred)
-        norm = np.asarray(result[8])
+        norm = np.asarray(result.core.bucket_norm_correction)
         expected_dtype = np.float64 if (spectrum_norm or normalization_float64) and not deferred else np.float32
         assert norm.dtype == np.dtype(expected_dtype)
         if deferred:

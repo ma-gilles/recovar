@@ -127,8 +127,8 @@ class BprefTransactionQueue:
         if any(dummy.dtype != value.dtype for dummy, value in zip(self._scorer_carry, carry, strict=True)):
             raise ValueError("Queued BPref scorer carry dtype changed")
         result = callback(*arguments[:7], *self._scorer_carry, *arguments[9:], **options)
-        self._scorer_carry = result[:2]
-        return (*carry, *result[2:])
+        self._scorer_carry = (result.core.Ft_y, result.core.Ft_ctf)
+        return result._replace(core=result.core._replace(Ft_y=carry[0], Ft_ctf=carry[1]))
 
     @staticmethod
     def _compatible_key(values):

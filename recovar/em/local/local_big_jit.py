@@ -1517,12 +1517,7 @@ def _project_local_half_spectrum(
 
 
 class _LocalBigJitCore(NamedTuple):
-    """The 22 leading values of every ``run_local_bucket_big_jit`` result.
-
-    Results stay plain tuples ``(*core, *extras)``: the fixed-capacity scan
-    slices carry positions out of them and the BPref transaction queue indexes
-    the M-step slots, so this type owns only the layout and its names.
-    """
+    """Named numerical outputs shared by every local bucket execution route."""
 
     Ft_y: jax.Array
     Ft_ctf: jax.Array
@@ -1546,6 +1541,68 @@ class _LocalBigJitCore(NamedTuple):
     reconstruction_sample_mask: jax.Array
     reconstruction_rotation_mask: jax.Array
     reconstruction_row_count: jax.Array
+
+
+class _LocalDeferredMstep(NamedTuple):
+    reconstruction_probs: jax.Array
+    shifted_recon: jax.Array
+    ctf2_over_nv_recon: jax.Array
+    shifted_noise: jax.Array
+    processed_score_half: jax.Array
+    flat_proj_for_noise: jax.Array
+    source_vdam_images: jax.Array
+    source_vdam_ctf: jax.Array
+    source_vdam_minvsigma2: jax.Array
+    source_vdam_ctf_probs: jax.Array
+
+
+class _LocalSourceVdam(NamedTuple):
+    images: jax.Array
+    ctf: jax.Array
+    minvsigma2: jax.Array
+    posterior: jax.Array
+    reference: jax.Array
+    ctf_probs: jax.Array
+
+
+class _LocalMstepTensors(NamedTuple):
+    summed: jax.Array
+    ctf_probs: jax.Array
+
+
+class _LocalBigJitDebug(NamedTuple):
+    scores: jax.Array | None = None
+    probs: jax.Array | None = None
+    shifted_score: jax.Array | None = None
+    shifted_recon: jax.Array | None = None
+    ctf2_over_nv_score: jax.Array | None = None
+    ctf2_over_nv_recon: jax.Array | None = None
+    proj_weighted: jax.Array | None = None
+    proj_for_noise: jax.Array | None = None
+    wavg_cutoff_triplet: jax.Array | None = None
+
+
+class _LocalBigJitResult(NamedTuple):
+    """Bucket outputs with the same flattened array order as the compiled ABI."""
+
+    core: _LocalBigJitCore
+    deferred_mstep: _LocalDeferredMstep | None = None
+    source_vdam: _LocalSourceVdam | None = None
+    mstep_tensors: _LocalMstepTensors | None = None
+    debug: _LocalBigJitDebug | None = None
+
+
+_LOCAL_BIG_JIT_CARRY_FIELDS = (
+    "Ft_y", "Ft_ctf", "noise_wsum", "noise_img_power", "noise_a2", "noise_xa",
+    "noise_scale_xa", "noise_scale_aa", "noise_sigma2_offset", "noise_sumw",
+)
+
+
+def _split_local_big_jit_carry(result):
+    """Retain call-local outputs without retaining the large carry buffers."""
+    carry = tuple(getattr(result.core, name) for name in _LOCAL_BIG_JIT_CARRY_FIELDS)
+    local_core = result.core._replace(**dict.fromkeys(_LOCAL_BIG_JIT_CARRY_FIELDS))
+    return carry, result._replace(core=local_core)
 
 
 @partial(
@@ -2517,7 +2574,7 @@ def run_local_bucket_big_jit(
             else jnp.zeros((1, 1, 1), dtype=debug_probs.dtype)
         )
         if not return_debug_operands:
-            return result + (debug_scores_for_return, debug_probs)
+            return result._replace(debug=_LocalBigJitDebug(debug_scores_for_return, debug_probs))
         debug_shifted_recon = (
             shifted_recon_split
             if shifted_recon_split is not None
@@ -2538,7 +2595,7 @@ def run_local_bucket_big_jit(
             if wavg_cutoff_triplet is not None
             else jnp.zeros((1, 3), dtype=jnp.float64)
         )
-        return result + (
+        return result._replace(debug=_LocalBigJitDebug(
             debug_scores_for_return,
             debug_probs,
             shifted_score_split,
@@ -2548,7 +2605,7 @@ def run_local_bucket_big_jit(
             proj_weighted,
             debug_proj_for_noise,
             debug_wavg_cutoff_triplet,
-        )
+        ))
 
     if score_only:
         shifted_score = shifted_score.astype(precision_policy.score_complex_dtype)
@@ -2600,31 +2657,31 @@ def run_local_bucket_big_jit(
             scores_override=direct_scores,
         )
         reconstruction_row_count = jnp.sum(reconstruction_rotation_mask & rotation_mask).astype(jnp.int32)
-        result = (
-            *_LocalBigJitCore(
-                Ft_y,
-                Ft_ctf,
-                noise_wsum,
-                noise_img_power,
-                noise_a2,
-                noise_xa,
-                noise_scale_xa,
-                noise_scale_aa,
-                jnp.zeros((batch_size,), dtype=jnp.float32),
-                noise_sigma2_offset,
-                noise_sumw,
-                batch_norm,
-                log_Z,
-                best_log_score,
-                best_argmax,
-                max_posterior,
-                probs_sum_t,
-                reconstruction_probs_sum_t,
-                n_significant_samples,
-                reconstruction_sample_mask,
-                reconstruction_rotation_mask,
-                reconstruction_row_count,
-            ),
+        result = _LocalBigJitResult(
+            core=_LocalBigJitCore(
+                Ft_y=Ft_y,
+                Ft_ctf=Ft_ctf,
+                noise_wsum=noise_wsum,
+                noise_img_power=noise_img_power,
+                noise_a2=noise_a2,
+                noise_xa=noise_xa,
+                noise_scale_xa=noise_scale_xa,
+                noise_scale_aa=noise_scale_aa,
+                bucket_norm_correction=jnp.zeros((batch_size,), dtype=jnp.float32),
+                noise_sigma2_offset=noise_sigma2_offset,
+                noise_sumw=noise_sumw,
+                batch_norm=batch_norm,
+                log_Z=log_Z,
+                best_log_score=best_log_score,
+                best_argmax=best_argmax,
+                max_posterior=max_posterior,
+                probs_sum_t=probs_sum_t,
+                reconstruction_probs_sum_t=reconstruction_probs_sum_t,
+                n_significant_samples=n_significant_samples,
+                reconstruction_sample_mask=reconstruction_sample_mask,
+                reconstruction_rotation_mask=reconstruction_rotation_mask,
+                reconstruction_row_count=reconstruction_row_count,
+            )
         )
         return _append_debug_outputs(
             result,
@@ -2783,41 +2840,43 @@ def run_local_bucket_big_jit(
                 (1, 1),
                 dtype=jnp.complex64,
             )
-        result = (
-            *_LocalBigJitCore(
-                Ft_y,
-                Ft_ctf,
-                noise_wsum,
-                noise_img_power,
-                noise_a2,
-                noise_xa,
-                noise_scale_xa,
-                noise_scale_aa,
-                jnp.zeros((batch_size,), dtype=jnp.float32),
-                noise_sigma2_offset,
-                noise_sumw,
-                batch_norm,
-                log_Z,
-                best_log_score,
-                best_argmax,
-                max_posterior,
-                probs_sum_t,
-                reconstruction_probs_sum_t,
-                n_significant_samples,
-                reconstruction_sample_mask,
-                reconstruction_rotation_mask,
-                reconstruction_row_count,
+        result = _LocalBigJitResult(
+            core=_LocalBigJitCore(
+                Ft_y=Ft_y,
+                Ft_ctf=Ft_ctf,
+                noise_wsum=noise_wsum,
+                noise_img_power=noise_img_power,
+                noise_a2=noise_a2,
+                noise_xa=noise_xa,
+                noise_scale_xa=noise_scale_xa,
+                noise_scale_aa=noise_scale_aa,
+                bucket_norm_correction=jnp.zeros((batch_size,), dtype=jnp.float32),
+                noise_sigma2_offset=noise_sigma2_offset,
+                noise_sumw=noise_sumw,
+                batch_norm=batch_norm,
+                log_Z=log_Z,
+                best_log_score=best_log_score,
+                best_argmax=best_argmax,
+                max_posterior=max_posterior,
+                probs_sum_t=probs_sum_t,
+                reconstruction_probs_sum_t=reconstruction_probs_sum_t,
+                n_significant_samples=n_significant_samples,
+                reconstruction_sample_mask=reconstruction_sample_mask,
+                reconstruction_rotation_mask=reconstruction_rotation_mask,
+                reconstruction_row_count=reconstruction_row_count,
             ),
-            reconstruction_probs,
-            shifted_recon_split,
-            ctf2_over_nv_recon,
-            shifted_noise_for_return,
-            processed_score_half_for_return,
-            deferred_flat_proj_for_noise,
-            deferred_source_vdam_images,
-            deferred_source_vdam_ctf,
-            deferred_source_vdam_minvsigma2,
-            deferred_source_vdam_ctf_probs,
+            deferred_mstep=_LocalDeferredMstep(
+                reconstruction_probs=reconstruction_probs,
+                shifted_recon=shifted_recon_split,
+                ctf2_over_nv_recon=ctf2_over_nv_recon,
+                shifted_noise=shifted_noise_for_return,
+                processed_score_half=processed_score_half_for_return,
+                flat_proj_for_noise=deferred_flat_proj_for_noise,
+                source_vdam_images=deferred_source_vdam_images,
+                source_vdam_ctf=deferred_source_vdam_ctf,
+                source_vdam_minvsigma2=deferred_source_vdam_minvsigma2,
+                source_vdam_ctf_probs=deferred_source_vdam_ctf_probs,
+            ),
         )
         return _append_debug_outputs(
             result,
@@ -3052,46 +3111,45 @@ def run_local_bucket_big_jit(
 
     reconstruction_row_count = jnp.sum(reconstruction_rotation_mask & rotation_mask).astype(jnp.int32)
     if return_mstep_tensors:
-        result = (
-            *_LocalBigJitCore(
-                Ft_y,
-                Ft_ctf,
-                noise_wsum,
-                noise_img_power,
-                noise_a2,
-                noise_xa,
-                noise_scale_xa,
-                noise_scale_aa,
-                bucket_norm_correction,
-                noise_sigma2_offset,
-                noise_sumw,
-                batch_norm,
-                log_Z,
-                best_log_score,
-                best_argmax,
-                max_posterior,
-                probs_sum_t,
-                reconstruction_probs_sum_t,
-                n_significant_samples,
-                reconstruction_sample_mask,
-                reconstruction_rotation_mask,
-                reconstruction_row_count,
-            ),
+        result = _LocalBigJitResult(
+            core=_LocalBigJitCore(
+                Ft_y=Ft_y,
+                Ft_ctf=Ft_ctf,
+                noise_wsum=noise_wsum,
+                noise_img_power=noise_img_power,
+                noise_a2=noise_a2,
+                noise_xa=noise_xa,
+                noise_scale_xa=noise_scale_xa,
+                noise_scale_aa=noise_scale_aa,
+                bucket_norm_correction=bucket_norm_correction,
+                noise_sigma2_offset=noise_sigma2_offset,
+                noise_sumw=noise_sumw,
+                batch_norm=batch_norm,
+                log_Z=log_Z,
+                best_log_score=best_log_score,
+                best_argmax=best_argmax,
+                max_posterior=max_posterior,
+                probs_sum_t=probs_sum_t,
+                reconstruction_probs_sum_t=reconstruction_probs_sum_t,
+                n_significant_samples=n_significant_samples,
+                reconstruction_sample_mask=reconstruction_sample_mask,
+                reconstruction_rotation_mask=reconstruction_rotation_mask,
+                reconstruction_row_count=reconstruction_row_count,
+            )
         )
         if return_source_vdam_operands:
-            result = result + (
-                jnp.asarray(
-                    processed_recon_half[:, bpref_pixel_indices],
-                    dtype=jnp.complex64,
-                ),
-                bpref_ctf,
-                jnp.asarray(bpref_minvsigma2, dtype=jnp.float32),
-                jnp.asarray(reconstruction_probs, dtype=jnp.float32),
-                jnp.asarray(proj_for_noise, dtype=jnp.complex64),
-                ctf_probs,
+            result = result._replace(
+                source_vdam=_LocalSourceVdam(
+                    images=jnp.asarray(processed_recon_half[:, bpref_pixel_indices], dtype=jnp.complex64),
+                    ctf=bpref_ctf,
+                    minvsigma2=jnp.asarray(bpref_minvsigma2, dtype=jnp.float32),
+                    posterior=jnp.asarray(reconstruction_probs, dtype=jnp.float32),
+                    reference=jnp.asarray(proj_for_noise, dtype=jnp.complex64),
+                    ctf_probs=ctf_probs,
+                )
             )
         else:
-            result = result + (summed, ctf_probs)
+            result = result._replace(mstep_tensors=_LocalMstepTensors(summed=summed, ctf_probs=ctf_probs))
         return _append_debug_outputs(
             result,
             debug_scores,
@@ -3104,31 +3162,31 @@ def run_local_bucket_big_jit(
             proj_for_noise=proj_for_noise,
             wavg_cutoff_triplet=debug_wavg_cutoff_triplet,
         )
-    result = (
-        *_LocalBigJitCore(
-            Ft_y,
-            Ft_ctf,
-            noise_wsum,
-            noise_img_power,
-            noise_a2,
-            noise_xa,
-            noise_scale_xa,
-            noise_scale_aa,
-            bucket_norm_correction,
-            noise_sigma2_offset,
-            noise_sumw,
-            batch_norm,
-            log_Z,
-            best_log_score,
-            best_argmax,
-            max_posterior,
-            probs_sum_t,
-            reconstruction_probs_sum_t,
-            n_significant_samples,
-            reconstruction_sample_mask,
-            reconstruction_rotation_mask,
-            reconstruction_row_count,
-        ),
+    result = _LocalBigJitResult(
+        core=_LocalBigJitCore(
+            Ft_y=Ft_y,
+            Ft_ctf=Ft_ctf,
+            noise_wsum=noise_wsum,
+            noise_img_power=noise_img_power,
+            noise_a2=noise_a2,
+            noise_xa=noise_xa,
+            noise_scale_xa=noise_scale_xa,
+            noise_scale_aa=noise_scale_aa,
+            bucket_norm_correction=bucket_norm_correction,
+            noise_sigma2_offset=noise_sigma2_offset,
+            noise_sumw=noise_sumw,
+            batch_norm=batch_norm,
+            log_Z=log_Z,
+            best_log_score=best_log_score,
+            best_argmax=best_argmax,
+            max_posterior=max_posterior,
+            probs_sum_t=probs_sum_t,
+            reconstruction_probs_sum_t=reconstruction_probs_sum_t,
+            n_significant_samples=n_significant_samples,
+            reconstruction_sample_mask=reconstruction_sample_mask,
+            reconstruction_rotation_mask=reconstruction_rotation_mask,
+            reconstruction_row_count=reconstruction_row_count,
+        )
     )
     return _append_debug_outputs(
         result,
@@ -3268,41 +3326,19 @@ def _run_fixed_capacity_whole_local_program(
             *prepared_call.trailing_arguments,
             **options,
         )
-        if len(result) < 12:
-            raise RuntimeError(
-                "mature local big-JIT returned fewer than twelve invariant outputs"
-            )
-        # Inputs 7:17 and outputs 0:8,9:11 are the exact chronological state.
-        # bucket_norm_correction (8), batch_norm (11), and all posterior/debug
-        # products remain call-local and are returned without retaining a copy
-        # of either multi-GB reconstruction accumulator for every call.
-        carry = tuple(result[:8]) + tuple(result[9:11])
-        call_outputs.append((result[8],) + tuple(result[11:]))
+        carry, call_output = _split_local_big_jit_carry(result)
+        call_outputs.append(call_output)
         if call_index + 1 < len(call_program):
             carry = jax.lax.optimization_barrier(carry)
     return carry, tuple(call_outputs)
 
 
 def _reconstruct_fixed_capacity_score_only_result(final_carry, call_output):
-    """Restore the mature 22-plus-value result topology for score-only calls."""
-
-    final_carry = tuple(final_carry)
-    call_output = tuple(call_output)
-    if len(final_carry) != 10:
-        raise ValueError(
-            "fixed-capacity score-only reconstruction requires ten carry values"
-        )
-    if len(call_output) < 11:
-        raise ValueError(
-            "fixed-capacity score-only reconstruction requires invariant call outputs"
-        )
-    return (
-        *final_carry[:8],
-        call_output[0],
-        *final_carry[8:],
-        call_output[1],
-        *call_output[2:],
-    )
+    """Restore carry fields without retaining per-call reconstruction buffers."""
+    if len(final_carry) != len(_LOCAL_BIG_JIT_CARRY_FIELDS):
+        raise ValueError("fixed-capacity score-only reconstruction requires ten carry values")
+    core = call_output.core._replace(**dict(zip(_LOCAL_BIG_JIT_CARRY_FIELDS, final_carry, strict=True)))
+    return call_output._replace(core=core)
 
 
 def _validate_uniform_fixed_capacity_call_program(call_program):
@@ -3379,13 +3415,8 @@ def _run_fixed_capacity_uniform_local_scan_program(
             *prepared_call.trailing_arguments,
             **options,
         )
-        if len(result) < 12:
-            raise RuntimeError(
-                "mature local big-JIT returned fewer than twelve invariant outputs"
-            )
-        next_carry = tuple(result[:8]) + tuple(result[9:11])
+        next_carry, call_output = _split_local_big_jit_carry(result)
         next_carry = jax.lax.optimization_barrier(next_carry)
-        call_output = (result[8],) + tuple(result[11:])
         return next_carry, call_output
 
     return jax.lax.scan(scan_step, carry, stacked_call_program)

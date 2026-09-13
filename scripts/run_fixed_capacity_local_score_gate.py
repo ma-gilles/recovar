@@ -474,7 +474,7 @@ def _capture_shared_numeric_call(
             return_debug_operands=False,
         )
         full_result = shared_numeric(*args, **diagnostic_kwargs)
-        host_result = tuple(_to_host_array(value) for value in full_result)
+        host_result = tuple(_to_host_array(value) for value in jax.tree_util.tree_leaves(full_result))
         if len(host_result) != len(_BASE_RESULT_NAMES) + 2:
             raise RuntimeError(
                 "shared score primitive returned an unexpected diagnostic topology: "
@@ -509,7 +509,7 @@ def _capture_shared_numeric_call(
         # The outer engine entered the non-diagnostic production topology and
         # must see precisely that topology even though the gate captured the
         # two diagnostic arrays from the same numeric invocation.
-        return full_result[:-2]
+        return full_result._replace(debug=None)
 
     local_em_engine._invoke_local_bucket_big_jit = capture_wrapper
     try:
@@ -587,14 +587,12 @@ def _run_outer(
     )
 
 
-def _outer_snapshot(result: tuple[Any, ...]) -> dict[str, np.ndarray]:
-    if len(result) != 4:
-        raise RuntimeError(f"score-only outer result changed topology: {len(result)}")
-    ft_y, ft_ctf, hard_assignment, stats = result
+def _outer_snapshot(result) -> dict[str, np.ndarray]:
+    stats = result.stats
     return {
-        "Ft_y": _to_host_array(ft_y),
-        "Ft_ctf": _to_host_array(ft_ctf),
-        "hard_assignment": _to_host_array(hard_assignment),
+        "Ft_y": _to_host_array(result.Ft_y),
+        "Ft_ctf": _to_host_array(result.Ft_ctf),
+        "hard_assignment": _to_host_array(result.hard_assignments),
         "log_evidence_per_image": _to_host_array(stats.log_evidence_per_image),
         "best_log_score_per_image": _to_host_array(stats.best_log_score_per_image),
         "max_posterior_per_image": _to_host_array(stats.max_posterior_per_image),
@@ -645,9 +643,7 @@ def _run_and_compare_whole_boundary(
         **reference_static,
     )
     final_carry = tuple(_to_host_array(value) for value in final_carry)
-    call_outputs = tuple(
-        tuple(_to_host_array(value) for value in output) for output in call_outputs
-    )
+    call_outputs = jax.tree_util.tree_map(_to_host_array, call_outputs)
     if len(call_outputs) != len(captures):
         raise AssertionError(
             f"{label} whole boundary returned {len(call_outputs)} calls, "
@@ -665,6 +661,7 @@ def _run_and_compare_whole_boundary(
             final_carry,
             call_output,
         )
+        reconstructed = jax.tree_util.tree_leaves(reconstructed)
         if len(reconstructed) != len(result_names):
             raise AssertionError(
                 f"{label} call {call_index} returned an unexpected topology: "
@@ -714,13 +711,14 @@ def _run_and_compare_uniform_scan_boundary(
     result_names = _BASE_RESULT_NAMES + ("debug_scores", "debug_probs")
     output_digests: list[dict[str, str]] = []
     for call_index, captured in enumerate(captures):
-        call_output = tuple(
-            _to_host_array(value[call_index]) for value in stacked_call_outputs
+        call_output = jax.tree_util.tree_map(
+            lambda value: _to_host_array(value[call_index]), stacked_call_outputs
         )
         reconstructed = local_big_jit._reconstruct_fixed_capacity_score_only_result(
             final_carry,
             call_output,
         )
+        reconstructed = jax.tree_util.tree_leaves(reconstructed)
         if len(reconstructed) != len(result_names):
             raise AssertionError(
                 f"{label} call {call_index} returned an unexpected topology: "
@@ -787,8 +785,8 @@ def _run_prepared_calls_individually(
         )
         if synchronize_each_call:
             _block_tree(result)
-        carry = tuple(result[:8]) + tuple(result[9:11])
-        call_outputs.append((result[8],) + tuple(result[11:]))
+        carry, call_output = local_big_jit._split_local_big_jit_carry(result)
+        call_outputs.append(call_output)
     return carry, tuple(call_outputs)
 
 

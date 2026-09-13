@@ -51,7 +51,9 @@ def test_deferred_scorer_donation_cannot_replace_pending_accumulators():
     @partial(jax.jit, donate_argnums=(7, 8), static_argnames=tuple(options))
     def scorer(a, b, c, d, e, f, g, data, weight, **options):
         shapes.append((data.shape, weight.shape))
-        return data, weight, jnp.asarray(19, jnp.int32)
+        from recovar.em.local.local_big_jit import _LocalBigJitCore, _LocalBigJitResult
+
+        return _LocalBigJitResult(_LocalBigJitCore(data, weight, jnp.asarray(19, jnp.int32), *([None] * 19)))
 
     common, calls, callback = setup()
     queue = BprefTransactionQueue()
@@ -61,7 +63,7 @@ def test_deferred_scorer_donation_cannot_replace_pending_accumulators():
         args, kwargs = operands(2, first, common, data, weight)
         data, weight, _ = queue.accumulate(callback, *args, **kwargs)
         result = queue.run_deferred_scorer(scorer, (None,) * 7 + (data, weight), options)
-        assert result[0] is data and result[1] is weight and int(result[2]) == 19
+        assert result.core.Ft_y is data and result.core.Ft_ctf is weight and int(result.core.noise_wsum) == 19
         assert not data.is_deleted() and not weight.is_deleted()
     assert shapes == [((0,), (0,))]
     assert not calls

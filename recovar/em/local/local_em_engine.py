@@ -112,7 +112,7 @@ from recovar.em.local.local_batch_planning import (
     _exact_local_xhalf_tail_microbatch_cap,
 )
 from recovar.em.local.local_big_jit import (
-    _LocalBigJitCore,
+    _LocalBigJitDebug,
     _noise_image_power_shells_and_per_image,
     _partition_uniform_fixed_capacity_calls,
     _prepare_fixed_capacity_local_call,
@@ -2317,38 +2317,17 @@ def run_local_em_exact(
                     *big_jit_arguments,
                     **big_jit_static_options,
                 )
-            debug_scores = None
-            debug_probs = None
-            debug_shifted_score_split = None
-            debug_shifted_recon_split = None
-            debug_ctf2_over_nv_score = None
-            debug_ctf2_over_nv_recon = None
-            debug_proj_weighted = None
-            debug_proj_for_noise = None
-            debug_wavg_cutoff_triplet = None
-            if return_big_jit_debug_arrays:
-                if return_big_jit_debug_operands:
-                    (
-                        *big_jit_result,
-                        debug_scores,
-                        debug_probs,
-                        debug_shifted_score_split,
-                        debug_shifted_recon_split,
-                        debug_ctf2_over_nv_score,
-                        debug_ctf2_over_nv_recon,
-                        debug_proj_weighted,
-                        debug_proj_for_noise,
-                        debug_wavg_cutoff_triplet,
-                    ) = big_jit_result
-                    if score_only:
-                        debug_shifted_recon_split = None
-                        debug_ctf2_over_nv_recon = None
-                        debug_proj_for_noise = None
-                        debug_wavg_cutoff_triplet = None
-                else:
-                    *big_jit_result, debug_scores, debug_probs = big_jit_result
-            big_jit_core = _LocalBigJitCore._make(big_jit_result[: len(_LocalBigJitCore._fields)])
-            big_jit_extras = tuple(big_jit_result[len(_LocalBigJitCore._fields) :])
+            (
+                debug_scores, debug_probs, debug_shifted_score_split,
+                debug_shifted_recon_split, debug_ctf2_over_nv_score,
+                debug_ctf2_over_nv_recon, debug_proj_weighted,
+                debug_proj_for_noise, debug_wavg_cutoff_triplet,
+            ) = big_jit_result.debug or _LocalBigJitDebug()
+            if score_only:
+                debug_shifted_recon_split = None
+                debug_ctf2_over_nv_recon = None
+                debug_proj_for_noise = None
+                debug_wavg_cutoff_triplet = None
             (
                 Ft_y,
                 Ft_ctf,
@@ -2372,7 +2351,7 @@ def run_local_em_exact(
                 reconstruction_sample_mask,
                 reconstruction_rotation_mask,
                 reconstruction_row_count_jax,
-            ) = big_jit_core
+            ) = big_jit_result.core
             summed = None
             ctf_probs = None
             if return_big_jit_deferred_mstep_inputs:
@@ -2387,7 +2366,7 @@ def run_local_em_exact(
                     deferred_source_vdam_ctf,
                     deferred_source_vdam_minvsigma2,
                     deferred_source_vdam_ctf_probs,
-                ) = big_jit_extras
+                ) = big_jit_result.deferred_mstep
             elif return_big_jit_mstep_tensors and return_source_vdam_operands:
                 (
                     source_vdam_images,
@@ -2396,7 +2375,7 @@ def run_local_em_exact(
                     source_vdam_posterior,
                     source_vdam_reference,
                     ctf_probs,
-                ) = big_jit_extras
+                ) = big_jit_result.source_vdam
                 if bpref_contribution_capture_active:
                     # The source-faithful production route deliberately avoids
                     # materializing the large (particle, rotation, pixel)
@@ -2418,11 +2397,7 @@ def run_local_em_exact(
                         image_shape,
                     )
             elif return_big_jit_mstep_tensors:
-                summed, ctf_probs = big_jit_extras
-            elif big_jit_extras:
-                raise ValueError(
-                    f"big-JIT result carries {len(big_jit_extras)} values past the {len(_LocalBigJitCore._fields)}-value core"
-                )
+                summed, ctf_probs = big_jit_result.mstep_tensors
             if group_ids_np is None:
                 noise_scale_xa = None
                 noise_scale_aa = None
