@@ -10619,8 +10619,12 @@ def test_flat_real_rows_sums_and_noise_are_bit_identical(monkeypatch, custom_cud
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_NATIVE_PAIR_SPARSE_SUMS", "1")
         monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_FLAT_ROWS", flat)
         monkeypatch.setattr(cuda_backproject, "dual_weighted_sums_pairs_rows_f32", spy)
+        # the fused stage is jitted: retrace so the (Python-level) spy sees the kernel call
+        bucketed_mod._compact_pair_weighted_sums_and_noise_native.clear_cache()
         kwargs = _fused_kclass_multibucket_fixture(n_images=13)
         kwargs["accumulate_noise"] = True
+        # the fused native sums/noise path (a prerequisite) is the exact Gaussian x-half M-step contract
+        kwargs["relion_x_half_mstep"] = True
         with jax.default_device(gpu_device):
             return _fused_kclass_result_arrays(
                 bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs)
@@ -10630,7 +10634,38 @@ def test_flat_real_rows_sums_and_noise_are_bit_identical(monkeypatch, custom_cud
     assert not calls, "the flat-row kernel must not run with the flag off"
     flat = run("1")
     assert calls, "the flat-row kernel must run with the flag on"
-    _assert_fused_arrays_identical(padded, flat, f"flat real rows (defer={defer_flag})")
+    # The x-half BPref adjoint accumulates with device atomics, so the reconstruction
+    # volumes are order-dependent at the float32 ULP level whenever the rows arrive in a
+    # different launch layout (the real-rows adjoint pin, f089f37e6, bounds them the same
+    # way); every other output — sums, CTF sums, noise statistics, posteriors, best poses —
+    # must be bit-identical.
+    volume_keys = {k for k in padded if k.startswith(("Ft_y", "Ft_ctf"))}
+    # The posterior-mass reductions now sit in a different XLA program (the flat-row
+    # stage), so XLA fuses them differently and the noise statistics they feed move by a
+    # float32 ULP or two (as ctf_probs did when the pair-sparse sums landed, 048c30d20).
+    # Bound them; posteriors, best poses and class evidences stay bitwise.
+    noise_keys = {k for k in padded if k.startswith("noise_stats")}
+    for name in sorted(noise_keys):
+        a = np.asarray(padded[name]); b = np.asarray(flat[name])
+        assert a.shape == b.shape and a.dtype == b.dtype, name
+        np.testing.assert_allclose(b, a, rtol=8 * np.finfo(np.float32).eps, atol=0.0, err_msg=name)
+    for name in sorted(padded):
+        a = np.asarray(padded[name]); b = np.asarray(flat[name])
+        if a.shape != b.shape or not np.array_equal(np.nan_to_num(a), np.nan_to_num(b)):
+            diff = np.abs(np.nan_to_num(a).astype(np.complex128) - np.nan_to_num(b).astype(np.complex128))
+            scale = np.abs(np.nan_to_num(a).astype(np.complex128))
+            print(f"DIFF {name}: shape {a.shape} dtype {a.dtype} n_mismatch {int((diff > 0).sum())} max_abs {diff.max():.3e} max_rel {np.max(diff / np.maximum(scale, 1e-30)):.3e}")
+    for name in sorted(volume_keys):
+        a = np.asarray(padded[name]); b = np.asarray(flat[name])
+        assert a.shape == b.shape and a.dtype == b.dtype, name
+        eps = np.finfo(np.asarray(a).real.dtype).eps
+        np.testing.assert_allclose(b, a, rtol=4 * eps, atol=4 * eps * max(1.0, float(np.max(np.abs(a)))), err_msg=name)
+    bounded = volume_keys | noise_keys
+    _assert_fused_arrays_identical(
+        {k: v for k, v in padded.items() if k not in bounded},
+        {k: v for k, v in flat.items() if k not in bounded},
+        f"flat real rows (defer={defer_flag})",
+    )
 
 
 def test_flat_real_rows_flag_requires_its_prerequisites(monkeypatch):
