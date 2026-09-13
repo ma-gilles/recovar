@@ -34,11 +34,19 @@ were removed only where inputs, implementation and assertions matched.
 [artifact checks](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_artifact_profile_cleanup_20260913/result.json),
 [FFT diagnostic checks](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_fft_replay_layout_cleanup_20260913/result.json).
 
-All ten same-source VDAM controls are terminal. Seven distinct arms miss at
-least one original two-sided mean or weighted-FSC band. Controls and ongoing
-bisections establish attribution, not replacement acceptance bands. Private speed
-integration remains held; no tolerance has changed.
-[Terminal control review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_capacity_noise_review_20260913/control_matrix_terminal.json).
+All ten same-source VDAM controls and twelve older/newer-base bisections are
+terminal. Seven of ten controls miss an original mean or weighted-FSC band.
+The older base has four of six arms inside both bands; the newer base has three.
+Their only source difference changes generic shared-spectrum noise operands from
+float64-promoting division to a reciprocal cast to the accumulation dtype before
+multiplication. Effective paired environments differ only in runtime paths;
+declared CUDA libraries hash identically. Current lead source retains generic
+division. These observations do not qualify either precision or the optional speed
+changes: same-source replicate variability and original acceptance bands remain.
+The existing radial-knob matrix continues; private speed integration is held.
+[Completed base and source review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_capacity_noise_review_20260913/base_source_environment_review.json),
+[all terminal base metrics](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_capacity_noise_review_20260913/base_all_terminal.json),
+[terminal control review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_capacity_noise_review_20260913/control_matrix_terminal.json).
 
 Earlier controller, startup-noise, projection-radius and prior corrections are
 recorded with their frozen-source evidence in the [published checkpoint history](https://github.com/ma-gilles/recovar/blob/00f319ca0e74816f3a4edb58d126bd14ede7e8ae/docs/development/em_status.md).
@@ -265,7 +273,7 @@ this page does not schedule or authorize duplicate runs.
 
 Finish the existing dtype-repair CUDA guard and peer bisections, then continue
 selective integration and the scientific ladder in the coordination queue. Do not
-restart or duplicate live candidates. The latest VDAM size check still fails at8753>6100 lines; moving code into
+restart or duplicate live candidates. The latest VDAM size check still fails at8741>6100 lines; moving code into
 another owner does not remove it from the budget.
 
 Preserve the distinct numerical routes while reducing structural overhead. Big-JIT
