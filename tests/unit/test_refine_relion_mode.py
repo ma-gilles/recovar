@@ -13545,12 +13545,15 @@ class TestRelionModeSmokeTest:
         np.testing.assert_allclose(captured_noise[0], half1_noise)
         np.testing.assert_allclose(captured_noise[1], half2_noise)
 
+    @pytest.mark.parametrize("oversampling,preserve_order", [(1, False), (0, True)])
     def test_k1_adaptive_significant_counts_do_not_replace_exact_accuracy(
         self,
         half_datasets,
         init_volume,
         translations,
         monkeypatch,
+        oversampling,
+        preserve_order,
     ):
         """K=1 adaptive counts remain diagnostic when exact accuracy is unavailable."""
         import recovar.em.refinement.iteration_loop as refine_mod
@@ -13616,6 +13619,7 @@ class TestRelionModeSmokeTest:
                 trans_parent_map,
                 disc_type,
             )
+            assert kwargs.get("preserve_bpref_particle_order", False) == preserve_order
             half_idx = call_idx["value"]
             call_idx["value"] += 1
             fine_mstep_prune_values.append(kwargs.get("relion_fine_mstep_prune"))
@@ -13686,7 +13690,8 @@ class TestRelionModeSmokeTest:
                     skip_final_iteration=True,
                 ),
                 batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=20),
-                adaptive=AdaptiveOptions(relion_current_sizes=[8], adaptive_oversampling=1),
+                adaptive=AdaptiveOptions(relion_current_sizes=[8], adaptive_oversampling=oversampling),
+                parity=RelionParityOptions(preserve_bpref_particle_order=preserve_order),
             ),
         )
 

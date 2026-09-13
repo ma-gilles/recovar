@@ -36,10 +36,10 @@ def _routed_block(source, start, end):
 
 def test_k1_dense_scorer_uses_the_routing_rule_and_no_longer_rejects_scale_groups():
     source = inspect.getsource(half_scoring._score_half_dense)
-    assert "if _dense_uses_adaptive_engine(state.adaptive_oversampling, group_ids_k):" in source
+    assert "if preserve_bpref_particle_order or _dense_uses_adaptive_engine(state.adaptive_oversampling, group_ids_k):" in source
     assert "does not accumulate group XA/AA statistics" not in source
     # Oversampling 0 with scale groups is RELION's single pass on the current grid.
-    routed = _routed_block(source, "if _dense_uses_adaptive_engine(", "if relion_firstiter_cc_this_iter:")
+    routed = _routed_block(source, "if preserve_bpref_particle_order or _dense_uses_adaptive_engine(", "if relion_firstiter_cc_this_iter:")
     assert "firstiter_coarse_current_size = cs_for_engine" in routed
     assert "firstiter_fine_current_size = cs_for_engine" in routed
 

@@ -603,17 +603,17 @@ def _score_half_dense(
             mstep_accumulator_shape=getattr(k_class_result, "mstep_accumulator_shape", None),
         )
 
-    if _dense_uses_adaptive_engine(state.adaptive_oversampling, group_ids_k):
+    if preserve_bpref_particle_order or _dense_uses_adaptive_engine(state.adaptive_oversampling, group_ids_k):
         if disable_adjoint_y or disable_adjoint_ctf:
             raise NotImplementedError("K=1 adaptive oversampling does not support adjoint ablation flags")
         adaptive_os_local = int(state.adaptive_oversampling)
         if adaptive_os_local <= 0:
-            # RELION scale groups at oversampling 0: single pass on the current
-            # grid through the adaptive engine so group XA/AA are accumulated.
+            # The sparse engine supplies group statistics and per-particle
+            # BPref launches even for a single pass on the current grid.
             firstiter_coarse_current_size = cs_for_engine
             firstiter_fine_current_size = cs_for_engine
             logger.info(
-                "RELION K=1 scale groups at oversampling 0: routing the single pass through the "
+                "RELION K=1 group statistics or BPref order at oversampling 0: single pass through the "
                 "adaptive engine (current_size=%s)",
                 cs_for_engine,
             )
