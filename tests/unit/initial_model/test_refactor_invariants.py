@@ -24,6 +24,21 @@ from recovar.commands.initial_model import GuiInitialModelDefaults
 from recovar.em.helpers.expected_accuracy import estimate_relion_expected_accuracy_from_prepared_inputs
 from recovar.em.refinement.mean_helpers import initial_low_pass_filter_references
 from recovar.em.relion import relion_projector_setup
+from recovar.em.vdam import (
+    dense_adapter,
+    driver,
+    estep_common,
+    estep_meta_updates,
+    iteration_loop,
+    m_step,
+    mstep_single_class,
+    native_options,
+    native_sampling,
+    sparse_pass2_estep,
+    star_io,
+    state,
+    subset_schedule,
+)
 from recovar.em.vdam.init import compute_current_size_for_denovo, compute_ini_high_angstrom, compute_ini_high_shell
 from recovar.em.vdam.layout import relion_bpref_frame_scales
 from recovar.em.vdam.schedules import (
@@ -502,3 +517,68 @@ print(parent_elapsed, initial_model_elapsed)
         f"recovar.em.vdam added {initial_model_elapsed:.2f}s after the "
         f"{parent_elapsed:.2f}s parent import; likely a module-level side effect"
     )
+
+
+# Module ownership and adapter routing.
+
+MOVED = ("NativeOpticsState", "_optics_group_indices", "_single_optics_scalars", "_phase_shift", "_native_optics_state", "_particle_state_from_star", "_write_model_star", "_write_data_star", "_write_iteration_artifacts", "_write_final_outputs", "_star_column", "_stack_star_pair", "_experiment_read_order", "_micrograph_sort_order")
+SAMPLING = ("NativeSamplingPlan", "NativeSamplingState", "_build_sampling_plan", "_initial_sampling_state", "_estimate_native_sampling_accuracy", "_relion_update_native_sampling_state", "_prepare_native_sampling_for_iteration", "_random_perturbation_for_iteration")
+
+
+def test_iteration_loop_updates_definition_ownership():
+    loop_src = inspect.getsource(iteration_loop)
+    for name in ("update_noise_from_estep_meta", "update_probabilities_from_estep_meta", "_maybe_dump_noise_update_boundary"):
+        assert inspect.getmodule(getattr(estep_meta_updates, name)) is estep_meta_updates and f"\ndef {name}(" not in loop_src
+    for name in ("select_subset_for_iter", "restore_subset_order_for_continuation"):
+        assert inspect.getmodule(getattr(subset_schedule, name)) is subset_schedule and f"\ndef {name}(" not in loop_src
+    assert iteration_loop.update_noise_from_estep_meta is estep_meta_updates.update_noise_from_estep_meta
+    assert iteration_loop.select_subset_for_iter is subset_schedule.select_subset_for_iter
+    for mod in (estep_meta_updates, subset_schedule):
+        assert "initial_model.iteration_loop import" not in inspect.getsource(mod)
+
+
+def test_mstep_single_class_definition_ownership():
+    src = inspect.getsource(m_step)
+    for name in ("vdam_m_step_single_class", "_run_m_step_transaction", "_validate_mstep_precision_route", "_maybe_replay_native_bpref_accumulators"):
+        assert inspect.getmodule(getattr(mstep_single_class, name)) is mstep_single_class and f"\ndef {name}(" not in src
+    assert inspect.getmodule(state.VdamAccumulator) is state and "\nclass VdamAccumulator" not in src
+    assert m_step.vdam_m_step_single_class is mstep_single_class.vdam_m_step_single_class
+    assert m_step.VdamAccumulator is state.VdamAccumulator
+    assert "initial_model.m_step import" not in inspect.getsource(mstep_single_class)
+
+
+def test_star_io_owns_the_cluster_and_driver_only_imports_it():
+    driver_src = inspect.getsource(driver)
+    for name in MOVED:
+        assert hasattr(star_io, name) and inspect.getmodule(getattr(star_io, name)) is star_io
+        assert f"\ndef {name}(" not in driver_src and f"\nclass {name}(" not in driver_src
+    assert "from recovar.em.vdam.star_io import (" in driver_src
+    assert driver._write_iteration_artifacts is star_io._write_iteration_artifacts
+
+
+def test_particle_record_is_owned_by_state_and_shared_with_star_io():
+    assert inspect.getmodule(state.NativeParticleState) is state
+    assert star_io.NativeParticleState is state.NativeParticleState
+
+
+def test_native_sampling_definition_ownership():
+    driver_src = inspect.getsource(driver)
+    for name in SAMPLING:
+        assert inspect.getmodule(getattr(native_sampling, name)) is native_sampling
+        assert f"\ndef {name}(" not in driver_src and f"\nclass {name}(" not in driver_src
+    assert inspect.getmodule(native_options.NativeInitialModelOptions) is native_options
+    assert "\nclass NativeInitialModelOptions" not in driver_src
+    assert driver.NativeInitialModelOptions is native_options.NativeInitialModelOptions
+    assert "import recovar.em.vdam.driver" not in inspect.getsource(native_sampling)
+
+
+def test_sparse_pass2_estep_definition_ownership():
+    adapter_src = inspect.getsource(dense_adapter)
+    for name in ("_run_sparse_pass2_initial_model_estep", "_sparse_pass2_estep_meta", "_initial_model_pass2_layout", "_pop_sparse_pass2_options"):
+        assert inspect.getmodule(getattr(sparse_pass2_estep, name)) is sparse_pass2_estep and f"\ndef {name}(" not in adapter_src
+    for name in ("DenseInitialModelEstepConfig", "DenseInitialModelEstepResult", "_estep_meta", "_select_image_rows"):
+        assert inspect.getmodule(getattr(estep_common, name)) is estep_common
+    assert dense_adapter._run_sparse_pass2_initial_model_estep is sparse_pass2_estep._run_sparse_pass2_initial_model_estep
+    assert dense_adapter.DenseInitialModelEstepConfig is estep_common.DenseInitialModelEstepConfig
+    for mod in (sparse_pass2_estep, estep_common):
+        assert "initial_model.dense_adapter import" not in inspect.getsource(mod)
