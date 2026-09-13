@@ -203,6 +203,31 @@ _AUTO_FULL_HYPOTHESIS_DEVICE_FRACTION = 0.305
 # 6,587,373 total candidates formed two 8 GiB gathers and requested a 17.04 GiB
 # compiled temporary on the 100k/256 fixture after earlier JIT fragmentation.
 _AUTO_FUSED_KCLASS_SCORE_GATHER_DEVICE_FRACTION = 0.100
+_FUSED_KCLASS_SCORE_GATHER_FRACTION_ENV = "RECOVAR_SPARSE_PASS2_FUSED_KCLASS_SCORE_GATHER_FRACTION"
+
+
+def _fused_kclass_score_gather_device_fraction() -> float:
+    """Device-memory share the fused K-class score gather may use per live buffer.
+
+    This fraction sets the hypotheses-per-microbatch budget, which divided by
+    (classes x pair bucket size) is what actually caps images per chunk - not the
+    projection-gather byte budget, which at 100k/256 K=4 does not bind (doubling it
+    left the dominant group at 2688 chunks, job 13840889). Every per-chunk host cost
+    scales with the chunk count, so this fraction is the lever on the ~5200 chunks an
+    iteration. It stays a fraction of real device memory rather than a fixed count so
+    the cap remains dimension- and capacity-dependent.
+    """
+
+    raw = os.environ.get(_FUSED_KCLASS_SCORE_GATHER_FRACTION_ENV)
+    if raw is None or not raw.strip():
+        return _AUTO_FUSED_KCLASS_SCORE_GATHER_DEVICE_FRACTION
+    value = float(raw)
+    if not (0.0 < value <= 0.45):
+        raise ValueError(
+            f"{_FUSED_KCLASS_SCORE_GATHER_FRACTION_ENV} must be in (0, 0.45], got {raw!r}; "
+            "the budget is multiplied by the number of live gathers"
+        )
+    return value
 _AUTO_FUSED_KCLASS_LIVE_COMPLEX_GATHERS = 2
 _AUTO_TRANSLATION_TILE_DEVICE_FRACTION = 0.020
 _AUTO_EXTERNAL_NORMALIZATION_TRANSLATION_TILE_DEVICE_FRACTION = 0.014
@@ -1786,7 +1811,7 @@ def _auto_hypotheses_per_microbatch(
             1,
             int(
                 float(device_memory_bytes)
-                * _AUTO_FUSED_KCLASS_SCORE_GATHER_DEVICE_FRACTION
+                * _fused_kclass_score_gather_device_fraction()
                 * int(fused_k_class_count)
                 / (
                     int(n_score_pixels)

@@ -10998,3 +10998,22 @@ def test_device_active_flat_row_indices_match_the_host_build(monkeypatch, case):
     np.testing.assert_array_equal(dev_idx[:host_count], host_idx[:host_count])
     np.testing.assert_array_equal(dev_mask, host_mask)
     assert dev_idx.min() >= 0 and dev_idx.max() < len(counts) * rows
+
+
+def test_fused_kclass_score_gather_fraction_env(monkeypatch):
+    """The fused K-class hypothesis budget scales with the device-memory fraction, stays
+    at the 0.100 default when unset, and rejects values outside (0, 0.45]."""
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    monkeypatch.delenv(bucketed_mod._FUSED_KCLASS_SCORE_GATHER_FRACTION_ENV, raising=False)
+    assert bucketed_mod._fused_kclass_score_gather_device_fraction() == 0.100
+    kwargs = dict(score_only=False, use_window=True, has_external_normalization=False,
+                  conservative_dump_execution=False, fused_k_class=True, fused_k_class_count=4,
+                  n_score_pixels=596, device_memory_bytes=85899345920)
+    base = bucketed_mod._max_hypotheses_per_microbatch_for_pass(**kwargs)
+    monkeypatch.setenv(bucketed_mod._FUSED_KCLASS_SCORE_GATHER_FRACTION_ENV, "0.2")
+    doubled = bucketed_mod._max_hypotheses_per_microbatch_for_pass(**kwargs)
+    assert abs(doubled / base - 2.0) < 0.01
+    monkeypatch.setenv(bucketed_mod._FUSED_KCLASS_SCORE_GATHER_FRACTION_ENV, "0.9")
+    with pytest.raises(ValueError, match="must be in"):
+        bucketed_mod._max_hypotheses_per_microbatch_for_pass(**kwargs)
