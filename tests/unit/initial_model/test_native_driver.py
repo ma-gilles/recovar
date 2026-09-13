@@ -2248,6 +2248,9 @@ def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
         np.ones(5, dtype=np.float32),
         plan,
         np.zeros((1, 2), dtype=np.float32),
+        sigma_offset_angstrom=4.0,
+        class_log_priors=np.zeros(opts.nr_classes, dtype=np.float64),
+        pass1_healpix_order=plan.healpix_order,
     )
 
     fine_prior = np.asarray(config.engine_kwargs["translation_log_prior"], dtype=np.float32)
@@ -2278,6 +2281,9 @@ def test_dense_estep_config_propagates_public_pass2_engine():
         np.ones(5, dtype=np.float32),
         plan,
         np.zeros((1, 2), dtype=np.float32),
+        sigma_offset_angstrom=10.0,
+        class_log_priors=np.zeros(opts.nr_classes, dtype=np.float64),
+        pass1_healpix_order=plan.healpix_order,
     )
 
     assert config.pass2_engine == "compact"
@@ -2306,6 +2312,9 @@ def test_dense_estep_config_keeps_zero_oversampling_on_exact_adaptive_route():
         np.ones(5, dtype=np.float32),
         plan,
         np.zeros((1, 2), dtype=np.float32),
+        sigma_offset_angstrom=10.0,
+        class_log_priors=np.zeros(opts.nr_classes, dtype=np.float64),
+        pass1_healpix_order=plan.healpix_order,
     )
 
     assert config.engine_kwargs["sparse_pass2"] is True

@@ -316,9 +316,9 @@ def _dense_estep_config(
     noise_variance: np.ndarray,
     sampling_plan: NativeSamplingPlan,
     translation_offsets: np.ndarray,
-    sigma_offset_angstrom: float | None = None,
-    class_log_priors: np.ndarray | None = None,
-    pass1_healpix_order: int | None = None,
+    sigma_offset_angstrom: float,
+    class_log_priors: np.ndarray,
+    pass1_healpix_order: int,
 ) -> DenseInitialModelEstepConfig:
     image_pre_shifts = relion_round_away_from_zero(translation_offsets)
     coarse_translations = np.asarray(
@@ -333,11 +333,7 @@ def _dense_estep_config(
         else coarse_translations,
         dtype=np.float32,
     )
-    # Default σ_offset = 10 Å matches RELION's _rlnSigmaOffsetsAngst at iter000.
-    if sigma_offset_angstrom is None:
-        sigma_angstrom = opts.translation_sigma_angstrom if opts.translation_sigma_angstrom is not None else 10.0
-    else:
-        sigma_angstrom = float(sigma_offset_angstrom)
+    sigma_angstrom = float(sigma_offset_angstrom)
     # InitialModel uses the same accelerated ``pdf_offset`` convention as the
     # supplied-map EM path: the sampling grid is represented in projection
     # pixels, while RELION applies its source-faithful pixel_size**4 scale.
@@ -383,11 +379,7 @@ def _dense_estep_config(
             random_perturbation=float(sampling_plan.random_perturbation),
             coarse_translations=coarse_translations,
             particle_diameter_ang=float(opts.particle_diameter),
-            pass1_healpix_order=(
-                int(sampling_plan.healpix_order)
-                if pass1_healpix_order is None
-                else int(pass1_healpix_order)
-            ),
+            pass1_healpix_order=int(pass1_healpix_order),
             return_profile=bool(os.environ.get("RECOVAR_INITIAL_MODEL_PROFILE")),
         )
         if _af := os.environ.get("RECOVAR_ADAPTIVE_FRACTION"):

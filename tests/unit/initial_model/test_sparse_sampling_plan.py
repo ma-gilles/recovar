@@ -50,6 +50,9 @@ def test_deferred_plan_cannot_enter_dense_execution(monkeypatch):
             np.ones(33, dtype=np.float32),
             plan,
             np.zeros((2, 2), dtype=np.float32),
+            sigma_offset_angstrom=10.0,
+            class_log_priors=np.zeros(opts.nr_classes, dtype=np.float64),
+            pass1_healpix_order=plan.healpix_order,
         )
 
 
