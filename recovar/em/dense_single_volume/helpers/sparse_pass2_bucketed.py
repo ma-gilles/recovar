@@ -270,6 +270,7 @@ _SPARSE_KCLASS_RECTANGULAR_ACTIVE_PREMATMUL_MAX_GROUPED_DENSE_RATIO_ENV = (
 )
 _SPARSE_KCLASS_ACTIVE_ROW_PAD_MULTIPLE_ENV = "RECOVAR_SPARSE_KCLASS_ACTIVE_ROW_PAD_MULTIPLE"
 _SPARSE_KCLASS_PIPELINE_DEPTH_ENV = "RECOVAR_SPARSE_KCLASS_PIPELINE_DEPTH"
+_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM_ENV = "RECOVAR_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM"
 _SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS_ENV = (
     "RECOVAR_SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS"
 )
@@ -629,13 +630,31 @@ def _compact_pair_counts_from_candidate_masks(per_image_inputs_by_class):
     return tuple(pair_counts_by_class)
 
 
+def _compact_pair_bucket_quantum() -> int | None:
+    """Optional coarser quantum for compact pair widths above the engine cap.
+
+    The default ladder steps pair widths by 4096 above the cap, which gave 55
+    distinct widths and 112 distinct bucket shapes in one 100k/256 iteration
+    (job 13807792), each compiling the whole per-class stage chain. With masked
+    pairs skipped by the fused score kernel and the pair-sparse sums, pair
+    padding is nearly free, so ``RECOVAR_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM``
+    (for example 32768) trades a little padding for far fewer programs. Rows are
+    not affected. ``None`` keeps the default ladder.
+    """
+    return _optional_positive_int_env(_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM_ENV)
+
+
 def _compact_pair_fused_bucket_sizes(pair_counts_by_class, *, pair_block_size_for_quantization=5000):
     if not pair_counts_by_class:
         return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
     fused_pair_counts = np.max(np.stack(pair_counts_by_class, axis=0), axis=0)
     pair_bucket_sizes = np.asarray(
         [
-            _exact_bucket_rotation_size(int(count), pair_block_size_for_quantization)
+            _exact_bucket_rotation_size(
+                int(count),
+                pair_block_size_for_quantization,
+                large_bucket_quantum=_compact_pair_bucket_quantum(),
+            )
             for count in fused_pair_counts
         ],
         dtype=np.int64,

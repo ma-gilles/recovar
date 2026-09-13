@@ -10412,3 +10412,40 @@ def test_lazy_pair_tables_builder_skips_per_pair_tables():
         np.testing.assert_array_equal(lazy[key], eager[key])
     np.testing.assert_array_equal(eager["rotation_index"][0], [5, 5, 6, 6, 7, 7])
     np.testing.assert_allclose(eager["log_prior"][0], [0.1, 0.1, 0.2, 0.2, 0.3, 0.3])
+
+
+def test_pair_bucket_quantum_coarsens_widths_without_changing_results(monkeypatch):
+    """A coarser pair-width quantum only pads more masked pairs; every output is unchanged."""
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    sizes = []
+    original = bucketed_mod._compact_pair_fused_bucket_sizes
+
+    def spy(*a, **kw):
+        out = original(*a, **kw)
+        sizes.append(tuple(int(v) for v in np.asarray(out).reshape(-1)))
+        return out
+
+    monkeypatch.setattr(bucketed_mod, "_compact_pair_fused_bucket_sizes", spy)
+
+    def run(quantum):
+        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "4")
+        if quantum is None:
+            monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM", raising=False)
+        else:
+            monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM", str(quantum))
+        sizes.clear()
+        kwargs = _fused_kclass_multibucket_fixture(n_images=13)
+        kwargs["accumulate_noise"] = True
+        result = _fused_kclass_result_arrays(bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs))
+        return result, sorted(set(v for tup in sizes for v in tup))
+
+    base, base_sizes = run(None)
+    coarse, coarse_sizes = run(7)  # tiny quantum so the fixture's small widths are affected
+    assert base_sizes, "fixture produced no compact pair buckets"
+    assert coarse_sizes != base_sizes or all(v <= 16 for v in base_sizes)
+    assert all(v % 7 == 0 or v <= 16 for v in coarse_sizes)
+    _assert_fused_arrays_identical(base, coarse, "pair bucket quantum")
