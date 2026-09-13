@@ -7831,9 +7831,11 @@ def compute_k_class_pass2_stats_sparse_fused(
                 host_statistics.update_bucket,
                 host=dict(
                     class_index=class_index,
-                    arrays=arrays,
+                    actual_counts=arrays["actual_counts"],
+                    rotation_indices=arrays["rotation_indices"],
                     image_indices=image_indices,
-                    pair_arrays=pair_arrays if bucket_uses_compact_pairs else None,
+                    local_rotation_row=pair_arrays["local_rotation_row"] if bucket_uses_compact_pairs else None,
+                    translation_idx=pair_arrays["translation_idx"] if bucket_uses_compact_pairs else None,
                     bucket_uses_compact_pairs=bucket_uses_compact_pairs,
                     batch=batch,
                     n_fine_trans=n_fine_trans,

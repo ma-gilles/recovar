@@ -557,9 +557,11 @@ class SparseKClassHostStatistics(NamedTuple):
         self,
         *,
         class_index,
-        arrays,
+        actual_counts,
+        rotation_indices,
         image_indices,
-        pair_arrays,
+        local_rotation_row,
+        translation_idx,
         bucket_uses_compact_pairs,
         batch,
         n_fine_trans,
@@ -589,15 +591,15 @@ class SparseKClassHostStatistics(NamedTuple):
             max_posterior,
             rotation_posterior_sums,
         ) = self
-        actual_counts_arr = np.asarray(arrays["actual_counts"], dtype=np.int64)
+        actual_counts_arr = np.asarray(actual_counts, dtype=np.int64)
         best_argmax_np = np.asarray(best_argmax, dtype=np.int64)
         best_log_score_np = np.asarray(best_log_score_bucket, dtype=np.float64)
         has_best_pose_np = np.isfinite(best_log_score_np)
         if bucket_uses_compact_pairs:
             safe_best_argmax_np = np.where(has_best_pose_np, best_argmax_np, 0)
             row_index_np = np.arange(batch, dtype=np.int64)
-            pair_local_rotation_row = np.asarray(pair_arrays["local_rotation_row"], dtype=np.int32)
-            pair_translation_idx = np.asarray(pair_arrays["translation_idx"], dtype=np.int32)
+            pair_local_rotation_row = np.asarray(local_rotation_row, dtype=np.int32)
+            pair_translation_idx = np.asarray(translation_idx, dtype=np.int32)
             best_rot_idx = np.where(
                 has_best_pose_np,
                 pair_local_rotation_row[row_index_np, safe_best_argmax_np],
@@ -612,7 +614,7 @@ class SparseKClassHostStatistics(NamedTuple):
             best_rot_idx = best_argmax_np // n_fine_trans
             best_trans_idx = best_argmax_np % n_fine_trans
             row_index_np = np.arange(batch, dtype=np.int64)
-        best_fine_rot_idx = np.asarray(arrays["rotation_indices"], dtype=np.int64)[
+        best_fine_rot_idx = np.asarray(rotation_indices, dtype=np.int64)[
             row_index_np,
             best_rot_idx,
         ]
