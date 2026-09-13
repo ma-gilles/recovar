@@ -10831,10 +10831,6 @@ class TestRelionModeSmokeTest:
                 np.zeros((n_rotations, 3), dtype=np.float32),
             )
 
-        def fake_get_relion_rotation_grid(order, *args, **kwargs):
-            del args, kwargs
-            return fake_relion_rotation_grid_float32(order)[0]
-
         def fake_get_relion_rotation_grid_eulers(order, *args, **kwargs):
             del args, kwargs
             return fake_relion_rotation_grid_float32(order)[1]
