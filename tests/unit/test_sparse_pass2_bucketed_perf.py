@@ -9893,8 +9893,9 @@ def test_compact_pair_xhalf_gpu_matches_rectangular_fused(monkeypatch):
 def test_device_chunk_scalars_gpu_fused_noise_accumulator_calls(monkeypatch):
     """GPU-only guard: with the fused weighted-sums/noise path (native CUDA dual sums, RELION
     x-half M-step, image capacity padding) RECOVAR_SPARSE_KCLASS_DEVICE_CHUNK_SCALARS must
-    actually run the device noise accumulator (call count asserted, lead review 2026-09-13)
-    and every result must equal the host accumulation bit for bit."""
+    actually run the device noise accumulator (call count asserted, lead review 2026-09-13);
+    the assignments and the two noise totals must equal the host accumulation bit for bit,
+    while the CUDA-atomic Ft_y/Ft_ctf are bounded at 1e-6 relative."""
 
     import jax
 
@@ -9987,14 +9988,15 @@ def test_device_chunk_scalars_gpu_fused_noise_accumulator_calls(monkeypatch):
         )
     for name in ("per_class_hard_assignments", "class_assignments", "pose_assignments"):
         np.testing.assert_array_equal(np.asarray(getattr(device, name)), np.asarray(getattr(host, name)), err_msg=name)
-    host_noise = getattr(host, "noise_stats", None)
-    device_noise = getattr(device, "noise_stats", None)
-    assert (host_noise is None) == (device_noise is None)
-    if host_noise is not None:
-        for class_index, (h, d) in enumerate(zip(host_noise, device_noise)):
-            for field in ("wsum_sigma2_noise", "wsum_norm_correction"):
-                if hasattr(h, field):
-                    np.testing.assert_array_equal(np.asarray(getattr(d, field)), np.asarray(getattr(h, field)), err_msg=f"{field} class {class_index}")
+    # Scope (lead review 2026-09-13): the three assignment fields exact; the two noise
+    # totals the flag produces exact for every class; Ft_y/Ft_ctf bounded above.
+    host_noise = host.noise_stats
+    device_noise = device.noise_stats
+    assert host_noise is not None and device_noise is not None
+    assert len(host_noise) == len(device_noise) == 2
+    for class_index, (h, d) in enumerate(zip(host_noise, device_noise)):
+        for field in ("wsum_sigma2_noise", "wsum_norm_correction"):
+            np.testing.assert_array_equal(np.asarray(getattr(d, field)), np.asarray(getattr(h, field)), err_msg=f"{field} class {class_index}")
 
 
 def test_bucketed_call_count_bounded_versus_perimage():

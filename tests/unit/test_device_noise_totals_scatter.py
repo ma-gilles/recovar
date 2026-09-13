@@ -29,8 +29,9 @@ def _case(rng, n_images, n_real, n_alloc, n_shells):
     real = np.sort(rng.choice(n_images, size=n_real, replace=False)).astype(np.int64)
     image_indices = np.concatenate([real, np.repeat(real[-1:], n_alloc - n_real)])
     shells = rng.standard_normal(n_shells).astype(np.float32)
-    # padded rows carry non-zero residuals of both signs, as a masked copy of the last image may
-    residual = rng.standard_normal(n_alloc).astype(np.float32) * np.array([1.0] * n_real + [3.0] * (n_alloc - n_real), dtype=np.float32)
+    # padded rows carry exactly zero residual (zero posterior mass), as the fused kernel produces
+    residual = rng.standard_normal(n_alloc).astype(np.float32)
+    residual[n_real:] = 0.0
     wsum = rng.standard_normal(n_shells)
     norm = rng.standard_normal(n_images)
     return image_indices, shells, residual, wsum, norm
@@ -38,15 +39,31 @@ def _case(rng, n_images, n_real, n_alloc, n_shells):
 
 def _run_device(device, image_indices, shells, residual, wsum, norm, n_real):
     with jax.default_device(device):
-        w, n = bucketed_mod._accumulate_noise_totals_device(
+        w, n, leak = bucketed_mod._accumulate_noise_totals_device(
             jnp.asarray(wsum, dtype=jnp.float64),
             jnp.asarray(norm, dtype=jnp.float64),
+            jnp.asarray(False),
             jnp.asarray(image_indices, dtype=jnp.int32),
             jnp.int32(n_real),
             jnp.asarray(shells),
             jnp.asarray(residual),
         )
+        assert not bool(np.asarray(leak)), "zero padded residuals must not raise the leak flag"
         return np.asarray(w), np.asarray(n)
+
+
+def test_device_noise_totals_flag_non_zero_padded_residual():
+    """A padded row with a non-zero residual (a leak the host path would add into the last
+    image) raises the leak flag so the fold fails closed instead of diverging silently."""
+    rng = np.random.default_rng(1)
+    image_indices, shells, residual, wsum, norm = _case(rng, n_images=40, n_real=11, n_alloc=16, n_shells=9)
+    residual[13] = 0.5
+    with jax.default_device(jax.devices("cpu")[0]):
+        _w, _n, leak = bucketed_mod._accumulate_noise_totals_device(
+            jnp.asarray(wsum, dtype=jnp.float64), jnp.asarray(norm, dtype=jnp.float64), jnp.asarray(False),
+            jnp.asarray(image_indices, dtype=jnp.int32), jnp.int32(11), jnp.asarray(shells), jnp.asarray(residual),
+        )
+    assert bool(np.asarray(leak))
 
 
 @pytest.mark.parametrize("seed", range(4))

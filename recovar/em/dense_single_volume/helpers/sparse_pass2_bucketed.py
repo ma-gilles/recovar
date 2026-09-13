@@ -5413,34 +5413,34 @@ def _absolute_log_z_to_score_frame_device(absolute_log_evidence, log_score_offse
 
 
 @jax.jit
-def _accumulate_noise_totals_device(wsum_total, norm_total, image_indices, n_real_images, block_shells, block_norm_residual):
+def _accumulate_noise_totals_device(
+    wsum_total, norm_total, padded_leak, image_indices, n_real_images, block_shells, block_norm_residual
+):
     """float64 ``wsum += shells`` and ``norm[image] += residual`` on the device.
 
     The chunk's first ``n_real_images`` indices are unique, so their scatter-add
-    is a plain per-element add.  Image-capacity padding repeats the last real
-    index; the host ``np.add.at`` folds those rows into the last image one
-    after another, so the padded rows are added sequentially here in the same
-    order (a scatter with duplicates would use atomics of unspecified order).
-    The result equals the host accumulation bit for bit.
+    is a plain per-element add and equals the host ``np.add.at`` bit for bit.
+    Image-capacity padding repeats the last real image's index; those rows
+    carry exactly zero residual (zero posterior mass zeroes every term of
+    :func:`_compute_noise_block_and_norm_residual_from_flat_rows_residual_terms`),
+    so the host adds exact zeros for them.  They are routed to an out-of-bounds
+    slot and dropped here (the unique-index promise is undefined for
+    overlapping indices, JAX ``lax.slicing``), and ``padded_leak`` records
+    whether any padded row carried a non-zero residual so the fold can fail
+    closed instead of silently diverging from the host.  A per-row device
+    loop is not used: XLA executes while loops with a host round trip per
+    iteration.
     """
 
     wsum_total = wsum_total + jnp.asarray(block_shells, dtype=jnp.float64)
     residual = jnp.asarray(block_norm_residual, dtype=jnp.float64)
     rows = jnp.arange(residual.shape[0], dtype=jnp.int32)
     real = rows < n_real_images
-    # The unique-index promise is only valid when the scatter indices really do
-    # not overlap (JAX: overlapping updates are undefined even when zero), so
-    # padded rows are routed to an out-of-bounds slot and dropped; the real
-    # rows' indices are unique within a chunk.
     out_of_bounds = jnp.int32(norm_total.shape[0])
     scatter_indices = jnp.where(real, image_indices, out_of_bounds)
     norm_total = norm_total.at[scatter_indices].add(residual, unique_indices=True, mode="drop")
-
-    def _add_padded_row(i, total):
-        return total.at[image_indices[i]].add(residual[i])
-
-    norm_total = jax.lax.fori_loop(n_real_images, residual.shape[0], _add_padded_row, norm_total)
-    return wsum_total, norm_total
+    padded_leak = padded_leak | jnp.any(jnp.where(real, False, residual != 0.0))
+    return wsum_total, norm_total, padded_leak
 
 
 @jax.jit
@@ -17088,10 +17088,12 @@ def compute_k_class_pass2_stats_sparse_fused(
                         noise_totals_device[class_index] = (
                             jnp.asarray(noise_wsum_total[class_index], dtype=jnp.float64),
                             jnp.asarray(noise_norm_correction_total[class_index], dtype=jnp.float64),
+                            jnp.asarray(False),
                         )
                     noise_totals_device[class_index] = _accumulate_noise_totals_device(
                         noise_totals_device[class_index][0],
                         noise_totals_device[class_index][1],
+                        noise_totals_device[class_index][2],
                         jnp.asarray(image_indices, dtype=jnp.int32),
                         jnp.int32(int(n_real_images)),
                         block_noise_shells_precomputed,
@@ -17402,7 +17404,13 @@ def compute_k_class_pass2_stats_sparse_fused(
                 "device chunk scalars: the host noise totals changed while the device "
                 f"accumulated class {class_index + 1}; refusing to fold (would drop additions)"
             )
-        wsum_dev, norm_dev = noise_totals_device[class_index]
+        wsum_dev, norm_dev, padded_leak = noise_totals_device[class_index]
+        if bool(np.asarray(padded_leak)):
+            raise RuntimeError(
+                "device chunk scalars: an image-capacity padded row carried a non-zero norm "
+                f"residual in class {class_index + 1}; the host path would add it into the last "
+                "real image, refusing to fold"
+            )
         noise_wsum_total[class_index][...] = np.asarray(wsum_dev, dtype=np.float64)
         noise_norm_correction_total[class_index][...] = np.asarray(norm_dev, dtype=np.float64)
         noise_totals_device[class_index] = None
