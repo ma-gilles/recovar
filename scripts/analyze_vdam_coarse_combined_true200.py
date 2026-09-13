@@ -278,12 +278,6 @@ def _leave_one_out_radius(gram: np.ndarray, indices: Sequence[int]) -> float:
     return float(np.max(np.min(distances, axis=1)))
 
 
-def _pooled_leave_one_out_radius(gram: np.ndarray) -> float:
-    """Compatibility helper for all-arm focused geometry tests."""
-
-    return _leave_one_out_radius(gram, range(gram.shape[0]))
-
-
 def _positive_energy_increment(current: float, reference: float) -> float:
     """Magnitude added in quadrature, avoiding norm-difference cancellation."""
 
@@ -2107,25 +2101,6 @@ def _one_sided_quality_gate(
         "outer_accepted_bound": outer,
         "maximum_outer_degradation": float(outer_degradation),
         "lane_worst": lane_worst,
-        "pass": passed,
-    }
-
-
-def _two_sided_serial_envelope(serial_values: Sequence[float], lane_values: Sequence[float]) -> dict[str, Any]:
-    serial = _finite_array(serial_values, "serial envelope values").reshape(-1)
-    lanes = _finite_array(lane_values, "lane envelope values").reshape(-1)
-    _require(
-        serial.size == lanes.size and serial.size >= 3,
-        "serial envelope requires balanced replicated values",
-    )
-    lower = float(np.min(serial))
-    upper = float(np.max(serial))
-    passed = bool(np.all(lanes >= np.nextafter(lower, -math.inf)) and np.all(lanes <= np.nextafter(upper, math.inf)))
-    return {
-        "serial_values": serial.tolist(),
-        "lane_values": lanes.tolist(),
-        "serial_min": lower,
-        "serial_max": upper,
         "pass": passed,
     }
 
