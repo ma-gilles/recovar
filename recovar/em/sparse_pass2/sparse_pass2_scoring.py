@@ -1359,6 +1359,85 @@ def _gather_projection_cache_rows(cache_score, cache_recon, cache_recon_abs2, ro
     )
 
 
+def _compact_fused_translate_scoring_enabled(
+    *,
+    use_exact_relion_gaussian,
+    use_float64_scoring,
+    relion_score_translation_angles,
+    current_size,
+):
+    """Use the fused kernel for supported float32 GPU compact scoring."""
+    if not use_exact_relion_gaussian or use_float64_scoring:
+        return False
+    if relion_score_translation_angles is None or current_size is None:
+        return False
+    if int(current_size) <= 0 or int(current_size) % 2 != 0:
+        return False
+    from recovar.cuda_backproject import custom_cuda_requested
+
+    return bool(jax.default_backend() == "gpu" and custom_cuda_requested())
+
+
+@partial(jax.jit, static_argnames=("current_size",))
+def _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
+    unshifted_corrected,  # (B, N) complex64, image / (CTF * scale), untranslated
+    corr_img_score,  # (B, N) real, Minvsigma2 * CTF^2 * scale^2
+    proj_half,  # (B, R, N) complex
+    half_weights,  # (N,) real
+    translation_angles,  # (T, 2) float32 RELION fine translation angles
+    local_rotation_row,  # (B, P) int
+    translation_idx,  # (B, P) int
+    pair_mask,  # (B, P) bool
+    relion_full_to_compact,  # (current_size * (current_size // 2 + 1),) int
+    highres_xi2_half=None,  # (B,) float32 powerClass tail already divided by two
+    *,
+    current_size,
+):
+    """Return positive float32 RELION costs for compact pairs without gathers.
+
+    Same contract and output as :func:`_score_pass2_pairs_relion_gpu_diff2_raw`,
+    evaluated by ``relion_fine_diff2_fused_translate_pairs_f32``: the image is
+    translated per pixel inside the kernel and the reference is the per-image
+    projection block flattened to ``(B * R, N)`` with row offsets ``b * R``.
+    Masked pairs are handed to the kernel as ``-1`` and skipped: they come back
+    as ``+inf``, which every consumer already treats as invalid
+    (``candidate_mask & isfinite``). Valid pairs are bit-identical to the gathered CUDA pairs kernel;
+    the JAX emulation may differ by a few float32 ULP. Jitted so the index glue and the weight product compile
+    once per bucket shape instead of one eager program each.
+    """
+    from recovar import cuda_backproject
+
+    proj_half = jnp.asarray(proj_half, dtype=jnp.complex64)
+    batch, n_rows, n_pixels = proj_half.shape
+    row_offset = (jnp.arange(batch, dtype=jnp.int32) * jnp.int32(n_rows))[:, None]
+    pair_mask = jnp.asarray(pair_mask, dtype=bool)
+    safe_rotation_row = jnp.where(
+        pair_mask, row_offset + jnp.asarray(local_rotation_row).astype(jnp.int32), jnp.int32(-1)
+    )
+    safe_translation_idx = jnp.where(
+        pair_mask, jnp.asarray(translation_idx).astype(jnp.int32), jnp.int32(-1)
+    )
+    weights = _relion_cuda_fine_pixel_weights(
+        corr_img_score, jnp.asarray(half_weights)[None, :]
+    ).astype(jnp.float32)
+    initial_diff2 = (
+        None
+        if highres_xi2_half is None
+        else jnp.asarray(highres_xi2_half, dtype=jnp.float32)
+    )
+    return cuda_backproject.relion_fine_diff2_fused_translate_pairs_f32(
+        proj_half.reshape(batch * n_rows, n_pixels),
+        jnp.asarray(unshifted_corrected, dtype=jnp.complex64),
+        jnp.asarray(translation_angles, dtype=jnp.float32),
+        weights,
+        safe_rotation_row,
+        safe_translation_idx,
+        jnp.asarray(relion_full_to_compact, dtype=jnp.int32),
+        initial_diff2,
+        current_size=int(current_size),
+    )
+
+
 @partial(jax.jit, static_argnames=("use_fused_ffi",))
 def _score_pass2_pairs_relion_gpu_diff2_raw(
     shifted_corrected,  # (B, T, N) complex, image / (CTF * scale)

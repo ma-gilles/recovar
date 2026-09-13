@@ -267,6 +267,8 @@ from recovar.em.sparse_pass2.sparse_pass2_scoring import (
     _score_pass2_pairs_normalized_cc,
     _score_pass2_pairs_relion_gpu_diff2,
     _score_pass2_pairs_relion_gpu_diff2_raw,
+    _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate,
+    _compact_fused_translate_scoring_enabled,
 )
 from recovar.em.sparse_pass2.sparse_pass2_wavg import (
     _make_relion_wavg_rectangle,
@@ -5583,6 +5585,13 @@ def compute_k_class_pass2_stats_sparse_fused(
             dtype=np.float64 if use_float64_scoring else np.float32,
         )
     )
+    fused_translate_current_size = int(image_shape[0]) if current_size is None else int(current_size)
+    use_compact_fused_translate_scoring = _compact_fused_translate_scoring_enabled(
+        use_exact_relion_gaussian=use_exact_relion_gaussian,
+        use_float64_scoring=use_float64_scoring,
+        relion_score_translation_angles=relion_score_translation_angles,
+        current_size=fused_translate_current_size,
+    )
     translation_phases_half = None if windowed_prepare else half_translation_phase_table(fine_translations, image_shape)
     score_translation_phases = None
     recon_translation_phases = None
@@ -5980,6 +5989,13 @@ def compute_k_class_pass2_stats_sparse_fused(
             shifted_noise = shifted_score_half_with_dc
 
         shifted_corrected_score_split = shifted_corrected_score.reshape(batch, n_fine_trans, -1)
+        fused_translate_score_input = None
+        if use_compact_fused_translate_scoring:
+            fused_translate_score_input = (
+                direct_score_input[:, window_indices]
+                if use_window and not windowed_prepare
+                else direct_score_input
+            )
         _add_sparse_group_timing(group_timing, "prepare", time.time() - stage_t0)
         scores_by_class = []
         class_score_log_z_bucket = []
@@ -6139,18 +6155,33 @@ def compute_k_class_pass2_stats_sparse_fused(
                 elif use_exact_relion_gaussian:
                     local_rotation_row = jnp.asarray(compact_arrays["local_rotation_row"])
                     translation_idx = jnp.asarray(compact_arrays["translation_idx"])
-                    raw_diff2 = _score_pass2_pairs_relion_gpu_diff2_raw(
-                        shifted_corrected_score_split,
-                        ctf2_over_nv_score,
-                        proj_half,
-                        direct_half_weights,
-                        local_rotation_row,
-                        translation_idx,
-                        pair_mask,
-                        relion_score_full_to_compact,
-                        relion_highres_xi2_half,
-                        use_fused_ffi=use_relion_fine_diff2_fused_ffi,
-                    )
+                    if use_compact_fused_translate_scoring:
+                        raw_diff2 = _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
+                            fused_translate_score_input,
+                            ctf2_over_nv_score,
+                            proj_half,
+                            direct_half_weights,
+                            relion_score_translation_angles,
+                            local_rotation_row,
+                            translation_idx,
+                            pair_mask,
+                            relion_score_full_to_compact,
+                            relion_highres_xi2_half,
+                            current_size=fused_translate_current_size,
+                        )
+                    else:
+                        raw_diff2 = _score_pass2_pairs_relion_gpu_diff2_raw(
+                            shifted_corrected_score_split,
+                            ctf2_over_nv_score,
+                            proj_half,
+                            direct_half_weights,
+                            local_rotation_row,
+                            translation_idx,
+                            pair_mask,
+                            relion_score_full_to_compact,
+                            relion_highres_xi2_half,
+                            use_fused_ffi=use_relion_fine_diff2_fused_ffi,
+                        )
                     # The joint minimum is not known until every class has
                     # scored. Offload each raw partition immediately so K
                     # device-resident raw tensors cannot overlap the K score
