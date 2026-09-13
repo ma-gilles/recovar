@@ -5,6 +5,7 @@ import pickle
 import numpy as np
 import pytest
 
+from recovar.em.scoring import compact_candidates
 from recovar.em.scoring.compact_candidates import (
     SparseCandidateMask,
     build_compact_fine_job_plan_from_pair_arrays,
@@ -13,6 +14,31 @@ from recovar.em.scoring.compact_candidates import (
 )
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.mark.parametrize("mode", ["coarse", "coarse_exclude"])
+@pytest.mark.parametrize("n_rows,n_trans", [(0, 0), (0, 7), (12, 0), (1, 1), (31, 23)])
+@pytest.mark.parametrize("seed", range(4))
+def test_coarse_row_expansion_matches_independent_dense_mask(monkeypatch, mode, n_rows, n_trans, seed):
+    rng = np.random.default_rng(seed)
+    mask = SparseCandidateMask(
+        mode=mode,
+        n_rows=n_rows,
+        n_fine_trans=n_trans,
+        parent_map=rng.integers(-3, 4, n_rows, dtype=np.int32),
+        fine_translation_parent=rng.integers(0, 3, n_trans, dtype=np.int32),
+        coarse_valid=rng.random((5, 4)) < 0.3,
+        coarse_excluded=rng.integers(-9, 19, 9, dtype=np.int32) if n_trans else np.zeros(0, dtype=np.int32),
+    )
+    expected = np.nonzero(np.asarray(mask))
+    monkeypatch.setattr(
+        compact_candidates, "_candidate_mask_to_dense",
+        lambda _: pytest.fail("compact enumeration expanded the dense fine-row mask"),
+    )
+    actual = compact_candidate_indices_in_source_order(mask)
+    for old, new in zip(expected, actual, strict=True):
+        assert new.dtype == old.dtype
+        np.testing.assert_array_equal(new, old)
 
 
 @pytest.mark.parametrize("protocol", [4, 5])

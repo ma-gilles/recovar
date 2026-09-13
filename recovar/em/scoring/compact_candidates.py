@@ -110,6 +110,28 @@ def _candidate_mask_is_full(candidate_mask) -> bool:
     return dense.size > 0 and bool(np.all(dense))
 
 
+def _coarse_candidate_rows(mask: SparseCandidateMask):
+    """Return coarse-row translation masks and each fine row's coarse index."""
+
+    if mask.mode == "coarse":
+        if mask.coarse_valid is None or mask.parent_map is None or mask.fine_translation_parent is None:
+            raise ValueError("coarse candidate mask spec is missing parent/coarse arrays")
+        return mask.coarse_valid[:, mask.fine_translation_parent], mask.parent_map
+    if mask.coarse_excluded is None or mask.parent_map is None or mask.fine_translation_parent is None:
+        raise ValueError("coarse_exclude candidate mask spec is missing excluded/parent arrays")
+    parents, inverse = np.unique(mask.parent_map, return_inverse=True)
+    translations = mask.fine_translation_parent.astype(np.int64)
+    n_coarse_trans = int(translations.max(initial=-1) + 1)
+    excluded = mask.coarse_excluded.astype(np.int64).reshape(-1)
+    table = np.ones((parents.size, translations.size), dtype=bool)
+    if excluded.size:
+        if n_coarse_trans <= 0:
+            raise ValueError("coarse_exclude candidate mask has empty translation parent map")
+        coarse_ids = parents.astype(np.int64)[:, None] * n_coarse_trans + translations
+        table &= ~(np.isin(coarse_ids, excluded) & (translations >= 0))
+    return table, inverse
+
+
 def compact_candidate_indices_in_source_order(candidate_mask):
     """Return compact ``(rotation, translation)`` ids in dense source order.
 
@@ -126,6 +148,18 @@ def compact_candidate_indices_in_source_order(candidate_mask):
         if candidate_mask.mode == "full":
             rows = np.repeat(np.arange(candidate_mask.n_rows, dtype=np.int64), candidate_mask.n_fine_trans)
             trans = np.tile(np.arange(candidate_mask.n_fine_trans, dtype=np.int64), candidate_mask.n_rows)
+            return rows, trans
+        if candidate_mask.mode in {"coarse", "coarse_exclude"}:
+            table, parents = _coarse_candidate_rows(candidate_mask)
+            coarse_rows, coarse_translations = np.nonzero(table)
+            coarse_counts = np.bincount(coarse_rows, minlength=table.shape[0])
+            row_counts = coarse_counts[parents]
+            coarse_starts = np.cumsum(coarse_counts) - coarse_counts
+            row_starts = np.cumsum(row_counts) - row_counts
+            rows = np.repeat(np.arange(parents.size, dtype=np.int64), row_counts)
+            # Each fine row repeats its parent's sorted translation list.
+            offsets = np.repeat(coarse_starts[parents] - row_starts, row_counts)
+            trans = coarse_translations[offsets + np.arange(rows.size, dtype=np.int64)]
             return rows, trans
     return np.nonzero(_candidate_mask_to_dense(candidate_mask))
 
