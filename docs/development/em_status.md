@@ -10,7 +10,12 @@ pre-wiring failures reproduced the missing dispatch policy; 81 focused cases
 and the unchanged 90-case CPU fast guard pass after wiring. These are CPU
 dtype/dispatch checks, not GPU score/support, FSC, trajectory or speed admission.
 The EM-clean lead remains sole shared integrator; current-source matched GPU
-qualification is next. No existing jobs or sealed libraries were changed.
+qualification remains open. A matched real10073 one-particle replay now records
+warm calls34.484s inherited-C128 versus3.011s repaired-C64 (11.45× in this
+scope), with the difference concentrated in the sparse-pass wrapper. Significant
+count changes9184→9194; Pmax changes1.72e-5. No trajectory/FSC or general speed
+admission. [Frozen replay, numerical differences and limitations](em_projector_real_replay_20260913.md).
+No existing jobs or sealed libraries were changed.
 
 Current decisions belong here; update this page when a decision changes, not for
 every test or publication. Detailed receipts belong behind links. The
