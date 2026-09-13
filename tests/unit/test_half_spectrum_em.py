@@ -19,6 +19,7 @@ import pytest
 pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
+from helpers.em_arrays import _hermitian_volume, _raw_real_image_2d
 
 import recovar.core.fourier_transform_utils as ftu
 import recovar.em.dense.em_engine as em_engine_module
@@ -202,23 +203,10 @@ def test_noise_shell_accumulation_uses_sentinel_safe_binning_helper():
 # ---------------------------------------------------------------------------
 
 
-def _raw_real_image_2d(image_shape, seed=42):
-    rng = np.random.default_rng(seed)
-    return rng.standard_normal(image_shape).astype(np.float32)
-
-
 def _hermitian_image_2d(image_shape, seed=42):
     """Generate a Hermitian-symmetric 2D spectrum (DFT of real data), centered."""
     ft = np.fft.fftshift(np.fft.fft2(_raw_real_image_2d(image_shape, seed=seed)))
     return jnp.array(ft, dtype=jnp.complex64)
-
-
-def _hermitian_volume(volume_shape, seed=42):
-    """Generate a Hermitian-symmetric 3D volume (DFT of real data), centered."""
-    rng = np.random.default_rng(seed)
-    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
-    ft = np.fft.fftshift(np.fft.fftn(real_vol))
-    return jnp.array(ft.ravel(), dtype=jnp.complex64)
 
 
 def _make_rotations(n, seed=42):

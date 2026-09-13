@@ -32,6 +32,7 @@ import pytest
 pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
+from helpers.em_arrays import _hermitian_volume, _raw_real_image_2d
 from helpers.fine_grid_significance_reference import _build_fine_grid_significance_mask
 from helpers.sparse_pass2_test_support import (
     _normalize_pass2_pairs_score_only,
@@ -881,18 +882,6 @@ def _assert_k_class_extra_outputs_close(actual, expected, *, rtol=1e-5, atol=1e-
         atol=atol,
     )
     _assert_best_pose_outputs_close(actual, expected)
-
-
-def _raw_real_image_2d(image_shape, seed=42):
-    rng = np.random.default_rng(seed)
-    return rng.standard_normal(image_shape).astype(np.float32)
-
-
-def _hermitian_volume(volume_shape, seed=42):
-    rng = np.random.default_rng(seed)
-    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
-    ft = np.fft.fftshift(np.fft.fftn(real_vol))
-    return jnp.array(ft.ravel(), dtype=jnp.complex64)
 
 
 def _identity_ctf(params, image_shape=None, voxel_size=None, *, half_image=False):

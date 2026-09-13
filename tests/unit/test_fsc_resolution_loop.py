@@ -7,6 +7,7 @@ import recovar.em.sampling as sampling_module
 
 pytest.importorskip("jax")
 import jax.numpy as jnp
+from helpers.em_arrays import _hermitian_volume, _make_rotations
 
 from recovar.em.refinement import iteration_loop as iteration_loop_module
 from recovar.em.refinement.iteration_loop import refine_single_volume
@@ -58,24 +59,6 @@ def _hermitian_image_2d(image_shape, seed=42):
     real_img = rng.standard_normal(image_shape).astype(np.float32)
     ft = np.fft.fftshift(np.fft.fft2(real_img))
     return jnp.array(ft, dtype=jnp.complex64)
-
-
-def _hermitian_volume(volume_shape, seed=42):
-    rng = np.random.default_rng(seed)
-    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
-    ft = np.fft.fftshift(np.fft.fftn(real_vol))
-    return jnp.array(ft.ravel(), dtype=jnp.complex64)
-
-
-def _make_rotations(n, seed=42):
-    rng = np.random.default_rng(seed)
-    z = rng.standard_normal((n, 3, 3))
-    q, r = np.linalg.qr(z)
-    d = np.sign(np.diagonal(r, axis1=1, axis2=2))
-    q = q * d[:, None, :]
-    det = np.linalg.det(q)
-    q[det < 0] *= -1
-    return q.astype(np.float32)
 
 
 def _identity_ctf(params, image_shape=None, voxel_size=None, *, half_image=False):

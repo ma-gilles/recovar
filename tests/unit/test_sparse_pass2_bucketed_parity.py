@@ -20,6 +20,7 @@ import pytest
 
 pytest.importorskip("jax")
 import jax.numpy as jnp
+from helpers.em_arrays import _hermitian_volume, _raw_real_image_2d
 
 import recovar.core.fourier_transform_utils as ftu
 from recovar.em.helpers import oversampling as oversampling_module
@@ -54,18 +55,6 @@ IMAGE_SHAPE = (8, 8)
 IMAGE_SIZE = 64
 VOLUME_SHAPE = (8, 8, 8)
 VOLUME_SIZE = 512
-
-
-def _raw_real_image_2d(image_shape, seed=42):
-    rng = np.random.default_rng(seed)
-    return rng.standard_normal(image_shape).astype(np.float32)
-
-
-def _hermitian_volume(volume_shape, seed=42):
-    rng = np.random.default_rng(seed)
-    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
-    ft = np.fft.fftshift(np.fft.fftn(real_vol))
-    return jnp.array(ft.ravel(), dtype=jnp.complex64)
 
 
 def _identity_ctf(params, image_shape=None, voxel_size=None, *, half_image=False):
