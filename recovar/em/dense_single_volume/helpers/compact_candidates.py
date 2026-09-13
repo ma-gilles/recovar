@@ -502,9 +502,20 @@ def _compact_pair_index_arrays_impl(tables, parents, ftp, counts, real_rows, *, 
     n_trans = int(ftp.shape[0])
     fine = jnp.take(tables, ftp, axis=2)  # (B, cR, T)
     coarse_counts = jnp.sum(fine, axis=-1, dtype=jnp.int32)  # (B, cR)
-    valid_translations = jnp.sort(
-        jnp.where(fine, jnp.arange(n_trans, dtype=jnp.int32)[None, None, :], jnp.int32(n_trans)),
-        axis=-1,
+    # k-th valid translation of each coarse row, without a sort: the rank of a valid
+    # entry is its exclusive prefix count, so scatter t into that slot (invalid entries
+    # go to the dropped slot T). A sort here cost ~35 CUB launches per class-chunk
+    # (nsys, job 13828749); the scatter is one kernel and yields the same integers.
+    ranks = jnp.cumsum(fine, axis=-1, dtype=jnp.int32) - fine.astype(jnp.int32)  # exclusive
+    slots = jnp.where(fine, ranks, jnp.int32(n_trans))
+    n_alloc_b, c_rot, _ = fine.shape
+    b_idx = jnp.arange(n_alloc_b, dtype=jnp.int32)[:, None, None]
+    c_idx = jnp.arange(c_rot, dtype=jnp.int32)[None, :, None]
+    t_ids = jnp.broadcast_to(jnp.arange(n_trans, dtype=jnp.int32)[None, None, :], fine.shape)
+    valid_translations = (
+        jnp.full((n_alloc_b, c_rot, n_trans + 1), jnp.int32(n_trans), dtype=jnp.int32)
+        .at[jnp.broadcast_to(b_idx, fine.shape), jnp.broadcast_to(c_idx, fine.shape), slots]
+        .set(t_ids, mode="drop")[:, :, :n_trans]
     )  # (B, cR, T), valid ids ascending then n_trans padding
     has_parent = parents >= 0
     safe_parent = jnp.where(has_parent, parents, 0)
