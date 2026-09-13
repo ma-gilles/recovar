@@ -15,11 +15,18 @@ from peer `83fc89583` is integrated separately from its noise/speed ancestry.
 Seven new regression cases fail before the repair;29 focused projection checks
 and90 CPU fast-guard checks pass afterward. The [radius formulation and scoped
 four-particle evidence](../math/sparse_projection_radius.md) explain the cause.
-H100 job **13811687** runs the frozen integrated source `52d06bebb` against the
-existing three-iteration regression, retaining its legacy particle ordering and
-pipeline startup noise for comparison with job13808717. This is separate from
-strict-oracle qualification with mt19937 ordering. Trajectory, strict-state and
-performance acceptance remain open. [Submission and pinned source](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_radius_integration_20260913/submission.json).
+H100 job **13811687** completed on frozen source `52d06bebb` in 23m31s: one
+three-iteration regression passed, zero skips, with source/input/harness/binary
+postchecks passing. It retains legacy particle ordering and pipeline startup
+noise for comparison with job13808717; strict-oracle mt19937 qualification is
+separate. Signed cross-engine FSC-AUC is **0.99933862 / 0.99956909** for the halves
+and **0.99946440** merged (merged change from the prior run: −0.000001266).
+First-iteration Pmax RMSE improves from **0.00152658 to 0.00148481**, but 1,886
+particles still differ by more than 0.001. Significant-count mismatches are
+**5000 / 917 / 39**; iteration-3 Pmax RMSE is **0.00999108**. This accepts the
+existing regression only. Strict state, convergence/final-all-data, production
+float32 completion, large K1, exactly K4 and speed remain unqualified.
+[Pinned source, reports and comparison](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_radius_integration_20260913/result.json).
 
 ## Integrated K1 prior correction — September 12
 
