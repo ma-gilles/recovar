@@ -269,6 +269,9 @@ _SPARSE_KCLASS_RECTANGULAR_ACTIVE_PREMATMUL_MAX_GROUPED_DENSE_RATIO_ENV = (
     "RECOVAR_SPARSE_KCLASS_RECTANGULAR_ACTIVE_PREMATMUL_MAX_GROUPED_DENSE_RATIO"
 )
 _SPARSE_KCLASS_ACTIVE_ROW_PAD_MULTIPLE_ENV = "RECOVAR_SPARSE_KCLASS_ACTIVE_ROW_PAD_MULTIPLE"
+_SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS_ENV = (
+    "RECOVAR_SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS"
+)
 _SPARSE_KCLASS_FUSED_NOISE_NORM_ENV = "RECOVAR_SPARSE_KCLASS_FUSED_NOISE_NORM"
 _SPARSE_KCLASS_RESIDUAL_TERMS_FUSED_ENV = "RECOVAR_SPARSE_KCLASS_RESIDUAL_TERMS_FUSED"
 _SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS_ENV = "RECOVAR_SPARSE_KCLASS_FUSE_COMPACT_IMAGE_SUMS"
@@ -6618,6 +6621,47 @@ def _active_flat_row_indices_from_probs_sum_t(
     active_mask = np.zeros((padded_count,), dtype=np.float32)
     active_mask[:active_count] = 1.0
     return padded_indices, active_mask, active_count
+
+
+def _real_flat_row_indices_from_actual_counts(
+    actual_counts,
+    n_rotation_rows: int,
+    *,
+    pad_multiple: int = 1,
+) -> tuple[np.ndarray, np.ndarray, int]:
+    """Flat ``(batch, rotation_row)`` indices of the rows an image really owns.
+
+    Rows at or beyond ``actual_counts[b]`` exist only to pad the bucket to its
+    quantized size; their posteriors are exactly zero, so the M-step adjoint can
+    skip them. Unlike :func:`_active_flat_row_indices_from_probs_sum_t` this
+    needs no device-to-host transfer: the counts are host metadata. Padding to
+    ``pad_multiple`` repeats the first index with a zero mask so shapes repeat.
+    """
+    counts = np.asarray(actual_counts, dtype=np.int64).reshape(-1)
+    n_rotation_rows = int(n_rotation_rows)
+    counts = np.clip(counts, 0, n_rotation_rows)
+    total = int(counts.sum())
+    if total == 0:
+        return np.zeros((0,), dtype=np.int32), np.zeros((0,), dtype=np.float32), 0
+    starts = np.concatenate(([0], np.cumsum(counts)[:-1]))
+    real_indices = (
+        np.repeat(np.arange(counts.size, dtype=np.int64) * n_rotation_rows, counts)
+        + np.arange(total, dtype=np.int64)
+        - np.repeat(starts, counts)
+    ).astype(np.int32, copy=False)
+    pad_multiple = max(1, int(pad_multiple))
+    padded_count = min(
+        int(counts.size) * n_rotation_rows,
+        ((total + pad_multiple - 1) // pad_multiple) * pad_multiple,
+    )
+    if padded_count <= total:
+        return real_indices, np.ones((total,), dtype=np.float32), total
+    padded_indices = np.empty((padded_count,), dtype=np.int32)
+    padded_indices[:total] = real_indices
+    padded_indices[total:] = real_indices[0]
+    active_mask = np.zeros((padded_count,), dtype=np.float32)
+    active_mask[:total] = 1.0
+    return padded_indices, active_mask, total
 
 
 def _apply_active_row_mask(values, active_mask):
@@ -13034,6 +13078,10 @@ def compute_k_class_pass2_stats_sparse_fused(
         compact_pairs
         and parse_env_flag(_SPARSE_KCLASS_COMPACT_ACTIVE_ROWS_ENV, default=True)
     )
+    compact_adjoint_real_rows = bool(
+        compact_pairs
+        and parse_env_flag(_SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS_ENV, default=False)
+    )
     reuse_compact_noise_sums = parse_env_flag(
         _SPARSE_KCLASS_REUSE_COMPACT_NOISE_SUMS_ENV,
         default=False,
@@ -13988,6 +14036,15 @@ def compute_k_class_pass2_stats_sparse_fused(
             # Residual VDAM accumulation needs the dense projected-reference
             # row tensor before adjoint packing.
             bucket_uses_active_rows = False
+        # The adjoint alone may still skip the padded rows: their indices come
+        # from host-side actual_counts, so no device pull is needed and the
+        # fused weighted-sum/noise wrapper keeps its dense rows.
+        bucket_adjoint_real_rows = bool(
+            compact_adjoint_real_rows
+            and bucket_uses_compact_pairs
+            and not bucket_uses_active_rows
+            and not mstep_subtract_ctf_projection
+        )
         group_key = (execution_mode, execution_bucket_size_key, bucket_size)
         if group_key != last_bucket_size_logged:
             if last_bucket_size_logged is not None and group_t0 is not None:
@@ -15753,15 +15810,24 @@ def compute_k_class_pass2_stats_sparse_fused(
 
             if active_rows_precomputed:
                 pass
-            elif bucket_uses_active_rows:
+            elif bucket_uses_active_rows or bucket_adjoint_real_rows:
                 if mstep_active_indices is None:
                     active_rows_t0 = time.time()
-                    mstep_active_indices, mstep_active_mask, mstep_active_count = (
-                        _active_flat_row_indices_from_probs_sum_t(
-                            probs_sum_t_jax,
-                            pad_multiple=active_row_pad_multiple,
+                    if bucket_uses_active_rows:
+                        mstep_active_indices, mstep_active_mask, mstep_active_count = (
+                            _active_flat_row_indices_from_probs_sum_t(
+                                probs_sum_t_jax,
+                                pad_multiple=active_row_pad_multiple,
+                            )
                         )
-                    )
+                    else:
+                        mstep_active_indices, mstep_active_mask, mstep_active_count = (
+                            _real_flat_row_indices_from_actual_counts(
+                                arrays["actual_counts"],
+                                class_bucket_size,
+                                pad_multiple=active_row_pad_multiple,
+                            )
+                        )
                     _add_sparse_group_timing(
                         group_timing,
                         "mstep_active_row_sync",

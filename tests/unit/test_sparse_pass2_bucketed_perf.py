@@ -10278,3 +10278,59 @@ def test_deferred_host_statistics_match_across_several_buckets(
         assert built[n_buckets - 1] == 1, f"expected a single-image last bucket, got sizes {built[:n_buckets]}"
     assert any("deferred host statistics: replayed" in r.getMessage() for r in caplog.records)
     _assert_fused_arrays_identical(baseline, deferred, f"deferred host statistics (multi-bucket, {defer_flag})")
+
+
+@pytest.mark.parametrize("noise_mode", ["no_noise", "noise"])
+def test_compact_adjoint_real_rows_matches_dense_rows(monkeypatch, noise_mode):
+    """Skipping the padded rotation rows in the M-step adjoint must not change any output.
+
+    Rows at or beyond ``actual_counts`` carry exactly zero posterior, so the adjoint
+    of the dense rows and of the real rows agree bit for bit on CPU. The row indices
+    come from host metadata (no device pull). At 100k/256 only 27 % of the padded
+    rows are real and the adjoint was 203 s of iteration 2 (job 13804810)."""
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    calls = []
+    original = bucketed_mod._real_flat_row_indices_from_actual_counts
+
+    def counting(*a, **kw):
+        out = original(*a, **kw)
+        calls.append(int(out[2]))
+        return out
+
+    monkeypatch.setattr(bucketed_mod, "_real_flat_row_indices_from_actual_counts", counting)
+
+    def run(flag):
+        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_ACTIVE_ROWS", "0")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "4")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS", flag)
+        kwargs = _fused_kclass_multibucket_fixture(n_images=13)
+        if noise_mode == "noise":
+            kwargs["accumulate_noise"] = True
+        return _fused_kclass_result_arrays(
+            bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs)
+        )
+
+    dense = run("0")
+    assert not calls
+    real = run("1")
+    assert calls and all(c > 0 for c in calls), "real-rows adjoint never engaged"
+    _assert_fused_arrays_identical(dense, real, f"real-rows adjoint ({noise_mode})")
+
+
+def test_real_flat_row_indices_from_actual_counts_layout():
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    idx, mask, count = bucketed_mod._real_flat_row_indices_from_actual_counts([2, 0, 3], 4, pad_multiple=1)
+    np.testing.assert_array_equal(idx, [0, 1, 8, 9, 10])
+    np.testing.assert_array_equal(mask, [1, 1, 1, 1, 1])
+    assert count == 5
+    idx, mask, count = bucketed_mod._real_flat_row_indices_from_actual_counts([2, 0, 3], 4, pad_multiple=4)
+    np.testing.assert_array_equal(idx, [0, 1, 8, 9, 10, 0, 0, 0])
+    np.testing.assert_array_equal(mask, [1, 1, 1, 1, 1, 0, 0, 0])
+    assert count == 5
+    idx, mask, count = bucketed_mod._real_flat_row_indices_from_actual_counts([0, 0], 4)
+    assert idx.size == 0 and mask.size == 0 and count == 0
