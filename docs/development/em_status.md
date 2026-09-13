@@ -22,9 +22,11 @@ sent float64 probabilities to the F32-only native dual sums, after the rectangul
 reference completed. Separate repair `58aa58131` checks actual per-class operand
 dtypes and retains the existing precision-preserving reduction for unsupported
 types. Profiles distinguish requested from executed native dispatch. CPU checks
-pass; unchanged tiny K2 guard **13817137** is queued on frozen 58aa58131. This is
-not yet GPU-qualified and cannot substitute for exactly K4 or full completion.
-[Failure, repair and validation evidence](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/compact_native_dtype_repair_20260913/result.json).
+pass; unchanged tiny K2 guard **13817137** completed0:0 on frozen58aa in19s,
+with one test and zero skips. Independent source, harness, manifest, loaded-library
+and JUnit checks pass. This closes that dispatch regression only, not current-head,
+exactly-K4, full-trajectory or speed qualification.
+[Terminal GPU review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/compact_native_dtype_repair_20260913/gpu_terminal_review.json).
 
 VDAM row selection, native binary replay readers and artifact profiling now
 share their existing owners. Two diagnostic analyzers also share one FFT row
