@@ -6,6 +6,25 @@ every test or publication. Detailed receipts belong behind links. The
 at `a2ab056cb`, including one paragraph per earlier checkpoint; its historical
 next actions are superseded here.
 
+## Integrated K1 prior correction — September 12
+
+The narrow cold-start prior correction from the EM peer is integrated at
+`46034c950`: fresh global K1 particles use the native Gaussian centered at zero;
+other callers retain the explicit flat-prior option. The source-linked formula
+is documented in [the refinement algorithm](../math/relion_refinement_algorithm.md).
+H100 job **13808717** completed in 23m56s on that clean frozen source, with one
+three-iteration regression passed and zero skips. Source, input, harness and
+loaded CUDA/binding identities passed their postchecks.
+
+Canonical signed cross-engine FSC-AUC at iteration 3 is **0.99933855 / 0.99957168**
+for the halves and **0.99946567** for their merged map. This supports the narrow
+regression integration, not strict state or full refinement qualification:
+first-iteration particle Pmax RMSE is **0.00152658**, significant-count mismatches
+are **5000 / 917 / 37** across the three iterations, `firstiter_cc` is false,
+and convergence/final-all-data were not run. Strict, large K1, exactly K4,
+shared/downstream and speed gates remain open; no private speed ancestry was
+integrated. [Pinned source, executed checks, FSC curves and saved-state evidence](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_prior_integration_20260912/result.json).
+
 ## Milestone and invariants
 
 Complete RECOVAR cleanup **EM first, GUI excluded**, before new-engine work:
