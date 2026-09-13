@@ -14,7 +14,8 @@ import pytest
 import recovar.em.vdam.driver as driver
 from recovar.data_io.starfile import read_star
 from recovar.em.helpers.batch_planning import maybe_cache_raw_image_loaders
-from recovar.em.vdam import initialise_denovo_state, native_options, native_sampling, star_io
+from recovar.em.vdam import native_options, native_sampling, star_io
+from recovar.em.vdam.init import initialise_denovo_state
 from recovar.em.vdam.subset_schedule import select_subset_for_iter
 from recovar.utils.helpers import R_from_relion, write_relion_mrc
 

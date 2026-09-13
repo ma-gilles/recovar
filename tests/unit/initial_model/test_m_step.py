@@ -19,17 +19,16 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-import recovar.em.vdam.m_step as m_step
-from recovar.em.vdam import initialise_denovo_state, mstep_single_class
-from recovar.em.vdam.init import initialise_data_vs_prior_from_references, seed_noise_from_mavg
+from recovar.em.vdam import mstep_single_class
+from recovar.em.vdam.init import initialise_data_vs_prior_from_references, initialise_denovo_state, seed_noise_from_mavg
 from recovar.em.vdam.m_step import vdam_m_step
-from recovar.em.vdam.state import VdamAccumulator
 from recovar.em.vdam.mstep_single_class import (
     _grad_min_resol_shell_from_state,
     _has_relion_reconstruction_weight,
     _maybe_replay_native_second_moment,
     vdam_m_step_single_class,
 )
+from recovar.em.vdam.state import VdamAccumulator
 
 pytestmark = pytest.mark.unit
 

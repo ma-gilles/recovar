@@ -19,9 +19,9 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from recovar.em.vdam import initialise_denovo_state
-from recovar.em.vdam.state import VdamAccumulator
+from recovar.em.vdam.init import initialise_denovo_state
 from recovar.em.vdam.mstep_single_class import vdam_m_step_single_class
+from recovar.em.vdam.state import VdamAccumulator
 
 pytestmark = pytest.mark.unit
 

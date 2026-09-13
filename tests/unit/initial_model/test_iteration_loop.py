@@ -11,8 +11,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from recovar.em.vdam import initialise_denovo_state
 from recovar.em.vdam.estep_meta_updates import update_noise_from_estep_meta, update_probabilities_from_estep_meta
+from recovar.em.vdam.init import initialise_denovo_state
 from recovar.em.vdam.iteration_loop import (
     _ave_pmax_from_meta,
     refresh_tau2_from_projector_power,

@@ -356,10 +356,10 @@ def test_estep_bpref_forward_parity():
         get_oversampled_translation_grid,
         get_translation_grid,
     )
-    from recovar.em.vdam import initialise_denovo_state
     from recovar.em.vdam.dense_adapter import run_dense_initial_model_estep
     from recovar.em.vdam.dense_adapter import split_pseudo_halfset_particle_ids as _split_halfset_particle_ids
     from recovar.em.vdam.estep_common import DenseInitialModelEstepConfig
+    from recovar.em.vdam.init import initialise_denovo_state
 
     try:
         if not jax.devices("gpu"):

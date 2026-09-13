@@ -25,7 +25,7 @@ import math
 import numpy as np
 import pytest
 
-from recovar.em.vdam import compute_phase_lengths, compute_stepsize, compute_subset_size, compute_tau2_fudge
+from recovar.em.vdam.schedules import compute_phase_lengths, compute_stepsize, compute_subset_size, compute_tau2_fudge
 
 pytestmark = pytest.mark.unit
 

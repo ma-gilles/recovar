@@ -8,7 +8,6 @@ import numpy as np
 import pytest
 
 from recovar.em.local.local_layout import LocalHypothesisLayout
-from recovar.em.vdam import initialise_denovo_state
 from recovar.em.vdam.dense_adapter import (
     _relion_projector_to_dense_volume,
     _resolve_class_inputs,
@@ -20,6 +19,7 @@ from recovar.em.vdam.dense_adapter import (
     split_pseudo_halfset_particle_ids,
 )
 from recovar.em.vdam.estep_common import DenseInitialModelEstepConfig, _arrays_to_accumulators, _estep_meta
+from recovar.em.vdam.init import initialise_denovo_state
 from recovar.em.vdam.sparse_pass2_estep import (
     _initial_model_pass2_layout,
     _initial_model_relion_f32_coarse_tie_ulps,

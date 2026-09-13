@@ -1,7 +1,7 @@
 """Merge guard: the InitialModel refactor savings must survive cross-branch merges.
 
 Pins the work landed on ``claude/refactor-initial-model``:
-- Public API surface (``__all__``) is the same 45 names.
+- Package import does not eagerly load execution modules.
 - Helpers extracted during dedup still exist with the right signatures.
 - Single source of truth for ``_relion_round`` (was duplicated in iteration_loop).
 - Pure-function outputs (schedules, init, layout) are byte-identical.
@@ -21,11 +21,9 @@ import pytest
 
 import recovar.em.vdam as init_model
 from recovar.em.helpers.expected_accuracy import estimate_relion_expected_accuracy_from_prepared_inputs
-from recovar.em.vdam import __all__ as INIT_MODEL_ALL
-from recovar.em.vdam import (
-    compute_current_size_for_denovo,
-    compute_ini_high_angstrom,
-    compute_ini_high_shell,
+from recovar.em.vdam.init import compute_current_size_for_denovo, compute_ini_high_angstrom, compute_ini_high_shell
+from recovar.em.vdam.layout import relion_bpref_frame_scales
+from recovar.em.vdam.schedules import (
     compute_phase_lengths,
     compute_stepsize,
     compute_subset_size,
@@ -33,7 +31,6 @@ from recovar.em.vdam import (
     default_step_size_for_3d_initial_model,
     default_subset_sizes_for_3d_initial_model,
     default_tau2_fudge_for_3d_initial_model,
-    relion_bpref_frame_scales,
 )
 
 pytestmark = pytest.mark.unit
@@ -41,82 +38,6 @@ pytestmark = pytest.mark.unit
 
 PACKAGE_DIR = Path(init_model.__file__).resolve().parent
 REPO_ROOT = PACKAGE_DIR.parents[2]
-
-
-# ---------------------------------------------------------------------------
-# 1. Public API surface — exactly these 45 names are exported.
-# ---------------------------------------------------------------------------
-
-
-EXPECTED_PUBLIC_API = frozenset(
-    {
-        "AlignSymmetrySpec",
-        "DEFAULT_GRAD_FIN_FRAC",
-        "DEFAULT_GRAD_INI_FRAC",
-        "DenseInitialModelEstepConfig",
-        "DenseInitialModelEstepResult",
-        "GuiInitialModelDefaults",
-        "INI_HIGH_DIGITAL_FREQ",
-        "InitialModelState",
-        "MOM2_INIT_CONSTANT",
-        "VdamPhaseLengths",
-        "VdamPosterior",
-        "assign_pseudo_halfsets",
-        "assign_pseudo_halfsets_for_particle_ids",
-        "bpref_to_run_em_output",
-        "build_align_symmetry_tokens",
-        "build_posterior_summary",
-        "class_log_priors_from_state",
-        "compute_avg_unaligned_and_sigma2",
-        "compute_current_size_for_denovo",
-        "compute_ini_high_angstrom",
-        "compute_ini_high_shell",
-        "compute_phase_lengths",
-        "compute_stepsize",
-        "compute_subset_size",
-        "compute_tau2_fudge",
-        "default_step_size_for_3d_initial_model",
-        "default_subset_sizes_for_3d_initial_model",
-        "default_tau2_fudge_for_3d_initial_model",
-        "dense_initial_model_expectation_step",
-        "fourier_crop_half",
-        "half_slot_count",
-        "half_slot_index",
-        "hermitian_weights_relion",
-        "initialise_data_vs_prior_from_references",
-        "initialise_denovo_state",
-        "minvsigma2_with_dc_zero",
-        "pseudo_halfsets_active",
-        "randomise_particles_order",
-        "reference_to_dense_means",
-        "relion_bpref_frame_scales",
-        "run_dense_initial_model_estep",
-        "run_em_output_to_bpref",
-        "seed_noise_from_mavg",
-        "select_vdam_subset",
-        "split_pseudo_halfset_particle_ids",
-    }
-)
-
-
-def test_public_api_is_frozen():
-    """No silent additions or removals from ``recovar.em.vdam.__all__``.
-
-    A merge that adds a symbol must update this frozen set deliberately.
-    A merge that removes one likely broke a downstream caller.
-    """
-    actual = set(INIT_MODEL_ALL)
-    missing = EXPECTED_PUBLIC_API - actual
-    extra = actual - EXPECTED_PUBLIC_API
-    assert not missing, f"Public API lost exports: {sorted(missing)}"
-    assert not extra, f"Public API gained exports (update the test if intentional): {sorted(extra)}"
-
-
-def test_every_public_name_resolves():
-    """Every symbol in ``__all__`` must be importable and not None."""
-    for name in INIT_MODEL_ALL:
-        obj = getattr(init_model, name)
-        assert obj is not None, f"public symbol {name!r} resolves to None"
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +74,7 @@ def test_initial_model_estep_reuses_shared_dense_em_engine():
     from recovar.em.helpers import expected_accuracy
     from recovar.em.local import local_layout
     from recovar.em.scoring import significance
-    from recovar.em.vdam import dense_adapter, sparse_pass2_estep
+    from recovar.em.vdam import sparse_pass2_estep
 
     shared_callables = {
         "_compute_k_class_significance_batched": (
@@ -550,12 +471,14 @@ def test_package_import_is_fast(tmp_path):
 
     code = """\
 import time
+import sys
 t0 = time.perf_counter()
 import recovar.em
 parent_elapsed = time.perf_counter() - t0
 t0 = time.perf_counter()
 import recovar.em.vdam
 initial_model_elapsed = time.perf_counter() - t0
+assert not any(name.startswith("recovar.em.vdam.") for name in sys.modules)
 print(parent_elapsed, initial_model_elapsed)
 """
     result = subprocess.run(

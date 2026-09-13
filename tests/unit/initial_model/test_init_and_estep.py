@@ -24,21 +24,21 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from recovar.em.vdam import (
-    MOM2_INIT_CONSTANT,
+from recovar.em.vdam.e_step import (
     build_posterior_summary,
+    fourier_crop_half,
+    hermitian_weights_relion,
+    minvsigma2_with_dc_zero,
+)
+from recovar.em.vdam.init import (
     compute_current_size_for_denovo,
     compute_ini_high_angstrom,
     compute_ini_high_shell,
-    fourier_crop_half,
-    half_slot_count,
-    half_slot_index,
-    hermitian_weights_relion,
     initialise_data_vs_prior_from_references,
     initialise_denovo_state,
-    minvsigma2_with_dc_zero,
     seed_noise_from_mavg,
 )
+from recovar.em.vdam.state import MOM2_INIT_CONSTANT, half_slot_count, half_slot_index
 
 pytestmark = pytest.mark.unit
 

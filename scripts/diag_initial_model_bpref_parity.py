@@ -473,8 +473,8 @@ def _build_config(args, ds, fixture_dir: Path, estep_dump_dir: Path, current_siz
 
 
 def run_mode(args, ds, main_in, relion_sorted_idx, mode: str, out_dir: Path) -> dict[str, object]:
-    from recovar.em.vdam import initialise_denovo_state
     from recovar.em.vdam.dense_adapter import run_dense_initial_model_estep
+    from recovar.em.vdam.init import initialise_denovo_state
 
     config, config_meta = _build_config(args, ds, args.fixture_dir, args.relion_estep_dump_dir, args.current_size)
     state = initialise_denovo_state(

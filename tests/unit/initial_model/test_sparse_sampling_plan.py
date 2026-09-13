@@ -6,7 +6,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.vdam import driver, initialise_denovo_state, native_options, native_sampling
+from recovar.em.vdam import driver, native_options, native_sampling
+from recovar.em.vdam.init import initialise_denovo_state
 
 pytestmark = pytest.mark.unit
 
