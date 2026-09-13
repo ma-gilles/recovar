@@ -2672,11 +2672,10 @@ def _capture_direct_checkpoint(
     original_continuation_loader = vdam_checkpoint._load_native_vdam_continuation
     original_iteration_loop = driver.run_vdam_iterations
 
-    def capture_expectation_factory(dataset, opts, noise_variance, particle_state, sampling_state=None, optics_state=None):
+    def capture_expectation_factory(dataset, opts, particle_state, sampling_state=None, optics_state=None, *, projector_context=None):
         captured.update(
             dataset=dataset,
             opts=opts,
-            noise_variance=noise_variance,
             particle_state=particle_state,
             sampling_state=sampling_state,
             optics_state=optics_state,
@@ -2684,10 +2683,10 @@ def _capture_direct_checkpoint(
         return original_expectation_factory(
             dataset,
             opts,
-            noise_variance,
             particle_state,
             sampling_state,
             optics_state,
+            projector_context=projector_context,
         )
 
     def capture_run(opts):
@@ -2742,7 +2741,6 @@ def _capture_direct_checkpoint(
     required = {
         "dataset",
         "opts",
-        "noise_variance",
         "particle_state",
         "sampling_state",
         "optics_state",
@@ -2876,7 +2874,6 @@ def _run_transition_arm(
     expectation_step = checkpoint["expectation_factory"](
         dataset,
         opts,
-        checkpoint["noise_variance"],
         particle_state,
         sampling_state,
         checkpoint["optics_state"],

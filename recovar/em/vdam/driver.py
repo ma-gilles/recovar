@@ -524,21 +524,12 @@ class _IterationProjectorContext:
 def _native_expectation_step(
     dataset,
     opts: NativeInitialModelOptions,
-    noise_variance: np.ndarray,
-    particle_state: NativeParticleState | np.ndarray,
+    particle_state: NativeParticleState,
     sampling_state: NativeSamplingState | None = None,
     optics_state: NativeOpticsState | None = None,
     *,
     projector_context: _IterationProjectorContext | None = None,
 ):
-    if not isinstance(particle_state, NativeParticleState):
-        particle_state = NativeParticleState(
-            translation_offsets=np.asarray(particle_state, dtype=np.float32).copy(),
-            class_assignments=np.zeros(int(dataset.n_images), dtype=np.int32),
-            max_posterior=np.zeros(int(dataset.n_images), dtype=np.float32),
-            pose_assignments=np.full(int(dataset.n_images), -1, dtype=np.int32),
-        )
-
     def _expectation_step(state: InitialModelState, particle_ids: np.ndarray, halfset_ids: np.ndarray):
         defer_token = os.environ.get("RECOVAR_VDAM_DEFER_SPARSE_ROTATIONS", "0").strip()
         if defer_token not in {"0", "1"}:
@@ -1121,7 +1112,6 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         sampling_state = continuation.sampling_state
     state = _prepare_mstep_state_precision(state, opts.mstep_compute_dtype)
     _record_driver_stage("state_setup")
-    noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
     exact_projector_setting = os.environ.get(
         "RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR", "1"
     ).strip().lower()
@@ -1132,7 +1122,6 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
     expectation_step = _native_expectation_step(
         dataset,
         opts,
-        noise_variance,
         particle_state,
         sampling_state,
         optics_state,

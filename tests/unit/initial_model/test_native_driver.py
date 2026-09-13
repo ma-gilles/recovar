@@ -810,7 +810,6 @@ def test_native_expectation_step_uses_rfloat_metadata_translations(monkeypatch):
     expectation_step = driver._native_expectation_step(
         SimpleNamespace(voxel_size=1.0, n_images=1),
         native_options.NativeInitialModelOptions(fn_img="particles.star", nr_iter=1),
-        np.ones(5, dtype=np.float32),
         particle_state,
     )
     expectation_step(state, np.asarray([0]), np.asarray([0], dtype=np.int8))
@@ -1585,8 +1584,12 @@ def test_native_expectation_step_rebuilds_sampling_per_iteration(monkeypatch):
     expectation_step = driver._native_expectation_step(
         dataset,
         native_options.NativeInitialModelOptions(fn_img="particles.star"),
-        np.ones(33, dtype=np.float32),
-        np.asarray([[1.0, -1.0], [0.0, 2.0]], dtype=np.float32),
+        NativeParticleState(
+            translation_offsets=np.asarray([[1.0, -1.0], [0.0, 2.0]], dtype=np.float32),
+            class_assignments=np.zeros(2, dtype=np.int32),
+            max_posterior=np.zeros(2, dtype=np.float32),
+            pose_assignments=np.full(2, -1, dtype=np.int32),
+        ),
     )
     accumulators, meta = expectation_step(state, np.asarray([0, 1]), np.asarray([0, 1], dtype=np.int8))
 
@@ -1636,7 +1639,6 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
     expectation_step = driver._native_expectation_step(
         dataset,
         native_options.NativeInitialModelOptions(fn_img="particles.star", translation_sigma_angstrom=2.0),
-        np.ones(33, dtype=np.float32),
         particle_state,
     )
 
@@ -1812,7 +1814,6 @@ def test_native_expectation_step_uses_autosampling_state_at_iteration_ten(monkey
     expectation_step = driver._native_expectation_step(
         SimpleNamespace(voxel_size=2.125, n_images=1),
         opts,
-        np.ones(5, dtype=np.float32),
         particle_state,
         sampling_state,
     )
@@ -1935,7 +1936,6 @@ def test_native_expectation_step_estimates_sampling_accuracy_before_update(monke
     expectation_step = driver._native_expectation_step(
         SimpleNamespace(voxel_size=2.125, n_images=2),
         opts,
-        np.ones(5, dtype=np.float32),
         particle_state,
         sampling_state,
         optics_state,
@@ -2120,7 +2120,6 @@ def test_native_expectation_step_records_sampling_changes_each_gradient_iteratio
     expectation_step = driver._native_expectation_step(
         SimpleNamespace(voxel_size=2.0, n_images=2),
         opts,
-        np.ones(5, dtype=np.float32),
         particle_state,
         sampling_state,
     )
@@ -2199,7 +2198,6 @@ def test_native_expectation_step_expands_class_rotation_prior_for_dense_fallback
     expectation_step = driver._native_expectation_step(
         SimpleNamespace(voxel_size=2.0, n_images=2),
         opts,
-        np.ones(5, dtype=np.float32),
         particle_state,
     )
 

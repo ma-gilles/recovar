@@ -8,6 +8,7 @@ import pytest
 
 from recovar.em.vdam import driver, native_options, native_sampling
 from recovar.em.vdam.init import initialise_denovo_state
+from recovar.em.vdam.state import NativeParticleState
 
 pytestmark = pytest.mark.unit
 
@@ -89,8 +90,12 @@ def test_expectation_deferred_plan_routing_and_metadata(monkeypatch, selector):
     expectation = driver._native_expectation_step(
         dataset,
         opts,
-        np.ones(33, dtype=np.float32),
-        np.zeros((2, 2), dtype=np.float32),
+        NativeParticleState(
+            translation_offsets=np.zeros((2, 2), dtype=np.float32),
+            class_assignments=np.zeros(2, dtype=np.int32),
+            max_posterior=np.zeros(2, dtype=np.float32),
+            pose_assignments=np.full(2, -1, dtype=np.int32),
+        ),
     )
     args = (state, np.asarray([0, 1]), np.asarray([0, 1], dtype=np.int8))
     if selector == "invalid":
