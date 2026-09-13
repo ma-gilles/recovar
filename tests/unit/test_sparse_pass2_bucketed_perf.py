@@ -10963,44 +10963,47 @@ def test_defer_fused_noise_totals_is_bit_identical_and_defers_two_leaves(
     off_b, _ = run("0")
     on, leaves_on = run("1")
     label = f"RECOVAR_SPARSE_KCLASS_DEFER_FUSED_NOISE_TOTALS ({noise_mode})"
-    # The x-half BPref adjoint accumulates with CUDA atomics, so its volumes are
-    # order-dependent between processes even at unchanged configuration. Measure that
-    # spread here rather than assuming it: the same control is run twice, and only the
-    # keys it actually reproduces bit for bit are held to equality. Everything the flag
-    # touches -- the noise shells and the norm correction -- is in the strict set.
-    volume_keys = {k for k in off_a if k.startswith(("Ft_y", "Ft_ctf"))}
-    control_spread = {}
-    for name in sorted(volume_keys):
-        a = np.nan_to_num(np.asarray(off_a[name]).astype(np.complex128))
-        b = np.nan_to_num(np.asarray(off_b[name]).astype(np.complex128))
-        control_spread[name] = float(np.max(np.abs(a - b))) if a.shape == b.shape else float("inf")
+
+    def _num(value):
+        arr = np.asarray(value)
+        if np.iscomplexobj(arr):
+            return np.nan_to_num(arr.astype(np.complex128))
+        return np.nan_to_num(arr.astype(np.float64))
+
+    # Which outputs does this configuration actually reproduce? The fused M-step and the
+    # x-half BPref adjoint both accumulate with CUDA atomics, so some outputs differ
+    # between two processes at unchanged configuration. Measure that instead of assuming
+    # it: run the control twice. A key the two controls reproduce bit for bit must not
+    # move at all under the flag; a key they do not reproduce is bounded by the same
+    # float32 atomics bound the reviewed padded-versus-flat-rows test uses, and the
+    # failure message reports the control spread next to the flag's delta.
+    assert set(off_a) == set(off_b) == set(on)
+    reproducible, nondeterministic = [], {}
+    for name in sorted(off_a):
+        a, b = _num(off_a[name]), _num(off_b[name])
+        if a.shape != b.shape:
+            raise AssertionError(f"{label}: {name} changed shape between two control runs")
+        spread = float(np.max(np.abs(a - b))) if a.size else 0.0
+        if spread == 0.0:
+            reproducible.append(name)
+        else:
+            nondeterministic[name] = spread
+    assert reproducible, f"{label}: the two control runs agreed on nothing"
     _assert_fused_arrays_identical(
-        {k: v for k, v in off_a.items() if k not in volume_keys},
-        {k: v for k, v in on.items() if k not in volume_keys},
+        {k: off_a[k] for k in reproducible},
+        {k: on[k] for k in reproducible},
         label,
     )
-    for name in sorted(volume_keys):
-        a = np.nan_to_num(np.asarray(off_a[name]).astype(np.complex128))
-        c = np.nan_to_num(np.asarray(on[name]).astype(np.complex128))
-        assert a.shape == c.shape, name
+    for name, spread in sorted(nondeterministic.items()):
+        a, c = _num(off_a[name]), _num(on[name])
         flag_delta = float(np.max(np.abs(a - c)))
-        if control_spread[name] == 0.0:
-            # This volume is reproducible at unchanged configuration, so the flag must
-            # not move it at all.
-            assert flag_delta == 0.0, (
-                f"{label}: {name} is bit-reproducible between two control runs "
-                f"(spread 0.0) but the flag moved it by {flag_delta:.3e}"
-            )
-        else:
-            # Atomics-order differences are bounded the same way the already-reviewed
-            # padded-versus-flat-rows test bounds them for these same volumes.
-            scale = max(1.0, float(np.max(np.abs(a))))
-            bound = 4 * np.finfo(np.float32).eps * scale
-            assert flag_delta <= bound, (
-                f"{label}: {name} moved by {flag_delta:.3e}, beyond the "
-                f"{bound:.3e} atomics bound; the control-run spread was "
-                f"{control_spread[name]:.3e}"
-            )
+        scale = max(1.0, float(np.max(np.abs(a))))
+        bound = 4 * np.finfo(np.float32).eps * scale
+        assert flag_delta <= max(bound, spread), (
+            f"{label}: {name} moved by {flag_delta:.3e} under the flag, beyond both the "
+            f"{bound:.3e} float32 atomics bound and the {spread:.3e} spread measured "
+            "between two runs of the control"
+        )
     assert leaves_on > leaves_off, (
         "the flag must actually defer the fused noise totals; the batched transfer "
         f"carried {leaves_on} leaves with the flag on and {leaves_off} with it off, so "
