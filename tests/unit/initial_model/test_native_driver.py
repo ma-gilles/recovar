@@ -2580,7 +2580,6 @@ def test_cli_gpu_defaults_to_async_relion_cuda_image_backend(monkeypatch):
 
     assert initial_model.main(["--no-require-custom-cuda", "--no-jax-compilation-cache", "--gpu", "", "--i", "particles.star", "--gpu", "0", "--nr_iter", "1"]) == 0
     assert calls["opts"].image_fourier_backend == "relion_cuda"
-    assert calls["opts"].deterministic_cuda is False
     assert initial_model.os.environ["CUDA_LAUNCH_BLOCKING"] == "0"
 
 
@@ -2600,5 +2599,4 @@ def test_cli_gpu_allows_explicit_deterministic_cuda(monkeypatch):
         )
         == 0
     )
-    assert calls["opts"].deterministic_cuda is True
     assert initial_model.os.environ["CUDA_LAUNCH_BLOCKING"] == "1"

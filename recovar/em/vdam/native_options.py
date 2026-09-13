@@ -52,7 +52,6 @@ class InitialModelDefaults:
     padding_factor: int = 1
     lazy: bool = True
     write_iter_artifacts: bool = True
-    deterministic_cuda: bool = False
     random_perturbation: float | None = None
     translation_sigma_angstrom: float | None = None
     grad_ini_frac: float = DEFAULT_GRAD_INI_FRAC

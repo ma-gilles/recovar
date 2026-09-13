@@ -19,6 +19,7 @@ class GuiInitialModelDefaults(InitialModelDefaults):
 
     image_fourier_backend: str = "auto"
     gpu_ids: str = "0"
+    deterministic_cuda: bool = False
     require_custom_cuda: bool = True
     use_jax_compilation_cache: bool = True
     jax_compilation_cache_dir: str = ""
@@ -517,7 +518,6 @@ def _native_options_dict(args: argparse.Namespace) -> dict[str, object]:
         "sigma2_min_particles": args.sigma2_min_particles,
         "padding_factor": args.padding_factor,
         "image_fourier_backend": backend,
-        "deterministic_cuda": args.deterministic_cuda,
         "lazy": args.lazy,
         "datadir": args.datadir,
         "strip_prefix": args.strip_prefix,
