@@ -10137,7 +10137,10 @@ def test_image_capacity_preserves_fused_results(monkeypatch, noise_mode):
     assert observed and all(real == cap for real, cap in observed)
     observed.clear()
     monkeypatch.setattr(owner, "quantized_image_capacity", lambda n, **_: 16)
-    padded = _fused_kclass_result_arrays(owner.compute_k_class_pass2_stats_sparse_fused(**kwargs))
+    padded_result = owner.compute_k_class_pass2_stats_sparse_fused(**kwargs)
+    assert padded_result.profile_summary["sparse_kclass_image_capacity_padded_rows"] > 0
+    assert padded_result.profile_summary["sparse_kclass_image_capacity_padded_buckets"] > 0
+    padded = _fused_kclass_result_arrays(padded_result)
     assert observed and all(real < cap for real, cap in observed)
     assert baseline and baseline.keys() == padded.keys()
     for name, expected in baseline.items():

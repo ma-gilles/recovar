@@ -1,4 +1,5 @@
 """Image padding must preserve real rows and mask every added candidate."""
+
 import numpy as np
 import pytest
 
@@ -15,7 +16,8 @@ pytestmark = pytest.mark.unit
 def test_capacity_allocations_preserve_real_rows(dtype, dense_fields):
     rotations = [np.repeat(np.eye(3, dtype=dtype)[None], n, axis=0) for n in [3, 1]]
     inputs = dict(
-        oversampled_rots=rotations, oversampled_mstep_rots=rotations,
+        oversampled_rots=rotations,
+        oversampled_mstep_rots=rotations,
         log_prior=[np.arange(n, dtype=dtype) for n in [3, 1]],
         candidate_mask=[np.ones((n, 2), dtype=bool) for n in [3, 1]],
         parent_map=[np.arange(n, dtype=np.int32) for n in [3, 1]],
@@ -24,7 +26,11 @@ def test_capacity_allocations_preserve_real_rows(dtype, dense_fields):
     bucket = dict(image_indices=np.array([1, 0]), bucket_size=4, pair_bucket_size=8)
     base = _build_k_class_bucket_arrays(bucket, [inputs, inputs], 2, include_dense_score_fields=dense_fields)
     padded = _build_k_class_bucket_arrays(
-        bucket, [inputs, inputs], 2, include_dense_score_fields=dense_fields, capacity_rows=4,
+        bucket,
+        [inputs, inputs],
+        2,
+        include_dense_score_fields=dense_fields,
+        capacity_rows=4,
     )
     for before, after in zip(base, padded, strict=True):
         assert after["rotations"] is after["mstep_rotations"]
@@ -73,5 +79,5 @@ def test_fetch_reordering_preserves_padding_rows():
     from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _reorder_to_indices
 
     values = np.array([[10, 11], [20, 21], [30, 31], [-1, -1], [-2, -2]])
-    reordered, = _reorder_to_indices(np.array([8, 3, 1]), np.array([1, 8, 3]), values)
+    (reordered,) = _reorder_to_indices(np.array([8, 3, 1]), np.array([1, 8, 3]), values)
     np.testing.assert_array_equal(reordered, [[20, 21], [30, 31], [10, 11], [-1, -1], [-2, -2]])

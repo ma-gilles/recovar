@@ -5559,6 +5559,8 @@ def compute_k_class_pass2_stats_sparse_fused(
     group_t0 = None
     group_timing = None
     overall_t0 = time.time()
+    image_capacity_padded_rows = 0
+    image_capacity_padded_buckets = 0
     rectangular_rotation_slots = 0
     compact_rotation_slots = 0
     compact_mstep_active_rows = 0
@@ -5750,11 +5752,11 @@ def compute_k_class_pass2_stats_sparse_fused(
             rectangular_rotation_slots += (
                 int(n_classes)
                 * max(int(arrays["bucket_size"]) for arrays in class_bucket_arrays)
-                * batch
+                * capacity_rows
             )
         else:
             rectangular_rotation_slots += int(n_classes) * int(bucket_size) * batch
-        compact_rotation_slots += sum(int(arrays["bucket_size"]) for arrays in class_bucket_arrays) * batch
+        compact_rotation_slots += sum(int(arrays["bucket_size"]) for arrays in class_bucket_arrays) * capacity_rows
         stage_t0 = time.time()
         batch_data, ctf_params, fetched_indices = fetch_indexed_batch(experiment_dataset, image_indices)
         batch_data = jnp.asarray(batch_data)
@@ -5807,6 +5809,8 @@ def compute_k_class_pass2_stats_sparse_fused(
             image_indices = fetched_indices_np
         if capacity_rows > n_real_images:
             pad_rows = capacity_rows - n_real_images
+            image_capacity_padded_rows += pad_rows
+            image_capacity_padded_buckets += 1
             image_indices = np.pad(image_indices, (0, pad_rows), mode="edge")
             batch_data = jnp.concatenate((batch_data, jnp.repeat(batch_data[-1:], pad_rows, axis=0)))
             ctf_params = jnp.concatenate((ctf_params, jnp.repeat(ctf_params[-1:], pad_rows, axis=0)))
@@ -8188,6 +8192,8 @@ def compute_k_class_pass2_stats_sparse_fused(
             int(rectangular_active_rows_min_bucket_size),
         ),
         "sparse_kclass_compact_buckets": bool(compact_buckets),
+        "sparse_kclass_image_capacity_padded_rows": np.int64(image_capacity_padded_rows),
+        "sparse_kclass_image_capacity_padded_buckets": np.int64(image_capacity_padded_buckets),
         "sparse_kclass_compact_rotation_slots": np.int64(compact_rotation_slots),
         "sparse_kclass_rectangular_rotation_slots": np.int64(rectangular_rotation_slots),
         "sparse_kclass_compact_slot_ratio": np.float64(compact_slot_ratio),
