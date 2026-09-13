@@ -63,32 +63,6 @@ class DenseInitialModelEstepResult:
     halfset_results: dict[int, Any]
 
 
-def _engine_kwargs_for_image_indices(
-    engine_kwargs: dict[str, Any],
-    image_indices: np.ndarray,
-    *,
-    n_images: int,
-) -> dict[str, Any]:
-    """Slice ``translation_log_prior`` (selected-image axis) for the dense engine."""
-    out = dict(engine_kwargs)
-    prior = out.get("translation_log_prior")
-    if prior is None:
-        return out
-    prior_np = np.asarray(prior)
-    if prior_np.ndim != 2:
-        return out
-
-    image_indices = np.asarray(image_indices, dtype=np.int64)
-    if prior_np.shape[0] == int(n_images):
-        out["translation_log_prior"] = prior_np[image_indices]
-    elif prior_np.shape[0] != int(image_indices.size):
-        raise ValueError(
-            "translation_log_prior must be shared, selected-image, or full-dataset shaped; "
-            f"got first axis {prior_np.shape[0]} for {image_indices.size} selected images and {n_images} total images"
-        )
-    return out
-
-
 def _select_image_rows(value, image_indices: np.ndarray, *, n_images: int, name: str):
     if value is None:
         return None
@@ -114,7 +88,19 @@ def _group_local_kwargs(
 ) -> dict[str, Any]:
     """Return dense/local kwargs in the compact row space of a dataset subset."""
 
-    out = _engine_kwargs_for_image_indices(engine_kwargs, image_indices, n_images=n_images)
+    out = dict(engine_kwargs)
+    prior = out.get("translation_log_prior")
+    # A shared translation prior is 1D; only 2D priors have an image axis.
+    prior_np = None if prior is None else np.asarray(prior)
+    if prior_np is not None and prior_np.ndim == 2:
+        image_indices = np.asarray(image_indices, dtype=np.int64)
+        if prior_np.shape[0] == int(n_images):
+            out["translation_log_prior"] = prior_np[image_indices]
+        elif prior_np.shape[0] != int(image_indices.size):
+            raise ValueError(
+                "translation_log_prior must be shared, selected-image, or full-dataset shaped; "
+                f"got first axis {prior_np.shape[0]} for {image_indices.size} selected images and {n_images} total images"
+            )
     for name in ("image_pre_shifts", "image_corrections", "scale_corrections", "translation_prior_centers"):
         out[name] = _select_image_rows(out.get(name), image_indices, n_images=n_images, name=name)
     return out
