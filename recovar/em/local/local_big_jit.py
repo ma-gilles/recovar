@@ -3537,7 +3537,7 @@ def run_fixed_capacity_segmented_local_scan(
             **static_options,
         )
         call_outputs.extend(
-            tuple(value[call_index] for value in stacked_outputs)
+            jax.tree_util.tree_map(lambda value: value[call_index], stacked_outputs)
             for call_index in range(len(segment))
         )
     return carry, tuple(call_outputs)
