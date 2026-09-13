@@ -633,3 +633,46 @@ def _write_chunked_scale_aa_dump(
             )
         np.savez_compressed(out_path, **payload)
     return int(target_rows.size)
+
+
+def _maybe_dump_direct_wavg_norm(
+    *,
+    experiment_dataset,
+    n_images,
+    current_size,
+    noise_wavg_direct_norm_current_total,
+    noise_wavg_direct_norm_high_total,
+    noise_norm_correction_total,
+    logger,
+):
+    """Record direct Wavg norm components and their original particle IDs."""
+    norm_dump_dir = os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_DIR")
+    if norm_dump_dir:
+        os.makedirs(norm_dump_dir, exist_ok=True)
+        context_iteration = int(bpref_diagnostics._bpref_contribution_context["iteration"])
+        context_half = int(bpref_diagnostics._bpref_contribution_context["half"])
+        local_rows = np.arange(n_images, dtype=np.int64)
+        original_rows = original_image_indices(experiment_dataset, local_rows)
+        norm_dump_path = os.path.join(
+            norm_dump_dir,
+            f"recovar_wavg_norm_it{context_iteration:03d}_half{context_half}.npz",
+        )
+        np.savez_compressed(
+            norm_dump_path,
+            schema=np.asarray("recovar-k1-wavg-direct-norm-v1"),
+            one_based_iteration=np.int64(context_iteration),
+            half=np.int64(context_half),
+            local_row=local_rows,
+            original_row=original_rows,
+            current_size=np.int64(current_size),
+            direct_current_size=np.asarray(
+                noise_wavg_direct_norm_current_total,
+                dtype=np.float64,
+            ),
+            powerclass_high_shell=np.asarray(
+                noise_wavg_direct_norm_high_total,
+                dtype=np.float64,
+            ),
+            total=np.asarray(noise_norm_correction_total, dtype=np.float64),
+        )
+        logger.info("Wrote RECOVAR direct Wavg norm debug dump: %s", norm_dump_path)

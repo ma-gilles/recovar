@@ -4430,36 +4430,15 @@ def compute_pass2_stats_sparse_bucketed(
     merged_noise_stats = None
     if accumulate_noise:
         if relion_wavg_atomic_direct_norm:
-            norm_dump_dir = os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_DIR")
-            if norm_dump_dir:
-                os.makedirs(norm_dump_dir, exist_ok=True)
-                context_iteration = int(bpref_diagnostics._bpref_contribution_context["iteration"])
-                context_half = int(bpref_diagnostics._bpref_contribution_context["half"])
-                local_rows = np.arange(n_images, dtype=np.int64)
-                original_rows = original_image_indices(experiment_dataset, local_rows)
-                norm_dump_path = os.path.join(
-                    norm_dump_dir,
-                    f"recovar_wavg_norm_it{context_iteration:03d}_half{context_half}.npz",
-                )
-                np.savez_compressed(
-                    norm_dump_path,
-                    schema=np.asarray("recovar-k1-wavg-direct-norm-v1"),
-                    one_based_iteration=np.int64(context_iteration),
-                    half=np.int64(context_half),
-                    local_row=local_rows,
-                    original_row=original_rows,
-                    current_size=np.int64(current_size),
-                    direct_current_size=np.asarray(
-                        noise_wavg_direct_norm_current_total,
-                        dtype=np.float64,
-                    ),
-                    powerclass_high_shell=np.asarray(
-                        noise_wavg_direct_norm_high_total,
-                        dtype=np.float64,
-                    ),
-                    total=np.asarray(noise_norm_correction_total, dtype=np.float64),
-                )
-                logger.info("Wrote RECOVAR direct Wavg norm debug dump: %s", norm_dump_path)
+            norm_scale_diagnostics._maybe_dump_direct_wavg_norm(
+                experiment_dataset=experiment_dataset,
+                n_images=n_images,
+                current_size=current_size,
+                noise_wavg_direct_norm_current_total=noise_wavg_direct_norm_current_total,
+                noise_wavg_direct_norm_high_total=noise_wavg_direct_norm_high_total,
+                noise_norm_correction_total=noise_norm_correction_total,
+                logger=logger,
+            )
         merged_noise_stats = make_noise_stats(
             wsum_sigma2_noise=noise_wsum_total,
             wsum_img_power=noise_img_power_total,
@@ -4653,17 +4632,9 @@ def compute_k_class_pass2_stats_sparse_fused(
         raise NotImplementedError("fused sparse K-class pass-2 requires shared class noise variance")
 
     n_images = int(experiment_dataset.n_units)
-    normalization_log_evidence_np = None
-    if normalization_log_evidence is not None:
-        normalization_log_evidence_np = np.asarray(
-            normalization_log_evidence,
-            dtype=np.float64,
-        )
-        if normalization_log_evidence_np.shape != (n_images,):
-            raise ValueError(
-                "normalization_log_evidence must have shape "
-                f"({n_images},), got {normalization_log_evidence_np.shape}",
-            )
+    normalization_log_evidence_np = optional_normalization_vector(
+        normalization_log_evidence, name="normalization_log_evidence", n_images=n_images,
+    )
     relion_f32_normalization_sum_weight_np = None
     if relion_f32_normalization_sum_weight is not None:
         relion_f32_normalization_sum_weight_np = np.asarray(
