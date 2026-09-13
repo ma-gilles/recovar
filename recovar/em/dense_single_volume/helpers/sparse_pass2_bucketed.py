@@ -14947,7 +14947,10 @@ def compute_k_class_pass2_stats_sparse_fused(
             last_bucket_size_logged = group_key
             group_t0 = time.time()
             group_timing = {} if profile_group_timing else None
-        stage_t0 = time.time()
+        # ``stage_t0`` is reassigned as the chunk moves from stage to stage, so it cannot
+        # be used to measure the whole chunk; keep a separate stamp for that.
+        chunk_t0 = time.time()
+        stage_t0 = chunk_t0
         # Allocate the image axis at its quantized capacity inside the builders so
         # the later capacity block finds nothing to copy.
         build_capacity_rows = None
@@ -17571,7 +17574,7 @@ def compute_k_class_pass2_stats_sparse_fused(
             _add_sparse_group_timing(
                 group_timing, "pipeline_throttle", time.time() - throttle_t0
             )
-        _add_sparse_group_timing(group_timing, "chunk_total", time.time() - stage_t0)
+        _add_sparse_group_timing(group_timing, "chunk_total", time.time() - chunk_t0)
         if _profile_active:
             jax.block_until_ready((Ft_y_total, Ft_ctf_total))
             jax.profiler.stop_trace()
