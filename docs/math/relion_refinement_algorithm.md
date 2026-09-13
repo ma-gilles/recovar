@@ -47,6 +47,26 @@ These containers store existing references. They do not copy arrays, normalize
 precision or release device storage. The controller owns buffer lifetime.
 Accumulator shape and half-spectrum axis metadata must travel with the arrays.
 
+### Cold-start K1 translation prior
+
+The global K1 controller supplies an explicit zero score-prior center when no
+previous offsets are available. Zero initial offsets do not imply a flat prior:
+the native accelerated `pdf_offset` construction still applies its Gaussian.
+For unperturbed translations `t` in pixels, voxel size `a` in Angstrom/pixel and
+model offset sigma `s` in Angstrom, the source-equivalent log prior is
+`-0.5 * ||t||^2 * a^4 / s^2`, up to a candidate-independent constant. Native
+sampling stores Angstrom translations and its accelerated code applies another
+pixel-size-squared factor. This documents source parity, not a proposed unit
+convention. Perturbation affects scoring translations, not this base-grid prior.
+
+[`make_relion_translation_log_prior`](../../recovar/em/helpers/orientation_priors.py)
+implements the formula; its explicit `None` center still requests a flat prior.
+The K1 correction is at the regular global controller call site, not a blanket
+change to shared helper, local, K-class or VDAM semantics. The controller wiring
+is tested by `test_k1_coldstart_supplies_gaussian_translation_prior` in
+[`test_refine_relion_mode.py`](../../tests/unit/test_refine_relion_mode.py).
+Trajectory/FSC qualification remains separate from the fixed-input regression.
+
 ## 2. Sampling grids and units
 
 [`sampling.py`](../../recovar/em/sampling.py) owns rotation and translation grids,

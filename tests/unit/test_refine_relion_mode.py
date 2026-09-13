@@ -9828,6 +9828,53 @@ def _clear_parity_dump_env(monkeypatch):
 class TestRelionModeSmokeTest:
     """Call refine_single_volume and verify it runs."""
 
+    @pytest.mark.parametrize("voxel_size", [1.0, 2.0])
+    def test_k1_coldstart_supplies_gaussian_translation_prior(
+        self, half_datasets, init_volume, rotations, translations, monkeypatch, voxel_size,
+    ):
+        """Zero initial offsets still have native accelerated pdf_offset, not a flat prior."""
+        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        monkeypatch.setattr(
+            iteration_loop_module, "_relion_rotation_grid_float32",
+            lambda order, dtype: (np.asarray(rotations, dtype=dtype), np.zeros((N_ROTATIONS, 3), dtype=dtype)),
+        )
+        for dataset in half_datasets:
+            dataset.voxel_size = voxel_size
+
+        class PriorChecked(Exception):
+            pass
+
+        def check_first_engine_call(dataset, mean, *args, **kwargs):
+            # Native acc_ml_optimiser_impl.h uses Angstrom sampling translations
+            # and multiplies their squared distance by pixel_size**2 again.
+            # This fixture uses exactly representable distances and sigma=10 A.
+            base = np.asarray(translations, dtype=np.float32)
+            expected = -0.5 * np.sum(base**2, axis=-1) * voxel_size**4 / 100.0
+            prior = np.asarray(kwargs["translation_log_prior"])
+            assert prior.dtype == np.float32
+            np.testing.assert_array_equal(prior, expected)
+            assert np.any(prior < 0.0)
+            raise PriorChecked
+
+        monkeypatch.setattr(half_scoring, "run_em", check_first_engine_call)
+        with pytest.raises(PriorChecked):
+            refine_single_volume(
+                half_datasets, init_volume,
+                jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+                jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+                rotations, translations,
+                options=RefinementOptions(
+                    disc_type="linear_interp",
+                    schedule=RefinementSchedule(
+                        max_iter=1, init_current_size=4, init_healpix_order=2,
+                        max_healpix_order=2, init_translation_sigma_angstrom=10.0,
+                    ),
+                    batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
+                    parity=RelionParityOptions(low_resol_join_halves_angstrom=0.0),
+                ),
+            )
+
+
     def test_relion_bootstrap_current_size_matches_benchmark_case(self):
         """128px, 4.25A/px, ini_high=30A should bootstrap from 36 -> 56."""
         assert _bootstrap_current_size_relion(36, 128) == 56
@@ -11431,6 +11478,7 @@ class TestRelionModeSmokeTest:
         translations,
     ):
         """ave_Pmax should use half 1's engine posterior maxima, as RELION MPI does."""
+        sigma_offset_angstrom = 10.0
         init_noise = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
         init_tau = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
 
@@ -11446,6 +11494,11 @@ class TestRelionModeSmokeTest:
                 relion_rotations,
                 translations,
                 "linear_interp",
+                # Match the controller's explicit cold-start Gaussian input.
+                translation_log_prior=(
+                    -0.5 * np.sum(np.asarray(translations, dtype=np.float32) ** 2, axis=-1)
+                    * dataset.voxel_size ** 4 / sigma_offset_angstrom ** 2
+                ),
                 image_batch_size=N_IMAGES,
                 rotation_block_size=N_ROTATIONS,
                 current_size=16,
@@ -11480,6 +11533,7 @@ class TestRelionModeSmokeTest:
                 disc_type="linear_interp",
                 schedule=RefinementSchedule(
                     max_iter=1,
+                    init_translation_sigma_angstrom=sigma_offset_angstrom,
                     init_current_size=16,
                     init_healpix_order=2,
                     max_healpix_order=3,

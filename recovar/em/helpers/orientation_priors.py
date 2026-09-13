@@ -191,8 +191,11 @@ def relion_half_translation_prior_inputs(
     accumulator would stay off. RELION still accumulates
     ``sum_i E[||t_i||^2]`` around the implicit zero prior, which seeds the
     iteration-2 sigma offset, so the engine receives a zero center instead.
-    The score log-prior path stays separate: ``None`` centers mean RELION's
-    flat cold-start offset prior, an explicit zero center a real Gaussian.
+    The score log-prior path stays separate: ``None`` requests a flat prior
+    from :func:`make_relion_translation_log_prior`. The global K1 controller
+    replaces a missing score center with zero to match the native cold-start
+    Gaussian; see ``docs/math/relion_refinement_algorithm.md``. Other callers
+    retain their existing center policy.
 
     The score log-prior is evaluated on the base translation grid; when the
     current grid has a different size, a single current translation selects

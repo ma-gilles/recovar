@@ -2246,6 +2246,11 @@ def _run_relion_iteration_loop(
             trans_prior_center_for_engine = translation_prior_inputs.engine_prior_center
             translation_log_prior = None
             if not use_local:
+                if not k_class_enabled and trans_prior_center is None:
+                    # A fresh K1 half has implicit zero offsets, not a flat
+                    # pdf_offset. Native ACC applies the Gaussian even at
+                    # iteration 1; see relion_refinement_algorithm.md.
+                    trans_prior_center = np.zeros(2, dtype=_dense_global_scoring_dtype())
                 translation_log_prior = make_relion_translation_log_prior(
                     translation_prior_inputs.prior_translations,
                     cryo.voxel_size,
