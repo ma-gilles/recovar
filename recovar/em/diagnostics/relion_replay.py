@@ -25,7 +25,12 @@ from recovar.em.helpers.orientation_priors import (
     normalize_direction_prior_per_half,
     remap_half_direction_prior_to_healpix_order,
 )
-from recovar.em.refinement.half_inputs import HalfInputState, optional_half_arrays
+from recovar.em.refinement.half_inputs import (
+    HalfInputState,
+    _as_sigma_offset_half_pair,
+    _normalize_sigma_offset_per_half,
+    optional_half_arrays,
+)
 from recovar.em.refinement.noise_updates import (
     _mean_noise_variance,
     _noise_radial_history,
@@ -608,37 +613,6 @@ def relion_mpi_process_start_scoring_noise_pair(noise_half1, noise_half2, *, spl
 def _replay_control_model_iteration(init_relion_iteration: int, loop_iteration: int) -> int:
     """Return the RELION model.star index whose control state governs this replay step."""
     return int(init_relion_iteration) + int(loop_iteration) + 1
-
-
-def _normalize_sigma_offset_per_half(values):
-    """Return a strict two-element float list for half-specific sigma offsets."""
-    if values is None:
-        return None
-    arr = np.asarray(values, dtype=np.float64).reshape(-1)
-    if arr.size != 2:
-        raise ValueError(
-            "translation_sigma_angstrom_per_half must contain exactly two values; "
-            f"got shape {np.asarray(values).shape}"
-        )
-    if not np.all(np.isfinite(arr)):
-        raise ValueError("translation_sigma_angstrom_per_half must be finite")
-    return [float(arr[0]), float(arr[1])]
-
-
-def _as_sigma_offset_half_pair(values):
-    """Return a scalar or explicit pair as a strict two-half sigma list."""
-
-    arr = np.asarray(values, dtype=np.float64).reshape(-1)
-    if arr.size == 1:
-        arr = np.repeat(arr, 2)
-    return _normalize_sigma_offset_per_half(arr)
-
-
-def _mean_sigma_offset_per_half(values):
-    per_half = _normalize_sigma_offset_per_half(values)
-    if per_half is None:
-        return None
-    return float(0.5 * (per_half[0] + per_half[1]))
 
 
 def _apply_replay_correction_overrides(*, relion_half_inputs, replay_override) -> list[str]:

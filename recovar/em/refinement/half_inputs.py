@@ -103,3 +103,33 @@ class HalfInputState:
             group_ids=optional_half_arrays(group_ids, dtype=np.int64),
             group_count=_optional_group_count_half_pair(group_count),
         )
+
+
+def _normalize_sigma_offset_per_half(values):
+    """Return a strict two-element float list for half-specific sigma offsets."""
+    if values is None:
+        return None
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    if arr.size != 2:
+        raise ValueError(
+            f"translation_sigma_angstrom_per_half must contain exactly two values; got shape {np.asarray(values).shape}"
+        )
+    if not np.all(np.isfinite(arr)):
+        raise ValueError("translation_sigma_angstrom_per_half must be finite")
+    return [float(arr[0]), float(arr[1])]
+
+
+def _as_sigma_offset_half_pair(values):
+    """Return a scalar or explicit pair as a strict two-half sigma list."""
+
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    if arr.size == 1:
+        arr = np.repeat(arr, 2)
+    return _normalize_sigma_offset_per_half(arr)
+
+
+def _mean_sigma_offset_per_half(values):
+    per_half = _normalize_sigma_offset_per_half(values)
+    if per_half is None:
+        return None
+    return float(0.5 * (per_half[0] + per_half[1]))

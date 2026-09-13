@@ -51,11 +51,8 @@ from recovar.em.diagnostics.frozen_boundary import (
 )
 from recovar.em.diagnostics.relion_replay import (
     _apply_replay_correction_overrides,
-    _as_sigma_offset_half_pair,
     _has_numbered_replay_iteration_overrides,
     _maybe_debug_replay_relion_references,
-    _mean_sigma_offset_per_half,
-    _normalize_sigma_offset_per_half,
     _perturbation_restart_state_iteration,
     _resolve_replay_random_perturbation,
     _restore_convergence_state_from_replay_restart,
@@ -141,7 +138,12 @@ from recovar.em.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.local.local_layout import _selected_rotation_matrices
 from recovar.em.local.local_search_iteration import _precompute_exact_local_fine_grid_enabled
 from recovar.em.refinement import finalization_policy
-from recovar.em.refinement.half_inputs import HalfInputState
+from recovar.em.refinement.half_inputs import (
+    HalfInputState,
+    _as_sigma_offset_half_pair,
+    _mean_sigma_offset_per_half,
+    _normalize_sigma_offset_per_half,
+)
 from recovar.em.refinement.mean_helpers import (
     _class_tau2_from_iref_power_spectrum,
     _class_tau2_update_details,
