@@ -1,4 +1,4 @@
-"""Denovo-init Mavg + sigma2_noise computation (pure NumPy).
+"""RELION initial noise estimation and process-start noise inputs (pure NumPy).
 
 Mirrors RELION ``calculateSumOfPowerSpectraAndAverageImage``
 (ml_optimiser.cpp:2891) + ``setSigmaNoiseEstimatesAndSetAverageImage``
@@ -7,11 +7,13 @@ accumulate Mavg and per-shell radial power; then
 ``sigma2_noise[g] = sum_sigma2[g] / (2 * sumw[g]) - 0.5*|FFT(Mavg)|²``
 with negative shells replaced by their nearest positive neighbour.
 
-Public API: ``compute_avg_unaligned_and_sigma2``.
+Compute initial image statistics or read the supported single-optics noise
+spectrum; preserve RELION MPI half-set initialization semantics.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Iterable, Iterator, Tuple
 
 import numpy as np
@@ -155,3 +157,52 @@ def _image_sigma2_iter(
         local_indices = np.asarray(local_indices, dtype=np.int64).reshape(-1)
         for image, local_idx in zip(batch_images, local_indices):
             yield int(optics_group_by_particle[int(local_idx)]), image
+
+
+def read_relion_single_optics_sigma2_noise(model, *, context):
+    """Read the sole supported RELION optics-group noise spectrum.
+
+    RELION carries one ``sigma2_noise`` spectrum per optics group. RECOVAR's
+    current EM scorer carries only one spectrum per random half, so silently
+    selecting optics group 1 would produce incorrect strict-parity results for
+    multi-optics data. Fail closed until scoring is optics-group indexed.
+    """
+
+    if not isinstance(model, dict):
+        return None
+    noise_keys = sorted(
+        key
+        for key, table in model.items()
+        if re.fullmatch(r"model_optics_group_\d+", str(key))
+        and hasattr(table, "columns")
+        and "rlnSigma2Noise" in table.columns
+    )
+    if len(noise_keys) > 1:
+        raise NotImplementedError(
+            f"Strict RELION replay does not yet support {len(noise_keys)} optics-group "
+            f"sigma2_noise tables in {context}: {noise_keys}"
+        )
+    if not noise_keys:
+        return None
+    return np.asarray(model[noise_keys[0]]["rlnSigma2Noise"], dtype=np.float64)
+
+
+def relion_mpi_process_start_scoring_noise_pair(noise_half1, noise_half2, *, split_random_halves):
+    """Return the noise arrays that RELION MPI uses at process-start scoring.
+
+    AutoRefine reads a model for each random subset, but MPI initialisation
+    then calls ``initialiseSigma2Noise`` only on follower rank 1 and broadcasts
+    that rank's ``mymodel.sigma2_noise`` to every follower. Consequently both
+    random subsets score with the half-1 spectrum at process start. Later
+    uninterrupted iterations update each follower independently. Class3D has
+    one shared model and does not need this emulation.
+    """
+
+    # RELION keeps sigma2_noise in RFLOAT and casts only its reciprocal to
+    # XFLOAT when constructing Minvsigma2.  Preserve the caller's dtype here:
+    # an early float32 cast changes that reciprocal by one ULP on some shells.
+    first = np.asarray(noise_half1)
+    second = np.asarray(noise_half2)
+    if split_random_halves:
+        second = first.copy()
+    return [first, second]

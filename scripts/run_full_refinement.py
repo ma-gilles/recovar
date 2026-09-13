@@ -48,19 +48,17 @@ from recovar.em.diagnostics.frozen_boundary import (
     verify_fixed_diagnostic_boundary_sources,
 )
 from recovar.em.diagnostics.relion_projector_capture import build_relion_projector_replay_state
-from recovar.em.diagnostics.relion_replay import (
-    read_relion_single_optics_sigma2_noise as _read_relion_single_optics_sigma2_noise,
-)
-from recovar.em.diagnostics.relion_replay import (
-    relion_mpi_process_start_scoring_noise_pair as _relion_mpi_process_start_scoring_noise_pair,
-)
 from recovar.em.diagnostics.state_swap_probe import (
     add_state_swap_probe_arguments,
     build_state_swap_probe,
     state_swap_probe_loop_index,
     validate_state_swap_probe_application,
 )
-from recovar.em.relion.initial_noise import compute_avg_unaligned_and_sigma2
+from recovar.em.relion.initial_noise import (
+    compute_avg_unaligned_and_sigma2,
+    read_relion_single_optics_sigma2_noise,
+    relion_mpi_process_start_scoring_noise_pair,
+)
 from recovar.em.relion.relion_worker_scale import (
     load_relion_dispatch_schedule,
     load_relion_follower_scale_replay,
@@ -1519,7 +1517,7 @@ def _build_replay_iteration_overrides(
         raise TypeError(f"noise_dtype must be float32 or float64, got {noise_dtype}")
 
     def _read_model_noise_variance(model, *, image_shape):
-        radial = _read_relion_single_optics_sigma2_noise(
+        radial = read_relion_single_optics_sigma2_noise(
             model,
             context="replay model",
         )
@@ -1733,7 +1731,7 @@ def _build_replay_iteration_overrides(
             "previous_best_rotation_eulers": [euler_h1, euler_h2],
         }
         if noise_h1 is not None and noise_h2 is not None:
-            override_k["noise_variance"] = _relion_mpi_process_start_scoring_noise_pair(
+            override_k["noise_variance"] = relion_mpi_process_start_scoring_noise_pair(
                 noise_h1,
                 noise_h2,
                 # RELION performs this broadcast once in MPI initialise().
@@ -4204,7 +4202,7 @@ def main():
         # run_k_class_parity.py:715-717).
         _n4 = ds.grid_size**4
         _relion_sigma2_per_model = [
-            _read_relion_single_optics_sigma2_noise(
+            read_relion_single_optics_sigma2_noise(
                 _model,
                 context=f"RELION iteration-0 model {model_index + 1}",
             )

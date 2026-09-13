@@ -25,7 +25,11 @@ from recovar.em.diagnostics.frozen_boundary import (
     _frozen_scoring_state_arrays,
 )
 from recovar.em.refinement.mean_helpers import _mean_variance_for_scoring_half, _updated_mean_variance_per_half
-from recovar.em.relion.initial_noise import compute_avg_unaligned_and_sigma2
+from recovar.em.relion.initial_noise import (
+    compute_avg_unaligned_and_sigma2,
+    read_relion_single_optics_sigma2_noise,
+    relion_mpi_process_start_scoring_noise_pair,
+)
 from scripts import run_full_refinement
 from scripts.run_full_refinement import (
     _assert_frozen_replay_slots_projector_only,
@@ -47,10 +51,8 @@ from scripts.run_full_refinement import (
     _maybe_apply_relion_image_mask,
     _parse_relion_cli_ini_high,
     _parse_relion_tau2_fudge,
-    _read_relion_single_optics_sigma2_noise,
     _relion_fresh_initial_noise_layout,
     _relion_halfset_and_accuracy_layout,
-    _relion_mpi_process_start_scoring_noise_pair,
     _relion_optimiser_star_for_runtime,
     _relion_sigma2_to_native_noise_variance,
     _replay_complete_initial_particle_state,
@@ -858,7 +860,7 @@ def test_relion_mpi_autorefine_scoring_noise_uses_rank1_broadcast():
     half1 = np.asarray([1.0, 2.0], dtype=np.float32)
     half2 = np.asarray([3.0, 4.0], dtype=np.float32)
 
-    got = _relion_mpi_process_start_scoring_noise_pair(half1, half2, split_random_halves=True)
+    got = relion_mpi_process_start_scoring_noise_pair(half1, half2, split_random_halves=True)
 
     np.testing.assert_array_equal(got[0], half1)
     np.testing.assert_array_equal(got[1], half1)
@@ -869,7 +871,7 @@ def test_relion_mpi_shared_model_scoring_noise_preserves_second_input():
     half1 = np.asarray([1.0, 2.0], dtype=np.float32)
     half2 = np.asarray([3.0, 4.0], dtype=np.float32)
 
-    got = _relion_mpi_process_start_scoring_noise_pair(half1, half2, split_random_halves=False)
+    got = relion_mpi_process_start_scoring_noise_pair(half1, half2, split_random_halves=False)
 
     np.testing.assert_array_equal(got[0], half1)
     np.testing.assert_array_equal(got[1], half2)
@@ -879,7 +881,7 @@ def test_relion_mpi_scoring_noise_preserves_rfloat_reciprocal_boundary():
     half1 = np.asarray([0.3, 0.7], dtype=np.float64)
     half2 = np.asarray([1.1, 2.3], dtype=np.float64)
 
-    got = _relion_mpi_process_start_scoring_noise_pair(
+    got = relion_mpi_process_start_scoring_noise_pair(
         half1,
         half2,
         split_random_halves=False,
@@ -901,7 +903,7 @@ def test_relion_strict_replay_rejects_multiple_optics_noise_tables():
     }
 
     with pytest.raises(NotImplementedError, match="2 optics-group sigma2_noise tables"):
-        _read_relion_single_optics_sigma2_noise(model, context="unit-test model")
+        read_relion_single_optics_sigma2_noise(model, context="unit-test model")
 
 
 def _read_relion_sigma(model_star: Path) -> float:

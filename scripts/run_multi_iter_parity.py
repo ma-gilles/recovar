@@ -22,11 +22,9 @@ from pathlib import Path
 import numpy as np
 
 from recovar.em.diagnostics.gt_metrics import DEFAULT_GT_ALIGN_HEALPIX_ORDER, DEFAULT_GT_ALIGN_MAX_SHELL
-from recovar.em.diagnostics.relion_replay import (
-    read_relion_single_optics_sigma2_noise as _read_relion_single_optics_sigma2_noise,
-)
-from recovar.em.diagnostics.relion_replay import (
-    relion_mpi_process_start_scoring_noise_pair as _relion_mpi_process_start_scoring_noise_pair,
+from recovar.em.relion.initial_noise import (
+    read_relion_single_optics_sigma2_noise,
+    relion_mpi_process_start_scoring_noise_pair,
 )
 from recovar.utils.parity_provenance import (
     _safe_git_commit,
@@ -819,7 +817,7 @@ def initial_scoring_noise_pair(noise_half1, noise_half2, *, continuous_relion_no
     instead needs the independently updated spectrum from each numbered half.
     """
 
-    return _relion_mpi_process_start_scoring_noise_pair(
+    return relion_mpi_process_start_scoring_noise_pair(
         noise_half1,
         noise_half2,
         split_random_halves=not bool(continuous_relion_noise_state),
@@ -1543,11 +1541,11 @@ def main():
     current_size = int(control_model_h1["model_general"]["rlnCurrentImageSize"])
     pixel_size = float(model_h1["model_general"]["rlnPixelSize"])
 
-    sigma2_h1 = _read_relion_single_optics_sigma2_noise(
+    sigma2_h1 = read_relion_single_optics_sigma2_noise(
         model_h1,
         context=f"RELION iteration {iteration} half 1",
     )
-    sigma2_h2 = _read_relion_single_optics_sigma2_noise(
+    sigma2_h2 = read_relion_single_optics_sigma2_noise(
         model_h2,
         context=f"RELION iteration {iteration} half 2",
     )
@@ -2094,11 +2092,11 @@ def main():
             _model_general_scalar(general_h2_iter, "rlnSigmaOffsetsAngst"),
         ]
         sigma_offset_iter = float(np.mean(sigma_offset_iter_per_half))
-        sigma2_h1_iter = _read_relion_single_optics_sigma2_noise(
+        sigma2_h1_iter = read_relion_single_optics_sigma2_noise(
             model_h1_iter,
             context=f"RELION iteration {previous_relion_iteration} half 1",
         )
-        sigma2_h2_iter = _read_relion_single_optics_sigma2_noise(
+        sigma2_h2_iter = read_relion_single_optics_sigma2_noise(
             model_h2_iter,
             context=f"RELION iteration {previous_relion_iteration} half 2",
         )
@@ -2106,7 +2104,7 @@ def main():
             raise ValueError(
                 f"RELION iteration {previous_relion_iteration} model is missing rlnSigma2Noise"
             )
-        noise_pair_iter = _relion_mpi_process_start_scoring_noise_pair(
+        noise_pair_iter = relion_mpi_process_start_scoring_noise_pair(
             jnp.asarray(recon_noise.make_radial_noise(sigma2_h1_iter * n4, (N, N))).reshape(-1),
             jnp.asarray(recon_noise.make_radial_noise(sigma2_h2_iter * n4, (N, N))).reshape(-1),
             split_random_halves=process_start,

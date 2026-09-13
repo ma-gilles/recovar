@@ -561,55 +561,6 @@ def _parse_relion_projector_replay_state(value, *, n_classes: int) -> RelionProj
     )
 
 
-def read_relion_single_optics_sigma2_noise(model, *, context):
-    """Read the sole supported RELION optics-group noise spectrum.
-
-    RELION carries one ``sigma2_noise`` spectrum per optics group. RECOVAR's
-    current EM scorer carries only one spectrum per random half, so silently
-    selecting optics group 1 would produce incorrect strict-parity results for
-    multi-optics data. Fail closed until scoring is optics-group indexed.
-    """
-
-    if not isinstance(model, dict):
-        return None
-    noise_keys = sorted(
-        key
-        for key, table in model.items()
-        if re.fullmatch(r"model_optics_group_\d+", str(key))
-        and hasattr(table, "columns")
-        and "rlnSigma2Noise" in table.columns
-    )
-    if len(noise_keys) > 1:
-        raise NotImplementedError(
-            f"Strict RELION replay does not yet support {len(noise_keys)} optics-group "
-            f"sigma2_noise tables in {context}: {noise_keys}"
-        )
-    if not noise_keys:
-        return None
-    return np.asarray(model[noise_keys[0]]["rlnSigma2Noise"], dtype=np.float64)
-
-
-def relion_mpi_process_start_scoring_noise_pair(noise_half1, noise_half2, *, split_random_halves):
-    """Return the noise arrays that RELION MPI uses at process-start scoring.
-
-    AutoRefine reads a model for each random subset, but MPI initialisation
-    then calls ``initialiseSigma2Noise`` only on follower rank 1 and broadcasts
-    that rank's ``mymodel.sigma2_noise`` to every follower. Consequently both
-    random subsets score with the half-1 spectrum at process start. Later
-    uninterrupted iterations update each follower independently. Class3D has
-    one shared model and does not need this emulation.
-    """
-
-    # RELION keeps sigma2_noise in RFLOAT and casts only its reciprocal to
-    # XFLOAT when constructing Minvsigma2.  Preserve the caller's dtype here:
-    # an early float32 cast changes that reciprocal by one ULP on some shells.
-    first = np.asarray(noise_half1)
-    second = np.asarray(noise_half2)
-    if split_random_halves:
-        second = first.copy()
-    return [first, second]
-
-
 def _replay_control_model_iteration(init_relion_iteration: int, loop_iteration: int) -> int:
     """Return the RELION model.star index whose control state governs this replay step."""
     return int(init_relion_iteration) + int(loop_iteration) + 1
