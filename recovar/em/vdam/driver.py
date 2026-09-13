@@ -18,6 +18,10 @@ import numpy as np
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.data_io.starfile import read_star
 from recovar.em import sampling
+from recovar.em.diagnostics.vdam_mstep_replay import (
+    INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV,
+    _maybe_replay_iteration_references,
+)
 from recovar.em.helpers.batch_planning import maybe_cache_raw_image_loaders
 from recovar.em.helpers.orientation_priors import (
     make_relion_translation_log_prior,
@@ -74,7 +78,6 @@ RELION_INITIALMODEL_MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES = 1
 RELION_INITIALMODEL_3D_GRADIENT_MAX_SIGNIFICANTS_PER_CLASS = 100
 INITIAL_MODEL_LOCAL_BATCH_REFERENCE_SIZE = 256
 INITIAL_MODEL_LOCAL_BATCH_REFERENCE_COUNT_40GB = 32
-INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV = "RECOVAR_INITIALMODEL_IREF_REPLAY_TEMPLATE"
 INITIAL_MODEL_SKIP_EXPECTED_ACCURACY_ENV = "RECOVAR_INITIALMODEL_SKIP_EXPECTED_ACCURACY"
 
 
@@ -795,64 +798,6 @@ def _initial_state_from_particles(
     profile.record("data_vs_prior")
     profile.report("initial state")
     return state, optics_group_by_particle
-
-
-def _maybe_replay_iteration_references(
-    state: InitialModelState,
-    *,
-    iteration: int,
-    meta: dict,
-) -> InitialModelState:
-    """Replace post-M-step references from an explicit diagnostic template.
-
-    This fail-closed hook is used only for causal trajectory boundaries.  A
-    template may contain ``{iteration}`` and ``{k}`` format fields, where
-    ``k`` is RELION's one-based class number.  A comma-separated list supplies
-    one path per class; a single path is broadcast only for K=1.
-    """
-
-    template = os.environ.get(INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV, "").strip()
-    if not template:
-        return state
-
-    tokens = [token.strip() for token in template.split(",") if token.strip()]
-    if len(tokens) == 1 and "{k" in tokens[0]:
-        paths = [
-            tokens[0].format(iteration=int(iteration), k=class_index + 1)
-            for class_index in range(int(state.K))
-        ]
-    elif len(tokens) == 1 and int(state.K) == 1:
-        paths = [tokens[0].format(iteration=int(iteration), k=1)]
-    elif len(tokens) == int(state.K):
-        paths = [
-            token.format(iteration=int(iteration), k=class_index + 1)
-            for class_index, token in enumerate(tokens)
-        ]
-    else:
-        raise ValueError(
-            f"{INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV} expects one path for K=1 "
-            f"or K={int(state.K)} comma-separated paths, got {len(tokens)}"
-        )
-
-    from recovar.utils.helpers import load_relion_volume
-
-    references = np.stack(
-        [np.asarray(load_relion_volume(path), dtype=np.float64) for path in paths],
-        axis=0,
-    )
-    expected_shape = (int(state.K), int(state.ori_size), int(state.ori_size), int(state.ori_size))
-    if references.shape != expected_shape:
-        raise ValueError(
-            f"iteration reference replay shape {references.shape} != {expected_shape}"
-        )
-    if not np.all(np.isfinite(references)):
-        raise ValueError("iteration reference replay contains non-finite values")
-
-    out = replace(state)
-    out.Iref = references
-    meta["diagnostic_iref_replay_paths"] = paths
-    meta["diagnostic_iref_replay_iteration"] = int(iteration)
-    return out
 
 
 def _should_write_iteration_artifacts(iteration: int, nr_iter: int, grad_write_iter: int) -> bool:

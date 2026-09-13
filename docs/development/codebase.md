@@ -41,7 +41,7 @@ their semantics already match:
 | `reference/` | Independent earlier EM/covariance formulations and their example notebook |
 | `ppca_refinement/` | Pose-marginal PPCA workflow and its K-class bridge |
 
-RELION diagnostic checkpoint restoration lives in [`relion/vdam_checkpoint.py`](../../recovar/em/relion/vdam_checkpoint.py), separate from the VDAM execution driver. Native moment/reference and BPref overrides live in [`diagnostics/vdam_mstep_replay.py`](../../recovar/em/diagnostics/vdam_mstep_replay.py); [`vdam/mstep_single_class.py`](../../recovar/em/vdam/mstep_single_class.py) retains the reconstruction transaction and its numerical boundary calls.
+RELION diagnostic checkpoint restoration lives in [`relion/vdam_checkpoint.py`](../../recovar/em/relion/vdam_checkpoint.py), separate from the VDAM execution driver. Native moment/reference and BPref overrides, including post-M-step reference-map replay, live in [`diagnostics/vdam_mstep_replay.py`](../../recovar/em/diagnostics/vdam_mstep_replay.py); [`vdam/mstep_single_class.py`](../../recovar/em/vdam/mstep_single_class.py) retains the reconstruction transaction and its numerical boundary calls.
 
 There is no second EM stack for VDAM. Its adapters supply the existing shared
 kernels with VDAM-specific inputs. Scheduling and state transitions remain with

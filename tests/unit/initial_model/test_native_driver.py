@@ -17,6 +17,7 @@ from recovar.em.helpers.batch_planning import maybe_cache_raw_image_loaders
 from recovar.em.relion import vdam_checkpoint
 from recovar.em.vdam import estep_meta_updates, native_options, native_sampling, star_io
 from recovar.em.vdam.init import initialise_denovo_state
+from recovar.em.diagnostics import vdam_mstep_replay
 from recovar.em.vdam.state import NativeParticleState
 from recovar.em.vdam.subset_schedule import select_subset_for_iter
 from recovar.utils.helpers import R_from_relion, write_relion_mrc
@@ -332,12 +333,12 @@ def test_iteration_reference_replay_expands_iteration_and_class(monkeypatch, tmp
         paths.append(path)
         expected.append(volume)
     monkeypatch.setenv(
-        driver.INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV,
+        vdam_mstep_replay.INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV,
         str(tmp_path / "run_it{iteration:03d}_class{k:03d}.mrc"),
     )
     meta = {}
 
-    replayed = driver._maybe_replay_iteration_references(state, iteration=3, meta=meta)
+    replayed = vdam_mstep_replay._maybe_replay_iteration_references(state, iteration=3, meta=meta)
 
     np.testing.assert_array_equal(replayed.Iref, np.asarray(expected))
     np.testing.assert_array_equal(state.Iref, 0.0)
@@ -353,10 +354,10 @@ def test_iteration_reference_replay_rejects_wrong_class_count(monkeypatch):
         nr_iter=10,
         n_directions=12,
     )
-    monkeypatch.setenv(driver.INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV, "one-map.mrc")
+    monkeypatch.setenv(vdam_mstep_replay.INITIAL_MODEL_IREF_REPLAY_TEMPLATE_ENV, "one-map.mrc")
 
     with pytest.raises(ValueError, match="expects one path for K=1 or K=2"):
-        driver._maybe_replay_iteration_references(state, iteration=1, meta={})
+        vdam_mstep_replay._maybe_replay_iteration_references(state, iteration=1, meta={})
 
 
 def test_experiment_read_order_uses_micrograph_lexicographic_order():
