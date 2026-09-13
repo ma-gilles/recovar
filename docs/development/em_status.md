@@ -6,6 +6,33 @@ every test or publication. Detailed receipts belong behind links. The
 at `a2ab056cb`, including one paragraph per earlier checkpoint; its historical
 next actions are superseded here.
 
+## Zero-oversampling controller integration — September 13
+
+The narrow controller port retains the coarse numeric denominator and winner
+through fine selection; it does not change coarse support selection. The
+[formulation](../math/zero_oversampling.md) describes the score frames and activation
+conditions. Generic production defaults remain unchanged. Frozen `2b27201e2`
+passed H100 job **13814090** in **25m30s**: one three-iteration K1 regression,
+zero skips, with independent source/input/harness/loaded-binary checks and
+verified child imports, saved native-noise/mt19937 modes and effective command.
+
+Against matched control **13812841**, first-iteration Pmax RMSE improves from
+**0.0000559783 to 0.0000146878**. Later values are **0.0026080452 / 0.0029356447**;
+significant-count mismatches remain **1454 / 654 / 9**. Signed cross-engine
+FSC-AUC is **0.9993978428 / 0.9998445841** for the halves, **0.9996192490** merged
+(merged change **−0.0000002225**). Only the existing regression is accepted;
+strict state, convergence/final-all-data, large K1, exactly K4, shared/downstream
+and speed gates remain open.
+[Exact source, canonical reports and matched comparison](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_zero_controller_integration_20260913/result.json).
+
+The private VDAM capacity fix restores class structure in all five fixtures,
+but three original mean-FSC bands still fail: radial flags2 **0.0693 < 0.0719**,
+head-heavy flags1 **0.1104 < 0.1122**, uniform flags1 **0.0672 < 0.0685**.
+All ten fixed-head arms completed. Same-source controls **13814629–13814638**
+are diagnostic; they do not replace the original bands. Private speed integration
+remains held. The retained VDAM size gate also fails at **8806 > 6100** lines.
+[Independent fixed-matrix review](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_capacity_noise_review_20260913/fixed_matrix_review.json).
+
 ## Opt-in native startup noise — September 13
 
 The narrow peer noise bootstrap is integrated at `cbae8e27d` behind
