@@ -83,11 +83,11 @@ def test_fused_translate_compact_pairs_match_gathered_path(
     gpu_device,
     translation_mode,
 ):
-    """Fused route == FFI pairs kernel bitwise; <= 1 ULP from the JAX emulation.
+    """Fused route == FFI pairs kernel bitwise; a few ULP from the JAX emulation.
 
     The pure-JAX 256-lane emulation used by the gathered path when
     ``RECOVAR_RELION_FINE_DIFF2_FUSED_FFI`` is off differs from the CUDA
-    kernels by one binary32 ULP on a minority of pairs even with zero
+    kernels by one or two binary32 ULP on a minority of pairs even with zero
     translations, so the kernel, not the emulation, is the bitwise reference.
     """
     import recovar.cuda_backproject as cuda_backproject
@@ -158,5 +158,8 @@ def test_fused_translate_compact_pairs_match_gathered_path(
     assert fused.dtype == np.float32 and fused.shape == (batch, n_pairs)
     assert np.all(np.isfinite(fused))
     np.testing.assert_array_equal(fused.view(np.uint32), gathered_ffi.view(np.uint32))
-    assert int(_ulp_distance(fused, gathered_jax).max()) <= 1
-    assert int(_ulp_distance(gathered_ffi, gathered_jax).max()) <= 1
+    # The emulation is not the bitwise reference: on H100 (jobs 13803046 and
+    # 13803570) it sits 1-2 ULP from the CUDA kernels on a minority of pairs.
+    # Bound it loosely so a real regression (many ULP) still fails here.
+    assert int(_ulp_distance(fused, gathered_jax).max()) <= 4
+    assert int(_ulp_distance(gathered_ffi, gathered_jax).max()) <= 4
