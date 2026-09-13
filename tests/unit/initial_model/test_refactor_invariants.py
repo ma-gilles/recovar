@@ -368,16 +368,16 @@ LOC_BUDGETS = {
     )),
     "initialization": (500, ("bootstrap_iref.py", "init.py")),
     "sampling_layout": (850, ("native_sampling.py", "layout.py")),
-    "estep": (2400, (
+    "estep": (2290, (
         "dense_adapter.py", "estep_common.py", "estep_meta_updates.py", "sparse_pass2_estep.py",
     )),
     "reconstruction_state": (700, ("m_step.py", "mstep_single_class.py", "state.py")),
     "input_output": (1250, (
         "star_io.py", "../relion/vdam_checkpoint.py", "../relion/initial_noise.py",
     )),
-    "diagnostics": (1050, (
+    "diagnostics": (1160, (
         "../diagnostics/gt_metrics.py", "../diagnostics/gt_registration.py",
-        "../diagnostics/vdam_mstep_replay.py",
+        "../diagnostics/vdam_mstep_replay.py", "../diagnostics/vdam_noise.py",
     )),
 }
 
@@ -471,7 +471,7 @@ SAMPLING = ("NativeSamplingPlan", "NativeSamplingState", "_build_sampling_plan",
 
 def test_iteration_loop_updates_definition_ownership():
     loop_src = inspect.getsource(iteration_loop)
-    for name in ("update_noise_from_estep_meta", "update_probabilities_from_estep_meta", "_maybe_dump_noise_update_boundary"):
+    for name in ("update_noise_from_estep_meta", "update_probabilities_from_estep_meta"):
         assert inspect.getmodule(getattr(estep_meta_updates, name)) is estep_meta_updates and f"\ndef {name}(" not in loop_src
     for name in ("select_subset_for_iter", "restore_subset_order_for_continuation"):
         assert inspect.getmodule(getattr(subset_schedule, name)) is subset_schedule and f"\ndef {name}(" not in loop_src
