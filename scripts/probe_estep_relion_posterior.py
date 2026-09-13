@@ -43,12 +43,6 @@ def _read_bin(p: Path) -> np.ndarray:
         return np.fromfile(f, dtype=dt, count=nz * ny * nx).reshape(nz, ny, nx)
 
 
-def _cc(a: np.ndarray, b: np.ndarray) -> float:
-    af = a.ravel() - a.mean()
-    bf = b.ravel() - b.mean()
-    return float(np.real(np.vdot(af, bf)) / (np.linalg.norm(af) * np.linalg.norm(bf) + 1e-30))
-
-
 def _read_relion_posterior(part_id: int) -> np.ndarray:
     """Return posterior table reshaped to (n_rot=4608, n_trans=116)."""
     with open(DUMP_DIR / f"p{part_id}_exp_Mweight.bin", "rb") as f:

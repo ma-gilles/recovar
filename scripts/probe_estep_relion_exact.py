@@ -34,9 +34,9 @@ from pathlib import Path
 import numpy as np
 
 try:
-    from scripts.relion_reference import euler_matrix, read_initial_noise_variance
+    from scripts.relion_reference import centered_correlation, euler_matrix, read_initial_noise_variance
 except ModuleNotFoundError:
-    from relion_reference import euler_matrix, read_initial_noise_variance
+    from relion_reference import centered_correlation, euler_matrix, read_initial_noise_variance
 
 FIXTURE_DIR = Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run")
 PARTICLES_STAR = Path(
@@ -57,12 +57,6 @@ def _read_bin(p: Path) -> np.ndarray:
         bp = rem // (nz * ny * nx) if nz * ny * nx else 8
         dt = np.complex128 if bp == 16 else np.float64
         return np.fromfile(f, dtype=dt, count=nz * ny * nx).reshape(nz, ny, nx)
-
-
-def _cc(a: np.ndarray, b: np.ndarray) -> float:
-    af = a.ravel() - a.mean()
-    bf = b.ravel() - b.mean()
-    return float(np.real(np.vdot(af, bf)) / (np.linalg.norm(af) * np.linalg.norm(bf) + 1e-30))
 
 
 def main():
@@ -311,12 +305,12 @@ def main():
                                 bp_weight[z0r + dz, y0r + dy, x0 + dx] += wt_corner * w_val
 
         if (p_idx + 1) % 1 == 0:
-            cc_data = _cc(bp_data, target_bp_data)
-            cc_weight = _cc(bp_weight, target_bp_weight)
+            cc_data = centered_correlation(bp_data, target_bp_data)
+            cc_weight = centered_correlation(bp_weight, target_bp_weight)
             print(f"  After particle {p_idx + 1}: bp_data CC = {cc_data:+.6f}, bp_weight CC = {cc_weight:+.6f}")
 
-    cc_data = _cc(bp_data, target_bp_data)
-    cc_weight = _cc(bp_weight, target_bp_weight)
+    cc_data = centered_correlation(bp_data, target_bp_data)
+    cc_weight = centered_correlation(bp_weight, target_bp_weight)
     print(f"\nFinal: bp_data CC = {cc_data:+.6f}, bp_weight CC = {cc_weight:+.6f}")
 
 

@@ -23,9 +23,9 @@ from pathlib import Path
 import numpy as np
 
 try:
-    from scripts.relion_reference import euler_matrix, read_initial_noise_variance
+    from scripts.relion_reference import centered_correlation, euler_matrix, read_initial_noise_variance
 except ModuleNotFoundError:
-    from relion_reference import euler_matrix, read_initial_noise_variance
+    from relion_reference import centered_correlation, euler_matrix, read_initial_noise_variance
 
 FIXTURE_DIR = Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run")
 PARTICLES_STAR = Path(
@@ -47,12 +47,6 @@ def _read_bin(p: Path) -> np.ndarray:
         bp = rem // (nz * ny * nx)
         dt = np.complex128 if bp == 16 else np.float64
         return np.fromfile(f, dtype=dt, count=nz * ny * nx).reshape(nz, ny, nx)
-
-
-def _cc(a: np.ndarray, b: np.ndarray) -> float:
-    af = a.ravel() - a.mean()
-    bf = b.ravel() - b.mean()
-    return float(np.real(np.vdot(af, bf)) / (np.linalg.norm(af) * np.linalg.norm(bf) + 1e-30))
 
 
 def main() -> None:
@@ -128,8 +122,8 @@ def main() -> None:
     target_weight = _read_bin(RELION_BPREF / "pipe_it1_c0_bp_weight.bin")
 
     print("\nB-PROBE RESULT (RELION-exact rotations + translations, h0):")
-    print(f"  bp_data    CC = {_cc(bp_data, target_data):+.6f}")
-    print(f"  bp_weight  CC = {_cc(bp_weight, target_weight):+.6f}")
+    print(f"  bp_data    CC = {centered_correlation(bp_data, target_data):+.6f}")
+    print(f"  bp_weight  CC = {centered_correlation(bp_weight, target_weight):+.6f}")
     print(f"  ‖ours‖/‖target‖ data   = {np.linalg.norm(bp_data) / np.linalg.norm(target_data):.4e}")
     print(f"  ‖ours‖/‖target‖ weight = {np.linalg.norm(bp_weight) / np.linalg.norm(target_weight):.4e}")
 

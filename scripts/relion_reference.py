@@ -41,3 +41,9 @@ def read_initial_noise_variance(fixture_dir, n: int) -> np.ndarray:
             except ValueError:
                 pass
     return v
+
+
+def centered_correlation(a: np.ndarray, b: np.ndarray) -> float:
+    af = a.ravel() - a.mean()
+    bf = b.ravel() - b.mean()
+    return float(np.real(np.vdot(af, bf)) / (np.linalg.norm(af) * np.linalg.norm(bf) + 1e-30))
