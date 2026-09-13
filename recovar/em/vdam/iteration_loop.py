@@ -213,18 +213,6 @@ def _ave_pmax_from_meta(meta: dict) -> float | None:
                 return average
             return float(np.mean(arr, dtype=np.float64))
 
-    weighted_sum = 0.0
-    count = 0
-    for key, value in meta.items():
-        if key.endswith("_pmax_mean"):
-            prefix = key[: -len("_pmax_mean")]
-            n_key = f"{prefix}_n_images"
-            n = int(meta.get(n_key, 1))
-            weighted_sum += float(value) * n
-            count += n
-    if count:
-        return weighted_sum / float(count)
-
     if "pmax_mean" in meta:
         return float(meta["pmax_mean"])
     return None
