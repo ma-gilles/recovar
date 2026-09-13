@@ -18,8 +18,6 @@ from recovar.em.scoring.compact_candidates import SparseCandidateMask, _candidat
 from recovar.em.scoring.sparse_bucket_arrays import (
     _DEFAULT_MAX_HYPOTHESES_PER_MICROBATCH,
     _bucket_sparse_k_class_compact_pair_counts,
-    _compact_pair_counts_from_inputs,
-    _prepare_per_image_compact_candidate_pairs,
 )
 from recovar.em.sparse_pass2.sparse_pass2_policy import _compact_pair_max_images_per_microbatch_for_pass
 
@@ -108,12 +106,12 @@ def _compact_k_class_pair_plan_stats(
 ) -> SparseKClassCompactPairPlanStats:
     """Compute compact-pair work counters without changing pass-2 execution."""
 
-    compact_inputs_by_class = tuple(
-        _prepare_per_image_compact_candidate_pairs(per_image_inputs)
-        for per_image_inputs in per_image_inputs_by_class
+    pair_counts_by_class = tuple(
+        np.asarray([np.count_nonzero(mask) for mask in inputs["candidate_mask"]], dtype=np.int64)
+        for inputs in per_image_inputs_by_class
     )
     return _compact_k_class_pair_plan_stats_from_counts(
-        _compact_pair_counts_from_inputs(compact_inputs_by_class),
+        pair_counts_by_class,
         dense_buckets,
         n_fine_trans,
         pair_block_size_for_quantization=pair_block_size_for_quantization,
