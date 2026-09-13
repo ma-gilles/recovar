@@ -71,7 +71,6 @@ class NativeSamplingPlan:
     offset_step_angstrom: float = InitialModelDefaults.offset_step_px
     coarse_translations: np.ndarray | None = None
     coarse_prior_translations: np.ndarray | None = None
-    translation_parent: np.ndarray | None = None
     metadata_translations: np.ndarray | None = None
 
     @property
@@ -607,7 +606,6 @@ def _build_sampling_plan(
             metadata_translations = sampling.apply_relion_translation_perturbation(
                 metadata_translations, random_perturbation, offset_step_px
             )
-        translation_parent = None
     else:
         rotations = None
         if not defer_fine_rotations:
@@ -635,7 +633,6 @@ def _build_sampling_plan(
             random_perturbation,
             offset_step_pixels=offset_step_px,
         )
-        translation_parent = np.asarray(_translation_parent, dtype=np.int64)
 
     return NativeSamplingPlan(
         rotations=None if rotations is None else np.asarray(rotations, dtype=np.float32),
@@ -649,7 +646,6 @@ def _build_sampling_plan(
         offset_step_angstrom=offset_step_angstrom,
         coarse_translations=coarse_pass1_translations,
         coarse_prior_translations=coarse_translations,
-        translation_parent=translation_parent,
         metadata_translations=np.asarray(metadata_translations, dtype=np.float64),
     )
 

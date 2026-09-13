@@ -2240,7 +2240,6 @@ def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
         random_perturbation=0.0,
         coarse_translations=np.asarray([[99.0, 0.0]], dtype=np.float32),
         coarse_prior_translations=np.asarray([[1.0, 0.0]], dtype=np.float32),
-        translation_parent=np.asarray([0, 0], dtype=np.int64),
     )
 
     config = driver._dense_estep_config(
