@@ -35,7 +35,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.classification.k_class_results import SparseKClassHostStatistics
+from recovar.em.classification.k_class_results import DeferredHostUpdates, SparseKClassHostStatistics
 from recovar.em.diagnostics import bpref_diagnostics
 from recovar.em.diagnostics import norm_scale as norm_scale_diagnostics
 from recovar.em.diagnostics import pass2 as pass2_diagnostics
@@ -5656,6 +5656,7 @@ def compute_k_class_pass2_stats_sparse_fused(
         raw_host_staging_peak_bytes = max(raw_host_staging_peak_bytes, next_bucket_bytes)
         return raw_host, next_bucket_bytes
 
+    deferred_statistics = DeferredHostUpdates()
     host_statistics = SparseKClassHostStatistics(
         class_hard_assignments,
         best_rotations,
@@ -7886,26 +7887,33 @@ def compute_k_class_pass2_stats_sparse_fused(
                 _add_sparse_group_timing(group_timing, "noise", time.time() - substage_t0)
 
             substage_t0 = time.time()
-            host_statistics.update_bucket(
-                class_index=class_index,
-                arrays=arrays,
-                image_indices=image_indices,
-                pair_arrays=pair_arrays if bucket_uses_compact_pairs else None,
-                bucket_uses_compact_pairs=bucket_uses_compact_pairs,
-                batch=batch,
-                n_fine_trans=n_fine_trans,
-                best_argmax=best_argmax,
-                best_log_score_bucket=best_log_score_bucket,
-                max_posterior_bucket=max_posterior_bucket,
-                class_log_z=class_score_log_z_bucket[class_index],
-                probs_sum_t_jax=probs_sum_t_jax,
-                score_real_dtype=precision_policy.score_real_dtype,
-                log_score_offset=log_score_offset,
-                use_exact_relion_gaussian=use_exact_relion_gaussian,
-                per_image_inputs_by_class=per_image_inputs_by_class,
+            deferred_statistics.append(
+                host_statistics.update_bucket,
+                host=dict(
+                    class_index=class_index,
+                    arrays=arrays,
+                    image_indices=image_indices,
+                    pair_arrays=pair_arrays if bucket_uses_compact_pairs else None,
+                    bucket_uses_compact_pairs=bucket_uses_compact_pairs,
+                    batch=batch,
+                    n_fine_trans=n_fine_trans,
+                    score_real_dtype=precision_policy.score_real_dtype,
+                    log_score_offset=log_score_offset,
+                    use_exact_relion_gaussian=use_exact_relion_gaussian,
+                    per_image_inputs_by_class=per_image_inputs_by_class,
+                ),
+                device=dict(
+                    best_argmax=best_argmax,
+                    best_log_score_bucket=best_log_score_bucket,
+                    max_posterior_bucket=max_posterior_bucket,
+                    class_log_z=class_score_log_z_bucket[class_index],
+                    probs_sum_t_jax=probs_sum_t_jax,
+                ),
             )
             _add_sparse_group_timing(group_timing, "stats", time.time() - substage_t0)
         _add_sparse_group_timing(group_timing, "mstep_noise_stats", time.time() - stage_t0)
+
+    deferred_statistics.flush()
 
     if last_bucket_size_logged is not None and group_t0 is not None:
         group_chunks, group_images = bucket_group_stats[last_bucket_size_logged]

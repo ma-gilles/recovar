@@ -664,3 +664,43 @@ class SparseKClassHostStatistics(NamedTuple):
                 coarse_rot_indices,
                 probs_sum_t[row, :cnt],
             )
+
+
+class DeferredHostUpdates:
+    """Transfer small groups of device leaves, then apply updates in order.
+
+    Host metadata belongs to the producing bucket and must remain immutable
+    until replay. Each callback receives explicit named inputs, never a loop
+    closure. A single oversized record is transferred alone.
+    """
+
+    def __init__(self, *, max_records=4, max_bytes=64 * 1024**2):
+        if max_records < 1 or max_bytes < 1:
+            raise ValueError("host update limits must be positive")
+        self.max_records = max_records
+        self.max_bytes = max_bytes
+        self.records = []
+        self.pending_bytes = 0
+
+    def append(self, update, *, host, device):
+        if host.keys() & device.keys():
+            raise ValueError("host and device update inputs must be disjoint")
+        size = sum(int(value.nbytes) for value in device.values())
+        if self.records and self.pending_bytes + size > self.max_bytes:
+            self.flush()
+        self.records.append((update, host, device))
+        self.pending_bytes += size
+        if len(self.records) >= self.max_records or self.pending_bytes >= self.max_bytes:
+            self.flush()
+
+    def flush(self):
+        if not self.records:
+            return
+        # Each statistics record has five leaves, so the default group submits
+        # at most20 asynchronous copies rather than an iteration-sized transfer.
+        pulled = jax.device_get([device for _, _, device in self.records])
+        records = self.records
+        self.records = []
+        self.pending_bytes = 0
+        for (update, host, _), device in zip(records, pulled, strict=True):
+            update(**host, **device)
