@@ -2,23 +2,9 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
+from helpers.vdam import particle_state_table as _table
 
 from scripts.audit_vdam_particle_state_trajectory import AuditError, compare_particle_tables
-
-
-def _table(rows):
-    return pd.DataFrame(
-        rows,
-        columns=(
-            "_rlnImageName",
-            "_rlnAngleRot",
-            "_rlnAngleTilt",
-            "_rlnAnglePsi",
-            "_rlnOriginXAngst",
-            "_rlnOriginYAngst",
-            "_rlnMaxValueProbDistribution",
-        ),
-    )
 
 
 def test_particle_state_audit_aligns_identity_and_reports_first_divergence():

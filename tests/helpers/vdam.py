@@ -126,3 +126,20 @@ def bpref_to_run_em_output(
         Fc[sl] = weight
 
     return Fy, Fc
+
+
+def particle_state_table(rows):
+    import pandas as pd
+
+    return pd.DataFrame(
+        rows,
+        columns=(
+            "_rlnImageName",
+            "_rlnAngleRot",
+            "_rlnAngleTilt",
+            "_rlnAnglePsi",
+            "_rlnOriginXAngst",
+            "_rlnOriginYAngst",
+            "_rlnMaxValueProbDistribution",
+        ),
+    )

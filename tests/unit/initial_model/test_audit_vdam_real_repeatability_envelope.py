@@ -1,25 +1,10 @@
 from __future__ import annotations
 
-import pandas as pd
+from helpers.vdam import particle_state_table as _table
 
 from scripts.audit_vdam_real_repeatability_envelope import (
     compare_particle_tables_to_reference_set,
 )
-
-
-def _table(rows):
-    return pd.DataFrame(
-        rows,
-        columns=(
-            "_rlnImageName",
-            "_rlnAngleRot",
-            "_rlnAngleTilt",
-            "_rlnAnglePsi",
-            "_rlnOriginXAngst",
-            "_rlnOriginYAngst",
-            "_rlnMaxValueProbDistribution",
-        ),
-    )
 
 
 def test_repeatability_envelope_accepts_state_and_pmax_from_either_reference():
