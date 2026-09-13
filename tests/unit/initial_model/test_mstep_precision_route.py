@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 from helpers.vdam import numpy_rnd_unif_factory
 
+from recovar.em.diagnostics import vdam_mstep_replay
 from recovar.commands import initial_model as initial_model_command
 from recovar.em.vdam import driver, iteration_loop, m_step, mstep_single_class, native_options, star_io
 from recovar.em.vdam.init import initialise_denovo_state
@@ -23,11 +24,11 @@ F32_STATE = {
     "fourier_coverage_class": np.float32,
 }
 REPLAYS = [
-    mstep_single_class.VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV,
-    mstep_single_class.VDAM_NATIVE_FIRST_MOMENT_REPLAY_ENV,
-    mstep_single_class.VDAM_NATIVE_BPREF_DATA_REPLAY_ENV,
-    mstep_single_class.VDAM_NATIVE_BPREF_WEIGHT_REPLAY_ENV,
-    mstep_single_class.VDAM_NATIVE_IREF_INPUT_REPLAY_ENV,
+    vdam_mstep_replay.VDAM_NATIVE_SECOND_MOMENT_REPLAY_ENV,
+    vdam_mstep_replay.VDAM_NATIVE_FIRST_MOMENT_REPLAY_ENV,
+    vdam_mstep_replay.VDAM_NATIVE_BPREF_DATA_REPLAY_ENV,
+    vdam_mstep_replay.VDAM_NATIVE_BPREF_WEIGHT_REPLAY_ENV,
+    vdam_mstep_replay.VDAM_NATIVE_IREF_INPUT_REPLAY_ENV,
     "RECOVAR_MSTEP_DUMP_DIR",
 ]
 
@@ -176,7 +177,7 @@ def _call(state, **kwargs):
 def test_float32_rejects_diagnostics_before_replay_consumption(monkeypatch, env):
     monkeypatch.setenv(env, "missing")
     monkeypatch.setattr(
-        mstep_single_class, "_maybe_replay_native_bpref_accumulators", lambda *a, **k: pytest.fail("consumed replay")
+        vdam_mstep_replay, "_maybe_replay_native_bpref_accumulators", lambda *a, **k: pytest.fail("consumed replay")
     )
     with pytest.raises(ValueError, match=env):
         _call(driver._prepare_mstep_state_precision(_state(), "float32"))
@@ -184,7 +185,7 @@ def test_float32_rejects_diagnostics_before_replay_consumption(monkeypatch, env)
 
 def test_float32_rejects_primitive_route_before_overrides(monkeypatch):
     monkeypatch.setattr(
-        mstep_single_class, "_maybe_replay_native_bpref_accumulators", lambda *a, **k: pytest.fail("consumed replay")
+        vdam_mstep_replay, "_maybe_replay_native_bpref_accumulators", lambda *a, **k: pytest.fail("consumed replay")
     )
     with pytest.raises(ValueError, match="transaction"):
         _call(driver._prepare_mstep_state_precision(_state(), "float32"), use_native_transaction=False)

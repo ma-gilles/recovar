@@ -24,6 +24,7 @@ from recovar.commands.initial_model import GuiInitialModelDefaults
 from recovar.em.helpers.expected_accuracy import estimate_relion_expected_accuracy_from_prepared_inputs
 from recovar.em.refinement.mean_helpers import initial_low_pass_filter_references
 from recovar.em.relion import relion_projector_setup
+from recovar.em.diagnostics import vdam_mstep_replay
 from recovar.em.vdam import (
     dense_adapter,
     driver,
@@ -462,7 +463,7 @@ def test_total_package_loc_within_budget():
                  for name in ("vdam_checkpoint.py", "initial_noise.py"))
     # Shared diagnostics remain counted after their responsibility move.
     total += sum(_file_loc(PACKAGE_DIR.parent / "diagnostics" / name)
-                 for name in ("gt_metrics.py", "gt_registration.py"))
+                 for name in ("gt_metrics.py", "gt_registration.py", "vdam_mstep_replay.py"))
     total += len(inspect.getsourcelines(GuiInitialModelDefaults)[0]) + 2  # Extracted launcher defaults remain counted.
     total += 1  # ProjectorSetupBackend alias now lives in the shared owner.
     # Shared projector wrappers remain counted after leaving dense_adapter.
@@ -539,8 +540,10 @@ def test_iteration_loop_updates_definition_ownership():
 
 def test_mstep_single_class_definition_ownership():
     src = inspect.getsource(m_step)
-    for name in ("vdam_m_step_single_class", "_run_m_step_transaction", "_validate_mstep_precision_route", "_maybe_replay_native_bpref_accumulators"):
+    for name in ("vdam_m_step_single_class", "_run_m_step_transaction", "_validate_mstep_precision_route"):
         assert inspect.getmodule(getattr(mstep_single_class, name)) is mstep_single_class and f"\ndef {name}(" not in src
+    assert inspect.getmodule(vdam_mstep_replay._maybe_replay_native_bpref_accumulators) is vdam_mstep_replay
+    assert not hasattr(mstep_single_class, "_maybe_replay_native_bpref_accumulators")
     assert inspect.getmodule(state.VdamAccumulator) is state and "\nclass VdamAccumulator" not in src
     assert m_step.vdam_m_step_single_class is mstep_single_class.vdam_m_step_single_class
     assert m_step.VdamAccumulator is state.VdamAccumulator
