@@ -524,9 +524,26 @@ def _compact_pair_index_arrays_impl(tables, parents, ftp, counts, real_rows, *, 
     )  # (B, R)
     row_starts = jnp.cumsum(row_counts, axis=1, dtype=jnp.int32) - row_counts  # exclusive
     slots = jnp.arange(pair_bucket_size, dtype=jnp.int32)  # (P,)
-    row = jax.vmap(lambda starts: jnp.searchsorted(starts, slots, side="right").astype(jnp.int32) - 1)(
-        row_starts
-    )  # (B, P): last row whose start <= p
+    # Row of slot p = the row whose [start, start + count) contains p. A vmapped
+    # searchsorted lowered to a ~log2(rows)-step loop of add/select/copy kernels
+    # (~350 launches per class-chunk, perfetto trace job 13832290); instead mark the
+    # start slot of every non-empty row with 1, so an inclusive cumsum over slots gives
+    # the rank of the owning row among the non-empty rows, then map rank -> row id.
+    nonempty = row_counts > 0  # (B, R)
+    rank = jnp.cumsum(nonempty, axis=1, dtype=jnp.int32) - nonempty.astype(jnp.int32)  # exclusive rank
+    b_rows = jnp.arange(n_alloc, dtype=jnp.int32)[:, None]
+    marks = (
+        jnp.zeros((n_alloc, pair_bucket_size + 1), dtype=jnp.int32)
+        .at[jnp.broadcast_to(b_rows, row_starts.shape), jnp.where(nonempty, row_starts, pair_bucket_size)]
+        .add(1, mode="drop")[:, :pair_bucket_size]
+    )  # (B, P): 1 at the first slot of every non-empty row
+    slot_rank = jnp.cumsum(marks, axis=1, dtype=jnp.int32) - 1  # (B, P): rank of the owning row
+    row_of_rank = (
+        jnp.zeros((n_alloc, rows + 1), dtype=jnp.int32)
+        .at[jnp.broadcast_to(b_rows, rank.shape), jnp.where(nonempty, rank, rows)]
+        .set(jnp.broadcast_to(jnp.arange(rows, dtype=jnp.int32)[None, :], rank.shape), mode="drop")
+    )  # (B, rows + 1): rank -> row id (slot `rows` is the dropped sink)
+    row = jnp.take_along_axis(row_of_rank, jnp.clip(slot_rank, 0, rows), axis=1)  # (B, P)
     row = jnp.clip(row, 0, rows - 1)
     within = slots[None, :] - jnp.take_along_axis(row_starts, row, axis=1)
     coarse_row = jnp.take_along_axis(safe_parent, row, axis=1)  # (B, P)

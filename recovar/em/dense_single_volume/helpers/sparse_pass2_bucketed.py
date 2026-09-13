@@ -7045,15 +7045,39 @@ def _apply_active_row_mask(values, active_mask):
     return values * mask
 
 
+@jax.jit
+def _select_active_flat_rows_jit(values, flat_rotations, active_indices, active_mask):
+    """Gather + mask the active rows and their rotations in one program.
+
+    The gather, the mask broadcast/multiply and the rotation gather used to be
+    four to six separate executables per class-chunk (perfetto trace, job
+    13832290); each executable costs a launch and a dispatch.
+    """
+    active_values = _gather_active_flat_bucket_rows(values, active_indices)
+    if active_mask is not None:
+        active_values = _apply_active_row_mask_jit(active_values, active_mask)
+    return active_values, flat_rotations[active_indices]
+
+
+@jax.jit
+def _select_active_flat_values_jit(values, active_indices, active_mask):
+    active_values = _gather_active_flat_bucket_rows(values, active_indices)
+    if active_mask is not None:
+        active_values = _apply_active_row_mask_jit(active_values, active_mask)
+    return active_values
+
+
 def _select_active_flat_rows(values, flat_rotations, active_indices, active_mask=None):
     """Gather active flattened rows with matching rotations."""
 
     if active_indices.size == 0:
         return None, None
-    active_indices_jax = jnp.asarray(active_indices, dtype=jnp.int32)
-    active_values = _gather_active_flat_bucket_rows(values, active_indices_jax)
-    active_values = _apply_active_row_mask(active_values, active_mask)
-    return active_values, flat_rotations[active_indices_jax]
+    return _select_active_flat_rows_jit(
+        values,
+        flat_rotations,
+        jnp.asarray(active_indices, dtype=jnp.int32),
+        None if active_mask is None else jnp.asarray(active_mask),
+    )
 
 
 def _select_active_flat_values(values, active_indices, active_mask=None):
@@ -7061,8 +7085,11 @@ def _select_active_flat_values(values, active_indices, active_mask=None):
 
     if active_indices.size == 0:
         return None
-    active_values = _gather_active_flat_bucket_rows(values, jnp.asarray(active_indices, dtype=jnp.int32))
-    return _apply_active_row_mask(active_values, active_mask)
+    return _select_active_flat_values_jit(
+        values,
+        jnp.asarray(active_indices, dtype=jnp.int32),
+        None if active_mask is None else jnp.asarray(active_mask),
+    )
 
 
 @jax.jit
