@@ -16676,12 +16676,31 @@ def compute_k_class_pass2_stats_sparse_fused(
                     best_pair_indices=best_pair_indices_dev,
                 )
             if defer_host_stats:
+                # The record must not pin the chunk's bucket arrays until the
+                # replay: with device-built pair tables / rotations that held
+                # every chunk's (images, pairs) and (images, rows, 3, 3) arrays on
+                # the GPU for the whole iteration (~55 GB at 100k/256, OOM in job
+                # 13825610). Keep only the host fields the replay reads; the check
+                # mode keeps the full dicts for its fingerprints.
+                record_arrays = arrays if defer_host_stats_check else {
+                    "actual_counts": arrays["actual_counts"],
+                    "rotation_indices": arrays["rotation_indices"],
+                }
+                if not bucket_uses_compact_pairs:
+                    record_pair_arrays = None
+                elif defer_host_stats_check or best_pair_indices_dev is None:
+                    record_pair_arrays = pair_arrays
+                else:
+                    record_pair_arrays = {
+                        "pair_bucket_size": pair_arrays["pair_bucket_size"],
+                        "rotation_index": pair_arrays["rotation_index"],
+                    }
                 deferred_host_records.append(
                     (
                         "stats",
                         class_index,
-                        arrays,
-                        pair_arrays if bucket_uses_compact_pairs else None,
+                        record_arrays,
+                        record_pair_arrays,
                         bucket_uses_compact_pairs,
                         image_indices,
                         n_real_images,
