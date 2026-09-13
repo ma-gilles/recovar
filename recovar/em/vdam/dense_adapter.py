@@ -273,6 +273,7 @@ def _resolve_class_inputs(
     state: InitialModelState,
     config: DenseInitialModelEstepConfig,
 ) -> tuple[Any, Any, np.ndarray | None, int | None]:
+    mean_variance = config.mean_variance
     relion_projector_half_by_class = None
     relion_projector_r_max = None
     if config.relion_projector_half_by_class is not None:
@@ -293,20 +294,23 @@ def _resolve_class_inputs(
     elif config.means is not None:
         means = config.means
     elif config.relion_projector_frame:
-        means, _prepared_variance, projector_half_by_class, projector_r_max = (
+        means, prepared_variance, projector_half_by_class, projector_r_max = (
             prepare_relion_projector_class_inputs(
                 state,
                 padding_factor=config.padding_factor,
                 projector_setup_backend=config.projector_setup_backend,
             )
         )
+        if mean_variance is None:
+            mean_variance = prepared_variance
         exact_projector_setting = os.environ.get(_EXACT_RELION_PROJECTOR_ENV, "1").strip().lower()
         if exact_projector_setting not in {"0", "false", "no", "off"}:
             relion_projector_half_by_class = projector_half_by_class
             relion_projector_r_max = projector_r_max
     else:
         means = reference_to_dense_means(state.Iref)
-    mean_variance = config.mean_variance if config.mean_variance is not None else np.abs(np.asarray(means)) ** 2
+    if mean_variance is None:
+        mean_variance = np.abs(np.asarray(means)) ** 2
     return means, mean_variance, relion_projector_half_by_class, relion_projector_r_max
 
 

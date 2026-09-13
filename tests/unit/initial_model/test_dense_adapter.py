@@ -802,9 +802,11 @@ def test_relion_projector_projection_dense_scale_matches_embedded_means(monkeypa
     np.testing.assert_allclose(np.asarray(proj_abs2), np.abs(expected) ** 2, rtol=1e-5, atol=1e-3)
 
 
-def test_resolve_class_inputs_relion_projector_uses_exact_path_by_default(monkeypatch):
-    projector_half = np.ones((1, 3, 3, 2), dtype=np.complex64)
-    dense_means = np.full((1, 8**3), 2.0 + 0.5j, dtype=np.complex64)
+@pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
+@pytest.mark.parametrize("override_variance", [False, True])
+def test_resolve_class_inputs_relion_projector_uses_exact_path_by_default(monkeypatch, dtype, override_variance):
+    projector_half = np.ones((1, 3, 3, 2), dtype=dtype)
+    dense_means = np.full((1, 8**3), 2.0 + 0.5j, dtype=dtype)
 
     monkeypatch.setattr(
         "recovar.em.relion.relion_projector_setup.reference_to_relion_projector_half_maps",
@@ -814,16 +816,33 @@ def test_resolve_class_inputs_relion_projector_uses_exact_path_by_default(monkey
         "recovar.em.vdam.dense_adapter.relion_projector_half_maps_to_dense_means",
         lambda *args, **kwargs: dense_means,
     )
+    variance_override = np.full(dense_means.shape, 7.0) if override_variance else None
+    expected_variance = np.abs(dense_means) ** 2 if variance_override is None else variance_override
+    original_abs = np.abs
+    computed_variances = []
+
+    def record_abs(value):
+        result = original_abs(value)
+        computed_variances.append(result)
+        return result
+
+    monkeypatch.setattr(np, "abs", record_abs)
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=1, n_directions=4)
     config = DenseInitialModelEstepConfig(
         noise_variance=np.ones(8 * 8, dtype=np.float32),
         rotations=np.eye(3, dtype=np.float32)[None],
         translations=np.zeros((1, 2), dtype=np.float32),
         relion_projector_frame=True,
+        mean_variance=variance_override,
     )
 
-    means, _mean_variance, exact_half, exact_rmax = _resolve_class_inputs(state, config)
+    means, mean_variance, exact_half, exact_rmax = _resolve_class_inputs(state, config)
 
+    assert len(computed_variances) == 1
+    np.testing.assert_array_equal(mean_variance, expected_variance)
+    assert mean_variance.dtype == expected_variance.dtype
+    if override_variance:
+        assert mean_variance is variance_override
     np.testing.assert_array_equal(means, dense_means)
     np.testing.assert_array_equal(exact_half, projector_half)
     assert exact_rmax == 2
@@ -831,6 +850,8 @@ def test_resolve_class_inputs_relion_projector_uses_exact_path_by_default(monkey
     monkeypatch.setenv("RECOVAR_INITIAL_MODEL_EXACT_RELION_PROJECTOR", "0")
     _means, _mean_variance, exact_half, exact_rmax = _resolve_class_inputs(state, config)
 
+    assert len(computed_variances) == 2
+    np.testing.assert_array_equal(_mean_variance, expected_variance)
     assert exact_half is None
     assert exact_rmax is None
 
