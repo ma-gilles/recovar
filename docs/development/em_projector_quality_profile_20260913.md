@@ -69,4 +69,35 @@ dtypes; changed hashes and memmap payloads are rejected. These five checks pass
 (92415); the real object graph and GPU placement still need validation.
 [CPU checkpoint checks](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_real_input_checkpoint_20260913/cpu_result.json).
 The checkpoint is private, trusted and source-pinned, not a public persistence
-format. No new GPU preparation or repeat profile has yet been launched.
+format. Actual preparation80700 subsequently completed in53.822s with zero E/M
+calls. The1.43GB real checkpoint preserves all operand/raw/mask/processing/type
+identities in a same-process round-trip. All source and library checks pass.
+
+## Completed checkpoint-based warm trace
+
+Profile31150 completed0 in135.491s on immediately idle A1001; no survivors or
+changed pins. Three unchanged calls took60.303s cold,5.650s warm and3.618s
+traced warm. Only the third was traced. All inputs, including mean_variance,
+match the earlier successful real replay. GPU activity covers42.846% of the
+traced interval (any recorded work, not occupancy).
+
+The strongest substep target is projection staging:135 sparse projection
+helper calls consume1.519s of nested host wall. Texture fill takes0.214s of
+summed GPU time, versus0.033s for actual texture sampling. Nsight records308GB
+of logical device-to-device copy bytes and36.7GB device-to-array; host-to-device
+is0.54GB.142 stream-synchronize calls account for1.026s API wall. These times
+overlap and must not be summed.
+
+Source5e still expands the half projector to a cubic embedding at each static
+projection block. The already-qualifiedb9/8dd half-staging patch addresses
+this route; the next discriminator is its actual-input replay, not a new
+implementation or full refinement. The lead's6118f0207 port is separate from
+the frozen5e source measured here.
+
+Warm/traced scores, Pmax, poses and support are byte-exact;35/41 fields match.
+Six accumulation/noise fields differ. Against the original real replay,33/41
+fields match; eight accumulation/noise fields differ. All arrays and differences
+are retained; no full quality or general speed admission follows.
+[Trace analysis](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_real_checkpoint_profile_20260913/analysis.json),
+[output comparisons](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_real_checkpoint_profile_20260913/output_audit.json),
+[terminal/source/library receipt](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_real_checkpoint_profile_20260913/supervisor/result.json).
