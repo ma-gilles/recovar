@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -71,6 +72,28 @@ def _run_make(wrapper: Path, *targets: str, env: dict[str, str]):
         capture_output=True,
         check=False,
     )
+
+
+def test_local_cuda_includes_are_build_and_package_inputs():
+    import recovar.cuda_backproject as cb
+
+    pending = ["cuda_backproject.cu"]
+    sources = set()
+    while pending:
+        name = pending.pop()
+        if name in sources:
+            continue
+        sources.add(name)
+        pending.extend(
+            include
+            for include in re.findall(r'^#include "([^"\n]+)"', (_CUDA_DIR / name).read_text(), re.M)
+            if (_CUDA_DIR / include).is_file()
+        )
+    dependencies = _MAKEFILE.read_text().split("$(LIB):", 1)[1].split("|", 1)[0].split()
+    manifest = (_REPO_ROOT / "MANIFEST.in").read_text().splitlines()
+    assert sources <= set(cb._CUDA_BUILD_SOURCE_NAMES)
+    assert sources <= set(dependencies)
+    assert all(f"include recovar/cuda/{name}" in manifest for name in sources)
 
 
 def test_makefile_prefers_cudacxx_over_path_and_roots(tmp_path):
