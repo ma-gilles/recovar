@@ -5783,6 +5783,7 @@ def _compact_fused_translate_scoring_enabled(
     return bool(jax.default_backend() == "gpu" and custom_cuda_requested())
 
 
+@partial(jax.jit, static_argnames=("current_size",))
 def _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
     unshifted_corrected,  # (B, N) complex64, image / (CTF * scale), untranslated
     corr_img_score,  # (B, N) real, Minvsigma2 * CTF^2 * scale^2
@@ -5803,16 +5804,24 @@ def _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
     evaluated by ``relion_fine_diff2_fused_translate_pairs_f32``: the image is
     translated per pixel inside the kernel and the reference is the per-image
     projection block flattened to ``(B * R, N)`` with row offsets ``b * R``.
-    Masked pairs evaluate rotation row 0 at translation 0, exactly like the
-    gathered path, so their discarded values also agree bit for bit.
+    Masked pairs are handed to the kernel as ``-1`` and skipped: they come back
+    as ``+inf``, which every consumer already treats as invalid
+    (``candidate_mask & isfinite``). Valid pairs are bit-identical to the
+    gathered path. Jitted so the index glue and the weight product compile
+    once per bucket shape instead of one eager program each.
     """
     from recovar import cuda_backproject
 
     proj_half = jnp.asarray(proj_half, dtype=jnp.complex64)
     batch, n_rows, n_pixels = proj_half.shape
     row_offset = (jnp.arange(batch, dtype=jnp.int32) * jnp.int32(n_rows))[:, None]
-    safe_rotation_row = jnp.where(pair_mask, local_rotation_row, 0).astype(jnp.int32)
-    safe_translation_idx = jnp.where(pair_mask, translation_idx, 0).astype(jnp.int32)
+    pair_mask = jnp.asarray(pair_mask, dtype=bool)
+    safe_rotation_row = jnp.where(
+        pair_mask, row_offset + jnp.asarray(local_rotation_row).astype(jnp.int32), jnp.int32(-1)
+    )
+    safe_translation_idx = jnp.where(
+        pair_mask, jnp.asarray(translation_idx).astype(jnp.int32), jnp.int32(-1)
+    )
     weights = _relion_cuda_fine_pixel_weights(
         corr_img_score, jnp.asarray(half_weights)[None, :]
     ).astype(jnp.float32)
@@ -5826,7 +5835,7 @@ def _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
         jnp.asarray(unshifted_corrected, dtype=jnp.complex64),
         jnp.asarray(translation_angles, dtype=jnp.float32),
         weights,
-        row_offset + safe_rotation_row,
+        safe_rotation_row,
         safe_translation_idx,
         jnp.asarray(relion_full_to_compact, dtype=jnp.int32),
         initial_diff2,
@@ -6450,6 +6459,14 @@ def _compact_pair_weighted_rotation_and_image_sums_fused_image_sums(
     return summed, summed_image, ctf_probs, probs_sum_t, translation_posterior
 
 
+@partial(jax.jit, static_argnames=("dtype",))
+def _gather_pair_log_prior(row_log_prior, local_rotation_row, pair_mask, dtype=None):
+    rows = jnp.where(pair_mask, local_rotation_row, 0).astype(jnp.int32)
+    gathered = jnp.take_along_axis(row_log_prior, rows, axis=1)
+    out = jnp.where(pair_mask, gathered, jnp.asarray(-1e30, dtype=row_log_prior.dtype))
+    return out if dtype is None else out.astype(dtype)
+
+
 def _compact_pair_log_prior_device(compact_arrays, arrays, dtype=None):
     """Per-pair rotation prior ``(batch, pair)`` on device.
 
@@ -6461,12 +6478,12 @@ def _compact_pair_log_prior_device(compact_arrays, arrays, dtype=None):
     table = compact_arrays["log_prior"]
     if table is not None:
         return jnp.asarray(table) if dtype is None else jnp.asarray(table, dtype=dtype)
-    row_log_prior = jnp.asarray(arrays["row_log_prior"])
-    pair_mask = jnp.asarray(compact_arrays["pair_mask"])
-    rows = jnp.where(pair_mask, jnp.asarray(compact_arrays["local_rotation_row"]), 0).astype(jnp.int32)
-    gathered = jnp.take_along_axis(row_log_prior, rows, axis=1)
-    out = jnp.where(pair_mask, gathered, jnp.asarray(-1e30, dtype=row_log_prior.dtype))
-    return out if dtype is None else out.astype(dtype)
+    return _gather_pair_log_prior(
+        jnp.asarray(arrays["row_log_prior"]),
+        jnp.asarray(compact_arrays["local_rotation_row"]),
+        jnp.asarray(compact_arrays["pair_mask"], dtype=bool),
+        dtype=None if dtype is None else jnp.dtype(dtype),
+    )
 
 
 @partial(jax.jit, static_argnames=("n_rotation_rows", "n_trans"))
@@ -6756,9 +6773,19 @@ def _real_flat_row_indices_from_actual_counts(
     return padded_indices, active_mask, total
 
 
+@jax.jit
+def _apply_active_row_mask_jit(values, active_mask):
+    mask = jnp.asarray(active_mask, dtype=jnp.asarray(values).real.dtype)
+    while mask.ndim < values.ndim:
+        mask = mask[:, None]
+    return values * mask
+
+
 def _apply_active_row_mask(values, active_mask):
     if active_mask is None:
         return values
+    if hasattr(values, "shape") and hasattr(values, "dtype"):
+        return _apply_active_row_mask_jit(values, jnp.asarray(active_mask))
     mask = jnp.asarray(active_mask, dtype=jnp.asarray(values).real.dtype)
     while mask.ndim < values.ndim:
         mask = mask[:, None]
@@ -6785,8 +6812,13 @@ def _select_active_flat_values(values, active_indices, active_mask=None):
     return _apply_active_row_mask(active_values, active_mask)
 
 
+@jax.jit
 def _gather_active_flat_bucket_rows(values, active_indices):
-    """Gather flat row indices without materializing the full flattened bucket."""
+    """Gather flat row indices without materializing the full flattened bucket.
+
+    Jitted: the index split and gather used to cost one eager program each per
+    bucket shape (618 gather compiles in one 100k/256 iteration, job 13807792).
+    """
 
     values = jnp.asarray(values)
     if values.ndim >= 3:

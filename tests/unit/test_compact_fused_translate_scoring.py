@@ -156,8 +156,12 @@ def test_fused_translate_compact_pairs_match_gathered_path(
     gathered_ffi = np.asarray(gathered_ffi)
     fused = np.asarray(fused)
     assert fused.dtype == np.float32 and fused.shape == (batch, n_pairs)
-    assert np.all(np.isfinite(fused))
-    np.testing.assert_array_equal(fused.view(np.uint32), gathered_ffi.view(np.uint32))
+    # masked pairs are skipped by the kernel and come back +inf (consumers treat
+    # non-finite as invalid); valid pairs are bit-identical to the FFI kernel
+    assert np.all(np.isposinf(fused[~pair_mask]))
+    assert np.all(np.isfinite(fused[pair_mask]))
+    np.testing.assert_array_equal(fused[pair_mask].view(np.uint32), gathered_ffi[pair_mask].view(np.uint32))
+    gathered_jax = np.where(pair_mask, gathered_jax, fused)
     # The emulation is not the bitwise reference: on H100 (jobs 13803046 and
     # 13803570) it sits 1-2 ULP from the CUDA kernels on a minority of pairs.
     # Bound it loosely so a real regression (many ULP) still fails here.
