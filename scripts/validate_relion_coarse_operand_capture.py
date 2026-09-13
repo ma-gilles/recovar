@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import struct
@@ -35,12 +34,11 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+# Support both direct execution and package imports.
+if __package__:
+    from .file_hash import sha256_file as _sha256
+else:
+    from file_hash import sha256_file as _sha256
 
 
 @dataclass(frozen=True)
