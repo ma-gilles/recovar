@@ -882,7 +882,15 @@ def _run_relion_iteration_loop(
 
     padded_volume_shape = tuple(d * PADDING_FACTOR for d in volume_shape)
 
-    def _safe_batch_sizes(n_rot, n_trans, *, classes=None, image_shape_for_batch=None, current_size_for_batch=None):
+    def _safe_batch_sizes(
+        n_rot,
+        n_trans,
+        *,
+        classes=None,
+        image_shape_for_batch=None,
+        current_size_for_batch=None,
+        windowed_translation=False,
+    ):
         """Reduce batch sizes for large pose grids to avoid GPU OOM."""
         plan = _estimate_relion_em_batch_sizes(
             requested_image_batch_size=batching.image_batch_size,
@@ -894,6 +902,7 @@ def _run_relion_iteration_loop(
             padding_factor=PADDING_FACTOR,
             n_classes=n_classes if classes is None else classes,
             current_size=current_size_for_batch,
+            windowed_translation=windowed_translation,
         )
         if plan.image_batch_size != batching.image_batch_size or plan.rotation_block_size != batching.rotation_block_size:
             logger.info(

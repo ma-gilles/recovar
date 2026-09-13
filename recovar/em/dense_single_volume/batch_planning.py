@@ -196,7 +196,19 @@ def _plan_kclass_adaptive_grid_batch_sizes(
     fine_current_size,
     safe_batch_sizes,
 ) -> _AdaptiveDenseBatchSizes:
-    """Plan K-class adaptive pass-1/pass-2 batches from the actual grids."""
+    """Plan K-class adaptive pass-1/pass-2 batches from the actual grids.
+
+    Both passes translate inside the current-size window, so the planner is
+    told ``windowed_translation=True`` when it accepts that keyword.
+    """
+
+    import inspect
+
+    try:
+        accepts_windowed = "windowed_translation" in inspect.signature(safe_batch_sizes).parameters
+    except (TypeError, ValueError):
+        accepts_windowed = False
+    windowed_kwargs = {"windowed_translation": True} if accepts_windowed else {}
 
     pass2_image_batch_size, pass2_rotation_block_size = safe_batch_sizes(
         int(np.asarray(fine_rotations).shape[0]),
@@ -204,6 +216,7 @@ def _plan_kclass_adaptive_grid_batch_sizes(
         classes=n_classes,
         image_shape_for_batch=image_shape,
         current_size_for_batch=fine_current_size,
+        **windowed_kwargs,
     )
     pass2_image_batch_size = min(
         pass2_image_batch_size,
@@ -227,6 +240,7 @@ def _plan_kclass_adaptive_grid_batch_sizes(
         classes=n_classes,
         image_shape_for_batch=image_shape,
         current_size_for_batch=coarse_current_size,
+        **windowed_kwargs,
     )
     significance_image_batch_size = min(
         significance_image_batch_size,
@@ -918,8 +932,18 @@ def _estimate_relion_em_batch_sizes(
     n_classes: int = 1,
     gpu_memory_gb: float | None = None,
     current_size: int | None = None,
+    windowed_translation: bool = False,
 ) -> _RelionEMBatchPlan:
-    """Choose EM microbatch sizes from pose-grid, image, class, and GPU size."""
+    """Choose EM microbatch sizes from pose-grid, image, class, and GPU size.
+
+    ``windowed_translation`` says the caller translates images inside the
+    current-size window (the K-class adaptive passes: the coarse significance
+    pass and the fused pass 2 both call the windowed translate kernels), so the
+    translation tile is ``n_trans x window pixels`` per image, not ``n_trans x
+    full half-image``. With the full-size estimate the 100k/256 K=4 coarse pass
+    was capped at 88 images per batch (61 MB per image for a 584-pixel window)
+    and ran 2 000 batches per iteration (job 13827447).
+    """
     from recovar import utils
 
     requested_image_batch_size = max(1, _safe_int(requested_image_batch_size, 1))
@@ -1009,9 +1033,12 @@ def _estimate_relion_em_batch_sizes(
         ),
     )
     active_score_image_cap = max(1, int(active_score_tile_budget_gb * 1e9 // active_score_bytes_per_image))
+    translation_pixels = (
+        score_half_pixels if (windowed_translation and current_size is not None) else full_half_pixels
+    )
     translation_bytes_per_image = max(
         1,
-        2 * n_trans * full_half_pixels * np.dtype(np.complex64).itemsize * n_classes,
+        2 * n_trans * translation_pixels * np.dtype(np.complex64).itemsize * n_classes,
     )
     translation_image_cap = max(1, int(translation_tile_budget_gb * 1e9 // translation_bytes_per_image))
     image_batch = min(requested_image_batch_size, score_image_cap, translation_image_cap, active_score_image_cap)
