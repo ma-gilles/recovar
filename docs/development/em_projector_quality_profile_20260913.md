@@ -190,3 +190,30 @@ not unordered score atomics; the posterior uses the existing native float32
 sort/scan. Next compare actual scorer operands and score surfaces between the
 control and staging prefixes, including processed images and weights, to find
 the first divergence. No fitted offsets, tolerances or production flags changed.
+
+## Matched scorer-boundary terminal result
+
+The follow-up prefixes on frozen control5e841111c and staging32a636925 both
+completed: local sessions75493/89877, exit0, 40.270/43.266s. CPU wiring checks
+11219/37767 and terminal posterior/pair audits completed. Same checkpoint,
+raw inputs, sealed libraries, GPU UUID and effective environment were verified;
+no changed pins or surviving owned processes. No new source or native changes.
+
+All135 observed calls (45 raw,45 prior-adjusted,45 scored) have identical
+operand fingerprints and byte-exact score outputs. The full1,376,256-score
+posterior input and all five outputs—probabilities, support mask, count,
+denominator and threshold—are byte-exact between arms. Each arm also repeats
+the posterior three times exactly. Fine significant count is8045.
+[Canonical pair comparison](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_real_score_boundary_candidate_20260913/pair_comparison.json)
+has SHA256 `06d5b0f1784b6590dfefe96ad5b7f672f01499ebc0794acdcfc05f7917e055b6`.
+
+This establishes value equivalence through this synchronized posterior boundary,
+not the cause of the earlier tiny aggregate differences. The observer hashes
+and copies operands, changing synchronization; only the first projection slab
+is saved as an array, with later slabs fingerprinted. Neither original scheduling,
+M-step equivalence, full refinement quality nor general speed is qualified here.
+Do not use these capture wall times as a performance ratio or infer universal
+scan determinism. Preserve earlier non-exact full-call outputs. Reproduction
+uses the pinned `compare_pair.py` and `audit.py` in the candidate artifact root
+with frozen pixi CPU Python; exclusive-create reports require a fresh output
+copy. Consumed GPU roots must not be rerun.
