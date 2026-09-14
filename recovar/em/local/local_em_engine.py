@@ -254,7 +254,6 @@ def _env_flag(name: str) -> bool:
 def run_local_em_exact(
     experiment_dataset,
     mean,
-    mean_variance,
     noise_variance,
     local_layout: LocalHypothesisLayout,
     disc_type: str,

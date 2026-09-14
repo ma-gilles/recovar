@@ -34,7 +34,7 @@ def test_optin_requires_shared_capacity_before_dataset_access(monkeypatch):
     monkeypatch.setenv(engine.EXACT_LOCAL_BPREF_PROJECTOR_CAPACITY_ENV, "1")
     monkeypatch.setenv(engine.EXACT_LOCAL_PROJECTOR_CAPACITY_ENV, "0")
     with pytest.raises(ValueError, match="requires the shared local projector capacity"):
-        engine.run_local_em_exact(None, None, None, None, None, "linear_interp", image_batch_size=1,
+        engine.run_local_em_exact(None, None, None, None, "linear_interp", image_batch_size=1,
                                   rotation_block_size=1, current_size=8, stable_fourier_window_shapes=True)
 
 

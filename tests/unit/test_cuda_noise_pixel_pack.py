@@ -122,7 +122,7 @@ def test_requires_pixel_capacity_before_dataset_access(monkeypatch):
     monkeypatch.setenv(engine.EXACT_LOCAL_NOISE_PIXEL_CAPACITY_ENV, "0")
     with pytest.raises(ValueError, match="CUDA packing requires noise pixel capacity"):
         engine.run_local_em_exact(
-            None, None, None, None, None, "linear_interp", image_batch_size=1, rotation_block_size=1, current_size=8
+            None, None, None, None, "linear_interp", image_batch_size=1, rotation_block_size=1, current_size=8
         )
 
 

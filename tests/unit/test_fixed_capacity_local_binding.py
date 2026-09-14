@@ -919,7 +919,6 @@ def test_stable_flat_row_capacity_requires_flat_rows():
             None,
             None,
             None,
-            None,
             "nearest",
             image_batch_size=1,
             rotation_block_size=1,
@@ -934,7 +933,6 @@ def test_fused_pair_fine_score_requires_exact_flat_rows():
         match="fused-pair fine scoring requires exact RELION fine diff2 and flat local rows",
     ):
         local_em_engine.run_local_em_exact(
-            None,
             None,
             None,
             None,

@@ -365,7 +365,6 @@ def _run_local_search_iteration(
         engine_outputs = run_local_em_exact(
             experiment_dataset,
             mean,
-            mean_variance,
             noise_variance,
             local_layout,
             disc_type,

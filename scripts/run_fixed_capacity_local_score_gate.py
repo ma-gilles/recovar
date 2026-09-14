@@ -582,7 +582,6 @@ def _run_outer(
     return local_em_engine.run_local_em_exact(
         fixture.dataset,
         jnp.asarray(fixture.mean, dtype=mean_dtype),
-        jnp.asarray(fixture.mean_variance, dtype=scalar_dtype),
         jnp.asarray(fixture.noise_variance, dtype=scalar_dtype),
         fixture.local_layout,
         "linear_interp",

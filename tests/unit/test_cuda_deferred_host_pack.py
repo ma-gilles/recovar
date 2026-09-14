@@ -119,7 +119,7 @@ def test_requires_host_plan_before_dataset_access(monkeypatch):
     monkeypatch.setenv(engine.EXACT_LOCAL_HOST_PLAN_PACK_ENV, "0")
     with pytest.raises(ValueError, match="requires host-plan packing"):
         engine.run_local_em_exact(
-            None, None, None, None, None, "linear_interp", image_batch_size=1, rotation_block_size=1, current_size=8
+            None, None, None, None, "linear_interp", image_batch_size=1, rotation_block_size=1, current_size=8
         )
 
 

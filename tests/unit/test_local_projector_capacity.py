@@ -115,6 +115,7 @@ def test_compact_mapping_scaling_and_runtime_trace(monkeypatch):
     kwargs = _local_kwargs(q, 1, 15)
     rotations = jnp.eye(3, dtype=jnp.float32)[None]
     old = big._project_local_half_spectrum(None, jnp.asarray(_logical(15, 1)), rotations, **kwargs)
+    records.clear()
     new_kwargs = dict(kwargs, relion_projector_r_max=0, projector_capacity=True)
 
     @jax.jit
@@ -198,7 +199,7 @@ def test_engine_rejects_optin_before_nonstable_dataset_access(monkeypatch):
     monkeypatch.setenv(engine.EXACT_LOCAL_PROJECTOR_CAPACITY_ENV, "1")
     with pytest.raises(ValueError, match="requires stable exact-local"):
         engine.run_local_em_exact(
-            None, None, None, None, None, "linear_interp", image_batch_size=1, rotation_block_size=1, current_size=16
+            None, None, None, None, "linear_interp", image_batch_size=1, rotation_block_size=1, current_size=16
         )
 
 

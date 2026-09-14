@@ -5003,7 +5003,6 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
 
     prior_rotations = np.zeros((1, 3), dtype=np.float32)
     rotation_grid_rotations = get_relion_rotation_grid(0).astype(np.float32)
-    rotation_grid_eulers = get_relion_rotation_grid_eulers(0).astype(np.float32)
     translations = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
     reference_translations = np.array([[0.0, 0.0], [2.0, 0.0]], dtype=np.float32)
 
@@ -5071,7 +5070,7 @@ def test_run_local_search_iteration_dispatches_aligned_mstep_grid(monkeypatch, r
         pass
 
     def capture_dispatch(*args, **kwargs):
-        captured["layout"] = args[4]
+        captured["layout"] = args[4 if k_class_enabled else 3]
         captured["relion_exact_score_translation"] = kwargs.get(
             "relion_exact_score_translation"
         )
@@ -5757,7 +5756,6 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     exact_outputs = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -5942,7 +5940,6 @@ def test_run_local_em_exact_can_return_half_volume_accumulators(rng, monkeypatch
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
     dataset = MockDataset(1, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=117)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=119)
     translations = np.zeros((1, 2), dtype=np.float32)
@@ -5962,7 +5959,6 @@ def test_run_local_em_exact_can_return_half_volume_accumulators(rng, monkeypatch
     full = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -5974,7 +5970,6 @@ def test_run_local_em_exact_can_return_half_volume_accumulators(rng, monkeypatch
     half = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6119,7 +6114,6 @@ def test_run_em_dense_can_return_half_volume_accumulators(rng, monkeypatch):
 def test_run_local_em_exact_class_log_prior_shifts_evidence_only(rng):
     dataset = MockDataset(1, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=121)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=129)
     translations = np.zeros((1, 2), dtype=np.float32)
@@ -6141,7 +6135,6 @@ def test_run_local_em_exact_class_log_prior_shifts_evidence_only(rng):
     local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6158,7 +6151,6 @@ def test_run_local_em_exact_class_log_prior_shifts_evidence_only(rng):
     local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6195,7 +6187,6 @@ def test_run_local_em_exact_external_log_evidence_scales_posterior(rng, monkeypa
     monkeypatch.setenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", "1")
     dataset = MockDataset(1, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=131)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=139)
     translations = np.zeros((1, 2), dtype=np.float32)
@@ -6216,7 +6207,6 @@ def test_run_local_em_exact_external_log_evidence_scales_posterior(rng, monkeypa
     local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6234,7 +6224,6 @@ def test_run_local_em_exact_external_log_evidence_scales_posterior(rng, monkeypa
     local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6252,7 +6241,6 @@ def test_run_local_em_exact_external_log_evidence_scales_posterior(rng, monkeypa
     local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6311,7 +6299,6 @@ def test_run_local_em_exact_external_pmax_scales_in_one_score_pass(
         monkeypatch.delenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", raising=False)
     dataset = MockDataset(1, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=132)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=140)
     local_layout = LocalHypothesisLayout(
@@ -6335,7 +6322,6 @@ def test_run_local_em_exact_external_pmax_scales_in_one_score_pass(
     base_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6349,7 +6335,6 @@ def test_run_local_em_exact_external_pmax_scales_in_one_score_pass(
     scaled_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6377,7 +6362,6 @@ def test_run_local_em_exact_deferred_packed_mstep_matches_fused(rng, monkeypatch
     monkeypatch.setenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", "1")
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=137)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(3, seed=143)
     translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
@@ -6398,7 +6382,6 @@ def test_run_local_em_exact_deferred_packed_mstep_matches_fused(rng, monkeypatch
     local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6416,7 +6399,6 @@ def test_run_local_em_exact_deferred_packed_mstep_matches_fused(rng, monkeypatch
     local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6540,7 +6522,6 @@ def test_local_k_class_identical_means_split_global_posterior(rng):
     local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6620,7 +6601,6 @@ def test_local_k_class_norm_correction_counts_shared_high_shell_once(rng):
     local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6631,7 +6611,6 @@ def test_local_k_class_norm_correction_counts_shared_high_shell_once(rng):
     local_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6679,7 +6658,6 @@ def test_local_k_class_norm_correction_counts_shared_high_shell_once(rng):
 def test_run_local_em_exact_can_report_significant_support_rotation_stats(rng):
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=163)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     translations = np.zeros((1, 2), dtype=np.float32)
     rotations_flat = np.broadcast_to(np.eye(3, dtype=np.float32), (4, 3, 3)).copy()
@@ -6699,7 +6677,6 @@ def test_run_local_em_exact_can_report_significant_support_rotation_stats(rng):
     base = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6713,7 +6690,6 @@ def test_run_local_em_exact_can_report_significant_support_rotation_stats(rng):
     support_stats = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6750,7 +6726,6 @@ def test_run_local_em_exact_can_report_significant_support_rotation_stats(rng):
 def test_run_local_em_exact_collects_unpruned_probability_values_for_global_threshold(rng):
     dataset = MockDataset(1, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=167)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     translations = np.zeros((1, 2), dtype=np.float32)
     rotations_flat = np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)).copy()
@@ -6770,7 +6745,6 @@ def test_run_local_em_exact_collects_unpruned_probability_values_for_global_thre
     outputs = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6791,7 +6765,6 @@ def test_run_local_em_exact_collects_unpruned_probability_values_for_global_thre
 def test_run_local_em_exact_collects_global_reconstruction_sample_ids(rng):
     dataset = MockDataset(1, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=171)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     translations = np.zeros((1, 2), dtype=np.float32)
     rotations_flat = np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)).copy()
@@ -6811,7 +6784,6 @@ def test_run_local_em_exact_collects_global_reconstruction_sample_ids(rng):
     outputs = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6831,7 +6803,6 @@ def test_run_local_em_exact_collects_global_reconstruction_sample_ids(rng):
 def test_run_local_em_exact_collapses_fine_children_to_parent_posterior_ids(rng):
     dataset = MockDataset(1, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=173)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     translations = np.zeros((1, 2), dtype=np.float32)
     rotations_flat = np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)).copy()
@@ -6852,7 +6823,6 @@ def test_run_local_em_exact_collapses_fine_children_to_parent_posterior_ids(rng)
     outputs = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7278,7 +7248,6 @@ def test_weighted_abs2_on_demand_scores_match_materialized(rng):
 def test_run_local_em_exact_windowed_path_computes_reconstruction_abs2_without_full_buffer(rng):
     dataset = MockDataset(1, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=201)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=109)
     translations = np.zeros((1, 2), dtype=np.float32)
@@ -7301,7 +7270,6 @@ def test_run_local_em_exact_windowed_path_computes_reconstruction_abs2_without_f
     outputs = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7356,7 +7324,6 @@ def test_run_local_em_exact_windowed_with_pre_shifts_matches_dense_engine(rng):
     exact_outputs = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7428,7 +7395,6 @@ def test_run_local_em_exact_windowed_with_pre_shifts_matches_dense_engine(rng):
 def test_run_local_em_exact_batched_matches_single_image_chunks(rng):
     dataset = MockDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=231)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(6, seed=233)
     translations = np.array(
@@ -7471,7 +7437,6 @@ def test_run_local_em_exact_batched_matches_single_image_chunks(rng):
     batched = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7490,7 +7455,6 @@ def test_run_local_em_exact_batched_matches_single_image_chunks(rng):
     single = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7566,7 +7530,6 @@ def test_run_local_em_exact_batched_matches_single_image_chunks(rng):
 def test_run_local_em_exact_default_path_matches_debug_split_path(monkeypatch, rng, tmp_path):
     dataset = MockDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=531)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(6, seed=533)
     translations = np.array(
@@ -7628,7 +7591,6 @@ def test_run_local_em_exact_default_path_matches_debug_split_path(monkeypatch, r
     default = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7640,7 +7602,6 @@ def test_run_local_em_exact_default_path_matches_debug_split_path(monkeypatch, r
     split = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7751,7 +7712,6 @@ def _three_image_local_layout(all_rotations):
 def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng, tmp_path):
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=551)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=553)
     local_layout = _three_image_local_layout(all_rotations)
@@ -7779,7 +7739,6 @@ def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng,
     big = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7791,7 +7750,6 @@ def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng,
     split = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -7910,7 +7868,6 @@ def test_run_local_em_exact_big_jit_cache_ignores_bound_dataset_process_method(
         translation_log_priors=np.zeros((1, 1), dtype=np.float32),
     )
     mean = _hermitian_volume(VOLUME_SHAPE, seed=561)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     common_kwargs = dict(
         image_batch_size=1,
@@ -7936,7 +7893,6 @@ def test_run_local_em_exact_big_jit_cache_ignores_bound_dataset_process_method(
         first = run_local_em_exact(
             datasets[0],
             mean,
-            mean_variance,
             noise_variance,
             local_layout,
             "linear_interp",
@@ -7946,7 +7902,6 @@ def test_run_local_em_exact_big_jit_cache_ignores_bound_dataset_process_method(
         second = run_local_em_exact(
             datasets[1],
             mean,
-            mean_variance,
             noise_variance,
             local_layout,
             "linear_interp",
@@ -7976,7 +7931,6 @@ def test_run_local_em_exact_big_jit_cache_ignores_bound_dataset_process_method(
         reference = run_local_em_exact(
             datasets[0],
             mean,
-            mean_variance,
             noise_variance,
             local_layout,
             "linear_interp",
@@ -8003,7 +7957,6 @@ def test_run_local_em_exact_score_only_big_jit_matches_debug_split(monkeypatch, 
         monkeypatch.setenv("RECOVAR_DISABLE_LOCAL_BIG_JIT", "1")
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=561)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=563)
     local_layout = _three_image_local_layout(all_rotations)
@@ -8029,7 +7982,6 @@ def test_run_local_em_exact_score_only_big_jit_matches_debug_split(monkeypatch, 
     big = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8041,7 +7993,6 @@ def test_run_local_em_exact_score_only_big_jit_matches_debug_split(monkeypatch, 
     split = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8092,7 +8043,6 @@ def test_run_local_em_exact_score_only_big_jit_matches_debug_split(monkeypatch, 
 def test_local_score_debug_dump_defaults_to_big_jit(monkeypatch, rng, tmp_path):
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=562)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=564)
     local_layout = _three_image_local_layout(all_rotations)
@@ -8110,7 +8060,6 @@ def test_local_score_debug_dump_defaults_to_big_jit(monkeypatch, rng, tmp_path):
     result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8162,7 +8111,6 @@ def test_local_score_debug_dump_defaults_to_big_jit(monkeypatch, rng, tmp_path):
 def test_local_score_debug_dump_operands_stay_on_big_jit(monkeypatch, rng, tmp_path):
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=563)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=565)
     local_layout = _three_image_local_layout(all_rotations)
@@ -8189,7 +8137,6 @@ def test_local_score_debug_dump_operands_stay_on_big_jit(monkeypatch, rng, tmp_p
     big = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8202,7 +8149,6 @@ def test_local_score_debug_dump_operands_stay_on_big_jit(monkeypatch, rng, tmp_p
     split = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8215,7 +8161,6 @@ def test_local_score_debug_dump_operands_stay_on_big_jit(monkeypatch, rng, tmp_p
     run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8264,7 +8209,6 @@ def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
 ):
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=566)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=567)
     local_layout = _three_image_local_layout(all_rotations)
@@ -8297,7 +8241,6 @@ def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
     baseline = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8317,7 +8260,6 @@ def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
     result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8361,7 +8303,6 @@ def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
     target_only_result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8387,7 +8328,6 @@ def test_local_score_debug_dump_does_not_filter_science_buckets_by_default(
 def test_local_score_debug_force_split_only_splits_target_bucket(monkeypatch, rng, tmp_path):
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=568)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=570)
     local_layout = _three_image_local_layout(all_rotations)
@@ -8401,7 +8341,6 @@ def test_local_score_debug_force_split_only_splits_target_bucket(monkeypatch, rn
     result = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8569,7 +8508,6 @@ def test_local_exact_relion_translation_requires_half_spectrum_scoring():
             None,
             None,
             None,
-            None,
             "linear_interp",
             image_batch_size=1,
             rotation_block_size=1,
@@ -8590,7 +8528,6 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=565)
     relion_projector_half = centered_full_to_relion_half(mean.reshape(VOLUME_SHAPE))[None]
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=567)
     local_layout = _three_image_local_layout(all_rotations)
@@ -8613,7 +8550,6 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
     big = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8624,7 +8560,6 @@ def test_run_local_em_exact_windowed_relion_projector_big_jit_matches_split(monk
     split = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8660,7 +8595,6 @@ def test_run_local_em_exact_relion_projection_cache_matches_uncached_big_jit(mon
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=568)
     relion_projector_half = centered_full_to_relion_half(mean.reshape(VOLUME_SHAPE))[None]
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(5, seed=569)
     local_layout = _three_image_local_layout(all_rotations)
@@ -8684,7 +8618,6 @@ def test_run_local_em_exact_relion_projection_cache_matches_uncached_big_jit(mon
     cached = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8695,7 +8628,6 @@ def test_run_local_em_exact_relion_projection_cache_matches_uncached_big_jit(mon
     uncached = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8725,7 +8657,6 @@ def test_run_local_em_exact_relion_projection_cache_matches_uncached_big_jit(mon
 def _sparse_big_jit_local_case(rng):
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=571)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(6, seed=573)
     translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
@@ -8752,7 +8683,7 @@ def _sparse_big_jit_local_case(rng):
             dtype=np.float32,
         ),
     )
-    return dataset, mean, mean_variance, noise_variance, local_layout
+    return dataset, mean, noise_variance, local_layout
 
 
 @pytest.mark.parametrize(
@@ -8863,7 +8794,7 @@ def _assert_noise_stats_allclose(actual, expected):
 
 
 def test_local_bucket_preserves_distinct_mstep_rotations(rng):
-    _, _, _, _, local_layout = _sparse_big_jit_local_case(rng)
+    _, _, _, local_layout = _sparse_big_jit_local_case(rng)
     distinct_mstep_rotations = np.roll(np.asarray(local_layout.rotations_flat), 1, axis=0)
     distinct_layout = replace(local_layout, mstep_rotations_flat=distinct_mstep_rotations)
 
@@ -8899,7 +8830,7 @@ def test_local_bucket_preserves_distinct_mstep_rotations(rng):
 
 @pytest.mark.parametrize("route", ["in_kernel_big_jit", "sparse_big_jit", "deferred_big_jit", "split"])
 def test_local_mstep_rotation_override_changes_only_adjoint_outputs(monkeypatch, rng, route):
-    dataset, mean, mean_variance, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
+    dataset, mean, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
     distinct_layout = replace(
         local_layout,
         mstep_rotations_flat=np.roll(np.asarray(local_layout.rotations_flat), 1, axis=0),
@@ -8931,7 +8862,6 @@ def test_local_mstep_rotation_override_changes_only_adjoint_outputs(monkeypatch,
     baseline = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8940,7 +8870,6 @@ def test_local_mstep_rotation_override_changes_only_adjoint_outputs(monkeypatch,
     overridden = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         distinct_layout,
         "linear_interp",
@@ -8970,14 +8899,13 @@ def test_local_mstep_rotation_override_changes_only_adjoint_outputs(monkeypatch,
 
 
 def test_run_local_em_exact_significant_support_uses_sparse_big_jit_packed_backprojection(monkeypatch, rng):
-    dataset, mean, mean_variance, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
+    dataset, mean, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
 
     monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", raising=False)
     monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", raising=False)
     outputs = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -8999,7 +8927,7 @@ def test_run_local_em_exact_significant_support_uses_sparse_big_jit_packed_backp
 
 
 def test_run_local_em_exact_over_cap_significant_support_defaults_to_deferred_big_jit(monkeypatch, rng):
-    dataset, mean, mean_variance, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
+    dataset, mean, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
     kwargs = dict(
         image_batch_size=3,
         rotation_block_size=8,
@@ -9019,7 +8947,6 @@ def test_run_local_em_exact_over_cap_significant_support_defaults_to_deferred_bi
     sparse = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -9030,7 +8957,6 @@ def test_run_local_em_exact_over_cap_significant_support_defaults_to_deferred_bi
     deferred = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -9173,7 +9099,7 @@ def test_skip_deferred_zero_norm_rejects_invalid_selector(monkeypatch, token):
 
 
 def test_run_local_em_exact_deferred_big_jit_no_noise_matches_sparse_big_jit(monkeypatch, rng):
-    dataset, mean, mean_variance, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
+    dataset, mean, noise_variance, local_layout = _sparse_big_jit_local_case(rng)
     kwargs = dict(
         image_batch_size=3,
         rotation_block_size=8,
@@ -9193,7 +9119,6 @@ def test_run_local_em_exact_deferred_big_jit_no_noise_matches_sparse_big_jit(mon
     sparse = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -9204,7 +9129,6 @@ def test_run_local_em_exact_deferred_big_jit_no_noise_matches_sparse_big_jit(mon
     deferred = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -9228,7 +9152,6 @@ def test_run_local_em_exact_deferred_big_jit_no_noise_matches_sparse_big_jit(mon
 def test_run_local_em_exact_processed_half_cache_matches_uncached_split(monkeypatch, rng):
     dataset = MockDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=581)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     all_rotations = _make_rotations(6, seed=583)
     translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
@@ -9274,7 +9197,6 @@ def test_run_local_em_exact_processed_half_cache_matches_uncached_split(monkeypa
     uncached = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -9284,7 +9206,6 @@ def test_run_local_em_exact_processed_half_cache_matches_uncached_split(monkeypa
     cached = run_local_em_exact(
         dataset,
         mean,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",

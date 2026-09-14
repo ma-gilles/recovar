@@ -82,7 +82,6 @@ def test_run_local_em_exact_rejects_invalid_explicit_bucket_radix(radix):
             None,
             None,
             None,
-            None,
             "linear_interp",
             image_batch_size=1,
             rotation_block_size=1,

@@ -220,7 +220,6 @@ def test_actual_local_engine_publishes_exact_host_statistics():
     args = (
         dataset,
         fixture._hermitian_volume(fixture.VOLUME_SHAPE, seed=101),
-        jnp.full(fixture.VOLUME_SIZE, 10.0, dtype=jnp.float32),
         jnp.ones(fixture.IMAGE_SIZE, dtype=jnp.float32),
         layout,
         "linear_interp",

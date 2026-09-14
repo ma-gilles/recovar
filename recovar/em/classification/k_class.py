@@ -2142,7 +2142,6 @@ def run_local_k_class_em(
                 output = run_local_em_exact(
                     experiment_dataset,
                     means_array[0],
-                    _select_class_value(mean_variance, 0, n_classes),
                     _select_class_value(noise_variance, 0, n_classes),
                     class_layout,
                     disc_type,
@@ -2195,7 +2194,6 @@ def run_local_k_class_em(
                 probe = run_local_em_exact(
                     experiment_dataset,
                     means_array[class_index],
-                    _select_class_value(mean_variance, class_index, n_classes),
                     _select_class_value(noise_variance, class_index, n_classes),
                     class_layout,
                     disc_type,
@@ -2244,7 +2242,6 @@ def run_local_k_class_em(
             output = run_local_em_exact(
                 experiment_dataset,
                 means_array[class_index],
-                _select_class_value(mean_variance, class_index, n_classes),
                 _select_class_value(noise_variance, class_index, n_classes),
                 class_layout,
                 disc_type,

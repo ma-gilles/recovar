@@ -1106,7 +1106,6 @@ def test_stable_window_engine_fails_closed_without_exact_vdam_topology():
             None,
             None,
             None,
-            None,
             "linear_interp",
             image_batch_size=1,
             rotation_block_size=1,
@@ -1135,7 +1134,6 @@ def test_stable_window_engine_requires_complete_bpref_accumulators(disabled_adjo
             None,
             None,
             None,
-            None,
             "linear_interp",
             image_batch_size=1,
             rotation_block_size=1,
@@ -1151,7 +1149,6 @@ def test_stable_window_engine_rejects_external_host_replay(monkeypatch):
     monkeypatch.setenv("RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY", "/tmp/replay.so")
     with pytest.raises(ValueError, match="do not support external VDAM host replay"):
         run_local_em_exact(
-            None,
             None,
             None,
             None,
@@ -1181,7 +1178,6 @@ def test_stable_window_engine_rejects_distinct_score_and_reconstruction_sizes():
     with pytest.raises(ValueError, match="identical score and reconstruction"):
         run_local_em_exact(
             dataset,
-            None,
             None,
             None,
             None,

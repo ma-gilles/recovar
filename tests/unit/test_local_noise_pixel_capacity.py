@@ -38,7 +38,6 @@ def test_requires_norm_capacity_before_dataset_access(monkeypatch):
             None,
             None,
             None,
-            None,
             "linear_interp",
             image_batch_size=1,
             rotation_block_size=1,

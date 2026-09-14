@@ -35,7 +35,7 @@ def test_native_noise_rejects_unsupported_engine_before_data_access(
     monkeypatch.setenv(engine.EXACT_LOCAL_NOISE_NATIVE_RESIDUAL_ENV, "1")
     with pytest.raises(ValueError, match="native noise residual requires"):
         engine.run_local_em_exact(
-            None, None, None, None, None, "linear_interp",
+            None, None, None, None, "linear_interp",
             image_batch_size=1, rotation_block_size=1, current_size=8,
             stable_fourier_window_shapes=stable,
             _defer_packed_vdam_enabled=deferred,
