@@ -3500,7 +3500,6 @@ def _run_relion_iteration_loop(
         sigma_offset_result = update_c1_sigma_offset_from_posterior(
             noise_stats_per_half=noise_stats_per_half,
             noise_stats_per_half_per_class=noise_stats_per_half_per_class,
-            current_sigma_offset_angstrom=current_sigma_offset_angstrom,
             current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
             n_classes=n_classes,
             k_class_enabled=k_class_enabled,

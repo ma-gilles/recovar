@@ -50,8 +50,7 @@ def update_c1_sigma_offset_from_posterior(
     *,
     noise_stats_per_half,
     noise_stats_per_half_per_class,
-    current_sigma_offset_angstrom: float | None = None,
-    current_sigma_offset_angstrom_per_half=None,
+    current_sigma_offset_angstrom_per_half,
     n_classes: int,
     k_class_enabled: bool,
     state_fallback_offsets_angstrom: float,
@@ -67,14 +66,9 @@ def update_c1_sigma_offset_from_posterior(
     posterior into it would not match RELION's gold-standard models.
     """
 
-    if current_sigma_offset_angstrom_per_half is None:
-        if current_sigma_offset_angstrom is None:
-            raise ValueError("a scalar or per-half current sigma offset is required")
-        current_per_half = np.full(2, float(current_sigma_offset_angstrom), dtype=np.float64)
-    else:
-        current_per_half = np.asarray(current_sigma_offset_angstrom_per_half, dtype=np.float64).reshape(-1)
-        if current_per_half.size != 2 or not np.all(np.isfinite(current_per_half)):
-            raise ValueError("current_sigma_offset_angstrom_per_half must contain two finite values")
+    current_per_half = np.asarray(current_sigma_offset_angstrom_per_half, dtype=np.float64).reshape(-1)
+    if current_per_half.size != 2 or not np.all(np.isfinite(current_per_half)):
+        raise ValueError("current_sigma_offset_angstrom_per_half must contain two finite values")
     per_half_values = []
     pooled_wsum = 0.0
     pooled_sumw = 0.0

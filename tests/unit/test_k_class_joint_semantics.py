@@ -649,7 +649,7 @@ def test_k_class_sigma_offset_live_update_uses_shared_relion_aggregate():
     result = update_c1_sigma_offset_from_posterior(
         noise_stats_per_half=aggregate,
         noise_stats_per_half_per_class=per_class,
-        current_sigma_offset_angstrom=1.5,
+        current_sigma_offset_angstrom_per_half=[1.5, 1.5],
         n_classes=2,
         k_class_enabled=True,
         state_fallback_offsets_angstrom=9.0,
