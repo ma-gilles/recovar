@@ -4592,6 +4592,42 @@ def main(argv: list[str] | None = None) -> int:
             "target_particle": payload["target_particle"],
         }
 
+    baseline_backend, candidate_backend = {
+        "exact_coarse_single_translate": (
+            "all_optimized_exact_coarse_single_translate_off",
+            "all_optimized_exact_coarse_single_translate_on",
+        ),
+        "exact_compact_preprocess": (
+            "all_optimized_exact_compact_preprocess_off",
+            "all_optimized_exact_compact_preprocess_on",
+        ),
+        "fused_pair_fine_score": (
+            "all_optimized_fused_pair_fine_score_off",
+            "all_optimized_fused_pair_fine_score_on",
+        ),
+        "fused_coarse_projector": (
+            "rectangular_preprojected_coarse_scorer",
+            "shared_relion_fused_coarse_projector",
+        ),
+        "all_optimized_stable_shapes": (
+            "all_optimized_stable_shapes_off_q32_batched",
+            "all_optimized_stable_shapes_on_q32_batched",
+        ),
+        "stable_shapes": (
+            "hybrid_packed_deferred_stable_fourier_off",
+            "hybrid_packed_deferred_stable_fourier_on",
+        ),
+        "stable_flat_capacity": (
+            "hybrid_packed_deferred_stable_flat_capacity_off",
+            "hybrid_packed_deferred_stable_flat_capacity_on",
+        ),
+    }.get(args.candidate_mode, ("direct", args.candidate_mode))
+    if args.mirrored_hybrid_image_batch_panels:
+        baseline_backend = "all_optimized_hybrid_image_batch_110"
+        candidate_backend = "all_optimized_hybrid_image_batch_200"
+    if args.mirrored_incremental_panels:
+        baseline_backend = "packed_deferred"
+
     report = {
         "schema": SCHEMA,
         "classification": "diagnostic_same_in_memory_state_one_transition_only",
@@ -4696,54 +4732,8 @@ def main(argv: list[str] | None = None) -> int:
                 if args.candidate_mode == "fused_coarse_projector"
                 else None
             ),
-            "baseline_trajectory_backend": (
-                "packed_deferred"
-                if args.mirrored_incremental_panels
-                else "all_optimized_hybrid_image_batch_110"
-                if args.mirrored_hybrid_image_batch_panels
-                else "all_optimized_exact_coarse_single_translate_off"
-                if args.candidate_mode == "exact_coarse_single_translate"
-                else "all_optimized_exact_compact_preprocess_off"
-                if args.candidate_mode == "exact_compact_preprocess"
-                else "all_optimized_fused_pair_fine_score_off"
-                if args.candidate_mode == "fused_pair_fine_score"
-                else "rectangular_preprojected_coarse_scorer"
-                if args.candidate_mode == "fused_coarse_projector"
-                else "all_optimized_stable_shapes_off_q32_batched"
-                if args.candidate_mode == "all_optimized_stable_shapes"
-                else (
-                    "hybrid_packed_deferred_stable_fourier_off"
-                    if args.candidate_mode == "stable_shapes"
-                    else (
-                        "hybrid_packed_deferred_stable_flat_capacity_off"
-                        if args.candidate_mode == "stable_flat_capacity"
-                        else "direct"
-                    )
-                )
-            ),
-            "candidate_backend": (
-                "all_optimized_hybrid_image_batch_200"
-                if args.mirrored_hybrid_image_batch_panels
-                else "all_optimized_exact_coarse_single_translate_on"
-                if args.candidate_mode == "exact_coarse_single_translate"
-                else "all_optimized_exact_compact_preprocess_on"
-                if args.candidate_mode == "exact_compact_preprocess"
-                else "all_optimized_fused_pair_fine_score_on"
-                if args.candidate_mode == "fused_pair_fine_score"
-                else "shared_relion_fused_coarse_projector"
-                if args.candidate_mode == "fused_coarse_projector"
-                else "all_optimized_stable_shapes_on_q32_batched"
-                if args.candidate_mode == "all_optimized_stable_shapes"
-                else (
-                    "hybrid_packed_deferred_stable_fourier_on"
-                    if args.candidate_mode == "stable_shapes"
-                    else (
-                        "hybrid_packed_deferred_stable_flat_capacity_on"
-                        if args.candidate_mode == "stable_flat_capacity"
-                        else args.candidate_mode
-                    )
-                )
-            ),
+            "baseline_trajectory_backend": baseline_backend,
+            "candidate_backend": candidate_backend,
             "transition_panel": (
                 "packed_deferred/packed_final_noise/packed_final_noise/packed_deferred"
                 "+packed_final_noise/packed_deferred/packed_deferred/packed_final_noise"
