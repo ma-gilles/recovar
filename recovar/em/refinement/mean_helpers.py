@@ -30,6 +30,46 @@ logger = logging.getLogger(__name__)
 WIDTH_FMASK_EDGE: float = 2.0  # ml_optimiser.h:91
 
 
+def initial_scale_data_vs_prior(
+    references, noise_variance, volume_shape, *, n_particles, class_probabilities, tau2_fudge,
+):
+    """Initial scale-selection curves in raw RECOVAR Fourier units.
+
+    Use raw, unpadded reference power, not the regularization prior or a
+    gridding-corrected projector. Noise is the controller's single full image
+    grid for this half; separate optics spectra are not represented here.
+    See docs/math/relion_refinement_algorithm.md#initial-scale-selection.
+    """
+    from recovar.utils.helpers import recovar_volume_to_relion
+
+    volume_shape = tuple(volume_shape)
+    n = volume_shape[0]
+    probabilities = np.asarray(class_probabilities, dtype=np.float64).reshape(-1)
+    means = np.asarray(references).reshape((probabilities.size,) + volume_shape)
+    noise = np.asarray(noise_variance, dtype=np.float64).reshape(n, n)
+    if volume_shape != (n, n, n) or not np.all(np.isfinite(noise)) or np.any(noise <= 0):
+        raise ValueError("Initial scale selection requires a cubic reference and positive finite noise")
+    shells = np.asarray(fourier_transform_utils.get_grid_of_radial_distances_real(volume_shape))
+    valid = shells <= n // 2
+    shell_ids = shells[valid]
+    counts = np.bincount(shell_ids, minlength=n // 2 + 1)
+    image_shells = np.asarray(fourier_transform_utils.get_grid_of_radial_distances((n, n)))
+    image_valid = image_shells <= n // 2
+    noise_radial = np.bincount(image_shells[image_valid], weights=noise[image_valid]) / np.bincount(
+        image_shells[image_valid],
+    )
+    packed_indices = np.asarray(fourier_transform_utils.get_real_fft_packed_last_axis_indices(n))
+    curves = []
+    for mean, probability in zip(means, probabilities):
+        native_frame = recovar_volume_to_relion(mean)
+        half_grid = np.take(native_frame, packed_indices, axis=-1).astype(np.complex128)
+        power = np.bincount(shell_ids, weights=np.abs(half_grid[valid]) ** 2) / counts
+        curve = float(n_particles) * probability * float(tau2_fudge) * power / (2.0 * noise_radial)
+        curve[1:] /= 2.0 * np.arange(1, curve.size)
+        curves.append(curve)
+    return curves[0] if probabilities.size == 1 else np.stack(curves)
+
+
 def prepare_initial_mean_variance(
     initial_mean_variance, *, use_per_half_mean_variance, k_class_enabled, log
 ):

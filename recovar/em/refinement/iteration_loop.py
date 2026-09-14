@@ -171,6 +171,7 @@ from recovar.em.refinement.mean_helpers import (
     _stack_class_tau2_update_details,
     _updated_mean_variance_per_half,
     compute_unregularized_halfmaps_and_align_signs,
+    initial_scale_data_vs_prior,
     join_half_accumulators_at_low_resolution,
     prepare_initial_mean_variance,
     update_learned_direction_priors,
@@ -1896,6 +1897,18 @@ def _run_relion_iteration_loop(
             experiment_datasets=experiment_datasets,
         )
         for k in diagnostic_half_indices:
+            scale_curve_for_half = scale_correction_data_vs_prior_this_iter
+            if (
+                iteration == 0 and init_relion_iteration == 0 and schedule.init_fsc is None
+                and replay.replay_iteration_overrides is None
+                and parity.perturb_replay_relion_dir is None
+                and follower_setup.scale_stats_group_ids_per_half[k] is not None
+            ):
+                scale_curve_for_half = initial_scale_data_vs_prior(
+                    means[k], noise_variance_per_half[k], volume_shape,
+                    n_particles=experiment_datasets[k].n_images,
+                    class_probabilities=class_weights, tau2_fudge=tau2_fudge,
+                )
             bpref_diagnostics.set_bpref_contribution_dump_context(
                 iteration=iteration + 1,
                 half=k + 1,
@@ -2144,7 +2157,7 @@ def _run_relion_iteration_loop(
                     scale_corrections_k=relion_half_inputs.scale_corrections[k],
                     group_ids_k=follower_setup.scale_stats_group_ids_per_half[k],
                     group_count_k=follower_setup.scale_stats_group_count_per_half[k],
-                    scale_correction_data_vs_prior=scale_correction_data_vs_prior_this_iter,
+                    scale_correction_data_vs_prior=scale_curve_for_half,
                     translation_search_base=translation_search_base,
                     disable_adjoint_y=debug.disable_adjoint_y,
                     disable_adjoint_ctf=debug.disable_adjoint_ctf,
@@ -2204,7 +2217,7 @@ def _run_relion_iteration_loop(
                     scale_corrections_k=relion_half_inputs.scale_corrections[k],
                     group_ids_k=follower_setup.scale_stats_group_ids_per_half[k],
                     group_count_k=follower_setup.scale_stats_group_count_per_half[k],
-                    scale_correction_data_vs_prior=scale_correction_data_vs_prior_this_iter,
+                    scale_correction_data_vs_prior=scale_curve_for_half,
                     firstiter_score_mode_this_iter=firstiter_score_mode_this_iter,
                     firstiter_winner_take_all_this_iter=firstiter_winner_take_all_this_iter,
                     cs_for_engine=cs_for_engine,

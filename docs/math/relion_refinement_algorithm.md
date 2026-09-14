@@ -1,5 +1,23 @@
 # RELION-style refinement: algorithm and code map
 
+## Initial scale selection
+
+[`initial_scale_data_vs_prior`](../../recovar/em/refinement/mean_helpers.py)
+derives cold-start scale-selection curves independently of FSC scheduling.
+For each half and class, its raw-reference FFTW half-grid shell power is
+multiplied by the half's particle count, class probability and tau2 fudge,
+then divided by twice the noise variance and by `2*s` for nonzero shell `s`.
+The existing scale mask selects values strictly greater than three. The
+reference power has no regularization floor, projector gridding correction,
+padding or corner-shell clamping. Canonical volume-frame and packed-index
+helpers define the half-grid; each stored Fourier coefficient counts once.
+
+The controller supplies its single noise grid per half. This does not add
+separate optics-group noise state or establish multioptics parity. Explicit
+replay, FSC-seeded continuation and later-iteration scheduling keep their
+existing curves. This initialization repair requires fresh scientific
+qualification; the saved single-target mask diagnostic is not that gate.
+
 ## Noise-only bootstrap qualification
 
 `scripts/run_full_refinement.py --initial-noise-bootstrap relion` is an opt-in

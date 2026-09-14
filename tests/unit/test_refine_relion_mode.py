@@ -10114,13 +10114,26 @@ class TestRelionModeSmokeTest:
         assert combined.wsum_scale_correction_xa is None
         assert combined.wsum_scale_correction_aa is None
 
+    @pytest.mark.parametrize("start", ["cold", "fsc", "continuation", "replay"])
     def test_relion_refinement_runs_2_iterations(
-        self,
-        half_datasets,
-        init_volume,
-        translations,
+        self, half_datasets, init_volume, translations, monkeypatch, start,
     ):
-        """RELION-parity refinement completes 2 iterations on a tiny dataset."""
+        """Run two iterations and keep initial scale evidence out of scheduling."""
+        initial_curves, scoring_curves = [], []
+        initialize = iteration_loop_module.initial_scale_data_vs_prior
+        score_half = iteration_loop_module._score_half_dense_in_bpref_scope
+
+        def record_initial_curve(*args, **kwargs):
+            curve = initialize(*args, **kwargs)
+            initial_curves.append(curve)
+            return curve
+
+        def record_scoring_curve(**kwargs):
+            scoring_curves.append(kwargs["scale_correction_data_vs_prior"])
+            return score_half(**kwargs)
+
+        monkeypatch.setattr(iteration_loop_module, "initial_scale_data_vs_prior", record_initial_curve)
+        monkeypatch.setattr(iteration_loop_module, "_score_half_dense_in_bpref_scope", record_scoring_curve)
         result = refine_single_volume(
             half_datasets,
             init_volume,
@@ -10134,10 +10147,26 @@ class TestRelionModeSmokeTest:
                     init_current_size=16,
                     init_healpix_order=2,
                     max_healpix_order=3,
+                    init_relion_iteration=1 if start == "continuation" else 0,
+                    init_fsc=np.ones(4) if start == "fsc" else None,
+                ),
+                replay=ReplayState(
+                    init_group_ids=[np.zeros(ds.n_images, dtype=np.int64) for ds in half_datasets],
+                    init_group_count=[1, 1],
+                    replay_iteration_overrides=[{}, None] if start == "replay" else None,
                 ),
                 batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
             ),
         )
+        assert len(scoring_curves) == 4
+        assert len(initial_curves) == (2 if start == "cold" else 0)
+        for half, curve in enumerate(initial_curves):
+            assert scoring_curves[half] is curve
+            assert all(later is not curve for later in scoring_curves[2:])
+        for curve in scoring_curves[2:]:
+            np.testing.assert_array_equal(curve, result["data_vs_prior_trajectory"][0])
+        if start in ("continuation", "replay"):
+            assert all(curve is None for curve in scoring_curves[:2])
 
         # Basic return dict structure
         assert "mean" in result

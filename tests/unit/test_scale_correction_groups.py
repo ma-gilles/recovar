@@ -65,3 +65,53 @@ def test_class_subset_keeps_absent_scale_groups():
     subset, count = prepare_scale_correction_groups([0, 2], full_count, n_images=2)
     np.testing.assert_array_equal(subset, [0, 2])
     assert count == full_count == 5
+
+
+@pytest.mark.parametrize("dtype,rtol", [(np.float32, 1e-6), (np.float64, 1e-12)])
+def test_initial_scale_curve_matches_independent_raw_reference_spectrum(dtype, rtol):
+    from recovar.core import fourier_transform_utils as ftu
+    from recovar.em.refinement.mean_helpers import initial_scale_data_vs_prior
+
+    n = 8
+    real = np.random.default_rng(14).normal(size=(n, n, n)).astype(dtype)
+    reference = ftu.get_dft3(real).reshape(-1)
+    actual = initial_scale_data_vs_prior(
+        reference, np.full(n * n, 2, dtype=dtype), real.shape,
+        n_particles=17, class_probabilities=[1], tau2_fudge=1.5,
+    )
+    # Independent native-frame FFT and explicit FFTW half-grid shell enumeration.
+    native = np.fft.rfftn(-real.transpose(2, 1, 0).astype(np.float64))
+    sums = np.zeros(n // 2 + 1)
+    counts = np.zeros(n // 2 + 1)
+    for z, y, x in np.ndindex(native.shape):
+        kz, ky = (z if z <= n // 2 else z - n), (y if y <= n // 2 else y - n)
+        shell = int(np.floor(np.sqrt(kz * kz + ky * ky + x * x) + 0.5))
+        if shell <= n // 2:
+            sums[shell] += abs(native[z, y, x]) ** 2
+            counts[shell] += 1
+    expected = (sums / counts) * 17 * 1.5 / 4
+    expected[1:] /= 2 * np.arange(1, expected.size)
+    np.testing.assert_allclose(actual, expected, rtol=rtol, atol=0)
+
+
+def test_initial_scale_curve_keeps_class_probabilities_and_half_counts_separate():
+    from recovar.em.refinement.mean_helpers import initial_scale_data_vs_prior
+
+    reference = np.ones(8**3, dtype=np.complex64)
+    probabilities = np.array([0.1, 0.2, 0.3, 0.4])
+    curves = initial_scale_data_vs_prior(
+        np.tile(reference, (4, 1)), np.ones(8**2), (8, 8, 8),
+        n_particles=20, class_probabilities=probabilities, tau2_fudge=1,
+    )
+    expected = np.outer(probabilities * 10, [1, 0.5, 0.25, 1 / 6, 0.125])
+    np.testing.assert_allclose(curves, expected, rtol=1e-15, atol=0)
+    other_half = initial_scale_data_vs_prior(
+        np.tile(reference, (4, 1)), np.full(8**2, 2), (8, 8, 8),
+        n_particles=10, class_probabilities=probabilities, tau2_fudge=1,
+    )
+    np.testing.assert_array_equal(other_half, curves / 4)
+    empty = initial_scale_data_vs_prior(
+        reference * 0, np.ones(8**2), (8, 8, 8),
+        n_particles=20, class_probabilities=[1], tau2_fudge=1,
+    )
+    np.testing.assert_array_equal(empty, np.zeros(5))
