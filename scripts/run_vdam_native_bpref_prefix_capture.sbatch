@@ -68,7 +68,6 @@ export PATH=${CUDA_HOME}/bin:${PATH}
 export LD_LIBRARY_PATH=${RELION_RUNTIME}/system_dev_overlay/lib:${MPI_ROOT}/lib64:${CUDA_HOME}/lib64
 export OMPI_MCA_orte_tmpdir_base=${TMPDIR}
 export OMPI_MCA_shmem_mmap_enable_nfs_warning=0
-export CUDA_VISIBLE_DEVICES=0
 
 COMMAND=(
     srun --mpi=pmix --ntasks=1 --cpus-per-task=2 --cpu-bind=none "${VDAM_RELION_BPREF_BINARY}"

@@ -81,7 +81,6 @@ while IFS='=' read -r variable_name _; do
     case "${variable_name}" in RECOVAR_*|RELION_ACC_DUMP_*|RELION_DUMP_*) unset "${variable_name}" ;; esac
 done < <(env)
 export PYTHONNOUSERSITE=1
-export CUDA_VISIBLE_DEVICES=0
 export CUDA_LAUNCH_BLOCKING=0
 export TMPDIR=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/tmp
 export PIXI_HOME=${OUTPUT_ROOT}/runtime/${SLURM_JOB_ID}/pixi_home
