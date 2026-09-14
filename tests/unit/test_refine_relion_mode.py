@@ -12879,6 +12879,7 @@ class TestRelionModeSmokeTest:
         from recovar.reconstruction import regularization
 
         monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", double_scoring)
+        monkeypatch.setenv("RECOVAR_USE_FLOAT64_SCORING", "1" if double_scoring else "0")
         called = {"tau2": 0}
 
         original_tau2 = regularization.compute_relion_tau2_from_weights
@@ -12891,6 +12892,7 @@ class TestRelionModeSmokeTest:
 
         scoring_priors = []
         scoring_rotations = []
+        scoring_grids = []
         monkeypatch.setattr(
             iteration_loop_module, "_relion_adaptive_pass1_rotations",
             lambda eulers, *args, **kwargs: sampling_module._relion_euler_angles_to_matrix(eulers).astype(np.float32),
@@ -12900,6 +12902,7 @@ class TestRelionModeSmokeTest:
         def record_scoring_prior(**kwargs):
             scoring_priors.append(np.asarray(kwargs["mean_variance"]))
             scoring_rotations.append(kwargs["coarse_scoring_rotations"])
+            scoring_grids.append((kwargs["effective_rotations"], kwargs["current_translations"]))
             return score_half(**kwargs)
 
         monkeypatch.setattr(iteration_loop_module, "_score_half_dense_in_bpref_scope", record_scoring_prior)
@@ -12940,6 +12943,9 @@ class TestRelionModeSmokeTest:
                 assert (coarse is None) == double_scoring
                 expected = np.array([]) if coarse is None else np.asarray(coarse)
                 np.testing.assert_array_equal(manifest["coarse_scoring_rotations"], expected)
+                for key, grid in zip(("effective_rotations", "current_translations"), scoring_grids[half]):
+                    np.testing.assert_array_equal(manifest[key], np.asarray(grid))
+                    assert manifest[key].dtype == grid.dtype
 
     def test_k1_solvent_corrected_fsc_disabled_uses_raw_tau2_fsc(
         self,

@@ -2277,11 +2277,11 @@ def _run_relion_iteration_loop(
                         f"manifest_iter{iteration}_half{k}.npz",
                     )
                     _manifest = {
-                        "effective_rotations": np.asarray(effective_rotations, dtype=np.float32),
+                        "effective_rotations": np.asarray(effective_rotations),
                         "coarse_scoring_rotations": np.asarray(dense_half_kwargs["coarse_scoring_rotations"])
                         if dense_half_kwargs["coarse_scoring_rotations"] is not None
                         else np.array([]),
-                        "current_translations": np.asarray(current_translations, dtype=np.float32),
+                        "current_translations": np.asarray(current_translations),
                         "rotation_log_prior": np.asarray(rotation_log_prior_k, dtype=np.float64)
                         if rotation_log_prior_k is not None
                         else np.array([]),
