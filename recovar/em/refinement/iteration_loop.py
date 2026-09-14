@@ -370,7 +370,6 @@ def refine_single_volume(
     return _run_relion_iteration_loop(
         experiment_datasets=experiment_datasets,
         init_volume=init_volume,
-        init_reference_real=options.replay.init_reference_real,
         init_noise_variance=init_noise_variance,
         init_mean_variance=init_mean_variance,
         translations=translations,
@@ -386,7 +385,6 @@ def refine_single_volume(
 def _run_relion_iteration_loop(
     experiment_datasets,
     init_volume,
-    init_reference_real,
     init_noise_variance,
     init_mean_variance,
     translations,
@@ -628,7 +626,7 @@ def _run_relion_iteration_loop(
     # flat per-half reference layout.
     means = _normalize_initial_means(init_volume, n_classes)
     initial_real_references_by_half = prepare_initial_real_references(
-        init_reference_real, volume_shape=volume_shape, n_classes=n_classes, log=logger
+        replay.init_reference_real, volume_shape=volume_shape, n_classes=n_classes, log=logger
     )
     noise_variance_per_half = _normalize_noise_variance_per_half(
         init_noise_variance,
