@@ -9,7 +9,6 @@ import pytest
 
 import recovar.em.local.local_em_engine as local_em_engine
 import recovar.em.refinement.iteration_loop as iteration_loop
-import recovar.em.vdam.dense_adapter as dense_adapter
 from recovar.em.helpers import preprocessing
 from recovar.em.vdam import sparse_pass2_estep
 
@@ -37,7 +36,7 @@ def test_datasets_without_a_backend_are_not_cuda():
 
 
 def test_initial_model_patch_point_is_the_owner():
-    assert sparse_pass2_estep._uses_relion_cuda_image_preprocessing is preprocessing.uses_relion_cuda_image_preprocessing
+    assert sparse_pass2_estep.uses_relion_cuda_image_preprocessing is preprocessing.uses_relion_cuda_image_preprocessing
 
 
 def test_local_engine_and_controller_use_the_owner():

@@ -1121,7 +1121,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         ),
     )
     monkeypatch.setattr(
-        "recovar.em.vdam.sparse_pass2_estep._uses_relion_cuda_image_preprocessing",
+        "recovar.em.vdam.sparse_pass2_estep.uses_relion_cuda_image_preprocessing",
         lambda dataset: True,
     )
     monkeypatch.setattr(
@@ -1302,7 +1302,7 @@ def test_dense_initial_model_estep_os0_uses_device_coarse_rotations(monkeypatch)
         ),
     )
     monkeypatch.setattr(
-        "recovar.em.vdam.sparse_pass2_estep._uses_relion_cuda_image_preprocessing",
+        "recovar.em.vdam.sparse_pass2_estep.uses_relion_cuda_image_preprocessing",
         lambda _dataset: True,
     )
 
@@ -1957,7 +1957,7 @@ def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypat
         fake_run_local,
     )
     monkeypatch.setattr(
-        "recovar.em.vdam.sparse_pass2_estep._uses_relion_cuda_image_preprocessing",
+        "recovar.em.vdam.sparse_pass2_estep.uses_relion_cuda_image_preprocessing",
         lambda dataset: True,
     )
     monkeypatch.setattr(

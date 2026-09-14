@@ -15,6 +15,7 @@ from typing import Any
 
 import numpy as np
 
+from recovar.em import sampling
 from recovar.em.classification.k_class import _run_sparse_k_class_adaptive_pass2, run_local_k_class_em
 from recovar.em.diagnostics import bpref_diagnostics
 from recovar.em.diagnostics.coarse_gaussian_diagnostics import _initial_model_coarse_gemm_diagnostic_scopes
@@ -201,9 +202,6 @@ def _translation_step_from_grid(translations: np.ndarray) -> float:
     diffs = np.diff(np.sort(unique_vals))
     diffs = diffs[diffs > 1.0e-6]
     return float(diffs.min()) if diffs.size else 1.0
-
-
-_uses_relion_cuda_image_preprocessing = uses_relion_cuda_image_preprocessing
 
 
 def _resolve_sparse_pass1_current_size(
@@ -524,7 +522,7 @@ def _run_sparse_pass2_initial_model_estep(
         and use_exact_relion_projector
         and not use_compact_sparse_pass2
         and joint_halfset_ids is not None
-        and _uses_relion_cuda_image_preprocessing(experiment_dataset)
+        and uses_relion_cuda_image_preprocessing(experiment_dataset)
     )
     if joint_halfset_stream:
         joint_particle_ids = np.asarray(joint_particle_ids, dtype=np.int64)
@@ -546,10 +544,7 @@ def _run_sparse_pass2_initial_model_estep(
     n_coarse_rotations = rotation_grid_size(healpix_order)
     if config.rotations is not None and int(np.asarray(config.rotations).shape[0]) == n_coarse_rotations:
         coarse_rotations = np.asarray(config.rotations, dtype=np.float32)
-        coarse_metadata_rotations = coarse_rotations
     else:
-        from recovar.em import sampling
-
         coarse_rotations = sampling.get_relion_hidden_rotation_grid(
             healpix_order,
             matrices=True,
@@ -559,15 +554,13 @@ def _run_sparse_pass2_initial_model_estep(
             random_perturbation,
             relion_angular_sampling_deg(healpix_order),
         ).astype(np.float32, copy=False)
-        coarse_metadata_rotations = coarse_rotations
+    coarse_metadata_rotations = coarse_rotations
     # AccProjectorPlan builds coarse scorer matrices on the accelerator even
     # when adaptive_oversampling == 0 and config.rotations already contains
     # exactly the coarse grid.  Do not let that equal-size fast path retain
     # the nearby host-double matrices.  Fine scoring and weighted-sum
     # backprojection deliberately continue to use their separate host path.
     if use_exact_relion_projector:
-        from recovar.em import sampling
-
         coarse_source_eulers = sampling.get_relion_rotation_grid_eulers(
             healpix_order,
             rotation_index_order="relion",
@@ -706,7 +699,7 @@ def _run_sparse_pass2_initial_model_estep(
             # shared guarded path whenever its exact projector is active.
             relion_coarse_gaussian_default=bool(
                 use_exact_relion_projector
-                and _uses_relion_cuda_image_preprocessing(group_dataset)
+                and uses_relion_cuda_image_preprocessing(group_dataset)
             ),
             # Production follows RELION's exact threshold comparison.  The
             # optional score-ULP envelope is diagnostic-only: native CUDA
@@ -716,7 +709,7 @@ def _run_sparse_pass2_initial_model_estep(
                 _initial_model_relion_f32_coarse_tie_ulps()
                 if state.K == 1
                 and use_exact_relion_projector
-                and _uses_relion_cuda_image_preprocessing(group_dataset)
+                and uses_relion_cuda_image_preprocessing(group_dataset)
                 else 0
             ),
             # VDAM changes its subset size almost every iteration. Keep the
@@ -821,7 +814,7 @@ def _run_sparse_pass2_initial_model_estep(
         use_exact_local_relion_operands = bool(
             state.K == 1
             and use_exact_relion_projector
-            and _uses_relion_cuda_image_preprocessing(group_dataset)
+            and uses_relion_cuda_image_preprocessing(group_dataset)
         )
         exact_local_runtime_policy_active = bool(
             exact_local_runtime_policy_active
