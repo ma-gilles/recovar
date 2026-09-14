@@ -32,47 +32,30 @@ def _launcher_env(tmp_path, scratch):
     return env
 
 
+def _run_launcher(env, scope):
+    proc = subprocess.run(
+        ["bash", str(LAUNCHER), "--dry-run", scope],
+        cwd=REPO_ROOT, env=env, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+    )
+    assert proc.returncode == 0, proc.stdout
+
+
 def test_completion_jobs_reuse_setup_relion_binding_build_dir(tmp_path):
     scratch = tmp_path / "scratch"
     runtime = tmp_path / "runtime"
-    env = os.environ.copy()
-    env.update(
-        {
-            "EM_COMPLETION_SCRATCH_DIR": str(scratch),
-            "EM_COMPLETION_RUNTIME_ROOT": str(runtime),
-            "SBATCH_ACCOUNT": "gilles",
-            "SBATCH_PARTITION": "cryoem",
-            "SBATCH_CONSTRAINT": "",
-            "EM_COMPLETION_SETUP_PARTITION": "cpu",
-            "EM_COMPLETION_SETUP_CONSTRAINT": "",
-            "EM_COMPLETION_SUMMARY_PARTITION": "cpu",
-            "EM_COMPLETION_SUMMARY_CONSTRAINT": "",
-            "EM_COMPLETION_SUMMARY_GRES": "",
-            "K1_MEM": "128G",
-            "K1_TIME_LIMIT": "04:00:00",
-            "RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MSTEP": "pair_sparse",
-            "RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES": "4294967296",
-            "RECOVAR_SPARSE_PASS2_MAX_NOISE_BLOCK_BYTES": "2147483648",
-            "RECOVAR_SPARSE_PASS2_MAX_ADJOINT_BLOCK_BYTES": "1073741824",
-            "RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS": "500",
-            "RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS": "120",
-            "RECOVAR_RELION_FIRSTITER_RECON_COMPLEX_BUDGET": "805306368",
-            "RELION_SRC_DIR": str(tmp_path / "relion_src"),
-            "RELION_REFINE_MPI": "/bin/true",
-        }
-    )
+    env = _launcher_env(tmp_path, scratch)
+    env.update({
+        'RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MSTEP': 'pair_sparse',
+        'RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES': '4294967296',
+        'RECOVAR_SPARSE_PASS2_MAX_NOISE_BLOCK_BYTES': '2147483648',
+        'RECOVAR_SPARSE_PASS2_MAX_ADJOINT_BLOCK_BYTES': '1073741824',
+        'RECOVAR_EXACT_LOCAL_PROGRESS_CHUNKS': '500',
+        'RECOVAR_EXACT_LOCAL_PROGRESS_SECONDS': '120',
+        'RECOVAR_RELION_FIRSTITER_RECON_COMPLEX_BUDGET': '805306368',
+    })
 
-    proc = subprocess.run(
-        ["bash", str(LAUNCHER), "--dry-run", "--k1-only"],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-
-    assert proc.returncode == 0, proc.stdout
+    _run_launcher(env, "--k1-only")
     setup_script = scratch / "jobs" / "em_completion_setup.sh"
     k1_script = scratch / "jobs" / "em_completion_k1_100k256.sh"
     summary_script = scratch / "jobs" / "em_completion_summary.sh"
@@ -211,11 +194,7 @@ def test_completion_jobs_preread_stacks_and_record_io_placement(tmp_path):
     """
     scratch = tmp_path / "scratch"
     env = _launcher_env(tmp_path, scratch)
-    proc = subprocess.run(
-        ["bash", str(LAUNCHER), "--dry-run", "--k1-only"],
-        cwd=REPO_ROOT, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
-    )
-    assert proc.returncode == 0, proc.stdout
+    _run_launcher(env, "--k1-only")
     k1_text = (scratch / "jobs" / "em_completion_k1_100k256.sh").read_text()
     assert 'export RECOVAR_PREREAD_IMAGES="${RECOVAR_PREREAD_IMAGES:-1}"' in k1_text
     assert 'export RECOVAR_PREREAD_MAX_GB="${RECOVAR_PREREAD_MAX_GB:-64}"' in k1_text
@@ -236,17 +215,7 @@ def test_completion_k1_relion_replay_mode_is_explicit(tmp_path):
         }
     )
 
-    proc = subprocess.run(
-        ["bash", str(LAUNCHER), "--dry-run", "--k1-only"],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-
-    assert proc.returncode == 0, proc.stdout
+    _run_launcher(env, "--k1-only")
     k1_text = (scratch / "jobs" / "em_completion_k1_100k256.sh").read_text()
     submission_env_text = (scratch / "submission.env").read_text()
     assert 'if [[ "relion-replay" == "relion-replay" ]]' in k1_text
@@ -268,17 +237,7 @@ def test_completion_k1_intermediates_can_be_disabled(tmp_path):
         }
     )
 
-    proc = subprocess.run(
-        ["bash", str(LAUNCHER), "--dry-run", "--k1-only"],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-
-    assert proc.returncode == 0, proc.stdout
+    _run_launcher(env, "--k1-only")
     k1_text = (scratch / "jobs" / "em_completion_k1_100k256.sh").read_text()
     submission_env_text = (scratch / "submission.env").read_text()
     assert "K1_SAVE_INTERMEDIATES=0" in submission_env_text
@@ -314,17 +273,7 @@ def test_completion_k4_resource_overrides_are_written(tmp_path):
         }
     )
 
-    proc = subprocess.run(
-        ["bash", str(LAUNCHER), "--dry-run", "--k4-only"],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-
-    assert proc.returncode == 0, proc.stdout
+    _run_launcher(env, "--k4-only")
     k4_script = scratch / "jobs" / "em_completion_k4_100k256.sh"
     submission_env = scratch / "submission.env"
     assert k4_script.exists()
@@ -378,17 +327,7 @@ def test_completion_setup_defaults_to_cpu_partition(tmp_path):
     env.pop("EM_COMPLETION_SETUP_CONSTRAINT", None)
     env.pop("EM_COMPLETION_SETUP_GRES", None)
 
-    proc = subprocess.run(
-        ["bash", str(LAUNCHER), "--dry-run", "--k4-only"],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-
-    assert proc.returncode == 0, proc.stdout
+    _run_launcher(env, "--k4-only")
     setup_script = scratch / "jobs" / "em_completion_setup.sh"
     submission_env = scratch / "submission.env"
     assert setup_script.exists()
