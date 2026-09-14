@@ -148,6 +148,23 @@ def _control_coarse_selector_audit(translation_count: int) -> dict:
     }
 
 
+def _identity_local_layout(*, n_images, rotations_per_image, n_translations):
+    n_rotations = n_images * rotations_per_image
+    return LocalHypothesisLayout(
+        n_global_rotations=1,
+        n_pixels=1,
+        n_psi=1,
+        rotation_offsets=np.arange(n_images + 1, dtype=np.int64) * rotations_per_image,
+        rotation_ids_flat=np.zeros(n_rotations, dtype=np.int32),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (n_rotations, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(n_rotations, dtype=np.float32),
+        rotation_counts=np.full(n_images, rotations_per_image, dtype=np.int32),
+        translation_grid=np.zeros((n_translations, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((n_images, n_translations), dtype=np.float32),
+        rotation_posterior_ids_flat=np.zeros(n_rotations, dtype=np.int32),
+    )
+
+
 def _fake_result(n_classes: int, n: int, *, n_images: int = 2, n_groups: int = 2):
     Ft_y = [np.full(n**3, k + 1, dtype=np.complex64) for k in range(n_classes)]
     Ft_ctf = [np.full(n**3, (k + 1) * 2, dtype=np.float32) for k in range(n_classes)]
@@ -1014,19 +1031,7 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["pass2_parent_prior"] = np.asarray(kwargs["translation_log_prior"], dtype=np.float32).copy()
         calls["fine_prior"] = kwargs["fine_translation_log_prior"]
         calls["layout_translations"] = np.asarray(args[4], dtype=np.float32).copy() if args else None
-        return LocalHypothesisLayout(
-            n_global_rotations=1,
-            n_pixels=1,
-            n_psi=1,
-            rotation_offsets=np.array([0, 1, 2], dtype=np.int64),
-            rotation_ids_flat=np.array([0, 0], dtype=np.int32),
-            rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (2, 3, 3)).copy(),
-            rotation_log_priors_flat=np.zeros(2, dtype=np.float32),
-            rotation_counts=np.array([1, 1], dtype=np.int32),
-            translation_grid=np.zeros((4, 2), dtype=np.float32),
-            translation_log_priors=np.zeros((2, 4), dtype=np.float32),
-            rotation_posterior_ids_flat=np.array([0, 0], dtype=np.int32),
-        )
+        return _identity_local_layout(n_images=2, rotations_per_image=1, n_translations=4)
 
     def fake_run_local(dataset, means, mean_variance, noise_variance, local_layout, disc_type, **kwargs):
         del means, mean_variance, noise_variance, disc_type
@@ -1670,19 +1675,7 @@ def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypa
                 "allow_empty": kwargs["allow_empty"],
             }
         )
-        return LocalHypothesisLayout(
-            n_global_rotations=1,
-            n_pixels=1,
-            n_psi=1,
-            rotation_offsets=np.array([0, 2, 4], dtype=np.int64),
-            rotation_ids_flat=np.array([0, 0, 0, 0], dtype=np.int32),
-            rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (4, 3, 3)).copy(),
-            rotation_log_priors_flat=np.zeros(4, dtype=np.float32),
-            rotation_counts=np.array([2, 2], dtype=np.int32),
-            translation_grid=np.zeros((2, 2), dtype=np.float32),
-            translation_log_priors=np.zeros((2, 2), dtype=np.float32),
-            rotation_posterior_ids_flat=np.array([0, 0, 0, 0], dtype=np.int32),
-        )
+        return _identity_local_layout(n_images=2, rotations_per_image=2, n_translations=2)
 
     def fake_run_local(dataset, means, mean_variance, noise_variance, local_layout, disc_type, **kwargs):
         del noise_variance, disc_type
@@ -1807,19 +1800,7 @@ def test_dense_initial_model_estep_sparse_pass2_pseudo_halfsets_use_separate_loc
                 "pass2_parent_prior": np.asarray(kwargs["translation_log_prior"], dtype=np.float32).copy(),
             }
         )
-        return LocalHypothesisLayout(
-            n_global_rotations=1,
-            n_pixels=1,
-            n_psi=1,
-            rotation_offsets=np.array([0, 2, 4, 6, 8], dtype=np.int64),
-            rotation_ids_flat=np.array([0, 0, 0, 0, 0, 0, 0, 0], dtype=np.int32),
-            rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (8, 3, 3)).copy(),
-            rotation_log_priors_flat=np.zeros(8, dtype=np.float32),
-            rotation_counts=np.array([2, 2, 2, 2], dtype=np.int32),
-            translation_grid=np.zeros((2, 2), dtype=np.float32),
-            translation_log_priors=np.zeros((4, 2), dtype=np.float32),
-            rotation_posterior_ids_flat=np.array([0, 0, 0, 0, 0, 0, 0, 0], dtype=np.int32),
-        )
+        return _identity_local_layout(n_images=4, rotations_per_image=2, n_translations=2)
 
     def fake_run_local(dataset, means, mean_variance, noise_variance, local_layout, disc_type, **kwargs):
         del noise_variance, local_layout, disc_type
@@ -1931,22 +1912,7 @@ def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypat
     def fake_build_layout(significant_samples, *args, **kwargs):
         del args, kwargs
         n_images = len(significant_samples)
-        return LocalHypothesisLayout(
-            n_global_rotations=1,
-            n_pixels=1,
-            n_psi=1,
-            rotation_offsets=np.arange(n_images + 1, dtype=np.int64),
-            rotation_ids_flat=np.zeros(n_images, dtype=np.int32),
-            rotations_flat=np.broadcast_to(
-                np.eye(3, dtype=np.float32),
-                (n_images, 3, 3),
-            ).copy(),
-            rotation_log_priors_flat=np.zeros(n_images, dtype=np.float32),
-            rotation_counts=np.ones(n_images, dtype=np.int32),
-            translation_grid=np.zeros((1, 2), dtype=np.float32),
-            translation_log_priors=np.zeros((n_images, 1), dtype=np.float32),
-            rotation_posterior_ids_flat=np.zeros(n_images, dtype=np.int32),
-        )
+        return _identity_local_layout(n_images=n_images, rotations_per_image=1, n_translations=1)
 
     def fake_run_local(dataset, means, mean_variance, noise_variance, local_layout, disc_type, **kwargs):
         del means, mean_variance, noise_variance, local_layout, disc_type
