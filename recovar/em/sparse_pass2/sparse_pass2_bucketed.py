@@ -3717,7 +3717,6 @@ def compute_pass2_stats_sparse_bucketed(
                     actual_counts=actual_counts,
                     rotations=mstep_rotations,
                     rotation_indices=rotation_indices,
-                    fine_translations=fine_translations,
                     candidate_mask=candidate_mask,
                     posterior_probs=probs,
                     reconstruction_probs=mstep_probs,

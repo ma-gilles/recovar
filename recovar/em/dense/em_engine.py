@@ -105,7 +105,6 @@ def _noise_split_diagnostics_requested() -> bool:
 
 def _dense_big_jit_disabled_reason(
     *,
-    relion_firstiter_winner_take_all: bool,
     accumulate_noise: bool,
     noise_split_diagnostics_enabled: bool,
     dense_noise_component_dump_enabled: bool,
@@ -113,7 +112,6 @@ def _dense_big_jit_disabled_reason(
 ) -> str | None:
     """Return the dense big-JIT fallback reason, or ``None`` if eligible."""
 
-    del relion_firstiter_winner_take_all  # WTA is supported in big-JIT now
     if accumulate_noise and noise_split_diagnostics_enabled:
         return "noise_split_diagnostics"
     if dense_noise_component_dump_enabled:
@@ -935,7 +933,6 @@ def run_em(
         )
 
     dense_big_jit_unsupported_reason = _dense_big_jit_disabled_reason(
-        relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
         accumulate_noise=accumulate_noise,
         noise_split_diagnostics_enabled=debug_options.return_noise_split,
         dense_noise_component_dump_enabled=debug_options.noise_component_dump_enabled,

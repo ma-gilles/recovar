@@ -1551,7 +1551,6 @@ def _maybe_dump_k1_bpref_membership(
     actual_counts,
     rotations,
     rotation_indices,
-    fine_translations,
     candidate_mask,
     posterior_probs,
     reconstruction_probs,

@@ -371,7 +371,6 @@ def test_dense_big_jit_pass1_matches_dense_primitives():
 def test_dense_big_jit_allows_sparse_pass2_skip_path():
     assert (
         _dense_big_jit_disabled_reason(
-            relion_firstiter_winner_take_all=False,
             accumulate_noise=False,
             noise_split_diagnostics_enabled=False,
             dense_noise_component_dump_enabled=False,
@@ -384,7 +383,6 @@ def test_dense_big_jit_allows_sparse_pass2_skip_path():
 def test_dense_big_jit_allows_noise_accumulation_without_debug_split():
     assert (
         _dense_big_jit_disabled_reason(
-            relion_firstiter_winner_take_all=False,
             accumulate_noise=True,
             noise_split_diagnostics_enabled=False,
             dense_noise_component_dump_enabled=False,
@@ -415,8 +413,6 @@ def test_pad_dense_big_jit_image_axis_preserves_ctf_rows():
 @pytest.mark.parametrize(
     ("kwargs", "reason"),
     [
-        # winner_take_all is supported in big-JIT; it must NOT trigger a bailout.
-        ({"relion_firstiter_winner_take_all": True}, None),
         ({"accumulate_noise": True, "noise_split_diagnostics_enabled": True}, "noise_split_diagnostics"),
         ({"dense_noise_component_dump_enabled": True}, "dense_noise_component_dump"),
         ({"per_pose_debug_dump_enabled": True}, "per_pose_debug_dump"),
@@ -424,7 +420,6 @@ def test_pad_dense_big_jit_image_axis_preserves_ctf_rows():
 )
 def test_dense_big_jit_disabled_reasons(kwargs, reason):
     base = {
-        "relion_firstiter_winner_take_all": False,
         "accumulate_noise": False,
         "noise_split_diagnostics_enabled": False,
         "dense_noise_component_dump_enabled": False,
