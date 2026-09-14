@@ -22,6 +22,9 @@ from recovar.em.ppca_refinement.config import (
     ScoringConfig,
     SparsePass2Config,
 )
+from recovar.em.ppca_refinement.dense_dataset import (
+    _project_augmented_half_volumes as _project_local_augmented,
+)
 from recovar.em.ppca_refinement.dense_dataset import prepare_dense_ppca_dataset_inputs
 from recovar.em.ppca_refinement.diagnostics import build_iteration_diagnostics, resolve_image_scale_range
 from recovar.em.ppca_refinement.engine import (
@@ -242,11 +245,6 @@ def _fetch_single_image_batch(experiment_dataset, image_index: int):
         return next(batch_iter)
     except StopIteration as exc:
         raise ValueError(f"Could not fetch image index {image_index}") from exc
-
-
-from recovar.em.ppca_refinement.dense_dataset import (
-    _project_augmented_half_volumes as _project_local_augmented,
-)
 
 
 def _per_pose_stats_local_bucket(Y1, proj_aug, ctf2_over_noise, y_norm):
