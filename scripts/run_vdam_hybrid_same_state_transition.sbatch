@@ -93,38 +93,15 @@ if [[ -n "${COARSE_PREFIX_DUMP_ORIGINAL_INDEX}" ]]; then
 fi
 test "$((MIRRORED_INCREMENTAL_PANELS + MIRRORED_HYBRID_IMAGE_BATCH_PANELS))" -le 1
 case "${CANDIDATE_MODE}" in
-  hybrid)
-    expected_arm_order=direct_1,hybrid_1,hybrid_2,direct_2
-    ;;
-  flat_rows)
-    expected_arm_order=direct_1,flat_rows_1,flat_rows_2,direct_2
-    ;;
-  packed_projection)
-    expected_arm_order=direct_1,packed_projection_1,packed_projection_2,direct_2
-    ;;
-  packed_deferred)
-    expected_arm_order=direct_1,packed_deferred_1,packed_deferred_2,direct_2
-    ;;
-  packed_final_noise)
-    expected_arm_order=direct_1,packed_final_noise_1,packed_final_noise_2,direct_2
-    ;;
-  hybrid_packed_deferred)
-    expected_arm_order=direct_1,hybrid_packed_deferred_1,hybrid_packed_deferred_2,direct_2
+  hybrid|flat_rows|packed_projection|packed_deferred|packed_final_noise|\
+  hybrid_packed_deferred|compact_posterior|compact_packed_deferred|all_optimized)
+    expected_arm_order="direct_1,${CANDIDATE_MODE}_1,${CANDIDATE_MODE}_2,direct_2"
     ;;
   stable_shapes)
     expected_arm_order=stable_off_1,stable_on_1,stable_on_2,stable_off_2
     ;;
   stable_flat_capacity)
     expected_arm_order=stable_flat_off_1,stable_flat_on_1,stable_flat_on_2,stable_flat_off_2
-    ;;
-  compact_posterior)
-    expected_arm_order=direct_1,compact_posterior_1,compact_posterior_2,direct_2
-    ;;
-  compact_packed_deferred)
-    expected_arm_order=direct_1,compact_packed_deferred_1,compact_packed_deferred_2,direct_2
-    ;;
-  all_optimized)
-    expected_arm_order=direct_1,all_optimized_1,all_optimized_2,direct_2
     ;;
   all_optimized_stable_shapes)
     expected_arm_order=stable_all_off_1,stable_all_on_1,stable_all_on_2,stable_all_off_2

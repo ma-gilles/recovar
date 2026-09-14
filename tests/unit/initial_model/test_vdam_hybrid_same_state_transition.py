@@ -2176,25 +2176,14 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     assert "--candidate-mode" in source
     assert "--constraint=h100" in sbatch
     assert "--checkpoint-iteration \"${CHECKPOINT_ITERATION}\"" in sbatch
-    assert "direct_1,hybrid_1,hybrid_2,direct_2" in sbatch
-    assert "direct_1,flat_rows_1,flat_rows_2,direct_2" in sbatch
-    assert (
-        "direct_1,packed_projection_1,packed_projection_2,direct_2" in sbatch
-    )
-    assert "direct_1,packed_deferred_1,packed_deferred_2,direct_2" in sbatch
-    assert (
-        "direct_1,packed_final_noise_1,packed_final_noise_2,direct_2"
-        in sbatch
-    )
+    assert "hybrid|flat_rows|packed_projection|packed_deferred|packed_final_noise|" in sbatch
+    assert "hybrid_packed_deferred|compact_posterior|compact_packed_deferred|all_optimized)" in sbatch
+    assert 'expected_arm_order="direct_1,${CANDIDATE_MODE}_1,${CANDIDATE_MODE}_2,direct_2"' in sbatch
     assert (
         "direct_oracle,abba_packed_deferred_1,abba_packed_final_noise_1,"
         "abba_packed_final_noise_2,abba_packed_deferred_2,"
         "baab_packed_final_noise_1,baab_packed_deferred_1,"
         "baab_packed_deferred_2,baab_packed_final_noise_2"
-        in sbatch
-    )
-    assert (
-        "direct_1,hybrid_packed_deferred_1,hybrid_packed_deferred_2,direct_2"
         in sbatch
     )
     assert "stable_off_1,stable_on_1,stable_on_2,stable_off_2" in sbatch
@@ -2203,14 +2192,6 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
         in sbatch
     )
     assert '"RECOVAR_INITIAL_MODEL_STABLE_FLAT_ROW_CAPACITY=0"' in sbatch
-    assert (
-        "direct_1,compact_posterior_1,compact_posterior_2,direct_2" in sbatch
-    )
-    assert (
-        "direct_1,compact_packed_deferred_1,compact_packed_deferred_2,direct_2"
-        in sbatch
-    )
-    assert "direct_1,all_optimized_1,all_optimized_2,direct_2" in sbatch
     assert (
         "stable_all_off_1,stable_all_on_1,stable_all_on_2,stable_all_off_2"
         in sbatch
