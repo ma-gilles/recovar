@@ -929,7 +929,6 @@ def _run_sparse_pass2_initial_model_estep(
                 result = run_local_k_class_em(
                     group_dataset,
                     means,
-                    mean_variance,
                     config.noise_variance,
                     local_layout,
                     config.disc_type,

@@ -161,7 +161,6 @@ def test_direct_k1_result_preserves_host_eulers(monkeypatch):
     result = k_class.run_local_k_class_em(
         SimpleNamespace(n_images=1),
         np.zeros((1, 8), np.complex64),
-        np.ones(8),
         np.ones(4),
         SimpleNamespace(n_images=1),
         "linear_interp",

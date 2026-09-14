@@ -5070,7 +5070,7 @@ def test_run_local_search_iteration_dispatches_aligned_mstep_grid(monkeypatch, r
         pass
 
     def capture_dispatch(*args, **kwargs):
-        captured["layout"] = args[4 if k_class_enabled else 3]
+        captured["layout"] = args[3]
         captured["relion_exact_score_translation"] = kwargs.get(
             "relion_exact_score_translation"
         )
@@ -6538,7 +6538,6 @@ def test_local_k_class_identical_means_split_global_posterior(rng):
     result = run_local_k_class_em(
         dataset,
         means,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6622,7 +6621,6 @@ def test_local_k_class_norm_correction_counts_shared_high_shell_once(rng):
     result = run_local_k_class_em(
         dataset,
         means,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6895,7 +6893,6 @@ def test_local_k_class_can_report_noise_support_class_sums(monkeypatch):
     result = run_local_k_class_em(
         dataset,
         means,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",
@@ -6994,7 +6991,6 @@ def test_local_k_class_uses_global_reconstruction_threshold(monkeypatch):
     run_local_k_class_em(
         dataset,
         means,
-        mean_variance,
         noise_variance,
         local_layout,
         "linear_interp",

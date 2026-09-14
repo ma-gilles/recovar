@@ -1033,8 +1033,8 @@ def test_dense_initial_model_estep_sparse_pass2_uses_coarse_parent_prior(monkeyp
         calls["layout_translations"] = np.asarray(args[4], dtype=np.float32).copy() if args else None
         return _identity_local_layout(n_images=2, rotations_per_image=1, n_translations=4)
 
-    def fake_run_local(dataset, means, mean_variance, noise_variance, local_layout, disc_type, **kwargs):
-        del means, mean_variance, noise_variance, disc_type
+    def fake_run_local(dataset, means, noise_variance, local_layout, disc_type, **kwargs):
+        del means, noise_variance, disc_type
         assert isinstance(local_layout, tuple)
         calls["local_layout_count"] = len(local_layout)
         calls["local_n_global_rotations"] = int(local_layout[0].n_global_rotations)
@@ -1677,10 +1677,9 @@ def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypa
         )
         return _identity_local_layout(n_images=2, rotations_per_image=2, n_translations=2)
 
-    def fake_run_local(dataset, means, mean_variance, noise_variance, local_layout, disc_type, **kwargs):
+    def fake_run_local(dataset, means, noise_variance, local_layout, disc_type, **kwargs):
         del noise_variance, disc_type
         calls["pass2_means_shape"] = np.asarray(means).shape
-        calls["pass2_mean_variance_shape"] = np.asarray(mean_variance).shape
         calls["pass2_class_log_priors"] = np.asarray(kwargs["class_log_priors"], dtype=np.float64).copy()
         calls["local_layout_count"] = len(local_layout)
         calls["has_class_local_rotation_log_prior"] = "class_local_rotation_log_prior" in kwargs
@@ -1737,7 +1736,6 @@ def test_dense_initial_model_estep_sparse_pass2_preserves_k_class_state(monkeypa
 
     assert calls["pass1_means_shape"] == (2, 8**3)
     assert calls["pass2_means_shape"] == (2, 8**3)
-    assert calls["pass2_mean_variance_shape"] == (2, 8**3)
     np.testing.assert_allclose(calls["pass1_class_log_priors"], np.log([0.8, 0.2]))
     np.testing.assert_allclose(calls["pass2_class_log_priors"], np.log([0.8, 0.2]))
     assert calls["pass1_relion_coarse_gaussian_default"] is False
@@ -1802,7 +1800,7 @@ def test_dense_initial_model_estep_sparse_pass2_pseudo_halfsets_use_separate_loc
         )
         return _identity_local_layout(n_images=4, rotations_per_image=2, n_translations=2)
 
-    def fake_run_local(dataset, means, mean_variance, noise_variance, local_layout, disc_type, **kwargs):
+    def fake_run_local(dataset, means, noise_variance, local_layout, disc_type, **kwargs):
         del noise_variance, local_layout, disc_type
         calls["local"].append(
             {
@@ -1914,8 +1912,8 @@ def test_exact_k1_sparse_pass2_preserves_joint_halfset_particle_stream(monkeypat
         n_images = len(significant_samples)
         return _identity_local_layout(n_images=n_images, rotations_per_image=1, n_translations=1)
 
-    def fake_run_local(dataset, means, mean_variance, noise_variance, local_layout, disc_type, **kwargs):
-        del means, mean_variance, noise_variance, local_layout, disc_type
+    def fake_run_local(dataset, means, noise_variance, local_layout, disc_type, **kwargs):
+        del means, noise_variance, local_layout, disc_type
         calls["local"].append(
             {
                 "n_images": int(dataset.n_images),

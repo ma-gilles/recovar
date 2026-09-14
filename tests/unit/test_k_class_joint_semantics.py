@@ -2026,7 +2026,6 @@ def test_local_k_class_single_class_skips_score_probe(monkeypatch):
     def fake_run_local_em_exact(
         _dataset,
         mean,
-        _mean_variance,
         _noise_variance,
         _local_layout,
         _disc_type,
@@ -2055,7 +2054,6 @@ def test_local_k_class_single_class_skips_score_probe(monkeypatch):
         TinyDataset(),
         jnp.zeros((1, 4), dtype=jnp.complex64),
         jnp.ones(4, dtype=jnp.float32),
-        jnp.ones(4, dtype=jnp.float32),
         local_layout,
         "linear_interp",
         return_best_pose_details=True,
@@ -2076,7 +2074,6 @@ def test_local_k_class_single_class_skips_score_probe(monkeypatch):
     run_local_k_class_em(
         TinyDataset(),
         jnp.zeros((1, 4), dtype=jnp.complex64),
-        jnp.ones(4, dtype=jnp.float32),
         jnp.ones(4, dtype=jnp.float32),
         local_layout,
         "linear_interp",
@@ -2114,7 +2111,6 @@ def test_local_k_class_accepts_per_class_layouts_and_external_evidence(monkeypat
     def fake_run_local_em_exact(
         _dataset,
         mean,
-        _mean_variance,
         _noise_variance,
         local_layout,
         _disc_type,
@@ -2142,7 +2138,6 @@ def test_local_k_class_accepts_per_class_layouts_and_external_evidence(monkeypat
     run_local_k_class_em(
         TinyDataset(),
         jnp.zeros((2, 4), dtype=jnp.complex64),
-        jnp.ones(4, dtype=jnp.float32),
         jnp.ones(4, dtype=jnp.float32),
         (layout_with_prior([0.0, -1.0]), layout_with_prior([-2.0, -3.0])),
         "linear_interp",

@@ -300,7 +300,6 @@ def _run_local_search_iteration(
         k_class_result = run_local_k_class_em(
             experiment_dataset,
             mean,
-            mean_variance,
             noise_variance,
             local_layout,
             disc_type,

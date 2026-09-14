@@ -2057,7 +2057,6 @@ def run_dense_k_class_em(
 def run_local_k_class_em(
     experiment_dataset,
     means,
-    mean_variance,
     noise_variance,
     local_layout: LocalHypothesisLayout,
     disc_type: str,

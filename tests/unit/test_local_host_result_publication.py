@@ -170,7 +170,6 @@ def test_local_result_route_is_opt_in_and_single_class(monkeypatch, n_classes, h
         SimpleNamespace(n_units=2),
         jnp.zeros((n_classes, 4), dtype=jnp.complex64),
         jnp.ones(4),
-        jnp.ones(4),
         layout,
         "linear_interp",
         class_log_evidence=np.zeros((n_classes, 2)),
