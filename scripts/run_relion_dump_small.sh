@@ -2,7 +2,7 @@
 # Run patched RELION on the small InitialModel fixture and write coherent
 # dumps for both the iter-1 E-step posterior and the iter-1 M-step BPref.
 # Both env vars must point to the same directory so subsequent probes
-# (scripts/probe_estep_coherent.py) compare apples to apples.
+# (scripts/probe_estep_relion_exact.py) compare apples to apples.
 #
 # Requires:
 #   - RELION built with docs/patches/relion_estep_dump.patch applied

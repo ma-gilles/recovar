@@ -2,7 +2,7 @@
 
 ## Conclusion
 
-`scripts/probe_estep_coherent.py` and the BPref CC gate in
+The [retired coherent probe](https://github.com/ma-gilles/recovar/blob/524e3a3e56cc1a14368e1e972497516ea93b46e9/scripts/probe_estep_coherent.py) and the historical BPref CC gate in
 `tests/unit/initial_model/test_estep_fixture.py::test_estep_to_bpref_forward_parity`
 compare the wrong things. The +0.74 CC ceiling is structural, not a
 backproject-scatter bug.
