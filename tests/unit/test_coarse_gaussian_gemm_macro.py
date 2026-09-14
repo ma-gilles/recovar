@@ -41,48 +41,50 @@ def _direct_scores(projected, shifted, weight, initial):
     )
 
 
-def test_coarse_gaussian_gemm_macro_is_default_off_and_fail_closed(monkeypatch):
-    variable = "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO"
+@pytest.mark.parametrize(
+    ("variable", "enabled_flag"),
+    [
+        (
+            'RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO',
+            significance._coarse_gaussian_gemm_macro_enabled,
+        ),
+        (
+            'RECOVAR_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS',
+            significance._k1_relion_exact_coarse_skip_generic_operands_enabled,
+        ),
+        (
+            'RECOVAR_K1_RELION_EXACT_COMPACT_PREPROCESS',
+            significance._k1_relion_exact_compact_preprocess_enabled,
+        ),
+        (
+            'RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE',
+            significance._coarse_gaussian_gemm_projection_cache_enabled,
+        ),
+    ],
+)
+def test_coarse_gaussian_flags_are_default_off_and_fail_closed(
+    monkeypatch, variable, enabled_flag,
+):
     monkeypatch.delenv(variable, raising=False)
-    assert not significance._coarse_gaussian_gemm_macro_enabled()
-    assert significance._coarse_gaussian_gemm_macro_enabled(default=True)
+    assert not enabled_flag()
+    assert enabled_flag(default=True)
 
     for disabled in ("0", "false", "no", "off"):
         monkeypatch.setenv(variable, disabled)
-        assert not significance._coarse_gaussian_gemm_macro_enabled(default=True)
+        assert not enabled_flag(default=True)
     for enabled in ("1", "true", "yes", "on"):
         monkeypatch.setenv(variable, enabled)
-        assert significance._coarse_gaussian_gemm_macro_enabled()
+        assert enabled_flag()
 
     monkeypatch.setenv(variable, "automatic")
     with pytest.raises(ValueError, match=variable):
-        significance._coarse_gaussian_gemm_macro_enabled()
+        enabled_flag()
 
 
 def test_exact_coarse_skip_generic_operands_is_default_off_and_fail_closed(
     monkeypatch,
 ):
     variable = "RECOVAR_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS"
-    monkeypatch.delenv(variable, raising=False)
-    assert not significance._k1_relion_exact_coarse_skip_generic_operands_enabled()
-    assert significance._k1_relion_exact_coarse_skip_generic_operands_enabled(
-        default=True,
-    )
-
-    for disabled in ("0", "false", "no", "off"):
-        monkeypatch.setenv(variable, disabled)
-        assert not (
-            significance._k1_relion_exact_coarse_skip_generic_operands_enabled(
-                default=True,
-            )
-        )
-    for enabled in ("1", "true", "yes", "on"):
-        monkeypatch.setenv(variable, enabled)
-        assert significance._k1_relion_exact_coarse_skip_generic_operands_enabled()
-
-    monkeypatch.setenv(variable, "automatic")
-    with pytest.raises(ValueError, match=variable):
-        significance._k1_relion_exact_coarse_skip_generic_operands_enabled()
 
     assert not significance._resolve_k1_relion_exact_coarse_skip_generic_operands(
         requested=False,
@@ -114,22 +116,6 @@ def test_exact_coarse_skip_generic_operands_is_default_off_and_fail_closed(
 
 def test_exact_compact_preprocess_is_default_off_and_fail_closed(monkeypatch):
     variable = "RECOVAR_K1_RELION_EXACT_COMPACT_PREPROCESS"
-    monkeypatch.delenv(variable, raising=False)
-    assert not significance._k1_relion_exact_compact_preprocess_enabled()
-    assert significance._k1_relion_exact_compact_preprocess_enabled(default=True)
-
-    for disabled in ("0", "false", "no", "off"):
-        monkeypatch.setenv(variable, disabled)
-        assert not significance._k1_relion_exact_compact_preprocess_enabled(
-            default=True,
-        )
-    for enabled in ("1", "true", "yes", "on"):
-        monkeypatch.setenv(variable, enabled)
-        assert significance._k1_relion_exact_compact_preprocess_enabled()
-
-    monkeypatch.setenv(variable, "automatic")
-    with pytest.raises(ValueError, match=variable):
-        significance._k1_relion_exact_compact_preprocess_enabled()
 
     valid = {
         "exact_coarse_skip_generic_operands_enabled": True,
@@ -163,30 +149,6 @@ def test_exact_compact_preprocess_is_default_off_and_fail_closed(monkeypatch):
                 requested=True,
                 **kwargs,
             )
-
-
-def test_coarse_gaussian_gemm_projection_cache_is_default_off_and_fail_closed(
-    monkeypatch,
-):
-    variable = "RECOVAR_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE"
-    monkeypatch.delenv(variable, raising=False)
-    assert not significance._coarse_gaussian_gemm_projection_cache_enabled()
-    assert significance._coarse_gaussian_gemm_projection_cache_enabled(
-        default=True,
-    )
-
-    for disabled in ("0", "false", "no", "off"):
-        monkeypatch.setenv(variable, disabled)
-        assert not significance._coarse_gaussian_gemm_projection_cache_enabled(
-            default=True,
-        )
-    for enabled in ("1", "true", "yes", "on"):
-        monkeypatch.setenv(variable, enabled)
-        assert significance._coarse_gaussian_gemm_projection_cache_enabled()
-
-    monkeypatch.setenv(variable, "automatic")
-    with pytest.raises(ValueError, match=variable):
-        significance._coarse_gaussian_gemm_projection_cache_enabled()
 
 
 def _projection_cache_request_kwargs(**updates):
@@ -704,10 +666,11 @@ def test_coarse_gemm_qualification_allows_only_fully_qualified_stable_noise():
         assert rejected["status"] == "NO_GO"
 
 
-def test_coarse_gaussian_gemm_scores_report_direct_objective_float32(record_property):
-    """Report float32 drift without turning this sample into a tolerance."""
+@pytest.mark.parametrize("real_dtype", [np.float32, np.float64])
+def test_coarse_gaussian_gemm_scores_report_direct_objective(record_property, real_dtype):
+    """Report precision-specific drift without turning this sample into a tolerance."""
 
-    operands = _macro_operands(real_dtype=np.float32)
+    operands = _macro_operands(real_dtype=real_dtype)
     actual = np.asarray(
         scoring._relion_coarse_gaussian_gemm_scores(
             *map(jnp.asarray, operands),
@@ -723,54 +686,14 @@ def test_coarse_gaussian_gemm_scores_report_direct_objective_float32(record_prop
     )
 
     assert actual.shape == (4, 5, 3)
-    assert actual.dtype == np.float32
+    assert actual.dtype == real_dtype
     assert np.all(np.isfinite(actual))
     np.testing.assert_array_equal(
         np.argmax(actual.reshape(actual.shape[0], -1), axis=1),
         np.argmax(expected.reshape(expected.shape[0], -1), axis=1),
     )
     record_property(
-        "float32_direct_macro_raw",
-        json.dumps(
-            {
-                "precision_bits": int(diagnostics["score_precision_bits"]),
-                "signed_mean_delta": diagnostics[
-                    "signed_mean_delta_per_image"
-                ].tolist(),
-                "max_abs_delta": diagnostics["max_abs_delta_per_image"].tolist(),
-                "max_ulp_delta": int(np.max(diagnostics["ulp_score_delta"])),
-            },
-            sort_keys=True,
-        ),
-    )
-
-
-def test_coarse_gaussian_gemm_scores_report_direct_objective_float64(record_property):
-    """Report the float64 companion without inventing a promotion epsilon."""
-
-    operands = _macro_operands(real_dtype=np.float64)
-    actual = np.asarray(
-        scoring._relion_coarse_gaussian_gemm_scores(
-            *map(jnp.asarray, operands),
-            operands[2].shape[0],
-            image_shape=(8, 8),
-            volume_shape=(8, 8, 8),
-        )
-    )
-    expected = _direct_scores(operands[0], operands[2], operands[3], operands[4])
-    diagnostics = coarse_score_diagnostics._coarse_gaussian_direct_macro_diagnostics(
-        expected[:, None, :, :],
-        actual[:, None, :, :],
-    )
-
-    assert actual.dtype == np.float64
-    assert np.all(np.isfinite(actual))
-    np.testing.assert_array_equal(
-        np.argmax(actual.reshape(actual.shape[0], -1), axis=1),
-        np.argmax(expected.reshape(expected.shape[0], -1), axis=1),
-    )
-    record_property(
-        "float64_direct_macro_raw",
+        f"{np.dtype(real_dtype).name}_direct_macro_raw",
         json.dumps(
             {
                 "precision_bits": int(diagnostics["score_precision_bits"]),
