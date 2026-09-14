@@ -9532,8 +9532,15 @@ def test_fused_sparse_k_class_relion_half_mstep_keeps_half_accumulators(monkeypa
     assert isinstance(result.profile_summary["sparse_kclass_windowed_translation_tile_cap"], bool)
 
 
-def test_fused_sparse_k_class_fine_mstep_prune_flag_exercises_compact_pairs(monkeypatch):
-    """Diagnostic fine-pass M-step pruning should work without x-half layout."""
+@pytest.mark.parametrize(
+    ("prune_flag", "expected_mode", "dataset_seed", "volume_seeds"),
+    [("1", "per_class", 211, (223, 227)), ("joint", "joint", 229, (233, 239))],
+    ids=["per_class", "joint"],
+)
+def test_fused_sparse_k_class_fine_mstep_pruning(
+    monkeypatch, prune_flag, expected_mode, dataset_seed, volume_seeds,
+):
+    """Per-class and joint pruning retain their original noise and mass checks."""
 
     from recovar.em.sampling import rotation_grid_size
 
@@ -9541,7 +9548,7 @@ def test_fused_sparse_k_class_fine_mstep_prune_flag_exercises_compact_pairs(monk
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED", "1")
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
     monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
-    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE", prune_flag)
 
     n_images = 2
     n_classes = 2
@@ -9555,11 +9562,11 @@ def test_fused_sparse_k_class_fine_mstep_prune_flag_exercises_compact_pairs(monk
         [np.asarray([0], dtype=np.int32) for _ in range(n_images)],
         [np.asarray([0], dtype=np.int32) for _ in range(n_images)],
     ]
-    ds = MockDataset(n_images=n_images, seed=211)
+    ds = MockDataset(n_images=n_images, seed=dataset_seed)
     volumes = jnp.stack(
         [
-            _hermitian_volume(VOLUME_SHAPE, seed=223),
-            _hermitian_volume(VOLUME_SHAPE, seed=227),
+            _hermitian_volume(VOLUME_SHAPE, seed=volume_seeds[0]),
+            _hermitian_volume(VOLUME_SHAPE, seed=volume_seeds[1]),
         ],
     )
 
@@ -9587,7 +9594,7 @@ def test_fused_sparse_k_class_fine_mstep_prune_flag_exercises_compact_pairs(monk
 
     assert result.profile_summary["sparse_kclass_compact_pairs"] is True
     assert result.profile_summary["sparse_kclass_relion_fine_mstep_prune"] is True
-    assert result.profile_summary["sparse_kclass_relion_fine_mstep_prune_mode"] == "per_class"
+    assert result.profile_summary["sparse_kclass_relion_fine_mstep_prune_mode"] == expected_mode
     np.testing.assert_allclose(
         np.sum(np.asarray(result.class_posterior_sums)),
         float(n_images),
@@ -9616,90 +9623,6 @@ def test_fused_sparse_k_class_fine_mstep_prune_flag_exercises_compact_pairs(monk
     assert np.asarray(result.profile_summary["class_posterior_sums_full"]).shape == (n_classes,)
     _assert_k_class_noise_sumw_matches_class_mass(result, rtol=1e-4, atol=1e-4)
 
-
-def test_fused_sparse_k_class_joint_fine_mstep_prune_flag(monkeypatch):
-    """Joint fine-pass M-step pruning should be reachable for Class3D parity."""
-
-    from recovar.em.sampling import rotation_grid_size
-
-    monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
-    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED", "1")
-    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
-    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
-    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_RELION_FINE_MSTEP_PRUNE", "joint")
-
-    n_images = 2
-    n_classes = 2
-    n_coarse_rot = rotation_grid_size(0)
-    coarse_translations = np.asarray([[0.0, 0.0]], dtype=np.float32)
-    fine_translations = np.asarray([[0.0, 0.0]], dtype=np.float32)
-    fine_translation_parent = np.asarray([0], dtype=np.int32)
-    fine_rotations = np.repeat(np.eye(3, dtype=np.float32)[None], 2, axis=0)
-    fine_parent = np.asarray([0, 1], dtype=np.int64)
-    significant_by_class = [
-        [np.asarray([0], dtype=np.int32) for _ in range(n_images)],
-        [np.asarray([0], dtype=np.int32) for _ in range(n_images)],
-    ]
-    ds = MockDataset(n_images=n_images, seed=229)
-    volumes = jnp.stack(
-        [
-            _hermitian_volume(VOLUME_SHAPE, seed=233),
-            _hermitian_volume(VOLUME_SHAPE, seed=239),
-        ],
-    )
-
-    result = _run_sparse_k_class_adaptive_pass2(
-        experiment_dataset=ds,
-        means_array=volumes,
-        mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0,
-        noise_variance=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-        coarse_rotations_np=np.repeat(np.eye(3, dtype=np.float32)[None], n_coarse_rot, axis=0),
-        coarse_translations_np=coarse_translations,
-        fine_rotations_np=fine_rotations,
-        fine_mstep_rotations_np=None,
-        rot_parent_map_np=fine_parent,
-        fine_translations_np=fine_translations,
-        trans_parent_map_np=fine_translation_parent,
-        sig_sample_indices_by_class=significant_by_class,
-        disc_type="linear_interp",
-        class_log_priors=np.log(np.full(n_classes, 1.0 / n_classes, dtype=np.float64)),
-        accumulate_noise=True,
-        return_best_pose_details=False,
-        oversampling_order=1,
-        random_perturbation=0.0,
-        engine_kwargs={"current_size": None, "relion_half_volume_mstep": False},
-    )
-
-    assert result.profile_summary["sparse_kclass_compact_pairs"] is True
-    assert result.profile_summary["sparse_kclass_relion_fine_mstep_prune"] is True
-    assert result.profile_summary["sparse_kclass_relion_fine_mstep_prune_mode"] == "joint"
-    np.testing.assert_allclose(
-        np.sum(np.asarray(result.class_posterior_sums)),
-        float(n_images),
-        rtol=1e-5,
-        atol=1e-5,
-    )
-    np.testing.assert_allclose(
-        np.asarray(result.class_mstep_posterior_sums),
-        np.asarray(result.profile_summary["sparse_kclass_mstep_class_posterior_sums"]),
-        rtol=1e-5,
-        atol=1e-5,
-    )
-    assert result.profile_summary["class_posterior_sums_used_override"] is True
-    np.testing.assert_allclose(
-        np.asarray(result.class_posterior_sums),
-        np.asarray(result.profile_summary["class_posterior_sums_returned"]),
-        rtol=1e-5,
-        atol=1e-5,
-    )
-    np.testing.assert_allclose(
-        np.asarray(result.class_mstep_posterior_sums),
-        np.asarray(result.profile_summary["class_mstep_posterior_sums_returned"]),
-        rtol=1e-5,
-        atol=1e-5,
-    )
-    assert np.asarray(result.profile_summary["class_posterior_sums_full"]).shape == (n_classes,)
-    _assert_k_class_noise_sumw_matches_class_mass(result, rtol=1e-4, atol=1e-4)
 
 
 def test_compact_significance_uses_complement_for_dense_masks():
