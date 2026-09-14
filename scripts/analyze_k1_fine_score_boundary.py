@@ -654,7 +654,6 @@ def _compare_particle(
     factor,
     score,
     recovar: dict[str, np.ndarray],
-    native_state_row,
     physical_image_size: int,
     current_size: int,
 ) -> dict[str, Any]:
@@ -1181,7 +1180,6 @@ def analyze(
                 factor=factors[stack],
                 score=scores[stack],
                 recovar=recovar,
-                native_state_row=state.loc[identity],
                 physical_image_size=physical_image_size,
                 current_size=current_size,
             )
