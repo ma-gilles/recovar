@@ -2302,7 +2302,7 @@ def _run_relion_iteration_loop(
                         "noise_variance": np.asarray(noise_variance_k),
                         "current_size": np.int32(cs_for_engine) if cs_for_engine is not None else np.int32(-1),
                         "half_spectrum_scoring": np.bool_(True),
-                        "use_float64_scoring": np.bool_(False),
+                        "use_float64_scoring": np.bool_(_DENSE_EM_STATIC_KWARGS["use_float64_scoring"]),
                         "projection_padding_factor": np.int32(PROJECTION_PADDING_FACTOR),
                         "reconstruction_padding_factor": np.int32(PADDING_FACTOR),
                         "score_with_masked_images": np.bool_(True),

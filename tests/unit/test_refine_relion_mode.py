@@ -12863,6 +12863,7 @@ class TestRelionModeSmokeTest:
         # ave_Pmax should be in [0, 1]
         assert 0.0 <= state.ave_Pmax <= 1.0
 
+    @pytest.mark.parametrize("double_scoring", [False, True])
     @pytest.mark.parametrize("per_half", [False, True])
     def test_relion_mode_uses_tau2_from_weights_for_prior(
         self,
@@ -12872,10 +12873,12 @@ class TestRelionModeSmokeTest:
         monkeypatch,
         tmp_path,
         per_half,
+        double_scoring,
     ):
         """RELION mode should compute tau2 from Ft_ctf weights + FSC (RELION order)."""
         from recovar.reconstruction import regularization
 
+        monkeypatch.setitem(iteration_loop_module._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", double_scoring)
         called = {"tau2": 0}
 
         original_tau2 = regularization.compute_relion_tau2_from_weights
@@ -12926,6 +12929,7 @@ class TestRelionModeSmokeTest:
         for half, prior in enumerate(scoring_priors):
             with np.load(tmp_path / f"manifest_iter0_half{half}.npz") as manifest:
                 np.testing.assert_array_equal(manifest["mean_variance"], prior)
+                assert bool(manifest["use_float64_scoring"]) == double_scoring
 
     def test_k1_solvent_corrected_fsc_disabled_uses_raw_tau2_fsc(
         self,
