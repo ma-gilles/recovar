@@ -21,7 +21,6 @@ from recovar.em.helpers.preprocessing import (
     resolve_image_mask_for_half_preprocess,
 )
 from recovar.em.helpers.preprocessing import apply_half_translation_phases as _apply_half_translation_phases
-from recovar.em.helpers.preprocessing import half_translation_phase_table as _half_translation_phase_table
 from recovar.em.helpers.timing import block_until_ready as _block_until_ready
 from recovar.em.local.local_big_jit import _preprocess_half as _big_jit_preprocess_half
 from recovar.em.local.local_caches import _LocalProcessedHalfCache
@@ -65,6 +64,8 @@ def prepare_local_bucket(
 ):
     """Prepare score, reconstruction, and noise inputs for one local bucket.
 
+    ``translation_phases_half`` is the phase table precomputed by the engine.
+
     This keeps the exact-local path separate from the dense engine and avoids
     recomputing CTF / translation tiling scaffolding across masked, unmasked,
     and noise-specific preprocessing.
@@ -83,20 +84,7 @@ def prepare_local_bucket(
     if timer is not None:
         timer["integer_shift_s"] += time.time() - integer_t0
 
-    phase_t0 = time.time()
     translation_phases_half = jnp.asarray(translation_phases_half)
-    raw_translations = translation_phases_half.shape[-1] == len(config.image_shape)
-    if raw_translations:
-        # Backward compatibility for tests and direct callers that pass raw
-        # translations instead of the precomputed phase table used by the hot path.
-        translation_phases_half = _half_translation_phase_table(
-            translation_phases_half,
-            config.image_shape,
-        )
-    if raw_translations and synchronize_profile:
-        _block_until_ready(translation_phases_half)
-    if raw_translations and timer is not None:
-        timer["translation_phase_s"] += time.time() - phase_t0
 
     exact_image_mask = None
     exact_image_mask_mode = None

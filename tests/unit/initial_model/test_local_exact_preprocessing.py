@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from recovar.em.helpers.half_spectrum import make_half_image_weights
+from recovar.em.helpers.preprocessing import half_translation_phase_table
 from recovar.em.local import local_preprocessing
 from recovar.em.local.local_caches import _LocalProcessedHalfCache
 from recovar.em.relion import relion_ctf
@@ -163,7 +164,7 @@ def test_prepare_local_exact_bucket_preserves_relion_bpref_operand_orders(
         np.zeros((1, 9), dtype=np.float32),
         np.asarray([0], dtype=np.int32),
         jnp.asarray(noise_f64),
-        jnp.zeros((1, 2), dtype=jnp.float32),
+        half_translation_phase_table(jnp.zeros((1, 2), dtype=jnp.float32), config.image_shape),
         config,
         make_half_image_weights(dataset.image_shape),
         score_with_masked_images=score_with_masked_images,

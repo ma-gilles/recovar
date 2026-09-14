@@ -69,7 +69,7 @@ from recovar.em.helpers.orientation_priors import (
     relion_translation_prior_center,
     relion_translation_search_base,
 )
-from recovar.em.helpers.preprocessing import resolve_image_mask_for_half_preprocess
+from recovar.em.helpers.preprocessing import half_translation_phase_table, resolve_image_mask_for_half_preprocess
 from recovar.em.helpers.projection import compute_scale_correction_terms_per_image, relion_scale_correction_pixel_mask
 from recovar.em.helpers.resolution import (
     _bootstrap_current_size_relion,
@@ -5808,7 +5808,7 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         ctf_params,
         bucket.image_indices,
         noise_variance_half,
-        jnp.asarray(local_layout.translation_grid),
+        half_translation_phase_table(jnp.asarray(local_layout.translation_grid), config.image_shape),
         config,
         half_weights,
         score_with_masked_images=True,
