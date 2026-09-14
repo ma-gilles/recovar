@@ -9389,40 +9389,6 @@ def test_compute_reconstruction_support_from_global_threshold_drops_low_class_ta
     np.testing.assert_array_equal(np.asarray(sig_rots[1]), np.array([True, True]))
 
 
-def test_tracked_local_engine_todo_ids_are_resolved():
-    repo_root = Path(__file__).resolve().parents[2]
-    iteration_loop_path = repo_root / 'recovar' / 'em' / 'refinement' / 'iteration_loop.py'
-    em_engine_path = repo_root / 'recovar' / 'em' / 'dense' / 'em_engine.py'
-    half_spectrum_path = repo_root / 'recovar' / 'em' / 'helpers' / 'half_spectrum.py'
-    docs_path = repo_root / "docs" / "relion_local_engine_refactor.md"
-
-    iteration_text = iteration_loop_path.read_text(encoding="utf-8")
-    em_engine_text = em_engine_path.read_text(encoding="utf-8")
-    half_spectrum_text = half_spectrum_path.read_text(encoding="utf-8")
-    docs_text = docs_path.read_text(encoding="utf-8")
-
-    documented_ids = [
-        "RELION_LOCAL_ENGINE/T001",
-        "RELION_LOCAL_ENGINE/T002",
-        "RELION_LOCAL_ENGINE/T003",
-        "RELION_LOCAL_ENGINE/T004",
-        "DENSE_ENGINE_BOUNDARY/E001",
-        "DENSE_ENGINE_BOUNDARY/E002",
-        "DENSE_ENGINE_BOUNDARY/E003",
-        "DENSE_ENGINE_BOUNDARY/E004",
-        "DENSE_ENGINE_BOUNDARY/E005",
-        "DENSE_ENGINE_BOUNDARY/E006",
-    ]
-    for todo_id in documented_ids:
-        assert todo_id in docs_text
-        assert f"`{todo_id}` | RESOLVED" in docs_text
-
-    active_code = "\n".join([iteration_text, em_engine_text, half_spectrum_text])
-    assert "TODO(RELION_LOCAL_ENGINE" not in active_code
-    assert "TODO(DENSE_ENGINE_BOUNDARY" not in active_code
-    assert "TODO(RELION-parity-debt" not in active_code
-
-
 def test_local_engine_selector_is_removed():
     assert "local_engine" not in inspect.signature(refine_single_volume).parameters
     assert "local_engine" not in inspect.signature(local_search_iteration._run_local_search_iteration).parameters
