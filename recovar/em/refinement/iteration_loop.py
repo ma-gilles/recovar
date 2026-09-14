@@ -564,12 +564,6 @@ def _run_relion_iteration_loop(
 
     # The refinement schedule owns the initial coarse HEALPix grid.
     current_healpix_order = int(schedule.init_healpix_order)
-    if adaptive.nside_level is not None and int(adaptive.nside_level) != current_healpix_order:
-        logger.info(
-            "RELION mode: ignoring caller nside_level=%d and regenerating initial coarse grid at healpix_order=%d",
-            int(adaptive.nside_level),
-            current_healpix_order,
-        )
     initial_grids = _initial_coarse_grids(
         healpix_order=current_healpix_order,
         sealed_sampling_state=sealed_sampling_state,

@@ -229,8 +229,6 @@ def run_refinement(
                 relion_current_sizes=oracle_current_sizes,
                 adaptive_oversampling=adaptive_oversampling,
                 max_significants=max_significants,
-                nside_level=healpix_order if adaptive_oversampling > 0 else None,
-                translation_pixel_offset=offset_step if adaptive_oversampling > 0 else None,
             ),
         ),
     )

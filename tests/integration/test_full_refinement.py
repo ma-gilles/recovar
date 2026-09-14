@@ -93,8 +93,6 @@ def _setup_refinement(n_iter=5, adaptive_oversampling=1, seed=42):
             adaptive=AdaptiveOptions(
                 adaptive_oversampling=adaptive_oversampling,
                 max_significants=500,
-                nside_level=healpix_order if adaptive_oversampling > 0 else None,
-                translation_pixel_offset=1.0 if adaptive_oversampling > 0 else None,
             ),
         ),
     )

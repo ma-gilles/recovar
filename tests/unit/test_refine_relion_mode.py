@@ -11505,7 +11505,7 @@ class TestRelionModeSmokeTest:
                     particle_diameter_ang=200.0,
                 ),
                 batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=20),
-                adaptive=AdaptiveOptions(adaptive_oversampling=1, nside_level=1),
+                adaptive=AdaptiveOptions(adaptive_oversampling=1),
             ),
         )
 
@@ -13402,7 +13402,7 @@ class TestRelionModeSmokeTest:
                     max_healpix_order=2,
                 ),
                 batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=len(rotations_many)),
-                adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=1),
+                adaptive=AdaptiveOptions(adaptive_oversampling=0),
             ),
         )
 
@@ -14275,7 +14275,7 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
             disc_type="linear_interp",
             schedule=RefinementSchedule(max_iter=1, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
             batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
-            adaptive=AdaptiveOptions(adaptive_oversampling=1, nside_level=4),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1),
             replay=ReplayState(init_previous_best_rotation_eulers=[prev_h1, prev_h2]),
         ),
     )
@@ -14471,7 +14471,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
             disc_type="linear_interp",
             schedule=RefinementSchedule(max_iter=1, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
             batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
-            adaptive=AdaptiveOptions(adaptive_oversampling=1, nside_level=4),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1),
             parity=RelionParityOptions(perturb_factor=0.5),
             replay=ReplayState(init_previous_best_rotation_eulers=[prev_h1, prev_h2]),
         ),
@@ -14611,7 +14611,7 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
             disc_type="linear_interp",
             schedule=RefinementSchedule(max_iter=1, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
             batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
-            adaptive=AdaptiveOptions(adaptive_oversampling=1, nside_level=4),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1),
             replay=ReplayState(
                 init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
                 init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
@@ -14739,7 +14739,7 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
             disc_type="linear_interp",
             schedule=RefinementSchedule(max_iter=1, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
             batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
-            adaptive=AdaptiveOptions(adaptive_oversampling=1, nside_level=4),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1),
             replay=ReplayState(
                 init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
                 init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
@@ -14833,7 +14833,7 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
             disc_type="linear_interp",
             schedule=RefinementSchedule(max_iter=2, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
             batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
-            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=4),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
         ),
     )
 
@@ -14917,7 +14917,7 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
             disc_type="linear_interp",
             schedule=RefinementSchedule(max_iter=2, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
             batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
-            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=4),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
         ),
     )
 
@@ -15077,7 +15077,7 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
                 init_relion_iteration=13,
             ),
             batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
-            adaptive=AdaptiveOptions(adaptive_oversampling=1, nside_level=4),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1),
             replay=ReplayState(
                 init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2],
                 init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
@@ -15241,7 +15241,7 @@ def test_previous_best_rotations_skip_first_local_dense_bootstrap(
                 skip_final_iteration=True,
             ),
             batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=512),
-            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=4),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
             replay=replay,
         ),
     )
@@ -15307,7 +15307,7 @@ def test_relion_mode_writes_absolute_translations_from_previous_offset(
                 skip_final_iteration=True,
             ),
             batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
-            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
             replay=ReplayState(init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()]),
         ),
     )
@@ -15454,7 +15454,7 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
                 skip_final_iteration=True,
             ),
             batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
-            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
             k_class=KClassOptions(
                 n_classes=n_classes,
                 init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
@@ -15483,7 +15483,7 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
                 skip_final_iteration=True,
             ),
             batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
-            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
             k_class=KClassOptions(
                 n_classes=n_classes,
                 init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
@@ -15512,7 +15512,7 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
                 skip_final_iteration=True,
             ),
             batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
-            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
             k_class=KClassOptions(
                 n_classes=n_classes,
                 init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
@@ -15541,7 +15541,7 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
                 skip_final_iteration=True,
             ),
             batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
-            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
             k_class=KClassOptions(
                 n_classes=n_classes,
                 init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
@@ -15662,7 +15662,7 @@ def test_relion_mode_dense_k_class_writes_absolute_translations_from_previous_of
                 skip_final_iteration=True,
             ),
             batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=1),
-            adaptive=AdaptiveOptions(adaptive_oversampling=0, nside_level=1),
+            adaptive=AdaptiveOptions(adaptive_oversampling=0),
             replay=ReplayState(init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()]),
             k_class=KClassOptions(n_classes=2, init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64))),
         ),
@@ -15833,7 +15833,7 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
             disc_type="linear_interp",
             schedule=RefinementSchedule(max_iter=1, init_current_size=16, init_healpix_order=4, max_healpix_order=4),
             batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=order_sizes[4]),
-            adaptive=AdaptiveOptions(adaptive_oversampling=1, nside_level=4),
+            adaptive=AdaptiveOptions(adaptive_oversampling=1),
             replay=ReplayState(init_previous_best_rotation_eulers=[prev_eulers_h1, prev_eulers_h2]),
             parity=RelionParityOptions(perturb_factor=0.0),
         ),

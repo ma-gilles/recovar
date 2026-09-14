@@ -176,7 +176,6 @@ def test_cli_translation_grid_parameters_seed_refinement_state():
     assert kwargs["init_healpix_order"] == 2
     assert kwargs["init_translation_range"] == 3.0
     assert kwargs["init_translation_step"] == 1.0
-    assert kwargs["translation_pixel_offset"] == 1.0
 
 
 def test_cli_perturb_seed_defaults_to_relion_random_seed():

@@ -1339,7 +1339,7 @@ class TestRefineWithAdaptive:
                 disc_type="linear_interp",
                 schedule=RefinementSchedule(max_iter=2, init_current_size=8),  # 8 to match volume_shape
                 batching=RefinementBatching(image_batch_size=n_images, rotation_block_size=len(rotations)),
-                adaptive=AdaptiveOptions(adaptive_oversampling=1, max_significants=100, nside_level=nside_level),
+                adaptive=AdaptiveOptions(adaptive_oversampling=1, max_significants=100),
             ),
         )
 
@@ -1388,7 +1388,7 @@ class TestRefineWithAdaptive:
             options=RefinementOptions(
                 schedule=RefinementSchedule(max_iter=1, init_healpix_order=2, max_healpix_order=2),
                 batching=RefinementBatching(image_batch_size=2, rotation_block_size=5),
-                adaptive=AdaptiveOptions(adaptive_oversampling=1, nside_level=None),
+                adaptive=AdaptiveOptions(adaptive_oversampling=1),
             ),
         )
 

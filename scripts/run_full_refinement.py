@@ -1400,7 +1400,6 @@ def _use_fresh_auto_refine_particle_order(
 def _refine_sampling_kwargs(args, init_healpix_order):
     """Return sampling kwargs forwarded from the CLI into ``refine_single_volume``."""
     return {
-        "translation_pixel_offset": args.offset_step if args.adaptive_oversampling > 0 else None,
         "init_healpix_order": init_healpix_order,
         "auto_local_healpix_order": args.auto_local_healpix_order,
         "init_translation_range": args.offset_range,
@@ -4756,8 +4755,6 @@ def main():
                 relion_healpix_orders=oracle_healpix_orders,
                 adaptive_oversampling=args.adaptive_oversampling,
                 max_significants=args.max_significants,
-                nside_level=rotation_grid_order if args.adaptive_oversampling > 0 else None,
-                translation_pixel_offset=sampling_kwargs["translation_pixel_offset"],
             ),
             parity=RelionParityOptions(
                 tau2_fudge=effective_tau2_fudge,
