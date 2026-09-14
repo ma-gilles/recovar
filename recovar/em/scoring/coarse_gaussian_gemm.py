@@ -515,12 +515,6 @@ def _plan_coarse_gaussian_gemm_projection_cache(
     )
 
 
-def _build_coarse_gaussian_gemm_projection_cache(plan, project_block):
-    """Build one private call-scoped cache through the shared exact builder."""
-
-    return projection_cache_helpers.build_projection_cache(plan, project_block)
-
-
 def _coarse_gaussian_gemm_projection_cache_stats(plan, *, enabled: bool):
     """Describe conservative admission and narrowly scoped alias evidence."""
 

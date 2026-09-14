@@ -11,6 +11,7 @@ import pytest
 from helpers import score_diagnostics
 
 from recovar.em.diagnostics import coarse_gaussian_diagnostics, coarse_score_diagnostics
+from recovar.em.helpers.projection_cache import build_projection_cache
 from recovar.em.relion import relion_ctf
 from recovar.em.scoring import coarse_gaussian_gemm, scoring, significance
 from recovar.em.scoring.coarse_gemm_streaming import COARSE_GEMM_STREAMING_SCHEMA
@@ -267,7 +268,7 @@ def test_coarse_gaussian_gemm_projection_cache_reuses_exact_c64_blocks_bitwise()
         build_calls.append((table_index, start, stop))
         return jnp.asarray(projected[start:stop])
 
-    cache = significance._build_coarse_gaussian_gemm_projection_cache(
+    cache = build_projection_cache(
         plan,
         project_block,
     )

@@ -38,6 +38,7 @@ from recovar.em.diagnostics.coarse_score_diagnostics import (
 from recovar.em.helpers.batch_fetch import original_image_indices
 from recovar.em.helpers.env_flags import parse_env_int_set
 from recovar.em.helpers.projection import compute_projections_block
+from recovar.em.helpers.projection_cache import build_projection_cache
 from recovar.em.relion.relion_coarse_operands import (
     _K1_RELION_EXACT_COMPACT_PREPROCESS_ENV,
     _assemble_relion_exact_coarse_gaussian_operands,
@@ -65,7 +66,6 @@ from recovar.em.scoring.coarse_gaussian_gemm import (
     _COARSE_GAUSSIAN_GEMM_MACRO_ENV,
     _K1_RELION_EXACT_COARSE_OPERANDS_ENV,
     _K1_RELION_F32_COARSE_SUPPORT_ENV,
-    _build_coarse_gaussian_gemm_projection_cache,
     _coarse_gaussian_gemm_compact_posterior_enabled,
     _coarse_gaussian_gemm_device_transaction_enabled,
     _coarse_gaussian_gemm_hybrid_block_capacity,
@@ -2390,7 +2390,7 @@ def _compute_k_class_significance_batched(
             return projected_reference
 
         coarse_gaussian_gemm_projection_cache = (
-            _build_coarse_gaussian_gemm_projection_cache(
+            build_projection_cache(
                 coarse_gaussian_gemm_projection_cache_plan,
                 _project_coarse_gemm_cache_build_block,
             )
