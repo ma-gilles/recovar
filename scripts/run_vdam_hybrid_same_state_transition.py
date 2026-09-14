@@ -354,39 +354,27 @@ def _resolve_native_checkpoint_inputs(
 
 
 def _arm_order(candidate_mode: str) -> tuple[str, str, str, str]:
-    if candidate_mode == "hybrid":
-        return ARM_ORDER
-    if candidate_mode == "flat_rows":
-        return FLAT_ROW_ARM_ORDER
-    if candidate_mode == "packed_projection":
-        return PACKED_PROJECTION_ARM_ORDER
-    if candidate_mode == "packed_deferred":
-        return PACKED_DEFERRED_ARM_ORDER
-    if candidate_mode == "packed_final_noise":
-        return PACKED_FINAL_NOISE_ARM_ORDER
-    if candidate_mode == "hybrid_packed_deferred":
-        return HYBRID_PACKED_DEFERRED_ARM_ORDER
-    if candidate_mode == "stable_shapes":
-        return STABLE_SHAPES_ARM_ORDER
-    if candidate_mode == "stable_flat_capacity":
-        return STABLE_FLAT_CAPACITY_ARM_ORDER
-    if candidate_mode == "compact_posterior":
-        return COMPACT_POSTERIOR_ARM_ORDER
-    if candidate_mode == "compact_packed_deferred":
-        return COMPACT_PACKED_DEFERRED_ARM_ORDER
-    if candidate_mode == "all_optimized":
-        return ALL_OPTIMIZED_ARM_ORDER
-    if candidate_mode == "all_optimized_stable_shapes":
-        return ALL_OPTIMIZED_STABLE_SHAPES_ARM_ORDER
-    if candidate_mode == "exact_coarse_single_translate":
-        return EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER
-    if candidate_mode == "exact_compact_preprocess":
-        return EXACT_COMPACT_PREPROCESS_ARM_ORDER
-    if candidate_mode == "fused_pair_fine_score":
-        return FUSED_PAIR_FINE_SCORE_ARM_ORDER
-    if candidate_mode == "fused_coarse_projector":
-        return FUSED_COARSE_PROJECTOR_ARM_ORDER
-    raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
+    orders = {
+        "hybrid": ARM_ORDER,
+        "flat_rows": FLAT_ROW_ARM_ORDER,
+        "packed_projection": PACKED_PROJECTION_ARM_ORDER,
+        "packed_deferred": PACKED_DEFERRED_ARM_ORDER,
+        "packed_final_noise": PACKED_FINAL_NOISE_ARM_ORDER,
+        "hybrid_packed_deferred": HYBRID_PACKED_DEFERRED_ARM_ORDER,
+        "stable_shapes": STABLE_SHAPES_ARM_ORDER,
+        "stable_flat_capacity": STABLE_FLAT_CAPACITY_ARM_ORDER,
+        "compact_posterior": COMPACT_POSTERIOR_ARM_ORDER,
+        "compact_packed_deferred": COMPACT_PACKED_DEFERRED_ARM_ORDER,
+        "all_optimized": ALL_OPTIMIZED_ARM_ORDER,
+        "all_optimized_stable_shapes": ALL_OPTIMIZED_STABLE_SHAPES_ARM_ORDER,
+        "exact_coarse_single_translate": EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER,
+        "exact_compact_preprocess": EXACT_COMPACT_PREPROCESS_ARM_ORDER,
+        "fused_pair_fine_score": FUSED_PAIR_FINE_SCORE_ARM_ORDER,
+        "fused_coarse_projector": FUSED_COARSE_PROJECTOR_ARM_ORDER,
+    }
+    if candidate_mode not in orders:
+        raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
+    return orders[candidate_mode]
 
 
 def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, str]:
