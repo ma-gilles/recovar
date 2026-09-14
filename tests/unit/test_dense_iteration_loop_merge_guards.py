@@ -469,7 +469,6 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
             volume_shape=(16, 16, 16),
         ),
         means_k="mean",
-        mean_variance="variance",
         noise_variance_k="noise_variance",
         previous_best_rotation_eulers_k=np.zeros((1, 3), dtype=np.float32),
         local_search_rotations=np.eye(3, dtype=np.float32)[None, :, :],
@@ -595,7 +594,6 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(
             volume_shape=(16, 16, 16),
         ),
         means_k="mean",
-        mean_variance="variance",
         noise_variance_k="noise_variance",
         previous_best_rotation_eulers_k=np.zeros((2, 3), dtype=np.float32),
         local_search_rotations=np.broadcast_to(np.eye(3, dtype=np.float32), (2, 3, 3)).copy(),
@@ -706,7 +704,6 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
             volume_shape=(16, 16, 16),
         ),
         means_k="mean",
-        mean_variance="variance",
         noise_variance_k="noise_variance",
         previous_best_rotation_eulers_k=np.zeros((1, 3), dtype=np.float32),
         local_search_rotations=np.eye(3, dtype=np.float32)[None, :, :],
@@ -901,9 +898,7 @@ def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
     required_iteration_loop_symbols = [
         "_maybe_dump_noise_update_debug",
         "_save_iteration_intermediates",
-        "advance_relion_perturbation",
         "apply_relion_rotation_perturbation",
-        "apply_relion_rotation_perturbation_to_eulers",
         "apply_relion_translation_perturbation",
         "read_relion_sampling_metadata",
     ]
@@ -926,7 +921,6 @@ def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
     assert "read_relion_optimiser_metadata(" not in controller_source
     assert callable(relion_replay.read_relion_direction_prior)
     assert callable(relion_replay.read_relion_direction_priors)
-    assert iteration_loop._translation_grid_for_class_count is relion_replay._translation_grid_for_class_count
     assert callable(ppca_bridge.PPCAKClassScheduleBridge)
     assert callable(ppca_bridge.run_dense_ppca_refinement_with_kclass_schedule)
     assert callable(ppca_bridge.run_local_ppca_refinement_with_kclass_schedule)

@@ -52,7 +52,7 @@ def test_kclass_optional_outputs_preserve_statistics(
     )
     result = local_search_iteration._run_local_search_iteration(
         SimpleNamespace(image_shape=(2, 2), volume_shape=(2, 2, 2)),
-        engine_result.Ft_y, None, None, rotations, rotations,
+        engine_result.Ft_y, None, rotations, rotations,
         healpix_order=0, sigma_rot=1.0, sigma_psi=1.0,
         translations=translations[:1], prior_translations=translations,
         sigma_offset_angstrom=1.0,
@@ -120,7 +120,7 @@ def test_local_sample_capture_does_not_shift_significant_counts(
     translations = np.zeros((2, 2), dtype=np.float32)
     result = local_search_iteration._run_local_search_iteration(
         SimpleNamespace(image_shape=(2, 2), volume_shape=(2, 2, 2)),
-        None, None, None, rotations, rotations,
+        None, None, rotations, rotations,
         healpix_order=0, sigma_rot=1.0, sigma_psi=1.0,
         translations=translations[:1], prior_translations=translations,
         sigma_offset_angstrom=1.0,

@@ -883,7 +883,6 @@ def _score_half_local(
     k: int,
     experiment_dataset,
     means_k,
-    mean_variance,
     noise_variance_k,
     previous_best_rotation_eulers_k,
     local_search_rotations,
@@ -1142,7 +1141,6 @@ def _score_half_local(
         parent_outputs = _run_local_search_iteration(
             experiment_dataset,
             means_k,
-            mean_variance,
             noise_variance_k,
             previous_best_rotation_eulers_k,
             None,
@@ -1281,7 +1279,6 @@ def _score_half_local(
             denominator_outputs = _run_local_search_iteration(
                 experiment_dataset,
                 means_k,
-                mean_variance,
                 noise_variance_k,
                 previous_best_rotation_eulers_k,
                 local_search_rotations,
@@ -1348,7 +1345,6 @@ def _score_half_local(
     local_outputs = _run_local_search_iteration(
         experiment_dataset,
         means_k,
-        mean_variance,
         noise_variance_k,
         previous_best_rotation_eulers_k,
         local_search_rotations,

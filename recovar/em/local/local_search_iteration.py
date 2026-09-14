@@ -57,7 +57,6 @@ class _LocalSearchIterationResult:
 def _run_local_search_iteration(
     experiment_dataset,
     mean,
-    mean_variance,
     noise_variance,
     prior_rotations,
     rotation_grid_rotations,

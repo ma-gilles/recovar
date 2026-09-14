@@ -3060,7 +3060,6 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
             k=0,
             experiment_dataset=dataset,
             means_k=jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-            mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
             noise_variance_k=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             previous_best_rotation_eulers_k=np.zeros((dataset.n_units, 3), dtype=np.float32),
             local_search_rotations=np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 2, axis=0),
@@ -3130,7 +3129,6 @@ def test_score_half_local_forwards_mstep_grid_for_each_class_count(monkeypatch, 
                 if not k_class_enabled
                 else jnp.zeros((n_classes, VOLUME_SIZE), dtype=jnp.complex64)
             ),
-            mean_variance=jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
             noise_variance_k=jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             previous_best_rotation_eulers_k=np.zeros((dataset.n_units, 3), dtype=np.float32),
             local_search_rotations=score_grid,
@@ -5009,7 +5007,6 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
     outputs = local_search_iteration._run_local_search_iteration(
         mock_dataset,
         jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-        jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         prior_rotations,
         rotation_grid_rotations,
@@ -5085,7 +5082,6 @@ def test_run_local_search_iteration_dispatches_aligned_mstep_grid(monkeypatch, r
         local_search_iteration._run_local_search_iteration(
             dataset,
             jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             np.zeros((1, 3), dtype=np.float32),
             score_grid,
@@ -5187,7 +5183,6 @@ def test_run_local_search_iteration_clamps_highres_local_batches(monkeypatch):
     outputs = local_search_iteration._run_local_search_iteration(
         HighresDataset(),
         jnp.zeros(1, dtype=jnp.complex64),
-        jnp.ones(1, dtype=jnp.float32),
         jnp.ones(384 * 384, dtype=jnp.float32),
         np.zeros((2, 3), dtype=np.float32),
         np.broadcast_to(np.eye(3, dtype=np.float32), (1024, 3, 3)).copy(),
@@ -5275,7 +5270,6 @@ def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_de
     local_search_iteration._run_local_search_iteration(
         Dataset256(),
         jnp.zeros(1, dtype=jnp.complex64),
-        jnp.ones(1, dtype=jnp.float32),
         jnp.ones(256 * 129, dtype=jnp.float32),
         np.zeros((2, 3), dtype=np.float32),
         np.broadcast_to(np.eye(3, dtype=np.float32), (local_rotations, 3, 3)).copy(),
@@ -5305,7 +5299,6 @@ def test_run_local_search_iteration_relion_xhalf_uses_windowed_batch_guard_by_de
     local_search_iteration._run_local_search_iteration(
         Dataset256(),
         jnp.zeros(1, dtype=jnp.complex64),
-        jnp.ones(1, dtype=jnp.float32),
         jnp.ones(256 * 129, dtype=jnp.float32),
         np.zeros((2, 3), dtype=np.float32),
         np.broadcast_to(np.eye(3, dtype=np.float32), (local_rotations, 3, 3)).copy(),
@@ -5371,7 +5364,6 @@ def test_run_local_search_iteration_plumbs_score_only_to_exact_engine(monkeypatc
     outputs = local_search_iteration._run_local_search_iteration(
         mock_dataset,
         jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-        jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         np.zeros((2, 3), dtype=np.float32),
         np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)).copy(),
@@ -5451,7 +5443,6 @@ def test_run_local_search_iteration_plumbs_normalization_log_evidence(monkeypatc
     outputs = local_search_iteration._run_local_search_iteration(
         mock_dataset,
         jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-        jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         np.zeros((2, 3), dtype=np.float32),
         np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)).copy(),
@@ -5521,7 +5512,6 @@ def test_run_local_search_iteration_plumbs_stats_use_reconstruction_probs(monkey
     outputs = local_search_iteration._run_local_search_iteration(
         mock_dataset,
         jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-        jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         np.zeros((2, 3), dtype=np.float32),
         np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)).copy(),
@@ -5573,7 +5563,6 @@ def test_run_local_search_iteration_rejects_k_class_score_only(rng):
         local_search_iteration._run_local_search_iteration(
             mock_dataset,
             jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             np.zeros((2, 3), dtype=np.float32),
             np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)).copy(),
@@ -5692,7 +5681,6 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
     outputs = local_search_iteration._run_local_search_iteration(
         mock_dataset,
         jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-        jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         np.zeros((1, 3), dtype=np.float32),
         perturbed_rotations,
@@ -6502,7 +6490,6 @@ def test_local_k_class_identical_means_split_global_posterior(rng):
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=151)
     means = jnp.stack([mean, mean], axis=0)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=159)
     translations = np.zeros((1, 2), dtype=np.float32)
@@ -6574,7 +6561,6 @@ def test_local_k_class_norm_correction_counts_shared_high_shell_once(rng):
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=160)
     means = jnp.stack([mean, mean], axis=0)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=161)
     local_layout = LocalHypothesisLayout(
@@ -6849,7 +6835,6 @@ def test_local_k_class_can_report_noise_support_class_sums(monkeypatch):
 
     dataset = type("Dataset", (), {"n_images": 2, "n_units": 2})()
     means = jnp.zeros((2, 4), dtype=jnp.complex64)
-    mean_variance = jnp.ones((2, 4), dtype=jnp.float32)
     noise_variance = jnp.ones(4, dtype=jnp.float32)
     local_layout = LocalHypothesisLayout(
         n_global_rotations=1,
@@ -6942,7 +6927,6 @@ def test_local_k_class_uses_global_reconstruction_threshold(monkeypatch):
 
     dataset = type("Dataset", (), {"n_images": 1, "n_units": 1})()
     means = jnp.zeros((2, 4), dtype=jnp.complex64)
-    mean_variance = jnp.ones((2, 4), dtype=jnp.float32)
     noise_variance = jnp.ones(4, dtype=jnp.float32)
     local_layout = LocalHypothesisLayout(
         n_global_rotations=1,
@@ -7014,7 +6998,6 @@ def test_local_search_iteration_k_class_returns_class_details(rng):
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=161)
     means = jnp.stack([mean, mean], axis=0)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=169)
     translations = np.zeros((1, 2), dtype=np.float32)
@@ -7034,7 +7017,6 @@ def test_local_search_iteration_k_class_returns_class_details(rng):
     outputs = local_search_iteration._run_local_search_iteration(
         dataset,
         means,
-        mean_variance,
         noise_variance,
         np.zeros((2, 3), dtype=np.float32),
         local_rotations,
@@ -7097,7 +7079,6 @@ def test_local_search_iteration_k_class_keeps_mstep_and_full_class_mass_separate
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=171)
     means = jnp.stack([mean, mean], axis=0)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32)
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     local_rotations = _make_rotations(2, seed=173)
     translations = np.zeros((1, 2), dtype=np.float32)
@@ -7146,7 +7127,6 @@ def test_local_search_iteration_k_class_keeps_mstep_and_full_class_mass_separate
     outputs = local_search_iteration._run_local_search_iteration(
         dataset,
         means,
-        mean_variance,
         noise_variance,
         np.zeros((2, 3), dtype=np.float32),
         local_rotations,
@@ -10716,7 +10696,6 @@ class TestRelionModeSmokeTest:
         def fake_local_search(
             experiment_dataset,
             mean,
-            mean_variance,
             noise_variance,
             prior_rotations,
             rotation_grid_rotations,
@@ -10733,7 +10712,6 @@ class TestRelionModeSmokeTest:
             **kwargs,
         ):
             _ = (
-                mean_variance,
                 noise_variance,
                 rotation_grid_rotations,
                 sigma_rot,
@@ -14107,7 +14085,6 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
-        mean_variance,
         noise_variance,
         prior_rotations,
         rotation_grid_rotations,
@@ -14290,7 +14267,6 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
-        mean_variance,
         noise_variance,
         prior_rotations,
         rotation_grid_rotations,
@@ -14446,7 +14422,6 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
-        mean_variance,
         noise_variance,
         prior_rotations,
         rotation_grid_rotations,
@@ -14579,7 +14554,6 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
-        mean_variance,
         noise_variance,
         prior_rotations,
         rotation_grid_rotations,
@@ -14898,7 +14872,6 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
-        mean_variance,
         noise_variance,
         prior_rotations,
         rotation_grid_rotations,
@@ -15068,7 +15041,6 @@ def test_previous_best_rotations_skip_first_local_dense_bootstrap(
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
-        mean_variance,
         noise_variance,
         prior_rotations,
         rotation_grid_rotations,
@@ -15658,7 +15630,6 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
     def fake_grouped_local_search(
         experiment_dataset,
         mean,
-        mean_variance,
         noise_variance,
         prior_rotations,
         rotation_grid_rotations,
