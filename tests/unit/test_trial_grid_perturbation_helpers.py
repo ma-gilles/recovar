@@ -72,8 +72,8 @@ def test_perturbed_trial_grid_matches_the_separate_relion_calls(dtype):
         dtype=dtype,
     )
     rotations, public_eulers = apply_relion_rotation_perturbation_to_eulers(eulers, 0.25, angsamp, dtype=dtype)
-    _, _, mstep = apply_relion_rotation_perturbation_to_eulers(
-        _canonical_eulers(ORDER), 0.25, angsamp, return_mstep_rotations=True, dtype=dtype
+    mstep, _ = apply_relion_rotation_perturbation_to_eulers(
+        _canonical_eulers(ORDER), 0.25, angsamp, dtype=dtype
     )
     translations = jnp.asarray(apply_relion_translation_perturbation(base_translations, 0.25, 2.0), dtype=dtype)
     for got, want in ((grid.rotations, rotations), (grid.rotation_eulers, public_eulers), (grid.mstep_rotations, mstep)):
@@ -86,11 +86,10 @@ def test_perturbed_trial_grid_matches_the_separate_relion_calls(dtype):
 def test_perturbed_trial_grid_records_call_order(monkeypatch):
     calls = []
 
-    def fake_rot(eulers, rp, angsamp, *, return_mstep_rotations=False, dtype=np.float32):
-        calls.append(("rot", return_mstep_rotations, rp, angsamp, dtype))
+    def fake_rot(eulers, rp, angsamp, *, dtype=np.float32):
+        calls.append(("rot", float(eulers[0, 0]), rp, angsamp, dtype))
         n = np.asarray(eulers).shape[0]
-        out = (np.zeros((n, 3, 3), dtype=dtype), np.asarray(eulers, dtype=dtype))
-        return out + ((np.ones((n, 3, 3), dtype=dtype),) if return_mstep_rotations else ())
+        return np.full((n, 3, 3), eulers[0, 0], dtype=dtype), np.asarray(eulers, dtype=dtype)
 
     def fake_trans(base, rp, step):
         calls.append(("trans", rp, step))
@@ -100,13 +99,13 @@ def test_perturbed_trial_grid_records_call_order(monkeypatch):
     monkeypatch.setattr(sampling_module, "apply_relion_translation_perturbation", fake_trans)
     grid = sampling_module._perturbed_trial_grid(
         rotation_eulers=np.zeros((4, 3)),
-        mstep_source_eulers=np.zeros((4, 3)),
+        mstep_source_eulers=np.ones((4, 3)),
         base_translations=np.zeros((2, 2)),
         translation_step=1.5,
         random_perturbation=0.5,
         angular_sampling_deg=30.0,
         dtype=np.float32,
     )
-    assert calls == [("rot", False, 0.5, 30.0, np.float32), ("rot", True, 0.5, 30.0, np.float32), ("trans", 0.5, 1.5)]
+    assert calls == [("rot", 0.0, 0.5, 30.0, np.float32), ("rot", 1.0, 0.5, 30.0, np.float32), ("trans", 0.5, 1.5)]
     assert grid.mstep_rotations.shape == (4, 3, 3) and float(grid.mstep_rotations[0, 0, 0]) == 1.0
     assert grid.translations.shape == (2, 2) and float(grid.translations[0, 0]) == 0.5

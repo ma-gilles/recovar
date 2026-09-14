@@ -1076,11 +1076,10 @@ def _selected_mstep_rotation_matrices(
         if abs(float(random_perturbation)) > 1e-12:
             raise ValueError("angular_sampling_deg is required when random_perturbation is nonzero")
         angular_sampling_deg = 0.0
-    _, _, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+    mstep_rotations, _ = apply_relion_rotation_perturbation_to_eulers(
         selected_eulers,
         float(random_perturbation),
         float(angular_sampling_deg),
-        return_mstep_rotations=True,
         dtype=dtype,
     )
     return np.asarray(mstep_rotations, dtype=dtype)[inverse]

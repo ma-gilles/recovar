@@ -3376,11 +3376,10 @@ def test_selected_rotation_matrices_match_full_perturbed_grid():
         random_perturbation,
         angular_sampling_deg,
     )
-    _, _, full_mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+    full_mstep_rotations, _ = apply_relion_rotation_perturbation_to_eulers(
         _get_relion_rotation_grid_eulers_float64(healpix_order),
         random_perturbation,
         angular_sampling_deg,
-        return_mstep_rotations=True,
     )
     rotation_ids = np.array([0, 3, 17, rotation_grid_size(healpix_order) - 1], dtype=np.int32)
 
@@ -3414,17 +3413,15 @@ def test_relion_mstep_generation_keeps_source_eulers_float64_until_host_inverse(
     public_eulers = get_relion_rotation_grid_eulers(healpix_order)
     angular_sampling_deg = relion_angular_sampling_deg(healpix_order)
 
-    _, _, exact_mstep = apply_relion_rotation_perturbation_to_eulers(
+    exact_mstep, _ = apply_relion_rotation_perturbation_to_eulers(
         source_eulers,
         0.25,
         angular_sampling_deg,
-        return_mstep_rotations=True,
     )
-    _, _, late_mstep = apply_relion_rotation_perturbation_to_eulers(
+    late_mstep, _ = apply_relion_rotation_perturbation_to_eulers(
         source_eulers.astype(np.float32),
         0.25,
         angular_sampling_deg,
-        return_mstep_rotations=True,
     )
 
     assert source_eulers.dtype == np.float64
@@ -10834,16 +10831,14 @@ class TestRelionModeSmokeTest:
             random_perturbation,
             angular_sampling_deg,
             *,
-            return_mstep_rotations=False,
             dtype=np.float32,
         ):
             _ = (random_perturbation, angular_sampling_deg)
             n_rows = int(np.asarray(eulers).shape[0])
             score = np.repeat(np.eye(3, dtype=dtype)[None], n_rows, axis=0)
             public_eulers = np.asarray(eulers, dtype=dtype)
-            if return_mstep_rotations:
-                mstep = np.repeat((13.0 * np.eye(3, dtype=np.float32))[None], n_rows, axis=0)
-                return score, public_eulers, mstep
+            if np.asarray(eulers).dtype == np.float64:
+                score = np.repeat((13.0 * np.eye(3, dtype=np.float32))[None], n_rows, axis=0)
             return score, public_eulers
 
         def force_converged_local_after_first_iter(*args, **kwargs):
@@ -14409,7 +14404,6 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         random_perturbation,
         angular_sampling_deg,
         *,
-        return_mstep_rotations=False,
         dtype=np.float32,
     ):
         perturb_calls.append(
@@ -14422,10 +14416,9 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         sentinel_rotations = np.zeros((np.asarray(eulers).shape[0], 3, 3), dtype=dtype)
         sentinel_rotations[:, 0, 0] = 7.0
         sentinel_eulers = np.full((np.asarray(eulers).shape[0], 3), 5.0, dtype=dtype)
-        if return_mstep_rotations:
-            sentinel_mstep_rotations = np.zeros_like(sentinel_rotations)
-            sentinel_mstep_rotations[:, 1, 1] = 11.0
-            return sentinel_rotations, sentinel_eulers, sentinel_mstep_rotations
+        if np.asarray(eulers).dtype == np.float64:
+            sentinel_rotations = np.zeros_like(sentinel_rotations)
+            sentinel_rotations[:, 1, 1] = 11.0
         return sentinel_rotations, sentinel_eulers
 
     def fake_r_to_relion(rotations, degrees=True):

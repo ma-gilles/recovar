@@ -272,94 +272,44 @@ def test_relion_mstep_rotation_helper_defaults_to_float32_but_accepts_float64():
     np.testing.assert_allclose(f64_result.astype(np.float32), default_result, rtol=0.0, atol=1e-6)
 
 
-def test_perturbation_optional_mstep_return_keeps_legacy_tuple_and_float64_working_eulers():
-    random_perturbation = -0.04961434006690979
-    legacy_rotations, legacy_eulers = apply_relion_rotation_perturbation_to_eulers(
-        _UNPERTURBED_FINE_EULERS_F64,
-        random_perturbation,
-        7.5,
-    )
-    rotations, eulers, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
-        _UNPERTURBED_FINE_EULERS_F64,
-        random_perturbation,
-        7.5,
-        return_mstep_rotations=True,
-    )
-
-    np.testing.assert_array_equal(rotations.view(np.uint32), legacy_rotations.view(np.uint32))
-    np.testing.assert_array_equal(eulers.view(np.uint32), legacy_eulers.view(np.uint32))
-    np.testing.assert_array_equal(mstep_rotations.view(np.uint32), _RELION_MSTEP_ROTATION_BITS)
-
-    # Reconstructing after the public Euler metadata is cast to float32 loses
-    # the host RFLOAT bits required at RELION's outer-radius boundary.
-    late_mstep_rotations = _relion_mstep_rotations_from_eulers(eulers)
-    assert np.count_nonzero(late_mstep_rotations.view(np.uint32) != _RELION_MSTEP_ROTATION_BITS) == 26
-
-
-def test_unperturbed_optional_mstep_return_is_backward_compatible():
-    legacy = apply_relion_rotation_perturbation_to_eulers(
-        _UNPERTURBED_FINE_EULERS_F64[:1],
-        0.0,
-        7.5,
-    )
-    extended = apply_relion_rotation_perturbation_to_eulers(
-        _UNPERTURBED_FINE_EULERS_F64[:1],
-        0.0,
-        7.5,
-        return_mstep_rotations=True,
-    )
-
-    assert len(legacy) == 2
-    assert len(extended) == 3
-    np.testing.assert_array_equal(extended[0], legacy[0])
-    np.testing.assert_array_equal(extended[1], legacy[1])
-    np.testing.assert_array_equal(
-        extended[2],
-        _relion_mstep_rotations_from_eulers(_UNPERTURBED_FINE_EULERS_F64[:1]),
-    )
-
-
 def test_perturbation_float64_preserves_working_eulers_and_rotations():
-    rotations, eulers, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+    rotations, eulers = apply_relion_rotation_perturbation_to_eulers(
         _UNPERTURBED_FINE_EULERS_F64[:2],
         -0.04961434006690979,
         7.5,
-        return_mstep_rotations=True,
         dtype=np.float64,
     )
 
     assert rotations.dtype == np.float64
     assert eulers.dtype == np.float64
-    assert mstep_rotations.dtype == np.float64
 
 
 def test_perturbed_scorer_uses_captured_host_generated_matrix_bits():
     random_perturbation = np.float64(-0.04961434006690979)
-    rotations, public_eulers, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+    rotations, public_eulers = apply_relion_rotation_perturbation_to_eulers(
         _UNPERTURBED_FINE_EULERS_F64,
         random_perturbation,
         7.5,
-        return_mstep_rotations=True,
     )
 
     np.testing.assert_array_equal(rotations.view(np.uint32), _RELION_MSTEP_ROTATION_BITS)
-    np.testing.assert_array_equal(mstep_rotations.view(np.uint32), _RELION_MSTEP_ROTATION_BITS)
-    np.testing.assert_array_equal(rotations, mstep_rotations)
     assert public_eulers.dtype == np.float32
     np.testing.assert_array_equal(public_eulers, _RELION_FINE_EULERS_F64.astype(np.float32))
 
+    # Casting working RFLOAT Euler angles before reconstruction loses captured bits.
+    late_mstep_rotations = _relion_mstep_rotations_from_eulers(public_eulers)
+    assert np.count_nonzero(late_mstep_rotations.view(np.uint32) != _RELION_MSTEP_ROTATION_BITS) == 26
+
 
 def test_unperturbed_scorer_and_mstep_share_host_generated_path():
-    rotations, _, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+    rotations, _ = apply_relion_rotation_perturbation_to_eulers(
         _UNPERTURBED_FINE_EULERS_F64[:1],
         0.0,
         7.5,
-        return_mstep_rotations=True,
     )
 
     expected = _relion_mstep_rotations_from_eulers(_UNPERTURBED_FINE_EULERS_F64[:1])
     np.testing.assert_array_equal(rotations, expected)
-    np.testing.assert_array_equal(mstep_rotations, expected)
 
 
 def test_relion_global_grid_preserves_source_euler_precision_until_matrix_cast(monkeypatch):

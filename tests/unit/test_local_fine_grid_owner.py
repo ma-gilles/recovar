@@ -59,8 +59,8 @@ def test_fine_grid_is_perturbed_with_exact_mstep_rotations(random_perturbation):
     )
     _, grid_eulers = _fake_grid(ORDER)
     exp_rot, exp_eulers = apply_relion_rotation_perturbation_to_eulers(grid_eulers, random_perturbation, ANGULAR_SAMPLING)
-    _, _, exp_mstep = apply_relion_rotation_perturbation_to_eulers(
-        _canonical_eulers(ORDER), random_perturbation, ANGULAR_SAMPLING, return_mstep_rotations=True
+    exp_mstep, _ = apply_relion_rotation_perturbation_to_eulers(
+        _canonical_eulers(ORDER), random_perturbation, ANGULAR_SAMPLING,
     )
     assert _same(rotations, exp_rot) and _same(eulers, exp_eulers) and _same(mstep, exp_mstep)
     assert rotations.dtype == np.float32 and rotations.shape == (N_ROT, 3, 3)
@@ -73,8 +73,8 @@ def test_pass_without_perturbation_keeps_the_grid_matrices(dtype):
     )
     grid_rot, grid_eulers = _fake_grid(ORDER, dtype=dtype)
     assert _same(rotations, grid_rot) and _same(eulers, grid_eulers)
-    _, _, exp_mstep = apply_relion_rotation_perturbation_to_eulers(
-        _canonical_eulers(ORDER), 0.0, ANGULAR_SAMPLING, return_mstep_rotations=True
+    exp_mstep, _ = apply_relion_rotation_perturbation_to_eulers(
+        _canonical_eulers(ORDER), 0.0, ANGULAR_SAMPLING,
     )
     assert _same(mstep, exp_mstep)
 
@@ -89,8 +89,8 @@ def test_reused_grid_keeps_its_own_mstep_rotations():
 def test_reused_grid_without_mstep_rotations_rebuilds_them_from_source_angles(n_rows):
     eulers = (np.arange(3 * n_rows, dtype=np.float64).reshape(n_rows, 3) / 3.0).astype(np.float32)
     got = sampling_module._local_search_mstep_rotations(None, eulers, ORDER)
-    _, _, expected = apply_relion_rotation_perturbation_to_eulers(
-        sampling_module._relion_mstep_source_eulers(eulers, ORDER), 0.0, ANGULAR_SAMPLING, return_mstep_rotations=True
+    expected, _ = apply_relion_rotation_perturbation_to_eulers(
+        sampling_module._relion_mstep_source_eulers(eulers, ORDER), 0.0, ANGULAR_SAMPLING,
     )
     assert _same(got, expected) and got.shape == (n_rows, 3, 3)
 

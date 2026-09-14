@@ -791,7 +791,6 @@ def apply_relion_rotation_perturbation_to_eulers(
     random_perturbation,
     angular_sampling_deg,
     *,
-    return_mstep_rotations=False,
     dtype: np.dtype = np.float32,
 ):
     """Apply RELION's SamplingPerturbation and return eulers plus matrices.
@@ -809,16 +808,12 @@ def apply_relion_rotation_perturbation_to_eulers(
     a no-op. RELION stores these working Euler angles as RFLOAT, so retaining
     float64 here is also required for a double-precision build.
 
-    When ``return_mstep_rotations`` is true, a third array contains the
-    RECOVAR-frame matrices produced by RELION's separate host-side inverse
-    path for weighted-sum backprojection. The default two-array return remains
-    backward compatible.
+    Scoring and M-step matrices share this host-generated path; callers supply
+    the appropriate source Euler precision before calling.
     """
     eulers = np.asarray(eulers_deg, dtype=np.float64).reshape(-1, 3)
     if abs(float(random_perturbation)) < 1e-12:
         rotations = _relion_mstep_rotations_from_eulers(eulers, dtype=dtype)
-        if return_mstep_rotations:
-            return rotations, eulers.astype(dtype), rotations
         return rotations, eulers.astype(dtype)
 
     myperturb = float(random_perturbation) * float(angular_sampling_deg)
@@ -827,12 +822,6 @@ def apply_relion_rotation_perturbation_to_eulers(
     perturbed_A = np.einsum("nij,jk->nik", A, R_perturb)
     perturbed_eulers = _relion_matrix_to_euler_angles(perturbed_A)
     perturbed_rotations = _relion_mstep_rotations_from_eulers(perturbed_eulers, dtype=dtype)
-    if return_mstep_rotations:
-        return (
-            perturbed_rotations,
-            perturbed_eulers.astype(dtype),
-            perturbed_rotations,
-        )
     return perturbed_rotations, perturbed_eulers.astype(dtype)
 
 
@@ -1244,21 +1233,19 @@ def get_oversampled_rotation_grid_from_samples(
             euler_angles,
             random_perturbation,
             relion_angular_sampling_deg(parent_nside_level, adaptive_oversampling=0),
-            return_mstep_rotations=return_mstep_rotations,
             dtype=dtype,
         )
         matrices = perturbed[0]
-        mstep_rotations = perturbed[2] if return_mstep_rotations else None
+        mstep_rotations = matrices if return_mstep_rotations else None
     elif native_euler_angles is None:
         unperturbed = apply_relion_rotation_perturbation_to_eulers(
             euler_angles,
             0.0,
             0.0,
-            return_mstep_rotations=return_mstep_rotations,
             dtype=dtype,
         )
         matrices = unperturbed[0]
-        mstep_rotations = unperturbed[2] if return_mstep_rotations else None
+        mstep_rotations = matrices if return_mstep_rotations else None
     parent_map = np.repeat(parent_map, psi_factor)
 
     outputs = [matrices, parent_map]
@@ -1426,11 +1413,10 @@ def _perturbed_trial_grid(
         angular_sampling_deg,
         dtype=dtype,
     )
-    _, _, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+    mstep_rotations, _ = apply_relion_rotation_perturbation_to_eulers(
         mstep_source_eulers,
         random_perturbation,
         angular_sampling_deg,
-        return_mstep_rotations=True,
         dtype=dtype,
     )
     translations = jnp.asarray(
@@ -1478,11 +1464,10 @@ def _exact_local_fine_grid(*, healpix_order, angular_sampling_deg, random_pertur
             float(random_perturbation),
             angular_sampling_deg,
         )
-    _, _, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+    mstep_rotations, _ = apply_relion_rotation_perturbation_to_eulers(
         _get_relion_rotation_grid_eulers_float64(healpix_order),
         0.0 if random_perturbation is None else float(random_perturbation),
         angular_sampling_deg,
-        return_mstep_rotations=True,
     )
     return rotations, rotation_eulers, mstep_rotations
 
@@ -1497,11 +1482,10 @@ def _local_search_mstep_rotations(effective_mstep_rotations, rotation_eulers, he
 
     if effective_mstep_rotations is not None:
         return effective_mstep_rotations
-    _, _, mstep_rotations = apply_relion_rotation_perturbation_to_eulers(
+    mstep_rotations, _ = apply_relion_rotation_perturbation_to_eulers(
         _relion_mstep_source_eulers(rotation_eulers, healpix_order),
         0.0,
         relion_angular_sampling_deg(healpix_order, adaptive_oversampling=0),
-        return_mstep_rotations=True,
     )
     return mstep_rotations
 
