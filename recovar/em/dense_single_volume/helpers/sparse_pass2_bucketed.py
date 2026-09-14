@@ -228,6 +228,63 @@ def _fused_kclass_score_gather_device_fraction() -> float:
             "the budget is multiplied by the number of live gathers"
         )
     return value
+_AUTO_FUSED_KCLASS_SCORE_GATHER_FREE_FRACTION = 0.25
+_FUSED_KCLASS_CAPACITY_FREE_FRACTION_ENV = (
+    "RECOVAR_SPARSE_KCLASS_CAPACITY_FREE_FRACTION"
+)
+
+
+def _capacity_free_fraction() -> float:
+    """Share of free device memory the capacity-derived hypothesis budget may use.
+
+    The measured headroom is much smaller than a naive reading suggests. At 100k/256
+    K=4 the card reports 79.6 GiB total but only 46.5 GiB free and 36.3 GiB free to the
+    JAX allocator by the time pass 2 plans, so the default 0.25 gives a budget only 1.14
+    times the flat rule's (job 13844994). Sweeping this fraction is therefore the lever,
+    not the rule, and it needs to be an environment override so a sweep costs no commits.
+
+    Raising it is not free: the budget is the total live bytes for the score gathers, so
+    a large fraction of an already half-full card risks the out-of-memory failure the
+    16.30 GiB compact-pair diff2 gather produced at this size before. The ceiling here
+    is deliberately below 1.0 for that reason.
+    """
+
+    raw = os.environ.get(_FUSED_KCLASS_CAPACITY_FREE_FRACTION_ENV)
+    if raw is None or not raw.strip():
+        return _AUTO_FUSED_KCLASS_SCORE_GATHER_FREE_FRACTION
+    value = float(raw)
+    if not (0.0 < value <= 0.6):
+        raise ValueError(
+            f"{_FUSED_KCLASS_CAPACITY_FREE_FRACTION_ENV} must be in (0, 0.6], got {raw!r}; "
+            "the budget is the total live bytes for the score gathers"
+        )
+    return value
+_FUSED_KCLASS_CAPACITY_DERIVED_HYPOTHESES_ENV = (
+    "RECOVAR_SPARSE_KCLASS_CAPACITY_DERIVED_HYPOTHESES"
+)
+
+
+def capacity_derived_hypotheses_enabled() -> bool:
+    """Size the hypothesis budget from memory that is actually free, not a flat share.
+
+    The default budget is a fixed 0.100 of TOTAL device memory. That ignores how much
+    of the card is already resident, so it is conservative on a large idle GPU and can
+    still be optimistic on a loaded one. Because the budget divided by
+    (classes x pair bucket size) is what caps images per chunk, and every per-chunk host
+    cost scales with the chunk count, being conservative here is expensive: at 100k/256
+    K=4 the loop ran 4713 chunks an iteration with about 20 images each.
+
+    With this flag the budget is a share of free memory: the smaller of the device's own
+    free reading and the JAX allocator's, which are the two readings
+    ``_exact_raw_diff2_cache_limit_bytes`` already combines in this module at the same
+    0.25 share. A cap on total memory was considered and left out because free memory
+    never exceeds total, so any total share at or above 0.25 could never bind. When
+    either free reading is unavailable the flat rule is used unchanged.
+    """
+
+    return parse_env_flag(_FUSED_KCLASS_CAPACITY_DERIVED_HYPOTHESES_ENV, default=False)
+
+
 _AUTO_FUSED_KCLASS_LIVE_COMPLEX_GATHERS = 2
 _AUTO_TRANSLATION_TILE_DEVICE_FRACTION = 0.020
 _AUTO_EXTERNAL_NORMALIZATION_TRANSLATION_TILE_DEVICE_FRACTION = 0.014
@@ -1798,6 +1855,9 @@ def _auto_hypotheses_per_microbatch(
     n_score_pixels: int | None,
     device_memory_bytes: int | None,
     score_complex_dtype=np.complex64,
+    capacity_derived_hypotheses: bool = False,
+    free_device_memory_bytes: int | None = None,
+    allocator_free_memory_bytes: int | None = None,
 ) -> int | None:
     if device_memory_bytes is None or n_score_pixels is None or int(n_score_pixels) <= 0:
         return None
@@ -1807,11 +1867,24 @@ def _auto_hypotheses_per_microbatch(
         if fused_k_class_count is None or int(fused_k_class_count) <= 0:
             raise ValueError("fused_k_class_count must be positive for fused K-class planning")
         bytes_per_score_pixel = _dtype_itemsize(score_complex_dtype)
+        budget_bytes = float(device_memory_bytes) * _fused_kclass_score_gather_device_fraction()
+        if (
+            capacity_derived_hypotheses
+            and free_device_memory_bytes is not None
+            and allocator_free_memory_bytes is not None
+            and int(free_device_memory_bytes) > 0
+            and int(allocator_free_memory_bytes) > 0
+        ):
+            budget_bytes = float(
+                min(
+                    int(float(free_device_memory_bytes) * _capacity_free_fraction()),
+                    int(float(allocator_free_memory_bytes) * _capacity_free_fraction()),
+                )
+            )
         return max(
             1,
             int(
-                float(device_memory_bytes)
-                * _fused_kclass_score_gather_device_fraction()
+                budget_bytes
                 * int(fused_k_class_count)
                 / (
                     int(n_score_pixels)
@@ -1862,6 +1935,9 @@ def _max_hypotheses_per_microbatch_for_pass(
             return override
         return int(auto) if auto is not None else _DEFAULT_SCORE_ONLY_MAX_HYPOTHESES_PER_MICROBATCH
     override = _optional_positive_int_env(_MAX_HYPOTHESES_ENV)
+    capacity_derived = bool(fused_k_class) and capacity_derived_hypotheses_enabled()
+    free_bytes = _device_free_memory_bytes() if capacity_derived else None
+    allocator_free_bytes = _jax_allocator_free_memory_bytes() if capacity_derived else None
     auto = _auto_hypotheses_per_microbatch(
         score_only=False,
         fused_k_class=fused_k_class,
@@ -1869,7 +1945,29 @@ def _max_hypotheses_per_microbatch_for_pass(
         n_score_pixels=n_score_pixels,
         device_memory_bytes=device_memory_bytes,
         score_complex_dtype=score_complex_dtype,
+        capacity_derived_hypotheses=capacity_derived,
+        free_device_memory_bytes=free_bytes,
+        allocator_free_memory_bytes=allocator_free_bytes,
     )
+    if capacity_derived:
+        # The chosen budget decides the chunk count, so a run must be able to say which
+        # reading bound it rather than leaving the cap unexplained in the log.
+        logger.info(
+            "Sparse fused K-class hypothesis budget: capacity-derived cap=%s "
+            "(flat rule would give %s) total=%s free=%s allocator_free=%s",
+            auto,
+            _auto_hypotheses_per_microbatch(
+                score_only=False,
+                fused_k_class=fused_k_class,
+                fused_k_class_count=fused_k_class_count,
+                n_score_pixels=n_score_pixels,
+                device_memory_bytes=device_memory_bytes,
+                score_complex_dtype=score_complex_dtype,
+            ),
+            device_memory_bytes,
+            free_bytes,
+            allocator_free_bytes,
+        )
     if override is not None:
         if auto is not None and int(override) < int(auto):
             logger.warning(

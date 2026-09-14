@@ -1173,6 +1173,97 @@ def test_sparse_pass2_tail_bucket_coalescing_respects_inflation_cap():
     np.testing.assert_array_equal(coalesced, bucket_sizes)
 
 
+def test_capacity_derived_hypothesis_budget_follows_free_memory(monkeypatch):
+    """RECOVAR_SPARSE_KCLASS_CAPACITY_DERIVED_HYPOTHESES sizes the fused K-class
+    hypothesis budget from a share of free memory, the smaller of the device reading and
+    the allocator reading, instead of a flat share of total memory.
+
+    The budget divided by (classes x pair bucket size) is what caps images per chunk, and
+    every per-chunk host cost scales with the chunk count, so this is the knob on the
+    chunk count. It must rise when the card is idle, fall when the card is busy, and fall
+    back to the flat rule when either free reading is missing."""
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    device_memory = 80 * 1024**3
+    common = dict(
+        score_only=False,
+        fused_k_class=True,
+        fused_k_class_count=4,
+        n_score_pixels=652,
+        device_memory_bytes=device_memory,
+    )
+    flat = bucketed_mod._auto_hypotheses_per_microbatch(**common)
+
+    idle = bucketed_mod._auto_hypotheses_per_microbatch(
+        **common,
+        capacity_derived_hypotheses=True,
+        free_device_memory_bytes=int(0.9 * device_memory),
+        allocator_free_memory_bytes=int(0.9 * device_memory),
+    )
+    assert idle > flat, "an almost empty 80 GiB card must allow a larger budget than 0.100 of total"
+
+    busy = bucketed_mod._auto_hypotheses_per_microbatch(
+        **common,
+        capacity_derived_hypotheses=True,
+        free_device_memory_bytes=int(0.05 * device_memory),
+        allocator_free_memory_bytes=int(0.9 * device_memory),
+    )
+    assert busy < flat, "a nearly full card must reduce the budget below the flat rule"
+
+    allocator_bound = bucketed_mod._auto_hypotheses_per_microbatch(
+        **common,
+        capacity_derived_hypotheses=True,
+        free_device_memory_bytes=int(0.9 * device_memory),
+        allocator_free_memory_bytes=int(0.05 * device_memory),
+    )
+    assert allocator_bound == busy, "the allocator reading must bind exactly as the device reading does"
+
+    # The smaller free reading sets the budget exactly.
+    assert idle == max(
+        1,
+        int(
+            int(0.9 * device_memory * bucketed_mod._AUTO_FUSED_KCLASS_SCORE_GATHER_FREE_FRACTION)
+            * 4
+            / (652 * 8 * bucketed_mod._AUTO_FUSED_KCLASS_LIVE_COMPLEX_GATHERS)
+        ),
+    )
+
+    for missing in ({"free_device_memory_bytes": None}, {"allocator_free_memory_bytes": None}):
+        kwargs = dict(
+            capacity_derived_hypotheses=True,
+            free_device_memory_bytes=int(0.9 * device_memory),
+            allocator_free_memory_bytes=int(0.9 * device_memory),
+        )
+        kwargs.update(missing)
+        assert bucketed_mod._auto_hypotheses_per_microbatch(**common, **kwargs) == flat, (
+            "a missing free-memory reading must fall back to the flat rule unchanged"
+        )
+
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_CAPACITY_DERIVED_HYPOTHESES", raising=False)
+    assert not bucketed_mod.capacity_derived_hypotheses_enabled(), "the flag must default off"
+
+    # The free-memory share is the lever, not the rule: the measured headroom at
+    # 100k/256 gave only a 1.14x budget at the 0.25 default (job 13844994), so a sweep
+    # has to be possible without a commit per value. The ceiling is below 1.0 because
+    # the budget is the total live bytes for the score gathers.
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_CAPACITY_FREE_FRACTION", raising=False)
+    assert bucketed_mod._capacity_free_fraction() == pytest.approx(0.25)
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_CAPACITY_FREE_FRACTION", "0.4")
+    assert bucketed_mod._capacity_free_fraction() == pytest.approx(0.4)
+    swept = bucketed_mod._auto_hypotheses_per_microbatch(
+        **common,
+        capacity_derived_hypotheses=True,
+        free_device_memory_bytes=int(0.9 * device_memory),
+        allocator_free_memory_bytes=int(0.9 * device_memory),
+    )
+    assert swept > idle, "a larger free share must raise the budget"
+    for bad in ("0", "-0.1", "0.9", "1.0"):
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_CAPACITY_FREE_FRACTION", bad)
+        with pytest.raises(ValueError, match="must be in"):
+            bucketed_mod._capacity_free_fraction()
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_CAPACITY_FREE_FRACTION", raising=False)
+
+
 def test_score_only_sparse_pass_uses_larger_default_bucket_budget(monkeypatch):
     monkeypatch.delenv("RECOVAR_SPARSE_PASS2_MAX_HYPOTHESES", raising=False)
     monkeypatch.delenv("RECOVAR_SPARSE_PASS2_SCORE_ONLY_MAX_HYPOTHESES", raising=False)
