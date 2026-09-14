@@ -32,26 +32,24 @@ from typing import Any, Iterator
 import numpy as np
 
 SCHEMA = "recovar.vdam_hybrid_same_state_transition.v3"
-ARM_ORDER = ("direct_1", "hybrid_1", "hybrid_2", "direct_2")
-FLAT_ROW_ARM_ORDER = ("direct_1", "flat_rows_1", "flat_rows_2", "direct_2")
-PACKED_PROJECTION_ARM_ORDER = (
-    "direct_1",
-    "packed_projection_1",
-    "packed_projection_2",
-    "direct_2",
-)
-PACKED_DEFERRED_ARM_ORDER = (
-    "direct_1",
-    "packed_deferred_1",
-    "packed_deferred_2",
-    "direct_2",
-)
-PACKED_FINAL_NOISE_ARM_ORDER = (
-    "direct_1",
-    "packed_final_noise_1",
-    "packed_final_noise_2",
-    "direct_2",
-)
+_ARM_BACKENDS = {
+    'hybrid': ('direct', 'hybrid'),
+    'flat_rows': ('direct', 'flat_rows'),
+    'packed_projection': ('direct', 'packed_projection'),
+    'packed_deferred': ('direct', 'packed_deferred'),
+    'packed_final_noise': ('direct', 'packed_final_noise'),
+    'hybrid_packed_deferred': ('direct', 'hybrid_packed_deferred'),
+    'stable_shapes': ('stable_off', 'stable_on'),
+    'stable_flat_capacity': ('stable_flat_off', 'stable_flat_on'),
+    'compact_posterior': ('direct', 'compact_posterior'),
+    'compact_packed_deferred': ('direct', 'compact_packed_deferred'),
+    'all_optimized': ('direct', 'all_optimized'),
+    'all_optimized_stable_shapes': ('stable_all_off', 'stable_all_on'),
+    'exact_coarse_single_translate': ('single_translate_off', 'single_translate_on'),
+    'exact_compact_preprocess': ('compact_preprocess_off', 'compact_preprocess_on'),
+    'fused_pair_fine_score': ('pair_fine_off', 'pair_fine_on'),
+    'fused_coarse_projector': ('fused_coarse_off', 'fused_coarse_on'),
+}
 PACKED_FINAL_NOISE_INCREMENTAL_ABBA_ARM_ORDER = (
     "abba_packed_deferred_1",
     "abba_packed_final_noise_1",
@@ -91,72 +89,6 @@ HYBRID_IMAGE_BATCH_ARM_ORDER = (
 HYBRID_IMAGE_BATCH_GATE_ARM_ORDER = (
     "direct_oracle",
     *HYBRID_IMAGE_BATCH_ARM_ORDER,
-)
-HYBRID_PACKED_DEFERRED_ARM_ORDER = (
-    "direct_1",
-    "hybrid_packed_deferred_1",
-    "hybrid_packed_deferred_2",
-    "direct_2",
-)
-STABLE_SHAPES_ARM_ORDER = (
-    "stable_off_1",
-    "stable_on_1",
-    "stable_on_2",
-    "stable_off_2",
-)
-STABLE_FLAT_CAPACITY_ARM_ORDER = (
-    "stable_flat_off_1",
-    "stable_flat_on_1",
-    "stable_flat_on_2",
-    "stable_flat_off_2",
-)
-COMPACT_POSTERIOR_ARM_ORDER = (
-    "direct_1",
-    "compact_posterior_1",
-    "compact_posterior_2",
-    "direct_2",
-)
-COMPACT_PACKED_DEFERRED_ARM_ORDER = (
-    "direct_1",
-    "compact_packed_deferred_1",
-    "compact_packed_deferred_2",
-    "direct_2",
-)
-ALL_OPTIMIZED_ARM_ORDER = (
-    "direct_1",
-    "all_optimized_1",
-    "all_optimized_2",
-    "direct_2",
-)
-ALL_OPTIMIZED_STABLE_SHAPES_ARM_ORDER = (
-    "stable_all_off_1",
-    "stable_all_on_1",
-    "stable_all_on_2",
-    "stable_all_off_2",
-)
-EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER = (
-    "single_translate_off_1",
-    "single_translate_on_1",
-    "single_translate_on_2",
-    "single_translate_off_2",
-)
-EXACT_COMPACT_PREPROCESS_ARM_ORDER = (
-    "compact_preprocess_off_1",
-    "compact_preprocess_on_1",
-    "compact_preprocess_on_2",
-    "compact_preprocess_off_2",
-)
-FUSED_PAIR_FINE_SCORE_ARM_ORDER = (
-    "pair_fine_off_1",
-    "pair_fine_on_1",
-    "pair_fine_on_2",
-    "pair_fine_off_2",
-)
-FUSED_COARSE_PROJECTOR_ARM_ORDER = (
-    "fused_coarse_off_1",
-    "fused_coarse_on_1",
-    "fused_coarse_on_2",
-    "fused_coarse_off_2",
 )
 HYBRID_ENVIRONMENT = (
     "RECOVAR_COARSE_GAUSSIAN_GEMM_HYBRID",
@@ -215,24 +147,7 @@ HYBRID_IMAGE_BATCH_CONTROL_BATCH_COUNT = 2
 HYBRID_IMAGE_BATCH_CANDIDATE_BATCH_COUNT = 1
 HYBRID_IMAGE_BATCH_CERTIFICATE_CHUNK_ROWS = 4_608
 HYBRID_IMAGE_BATCH_TRANSLATION_COUNT = 49
-CANDIDATE_MODES = (
-    "hybrid",
-    "flat_rows",
-    "packed_projection",
-    "packed_deferred",
-    "packed_final_noise",
-    "hybrid_packed_deferred",
-    "stable_shapes",
-    "stable_flat_capacity",
-    "compact_posterior",
-    "compact_packed_deferred",
-    "all_optimized",
-    "all_optimized_stable_shapes",
-    "exact_coarse_single_translate",
-    "exact_compact_preprocess",
-    "fused_pair_fine_score",
-    "fused_coarse_projector",
-)
+CANDIDATE_MODES = tuple(_ARM_BACKENDS)
 META_ARRAY_KEYS = (
     "selected_particle_ids",
     "best_pose_rotation_ids",
@@ -354,27 +269,10 @@ def _resolve_native_checkpoint_inputs(
 
 
 def _arm_order(candidate_mode: str) -> tuple[str, str, str, str]:
-    orders = {
-        "hybrid": ARM_ORDER,
-        "flat_rows": FLAT_ROW_ARM_ORDER,
-        "packed_projection": PACKED_PROJECTION_ARM_ORDER,
-        "packed_deferred": PACKED_DEFERRED_ARM_ORDER,
-        "packed_final_noise": PACKED_FINAL_NOISE_ARM_ORDER,
-        "hybrid_packed_deferred": HYBRID_PACKED_DEFERRED_ARM_ORDER,
-        "stable_shapes": STABLE_SHAPES_ARM_ORDER,
-        "stable_flat_capacity": STABLE_FLAT_CAPACITY_ARM_ORDER,
-        "compact_posterior": COMPACT_POSTERIOR_ARM_ORDER,
-        "compact_packed_deferred": COMPACT_PACKED_DEFERRED_ARM_ORDER,
-        "all_optimized": ALL_OPTIMIZED_ARM_ORDER,
-        "all_optimized_stable_shapes": ALL_OPTIMIZED_STABLE_SHAPES_ARM_ORDER,
-        "exact_coarse_single_translate": EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER,
-        "exact_compact_preprocess": EXACT_COMPACT_PREPROCESS_ARM_ORDER,
-        "fused_pair_fine_score": FUSED_PAIR_FINE_SCORE_ARM_ORDER,
-        "fused_coarse_projector": FUSED_COARSE_PROJECTOR_ARM_ORDER,
-    }
-    if candidate_mode not in orders:
+    if candidate_mode not in _ARM_BACKENDS:
         raise ValueError(f"unsupported same-state candidate mode: {candidate_mode}")
-    return orders[candidate_mode]
+    control, candidate = _ARM_BACKENDS[candidate_mode]
+    return f"{control}_1", f"{candidate}_1", f"{candidate}_2", f"{control}_2"
 
 
 def _candidate_environment(candidate_mode: str, *, enabled: bool) -> dict[str, str]:
@@ -3423,7 +3321,7 @@ def _exact_coarse_single_translate_runtime_contract(
     for backend, token in (("skip_off", "_off_"), ("skip_on", "_on_")):
         labels = tuple(
             label
-            for label in EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER
+            for label in _arm_order('exact_coarse_single_translate')
             if token in label
         )
         measurements: dict[str, list[float]] = {}
@@ -3496,7 +3394,7 @@ def _exact_compact_preprocess_runtime_contract(
     ):
         labels = tuple(
             label
-            for label in EXACT_COMPACT_PREPROCESS_ARM_ORDER
+            for label in _arm_order('exact_compact_preprocess')
             if token in label
         )
         measurements: dict[str, list[float]] = {}
@@ -3883,7 +3781,7 @@ def _fused_pair_fine_runtime_contract(
     timed_cache_stable = True
     for backend, token in (("pair_off", "_off_"), ("pair_on", "_on_")):
         labels = tuple(
-            label for label in FUSED_PAIR_FINE_SCORE_ARM_ORDER if token in label
+            label for label in _arm_order('fused_pair_fine_score') if token in label
         )
         measurements: dict[str, list[float]] = {}
         for metric in metrics:
@@ -3942,7 +3840,7 @@ def _fused_pair_fine_runtime_contract(
             "fractional_change": candidate / control - 1.0 if control else None,
             "speedup": control / candidate if candidate else None,
         }
-    final_snapshot = arms[FUSED_PAIR_FINE_SCORE_ARM_ORDER[-1]][
+    final_snapshot = arms[_arm_order('fused_pair_fine_score')[-1]][
         "persistent_cache"
     ]["after"]
     result["pair_on_vs_pair_off"] = changes
@@ -4268,7 +4166,7 @@ def main(argv: list[str] | None = None) -> int:
             gc.collect()
         arm_specs = tuple(
             (label, None)
-            for label in EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER
+            for label in _arm_order('exact_coarse_single_translate')
         )
     elif args.candidate_mode == "exact_compact_preprocess":
         for backend, enabled in (
@@ -4309,7 +4207,7 @@ def main(argv: list[str] | None = None) -> int:
             gc.collect()
         arm_specs = tuple(
             (label, None)
-            for label in EXACT_COMPACT_PREPROCESS_ARM_ORDER
+            for label in _arm_order('exact_compact_preprocess')
         )
     elif args.candidate_mode == "fused_pair_fine_score":
         for backend, enabled in (("pair_off", False), ("pair_on", True)):
@@ -4348,7 +4246,7 @@ def main(argv: list[str] | None = None) -> int:
             gc.collect()
         arm_specs = tuple(
             (label, None)
-            for label in FUSED_PAIR_FINE_SCORE_ARM_ORDER
+            for label in _arm_order('fused_pair_fine_score')
         )
     elif args.candidate_mode == "fused_coarse_projector":
         for backend, enabled in (("fused_off", False), ("fused_on", True)):
@@ -4386,7 +4284,7 @@ def main(argv: list[str] | None = None) -> int:
             gc.collect()
         arm_specs = tuple(
             (label, None)
-            for label in FUSED_COARSE_PROJECTOR_ARM_ORDER
+            for label in _arm_order('fused_coarse_projector')
         )
     else:
         legacy_arm_order = _arm_order(args.candidate_mode)

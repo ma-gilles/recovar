@@ -138,49 +138,32 @@ def test_fused_posterior_dump_keeps_arm_label_when_score_label_is_also_set(
     )
 
 
+@pytest.mark.parametrize(
+    "mode,expected",
+    [
+        ('hybrid', ('direct_1', 'hybrid_1', 'hybrid_2', 'direct_2')),
+        ('flat_rows', ('direct_1', 'flat_rows_1', 'flat_rows_2', 'direct_2')),
+        ('packed_projection', ('direct_1', 'packed_projection_1', 'packed_projection_2', 'direct_2')),
+        ('packed_deferred', ('direct_1', 'packed_deferred_1', 'packed_deferred_2', 'direct_2')),
+        ('packed_final_noise', ('direct_1', 'packed_final_noise_1', 'packed_final_noise_2', 'direct_2')),
+        ('hybrid_packed_deferred', ('direct_1', 'hybrid_packed_deferred_1', 'hybrid_packed_deferred_2', 'direct_2')),
+        ('stable_shapes', ('stable_off_1', 'stable_on_1', 'stable_on_2', 'stable_off_2')),
+        ('stable_flat_capacity', ('stable_flat_off_1', 'stable_flat_on_1', 'stable_flat_on_2', 'stable_flat_off_2')),
+        ('compact_posterior', ('direct_1', 'compact_posterior_1', 'compact_posterior_2', 'direct_2')),
+        ('compact_packed_deferred', ('direct_1', 'compact_packed_deferred_1', 'compact_packed_deferred_2', 'direct_2')),
+        ('all_optimized', ('direct_1', 'all_optimized_1', 'all_optimized_2', 'direct_2')),
+        ('all_optimized_stable_shapes', ('stable_all_off_1', 'stable_all_on_1', 'stable_all_on_2', 'stable_all_off_2')),
+        ('exact_coarse_single_translate', ('single_translate_off_1', 'single_translate_on_1', 'single_translate_on_2', 'single_translate_off_2')),
+        ('exact_compact_preprocess', ('compact_preprocess_off_1', 'compact_preprocess_on_1', 'compact_preprocess_on_2', 'compact_preprocess_off_2')),
+        ('fused_pair_fine_score', ('pair_fine_off_1', 'pair_fine_on_1', 'pair_fine_on_2', 'pair_fine_off_2')),
+        ('fused_coarse_projector', ('fused_coarse_off_1', 'fused_coarse_on_1', 'fused_coarse_on_2', 'fused_coarse_off_2')),
+    ],
+)
+def test_same_state_arm_order(mode, expected):
+    assert runner._arm_order(mode) == expected
+
+
 def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
-    assert runner._arm_order("hybrid") == runner.ARM_ORDER
-    assert runner._arm_order("flat_rows") == runner.FLAT_ROW_ARM_ORDER
-    assert runner._arm_order("packed_projection") == runner.PACKED_PROJECTION_ARM_ORDER
-    assert runner._arm_order("packed_deferred") == runner.PACKED_DEFERRED_ARM_ORDER
-    assert (
-        runner._arm_order("packed_final_noise")
-        == runner.PACKED_FINAL_NOISE_ARM_ORDER
-    )
-    assert (
-        runner._arm_order("hybrid_packed_deferred")
-        == runner.HYBRID_PACKED_DEFERRED_ARM_ORDER
-    )
-    assert runner._arm_order("stable_shapes") == runner.STABLE_SHAPES_ARM_ORDER
-    assert (
-        runner._arm_order("stable_flat_capacity")
-        == runner.STABLE_FLAT_CAPACITY_ARM_ORDER
-    )
-    assert (
-        runner._arm_order("compact_posterior")
-        == runner.COMPACT_POSTERIOR_ARM_ORDER
-    )
-    assert (
-        runner._arm_order("compact_packed_deferred")
-        == runner.COMPACT_PACKED_DEFERRED_ARM_ORDER
-    )
-    assert runner._arm_order("all_optimized") == runner.ALL_OPTIMIZED_ARM_ORDER
-    assert (
-        runner._arm_order("exact_coarse_single_translate")
-        == runner.EXACT_COARSE_SINGLE_TRANSLATE_ARM_ORDER
-    )
-    assert (
-        runner._arm_order("exact_compact_preprocess")
-        == runner.EXACT_COMPACT_PREPROCESS_ARM_ORDER
-    )
-    assert (
-        runner._arm_order("fused_pair_fine_score")
-        == runner.FUSED_PAIR_FINE_SCORE_ARM_ORDER
-    )
-    assert (
-        runner._arm_order("fused_coarse_projector")
-        == runner.FUSED_COARSE_PROJECTOR_ARM_ORDER
-    )
 
     control = runner._candidate_environment("flat_rows", enabled=False)
     flat_rows = runner._candidate_environment("flat_rows", enabled=True)
@@ -504,7 +487,7 @@ def test_same_state_candidate_modes_keep_control_and_candidate_scoped() -> None:
 
 def test_all_optimized_stable_pair_changes_only_the_two_stable_abis() -> None:
     mode = "all_optimized_stable_shapes"
-    assert runner._arm_order(mode) == runner.ALL_OPTIMIZED_STABLE_SHAPES_ARM_ORDER
+    assert runner._arm_order(mode) == runner._arm_order('all_optimized_stable_shapes')
     assert runner._arm_candidate_enabled("stable_all_off_1", mode) is False
     assert runner._arm_candidate_enabled("stable_all_on_1", mode) is True
 
@@ -1675,7 +1658,7 @@ def _science_pair(normalized_l2: float) -> dict:
 
 
 def test_compact_science_contract_requires_exact_decisions_and_reports_envelope() -> None:
-    order = runner.COMPACT_POSTERIOR_ARM_ORDER
+    order = runner._arm_order('compact_posterior')
     pair_values = {
         "direct_1__vs__direct_2": 2.0e-7,
         "compact_posterior_1__vs__compact_posterior_2": 3.0e-7,
@@ -1700,7 +1683,7 @@ def test_compact_science_contract_requires_exact_decisions_and_reports_envelope(
 
 
 def test_compact_science_contract_localizes_exact_and_repeat_envelope_failure() -> None:
-    order = runner.COMPACT_POSTERIOR_ARM_ORDER
+    order = runner._arm_order('compact_posterior')
     pair_values = {
         "direct_1__vs__direct_2": 1.0e-7,
         "compact_posterior_1__vs__compact_posterior_2": 1.0e-7,
@@ -1835,7 +1818,7 @@ def test_hybrid_image_batch_runtime_contract_compares_four_warm_arms_each() -> N
 
 def test_exact_compact_preprocess_runtime_contract_is_balanced_and_isolated() -> None:
     arms = {}
-    for index, label in enumerate(runner.EXACT_COMPACT_PREPROCESS_ARM_ORDER):
+    for index, label in enumerate(runner._arm_order('exact_compact_preprocess')):
         enabled = "_on_" in label
         requested = runner._candidate_environment(
             "exact_compact_preprocess",
@@ -1880,7 +1863,7 @@ def _cache_state(count: int) -> dict:
 
 def test_fused_pair_fine_runtime_contract_is_warmed_balanced_and_isolated() -> None:
     arms = {}
-    for index, label in enumerate(runner.FUSED_PAIR_FINE_SCORE_ARM_ORDER):
+    for index, label in enumerate(runner._arm_order('fused_pair_fine_score')):
         enabled = "_on_" in label
         requested = runner._candidate_environment(
             "fused_pair_fine_score",
@@ -2167,7 +2150,7 @@ def test_same_state_runner_seals_abba_and_exact_snapshot_contract() -> None:
     source = SCRIPT.read_text()
     sbatch = RUNNER.read_text()
 
-    assert runner.ARM_ORDER == ("direct_1", "hybrid_1", "hybrid_2", "direct_2")
+    assert runner._arm_order('hybrid') == ("direct_1", "hybrid_1", "hybrid_2", "direct_2")
     assert "copy.deepcopy(checkpoint[\"result\"].state)" in source
     assert "copy.deepcopy(checkpoint[\"particle_state\"])" in source
     assert "copy.deepcopy(checkpoint[\"sampling_state\"])" in source
