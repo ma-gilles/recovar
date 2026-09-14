@@ -94,7 +94,7 @@ def _stub_estep_factory(ori_size: int):
                 weight = rng.uniform(10.0, 100.0, size=(Nz, Ny, Nx_h))
                 accumulators.append(VdamAccumulator(data=data, weight=weight, class_idx=k, halfset_idx=h))
         meta = {
-            "pmax_mean": float(rng.uniform(0.1, 0.3)),
+            "max_posterior_per_image": np.full(len(particle_ids), rng.uniform(0.1, 0.3), dtype=np.float32),
             "nr_significant_mean": int(rng.integers(10, 200)),
             "iter": state.iter,
         }

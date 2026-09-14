@@ -109,7 +109,6 @@ def update_probabilities_from_estep_meta(
     class_sums = _posterior_sums_from_meta(meta, "class_posterior_sums")
     if class_sums is None:
         return state
-    class_sums = np.asarray(class_sums, dtype=np.float64)
     if class_sums.shape != (state.K,):
         raise ValueError(f"class_posterior_sums must have shape ({state.K},), got {class_sums.shape}")
     if not np.all(np.isfinite(class_sums)) or np.any(class_sums < 0.0):
@@ -129,7 +128,6 @@ def update_probabilities_from_estep_meta(
 
     direction_sums = _posterior_sums_from_meta(meta, "class_direction_posterior_sums")
     if direction_sums is not None and state.pdf_direction is not None:
-        direction_sums = np.asarray(direction_sums, dtype=np.float64)
         if direction_sums.ndim != 2 or direction_sums.shape[0] != state.K:
             raise ValueError(
                 f"class_direction_posterior_sums must have shape ({state.K}, n_directions), got {direction_sums.shape}"
@@ -184,8 +182,7 @@ def _update_particle_state_from_estep_meta(
     N = particle_state.translation_offsets.shape[0]
     if np.any(ids < 0) or np.any(ids >= N):
         raise ValueError("selected_particle_ids contains entries outside the particle state table")
-    if particle_state.visited is None or np.asarray(particle_state.visited).shape != (N,):
-        particle_state.visited = np.zeros(N, dtype=bool)
+    particle_state.visited = _ensure_field(particle_state.visited, (N,), bool)
     particle_state.visited[ids] = True
 
     if (pose := meta.get("pose_assignments")) is not None:

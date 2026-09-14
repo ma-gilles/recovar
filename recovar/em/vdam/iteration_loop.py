@@ -206,8 +206,6 @@ def _ave_pmax_from_meta(meta: dict) -> float | None:
                 return average
             return float(np.mean(arr, dtype=np.float64))
 
-    if "pmax_mean" in meta:
-        return float(meta["pmax_mean"])
     return None
 
 
