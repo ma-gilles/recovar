@@ -22,6 +22,7 @@ from pathlib import Path
 import numpy as np
 
 from recovar.em.diagnostics.gt_metrics import DEFAULT_GT_ALIGN_HEALPIX_ORDER, DEFAULT_GT_ALIGN_MAX_SHELL
+from recovar.em.helpers.iteration_history import add_significant_count_artifacts
 from recovar.em.relion.initial_noise import (
     read_relion_single_optics_sigma2_noise,
     relion_mpi_process_start_scoring_noise_pair,
@@ -248,32 +249,6 @@ def retain_group_scale_update_state(
     return bool(diagnostic_retain_terminal_state) or not (
         int(max_iter) == 1 and bool(skip_final_iteration)
     )
-
-
-def add_significant_count_artifacts(save_dict, significant_counts, half_indices, n_images):
-    """Save parity support counts in explicit half and source-image order."""
-    half_order_indices = np.concatenate(
-        [np.asarray(indices, dtype=np.int64) for indices in half_indices],
-    )
-    for iteration, counts in enumerate(significant_counts):
-        if counts is None:
-            continue
-        if isinstance(counts, (list, tuple)):
-            present = [np.asarray(value) for value in counts if value is not None]
-            if not present:
-                continue
-            counts_half_order = np.concatenate(present, axis=0)
-        else:
-            counts_half_order = np.asarray(counts)
-        flat_counts = counts_half_order.reshape(-1)
-        legacy_key = f"sig_counts_iter_{iteration:03d}"
-        save_dict[legacy_key] = counts_half_order
-        save_dict[f"sig_counts_half_order_iter_{iteration:03d}"] = counts_half_order
-        if flat_counts.shape[0] != half_order_indices.shape[0]:
-            continue
-        counts_by_image = np.full(int(n_images), -1, dtype=flat_counts.dtype)
-        counts_by_image[half_order_indices] = flat_counts
-        save_dict[f"sig_counts_by_image_iter_{iteration:03d}"] = counts_by_image
 
 
 def particle_half_indices(

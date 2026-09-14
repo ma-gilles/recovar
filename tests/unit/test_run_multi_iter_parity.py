@@ -8,13 +8,13 @@ import pytest
 import starfile
 
 from recovar.em.diagnostics.relion_replay import _validate_bpref_particle_order_scope
+from recovar.em.helpers.iteration_history import add_significant_count_artifacts
 from recovar.em.refinement.iteration_loop import _fresh_k1_spectrum_norm_default
 from scripts import diff_relion_recovar_per_iter as parity_diff
 from scripts.postprocess_multi_iter_gt import resolve_intermediates_dir
 from scripts.run_multi_iter_parity import (
     _normalized_fsc_auc,
     _read_relion_scheduling_average_pmax,
-    add_significant_count_artifacts,
     apply_iteration_normalization_factor_overrides,
     build_gt_postprocess_command,
     filter_fresh_initial_reference,

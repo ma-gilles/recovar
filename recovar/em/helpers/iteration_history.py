@@ -9,6 +9,28 @@ from dataclasses import dataclass, field
 import numpy as np
 
 
+def add_significant_count_artifacts(save_dict, significant_counts, half_indices, n_images):
+    """Save significant-count history in both half and original image order."""
+    half_order_indices = np.concatenate(
+        [np.asarray(indices, dtype=np.int64) for indices in half_indices],
+    )
+    for iteration, counts in enumerate(significant_counts):
+        if counts is None:
+            continue
+        counts_half_order = np.asarray(counts)
+        # Keep the legacy key value/shape/dtype-compatible: it has always
+        # stored the concatenated half-1, half-2 refinement-loop order.
+        save_dict[f"sig_counts_iter_{iteration:03d}"] = counts_half_order
+        save_dict[f"sig_counts_half_order_iter_{iteration:03d}"] = counts_half_order
+        flat_counts = counts_half_order.reshape(-1)
+        if flat_counts.shape[0] != half_order_indices.shape[0]:
+            continue
+        counts_by_image = np.full(int(n_images), -1, dtype=flat_counts.dtype)
+        counts_by_image[half_order_indices] = flat_counts
+        save_dict[f"sig_counts_by_image_iter_{iteration:03d}"] = counts_by_image
+
+
+
 @dataclass(frozen=True)
 class RefinementHistory:
     """Accumulates per-iteration trajectories for one RELION refinement run."""

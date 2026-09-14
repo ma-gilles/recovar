@@ -6,12 +6,12 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from recovar.em.helpers.iteration_history import add_significant_count_artifacts
 from recovar.em.sampling import (
     advance_relion_perturbation_from_seed,
     relion_sampling_perturbation_for_iteration,
 )
 from scripts.run_full_refinement import (
-    _add_significant_count_artifacts,
     _configure_relion_firstiter_controls,
     _effective_perturb_seed,
     _explicit_relion_optimiser_for_seed,
@@ -330,7 +330,7 @@ def test_significant_count_artifacts_preserve_legacy_half_order_and_add_image_or
     counts_half_order = np.asarray([20, 0, 40, 10, 30], dtype=np.int32)
     artifacts = {}
 
-    _add_significant_count_artifacts(
+    add_significant_count_artifacts(
         artifacts,
         [counts_half_order, None],
         half_indices,
