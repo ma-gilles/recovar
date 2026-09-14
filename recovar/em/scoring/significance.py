@@ -2899,36 +2899,28 @@ def _compute_k_class_significance_batched(
                 shifted_half, batch_norm, ctf2_half_score, ctf2_over_nv_half = (
                     cc_preprocess_result
                 )
-        elif use_relion_numpy_preprocess and not relion_cuda_preprocess:
-            preprocess_result = _preprocess_batch_relion_numpy(
-                batch_data,
-                ctf_params,
-                batch_size,
-                return_unshifted_score_weighted=coarse_gaussian_sincosf_enabled,
-            )
-            if coarse_gaussian_sincosf_enabled:
-                (
-                    shifted_half,
-                    batch_norm,
-                    ctf2_over_nv_half,
-                    coarse_gaussian_unshifted_score_weighted,
-                ) = preprocess_result
-            else:
-                shifted_half, batch_norm, ctf2_over_nv_half = preprocess_result
         else:
-            if exact_coarse_assembly_profile_enabled:
-                generic_score_preprocess_count += 1
-            preprocess_result = _preprocess_batch(
-                experiment_dataset,
-                batch_data,
-                ctf_params,
-                noise_variance_half,
-                translations,
-                config,
-                score_with_masked_images,
-                relion_preprocess_kwargs=relion_preprocess_kwargs,
-                return_unshifted_score_weighted=coarse_gaussian_sincosf_enabled,
-            )
+            if use_relion_numpy_preprocess and not relion_cuda_preprocess:
+                preprocess_result = _preprocess_batch_relion_numpy(
+                    batch_data,
+                    ctf_params,
+                    batch_size,
+                    return_unshifted_score_weighted=coarse_gaussian_sincosf_enabled,
+                )
+            else:
+                if exact_coarse_assembly_profile_enabled:
+                    generic_score_preprocess_count += 1
+                preprocess_result = _preprocess_batch(
+                    experiment_dataset,
+                    batch_data,
+                    ctf_params,
+                    noise_variance_half,
+                    translations,
+                    config,
+                    score_with_masked_images,
+                    relion_preprocess_kwargs=relion_preprocess_kwargs,
+                    return_unshifted_score_weighted=coarse_gaussian_sincosf_enabled,
+                )
             if coarse_gaussian_sincosf_enabled:
                 (
                     shifted_half,
