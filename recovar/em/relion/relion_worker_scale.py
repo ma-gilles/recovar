@@ -962,7 +962,6 @@ def relion_class3d_follower_owners_from_schedule(
     schedule: RelionDispatchSchedule,
     *,
     particle_ids_by_image,
-    optics_group_ids_by_image,
     random_seed: int,
     relion_iteration: int,
 ) -> np.ndarray:

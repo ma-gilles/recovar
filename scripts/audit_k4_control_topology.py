@@ -322,7 +322,6 @@ def audit(
                 relion_class3d_follower_owners_from_schedule(
                     schedule,
                     particle_ids_by_image=particle_ids_by_recovar_row[half1],
-                    optics_group_ids_by_image=np.zeros(n_images, dtype=np.int64),
                     random_seed=schedule.random_seed,
                     relion_iteration=iteration,
                 )

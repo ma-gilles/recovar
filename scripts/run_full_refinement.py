@@ -3695,7 +3695,6 @@ def main():
                 owners_half1 = relion_class3d_follower_owners_from_schedule(
                     relion_dispatch_schedule,
                     particle_ids_by_image=native_group_layout.particle_ids_per_half[0],
-                    optics_group_ids_by_image=native_group_layout.optics_group_ids_per_half[0],
                     random_seed=int(args.seed),
                     relion_iteration=relion_iteration,
                 )

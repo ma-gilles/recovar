@@ -195,19 +195,16 @@ def test_captured_schedule_maps_dynamic_owners_to_recovar_image_order():
         source="unit capture",
     )
     image_particle_ids = np.arange(n_particles, dtype=np.int64)
-    optics_ids = np.zeros(n_particles, dtype=np.int64)
 
     iter1 = relion_class3d_follower_owners_from_schedule(
         schedule,
         particle_ids_by_image=image_particle_ids,
-        optics_group_ids_by_image=optics_ids,
         random_seed=2802,
         relion_iteration=1,
     )
     iter2 = relion_class3d_follower_owners_from_schedule(
         schedule,
         particle_ids_by_image=image_particle_ids,
-        optics_group_ids_by_image=optics_ids,
         random_seed=2802,
         relion_iteration=2,
     )
@@ -246,7 +243,6 @@ def test_dispatch_schedule_npz_loads_and_fails_closed_on_seed_mismatch(tmp_path)
         relion_class3d_follower_owners_from_schedule(
             schedule,
             particle_ids_by_image=np.arange(4),
-            optics_group_ids_by_image=np.zeros(4, dtype=np.int64),
             random_seed=10,
             relion_iteration=1,
         )
