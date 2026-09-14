@@ -15,7 +15,7 @@ import numpy as np
 
 from recovar.em.diagnostics import bpref_diagnostics
 from recovar.em.local.local_layout import LocalBucketSpec
-from recovar.em.sparse_pass2 import sparse_pass2_bucketed
+from recovar.em.sparse_pass2 import sparse_pass2_posterior
 
 
 def _exact_local_bpref_capture_static_kwargs(
@@ -146,7 +146,7 @@ def _exact_local_bpref_reconstruction_probs_for_capture(
     if not use_relion_f32_fine_posterior:
         return jnp.where(reconstruction_sample_mask, generic_probs, 0.0)
     reconstruction_probs, exact_mask, *_diagnostics = (
-        sparse_pass2_bucketed._relion_f32_fine_reconstruction_probs(
+        sparse_pass2_posterior._relion_f32_fine_reconstruction_probs(
             scores,
             adaptive_fraction=float(adaptive_fraction),
         )
