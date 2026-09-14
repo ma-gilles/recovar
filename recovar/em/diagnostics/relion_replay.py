@@ -17,7 +17,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.helpers.convergence import healpix_angular_step
-from recovar.em.helpers.env_flags import parse_env_flag_or_false
+from recovar.em.helpers.env_flags import parse_env_flag_or_false, parse_env_true_flag
 from recovar.em.helpers.orientation_priors import (
     class_weights_from_direction_prior,
     infer_direction_prior_healpix_order,
@@ -53,8 +53,6 @@ logger = logging.getLogger(__name__)
 
 _DEBUG_REPLAY_RELION_REFERENCES_ENV = "RECOVAR_DEBUG_REPLAY_RELION_REFERENCES"
 _DEBUG_REPLAY_RELION_REFERENCES_ITERATION_ENV = "RECOVAR_DEBUG_REPLAY_RELION_REFERENCES_ITERATION"
-# Reference replay rejects unknown tokens; the permissive diagnostic parser does not.
-_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 
 
 _KCLASS_REPLAY_TAU2_ENV = "RECOVAR_KCLASS_REPLAY_TAU2"
@@ -326,7 +324,7 @@ def _validate_bpref_particle_order_scope(
 def _debug_replay_relion_references_enabled(iteration_number: int) -> bool:
     """Return whether this scoring iteration should use RELION half-map references."""
 
-    if os.environ.get(_DEBUG_REPLAY_RELION_REFERENCES_ENV, "").strip().lower() not in _TRUE_ENV_VALUES:
+    if not parse_env_true_flag(_DEBUG_REPLAY_RELION_REFERENCES_ENV):
         return False
     requested = os.environ.get(_DEBUG_REPLAY_RELION_REFERENCES_ITERATION_ENV)
     if requested is None or requested.strip() == "":

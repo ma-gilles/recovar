@@ -8371,7 +8371,7 @@ def test_local_score_debug_recon_projection_materialization_is_bucket_scoped():
 def test_local_fused_posterior_debug_requests_scores_only_with_explicit_flag():
     src = inspect.getsource(run_local_em_exact)
     assert "debug_fused_posterior_dump_scores = bool(" in src
-    assert 'and _env_flag("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES")' in src
+    assert 'and parse_env_true_flag("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES")' in src
     debug_scores_block = src[
         src.index("return_big_jit_debug_scores = bool(") :
         src.index("return_big_jit_debug_operands = bool(")

@@ -36,7 +36,6 @@ from recovar.em.dense.score_outputs import (
 )
 from recovar.em.dense.scoring_policy import (
     _DENSE_EM_STATIC_KWARGS,
-    _TRUE_ENV_VALUES,
     PADDING_FACTOR,
     PROJECTION_PADDING_FACTOR,
     _dense_global_scoring_dtype,
@@ -107,6 +106,7 @@ from recovar.em.helpers.convergence import (
     update_refinement_state,
 )
 from recovar.em.helpers.dtype_policy import _local_search_precision_flags
+from recovar.em.helpers.env_flags import parse_env_true_flag
 from recovar.em.helpers.expected_accuracy import (
     Half1AccuracyInputs,
     _expected_accuracy_class_ids,
@@ -3605,12 +3605,7 @@ def _run_relion_iteration_loop(
         mean_signal_variance_per_half = tau2_update_details_per_half = None
         noise_stats_per_half = noise_stats_per_half_per_class = None
         gc.collect()
-        if os.environ.get("RECOVAR_RELION_CLEAR_JAX_CACHES_BETWEEN_ITERS", "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }:
+        if parse_env_true_flag("RECOVAR_RELION_CLEAR_JAX_CACHES_BETWEEN_ITERS"):
             jax.clear_caches()
 
         if state.has_converged and not schedule.force_max_iter_after_convergence:
@@ -3708,22 +3703,15 @@ def _run_relion_iteration_loop(
     # that half's own reference map, then join the weighted sums into one final
     # reconstruction.
     final_join_means = [means[0], means[1]]
-    if (
-        not k_class_enabled
-        and os.environ.get(_FINAL_ALL_DATA_USE_MERGED_REFERENCE_ENV, "").strip().lower() in _TRUE_ENV_VALUES
-    ):
+    if not k_class_enabled and parse_env_true_flag(_FINAL_ALL_DATA_USE_MERGED_REFERENCE_ENV):
         final_merged_reference, _ = _merged_mean_from_halves(means)
         final_join_means = [final_merged_reference, final_merged_reference]
         logger.info(
             "Diagnostic %s=1: final all-data K=1 E-step uses merged reference for both halves",
             _FINAL_ALL_DATA_USE_MERGED_REFERENCE_ENV,
         )
-    final_replay_forced = (
-        os.environ.get(_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE_ENV, "").strip().lower() in _TRUE_ENV_VALUES
-    )
-    final_replay_disabled = (
-        os.environ.get(_FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE_ENV, "").strip().lower() in _TRUE_ENV_VALUES
-    )
+    final_replay_forced = parse_env_true_flag(_FINAL_ALL_DATA_REPLAY_LAST_NUMBERED_STATE_ENV)
+    final_replay_disabled = parse_env_true_flag(_FINAL_ALL_DATA_DISABLE_REPLAY_LAST_NUMBERED_STATE_ENV)
     final_replay_has_overrides = replay.replay_iteration_overrides is not None and len(replay.replay_iteration_overrides) > 0
     final_replay_has_numbered_overrides = _has_numbered_replay_iteration_overrides(
         replay.replay_iteration_overrides

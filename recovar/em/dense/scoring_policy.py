@@ -12,7 +12,7 @@ import os
 import jax
 import numpy as np
 
-from recovar.em.helpers.env_flags import parse_env_flag_or_false
+from recovar.em.helpers.env_flags import parse_env_flag_or_false, parse_env_true_flag
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +224,7 @@ def _k1_relion_x_half_mstep_enabled() -> bool:
 def _local_adaptive_pass2_full_parent_enabled() -> bool:
     """Return whether K=1 adaptive local pass-2 expands all parent samples."""
 
-    if os.environ.get(_LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV, "").strip().lower() in _TRUE_ENV_VALUES:
+    if parse_env_true_flag(_LOCAL_ADAPTIVE_PASS2_DISABLE_FULL_PARENT_ENV):
         return False
     value = os.environ.get(_LOCAL_ADAPTIVE_PASS2_FULL_PARENT_ENV)
     if value is None or value.strip() == "":

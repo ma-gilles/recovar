@@ -6,6 +6,11 @@ import logging
 import os
 
 
+def parse_env_true_flag(name: str) -> bool:
+    """Enable recognized true tokens; absent or unrecognized values stay disabled."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def parse_env_flag_or_false(name: str, *, logger: logging.Logger) -> bool:
     """Read a recognized boolean token; invalid values warn and stay disabled.
 

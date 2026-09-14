@@ -25,7 +25,7 @@ from typing import Optional
 
 import numpy as np
 
-from recovar.em.helpers.env_flags import parse_env_float_or_default, parse_env_int_or_default
+from recovar.em.helpers.env_flags import parse_env_float_or_default, parse_env_int_or_default, parse_env_true_flag
 
 logger = logging.getLogger(__name__)
 
@@ -1020,10 +1020,6 @@ def update_angular_sampling(state: RefinementState) -> RefinementState:
     return refine_angular_sampling(state)
 
 
-def _env_flag_enabled(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
-
-
 def _env_bool(name: str, default: bool) -> bool:
     value = os.environ.get(name)
     if value is None or value.strip() == "":
@@ -1053,9 +1049,9 @@ def _approx_acc_rot_policy_for_convergence(
     can opt into the historical convergence gate with
     RECOVAR_EM_USE_APPROX_ACC_ROT_FOR_CONVERGENCE=1.
     """
-    if _env_flag_enabled(_APPROX_ACC_ROT_CONVERGENCE_ENV):
+    if parse_env_true_flag(_APPROX_ACC_ROT_CONVERGENCE_ENV):
         return True, "forced-by-env"
-    if _env_flag_enabled(_APPROX_ACC_ROT_CONVERGENCE_DISABLE_ENV):
+    if parse_env_true_flag(_APPROX_ACC_ROT_CONVERGENCE_DISABLE_ENV):
         return False, "disabled-by-env"
     if state.do_local_search:
         return False, "diagnostic-only-local-search"
@@ -1090,7 +1086,7 @@ def _low_pmax_refinement_guard_blocks(state: RefinementState) -> bool:
     post-local angular refinement when the posterior remains diffuse
     (low ave_Pmax) and the FSC-derived resolution has already stalled.
     """
-    if not _env_flag_enabled(_LOW_PMAX_REFINE_GUARD_ENV):
+    if not parse_env_true_flag(_LOW_PMAX_REFINE_GUARD_ENV):
         return False
     require_local_search = _env_bool(_LOW_PMAX_REFINE_REQUIRE_LOCAL_ENV, True)
     if require_local_search and not state.do_local_search:

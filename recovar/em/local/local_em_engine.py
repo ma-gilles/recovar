@@ -39,7 +39,7 @@ from recovar.em.helpers.adjoint import adjoint_slice_volume_maybe_windowed as _a
 from recovar.em.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.helpers.deterministic_reduce import add_segment_sum
 from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
-from recovar.em.helpers.env_flags import parse_env_binary_flag, parse_env_nonnegative_int
+from recovar.em.helpers.env_flags import parse_env_binary_flag, parse_env_nonnegative_int, parse_env_true_flag
 from recovar.em.helpers.fourier_window import (
     DEFAULT_STABLE_FOURIER_WINDOW_QUANTUM,
     make_stable_fourier_window_shape_plan,
@@ -238,17 +238,12 @@ LOCAL_SCORE_DUMP_FORCE_SPLIT_ENV = "RECOVAR_LOCAL_SCORE_DUMP_FORCE_SPLIT"
 LOCAL_SCORE_DUMP_OPERANDS_ENV = "RECOVAR_LOCAL_SCORE_DUMP_OPERANDS"
 LOCAL_SCORE_DUMP_TARGET_ONLY_ENV = "RECOVAR_LOCAL_SCORE_DUMP_TARGET_ONLY"
 EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS_ENV = "RECOVAR_EXACT_LOCAL_SPARSE_ADJOINT_TARGET_ROWS"
-_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 # Disabled by default: on the 50k/256 local-search target this cache made the
 # iteration slower by precomputing more spectra than the bucket schedule reuses.
 # Upper bound for the extra M-step tensors materialized by the sparse big-JIT
 # hybrid path. This path still packs rows before backprojection; the cap only
 # guards the temporary fused summed/ctf tensor outputs.
 EXACT_LOCAL_BIG_JIT_MIN_SIGNIFICANT_ROW_FRACTION = 0.25
-
-
-def _env_flag(name: str) -> bool:
-    return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
 
 
 def run_local_em_exact(
@@ -673,7 +668,7 @@ def run_local_em_exact(
     )
     debug_fused_posterior_dump_scores = bool(
         debug_fused_posterior_dump_filter_matches
-        and _env_flag("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES")
+        and parse_env_true_flag("RECOVAR_LOCAL_FUSED_POSTERIOR_DUMP_SCORES")
     )
     debug_noise_dump_filter_matches = (
         debug_noise_dump_dir is not None
@@ -688,11 +683,11 @@ def run_local_em_exact(
     )
     debug_score_dump_operands = bool(
         debug_score_dump_filter_matches
-        and _env_flag(LOCAL_SCORE_DUMP_OPERANDS_ENV)
+        and parse_env_true_flag(LOCAL_SCORE_DUMP_OPERANDS_ENV)
     )
     debug_score_dump_force_split = bool(
         debug_score_dump_filter_matches
-        and _env_flag(LOCAL_SCORE_DUMP_FORCE_SPLIT_ENV)
+        and parse_env_true_flag(LOCAL_SCORE_DUMP_FORCE_SPLIT_ENV)
     )
     debug_score_dump_big_jit = bool(debug_score_dump_filter_matches and not debug_score_dump_force_split)
     config = ForwardModelConfig.from_dataset(
@@ -1165,7 +1160,7 @@ def run_local_em_exact(
         # dump target is configured makes the diagnostic change refinement
         # results.  Keep target-only execution as an explicit opt-in for
         # standalone diagnostics.
-        and _env_flag(LOCAL_SCORE_DUMP_TARGET_ONLY_ENV)
+        and parse_env_true_flag(LOCAL_SCORE_DUMP_TARGET_ONLY_ENV)
     )
     debug_target_only_original_bucket_count = len(bucket_specs)
     debug_target_only_original_image_count = int(
@@ -1690,7 +1685,7 @@ def run_local_em_exact(
         )
         force_deferred_big_jit_backprojection = bool(
             defer_packed_vdam_enabled
-            or _env_flag(EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV)
+            or parse_env_true_flag(EXACT_LOCAL_BIG_JIT_DEFER_PACKED_MSTEP_ENV)
         )
         deferred_big_jit_backprojection = (
             can_defer_big_jit_backprojection
@@ -3216,10 +3211,10 @@ def run_local_em_exact(
                     vdam_replay._relion_vdam_serial_rotation_replay()
                     or vdam_replay._relion_vdam_captured_block_serial_replay()
                 )
-                fused_serial_rotations = _env_flag(
+                fused_serial_rotations = parse_env_true_flag(
                     EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_ROTATIONS_ENV
                 )
-                launch_serial_rotations = _env_flag(
+                launch_serial_rotations = parse_env_true_flag(
                     EXACT_LOCAL_SOURCE_BPREF_LAUNCH_SERIAL_ROTATIONS_ENV
                 )
                 if fused_serial_rotations and launch_serial_rotations:
@@ -3245,7 +3240,7 @@ def run_local_em_exact(
                     debug_iteration=debug_iteration
                 )
                 particle_chunk_cap = _source_faithful_bpref_particle_chunk_cap()
-                fused_serial_particles = _env_flag(
+                fused_serial_particles = parse_env_true_flag(
                     EXACT_LOCAL_SOURCE_BPREF_FUSED_SERIAL_PARTICLES_ENV
                 )
                 if (fused_serial_rotations or launch_serial_rotations) and (
@@ -4244,7 +4239,7 @@ def run_local_em_exact(
             and not debug_score_dump_bucket_matches
             and not bpref_contribution_capture_active
         )
-        defer_packed_mstep_requested = _env_flag(EXACT_LOCAL_DEFER_PACKED_MSTEP_ENV)
+        defer_packed_mstep_requested = parse_env_true_flag(EXACT_LOCAL_DEFER_PACKED_MSTEP_ENV)
         threshold_for_bucket = (
             None
             if reconstruction_probability_threshold_np is None

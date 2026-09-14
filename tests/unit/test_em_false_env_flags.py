@@ -4,7 +4,12 @@ import logging
 
 import pytest
 
-from recovar.em.helpers.env_flags import parse_env_binary_flag, parse_env_flag, parse_env_flag_or_false
+from recovar.em.helpers.env_flags import (
+    parse_env_binary_flag,
+    parse_env_flag,
+    parse_env_flag_or_false,
+    parse_env_true_flag,
+)
 
 pytestmark = pytest.mark.unit
 NAME = "RECOVAR_TEST_FALSE_FLAG"
@@ -22,6 +27,7 @@ def test_known_tokens_and_absence_are_silent(monkeypatch, caplog, value, expecte
         monkeypatch.delenv(NAME, raising=False)
     else:
         monkeypatch.setenv(NAME, value)
+    assert parse_env_true_flag(NAME) is expected
     assert parse_env_flag_or_false(NAME, logger=LOG) is expected
     assert not caplog.records
 
@@ -29,6 +35,8 @@ def test_known_tokens_and_absence_are_silent(monkeypatch, caplog, value, expecte
 @pytest.mark.parametrize("value", ["unexpected", "2", "false true", "none"])
 def test_invalid_flag_preserves_caller_warning(monkeypatch, caplog, value):
     monkeypatch.setenv(NAME, value)
+    assert parse_env_true_flag(NAME) is False
+    assert not caplog.records
     assert parse_env_flag_or_false(NAME, logger=LOG) is False
     assert len(caplog.records) == 1
     record = caplog.records[0]
