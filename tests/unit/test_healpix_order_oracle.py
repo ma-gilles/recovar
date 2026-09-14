@@ -117,13 +117,13 @@ def test_refinement_entry_passes_validated_options_to_loop(monkeypatch, use_defa
         schedule=RefinementSchedule(max_iter=3, init_healpix_order=3),
         adaptive=AdaptiveOptions(relion_healpix_orders=[3, 3, 4]),
     )
-    inputs = [object() for _ in range(6)]
+    inputs = [object() for _ in range(5)]
     assert iteration_loop.refine_single_volume(*inputs, options=options) is sentinel
     assert len(received) == 1
     validated = received[0]["options"]
     assert validated.adaptive.relion_healpix_orders == (None if use_defaults else (3, 3, 4))
     for name, value in zip(
-        ("experiment_datasets", "init_volume", "init_noise_variance", "init_mean_variance", "rotations", "translations"),
+        ("experiment_datasets", "init_volume", "init_noise_variance", "init_mean_variance", "translations"),
         inputs,
     ):
         assert received[0][name] is value
@@ -138,4 +138,4 @@ def test_invalid_sampling_schedule_never_starts_refinement(monkeypatch):
     monkeypatch.setattr(iteration_loop, "_run_relion_iteration_loop", unexpected_loop)
     options = RefinementOptions(adaptive=AdaptiveOptions(relion_current_sizes=[]))
     with pytest.raises(ValueError, match="relion_current_sizes must be non-empty"):
-        iteration_loop.refine_single_volume(*([None] * 6), options=options)
+        iteration_loop.refine_single_volume(*([None] * 5), options=options)

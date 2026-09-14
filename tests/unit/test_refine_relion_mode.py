@@ -1167,7 +1167,6 @@ def test_final_all_data_replay_ignores_cold_start_only_overrides(overrides, expe
 def test_final_all_data_runs_with_cold_start_only_override(
     half_datasets,
     init_volume,
-    rotations,
     translations,
     monkeypatch,
 ):
@@ -1189,7 +1188,6 @@ def test_final_all_data_runs_with_cold_start_only_override(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        rotations,
         translations,
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -1207,7 +1205,6 @@ def test_final_all_data_runs_with_cold_start_only_override(
 def test_last_numbered_state_does_not_trigger_post_cap_final_all_data(
     half_datasets,
     init_volume,
-    rotations,
     translations,
     monkeypatch,
 ):
@@ -1233,7 +1230,6 @@ def test_last_numbered_state_does_not_trigger_post_cap_final_all_data(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        rotations,
         translations,
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -9817,7 +9813,7 @@ class TestRelionModeSmokeTest:
                 half_datasets, init_volume,
                 jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
                 jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-                rotations, translations,
+                 translations,
                 options=RefinementOptions(
                     disc_type="linear_interp",
                     schedule=RefinementSchedule(
@@ -9841,7 +9837,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -9895,7 +9890,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -10261,7 +10255,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
     ):
         """RELION-parity refinement completes 2 iterations on a tiny dataset."""
@@ -10270,7 +10263,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -10304,7 +10296,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
     ):
         """RELION does not run final all-data iteration just because max_iter ended."""
@@ -10313,7 +10304,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -10331,7 +10321,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -10355,7 +10344,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -10376,7 +10364,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -10440,7 +10427,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -10479,7 +10465,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -10544,7 +10529,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -10653,7 +10637,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -10678,7 +10661,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -10713,7 +10695,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -10739,7 +10720,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -10771,7 +10751,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -10798,7 +10777,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -10981,7 +10959,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -11019,7 +10996,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -11042,7 +11018,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -11067,7 +11042,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -11180,7 +11154,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -11208,7 +11181,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -11298,7 +11270,6 @@ class TestRelionModeSmokeTest:
                 init_volume,
                 jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
                 jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-                rotations,
                 translations,
                 options=RefinementOptions(
                     disc_type="linear_interp",
@@ -11330,7 +11301,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
     ):
         """RELION mode produces finite volumes and valid assignments."""
@@ -11339,7 +11309,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -11367,7 +11336,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
     ):
         """Dense non-adaptive RELION loop supports an explicit class axis."""
@@ -11376,7 +11344,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -11419,7 +11386,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
     ):
         """ave_Pmax should use half 1's engine posterior maxima, as RELION MPI does."""
@@ -11472,7 +11438,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             init_noise,
             init_tau,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -11529,7 +11494,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            _make_rotations(20, seed=123),
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -12903,7 +12867,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
     ):
         """Convergence state is a RefinementState with correct fields."""
@@ -12912,7 +12875,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -12939,7 +12901,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -12962,7 +12923,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -12984,7 +12944,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -13027,7 +12986,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -13053,7 +13011,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -13102,7 +13059,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -13254,7 +13210,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         tmp_path,
     ):
@@ -13266,7 +13221,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -13290,7 +13244,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         tmp_path,
     ):
@@ -13302,7 +13255,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -13331,7 +13283,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -13346,7 +13297,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -13367,7 +13317,6 @@ class TestRelionModeSmokeTest:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
     ):
         """RELION-specific trajectories have correct lengths."""
@@ -13376,7 +13325,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -13444,7 +13392,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations_many,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -13510,7 +13457,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             np.stack([half1_noise, half2_noise]),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations_many,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -13664,7 +13610,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations_many,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -13715,7 +13660,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations_many,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -13864,7 +13808,6 @@ class TestRelionModeSmokeTest:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            _make_rotations(20, seed=334),
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -13915,7 +13858,6 @@ class TestRelionDefault:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -13941,7 +13883,6 @@ class TestRelionDefault:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -13962,7 +13903,6 @@ class TestRelionDefault:
         self,
         half_datasets,
         init_volume,
-        rotations,
         translations,
         monkeypatch,
     ):
@@ -13997,7 +13937,6 @@ class TestRelionDefault:
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
             translations,
             options=opts,
         )
@@ -14331,7 +14270,6 @@ def test_local_search_uses_lazy_parent_expanded_fine_rotation_grid_when_oversamp
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=99),
         translations,
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -14528,7 +14466,6 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=111),
         translations,
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -14669,7 +14606,6 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=123),
         translations,
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -14798,7 +14734,6 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=123),
         translations,
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -14893,7 +14828,6 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=222),
         translations,
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -14978,7 +14912,6 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=226),
         translations,
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -15133,7 +15066,6 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=123),
         translations,
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -15298,7 +15230,6 @@ def test_previous_best_rotations_skip_first_local_dense_bootstrap(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(rotation_grid_size(4), seed=rotation_seed),
         translations,
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -15365,7 +15296,6 @@ def test_relion_mode_writes_absolute_translations_from_previous_offset(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(1, seed=123),
         translations,
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -15513,7 +15443,6 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones((n_classes, VOLUME_SIZE), dtype=jnp.float32),
-        _make_rotations(1, seed=123),
         jnp.array([[0.0, 0.0]], dtype=jnp.float32),
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -15543,7 +15472,6 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         init_tau2_volume,
-        _make_rotations(1, seed=456),
         jnp.array([[0.0, 0.0]], dtype=jnp.float32),
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -15573,7 +15501,6 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones((n_classes, VOLUME_SIZE), dtype=jnp.float32),
-        _make_rotations(1, seed=789),
         jnp.array([[0.0, 0.0]], dtype=jnp.float32),
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -15603,7 +15530,6 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones((n_classes, VOLUME_SIZE), dtype=jnp.float32),
-        _make_rotations(1, seed=790),
         jnp.array([[0.0, 0.0]], dtype=jnp.float32),
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -15725,7 +15651,6 @@ def test_relion_mode_dense_k_class_writes_absolute_translations_from_previous_of
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(1, seed=123),
         jnp.array([[0.0, 0.0]], dtype=jnp.float32),
         options=RefinementOptions(
             disc_type="linear_interp",
@@ -15903,7 +15828,6 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         init_volume,
         jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=321),
         translations,
         options=RefinementOptions(
             disc_type="linear_interp",

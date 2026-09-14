@@ -175,7 +175,7 @@ def run_refinement(
         RefinementOptions,
         RefinementSchedule,
     )
-    from recovar.em.sampling import get_rotation_grid, get_translation_grid
+    from recovar.em.sampling import get_translation_grid
     from recovar.reconstruction import noise as recon_noise
     from recovar.reconstruction.regularization import average_over_shells
 
@@ -191,8 +191,7 @@ def run_refinement(
         init_vol_real = np.array(mrc.data, dtype=np.float32)
     init_vol_ft = np.fft.fftn(np.fft.ifftshift(init_vol_real)).astype(np.complex64).reshape(-1)
 
-    # Rotation + translation grids
-    rotations = get_rotation_grid(healpix_order, matrices=True).astype(np.float32)
+    # Translation grid
     translations = get_translation_grid(offset_range, offset_step).astype(np.float32)
 
     # Initial noise and prior
@@ -216,7 +215,6 @@ def run_refinement(
         init_volume=jnp.asarray(init_vol_ft),
         init_noise_variance=noise_variance,
         init_mean_variance=mean_variance,
-        rotations=rotations,
         translations=jnp.asarray(translations),
         options=RefinementOptions(
             disc_type="linear_interp",

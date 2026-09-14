@@ -317,7 +317,6 @@ def refine_single_volume(
     init_volume: list[jnp.ndarray] | jnp.ndarray,
     init_noise_variance: jnp.ndarray,
     init_mean_variance: jnp.ndarray,
-    rotations: jnp.ndarray | None,
     translations: jnp.ndarray | None,
     options: RefinementOptions | None = None,
 ) -> dict:
@@ -335,9 +334,6 @@ def refine_single_volume(
         Initial per-pixel noise variance for each half-set.
     init_mean_variance : jnp.ndarray, shape (volume_size,)
         Initial signal prior (tau^2).
-    rotations : np.ndarray, shape (n_rot, 3, 3)
-        Optional initial rotation grid for compatibility. RELION mode
-        regenerates grids from the HEALPix refinement state.
     translations : jnp.ndarray, shape (n_trans, 2)
         Translation grid.
     options : `RefinementOptions` struct that bundles the schedule / adaptive / parity
@@ -377,7 +373,6 @@ def refine_single_volume(
         init_reference_real=options.replay.init_reference_real,
         init_noise_variance=init_noise_variance,
         init_mean_variance=init_mean_variance,
-        rotations=rotations,
         translations=translations,
         options=options,
     )
@@ -394,7 +389,6 @@ def _run_relion_iteration_loop(
     init_reference_real,
     init_noise_variance,
     init_mean_variance,
-    rotations,
     translations,
     options,
 ):
@@ -568,19 +562,12 @@ def _run_relion_iteration_loop(
         _restore_diagnostic_frozen_boundary_state(state, options)
     _mark_setup_phase("state_init")
 
-    # RELION mode owns the coarse HEALPix grid. When coarse-grid metadata is
-    # provided, regenerate the matching coarse grid here instead of inheriting
-    # any finer caller-supplied rotation table.
+    # The refinement schedule owns the initial coarse HEALPix grid.
     current_healpix_order = int(schedule.init_healpix_order)
     if adaptive.nside_level is not None and int(adaptive.nside_level) != current_healpix_order:
         logger.info(
             "RELION mode: ignoring caller nside_level=%d and regenerating initial coarse grid at healpix_order=%d",
             int(adaptive.nside_level),
-            current_healpix_order,
-        )
-    elif rotations is not None:
-        logger.info(
-            "RELION mode: ignoring caller-provided rotation table and regenerating initial coarse grid at healpix_order=%d",
             current_healpix_order,
         )
     initial_grids = _initial_coarse_grids(

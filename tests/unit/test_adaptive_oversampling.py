@@ -1334,7 +1334,6 @@ class TestRefineWithAdaptive:
             volume,
             noise_variance,
             mean_variance,
-            rotations,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -1385,7 +1384,6 @@ class TestRefineWithAdaptive:
             volume,
             noise_variance,
             mean_variance,
-            rotations,
             translations,
             options=RefinementOptions(
                 schedule=RefinementSchedule(max_iter=1, init_healpix_order=2, max_healpix_order=2),

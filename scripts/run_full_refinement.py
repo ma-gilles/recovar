@@ -3952,7 +3952,7 @@ def main():
         init_vol_real = _load_mrc(class_paths[0]).astype(_init_volume_dtype)
 
     # ---- Set up rotation and translation grids ----
-    from recovar.em.sampling import get_relion_rotation_grid, get_translation_grid
+    from recovar.em.sampling import get_translation_grid, rotation_grid_size
 
     init_healpix_order, finest_healpix_order = _resolve_relion_sampling_orders(
         args.healpix_order,
@@ -3976,9 +3976,9 @@ def main():
         max_healpix_order_source,
     )
 
-    rotations = get_relion_rotation_grid(rotation_grid_order).astype(np.float32)
+    n_rotations = rotation_grid_size(rotation_grid_order)
     translations = get_translation_grid(args.offset_range, args.offset_step).astype(np.float32)
-    logger.info("Rotation grid: %d rotations (healpix_order=%d)", rotations.shape[0], rotation_grid_order)
+    logger.info("Rotation grid: %d rotations (healpix_order=%d)", n_rotations, rotation_grid_order)
     logger.info(
         "Translation grid: %d translations (range=%.1f, step=%.1f)",
         translations.shape[0],
@@ -4715,7 +4715,6 @@ def main():
         init_volume=jnp.asarray(init_vol_ft),
         init_noise_variance=noise_variance,
         init_mean_variance=mean_variance,
-        rotations=rotations,
         translations=translations_jnp,
         options=RefinementOptions(
             disc_type=os.environ.get("RECOVAR_DISC_TYPE_OVERRIDE", "linear_interp"),
@@ -4993,7 +4992,7 @@ def main():
         "finest_healpix_order": finest_healpix_order,
         "max_healpix_order": effective_max_healpix_order,
         "max_healpix_order_source": np.asarray(max_healpix_order_source),
-        "n_rotations": rotations.shape[0],
+        "n_rotations": n_rotations,
         "n_translations": translations.shape[0],
         "n_images": n_images,
         "image_shape": np.array(ds.image_shape),
@@ -5534,7 +5533,7 @@ def main():
             "image_shape": [int(x) for x in ds.image_shape],
             "volume_shape": [int(x) for x in ds.volume_shape],
             "voxel_size": float(ds.voxel_size),
-            "n_rotations": int(rotations.shape[0]),
+            "n_rotations": int(n_rotations),
             "n_translations": int(translations.shape[0]),
             "healpix_order": int(args.healpix_order),
             "coarse_healpix_order": int(init_healpix_order),

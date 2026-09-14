@@ -85,7 +85,6 @@ def _setup_refinement(n_iter=5, adaptive_oversampling=1, seed=42):
         init_volume=jnp.asarray(init_vol_ft),
         init_noise_variance=noise_variance,
         init_mean_variance=mean_variance,
-        rotations=rotations,
         translations=jnp.asarray(translations),
         options=RefinementOptions(
             disc_type="linear_interp",

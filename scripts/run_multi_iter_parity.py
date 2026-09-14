@@ -2344,7 +2344,6 @@ def main():
         init_volume=[jnp.asarray(vol_ft_h1), jnp.asarray(vol_ft_h2)],
         init_noise_variance=noise_variance,
         init_mean_variance=mean_variance.reshape(-1),
-        rotations=None,
         translations=None,
         options=RefinementOptions(
             disc_type="linear_interp",
