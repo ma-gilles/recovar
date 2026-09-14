@@ -12863,12 +12863,15 @@ class TestRelionModeSmokeTest:
         # ave_Pmax should be in [0, 1]
         assert 0.0 <= state.ave_Pmax <= 1.0
 
+    @pytest.mark.parametrize("per_half", [False, True])
     def test_relion_mode_uses_tau2_from_weights_for_prior(
         self,
         half_datasets,
         init_volume,
         translations,
         monkeypatch,
+        tmp_path,
+        per_half,
     ):
         """RELION mode should compute tau2 from Ft_ctf weights + FSC (RELION order)."""
         from recovar.reconstruction import regularization
@@ -12883,12 +12886,24 @@ class TestRelionModeSmokeTest:
 
         monkeypatch.setattr(regularization, "compute_relion_tau2_from_weights", wrap_tau2)
 
+        scoring_priors = []
+        score_half = iteration_loop_module._score_half_dense_in_bpref_scope
+
+        def record_scoring_prior(**kwargs):
+            scoring_priors.append(np.asarray(kwargs["mean_variance"]))
+            return score_half(**kwargs)
+
+        monkeypatch.setattr(iteration_loop_module, "_score_half_dense_in_bpref_scope", record_scoring_prior)
+        initial_tau2 = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
+        if per_half:
+            initial_tau2 = jnp.stack([initial_tau2, 2 * initial_tau2])
+
         grid_size = int(np.sqrt(IMAGE_SIZE))
         refine_single_volume(
             half_datasets,
             init_volume,
             jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            initial_tau2,
             translations,
             options=RefinementOptions(
                 disc_type="linear_interp",
@@ -12901,10 +12916,16 @@ class TestRelionModeSmokeTest:
                 ),
                 batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
                 adaptive=AdaptiveOptions(adaptive_oversampling=0),
+                parity=RelionParityOptions(use_per_half_mean_variance=per_half),
+                debug=EngineDebugOptions(save_intermediates_dir=str(tmp_path)),
             ),
         )
 
         assert called["tau2"] >= 1
+        assert len(scoring_priors) == 2
+        for half, prior in enumerate(scoring_priors):
+            with np.load(tmp_path / f"manifest_iter0_half{half}.npz") as manifest:
+                np.testing.assert_array_equal(manifest["mean_variance"], prior)
 
     def test_k1_solvent_corrected_fsc_disabled_uses_raw_tau2_fsc(
         self,

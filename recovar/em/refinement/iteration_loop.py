@@ -2298,7 +2298,7 @@ def _run_relion_iteration_loop(
                         if previous_translations_k is not None
                         else np.array([]),
                         "mean_vol_ft": np.asarray(means[k]),
-                        "mean_variance": np.asarray(mean_variance),
+                        "mean_variance": np.asarray(mean_variance_k),
                         "noise_variance": np.asarray(noise_variance_k),
                         "current_size": np.int32(cs_for_engine) if cs_for_engine is not None else np.int32(-1),
                         "half_spectrum_scoring": np.bool_(True),
