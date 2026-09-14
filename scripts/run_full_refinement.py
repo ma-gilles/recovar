@@ -6,7 +6,7 @@ initializes from the low-pass filtered reference volume, and calls
 refine_single_volume() with parameters matching the RELION auto-refine run.
 
 Results are saved as a single .npz file with per-iteration arrays for
-downstream comparison via compare_vs_relion.py.
+downstream comparisons.
 
 Usage:
     CUDA_VISIBLE_DEVICES=1 XLA_PYTHON_CLIENT_PREALLOCATE=false \
