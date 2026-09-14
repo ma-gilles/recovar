@@ -69,35 +69,13 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-def _selection_records(selection: dict[str, object]) -> list[dict[str, object]]:
-    """Normalize legacy stratification and K=1 boundary-panel selections."""
-
-    schema = selection.get("schema")
-    if schema == "bpref-factor-stratification-v1":
-        records = selection.get("selected")
-        stack_field = "stack_index_1based"
-    elif schema in {
-        "recovar.em.k1_bpref_factor_panel.v1",
-        "recovar.em.k1_fine_score_panel.v1",
-    }:
-        records = selection.get("targets")
-        stack_field = "stack_index_one_based"
-    else:
-        raise ValueError("unexpected selection schema")
-    _require(isinstance(records, list) and bool(records), "selection is empty")
-    normalized = []
-    for record in records:
-        _require(isinstance(record, dict), "selection record is not an object")
-        _require(stack_field in record, "selection record is missing stack identity")
-        normalized.append({**record, "stack_index_1based": int(record[stack_field])})
-    return normalized
-
-
 # Support both direct execution and package imports.
 if __package__:
     from .file_hash import fnv1a64, sha256_file as _sha256
+    from .validate_relion_bpref_factor_capture import _selection_records
 else:
     from file_hash import fnv1a64, sha256_file as _sha256
+    from validate_relion_bpref_factor_capture import _selection_records
 
 
 def _float32_from_bits(value: int) -> np.float32:
