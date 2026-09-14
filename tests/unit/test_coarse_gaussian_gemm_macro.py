@@ -1791,6 +1791,26 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
             pad_final_image_batch=True,
         )
 
+    def assert_same_significance(actual, expected):
+        for index in range(4):
+            np.testing.assert_array_equal(actual[index], expected[index])
+        assert len(actual[4]) == len(expected[4])
+        for actual_class, expected_class in zip(actual[4], expected[4]):
+            assert len(actual_class) == len(expected_class)
+            for actual_support, expected_support in zip(actual_class, expected_class):
+                np.testing.assert_array_equal(actual_support, expected_support)
+        for key in (
+            "normalization_log_z",
+            "normalization_log_evidence",
+            "log_evidence_per_image",
+            "best_log_score_per_image",
+            "max_posterior_per_image",
+            "class_log_evidence_per_image",
+            "class_assignments",
+            "significant_cutoff_counts",
+        ):
+            np.testing.assert_array_equal(actual[5][key], expected[5][key])
+
     control = run()
     control_projection_calls = tuple(projection_calls)
     control_helper_outputs = tuple(value.copy() for value in helper_outputs)
@@ -1887,27 +1907,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         ):
             np.testing.assert_array_equal(candidate_value, control_value)
 
-    for index in range(4):
-        np.testing.assert_array_equal(result[index], control[index])
-    assert len(result[4]) == len(control[4])
-    for candidate_class, control_class in zip(result[4], control[4]):
-        assert len(candidate_class) == len(control_class)
-        for candidate_support, control_support in zip(
-            candidate_class,
-            control_class,
-        ):
-            np.testing.assert_array_equal(candidate_support, control_support)
-    for key in (
-        "normalization_log_z",
-        "normalization_log_evidence",
-        "log_evidence_per_image",
-        "best_log_score_per_image",
-        "max_posterior_per_image",
-        "class_log_evidence_per_image",
-        "class_assignments",
-        "significant_cutoff_counts",
-    ):
-        np.testing.assert_array_equal(result[5][key], control[5][key])
+    assert_same_significance(result, control)
 
     control_assembly = control[5]["exact_coarse_operand_assembly"]
     assert control_assembly == {
@@ -2172,33 +2172,7 @@ def test_live_k1_hybrid_reuses_exact_scores_in_both_significance_passes(
         ):
             np.testing.assert_array_equal(specialized_value, single_translate_value)
 
-    for index in range(4):
-        np.testing.assert_array_equal(specialized[index], result[index])
-    assert len(specialized[4]) == len(result[4])
-    for specialized_class, single_translate_class in zip(
-        specialized[4],
-        result[4],
-    ):
-        assert len(specialized_class) == len(single_translate_class)
-        for specialized_support, single_translate_support in zip(
-            specialized_class,
-            single_translate_class,
-        ):
-            np.testing.assert_array_equal(
-                specialized_support,
-                single_translate_support,
-            )
-    for key in (
-        "normalization_log_z",
-        "normalization_log_evidence",
-        "log_evidence_per_image",
-        "best_log_score_per_image",
-        "max_posterior_per_image",
-        "class_log_evidence_per_image",
-        "class_assignments",
-        "significant_cutoff_counts",
-    ):
-        np.testing.assert_array_equal(specialized[5][key], result[5][key])
+    assert_same_significance(specialized, result)
 
     specialized_assembly = specialized[5]["exact_coarse_operand_assembly"]
     expected_specialized_assembly = dict(candidate_assembly)
