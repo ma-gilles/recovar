@@ -217,12 +217,9 @@ import json
 from pathlib import Path
 status = {
     "relion_initial_model_dir": "$IM_DIR",
-    "recovar_initial_model_k16_parity": "unsupported",
-    "reason": (
-        "recovar.em.vdam.gpu_pipeline.run_iter_gpu_vdam currently "
-        "hardcodes K=1 in the VDAM M-step/momenta path; K=16 InitialModel "
-        "parity needs a separate multi-class VDAM implementation."
-    ),
+    "recovar_initial_model_parity": "not_run",
+    "n_classes": int("$N_CLASSES"),
+    "reason": "This launcher does not run the RECOVAR initial-model comparison.",
 }
 Path("$DATA_DIR/initial_model_recovar_status.json").write_text(json.dumps(status, indent=2))
 print(json.dumps(status, indent=2))
