@@ -6,6 +6,34 @@ every test or publication. Detailed receipts belong behind links. The
 at `a2ab056cb`, including one paragraph per earlier checkpoint; its historical
 next actions are superseded here.
 
+## Lead transfer and two integration decisions — September 15
+
+The em_clean lead and sole PR179 publisher is now Claude (Opus 5, 1M context); the
+outgoing Codex stopped source edits and job submissions. Ownership, constraints and
+the ten-item queue are unchanged.
+
+**The initial scale-selection curve stays out of shared source, and is not duplicated.**
+The EM peer froze the change as `ad0ba7e88` and owns its qualification (10097 setup
+13953452, end-to-end 13953454). The lead's separate uncommitted copy is byte-identical
+in changed lines, so there is one candidate, not two. Its one preserved failure was a
+wrong archive key (`mean` for `mean_vol_ft`), not a numerical failure: the corrected
+CPU check reproduces the independent derivation to 1.1358e-14 over all 65 shells,
+reproduces the native DVP>3 mask exactly at shells 0-5, and inherits the derivation's
+1.8447064e-7 residual against the native curve without adding error. Multi-optics,
+fixed-tau, normalized-scale closure, trajectory, production-F32 and speed remain open
+and peer-owned.
+[Fixture recheck](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/initial_scale_fixture_recheck_20260915/review.json).
+
+**VDAM `11429b729` + `18c29231b` are not admissible to shared source.** The reported
+tolerance widening is not one: `git diff 5ca9c8fff..464426857 -- tests/` is +3499/-0, so
+no established assertion was touched, and the relaxed test was authored two commits
+earlier in the same branch. The blocker is what that test revealed — group-static
+active-row padding enlarges the row set and changes the XLA scatter-add float32
+accumulation order, so the adjoint volumes differ on GPU and bit identity holds only on
+CPU. Reduction order is preserved through structural work, and the peer's own status
+records this arm as negative and off, so there is no gain to weigh against it.
+[Audit](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_tolerance_audit_20260915/review.json).
+
 ## Geometry validation and compact dtype repair — September 13
 
 The [zero-oversampling geometry correction](../math/zero_coarse_geometry.md)
