@@ -24,6 +24,7 @@ import gc
 import inspect
 import logging
 import os
+import re
 import weakref
 
 import numpy as np
@@ -11239,6 +11240,85 @@ def test_fused_translate_scorer_runtime_logical_size_matches_static_kernel(
     assert expected.shape == actual.shape == (batch, pairs)
     assert np.all(np.isinf(expected[~pair_mask])) and np.all(np.isinf(actual[~pair_mask]))
     np.testing.assert_array_equal(actual[pair_mask].view(np.uint32), expected[pair_mask].view(np.uint32))
+
+
+def _stable_window_fixture_env(monkeypatch, flag):
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "4")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_FUSED_TRANSLATE", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS", "1")
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_STABLE_WINDOWS", flag)
+
+
+def test_stable_windows_fall_back_to_the_logical_window_without_the_fused_scorer(monkeypatch, caplog):
+    """Without the fused-translate Gaussian scorer (here: CUDA disabled) the flag must leave
+    every output untouched and say so."""
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    def run(flag):
+        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        _stable_window_fixture_env(monkeypatch, flag)
+        kwargs = _fused_kclass_multibucket_fixture(n_images=13)
+        kwargs["accumulate_noise"] = True
+        return _fused_kclass_result_arrays(bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs))
+
+    base = run("0")
+    with caplog.at_level(logging.INFO):
+        on = run("1")
+    assert any("stable windows requested but not applicable" in r.getMessage() for r in caplog.records)
+    _assert_fused_arrays_identical(base, on, "stable windows fallback")
+
+
+@pytest.mark.parametrize("current_size", [2, 4])  # the fixture box is 8 pixels; both sizes get a physical tail
+def test_stable_windows_match_the_logical_window_on_gpu(monkeypatch, caplog, custom_cuda_lib, gpu_device, current_size):
+    """Inside a physical Fourier-window class the compact engine reproduces the logical
+    window: scores, posteriors, assignments and evidence bit for bit (the runtime kernel
+    stops at the logical size); noise statistics and the two adjoint volumes within the
+    bounds this file uses for reductions over a differently shaped axis and for GPU
+    atomics. The planner log must show a physical class larger than the logical size,
+    or the test is vacuous."""
+    import jax
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
+    def run(flag):
+        _stable_window_fixture_env(monkeypatch, flag)
+        kwargs = _fused_kclass_multibucket_fixture(n_images=13)
+        kwargs["accumulate_noise"] = True
+        kwargs["current_size"] = current_size
+        kwargs["relion_exact_fine_gaussian"] = True
+        kwargs["relion_f32_fine_posterior"] = True  # production posterior dtype; the native dual sums require it
+        kwargs["relion_x_half_mstep"] = True
+        with jax.default_device(gpu_device):
+            return _fused_kclass_result_arrays(bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs))
+
+    base = run("0")
+    with caplog.at_level(logging.INFO):
+        on = run("1")
+    plan_lines = [r.getMessage() for r in caplog.records if "stable windows: logical current_size" in r.getMessage()]
+    why = [r.getMessage() for r in caplog.records if "stable windows requested but not applicable" in r.getMessage()]
+    assert plan_lines, f"the stable-window plan was not applied: {why}"
+    m = re.search(r"logical current_size (\d+) -> physical class (\d+) \(score pixels (\d+) -> (\d+)", plan_lines[-1])
+    assert m and int(m.group(2)) > int(m.group(1)) and int(m.group(4)) > int(m.group(3)), plan_lines[-1]
+    bounded = {k for k in base if k.startswith(("Ft_y", "Ft_ctf", "noise_stats"))}
+    _assert_fused_arrays_identical(
+        {k: v for k, v in base.items() if k not in bounded},
+        {k: v for k, v in on.items() if k not in bounded},
+        "stable windows",
+    )
+    for k in sorted(bounded):
+        x = np.asarray(base[k]); y = np.asarray(on[k])
+        assert x.shape == y.shape and x.dtype == y.dtype, k
+        tol = 1e-5 if k.startswith(("Ft_y", "Ft_ctf")) else 1e-6
+        scale = float(np.max(np.abs(np.nan_to_num(x)))) or 1.0
+        err = float(np.max(np.abs(np.nan_to_num(y) - np.nan_to_num(x))))
+        np.testing.assert_allclose(np.nan_to_num(y), np.nan_to_num(x), rtol=tol, atol=tol * scale,
+                                   err_msg=f"{k}: max|diff|={err:.3e}, max|ref|={scale:.3e}, rel={err/scale:.3e}")
 
 
 def test_padded_active_row_count_matches_the_row_builder(monkeypatch):

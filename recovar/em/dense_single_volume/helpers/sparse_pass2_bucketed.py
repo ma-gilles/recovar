@@ -81,6 +81,7 @@ from recovar.em.dense_single_volume.helpers.fourier_window import (
     centered_half_indices_to_fftw_half_indices,
     make_fourier_window_indices_np,
     make_fourier_window_spec,
+    make_stable_fourier_window_shape_plan,
     relion_fftw_order_for_square_score_window,
 )
 from recovar.em.dense_single_volume.helpers.deterministic_reduce import (
@@ -1561,6 +1562,31 @@ def group_static_active_rows_enabled() -> bool:
     """
 
     return parse_env_flag(_SPARSE_KCLASS_GROUP_STATIC_ACTIVE_ROWS_ENV, default=False)
+
+
+_SPARSE_KCLASS_STABLE_WINDOWS_ENV = "RECOVAR_SPARSE_KCLASS_STABLE_WINDOWS"
+
+
+def stable_windows_enabled() -> bool:
+    """Run the compact pass-2 engine inside stable physical Fourier-window classes.
+
+    Every per-chunk program of this engine is shaped by the pixel count of the
+    current Fourier window, and RELION's ``current_size`` changes every
+    iteration, so nothing compiled in one iteration is reused in the next:
+    1000-1850 programs per iteration at 100k/256 K=4 (compile inventory, job
+    13927046), about a third of the late-iteration loop (sampled job 13923173).
+    The K=1 local engine solved this with
+    ``fourier_window.make_stable_fourier_window_shape_plan``: the exact logical
+    window is the prefix of a physical capacity rounded to a quantum-8 ladder,
+    runtime-bound CUDA kernels stop at the logical count, and JAX reductions see
+    zero weight and the shell sentinel on the tail. This flag applies the same
+    plan here: scores come from the runtime pair kernel and are bit-identical;
+    the noise, scale and norm terms and the adjoint see the tail as inert.
+    Requires the fused-translate Gaussian scorer; other score modes keep the
+    logical window. Default off.
+    """
+
+    return parse_env_flag(_SPARSE_KCLASS_STABLE_WINDOWS_ENV, default=False)
 
 
 def _padded_active_row_count(total: int, n_slots: int, pad_multiple: int) -> int:
@@ -14373,19 +14399,67 @@ def compute_k_class_pass2_stats_sparse_fused(
         disc_type=disc_type,
         process_fn=experiment_dataset.process_images,
     )
-    window_spec = make_fourier_window_spec(
-        image_shape,
-        current_size,
-        n_half,
-        reconstruction_current_size=mstep_current_size,
-        square=square_window,
-        include_recon_window=True,
-        **window_spec_kwargs,
+    stable_window_plan = None
+    use_stable_windows = bool(
+        stable_windows_enabled()
+        and current_size is not None
+        and int(current_size) < int(image_shape[0])
+        and use_compact_fused_translate_scoring
     )
+    if stable_windows_enabled() and not use_stable_windows:
+        logger.info(
+            "sparse K-class stable windows requested but not applicable to this pass "
+            "(current_size=%s, image_shape=%s, fused translate scoring=%s); using the logical window",
+            current_size,
+            tuple(int(v) for v in image_shape),
+            use_compact_fused_translate_scoring,
+        )
+    if use_stable_windows:
+        stable_window_plan = make_stable_fourier_window_shape_plan(
+            image_shape,
+            int(current_size),
+            n_half,
+            reconstruction_current_size=mstep_current_size,
+            enabled=True,
+            square=square_window,
+            **window_spec_kwargs,
+        )
+        window_spec = stable_window_plan.packed_physical_spec()
+        logger.info(
+            "sparse K-class stable windows: logical current_size %d -> physical class %d "
+            "(score pixels %d -> %d, recon pixels %d -> %d)",
+            stable_window_plan.logical_current_size,
+            stable_window_plan.physical_current_size,
+            stable_window_plan.logical_score_pixels,
+            stable_window_plan.physical_score_pixels,
+            stable_window_plan.logical_reconstruction_pixels,
+            stable_window_plan.physical_reconstruction_pixels,
+        )
+    else:
+        window_spec = make_fourier_window_spec(
+            image_shape,
+            current_size,
+            n_half,
+            reconstruction_current_size=mstep_current_size,
+            square=square_window,
+            include_recon_window=True,
+            **window_spec_kwargs,
+        )
     use_window = window_spec.use_window
     window_indices_np = window_spec.score_indices_np
     window_indices = window_spec.score_indices
     recon_window_indices = window_spec.recon_indices
+    # Logical-prefix masks over the (possibly physical) windows: True on the exact
+    # RELION support, False on the capacity tail; None without the plan.
+    score_logical_mask_np = None
+    recon_logical_mask_np = None
+    if use_stable_windows:
+        score_logical_mask_np = (
+            np.arange(int(window_spec.n_score)) < int(stable_window_plan.logical_score_pixels)
+        )
+        recon_logical_mask_np = (
+            np.arange(int(window_spec.n_recon)) < int(stable_window_plan.logical_reconstruction_pixels)
+        )
     relion_x_half_recon_indices = None
     if use_relion_x_half_mstep:
         centered_recon_indices = (
@@ -14420,27 +14494,69 @@ def compute_k_class_pass2_stats_sparse_fused(
         half_weights = half_weights.astype(jnp.float64)
         half_weights_windowed = window_spec.score_values(half_weights)
     direct_half_weights = half_weights_windowed if use_window else half_weights
-    relion_score_full_to_compact = jnp.asarray(
-        _relion_cuda_fine_full_to_compact_lookup(
+    if use_stable_windows:
+        direct_half_weights = direct_half_weights * jnp.asarray(
+            score_logical_mask_np, dtype=direct_half_weights.dtype
+        )
+    fused_translate_logical_current_size = None
+    if use_stable_windows:
+        # RELION's fine scorer indexes its full logical current-size layout; the
+        # compact row of each logical pixel is its position in the packed prefix.
+        # The runtime kernel never reads past the logical rectangle, so the pad
+        # value only keeps the buffer at the physical class's size.
+        logical_lookup = _relion_cuda_fine_full_to_compact_lookup(
             image_shape,
-            current_size,
-            window_indices_np if use_window else np.arange(int(n_half), dtype=np.int32),
-        ),
-        dtype=jnp.int32,
-    )
+            int(current_size),
+            window_indices_np[: int(stable_window_plan.logical_score_pixels)],
+        )
+        relion_score_full_to_compact = jnp.asarray(
+            np.pad(
+                logical_lookup,
+                (0, int(stable_window_plan.physical_rectangle_pixels) - logical_lookup.size),
+                constant_values=-1,
+            ),
+            dtype=jnp.int32,
+        )
+        fused_translate_current_size = int(stable_window_plan.physical_current_size)
+        fused_translate_logical_current_size = int(current_size)
+    else:
+        relion_score_full_to_compact = jnp.asarray(
+            _relion_cuda_fine_full_to_compact_lookup(
+                image_shape,
+                current_size,
+                window_indices_np if use_window else np.arange(int(n_half), dtype=np.int32),
+            ),
+            dtype=jnp.int32,
+        )
 
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(shared_noise_variance, image_shape).squeeze()
     if accumulate_noise:
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
         if use_window:
+            # The crop mask must see RELION's logical window, not the physical
+            # class: boundary-row pixels at the cutoff shell that lie outside the
+            # logical crop but inside the capacity would otherwise keep their shell.
             shell_indices_half = mask_relion_noise_shell_indices_to_current_window(
                 shell_indices_half,
                 image_shape,
                 current_size,
-                window_indices,
+                window_indices_np[: int(stable_window_plan.logical_score_pixels)]
+                if use_stable_windows
+                else window_indices,
             )
         shell_indices_noise = window_spec.recon_values(shell_indices_half)
         noise_variance_for_noise = window_spec.recon_values(noise_variance_half)
+        if use_stable_windows:
+            # The capacity tail holds real pixels above RELION's cutoff. They are
+            # neither current-image residuals nor the high-shell extension (that
+            # comes from the full-image powerClass path), so they take the shell
+            # sentinel and zero noise variance: every residual, power and scale
+            # term they could enter is then exactly zero.
+            tail = ~jnp.asarray(recon_logical_mask_np)
+            shell_indices_noise = jnp.where(
+                tail, jnp.int32(int(image_shape[0]) // 2 + 1), shell_indices_noise
+            )
+            noise_variance_for_noise = jnp.where(tail, 0.0, noise_variance_for_noise)
         scale_dvp = scale_correction_data_vs_prior
         if scale_dvp is None:
             scale_dvp_per_class = [None] * n_classes
@@ -15508,6 +15624,16 @@ def compute_k_class_pass2_stats_sparse_fused(
             shifted_recon = shifted_recon_half if windowed_prepare else shifted_recon_half[:, recon_window_indices]
             ctf2_over_nv_recon = ctf2_over_nv_half_with_dc if windowed_prepare else ctf2_over_nv_half_with_dc[:, recon_window_indices]
             shifted_noise = shifted_score_half_with_dc if windowed_prepare else shifted_score_half_with_dc[:, recon_window_indices]
+            if use_stable_windows:
+                # Tail pixels carry no weight in any sum: the scorer stops at the
+                # logical size, the weighted sums and the adjoint see zero CTF
+                # weight, the noise terms see zero variance (set above).
+                ctf2_over_nv_score = ctf2_over_nv_score * jnp.asarray(
+                    score_logical_mask_np, dtype=ctf2_over_nv_score.dtype
+                )
+                ctf2_over_nv_recon = ctf2_over_nv_recon * jnp.asarray(
+                    recon_logical_mask_np, dtype=ctf2_over_nv_recon.dtype
+                )
         else:
             ctf2_over_nv_score = ctf2_over_nv_half
             shifted_corrected_score = shifted_corrected_score_half
@@ -15691,6 +15817,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                             relion_score_full_to_compact,
                             relion_highres_xi2_half,
                             current_size=fused_translate_current_size,
+                            logical_current_size=fused_translate_logical_current_size,
                         )
                     else:
                         raw_diff2 = _score_pass2_pairs_relion_gpu_diff2_raw(
