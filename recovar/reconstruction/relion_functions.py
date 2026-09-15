@@ -1132,17 +1132,35 @@ def _relion_window_centered_half_fourier(vol_half, old_volume_shape, new_volume_
         out = jnp.take(out, axis_idx, axis=1)
         return jnp.take(out, col_idx, axis=2)
 
-    axis_idx = jnp.asarray(_relion_centered_axis_scatter_indices(old_dim, new_dim), dtype=jnp.int32)
-    col_idx = jnp.arange(old_half_shape[-1], dtype=jnp.int32)
+    scatter_idx = _relion_centered_axis_scatter_indices(old_dim, new_dim)
+    n_cols = old_half_shape[-1]
     freq = _relion_centered_axis_fftw_frequencies(old_dim).astype(np.int32)
-    col_freq = np.arange(old_half_shape[-1], dtype=np.int32)
-    max_r2 = int(old_half_shape[-1] - 1) ** 2
+    col_freq = np.arange(n_cols, dtype=np.int32)
+    max_r2 = int(n_cols - 1) ** 2
     support = (
         freq[:, None, None] * freq[:, None, None]
         + freq[None, :, None] * freq[None, :, None]
         + col_freq[None, None, :] * col_freq[None, None, :]
     ) <= max_r2
     vol_half = jnp.where(jnp.asarray(support), vol_half, jnp.zeros((), dtype=vol_half.dtype))
+
+    # The destination rows are a permutation of one contiguous block: the
+    # centered frequency interval spans old_dim - 1 < new_dim, so the modulo in
+    # _relion_centered_axis_scatter_indices cannot map two rows onto each other.
+    # Padding the permuted source writes exactly the same values to the same
+    # positions as the scatter, and keeps XLA from expanding that scatter into a
+    # per-element while loop (32,806,618 sequential trips for 403 -> 760).
+    order = np.argsort(scatter_idx, kind="stable")
+    start = int(scatter_idx[order[0]])
+    if np.array_equal(scatter_idx[order], np.arange(start, start + old_dim)):
+        if not np.array_equal(order, np.arange(old_dim)):
+            gather = jnp.asarray(order, dtype=jnp.int32)
+            vol_half = jnp.take(jnp.take(vol_half, gather, axis=0), gather, axis=1)
+        tail = new_dim - start - old_dim
+        return jnp.pad(vol_half, ((start, tail), (start, tail), (0, new_half_shape[-1] - n_cols)))
+
+    axis_idx = jnp.asarray(scatter_idx, dtype=jnp.int32)
+    col_idx = jnp.arange(n_cols, dtype=jnp.int32)
     out = jnp.zeros(new_half_shape, dtype=vol_half.dtype)
     return out.at[axis_idx[:, None, None], axis_idx[None, :, None], col_idx[None, None, :]].set(vol_half)
 
