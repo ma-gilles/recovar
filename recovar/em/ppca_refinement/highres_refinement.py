@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.local.local_layout import (
@@ -21,7 +20,6 @@ from recovar.em.ppca_refinement.config import (
     SparsePass2Config,
 )
 from recovar.em.ppca_refinement.dense_dataset import (
-    coerce_augmented_half_volumes,
     compute_dense_ppca_adaptive_significance,
     run_dense_ppca_halfset_fused_em_iteration,
 )
@@ -42,14 +40,13 @@ from recovar.em.ppca_refinement.refinement_loop import (
     compare_halfset_means_by_fsc,
     propose_next_current_size,
 )
-from recovar.em.ppca_refinement.schedule import PPCARefinementScheduleState, evaluate_halfset_resolution_gate
+from recovar.em.ppca_refinement.schedule import evaluate_halfset_resolution_gate
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
 from recovar.em.sampling import (
     build_local_search_grid_metadata,
     get_oversampled_translation_grid,
     get_relion_rotation_grid,
 )
-from recovar.ppca import PCPriorConfig
 
 
 @dataclass(frozen=True)
@@ -67,73 +64,6 @@ def _logsumexp_np(values: np.ndarray, axis: int) -> np.ndarray:
     summed = np.sum(np.exp(np.where(np.isfinite(values), values - safe_max, -np.inf)), axis=axis)
     with np.errstate(divide="ignore"):
         return np.squeeze(safe_max, axis=axis) + np.log(summed)
-
-
-def _coerce_pipeline_W(W=None, *, eigenvectors=None, eigenvalues=None):
-    if W is not None:
-        return W
-    if eigenvectors is None:
-        return None
-    eigvec = np.asarray(eigenvectors)
-    if eigenvalues is None:
-        return eigvec
-    eig = np.asarray(eigenvalues, dtype=np.float32).reshape(-1)
-    if eigvec.shape[0] == eig.shape[0]:
-        return eigvec * np.sqrt(eig)[:, None, None, None]
-    if eigvec.ndim == 2 and eigvec.shape[1] == eig.shape[0]:
-        return eigvec * np.sqrt(eig)[None, :]
-    raise ValueError(f"Cannot align eigenvalues {eig.shape} with eigenvectors {eigvec.shape}")
-
-
-def initialize_state_from_pipeline_ppca(
-    mean,
-    *,
-    W=None,
-    eigenvectors=None,
-    eigenvalues=None,
-    mean_prior,
-    W_prior,
-    noise_variance,
-    volume_shape,
-    q: int | None = None,
-    volume_domain: str = "auto",
-    schedule_state: PPCARefinementScheduleState | None = None,
-    pc_prior_config: PCPriorConfig | None = None,
-) -> PoseMarginalPPCAEMState:
-    """Create a halfset-aware PPCA refinement state from pipeline PPCA arrays."""
-
-    W_input = _coerce_pipeline_W(W, eigenvectors=eigenvectors, eigenvalues=eigenvalues)
-    augmented_half, q_resolved = coerce_augmented_half_volumes(
-        mean,
-        W_input,
-        volume_shape=volume_shape,
-        q=q,
-        volume_domain=volume_domain,
-    )
-    mu = augmented_half[0]
-    W_half = (
-        jnp.swapaxes(augmented_half[1:], 0, 1)
-        if q_resolved
-        else jnp.zeros((mu.shape[0], 0), dtype=mu.dtype)
-    )
-    W_prior_arr = jnp.asarray(W_prior)
-    if W_prior_arr.shape != (mu.shape[0], q_resolved):
-        raise ValueError(f"W_prior shape {W_prior_arr.shape} != ({mu.shape[0]}, {q_resolved})")
-    mean_prior_arr = jnp.asarray(mean_prior)
-    if mean_prior_arr.shape != mu.shape:
-        raise ValueError(f"mean_prior shape {mean_prior_arr.shape} != {mu.shape}")
-    return PoseMarginalPPCAEMState(
-        mu_half=(mu, mu),
-        W_half=(W_half, W_half),
-        mu_score=mu,
-        W_score=W_half,
-        W_prior=W_prior_arr,
-        mean_prior=mean_prior_arr,
-        noise_variance=jnp.asarray(noise_variance),
-        z_prior_precision_diag=jnp.ones((q_resolved,), dtype=jnp.float32),
-        schedule_state=schedule_state,
-        pc_prior_config=pc_prior_config if pc_prior_config is not None else PCPriorConfig(),
-    )
 
 
 def _gate_ppca_iteration(
@@ -1129,45 +1059,3 @@ def run_highres_ppca_refinement_with_kclass_pose_hierarchy(
     )
 
 
-def run_highres_ppca_refinement_from_pipeline_ppca(
-    experiment_dataset,
-    *,
-    mean,
-    mean_prior,
-    W_prior,
-    noise_variance,
-    W=None,
-    eigenvectors=None,
-    eigenvalues=None,
-    volume_shape=None,
-    q: int | None = None,
-    volume_domain: str = "auto",
-    **kwargs,
-) -> HighresPPCARefinementResult:
-    """Initialize from pipeline PPCA arrays, then run high-resolution refinement."""
-
-    volume_shape = tuple(
-        int(x)
-        for x in (
-            experiment_dataset.volume_shape
-            if volume_shape is None
-            else volume_shape
-        )
-    )
-    state = initialize_state_from_pipeline_ppca(
-        mean,
-        W=W,
-        eigenvectors=eigenvectors,
-        eigenvalues=eigenvalues,
-        mean_prior=mean_prior,
-        W_prior=W_prior,
-        noise_variance=noise_variance,
-        volume_shape=volume_shape,
-        q=q,
-        volume_domain=volume_domain,
-    )
-    return run_highres_ppca_refinement_with_kclass_pose_hierarchy(
-        state,
-        experiment_dataset,
-        **kwargs,
-    )

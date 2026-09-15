@@ -723,9 +723,8 @@ def run_dense_ppca_fused_refinement_blocks(
     given the current iteration's geometry (``current_size``, ``q``,
     ``volume_domain``) and schedule (batch sizes); this function does not
     know about HEALPix orders or per-iter schedules. The dataset-facing
-    entry points :func:`recovar.em.ppca_refinement.dense_dataset.iter_dense_ppca_dataset_blocks`
-    / :func:`recovar.em.ppca_refinement.local_dataset.iter_local_ppca_dataset_blocks`
-    are what produce the blocks.
+    entry point :func:`recovar.em.ppca_refinement.dense_dataset.iter_dense_ppca_dataset_blocks`
+    is what produces the blocks.
     """
     mean_reg = mean_reg if mean_reg is not None else MeanRegularizationConfig()
     postprocess = postprocess if postprocess is not None else PostprocessConfig()

@@ -23,21 +23,6 @@ def _stats_array(value, dtype, host_arrays):
     return np.asarray(value, dtype=dtype)
 
 
-class MeanStats(NamedTuple):
-    """Accumulated M-step sufficient statistics.
-
-    Both fields are additive over image batches and across devices,
-    making this the natural unit for distributed all-reduce.
-
-    Attributes:
-        Ft_y: (volume_size,) complex -- weighted backprojected images.
-        Ft_ctf: (volume_size,) real/complex -- weighted CTF^2 backprojection.
-    """
-
-    Ft_y: jax.Array
-    Ft_ctf: jax.Array
-
-
 class RelionStats(NamedTuple):
     """Per-image E-step statistics needed by the RELION-style refine loop.
 
