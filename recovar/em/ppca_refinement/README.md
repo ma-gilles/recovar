@@ -75,7 +75,7 @@ switch from single-set to halfset).
 
 | File | What lives there |
 |---|---|
-| `__init__.py` | Public re-exports. |
+| `__init__.py` | Package docstring only; it re-exports nothing, so imports name their owner. |
 | `config.py` | `GeometryConfig`, `ScheduleConfig`, `ScoringConfig`, `SparsePass2Config` plus re-exported `MeanRegularizationConfig` and `PostprocessConfig`. **Every tunable parameter lives here.** |
 | `state.py` | `PoseMarginalPPCAEMState` — pytree carried between iterations (μ, W, priors, schedule state). |
 | `schedule.py` | `PPCARefinementScheduleState` and the halfset-resolution gating decision. |
@@ -88,6 +88,10 @@ switch from single-set to halfset).
 | `local_dataset.py` | Dataset-facing exact-local-flavor iteration (`run_local_ppca_fused_em_iteration`) + halfset wrapper + the per-image bucket iterator. |
 | `refinement_loop.py` | `run_dense_ppca_refinement_loop` and `run_local_ppca_refinement_loop` — multi-iteration drivers. |
 | `fixture_validation.py` | Test fixtures shared with `tests/unit/ppca_refinement/`. |
+| `highres_refinement.py` | High-resolution refinement over the K-class pose hierarchy: `HighresPPCARefinementResult`, pipeline-PPCA state initialization, top-p local hypothesis layouts. |
+| `pose_selection.py` | Top-p pose diagnostics: `TopPoseSelection`, pose-id packing, distinct top-pose selection, per-block top-p scores. |
+| `ppca_bridge.py` | The K-class side of the schedule agreement: `PPCAKClassScheduleBridge` feeds PPCA best-pose/Pmax diagnostics through `update_refinement_state` so HEALPix, local search and convergence evolve on the same controller as `refine_single_volume`. |
+| `projcov_whiten.py` | Post-M-step whitening: `whiten_W_svd_post_mstep` (matches the recovar PPCA route's M-step) and `whiten_W_via_projcov`. |
 
 ---
 
