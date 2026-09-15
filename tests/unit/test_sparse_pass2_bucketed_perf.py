@@ -11173,6 +11173,74 @@ def test_auto_pair_bucket_quantum_is_resolved_once_per_plan_and_changes_no_resul
     _assert_fused_arrays_identical(base, auto, "auto pair bucket quantum")
 
 
+@pytest.mark.parametrize("logical_size", [22, 26, 28])
+def test_fused_translate_scorer_runtime_logical_size_matches_static_kernel(
+    monkeypatch, custom_cuda_lib, gpu_device, logical_size
+):
+    """The compact fused-translate scorer, given a physical pixel capacity and a runtime
+    logical size, returns bit-identical costs to the static kernel on the logical operands,
+    and the runtime program is shared across logical sizes in one physical class."""
+    import jax
+    import jax.numpy as jnp
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+    from recovar.em.dense_single_volume.helpers.fourier_window import make_stable_fourier_window_shape_plan
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    rng = np.random.default_rng(2026_09_15)
+    image_size = 32
+    image_shape = (image_size, image_size)
+    n_half = image_size * (image_size // 2 + 1)
+    plan = make_stable_fourier_window_shape_plan(
+        image_shape, logical_size, n_half, enabled=True, quantum=8,
+    )
+    # quantum-8 ladder in a 32 box: 22 -> 24, 26 and 28 -> 30; every case carries a real tail
+    assert plan.physical_current_size > logical_size
+    logical_spec = plan.logical_spec
+    packed = plan.packed_physical_spec()
+    n_logical = int(logical_spec.n_score)
+    n_physical = int(packed.n_score)
+    assert n_physical > n_logical, "the physical class must add tail pixels or the test is vacuous"
+    batch, rows, n_trans, pairs = 2, 3, 4, 5
+    proj = (rng.normal(size=(batch, rows, n_logical)) + 1j * rng.normal(size=(batch, rows, n_logical))).astype(np.complex64)
+    image = (rng.normal(size=(batch, n_logical)) + 1j * rng.normal(size=(batch, n_logical))).astype(np.complex64)
+    corr = rng.uniform(0.5, 2.0, size=(batch, n_logical)).astype(np.float32)
+    half_weights = rng.uniform(0.5, 2.0, size=(n_logical,)).astype(np.float32)
+    angles = rng.normal(0, 0.2, size=(n_trans, 2)).astype(np.float32)
+    local_rotation_row = rng.integers(0, rows, size=(batch, pairs)).astype(np.int32)
+    translation_idx = rng.integers(0, n_trans, size=(batch, pairs)).astype(np.int32)
+    pair_mask = np.ones((batch, pairs), dtype=bool); pair_mask[1, -1] = False
+    highres = rng.uniform(0, 1, size=(batch,)).astype(np.float32)
+    logical_lookup = bucketed_mod._relion_cuda_fine_full_to_compact_lookup(
+        image_shape, logical_size, logical_spec.score_indices_np,
+    )
+    pad = n_physical - n_logical
+    def padc(a): return np.pad(a, [(0, 0)] * (a.ndim - 1) + [(0, pad)], constant_values=np.complex64(9 + 4j))
+    def padf(a): return np.pad(a, [(0, 0)] * (a.ndim - 1) + [(0, pad)], constant_values=np.float32(3.5))
+    physical_rect = plan.physical_rectangle_pixels
+    physical_lookup = np.pad(logical_lookup, (0, physical_rect - logical_lookup.size), constant_values=-1)
+    with jax.default_device(gpu_device):
+        expected = bucketed_mod._score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
+            jnp.asarray(image), jnp.asarray(corr), jnp.asarray(proj), jnp.asarray(half_weights),
+            jnp.asarray(angles), jnp.asarray(local_rotation_row), jnp.asarray(translation_idx),
+            jnp.asarray(pair_mask), jnp.asarray(logical_lookup), jnp.asarray(highres),
+            current_size=logical_size,
+        )
+        actual = bucketed_mod._score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
+            jnp.asarray(padc(image)), jnp.asarray(padf(corr)), jnp.asarray(padc(proj)), jnp.asarray(padf(half_weights)),
+            jnp.asarray(angles), jnp.asarray(local_rotation_row), jnp.asarray(translation_idx),
+            jnp.asarray(pair_mask), jnp.asarray(physical_lookup), jnp.asarray(highres),
+            current_size=plan.physical_current_size, logical_current_size=logical_size,
+        )
+        expected, actual = jax.block_until_ready((expected, actual))
+    expected = np.asarray(expected); actual = np.asarray(actual)
+    assert expected.shape == actual.shape == (batch, pairs)
+    assert np.all(np.isinf(expected[~pair_mask])) and np.all(np.isinf(actual[~pair_mask]))
+    np.testing.assert_array_equal(actual[pair_mask].view(np.uint32), expected[pair_mask].view(np.uint32))
+
+
 def test_padded_active_row_count_matches_the_row_builder(monkeypatch):
     """The planner's padded-count predictor and the row builder agree for every count, and
     ``pad_to`` pads with repeated first indices under a zero mask, never past the slots."""

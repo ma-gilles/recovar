@@ -6169,6 +6169,7 @@ def _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
     highres_xi2_half=None,  # (B,) float32 powerClass tail already divided by two
     *,
     current_size,
+    logical_current_size=None,
 ):
     """Return positive float32 RELION costs for compact pairs without gathers.
 
@@ -6181,6 +6182,15 @@ def _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
     (``candidate_mask & isfinite``). Valid pairs are bit-identical to the
     gathered path. Jitted so the index glue and the weight product compile
     once per bucket shape instead of one eager program each.
+
+    ``logical_current_size`` selects the runtime-bound kernel: the pixel axis of
+    every operand is then a physical capacity (a stable Fourier-window class, see
+    ``fourier_window.make_stable_fourier_window_shape_plan``) whose logical
+    prefix holds RELION's exact ``current_size`` support, ``current_size`` is
+    that physical class, and the kernel stops at the logical size passed as a
+    device scalar. The tail is never read, so the costs are bit-identical to the
+    static kernel on the logical operands and the compiled program is shared by
+    every logical size inside the same physical class.
     """
     from recovar import cuda_backproject
 
@@ -6202,6 +6212,18 @@ def _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
         if highres_xi2_half is None
         else jnp.asarray(highres_xi2_half, dtype=jnp.float32)
     )
+    if logical_current_size is not None:
+        return cuda_backproject.relion_fine_diff2_fused_translate_runtime_pairs_f32(
+            proj_half.reshape(batch * n_rows, n_pixels),
+            jnp.asarray(unshifted_corrected, dtype=jnp.complex64),
+            jnp.asarray(translation_angles, dtype=jnp.float32),
+            weights,
+            safe_rotation_row,
+            safe_translation_idx,
+            jnp.asarray(relion_full_to_compact, dtype=jnp.int32),
+            jnp.asarray(logical_current_size, dtype=jnp.int32),
+            initial_diff2,
+        )
     return cuda_backproject.relion_fine_diff2_fused_translate_pairs_f32(
         proj_half.reshape(batch * n_rows, n_pixels),
         jnp.asarray(unshifted_corrected, dtype=jnp.complex64),
