@@ -496,6 +496,38 @@ def test_adjust_regularization_relion_style_respects_minres_map():
     np.testing.assert_allclose(reg[shell >= 2], 3.0, rtol=1e-6, atol=1e-6)
 
 
+@pytest.mark.parametrize("side", [8, 11])
+@pytest.mark.parametrize("half_volume", [False, True])
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("max_shell", [1, 2])
+def test_reconstruct_floor_drops_zero_weight_outside_shell_updates(
+    monkeypatch, side, half_volume, dtype, max_shell
+):
+    """Invalid voxels must not contend on the last valid shell's scatter bin."""
+    shape = (side, side, side // 2 + 1) if half_volume else (side,) * 3
+    values = jnp.asarray(np.arange(np.prod(shape)) % 17 + 1, dtype=dtype)
+    original = jnp.bincount
+    captured = []
+
+    def checked(indices, *, weights, length):
+        actual = original(indices, weights=weights, length=length)
+        legacy = original(jnp.minimum(indices, length - 1), weights=weights, length=length)
+        np.testing.assert_array_equal(actual, legacy)
+        captured.append((np.asarray(indices), np.asarray(weights)))
+        return actual
+
+    monkeypatch.setattr(jnp, "bincount", checked)
+    result = rf._relion_reconstruct_floor_volume(
+        values, (side,) * 3, 2, half_volume=half_volume, max_res_shell=max_shell
+    )
+    assert result.shape == values.shape and result.dtype == values.dtype
+    assert len(captured) == 2
+    for indices, weights in captured:
+        invalid = weights == 0
+        assert np.any(invalid)
+        assert np.all(indices[invalid] >= max_shell)
+
+
 def test_adjust_regularization_relion_style_native_shell_floor_under_padding():
     import recovar.core.fourier_transform_utils as ftu
 

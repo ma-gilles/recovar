@@ -857,15 +857,17 @@ def _relion_reconstruct_floor_volume(regularized_filter, volume_shape, padding_f
         average_filter = jnp.take(regularized_filter.reshape(volume_shape), packed_x, axis=0).reshape(-1)
         average_shell = jnp.take(shell.reshape(volume_shape), packed_x, axis=0).reshape(-1)
     average_valid = average_shell < max_res_shell
-    average_shell_clipped = jnp.minimum(average_shell, max_res_shell - 1)
+    # bincount drops indices beyond its fixed length. Keep invalid shells
+    # out of range instead of contending on the last bin with zero updates.
+    # The separate shell_clipped lookup still extends the floor outside support.
     dtype = regularized_filter.real.dtype
     valid_weights = average_valid.astype(dtype)
     shell_sum = jnp.bincount(
-        average_shell_clipped,
+        average_shell,
         weights=jnp.where(average_valid, average_filter, 0.0),
         length=max_res_shell,
     )
-    shell_count = jnp.bincount(average_shell_clipped, weights=valid_weights, length=max_res_shell)
+    shell_count = jnp.bincount(average_shell, weights=valid_weights, length=max_res_shell)
     shell_avg = jnp.where(shell_count > 0, shell_sum / shell_count, 0.0) / 1000.0
     return shell_avg[shell_clipped].reshape(regularized_filter.shape)
 
