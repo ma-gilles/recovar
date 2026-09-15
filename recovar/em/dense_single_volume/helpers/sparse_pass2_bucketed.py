@@ -1538,6 +1538,129 @@ def _active_row_pad_multiple_for_pass() -> int:
     return _DEFAULT_ACTIVE_ROW_PAD_MULTIPLE
 
 
+_SPARSE_KCLASS_GROUP_STATIC_ACTIVE_ROWS_ENV = "RECOVAR_SPARSE_KCLASS_GROUP_STATIC_ACTIVE_ROWS"
+
+
+def group_static_active_rows_enabled() -> bool:
+    """Pad every chunk's active-row selection to its group's maximum.
+
+    The active-row helpers (`_select_active_flat_rows_jit`, `_select_active_flat_values_jit`)
+    and the adjoint they feed compile once per distinct row count. That count is
+    the sum of the chunk's per-image rotation rows, padded to
+    ``RECOVAR_SPARSE_KCLASS_ACTIVE_ROW_PAD_MULTIPLE``, so it differs between chunks
+    of the same group: 190 distinct selection shapes against 24 groups in one
+    100k/256 K=4 iteration, 760 of its 2384 compile events (compile inventory, job
+    13927046), about 32 s of the 127 s an iteration spends compiling (sampled
+    job 13923173). The per-image row counts are host metadata known before the
+    loop, so the padded count of every chunk can be computed at planning time and
+    each chunk padded to the maximum of its group (same execution width, same
+    per-class bucket sizes, same quantized image capacity). Padded slots repeat
+    the first index under a zero mask exactly as the multiple padding does, so
+    every accumulator is unchanged; the cost is the extra masked rows through the
+    gather and the adjoint, which the planner logs as a fraction of the real rows.
+    """
+
+    return parse_env_flag(_SPARSE_KCLASS_GROUP_STATIC_ACTIVE_ROWS_ENV, default=False)
+
+
+def _padded_active_row_count(total: int, n_slots: int, pad_multiple: int) -> int:
+    """The row count :func:`_real_flat_row_indices_from_actual_counts` would pad to."""
+
+    total = int(total)
+    if total <= 0:
+        return 0
+    pad_multiple = max(1, int(pad_multiple))
+    padded_count = ((total + pad_multiple - 1) // pad_multiple) * pad_multiple
+    if pad_multiple > 1:
+        pow2_count = max(pad_multiple, 1 << (padded_count - 1).bit_length())
+        if pow2_count <= padded_count + padded_count // 8:
+            padded_count = pow2_count
+    return min(int(n_slots), padded_count)
+
+
+def _attach_group_static_active_row_targets(
+    execution_buckets,
+    per_image_inputs_by_class,
+    *,
+    pad_multiple: int,
+    rotation_block_size_for_quantization,
+) -> dict:
+    """Store per-class active-row padding targets on every compact-pair bucket.
+
+    Returns planner statistics: groups, chunks, real and padded row totals.
+    """
+
+    row_counts_by_class = [
+        {int(i): int(np.asarray(r).shape[0]) for i, r in per_image_inputs["oversampled_rots"].items()}
+        if isinstance(per_image_inputs["oversampled_rots"], dict)
+        else [int(np.asarray(r).shape[0]) for r in per_image_inputs["oversampled_rots"]]
+        for per_image_inputs in per_image_inputs_by_class
+    ]
+    capacity = image_capacity_enabled()
+    per_bucket = []
+    for bucket in execution_buckets:
+        if str(bucket.get("_execution_mode")) != "compact_pair":
+            per_bucket.append(None)
+            continue
+        image_indices = np.asarray(bucket["image_indices"], dtype=np.int64)
+        forced = bucket.get("class_bucket_sizes")
+        class_sizes = tuple(
+            int(forced[c]) if forced is not None
+            else int(_compact_bucket_size_for_class(bucket, per_image_inputs_by_class[c], rotation_block_size_for_quantization))
+            for c in range(len(per_image_inputs_by_class))
+        )
+        n_images = int(image_indices.size)
+        images_axis = (
+            quantized_image_capacity(n_images, max_images=bucket.get("image_capacity_budget")) if capacity else n_images
+        )
+        totals = tuple(
+            int(sum(min(row_counts_by_class[c][int(i)], class_sizes[c]) for i in image_indices))
+            for c in range(len(class_sizes))
+        )
+        padded = tuple(
+            _padded_active_row_count(totals[c], images_axis * class_sizes[c], pad_multiple) for c in range(len(class_sizes))
+        )
+        key = (int(bucket["_execution_bucket_size"]), class_sizes, int(images_axis))
+        per_bucket.append((key, totals, padded))
+    targets: dict = {}
+    for entry in per_bucket:
+        if entry is None:
+            continue
+        key, _totals, padded = entry
+        current = targets.get(key)
+        targets[key] = padded if current is None else tuple(max(a, b) for a, b in zip(current, padded))
+    real_rows = padded_rows = target_rows = 0
+    chunks = 0
+    for bucket, entry in zip(execution_buckets, per_bucket):
+        if entry is None:
+            continue
+        key, totals, padded = entry
+        bucket["_active_row_pad_targets"] = targets[key]
+        chunks += 1
+        real_rows += sum(totals)
+        padded_rows += sum(padded)
+        target_rows += sum(targets[key])
+    stats = {
+        "groups": len(targets),
+        "chunks": chunks,
+        "real_rows": real_rows,
+        "multiple_padded_rows": padded_rows,
+        "group_static_rows": target_rows,
+    }
+    logger.info(
+        "sparse K-class group-static active rows: %d groups, %d chunks, real rows %d, "
+        "multiple-padded rows %d (+%.1f%%), group-static rows %d (+%.1f%%)",
+        stats["groups"],
+        stats["chunks"],
+        real_rows,
+        padded_rows,
+        100.0 * (padded_rows - real_rows) / max(real_rows, 1),
+        target_rows,
+        100.0 * (target_rows - real_rows) / max(real_rows, 1),
+    )
+    return stats
+
+
 def _small_bucket_coalesce_size_for_pass(n_images: int) -> int | None:
     explicit = _optional_positive_int_env(_SMALL_BUCKET_COALESCE_SIZE_ENV)
     if explicit is not None:
@@ -7261,11 +7384,19 @@ def _active_flat_row_indices_device(counts, *, n_rotation_rows: int, padded_coun
     return flat, (slots < ends[-1]).astype(jnp.float32)
 
 
+def _group_static_pad_to(bucket_meta, class_index: int) -> int | None:
+    targets = bucket_meta.get("_active_row_pad_targets")
+    if targets is None:
+        return None
+    return int(targets[int(class_index)])
+
+
 def _real_flat_row_indices_from_actual_counts(
     actual_counts,
     n_rotation_rows: int,
     *,
     pad_multiple: int = 1,
+    pad_to: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, int]:
     """Flat ``(batch, rotation_row)`` indices of the rows an image really owns.
 
@@ -7302,6 +7433,10 @@ def _real_flat_row_indices_from_actual_counts(
         pow2_count = max(pad_multiple, 1 << (padded_count - 1).bit_length())
         if pow2_count <= padded_count + padded_count // 8:
             padded_count = pow2_count
+    if pad_to is not None:
+        # Group-static target (see ``group_static_active_rows_enabled``): never below
+        # the multiple padding this chunk would get on its own.
+        padded_count = max(padded_count, int(pad_to))
     padded_count = min(int(counts.size) * n_rotation_rows, padded_count)
     if device_active_row_indices_enabled():
         device_indices, device_mask = _active_flat_row_indices_device(
@@ -14432,6 +14567,13 @@ def compute_k_class_pass2_stats_sparse_fused(
             for bucket in buckets
         ]
     _validate_k_class_execution_bucket_partition(execution_buckets, n_images=n_images)
+    if compact_pairs and group_static_active_rows_enabled():
+        _attach_group_static_active_row_targets(
+            execution_buckets,
+            per_image_inputs_by_class,
+            pad_multiple=active_row_pad_multiple,
+            rotation_block_size_for_quantization=rotation_block_size_for_quantization,
+        )
     translation_phases_half = None if windowed_prepare else half_translation_phase_table(fine_translations, image_shape)
     score_translation_phases = None
     recon_translation_phases = None
@@ -16341,6 +16483,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                                     arrays["actual_counts"],
                                     class_bucket_size,
                                     pad_multiple=active_row_pad_multiple,
+                                    pad_to=_group_static_pad_to(bucket_meta, class_index),
                                 )
                             )
                             _add_sparse_group_timing(
@@ -16787,6 +16930,7 @@ def compute_k_class_pass2_stats_sparse_fused(
                                 arrays["actual_counts"],
                                 class_bucket_size,
                                 pad_multiple=active_row_pad_multiple,
+                                pad_to=_group_static_pad_to(bucket_meta, class_index),
                             )
                         )
                     _add_sparse_group_timing(
