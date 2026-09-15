@@ -6092,7 +6092,7 @@ def test_prepare_bucket_io_windowed_shifted_matches_full_half_slice(monkeypatch)
     for actual, expected in zip(precomputed, windowed, strict=True):
         if actual is None and expected is None:
             continue
-        np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), rtol=1e-6, atol=1e-6)
+        np.testing.assert_array_equal(np.asarray(actual), np.asarray(expected))
 
 
 def test_prepare_bucket_io_routes_direct_score_translation_through_relion_cuda(
@@ -7361,6 +7361,20 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
     from recovar.em.diagnostics import compact_candidate_capture as capture_mod
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
+    original_prepare = bucketed_mod._prepare_bucket_io
+    phase_pairs = []
+
+    def require_precomputed_phases(*args, **kwargs):
+        phases = (kwargs.get("score_translation_phases"), kwargs.get("recon_translation_phases"))
+        if kwargs["return_windowed_shifted"]:
+            assert all(phase is not None for phase in phases)
+            phase_pairs.append(phases)
+        else:
+            assert phases == (None, None)
+        return original_prepare(*args, **kwargs)
+
+    monkeypatch.setattr(bucketed_mod, "_prepare_bucket_io", require_precomputed_phases)
+
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
     monkeypatch.delenv("RECOVAR_PASS2_DUMP_DIR", raising=False)
     monkeypatch.delenv(capture_mod.CAPTURE_DIR_ENV, raising=False)
@@ -7448,7 +7462,13 @@ def test_sparse_pass2_rotation_chunking_matches_unchunked_windowed_path(
         ds.dataset_indices = np.arange(n_images, dtype=np.int64) + n_images
         bpref_diagnostics.set_bpref_contribution_dump_context(iteration=3, half=2)
         monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTION_GATHER_BYTES", "512")
+        phase_pairs.clear()
         chunked = compute_pass2_stats_sparse(**common)
+        assert phase_pairs
+        assert all(
+            score is phase_pairs[0][0] and recon is phase_pairs[0][1]
+            for score, recon in phase_pairs
+        )
     finally:
         bpref_diagnostics.clear_bpref_contribution_dump_context()
 

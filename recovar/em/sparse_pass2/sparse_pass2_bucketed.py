@@ -1240,6 +1240,17 @@ def compute_pass2_stats_sparse_bucketed(
     )
     translation_phases_half = None if windowed_prepare else half_translation_phase_table(fine_translations, image_shape)
 
+    # Translations and both Fourier windows are invariant across image buckets.
+    score_translation_phases = None
+    recon_translation_phases = None
+    if windowed_prepare:
+        score_translation_phases = _translation_phase_table_for_indices(
+            fine_translations, image_shape, window_indices, None,
+        )
+        recon_translation_phases = _translation_phase_table_for_indices(
+            fine_translations, image_shape, recon_window_indices, None,
+        )
+
     exact_raw_diff2_cache_limit_bytes = 0
     exact_raw_diff2_cache_admission_logged = False
     if use_exact_relion_gaussian:
@@ -1532,6 +1543,8 @@ def compute_pass2_stats_sparse_bucketed(
             translation_phases_half=translation_phases_half,
             relion_score_translation_angles=relion_score_translation_angles,
             return_windowed_shifted=windowed_prepare,
+            score_translation_phases=score_translation_phases,
+            recon_translation_phases=recon_translation_phases,
             relion_exact_normalized_cc_operands=relion_exact_fine_normalized_cc,
             relion_exact_bpref_operands=relion_exact_bpref_operands,
         )
