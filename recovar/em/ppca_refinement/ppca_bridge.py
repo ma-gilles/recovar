@@ -212,7 +212,7 @@ def run_dense_ppca_refinement_with_kclass_schedule(
 ):
     """Run dense PPCA refinement using the production K-class schedule bridge."""
 
-    from recovar.em.ppca_refinement import run_dense_ppca_refinement_loop
+    from recovar.em.ppca_refinement.refinement_loop import run_dense_ppca_refinement_loop
 
     bridge = make_ppca_kclass_schedule_bridge(
         n_rotations=int(np.asarray(rotations).shape[0]),
@@ -249,7 +249,7 @@ def run_local_ppca_refinement_with_kclass_schedule(
 ):
     """Run exact-local PPCA refinement using the production K-class schedule bridge."""
 
-    from recovar.em.ppca_refinement import run_local_ppca_refinement_loop
+    from recovar.em.ppca_refinement.refinement_loop import run_local_ppca_refinement_loop
 
     first_layout = halfset_local_layouts[0]
     first_dataset = halfset_datasets[0]

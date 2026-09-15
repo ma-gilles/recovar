@@ -93,23 +93,33 @@ switch from single-set to halfset).
 
 ## 4. Public entry points
 
+Import each name from the module that owns it; the package initializer
+re-exports nothing.
+
 ```python
-from recovar.em.ppca_refinement import (
-    # Single iteration
+# Single iteration
+from recovar.em.ppca_refinement.dense_dataset import (
     run_dense_ppca_fused_em_iteration,         # dense flavor
-    run_local_ppca_fused_em_iteration,         # exact-local flavor
     run_dense_ppca_halfset_fused_em_iteration, # gold-standard halfsets
+)
+from recovar.em.ppca_refinement.local_dataset import (
+    run_local_ppca_fused_em_iteration,         # exact-local flavor
     run_local_ppca_halfset_fused_em_iteration,
-    # Multi-iteration loops
+)
+# Multi-iteration loops
+from recovar.em.ppca_refinement.refinement_loop import (
     run_dense_ppca_refinement_loop,
     run_local_ppca_refinement_loop,
-    # State + schedule
-    PoseMarginalPPCAEMState,
-    PPCARefinementScheduleState,
-    # Configs
-    GeometryConfig, ScheduleConfig, ScoringConfig,
-    SparsePass2Config, MeanRegularizationConfig, PostprocessConfig,
 )
+# State + schedule
+from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
+from recovar.em.ppca_refinement.schedule import PPCARefinementScheduleState
+# Configs
+from recovar.em.ppca_refinement.config import (
+    GeometryConfig, ScheduleConfig, ScoringConfig, SparsePass2Config,
+)
+from recovar.em.ppca_refinement.mean_regularization import MeanRegularizationConfig
+from recovar.em.ppca_refinement.postprocess import PostprocessConfig
 ```
 
 A typical caller passes 2–4 configs:

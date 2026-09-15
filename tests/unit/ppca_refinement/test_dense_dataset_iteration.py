@@ -6,24 +6,26 @@ import pytest
 import recovar.core.fourier_transform_utils as ftu
 from recovar.em.helpers.half_spectrum import make_half_image_weights
 from recovar.em.local.local_layout import LocalHypothesisLayout
-from recovar.em.ppca_refinement import (
-    HalfsetMeanComparison,
-    PoseMarginalPPCAEMState,
-    dense_pose_ppca_E_step_blocked,
-    iter_dense_ppca_dataset_blocks,
-    run_dense_ppca_fused_em_iteration,
-    run_dense_ppca_halfset_fused_em_iteration,
-    run_dense_ppca_refinement_loop,
-    run_local_ppca_fused_em_iteration,
-    run_local_ppca_refinement_loop,
-)
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
     ScheduleConfig,
     ScoringConfig,
     SparsePass2Config,
 )
+from recovar.em.ppca_refinement.dense_dataset import (
+    iter_dense_ppca_dataset_blocks,
+    run_dense_ppca_fused_em_iteration,
+    run_dense_ppca_halfset_fused_em_iteration,
+)
+from recovar.em.ppca_refinement.engine import dense_pose_ppca_E_step_blocked
+from recovar.em.ppca_refinement.local_dataset import run_local_ppca_fused_em_iteration
 from recovar.em.ppca_refinement.ppca_bridge import run_dense_ppca_refinement_with_kclass_schedule
+from recovar.em.ppca_refinement.refinement_loop import (
+    HalfsetMeanComparison,
+    run_dense_ppca_refinement_loop,
+    run_local_ppca_refinement_loop,
+)
+from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
 from recovar.em.scoring.scoring import _e_step_block_scores
 
 pytestmark = pytest.mark.unit
