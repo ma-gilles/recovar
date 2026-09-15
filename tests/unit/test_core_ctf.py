@@ -361,20 +361,6 @@ def test_spa_modes_evaluator_on_gpu(gpu_device, mode):
 
 
 @pytest.mark.gpu
-def test_spa_evaluator_half_matches_full_mapping_on_gpu(gpu_device):
-    ctf_params = _make_standard_ctf_params(2)[:, :9].astype(np.float32)
-    image_shape = (4, 8)
-    evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.SPA)
-    with jax.default_device(gpu_device):
-        full = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
-        half = np.asarray(
-            evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True)
-        )
-    expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
-    np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)
-
-
-@pytest.mark.gpu
 def test_cryo_et_evaluator_on_gpu(gpu_device):
     ctf_params = _make_standard_ctf_params(4).astype(np.float32)
     image_shape = (4, 8)

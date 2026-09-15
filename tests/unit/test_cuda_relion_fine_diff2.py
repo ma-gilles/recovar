@@ -255,10 +255,11 @@ def test_relion_fused_translate_cuda_source_pins_native_block_topology():
         "relion_fine_diff2_fused_translate_pairs_f32_kernel"
     )
     pair_kernel = source[pair_start : source.index("cudaError_t", pair_start)]
-    assert "pair_count + kRelionFineDiff2Ref3dJobChunk - 1" in pair_kernel
-    assert "pair_chunk * kRelionFineDiff2Ref3dJobChunk" in pair_kernel
+    assert "constexpr int kRelionFineDiff2PairsPerBlock = 16;" in source
+    assert "pair_count + kRelionFineDiff2PairsPerBlock - 1" in pair_kernel
+    assert "pair_chunk * kRelionFineDiff2PairsPerBlock" in pair_kernel
     assert (
-        "kRelionFineDiff2BlockSize * kRelionFineDiff2TranslationCapacity"
+        "kRelionFineDiff2BlockSize * kRelionFineDiff2PairsPerBlock"
         in pair_kernel
     )
     assert "image_value = image[image_index]" in pair_kernel
@@ -633,7 +634,15 @@ def test_relion_coarse_prehalf_shared_body_is_built_packaged_and_stale_checked()
     makefile = (root / "recovar" / "cuda" / "Makefile").read_text()
     manifest = (root / "MANIFEST.in").read_text()
 
-    build_inputs = ("cuda_backproject.cu", include_name, "noise_residual.cuh", "relion_vdam_mstep.cuh", "relion_scoring.cuh")
+    build_inputs = (
+        "cuda_backproject.cu",
+        include_name,
+        "noise_residual.cuh",
+        "vdam_trace.cuh",
+        "relion_preprocess.cuh",
+        "relion_vdam_mstep.cuh",
+        "relion_scoring.cuh",
+    )
     library_rule = next(line for line in makefile.splitlines() if line.startswith("$(LIB):"))
     prerequisites, order_only = library_rule.split(":", 1)[1].split("|", 1)
     assert set(prerequisites.split()) == set(build_inputs)
@@ -645,6 +654,8 @@ def test_relion_coarse_prehalf_shared_body_is_built_packaged_and_stale_checked()
 
     assert cuda_backproject._CUDA_BUILD_SOURCE_NAMES == (
         "noise_residual.cuh",
+        "vdam_trace.cuh",
+        "relion_preprocess.cuh",
         "relion_vdam_mstep.cuh",
         "relion_scoring.cuh",
         "cuda_backproject.cu",
