@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import subprocess
@@ -49,12 +48,13 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+# Support direct execution, sibling imports, and the scripts package.
+if not __package__:
+    from analyzer_provenance import clean_repo_head
+    from file_hash import sha256_file as _sha256
+else:
+    from scripts.analyzer_provenance import clean_repo_head
+    from scripts.file_hash import sha256_file as _sha256
 
 
 def _strict_mismatch_count(reference: np.ndarray, repeat: np.ndarray) -> int:
@@ -216,19 +216,6 @@ def _allocated_gpu_uuid(expected_gpu_uuid: str) -> str:
     actual = completed.stdout.strip()
     _require(actual == expected_gpu_uuid, "allocated GPU UUID mismatch")
     return actual
-
-
-def _clean_repo_head(repo: Path) -> str:
-    head = subprocess.check_output(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        text=True,
-    ).strip()
-    status = subprocess.check_output(
-        ["git", "-C", str(repo), "status", "--porcelain=v1"],
-        text=True,
-    )
-    _require(not status, "analyzer repository is dirty")
-    return head
 
 
 def _load_bundle(
@@ -424,7 +411,7 @@ def main() -> None:
         particle_diameter_angstrom=args.particle_diameter_angstrom,
         mask_edge_width_pixels=args.mask_edge_width_pixels,
     )
-    report["analyzer_repo_head"] = _clean_repo_head(args.repo)
+    report["analyzer_repo_head"] = clean_repo_head(args.repo)
     report["inputs"]["cuda_library"] = {
         "path": str(args.cuda_library.resolve()),
         "sha256": _sha256(args.cuda_library),

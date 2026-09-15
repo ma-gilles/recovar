@@ -5,6 +5,9 @@ site_url: https://ma-gilles.github.io/recovar
 repo_name: ma-gilles/recovar
 repo_url: https://github.com/ma-gilles/recovar
 
+hooks:
+  - scripts/mkdocs_source_links.py
+
 extra_css:
   - stylesheets/extra.css
 
@@ -44,6 +47,7 @@ plugins:
       handlers:
         python:
           options:
+            allow_inspection: false
             docstring_style: google
             show_source: false
             show_root_heading: true
@@ -100,6 +104,12 @@ nav:
   - Reference:
     - CLI Commands: reference/cli.md
     - File Formats: reference/file-formats.md
+    - Development:
+      - Codebase Map: development/codebase.md
+      - Cleanup Plan: development/cleanup_plan.md
+      - Della Setup: development/della.md
+      - Benchmark Contract: development/benchmarks.md
+      - Current EM Status: development/em_status.md
     - Developer API:
       - recovar.core: reference/api/core.md
       - recovar.data_io: reference/api/data_io.md

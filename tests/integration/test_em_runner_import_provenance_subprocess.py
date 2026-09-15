@@ -1,12 +1,11 @@
 """Subprocess coverage for the import-bound full-refinement entry point."""
 
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -33,9 +32,11 @@ def test_module_entry_point_checks_concrete_imports(tmp_path):
         check=False,
     )
     assert accepted.returncode == 0, accepted.stderr
-    assert "recovar.em.dense_single_volume.iteration_loop=" in accepted.stderr
-    assert "recovar.em.dense_single_volume.k_class=" in accepted.stderr
-    assert "recovar.em.dense_single_volume.helpers.significance=" in accepted.stderr
+    assert "recovar.em.refinement.iteration_loop=" in accepted.stderr
+    assert "recovar.em.dense.half_scoring=" in accepted.stderr
+    assert "recovar.em.dense.scoring_policy=" in accepted.stderr
+    assert "recovar.em.classification.k_class=" in accepted.stderr
+    assert "recovar.em.scoring.significance=" in accepted.stderr
 
     rejected = subprocess.run(
         command,

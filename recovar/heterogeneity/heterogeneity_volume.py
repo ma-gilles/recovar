@@ -61,16 +61,20 @@ def make_volumes_kernel_estimate_from_results(
     pipeline results dict.
 
     Args:
-        latent_point: Target point in latent space, shape ``(zdim,)``.
-        results: Pipeline output dictionary (loaded from pickle).
-        ndim: Latent dimensionality to use.
-        cryos: Pre-loaded dataset (``CryoEMDataset`` or ``CryoEMDataset``);
+        latent_point (numpy.ndarray | jax.Array): Target point in latent space, shape ``(zdim,)``.
+        results (dict[str, object]): Pipeline output dictionary (loaded from pickle).
+        ndim (int): Latent dimensionality to use.
+        cryos (CryoEMDataset | None): Preloaded dataset;
             loaded from *results* if ``None``.
-        n_bins: Number of heterogeneity bins for kernel regression.
-        output_folder: Directory for output MRC files.
-        B_factor: B-factor sharpening in Angstroms squared.
-        metric_used: Volume quality metric for selection.
-        n_min_particles: Minimum particles per bin.
+        n_bins (int): Number of heterogeneity bins for kernel regression.
+        output_folder (str | os.PathLike | None): Directory for output MRC files.
+        B_factor (float): B-factor sharpening in Angstroms squared.
+        metric_used (str): Volume quality metric for selection.
+        n_min_particles (int): Minimum particles per bin.
+
+    Returns:
+        result (None): Writes reconstruction outputs to ``output_folder``.
+            The legacy ``global`` metric branch does not reconstruct a volume.
     """
     ds = halfsets.load_halfset_dataset_from_args(results["input_args"], lazy=False) if cryos is None else cryos
     output_folder = results["input_args"].outdir + "/output/" if output_folder is None else output_folder
@@ -132,26 +136,33 @@ def make_volumes_kernel_estimate_local(
     with local-resolution filtering.  Results are written as MRC files.
 
     Args:
-        heterogeneity_distances: Per-half-set log-likelihood distances,
-            list of two arrays each of shape ``(n_images_half,)``.
-        dataset: ``CryoEMDataset`` with ``halfset_indices`` set.
+        heterogeneity_distances (Sequence[numpy.ndarray]): Per-half-set log-likelihood distances,
+            two arrays indexed within each half-set, per image for SPA or
+            per particle for tilt-series data.
+        dataset (CryoEMDataset): ``CryoEMDataset`` with ``halfset_indices`` set.
             Halfset datasets are obtained via ``dataset.get_halfset(k)``.
-        vol_paths: :class:`VolumeOutputPaths` defining where to write outputs.
-        ndim: Latent dimensionality (``-1`` for automatic).
-        bins: Number of bins (int) or explicit bin edges (array).
-        B_factor: B-factor sharpening in Angstroms squared.
-        tau: Regularization parameter (``None`` = auto).
-        n_min_particles: Minimum particles per bin.
-        metric_used: Volume quality metric for local-resolution selection.
-        upsampling_for_ests: Upsampling factor for estimates.
-        use_mask_ests: Apply mask to estimates.
-        grid_correct_ests: Apply gridding correction.
-        locres_sampling: Number of local-resolution shells.
-        locres_maskrad: Local-resolution mask radius.
-        locres_edgwidth: Local-resolution mask edge width.
-        kernel_rad: Radius of the heterogeneity kernel.
-        save_all_estimates: Save all intermediate estimates.
-        heterogeneity_kernel: Kernel shape (``'parabola'`` or ``'flat'``).
+        vol_paths (VolumeOutputPaths): :class:`VolumeOutputPaths` defining where to write outputs.
+        ndim (int): Compatibility argument; currently unused.
+        bins (int | numpy.ndarray): Number of bins (int) or explicit bin edges (array).
+        B_factor (float): B-factor sharpening in Angstroms squared.
+        tau (numpy.ndarray | jax.Array | float | None): Regularization parameter (``None`` = auto).
+        n_min_particles (int): Minimum particles per bin.
+        metric_used (str): Volume quality metric for local-resolution selection.
+        upsampling_for_ests (int): Upsampling factor for estimates.
+        use_mask_ests (bool): Apply mask to estimates.
+        grid_correct_ests (bool): Apply gridding correction.
+        locres_sampling (float): Local-resolution sampling-point spacing in Angstroms.
+        locres_maskrad (float | None): Local-resolution mask radius in Angstroms; defaults to half
+            the sampling-point spacing.
+        locres_edgwidth (float | None): Local-resolution mask edge width in Angstroms; defaults to
+            the sampling-point spacing.
+        kernel_rad (float): Spatial smoothing radius for the selected-bin map, in voxels.
+        save_all_estimates (bool): Save all intermediate estimates.
+        heterogeneity_kernel (str): Kernel shape (``'parabola'`` or ``'flat'``).
+        use_fast_rfft (bool): Use the half-spectrum reconstruction path.
+
+    Returns:
+        result (None): Writes maps, distances and diagnostics through ``vol_paths``.
     """
     vol_paths.ensure_dirs()
     ds = dataset

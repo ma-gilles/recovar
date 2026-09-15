@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -12,6 +11,7 @@ from typing import Any
 import numpy as np
 
 from recovar.reconstruction import regularization
+from recovar.utils.file_hash import sha256_file
 from scripts.analyze_em_k1_bpref_substitution import (
     load_relion_raw,
     relion_raw_to_recovar_full,
@@ -25,14 +25,6 @@ from scripts.compare_iter1_bpref_accum import (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _load_native_bpref(path: Path, *, value_dtype: np.dtype) -> tuple[np.ndarray, np.ndarray]:
@@ -350,7 +342,7 @@ def main() -> None:
             max_shell=max_shell,
         ),
         "artifacts": {
-            str(path.resolve()): _sha256(path)
+            str(path.resolve()): sha256_file(path)
             for path in (args.recovar_bpref, args.native_data, args.native_weight)
         },
     }
@@ -477,9 +469,9 @@ def main() -> None:
                 recovar_fsc, production_fsc, allow_sign=False
             )
             report["two_half_fsc"]["production"] = production_fsc.tolist()
-            report["artifacts"][str(args.recovar_fsc.resolve())] = _sha256(args.recovar_fsc)
+            report["artifacts"][str(args.recovar_fsc.resolve())] = sha256_file(args.recovar_fsc)
         for path in (args.native_data_half2, args.native_weight_half2):
-            report["artifacts"][str(path.resolve())] = _sha256(path)
+            report["artifacts"][str(path.resolve())] = sha256_file(path)
     if args.recovar_repeat is not None:
         repeat_recovar = _load_recovar(args.recovar_repeat, half=args.half)
         for key in (
@@ -534,7 +526,7 @@ def main() -> None:
                 max_shell=max_shell,
             ),
         }
-        report["artifacts"][str(args.recovar_repeat.resolve())] = _sha256(
+        report["artifacts"][str(args.recovar_repeat.resolve())] = sha256_file(
             args.recovar_repeat
         )
     if (args.native_repeat_data is None) != (args.native_repeat_weight is None):
@@ -577,7 +569,7 @@ def main() -> None:
         )
         report["artifacts"].update(
             {
-                str(path.resolve()): _sha256(path)
+                str(path.resolve()): sha256_file(path)
                 for path in (args.native_repeat_data, args.native_repeat_weight)
             }
         )

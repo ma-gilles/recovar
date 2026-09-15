@@ -1,0 +1,274 @@
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from scripts.analyze_vdam_storewavg_boundary import (
+    _complex_long_3d,
+    _fftw_window_to_native_crop,
+    _inline_projector_comparisons,
+    _load_unmasked_image,
+    _match_rotations,
+    _metric,
+    _native_gradient_rows,
+    _posterior_metric,
+    _positive_rotation_mask,
+    _real_2d_or_flat,
+    _production_score_gradient_rows,
+    _restore_storewavg_inverse_noise_dc,
+    _scatter_relion_rows,
+    _select_recovar_particle_rows,
+)
+
+pytestmark = pytest.mark.unit
+
+
+def test_fftw_window_maps_full_box_rows_to_native_crop_and_centered_rows():
+    half_width = 65
+    fftw_indices = np.asarray(
+        [0 * half_width + 0, 1 * half_width + 2, 127 * half_width + 3],
+        dtype=np.int32,
+    )
+
+    crop, centered = _fftw_window_to_native_crop(
+        fftw_indices,
+        physical_image_size=128,
+        current_size=38,
+    )
+
+    np.testing.assert_array_equal(crop, np.asarray([0, 22, 743], dtype=np.int32))
+    np.testing.assert_array_equal(
+        centered,
+        np.asarray([64 * half_width, 65 * half_width + 2, 63 * half_width + 3], dtype=np.int32),
+    )
+
+
+def test_match_rotations_is_tolerance_bounded_and_one_to_one():
+    native = np.stack((np.eye(3), np.diag([-1.0, -1.0, 1.0]))).astype(np.float32)
+    recovar = native[::-1].copy()
+    recovar[0, 0, 0] += np.float32(5.0e-7)
+
+    np.testing.assert_array_equal(_match_rotations(native, recovar, 1.0e-6), np.asarray([1, 0]))
+    with pytest.raises(ValueError, match="absent"):
+        _match_rotations(native, recovar, 1.0e-8)
+
+
+def test_positive_rotation_mask_ignores_native_zero_posterior_padding():
+    probabilities = np.asarray(
+        [[0.0, 0.0], [0.25, 0.0], [0.0, 0.75], [0.0, 0.0]],
+        dtype=np.float32,
+    )
+
+    np.testing.assert_array_equal(
+        _positive_rotation_mask(probabilities),
+        np.asarray([False, True, True, False]),
+    )
+    with pytest.raises(ValueError, match="no positive-posterior rotations"):
+        _positive_rotation_mask(np.zeros((2, 3), dtype=np.float32))
+
+
+def test_native_gradient_rows_replays_relion_residual_formula():
+    probabilities = np.asarray([[0.25, 0.75], [0.5, 0.0]], dtype=np.float32)
+    translated = np.asarray([[1 + 2j, 3 + 4j], [5 + 6j, 7 + 8j]], dtype=np.complex64)
+    projections = np.asarray([[0.5 + 0.25j, 1 + 0.5j], [2 + 1j, 3 + 1.5j]], dtype=np.complex64)
+    ctf = np.asarray([2.0, -3.0], dtype=np.float32)
+    inverse_noise = np.asarray([4.0, 5.0], dtype=np.float32)
+
+    data, weight = _native_gradient_rows(probabilities, translated, projections, ctf, inverse_noise)
+
+    mass = probabilities.sum(axis=1)
+    expected_weight = mass[:, None] * (ctf * ctf * inverse_noise)[None, :]
+    expected_data = (
+        probabilities @ translated * (ctf * inverse_noise)[None, :]
+        - projections * expected_weight
+    )
+    np.testing.assert_array_equal(weight, expected_weight.astype(np.float32))
+    np.testing.assert_allclose(data, expected_data.astype(np.complex64), rtol=1.0e-7, atol=1.0e-7)
+
+
+def test_restore_storewavg_inverse_noise_dc_uses_sigma2_model_value():
+    inverse_noise = np.asarray([0.0, 2.0, 3.0], dtype=np.float32)
+    crop_indices = np.asarray([0, 4, 7], dtype=np.int32)
+
+    restored = _restore_storewavg_inverse_noise_dc(
+        inverse_noise,
+        crop_indices,
+        np.asarray([[0.25, 0.5]], dtype=np.float64),
+        2.0,
+    )
+
+    np.testing.assert_array_equal(restored, np.asarray([2.0, 2.0, 3.0], dtype=np.float32))
+    np.testing.assert_array_equal(inverse_noise, np.asarray([0.0, 2.0, 3.0], dtype=np.float32))
+
+
+def test_production_score_gradient_rows_replays_fused_mstep_formula():
+    posterior = np.asarray([[[0.25, 0.75], [0.5, 0.5]]], dtype=np.float32)
+    mask = np.asarray([[[True, False], [True, True]]])
+    shifted = np.asarray([[1 + 2j, 3 + 4j], [5 + 6j, 7 + 8j]], dtype=np.complex64)
+    ctf2 = np.asarray([2.0, 3.0], dtype=np.float32)
+    projections = np.asarray([[0.5 + 0.25j, 1 + 0.5j], [2 + 1j, 3 + 1.5j]], dtype=np.complex64)
+
+    data, weight, reconstruction_probs = _production_score_gradient_rows(
+        {
+            "posterior": posterior,
+            "reconstruction_sample_mask": mask,
+            "debug_shifted_recon": shifted,
+            "debug_ctf2_over_nv_recon": ctf2,
+            "debug_proj_for_recon": projections,
+        }
+    )
+
+    expected_probs = posterior[0] * mask[0]
+    mass = expected_probs.sum(axis=-1, dtype=np.float32)
+    expected_weight = mass[:, None] * ctf2[None, :]
+    expected_data = expected_probs @ shifted - projections * expected_weight
+    np.testing.assert_array_equal(reconstruction_probs, expected_probs)
+    np.testing.assert_array_equal(weight, expected_weight.astype(np.float32))
+    np.testing.assert_allclose(data, expected_data.astype(np.complex64), rtol=1.0e-7, atol=1.0e-7)
+
+
+def test_metric_uses_relative_l2_and_complex_inner_product():
+    reference = np.asarray([1 + 1j, 2 - 1j], dtype=np.complex64)
+    result = _metric(reference, reference.copy())
+
+    assert result["relative_l2"] == 0.0
+    assert result["cosine"] == pytest.approx(1.0)
+    assert result["max_abs"] == 0.0
+
+
+def test_posterior_metric_reports_mass_support_and_l1():
+    reference = np.asarray([[0.25, 0.75, 0.0]], dtype=np.float32)
+    candidate = np.asarray([[0.2, 0.0, 0.8]], dtype=np.float32)
+
+    result = _posterior_metric(reference, candidate)
+
+    assert result["reference_retained_mass"] == pytest.approx(1.0)
+    assert result["candidate_retained_mass"] == pytest.approx(1.0)
+    assert result["l1"] == pytest.approx(1.6)
+    assert result["support_mismatch_count"] == 2
+    assert result["reference_positive_count"] == 2
+    assert result["candidate_positive_count"] == 2
+
+
+def test_inline_projector_comparisons_selects_capture_by_original_identity():
+    native_data = np.asarray([1 + 2j, 3 + 4j], dtype=np.complex64)
+    native_weight = np.asarray([5.0, 6.0], dtype=np.float32)
+    controlled_data = native_data + np.complex64(1.0)
+    controlled_weight = native_weight + np.float32(1.0)
+    capture = {
+        "original_indices": np.asarray([20, 10], dtype=np.int64),
+        "inline_projector_original_indices": np.asarray([10], dtype=np.int64),
+        "inline_projector_data_volumes": native_data.reshape(1, -1),
+        "inline_projector_weight_volumes": native_weight.reshape(1, -1),
+    }
+
+    result = _inline_projector_comparisons(
+        capture,
+        particle_slot=1,
+        native_bpref_data=native_data,
+        native_bpref_weight=native_weight,
+        controlled_bpref_data=controlled_data,
+        controlled_bpref_weight=controlled_weight,
+        native_gpu_bpref_data=native_data,
+        native_gpu_bpref_weight=native_weight,
+    )
+
+    assert result["inline_projector_bpref_data"]["relative_l2"] == 0.0
+    assert result["inline_projector_bpref_weight"]["relative_l2"] == 0.0
+    assert result["inline_projector_vs_native_gpu_bpref_data"]["relative_l2"] == 0.0
+    assert result["inline_projector_vs_native_gpu_bpref_weight"]["relative_l2"] == 0.0
+    assert result["inline_projector_bpref_data_same_posterior_control"]["relative_l2"] > 0.0
+    assert result["inline_projector_bpref_weight_same_posterior_control"]["relative_l2"] > 0.0
+
+
+def test_complex_long_3d_reads_relion_multidimarray_dump(tmp_path):
+    path = tmp_path / "p0_Fimg_nomask.bin"
+    dimensions = np.asarray([1, 2, 3], dtype=np.int_)
+    values = np.arange(6, dtype=np.float64).astype(np.complex128).reshape(1, 2, 3)
+    path.write_bytes(dimensions.tobytes() + values.tobytes())
+
+    np.testing.assert_array_equal(_complex_long_3d(path), values)
+    np.testing.assert_array_equal(_load_unmasked_image(path), values)
+
+    shifted_path = tmp_path / "store_Fimg_shifted_t0_nomask.bin"
+    shifted_path.write_bytes(dimensions.tobytes() + values.tobytes())
+    np.testing.assert_array_equal(_load_unmasked_image(shifted_path), values)
+
+
+def test_real_2d_or_flat_reads_storewavg_accptr_dump(tmp_path):
+    flat_path = tmp_path / "Minvsigma2.bin"
+    values = np.asarray([1.25, 2.5, 5.0], dtype="<f8")
+    flat_path.write_bytes(np.asarray([values.size], dtype="<i4").tobytes() + values.tobytes())
+
+    np.testing.assert_array_equal(_real_2d_or_flat(flat_path), values)
+
+    matrix_path = tmp_path / "matrix.bin"
+    matrix = values.reshape(1, 3)
+    matrix_path.write_bytes(np.asarray(matrix.shape, dtype="<i4").tobytes() + matrix.tobytes())
+    np.testing.assert_array_equal(_real_2d_or_flat(matrix_path), matrix)
+
+
+def test_load_unmasked_image_rejects_masked_scoring_operand(tmp_path):
+    path = tmp_path / "Fimg_unweighted.bin"
+    path.write_bytes(b"not used")
+
+    with pytest.raises(ValueError, match="refusing masked"):
+        _load_unmasked_image(path)
+
+
+def test_select_recovar_particle_rows_uses_original_identity():
+    capture = {
+        "original_indices": np.asarray([100, 0], dtype=np.int64),
+        "active_particle_rows": np.asarray([0, 1, 0, 1, 1], dtype=np.int32),
+    }
+
+    slot, row_mask = _select_recovar_particle_rows(capture, 0)
+
+    assert slot == 1
+    np.testing.assert_array_equal(row_mask, np.asarray([False, True, False, True, True]))
+
+
+def test_select_recovar_particle_rows_requires_identity_for_panel():
+    capture = {
+        "original_indices": np.asarray([0, 100], dtype=np.int64),
+        "active_particle_rows": np.asarray([0, 1], dtype=np.int32),
+    }
+
+    with pytest.raises(ValueError, match="required for a panel"):
+        _select_recovar_particle_rows(capture, None)
+
+
+def test_scatter_relion_rows_expands_fftw_half_images_and_pins_geometry():
+    calls = []
+
+    def fake_backprojector(images, rotations, weights, **kwargs):
+        calls.append((images, rotations, weights, kwargs))
+        return images.sum(axis=0), weights.sum(axis=0)
+
+    data, weight = _scatter_relion_rows(
+        np.asarray([[1.0 + 2.0j, 3.0 + 4.0j]], dtype=np.complex64),
+        np.asarray([[5.0, 6.0]], dtype=np.float32),
+        np.eye(3, dtype=np.float32)[None],
+        np.asarray([0, 7], dtype=np.int32),
+        physical_image_size=8,
+        current_size=6,
+        padding_factor=1,
+        get_backprojector_data=fake_backprojector,
+    )
+
+    images, rotations, weights, kwargs = calls[0]
+    assert images.shape == (1, 8, 5)
+    assert weights.shape == (1, 8, 5)
+    assert images.dtype == np.complex128
+    assert weights.dtype == np.float64
+    np.testing.assert_array_equal(images.reshape(1, -1)[0, [0, 7]], [1 + 2j, 3 + 4j])
+    np.testing.assert_array_equal(weights.reshape(1, -1)[0, [0, 7]], [5.0, 6.0])
+    np.testing.assert_array_equal(rotations, np.eye(3, dtype=np.float64)[None])
+    assert kwargs == {
+        "ori_size": 8,
+        "padding_factor": 1,
+        "interpolator": 1,
+        "current_size": 6,
+    }
+    np.testing.assert_array_equal(data, images[0])
+    np.testing.assert_array_equal(weight, weights[0])

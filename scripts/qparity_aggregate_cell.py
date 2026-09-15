@@ -55,37 +55,6 @@ def _read_relion_pmax(relion_dir: Path, iter_num: int) -> float:
         return float("nan")
 
 
-def _read_relion_volume(relion_dir: Path, iter_num: int, class_index: int = 1) -> np.ndarray | None:
-    """Read RELION reconstructed volume run_it{NNN}_class{ccc}.mrc."""
-    p = relion_dir / f"run_it{iter_num:03d}_class{class_index:03d}.mrc"
-    if not p.exists():
-        return None
-    try:
-        from recovar import utils
-
-        return np.asarray(utils.load_mrc(str(p))[0], dtype=np.float64)
-    except Exception:
-        try:
-            import mrcfile
-
-            with mrcfile.open(str(p), permissive=True) as f:
-                return np.asarray(f.data, dtype=np.float64)
-        except Exception:
-            return None
-
-
-def _vol_corr(a: np.ndarray, b: np.ndarray) -> float:
-    a = a.astype(np.float64).ravel()
-    b = b.astype(np.float64).ravel()
-    a -= a.mean()
-    b -= b.mean()
-    na = float(np.linalg.norm(a))
-    nb = float(np.linalg.norm(b))
-    if na == 0 or nb == 0:
-        return float("nan")
-    return float(np.dot(a, b) / (na * nb))
-
-
 def _aggregate_k1(args, summary: dict) -> dict:
     """K=1 case: compare recovar refinement_results.npz half1/half2 against
     RELION run_it{NNN}_class001.mrc per iter."""

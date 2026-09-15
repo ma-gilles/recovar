@@ -10,7 +10,6 @@ comparisons here use exact equality and relative L2 only.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -41,12 +40,11 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+# Support direct execution, sibling imports, and the scripts package.
+if not __package__:
+    from file_hash import sha256_file as _sha256
+else:
+    from scripts.file_hash import sha256_file as _sha256
 
 
 def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, Any]:
@@ -137,7 +135,7 @@ def _device_sums(
     import jax
     import jax.numpy as jnp
 
-    from recovar.em.dense_single_volume.local_backprojection import compute_local_mstep_sums
+    from recovar.em.local.local_backprojection import compute_local_mstep_sums
 
     devices = jax.devices()
     _require(bool(devices), "JAX reports no devices")

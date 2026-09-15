@@ -124,10 +124,12 @@ def _particle_table(path: Path):
     return table
 
 
-def _identity_array(table, *, source: Path) -> np.ndarray:
+def _identity_array(table, *, source: Path | str) -> np.ndarray:
     values = _column(table, "rlnImageName")
     if values is None:
         raise AuditError(f"{source} is missing required rlnImageName identities")
+    if values.isna().any():
+        raise AuditError(f"{source} contains missing rlnImageName identities")
     identities = np.asarray(values.astype(str).to_numpy(), dtype=str)
     if identities.size == 0 or np.any(np.char.str_len(np.char.strip(identities)) == 0):
         raise AuditError(f"{source} contains empty rlnImageName identities")

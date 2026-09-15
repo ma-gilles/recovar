@@ -18,17 +18,19 @@ import math
 
 import pytest
 
-from recovar.em.initial_model import (
-    GuiInitialModelDefaults,
+from recovar.em.vdam.native_options import InitialModelDefaults
+from recovar.em.vdam.schedules import (
+    DEFAULT_STEPSIZE_3D_INITIAL_MODEL,
+    DEFAULT_TAU2_FUDGE_3D_INITIAL_MODEL,
+    _relion_round,
+    _step_sigmoid_value,
     compute_phase_lengths,
     compute_stepsize,
     compute_subset_size,
     compute_tau2_fudge,
-    default_step_size_for_3d_initial_model,
     default_subset_sizes_for_3d_initial_model,
-    default_tau2_fudge_for_3d_initial_model,
+    phase_lengths_from_effective_fractions,
 )
-from recovar.em.initial_model.schedules import _relion_round, _step_sigmoid_value
 
 pytestmark = pytest.mark.unit
 
@@ -59,6 +61,22 @@ class TestPhaseLengths:
         assert p.grad_fin_iter == int(1100 * (0.5 / 1.1))
         # nr_iter - ini - fin
         assert p.grad_inbetween_iter == 1100 - p.grad_ini_iter - p.grad_fin_iter
+
+    def test_checkpoint_effective_fractions_are_not_normalized_twice(self):
+        effective = 0.8 / (0.8 + 0.8 + 0.1)
+
+        uninterrupted = compute_phase_lengths(200, 0.8, 0.8)
+        resumed = phase_lengths_from_effective_fractions(
+            200,
+            effective,
+            effective,
+        )
+
+        assert resumed == uninterrupted
+        assert resumed.grad_ini_iter == 94
+        assert resumed.grad_inbetween_iter == 12
+        assert resumed.grad_fin_iter == 94
+        assert compute_phase_lengths(200, effective, effective) != uninterrupted
 
     def test_c_integer_truncation_not_banker_rounding(self):
         # nr_iter=10, frac=0.15 -> int(10*0.15) = int(1.5) = 1 (trunc), NOT 2
@@ -297,7 +315,7 @@ class TestSubsetSizeSchedule:
 
 class TestStepSizeSchedule:
     def test_default_3d_initial_model_stepsize(self):
-        assert default_step_size_for_3d_initial_model() == 0.5
+        assert DEFAULT_STEPSIZE_3D_INITIAL_MODEL == 0.5
 
     def test_3d_initial_model_default_scheme_decays_0p9_to_0p5(self):
         """For is_3d_model=True, ref_dim=3, default stepsize=0.5, default scheme=1.8-step.
@@ -320,6 +338,11 @@ class TestStepSizeSchedule:
         # stepsize = 0.9*0.5 + 0.5*0.5 = 0.45 + 0.25 = 0.7
         v_mid = compute_stepsize(iter=85, phase_lengths=p, is_3d_model=True, ref_dim=3)
         assert v_mid == pytest.approx(0.7, abs=2e-8)
+
+    def test_iteration_one_preserves_relion_float_scale_rounding(self):
+        """RELION's x/a/b/scale sigmoid locals are 32-bit ``float``."""
+        p = compute_phase_lengths(200, 0.3, 0.2)
+        assert compute_stepsize(iter=1, phase_lengths=p, is_3d_model=True, ref_dim=3) == 0.8999999046325726
 
     def test_short_8_iter_reference_schedule_matches_relion_initialmodel(self):
         """Pinned from the 50k/256 RELION InitialModel iter-8 reference."""
@@ -420,7 +443,7 @@ class TestStepSizeSchedule:
 
 class TestTau2FudgeSchedule:
     def test_default_3d_initial_model_fudge(self):
-        assert default_tau2_fudge_for_3d_initial_model() == 4.0
+        assert DEFAULT_TAU2_FUDGE_3D_INITIAL_MODEL == 4.0
 
     def test_3d_initial_model_default_scheme_grows_1_to_4(self):
         """Default scheme = "4-step" -> deflate=4.
@@ -476,9 +499,10 @@ class TestTau2FudgeSchedule:
             )
             for it in range(0, 201, 10)
         ]
-        # Every step (after the flat initial tail) is non-decreasing
+        # RELION stores the sigmoid scale as float.  Its quantized tail can
+        # overshoot 4 and then fall back by one float-sized increment.
         for a, b in zip(values, values[1:]):
-            assert b >= a - 1e-12, f"trajectory not monotone: {a} -> {b}"
+            assert b >= a - 3e-8, f"trajectory not monotone within RELION float precision: {a} -> {b}"
         assert values[0] < 1.5  # starts near 1
         assert values[-1] > 3.5  # ends near 4
 
@@ -546,7 +570,6 @@ class TestHelpers:
         v = _step_sigmoid_value(
             iter=1_000_000,
             grad_ini_iter=60,
-            grad_inbetween_iter=100,
             base=0.5,
             inflated=0.9,
             sigmoid_length=50.0,
@@ -557,7 +580,6 @@ class TestHelpers:
         v2 = _step_sigmoid_value(
             iter=-1_000_000,
             grad_ini_iter=60,
-            grad_inbetween_iter=100,
             base=0.5,
             inflated=0.9,
             sigmoid_length=50.0,
@@ -565,11 +587,10 @@ class TestHelpers:
         assert abs(v2 - 0.9) < 1e-9
 
     def test_step_sigmoid_degenerate_a_zero(self):
-        # Inbetween phase is 0 --> fall through to base
+        # Zero sigmoid length falls through to base
         v = _step_sigmoid_value(
             iter=100,
             grad_ini_iter=60,
-            grad_inbetween_iter=0,
             base=0.5,
             inflated=0.9,
             sigmoid_length=0.0,
@@ -584,7 +605,7 @@ class TestHelpers:
 
 def test_gui_initial_model_defaults_produce_plan_trajectory():
     """Quick visual check: at GUI defaults, step 0.9->0.5 and tau 1->4."""
-    defaults = GuiInitialModelDefaults()
+    defaults = InitialModelDefaults()
     p = compute_phase_lengths(
         defaults.nr_iter,
         defaults.grad_ini_frac,

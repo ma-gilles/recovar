@@ -60,7 +60,7 @@ def test_single_iter_plain_em():
 
     from recovar.core import fourier_transform_utils as ftu
     from recovar.data_io.cryoem_dataset import load_dataset
-    from recovar.em.dense_single_volume.em_engine import run_em
+    from recovar.em.dense.em_engine import run_em
     from recovar.em.sampling import get_relion_hidden_rotation_grid, get_translation_grid
     from recovar.reconstruction.noise import make_radial_noise
     from recovar.utils.helpers import load_relion_volume
@@ -113,7 +113,7 @@ def test_single_iter_plain_em():
     )
 
     # Unpack: (new_mean, hard_assignment, Ft_y, Ft_ctf, relion_stats)
-    new_mean = np.asarray(result[0])
+    new_mean = np.asarray(result.mean)
     assert new_mean.shape == (ori_size**3,), f"unexpected new_mean shape {new_mean.shape}"
 
     # Convert back to real space

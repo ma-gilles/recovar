@@ -4,7 +4,7 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.em import e_step, m_step
+from recovar.em.reference import e_step, m_step
 
 pytestmark = pytest.mark.unit
 

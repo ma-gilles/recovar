@@ -120,7 +120,7 @@ These pieces are good building blocks and should be preserved:
 - A RELION-mode top-level loop in `_run_relion_iteration_loop()`.
 - Local-search and adaptive-oversampling scaffolding.
 - RELION reference extraction utilities in `scripts/extract_relion_reference.py`.
-- Comparison helpers in `tests/integration/test_relion_comparison.py`.
+- Comparison helpers in [the historical comparison scaffold](https://github.com/ma-gilles/recovar/blob/a705edae45802061ab047b6bb3b9b6d8a65dcb90/tests/integration/test_relion_comparison.py).
 
 The problem is not the absence of a RELION-mode scaffold. The problem is that
 the scaffold does not yet preserve the same sufficient statistics and control
@@ -335,7 +335,7 @@ Deliverables:
 Implementation notes:
 
 - Reuse `scripts/extract_relion_reference.py`.
-- Reuse the helper comparisons in `tests/integration/test_relion_comparison.py`.
+- Reuse the helper comparisons in [the historical comparison scaffold](https://github.com/ma-gilles/recovar/blob/a705edae45802061ab047b6bb3b9b6d8a65dcb90/tests/integration/test_relion_comparison.py).
 - Stop accepting "same ballpark" assertions in parity tests.
 
 Exit criteria:

@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 import starfile
 
-from recovar.em.dense_single_volume.relion_worker_scale import (
+from recovar.em.relion.relion_worker_scale import (
     make_relion_dispatch_schedule_from_chunks,
     relion_class3d_follower_owners_from_schedule,
     relion_oracle_id,
@@ -168,7 +168,6 @@ def _fixture(tmp_path: Path, *, final_all_data: bool = False) -> dict[str, Path]
             relion_class3d_follower_owners_from_schedule(
                 schedule,
                 particle_ids_by_image=particle_ids,
-                optics_group_ids_by_image=np.zeros(n_images, dtype=np.int64),
                 random_seed=17,
                 relion_iteration=int(iteration),
             )

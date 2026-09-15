@@ -20,40 +20,35 @@ import numpy as np
 
 from recovar.core import fourier_transform_utils as ftu
 from recovar.data_io.cryoem_dataset import load_dataset
-from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed
-from recovar.em.dense_single_volume.helpers.fourier_window import (
-    make_fourier_window_spec,
-)
-from recovar.em.dense_single_volume.helpers.oversampling import (
-    compute_pass2_stats_sparse,
-)
-from recovar.em.dense_single_volume.iteration_loop import (
-    _relion_projector_half_maps_for_scoring,
-)
-from recovar.em.dense_single_volume.relion_metadata import (
-    relion_translation_search_base,
-)
+from recovar.em.diagnostics import bpref_diagnostics
+from recovar.em.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.helpers.oversampling import compute_pass2_stats_sparse
+from recovar.em.refinement.projector_preparation import _relion_projector_half_maps_for_scoring
+from recovar.em.relion.relion_metadata import relion_translation_search_base
+from recovar.em.sparse_pass2 import sparse_pass2_scoring
 from recovar.reconstruction import noise as reconstruction_noise
 from recovar.utils.helpers import load_mrc
-from scripts.analyze_k1_exact_ppref_fine_boundary import _load_ppref
 from scripts.analyze_em_k1_live_reference_counterfactual import (
     relion_values_on_recovar_window,
 )
+from scripts.analyze_k1_exact_ppref_fine_boundary import _load_ppref
 from scripts.run_full_refinement import (
     _build_replay_iteration_overrides,
     _maybe_apply_relion_image_mask,
 )
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
+from scripts.validate_relion_fine_operand_capture import load_fine_operand_capture
 from scripts.validate_relion_fine_score_capture import (
     ACTIVE,
     load_fine_score_capture,
 )
-from scripts.validate_relion_fine_operand_capture import load_fine_operand_capture
 from scripts.validate_relion_preprocess_capture import (
     load_artifact as load_preprocess_capture,
 )
 from scripts.validate_relion_scoring_noise_capture import (
     ScoringNoiseCapture,
+)
+from scripts.validate_relion_scoring_noise_capture import (
     load_capture as load_scoring_noise_capture,
 )
 
@@ -705,19 +700,19 @@ def main() -> None:
     os.environ["RECOVAR_K1_RELION_EXACT_BPREF_OPERANDS"] = "1"
     os.environ["RECOVAR_K1_RELION_EXACT_CTF_STAR"] = str(data_star.resolve())
 
-    sparse_pass2_bucketed.set_bpref_contribution_dump_context(
+    bpref_diagnostics.set_bpref_contribution_dump_context(
         iteration=args.consumer_iteration,
         half=args.half,
     )
     original_pixel_correction = (
-        sparse_pass2_bucketed._relion_cuda_pixel_correction_from_rfloat_ctf
+        sparse_pass2_scoring._relion_cuda_pixel_correction_from_rfloat_ctf
     )
     if native_fine_image_override:
         def unit_pixel_correction(scale, ctf_rfloat):
             del scale
             return jax.numpy.ones_like(ctf_rfloat, dtype=jax.numpy.float32)
 
-        sparse_pass2_bucketed._relion_cuda_pixel_correction_from_rfloat_ctf = (
+        sparse_pass2_scoring._relion_cuda_pixel_correction_from_rfloat_ctf = (
             unit_pixel_correction
         )
     try:
@@ -765,10 +760,10 @@ def main() -> None:
             adaptive_fraction=0.999,
         )
     finally:
-        sparse_pass2_bucketed._relion_cuda_pixel_correction_from_rfloat_ctf = (
+        sparse_pass2_scoring._relion_cuda_pixel_correction_from_rfloat_ctf = (
             original_pixel_correction
         )
-        sparse_pass2_bucketed.clear_bpref_contribution_dump_context()
+        bpref_diagnostics.clear_bpref_contribution_dump_context()
 
     dump_path = args.output_dir / (f"pass2_orig{args.source_index:06d}_cs{args.current_size:03d}.npz")
     _require(dump_path.is_file() and dump_path.stat().st_size > 0, "focused pass-2 dump missing")

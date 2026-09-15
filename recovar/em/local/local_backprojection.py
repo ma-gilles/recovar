@@ -1,0 +1,220 @@
+"""Exact local sufficient-statistics accumulation helpers."""
+
+from __future__ import annotations
+
+import os
+from functools import partial
+
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+import recovar.core.fourier_transform_utils as fourier_transform_utils
+
+_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION_ENV = (
+    "RECOVAR_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION"
+)
+
+
+def relion_x_half_sequential_translation_reduction_enabled() -> bool:
+    """Return whether the diagnostic RELION-order translation reduction is enabled."""
+
+    raw = os.environ.get(_RELION_X_HALF_SEQUENTIAL_TRANSLATION_REDUCTION_ENV)
+    return raw is not None and raw.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+@jax.jit
+def compute_local_weighted_sums(probs, shifted):
+    """Compute weighted image sums for one exact local bucket.
+
+    probs: (B, R, T)
+    shifted: (B, T, N)
+    returns: (B, R, N)
+
+    Use full float32 products for this EM-local contraction.  Accelerator
+    defaults may otherwise select reduced-precision products, which produces a
+    systematic BPref numerator mismatch against RELION even for one-hot
+    translation posteriors.
+    """
+
+    return jnp.matmul(probs, shifted, precision=jax.lax.Precision.HIGHEST)
+
+
+@jax.jit
+def compute_local_ctf_sums(probs, ctf2_over_nv):
+    """Compute weighted CTF^2/noise sums for one exact local bucket."""
+
+    probs_sum_t = jnp.sum(probs, axis=-1)  # (B, R)
+    return compute_local_ctf_sums_from_probs_sum_t(probs_sum_t, ctf2_over_nv)
+
+
+@jax.jit
+def compute_local_ctf_sums_from_probs_sum_t(probs_sum_t, ctf2_over_nv):
+    """Compute weighted CTF^2/noise sums from precomputed rotation posterior sums."""
+
+    return jnp.where(
+        probs_sum_t[..., None] != 0.0,
+        probs_sum_t[..., None] * ctf2_over_nv[:, None, :],
+        0.0,
+    )
+
+
+@jax.jit
+def compute_relion_sequential_mstep_sums(probs, shifted, ctf2_over_nv):
+    """Reduce translations in RELION order without changing precision.
+
+    RELION accumulates this loop in ``XFLOAT``.  That is float32 in its normal
+    GPU build and float64 in a double-precision build, so the RECOVAR parity
+    path must follow the operand precision rather than unconditionally model
+    the former.
+    """
+
+    real_dtype = jnp.result_type(probs, ctf2_over_nv, jnp.real(shifted))
+    complex_dtype = jnp.complex128 if real_dtype == jnp.dtype(jnp.float64) else jnp.complex64
+    probs = jnp.asarray(probs, dtype=real_dtype)
+    shifted = jnp.asarray(shifted, dtype=complex_dtype)
+    ctf2_over_nv = jnp.asarray(ctf2_over_nv, dtype=real_dtype)
+    batch, n_rot, n_trans = probs.shape
+    n_pixels = shifted.shape[-1]
+    numerator0 = jnp.zeros((batch, n_rot, n_pixels), dtype=complex_dtype)
+    denominator0 = jnp.zeros((batch, n_rot, n_pixels), dtype=real_dtype)
+
+    def add_translation(trans_idx, carry):
+        numerator, denominator = carry
+        weight = probs[:, :, trans_idx, None]
+        numerator = numerator + weight * shifted[:, None, trans_idx, :]
+        denominator = denominator + weight * ctf2_over_nv[:, None, :]
+        return numerator, denominator
+
+    return jax.lax.fori_loop(0, n_trans, add_translation, (numerator0, denominator0))
+
+
+def compute_local_mstep_sums(
+    probs,
+    shifted,
+    ctf2_over_nv,
+    *,
+    relion_x_half: bool,
+    default_probs_sum_t=None,
+    sequential_translation_reduction: bool | None = None,
+):
+    """Compute numerator/denominator sums, optionally using the x-half diagnostic."""
+
+    use_sequential_reduction = (
+        relion_x_half_sequential_translation_reduction_enabled()
+        if sequential_translation_reduction is None
+        else bool(sequential_translation_reduction)
+    )
+    if relion_x_half and use_sequential_reduction:
+        return compute_relion_sequential_mstep_sums(probs, shifted, ctf2_over_nv)
+    denominator = (
+        compute_local_ctf_sums(probs, ctf2_over_nv)
+        if default_probs_sum_t is None
+        else compute_local_ctf_sums_from_probs_sum_t(default_probs_sum_t, ctf2_over_nv)
+    )
+    return compute_local_weighted_sums(probs, shifted), denominator
+
+
+def compute_local_noise_scalar_terms(
+    reconstruction_probs,
+    translation_sqdist,
+    valid_image_mask,
+):
+    """Reduce the small RELION noise scalars in dense posterior row order.
+
+    Keeping these operations in one shared helper matters when a caller packs
+    the pixel-heavy M-step rows.  Removing structurally zero rotation rows can
+    change XLA's float32 reduction tree by one ULP even though the posterior is
+    mathematically identical.  The dense big-JIT oracle and packed VDAM lane
+    therefore call this exact sequence on the same dense posterior shape.  Do
+    not add a nested ``jax.jit`` boundary here: the mature big-JIT path must
+    inline these primitives into its existing graph to preserve its reduction
+    schedule. Preserve the posterior dtype so double-precision diagnostic
+    scoring retains its scalar statistics without changing the float32 path.
+    """
+
+    batch_size = reconstruction_probs.shape[0]
+    stats_dtype = reconstruction_probs.real.dtype
+    support_mass = jnp.sum(
+        reconstruction_probs.reshape(batch_size, -1),
+        axis=1,
+    ).astype(stats_dtype)
+    support_mass = jnp.where(valid_image_mask, support_mass, 0.0)
+    translation_posterior = jnp.sum(reconstruction_probs, axis=1).astype(
+        stats_dtype
+    )
+    noise_sumw_offset = jnp.sum(
+        translation_posterior
+        * jnp.asarray(translation_sqdist, dtype=stats_dtype)
+    )
+    return support_mass, translation_posterior, noise_sumw_offset
+
+
+@jax.jit
+def flatten_bucket_rows(values):
+    """Flatten a bucket's per-image rows into one row-major batch."""
+
+    return values.reshape(values.shape[0] * values.shape[1], values.shape[-1])
+
+
+@jax.jit
+def flatten_bucket_rotations(rotations):
+    """Flatten a bucket's per-image rotations into one row-major batch."""
+
+    return rotations.reshape(rotations.shape[0] * rotations.shape[1], 3, 3)
+
+
+def enforce_relion_half_volume_x0_hermitian(volume_flat, full_volume_shape):
+    """Match RELION BackProjector::enforceHermitianSymmetry on x=0 plane."""
+
+    return _enforce_relion_half_volume_x0_hermitian_jit(
+        volume_flat,
+        tuple(int(value) for value in full_volume_shape),
+    )
+
+
+@partial(jax.jit, static_argnames=("full_volume_shape",))
+def _enforce_relion_half_volume_x0_hermitian_jit(volume_flat, full_volume_shape):
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(full_volume_shape)
+    vol = jnp.asarray(volume_flat).reshape(half_shape)
+    n0, n1, _ = half_shape
+    i0 = jnp.arange(n0, dtype=jnp.int32)
+    i1 = jnp.arange(n1, dtype=jnp.int32)
+    # RELION pairs logical Xmipp-origin coordinates (z, y) with (-z, -y).
+    # In RECOVAR's centered array convention this is (N - (N % 2) - i) % N;
+    # odd RELION BPref grids therefore use N-1-i, not the unshifted -i.
+    p0 = (n0 - (n0 % 2) - i0) % n0
+    p1 = (n1 - (n1 % 2) - i1) % n1
+    plane = vol[:, :, 0]
+    partner = jnp.conj(plane[p0[:, None], p1[None, :]])
+    summed = plane + partner
+    self_partner = (p0[:, None] == i0[:, None]) & (p1[None, :] == i1[None, :])
+    plane = jnp.where(self_partner, plane, summed)
+    return vol.at[:, :, 0].set(plane).reshape(-1)
+
+
+def enforce_relion_half_volume_x0_hermitian_host(volume_flat, full_volume_shape):
+    """Host implementation of RELION x=0 Hermitian-plane enforcement.
+
+    The device path updates a single plane with ``.at[..., 0].set(...)`` but may
+    still allocate another full packed half-volume.  Large RELION BPref grids
+    already repack through host memory downstream, so handling the plane update
+    here avoids a transient GPU allocation without changing the arithmetic.
+    """
+
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(full_volume_shape)
+    host = np.asarray(jax.device_get(volume_flat))
+    if isinstance(volume_flat, np.ndarray) or not host.flags.writeable:
+        host = host.copy()
+    vol = host.reshape(half_shape)
+    n0, n1, _ = half_shape
+    i0 = np.arange(n0, dtype=np.int32)
+    i1 = np.arange(n1, dtype=np.int32)
+    p0 = (n0 - (n0 % 2) - i0) % n0
+    p1 = (n1 - (n1 % 2) - i1) % n1
+    plane = vol[:, :, 0]
+    partner = np.conj(plane[np.ix_(p0, p1)])
+    summed = plane + partner
+    self_partner = (p0[:, None] == i0[:, None]) & (p1[None, :] == i1[None, :])
+    vol[:, :, 0] = np.where(self_partner, plane, summed)
+    return vol.reshape(-1)

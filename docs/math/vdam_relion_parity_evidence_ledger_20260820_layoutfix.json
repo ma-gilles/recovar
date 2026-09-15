@@ -1,0 +1,121 @@
+{
+  "cases": [
+    {
+      "case_id": "vdam-01",
+      "report": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-01/trajectory_audit.json",
+      "report_sha256": "95605b72a2ab13c63af52d2ed52dfbad40fedcead954469d04dbbd784267700d",
+      "result": "fail",
+      "run_provenance": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-01/run_provenance.json",
+      "slurm_job_id": "12672743",
+      "source_head": "fe38f982d0bbe25f6fc87493300c5c692b036996"
+    },
+    {
+      "case_id": "vdam-02",
+      "report": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-02/trajectory_audit.json",
+      "report_sha256": "4ff0ca29029fbffcd5d93649abf860aa435fbc9c9cde32273b00231866145bda",
+      "result": "fail",
+      "run_provenance": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-02/run_provenance.json",
+      "slurm_job_id": "12672744",
+      "source_head": "fe38f982d0bbe25f6fc87493300c5c692b036996"
+    },
+    {
+      "case_id": "vdam-03",
+      "report": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-03/trajectory_audit.json",
+      "report_sha256": "b5428af040140d54baec548548839c55e407a12c8553fd9d7ade3d72f7a9561e",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-03/run_provenance.json",
+      "slurm_job_id": "12672745",
+      "source_head": "fe38f982d0bbe25f6fc87493300c5c692b036996"
+    },
+    {
+      "case_id": "vdam-04",
+      "report": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-04/trajectory_audit.json",
+      "report_sha256": "8247af430cfcafff6862cfa9203627d2de2640570178fcaf442acb571718d5c5",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-04/run_provenance.json",
+      "slurm_job_id": "12672746",
+      "source_head": "fe38f982d0bbe25f6fc87493300c5c692b036996"
+    },
+    {
+      "case_id": "vdam-05",
+      "report": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-05/trajectory_audit.json",
+      "report_sha256": "05462686b83ceaa0dca0dcc0e84129ba32c1ee3fadc1212c96d8e62430b8628d",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-05/run_provenance.json",
+      "slurm_job_id": "12672820",
+      "source_head": "fe38f982d0bbe25f6fc87493300c5c692b036996"
+    },
+    {
+      "case_id": "vdam-06",
+      "report": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-06/trajectory_audit.json",
+      "report_sha256": "fc78050fd2ccdcc6a77db9a36ce689a8cbc04cf17a3c18164dda406ba9c43fd8",
+      "result": "fail",
+      "run_provenance": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-06/run_provenance.json",
+      "slurm_job_id": "12672832",
+      "source_head": "fe38f982d0bbe25f6fc87493300c5c692b036996"
+    },
+    {
+      "case_id": "vdam-07",
+      "report": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-07/trajectory_audit.json",
+      "report_sha256": "e425a83b0fcb3b42d830f116f1e295d887b55f7fb7fc29318b2fa8d5e3ab7383",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-07/run_provenance.json",
+      "slurm_job_id": "12672833",
+      "source_head": "fe38f982d0bbe25f6fc87493300c5c692b036996"
+    },
+    {
+      "case_id": "vdam-08",
+      "report": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_5a4c5783_layoutfix/vdam-08/trajectory_audit.json",
+      "report_sha256": "b2d674406b8c81eefff32318b321f0950b09cc8dfc80b5bbe83674cd97bff27c",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_5a4c5783_layoutfix/vdam-08/run_provenance.json",
+      "slurm_job_id": "12672666",
+      "source_head": "762e71a68b1e00c732f5a5b8baf843db9c751e3e"
+    },
+    {
+      "case_id": "vdam-09",
+      "report": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_8d424295_batch200_09_12/vdam-09/trajectory_audit.json",
+      "report_sha256": "b457b94fc2ddd4d29e6be25b3320277cd0b69d8118ea4c4eb87d77617b28acf6",
+      "result": "fail",
+      "run_provenance": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_8d424295_batch200_09_12/vdam-09/run_provenance.json",
+      "slurm_job_id": "12673042",
+      "source_head": "8d4242955fd4475942be3905ba0ce83f93168c4a"
+    },
+    {
+      "case_id": "vdam-10",
+      "report": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-10/trajectory_audit.json",
+      "report_sha256": "89748dbb669cc1ce5597cf9b45db5b6229d26777628e81a774898e42be57805b",
+      "result": "fail",
+      "run_provenance": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-10/run_provenance.json",
+      "slurm_job_id": "12672863",
+      "source_head": "fe38f982d0bbe25f6fc87493300c5c692b036996"
+    },
+    {
+      "case_id": "vdam-11",
+      "report": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-11/trajectory_audit.json",
+      "report_sha256": "ef3266923a7b512bb94365b74623293023ae6f064de50dfe044d9243d24282c9",
+      "result": "fail",
+      "run_provenance": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_fe38f982_fixed12/vdam-11/run_provenance.json",
+      "slurm_job_id": "12672864",
+      "source_head": "fe38f982d0bbe25f6fc87493300c5c692b036996"
+    },
+    {
+      "case_id": "vdam-12",
+      "report": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_5fc3058e_deferred_batch25_12/vdam-12/trajectory_audit.json",
+      "report_sha256": "6450095ddafee18a67a63ebe7aec64c4815779608a19121d730ce63cca6860f2",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/GILLES/mg6942/vdam_relion_parity/20260820_5fc3058e_deferred_batch25_12/vdam-12/run_provenance.json",
+      "slurm_job_id": "12673810",
+      "source_head": "5fc3058e8c37f20e14a6922b20dc97fcfeca7f50"
+    }
+  ],
+  "counts": {
+    "fail": 6,
+    "not_run": 0,
+    "pass": 6
+  },
+  "recorded_utc": "2026-08-20T13:13:29Z",
+  "schema": "recovar.vdam_relion_parity_evidence_ledger.v1",
+  "snapshot_id": "vdam-k1-fixed12-20260820-layoutfix",
+  "source_head": "5fc3058e8c37f20e14a6922b20dc97fcfeca7f50"
+}

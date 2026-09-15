@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 
-from recovar.em.dense_single_volume.frozen_boundary_variant import (
+from recovar.em.diagnostics.frozen_boundary_variant import (
     build_frozen_boundary_variant,
     validate_frozen_boundary_variant,
 )

@@ -46,9 +46,7 @@ def test_ulp_summary_partitions_exact_adjacent_and_larger_distances():
 
 
 def test_live_pass2_inverse_noise_report_localizes_shell_mismatch(tmp_path: Path):
-    from recovar.em.dense_single_volume.helpers.half_spectrum import (
-        make_shell_indices_half,
-    )
+    from recovar.em.helpers.half_spectrum import make_shell_indices_half
 
     image_size = 8
     shell_indices = np.asarray(

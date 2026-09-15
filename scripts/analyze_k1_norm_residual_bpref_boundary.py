@@ -326,9 +326,7 @@ def _load_native_posterior_aligned(
         ),
         axis=1,
     )
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-        _relion_translation_angles_f32,
-    )
+    from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_angles_f32
 
     recovar_translation_angles = np.asarray(
         _relion_translation_angles_f32(
@@ -407,9 +405,7 @@ def _replay_chunked_xa_with_posterior(
     import jax
     import jax.numpy as jnp
 
-    from recovar.em.dense_single_volume.helpers.projection import (
-        compute_relion_projector_projections_block,
-    )
+    from recovar.em.helpers.projection import compute_relion_projector_projections_block
 
     rotations = np.asarray(rotations, dtype=np.float32)
     recovar_probabilities = np.asarray(recovar_probabilities, dtype=np.float32)
@@ -653,12 +649,8 @@ def _analyze_chunked(
     import jax
     import jax.numpy as jnp
 
-    from recovar.em.dense_single_volume.helpers.fourier_window import (
-        make_fourier_window_indices_np,
-    )
-    from recovar.em.dense_single_volume.helpers.projection import (
-        compute_relion_projector_projections_block,
-    )
+    from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
+    from recovar.em.helpers.projection import compute_relion_projector_projections_block
 
     _require(jax.default_backend() == "gpu", "chunked native BPref substitution requires a GPU")
     _require(rotation_block_size > 0, "rotation block size must be positive")

@@ -1,9 +1,9 @@
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers.types import make_noise_stats
-from recovar.em.dense_single_volume.mean_helpers import update_c1_sigma_offset_from_posterior
-from recovar.em.dense_single_volume.relion_replay import _as_sigma_offset_half_pair
+from recovar.em.helpers.types import make_noise_stats
+from recovar.em.refinement.half_inputs import _as_sigma_offset_half_pair
+from recovar.em.refinement.noise_updates import update_c1_sigma_offset_from_posterior
 
 pytestmark = pytest.mark.unit
 

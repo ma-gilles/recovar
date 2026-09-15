@@ -819,3 +819,10 @@ def test_independent_relion_control_pair_sets_the_numerical_envelope(tmp_path):
     ]["mean"]
     assert ratio == pytest.approx(rec_mean / 5e-6)
     assert report["sources"]["relion_control_reference_stars"]["1"] == str(control_reference.resolve())
+
+
+@pytest.mark.parametrize("identity", [None, float("nan"), pd.NA, "", "  "])
+def test_identity_array_rejects_missing_before_string_conversion(identity):
+    table = pd.DataFrame({"rlnImageName": [identity]})
+    with pytest.raises(auditor.AuditError, match="identities"):
+        auditor._identity_array(table, source=Path("fixture.star"))

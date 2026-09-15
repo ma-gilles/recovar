@@ -1,0 +1,119 @@
+{
+  "schema": "recovar.vdam_relion_real_data_suite.v1",
+  "suite_id": "vdam-k1-real-data-v1",
+  "description": "Frozen real-particle K=1 InitialModel trajectory parity suite. It gates RECOVAR-vs-RELION FSC/FSC-AUC plus exact particle identity and winning pose/translation topology with bounded Pmax drift because real data have no ground-truth map.",
+  "acceptance_contract": {
+    "cross_engine_fsc_auc_min": 0.999,
+    "pose_tolerance_deg": 0.001,
+    "translation_tolerance_angst": 0.0001,
+    "pmax_absolute_error_p95_max": 0.005,
+    "pmax_absolute_error_max": 0.01,
+    "required_checkpoints": [0, 1, 2, 4, 8],
+    "exact_schedule": true,
+    "exact_artifact_topology": true,
+    "same_physical_gpu_per_pair": true,
+    "correlation_used": false
+  },
+  "cases": [
+    {
+      "id": "vdam-r01",
+      "name": "empiar10076_deterministic_10k",
+      "dataset": "EMPIAR-10076",
+      "input_star": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data/particles.star",
+      "input_star_sha256": "2560afeea6839dddbb38b47d26cdf8944535a799d1e6d3e1441535c96043998f",
+      "data_dir": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_k1_real10076_10k_fixture_20260712/data",
+      "source_indices_sha256": "b58a6d11fb292a9ed9573ac75c6a0673f4a0e8c216f4dadf11a7f0537b0e2c9d",
+      "particle_count": 10000,
+      "definition": {
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4.0,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6.0,
+        "offset_step_px": 2.0,
+        "padding_factor": 1,
+        "symmetry": "C1",
+        "do_run_C1": true,
+        "particle_diameter_angstrom": 200.0,
+        "image_batch_size": 128
+      }
+    },
+    {
+      "id": "vdam-r02",
+      "name": "empiar10073_deterministic_10k",
+      "dataset": "EMPIAR-10073",
+      "input_star": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10073_10k_fixture_v3_20260823/data/particles.star",
+      "input_star_sha256": "eb15efcb63d3496c6a7b39e966ec3a0d992b78223c7b11ef1c5cbdd61355ee1a",
+      "data_dir": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10073_10k_fixture_v3_20260823/data",
+      "source_indices_sha256": "4417136987d8c2501bcac53b795d25aa7821d0b4f2a09ac91d385d8224a15bea",
+      "particle_count": 10000,
+      "definition": {
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4.0,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6.0,
+        "offset_step_px": 2.0,
+        "padding_factor": 1,
+        "symmetry": "C1",
+        "do_run_C1": true,
+        "particle_diameter_angstrom": 200.0,
+        "image_batch_size": 128
+      }
+    },
+    {
+      "id": "vdam-r03",
+      "name": "empiar10345_deterministic_10k",
+      "dataset": "EMPIAR-10345",
+      "input_star": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10345_10k_fixture_v1_20260823/data/particles.star",
+      "input_star_sha256": "e5d9f77ff38d0e5137412892e7cc7591ba09265fb928b649cdeab58208a540f5",
+      "data_dir": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10345_10k_fixture_v1_20260823/data",
+      "source_indices_sha256": "9f812a7bfd6bb9dd071786143a501c6803f6c05541faee36c7d6e07f0aa787a3",
+      "particle_count": 10000,
+      "definition": {
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6,
+        "offset_step_px": 2,
+        "padding_factor": 1,
+        "symmetry": "C1",
+        "do_run_C1": true,
+        "particle_diameter_angstrom": 200,
+        "image_batch_size": 128
+      }
+    },
+    {
+      "id": "vdam-r04",
+      "name": "empiar10180_filtered_deterministic_10k",
+      "dataset": "EMPIAR-10180",
+      "input_star": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10180_filtered_10k_fixture_v1_20260823/data/particles.star",
+      "input_star_sha256": "91027ae7b4ef30b8ebd36e6bd57b9a56154319bc998dd2332c2ce9d3e34d051b",
+      "data_dir": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_real10180_filtered_10k_fixture_v1_20260823/data",
+      "source_indices_sha256": "3f71ae4b36e7abedceb98a5622c3719d1806f2bb4d2883a5953d343ff7a9b384",
+      "particle_count": 10000,
+      "definition": {
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6,
+        "offset_step_px": 2,
+        "padding_factor": 1,
+        "symmetry": "C1",
+        "do_run_C1": true,
+        "particle_diameter_angstrom": 200,
+        "image_batch_size": 128
+      }
+    }
+  ]
+}

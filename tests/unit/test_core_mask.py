@@ -361,6 +361,26 @@ class TestRaisedCosineMask:
         assert float(jnp.min(m)) >= -1e-6
         assert float(jnp.max(m)) <= 1.0 + 1e-6
 
+    def test_explicit_float64_preserves_relion_rfloat_precision(self):
+        vol_shape = (12, 12, 12)
+        result = mask.raised_cosine_mask(
+            vol_shape,
+            radius=3.25,
+            radius_p=5.25,
+            offset=np.zeros(3),
+            dtype=jnp.float64,
+        )
+        assert result.dtype == jnp.float64
+
+        coords = np.arange(-6, 6, dtype=np.float64)
+        z, y, x = np.meshgrid(coords, coords, coords, indexing="ij")
+        radius = np.sqrt(z * z + y * y + x * x)
+        expected = np.zeros(vol_shape, dtype=np.float64)
+        expected[radius < 3.25] = 1.0
+        edge = (radius >= 3.25) & (radius < 5.25)
+        expected[edge] = 0.5 - 0.5 * np.cos(np.pi * (5.25 - radius[edge]) / 2.0)
+        np.testing.assert_allclose(np.asarray(result), expected, rtol=2e-15, atol=2e-15)
+
 
 # ---------------------------------------------------------------------------
 # soft_mask_outside_map

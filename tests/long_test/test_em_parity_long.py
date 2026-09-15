@@ -12,7 +12,7 @@ Tests:
    ``1e-3`` of RELION at every iteration AND final FSC@0.5 vs GT within
    ``±0.5 Å`` of RELION.
 2. K=1 256² 50k native InitialModel/VDAM cold-start (8 iters) — run the
-   GUI-facing ``scripts/run_ab_initio.py`` path and assert GT quality is close
+   GUI-facing ``recovar.commands.initial_model`` path and assert GT quality is close
    to a RELION ``--grad --denovo_3dref`` iter-8 reference.
 3. K=4 256² 50k full ab-initio (15 iters) — same per-class.
 
@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -40,8 +41,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PARITY_SCRIPT = REPO_ROOT / "scripts" / "run_multi_iter_parity.py"
 KCLASS_SCRIPT = REPO_ROOT / "scripts" / "run_k_class_parity.py"
 REFINE_SCRIPT = REPO_ROOT / "scripts" / "run_full_refinement.py"
-ABINITIO_SCRIPT = REPO_ROOT / "scripts" / "run_ab_initio.py"
-BASELINES_DIR = REPO_ROOT / "tests" / "baselines"
+ABINITIO_SCRIPT = REPO_ROOT / "recovar" / "commands" / "initial_model.py"
 
 FIXTURE_BASE = Path("/scratch/gpfs/GILLES/mg6942/em_relion_proj")
 
@@ -88,9 +88,9 @@ def _assert_parity_ancestors_or_skip() -> None:
         pytest.fail(str(exc))
 
 
-def _write_quality_ledger(name: str, payload: dict) -> Path:
-    BASELINES_DIR.mkdir(parents=True, exist_ok=True)
-    ledger_path = BASELINES_DIR / f"em_parity_quality_long_ledger_{name}.json"
+def _write_quality_ledger(name: str, payload: dict, *, output_dir: Path) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    ledger_path = output_dir / f"em_parity_quality_long_ledger_{name}.json"
     payload = dict(payload)
     payload.setdefault("timestamp", time.strftime("%Y-%m-%dT%H:%M:%S"))
     with ledger_path.open("w") as f:
@@ -173,7 +173,7 @@ def _real_space_shell_fsc(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
 
 def _relion_frame_map_similarity(lhs_path: Path, rhs_path: Path) -> dict[str, float]:
     """Same-frame map parity metrics; no GT alignment or handedness search."""
-    from recovar.em.initial_model.gt_metrics import centered_correlation, first_shell_below_threshold
+    from recovar.em.diagnostics.gt_metrics import centered_correlation, first_shell_below_threshold
     from recovar.utils import helpers
 
     lhs, _lhs_voxel = helpers.load_relion_volume(str(lhs_path), return_voxel_size=True)
@@ -350,7 +350,7 @@ def test_em_parity_long_k1_full(tmp_path):
         "k1_long_recovar_perf_ledger_path": str(perf_ledger_path),
         "k1_long_recovar_timing_dir": str(timing_dir),
     }
-    ledger = _write_quality_ledger("k1_long", payload)
+    ledger = _write_quality_ledger("k1_long", payload, output_dir=output_dir)
     logger.info("K=1 long ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)
@@ -384,7 +384,7 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
 
     This is intentionally separate from ``test_em_parity_long_k1_full``.
     ``run_full_refinement.py`` and replay-style tests can pass while the
-    GUI-facing native InitialModel path in ``scripts/run_ab_initio.py`` stalls
+    GUI-facing native InitialModel path in ``recovar.commands.initial_model`` stalls
     after the first few VDAM iterations. This test guards the exact production
     command shape users get from RELION InitialModel parity work.
 
@@ -418,7 +418,12 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
 
     cmd = [
         sys.executable,
-        str(ABINITIO_SCRIPT),
+        "-m",
+        "recovar.commands.initial_model",
+        "--jax-compilation-cache" if os.environ.get("JAX_COMPILATION_CACHE_DIR") else "--no-jax-compilation-cache",
+        "--no-require-custom-cuda",
+        "--gpu",
+        "",
         "--i",
         str(K1_LONG_DATA_STAR),
         "--datadir",
@@ -451,7 +456,7 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
         "256",
         "--padding_factor",
         "1",
-        "--eager_images",
+        "--no-lazy",
     ]
     logger.info("K=1 native InitialModel cmd: %s", " ".join(cmd))
 
@@ -459,7 +464,7 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
     proc = subprocess.run(cmd, capture_output=True, text=True, env=gpu_subprocess_env())
     elapsed = time.time() - t0
     assert proc.returncode == 0, (
-        f"run_ab_initio.py exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        f"initial_model exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     )
 
     from scripts.evaluate_ab_initio_gt import evaluate
@@ -520,7 +525,7 @@ def test_em_parity_long_k1_native_initialmodel_quality(tmp_path):
         "k1_native_initialmodel_vdam_vs_relion_it008_shell_0143": relion_map_similarity["shell_0143"],
         "k1_native_initialmodel_relion_iter_walltimes_s": _relion_iter_walltimes_s(K1_NATIVE_RELION_DIR),
     }
-    ledger = _write_quality_ledger("k1_native_initialmodel", payload)
+    ledger = _write_quality_ledger("k1_native_initialmodel", payload, output_dir=output_dir)
     logger.info("K=1 native InitialModel ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)
@@ -636,7 +641,7 @@ def test_em_parity_long_kclass_full(tmp_path):
         "kclass_long_walltime_s": elapsed,
         "kclass_long_target_iter": final_iter,
     }
-    ledger = _write_quality_ledger("kclass_long", payload)
+    ledger = _write_quality_ledger("kclass_long", payload, output_dir=output_dir)
     logger.info("K-class long ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)

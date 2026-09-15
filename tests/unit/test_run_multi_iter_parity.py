@@ -1,6 +1,5 @@
 import inspect
 import sys
-from pathlib import Path
 
 import mrcfile
 import numpy as np
@@ -8,16 +7,14 @@ import pandas as pd
 import pytest
 import starfile
 
+from recovar.em.diagnostics.relion_replay import _validate_bpref_particle_order_scope
+from recovar.em.helpers.iteration_history import add_significant_count_artifacts
+from recovar.em.refinement.iteration_loop import _fresh_k1_spectrum_norm_default
 from scripts import diff_relion_recovar_per_iter as parity_diff
 from scripts.postprocess_multi_iter_gt import resolve_intermediates_dir
-from recovar.em.dense_single_volume.iteration_loop import (
-    _fresh_k1_spectrum_norm_default,
-    _validate_bpref_particle_order_scope,
-)
 from scripts.run_multi_iter_parity import (
     _normalized_fsc_auc,
     _read_relion_scheduling_average_pmax,
-    add_significant_count_artifacts,
     apply_iteration_normalization_factor_overrides,
     build_gt_postprocess_command,
     filter_fresh_initial_reference,
@@ -30,6 +27,7 @@ from scripts.run_multi_iter_parity import (
     map_pose_arrays_to_particle_order,
     map_relion_half_orders_to_dataset_rows,
     map_relion_scale_groups_to_half_order,
+    parity_runtime_real_dtype,
     parse_iteration_normalization_factor_overrides,
     parse_relion_optimiser_cli_flags,
     particle_half_indices,
@@ -37,6 +35,7 @@ from scripts.run_multi_iter_parity import (
     read_relion_optics_image_geometry,
     relion_final_gt_series,
     replay_control_relion_iteration,
+    replay_override_is_before_cutoff,
     replay_override_iteration_pairs,
     replay_previous_relion_iteration,
     resolve_firstiter_cc_mode,
@@ -170,17 +169,19 @@ def test_particle_half_indices_preserve_source_order_and_int64_dtype():
     assert half2.dtype == np.int64
 
 
-def test_particle_half_indices_can_reconstruct_fresh_relion_order(monkeypatch):
-    from recovar.em.dense_single_volume.helpers import expected_accuracy
+@pytest.mark.parametrize("shuffle_algorithm", ["legacy", "mt19937"])
+def test_particle_half_indices_can_reconstruct_fresh_relion_order(monkeypatch, shuffle_algorithm):
+    from recovar.em.helpers import expected_accuracy
 
     observed = {}
 
-    def fake_orders(subsets, seed, first_iteration, *, optics_group_ids=None):
+    def fake_orders(subsets, seed, first_iteration, *, optics_group_ids=None, shuffle_algorithm):
         observed.update(
             subsets=np.asarray(subsets),
             seed=seed,
             first_iteration=first_iteration,
             optics=np.asarray(optics_group_ids),
+            shuffle_algorithm=shuffle_algorithm,
         )
         return (
             np.asarray([4, 1, 3], dtype=np.int64),
@@ -195,6 +196,7 @@ def test_particle_half_indices_can_reconstruct_fresh_relion_order(monkeypatch):
         subsets,
         fresh_order_seed=1707,
         optics_group_ids=optics,
+        shuffle_algorithm=shuffle_algorithm,
     )
 
     np.testing.assert_array_equal(half1, np.asarray([4, 1, 3]))
@@ -203,6 +205,7 @@ def test_particle_half_indices_can_reconstruct_fresh_relion_order(monkeypatch):
     np.testing.assert_array_equal(observed["optics"], optics)
     assert observed["seed"] == 1707
     assert observed["first_iteration"] == 1
+    assert observed["shuffle_algorithm"] == shuffle_algorithm
 
 
 def test_map_relion_half_orders_to_dataset_rows_uses_image_identity():
@@ -813,6 +816,33 @@ def test_select_final_replay_override_rejects_unknown_or_missing_state():
         select_final_replay_override([{}], "noise")
 
 
+@pytest.mark.parametrize(
+    ("slot", "cutoff", "expected"),
+    [
+        (1, None, True),
+        (1, 0, False),
+        (1, 1, False),
+        (1, 2, True),
+        (2, 2, False),
+    ],
+)
+def test_replay_override_cutoff_does_not_inject_boundary_state(slot, cutoff, expected):
+    assert replay_override_is_before_cutoff(slot, cutoff) is expected
+
+
+@pytest.mark.parametrize(
+    ("environ", "expected"),
+    [
+        ({}, np.float32),
+        ({"RECOVAR_USE_FLOAT64_SCORING": "1"}, np.float64),
+        ({"RECOVAR_USE_FLOAT64_PROJECTIONS": "true"}, np.float64),
+        ({"RECOVAR_USE_FLOAT64_SCORING": "off", "RECOVAR_USE_FLOAT64_PROJECTIONS": "0"}, np.float32),
+    ],
+)
+def test_parity_runtime_real_dtype_matches_dense_precision_switches(environ, expected):
+    assert parity_runtime_real_dtype(environ) is expected
+
+
 def test_parse_relion_optimiser_cli_flags_reads_ini_high_and_firstiter_cc():
     parsed = parse_relion_optimiser_cli_flags(
         "# --auto_refine --firstiter_cc --ini_high 30 --ctf --iter 8\n_rlnParticleDiameter 544\n"
@@ -910,21 +940,3 @@ def test_relion_final_gt_series_accepts_unnumbered_all_data_without_half_maps():
 
     assert set(series) == {"relion_merged"}
     np.testing.assert_array_equal(series["relion_merged"], merged)
-
-
-def test_case07_native_texture_trajectory_launcher_accepts_pinned_build_overrides():
-    launcher = (
-        Path(__file__).resolve().parents[2]
-        / "scripts"
-        / "run_k1_case07_native_texture_trajectory3.sbatch"
-    ).read_text()
-
-    assert "CUDA_LIB=${K1_CUDA_LIB:-" in launcher
-    assert "RELION_BIND=${K1_RELION_BIND_BUILD_DIR:-" in launcher
-    assert "RECOVAR_K1_BPREF_EXECUTION_ORDER_CHUNK_SIZE" in launcher
-    assert 'provenance/environment_${SLURM_JOB_ID}.txt' in launcher
-    assert 'provenance/repo_diff_${SLURM_JOB_ID}.patch' in launcher
-    assert "EXPECTED_REPO_DIFF_SHA256" in launcher
-    assert 'sha256sum "${CUDA_LIB}"' in launcher
-    assert 'sha256sum "${RELION_BIND}"/_relion_bind_core*.so' in launcher
-    assert "--numbered-only --allow-incomplete" in launcher

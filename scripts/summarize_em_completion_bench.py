@@ -23,6 +23,13 @@ from typing import Any, Callable, Sequence
 
 import numpy as np
 
+try:
+    from scripts.fsc_metrics import normalized_fsc_auc, shell_fsc
+except ModuleNotFoundError as error:
+    if error.name != "scripts":
+        raise
+    from fsc_metrics import normalized_fsc_auc, shell_fsc
+
 # This reporter only reads files and computes NumPy FSCs. Force CPU before
 # importing RECOVAR helpers so JAX does not initialize a busy Slurm GPU.
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
@@ -195,29 +202,6 @@ def centered_corr(lhs: np.ndarray, rhs: np.ndarray) -> float:
     return float(np.dot(a, b) / denom)
 
 
-def shell_fsc(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
-    """Return canonical RECOVAR FSC shells, excluding Nyquist edges."""
-    a = np.asarray(lhs, dtype=np.float64)
-    b = np.asarray(rhs, dtype=np.float64)
-    if a.shape != b.shape or a.ndim != 3 or len(set(a.shape)) != 1:
-        return np.asarray([], dtype=np.float64)
-
-    n = int(a.shape[0])
-    fa = np.fft.fftn(a)
-    fb = np.fft.fftn(b)
-    freqs = np.fft.fftfreq(n) * n
-    z, y, x = np.meshgrid(freqs, freqs, freqs, indexing="ij")
-    shells = np.rint(np.sqrt(x * x + y * y + z * z)).astype(np.int32).ravel()
-    product = (fa * np.conj(fb)).ravel()
-    numerator = np.bincount(shells, weights=np.real(product))
-    lhs_power = np.bincount(shells, weights=(np.abs(fa) ** 2).ravel())
-    rhs_power = np.bincount(shells, weights=(np.abs(fb) ** 2).ravel())
-    denom = np.sqrt(lhs_power * rhs_power)
-    out = np.full(numerator.shape, np.nan, dtype=np.float64)
-    np.divide(numerator, denom, out=out, where=denom > 0.0)
-    return out[: n // 2 - 1]
-
-
 def integer_shift_to_align_lhs_to_rhs(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
     """Estimate the integer voxel roll that best aligns ``lhs`` to ``rhs``."""
     a = np.asarray(lhs, dtype=np.float64)
@@ -277,40 +261,6 @@ def first_shell_below(values: np.ndarray, threshold: float) -> int | None:
         if np.isfinite(values[shell]) and float(values[shell]) < float(threshold):
             return int(shell)
     return None
-
-
-def normalized_fsc_auc(values: Any, axis: Any | None = None) -> float:
-    """Integrate an FSC curve over a normalized shell/radius axis."""
-    fsc = np.asarray(values, dtype=np.float64).reshape(-1)
-    if fsc.size == 0:
-        return float("nan")
-
-    if axis is None:
-        x = np.arange(fsc.size, dtype=np.float64)
-    else:
-        x = np.asarray(axis, dtype=np.float64).reshape(-1)
-        if x.size != fsc.size:
-            return float("nan")
-
-    finite = np.isfinite(fsc) & np.isfinite(x)
-    if finite.size:
-        finite[0] = False  # Shell 0/DC is excluded from the existing FSC shell summaries.
-    x = x[finite]
-    y = fsc[finite]
-    if y.size == 0:
-        return float("nan")
-    if y.size == 1:
-        return float(y[0])
-
-    order = np.argsort(x)
-    x = x[order]
-    y = y[order]
-    span = float(x[-1] - x[0])
-    if span <= 0.0 or not math.isfinite(span):
-        return float(np.mean(y))
-    x_norm = (x - x[0]) / span
-    integrate = getattr(np, "trapezoid", np.trapz)
-    return float(integrate(y, x_norm))
 
 
 def map_metrics(lhs: np.ndarray, rhs: np.ndarray, *, include_fsc: bool = True) -> dict[str, Any]:
@@ -545,7 +495,10 @@ def _read_gpu_monitor(path: Path | None) -> dict[str, Any] | None:
         "peak_memory_total_gib": None,
         "peak_device_index": None,
         "peak_device_name": None,
+        "peak_device_uuid": None,
         "peak_timestamp": None,
+        "gpu_uuids": None,
+        "gpu_uuid_count": None,
         "notes": [],
     }
     try:
@@ -558,11 +511,13 @@ def _read_gpu_monitor(path: Path | None) -> dict[str, Any] | None:
             total_col = _csv_column(reader.fieldnames, "memory.total")
             index_col = _csv_column(reader.fieldnames, "index")
             name_col = _csv_column(reader.fieldnames, "name")
+            uuid_col = _csv_column(reader.fieldnames, "uuid")
             timestamp_col = _csv_column(reader.fieldnames, "timestamp")
 
             peak_mib: float | None = None
             peak_row: dict[str, Any] = {}
             device_indices: set[str] = set()
+            device_uuids: set[str] = set()
             for row in reader:
                 used_mib = _parse_mib(row.get(used_col))
                 if used_mib is None:
@@ -572,6 +527,10 @@ def _read_gpu_monitor(path: Path | None) -> dict[str, Any] | None:
                     device_index = str(row.get(index_col, "")).strip()
                     if device_index:
                         device_indices.add(device_index)
+                if uuid_col is not None:
+                    device_uuid = str(row.get(uuid_col, "")).strip()
+                    if device_uuid:
+                        device_uuids.add(device_uuid)
                 if peak_mib is None or used_mib > peak_mib:
                     peak_mib = used_mib
                     peak_row = row
@@ -580,6 +539,9 @@ def _read_gpu_monitor(path: Path | None) -> dict[str, Any] | None:
         return summary
 
     summary["gpu_count"] = len(device_indices)
+    if uuid_col is not None:
+        summary["gpu_uuids"] = sorted(device_uuids)
+        summary["gpu_uuid_count"] = len(device_uuids)
     if peak_mib is None:
         summary["notes"].append("no parseable memory.used samples")
         return summary
@@ -591,6 +553,7 @@ def _read_gpu_monitor(path: Path | None) -> dict[str, Any] | None:
     summary["peak_memory_total_gib"] = float(total_mib / 1024.0) if total_mib is not None else None
     summary["peak_device_index"] = str(peak_row.get(index_col, "")).strip() if index_col is not None else None
     summary["peak_device_name"] = str(peak_row.get(name_col, "")).strip() if name_col is not None else None
+    summary["peak_device_uuid"] = str(peak_row.get(uuid_col, "")).strip() if uuid_col is not None else None
     summary["peak_timestamp"] = str(peak_row.get(timestamp_col, "")).strip() if timestamp_col is not None else None
     return summary
 
@@ -1297,10 +1260,6 @@ def _parse_run_log_telemetry(log_path: Path | None) -> dict[str, Any]:
     if telemetry["counts"]["sparse_pass2_events"] == 0:
         telemetry["notes"].append("no sparse pass-2 telemetry rows found in RECOVAR run log")
     return telemetry
-
-
-def _parse_batch_sizing(log_path: Path | None) -> list[dict[str, Any]]:
-    return list(_parse_run_log_telemetry(log_path).get("batch_sizing_events") or [])
 
 
 def _sparse_pass2_aggregate(
@@ -2155,32 +2114,6 @@ def _check_bool_default(
     values[key] = observed
     if observed is not bool(expected):
         failures.append(f"{key}={observed}, expected {bool(expected)}")
-
-
-def _check_log_contains(
-    *,
-    recovar_dir: Path,
-    log_name: str,
-    pattern: str,
-    label: str,
-    values: dict[str, Any],
-    failures: list[str],
-    missing_fields: list[str],
-) -> None:
-    path = recovar_dir / log_name
-    values[label] = False
-    if not path.exists():
-        missing_fields.append(log_name)
-        failures.append(f"missing {log_name}")
-        return
-    try:
-        found = pattern in path.read_text(errors="replace")
-    except Exception as exc:
-        failures.append(f"failed to read {log_name}: {exc}")
-        return
-    values[label] = bool(found)
-    if not found:
-        failures.append(f"{label}=False, expected log line containing {pattern!r}")
 
 
 def _check_log_line_match(

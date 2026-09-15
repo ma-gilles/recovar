@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import struct
@@ -145,24 +144,15 @@ def _selection_records(selection: dict[str, object]) -> list[dict[str, object]]:
     return normalized
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+# Support both direct execution and package imports.
+if __package__:
+    from .file_hash import fnv1a64, sha256_file as _sha256
+else:
+    from file_hash import fnv1a64, sha256_file as _sha256
 
 
 def _float32_from_bits(value: int) -> np.float32:
     return np.float32(struct.unpack("<f", struct.pack("<I", value & 0xFFFFFFFF))[0])
-
-
-def fnv1a64(text: str) -> int:
-    value = 14695981039346656037
-    for byte in text.encode():
-        value ^= byte
-        value = (value * 1099511628211) & 0xFFFFFFFFFFFFFFFF
-    return value
 
 
 def _read_array(payload: bytes, dtype: np.dtype, count: int, offset: int) -> tuple[np.ndarray, int]:

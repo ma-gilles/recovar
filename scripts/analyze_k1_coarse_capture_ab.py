@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
@@ -76,12 +75,11 @@ def _available_ordered_fields(
     return available, missing_control, missing_candidate
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+# Support direct execution, sibling imports, and the scripts package.
+if not __package__:
+    from file_hash import sha256_file as _sha256
+else:
+    from scripts.file_hash import sha256_file as _sha256
 
 
 def _bit_equal(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:

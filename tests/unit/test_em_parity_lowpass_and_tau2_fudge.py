@@ -40,8 +40,8 @@ import pytest
 from scripts.run_full_refinement import _read_relion_mrc_model_pixel_size
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-ITERATION_LOOP_PY = REPO_ROOT / "recovar" / "em" / "dense_single_volume" / "iteration_loop.py"
-MEAN_HELPERS_PY = REPO_ROOT / "recovar" / "em" / "dense_single_volume" / "mean_helpers.py"
+ITERATION_LOOP_PY = REPO_ROOT / 'recovar' / 'em' / 'refinement' / 'iteration_loop.py'
+MEAN_HELPERS_PY = REPO_ROOT / 'recovar' / 'em' / 'refinement' / 'mean_helpers.py'
 RUN_FULL_REFINEMENT_PY = REPO_ROOT / "scripts" / "run_full_refinement.py"
 
 
@@ -200,9 +200,9 @@ def test_apply_initial_lowpass_helper_calls_exact_relion_lowpass():
     """Lock the call site to the exact RELION initial-reference low-pass."""
 
     source = _build_run_full_refinement_parser()
-    assert "from recovar.em.initial_model.bootstrap_iref import initial_low_pass_filter_references" in source, (
+    assert "from recovar.em.refinement.mean_helpers import initial_low_pass_filter_references" in source, (
         "Expected --apply-initial-lowpass helper to import "
-        "recovar.em.initial_model.bootstrap_iref.initial_low_pass_filter_references. "
+        "recovar.em.refinement.mean_helpers.initial_low_pass_filter_references. "
         "The generic locres filter does not exactly match RELION's "
         "initialLowPassFilterReferences projector input."
     )
@@ -274,8 +274,10 @@ def test_mean_helpers_initial_lowpass_matches_exact_relion_helper():
     import jax.numpy as jnp
 
     from recovar.core import fourier_transform_utils as ftu
-    from recovar.em.dense_single_volume.mean_helpers import _apply_relion_initial_lowpass_filter
-    from recovar.em.initial_model.bootstrap_iref import initial_low_pass_filter_references
+    from recovar.em.refinement.mean_helpers import (
+        _apply_relion_initial_lowpass_filter,
+        initial_low_pass_filter_references,
+    )
 
     rng = np.random.default_rng(17)
     volume = rng.normal(size=(1, 8, 8, 8)).astype(np.float32)

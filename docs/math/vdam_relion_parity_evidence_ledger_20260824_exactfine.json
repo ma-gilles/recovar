@@ -1,0 +1,121 @@
+{
+  "cases": [
+    {
+      "case_id": "vdam-01",
+      "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-01/trajectory_audit.json",
+      "report_sha256": "fbccbcbf23e3e0266aac04812bf77ea18b3ba40be495b6ca24051481b16f1d22",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-01/run_provenance.json",
+      "slurm_job_id": "12752300",
+      "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+    },
+    {
+      "case_id": "vdam-02",
+      "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-02/trajectory_audit.json",
+      "report_sha256": "6aa5f5496e82d9081b9a9645caf760ccf4c2db4a2ac6bec0e41a04ce8a4e33a0",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-02/run_provenance.json",
+      "slurm_job_id": "12752301",
+      "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+    },
+    {
+      "case_id": "vdam-03",
+      "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-03/trajectory_audit.json",
+      "report_sha256": "4d501c845f44d7f10e727eefbd19a456e34191c400013dc4438b4209fa9ffe16",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-03/run_provenance.json",
+      "slurm_job_id": "12752302",
+      "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+    },
+    {
+      "case_id": "vdam-04",
+      "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-04/trajectory_audit.json",
+      "report_sha256": "7b9ee22176cbe71779f7e5343c3b11843b46336c72a049724269c3c7ec56a4a3",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-04/run_provenance.json",
+      "slurm_job_id": "12752367",
+      "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+    },
+    {
+      "case_id": "vdam-05",
+      "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-05/trajectory_audit.json",
+      "report_sha256": "5fb662ed072dd9b21f72ce0911e7a35ccd622a26a8064f550df9ee1f56f9686f",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-05/run_provenance.json",
+      "slurm_job_id": "12752371",
+      "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+    },
+    {
+      "case_id": "vdam-06",
+      "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-06/trajectory_audit.json",
+      "report_sha256": "33333dc7ed29125b9e4c9c08a1df34b46e0f60800f581d1dba9e982e2e301f86",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-06/run_provenance.json",
+      "slurm_job_id": "12752405",
+      "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+    },
+    {
+      "case_id": "vdam-07",
+      "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-07/trajectory_audit.json",
+      "report_sha256": "1fa5d1ee9d0af5ca9e8e594f3a15cf048ba3fc56fcb62856d79651a0bf4f123e",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-07/run_provenance.json",
+      "slurm_job_id": "12752417",
+      "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+    },
+    {
+      "case_id": "vdam-08",
+      "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-08/trajectory_audit.json",
+      "report_sha256": "8a3d17131449baf23ab20c275a5552b68ed4c860d7306ebc37ca773bc7a251b1",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-08/run_provenance.json",
+      "slurm_job_id": "12752418",
+      "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+    },
+    {
+      "case_id": "vdam-09",
+      "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-09/trajectory_audit.json",
+      "report_sha256": "69661d3c4d60c8b23ebb73716dd781d4b7f44c96eb48c09bd035f9c2fc2cacfe",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-09/run_provenance.json",
+      "slurm_job_id": "12752451",
+      "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+    },
+    {
+      "case_id": "vdam-10",
+      "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-10/trajectory_audit.json",
+      "report_sha256": "b8d8e3fccb24a5e8d7489f4efee6cbb4a03c801c08637ce8537329d5dc76ba7b",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-10/run_provenance.json",
+      "slurm_job_id": "12752457",
+      "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+    },
+    {
+      "case_id": "vdam-11",
+      "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-11/trajectory_audit.json",
+      "report_sha256": "df1801f8ea4fe4d77f48b3d56d14a95b482439dd3c9934869ae78f09ca22ca18",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-11/run_provenance.json",
+      "slurm_job_id": "12752475",
+      "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+    },
+    {
+      "case_id": "vdam-12",
+      "report": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-12/trajectory_audit.json",
+      "report_sha256": "46d4335ad91dc29d4af11cc80ba5528dd8ec652add3680ef3b067ebcb4bb438d",
+      "result": "pass",
+      "run_provenance": "/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/vdam_k1_fixed12_27da5efb_20260824T104500Z/vdam-12/run_provenance.json",
+      "slurm_job_id": "12752296",
+      "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+    }
+  ],
+  "counts": {
+    "fail": 0,
+    "not_run": 0,
+    "pass": 12
+  },
+  "recorded_utc": "2026-08-22T03:57:29Z",
+  "schema": "recovar.vdam_relion_parity_evidence_ledger.v1",
+  "snapshot_id": "vdam-k1-fixed12-27da5efb-20260824T104500Z",
+  "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+}

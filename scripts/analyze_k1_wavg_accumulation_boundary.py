@@ -9,15 +9,13 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.fourier_window import (
-    make_fourier_window_indices_np,
-    make_frequency_coords_half_np,
-)
+from recovar.em.helpers.fourier_window import make_fourier_window_indices_np, make_frequency_coords_half_np
+from recovar.utils.file_hash import sha256_file
 from scripts.analyze_k1_projected_power_boundary import (
     _native_probabilities,
     _raw_f32,
 )
-from scripts.analyze_k1_scale_aa_candidates import _metric, _real, _scalar, _sha256
+from scripts.analyze_k1_scale_aa_candidates import _metric, _real, _scalar
 
 
 def _require(condition: bool, message: str) -> None:
@@ -194,10 +192,10 @@ def analyze(
         },
         "artifacts": {
             "recovar_capture": str(recovar_capture.resolve()),
-            "recovar_capture_sha256": _sha256(recovar_capture),
+            "recovar_capture_sha256": sha256_file(recovar_capture),
             "native_directory": str(native_directory.resolve()),
             "native_pixels": str(native_pixels.resolve()),
-            "native_pixels_sha256": _sha256(native_pixels),
+            "native_pixels_sha256": sha256_file(native_pixels),
         },
         "classification": "the first material inequality is native Wavg rotation accumulation order",
     }

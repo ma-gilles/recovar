@@ -66,12 +66,11 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+# Support direct execution, sibling imports, and the scripts package.
+if not __package__:
+    from file_hash import sha256_file as _sha256
+else:
+    from scripts.file_hash import sha256_file as _sha256
 
 
 def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, Any]:
@@ -655,7 +654,6 @@ def _compare_particle(
     factor,
     score,
     recovar: dict[str, np.ndarray],
-    native_state_row,
     physical_image_size: int,
     current_size: int,
 ) -> dict[str, Any]:
@@ -1182,7 +1180,6 @@ def analyze(
                 factor=factors[stack],
                 score=scores[stack],
                 recovar=recovar,
-                native_state_row=state.loc[identity],
                 physical_image_size=physical_image_size,
                 current_size=current_size,
             )

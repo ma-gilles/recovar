@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import struct
@@ -70,48 +69,17 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-def _selection_records(selection: dict[str, object]) -> list[dict[str, object]]:
-    """Normalize legacy stratification and K=1 boundary-panel selections."""
-
-    schema = selection.get("schema")
-    if schema == "bpref-factor-stratification-v1":
-        records = selection.get("selected")
-        stack_field = "stack_index_1based"
-    elif schema in {
-        "recovar.em.k1_bpref_factor_panel.v1",
-        "recovar.em.k1_fine_score_panel.v1",
-    }:
-        records = selection.get("targets")
-        stack_field = "stack_index_one_based"
-    else:
-        raise ValueError("unexpected selection schema")
-    _require(isinstance(records, list) and bool(records), "selection is empty")
-    normalized = []
-    for record in records:
-        _require(isinstance(record, dict), "selection record is not an object")
-        _require(stack_field in record, "selection record is missing stack identity")
-        normalized.append({**record, "stack_index_1based": int(record[stack_field])})
-    return normalized
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+# Support both direct execution and package imports.
+if __package__:
+    from .file_hash import fnv1a64, sha256_file as _sha256
+    from .validate_relion_bpref_factor_capture import _selection_records
+else:
+    from file_hash import fnv1a64, sha256_file as _sha256
+    from validate_relion_bpref_factor_capture import _selection_records
 
 
 def _float32_from_bits(value: int) -> np.float32:
     return np.float32(struct.unpack("<f", struct.pack("<I", value & 0xFFFFFFFF))[0])
-
-
-def fnv1a64(text: str) -> int:
-    value = 14695981039346656037
-    for byte in text.encode():
-        value ^= byte
-        value = (value * 1099511628211) & 0xFFFFFFFFFFFFFFFF
-    return value
 
 
 def _finite_float32_tolerance(reference: np.ndarray, *, ulps: int = 4) -> np.ndarray:

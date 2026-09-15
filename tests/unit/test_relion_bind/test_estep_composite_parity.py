@@ -300,7 +300,7 @@ class TestPosteriorParity:
         jax.config.update("jax_enable_x64", True)
         import jax.numpy as jnp
 
-        from recovar.em.dense_single_volume.helpers.scoring import _e_step_block_scores
+        from recovar.em.scoring.scoring import _e_step_block_scores
 
         s = _setup_scenario()
         N = s["N"]
@@ -517,7 +517,7 @@ class TestWindowingDivergence:
         relion_pixels = current_size * (current_size // 2 + 1)
 
         # recovar: radial mask on (N, N//2+1) half-spectrum
-        from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
+        from recovar.em.helpers.fourier_window import make_fourier_window_indices_np
 
         _, n_windowed = make_fourier_window_indices_np((N, N), current_size)
 

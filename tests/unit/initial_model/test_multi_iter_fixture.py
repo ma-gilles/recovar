@@ -1,14 +1,12 @@
-"""F9 parity test: multi-iteration VDAM loop.
+"""Historical ten-iteration plain-EM blend fixture.
 
-Full 200-iter run is ~80 min on CPU. This test runs 10 iters (short
-smoke) and checks:
-  - plumbing survives multiple iterations without NaN/Inf
-  - CC trajectory against RELION's iter1/iter2 improves monotonically
-  - final state stays finite and bounded
+Checks finite, non-trivial state and the saved correlation trajectory using
+plain-EM E/M calls followed by a fixed real-space blend. VDAM schedule values
+are diagnostic snapshots; this test does not exercise the native VDAM M-step.
 
-The full 200-iter run + FSC comparison against initial_model.mrc is
-invoked as a separate Slurm job via scripts/run_vdam_f9_slurm.sh
-(deferred — not part of this test).
+The obsolete F9/F10 launch and timing scripts are archived at
+/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/obsolete_vdam_blend_benchmarks_cleanup_20260913/.
+Their retirement leaves this numerical coverage unchanged.
 """
 
 from __future__ import annotations
@@ -58,13 +56,9 @@ def test_ten_iter_vdam_smoke():
 
     from recovar.core import fourier_transform_utils as ftu
     from recovar.data_io.cryoem_dataset import load_dataset
-    from recovar.em.dense_single_volume.em_engine import run_em
-    from recovar.em.initial_model.schedules import (
-        compute_phase_lengths,
-        compute_stepsize,
-        compute_tau2_fudge,
-    )
+    from recovar.em.dense.em_engine import run_em
     from recovar.em.sampling import get_relion_hidden_rotation_grid, get_translation_grid
+    from recovar.em.vdam.schedules import compute_phase_lengths, compute_stepsize, compute_tau2_fudge
     from recovar.reconstruction.noise import make_radial_noise
     from recovar.utils.helpers import load_relion_volume
 
@@ -125,7 +119,7 @@ def test_ten_iter_vdam_smoke():
             half_spectrum_scoring=True,
             return_stats=True,
         )
-        new_mean = np.asarray(result[0]).reshape(ori_size, ori_size, ori_size)
+        new_mean = np.asarray(result.mean).reshape(ori_size, ori_size, ori_size)
         new_vol = np.asarray(ftu.get_idft3(jnp.asarray(new_mean))).real
 
         # VDAM blend: step=0.5 from F8 sweep

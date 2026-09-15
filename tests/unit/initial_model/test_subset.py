@@ -1,13 +1,12 @@
-"""Phase-1 subset/ordering tests (pure Python, no RELION binding).
+"""Subset primitives and an independent Fisher-Yates reference.
 
-The RELION-generator binding lands in Phase 2. Here we cover:
+Production shuffling uses the native binding, tested separately. Here we cover:
 
   - `randomise_particles_order` is a bijection (permutation) and reproduces
     Fisher-Yates semantics against a deterministic `rnd_unif` stream.
   - `select_vdam_subset` stable-sorts the prefix by optics group and emits
     RELION BPref pseudo-halfset ids of length `subset_size`.
   - `assign_pseudo_halfsets_for_particle_ids` produces `part_id % 2` ids.
-  - `pseudo_halfsets_active` matches RELION's activation logic
     (ml_optimiser.cpp:1920).
 """
 
@@ -15,13 +14,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from helpers.vdam import numpy_rnd_unif_factory, randomise_particles_order
 
-from recovar.em.initial_model.subset import (
-    assign_pseudo_halfsets,
+from recovar.em.vdam.subset import (
     assign_pseudo_halfsets_for_particle_ids,
-    numpy_rnd_unif_factory,
-    pseudo_halfsets_active,
-    randomise_particles_order,
     select_vdam_subset,
 )
 
@@ -183,45 +179,13 @@ class TestSelectVdamSubset:
         np.testing.assert_array_equal(plan.halfset_ids, plan.particle_ids % 2)
 
 
-# ---------------------------------------------------------------------------
-# Pseudo-halfset activation
-# ---------------------------------------------------------------------------
-
-
-class TestPseudoHalfsetsActive:
-    def test_gui_initial_model_path(self):
-        # ml_optimiser.cpp:1920 with --grad, no --split_random_halves
-        assert pseudo_halfsets_active(gradient_refine=True, do_split_random_halves=False) is True
-
-    def test_auto_refine_path(self):
-        # ml_optimiser.cpp:1920 with --auto_refine (which adds --split_random_halves)
-        # grad off, real halves on
-        assert pseudo_halfsets_active(gradient_refine=False, do_split_random_halves=True) is False
-
-    def test_em_no_halves(self):
-        assert pseudo_halfsets_active(gradient_refine=False, do_split_random_halves=False) is False
-
-    def test_grad_with_split_halves_is_not_pseudo(self):
-        # Odd combination but RELION's logic still says no
-        assert pseudo_halfsets_active(gradient_refine=True, do_split_random_halves=True) is False
-
-
-class TestAssignPseudoHalfsets:
-    def test_even_length(self):
-        assert assign_pseudo_halfsets(4).tolist() == [0, 1, 0, 1]
-
-    def test_odd_length(self):
-        assert assign_pseudo_halfsets(5).tolist() == [0, 1, 0, 1, 0]
-
-    def test_zero(self):
-        assert assign_pseudo_halfsets(0).tolist() == []
-
-    def test_dtype(self):
-        out = assign_pseudo_halfsets(3)
+class TestAssignPseudoHalfsetsForParticleIds:
+    @pytest.mark.parametrize("count, expected", ((3, [0, 1, 0]), (4, [0, 1, 0, 1]), (5, [0, 1, 0, 1, 0])))
+    def test_sequential_ids(self, count, expected):
+        out = assign_pseudo_halfsets_for_particle_ids(np.arange(count, dtype=np.int64))
+        assert out.tolist() == expected
         assert out.dtype == np.int8
 
-
-class TestAssignPseudoHalfsetsForParticleIds:
     def test_global_particle_id_parity(self):
         ids = np.asarray([5, 0, 3, 4, 1, 2], dtype=np.int64)
         assert assign_pseudo_halfsets_for_particle_ids(ids).tolist() == [1, 0, 1, 0, 1, 0]

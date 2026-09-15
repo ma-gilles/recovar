@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,6 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar import cuda_backproject
+from recovar.utils.file_hash import sha256_file
 from scripts.analyze_k1_native_fine_operand_boundary import (
     _center,
     _load_flat_real,
@@ -22,14 +22,6 @@ from scripts.analyze_k1_native_fine_operand_boundary import (
 )
 
 SCHEMA = "recovar.em.k1_native_fine_operand_gpu_replay.v1"
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def replay(
@@ -90,7 +82,7 @@ def replay(
         "raw_score": _metric(native_raw, replayed_raw),
         "centered_raw_score": _metric(_center(native_raw), _center(replayed_raw)),
         "artifacts": [
-            {"path": str(path.resolve()), "sha256": _sha256(path)} for path in files
+            {"path": str(path.resolve()), "sha256": sha256_file(path)} for path in files
         ],
     }
     if recovar_capture is not None:
@@ -130,7 +122,7 @@ def replay(
                 _center(native_raw), _center(recovar_corr_replayed)
             ),
             "recovar_capture": str(recovar_capture.resolve()),
-            "recovar_capture_sha256": _sha256(recovar_capture),
+            "recovar_capture_sha256": sha256_file(recovar_capture),
         }
     return report
 

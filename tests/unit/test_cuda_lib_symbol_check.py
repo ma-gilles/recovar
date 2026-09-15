@@ -25,16 +25,23 @@ pytestmark = pytest.mark.unit
 
 
 def test_ffi_registrations_cover_all_target_constants():
-    """Catch missing entries when someone adds a new ``_TARGET_*`` without
-    updating the single-source-of-truth ``_FFI_REGISTRATIONS``.
-    """
+    """Every target is eager or explicitly optional; optional ABIs stay lazy."""
     targets_in_table = {target for target, _symbol in cb._FFI_REGISTRATIONS}
     target_constants = {v for k, v in vars(cb).items() if k.startswith("_TARGET_") and isinstance(v, str)}
-    missing_from_table = target_constants - targets_in_table
-    assert not missing_from_table, (
-        f"_FFI_REGISTRATIONS is missing entries for: {sorted(missing_from_table)}. "
-        "Add the (target, symbol) pair so the cache binary-compat check covers it."
-    )
+    optional_targets = {
+        cb._TARGET_PROJECT_RELION_HALF_RUNTIME,
+        cb._TARGET_PROJECT_RELION_HALF_IMAGE_RADIUS,
+        cb._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF,
+        cb._TARGET_RELION_WAVG_NATIVE_PREFIX_F32,
+        cb._TARGET_RELION_WAVG_NATIVE_PREFIX_DEBUG_F32,
+        cb._TARGET_NOISE_PIXEL_PACK,
+        cb._TARGET_DEFERRED_VDAM_HOST_PACK,
+        cb._TARGET_BPREF_PARTICLE_PACK,
+        cb._TARGET_RELION_COARSE_POSTERIOR_TRANSACTION_F32,
+        cb._TARGET_RELION_COARSE_SHARED_PRETRANSLATED_RUNTIME_F32,
+    }
+    assert targets_in_table.isdisjoint(optional_targets)
+    assert target_constants == targets_in_table | optional_targets
 
 
 def test_ffi_registrations_have_unique_targets_and_symbols():

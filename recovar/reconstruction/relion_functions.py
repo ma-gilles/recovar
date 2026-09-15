@@ -224,23 +224,40 @@ def _pad_volume_for_projection_host(
     do_gridding_correction=False,
     current_size=None,
 ):
-    """Host-side projection padding for grids whose cuFFT workspace is too large."""
+    """Host-side projection padding for grids whose cuFFT workspace is too large.
+
+    Preserves ``vol_ft_flat``'s own dtype throughout rather than forcing
+    complex64: RELION's ``Projector::data``/``Iref`` are RFLOAT-precision
+    (double, in our ACC_DOUBLE_PRECISION oracle) end to end, and this
+    padding step sits directly in the projection path
+    (``pad_volume_for_projection``, called every iteration whenever
+    ``projection_padding_factor > 1``). Hardcoding complex64 here silently
+    discarded whatever double precision the caller had already arranged
+    for the input volume, regardless of RECOVAR_USE_FLOAT64_PROJECTIONS.
+    """
 
     N = int(volume_shape[0])
     padded_shape = tuple(int(s) * int(padding_factor) for s in volume_shape)
-    vol_real = _get_idft3_np(np.asarray(vol_ft_flat, dtype=np.complex64).reshape(volume_shape))
+    vol_ft_flat = np.asarray(vol_ft_flat)
+    real_dtype = np.float64 if vol_ft_flat.dtype == np.complex128 else np.float32
+    # _get_idft3_np's output is nominally real-valued but stays complex
+    # (matching the original code) -- do not force a real cast here, that
+    # would drop the (numerically negligible) imaginary residue with a
+    # ComplexWarning for no benefit; np.pad/_get_dft3_np below operate
+    # identically on the complex array either way.
+    vol_real = _get_idft3_np(vol_ft_flat.reshape(volume_shape))
     if do_gridding_correction:
         vol_real = _gridding_correct_trilinear_np(vol_real, N, int(padding_factor))
     pad_amount = N * (int(padding_factor) - 1)
     pad_before = pad_amount // 2
     pad_after = pad_amount - pad_before
     vol_real_padded = np.pad(vol_real, [(pad_before, pad_after)] * 3, mode="constant")
-    vol_ft_padded = _get_dft3_np(vol_real_padded).astype(np.complex64, copy=False)
+    vol_ft_padded = _get_dft3_np(vol_real_padded).astype(vol_ft_flat.dtype, copy=False)
 
     if current_size is not None:
         r_max_ref = int(padding_factor) * (int(current_size) // 2)
         pN = int(padded_shape[0])
-        coords = np.arange(pN, dtype=np.float32) - pN / 2.0
+        coords = np.arange(pN, dtype=real_dtype) - pN / 2.0
         r2_3d = coords[:, None, None] ** 2 + coords[None, :, None] ** 2 + coords[None, None, :] ** 2
         vol_ft_padded = np.where(r2_3d <= r_max_ref**2, vol_ft_padded, 0.0)
 

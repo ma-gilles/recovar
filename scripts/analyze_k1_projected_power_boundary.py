@@ -10,9 +10,10 @@ from pathlib import Path
 
 import numpy as np
 
+from recovar.utils.file_hash import sha256_file
 from scripts.analyze_k1_bpref_contributor_membership import match_rotations
 from scripts.analyze_k1_scale_aa_boundary import _native_aa_shells
-from scripts.analyze_k1_scale_aa_candidates import _metric, _real, _scalar, _sha256
+from scripts.analyze_k1_scale_aa_candidates import _metric, _real, _scalar
 
 
 def _require(condition: bool, message: str) -> None:
@@ -214,12 +215,12 @@ def analyze(
         },
         "artifacts": {
             "recovar_capture": str(recovar_capture.resolve()),
-            "recovar_capture_sha256": _sha256(recovar_capture),
+            "recovar_capture_sha256": sha256_file(recovar_capture),
             "native_directory": str(native_directory.resolve()),
-            "native_project_panel_real_sha256": _sha256(real_path),
-            "native_project_panel_imag_sha256": _sha256(imag_path),
+            "native_project_panel_real_sha256": sha256_file(real_path),
+            "native_project_panel_imag_sha256": sha256_file(imag_path),
             "native_components": str(native_components.resolve()),
-            "native_components_sha256": _sha256(native_components),
+            "native_components_sha256": sha256_file(native_components),
         },
         "classification": (
             "projected-reference interpolation/power is causally sufficient for the AA residual"

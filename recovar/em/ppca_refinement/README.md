@@ -75,7 +75,7 @@ switch from single-set to halfset).
 
 | File | What lives there |
 |---|---|
-| `__init__.py` | Public re-exports. |
+| `__init__.py` | Package docstring only; it re-exports nothing, so imports name their owner. |
 | `config.py` | `GeometryConfig`, `ScheduleConfig`, `ScoringConfig`, `SparsePass2Config` plus re-exported `MeanRegularizationConfig` and `PostprocessConfig`. **Every tunable parameter lives here.** |
 | `state.py` | `PoseMarginalPPCAEMState` — pytree carried between iterations (μ, W, priors, schedule state). |
 | `schedule.py` | `PPCARefinementScheduleState` and the halfset-resolution gating decision. |
@@ -88,28 +88,42 @@ switch from single-set to halfset).
 | `local_dataset.py` | Dataset-facing exact-local-flavor iteration (`run_local_ppca_fused_em_iteration`) + halfset wrapper + the per-image bucket iterator. |
 | `refinement_loop.py` | `run_dense_ppca_refinement_loop` and `run_local_ppca_refinement_loop` — multi-iteration drivers. |
 | `fixture_validation.py` | Test fixtures shared with `tests/unit/ppca_refinement/`. |
+| `highres_refinement.py` | High-resolution refinement over the K-class pose hierarchy: `HighresPPCARefinementResult`, pipeline-PPCA state initialization, top-p local hypothesis layouts. |
+| `pose_selection.py` | Top-p pose diagnostics: `TopPoseSelection`, pose-id packing, distinct top-pose selection, per-block top-p scores. |
+| `ppca_bridge.py` | The K-class side of the schedule agreement: `PPCAKClassScheduleBridge` feeds PPCA best-pose/Pmax diagnostics through `update_refinement_state` so HEALPix, local search and convergence evolve on the same controller as `refine_single_volume`. |
+| `projcov_whiten.py` | Post-M-step whitening: `whiten_W_svd_post_mstep` (matches the recovar PPCA route's M-step) and `whiten_W_via_projcov`. |
 
 ---
 
 ## 4. Public entry points
 
+Import each name from the module that owns it; the package initializer
+re-exports nothing.
+
 ```python
-from recovar.em.ppca_refinement import (
-    # Single iteration
+# Single iteration
+from recovar.em.ppca_refinement.dense_dataset import (
     run_dense_ppca_fused_em_iteration,         # dense flavor
-    run_local_ppca_fused_em_iteration,         # exact-local flavor
     run_dense_ppca_halfset_fused_em_iteration, # gold-standard halfsets
+)
+from recovar.em.ppca_refinement.local_dataset import (
+    run_local_ppca_fused_em_iteration,         # exact-local flavor
     run_local_ppca_halfset_fused_em_iteration,
-    # Multi-iteration loops
+)
+# Multi-iteration loops
+from recovar.em.ppca_refinement.refinement_loop import (
     run_dense_ppca_refinement_loop,
     run_local_ppca_refinement_loop,
-    # State + schedule
-    PoseMarginalPPCAEMState,
-    PPCARefinementScheduleState,
-    # Configs
-    GeometryConfig, ScheduleConfig, ScoringConfig,
-    SparsePass2Config, MeanRegularizationConfig, PostprocessConfig,
 )
+# State + schedule
+from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
+from recovar.em.ppca_refinement.schedule import PPCARefinementScheduleState
+# Configs
+from recovar.em.ppca_refinement.config import (
+    GeometryConfig, ScheduleConfig, ScoringConfig, SparsePass2Config,
+)
+from recovar.em.ppca_refinement.mean_regularization import MeanRegularizationConfig
+from recovar.em.ppca_refinement.postprocess import PostprocessConfig
 ```
 
 A typical caller passes 2–4 configs:
@@ -138,7 +152,7 @@ result = run_dense_ppca_fused_em_iteration(
   most-load-bearing imports.
 - **Half-Fourier helpers, FFT conventions** → `recovar/core/fourier_transform_utils.py`.
 - **Preprocessing, batch fetch, half-spectrum weights** →
-  `recovar/em/dense_single_volume/helpers/`.
+  `recovar/em/helpers/`.
 - **Noise model expansion** → `recovar/reconstruction/noise.py`.
 
 The single rule: **if it's used by `dense_dataset.py` and `local_dataset.py`,

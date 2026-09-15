@@ -19,11 +19,10 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.cuda_backproject import project
-from recovar.em.dense_single_volume.helpers.projection import (
+from recovar.em.helpers.projection import (
     compute_relion_projector_projections_block,
     relion_projector_half_to_texture_full,
 )
-
 
 DEFAULT_ORIGINAL_INDICES = (1087, 1280, 1794, 431, 2693)
 

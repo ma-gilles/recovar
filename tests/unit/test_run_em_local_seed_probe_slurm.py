@@ -4,9 +4,35 @@ import os
 import subprocess
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LAUNCHER = REPO_ROOT / "scripts" / "run_em_local_seed_probe_slurm.sh"
+
+
+def _probe_job(tmp_path, overrides):
+    output_root = tmp_path / "probe"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    sbatch = fake_bin / "sbatch"
+    sbatch.write_text("#!/usr/bin/env bash\necho 12345\n")
+    sbatch.chmod(0o755)
+    env = os.environ.copy()
+    env.update({
+        "PATH": f"{fake_bin}:{env['PATH']}",
+        "EM_LOCAL_PROBE_OUTPUT_ROOT": str(output_root),
+        "EM_LOCAL_PROBE_PROFILE_NAME": "unit_probe",
+        "EM_LOCAL_PROBE_DATA_DIR": str(tmp_path / "data"),
+        "EM_LOCAL_PROBE_SEED_NPZ": str(tmp_path / "seed.npz"),
+        "SBATCH_ACCOUNT": "gilles",
+        "SBATCH_PARTITION": "cryoem",
+        "SBATCH_CONSTRAINT": "",
+    })
+    env.update(overrides)
+    proc = subprocess.run(
+        ["bash", str(LAUNCHER)], cwd=REPO_ROOT, env=env, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False,
+    )
+    assert proc.returncode == 0, proc.stdout
+    return (output_root / "jobs" / "unit_probe.sbatch").read_text()
 
 
 def test_local_seed_probe_defaults_stay_memory_safe_for_exact_local(tmp_path):
@@ -18,6 +44,9 @@ def test_local_seed_probe_defaults_stay_memory_safe_for_exact_local(tmp_path):
     sbatch.chmod(0o755)
 
     env = os.environ.copy()
+    # Exercise the launcher's own explicit qualification default rather than
+    # inheriting recovar.jax_config's process-wide user default from pytest.
+    env.pop("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", None)
     env.update(
         {
             "PATH": f"{fake_bin}:{env['PATH']}",
@@ -101,40 +130,9 @@ def test_local_seed_probe_defaults_stay_memory_safe_for_exact_local(tmp_path):
 
 
 def test_local_seed_probe_can_opt_into_full_profile_mstep(tmp_path):
-    output_root = tmp_path / "probe"
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    sbatch = fake_bin / "sbatch"
-    sbatch.write_text("#!/usr/bin/env bash\necho 12345\n")
-    sbatch.chmod(0o755)
-
-    env = os.environ.copy()
-    env.update(
-        {
-            "PATH": f"{fake_bin}:{env['PATH']}",
-            "EM_LOCAL_PROBE_OUTPUT_ROOT": str(output_root),
-            "EM_LOCAL_PROBE_PROFILE_NAME": "unit_probe",
-            "EM_LOCAL_PROBE_DATA_DIR": str(tmp_path / "data"),
-            "EM_LOCAL_PROBE_SEED_NPZ": str(tmp_path / "seed.npz"),
-            "EM_LOCAL_PROBE_STOP_AFTER_LOCAL_SEARCH_SCORE_ONLY": "0",
-            "SBATCH_ACCOUNT": "gilles",
-            "SBATCH_PARTITION": "cryoem",
-            "SBATCH_CONSTRAINT": "",
-        }
-    )
-
-    proc = subprocess.run(
-        ["bash", str(LAUNCHER)],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    text = (output_root / "jobs" / "unit_probe.sbatch").read_text()
+    text = _probe_job(tmp_path, {
+        'EM_LOCAL_PROBE_STOP_AFTER_LOCAL_SEARCH_SCORE_ONLY': '0',
+    })
     assert "Stop after profile: 1" in text
     assert "Stop after local search score-only: 0" in text
     assert '--local_search_profile "on"' in text
@@ -147,120 +145,27 @@ def test_local_seed_probe_can_opt_into_full_profile_mstep(tmp_path):
 
 
 def test_local_seed_probe_save_intermediates_skips_unregularized_by_default(tmp_path):
-    output_root = tmp_path / "probe"
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    sbatch = fake_bin / "sbatch"
-    sbatch.write_text("#!/usr/bin/env bash\necho 12345\n")
-    sbatch.chmod(0o755)
-
-    env = os.environ.copy()
-    env.update(
-        {
-            "PATH": f"{fake_bin}:{env['PATH']}",
-            "EM_LOCAL_PROBE_OUTPUT_ROOT": str(output_root),
-            "EM_LOCAL_PROBE_PROFILE_NAME": "unit_probe",
-            "EM_LOCAL_PROBE_DATA_DIR": str(tmp_path / "data"),
-            "EM_LOCAL_PROBE_SEED_NPZ": str(tmp_path / "seed.npz"),
-            "EM_LOCAL_PROBE_SAVE_INTERMEDIATES": "1",
-            "SBATCH_ACCOUNT": "gilles",
-            "SBATCH_PARTITION": "cryoem",
-            "SBATCH_CONSTRAINT": "",
-        }
-    )
-
-    proc = subprocess.run(
-        ["bash", str(LAUNCHER)],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    text = (output_root / "jobs" / "unit_probe.sbatch").read_text()
+    text = _probe_job(tmp_path, {
+        'EM_LOCAL_PROBE_SAVE_INTERMEDIATES': '1',
+    })
     assert '--save_intermediates_dir "${OUT_DIR}/intermediates"' in text
     assert "--save_intermediates_skip_unregularized" in text
 
 
 def test_local_seed_probe_profile_off_uses_fast_local_search_stop(tmp_path):
-    output_root = tmp_path / "probe"
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    sbatch = fake_bin / "sbatch"
-    sbatch.write_text("#!/usr/bin/env bash\necho 12345\n")
-    sbatch.chmod(0o755)
-
-    env = os.environ.copy()
-    env.update(
-        {
-            "PATH": f"{fake_bin}:{env['PATH']}",
-            "EM_LOCAL_PROBE_OUTPUT_ROOT": str(output_root),
-            "EM_LOCAL_PROBE_PROFILE_NAME": "unit_probe",
-            "EM_LOCAL_PROBE_DATA_DIR": str(tmp_path / "data"),
-            "EM_LOCAL_PROBE_SEED_NPZ": str(tmp_path / "seed.npz"),
-            "EM_LOCAL_PROBE_LOCAL_SEARCH_PROFILE": "off",
-            "EM_LOCAL_PROBE_STOP_AFTER_LOCAL_SEARCH_SCORE_ONLY": "0",
-            "EM_LOCAL_PROBE_STOP_AFTER_PROFILE": "1",
-            "SBATCH_ACCOUNT": "gilles",
-            "SBATCH_PARTITION": "cryoem",
-            "SBATCH_CONSTRAINT": "",
-        }
-    )
-
-    proc = subprocess.run(
-        ["bash", str(LAUNCHER)],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    text = (output_root / "jobs" / "unit_probe.sbatch").read_text()
+    text = _probe_job(tmp_path, {
+        'EM_LOCAL_PROBE_LOCAL_SEARCH_PROFILE': 'off',
+        'EM_LOCAL_PROBE_STOP_AFTER_LOCAL_SEARCH_SCORE_ONLY': '0',
+        'EM_LOCAL_PROBE_STOP_AFTER_PROFILE': '1',
+    })
     assert '--local_search_profile "off"' in text
     assert 'if [[ "off" == "off" ]]; then\n    EXTRA_REFINEMENT_ARGS+=(--stop_after_local_search)' in text
 
 
 def test_local_seed_probe_can_use_score_only_local_search_stop(tmp_path):
-    output_root = tmp_path / "probe"
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    sbatch = fake_bin / "sbatch"
-    sbatch.write_text("#!/usr/bin/env bash\necho 12345\n")
-    sbatch.chmod(0o755)
-
-    env = os.environ.copy()
-    env.update(
-        {
-            "PATH": f"{fake_bin}:{env['PATH']}",
-            "EM_LOCAL_PROBE_OUTPUT_ROOT": str(output_root),
-            "EM_LOCAL_PROBE_PROFILE_NAME": "unit_probe",
-            "EM_LOCAL_PROBE_DATA_DIR": str(tmp_path / "data"),
-            "EM_LOCAL_PROBE_SEED_NPZ": str(tmp_path / "seed.npz"),
-            "EM_LOCAL_PROBE_STOP_AFTER_LOCAL_SEARCH_SCORE_ONLY": "1",
-            "SBATCH_ACCOUNT": "gilles",
-            "SBATCH_PARTITION": "cryoem",
-            "SBATCH_CONSTRAINT": "",
-        }
-    )
-
-    proc = subprocess.run(
-        ["bash", str(LAUNCHER)],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    text = (output_root / "jobs" / "unit_probe.sbatch").read_text()
+    text = _probe_job(tmp_path, {
+        'EM_LOCAL_PROBE_STOP_AFTER_LOCAL_SEARCH_SCORE_ONLY': '1',
+    })
     assert "Stop after local search score-only: 1" in text
     assert "Local search profile mode: off" in text
     assert '--local_search_profile "off"' in text
@@ -271,41 +176,10 @@ def test_local_seed_probe_can_use_score_only_local_search_stop(tmp_path):
 
 
 def test_local_seed_probe_can_use_diagnostic_single_half(tmp_path):
-    output_root = tmp_path / "probe"
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    sbatch = fake_bin / "sbatch"
-    sbatch.write_text("#!/usr/bin/env bash\necho 12345\n")
-    sbatch.chmod(0o755)
-
-    env = os.environ.copy()
-    env.update(
-        {
-            "PATH": f"{fake_bin}:{env['PATH']}",
-            "EM_LOCAL_PROBE_OUTPUT_ROOT": str(output_root),
-            "EM_LOCAL_PROBE_PROFILE_NAME": "unit_probe",
-            "EM_LOCAL_PROBE_DATA_DIR": str(tmp_path / "data"),
-            "EM_LOCAL_PROBE_SEED_NPZ": str(tmp_path / "seed.npz"),
-            "EM_LOCAL_PROBE_STOP_AFTER_LOCAL_SEARCH_SCORE_ONLY": "1",
-            "EM_LOCAL_PROBE_DIAGNOSTIC_SINGLE_HALF": "1",
-            "SBATCH_ACCOUNT": "gilles",
-            "SBATCH_PARTITION": "cryoem",
-            "SBATCH_CONSTRAINT": "",
-        }
-    )
-
-    proc = subprocess.run(
-        ["bash", str(LAUNCHER)],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    text = (output_root / "jobs" / "unit_probe.sbatch").read_text()
+    text = _probe_job(tmp_path, {
+        'EM_LOCAL_PROBE_STOP_AFTER_LOCAL_SEARCH_SCORE_ONLY': '1',
+        'EM_LOCAL_PROBE_DIAGNOSTIC_SINGLE_HALF': '1',
+    })
     assert "Local search profile mode: off" in text
     assert "Diagnostic single half: 1" in text
     assert "EXTRA_REFINEMENT_ARGS+=(--diagnostic_single_half)" in text
@@ -315,40 +189,9 @@ def test_local_seed_probe_can_use_diagnostic_single_half(tmp_path):
 
 
 def test_local_seed_probe_single_half_defaults_to_profile_off(tmp_path):
-    output_root = tmp_path / "probe"
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    sbatch = fake_bin / "sbatch"
-    sbatch.write_text("#!/usr/bin/env bash\necho 12345\n")
-    sbatch.chmod(0o755)
-
-    env = os.environ.copy()
-    env.update(
-        {
-            "PATH": f"{fake_bin}:{env['PATH']}",
-            "EM_LOCAL_PROBE_OUTPUT_ROOT": str(output_root),
-            "EM_LOCAL_PROBE_PROFILE_NAME": "unit_probe",
-            "EM_LOCAL_PROBE_DATA_DIR": str(tmp_path / "data"),
-            "EM_LOCAL_PROBE_SEED_NPZ": str(tmp_path / "seed.npz"),
-            "EM_LOCAL_PROBE_DIAGNOSTIC_SINGLE_HALF": "1",
-            "SBATCH_ACCOUNT": "gilles",
-            "SBATCH_PARTITION": "cryoem",
-            "SBATCH_CONSTRAINT": "",
-        }
-    )
-
-    proc = subprocess.run(
-        ["bash", str(LAUNCHER)],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    text = (output_root / "jobs" / "unit_probe.sbatch").read_text()
+    text = _probe_job(tmp_path, {
+        'EM_LOCAL_PROBE_DIAGNOSTIC_SINGLE_HALF': '1',
+    })
     assert "Local search profile mode: off" in text
     assert '--local_search_profile "off"' in text
     assert "EXTRA_REFINEMENT_ARGS+=(--stop_after_local_search)" in text
@@ -359,42 +202,11 @@ def test_local_seed_probe_single_half_defaults_to_profile_off(tmp_path):
 
 
 def test_local_seed_probe_can_reuse_seed_noise_for_diagnostics(tmp_path):
-    output_root = tmp_path / "probe"
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    sbatch = fake_bin / "sbatch"
-    sbatch.write_text("#!/usr/bin/env bash\necho 12345\n")
-    sbatch.chmod(0o755)
-
     seed_npz = tmp_path / "seed.npz"
-    env = os.environ.copy()
-    env.update(
-        {
-            "PATH": f"{fake_bin}:{env['PATH']}",
-            "EM_LOCAL_PROBE_OUTPUT_ROOT": str(output_root),
-            "EM_LOCAL_PROBE_PROFILE_NAME": "unit_probe",
-            "EM_LOCAL_PROBE_DATA_DIR": str(tmp_path / "data"),
-            "EM_LOCAL_PROBE_SEED_NPZ": str(seed_npz),
-            "EM_LOCAL_PROBE_POSE_ITER": "7",
-            "EM_LOCAL_PROBE_INIT_NOISE_FROM_SEED_NPZ": "1",
-            "SBATCH_ACCOUNT": "gilles",
-            "SBATCH_PARTITION": "cryoem",
-            "SBATCH_CONSTRAINT": "",
-        }
-    )
-
-    proc = subprocess.run(
-        ["bash", str(LAUNCHER)],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    text = (output_root / "jobs" / "unit_probe.sbatch").read_text()
+    text = _probe_job(tmp_path, {
+        'EM_LOCAL_PROBE_POSE_ITER': '7',
+        'EM_LOCAL_PROBE_INIT_NOISE_FROM_SEED_NPZ': '1',
+    })
     assert "Init noise from seed NPZ: 1" in text
     assert "Init noise iter: 7" in text
     assert f'EXTRA_REFINEMENT_ARGS+=(--init_noise_from_npz "{seed_npz}" --init_noise_iter "7")' in text
@@ -406,120 +218,27 @@ def test_local_seed_probe_can_reuse_seed_noise_for_diagnostics(tmp_path):
 
 
 def test_local_seed_probe_can_disable_initial_noise_cache(tmp_path):
-    output_root = tmp_path / "probe"
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    sbatch = fake_bin / "sbatch"
-    sbatch.write_text("#!/usr/bin/env bash\necho 12345\n")
-    sbatch.chmod(0o755)
-
-    env = os.environ.copy()
-    env.update(
-        {
-            "PATH": f"{fake_bin}:{env['PATH']}",
-            "EM_LOCAL_PROBE_OUTPUT_ROOT": str(output_root),
-            "EM_LOCAL_PROBE_PROFILE_NAME": "unit_probe",
-            "EM_LOCAL_PROBE_DATA_DIR": str(tmp_path / "data"),
-            "EM_LOCAL_PROBE_SEED_NPZ": str(tmp_path / "seed.npz"),
-            "EM_LOCAL_PROBE_INITIAL_NOISE_CACHE_DIR": "",
-            "SBATCH_ACCOUNT": "gilles",
-            "SBATCH_PARTITION": "cryoem",
-            "SBATCH_CONSTRAINT": "",
-        }
-    )
-
-    proc = subprocess.run(
-        ["bash", str(LAUNCHER)],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    text = (output_root / "jobs" / "unit_probe.sbatch").read_text()
+    text = _probe_job(tmp_path, {
+        'EM_LOCAL_PROBE_INITIAL_NOISE_CACHE_DIR': '',
+    })
     assert 'export RECOVAR_INITIAL_NOISE_CACHE_DIR=""' in text
     assert 'elif [[ -n "${RECOVAR_INITIAL_NOISE_CACHE_DIR}" ]]; then' in text
     assert '--initial_noise_cache_dir "${RECOVAR_INITIAL_NOISE_CACHE_DIR}"' in text
 
 
 def test_local_seed_probe_records_auto_microbatch_boost(tmp_path):
-    output_root = tmp_path / "probe"
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    sbatch = fake_bin / "sbatch"
-    sbatch.write_text("#!/usr/bin/env bash\necho 12345\n")
-    sbatch.chmod(0o755)
-
-    env = os.environ.copy()
-    env.update(
-        {
-            "PATH": f"{fake_bin}:{env['PATH']}",
-            "EM_LOCAL_PROBE_OUTPUT_ROOT": str(output_root),
-            "EM_LOCAL_PROBE_PROFILE_NAME": "unit_probe",
-            "EM_LOCAL_PROBE_DATA_DIR": str(tmp_path / "data"),
-            "EM_LOCAL_PROBE_SEED_NPZ": str(tmp_path / "seed.npz"),
-            "RECOVAR_EXACT_LOCAL_AUTO_MICROBATCH_BOOST": "3",
-            "SBATCH_ACCOUNT": "gilles",
-            "SBATCH_PARTITION": "cryoem",
-            "SBATCH_CONSTRAINT": "",
-        }
-    )
-
-    proc = subprocess.run(
-        ["bash", str(LAUNCHER)],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    text = (output_root / "jobs" / "unit_probe.sbatch").read_text()
+    text = _probe_job(tmp_path, {
+        'RECOVAR_EXACT_LOCAL_AUTO_MICROBATCH_BOOST': '3',
+    })
     assert "RECOVAR_EXACT_LOCAL_AUTO_MICROBATCH_BOOST=3" in text
     assert 'export RECOVAR_EXACT_LOCAL_AUTO_MICROBATCH_BOOST="3"' in text
 
 
 def test_local_seed_probe_can_force_native_rebuild(tmp_path):
-    output_root = tmp_path / "probe"
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    sbatch = fake_bin / "sbatch"
-    sbatch.write_text("#!/usr/bin/env bash\necho 12345\n")
-    sbatch.chmod(0o755)
-
-    env = os.environ.copy()
-    env.update(
-        {
-            "PATH": f"{fake_bin}:{env['PATH']}",
-            "EM_LOCAL_PROBE_OUTPUT_ROOT": str(output_root),
-            "EM_LOCAL_PROBE_PROFILE_NAME": "unit_probe",
-            "EM_LOCAL_PROBE_DATA_DIR": str(tmp_path / "data"),
-            "EM_LOCAL_PROBE_SEED_NPZ": str(tmp_path / "seed.npz"),
-            "EM_LOCAL_PROBE_FORCE_NATIVE_REBUILD": "1",
-            "EM_LOCAL_PROBE_FORCE_INSTALL": "1",
-            "SBATCH_ACCOUNT": "gilles",
-            "SBATCH_PARTITION": "cryoem",
-            "SBATCH_CONSTRAINT": "",
-        }
-    )
-
-    proc = subprocess.run(
-        ["bash", str(LAUNCHER)],
-        cwd=REPO_ROOT,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-
-    assert proc.returncode == 0, proc.stdout
-    text = (output_root / "jobs" / "unit_probe.sbatch").read_text()
+    text = _probe_job(tmp_path, {
+        'EM_LOCAL_PROBE_FORCE_NATIVE_REBUILD': '1',
+        'EM_LOCAL_PROBE_FORCE_INSTALL': '1',
+    })
     assert "EM_LOCAL_PROBE_FORCE_NATIVE_REBUILD=1" in text
     assert "EM_LOCAL_PROBE_FORCE_INSTALL=1" in text
     assert 'make -C recovar/cuda LIB="${RECOVAR_CUDA_LIB}" clean' in text

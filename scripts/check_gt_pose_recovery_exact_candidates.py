@@ -14,7 +14,6 @@ import argparse
 import json
 import pickle
 from pathlib import Path
-from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -24,20 +23,7 @@ from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.em.ppca_refinement.dense_dataset import iter_dense_ppca_dataset_blocks
 from recovar.em.ppca_refinement.engine import dense_pose_ppca_E_step_blocked
 from recovar.reconstruction import noise as recon_noise
-
-
-def _jsonable(value: Any):
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, np.ndarray):
-        return _jsonable(value.tolist())
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, Path):
-        return str(value)
-    return value
+from recovar.utils.json_utils import to_jsonable
 
 
 def _load_simulation_info(path: Path):
@@ -162,7 +148,7 @@ def run_check(
         ],
     }
     output_json.parent.mkdir(parents=True, exist_ok=True)
-    output_json.write_text(json.dumps(_jsonable(result), indent=2, sort_keys=True) + "\n")
+    output_json.write_text(json.dumps(to_jsonable(result), indent=2, sort_keys=True) + "\n")
     return result
 
 
@@ -193,7 +179,7 @@ def main():
         disc_type=str(args.disc_type),
         relion_texture_interp=bool(args.relion_texture_interp),
     )
-    print(json.dumps(_jsonable(result), indent=2, sort_keys=True))
+    print(json.dumps(to_jsonable(result), indent=2, sort_keys=True))
     if not result["passed"]:
         raise SystemExit(1)
 

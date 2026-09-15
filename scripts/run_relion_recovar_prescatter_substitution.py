@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import struct
 from pathlib import Path
@@ -34,12 +33,11 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
+# Support direct execution, sibling imports, and the scripts package.
+if not __package__:
+    from file_hash import sha256_file as _sha256
+else:
+    from scripts.file_hash import sha256_file as _sha256
 
 
 def array_metrics(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
@@ -108,7 +106,7 @@ def scatter_operand(
 
 
 def _half_to_public(data: np.ndarray, weight: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    from recovar.em.dense_single_volume.helpers import half_volume_mstep
+    from recovar.em.helpers import half_volume_mstep
 
     data_post = half_volume_mstep.enforce_relion_half_volume_x0_hermitian_host(
         data, ACCUMULATOR_SHAPE
@@ -312,7 +310,7 @@ def reconstruct_common(args: argparse.Namespace) -> None:
     import jax.numpy as jnp
 
     from recovar.core import fourier_transform_utils as ftu
-    from recovar.em.dense_single_volume.mean_helpers import _reconstruct_volume_eager
+    from recovar.em.refinement.mean_helpers import _reconstruct_volume_eager
     from recovar.utils.helpers import recovar_volume_to_relion
 
     output = Path(args.output).resolve()

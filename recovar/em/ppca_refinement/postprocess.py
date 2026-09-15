@@ -86,17 +86,6 @@ def _half_volume_frequency_mask(volume_shape, max_r: float, *, dtype):
     return (r2 <= float(max_r) ** 2).astype(dtype)
 
 
-def _half_radial_shell_labels(volume_shape) -> np.ndarray:
-    labels = np.asarray(
-        ftu.get_grid_of_radial_distances_real(tuple(volume_shape), scaled=False, frequency_shift=0),
-        dtype=np.int32,
-    ).reshape(-1)
-    half_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(tuple(volume_shape))))
-    if labels.size != half_size:
-        raise AssertionError(f"radial shell labels have {labels.size} entries, expected {half_size}")
-    return labels
-
-
 def _soft_mask_and_background_weights(volume_shape, *, mask_radius_px: float | None, cosine_width_px: float, dtype):
     radius = -1 if mask_radius_px is None else float(mask_radius_px)
     if radius < 0:

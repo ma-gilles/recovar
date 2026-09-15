@@ -153,7 +153,7 @@ def test_estep_pmax_matches_relion_iter1():
 
     from recovar.core import fourier_transform_utils as ftu
     from recovar.data_io.cryoem_dataset import load_dataset
-    from recovar.em.dense_single_volume.em_engine import run_em
+    from recovar.em.dense.em_engine import run_em
     from recovar.em.sampling import get_relion_hidden_rotation_grid, get_translation_grid
     from recovar.utils.helpers import load_relion_volume
 
@@ -221,19 +221,8 @@ def test_estep_pmax_matches_relion_iter1():
         half_spectrum_scoring=True,
         return_stats=True,
     )
-    # run_em returns (Ft_y, Ft_ctf, relion_stats) or similar when return_stats=True
-    # Inspect result tuple
-    if isinstance(result, tuple):
-        for x in result:
-            if hasattr(x, "max_posterior_per_image"):
-                stats = x
-                break
-        else:
-            raise RuntimeError(
-                f"RelionStats not found in run_em result; got types {[type(x).__name__ for x in result]}"
-            )
-    else:
-        raise RuntimeError(f"unexpected run_em result type {type(result)}")
+    stats = result.stats
+    assert stats is not None
 
     ours_pmax = np.asarray(stats.max_posterior_per_image)
     ours_mean = float(ours_pmax.mean())
@@ -344,7 +333,7 @@ def test_estep_bpref_forward_parity():
     Phase C refactor (2026-04-28): the test now exercises the production
     dense K-class adapter instead of calling `run_em` directly with a bespoke
     recipe. This guarantees the test gate covers the same code path that
-    downstream consumers (e.g. `scripts/run_ab_initio.py`) will hit.
+    downstream consumers (e.g. `recovar.commands.initial_model`) will hit.
 
     With pseudo_halfsets=1, RELION accumulates two BPref instances by
     alternating particles across halfset slots. We mirror that via
@@ -360,19 +349,17 @@ def test_estep_bpref_forward_parity():
     import jax
 
     from recovar.data_io.cryoem_dataset import load_dataset
-    from recovar.data_io.starfile import read_star
-    from recovar.em.dense_single_volume.helpers.orientation_priors import make_relion_translation_log_prior
-    from recovar.em.initial_model import initialise_denovo_state
-    from recovar.em.initial_model.dense_adapter import DenseInitialModelEstepConfig, run_dense_initial_model_estep
-    from recovar.em.initial_model.dense_adapter import (
-        split_pseudo_halfset_particle_ids as _split_halfset_particle_ids,
-    )
+    from recovar.em.helpers.orientation_priors import make_relion_translation_log_prior
     from recovar.em.sampling import (
         apply_relion_translation_perturbation,
         get_oversampled_rotation_grid_from_samples,
         get_oversampled_translation_grid,
         get_translation_grid,
     )
+    from recovar.em.vdam.dense_adapter import run_dense_initial_model_estep
+    from recovar.em.vdam.estep_common import DenseInitialModelEstepConfig
+    from recovar.em.vdam.init import initialise_denovo_state
+    from recovar.em.vdam.subset import split_pseudo_halfset_particle_ids as _split_halfset_particle_ids
 
     try:
         if not jax.devices("gpu"):
@@ -442,12 +429,8 @@ def test_estep_bpref_forward_parity():
     current_size = 28
     r_max = 14
 
-    # Pseudo-halfset routing: pass micrograph names so the wrapper picks
-    # RELION-sorted halfsets via `_split_halfset_particle_ids`.
-    main_in, _ = read_star(str(PARTICLES_STAR))
-    mic_names = np.asarray(main_in["_rlnMicrographName"].tolist())
-    # Sanity-check the wrapper's halfset assignment matches RELION's lex-sort.
-    h0_ids, h1_ids = _split_halfset_particle_ids(ds.n_images, micrograph_names=mic_names)
+    # InitialModel pseudo-halfsets follow global particle-ID parity.
+    h0_ids, h1_ids = _split_halfset_particle_ids(ds.n_images)
     assert h0_ids.size + h1_ids.size == ds.n_images
 
     # Drive the production wrapper. The adapter now constructs the RELION

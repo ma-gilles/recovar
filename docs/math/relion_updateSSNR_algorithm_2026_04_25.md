@@ -169,7 +169,7 @@ Two non-obvious facts that matter for parity:
 
 ## 4. Recovar deviation — side-by-side
 
-Source: `/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_em_phase01_sparse_pass2_rebase_20260424/recovar/em/dense_single_volume/iteration_loop.py:2845-2872`.
+Source: `/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_em_phase01_sparse_pass2_rebase_20260424/recovar/em/refinement/iteration_loop.py:2845-2872`.
 
 | Step | RELION (auto-refine, split-half) | recovar (current `iteration_loop.py`) |
 |---|---|---|
@@ -204,7 +204,7 @@ is intact precisely because:
 
 The cleanest fix that matches RELION exactly and preserves late-iter
 parity is to **re-order** the iter loop in
-`recovar/em/dense_single_volume/iteration_loop.py` so that:
+`recovar/em/refinement/iteration_loop.py` so that:
 
 1. After E-step + `low_resol_join_halves`,
 2. **First** reconstruct unreg half-maps and compute the current iter's FSC,
@@ -218,8 +218,8 @@ remove the tau2 update from the `init_fsc` / `fsc_history[-1]` path.
 ### Diff sketch (NOT applied)
 
 ```diff
---- a/recovar/em/dense_single_volume/iteration_loop.py
-+++ b/recovar/em/dense_single_volume/iteration_loop.py
+--- a/recovar/em/refinement/iteration_loop.py
++++ b/recovar/em/refinement/iteration_loop.py
 @@ -2842,40 +2842,73 @@
              current_resolution_angstrom=prev_res_angstrom,
          )
@@ -488,9 +488,9 @@ That's a different code path and stays as-is.
   — `MlModel::initialise`, `setFourierTransformMaps`, `initialiseDataVersusPrior`
 - `/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_em_phase01_sparse_pass2_rebase_20260424/recovar/reconstruction/regularization.py:560-667`
   — `compute_relion_tau2_from_weights`
-- `/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_em_phase01_sparse_pass2_rebase_20260424/recovar/em/dense_single_volume/iteration_loop.py:2700-2980`
+- `/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_em_phase01_sparse_pass2_rebase_20260424/recovar/em/refinement/iteration_loop.py:2700-2980`
   — recovar iter loop with the buggy tau2 update site
-- `/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_em_phase01_sparse_pass2_rebase_20260424/recovar/em/dense_single_volume/iteration_loop.py:1620-1700`
+- `/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_em_phase01_sparse_pass2_rebase_20260424/recovar/em/refinement/iteration_loop.py:1620-1700`
   — `init_fsc` consumption for `current_size` (a separate, correct path that should NOT be touched)
 - `/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_em_phase01_sparse_pass2_rebase_20260424/scripts/run_multi_iter_parity.py:370-405, 800-820`
   — how `init_fsc` is constructed at script entry

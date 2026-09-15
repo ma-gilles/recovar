@@ -15,12 +15,12 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 
 import jax
 import jax.numpy as jnp
+
 try:
     from run_ppca_dense_from_init_npz import (
         _default_current_size_schedule,
         _default_healpix_order_schedule,
         _half_size,
-        _jsonable,
         _load_init,
         _load_noise_variance,
         _load_simulation_info,
@@ -36,7 +36,6 @@ except ModuleNotFoundError as exc:
         _default_current_size_schedule,
         _default_healpix_order_schedule,
         _half_size,
-        _jsonable,
         _load_init,
         _load_noise_variance,
         _load_simulation_info,
@@ -47,7 +46,8 @@ except ModuleNotFoundError as exc:
     )
 
 from recovar.data_io.cryoem_dataset import load_dataset
-from recovar.em.dense_single_volume.local_layout import build_local_hypothesis_layout
+from recovar.utils.json_utils import to_jsonable
+from recovar.em.local.local_layout import build_local_hypothesis_layout
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
     ScheduleConfig,
@@ -249,7 +249,7 @@ def _run_local_with_halfset_fsc_schedule(
             "resolution_increased": bool(rec.resolution_decision.allow_increase),
             "gate_reasons": list(rec.resolution_decision.reasons),
             "pose_change_fraction": float(rec.resolution_decision.pose_change_fraction),
-            "diagnostics": _jsonable(rec.diagnostics),
+            "diagnostics": to_jsonable(rec.diagnostics),
         }
         iter_summaries.append(rec_summary)
         print(json.dumps(rec_summary, indent=2, sort_keys=True), flush=True)
@@ -324,8 +324,8 @@ def _run_local_with_halfset_fsc_schedule(
         "output_dir": str(output_dir),
         "final_npz": str(final_npz),
     }
-    (output_dir / "summary.json").write_text(json.dumps(_jsonable(summary), indent=2, sort_keys=True) + "\n")
-    print(json.dumps(_jsonable(summary), indent=2, sort_keys=True))
+    (output_dir / "summary.json").write_text(json.dumps(to_jsonable(summary), indent=2, sort_keys=True) + "\n")
+    print(json.dumps(to_jsonable(summary), indent=2, sort_keys=True))
 
 
 def _candidate_rotations(
@@ -878,7 +878,7 @@ def main() -> None:
                 },
             }
             iter_summaries.append(iter_summary)
-            print(json.dumps(_jsonable(iter_summary), indent=2, sort_keys=True), flush=True)
+            print(json.dumps(to_jsonable(iter_summary), indent=2, sort_keys=True), flush=True)
             prior_rotations = pose_arrays["best_rotation_matrix"]
             prior_translations = pose_arrays["best_translation"]
             pose_npz = dict(pose_arrays)
@@ -1019,7 +1019,7 @@ def main() -> None:
             },
         }
         iter_summaries.append(iter_summary)
-        print(json.dumps(_jsonable(iter_summary), indent=2, sort_keys=True), flush=True)
+        print(json.dumps(to_jsonable(iter_summary), indent=2, sort_keys=True), flush=True)
 
         current_mu = np.asarray(result.mu_half)
         current_W = np.asarray(result.W_half)
@@ -1106,8 +1106,8 @@ def main() -> None:
         "elapsed_s": float(time.time() - t_all),
         "iterations": iter_summaries,
     }
-    (output_dir / "summary.json").write_text(json.dumps(_jsonable(summary), indent=2, sort_keys=True) + "\n")
-    print(json.dumps(_jsonable(summary), indent=2, sort_keys=True))
+    (output_dir / "summary.json").write_text(json.dumps(to_jsonable(summary), indent=2, sort_keys=True) + "\n")
+    print(json.dumps(to_jsonable(summary), indent=2, sort_keys=True))
     if not summary["passed"]:
         raise SystemExit(1)
 

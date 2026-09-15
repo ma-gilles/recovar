@@ -22,7 +22,6 @@ from pathlib import Path
 
 import numpy as np
 
-
 DEFAULT_FIXTURE_DIR = Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run")
 DEFAULT_RELION_DUMP_DIR = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_debug_dump")
 DEFAULT_RELION_ESTEP_DUMP = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_dump_small")
@@ -54,15 +53,6 @@ def _read_relion_3d_complex_dump(path: Path) -> np.ndarray:
     with open(path, "rb") as f:
         zdim, ydim, xdim = struct.unpack("iii", f.read(12))
         return np.fromfile(f, dtype=np.complex128, count=zdim * ydim * xdim).reshape(zdim, ydim, xdim)
-
-
-def _read_relion_2d_dump(path: Path, *, complex_values: bool) -> np.ndarray:
-    """Read RELION debug dumps written as ``int32 ydim, int32 xdim, data``."""
-
-    with open(path, "rb") as f:
-        ydim, xdim = struct.unpack("ii", f.read(8))
-        dtype = np.complex128 if complex_values else np.float64
-        return np.fromfile(f, dtype=dtype, count=ydim * xdim).reshape(ydim, xdim)
 
 
 def _read_raw_scalar(path: Path) -> float | None:
@@ -343,57 +333,13 @@ def _load_sampling(fixture_dir: Path, estep_dump_dir: Path):
     )
 
 
-def _relion_projector_dense_volume_from_dump(ppref: np.ndarray, ori_size: int) -> np.ndarray:
-    """Embed RELION ``Projector::data`` into dense full-centered Fourier layout."""
-
-    from recovar.core import fourier_transform_utils as ftu
-
-    ppref = np.asarray(ppref, dtype=np.complex128)
-    if ppref.ndim != 3:
-        raise ValueError(f"ppref must be 3D, got {ppref.shape}")
-    n = int(ori_size)
-    if n % 2:
-        raise ValueError(f"expected even ori_size, got {ori_size}")
-    center = n // 2
-    half = np.zeros((n, n, center + 1), dtype=np.complex128)
-    slab = ppref[::-1, :, :]
-    zdim, ydim, xdim = slab.shape
-    z_center = zdim // 2
-    y_center = ydim // 2
-    if xdim > center + 1:
-        raise ValueError(f"ppref x half-axis {xdim} does not fit ori_size={ori_size}")
-    for iz in range(zdim):
-        for iy in range(ydim):
-            half[(iz - z_center) + center, (iy - y_center) + center, :xdim] = slab[iz, iy, :]
-    return np.asarray(ftu.half_volume_to_full_volume(half, (n, n, n)), dtype=np.complex128)
-
-
-def _relion_projector_dense_rotations(rotations: np.ndarray) -> np.ndarray:
-    """Map RELION rotation matrices to the dense frame for embedded projector data."""
-
-    rotations = np.asarray(rotations, dtype=np.float64)
-    if rotations.ndim != 3 or rotations.shape[1:] != (3, 3):
-        raise ValueError(f"rotations must have shape (R, 3, 3), got {rotations.shape}")
-    swap_xz = np.array(
-        [
-            [0.0, 0.0, 1.0],
-            [0.0, 1.0, 0.0],
-            [1.0, 0.0, 0.0],
-        ],
-        dtype=np.float64,
-    )
-    flip_x = np.diag([-1.0, 1.0, 1.0]).astype(np.float64)
-    inv_t = np.linalg.inv(rotations).transpose(0, 2, 1)
-    return np.einsum("rij,jk,kl->ril", inv_t, swap_xz, flip_x).astype(np.float32)
-
-
 def _build_config(args, ds, fixture_dir: Path, estep_dump_dir: Path, current_size: int):
     import jax.numpy as jnp
 
     from recovar.core import fourier_transform_utils as ftu
-    from recovar.em.dense_single_volume.helpers.orientation_priors import make_relion_translation_log_prior
+    from recovar.em.helpers.orientation_priors import make_relion_translation_log_prior
     from recovar.em.sampling import get_translation_grid
-    from recovar.em.initial_model.dense_adapter import DenseInitialModelEstepConfig
+    from recovar.em.vdam.estep_common import DenseInitialModelEstepConfig
     from recovar.reconstruction.noise import make_radial_noise
     from recovar.reconstruction.relion_functions import griddingCorrect
     from recovar.utils.helpers import load_relion_volume, relion_volume_to_recovar
@@ -527,8 +473,8 @@ def _build_config(args, ds, fixture_dir: Path, estep_dump_dir: Path, current_siz
 
 
 def run_mode(args, ds, main_in, relion_sorted_idx, mode: str, out_dir: Path) -> dict[str, object]:
-    from recovar.em.initial_model import initialise_denovo_state
-    from recovar.em.initial_model.dense_adapter import run_dense_initial_model_estep
+    from recovar.em.vdam.dense_adapter import run_dense_initial_model_estep
+    from recovar.em.vdam.init import initialise_denovo_state
 
     config, config_meta = _build_config(args, ds, args.fixture_dir, args.relion_estep_dump_dir, args.current_size)
     state = initialise_denovo_state(

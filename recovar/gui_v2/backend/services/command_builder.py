@@ -8,11 +8,12 @@ argv elements.
 
 from __future__ import annotations
 
-import os
 import shutil
 import sys
 from pathlib import Path
 from typing import Any
+
+from recovar.commands.initial_model import initial_model_defaults_dict
 
 
 def _recovar_cmd() -> list[str]:
@@ -71,6 +72,116 @@ def _add_bool_optional(cmd: list[str], flag_base: str, value: bool | None) -> No
         cmd.append(f"--{flag_base}")
     elif value is False:
         cmd.append(f"--no-{flag_base}")
+
+
+def _add_boolean_option(cmd: list[str], flag: str, value: bool) -> None:
+    """Append one side of an argparse ``BooleanOptionalAction`` option."""
+
+    cmd.append(flag if value else f"--no-{flag.removeprefix('--')}")
+
+
+def build_initial_model_command(params: dict[str, Any]) -> list[str]:
+    """Build a fully resolved ``recovar initial_model`` command."""
+
+    defaults = initial_model_defaults_dict()
+
+    def value(name: str) -> Any:
+        return params.get(name, defaults[name])
+
+    exact_local_bucket_radix = int(value("exact_local_bucket_radix"))
+    if exact_local_bucket_radix not in (2, 4):
+        raise ValueError("InitialModel exact_local_bucket_radix must be 2 or 4")
+    exact_local_physical_order_chunk_size = int(
+        value("exact_local_physical_order_chunk_size")
+    )
+    if exact_local_physical_order_chunk_size not in (0,) and exact_local_physical_order_chunk_size < 3:
+        raise ValueError(
+            "InitialModel exact_local_physical_order_chunk_size must be 0 (disabled) or at least 3"
+        )
+
+    cmd = [
+        *_recovar_cmd(),
+        "initial_model",
+        "--i",
+        str(params["input_star"]),
+        "--o",
+        str(Path(params["outdir"]) / "run"),
+        "--nr-iter",
+        str(value("nr_iter")),
+        "--grad-write-iter",
+        str(value("grad_write_iter")),
+        "--K",
+        str(value("nr_classes")),
+        "--tau2-fudge",
+        str(value("tau2_fudge")),
+        "--grad-ini-frac",
+        str(value("grad_ini_frac")),
+        "--grad-fin-frac",
+        str(value("grad_fin_frac")),
+        "--grad-em-iters",
+        str(value("grad_em_iters")),
+        "--stepsize",
+        str(value("stepsize")),
+        "--mu",
+        str(value("mu")),
+        "--sym",
+        str(value("sym_name")),
+        "--particle-diameter",
+        str(value("particle_diameter")),
+        "--random-seed",
+        str(value("random_seed")),
+        "--healpix-order",
+        str(value("healpix_order")),
+        "--oversampling",
+        str(value("oversampling")),
+        "--offset-range",
+        str(value("offset_range_px")),
+        "--offset-step",
+        str(value("offset_step_px")),
+        "--perturbation-factor",
+        str(value("perturbation_factor")),
+        "--image-batch-size",
+        str(value("image_batch_size")),
+        "--rotation-block-size",
+        str(value("rotation_block_size")),
+        "--pass2-engine",
+        str(value("pass2_engine")),
+        "--exact-local-bucket-radix",
+        str(exact_local_bucket_radix),
+        "--exact-local-physical-order-chunk-size",
+        str(exact_local_physical_order_chunk_size),
+        "--bootstrap-min-particles",
+        str(value("bootstrap_min_particles")),
+        "--sigma2-min-particles",
+        str(value("sigma2_min_particles")),
+        "--padding-factor",
+        str(value("padding_factor")),
+        "--image-fourier-backend",
+        str(value("image_fourier_backend")),
+        "--gpu",
+        str(value("gpu_ids")),
+    ]
+    for flag, name in (
+        ("--run-in-c1", "do_run_C1"),
+        ("--solvent", "do_solvent"),
+        ("--zero-mask", "do_zero_mask"),
+        ("--ctf", "do_ctf_correction"),
+        ("--lazy", "lazy"),
+        ("--write-iter-artifacts", "write_iter_artifacts"),
+        ("--require-custom-cuda", "require_custom_cuda"),
+        ("--relion-wavg-sequential-cuda", "relion_wavg_sequential_cuda"),
+        ("--stable-fourier-window-shapes", "stable_fourier_window_shapes"),
+    ):
+        _add_boolean_option(cmd, flag, bool(value(name)))
+
+    cmd.append("--deterministic-cuda" if bool(value("deterministic_cuda")) else "--allow-async-cuda")
+    _add_boolean_option(cmd, "--jax-compilation-cache", bool(value("use_jax_compilation_cache")))
+    _add_optional(cmd, "--jax-compilation-cache-dir", params.get("jax_compilation_cache_dir"))
+    _add_optional(cmd, "--random-perturbation", params.get("random_perturbation"))
+    _add_optional(cmd, "--translation-sigma-angstrom", params.get("translation_sigma_angstrom"))
+    _add_optional(cmd, "--datadir", params.get("datadir"))
+    _add_optional(cmd, "--strip-prefix", params.get("strip_prefix"))
+    return cmd
 
 
 def build_pipeline_command(params: dict[str, Any]) -> list[str]:
@@ -278,6 +389,7 @@ def build_downsample_command(params: dict[str, Any]) -> list[str]:
 # ComputeState and ComputeTrajectory need special handling (coord files),
 # so they are not included here.
 COMMAND_BUILDERS: dict[str, Any] = {
+    "InitialModel": build_initial_model_command,
     "Pipeline": build_pipeline_command,
     "Analyze": build_analyze_command,
     "Density": build_density_command,

@@ -21,10 +21,12 @@ def captured_variance(test_v, U, s):
     not singular values of any underlying matrix.
 
     Args:
-        test_v: Test vectors, shape (n_voxels, n_test). Should be column-orthonormal
+        test_v (numpy.ndarray | jax.Array): Test vectors, shape (n_voxels, n_test). Should be
+            column-orthonormal
             for ``relative_variance_from_captured_variance`` to give ``≤ 1``.
-        U: Eigenvector matrix, shape (n_voxels, n_pcs).
-        s: **Eigenvalue** array, shape (n_pcs,) — the variances along the columns
+        U (numpy.ndarray | jax.Array): Eigenvector matrix, shape (n_voxels, n_pcs).
+        s (numpy.ndarray | jax.Array): **Eigenvalue** array, shape (n_pcs,) — the variances along
+            the columns
             of ``U``. If you have singular values from ``np.linalg.svd``, square them
             first.
 
@@ -40,7 +42,7 @@ def captured_variance(test_v, U, s):
     baselines.
 
     Returns:
-        Cumulative captured variance array, shape (n_test,).
+        variance (numpy.ndarray): Cumulative captured variance, shape ``(n_test,)``.
     """
     x = (jnp.conj(test_v.T) @ U) * np.sqrt(s)
     norms = np.linalg.norm(x, axis=-1)**2
@@ -87,13 +89,15 @@ def subspace_angles(u ,v, max_rank = None, check_orthogonalize = False):
     """Compute principal angles between two subspaces of increasing rank.
 
     Args:
-        u: First set of basis vectors, shape (n_voxels, n_pcs).
-        v: Second set of basis vectors, shape (n_voxels, n_pcs).
-        max_rank: Maximum subspace rank to evaluate.
-        check_orthogonalize: If True, QR-orthogonalize u and v first.
+        u (numpy.ndarray | jax.Array): First set of basis vectors, shape (n_voxels, n_pcs).
+        v (numpy.ndarray | jax.Array): Second set of basis vectors, shape (n_voxels, n_pcs).
+        max_rank (int | None): Maximum subspace rank to evaluate; defaults to the number of
+            columns in ``u``.
+        check_orthogonalize (bool): If True, QR-orthogonalize u and v first.
 
     Returns:
-        Array of sine of principal angles, shape (max_rank,).
+        sine_angles (numpy.ndarray): Sine of the largest principal angle at
+            each rank from 1 through ``max_rank``; shape ``(max_rank,)``.
     """
     max_rank = u.shape[-1] if max_rank is None else max_rank
     sine_angles = np.zeros(max_rank)
@@ -112,15 +116,18 @@ def local_fsc_metric(map1, map2, voxel_size, mask, fsc_threshold=1/7, locres_sam
     """Compute local resolution and local AUC metrics within a mask.
 
     Args:
-        map1: First half-map (3-D real-space array).
-        map2: Second half-map (3-D real-space array).
-        voxel_size: Voxel size in Angstroms.
-        mask: Boolean mask selecting voxels to evaluate.
-        fsc_threshold: FSC threshold for resolution (default 1/7).
-        locres_sampling: Sampling factor for local resolution windows.
+        map1 (numpy.ndarray | jax.Array): First half-map (3-D real-space array).
+        map2 (numpy.ndarray | jax.Array): Second half-map (3-D real-space array).
+        voxel_size (float): Voxel size in Angstroms.
+        mask (numpy.ndarray): Boolean mask selecting voxels to evaluate.
+        fsc_threshold (float): FSC threshold for resolution (default 1/7).
+        locres_sampling (float): Spacing between local-resolution sampling points in Angstroms.
 
     Returns:
-        Tuple of (median_locres, ninety_pc_locres, median_auc, ten_pc_auc).
+        median_locres (numpy.floating): Median local resolution in Angstroms.
+        ninety_pc_locres (numpy.floating): 90th-percentile local resolution.
+        median_auc (numpy.floating): Median local FSC AUC.
+        ten_pc_auc (numpy.floating): 10th-percentile local FSC AUC.
     """
     fscs, local_resols, i_loc_res, i_loc_auc = locres.local_resolution(map1, map2, 0, voxel_size, locres_sampling = locres_sampling, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = False, use_v2 = True, fsc_threshold = fsc_threshold)
     
@@ -174,18 +181,20 @@ def gt_mask_fn(gt_map):
 
 
 def make_union_gt_mask_from_hvd(gt_thing, volume_shape):
-    """Build a union mask from all GT volumes in a HeterogeneousReconstruction.
+    """Build a union mask from all GT volumes in a HeterogeneousVolumeDistribution.
 
     Converts each Fourier-space volume to real space, then delegates to
     ``mask.make_union_gt_mask``.
 
     Args:
-        gt_thing: A ``HeterogeneousReconstruction`` with ``.volumes`` in
+        gt_thing (recovar.simulation.synthetic_dataset.HeterogeneousVolumeDistribution): A
+            ``HeterogeneousVolumeDistribution`` with ``.volumes`` in
             Fourier space, shape ``(n_vols, n_voxels)``.
-        volume_shape: 3-D grid dimensions tuple.
+        volume_shape (tuple[int, int, int]): 3-D grid dimensions tuple.
 
     Returns:
-        Tuple ``(soft_mask, binary_mask)``.
+        soft_mask (numpy.ndarray): Float32 soft union mask, shape ``volume_shape``.
+        binary_mask (numpy.ndarray): Boolean dilated union mask, same shape.
     """
     import recovar.core.fourier_transform_utils as ftu
 

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import sys
 from pathlib import Path
@@ -15,22 +14,15 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from recovar.em.initial_model.dense_adapter import reference_to_relion_projector_half_maps
+from recovar.em.relion.relion_projector_setup import reference_to_relion_projector_half_maps
 from recovar.utils import helpers
+from recovar.utils.file_hash import sha256_file  # noqa: E402 - follows repository path setup
 from scripts.analyze_k1_exact_ppref_fine_boundary import _load_ppref
 
 
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _metric(candidate: np.ndarray, reference: np.ndarray) -> dict[str, float | int]:
@@ -111,7 +103,7 @@ def analyze(ppref_path: Path, map_specs: list[tuple[str, Path, str]]) -> dict[st
     candidates: dict[str, np.ndarray] = {}
     artifacts: dict[str, object] = {
         "native_ppref": str(ppref_path.resolve()),
-        "native_ppref_sha256": _sha256(ppref_path),
+        "native_ppref_sha256": sha256_file(ppref_path),
         "maps": {},
     }
     for label, path, convention in map_specs:
@@ -128,7 +120,7 @@ def analyze(ppref_path: Path, map_specs: list[tuple[str, Path, str]]) -> dict[st
         candidates[label] = candidate
         artifacts["maps"][label] = {
             "path": str(path.resolve()),
-            "sha256": _sha256(path),
+            "sha256": sha256_file(path),
             "convention": convention,
             "shape": list(reference.shape),
             "dtype_after_load": str(reference.dtype),

@@ -81,7 +81,7 @@ flock "${SCRATCH_DIR}/relion_bind_build.lock" bash -c 'rm -rf recovar/relion_bin
 OUT_DIR="${SCRATCH_DIR}/recovar_K${K}"
 mkdir -p "\${OUT_DIR}"
 
-pixi run python scripts/run_ab_initio.py \\
+pixi run python -m recovar.commands.initial_model --no-jax-compilation-cache --no-require-custom-cuda --gpu '' \\
   --i ${data_dir}/particles.star \\
   --datadir ${data_dir} \\
   --o "\${OUT_DIR}/run" \\
@@ -90,7 +90,7 @@ pixi run python scripts/run_ab_initio.py \\
   --healpix_order 1 --oversampling 1 \\
   --offset_range 6 --offset_step 2 \\
   --bootstrap_min_particles 1000 --sigma2_min_particles 1000 \\
-  --padding_factor 1 --eager_images \\
+  --padding_factor 1 --no-lazy \\
   --image_batch_size 250 \\
   --rotation_block_size 5000
 

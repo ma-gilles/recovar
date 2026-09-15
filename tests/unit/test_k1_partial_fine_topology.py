@@ -3,7 +3,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.em.dense_single_volume.helpers import compact_candidate_capture as capture
+from recovar.em.diagnostics import compact_candidate_capture as capture
 from scripts.analyze_k1_partial_fine_topology import (
     _native_significant_count,
     _tuple_sequence_report,

@@ -12,7 +12,6 @@ shellwise FSC and normalized FSC-AUC.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -23,6 +22,7 @@ import numpy as np
 from recovar.core import mask
 from recovar.relion_bind import _relion_bind_core as relion_bind
 from recovar.utils import helpers
+from recovar.utils.file_hash import sha256_file as _sha256
 
 if __package__:
     from scripts.summarize_em_completion_bench import normalized_fsc_auc, shell_fsc
@@ -53,14 +53,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-iter-preweight", type=int, default=10)
     parser.add_argument("--skip-gridding", action="store_true")
     return parser.parse_args()
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _finite(value: float) -> float | None:

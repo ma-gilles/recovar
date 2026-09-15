@@ -1,6 +1,6 @@
 """Prerequisite test P1 for the PPCA-ab-initio v0 plan.
 
-Verifies that recovar.em.heterogeneity.compute_bHb_terms — the
+Verifies that recovar.em.reference.heterogeneity.compute_bHb_terms — the
 low-rank score correction used inside E_with_precompute — actually
 computes the formula it claims to compute.
 
@@ -51,7 +51,7 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-import recovar.em.heterogeneity as hetero
+import recovar.em.reference.heterogeneity as hetero
 
 pytestmark = pytest.mark.unit
 

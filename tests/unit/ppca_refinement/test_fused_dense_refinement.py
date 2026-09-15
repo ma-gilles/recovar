@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from recovar.core import fourier_transform_utils as ftu
-from recovar.em.dense_single_volume.helpers.adjoint import batch_adjoint_slice_volume_half
+from recovar.em.helpers.adjoint import batch_adjoint_slice_volume_half
 from recovar.em.ppca_refinement.engine import (
     DensePPCAFusedBlock,
     _score_gamma_and_moments,
@@ -11,7 +11,6 @@ from recovar.em.ppca_refinement.engine import (
     run_dense_ppca_fused_refinement_blocks,
 )
 from recovar.ppca.triangular import _tri_size
-
 
 pytestmark = pytest.mark.unit
 

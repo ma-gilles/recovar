@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import subprocess
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -30,6 +29,7 @@ if __package__:
     from .analyze_relion_k4_panel_posterior_decomposition import (
         REPORT_SCHEMA as POSTERIOR_SCHEMA,
     )
+    from .analyzer_provenance import clean_repo_head
     from .validate_relion_bpref_factor_capture import load_factor_capture
     from .validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 else:
@@ -49,6 +49,7 @@ else:
     from analyze_relion_k4_panel_posterior_decomposition import (
         REPORT_SCHEMA as POSTERIOR_SCHEMA,
     )
+    from analyzer_provenance import clean_repo_head
     from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
         load_factor_capture,
     )
@@ -631,19 +632,6 @@ def analyze(*, posterior_json: Path) -> dict[str, Any]:
     }
 
 
-def _clean_repo_head(repo: Path) -> str:
-    head = subprocess.check_output(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        text=True,
-    ).strip()
-    status = subprocess.check_output(
-        ["git", "-C", str(repo), "status", "--porcelain=v1"],
-        text=True,
-    )
-    _require(not status, "analyzer repository is dirty")
-    return head
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
@@ -662,7 +650,7 @@ def main() -> None:
             "path": str(args.posterior_json.resolve()),
             "sha256": _sha256(args.posterior_json),
         },
-        "analyzer_repo_head": _clean_repo_head(args.repo),
+        "analyzer_repo_head": clean_repo_head(args.repo),
     }
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")

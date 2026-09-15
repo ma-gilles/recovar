@@ -168,8 +168,14 @@ def run_refinement(
 ):
     """Run our refinement and return results dict + wall time."""
     from recovar import utils
-    from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
-    from recovar.em.sampling import get_rotation_grid, get_translation_grid
+    from recovar.em.refinement.iteration_loop import refine_single_volume
+    from recovar.em.refinement.refinement_options import (
+        AdaptiveOptions,
+        RefinementBatching,
+        RefinementOptions,
+        RefinementSchedule,
+    )
+    from recovar.em.sampling import get_translation_grid
     from recovar.reconstruction import noise as recon_noise
     from recovar.reconstruction.regularization import average_over_shells
 
@@ -185,8 +191,7 @@ def run_refinement(
         init_vol_real = np.array(mrc.data, dtype=np.float32)
     init_vol_ft = np.fft.fftn(np.fft.ifftshift(init_vol_real)).astype(np.complex64).reshape(-1)
 
-    # Rotation + translation grids
-    rotations = get_rotation_grid(healpix_order, matrices=True).astype(np.float32)
+    # Translation grid
     translations = get_translation_grid(offset_range, offset_step).astype(np.float32)
 
     # Initial noise and prior
@@ -210,20 +215,22 @@ def run_refinement(
         init_volume=jnp.asarray(init_vol_ft),
         init_noise_variance=noise_variance,
         init_mean_variance=mean_variance,
-        rotations=rotations,
         translations=jnp.asarray(translations),
-        disc_type="linear_interp",
-        max_iter=max_iter,
-        image_batch_size=image_batch_size,
-        rotation_block_size=rotation_block_size,
-        relion_current_sizes=oracle_current_sizes,
-        init_current_size=init_current_size,
-        fsc_threshold=1.0 / 7.0,
-        adaptive_oversampling=adaptive_oversampling,
-        max_significants=max_significants,
-        init_translation_sigma_angstrom=offset_sigma_angstrom,
-        nside_level=healpix_order if adaptive_oversampling > 0 else None,
-        translation_pixel_offset=offset_step if adaptive_oversampling > 0 else None,
+        options=RefinementOptions(
+            disc_type="linear_interp",
+            schedule=RefinementSchedule(
+                max_iter=max_iter,
+                init_current_size=init_current_size,
+                fsc_threshold=1.0 / 7.0,
+                init_translation_sigma_angstrom=offset_sigma_angstrom,
+            ),
+            batching=RefinementBatching(image_batch_size=image_batch_size, rotation_block_size=rotation_block_size),
+            adaptive=AdaptiveOptions(
+                relion_current_sizes=oracle_current_sizes,
+                adaptive_oversampling=adaptive_oversampling,
+                max_significants=max_significants,
+            ),
+        ),
     )
 
     total_time = time.time() - t_start

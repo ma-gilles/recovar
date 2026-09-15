@@ -13,9 +13,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-    _relion_f32_fine_reconstruction_probs,
-)
+from recovar.em.sparse_pass2.sparse_pass2_posterior import _relion_f32_fine_reconstruction_probs
 
 SCHEMA = "recovar.em_k4_joint_f32_support_probe.v1"
 EXPECTED_CLASSES = 4

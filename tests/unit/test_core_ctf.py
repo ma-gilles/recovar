@@ -43,6 +43,30 @@ def test_ctf_evaluator_spa_mode():
     assert out_half.shape == (2, 4 * (4 // 2 + 1))
 
 
+def test_ctf_evaluator_constructs_grid_in_parameter_dtype():
+    evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.SPA)
+    params64 = np.array(
+        [[15000.000123, 14999.999321, 100.841064, 300.0, 2.7, 0.1, 0.0, 0.0, 1.0]],
+        dtype=np.float64,
+    )
+    image_shape = (8, 8)
+    voxel_size = np.float64("1.234567890123")
+
+    actual = np.asarray(
+        evaluator(params64, image_shape=image_shape, voxel_size=voxel_size, half_image=True)
+    )
+    freqs64 = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+        image_shape,
+        voxel_size,
+        scaled=True,
+        dtype=np.float64,
+    )
+    expected = np.asarray(core_ctf.evaluate_ctf(freqs64, params64))
+
+    assert actual.dtype == np.float64
+    np.testing.assert_array_equal(actual, expected)
+
+
 def test_ctf_evaluator_cryo_et_mode():
     evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.CRYO_ET)
     ctf_params = np.zeros((2, 11), dtype=np.float32)
@@ -334,20 +358,6 @@ def test_spa_modes_evaluator_on_gpu(gpu_device, mode):
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
-
-
-@pytest.mark.gpu
-def test_spa_evaluator_half_matches_full_mapping_on_gpu(gpu_device):
-    ctf_params = _make_standard_ctf_params(2)[:, :9].astype(np.float32)
-    image_shape = (4, 8)
-    evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.SPA)
-    with jax.default_device(gpu_device):
-        full = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
-        half = np.asarray(
-            evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True)
-        )
-    expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
-    np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)
 
 
 @pytest.mark.gpu

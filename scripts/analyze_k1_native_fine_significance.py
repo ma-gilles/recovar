@@ -109,9 +109,7 @@ def analyze(
     if weights.size == 0:
         raise ValueError("native fine-score capture has no active weights")
 
-    from recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed import (
-        _relion_f32_fine_reconstruction_probs,
-    )
+    from recovar.em.sparse_pass2.sparse_pass2_posterior import _relion_f32_fine_reconstruction_probs
 
     jax_weights = jnp.asarray(weights)
     jax_sorted = jnp.sort(jax_weights)

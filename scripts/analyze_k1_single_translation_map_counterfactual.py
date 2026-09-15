@@ -26,7 +26,6 @@ os.environ.setdefault("JAX_PLATFORMS", "cuda,cpu")
 
 from scripts.analyze_em_k1_tau2_substitution import map_metrics
 
-
 SCHEMA = "recovar.em.k1_single_translation_map_counterfactual.v1"
 
 
@@ -66,9 +65,7 @@ def _backproject_row(
 
     from recovar import cuda_backproject
     from recovar.core import fourier_transform_utils as ftu
-    from recovar.em.dense_single_volume.local_backprojection import (
-        enforce_relion_half_volume_x0_hermitian_host,
-    )
+    from recovar.em.local.local_backprojection import enforce_relion_half_volume_x0_hermitian_host
 
     half_shape = ftu.volume_shape_to_half_volume_shape(accumulator_shape)
     zeros = jnp.zeros((int(np.prod(half_shape)),), dtype=jnp.complex64)
@@ -113,9 +110,7 @@ def _reconstruct_iteration1_maps(
     import jax.numpy as jnp
 
     from recovar.core import fourier_transform_utils as ftu
-    from recovar.em.dense_single_volume.mean_helpers import (
-        _reconstruct_and_postprocess_means,
-    )
+    from recovar.em.refinement.mean_helpers import _reconstruct_and_postprocess_means
     from recovar.reconstruction import regularization
 
     fsc = regularization.compute_relion_fsc_from_backprojector(
@@ -202,10 +197,7 @@ def analyze(
     import jax
 
     from recovar import utils
-    from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
-        relion_backprojector_volume_shape,
-        relion_x_half_volume_to_full,
-    )
+    from recovar.em.helpers.half_volume_mstep import relion_backprojector_volume_shape, relion_x_half_volume_to_full
     from recovar.reconstruction import regularization
     from recovar.utils import helpers
 

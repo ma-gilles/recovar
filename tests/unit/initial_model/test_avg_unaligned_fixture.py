@@ -19,7 +19,7 @@ from typing import Iterator, Tuple
 import numpy as np
 import pytest
 
-from recovar.em.initial_model.avg_unaligned import compute_avg_unaligned_and_sigma2
+from recovar.em.relion.initial_noise import compute_avg_unaligned_and_sigma2
 
 FIXTURE_DIR = Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run")
 PARTICLES_STAR = Path(

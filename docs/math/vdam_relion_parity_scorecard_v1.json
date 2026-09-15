@@ -1,0 +1,529 @@
+{
+  "schema": "recovar.vdam_relion_parity_scorecard.v1",
+  "suite_id": "vdam-k1-gui-grid0-fixed12",
+  "suite_version": 1,
+  "frozen_denominator": 12,
+  "frozen_case_definitions_sha256": "1a37a1b360b022d60eefdd0481eb0784d4a0e98a4d92066199625ceaf6d11dd1",
+  "source_fixture_manifest": {
+    "path": "docs/math/em_relion_parity_fixture_manifest_v2.json",
+    "sha256": "422a79a0a7703d92f9777266e8c34ccd3a7cf5963b354e57a7d9a18f227babee"
+  },
+  "metric_policy": "Signed shellwise FSC and normalized non-DC FSC-AUC for maps; exact or distributional comparisons for state. Correlation is not computed or gated.",
+  "acceptance_contract": {
+    "cross_engine_fsc_auc_min": 0.999,
+    "recovar_minus_relion_gt_fsc_auc_min": -0.002,
+    "required_checkpoints": [
+      0,
+      1,
+      2,
+      4,
+      8
+    ],
+    "exact_schedule": true,
+    "exact_artifact_topology": true,
+    "same_physical_gpu_per_pair": true,
+    "correlation_used": false
+  },
+  "current_snapshot": {
+    "id": "vdam-k1-fixed12-27da5efb-20260824T104500Z",
+    "counts": {
+      "pass": 12,
+      "fail": 0,
+      "not_run": 0
+    },
+    "evidence": {
+      "ledger_path": "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_vdam_relion_parity_20260820/docs/math/vdam_relion_parity_evidence_ledger_20260824_exactfine.json",
+      "ledger_sha256": "1b43a9a7a4623fd5bca415beabbfbe096d2aacc73cb8f0e07bd7c74296061309",
+      "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+    }
+  },
+  "history": [
+    {
+      "id": "vdam-k1-fixed12-initial",
+      "recorded_utc": "2026-08-20T00:00:00Z",
+      "counts": {
+        "pass": 0,
+        "fail": 0,
+        "not_run": 12
+      },
+      "evidence": null,
+      "status_note": "Suite definition only. Historical correlation results are non-scoring under the FSC/FSC-AUC contract."
+    },
+    {
+      "id": "vdam-k1-fixed12-20260820-layoutfix",
+      "recorded_utc": "2026-08-20T13:13:29Z",
+      "counts": {
+        "pass": 6,
+        "fail": 6,
+        "not_run": 0
+      },
+      "evidence": {
+        "ledger_path": "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_vdam_relion_parity_20260820/docs/math/vdam_relion_parity_evidence_ledger_20260820_layoutfix.json",
+        "ledger_sha256": "398e4c34e634312c829a4d7aa3614dec76ba04081cf1be3c19551834b3084d23",
+        "source_head": "5fc3058e8c37f20e14a6922b20dc97fcfeca7f50"
+      },
+      "status_note": "Recorded frozen same-GPU VDAM trajectory audits without changing suite gates."
+    },
+    {
+      "id": "vdam-k1-fixed12-27da5efb-20260824T104500Z",
+      "recorded_utc": "2026-08-22T03:57:29Z",
+      "counts": {
+        "pass": 12,
+        "fail": 0,
+        "not_run": 0
+      },
+      "evidence": {
+        "ledger_path": "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_vdam_relion_parity_20260820/docs/math/vdam_relion_parity_evidence_ledger_20260824_exactfine.json",
+        "ledger_sha256": "1b43a9a7a4623fd5bca415beabbfbe096d2aacc73cb8f0e07bd7c74296061309",
+        "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0"
+      },
+      "status_note": "Recorded frozen same-GPU VDAM trajectory audits without changing suite gates."
+    }
+  ],
+  "cases": [
+    {
+      "id": "vdam-01",
+      "name": "small_baseline",
+      "definition": {
+        "source_em_case_id": "k1-11",
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4.0,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6.0,
+        "offset_step_px": 2.0,
+        "padding_factor": 1
+      },
+      "result": "pass",
+      "checkpoint_results": {
+        "0": "pass",
+        "1": "pass",
+        "2": "pass",
+        "4": "pass",
+        "8": "pass"
+      },
+      "evidence": {
+        "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0",
+        "report_sha256": "fbccbcbf23e3e0266aac04812bf77ea18b3ba40be495b6ca24051481b16f1d22",
+        "recovar_job": "12752300",
+        "relion_job": "12752300",
+        "audit_job": "12752300",
+        "same_physical_gpu": true,
+        "correlation_used": false,
+        "exact_schedule": true,
+        "exact_artifact_topology": true,
+        "final_cross_engine_fsc_auc": 0.9999999999373882,
+        "final_gt_fsc_auc_delta": -2.8182957238775952e-08
+      }
+    },
+    {
+      "id": "vdam-02",
+      "name": "small_very_high_noise",
+      "definition": {
+        "source_em_case_id": "k1-12",
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4.0,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6.0,
+        "offset_step_px": 2.0,
+        "padding_factor": 1
+      },
+      "result": "pass",
+      "checkpoint_results": {
+        "0": "pass",
+        "1": "pass",
+        "2": "pass",
+        "4": "pass",
+        "8": "pass"
+      },
+      "evidence": {
+        "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0",
+        "report_sha256": "6aa5f5496e82d9081b9a9645caf760ccf4c2db4a2ac6bec0e41a04ce8a4e33a0",
+        "recovar_job": "12752301",
+        "relion_job": "12752301",
+        "audit_job": "12752301",
+        "same_physical_gpu": true,
+        "correlation_used": false,
+        "exact_schedule": true,
+        "exact_artifact_topology": true,
+        "final_cross_engine_fsc_auc": 0.9999999999271382,
+        "final_gt_fsc_auc_delta": 3.20334007722356e-08
+      }
+    },
+    {
+      "id": "vdam-03",
+      "name": "small_anisotropic",
+      "definition": {
+        "source_em_case_id": "k1-13",
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4.0,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6.0,
+        "offset_step_px": 2.0,
+        "padding_factor": 1
+      },
+      "result": "pass",
+      "checkpoint_results": {
+        "0": "pass",
+        "1": "pass",
+        "2": "pass",
+        "4": "pass",
+        "8": "pass"
+      },
+      "evidence": {
+        "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0",
+        "report_sha256": "4d501c845f44d7f10e727eefbd19a456e34191c400013dc4438b4209fa9ffe16",
+        "recovar_job": "12752302",
+        "relion_job": "12752302",
+        "audit_job": "12752302",
+        "same_physical_gpu": true,
+        "correlation_used": false,
+        "exact_schedule": true,
+        "exact_artifact_topology": true,
+        "final_cross_engine_fsc_auc": 0.9999999995476587,
+        "final_gt_fsc_auc_delta": 1.2943197361114933e-07
+      }
+    },
+    {
+      "id": "vdam-04",
+      "name": "small_noctf",
+      "definition": {
+        "source_em_case_id": "k1-14",
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4.0,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6.0,
+        "offset_step_px": 2.0,
+        "padding_factor": 1
+      },
+      "result": "pass",
+      "checkpoint_results": {
+        "0": "pass",
+        "1": "pass",
+        "2": "pass",
+        "4": "pass",
+        "8": "pass"
+      },
+      "evidence": {
+        "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0",
+        "report_sha256": "7b9ee22176cbe71779f7e5343c3b11843b46336c72a049724269c3c7ec56a4a3",
+        "recovar_job": "12752367",
+        "relion_job": "12752367",
+        "audit_job": "12752367",
+        "same_physical_gpu": true,
+        "correlation_used": false,
+        "exact_schedule": true,
+        "exact_artifact_topology": true,
+        "final_cross_engine_fsc_auc": 0.9999999999230026,
+        "final_gt_fsc_auc_delta": -6.913053805096547e-08
+      }
+    },
+    {
+      "id": "vdam-05",
+      "name": "small_contrast_noise_scale",
+      "definition": {
+        "source_em_case_id": "k1-18",
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4.0,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6.0,
+        "offset_step_px": 2.0,
+        "padding_factor": 1
+      },
+      "result": "pass",
+      "checkpoint_results": {
+        "0": "pass",
+        "1": "pass",
+        "2": "pass",
+        "4": "pass",
+        "8": "pass"
+      },
+      "evidence": {
+        "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0",
+        "report_sha256": "5fb662ed072dd9b21f72ce0911e7a35ccd622a26a8064f550df9ee1f56f9686f",
+        "recovar_job": "12752371",
+        "relion_job": "12752371",
+        "audit_job": "12752371",
+        "same_physical_gpu": true,
+        "correlation_used": false,
+        "exact_schedule": true,
+        "exact_artifact_topology": true,
+        "final_cross_engine_fsc_auc": 0.9999999962261295,
+        "final_gt_fsc_auc_delta": -1.1476845639124544e-07
+      }
+    },
+    {
+      "id": "vdam-06",
+      "name": "small_image_offset",
+      "definition": {
+        "source_em_case_id": "k1-19",
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4.0,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6.0,
+        "offset_step_px": 2.0,
+        "padding_factor": 1
+      },
+      "result": "pass",
+      "checkpoint_results": {
+        "0": "pass",
+        "1": "pass",
+        "2": "pass",
+        "4": "pass",
+        "8": "pass"
+      },
+      "evidence": {
+        "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0",
+        "report_sha256": "33333dc7ed29125b9e4c9c08a1df34b46e0f60800f581d1dba9e982e2e301f86",
+        "recovar_job": "12752405",
+        "relion_job": "12752405",
+        "audit_job": "12752405",
+        "same_physical_gpu": true,
+        "correlation_used": false,
+        "exact_schedule": true,
+        "exact_artifact_topology": true,
+        "final_cross_engine_fsc_auc": 0.9999999999343818,
+        "final_gt_fsc_auc_delta": -2.3424882790445967e-08
+      }
+    },
+    {
+      "id": "vdam-07",
+      "name": "small_severe_outliers",
+      "definition": {
+        "source_em_case_id": "k1-22",
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4.0,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6.0,
+        "offset_step_px": 2.0,
+        "padding_factor": 1
+      },
+      "result": "pass",
+      "checkpoint_results": {
+        "0": "pass",
+        "1": "pass",
+        "2": "pass",
+        "4": "pass",
+        "8": "pass"
+      },
+      "evidence": {
+        "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0",
+        "report_sha256": "1fa5d1ee9d0af5ca9e8e594f3a15cf048ba3fc56fcb62856d79651a0bf4f123e",
+        "recovar_job": "12752417",
+        "relion_job": "12752417",
+        "audit_job": "12752417",
+        "same_physical_gpu": true,
+        "correlation_used": false,
+        "exact_schedule": true,
+        "exact_artifact_topology": true,
+        "final_cross_engine_fsc_auc": 0.9999999798102687,
+        "final_gt_fsc_auc_delta": -1.2697630864116904e-06
+      }
+    },
+    {
+      "id": "vdam-08",
+      "name": "tiny_baseline",
+      "definition": {
+        "source_em_case_id": "k1-25",
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4.0,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6.0,
+        "offset_step_px": 2.0,
+        "padding_factor": 1
+      },
+      "result": "pass",
+      "checkpoint_results": {
+        "0": "pass",
+        "1": "pass",
+        "2": "pass",
+        "4": "pass",
+        "8": "pass"
+      },
+      "evidence": {
+        "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0",
+        "report_sha256": "8a3d17131449baf23ab20c275a5552b68ed4c860d7306ebc37ca773bc7a251b1",
+        "recovar_job": "12752418",
+        "relion_job": "12752418",
+        "audit_job": "12752418",
+        "same_physical_gpu": true,
+        "correlation_used": false,
+        "exact_schedule": true,
+        "exact_artifact_topology": true,
+        "final_cross_engine_fsc_auc": 0.9999999999168058,
+        "final_gt_fsc_auc_delta": -2.368586577566889e-08
+      }
+    },
+    {
+      "id": "vdam-09",
+      "name": "small_high_res_radial",
+      "definition": {
+        "source_em_case_id": "k1-20",
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4.0,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6.0,
+        "offset_step_px": 2.0,
+        "padding_factor": 1
+      },
+      "result": "pass",
+      "checkpoint_results": {
+        "0": "pass",
+        "1": "pass",
+        "2": "pass",
+        "4": "pass",
+        "8": "pass"
+      },
+      "evidence": {
+        "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0",
+        "report_sha256": "69661d3c4d60c8b23ebb73716dd781d4b7f44c96eb48c09bd035f9c2fc2cacfe",
+        "recovar_job": "12752451",
+        "relion_job": "12752451",
+        "audit_job": "12752451",
+        "same_physical_gpu": true,
+        "correlation_used": false,
+        "exact_schedule": true,
+        "exact_artifact_topology": true,
+        "final_cross_engine_fsc_auc": 0.9999999997004289,
+        "final_gt_fsc_auc_delta": 2.1900145235481672e-08
+      }
+    },
+    {
+      "id": "vdam-10",
+      "name": "mid_baseline",
+      "definition": {
+        "source_em_case_id": "k1-31",
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4.0,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6.0,
+        "offset_step_px": 2.0,
+        "padding_factor": 1
+      },
+      "result": "pass",
+      "checkpoint_results": {
+        "0": "pass",
+        "1": "pass",
+        "2": "pass",
+        "4": "pass",
+        "8": "pass"
+      },
+      "evidence": {
+        "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0",
+        "report_sha256": "b8d8e3fccb24a5e8d7489f4efee6cbb4a03c801c08637ce8537329d5dc76ba7b",
+        "recovar_job": "12752457",
+        "relion_job": "12752457",
+        "audit_job": "12752457",
+        "same_physical_gpu": true,
+        "correlation_used": false,
+        "exact_schedule": true,
+        "exact_artifact_topology": true,
+        "final_cross_engine_fsc_auc": 0.9999999999047774,
+        "final_gt_fsc_auc_delta": -1.125064722287683e-07
+      }
+    },
+    {
+      "id": "vdam-11",
+      "name": "production_baseline",
+      "definition": {
+        "source_em_case_id": "k1-01",
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4.0,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6.0,
+        "offset_step_px": 2.0,
+        "padding_factor": 1
+      },
+      "result": "pass",
+      "checkpoint_results": {
+        "0": "pass",
+        "1": "pass",
+        "2": "pass",
+        "4": "pass",
+        "8": "pass"
+      },
+      "evidence": {
+        "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0",
+        "report_sha256": "df1801f8ea4fe4d77f48b3d56d14a95b482439dd3c9934869ae78f09ca22ca18",
+        "recovar_job": "12752475",
+        "relion_job": "12752475",
+        "audit_job": "12752475",
+        "same_physical_gpu": true,
+        "correlation_used": false,
+        "exact_schedule": true,
+        "exact_artifact_topology": true,
+        "final_cross_engine_fsc_auc": 0.9999999995722044,
+        "final_gt_fsc_auc_delta": 1.613965623648017e-08
+      }
+    },
+    {
+      "id": "vdam-12",
+      "name": "production_near_nyquist",
+      "definition": {
+        "source_em_case_id": "k1-09",
+        "nr_classes": 1,
+        "nr_iter": 8,
+        "random_seed": 0,
+        "tau2_fudge": 4.0,
+        "healpix_order": 1,
+        "oversampling": 1,
+        "offset_range_px": 6.0,
+        "offset_step_px": 2.0,
+        "padding_factor": 1
+      },
+      "result": "pass",
+      "checkpoint_results": {
+        "0": "pass",
+        "1": "pass",
+        "2": "pass",
+        "4": "pass",
+        "8": "pass"
+      },
+      "evidence": {
+        "source_head": "27da5efb1920ce5d26f73ac281ebb16564abd9e0",
+        "report_sha256": "46d4335ad91dc29d4af11cc80ba5528dd8ec652add3680ef3b067ebcb4bb438d",
+        "recovar_job": "12752296",
+        "relion_job": "12752296",
+        "audit_job": "12752296",
+        "same_physical_gpu": true,
+        "correlation_used": false,
+        "exact_schedule": true,
+        "exact_artifact_topology": true,
+        "final_cross_engine_fsc_auc": 0.9999998643771884,
+        "final_gt_fsc_auc_delta": -1.547323648097218e-06
+      }
+    }
+  ]
+}

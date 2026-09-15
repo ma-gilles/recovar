@@ -24,7 +24,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import mrcfile
 import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -99,13 +98,12 @@ def classify_source_boundary(
 
 
 def _read_relion_map(path: Path) -> np.ndarray:
-    from recovar.utils.helpers import relion_volume_to_recovar
+    from recovar.utils.helpers import load_relion_volume
 
-    with mrcfile.open(path, permissive=False) as handle:
-        raw = np.asarray(handle.data, dtype=np.float32).copy()
-    _require(raw.ndim == 3 and len(set(raw.shape)) == 1, f"RELION map is not cubic: {path}")
-    _require(np.all(np.isfinite(raw)), f"RELION map contains non-finite values: {path}")
-    return np.asarray(relion_volume_to_recovar(raw), dtype=np.float32)
+    volume = np.asarray(load_relion_volume(path), dtype=np.float32)
+    _require(volume.ndim == 3 and len(set(volume.shape)) == 1, f"RELION map is not cubic: {path}")
+    _require(np.all(np.isfinite(volume)), f"RELION map contains non-finite values: {path}")
+    return volume
 
 
 def _read_recovar_map(path: Path) -> np.ndarray:
@@ -252,13 +250,11 @@ def build_report(
     import jax.numpy as jnp
 
     from recovar.cuda_backproject import cuda_available
-    from recovar.em.dense_single_volume.helpers.projection import (
+    from recovar.em.helpers.projection import (
         _relion_projector_texture_enabled,
         compute_relion_projector_projections_block,
     )
-    from recovar.em.initial_model.dense_adapter import (
-        reference_to_relion_projector_half_maps,
-    )
+    from recovar.em.relion.relion_projector_setup import reference_to_relion_projector_half_maps
     from recovar.relion_bind import _relion_bind_core as relion_bind
 
     paths = [

@@ -19,6 +19,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Check agent contracts and development links
+        run: python scripts/check_agent_guides.py
+
       - run: pip install ruff
 
       - name: Ruff format check (changed .py files only)

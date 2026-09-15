@@ -1,11 +1,8 @@
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.dense_single_volume.em_engine import normalized_cc_score_inverse_power
-from recovar.em.dense_single_volume.helpers.preprocessing import (
-    preprocess_batch,
-    preprocess_batch_firstiter_cc,
-)
+from recovar.em.dense.em_engine import normalized_cc_score_inverse_power
+from recovar.em.helpers.preprocessing import preprocess_batch, preprocess_batch_firstiter_cc
 
 
 class _Float64CtfConfig:
@@ -18,6 +15,34 @@ class _Float64CtfConfig:
 class _Complex64HalfDataset:
     def process_images_half(self, batch, apply_image_mask=False):
         return jnp.ones((batch.shape[0], 40), dtype=jnp.complex64)
+
+
+class _CapturingCtfConfig:
+    image_shape = (8, 8)
+
+    def __init__(self):
+        self.input_dtype = None
+
+    def compute_ctf_half(self, ctf_params):
+        self.input_dtype = ctf_params.dtype
+        return jnp.ones((ctf_params.shape[0], 40), dtype=ctf_params.dtype)
+
+
+def test_dense_preprocessing_casts_ctf_parameters_before_evaluation():
+    config = _CapturingCtfConfig()
+    preprocess_batch(
+        _Complex64HalfDataset(),
+        jnp.zeros((2, 64), dtype=jnp.float32),
+        jnp.ones((2, 9), dtype=jnp.float32),
+        np.ones(40, dtype=np.float64),
+        np.zeros((1, 2), dtype=np.float64),
+        config,
+        score_complex_dtype=jnp.complex128,
+        score_real_dtype=jnp.float64,
+        norm_real_dtype=jnp.float64,
+    )
+
+    assert config.input_dtype == jnp.float64
 
 
 def test_dense_preprocessing_tiles_score_dtype_before_translation_expansion():

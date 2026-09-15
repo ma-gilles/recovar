@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """K-class GT FSC evaluation with best-permutation matching.
 
-Wraps :mod:`recovar.em.initial_model.gt_metrics` to handle the K-class
+Wraps :mod:`recovar.em.diagnostics.gt_metrics` to handle the K-class
 case end-to-end:
 
 * takes ``--volume`` MRCs (one per class) and ``--gt_volume`` MRCs (one
@@ -31,7 +31,7 @@ from typing import Any
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
-from recovar.em.initial_model.gt_metrics import (
+from recovar.em.diagnostics.gt_metrics import (
     DEFAULT_GT_ALIGN_HEALPIX_ORDER,
     DEFAULT_GT_ALIGN_MAX_SHELL,
     align_volume_to_reference,
@@ -100,6 +100,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="HEALPix orders for local refinement; empty list disables refinement.",
     )
     parser.add_argument("--gt_align_refine_sigma_deg", type=float, default=30.0)
+    parser.add_argument(
+        "--class_population",
+        action="append",
+        type=float,
+        default=None,
+        help=(
+            "Optional per-class population (one per --volume, same order; "
+            "rlnClassDistribution or particle counts both work). When given, the report "
+            "adds population-weighted means beside the plain ones, so empty or tiny "
+            "classes stop dominating the average."
+        ),
+    )
     parser.add_argument("--print_per_shell_fsc", action="store_true")
     parser.add_argument("--output_json", default=None, help="Optional JSON path for the report.")
     return parser.parse_args(argv)
@@ -223,6 +235,37 @@ def _mean_score_for_perm(score_matrix: np.ndarray, perm: tuple[int, ...]) -> flo
     return float(np.mean(chosen))
 
 
+def _normalized_class_weights(populations, k: int) -> np.ndarray | None:
+    """Turn per-class populations into weights summing to one, or None if unusable."""
+
+    if populations is None:
+        return None
+    weights = np.asarray(list(populations), dtype=np.float64)
+    if weights.size != k:
+        raise ValueError(f"--class_population must be given once per class: got {weights.size}, expected {k}")
+    if not np.all(np.isfinite(weights)) or np.any(weights < 0.0):
+        raise ValueError(f"--class_population values must be finite and non-negative, got {weights.tolist()}")
+    total = float(weights.sum())
+    if total <= 0.0:
+        raise ValueError("--class_population values must not sum to zero")
+    return weights / total
+
+
+def _weighted_score_for_perm(score_matrix: np.ndarray, perm: tuple[int, ...], weights: np.ndarray) -> float:
+    """Population-weighted mean of the matched per-class scores.
+
+    A plain mean over classes is dominated by classes that hold almost no
+    particles, and an empty class contributes a meaningless score at full
+    weight; weighting by population reports what the particles actually saw.
+    """
+
+    scores = np.asarray(score_matrix, dtype=np.float64)
+    if len(perm) != scores.shape[0] or weights.shape != (scores.shape[0],):
+        raise ValueError("perm and weights must match the score matrix")
+    chosen = scores[np.arange(scores.shape[0]), np.asarray(perm, dtype=np.int64)]
+    return float(np.sum(chosen * weights))
+
+
 def _pairwise_score_matrices(fsc_table: list[list[np.ndarray]]) -> tuple[np.ndarray, np.ndarray]:
     K = len(fsc_table)
     if K == 0 or any(len(row) != K for row in fsc_table):
@@ -232,13 +275,25 @@ def _pairwise_score_matrices(fsc_table: list[list[np.ndarray]]) -> tuple[np.ndar
     return mean_fsc_1_8, fsc_auc
 
 
-def _assignment_summary_from_fsc_table(fsc_table: list[list[np.ndarray]]) -> dict[str, Any]:
+def _assignment_summary_from_fsc_table(
+    fsc_table: list[list[np.ndarray]],
+    class_weights: np.ndarray | None = None,
+) -> dict[str, Any]:
     mean_fsc_1_8_matrix, fsc_auc_matrix = _pairwise_score_matrices(fsc_table)
     best_perm, best_mean_fsc_auc = _best_permutation_from_score_matrix(fsc_auc_matrix)
     best_perm_by_mean_fsc_1_8, best_mean_fsc_1_8_by_mean_fsc_1_8 = _best_permutation_from_score_matrix(
         mean_fsc_1_8_matrix
     )
-    return {
+    weighted = {
+        "class_weights": None if class_weights is None else class_weights.tolist(),
+        "best_weighted_mean_fsc_auc": (
+            None if class_weights is None else _weighted_score_for_perm(fsc_auc_matrix, best_perm, class_weights)
+        ),
+        "best_weighted_mean_fsc_1_8": (
+            None if class_weights is None else _weighted_score_for_perm(mean_fsc_1_8_matrix, best_perm, class_weights)
+        ),
+    }
+    return weighted | {
         "best_perm": best_perm,
         "best_perm_score_key": "fsc_auc",
         "best_mean_fsc_auc": float(best_mean_fsc_auc),
@@ -304,7 +359,9 @@ def _evaluate_one_set(
             )
     print(f"[{label}]   alignment done in {time.time() - t0:.1f}s", flush=True)
 
-    assignment = _assignment_summary_from_fsc_table(fsc_table)
+    assignment = _assignment_summary_from_fsc_table(
+        fsc_table, _normalized_class_weights(getattr(args, "class_population", None), K)
+    )
     best_perm = assignment["best_perm"]
     pairwise_corr = np.array([[float(alignments[i][j].corr) for j in range(K)] for i in range(K)])
 
@@ -347,6 +404,9 @@ def _evaluate_one_set(
         "best_perm_score_key": str(assignment["best_perm_score_key"]),
         "best_mean_fsc_auc": float(assignment["best_mean_fsc_auc"]),
         "best_mean_fsc_1_8": float(assignment["best_mean_fsc_1_8"]),
+        "class_weights": assignment["class_weights"],
+        "best_weighted_mean_fsc_auc": assignment["best_weighted_mean_fsc_auc"],
+        "best_weighted_mean_fsc_1_8": assignment["best_weighted_mean_fsc_1_8"],
         "best_perm_by_mean_fsc_1_8": list(assignment["best_perm_by_mean_fsc_1_8"]),
         "best_mean_fsc_1_8_by_mean_fsc_1_8": float(assignment["best_mean_fsc_1_8_by_mean_fsc_1_8"]),
         "pairwise_fsc_auc": np.asarray(assignment["pairwise_fsc_auc"], dtype=np.float64).tolist(),

@@ -11,17 +11,38 @@ All loaders share the ImageLoader base class which provides a uniform
 interface for indexing, batching, and caching.
 """
 
+import logging
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor
+from typing import Iterator, Optional, Tuple
+
 import numpy as np
 import pandas as pd
-from typing import Optional, Tuple, Iterator
-from concurrent.futures import ThreadPoolExecutor
-import logging
 
 from recovar.data_io._index_utils import normalize_indices
 from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
+
+PREREAD_IMAGES_ENV = "RECOVAR_PREREAD_IMAGES"
+PREREAD_MAX_GB_ENV = "RECOVAR_PREREAD_MAX_GB"
+DEFAULT_PREREAD_MAX_GB = 64.0
+
+
+def preread_images_requested() -> bool:
+    """Return whether ``RECOVAR_PREREAD_IMAGES=1`` asks for host-memory particle stacks.
+
+    Mirrors RELION ``--preread_images``: every selected image of an MRC stack is
+    read once at loader construction so per-iteration subset fetches never touch
+    the (network) file system again. ``RECOVAR_PREREAD_MAX_GB`` (default 64)
+    caps the per-file host allocation; larger stacks stay lazy with a warning.
+    """
+
+    token = os.environ.get(PREREAD_IMAGES_ENV, "0").strip()
+    if token not in {"0", "1"}:
+        raise ValueError(f"{PREREAD_IMAGES_ENV} must be 0 or 1, got {token!r}")
+    return token == "1"
 
 NVTX_DOMAIN_DATA_IO = "data_io"
 
@@ -45,6 +66,34 @@ def _normalize_selection_indices(indices, n_total: int, name: str) -> np.ndarray
     if indices is None:
         return np.arange(int(n_total), dtype=np.int32)
     return normalize_indices(indices, n_total=int(n_total), name=name)
+
+
+def _permute_image_rows_in_place(images: np.ndarray, source_positions: np.ndarray) -> np.ndarray:
+    """Reorder image rows with one image-sized scratch buffer.
+
+    ``source_positions[j]`` names the row in the original array that belongs
+    at output row ``j``.  The caller guarantees that it is a permutation.
+    """
+    visited = np.zeros(len(source_positions), dtype=bool)
+    for start in range(len(source_positions)):
+        if visited[start]:
+            continue
+        source = int(source_positions[start])
+        if source == start:
+            visited[start] = True
+            continue
+
+        saved = images[start].copy()
+        current = start
+        while source != start:
+            images[current] = images[source]
+            visited[current] = True
+            current = source
+            source = int(source_positions[current])
+        images[current] = saved
+        visited[current] = True
+        del saved
+    return images
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +211,7 @@ def load_images(
             like downsampling where staging the full-res data is wasteful)
 
     Returns:
-        ImageLoader instance for the specified file
+        loader (ImageLoader): Loader for the specified file.
     """
     ext = filepath.rsplit(".", 1)[-1].lower()
 
@@ -277,10 +326,11 @@ class ImageLoader:
         """Get images at specified indices.
 
         Args:
-            indices: Indices to retrieve (int, slice, array, or None for all)
+            indices (int | slice | numpy.ndarray | list[int] | None): Indices to
+                retrieve, or None for all images.
 
         Returns:
-            Array of shape (N, image_size, image_size)
+            images (numpy.ndarray): Array of shape ``(N, image_size, image_size)``.
         """
         idx_array = self._parse_indices(indices)
 
@@ -387,6 +437,7 @@ class MRCLoader(ImageLoader):
         self, filepath: str, indices: Optional[np.ndarray] = None, lazy: bool = True, skip_staging: bool = False
     ):
         import mrcfile
+
         from recovar.data_io.staging import get_cache_dir, stage_mrc
 
         if not skip_staging:
@@ -432,9 +483,36 @@ class MRCLoader(ImageLoader):
 
         if not lazy:
             self.load_all()
+        elif preread_images_requested():
+            self._preread_into_memory()
 
     def __repr__(self) -> str:
         return f"MRCLoader(filepath={self._filepath!r}, n={self._num_images}, D={self._image_size})"
+
+    def _preread_into_memory(self) -> None:
+        """Read every selected image into host memory once (``RECOVAR_PREREAD_IMAGES=1``)."""
+
+        n_bytes = int(self._num_images) * int(self._bytes_per_image)
+        max_gb = float(os.environ.get(PREREAD_MAX_GB_ENV, DEFAULT_PREREAD_MAX_GB))
+        if n_bytes / 1e9 > max_gb:
+            logger.warning(
+                "%s=1 but %s needs %.2f GB in host memory, above %s=%.1f GB; reading lazily",
+                PREREAD_IMAGES_ENV,
+                os.path.basename(self._filepath),
+                n_bytes / 1e9,
+                PREREAD_MAX_GB_ENV,
+                max_gb,
+            )
+            return
+        t0 = time.monotonic()
+        self.load_all()
+        logger.info(
+            "Preread %d images (%.2f GB) from %s into host memory in %.1fs",
+            int(self._num_images),
+            n_bytes / 1e9,
+            os.path.basename(self._filepath),
+            time.monotonic() - t0,
+        )
 
     # -- Memory-mapped access ------------------------------------------------
 
@@ -468,19 +546,41 @@ class MRCLoader(ImageLoader):
 
     # -- Loading -------------------------------------------------------------
 
+    def _read_contiguous(self, first_index: int, count: int) -> np.ndarray:
+        """Read adjacent physical rows into one allocation and reshape it without copying."""
+        offset = self._data_start + first_index * self._bytes_per_image
+        with open(self._filepath, "rb") as f:
+            f.seek(offset)
+            data = np.fromfile(
+                f,
+                dtype=self._file_dtype,
+                count=self._pixels_per_image * count,
+            )
+        return data.reshape(count, self._image_size, self._image_size)
+
     @nvtx.annotate("MRCLoader._load", color="blue", domain=NVTX_DOMAIN_DATA_IO)
     def _load(self, indices: np.ndarray) -> np.ndarray:
         """Load images from MRC file."""
+        if self._cached is not None:
+            # Multi-file wrappers call ``_load`` directly; serve preread stacks here too.
+            return self._cached[np.asarray(indices)]
         file_idx = self._file_indices[indices]
         if len(file_idx) == 0:
             return np.empty((0, self._image_size, self._image_size), dtype=self._file_dtype)
+
+        # The common batch/cache path requests physical rows in their on-disk
+        # order.  Return the reshaped fromfile allocation directly so a second
+        # full-size output buffer and copy are unnecessary.
+        is_contiguous_ascending = len(file_idx) == 1 or np.all(np.diff(file_idx) == 1)
+        if is_contiguous_ascending:
+            with nvtx.annotate(f"disk_read_{len(file_idx)}_images", color="cyan", domain=NVTX_DOMAIN_DATA_IO):
+                with nvtx.annotate("sequential_read", color="green", domain=NVTX_DOMAIN_DATA_IO):
+                    return self._read_contiguous(int(file_idx[0]), len(file_idx))
 
         # De-duplicate to avoid redundant disk reads.
         unique_idx, inverse = np.unique(file_idx, return_inverse=True)
         has_duplicates = unique_idx.size != file_idx.size
         read_idx = unique_idx if has_duplicates else file_idx
-
-        read_output = np.empty((len(read_idx), self._image_size, self._image_size), dtype=self._file_dtype)
 
         with nvtx.annotate(f"disk_read_{len(file_idx)}_images", color="cyan", domain=NVTX_DOMAIN_DATA_IO):
             sorted_order = np.argsort(read_idx)
@@ -489,17 +589,21 @@ class MRCLoader(ImageLoader):
 
             if is_sequential:
                 with nvtx.annotate("sequential_read", color="green", domain=NVTX_DOMAIN_DATA_IO):
-                    offset = self._data_start + int(sorted_idx[0]) * self._bytes_per_image
-                    with open(self._filepath, "rb") as f:
-                        f.seek(offset)
-                        data = np.fromfile(
-                            f,
-                            dtype=self._file_dtype,
-                            count=self._pixels_per_image * len(sorted_idx),
-                        )
-                    data = data.reshape(len(sorted_idx), self._image_size, self._image_size)
-                    read_output[sorted_order] = data
+                    data = self._read_contiguous(int(sorted_idx[0]), len(sorted_idx))
+                if has_duplicates:
+                    return data[inverse]
+
+                # ``data`` is in physical row order.  Metadata formats such
+                # as RELION STAR may list a complete contiguous stack in a
+                # different logical order.  Reorder that same allocation so
+                # a persistent cache does not need a second stack-sized
+                # workspace.
+                source_positions = read_idx.astype(np.int64, copy=False) - int(sorted_idx[0])
+                return _permute_image_rows_in_place(data, source_positions)
             else:
+                read_output = np.empty(
+                    (len(read_idx), self._image_size, self._image_size), dtype=self._file_dtype
+                )
                 with nvtx.annotate("random_access_read", color="red", domain=NVTX_DOMAIN_DATA_IO):
                     with open(self._filepath, "rb") as f:
                         for i, idx in enumerate(read_idx):
@@ -654,17 +758,22 @@ class MultiMRCLoader(ImageLoader):
 
     def _load(self, indices: np.ndarray) -> np.ndarray:
         n_out = int(len(indices))
-        output = np.empty((n_out, self._image_size, self._image_size), dtype=self._dtype)
         if n_out == 0:
-            return output
+            return np.empty((0, self._image_size, self._image_size), dtype=self._dtype)
 
         subset = self._file_map.iloc[indices]
-        out_pos = np.arange(n_out, dtype=np.int32)
-        file_paths = subset["mrc_file"].to_numpy()
         mrc_indices = subset["mrc_index"].to_numpy(dtype=np.int64, copy=False)
+        if len(self._loaders) == 1:
+            # STAR/CS metadata commonly wraps one particle stack.  Delegate
+            # directly so the child loader's result becomes the caller's
+            # result instead of allocating and copying a second full array.
+            return next(iter(self._loaders.values()))._load(mrc_indices)
 
         # Group by file using numpy (avoids DataFrame groupby overhead).
+        file_paths = subset["mrc_file"].to_numpy()
         unique_paths, path_group = np.unique(file_paths, return_inverse=True)
+        output = np.empty((n_out, self._image_size, self._image_size), dtype=self._dtype)
+        out_pos = np.arange(n_out, dtype=np.int32)
         group_order = np.argsort(path_group, kind="stable")
         split_points = np.flatnonzero(np.diff(path_group[group_order])) + 1
         grouped_positions = np.split(group_order, split_points)

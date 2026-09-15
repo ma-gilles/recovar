@@ -28,8 +28,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from recovar.data_io.cryoem_dataset import load_dataset
-from recovar.em.dense_single_volume.local_layout import build_pass2_hypothesis_layout
-from recovar.em.sampling import get_relion_rotation_grid
+from recovar.utils.json_utils import to_jsonable
+from recovar.em.local.local_layout import build_pass2_hypothesis_layout
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
     PoseSelectionConfig,
@@ -39,6 +39,11 @@ from recovar.em.ppca_refinement.config import (
 )
 from recovar.em.ppca_refinement.dense_dataset import compute_dense_ppca_adaptive_significance
 from recovar.em.ppca_refinement.highres_refinement import build_top_p_local_hypothesis_layout
+from recovar.em.ppca_refinement.initialization import (
+    loading_row_norm_variance_prior,
+    pipeline_variance_W_prior,
+    volume_power_variance_prior,
+)
 from recovar.em.ppca_refinement.local_dataset import (
     run_local_ppca_fused_em_iteration,
     run_local_ppca_pose_scoring_iteration,
@@ -49,15 +54,10 @@ from recovar.em.ppca_refinement.mean_regularization import (
     relion_style_mean_precision_from_stats,
 )
 from recovar.em.ppca_refinement.postprocess import PostprocessConfig
-from recovar.em.ppca_refinement.initialization import (
-    loading_row_norm_variance_prior,
-    pipeline_variance_W_prior,
-    volume_power_variance_prior,
-)
+from recovar.em.sampling import get_relion_rotation_grid
 from scripts.run_ppca_local_from_init_npz import (
     _half_size,
     _image_ordered_pose_arrays,
-    _jsonable,
     _load_init,
     _load_noise_variance,
     _load_simulation_info,
@@ -509,7 +509,7 @@ def main() -> None:
         **_top_p_subset_summary(dense_pose, report_widths),
     }
     summary["stages"].append(dense_stage)
-    print(json.dumps(_jsonable(dense_stage), indent=2, sort_keys=True), flush=True)
+    print(json.dumps(to_jsonable(dense_stage), indent=2, sort_keys=True), flush=True)
 
     os_layout = build_pass2_hypothesis_layout(
         dense_sig.significant_sample_indices,
@@ -562,7 +562,7 @@ def main() -> None:
         **_top_p_subset_summary(os_pose, report_widths),
     }
     summary["stages"].append(os_stage)
-    print(json.dumps(_jsonable(os_stage), indent=2, sort_keys=True), flush=True)
+    print(json.dumps(to_jsonable(os_stage), indent=2, sort_keys=True), flush=True)
 
     current_mu = np.asarray(mu)
     current_W = np.asarray(W)
@@ -624,7 +624,7 @@ def main() -> None:
             **_top_p_subset_summary(current_pose, report_widths),
         }
         summary["stages"].append(final_pose_stage)
-        print(json.dumps(_jsonable(final_pose_stage), indent=2, sort_keys=True), flush=True)
+        print(json.dumps(to_jsonable(final_pose_stage), indent=2, sort_keys=True), flush=True)
         current_center_grid = final_grid
         current_translations = final_translations
     else:
@@ -743,7 +743,7 @@ def main() -> None:
         }
         em_results.append(em_stage)
         summary["stages"].append(em_stage)
-        print(json.dumps(_jsonable(em_stage), indent=2, sort_keys=True), flush=True)
+        print(json.dumps(to_jsonable(em_stage), indent=2, sort_keys=True), flush=True)
 
     final_npz = output_dir / "final_ppca_dense_os_local.npz"
     _save_pose_npz(
@@ -759,8 +759,8 @@ def main() -> None:
     summary["em_iters_completed"] = int(len(em_results))
     summary["passed"] = bool(np.all(np.isfinite(current_mu)) and np.all(np.isfinite(current_W)))
     summary_path = output_dir / "summary.json"
-    summary_path.write_text(json.dumps(_jsonable(summary), indent=2, sort_keys=True) + "\n")
-    print(json.dumps(_jsonable({"summary": summary_path, "final_npz": final_npz, "passed": summary["passed"]}), indent=2))
+    summary_path.write_text(json.dumps(to_jsonable(summary), indent=2, sort_keys=True) + "\n")
+    print(json.dumps(to_jsonable({"summary": summary_path, "final_npz": final_npz, "passed": summary["passed"]}), indent=2))
 
 
 if __name__ == "__main__":
