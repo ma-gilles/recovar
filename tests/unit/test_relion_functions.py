@@ -821,6 +821,52 @@ def test_relion_window_centered_half_fourier_matches_binding(old_dim, new_dim):
     np.testing.assert_allclose(ours, relion_centered, atol=1e-12, rtol=1e-12)
 
 
+@pytest.mark.parametrize(
+    ("old_dim", "new_dim"),
+    [(7, 10), (8, 10), (7, 11), (8, 11), (11, 11), (12, 12), (403, 760)],
+)
+def test_relion_window_padding_indices_are_a_contiguous_permutation(old_dim, new_dim):
+    """The padded-axis destinations tile one contiguous block exactly once."""
+
+    idx = rf._relion_centered_axis_scatter_indices(old_dim, new_dim)
+    assert idx.shape == (old_dim,)
+    assert idx.min() >= 0 and idx.max() < new_dim
+    np.testing.assert_array_equal(np.sort(idx), np.arange(idx.min(), idx.min() + old_dim))
+
+
+@pytest.mark.parametrize(
+    ("old_dim", "new_dim"),
+    [(7, 10), (8, 10), (7, 11), (8, 11), (9, 16), (12, 16)],
+)
+@pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
+def test_relion_window_centered_half_fourier_padding_matches_scatter_reference(old_dim, new_dim, dtype):
+    """Padding places the supported source values exactly where the scatter did."""
+
+    old_half = (old_dim, old_dim, old_dim // 2 + 1)
+    new_half = (new_dim, new_dim, new_dim // 2 + 1)
+    rng = np.random.default_rng(20260915)
+    vol = (rng.standard_normal(old_half) + 1j * rng.standard_normal(old_half)).astype(dtype)
+
+    freq = rf._relion_centered_axis_fftw_frequencies(old_dim).astype(np.int32)
+    col_freq = np.arange(old_half[-1], dtype=np.int32)
+    support = (
+        freq[:, None, None] ** 2 + freq[None, :, None] ** 2 + col_freq[None, None, :] ** 2
+    ) <= int(old_half[-1] - 1) ** 2
+    axis_idx = rf._relion_centered_axis_scatter_indices(old_dim, new_dim)
+    expected = np.zeros(new_half, dtype=dtype)
+    expected[
+        axis_idx[:, None, None], axis_idx[None, :, None], col_freq[None, None, :]
+    ] = np.where(support, vol, 0)
+
+    got = np.asarray(
+        rf._relion_window_centered_half_fourier(
+            jnp.asarray(vol), (old_dim,) * 3, (new_dim,) * 3
+        )
+    )
+    assert got.dtype == dtype
+    np.testing.assert_array_equal(got, expected)
+
+
 def test_relion_odd_accumulator_postprocess_windows_to_even_padded_grid():
     import recovar.core.fourier_transform_utils as ftu
 
