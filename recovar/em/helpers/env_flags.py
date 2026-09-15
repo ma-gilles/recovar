@@ -30,6 +30,22 @@ def parse_env_flag_or_false(name: str, *, logger: logging.Logger) -> bool:
     return False
 
 
+def parse_env_strict_flag(name: str, *, default: bool = False) -> bool:
+    """Read a recognized boolean token, failing closed on anything else.
+
+    The caller's default selects which token an unset variable behaves like.
+    Unlike :func:`parse_env_flag_or_false`, an unrecognized value raises instead
+    of quietly disabling the policy, so a misspelled opt-in cannot silently run
+    the default path.
+    """
+    token = os.environ.get(name, "1" if default else "0").strip().lower()
+    if token in {"0", "false", "no", "off"}:
+        return False
+    if token in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError(f"Unsupported {name}={token!r}")
+
+
 def parse_env_binary_flag(name: str) -> bool:
     """Read a strict 0/1 flag; unset is false, whitespace is stripped, blank is invalid."""
     token = os.environ.get(name, "0").strip()

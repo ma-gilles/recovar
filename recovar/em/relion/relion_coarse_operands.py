@@ -13,6 +13,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.helpers.env_flags import parse_env_strict_flag
 from recovar.em.scoring.coarse_gaussian_gemm import (
     _COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR_ENV,
     _COARSE_GAUSSIAN_GEMM_HYBRID_ENV,
@@ -71,17 +72,7 @@ def _relion_acc_double_floorf_quirk_enabled() -> bool:
 def _k1_relion_exact_coarse_operands_enabled(*, default: bool = False) -> bool:
     """Return whether coarse Gaussian scoring uses native RFLOAT CTF operands."""
 
-    token = os.environ.get(
-        _K1_RELION_EXACT_COARSE_OPERANDS_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_K1_RELION_EXACT_COARSE_OPERANDS_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_K1_RELION_EXACT_COARSE_OPERANDS_ENV, default=default)
 
 
 def _k1_relion_exact_coarse_skip_generic_operands_enabled(
@@ -125,17 +116,7 @@ def _k1_relion_exact_coarse_assembly_profile_enabled(
 ) -> bool:
     """Return whether exact-coarse call-count diagnostics are published."""
 
-    token = os.environ.get(
-        _K1_RELION_EXACT_COARSE_ASSEMBLY_PROFILE_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_K1_RELION_EXACT_COARSE_ASSEMBLY_PROFILE_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_K1_RELION_EXACT_COARSE_ASSEMBLY_PROFILE_ENV, default=default)
 
 
 def _k1_relion_exact_compact_preprocess_enabled(
@@ -144,17 +125,7 @@ def _k1_relion_exact_compact_preprocess_enabled(
 ) -> bool:
     """Return whether exact compact scoring skips unused generic preprocessing."""
 
-    token = os.environ.get(
-        _K1_RELION_EXACT_COMPACT_PREPROCESS_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_K1_RELION_EXACT_COMPACT_PREPROCESS_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_K1_RELION_EXACT_COMPACT_PREPROCESS_ENV, default=default)
 
 
 def _resolve_k1_relion_exact_compact_preprocess(
@@ -194,17 +165,7 @@ def _resolve_k1_relion_exact_compact_preprocess(
 def _k1_relion_f32_coarse_support_enabled(*, default: bool = False) -> bool:
     """Return whether the RELION CUDA float32 coarse support is active."""
 
-    token = os.environ.get(
-        _K1_RELION_F32_COARSE_SUPPORT_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_K1_RELION_F32_COARSE_SUPPORT_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_K1_RELION_F32_COARSE_SUPPORT_ENV, default=default)
 
 
 def _relion_coarse_gaussian_square_operands(

@@ -36,7 +36,7 @@ from recovar.em.diagnostics.coarse_score_diagnostics import (
     _validate_coarse_selector_audit,
 )
 from recovar.em.helpers.batch_fetch import original_image_indices
-from recovar.em.helpers.env_flags import parse_env_int_set
+from recovar.em.helpers.env_flags import parse_env_int_set, parse_env_strict_flag
 from recovar.em.helpers.projection import compute_projections_block
 from recovar.em.helpers.projection_cache import build_projection_cache
 from recovar.em.relion.relion_coarse_operands import (
@@ -373,15 +373,7 @@ def _coarse_rotated_radius_enabled() -> bool:
 def _k1_coarse_gaussian_ffi_enabled(*, default: bool = False) -> bool:
     """Return whether the RELION coarse Gaussian FFI is active."""
 
-    token = os.environ.get(
-        _K1_COARSE_GAUSSIAN_FFI_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(f"Unsupported {_K1_COARSE_GAUSSIAN_FFI_ENV}={token!r}")
+    return parse_env_strict_flag(_K1_COARSE_GAUSSIAN_FFI_ENV, default=default)
 
 
 def _coarse_gaussian_ffi_default(
@@ -410,81 +402,31 @@ def _coarse_gaussian_ffi_default(
 def _k1_coarse_gaussian_sincosf_enabled(*, default: bool = False) -> bool:
     """Return whether exact RELION coarse score translation is active."""
 
-    token = os.environ.get(
-        _K1_COARSE_GAUSSIAN_SINCOSF_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_K1_COARSE_GAUSSIAN_SINCOSF_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_K1_COARSE_GAUSSIAN_SINCOSF_ENV, default=default)
 
 
 def _k1_coarse_gaussian_native_texture_enabled(*, default: bool = False) -> bool:
     """Return whether projection and coarse scoring run in one RELION kernel."""
 
-    token = os.environ.get(
-        _K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE_ENV, default=default)
 
 
 def _k1_coarse_fused_projector_enabled(*, default: bool = False) -> bool:
     """Return whether coarse projection and diff2 use RELION's fused topology."""
 
-    token = os.environ.get(
-        _K1_COARSE_FUSED_PROJECTOR_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_K1_COARSE_FUSED_PROJECTOR_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_K1_COARSE_FUSED_PROJECTOR_ENV, default=default)
 
 
 def _relion_coarse_canonical_reduction_enabled(*, default: bool = False) -> bool:
     """Whether the shared fused coarse scorer reduces lanes in index order."""
 
-    token = os.environ.get(
-        _RELION_COARSE_CANONICAL_REDUCTION_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_RELION_COARSE_CANONICAL_REDUCTION_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_RELION_COARSE_CANONICAL_REDUCTION_ENV, default=default)
 
 
 def _k1_coarse_single_lane_canonical_enabled(*, default: bool = False) -> bool:
     """Whether 65--128 translations use the single-lane CUDA specialization."""
 
-    token = os.environ.get(
-        _K1_COARSE_SINGLE_LANE_CANONICAL_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_K1_COARSE_SINGLE_LANE_CANONICAL_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_K1_COARSE_SINGLE_LANE_CANONICAL_ENV, default=default)
 
 
 def _k1_coarse_single_lane_canonical_selected(
@@ -505,17 +447,7 @@ def _k1_coarse_single_lane_canonical_selected(
 def _k1_coarse_native_atomic_reduction_enabled(*, default: bool = False) -> bool:
     """Whether the fused coarse scorer uses RELION's native atomic lane adds."""
 
-    token = os.environ.get(
-        _K1_COARSE_NATIVE_ATOMIC_REDUCTION_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_K1_COARSE_NATIVE_ATOMIC_REDUCTION_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_K1_COARSE_NATIVE_ATOMIC_REDUCTION_ENV, default=default)
 
 
 def _k1_coarse_native_atomic_reduction_selected(
@@ -543,17 +475,7 @@ def _k1_coarse_prehalf_weight_enabled(*, default: bool = False) -> bool:
     is complete.
     """
 
-    token = os.environ.get(
-        _K1_COARSE_PREHALF_WEIGHT_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_K1_COARSE_PREHALF_WEIGHT_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_K1_COARSE_PREHALF_WEIGHT_ENV, default=default)
 
 
 def _k1_coarse_multistream_worker_count(*, default: int = 0) -> int:
@@ -613,17 +535,7 @@ def _coarse_significance_support_audit_enabled(
 ) -> bool:
     """Resolve exact, diagnostic-only coarse-support hashing."""
 
-    token = os.environ.get(
-        _COARSE_SIGNIFICANCE_SUPPORT_AUDIT_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_ENV, default=default)
 
 
 def _coarse_significance_support_audit_ids_enabled() -> bool:

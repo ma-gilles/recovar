@@ -15,6 +15,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.helpers import projection_cache as projection_cache_helpers
+from recovar.em.helpers.env_flags import parse_env_strict_flag
 from recovar.em.scoring.coarse_device_selection import DeviceCoarseBlockSelection
 from recovar.em.scoring.coarse_gemm_hybrid import (
     DEFAULT_ROTATION_BLOCK_CAPACITY,
@@ -102,17 +103,7 @@ def _coarse_gaussian_gemm_macro_enabled(*, default: bool = False) -> bool:
     speedup.
     """
 
-    token = os.environ.get(
-        _COARSE_GAUSSIAN_GEMM_MACRO_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_COARSE_GAUSSIAN_GEMM_MACRO_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_COARSE_GAUSSIAN_GEMM_MACRO_ENV, default=default)
 
 
 def _coarse_gaussian_gemm_projection_cache_enabled(
@@ -121,33 +112,13 @@ def _coarse_gaussian_gemm_projection_cache_enabled(
 ) -> bool:
     """Resolve the explicit call-scoped coarse-projection cache toggle."""
 
-    token = os.environ.get(
-        _COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_COARSE_GAUSSIAN_GEMM_PROJECTION_CACHE_ENV, default=default)
 
 
 def _coarse_gaussian_gemm_hybrid_enabled(*, default: bool = False) -> bool:
     """Resolve the default-off certified GEMM/exact-source16 hybrid."""
 
-    token = os.environ.get(
-        _COARSE_GAUSSIAN_GEMM_HYBRID_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_COARSE_GAUSSIAN_GEMM_HYBRID_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_COARSE_GAUSSIAN_GEMM_HYBRID_ENV, default=default)
 
 
 def _coarse_gaussian_gemm_compact_posterior_enabled(
@@ -156,17 +127,7 @@ def _coarse_gaussian_gemm_compact_posterior_enabled(
 ) -> bool:
     """Resolve the experimental fixed-capacity selected-score posterior."""
 
-    token = os.environ.get(
-        _COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_COARSE_GAUSSIAN_GEMM_COMPACT_POSTERIOR_ENV, default=default)
 
 
 def _coarse_gaussian_gemm_device_transaction_enabled() -> bool:
