@@ -723,7 +723,9 @@ def test_exact_local_topk_mstep_falls_back_when_posteriors_not_peaked(tiny_input
     )
 
     np.testing.assert_allclose(np.asarray(fallback.stats.rhs), np.asarray(exact.stats.rhs), rtol=2e-5, atol=2e-5)
-    np.testing.assert_allclose(np.asarray(fallback.stats.lhs_tri), np.asarray(exact.stats.lhs_tri), rtol=2e-5, atol=2e-5)
+    np.testing.assert_allclose(
+        np.asarray(fallback.stats.lhs_tri), np.asarray(exact.stats.lhs_tri), rtol=2e-5, atol=2e-5
+    )
     assert fallback.diagnostics["local_mstep_topk_buckets"] == 0
     assert fallback.diagnostics["local_mstep_exact_buckets"] > 0
 
