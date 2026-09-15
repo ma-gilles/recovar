@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import itertools
+import math
 import os
 import subprocess
 import time
@@ -663,7 +664,12 @@ def _compact_pair_counts_from_candidate_masks(per_image_inputs_by_class):
     return tuple(pair_counts_by_class)
 
 
-def _compact_pair_bucket_quantum() -> int | None:
+_AUTO_COMPACT_PAIR_QUANTUM_MIN = 4096
+_AUTO_COMPACT_PAIR_QUANTUM_MAX = 32768
+_AUTO_COMPACT_PAIR_QUANTUM_MEAN_MULTIPLE = 2.0
+
+
+def _compact_pair_bucket_quantum(pair_counts_by_class=None) -> int | None:
     """Optional coarser quantum for compact pair widths above the engine cap.
 
     The default ladder steps pair widths by 4096 above the cap, which gave 55
@@ -673,20 +679,54 @@ def _compact_pair_bucket_quantum() -> int | None:
     padding is nearly free, so ``RECOVAR_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM``
     (for example 32768) trades a little padding for far fewer programs. Rows are
     not affected. ``None`` keeps the default ladder.
+
+    ``auto`` picks the quantum per call from the valid-pair counts themselves:
+    the smallest power of two at or above twice the mean valid pairs per
+    image-class, clamped to [4096, 32768]. The two costs a fixed quantum trades
+    move in opposite directions over a run. Early iterations have wide, flat
+    posteriors (mean valid pairs 16446 at iteration 2 of the 100k/256 K=4
+    fixture, job 13905556) and a fine quantum there creates many group shapes
+    to compile: quantum 4096 cost +57 percent at iteration 2 and +27 percent at
+    iteration 3 against 16384 (job 13912594). Late iterations are sparse (mean
+    1371-1654 from iteration 6 on) and a coarse quantum there is mostly
+    padding: 16384 padded 7x the valid pairs at iteration 12 and 4096 was 17
+    percent faster at iterations 12-13. The crossover in those runs sits near a
+    mean of 3000, which twice-the-mean rounded up reproduces: 32768 at
+    iteration 2, 16384 at 3-4, 8192 at 5, 4096 from 6 on.
     """
-    return _optional_positive_int_env(_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM_ENV)
+    raw = os.environ.get(_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM_ENV, "").strip()
+    if raw.lower() != "auto":
+        return _optional_positive_int_env(_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM_ENV)
+    if not pair_counts_by_class:
+        return None
+    valid_counts = np.concatenate([np.asarray(c, dtype=np.int64).reshape(-1) for c in pair_counts_by_class])
+    if valid_counts.size == 0:
+        return None
+    mean_valid = float(np.mean(valid_counts))
+    target = max(1.0, _AUTO_COMPACT_PAIR_QUANTUM_MEAN_MULTIPLE * mean_valid)
+    quantum = 1 << int(math.ceil(math.log2(target)))
+    quantum = int(min(max(quantum, _AUTO_COMPACT_PAIR_QUANTUM_MIN), _AUTO_COMPACT_PAIR_QUANTUM_MAX))
+    logger.info(
+        "sparse K-class compact pairs: auto pair bucket quantum=%d from mean valid pairs/image-class=%.1f",
+        quantum,
+        mean_valid,
+    )
+    return quantum
 
 
 def _compact_pair_fused_bucket_sizes(pair_counts_by_class, *, pair_block_size_for_quantization=5000):
     if not pair_counts_by_class:
         return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64)
     fused_pair_counts = np.max(np.stack(pair_counts_by_class, axis=0), axis=0)
+    # Resolve the quantum once per plan, not once per image: the accessor reads the
+    # environment and, in auto mode, the whole pair-count distribution.
+    large_bucket_quantum = _compact_pair_bucket_quantum(pair_counts_by_class)
     pair_bucket_sizes = np.asarray(
         [
             _exact_bucket_rotation_size(
                 int(count),
                 pair_block_size_for_quantization,
-                large_bucket_quantum=_compact_pair_bucket_quantum(),
+                large_bucket_quantum=large_bucket_quantum,
             )
             for count in fused_pair_counts
         ],

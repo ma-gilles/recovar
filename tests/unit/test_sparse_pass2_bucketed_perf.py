@@ -11083,6 +11083,96 @@ def test_pair_bucket_quantum_coarsens_widths_without_changing_results(monkeypatc
     _assert_fused_arrays_identical(base, coarse, "pair bucket quantum")
 
 
+@pytest.mark.parametrize(
+    "mean_valid, expected",
+    [
+        (16446.0, 32768),  # iteration 2 of the 100k/256 K=4 fixture: 2x mean exceeds the cap
+        (6847.0, 16384),  # iteration 3
+        (4334.0, 16384),  # iteration 4
+        (2633.0, 8192),  # iteration 5
+        (1638.0, 4096),  # iteration 6 on
+        (100.0, 4096),  # floor
+    ],
+)
+def test_auto_pair_bucket_quantum_follows_mean_valid_pairs(monkeypatch, mean_valid, expected):
+    """``auto`` resolves the quantum from the plan's own valid-pair counts: the power of two
+    at or above twice the mean valid pairs per image-class, clamped to [4096, 32768]. A fixed
+    numeric value and an unset variable behave as before."""
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    # Two classes whose per-image counts average to ``mean_valid`` exactly.
+    counts = (
+        np.asarray([mean_valid - 10.0, mean_valid + 10.0], dtype=np.int64),
+        np.asarray([mean_valid, mean_valid], dtype=np.int64),
+    )
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM", "auto")
+    assert bucketed_mod._compact_pair_bucket_quantum(counts) == expected
+    assert bucketed_mod._compact_pair_bucket_quantum(()) is None
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM", "12345")
+    assert bucketed_mod._compact_pair_bucket_quantum(counts) == 12345
+    monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM", raising=False)
+    assert bucketed_mod._compact_pair_bucket_quantum(counts) is None
+
+
+def test_auto_pair_bucket_quantum_is_resolved_once_per_plan_and_changes_no_result(monkeypatch):
+    """The fused bucket sizes resolve the quantum once for the whole plan (not once per
+    image), the resolved value is what pads the widths, and every output of the fused engine
+    is unchanged because padded pairs are masked."""
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    calls = []
+    original_quantum = bucketed_mod._compact_pair_bucket_quantum
+
+    def counting_quantum(pair_counts_by_class=None):
+        calls.append(pair_counts_by_class)
+        return original_quantum(pair_counts_by_class)
+
+    monkeypatch.setattr(bucketed_mod, "_compact_pair_bucket_quantum", counting_quantum)
+    monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM", "auto")
+    counts = (np.asarray([9000, 12000, 30000], dtype=np.int64), np.asarray([8000, 8000, 8000], dtype=np.int64))
+    fused, sizes = bucketed_mod._compact_pair_fused_bucket_sizes(counts, pair_block_size_for_quantization=5000)
+    assert len(calls) == 1 and calls[0] is counts
+    expected_quantum = original_quantum(counts)  # mean 12500 -> 2x = 25000 -> 32768
+    assert expected_quantum == 32768
+    np.testing.assert_array_equal(fused, [9000, 12000, 30000])
+    from recovar.em.dense_single_volume import local_layout
+
+    engine_cap = local_layout._local_search_engine_rotation_block_size(5000)
+    above_cap = [int(v) for v, c in zip(sizes, fused) if int(c) > engine_cap]
+    assert above_cap, "fixture counts must exceed the engine cap for the quantum to bind"
+    assert all(v % expected_quantum == 0 for v in above_cap)
+
+    sizes_seen = []
+    original_sizes = bucketed_mod._compact_pair_fused_bucket_sizes
+
+    def spy(*a, **kw):
+        out = original_sizes(*a, **kw)
+        sizes_seen.append(tuple(int(v) for v in np.asarray(out[1]).reshape(-1)))
+        return out
+
+    monkeypatch.setattr(bucketed_mod, "_compact_pair_fused_bucket_sizes", spy)
+
+    def run(setting):
+        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "4")
+        if setting is None:
+            monkeypatch.delenv("RECOVAR_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM", raising=False)
+        else:
+            monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_PAIR_BUCKET_QUANTUM", setting)
+        sizes_seen.clear()
+        kwargs = _fused_kclass_multibucket_fixture(n_images=13)
+        kwargs["accumulate_noise"] = True
+        result = _fused_kclass_result_arrays(bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs))
+        return result
+
+    base = run(None)
+    auto = run("auto")
+    assert sizes_seen, "fixture produced no compact pair buckets"
+    _assert_fused_arrays_identical(base, auto, "auto pair bucket quantum")
+
+
 @pytest.mark.parametrize("case", [([2, 0, 3], 4, 1), ([2, 0, 3], 4, 4), ([5, 5, 5], 8, 5), ([0, 0], 4, 1), ([7], 8, 3)])
 def test_device_active_flat_row_indices_match_the_host_build(monkeypatch, case):
     """RECOVAR_SPARSE_KCLASS_DEVICE_ACTIVE_ROW_INDICES builds the same index vector and
