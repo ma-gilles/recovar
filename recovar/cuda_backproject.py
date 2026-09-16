@@ -575,6 +575,7 @@ _TARGET_RELION_BPREF_OPERANDS_F32 = "cuda_relion_bpref_operands_f32"
 _TARGET_BPREF_PARTICLE_PACK = "cuda_bpref_particle_pack"
 _TARGET_DEFERRED_VDAM_HOST_PACK = "cuda_deferred_vdam_host_pack"
 _TARGET_NOISE_PIXEL_PACK = "cuda_noise_pixel_pack"
+_TARGET_NOISE_RESIDUAL_STATISTICS = "recovar_noise_residual_statistics"
 _TARGET_RELION_VDAM_MSTEP_SUMS_F32 = "cuda_relion_vdam_mstep_sums_f32"
 _TARGET_RELION_VDAM_MSTEP_DENOMINATOR_F32 = (
     "cuda_relion_vdam_mstep_denominator_f32"
@@ -1113,6 +1114,10 @@ _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF = (
 
 _optional_ffi_registered: set[str] = set()
 _OPTIONAL_FFI_REGISTRATIONS = {
+    _TARGET_NOISE_RESIDUAL_STATISTICS: (
+        "NoiseResidualStatistics",
+        "Explicit CUDA build with NoiseResidualStatistics required",
+    ),
     _TARGET_PROJECT_RELION_HALF_RUNTIME: (
         "ProjectRelionHalfRuntime",
         "Projector capacity was requested but the loaded CUDA library lacks ProjectRelionHalfRuntime; explicitly rebuild the custom CUDA library",

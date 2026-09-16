@@ -7,10 +7,6 @@ import numpy as np
 
 from recovar import cuda_backproject as cb
 
-_TARGET = "recovar_noise_residual_statistics"
-_registered = False
-
-
 def _output_shapes(proj, abs2, summed, ctf, variance, mask):
     if proj.ndim != 3 or proj.dtype not in (jnp.complex64, jnp.complex128):
         raise ValueError("Residual projections must be complex B,R,P")
@@ -35,21 +31,6 @@ def _output_shapes(proj, abs2, summed, ctf, variance, mask):
         ((rt,p), jnp.float64), ((rt,p), proj.dtype), ((b,it,4), jnp.float64)))
 
 
-def _ensure_registered():
-    global _registered
-    cb._ensure_ffi()
-    if _registered:
-        return
-    with cb._ffi_lock:
-        if _registered:
-            return
-        symbol = getattr(cb._get_lib(), "NoiseResidualStatistics", None)
-        if symbol is None:
-            raise RuntimeError("Explicit CUDA build with NoiseResidualStatistics required")
-        jax.ffi.register_ffi_target(_TARGET, jax.ffi.pycapsule(symbol), platform="CUDA")
-        _registered = True
-
-
 @functools.partial(jax.jit, static_argnames=("compute_scale",))
 def residual_statistics(proj, abs2, summed, ctf, variance, mask, *, compute_scale=False):
     """Return pixel A2/cross and image A2/XA/masked-A2/masked-XA sums.
@@ -68,8 +49,8 @@ def residual_statistics(proj, abs2, summed, ctf, variance, mask, *, compute_scal
     outputs = _output_shapes(proj, abs2, summed, ctf, variance, mask)
     if jax.default_backend() != "gpu" or not cb.custom_cuda_requested():
         raise RuntimeError("Native residual statistics require enabled CUDA")
-    _ensure_registered()
-    result = jax.ffi.ffi_call(_TARGET, outputs, vmap_method="sequential")(
+    cb._ensure_optional_ffi(cb._TARGET_NOISE_RESIDUAL_STATISTICS)
+    result = jax.ffi.ffi_call(cb._TARGET_NOISE_RESIDUAL_STATISTICS, outputs, vmap_method="sequential")(
         proj, abs2, summed, ctf, variance, mask,
         compute_scale=np.int64(compute_scale))
     return tuple(result[:6])

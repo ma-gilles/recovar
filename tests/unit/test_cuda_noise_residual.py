@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 from recovar import cuda_noise_residual as nr
+from recovar import cuda_backproject as cb
 from recovar.em.helpers import projection
 from recovar.em.helpers.half_spectrum import bin_shell_values_jax
 
@@ -100,12 +101,12 @@ def test_masked_nonfinite_terms(dtype):
 def test_native_rejects_malformed_buffers(case):
     args = list(jax.tree.map(jnp.asarray,operands(shape=(2,3,5))))
     outputs = list(nr._output_shapes(*args))
-    nr._ensure_registered()
+    cb._ensure_optional_ffi(cb._TARGET_NOISE_RESIDUAL_STATISTICS)
     scale = 0
     if case == "mask_dtype": args[-1] = args[-1].astype(jnp.int32)
     if case == "scratch": outputs[-1] = jax.ShapeDtypeStruct((2,1,3),jnp.float64)
     if case == "scale_policy": scale = 2
     with pytest.raises((ValueError,RuntimeError),match="NoiseResidual:"):
-        result = jax.ffi.ffi_call(nr._TARGET,tuple(outputs),vmap_method="sequential")(
+        result = jax.ffi.ffi_call(cb._TARGET_NOISE_RESIDUAL_STATISTICS,tuple(outputs),vmap_method="sequential")(
             *args,compute_scale=np.int64(scale))
         jax.block_until_ready(result)
