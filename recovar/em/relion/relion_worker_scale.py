@@ -1503,7 +1503,7 @@ def _dispatch_relion_follower_scale_for_numbered_iteration(
             group_counts=np.asarray(setup.follower_scale_state.group_counts, dtype=np.float64).copy(),
             n_optics_groups=int(setup.follower_scale_state.n_optics_groups),
         )
-        history.record_follower_replay_applied(numbered_relion_iteration)
+        history.relion_follower_scale_replay_applied_iterations.append(numbered_relion_iteration)
         replayed_follower_scale_state = True
         logger.info(
             "Diagnostic RELION follower-scale replay: numbered_iter=%d source=%s",

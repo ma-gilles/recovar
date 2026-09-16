@@ -93,31 +93,13 @@ class RefinementHistory:
         self.sigma_offset_used_trajectory.append(sigma_offset_used)
         self.sigma_offset_used_per_half_trajectory.append(sigma_offset_used_per_half)
 
-    def record_state_swap_probe_iteration(self, relion_iteration_idx: int) -> None:
-        self.state_swap_probe_applied_relion_iterations.append(relion_iteration_idx)
-
     # -- RELION follower-scale replay/dispatch bookkeeping -------------
-
-    def record_follower_replay_applied(self, numbered_relion_iteration: int) -> None:
-        self.relion_follower_scale_replay_applied_iterations.append(numbered_relion_iteration)
 
     def record_follower_scale_pre_score(self, pre_score_scales, owners_half1) -> None:
         self.relion_scale_follower_scales_numbered_pre_score_trajectory.append(pre_score_scales)
         self.relion_follower_owners_half1_trajectory.append(owners_half1)
 
-    def record_follower_scale_post_mstep(self, post_mstep_scales) -> None:
-        self.relion_scale_follower_scales_numbered_post_mstep_trajectory.append(post_mstep_scales)
-
     # -- per-iteration E-step / M-step outputs --------------------------
-
-    def record_significant_counts(self, counts) -> None:
-        self.significant_counts.append(counts)
-
-    def record_pixel_resolution(self, pixel_res) -> None:
-        self.pixel_resolutions.append(pixel_res)
-
-    def record_data_vs_prior(self, data_vs_prior) -> None:
-        self.data_vs_prior_trajectory.append(data_vs_prior)
 
     def record_direction_prior(
         self, class_direction_prior_per_half, global_direction_prior_per_half, *, k_class_enabled: bool
@@ -160,9 +142,6 @@ class RefinementHistory:
         self.class_weight_trajectory.append(class_weights)
         self.class_mstep_weight_trajectory.append(mstep_weights)
         self.class_full_posterior_weight_trajectory.append(posterior_weights)
-
-    def record_class_assignment(self, assignment_ids) -> None:
-        self.class_assignment_history.append(assignment_ids)
 
     def record_pose_history(self, euler_snapshot_per_half, translation_snapshot_per_half) -> None:
         self.best_rotation_eulers_history.append(euler_snapshot_per_half)
@@ -217,9 +196,6 @@ class RefinementHistory:
         self.sigma_offset_per_half_trajectory.append(sigma_offset_per_half)
         self.per_class_sigma_offset_trajectory.append(per_class_sigma_offset)
 
-    def record_frac_changed(self, frac_changed: float) -> None:
-        self.frac_changed_trajectory.append(frac_changed)
-
     def record_pose_accuracy_diagnostics(
         self,
         acc_rot,
@@ -239,9 +215,6 @@ class RefinementHistory:
         self.expected_accuracy_status_trajectory.append(expected_accuracy_status)
         self.smallest_change_angles_trajectory.append(smallest_change_angles)
         self.smallest_change_offsets_trajectory.append(smallest_change_offsets)
-
-    def record_wall_time(self, elapsed: float) -> None:
-        self.wall_times.append(elapsed)
 
     def to_dict(self) -> dict:
         """Return the trajectory entries of the function's result dict.

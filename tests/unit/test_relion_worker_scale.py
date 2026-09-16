@@ -970,7 +970,7 @@ def test_numbered_scale_telemetry_brackets_scoring_and_mstep_boundaries():
     dispatch_call = source.index("_dispatch_relion_follower_scale_for_numbered_iteration(")
     replay_apply = source.index("replay_result = apply_iter_replay_overrides(")
     scale_update = source.index("_update_relion_follower_corrections(")
-    post_mstep_append = source.index("history.record_follower_scale_post_mstep(")
+    post_mstep_append = source.index("history.relion_scale_follower_scales_numbered_post_mstep_trajectory.append(")
     convergence_update = source.index("# --- Update convergence state ---")
 
     assert dispatch_call < replay_apply

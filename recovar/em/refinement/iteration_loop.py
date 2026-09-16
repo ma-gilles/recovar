@@ -1238,7 +1238,7 @@ def _run_relion_iteration_loop(
                 use_per_half_mean_variance=False,
             )
         if state_swap_target_this_iteration:
-            history.record_state_swap_probe_iteration(int(init_relion_iteration) + int(iteration) + 1)
+            history.state_swap_probe_applied_relion_iterations.append(int(init_relion_iteration) + int(iteration) + 1)
         if frozen_initial_scoring_state is not None and iteration == 0:
             frozen_initial_scoring_state_sha256 = _assert_frozen_scoring_state_unchanged(
                 frozen_initial_scoring_state,
@@ -2662,7 +2662,7 @@ def _run_relion_iteration_loop(
                 [np.asarray(dvp, dtype=_dense_global_scoring_dtype()) for dvp in data_vs_prior_per_class],
                 axis=0,
             )
-            history.record_data_vs_prior(data_vs_prior_iter)
+            history.data_vs_prior_trajectory.append(data_vs_prior_iter)
             previous_data_vs_prior_for_scheduling = data_vs_prior_iter
             tau2_update_details = _stack_class_tau2_update_details(tau2_update_details_per_class)
             logger.info(
@@ -2920,7 +2920,7 @@ def _run_relion_iteration_loop(
             )
         _parity_dump.mark_stage(iteration, "recon")
 
-        history.record_significant_counts(iter_recorded_sig_counts)
+        history.significant_counts.append(iter_recorded_sig_counts)
 
         history.record_rotation_posterior(rotation_posterior_per_half)
         if all(rot_sum is not None for rot_sum in rotation_posterior_per_half):
@@ -3060,7 +3060,7 @@ def _run_relion_iteration_loop(
         previous_combined_ha = concatenate_assignments_or_none(previous_assignments)
         if k_class_enabled:
             current_combined_classes = concatenate_assignments(class_assignments)
-            history.record_class_assignment(current_combined_classes.copy())
+            history.class_assignment_history.append(current_combined_classes.copy())
             previous_combined_classes = concatenate_assignments_or_none(previous_class_assignments)
         else:
             current_combined_classes = None
@@ -3146,7 +3146,7 @@ def _run_relion_iteration_loop(
                 tau2_update_details_per_half=tau2_update_details_per_half,
                 logger=logger,
             )
-        history.record_pixel_resolution(pixel_res)
+        history.pixel_resolutions.append(pixel_res)
 
         # --- Update poses and noise ---
         # Snapshot the iter K-1 best rotations / translations BEFORE the
@@ -3247,7 +3247,7 @@ def _run_relion_iteration_loop(
         )
 
         if not k_class_enabled:
-            history.record_data_vs_prior(np.asarray(dvp_iter, dtype=_dense_global_scoring_dtype()))
+            history.data_vs_prior_trajectory.append(np.asarray(dvp_iter, dtype=_dense_global_scoring_dtype()))
             previous_data_vs_prior_for_scheduling = np.asarray(
                 dvp_iter,
                 dtype=_dense_global_scoring_dtype(),
@@ -3351,7 +3351,7 @@ def _run_relion_iteration_loop(
                 _format_relion_correction_range(norm_scale_update.scale_corrections_per_half[1]),
             )
         if follower_setup.follower_scale_state is not None:
-            history.record_follower_scale_post_mstep(
+            history.relion_scale_follower_scales_numbered_post_mstep_trajectory.append(
                 np.asarray(follower_setup.follower_scale_state.scales, dtype=np.float64).copy()
             )
 
@@ -3467,7 +3467,7 @@ def _run_relion_iteration_loop(
         # Sampling transitions and optimiser replay preserve this field.
         frac_changed = state.fraction_changed
         state._last_frac_changed = frac_changed
-        history.record_frac_changed(float(frac_changed))
+        history.frac_changed_trajectory.append(float(frac_changed))
 
         # --- C1 (RELION-parity): update sigma2_offset from data ---
         # Posterior-weighted RELION update with fallback to hard-assignment
@@ -3563,7 +3563,7 @@ def _run_relion_iteration_loop(
 
         # --- Timing ---
         elapsed = time.time() - t0
-        history.record_wall_time(elapsed)
+        history.wall_times.append(elapsed)
 
         res_angstrom = shell_index_to_resolution_angstrom(
             pixel_res,
@@ -4765,7 +4765,7 @@ def _run_relion_iteration_loop(
         final_current_size,
         final_iter_elapsed,
     )
-    history.record_wall_time(final_iter_elapsed)
+    history.wall_times.append(final_iter_elapsed)
 
     (
         replay_requested_iterations,
