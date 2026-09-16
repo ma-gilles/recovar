@@ -6,16 +6,18 @@ every test or publication. Detailed receipts belong behind links. The
 at `a2ab056cb`, including one paragraph per earlier checkpoint; its historical
 next actions are superseded here.
 
-## Lead transfer and two integration decisions — September 15
+## Lead ownership and integration decisions — September 16
 
-The em_clean lead and sole PR179 publisher is now Claude (Opus 5, 1M context); the
-outgoing Codex stopped source edits and job submissions. Ownership, constraints and
-the ten-item queue are unchanged.
+Codex has resumed the em_clean lead and sole PR179 publisher role. The existing
+EM and VDAM Claude peers retain their owned work; synchronize writable development
+branches at natural integration checkpoints and preserve measured snapshots. The
+ten-item queue and scientific gates remain open.
 
 **The initial scale-selection curve stays out of shared source, and is not duplicated.**
 The EM peer froze the change as `ad0ba7e88` and owns its qualification (10097 setup
-13953452, end-to-end 13953454). The lead's separate uncommitted copy is byte-identical
-in changed lines, so there is one candidate, not two. Its one preserved failure was a
+13953452, active end-to-end 13955618; 13953454 remains dependency-blocked).
+The prior lead comparison established identical changed lines in its separate
+uncommitted copy, so there is one candidate, not two. Its one preserved failure was a
 wrong archive key (`mean` for `mean_vol_ft`), not a numerical failure: the corrected
 CPU check reproduces the independent derivation to 1.1358e-14 over all 65 shells,
 reproduces the native DVP>3 mask exactly at shells 0-5, and inherits the derivation's

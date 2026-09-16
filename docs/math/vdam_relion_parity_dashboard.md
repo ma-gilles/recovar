@@ -348,4 +348,4 @@ and are marked `SAFE_TO_DELETE`.
 - `recovar/cuda_backproject.py:relion_coarse_diff2_rotation_blocks_f32`
 - `recovar/cuda/cuda_backproject.cu:launch_relion_coarse_diff2_rotation_blocks_f32`
 - [run_vdam_coarse_gemm_gf46_streaming_selector.sbatch](https://github.com/ma-gilles/recovar/blob/4e3e5396d8c5fee4e207b9df3acb7f9987e17473/scripts/run_vdam_coarse_gemm_gf46_streaming_selector.sbatch)
-- `scripts/run_vdam_coarse_rotation_blocks_primitive_gate.sbatch`
+- [Archived rotation-block primitive launcher; private](https://github.com/ma-gilles/recovar-experiments/blob/f0643c3fbebdba292fd3158d74872df8c118c844/scripts/run_vdam_coarse_rotation_blocks_primitive_gate.sbatch)
