@@ -204,7 +204,7 @@ def test_kclass_scatter_uses_mstep_class_mass_for_relion_priors():
         best_pose_rotations=np.repeat(np.eye(3, dtype=np.float64)[None], 3, axis=0),
         best_pose_translations=np.asarray([[0.1, -0.2], [0.3, -0.4], [0.5, -0.6]], dtype=np.float64),
     )
-    outputs = score_outputs.PerHalfOutputs.empty()
+    outputs = score_outputs.PerHalfOutputs()
 
     score_outputs._scatter_dense_k_class_result(
         result,

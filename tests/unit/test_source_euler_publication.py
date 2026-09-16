@@ -46,7 +46,7 @@ def _kclass_result():
 
 
 def _scatter(result, half, dtype):
-    outputs = score_outputs.PerHalfOutputs.empty()
+    outputs = score_outputs.PerHalfOutputs()
     returned = score_outputs._scatter_dense_k_class_result(
         result,
         k=half,

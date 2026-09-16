@@ -834,7 +834,7 @@ def test_clear_dump_context_marks_contribution_and_native_dumps_inactive():
 def test_iteration_loop_clears_dump_context_before_every_final_exit_or_half():
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
     final_decision = source.index("should_run_final_iteration =")
-    final_loop = source.index("for k in range(2):", source.index("final_outs = PerHalfOutputs.empty()"))
+    final_loop = source.index("for k in range(2):", source.index("final_outs = PerHalfOutputs()"))
 
     assert source.rfind("clear_bpref_contribution_dump_context()", 0, final_decision) >= 0
     assert "clear_bpref_contribution_dump_context()" in source[

@@ -646,7 +646,7 @@ def _run_relion_iteration_loop(
     # History tracking: one RefinementHistory instance accumulates every
     # per-iteration trajectory (see helpers/iteration_history.py).
     history = RefinementHistory()
-    per_half = PerHalfOutputs.empty()
+    per_half = PerHalfOutputs()
     hard_assignments = per_half.hard_assignments
     previous_assignments = [None, None]
     class_assignments = per_half.class_assignments
@@ -1751,7 +1751,7 @@ def _run_relion_iteration_loop(
         # Track the rotation grids used for pose extraction.
         # When adaptive oversampling is active, ha_k indices refer to the
         # oversampled grid (from pass 2), not effective_rotations.
-        per_half = PerHalfOutputs.empty()
+        per_half = PerHalfOutputs()
         hard_assignments = per_half.hard_assignments
         class_assignments = per_half.class_assignments
         class_posterior_per_half = per_half.class_posterior
@@ -4234,7 +4234,7 @@ def _run_relion_iteration_loop(
         pass_index=2,
         static_em_kwargs=_DENSE_EM_STATIC_KWARGS,
     )
-    final_outs = PerHalfOutputs.empty()
+    final_outs = PerHalfOutputs()
     for k in range(2):
         bpref_diagnostics.clear_bpref_contribution_dump_context()
         final_half_t0 = time.time()

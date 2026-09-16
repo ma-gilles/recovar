@@ -6,7 +6,7 @@ their existing casts and coarse-grid reductions.
 """
 
 import gc
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import jax
 import numpy as np
@@ -113,51 +113,26 @@ class PerHalfOutputs:
     class assignments, posterior summaries and per-class noise statistics.
     """
 
-    hard_assignments: list
-    Ft_y: list
-    Ft_ctf: list
-    coarse_ha: list
-    max_posterior: list
-    rotation_posterior: list
-    class_assignments: list
-    class_posterior: list
-    class_full_posterior: list
-    class_rotation_posterior: list
-    noise_stats: list
-    noise_stats_per_class: list
-    best_pose_rotations: list
-    best_pose_rotation_eulers: list
-    best_pose_translations: list
-    translation_search_bases: list
-    pose_rotations: list
-    pose_rotation_eulers: list
-    mstep_full_half_axis: list
-    mstep_accumulator_shape: list
-
-    @classmethod
-    def empty(cls) -> "PerHalfOutputs":
-        return cls(
-            hard_assignments=[None, None],
-            Ft_y=[None, None],
-            Ft_ctf=[None, None],
-            coarse_ha=[None, None],
-            max_posterior=[None, None],
-            rotation_posterior=[None, None],
-            class_assignments=[None, None],
-            class_posterior=[None, None],
-            class_full_posterior=[None, None],
-            class_rotation_posterior=[None, None],
-            noise_stats=[None, None],
-            noise_stats_per_class=[None, None],
-            best_pose_rotations=[None, None],
-            best_pose_rotation_eulers=[None, None],
-            best_pose_translations=[None, None],
-            translation_search_bases=[None, None],
-            pose_rotations=[None, None],
-            pose_rotation_eulers=[None, None],
-            mstep_full_half_axis=[None, None],
-            mstep_accumulator_shape=[None, None],
-        )
+    hard_assignments: list = field(default_factory=lambda: [None, None])
+    Ft_y: list = field(default_factory=lambda: [None, None])
+    Ft_ctf: list = field(default_factory=lambda: [None, None])
+    coarse_ha: list = field(default_factory=lambda: [None, None])
+    max_posterior: list = field(default_factory=lambda: [None, None])
+    rotation_posterior: list = field(default_factory=lambda: [None, None])
+    class_assignments: list = field(default_factory=lambda: [None, None])
+    class_posterior: list = field(default_factory=lambda: [None, None])
+    class_full_posterior: list = field(default_factory=lambda: [None, None])
+    class_rotation_posterior: list = field(default_factory=lambda: [None, None])
+    noise_stats: list = field(default_factory=lambda: [None, None])
+    noise_stats_per_class: list = field(default_factory=lambda: [None, None])
+    best_pose_rotations: list = field(default_factory=lambda: [None, None])
+    best_pose_rotation_eulers: list = field(default_factory=lambda: [None, None])
+    best_pose_translations: list = field(default_factory=lambda: [None, None])
+    translation_search_bases: list = field(default_factory=lambda: [None, None])
+    pose_rotations: list = field(default_factory=lambda: [None, None])
+    pose_rotation_eulers: list = field(default_factory=lambda: [None, None])
+    mstep_full_half_axis: list = field(default_factory=lambda: [None, None])
+    mstep_accumulator_shape: list = field(default_factory=lambda: [None, None])
 
     def update_from(self, half_index: int, score_result: HalfScoreResult, *, dtype=np.float32) -> None:
         """Store one half's payload, retaining arrays except for posterior casts.

@@ -3092,7 +3092,7 @@ def test_score_half_local_parent_layout_ignores_global_rotation_prior_for_adapti
             k_class_enabled=False,
             collect_local_search_profile=False,
             safe_batch_sizes=lambda *args, **kwargs: (1, 1),
-            outputs=score_outputs.PerHalfOutputs.empty(),
+            outputs=score_outputs.PerHalfOutputs(),
             local_profile_history=[],
         )
 
@@ -3162,7 +3162,7 @@ def test_score_half_local_forwards_mstep_grid_for_each_class_count(monkeypatch, 
             k_class_enabled=k_class_enabled,
             collect_local_search_profile=False,
             safe_batch_sizes=lambda *args, **kwargs: (1, 16),
-            outputs=score_outputs.PerHalfOutputs.empty(),
+            outputs=score_outputs.PerHalfOutputs(),
             local_profile_history=[],
         )
 

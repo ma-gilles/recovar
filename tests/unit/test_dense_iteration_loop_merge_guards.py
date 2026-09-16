@@ -130,7 +130,7 @@ def test_per_half_update_from_half_score_result_updates_only_score_payload():
         max_posterior_per_image = np.array([0.25, 0.75], dtype=np.float64)
         rotation_posterior_sums = np.array([1.0, 2.0, 3.0], dtype=np.float64)
 
-    outs = score_outputs.PerHalfOutputs.empty()
+    outs = score_outputs.PerHalfOutputs()
     hs = score_outputs.HalfScoreResult(
         ha=np.array([0, 1], dtype=np.int32),
         Ft_y="ft_y",
@@ -169,7 +169,7 @@ def test_per_half_update_preserves_double_posterior_state_in_double_mode(monkeyp
         rotation_posterior_sums = np.array([0.987654321098765], dtype=np.float64)
 
     monkeypatch.setitem(scoring_policy._DENSE_EM_STATIC_KWARGS, "use_float64_scoring", True)
-    outs = iteration_loop.PerHalfOutputs.empty()
+    outs = iteration_loop.PerHalfOutputs()
     outs.update_from(
         0,
         iteration_loop.HalfScoreResult(
@@ -502,7 +502,7 @@ def test_k1_local_search_passes_relion_x_half_mstep(monkeypatch):
         collect_local_search_profile=False,
         diagnostic_score_only=False,
         safe_batch_sizes=lambda *_args, **_kwargs: (2, 3),
-        outputs=score_outputs.PerHalfOutputs.empty(),
+        outputs=score_outputs.PerHalfOutputs(),
         local_profile_history=[],
     )
 
@@ -627,7 +627,7 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(
         collect_local_search_profile=False,
         diagnostic_score_only=False,
         safe_batch_sizes=lambda *_args, **_kwargs: (2, 3),
-        outputs=score_outputs.PerHalfOutputs.empty(),
+        outputs=score_outputs.PerHalfOutputs(),
         local_profile_history=[],
     )
 
@@ -737,7 +737,7 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
         collect_local_search_profile=False,
         diagnostic_score_only=False,
         safe_batch_sizes=lambda *_args, **_kwargs: (2, 3),
-        outputs=score_outputs.PerHalfOutputs.empty(),
+        outputs=score_outputs.PerHalfOutputs(),
         local_profile_history=[],
     )
 
@@ -748,7 +748,7 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
 
 def test_final_all_data_iteration_stays_on_shared_dense_scoring_path():
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
-    final_marker = "final_outs = PerHalfOutputs.empty()"
+    final_marker = "final_outs = PerHalfOutputs()"
     assert final_marker in source
     final_block = source[source.index(final_marker) :]
     final_reconstruct_marker = "RELION final all-data reconstruction start"
