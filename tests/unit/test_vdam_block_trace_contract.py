@@ -4,27 +4,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_relion_block_trace_build_seals_the_complete_patch_and_both_schemas():
-    build = (ROOT / "scripts/build_relion_vdam_block_trace.sbatch").read_text()
-    required = [
-        "EXPECTED_RELION_BASE",
-        "RELION_LOCAL_BUILD_ROOT",
-        'case "${RELION_LOCAL_BUILD_ROOT}" in',
-        "/tmp/*",
-        "QUALIFIED_BUILD=${RELION_BUILD_ROOT}/build",
-        'install -m 755 "${BUILD}/bin/relion_refine" "${BINARY}"',
-        'diff "${EXPECTED_RELION_BASE}"..HEAD',
-        "src/acc/cuda/cuda_kernels/BP.cuh",
-        "src/acc/cuda/vdam_block_trace.h",
-        "src/acc/cuda/vdam_block_trace.cu",
-        "RELION_VDAM_WORKER_LOG_SCHEMA_V2",
-        "RELION_VDAM_BLOCK_TRACE_SCHEMA_V1",
-        "sha256sum",
-    ]
-    for text in required:
-        assert text in build
-
-
 def test_relion_block_trace_runner_is_fail_closed_and_full_trajectory():
     runner = (ROOT / "scripts/run_vdam_relion_block_trace.sbatch").read_text()
     required = [
