@@ -2904,19 +2904,11 @@ def main():
     parser.add_argument(
         "--relion_init_dir",
         default=None,
-        help="Strict-parity cold-start: load RELION run_it000_model.star, "
-        "or AutoRefine run_it000_half{1,2}_model.star for K=1, "
-        "sigma2_noise spectrum + per-class rlnReferenceTau2 spectra + "
-        "rlnTau2FudgeFactor/rlnTau2FudgeArg + rlnSigmaOffsetsAngst from this "
-        "directory and use them as recovar's iter-0 state (instead of "
-        "bootstrapping from images). "
-        "Eliminates the ~1e-3 relative drift between recovar's bootstrapped "
-        "sigma2_noise and RELION's, which is what flips ~22%% of K=4 iter-1 "
-        "class assignments and caps mean_corr at 0.94 in pure cold-start. "
-        "Combine with --perturb_replay_relion_dir to also match RELION's "
-        "per-iter HEALPix grid jitter; that pair lifts K=4 cold-start to "
-        "≥ 0.99 mean_corr (kernel-level parity, gated by "
-        "test_em_parity_fast_kclass_strict_coldstart).",
+        help="Initialize from RELION run_it000_model.star (or "
+        "run_it000_half{1,2}_model.star for K=1): load noise, per-class tau2, "
+        "tau2 fudge factor and translation sigma instead of bootstrapping. "
+        "Combine with --perturb_replay_relion_dir to replay sampling jitter. "
+        "Matching initialization alone does not establish trajectory parity.",
     )
     parser.add_argument(
         "--init_class_volumes",

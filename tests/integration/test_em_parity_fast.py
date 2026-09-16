@@ -695,14 +695,14 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
 @pytest.mark.gpu
 @pytest.mark.integration
 @pytest.mark.slow
-def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
+def test_em_parity_fast_kclass_nonadaptive_replay(tmp_path):
     """Exercise three K4 iterations at coarse order 1 without oversampling.
 
     Load RELION iteration-0 noise/tau/sigma and replay perturbations/corrections
     with firstiter_cc. Check all four matched maps and particle class assignments.
-    This retains the nonadaptive route's regression coverage. Available order-1
-    oracles use oversampling 1; comparing against them is a cross-grid diagnostic,
-    not strict matched-state parity despite this test's historical name.
+    RELION GPU rejects firstiter_cc without oversampling. Comparing against its
+    oversampling-1 reference preserves cross-grid regression coverage, not
+    strict matched-state parity.
     """
     _assert_parity_ancestors_or_skip()
     _require_fixture(REFINE_SCRIPT, K4_FIXTURE_DIR, K4_RELION_DIR, K4_DATA_STAR)
@@ -745,7 +745,7 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
         "--rotation_block_size",
         "2000",
     ]
-    logger.info("K-class STRICT-PARITY cold-start cmd: %s", " ".join(cmd))
+    logger.info("K-class nonadaptive replay cmd: %s", " ".join(cmd))
     t0 = time.time()
     proc = subprocess.run(cmd, capture_output=True, text=True, env=gpu_subprocess_env())
     elapsed = time.time() - t0
@@ -816,11 +816,11 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
         "kclass_strict_walltime_s": elapsed,
     }
     ledger = _write_quality_ledger("kclass_strict", payload, output_dir=output_dir)
-    logger.info("K-class strict-parity ledger: %s", ledger)
+    logger.info("K-class nonadaptive replay ledger: %s", ledger)
 
     print(file=sys.stderr, flush=True)
     print(
-        "=== K=4 STRICT-PARITY cold-start (relion_init + perturb_replay + firstiter_cc + adaptive engine) ===",
+        "=== K=4 nonadaptive replay (RELION os1 reference; cross-grid diagnostic) ===",
         file=sys.stderr,
         flush=True,
     )

@@ -122,7 +122,7 @@ pixi run python -m pytest -v -s --run-slow --run-integration --run-gpu \\
   --basetemp "${SCRATCH_DIR}/parity_results/kclass_\${SLURM_JOB_ID}" \\
   tests/integration/test_em_parity_fast.py::test_em_parity_fast_kclass_replay \\
   tests/integration/test_em_parity_fast.py::test_em_parity_fast_kclass_coldstart \\
-  tests/integration/test_em_parity_fast.py::test_em_parity_fast_kclass_strict_coldstart \\
+  tests/integration/test_em_parity_fast.py::test_em_parity_fast_kclass_nonadaptive_replay \\
   tests/integration/test_em_parity_fast.py::test_em_parity_fast_kclass_strict_oversample_coldstart
 
 find "${SCRATCH_DIR}/parity_results" -name refinement_results.npz -print | tee "${SCRATCH_DIR}/kclass_refinement_npz_paths.txt"
