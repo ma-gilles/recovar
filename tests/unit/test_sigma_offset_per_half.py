@@ -41,9 +41,10 @@ def test_kclass_sigma_offset_is_shared_across_halves():
     assert result.current_sigma_offset_angstrom_per_half == pytest.approx([expected, expected])
 
 
-def test_missing_half_uses_hard_assignment_fallback_independently():
+@pytest.mark.parametrize("missing_stats", [None, _noise_stats(0.0, 0.0)])
+def test_missing_half_uses_hard_assignment_fallback_independently(missing_stats):
     result = update_c1_sigma_offset_from_posterior(
-        noise_stats_per_half=[_noise_stats(0.0, 0.0), _noise_stats(40.0, 2.0)],
+        noise_stats_per_half=[missing_stats, _noise_stats(40.0, 2.0)],
         noise_stats_per_half_per_class=[None, None],
         current_sigma_offset_angstrom_per_half=[10.0, 10.0],
         n_classes=1,

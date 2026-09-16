@@ -72,20 +72,12 @@ def update_c1_sigma_offset_from_posterior(
     pooled_wsum = 0.0
     pooled_sumw = 0.0
     for half_idx, stats_k in enumerate(noise_stats_per_half):
-        if stats_k is None:
-            per_half_values.append(
-                _sigma_offset_from_moment(
-                    0.0,
-                    0.0,
-                    current_sigma_offset_angstrom=float(current_per_half[half_idx]),
-                    state_fallback_offsets_angstrom=state_fallback_offsets_angstrom,
-                )
-            )
-            continue
-        wsum_k = float(getattr(stats_k, "wsum_sigma2_offset", 0.0))
-        sumw_k = float(getattr(stats_k, "sumw", 0.0))
-        pooled_wsum += wsum_k
-        pooled_sumw += sumw_k
+        wsum_k = sumw_k = 0.0
+        if stats_k is not None:
+            wsum_k = float(getattr(stats_k, "wsum_sigma2_offset", 0.0))
+            sumw_k = float(getattr(stats_k, "sumw", 0.0))
+            pooled_wsum += wsum_k
+            pooled_sumw += sumw_k
         per_half_values.append(
             _sigma_offset_from_moment(
                 wsum_k,
