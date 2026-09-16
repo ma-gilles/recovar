@@ -1,6 +1,7 @@
 """File identity checks independent of diagnostic acceptance policies."""
 
 import hashlib
+from pathlib import Path
 
 import pytest
 
@@ -15,10 +16,11 @@ from recovar.utils.file_hash import sha256_file
         (b"abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
     ],
 )
-def test_sha256_file_known_digests(tmp_path, content, expected):
+@pytest.mark.parametrize("path_type", [str, Path])
+def test_sha256_file_known_digests(tmp_path, content, expected, path_type):
     path = tmp_path / "artifact"
     path.write_bytes(content)
-    assert sha256_file(path) == expected
+    assert sha256_file(path_type(path)) == expected
 
 
 @pytest.mark.unit

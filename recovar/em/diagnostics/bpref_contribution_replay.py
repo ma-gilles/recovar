@@ -8,6 +8,8 @@ from pathlib import Path
 
 import numpy as np
 
+from recovar.utils.file_hash import sha256_file
+
 MAGIC = "RECOVAR_BPREF_CONTRIBUTION_ROWS"
 SCHEMA = "recovar-bpref-contribution-rows-v3"
 
@@ -470,14 +472,6 @@ def replay_relion_double(
         precision="complex128/float64",
         launch_topology="sequential_rows",
     )
-
-
-def sha256_file(path: str | Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def summarize_bpref_contribution_bundle(bundle: BPrefContributionBundle) -> dict[str, object]:

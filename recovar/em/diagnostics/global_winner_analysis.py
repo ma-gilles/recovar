@@ -10,8 +10,9 @@ from pathlib import Path
 
 import numpy as np
 
-from recovar.em.diagnostics.global_winner_summary import MAX_SUPPORTED_BYTES, SCHEMA, sha256_file
+from recovar.em.diagnostics.global_winner_summary import MAX_SUPPORTED_BYTES, SCHEMA
 from recovar.em.relion.relion_worker_scale import load_relion_dispatch_schedule, verify_relion_dispatch_schedule_oracle
+from recovar.utils.file_hash import sha256_file
 
 RELION_DISPATCH_CAPTURE_PENDING = "capture_pending_v1"
 

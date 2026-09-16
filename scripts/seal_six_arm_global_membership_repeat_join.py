@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from recovar.em.diagnostics.global_winner_analysis import read_relion_identity_classes
-from recovar.em.diagnostics.global_winner_summary import sha256_file
+from recovar.utils.file_hash import sha256_file
 
 ARM_NAMES = (
     "relion_controlA",

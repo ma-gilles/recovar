@@ -18,9 +18,9 @@ from recovar.em.diagnostics.bpref_contribution_replay import (
     accumulator_replay_metrics,
     load_bpref_contribution_bundle,
     replay_relion_double,
-    sha256_file,
     summarize_bpref_contribution_bundle,
 )
+from recovar.utils.file_hash import sha256_file
 
 
 def parse_args(argv=None):

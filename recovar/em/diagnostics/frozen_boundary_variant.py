@@ -21,6 +21,7 @@ from recovar.em.diagnostics.frozen_boundary import (
     FROZEN_BOUNDARY_MANIFEST,
     load_frozen_refinement_boundary,
 )
+from recovar.utils.file_hash import sha256_file
 
 FROZEN_BOUNDARY_VARIANT_SCHEMA = "recovar.em.frozen_boundary_variant.v1"
 FROZEN_BOUNDARY_VARIANT_ATTESTATION = "FROZEN_BOUNDARY_VARIANT_V1.json"
@@ -32,14 +33,6 @@ _COMPONENT_PAYLOAD_KEYS = {
 _TAU2_SOURCE_PATTERN = re.compile(r"it(?P<iteration>\d{3})_tau2\.npy")
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _GIT_COMMIT_PATTERN = re.compile(r"[0-9a-f]{40}")
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _array_sha256(value: np.ndarray) -> str:
@@ -139,7 +132,7 @@ def _validate_source_layout(component_source: Path, source_results: Path) -> Non
 
 
 def _write_single_file_manifest(path: Path, sealed_path: Path) -> None:
-    path.write_text(f"{_sha256(sealed_path)}  {sealed_path.name}\n", encoding="utf-8")
+    path.write_text(f"{sha256_file(sealed_path)}  {sealed_path.name}\n", encoding="utf-8")
 
 
 def _load_attestation(output_dir: Path) -> dict[str, object]:
@@ -155,7 +148,7 @@ def _load_attestation(output_dir: Path) -> dict[str, object]:
         raise ValueError("variant attestation manifest seals the wrong file")
     if _SHA256_PATTERN.fullmatch(fields[0]) is None:
         raise ValueError("variant attestation manifest contains an invalid SHA-256")
-    if _sha256(attestation_path) != fields[0]:
+    if sha256_file(attestation_path) != fields[0]:
         raise ValueError("variant attestation SHA-256 mismatch")
     value = json.loads(attestation_path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
@@ -214,9 +207,9 @@ def validate_frozen_boundary_variant(output_dir: str | Path) -> dict[str, object
     component_source = Path(str(attestation["component_source_path"])).resolve()
     source_results = Path(str(attestation["source_results_path"])).resolve()
     _validate_source_layout(component_source, source_results)
-    if _sha256(component_source) != attestation["component_source_sha256"]:
+    if sha256_file(component_source) != attestation["component_source_sha256"]:
         raise ValueError("component source SHA-256 no longer matches the attestation")
-    if _sha256(source_results) != attestation["source_results_sha256"]:
+    if sha256_file(source_results) != attestation["source_results_sha256"]:
         raise ValueError("source results SHA-256 no longer matches the attestation")
     if _load_source_commit(source_results) != attestation["source_git_commit"]:
         raise ValueError("source git commit no longer matches the attestation")
@@ -318,9 +311,9 @@ def build_frozen_boundary_variant(
         "variant_boundary_sha256": variant_boundary.boundary_sha256,
         "variant_manifest_sha256": variant_boundary.source_manifest_sha256,
         "component_source_path": os.fspath(component_source),
-        "component_source_sha256": _sha256(component_source),
+        "component_source_sha256": sha256_file(component_source),
         "source_results_path": os.fspath(source_results),
-        "source_results_sha256": _sha256(source_results),
+        "source_results_sha256": sha256_file(source_results),
         "expected_changed_payload_keys": expected_changed,
         "actual_changed_payload_keys": actual_changed,
         "base_payload_sha256": _payload_hashes(base_payload),

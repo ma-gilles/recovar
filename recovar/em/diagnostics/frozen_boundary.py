@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 
 from recovar.em.refinement.refinement_options import RefinementOptions
+from recovar.utils.file_hash import sha256_file
 
 logger = logging.getLogger(__name__)
 
@@ -330,14 +331,6 @@ class FrozenRefinementBoundary:
     map_lineage: dict[str, str]
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def _array_bytes_sha256(value: np.ndarray) -> str:
     """Hash the exact C-order payload bytes used by the v3 map transform."""
 
@@ -398,7 +391,7 @@ def verify_fixed_diagnostic_boundary_sources(
             raise ValueError(
                 f"fixed diagnostic boundary source {source_name} is not a file: {source_path}"
             )
-        observed_sha256 = _sha256(source_path)
+        observed_sha256 = sha256_file(source_path)
         expected_sha256 = boundary.source_sha256[source_name]
         if observed_sha256 != expected_sha256:
             raise ValueError(
@@ -694,7 +687,7 @@ def load_frozen_refinement_boundary(
     boundary_path = source_dir / relative_name
     if not boundary_path.is_file():
         raise ValueError(f"frozen-boundary NPZ does not exist: {boundary_path}")
-    actual_sha256 = _sha256(boundary_path)
+    actual_sha256 = sha256_file(boundary_path)
     if actual_sha256 != expected_sha256:
         raise ValueError(
             "frozen-boundary SHA-256 mismatch: "
@@ -1225,7 +1218,7 @@ def load_frozen_refinement_boundary(
         result = FrozenRefinementBoundary(
             source_dir=source_dir,
             source_manifest=source_manifest,
-            source_manifest_sha256=_sha256(source_manifest),
+            source_manifest_sha256=sha256_file(source_manifest),
             boundary_sha256=actual_sha256,
             completed_relion_iteration=completed_iteration,
             consumer_relion_iteration=(

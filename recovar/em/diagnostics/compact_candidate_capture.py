@@ -14,6 +14,8 @@ from pathlib import Path
 
 import numpy as np
 
+from recovar.utils.file_hash import sha256_file
+
 SCHEMA = "recovar-k1-production-candidate-bucket-v2"
 CAPTURE_DIR_ENV = "RECOVAR_COMPACT_CANDIDATE_CAPTURE_DIR"
 CAPTURE_ITERATION_ENV = "RECOVAR_COMPACT_CANDIDATE_CAPTURE_ITERATION"
@@ -26,14 +28,6 @@ _capture_counter = 0
 
 class CompactCaptureError(RuntimeError):
     pass
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _fsync_directory(path: Path) -> None:
@@ -318,7 +312,7 @@ def validate_raw_capture_shard(path: Path) -> dict[str, object]:
 
     return {
         "path": str(path),
-        "sha256": _sha256_file(path),
+        "sha256": sha256_file(path),
         "iteration": int(arrays["iteration"]),
         "half": int(arrays["half"]),
         "particle_count": particle_count,
@@ -461,7 +455,7 @@ def finalize_raw_capture_directory(
     marker = {
         "schema": SCHEMA,
         "manifest": manifest_path.name,
-        "manifest_sha256": _sha256_file(manifest_path),
+        "manifest_sha256": sha256_file(manifest_path),
         "iteration": int(expected_iteration),
         "shard_count": len(inventory),
         "particle_count": int(observed.size),

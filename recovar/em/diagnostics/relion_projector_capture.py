@@ -6,13 +6,14 @@ Every consumed byte is bound to its capture manifest before replay.
 
 from __future__ import annotations
 
-import hashlib
 import math
 import re
 import struct
 from pathlib import Path
 
 import numpy as np
+
+from recovar.utils.file_hash import sha256_file
 
 STATE_RE = re.compile(
     r"state_iter(?P<iteration>\d+)_rank(?P<rank>\d+)_device(?P<device>\d+)_"
@@ -51,14 +52,6 @@ def _captured_rank_prefixes(dump_dir: Path, iteration) -> dict[int, Path]:
     if not rank_prefixes:
         raise ProjectorLoadError("no captured rank-local projector state found")
     return rank_prefixes
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _read_scalar(path: Path, *, integral: bool = False) -> float | int:
