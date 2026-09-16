@@ -19,9 +19,9 @@ def test_old_library_needs_new_symbol_only_for_requested_packing(monkeypatch):
     assert all(symbol != "BprefParticlePack" for _, symbol in cuda_backproject._FFI_REGISTRATIONS)
     monkeypatch.setattr(cuda_backproject, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cuda_backproject, "_get_lib", lambda: SimpleNamespace())
-    monkeypatch.setattr(cuda_backproject, "_bpref_particle_pack_ffi_registered", False)
+    monkeypatch.setattr(cuda_backproject, "_optional_ffi_registered", set())
     with pytest.raises(RuntimeError, match="explicit build with BprefParticlePack"):
-        cuda_backproject._ensure_bpref_particle_pack_ffi()
+        cuda_backproject._ensure_optional_ffi(cuda_backproject._TARGET_BPREF_PARTICLE_PACK)
 
 
 def columns_for(counts, pixels=7, rotations=3, translations=5):
@@ -170,7 +170,7 @@ def test_cuda_pack_preserves_every_bit_and_bucket_worker_ids(counts, capacity):
 )
 def test_raw_cuda_pack_rejects_malformed_buffers(case):
     assert jax.default_backend() == "gpu"
-    cuda_backproject._ensure_bpref_particle_pack_ffi()
+    cuda_backproject._ensure_optional_ffi(cuda_backproject._TARGET_BPREF_PARTICLE_PACK)
     columns = columns_for((2, 3))
     outputs = list(cuda_backproject._bpref_particle_pack_shapes(columns, 8))
     args = [jnp.asarray(x) for column in columns for x in column]

@@ -40,7 +40,7 @@ def test_invalid_optin(monkeypatch):
 
 @pytest.mark.parametrize("radius", [np.float32(13), np.array([13], np.int32)])
 def test_image_radius_validated_before_loading_cuda(monkeypatch, radius):
-    monkeypatch.setattr(cb, "_ensure_projector_image_radius_ffi", lambda: pytest.fail("loaded before validation"))
+    monkeypatch.setattr(cb, "_ensure_optional_ffi", lambda _target: pytest.fail("loaded before validation"))
     with pytest.raises(ValueError, match="image_r_max must be an S32 scalar"):
         cb.project_relion_half_capacity(
             jnp.ones((33, 33, 17), jnp.complex64),

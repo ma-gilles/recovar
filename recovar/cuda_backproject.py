@@ -1106,81 +1106,54 @@ def _ensure_ffi():
         logger.debug("Registered CUDA FFI targets")
 
 
-_projector_capacity_ffi_registered = False
-_projector_image_radius_ffi_registered = False
-_bpref_projector_capacity_ffi_registered = False
 _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF = (
     "cuda_relion_vdam_mstep_fused_projector_capacity_x_half"
 )
 
 
-def _ensure_projector_capacity_ffi():
-    """Register the opt-in ABI without invalidating qualified older libraries."""
-    global _projector_capacity_ffi_registered
+_optional_ffi_registered: set[str] = set()
+_OPTIONAL_FFI_REGISTRATIONS = {
+    _TARGET_PROJECT_RELION_HALF_RUNTIME: (
+        "ProjectRelionHalfRuntime",
+        "Projector capacity was requested but the loaded CUDA library lacks ProjectRelionHalfRuntime; explicitly rebuild the custom CUDA library",
+    ),
+    _TARGET_PROJECT_RELION_HALF_IMAGE_RADIUS: (
+        "ProjectRelionHalfImageRadius",
+        "Image-radius projection requires ProjectRelionHalfImageRadius; explicitly rebuild the custom CUDA library",
+    ),
+    _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF: (
+        "RelionVdamMstepFusedProjectorCapacityXHalf",
+        "BPref projector capacity requires RelionVdamMstepFusedProjectorCapacityXHalf; explicitly rebuild the custom CUDA library",
+    ),
+    _TARGET_NOISE_PIXEL_PACK: (
+        "NoisePixelPack",
+        "CUDA noise pixel packing requires an explicit build with NoisePixelPack",
+    ),
+    _TARGET_DEFERRED_VDAM_HOST_PACK: (
+        "DeferredVdamHostPack",
+        "CUDA host-plan packing requires an explicit build with DeferredVdamHostPack",
+    ),
+    _TARGET_BPREF_PARTICLE_PACK: (
+        "BprefParticlePack",
+        "CUDA BPref packing requires an explicit build with BprefParticlePack",
+    ),
+}
+
+
+def _ensure_optional_ffi(target):
+    """Register a requested optional ABI without invalidating older libraries."""
     _ensure_ffi()
-    if _projector_capacity_ffi_registered:
+    if target in _optional_ffi_registered:
         return
     with _ffi_lock:
-        if _projector_capacity_ffi_registered:
+        if target in _optional_ffi_registered:
             return
-        lib = _get_lib()
-        symbol = getattr(lib, "ProjectRelionHalfRuntime", None)
+        symbol_name, error = _OPTIONAL_FFI_REGISTRATIONS[target]
+        symbol = getattr(_get_lib(), symbol_name, None)
         if symbol is None:
-            raise RuntimeError(
-                "Projector capacity was requested but the loaded CUDA library lacks "
-                "ProjectRelionHalfRuntime; explicitly rebuild the custom CUDA library"
-            )
-        jax.ffi.register_ffi_target(
-            _TARGET_PROJECT_RELION_HALF_RUNTIME,
-            jax.ffi.pycapsule(symbol),
-            platform="CUDA",
-        )
-        _projector_capacity_ffi_registered = True
-
-
-def _ensure_projector_image_radius_ffi():
-    """Load the image-radius ABI only when the corrected projector is used."""
-    global _projector_image_radius_ffi_registered
-    _ensure_ffi()
-    if _projector_image_radius_ffi_registered:
-        return
-    with _ffi_lock:
-        if _projector_image_radius_ffi_registered:
-            return
-        symbol = getattr(_get_lib(), "ProjectRelionHalfImageRadius", None)
-        if symbol is None:
-            raise RuntimeError(
-                "Image-radius projection requires ProjectRelionHalfImageRadius; "
-                "explicitly rebuild the custom CUDA library"
-            )
-        jax.ffi.register_ffi_target(
-            _TARGET_PROJECT_RELION_HALF_IMAGE_RADIUS,
-            jax.ffi.pycapsule(symbol),
-            platform="CUDA",
-        )
-        _projector_image_radius_ffi_registered = True
-
-
-def _ensure_bpref_projector_capacity_ffi():
-    """Register only on explicit use, preserving qualified legacy libraries."""
-    global _bpref_projector_capacity_ffi_registered
-    _ensure_ffi()
-    if _bpref_projector_capacity_ffi_registered:
-        return
-    with _ffi_lock:
-        if _bpref_projector_capacity_ffi_registered:
-            return
-        symbol = getattr(_get_lib(), "RelionVdamMstepFusedProjectorCapacityXHalf", None)
-        if symbol is None:
-            raise RuntimeError(
-                "BPref projector capacity requires RelionVdamMstepFusedProjectorCapacityXHalf; "
-                "explicitly rebuild the custom CUDA library"
-            )
-        jax.ffi.register_ffi_target(
-            _TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF,
-            jax.ffi.pycapsule(symbol), platform="CUDA",
-        )
-        _bpref_projector_capacity_ffi_registered = True
+            raise RuntimeError(error)
+        jax.ffi.register_ffi_target(target, jax.ffi.pycapsule(symbol), platform="CUDA")
+        _optional_ffi_registered.add(target)
 
 
 def _ensure_wavg_native_prefix_ffi():
@@ -2222,26 +2195,6 @@ def relion_vdam_mstep_sums_f32(
     )
 
 
-_bpref_particle_pack_ffi_registered = False
-_deferred_vdam_host_pack_ffi_registered = False
-_noise_pixel_pack_ffi_registered = False
-
-
-def _ensure_noise_pixel_pack_ffi():
-    global _noise_pixel_pack_ffi_registered
-    _ensure_ffi()
-    if _noise_pixel_pack_ffi_registered:
-        return
-    with _ffi_lock:
-        if _noise_pixel_pack_ffi_registered:
-            return
-        symbol = getattr(_get_lib(), "NoisePixelPack", None)
-        if symbol is None:
-            raise RuntimeError("CUDA noise pixel packing requires an explicit build with NoisePixelPack")
-        jax.ffi.register_ffi_target(_TARGET_NOISE_PIXEL_PACK, jax.ffi.pycapsule(symbol), platform="CUDA")
-        _noise_pixel_pack_ffi_registered = True
-
-
 def _noise_pixel_pack_shapes(probs, projection, ctf_probs, indices, spare_index, *, target_batch):
     if type(target_batch) is not int or target_batch <= 0:
         raise ValueError("Noise pixel target batch must be a positive integer")
@@ -2267,27 +2220,10 @@ def pad_noise_pixels_cuda(probs, projection, ctf_probs, indices, spare_index, *,
     outputs = _noise_pixel_pack_shapes(*args, target_batch=target_batch)
     if jax.default_backend() != "gpu" or not custom_cuda_requested():
         raise RuntimeError("CUDA noise pixel packing requires an enabled JAX GPU backend")
-    _ensure_noise_pixel_pack_ffi()
+    _ensure_optional_ffi(_TARGET_NOISE_PIXEL_PACK)
     return tuple(jax.ffi.ffi_call(_TARGET_NOISE_PIXEL_PACK, outputs, vmap_method="sequential")(
         *args, target_batch=target_batch,
     ))
-
-
-def _ensure_deferred_vdam_host_pack_ffi():
-    global _deferred_vdam_host_pack_ffi_registered
-    _ensure_ffi()
-    if _deferred_vdam_host_pack_ffi_registered:
-        return
-    with _ffi_lock:
-        if _deferred_vdam_host_pack_ffi_registered:
-            return
-        symbol = getattr(_get_lib(), "DeferredVdamHostPack", None)
-        if symbol is None:
-            raise RuntimeError("CUDA host-plan packing requires an explicit build with DeferredVdamHostPack")
-        jax.ffi.register_ffi_target(
-            _TARGET_DEFERRED_VDAM_HOST_PACK, jax.ffi.pycapsule(symbol), platform="CUDA",
-        )
-        _deferred_vdam_host_pack_ffi_registered = True
 
 
 def _deferred_vdam_host_pack_shapes(
@@ -2331,28 +2267,10 @@ def pack_deferred_vdam_host_plan_cuda(
     outputs = _deferred_vdam_host_pack_shapes(*args)
     if jax.default_backend() != "gpu" or not custom_cuda_requested():
         raise RuntimeError("CUDA host-plan packing requires an enabled JAX GPU backend")
-    _ensure_deferred_vdam_host_pack_ffi()
+    _ensure_optional_ffi(_TARGET_DEFERRED_VDAM_HOST_PACK)
     return tuple(jax.ffi.ffi_call(
         _TARGET_DEFERRED_VDAM_HOST_PACK, outputs, vmap_method="sequential",
     )(*args))
-
-
-def _ensure_bpref_particle_pack_ffi():
-    """Register only when requested, preserving compatibility with older builds."""
-    global _bpref_particle_pack_ffi_registered
-    _ensure_ffi()
-    if _bpref_particle_pack_ffi_registered:
-        return
-    with _ffi_lock:
-        if _bpref_particle_pack_ffi_registered:
-            return
-        symbol = getattr(_get_lib(), "BprefParticlePack", None)
-        if symbol is None:
-            raise RuntimeError("CUDA BPref packing requires an explicit build with BprefParticlePack")
-        jax.ffi.register_ffi_target(
-            _TARGET_BPREF_PARTICLE_PACK, jax.ffi.pycapsule(symbol), platform="CUDA",
-        )
-        _bpref_particle_pack_ffi_registered = True
 
 
 def _bpref_particle_pack_shapes(columns, capacity):
@@ -2402,7 +2320,7 @@ def pack_bpref_particle_fields(columns, capacity):
     outputs = _bpref_particle_pack_shapes(columns, capacity)
     if jax.default_backend() != "gpu" or not custom_cuda_requested():
         raise RuntimeError("CUDA BPref packing requires an enabled JAX GPU backend")
-    _ensure_bpref_particle_pack_ffi()
+    _ensure_optional_ffi(_TARGET_BPREF_PARTICLE_PACK)
     return tuple(jax.ffi.ffi_call(
         _TARGET_BPREF_PARTICLE_PACK, outputs, vmap_method="sequential",
     )(*(value for column in columns for value in column)))
@@ -3031,7 +2949,7 @@ def relion_vdam_mstep_fused_projector_x_half(
             "persistent serial VDAM rotations require serial_rotation_replay"
         )
     if projector_capacity:
-        _ensure_bpref_projector_capacity_ffi()
+        _ensure_optional_ffi(_TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF)
     else:
         _ensure_ffi()
 
@@ -6344,10 +6262,10 @@ def project_relion_half_capacity(
     if rotation_matrices.shape[0] * n_pixels > np.iinfo(np.int32).max:
         raise ValueError("projection output exceeds int32 kernel indexing")
     if image_r_max is None:
-        _ensure_projector_capacity_ffi()
+        _ensure_optional_ffi(_TARGET_PROJECT_RELION_HALF_RUNTIME)
         target = _TARGET_PROJECT_RELION_HALF_RUNTIME
     else:
-        _ensure_projector_image_radius_ffi()
+        _ensure_optional_ffi(_TARGET_PROJECT_RELION_HALF_IMAGE_RADIUS)
         target = _TARGET_PROJECT_RELION_HALF_IMAGE_RADIUS
     rot6 = _rot_to_compact(rotation_matrices, jnp.float32)
     output = jax.ShapeDtypeStruct((rotation_matrices.shape[0], n_pixels), jnp.complex64)

@@ -37,7 +37,7 @@ def _inputs(q=32, pf=1):
     ],
 )
 def test_invalid_operands_rejected_before_loading_cuda(monkeypatch, which, value, message):
-    monkeypatch.setattr(cb, "_ensure_projector_capacity_ffi", lambda: pytest.fail("loaded CUDA before validation"))
+    monkeypatch.setattr(cb, "_ensure_optional_ffi", lambda _target: pytest.fail("loaded CUDA before validation"))
     args = list(_inputs())
     args[which] = value
     with pytest.raises(ValueError, match=message):
@@ -46,14 +46,14 @@ def test_invalid_operands_rejected_before_loading_cuda(monkeypatch, which, value
 
 @pytest.mark.parametrize("shape,pf", [((31, 31), 1), ((32, 30), 1), ((32, 32), 3)])
 def test_invalid_static_geometry(monkeypatch, shape, pf):
-    monkeypatch.setattr(cb, "_ensure_projector_capacity_ffi", lambda: pytest.fail("loaded CUDA before validation"))
+    monkeypatch.setattr(cb, "_ensure_optional_ffi", lambda _target: pytest.fail("loaded CUDA before validation"))
     with pytest.raises(ValueError):
         cb.project_relion_half_capacity(*_inputs(), image_shape=shape, padding_factor=pf)
 
 
 def test_runtime_radius_is_operand_not_attribute_and_reuses_trace(monkeypatch):
     records = []
-    monkeypatch.setattr(cb, "_ensure_projector_capacity_ffi", lambda: None)
+    monkeypatch.setattr(cb, "_ensure_optional_ffi", lambda _target: None)
 
     def fake_ffi(target, output, **options):
         def call(half, rotations, radius, **attrs):
@@ -78,27 +78,43 @@ def test_runtime_radius_is_operand_not_attribute_and_reuses_trace(monkeypatch):
     cb.project_relion_half_capacity.clear_cache()
 
 
-def test_qualified_old_library_keeps_old_paths_and_capacity_fails_closed(monkeypatch):
+@pytest.mark.parametrize(
+    "target,symbol", [(target, spec[0]) for target, spec in cb._OPTIONAL_FFI_REGISTRATIONS.items()]
+)
+def test_qualified_old_library_keeps_old_paths_and_capacity_fails_closed(monkeypatch, target, symbol):
+    from concurrent.futures import ThreadPoolExecutor
+
     old_symbols = {symbol: object() for _, symbol in cb._FFI_REGISTRATIONS}
-    assert "ProjectRelionHalfRuntime" not in old_symbols
+    assert symbol not in old_symbols
     library = SimpleNamespace(**old_symbols)
     registrations = []
     monkeypatch.setattr(cb, "_ffi_registered", False)
-    monkeypatch.setattr(cb, "_projector_capacity_ffi_registered", False)
+    monkeypatch.setattr(cb, "_optional_ffi_registered", set())
     monkeypatch.setattr(cb, "_loaded_lib_path", None)
     monkeypatch.setattr(cb, "_get_lib", lambda: library)
     monkeypatch.setattr(jax.ffi, "pycapsule", lambda symbol: symbol)
     monkeypatch.setattr(jax.ffi, "register_ffi_target", lambda target, *args, **kwargs: registrations.append(target))
     cb._ensure_ffi()
     assert registrations == [target for target, _ in cb._FFI_REGISTRATIONS]
-    with pytest.raises(RuntimeError, match="lacks ProjectRelionHalfRuntime"):
-        cb._ensure_projector_capacity_ffi()
-    assert not cb._projector_capacity_ffi_registered
+    with pytest.raises(RuntimeError, match=symbol):
+        cb._ensure_optional_ffi(target)
+    assert target not in cb._optional_ffi_registered
     assert cb._ffi_registered
-    library.ProjectRelionHalfRuntime = object()
-    cb._ensure_projector_capacity_ffi()
-    cb._ensure_projector_capacity_ffi()
-    assert registrations.count(cb._TARGET_PROJECT_RELION_HALF_RUNTIME) == 1
+    setattr(library, symbol, object())
+    register = jax.ffi.register_ffi_target
+
+    def fail_registration(*args, **kwargs):
+        raise RuntimeError("registration failed")
+
+    monkeypatch.setattr(jax.ffi, "register_ffi_target", fail_registration)
+    with pytest.raises(RuntimeError, match="registration failed"):
+        cb._ensure_optional_ffi(target)
+    assert target not in cb._optional_ffi_registered
+    monkeypatch.setattr(jax.ffi, "register_ffi_target", register)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _: cb._ensure_optional_ffi(target), range(16)))
+    cb._ensure_optional_ffi(target)
+    assert registrations.count(target) == 1
 
 
 def _pad_with_poison(logical, q, pf):

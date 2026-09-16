@@ -62,7 +62,7 @@ def _arguments(pf=1, grouped=False):
 def _no_cuda(monkeypatch):
     monkeypatch.setattr(cb, "_ensure_ffi", lambda: pytest.fail("CUDA loaded before validation"))
     monkeypatch.setattr(
-        cb, "_ensure_bpref_projector_capacity_ffi", lambda: pytest.fail("capacity CUDA loaded before validation")
+        cb, "_ensure_optional_ffi", lambda _target: pytest.fail("capacity CUDA loaded before validation")
     )
 
 
@@ -221,7 +221,7 @@ def test_optional_registration_preserves_qualified_legacy_library(monkeypatch):
     library = SimpleNamespace(**legacy)
     registrations = []
     monkeypatch.setattr(cb, "_ffi_registered", False)
-    monkeypatch.setattr(cb, "_bpref_projector_capacity_ffi_registered", False)
+    monkeypatch.setattr(cb, "_optional_ffi_registered", set())
     monkeypatch.setattr(cb, "_loaded_lib_path", None)
     monkeypatch.setattr(cb, "_get_lib", lambda: library)
     monkeypatch.setattr(jax.ffi, "pycapsule", lambda value: value)
@@ -229,18 +229,18 @@ def test_optional_registration_preserves_qualified_legacy_library(monkeypatch):
     cb._ensure_ffi()
     assert registrations == [target for target, _ in cb._FFI_REGISTRATIONS]
     with pytest.raises(RuntimeError, match=symbol):
-        cb._ensure_bpref_projector_capacity_ffi()
-    assert cb._ffi_registered and not cb._bpref_projector_capacity_ffi_registered
+        cb._ensure_optional_ffi(cb._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF)
+    assert cb._ffi_registered and cb._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF not in cb._optional_ffi_registered
     setattr(library, symbol, object())
-    cb._ensure_bpref_projector_capacity_ffi()
-    cb._ensure_bpref_projector_capacity_ffi()
+    cb._ensure_optional_ffi(cb._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF)
+    cb._ensure_optional_ffi(cb._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF)
     assert registrations.count(cb._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF) == 1
 
 
 def test_capacity_radius_operand_preserves_aliases_geometry_and_one_trace(monkeypatch):
     monkeypatch.delenv("RECOVAR_VDAM_EXTERNAL_HOST_REPLAY_LIBRARY", raising=False)
     monkeypatch.setattr(cb, "_ensure_ffi", lambda: None)
-    monkeypatch.setattr(cb, "_ensure_bpref_projector_capacity_ffi", lambda: None)
+    monkeypatch.setattr(cb, "_ensure_optional_ffi", lambda _target: None)
     records = []
 
     def fake_ffi(target, outputs, **options):

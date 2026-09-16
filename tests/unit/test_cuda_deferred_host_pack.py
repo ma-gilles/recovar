@@ -127,9 +127,9 @@ def test_older_library_supported_until_new_transaction_requested(monkeypatch):
     assert all(symbol != "DeferredVdamHostPack" for _, symbol in cuda._FFI_REGISTRATIONS)
     monkeypatch.setattr(cuda, "_ensure_ffi", lambda: None)
     monkeypatch.setattr(cuda, "_get_lib", lambda: SimpleNamespace())
-    monkeypatch.setattr(cuda, "_deferred_vdam_host_pack_ffi_registered", False)
+    monkeypatch.setattr(cuda, "_optional_ffi_registered", set())
     with pytest.raises(RuntimeError, match="explicit build with DeferredVdamHostPack"):
-        cuda._ensure_deferred_vdam_host_pack_ffi()
+        cuda._ensure_optional_ffi(cuda._TARGET_DEFERRED_VDAM_HOST_PACK)
 
 
 @pytest.mark.gpu
@@ -157,7 +157,7 @@ def test_cuda_preserves_all_seven_outputs_and_input_bytes(batch, case):
 @pytest.mark.parametrize("case", ["dtype", "rank", "shape", "output_dtype", "output_shape"])
 def test_raw_ffi_rejects_bad_buffers(case):
     assert jax.default_backend() == "gpu"
-    cuda._ensure_deferred_vdam_host_pack_ffi()
+    cuda._ensure_optional_ffi(cuda._TARGET_DEFERRED_VDAM_HOST_PACK)
     arrays = operands()
     outputs = list(cuda._deferred_vdam_host_pack_shapes(*arrays))
     args = [jnp.asarray(x) for x in arrays]
