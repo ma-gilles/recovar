@@ -172,12 +172,22 @@ def _maybe_dump_k_class_statistics(result, *, iteration: int, halfset: int, imag
     per_class = getattr(result, "per_class_stats", None) or ()
     payload = {
         "image_indices": np.asarray(image_indices, dtype=np.int64),
+        "halfset": np.asarray(int(halfset), dtype=np.int64),
         "joint_best": np.asarray(result.stats.best_log_score_per_image, dtype=np.float64),
         "joint_log_evidence": np.asarray(result.stats.log_evidence_per_image, dtype=np.float64),
         "joint_max_posterior": np.asarray(result.stats.max_posterior_per_image, dtype=np.float64),
         "class_responsibilities": np.asarray(result.class_responsibilities, dtype=np.float64),
         "class_posterior_sums": np.asarray(result.class_posterior_sums, dtype=np.float64),
     }
+    uncast = getattr(result, "uncast_log_evidence_per_image", None)
+    if uncast is not None:
+        payload["uncast_log_evidence"] = np.asarray(uncast, dtype=np.float64)
+    published = payload["joint_max_posterior"].shape[0]
+    if payload["image_indices"].shape[0] != published:
+        raise ValueError(
+            "k-class statistics dump: %d image ids for %d published rows"
+            % (payload["image_indices"].shape[0], published)
+        )
     for class_index, stats in enumerate(per_class):
         payload[f"class{class_index}_best"] = np.asarray(stats.best_log_score_per_image, dtype=np.float64)
         payload[f"class{class_index}_log_evidence"] = np.asarray(stats.log_evidence_per_image, dtype=np.float64)
@@ -1140,7 +1150,9 @@ def _run_sparse_pass2_initial_model_estep(
             result,
             iteration=int(group_kwargs.get("debug_iteration", -1)),
             halfset=int(halfset_idx),
-            image_indices=joint_particle_ids if joint_halfset_stream else groups[0][1],
+            # This half's own particle ids. Passing the first group's ids for every
+            # half mislabelled the second half's rows and inflated the particle count.
+            image_indices=image_indices,
         )
         halfset_results[int(halfset_idx)] = result
         accumulators.extend(

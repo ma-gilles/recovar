@@ -1124,6 +1124,9 @@ def _score_normalize_support(
 
     flat_scores = scores.reshape(scores.shape[0], -1)
     best_log_score = jnp.max(flat_scores, axis=1)
+    # Diagnostic only: the normalizer as reduced, before any cast. Set in the branch
+    # that reduces it internally; None elsewhere means "the value below is uncast".
+    uncast_log_Z = None
     row_has_score = jnp.isfinite(best_log_score) & valid_image_mask
     if has_normalization_log_z and has_normalization_max_posterior:
         raise ValueError(
@@ -1152,6 +1155,10 @@ def _score_normalize_support(
         row_has_mass = row_has_score & jnp.isfinite(sum_exp) & (sum_exp > 0.0)
         safe_sum_exp = jnp.where(row_has_mass, sum_exp, 1.0)
         log_Z = jnp.where(row_has_mass, best_log_score + jnp.log(safe_sum_exp), 0.0)
+        # Diagnostic only: the normalizer as reduced, before the cast below. Returning
+        # it changes no production value; it lets a comparison separate a difference in
+        # the reduction from a difference introduced by the cast.
+        uncast_log_Z = log_Z
         if cast_internal_normalizer_to_score_dtype:
             # A caller that supplies an external normalizer has it cast to the score
             # precision above, which keeps the posterior and every M-step tensor at the
@@ -1159,6 +1166,8 @@ def _score_normalize_support(
             # instead, so it applies the same boundary or the accumulators it feeds
             # would silently promote.
             log_Z = log_Z.astype(scores.real.dtype)
+    if uncast_log_Z is None:
+        uncast_log_Z = log_Z
     scores_for_probs = jnp.where(row_has_mass[:, None, None], scores, -jnp.inf)
     probs = jnp.exp(scores_for_probs - log_Z[:, None, None])
     probs = jnp.where(row_has_mass[:, None, None] & jnp.isfinite(probs), probs, 0.0)
@@ -1254,6 +1263,7 @@ def _score_normalize_support(
         reconstruction_probs,
         probs_sum_t,
         reconstruction_probs_sum_t,
+        uncast_log_Z,
     )
 
 
@@ -1301,6 +1311,7 @@ def _score_normalize_mstep(
         reconstruction_probs,
         probs_sum_t,
         reconstruction_probs_sum_t,
+        uncast_log_Z,
     ) = _score_normalize_support(
         shifted_score_split,
         ctf2_over_nv_score,
@@ -1349,6 +1360,7 @@ def _score_normalize_mstep(
         ctf_probs,
         scores,
         probs,
+        uncast_log_Z,
     )
 
 
@@ -1765,6 +1777,7 @@ class _LocalBigJitCore(NamedTuple):
     class_reconstruction_probs_sum: jax.Array | None = None
     class_log_evidence: jax.Array | None = None
     class_best_argmax: jax.Array | None = None
+    uncast_log_Z: jax.Array | None = None
 
 
 class _LocalDeferredMstep(NamedTuple):
@@ -3178,6 +3191,7 @@ def run_local_bucket_big_jit(
         ctf_probs,
         debug_scores,
         debug_probs,
+        uncast_log_Z,
     ) = _score_normalize_mstep(
         shifted_score_split,
         ctf2_over_nv_score,
@@ -3456,6 +3470,7 @@ def run_local_bucket_big_jit(
                 class_reconstruction_probs_sum=class_reconstruction_probs_sum,
                 class_log_evidence=class_log_evidence,
                 class_best_argmax=class_best_argmax,
+                uncast_log_Z=uncast_log_Z,
             )
         )
         if return_source_vdam_operands:
@@ -3512,6 +3527,7 @@ def run_local_bucket_big_jit(
             class_reconstruction_probs_sum=class_reconstruction_probs_sum,
             class_log_evidence=class_log_evidence,
             class_best_argmax=class_best_argmax,
+            uncast_log_Z=uncast_log_Z,
         )
     )
     return _append_debug_outputs(

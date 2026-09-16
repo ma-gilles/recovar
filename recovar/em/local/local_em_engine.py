@@ -991,6 +991,8 @@ def run_local_em_exact(
     max_posterior_per_image = np.empty(n_images, dtype=precision_policy.score_real_dtype)
     significant_counts = np.empty(n_images, dtype=np.int32) if return_significant_counts else None
     rotation_posterior_sums = np.zeros(int(local_layout.n_global_rotations), dtype=np.float64)
+    # Diagnostic: the normalizer as reduced, before the cast to the scoring dtype.
+    uncast_log_evidence_per_image = np.zeros(n_images, dtype=np.float64)
     class_log_evidence_per_image = None
     class_best_log_score_per_image = None
     class_posterior_sums = None
@@ -2614,6 +2616,7 @@ def run_local_em_exact(
                 bucket_class_reconstruction_probs_sum,
                 bucket_class_log_evidence,
                 bucket_class_best_argmax,
+                bucket_uncast_log_Z,
             ) = big_jit_result.core
             summed = None
             ctf_probs = None
@@ -4435,6 +4438,16 @@ def run_local_em_exact(
                     class_rotation_posterior_sums=class_rotation_posterior_sums,
                     class_assignments=class_assignments,
                 )
+            if bucket_uncast_log_Z is not None:
+                uncast_rows = np.asarray(
+                    postprocess_rows(bucket_uncast_log_Z), dtype=np.float64,
+                )[:unpadded_batch_size]
+                offset_rows = -0.5 * np.asarray(
+                    postprocess_rows(batch_norm), dtype=np.float64,
+                ).reshape(unpadded_batch_size, -1)[:unpadded_batch_size, 0]
+                uncast_log_evidence_per_image[
+                    np.asarray(unpadded_bucket.image_indices, dtype=np.int64)
+                ] = uncast_rows + offset_rows
             significant_sample_count, reconstruction_row_count = _postprocess_local_bucket(
                 image_indices=unpadded_bucket.image_indices,
                 **_unpadded_bucket_rows(bucket, unpadded_batch_size),
@@ -5909,6 +5922,7 @@ def run_local_em_exact(
         Ft_ctf=Ft_ctf,
         hard_assignments=hard_assignment,
         stats=relion_stats,
+        uncast_log_evidence_per_image=uncast_log_evidence_per_image,
         class_log_evidence_per_image=class_log_evidence_per_image,
         class_best_log_score_per_image=class_best_log_score_per_image,
         class_posterior_sums=class_posterior_sums,

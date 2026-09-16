@@ -238,6 +238,7 @@ class LocalEMResult:
     # Class-segmented execution only: one row per class. ``Ft_y``/``Ft_ctf`` then
     # carry a leading class axis, and these follow the same class order as the
     # layouts and priors the caller supplied.
+    uncast_log_evidence_per_image: np.ndarray | None = None
     class_log_evidence_per_image: np.ndarray | None = None
     class_best_log_score_per_image: np.ndarray | None = None
     class_posterior_sums: np.ndarray | None = None

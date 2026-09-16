@@ -2151,6 +2151,7 @@ def _run_local_k_class_em_segmented(
             else list(output.per_class_best_pose_eulers_deg)
         ),
         profile_summary=output.profile if return_profile else None,
+        uncast_log_evidence_per_image=output.uncast_log_evidence_per_image,
     )
 
 
@@ -2357,6 +2358,9 @@ def run_local_k_class_em(
     global_log_evidence = _logsumexp_np(class_log_evidence_np, axis=0)
     if normalization_log_evidence_np is not None:
         global_log_evidence = normalization_log_evidence_np
+    # The same diagnostic quantity for this route: the normalizer before the engine
+    # casts it to the scoring dtype. No production consumer.
+    uncast_global_log_evidence = np.asarray(global_log_evidence, dtype=np.float64).copy()
 
     results = _PerClassResults(
         accumulate_noise=accumulate_noise,
@@ -2411,6 +2415,7 @@ def run_local_k_class_em(
         }
 
     return _assemble_result(
+        uncast_log_evidence_per_image=uncast_global_log_evidence,
         class_log_evidence=class_log_evidence_np,
         new_means=None,
         Ft_y=results.Ft_y,

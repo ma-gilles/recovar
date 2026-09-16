@@ -50,6 +50,11 @@ class KClassEMResult(NamedTuple):
     per_class_best_pose_eulers_deg: tuple[np.ndarray, ...] | None = None
     best_pose_eulers_deg: np.ndarray | None = None
 
+    # Diagnostic only, no production consumer: the joint normalizer as reduced,
+    # before the cast to the scoring dtype that both routes apply. Published so a
+    # precision comparison can separate the reduction from the cast.
+    uncast_log_evidence_per_image: np.ndarray | None = None
+
 
 def _logsumexp_np(values: np.ndarray, axis: int) -> np.ndarray:
     max_value = np.max(values, axis=axis, keepdims=True)
@@ -249,6 +254,7 @@ def _assemble_result(
     profile_summary: dict | None = None,
     class_posterior_sums_override=None,
     aggregate_noise_stats_override=None,
+    uncast_log_evidence_per_image=None,
     firstiter_winner_take_all: bool = False,
     host_accumulators: bool = False,
     host_stats_publication: bool = False,
@@ -427,6 +433,7 @@ def _assemble_result(
         per_class_best_pose_eulers_deg=(
             None if per_class_best_pose_eulers_deg is None else tuple(per_class_best_pose_eulers_deg)
         ),
+        uncast_log_evidence_per_image=uncast_log_evidence_per_image,
         best_pose_eulers_deg=best_pose_eulers_deg,
         best_pose_rotations=best_pose_rotations,
         best_pose_translations=best_pose_translations,
