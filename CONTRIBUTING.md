@@ -102,6 +102,14 @@ unit test is tiny or independent of external fixtures. Long and GPU tests run
 under Slurm. Record selected versus executed counts, skips and process exit
 status. Preserve full logs; a truncated console tail is not a result archive.
 
+CPU placement does not remove native dependencies: some unit tests require the
+RELION extension even without a GPU. For those tests, preflight the required
+exports from `recovar.relion_bind._relion_bind_core` and record the loaded path
+and binary hash; an isolated existing build can be selected with
+`RECOVAR_RELION_BIND_BUILD_DIR`. Missing required exports are setup failures,
+not passing or skipped checks. Report CPU-only, native-oracle, GPU and scientific
+parity results separately; the EM fast guard does not qualify the other scopes.
+
 Some legacy EM tests write ledgers beside baselines, and performance helpers
 can auto-save hardware entries. Isolate their result-writing paths before
 qualification. Do not overwrite established baselines as a side effect of a
