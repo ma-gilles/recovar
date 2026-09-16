@@ -2450,6 +2450,54 @@ def test_relion_x_half_bp_per_particle_launch_preserves_ownership_and_order(monk
     np.testing.assert_allclose(np.asarray(ctf_volume), expected_ctf)
 
 
+def test_relion_x_half_bp_per_particle_launches_use_power_of_two_row_ladder(monkeypatch):
+    """Launch rows are padded to a power-of-two ladder with inert zero rows.
+
+    The padded rows carry zero data, zero weight and an identity rotation, so a
+    reference that ignores them reproduces the unpadded accumulators exactly
+    while the number of distinct launch shapes stays O(log rows).
+    """
+
+    from recovar.em.sparse_pass2 import sparse_pass2_adjoint
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
+
+    n_particles, max_rows, n_pixels = 4, 13, 3
+    rng = np.random.default_rng(0)
+    values = jnp.asarray(rng.standard_normal((n_particles, max_rows, n_pixels)) + 1j * rng.standard_normal((n_particles, max_rows, n_pixels)), dtype=jnp.complex64)
+    ctf_values = jnp.asarray(rng.random((n_particles, max_rows, n_pixels)) + 0.5, dtype=jnp.float32)
+    rotations = jnp.asarray(rng.standard_normal((n_particles, max_rows, 3, 3)), dtype=jnp.float32)
+    actual_counts = np.asarray([3, 13, 5, 1], dtype=np.int32)
+    calls = []
+
+    def fake_adjoint_slice_volume_windowed(half_block, window_indices, rotations_block, volume_in, *args, **kwargs):
+        calls.append((np.asarray(half_block).copy(), np.asarray(rotations_block).copy()))
+        return volume_in + jnp.sum(half_block).real
+
+    monkeypatch.setattr(sparse_pass2_adjoint, "_adjoint_slice_volume_windowed", fake_adjoint_slice_volume_windowed)
+    y_volume, ctf_volume = bucketed_mod._accumulate_relion_x_half_per_particle_launches(
+        values, ctf_values, rotations, actual_counts,
+        jnp.asarray(0.0, dtype=jnp.float32), jnp.asarray(0.0, dtype=jnp.float32),
+        window_indices=jnp.arange(n_pixels, dtype=jnp.int32), image_shape=(8, 8), volume_shape=(8, 8, 8),
+        disc_type="linear_interp", half_volume=True, max_r=2.0, log_label_prefix="test",
+    )
+
+    assert [sparse_pass2_adjoint._per_particle_launch_capacity(c) for c in (1, 2, 3, 4, 5, 13)] == [1, 2, 4, 4, 8, 16]
+    # one data and one weight launch per particle, both padded to min(ladder, max_rows)
+    assert [call[0].shape[0] for call in calls] == [4, 4, 13, 13, 8, 8, 1, 1]
+    for particle, count in enumerate(actual_counts):
+        data_rows, rot = calls[2 * particle]
+        weight_rows, _ = calls[2 * particle + 1]
+        np.testing.assert_array_equal(data_rows[:count], np.asarray(values[particle, :count]))
+        np.testing.assert_array_equal(weight_rows[:count], np.asarray(ctf_values[particle, :count]))
+        np.testing.assert_array_equal(rot[:count], np.asarray(rotations[particle, :count]))
+        assert not data_rows[count:].any() and not weight_rows[count:].any()
+        assert np.array_equal(rot[count:], np.broadcast_to(np.eye(3, dtype=np.float32), rot[count:].shape))
+    expected_y = sum(np.asarray(values[i, :c]).sum().real for i, c in enumerate(actual_counts))
+    expected_ctf = sum(np.asarray(ctf_values[i, :c]).sum() for i, c in enumerate(actual_counts))
+    np.testing.assert_allclose(np.asarray(y_volume), expected_y, rtol=1e-6)
+    np.testing.assert_allclose(np.asarray(ctf_volume), expected_ctf, rtol=1e-6)
+
+
 def test_relion_x_half_bp_fused_atomics_threads_both_accumulators_per_particle(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod

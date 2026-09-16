@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -61,6 +62,12 @@ def _adjoint_block_chunk_rows(flat_block, *, max_block_bytes: int) -> int:
         return 1
     row_bytes = _flat_block_row_bytes(flat_block)
     return max(1, int(max_block_bytes) // row_bytes)
+
+
+def _per_particle_launch_capacity(count: int) -> int:
+    """Smallest power of two >= ``count`` (``count`` >= 1)."""
+
+    return 1 << (int(count) - 1).bit_length()
 
 
 def _accumulate_relion_x_half_per_particle_launches(
@@ -186,6 +193,8 @@ def _accumulate_relion_x_half_per_particle_launches(
             int(actual_counts.max()) if actual_counts.size else 0,
             log_label_prefix,
         )
+    max_rows = int(values.shape[1])
+    identity_rotation = jnp.eye(3, dtype=rotations.dtype)
     for pool_start in range(0, actual_counts.size, particle_pool_size):
         pool_stop = min(pool_start + particle_pool_size, actual_counts.size)
         value_rows = []
@@ -195,15 +204,21 @@ def _accumulate_relion_x_half_per_particle_launches(
             count = int(actual_counts[particle_index])
             if count <= 0:
                 continue
-            particle_slice = (
-                slice(particle_index, particle_index + 1),
-                slice(0, count),
-            )
-            value_rows.append(values[particle_slice].reshape(count, values.shape[-1]))
-            ctf_rows.append(
-                ctf_values[particle_slice].reshape(count, ctf_values.shape[-1])
-            )
-            rotation_rows.append(rotations[particle_slice].reshape(count, 3, 3))
+            # Launch shapes are bounded to a power-of-two ladder and the
+            # particle is selected with a traced index, so op-by-op JAX
+            # compiles O(log max_rows) programs per bucket instead of one per
+            # (particle, count) pair.  Padding rows carry zero data and zero
+            # weight: the fused kernel skips non-positive weights and the JAX
+            # adjoint adds exact zeros, so the accumulators are unchanged.
+            capacity = min(_per_particle_launch_capacity(count), max_rows)
+            row = jnp.asarray(particle_index, dtype=jnp.int32)
+            valid = jnp.arange(capacity, dtype=jnp.int32) < jnp.asarray(count, dtype=jnp.int32)
+            particle_values = jax.lax.dynamic_index_in_dim(values, row, axis=0, keepdims=False)[:capacity]
+            particle_ctf = jax.lax.dynamic_index_in_dim(ctf_values, row, axis=0, keepdims=False)[:capacity]
+            particle_rot = jax.lax.dynamic_index_in_dim(rotations, row, axis=0, keepdims=False)[:capacity]
+            value_rows.append(jnp.where(valid[:, None], particle_values, jnp.zeros((), particle_values.dtype)))
+            ctf_rows.append(jnp.where(valid[:, None], particle_ctf, jnp.zeros((), particle_ctf.dtype)))
+            rotation_rows.append(jnp.where(valid[:, None, None], particle_rot, identity_rotation))
         if not value_rows:
             continue
         particle_values = jnp.concatenate(value_rows, axis=0)
