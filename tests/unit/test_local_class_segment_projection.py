@@ -130,6 +130,9 @@ def test_segment_placement_is_class_major_and_row_preserving():
 def test_class_volume_rejects_a_mismatched_stack():
     volumes = jnp.zeros((2, 5))
     assert _class_volume(None, 0, 2) is None
+    # The unused placeholder operand passes through untouched.
+    placeholder = jnp.zeros((1, 1, 1))
+    assert _class_volume(placeholder, 0, 2, per_class=False) is placeholder
     np.testing.assert_array_equal(np.asarray(_class_volume(volumes, 1, 2)), np.zeros(5))
     with pytest.raises(ValueError, match="leading class axis"):
         _class_volume(volumes, 0, 3)
@@ -248,7 +251,7 @@ def test_class_segment_statistics_match_per_class_reductions(n_classes):
     probs = jnp.exp(scores - log_z[:, None, None])
     recon = probs * jnp.asarray(rng.random((batch_size, rows, n_trans)) > 0.4, dtype=probs.dtype)
 
-    mass, best, recon_mass, evidence = _class_segment_statistics(
+    mass, best, recon_mass, evidence, _winner = _class_segment_statistics(
         probs, scores, recon, n_classes=n_classes, segment_rotation_count=seg,
     )
     for k in range(n_classes):
@@ -288,7 +291,7 @@ def test_class_evidence_survives_posterior_underflow(use_float64):
     log_z = jax.scipy.special.logsumexp(scores.reshape(1, -1), axis=1)
     probs = jnp.exp(scores - log_z[:, None, None])
 
-    mass, best, _recon, evidence = _class_segment_statistics(
+    mass, best, _recon, evidence, _winner = _class_segment_statistics(
         probs, scores, None, n_classes=n_classes, segment_rotation_count=seg,
         use_float64_normalization=use_float64,
     )
@@ -307,7 +310,7 @@ def test_empty_class_reports_minus_infinity_evidence():
     scores = jnp.asarray(np.array([[[0.0, -2.0], [-np.inf, -np.inf], [-5.0, -7.0]]]), dtype=jnp.float32)
     probs = jnp.exp(scores - jax.scipy.special.logsumexp(scores.reshape(1, -1), axis=1)[:, None, None])
     probs = jnp.where(jnp.isfinite(probs), probs, 0.0)
-    _mass, _best, _recon, evidence = _class_segment_statistics(
+    _mass, _best, _recon, evidence, _winner = _class_segment_statistics(
         probs, scores, None, n_classes=3, segment_rotation_count=1,
     )
     got = np.asarray(evidence)[0]
@@ -328,7 +331,7 @@ def test_class_evidence_matches_direct_logsumexp_on_wide_score_ranges():
     offsets = np.repeat(np.array([0.0, -60.0, -400.0, -1500.0]), seg)[None, :, None]
     scores = jnp.asarray(base + offsets, dtype=jnp.float32)
     probs = jnp.exp(scores - jax.scipy.special.logsumexp(scores.reshape(batch_size, -1), axis=1)[:, None, None])
-    _mass, _best, _recon, evidence = _class_segment_statistics(
+    _mass, _best, _recon, evidence, _winner = _class_segment_statistics(
         probs, scores, None, n_classes=n_classes, segment_rotation_count=seg,
     )
     direct = np.stack([
@@ -336,3 +339,48 @@ def test_class_evidence_matches_direct_logsumexp_on_wide_score_ranges():
         for k in range(n_classes)
     ], axis=1)
     np.testing.assert_allclose(np.asarray(evidence), direct, rtol=1e-6, atol=1e-3)
+
+
+@pytest.mark.parametrize("n_classes", [2, 3])
+def test_class_winner_indexes_within_its_own_segment(n_classes):
+    """Each class reports its own best (row, translation), as the per-class calls do."""
+    from recovar.em.local.local_big_jit import _class_segment_statistics
+
+    rng = np.random.default_rng(71)
+    batch_size, seg, n_trans = 4, 3, 5
+    rows = n_classes * seg
+    scores = jnp.asarray(rng.standard_normal((batch_size, rows, n_trans)) * 4.0, dtype=jnp.float32)
+    probs = jnp.exp(scores - jax.scipy.special.logsumexp(scores.reshape(batch_size, -1), axis=1)[:, None, None])
+
+    _mass, best, _recon, _evidence, winner = _class_segment_statistics(
+        probs, scores, None, n_classes=n_classes, segment_rotation_count=seg,
+    )
+    winner = np.asarray(winner)
+    assert winner.shape == (batch_size, n_classes)
+    for k in range(n_classes):
+        segment = np.asarray(scores[:, k * seg:(k + 1) * seg]).reshape(batch_size, -1)
+        np.testing.assert_array_equal(winner[:, k], segment.argmax(axis=1))
+        # The winner's score is the reported per-class best.
+        np.testing.assert_allclose(segment[np.arange(batch_size), winner[:, k]], np.asarray(best[:, k]), rtol=0, atol=0)
+        # It decodes to a row inside class k and a valid translation.
+        assert ((winner[:, k] // n_trans) < seg).all() and ((winner[:, k] % n_trans) < n_trans).all()
+
+
+def test_joint_winner_is_the_best_class_winner():
+    """The joint argmax and the per-class winners agree on which class wins."""
+    from recovar.em.local.local_big_jit import _class_segment_statistics
+
+    rng = np.random.default_rng(73)
+    batch_size, n_classes, seg, n_trans = 5, 3, 2, 3
+    scores = jnp.asarray(rng.standard_normal((batch_size, n_classes * seg, n_trans)) * 5.0, dtype=jnp.float32)
+    probs = jnp.exp(scores - jax.scipy.special.logsumexp(scores.reshape(batch_size, -1), axis=1)[:, None, None])
+    _mass, best, _recon, _evidence, winner = _class_segment_statistics(
+        probs, scores, None, n_classes=n_classes, segment_rotation_count=seg,
+    )
+    joint_argmax = np.asarray(jnp.argmax(scores.reshape(batch_size, -1), axis=1))
+    joint_class = (joint_argmax // n_trans) // seg
+    np.testing.assert_array_equal(joint_class, np.asarray(best).argmax(axis=1))
+    for image in range(batch_size):
+        k = int(joint_class[image])
+        row_in_segment = (int(joint_argmax[image]) // n_trans) - k * seg
+        assert int(winner[image, k]) == row_in_segment * n_trans + int(joint_argmax[image]) % n_trans

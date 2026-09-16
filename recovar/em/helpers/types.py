@@ -243,6 +243,10 @@ class LocalEMResult:
     class_posterior_sums: np.ndarray | None = None
     class_rotation_posterior_sums: np.ndarray | None = None
     class_assignments: np.ndarray | None = None
+    per_class_hard_assignments: np.ndarray | None = None
+    per_class_best_pose_rotations: np.ndarray | None = None
+    per_class_best_pose_translations: np.ndarray | None = None
+    per_class_best_pose_rotation_ids: np.ndarray | None = None
 
 
 @dataclass(frozen=True)

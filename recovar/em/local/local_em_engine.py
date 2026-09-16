@@ -152,6 +152,7 @@ from recovar.em.local.local_bucket_stages import (
     _reorder_bucket_to_indices,
     _return_local_big_jit_mstep_tensors,
     _unpadded_bucket_rows,
+    encode_hard_assignment,
     validate_local_relion_projector_window,
 )
 from recovar.em.local.local_caches import (
@@ -263,6 +264,12 @@ def _accumulate_class_segment_statistics(
     class_probs_sum,
     class_best_log_score,
     class_log_evidence,
+    class_best_argmax,
+    translation_grid,
+    per_class_hard_assignments,
+    per_class_best_pose_rotations,
+    per_class_best_pose_translations,
+    per_class_best_pose_rotation_ids,
     probs_sum_t,
     unpadded_batch_size: int,
     class_log_evidence_per_image,
@@ -301,6 +308,10 @@ def _accumulate_class_segment_statistics(
     posterior_ids = np.asarray(posterior_ids, dtype=np.int64)[:rows]
     row_mask = np.asarray(unpadded_rows["local_rotation_mask"], dtype=bool)[:rows]
     row_mass = np.asarray(probs_sum_t, dtype=np.float64)[:rows]
+    rotation_ids = np.asarray(unpadded_rows["local_rotation_ids"], dtype=np.int64)[:rows]
+    rotations = np.asarray(unpadded_rows["local_rotations"])[:rows]
+    class_winner = np.asarray(class_best_argmax, dtype=np.int64)[:rows]
+    translations = np.asarray(translation_grid)
     for class_index in range(int(n_classes)):
         start = class_index * int(segment_rotation_count)
         stop = start + int(segment_rotation_count)
@@ -310,6 +321,20 @@ def _accumulate_class_segment_statistics(
             posterior_ids[:, start:stop][segment_mask],
             row_mass[:, start:stop][segment_mask],
         )
+        winner_row = start + class_winner[:, class_index] // int(n_trans)
+        winner_trans = class_winner[:, class_index] % int(n_trans)
+        winner_rotation_ids = rotation_ids[np.arange(rows), winner_row]
+        if np.any(winner_rotation_ids < 0):
+            raise RuntimeError(
+                f"class-segmented winner selected a padded row in class {class_index}"
+            )
+        per_class_hard_assignments[class_index, image_indices] = encode_hard_assignment(
+            winner_rotation_ids, winner_trans.astype(np.int32), int(n_trans),
+        )
+        if per_class_best_pose_rotations is not None:
+            per_class_best_pose_rotations[class_index, image_indices] = rotations[np.arange(rows), winner_row]
+            per_class_best_pose_translations[class_index, image_indices] = translations[winner_trans]
+            per_class_best_pose_rotation_ids[class_index, image_indices] = winner_rotation_ids
 
 
 def run_local_em_exact(
@@ -970,6 +995,28 @@ def run_local_em_exact(
             (n_classes, int(local_layout.n_global_rotations)), dtype=np.float64,
         )
         class_assignments = np.zeros(n_images, dtype=np.int32)
+        per_class_hard_assignments = np.zeros((n_classes, n_images), dtype=np.int64)
+        per_class_best_pose_rotations = (
+            np.zeros((n_classes, n_images, 3, 3), dtype=precision_policy.score_real_dtype)
+            if return_best_pose_details
+            else None
+        )
+        per_class_best_pose_translations = (
+            np.zeros(
+                (n_classes, n_images, local_layout.translation_grid.shape[1]),
+                dtype=precision_policy.score_real_dtype,
+            )
+            if return_best_pose_details
+            else None
+        )
+        per_class_best_pose_rotation_ids = (
+            np.zeros((n_classes, n_images), dtype=np.int64) if return_best_pose_details else None
+        )
+    else:
+        per_class_hard_assignments = None
+        per_class_best_pose_rotations = None
+        per_class_best_pose_translations = None
+        per_class_best_pose_rotation_ids = None
     best_pose_rotations = (
         np.empty((n_images, 3, 3), dtype=precision_policy.score_real_dtype) if return_best_pose_details else None
     )
@@ -2535,6 +2582,7 @@ def run_local_em_exact(
                 bucket_class_best_log_score,
                 bucket_class_reconstruction_probs_sum,
                 bucket_class_log_evidence,
+                bucket_class_best_argmax,
             ) = big_jit_result.core
             summed = None
             ctf_probs = None
@@ -4251,6 +4299,12 @@ def run_local_em_exact(
                     class_probs_sum=postprocess_rows(bucket_class_probs_sum),
                     class_best_log_score=postprocess_rows(bucket_class_best_log_score),
                     class_log_evidence=postprocess_rows(bucket_class_log_evidence),
+                    class_best_argmax=postprocess_rows(bucket_class_best_argmax),
+                    translation_grid=local_layout.translation_grid,
+                    per_class_hard_assignments=per_class_hard_assignments,
+                    per_class_best_pose_rotations=per_class_best_pose_rotations,
+                    per_class_best_pose_translations=per_class_best_pose_translations,
+                    per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
                     probs_sum_t=(
                         postprocess_rows(stats_probs_sum_t)
                         if stats_probs_sum_t_np is None
@@ -5448,7 +5502,21 @@ def run_local_em_exact(
                 final_recon_volume_shape,
             )
 
-        if reconstruction_group_ids_np is None:
+        if n_classes > 1:
+            # The accumulators carry a leading class axis; the finalization is a
+            # per-volume operation (x=0 Hermitian enforcement and layout conversion),
+            # so apply it to each class's pair and restack.
+            finalized = [
+                _finalize_accumulator(
+                    Ft_y[class_index],
+                    Ft_ctf[class_index],
+                    label=f"Exact local class {class_index}",
+                )
+                for class_index in range(n_classes)
+            ]
+            Ft_y = jnp.stack([pair[0] for pair in finalized], axis=0)
+            Ft_ctf = jnp.stack([pair[1] for pair in finalized], axis=0)
+        elif reconstruction_group_ids_np is None:
             Ft_y, Ft_ctf = _finalize_accumulator(
                 Ft_y,
                 Ft_ctf,
@@ -5728,6 +5796,10 @@ def run_local_em_exact(
         class_posterior_sums=class_posterior_sums,
         class_rotation_posterior_sums=class_rotation_posterior_sums,
         class_assignments=class_assignments,
+        per_class_hard_assignments=per_class_hard_assignments,
+        per_class_best_pose_rotations=per_class_best_pose_rotations,
+        per_class_best_pose_translations=per_class_best_pose_translations,
+        per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
         best_pose_rotations=best_pose_rotations if return_best_pose_details else None,
         best_pose_translations=best_pose_translations if return_best_pose_details else None,
         best_pose_rotation_ids=best_pose_rotation_ids if return_best_pose_details else None,

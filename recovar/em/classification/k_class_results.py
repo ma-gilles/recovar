@@ -248,6 +248,7 @@ def _assemble_result(
     per_class_best_pose_rotation_ids=None,
     profile_summary: dict | None = None,
     class_posterior_sums_override=None,
+    aggregate_noise_stats_override=None,
     firstiter_winner_take_all: bool = False,
     host_accumulators: bool = False,
     host_stats_publication: bool = False,
@@ -368,9 +369,21 @@ def _assemble_result(
     else:
         stacked_new_means = jnp.stack([jnp.asarray(mean) for mean in new_means], axis=0)
 
-    aggregate_noise_stats = _sum_k_class_noise_stats(
-        noise_stats, class_mstep_posterior_sums, host_arrays=host_stats_publication
-    )
+    if aggregate_noise_stats_override is not None:
+        if noise_stats is not None:
+            raise ValueError("aggregate noise statistics replace per-class noise statistics")
+        # RELION accumulates one group-indexed wsum_sigma2_noise inside its class
+        # loop, so a pass that scores every class jointly produces that sum directly
+        # and there is no per-class noise to combine. Its sum_weight is RELION's
+        # joint class-by-pose mass, which is what the per-class path reconstructs by
+        # rescaling. Take it as given rather than splitting it back into classes.
+        aggregate_noise_stats = aggregate_noise_stats_override._replace(
+            sumw=float(np.sum(np.asarray(class_mstep_posterior_sums, dtype=np.float64))),
+        )
+    else:
+        aggregate_noise_stats = _sum_k_class_noise_stats(
+            noise_stats, class_mstep_posterior_sums, host_arrays=host_stats_publication
+        )
     profile_summary_out = None
     if profile_summary is not None:
         profile_summary_out = dict(profile_summary)

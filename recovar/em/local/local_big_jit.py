@@ -1515,11 +1515,16 @@ def _project_local_half_spectrum(
         force_jax=projection_force_jax,
     )
 
-def _class_volume(volume, class_index: int, n_classes: int):
-    """Select one class's volume from a stacked ``[K, ...]`` operand."""
+def _class_volume(volume, class_index: int, n_classes: int, *, per_class: bool = True):
+    """Select one class's volume from a stacked ``[K, ...]`` operand.
 
-    if volume is None:
-        return None
+    Only the operand the projection route actually reads carries a class axis: the
+    other is the unused placeholder the bucket program always receives, and it is
+    passed through untouched.
+    """
+
+    if volume is None or not per_class:
+        return volume
     if int(volume.shape[0]) != int(n_classes):
         raise ValueError(
             f"class-segmented projection expects a leading class axis of {n_classes}, "
@@ -1536,6 +1541,8 @@ def _project_local_class_segments(
     *,
     n_classes: int,
     segment_rotation_count: int,
+    mean_is_per_class: bool = True,
+    projector_is_per_class: bool = True,
 ):
     """Project class-major segmented rows, each segment from its own class volume.
 
@@ -1558,8 +1565,8 @@ def _project_local_class_segments(
         start = class_index * segment_rotation_count
         segment_rotations = local_rotations[:, start : start + segment_rotation_count]
         projected = project_rows(
-            _class_volume(mean_for_proj, class_index, n_classes),
-            _class_volume(relion_projector_half, class_index, n_classes),
+            _class_volume(mean_for_proj, class_index, n_classes, per_class=mean_is_per_class),
+            _class_volume(relion_projector_half, class_index, n_classes, per_class=projector_is_per_class),
             segment_rotations.reshape(batch_size * segment_rotation_count, 3, 3),
         )
         segments.append(projected.reshape(batch_size, segment_rotation_count, projected.shape[-1]))
@@ -1646,7 +1653,8 @@ def _class_segment_statistics(
       finite score at all, which is the empty-class case.
     * ``class_probs_sum[b, k]`` is class k's posterior mass, RELION's responsibility,
       which correctly underflows to zero for a negligible class;
-    * ``class_best_log_score[b, k]`` is the best unnormalized score within class k;
+    * ``class_best_log_score[b, k]`` and ``class_best_argmax[b, k]`` are the best
+      unnormalized score within class k and where it sits in that segment;
     * ``class_reconstruction_probs_sum[b, k]`` is the mass over the pruned
       reconstruction posterior.
     """
@@ -1670,6 +1678,9 @@ def _class_segment_statistics(
 
     segment_scores = segments(scores).reshape(batch_size, n_classes, segment_rotation_count * scores.shape[-1])
     class_best_log_score = jnp.max(segment_scores, axis=2)
+    # Winner within the class, in the same (row, translation) encoding the joint
+    # argmax uses, so a per-class best pose decodes with the segment's own rows.
+    class_best_argmax = jnp.argmax(segment_scores, axis=2)
     class_has_score = jnp.isfinite(class_best_log_score)
     shift = jnp.where(class_has_score, class_best_log_score, jnp.zeros_like(class_best_log_score))
     accumulation_dtype = jnp.float64 if use_float64_normalization else segment_scores.dtype
@@ -1683,7 +1694,13 @@ def _class_segment_statistics(
         shift.astype(accumulation_dtype) + jnp.log(safe_sum),
         jnp.asarray(-jnp.inf, dtype=accumulation_dtype),
     )
-    return class_probs_sum, class_best_log_score, class_reconstruction_probs_sum, class_log_evidence
+    return (
+        class_probs_sum,
+        class_best_log_score,
+        class_reconstruction_probs_sum,
+        class_log_evidence,
+        class_best_argmax,
+    )
 
 
 
@@ -1737,6 +1754,7 @@ class _LocalBigJitCore(NamedTuple):
     class_best_log_score: jax.Array | None = None
     class_reconstruction_probs_sum: jax.Array | None = None
     class_log_evidence: jax.Array | None = None
+    class_best_argmax: jax.Array | None = None
 
 
 class _LocalDeferredMstep(NamedTuple):
@@ -2539,6 +2557,8 @@ def run_local_bucket_big_jit(
                 _project_rows,
                 n_classes=n_classes,
                 segment_rotation_count=int(class_segment_rotation_count),
+                mean_is_per_class=not use_relion_projector,
+                projector_is_per_class=bool(use_relion_projector),
             )
         else:
             proj_half_flat = _project_rows(mean_for_proj, relion_projector_half, flat_rotations)
@@ -3181,6 +3201,7 @@ def run_local_bucket_big_jit(
             class_best_log_score,
             class_reconstruction_probs_sum,
             class_log_evidence,
+            class_best_argmax,
         ) = _class_segment_statistics(
             debug_probs,
             debug_scores,
@@ -3190,7 +3211,7 @@ def run_local_bucket_big_jit(
             use_float64_normalization=use_float64_normalization,
         )
     else:
-        class_probs_sum = class_best_log_score = None
+        class_probs_sum = class_best_log_score = class_best_argmax = None
         class_reconstruction_probs_sum = class_log_evidence = None
     source_ordered_vdam_scattered = bool(
         source_ordered_vdam_mstep
@@ -3421,6 +3442,7 @@ def run_local_bucket_big_jit(
                 class_best_log_score=class_best_log_score,
                 class_reconstruction_probs_sum=class_reconstruction_probs_sum,
                 class_log_evidence=class_log_evidence,
+                class_best_argmax=class_best_argmax,
             )
         )
         if return_source_vdam_operands:
@@ -3472,6 +3494,11 @@ def run_local_bucket_big_jit(
             reconstruction_sample_mask=reconstruction_sample_mask,
             reconstruction_rotation_mask=reconstruction_rotation_mask,
             reconstruction_row_count=reconstruction_row_count,
+            class_probs_sum=class_probs_sum,
+            class_best_log_score=class_best_log_score,
+            class_reconstruction_probs_sum=class_reconstruction_probs_sum,
+            class_log_evidence=class_log_evidence,
+            class_best_argmax=class_best_argmax,
         )
     )
     return _append_debug_outputs(
