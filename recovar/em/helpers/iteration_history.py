@@ -161,7 +161,7 @@ class RefinementHistory:
             axis=0,
         )
         tau2_details = (
-            None
+            {}
             if tau2_details is None
             else {
                 "prior_shells": np.asarray(tau2_details["prior_shells"], dtype=np.float64),
@@ -175,22 +175,13 @@ class RefinementHistory:
         )
         self.noise_radial_trajectory.append(noise_radial)
         self.noise_radial_per_half_trajectory.append(noise_radial_per_half)
-        if tau2_details is None:
-            self.tau2_radial_trajectory.append(None)
-            self.tau2_sigma2_trajectory.append(None)
-            self.tau2_avg_weight_trajectory.append(None)
-            self.tau2_shell_sum_trajectory.append(None)
-            self.tau2_shell_count_trajectory.append(None)
-            self.tau2_fsc_used_trajectory.append(None)
-            self.tau2_ssnr_trajectory.append(None)
-            return
-        self.tau2_radial_trajectory.append(tau2_details["prior_shells"])
-        self.tau2_sigma2_trajectory.append(tau2_details["sigma2_shells"])
-        self.tau2_avg_weight_trajectory.append(tau2_details["avg_weight_shells"])
-        self.tau2_shell_sum_trajectory.append(tau2_details["shell_sum"])
-        self.tau2_shell_count_trajectory.append(tau2_details["shell_count"])
-        self.tau2_ssnr_trajectory.append(tau2_details["ssnr_shells"])
-        self.tau2_fsc_used_trajectory.append(None if k_class_enabled else tau2_details["fsc_shells"])
+        self.tau2_radial_trajectory.append(tau2_details.get("prior_shells"))
+        self.tau2_sigma2_trajectory.append(tau2_details.get("sigma2_shells"))
+        self.tau2_avg_weight_trajectory.append(tau2_details.get("avg_weight_shells"))
+        self.tau2_shell_sum_trajectory.append(tau2_details.get("shell_sum"))
+        self.tau2_shell_count_trajectory.append(tau2_details.get("shell_count"))
+        self.tau2_ssnr_trajectory.append(tau2_details.get("ssnr_shells"))
+        self.tau2_fsc_used_trajectory.append(tau2_details.get("fsc_shells"))
 
     def record_sigma_offset_update(self, sigma_offset, sigma_offset_per_half, per_class_sigma_offset) -> None:
         self.sigma_offset_trajectory.append(sigma_offset)
