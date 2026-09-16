@@ -40,7 +40,7 @@ def _guarded_by(node, parents, condition_name):
 
 
 def test_final_local_pass1_size_is_assigned_only_under_parent_expansion():
-    source = textwrap.dedent(inspect.getsource(iteration_loop._run_relion_iteration_loop))
+    source = textwrap.dedent(inspect.getsource(iteration_loop.refine_single_volume))
     tree = ast.parse(source)
     assignments = list(_assignments_to(tree, "final_local_pass1_current_size"))
     assert len(assignments) == 2

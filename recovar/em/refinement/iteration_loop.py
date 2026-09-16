@@ -1,7 +1,6 @@
 """Orchestrate dense single-volume and K-class EM refinement.
 
-``refine_single_volume`` resolves the entry-point configuration, and
-``_run_relion_iteration_loop`` manages refinement state and dispatch.
+``refine_single_volume`` validates options and manages refinement state and dispatch.
 ``half_scoring`` owns the per-half dense/local engine calls; ``scoring_policy``
 owns their shared execution defaults and diagnostic selectors. Local chunks
 are implemented in ``local_search_iteration``; state-swap diagnostics belong
@@ -324,7 +323,7 @@ def refine_single_volume(
 ) -> dict:
     """Multi-iteration RELION-parity EM refinement.
 
-    This API always runs the RELION-parity refinement loop.
+    Implements the loop described in ``docs/math/relion_refinement_algorithm.md``.
 
     Parameters
     ----------
@@ -369,42 +368,6 @@ def refine_single_volume(
 
     options = with_validated_sampling_schedule(options)
 
-    return _run_relion_iteration_loop(
-        experiment_datasets=experiment_datasets,
-        init_volume=init_volume,
-        init_noise_variance=init_noise_variance,
-        init_mean_variance=init_mean_variance,
-        translations=translations,
-        options=options,
-    )
-
-
-# ---------------------------------------------------------------------------
-# RELION-parity refinement mode
-# ---------------------------------------------------------------------------
-
-
-def _run_relion_iteration_loop(
-    experiment_datasets,
-    init_volume,
-    init_noise_variance,
-    init_mean_variance,
-    translations,
-    options,
-):
-    """RELION-parity refinement loop with convergence detection.
-
-    This implements the full RELION auto-refine algorithm:
-    1. Convergence-driven iteration (not fixed max_iter)
-    2. data_vs_prior for resolution instead of FSC < 0.143
-    3. Angular step refinement (HEALPix order increments)
-    4. Local angular search when HEALPix order reaches auto_local_healpix_order
-    5. Per-image best assignment tracking
-    6. Average Pmax computation for adaptive current_size growth
-
-    Corresponds to RELION's autoRefine iteration loop.
-    See docs/relion5_auto_refine_algorithm.md.
-    """
     from recovar.reconstruction import regularization
 
     schedule = options.schedule

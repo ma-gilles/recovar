@@ -96,7 +96,7 @@ the local experimental fixes that may exist in other working trees.
 
 | RELION function | Role in RELION | recovar counterpart | Status | Main mismatch |
 | --- | --- | --- | --- | --- |
-| `MlOptimiser::iterate()` | Top-level auto-refine loop | `iteration_loop.py::_run_relion_iteration_loop()` | Partial | Same overall loop shape, but final joined-halves iteration, metadata propagation, and exact convergence behavior are missing. |
+| `MlOptimiser::iterate()` | Top-level auto-refine loop | `iteration_loop.py::refine_single_volume()` | Partial | Same overall loop shape, but final joined-halves iteration, metadata propagation, and exact convergence behavior are missing. |
 | `updateCurrentResolution()` | Convert `data_vs_prior` to current resolution | `regularization.compute_data_vs_prior()` + `resolution_from_data_vs_prior()` | Partial | RELION uses true reconstruction weights from the backprojector; we use shell averages from our accumulated `Ft_ctf`, which are only exact if upstream stats are exact. |
 | `updateImageSizeAndResolutionPointers()` | Grow `current_size`, set coarse/fine image sizes | `compute_current_size_relion()` + `compute_coarse_image_size()` + `quantize_current_size()` | Partial | Growth rule exists, but quantization is still not exact RELION behavior and the final `do_use_all_data` Nyquist iteration is missing. |
 | `getFourierTransformsAndCtfs()` | Image preprocessing, masking, priors, high-res residual term | `em_engine._preprocess_batch()` plus parts of `refine.py` | Partial | recovar now has masked-scoring and unmasked-reconstruction paths, the benchmark harness now applies RELION's particle-diameter mask geometry, and RELION mode now uses the actual particle diameter in the adaptive coarse-size formula. It still does not emit RELION's explicit `exp_power_img` / `exp_highres_Xi2_img` bookkeeping or the full metadata-driven prior state. |
@@ -117,7 +117,7 @@ These pieces are good building blocks and should be preserved:
 - A fast half-spectrum GEMM engine in `em_engine.py`.
 - Coordinate-preserving Fourier windowing for `current_size`.
 - RELION-style reconstruction helpers in `relion_functions.py`.
-- A RELION-mode top-level loop in `_run_relion_iteration_loop()`.
+- A RELION-mode top-level loop in `refine_single_volume()`.
 - Local-search and adaptive-oversampling scaffolding.
 - RELION reference extraction utilities in `scripts/extract_relion_reference.py`.
 - Comparison helpers in [the historical comparison scaffold](https://github.com/ma-gilles/recovar/blob/a705edae45802061ab047b6bb3b9b6d8a65dcb90/tests/integration/test_relion_comparison.py).

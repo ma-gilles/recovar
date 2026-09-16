@@ -43,7 +43,7 @@ def test_estimator_receives_run_constants_and_per_pass_operands(monkeypatch):
 
 
 def test_controller_estimates_accuracy_through_the_owner_in_both_passes():
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     assert source.count("expected_accuracy_inputs.estimate(") == 2
     assert source.count("_expected_accuracy_class_ids(") == 2
     assert source.count("Half1AccuracyInputs(") == 1

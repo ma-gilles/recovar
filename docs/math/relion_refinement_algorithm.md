@@ -40,7 +40,7 @@ and refinement settings. Despite its historical name, it supports `n_classes > 1
 groups the settings; supplied option fields override the corresponding individual
 arguments.
 
-The controller, `_run_relion_iteration_loop`, coordinates:
+The controller, `refine_single_volume`, coordinates:
 
 1. Sampling and reference preparation for the current iteration.
 2. Scoring each half through `_score_half_dense` or `_score_half_local`.

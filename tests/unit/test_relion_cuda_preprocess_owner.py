@@ -43,6 +43,6 @@ def test_local_engine_and_controller_use_the_owner():
     engine_source = inspect.getsource(local_em_engine.run_local_em_exact)
     assert "uses_relion_cuda_image_preprocessing(experiment_dataset)" in engine_source
     assert 'while hasattr(image_source, "parent")' not in engine_source
-    controller_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    controller_source = inspect.getsource(iteration_loop.refine_single_volume)
     assert "require RELION CUDA image preprocessing; pass" in controller_source
     assert controller_source.count('getattr(backend, "relion_fourier_backend", None) not in (None, "relion_cuda")') == 1

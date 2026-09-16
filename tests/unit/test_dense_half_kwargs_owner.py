@@ -12,7 +12,7 @@ pytestmark = pytest.mark.unit
 
 
 def test_dense_scoring_branches_share_one_keyword_set():
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     assert source.count("dense_half_kwargs = dict(") == 1
     assert source.count("**dense_half_kwargs,") == 2
     assert "adaptive_result = _score_half_dense_in_bpref_scope(" not in source

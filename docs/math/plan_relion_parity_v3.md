@@ -2,7 +2,7 @@
 
 **Date**: 2026-04-08
 **Supersedes**: `plan_relion_parity.md` (v1, 2026-03), `plan_relion_parity_v2.md` (v2, 2026-04-02)
-**Goal**: Bit-by-bit parity between recovar's `_run_relion_iteration_loop` and
+**Goal**: Bit-by-bit parity between recovar's `refine_single_volume` and
 RELION 5.0.1 `relion_refine_mpi --auto_refine` on a single benchmark
 dataset.
 
@@ -28,7 +28,7 @@ differences. Specifically:
 After fixing all five issues, the actual per-iter trajectories are
 much closer than we thought, and most of the remaining gap comes from
 a **small number of well-defined algorithmic differences** in
-`_run_relion_iteration_loop`. v3 is built on top of those clean baselines and
+`refine_single_volume`. v3 is built on top of those clean baselines and
 on a fresh read of RELION's source.
 
 This v3 plan is the ONLY plan to follow going forward. v1 and v2 have
@@ -204,7 +204,7 @@ After re-reading the actual code in
 `/scratch/gpfs/GILLES/mg6942/recovar_relion_parity_audit/` against
 RELION 5.0.1 source line by line, the following items the original
 audit (and the v2 plan) flagged as "MISSING" or "PARTIAL" are
-**actually fully implemented** in the current `_run_relion_iteration_loop`.
+**actually fully implemented** in the current `refine_single_volume`.
 The earlier audit was based on stale info, conflated the legacy and
 relion modes, or both.
 
@@ -259,7 +259,7 @@ so σ² was 3-6× too big (7-32× at high shells), making χ² 3-6× too
 small and collapsing the iter-1 posterior. Fix: thread `apply_image_mask`
 through `process_images` in the bootstrap function.
 
-**Bug 2 (FIXED): `_run_relion_iteration_loop` used `PADDING_FACTOR=2`, but the
+**Bug 2 (FIXED): `refine_single_volume` used `PADDING_FACTOR=2`, but the
 zero-padding path leaves the padded grid sparse, so the iFFT divides
 by `(pf*N)^3` even though only `N^3` worth of energy is present.**
 This produced a real-space volume `1/pf^3 = 1/8` the correct amplitude.
@@ -489,7 +489,7 @@ This is **NOT FSC < 0.143** — it's **FSC < 0.5** in the equivalent
 SSNR formulation, computed from the actual reconstruction weights
 (`Ft_ctf` accumulator), not from a half-map FSC.
 
-**What recovar does**: `_run_relion_iteration_loop` at
+**What recovar does**: `refine_single_volume` at
 `iteration_loop.py:~1320` computes
 `data_vs_prior_iter = fsc_to_relion_ssnr(fsc_prev)` from the previous
 iter's FSC, but the current_size growth heuristic is fed pixel-shell
@@ -553,7 +553,7 @@ exists; just rewire the call site.
 
 ### A3. Pass `tau²_fudge` parameter through the Wiener solve — ✅ DONE (commit `6ef6215`)
 
-`tau2_fudge` is now plumbed through `_run_relion_iteration_loop` to
+`tau2_fudge` is now plumbed through `refine_single_volume` to
 `compute_relion_prior_from_reconstruction_stats` and
 `post_process_from_filter_v2`. Also (commit `9ef1536`) passed to the
 two `fsc_to_relion_ssnr` call sites that produce `data_vs_prior` for
@@ -620,7 +620,7 @@ solve happens on this padded grid; the volume is then cropped back to
 critical for the final FSC shape at high resolution.
 
 **What recovar does**: `PADDING_FACTOR = 1` is hardcoded in
-`_run_relion_iteration_loop` because `relion_functions.zero_pad_fourier_volume`
+`refine_single_volume` because `relion_functions.zero_pad_fourier_volume`
 has a known geometry bug. Effectively recovar runs at half RELION's
 internal resolution.
 
@@ -661,7 +661,7 @@ Concretely:
   the **unmasked** `shifted_recon_half` that is fed to
   `_m_step_block*` for the y backprojection.
 - The `score_with_masked_images=True` flag is wired into every
-  `run_em` call inside `_run_relion_iteration_loop` (8+ call sites)
+  `run_em` call inside `refine_single_volume` (8+ call sites)
   and into `_compute_significance_batched` for the relion-mode
   coarse pass.
 - `process_images(images, apply_image_mask=True)` multiplies by the
@@ -730,7 +730,7 @@ in pixels then converted to Å. The state object now carries
 `current_changes_optimal_orientations`, `current_changes_optimal_offsets_angstrom`,
 sticky `smallest_changes_optimal_*`, and the
 `nr_iter_wo_large_hidden_variable_changes` counter. The previous iter's
-best (rot, trans) is snapshotted in `_run_relion_iteration_loop` BEFORE the
+best (rot, trans) is snapshotted in `refine_single_volume` BEFORE the
 per-half loop overwrites them, so the deltas are computed against the
 correct K-1 state.
 
@@ -1052,7 +1052,7 @@ See commit `ae8bcc3` for the full change.
   convergence)
 - `relion/src/backprojector.cpp` (Wiener filter, tau² update,
   data_vs_prior)
-- `recovar/em/dense_single_volume/iteration_loop.py` (`_run_relion_iteration_loop`)
+- `recovar/em/dense_single_volume/iteration_loop.py` (`refine_single_volume`)
 - `recovar/em/dense_single_volume/em_engine.py` (E+M kernels)
 - `recovar/reconstruction/regularization.py` (resolution criterion,
   prior, growth heuristic, low_resol_join_halves)

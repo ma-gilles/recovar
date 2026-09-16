@@ -1,5 +1,5 @@
 """
-Per-iteration trajectory bookkeeping for ``_run_relion_iteration_loop``.
+Per-iteration trajectory bookkeeping for ``refine_single_volume``.
 """
 
 from __future__ import annotations
@@ -222,7 +222,7 @@ class RefinementHistory:
 
         Reproduces the exact key strings (including two pre-existing
         aliased-duplicate keys) that all three ``return {...}`` sites in
-        ``_run_relion_iteration_loop`` have always used, so callers can
+        ``refine_single_volume`` have always used, so callers can
         merge this in with ``**history.to_dict()`` unchanged.
         """
         return {

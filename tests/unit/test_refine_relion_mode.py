@@ -401,7 +401,7 @@ def test_dense_global_prior_helpers_honor_explicit_float64_dtype():
     RELION's own pdf_orientation/pdf_offset computation never narrows below
     RFLOAT/XFLOAT (both double under double-precision builds), so these
     helpers -- used only on the ``if not use_local:`` dense/global path in
-    ``_run_relion_iteration_loop`` -- must accept and honor an explicit
+    ``refine_single_volume`` -- must accept and honor an explicit
     ``dtype=np.float64`` request instead of silently staying at float32.
     """
 
@@ -649,7 +649,7 @@ def test_k1_skip_significance_pruning_env_defaults_to_disabled(monkeypatch):
 
 
 def test_kclass_final_reconstruction_does_not_predivide_class_accumulators():
-    source = inspect.getsource(iteration_loop_module._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop_module.refine_single_volume)
     final_start = source.index("RELION final all-data reconstruction start")
     final_source = source[final_start:]
 
@@ -681,10 +681,10 @@ def test_past_perturb_replay_max_iter_matches_one_indexed_cutoff(
     )
 
 
-def test_run_relion_iteration_loop_clears_perturb_replay_dir_past_cutoff_source():
+def testrefine_single_volume_clears_perturb_replay_dir_past_cutoff_source():
     """Regression for the bug where --replay-override-max-iter only gated the
     explicit ``replay_iteration_overrides`` dict, leaving
-    ``_run_relion_iteration_loop``'s independent per-iteration
+    ``refine_single_volume``'s independent per-iteration
     sampling/model/optimiser STAR reads (including the "Replay override:
     optimiser control <- ..." log line) active for every iteration
     regardless of the cutoff. Asserts the loop body reassigns
@@ -693,7 +693,7 @@ def test_run_relion_iteration_loop_clears_perturb_replay_dir_past_cutoff_source(
     ``_past_perturb_replay_max_iter``, rather than only gating
     ``iter_replay_override``.
     """
-    source = inspect.getsource(iteration_loop_module._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop_module.refine_single_volume)
     assert "perturb_replay_relion_dir = None" in source
     assert "_past_perturb_replay_max_iter(" in source
     assert "replay_saved_healpix_order = None" in source
@@ -1119,7 +1119,7 @@ def test_replay_explicit_paired_image_scale_state_remains_exact(with_resident_st
 
 
 def test_final_all_data_replay_uses_shared_live_scale_correction_contract():
-    source = inspect.getsource(iteration_loop_module._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop_module.refine_single_volume)
     final_start = source.index("final_replay_last_numbered_state")
     final_end = source.index("final_noise_variance_per_half =", final_start)
     final_replay_source = source[final_start:final_end]
@@ -9621,7 +9621,7 @@ def _clear_parity_dump_env(monkeypatch):
     """Isolate these tests from ambient RELION-parity-dump debugging env vars.
 
     ``_parity_dump.is_active()`` reads ``RECOVAR_PARITY_DUMP_DIR`` directly, and
-    it feeds the ``need_unreg_means`` gate in ``_run_relion_iteration_loop`` via
+    it feeds the ``need_unreg_means`` gate in ``refine_single_volume`` via
     an ``or`` -- so a var left exported in a developer's shell from an earlier
     parity-debugging session silently changes reconstruction call counts and
     intermediate-file output for every test here, regardless of what each
@@ -13752,107 +13752,6 @@ class TestRelionModeSmokeTest:
         )
 
 
-class TestRelionDefault:
-    def test_default_mode_is_relion(
-        self,
-        half_datasets,
-        init_volume,
-        translations,
-        monkeypatch,
-    ):
-        """Calling without mode= uses the RELION path."""
-        sentinel = {"convergence_state": object()}
-        called = {"ran_relion": False}
-
-        def fake_relion_loop(**kwargs):
-            called["ran_relion"] = True
-            assert kwargs["experiment_datasets"] is half_datasets
-            assert kwargs["options"].adaptive.relion_current_sizes is None
-            assert kwargs["options"].schedule.init_healpix_order == 2
-            return sentinel
-
-        monkeypatch.setattr(
-            iteration_loop_module,
-            "_run_relion_iteration_loop",
-            fake_relion_loop,
-        )
-
-        result = refine_single_volume(
-            half_datasets,
-            init_volume,
-            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            translations,
-            options=RefinementOptions(
-                disc_type="linear_interp",
-                schedule=RefinementSchedule(
-                    max_iter=1,
-                    init_current_size=16,
-                    init_healpix_order=2,
-                    max_healpix_order=3,
-                ),
-                batching=RefinementBatching(image_batch_size=N_IMAGES, rotation_block_size=N_ROTATIONS),
-            ),
-        )
-
-        assert result is sentinel
-        assert called == {"ran_relion": True}
-
-    def test_refinement_options_struct_forwarded_to_iteration_loop(
-        self,
-        half_datasets,
-        init_volume,
-        translations,
-        monkeypatch,
-    ):
-        """The ``options=RefinementOptions(...)`` struct reaches the iteration loop unchanged."""
-        sentinel = {"convergence_state": object()}
-        captured: dict = {}
-
-        def fake_relion_loop(**kwargs):
-            captured.update(kwargs)
-            return sentinel
-
-        monkeypatch.setattr(
-            iteration_loop_module,
-            "_run_relion_iteration_loop",
-            fake_relion_loop,
-        )
-
-        opts = RefinementOptions(
-            schedule=RefinementSchedule(max_iter=7, init_healpix_order=3, max_healpix_order=4),
-            parity=RelionParityOptions(
-                tau2_fudge=4.0,
-                perturb_replay_relion_prefix="custom",
-                emulate_relion_firstiter_cc=True,
-                do_solvent_fsc_correction=True,
-                image_fourier_backend="jax_gpu",
-            ),
-            k_class=KClassOptions(n_classes=4),
-            replay=ReplayState(init_group_count=[7, 8]),
-        )
-        result = refine_single_volume(
-            half_datasets,
-            init_volume,
-            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            translations,
-            options=opts,
-        )
-
-        assert result is sentinel
-        forwarded = captured["options"]
-        assert forwarded.schedule.max_iter == 7
-        assert forwarded.schedule.init_healpix_order == 3
-        assert forwarded.schedule.max_healpix_order == 4
-        assert forwarded.parity.tau2_fudge == 4.0
-        assert forwarded.parity.perturb_replay_relion_prefix == "custom"
-        assert forwarded.parity.emulate_relion_firstiter_cc is True
-        assert forwarded.parity.do_solvent_fsc_correction is True
-        assert forwarded.parity.image_fourier_backend == "jax_gpu"
-        assert forwarded.k_class.n_classes == 4
-        assert forwarded.replay.init_group_count == [7, 8]
-
 # ===========================================================================
 # Test 3: Local search oversampling regression
 # ===========================================================================
@@ -15237,7 +15136,7 @@ def test_kclass_recomputes_mstep_tau2_from_iref_power_spectrum(
 
     def record_shell_stats(*args, **kwargs):
         result = shell_stats(*args, **kwargs)
-        if kwargs.get("shell_rounding") == "floor" and inspect.currentframe().f_back.f_code.co_name == "_run_relion_iteration_loop":
+        if kwargs.get("shell_rounding") == "floor" and inspect.currentframe().f_back.f_code.co_name == "refine_single_volume":
             floor_calls.append(result)
         return result
 

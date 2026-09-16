@@ -983,7 +983,7 @@ def main():
             "direction priors, previous-best poses, image/scale corrections -- via this "
             "script's own per-iteration override loop), and (2) RelionParityOptions."
             "perturb_replay_max_iter (RefinementOptions.parity), which stops "
-            "_run_relion_iteration_loop's independent per-iteration reads of RELION's "
+            "refine_single_volume's independent per-iteration reads of RELION's "
             "sampling.star (healpix order, current_size, translation range/step), "
             "control model.star, and run_it{N}_optimiser.star (convergence-tracking "
             "state: stall counters, changes, has_converged) -- previously ungated by "

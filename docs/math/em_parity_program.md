@@ -4146,11 +4146,11 @@ fixture (128^3) is well under its `>=293^3` host-path threshold.
 ### path); fixed and re-validated genuinely this time
 
 User pushed back on round 3's approach (wanted the fix moved into
-`_run_relion_iteration_loop`), which on investigation surfaced two real
+`refine_single_volume`), which on investigation surfaced two real
 problems, not just a design preference -- full detail in `docs/math/
 relion_parity_agent_notes.md`'s 2026-08-28 entry:
 
-1. `_run_relion_iteration_loop` receives `init_volume` already in Fourier
+1. `refine_single_volume` receives `init_volume` already in Fourier
    space; `jnp.fft` computes at whatever dtype the real-space array had
    going in, so casting inside the iteration loop after the FFT already
    ran (in the caller) cannot recover precision -- moving the fix there as

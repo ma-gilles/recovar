@@ -3,8 +3,11 @@ import pytest
 from recovar.em.helpers.convergence import RefinementState, _apply_relion_healpix_order_oracle
 from recovar.em.refinement.refinement_options import (
     AdaptiveOptions,
+    KClassOptions,
     RefinementOptions,
     RefinementSchedule,
+    RelionParityOptions,
+    ReplayState,
     _validate_relion_healpix_orders,
     with_validated_sampling_schedule,
 )
@@ -64,8 +67,17 @@ def test_relion_healpix_order_oracle_holds_then_advances_sampling_state():
 def test_sampling_validation_preserves_payloads_and_input_options(orders):
     current_sizes = [32, 40, 48]
     options = RefinementOptions(
-        schedule=RefinementSchedule(max_iter=3, init_healpix_order=3),
+        schedule=RefinementSchedule(max_iter=3, init_healpix_order=3, max_healpix_order=4),
         adaptive=AdaptiveOptions(relion_current_sizes=current_sizes, relion_healpix_orders=orders),
+        parity=RelionParityOptions(
+            tau2_fudge=4.0,
+            perturb_replay_relion_prefix="custom",
+            emulate_relion_firstiter_cc=True,
+            do_solvent_fsc_correction=True,
+            image_fourier_backend="jax_gpu",
+        ),
+        k_class=KClassOptions(n_classes=4),
+        replay=ReplayState(init_group_count=[7, 8]),
     )
     validated = with_validated_sampling_schedule(options)
 
@@ -102,40 +114,34 @@ def test_sampling_validation_runs_at_entry_and_preserves_error_precedence(sizes,
 
 
 @pytest.mark.parametrize("use_defaults", [False, True])
-def test_refinement_entry_passes_validated_options_to_loop(monkeypatch, use_defaults):
+def test_refinement_entry_validates_options_before_reading_data(monkeypatch, use_defaults):
     from recovar.em.refinement import iteration_loop
 
-    received = []
-    sentinel = object()
+    validated_options = []
 
-    def run_loop(**kwargs):
-        received.append(kwargs)
-        return sentinel
+    def validate(options):
+        validated = with_validated_sampling_schedule(options)
+        validated_options.append(validated)
+        return validated
 
-    monkeypatch.setattr(iteration_loop, "_run_relion_iteration_loop", run_loop)
+    class StopAtDataset:
+        def __getitem__(self, index):
+            assert len(validated_options) == 1
+            raise RuntimeError("dataset boundary reached")
+
+    monkeypatch.setattr(iteration_loop, "with_validated_sampling_schedule", validate)
     options = None if use_defaults else RefinementOptions(
         schedule=RefinementSchedule(max_iter=3, init_healpix_order=3),
         adaptive=AdaptiveOptions(relion_healpix_orders=[3, 3, 4]),
     )
-    inputs = [object() for _ in range(5)]
-    assert iteration_loop.refine_single_volume(*inputs, options=options) is sentinel
-    assert len(received) == 1
-    validated = received[0]["options"]
-    assert validated.adaptive.relion_healpix_orders == (None if use_defaults else (3, 3, 4))
-    for name, value in zip(
-        ("experiment_datasets", "init_volume", "init_noise_variance", "init_mean_variance", "translations"),
-        inputs,
-    ):
-        assert received[0][name] is value
+    with pytest.raises(RuntimeError, match="dataset boundary reached"):
+        iteration_loop.refine_single_volume(StopAtDataset(), None, None, None, None, options=options)
+    assert validated_options[0].adaptive.relion_healpix_orders == (None if use_defaults else (3, 3, 4))
 
 
-def test_invalid_sampling_schedule_never_starts_refinement(monkeypatch):
+def test_invalid_sampling_schedule_never_starts_refinement():
     from recovar.em.refinement import iteration_loop
 
-    def unexpected_loop(**kwargs):
-        pytest.fail("invalid schedule reached refinement")
-
-    monkeypatch.setattr(iteration_loop, "_run_relion_iteration_loop", unexpected_loop)
     options = RefinementOptions(adaptive=AdaptiveOptions(relion_current_sizes=[]))
     with pytest.raises(ValueError, match="relion_current_sizes must be non-empty"):
         iteration_loop.refine_single_volume(*([None] * 5), options=options)

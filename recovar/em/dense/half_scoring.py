@@ -326,7 +326,7 @@ def _score_half_dense(
     Stores K-class summaries and explicit best poses in ``outputs``. The
     caller records the common payload from the returned ``HalfScoreResult``.
     ``safe_batch_sizes`` is the closure-bound batch sizer from
-    ``_run_relion_iteration_loop``.
+    ``refine_single_volume``.
     """
 
     safe_ibs, safe_rbs = safe_batch_sizes(

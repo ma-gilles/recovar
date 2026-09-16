@@ -6,7 +6,7 @@ and weighted reconstruction use the distinct host Euler matrix path.
 They represent the same intended rotations but differ in float32 arithmetic;
 texture interpolation can amplify these small matrix differences.
 
-`_run_relion_iteration_loop` in
+`refine_single_volume` in
 `recovar/em/refinement/iteration_loop.py` uses the existing
 `sampling._relion_adaptive_pass1_rotations` with canonical source Euler rows
 and the separate perturbation matrix. The OS0 result is transported as

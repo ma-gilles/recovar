@@ -9,7 +9,7 @@ Convention bridge (the critical insight):
   With Hermitian weights (w=2 for interior): the half-spectrum sum recovers
   the FULL-spectrum inner product, which is ~2x the half-complex sum.
   This makes the posterior exponentially more peaked — wrong for RELION parity.
-  _run_relion_iteration_loop correctly uses half_spectrum_scoring=True.
+  refine_single_volume correctly uses half_spectrum_scoring=True.
 
 Exact parity required: rel_err < 1e-10.
 """

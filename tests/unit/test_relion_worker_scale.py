@@ -10,7 +10,7 @@ import numpy as np
 from recovar.em.diagnostics.relion_replay import _apply_replay_correction_overrides
 from recovar.em.helpers.types import NoiseStats
 from recovar.em.refinement.half_inputs import HalfInputState
-from recovar.em.refinement.iteration_loop import _run_relion_iteration_loop
+from recovar.em.refinement.iteration_loop import refine_single_volume
 from recovar.em.relion.relion_normalization import update_relion_norm_scale_corrections
 from recovar.em.relion.relion_worker_scale import (
     RelionDispatchSchedule,
@@ -954,7 +954,7 @@ def test_final_dispatch_remaps_scoring_scale_norm_ratio_and_xa_aa_group_ids():
 
 
 def test_final_dispatch_remap_is_wired_before_final_scoring():
-    source = inspect.getsource(_run_relion_iteration_loop)
+    source = inspect.getsource(refine_single_volume)
     dispatch_call = source.index("_dispatch_relion_follower_scale_for_final_all_data(")
     final_scoring_start = source.index("if final_use_local:", dispatch_call)
     assert dispatch_call < final_scoring_start
@@ -966,7 +966,7 @@ def test_final_dispatch_remap_is_wired_before_final_scoring():
 
 
 def test_numbered_scale_telemetry_brackets_scoring_and_mstep_boundaries():
-    source = inspect.getsource(_run_relion_iteration_loop)
+    source = inspect.getsource(refine_single_volume)
     dispatch_call = source.index("_dispatch_relion_follower_scale_for_numbered_iteration(")
     replay_apply = source.index("replay_result = apply_iter_replay_overrides(")
     scale_update = source.index("_update_relion_follower_corrections(")
@@ -1034,7 +1034,7 @@ def test_strict_restart_requires_coupled_perturbation_and_model_scale_state():
 
 
 def test_sparse_follower_scale_replay_accounting_guards_every_result_return():
-    source = inspect.getsource(_run_relion_iteration_loop)
+    source = inspect.getsource(refine_single_volume)
 
     # One call immediately before each of the three result-return paths
     # (local diagnostic, no-final, and final-all-data). Validation belongs to

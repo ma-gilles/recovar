@@ -52,7 +52,7 @@ M-step accumulator that `run_em` produces.
 > `~/.claude/projects/-scratch-.../memory/project_relion_parity_mstep_at_parity.md`)
 
 That memory was written for the standard E-M iteration loop
-(`_run_relion_iteration_loop`), where 5k iter-13→14 reaches gap
+(`refine_single_volume`), where 5k iter-13→14 reaches gap
 -1.07e-4 vs codex gold. It does **not** apply to the InitialModel
 VDAM path, which:
 
@@ -67,7 +67,7 @@ Either:
 
 1. **Drop the InitialModel BPref probe + parity gate.** The current
    probe is structurally broken: it compares standard-E-M output to
-   VDAM output. Resume parity work via `_run_relion_iteration_loop`
+   VDAM output. Resume parity work via `refine_single_volume`
    on the canonical 5k codex fixture (where gap is -1.07e-4 already).
 
 2. **Port RELION's VDAM update path** into recovar. This is a

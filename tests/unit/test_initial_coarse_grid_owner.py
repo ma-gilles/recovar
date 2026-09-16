@@ -113,7 +113,7 @@ def test_caller_translation_table_is_kept_as_the_base_grid(monkeypatch):
 
 
 def test_controller_materializes_coarse_grids_through_the_owners():
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     assert source.count("_initial_coarse_grids(") == 1
     assert "_sealed_sampling_base_grids(" not in source
     assert "_translation_grid_for_class_count(" not in source

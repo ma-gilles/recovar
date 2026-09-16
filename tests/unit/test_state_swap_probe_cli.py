@@ -278,7 +278,7 @@ def test_relion_references_are_applied_before_state_restoration():
     loop_function = next(
         node
         for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_run_relion_iteration_loop"
+        if isinstance(node, ast.FunctionDef) and node.name == "refine_single_volume"
     )
     call_lines = {
         node.func.id: node.lineno

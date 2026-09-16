@@ -2,7 +2,7 @@
 
 These functions build the Gaussian log-prior arrays that RELION uses to
 bias the E-step towards the previous best orientations and offsets.
-Called by ``_run_relion_iteration_loop`` and ``_run_local_search_iteration``
+Called by ``refine_single_volume`` and ``_run_local_search_iteration``
 in ``refine.py``.
 """
 

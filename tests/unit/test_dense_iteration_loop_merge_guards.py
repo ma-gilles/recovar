@@ -216,7 +216,7 @@ def test_local_search_keeps_relion_x_half_mstep_contract():
 
 
 def test_empty_k1_local_or_adaptive_half_keeps_relion_x_half_shape_contract():
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     empty_start = source.index("if experiment_datasets[k].n_units == 0:")
     empty_source = source[empty_start : source.index("continue\n            if use_local:", empty_start)]
 
@@ -233,7 +233,7 @@ def test_empty_k1_local_or_adaptive_half_keeps_relion_x_half_shape_contract():
 
 
 def test_relion_norm_scale_updates_are_not_disabled_for_k_class():
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     update_start = source.index("can_update_norm_scale = (")
     update_source = source[update_start : source.index("history.record_noise_and_tau2(", update_start)]
 
@@ -270,7 +270,7 @@ def test_k1_local_search_stats_use_relion_retained_weights():
 def test_fresh_k1_spectrum_norm_reaches_local_noise_update_only():
     score_source = inspect.getsource(half_scoring._score_half_local)
     wrapper_source = inspect.getsource(local_search_iteration._run_local_search_iteration)
-    loop_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    loop_source = inspect.getsource(iteration_loop.refine_single_volume)
 
     assert "if source_faithful_spectrum_norm and k_class_enabled:" in score_source
     calls = _local_score_call_keywords()
@@ -409,7 +409,7 @@ def test_k1_local_search_does_not_score_learned_global_direction_prior():
 
     # Both passes build their pdf_direction log priors through one RELION-semantics
     # owner; local searches yield no direction prior there.
-    loop_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    loop_source = inspect.getsource(iteration_loop.refine_single_volume)
     assert loop_source.count("relion_direction_log_priors_for_half(") == 2
     assert "make_relion_direction_log_prior(" not in loop_source
     prior_loop = loop_source[
@@ -747,7 +747,7 @@ def test_kclass_local_search_passes_relion_x_half_mstep(monkeypatch):
 
 
 def test_final_all_data_iteration_stays_on_shared_dense_scoring_path():
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     final_marker = "final_outs = PerHalfOutputs()"
     assert final_marker in source
     final_block = source[source.index(final_marker) :]
@@ -793,7 +793,7 @@ def test_final_all_data_iteration_stays_on_shared_dense_scoring_path():
 
 
 def test_final_all_data_tau2_uses_joined_half_weight_sum():
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     marker = "final_mean_variance, _, final_tau2_update_details = regularization.compute_relion_tau2_from_weights("
     assert marker in source
     tau2_call = source[source.index(marker) : source.index("        logger.info(", source.index(marker))]
@@ -806,7 +806,7 @@ def test_final_all_data_tau2_uses_joined_half_weight_sum():
 
 
 def test_kclass_final_all_data_recomputes_tau2_from_iref_and_returns_final_means():
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     final_marker = "final_ft_y = final_Ft_y_0 + final_Ft_y_1"
     final_block = source[source.index(final_marker) :]
     kclass_marker = "if k_class_enabled:"
@@ -854,14 +854,14 @@ def test_final_all_data_grid_correction_defaults_to_gui_quality(monkeypatch):
     monkeypatch.setenv(finalization_policy._FINAL_ALL_DATA_GRID_CORRECT_ENV, "unexpected")
     assert finalization_policy._final_all_data_grid_correct_enabled(logger=iteration_loop.logger) is False
 
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     assert "RELION final all-data reconstruction gridding correction enabled" in source
     assert "RELION final all-data reconstruction gridding correction disabled" in source
     assert "grid_correct=final_grid_correct" in source
 
 
 def test_final_all_data_local_search_uses_replayed_translation_range():
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     final_call_idx = source.index("final_result = _score_half_local_in_bpref_scope(")
     final_call = source[final_call_idx : source.index("            )", final_call_idx)]
     assert "current_translations=final_current_translations" in final_call
@@ -874,7 +874,7 @@ def test_final_all_data_local_search_uses_replayed_translation_range():
 
 
 def test_final_all_data_sampling_replay_forwards_numbered_boundaries_and_strictness():
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     start = source.index("final_sampling_star, final_sampling_star_source, final_sampling_candidates = select_final_sampling_star(")
     block = source[start : source.index("        )", start)]
     assert "final_sampling_replay_dir," in block
@@ -891,7 +891,7 @@ def test_native_final_perturbation_uses_active_local_order_but_preserves_global_
     assert _native_final_perturbation_healpix_order(local_state, 3) == 4
     assert _native_final_perturbation_healpix_order(global_state, 3) == 3
 
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     assert "final_perturbation_healpix_order = _native_final_perturbation_healpix_order(" in source
 
 
@@ -917,7 +917,7 @@ def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
     assert callable(relion_replay.read_relion_optimiser_metadata)
     assert callable(relion_replay.read_optimiser_accuracy_replay)
     assert not hasattr(iteration_loop, "read_relion_optimiser_metadata")
-    controller_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    controller_source = inspect.getsource(iteration_loop.refine_single_volume)
     assert controller_source.count("read_optimiser_accuracy_replay(") == 1
     assert "read_relion_optimiser_metadata(" not in controller_source
     assert callable(relion_replay.read_relion_direction_prior)
@@ -947,7 +947,7 @@ def test_local_adaptive_pass2_defaults_to_relion_pruned_parent(monkeypatch):
 
 def test_final_sampling_missing_files_log_all_candidates_without_changing_grid(tmp_path, caplog):
     """Execute the controller's real replay branch with no sampling files."""
-    tree = ast.parse(inspect.getsource(iteration_loop._run_relion_iteration_loop))
+    tree = ast.parse(inspect.getsource(iteration_loop.refine_single_volume))
     branch = next(
         node for node in ast.walk(tree)
         if isinstance(node, ast.If)

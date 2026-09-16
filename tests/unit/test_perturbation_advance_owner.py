@@ -28,7 +28,7 @@ def test_generator_path_reports_no_seed():
 
 
 def test_controller_advances_the_perturbation_through_the_owner_in_both_passes():
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     assert source.count("sampling._advance_relion_perturbation(") == 2
     assert "advance_relion_perturbation_from_seed(" not in source
     assert source.count("advance_relion_perturbation(") == 2

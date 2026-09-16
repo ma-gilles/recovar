@@ -96,7 +96,7 @@ def test_reused_grid_without_mstep_rotations_rebuilds_them_from_source_angles(n_
 
 
 def test_controller_builds_local_search_grids_through_the_owners():
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     assert source.count("_exact_local_fine_grid(") == 2
     assert source.count("_local_search_mstep_rotations(") == 2
     assert source.count("relion_local_pass1_current_size(") == 2

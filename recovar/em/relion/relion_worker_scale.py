@@ -1145,7 +1145,7 @@ class RelionFollowerScaleSetup:
     def to_result_dict(self, history: RefinementHistory) -> dict:
         """Return this run's follower-scale result-dict entries.
 
-        Reproduces the exact key strings ``_run_relion_iteration_loop``'s
+        Reproduces the exact key strings ``refine_single_volume``'s
         return sites have always used, mirroring ``RefinementHistory.to_dict()``.
         """
         keys = (

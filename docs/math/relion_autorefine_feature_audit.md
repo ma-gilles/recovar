@@ -27,7 +27,7 @@ Update this file every time a binding validates or disproves parity.
 | # | RELION operation | RELION source | Ported? | recovar location | Validated? | Notes |
 |---|-----------------|---------------|---------|------------------|------------|-------|
 | 1 | Read image + apply gain/defect | ml_optimiser.cpp:5840 | Partial | `data_io/` handles gain | — | recovar skips defect correction |
-| 2 | Soft circular mask (particle_diameter) | ml_optimiser.cpp:5893 | Yes | `core/mask.py:relion_soft_image_mask`, `refine.py` | �� | Binding P2: 93 tests, RELION C++ softMaskOutsideMap vs recovar smooth_circular_mask at atol=1e-12. Wired into `_run_relion_iteration_loop` via image_mask override. |
+| 2 | Soft circular mask (particle_diameter) | ml_optimiser.cpp:5893 | Yes | `core/mask.py:relion_soft_image_mask`, `refine.py` | �� | Binding P2: 93 tests, RELION C++ softMaskOutsideMap vs recovar smooth_circular_mask at atol=1e-12. Wired into `refine_single_volume` via image_mask override. |
 | 3 | FFT of masked image (for E-step) | ml_optimiser.cpp:5920 | Yes | `em_engine.py` FFT in preprocess | — | |
 | 4 | FFT of unmasked image (for M-step) | ml_optimiser.cpp:5927 | No | — | — | recovar uses same image for both |
 | 5 | selfTranslate (beam-tilt phase ramp) | ml_optimiser.cpp:5935 | No | — | — | Zero effect for SPA w/o beam tilt |
@@ -75,7 +75,7 @@ Update this file every time a binding validates or disproves parity.
 | 27 | Blob deconvolution (iterative) | backprojector.cpp:1400 | No | direct Wiener instead | — | Different strategy — binding M2 |
 | 28 | IFFT → crop to ori_size | backprojector.cpp:2589 | Yes | iDFT + unpad | ✓ | Binding M7: 21 pass, 6 xfail (layout conversion). Output shape, determinism, self-consistency verified. Covered by BackProjector round-trip + M4/M5 bindings. |
 | 29 | Gridding correction (radial sinc²) | projector.cpp:595 | Yes | `relion_functions.py:64` | ✓ | Validated Phase 1: max diff 1.6e-5 (float k-coords vs int) |
-| 30 | Flatten solvent (mask volume exterior) | ml_optimiser.cpp:5100 | Yes | `iteration_loop.py:_run_relion_iteration_loop` post-reconstruction | — | Uses `soft_mask_outside_map(radius=particle_diameter/(2*pixel_size), cosine_width=5)` |
+| 30 | Flatten solvent (mask volume exterior) | ml_optimiser.cpp:5100 | Yes | `iteration_loop.py:refine_single_volume` post-reconstruction | — | Uses `soft_mask_outside_map(radius=particle_diameter/(2*pixel_size), cosine_width=5)` |
 | 31 | Zero mask (zero exterior instead of noise) | ml_optimiser.cpp:5110 | Yes | Handled by #2 (soft mask replaces exterior with avg_bg) | — | Automatic with softMaskOutsideMap do_zero_mask path |
 
 ## M-step: Statistics & Resolution

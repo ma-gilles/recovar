@@ -31,6 +31,6 @@ def test_global_search_keeps_unset_widths():
 
 
 def test_controller_uses_the_owner_in_both_passes():
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     assert source.count("relion_local_search_sigmas(") == 2
     assert "np.sqrt(2.0 * 2.0) * step_rad" not in source

@@ -24,7 +24,7 @@ import numpy as np
 _E_STEP: dict[int, dict[str, Any]] = {}
 
 # Per-iter wall-time tracking. Keyed by iteration index (the ``iteration``
-# variable inside ``_run_relion_iteration_loop``), holds:
+# variable inside ``refine_single_volume``), holds:
 #   {"t0": float, "stages": {stage_name: cumulative_seconds_since_t0}}
 # All hooks no-op when ``RECOVAR_PARITY_DUMP_DIR`` is unset.
 _ITER_TIMERS: dict[int, dict[str, Any]] = {}

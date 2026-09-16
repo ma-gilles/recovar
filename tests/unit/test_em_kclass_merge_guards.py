@@ -240,7 +240,7 @@ def test_kclass_weight_trajectories_record_mstep_and_full_posterior_provenance()
     history.class_weight_trajectory[0][0] = 1.0
     assert history.class_mstep_weight_trajectory[0][0] == 0.25
 
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     assert "history.record_class_weights(" in source
 
     import scripts.run_full_refinement as run_full_refinement
@@ -465,7 +465,7 @@ def test_kclass_significance_dump_threads_one_based_iteration():
     assert "debug_iteration" in inspect.signature(
         sig_mod._compute_k_class_significance_batched
     ).parameters
-    loop_source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    loop_source = inspect.getsource(iteration_loop.refine_single_volume)
     score_source = inspect.getsource(half_scoring._score_half_dense)
     adaptive_source = inspect.getsource(k_class_mod.run_dense_k_class_em_adaptive)
     significance_source = inspect.getsource(sig_mod._compute_k_class_significance_batched)
@@ -1943,14 +1943,14 @@ def test_k1_firstiter_sparse_pass2_uses_exact_relion_cc_scorer():
 
 
 def test_iteration_loop_threads_fmask_edge_through_to_postprocess():
-    """``_run_relion_iteration_loop`` must forward
+    """``refine_single_volume`` must forward
     ``RELION_WIDTH_FMASK_EDGE`` to ``_reconstruct_and_postprocess_means``
     via the ``relion_fmask_edge`` kwarg. A merge that defines the
     constant but stops threading it leaves the LP filter using the
     real-space mask edge (RELION ``WIDTH_FMASK_EDGE`` vs
     ``--maskedge`` are different units).
     """
-    source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
+    source = inspect.getsource(iteration_loop.refine_single_volume)
     assert "relion_fmask_edge=RELION_WIDTH_FMASK_EDGE" in source, (
         "iteration_loop must forward RELION_WIDTH_FMASK_EDGE to _reconstruct_and_postprocess_means"
     )

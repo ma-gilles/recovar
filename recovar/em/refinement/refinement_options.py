@@ -61,7 +61,7 @@ class RelionParityOptions:
     perturb_replay_relion_dir: str | None = None
     perturb_replay_relion_prefix: str = "run"
     # Diagnostic-only cutoff (number of physical recovar iterations): after
-    # this many iterations, `_run_relion_iteration_loop` stops reading
+    # this many iterations, `refine_single_volume` stops reading
     # RELION's per-iteration sampling/model/optimiser STAR files entirely and
     # resumes native sampling/convergence from recovar's carried state. Zero
     # disables numbered replay immediately after the initial snapshot. `None`
@@ -226,8 +226,7 @@ class RefinementBatching:
 class RefinementOptions:
     """Configuration groups consumed by ``refine_single_volume``.
 
-    Passed as the ``options`` argument of ``refine_single_volume`` and
-    ``_run_relion_iteration_loop``.
+    Passed as the ``options`` argument of ``refine_single_volume``.
     """
 
     schedule: RefinementSchedule = field(default_factory=RefinementSchedule)
