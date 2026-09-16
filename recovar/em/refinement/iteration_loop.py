@@ -3421,9 +3421,7 @@ def refine_single_volume(
 
         # Reuse the assignment statistic computed by update_refinement_state.
         # Sampling transitions and optimiser replay preserve this field.
-        frac_changed = state.fraction_changed
-        state._last_frac_changed = frac_changed
-        history.frac_changed_trajectory.append(float(frac_changed))
+        history.frac_changed_trajectory.append(float(state.fraction_changed))
 
         # --- C1 (RELION-parity): update sigma2_offset from data ---
         # Posterior-weighted RELION update with fallback to hard-assignment
