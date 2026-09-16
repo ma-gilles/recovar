@@ -2389,6 +2389,36 @@ def test_build_pass2_hypothesis_layout_preserves_sparse_rotation_translation_mas
     assert not np.any(buckets[0].local_sample_mask[row_for_image0, 2:])
 
 
+@pytest.mark.parametrize("oversampling_order", [0, 1])
+def test_build_pass2_hypothesis_layout_accepts_complement_support(oversampling_order):
+    from recovar.em.scoring.significant_samples import (
+        ComplementSignificantSampleIndices,
+        compact_significant_sample_indices_from_mask,
+    )
+
+    n_rotations = rotation_grid_size(0)
+    mask = np.ones(n_rotations * 2, dtype=bool)
+    mask[[0, 1, 3, mask.size - 1]] = False
+    compact = compact_significant_sample_indices_from_mask(mask)
+    assert isinstance(compact, ComplementSignificantSampleIndices)
+    kwargs = dict(
+        n_coarse_rotations=n_rotations,
+        n_coarse_translations=2,
+        nside_level=0,
+        translations=np.array([[0., 0.], [1., 0.]], dtype=np.float32),
+        oversampling_order=oversampling_order,
+        rotation_log_prior=np.arange(n_rotations, dtype=np.float32),
+        translation_log_prior=np.array([0., -2.], dtype=np.float32),
+    )
+    expected = build_pass2_hypothesis_layout([np.flatnonzero(mask)], **kwargs)
+    actual = build_pass2_hypothesis_layout([compact], **kwargs)
+    for field in fields(expected):
+        np.testing.assert_array_equal(
+            getattr(actual, field.name), getattr(expected, field.name),
+            err_msg=field.name,
+        )
+
+
 def test_build_pass2_hypothesis_layout_accepts_fine_translation_log_prior():
     translations = np.array([[0.0, 0.0], [2.0, 0.0]], dtype=np.float32)
     fine_prior = np.arange(8, dtype=np.float32)

@@ -22,6 +22,7 @@ from recovar.em.helpers.batch_planning import (
 )
 from recovar.em.helpers.orientation_priors import make_relion_translation_log_prior
 from recovar.em.helpers.shape_buckets import coarse_bucket, power_bucket
+from recovar.em.scoring.significant_samples import significant_sample_ids
 from recovar.em.sampling import (
     _normalized_log_weights,
     _wrapped_abs_diff_deg,
@@ -1657,7 +1658,9 @@ def build_pass2_hypothesis_layout(
             coarse_trans = None
             use_full_candidate_mask = True
         else:
-            sig_samples = np.asarray(sig_samples, dtype=np.int64).reshape(-1)
+            sig_samples = significant_sample_ids(
+                sig_samples, int(n_coarse_rotations) * int(n_coarse_translations),
+            )
             if sig_samples.size == 0:
                 if not allow_empty:
                     raise ValueError(f"Image {image_idx} has no significant coarse samples for sparse pass 2")
