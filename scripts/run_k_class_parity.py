@@ -295,9 +295,6 @@ def _resolve_firstiter_cc_mode(args, relion_cli_flags: dict[str, object]) -> dic
         and bool(relion_cli_flags.get("do_firstiter_cc", False))
     )
     mode = str(args.firstiter_cc_mode)
-    forced_by_legacy_flag = bool(args.winner_take_all_mstep)
-    if forced_by_legacy_flag:
-        mode = "force"
     if mode == "auto":
         emulate = relion_requested
     elif mode == "force":
@@ -307,9 +304,7 @@ def _resolve_firstiter_cc_mode(args, relion_cli_flags: dict[str, object]) -> dic
     else:  # pragma: no cover - argparse choices should prevent this.
         raise ValueError(f"Unknown firstiter CC mode: {mode}")
     return {
-        "requested_mode": str(args.firstiter_cc_mode),
         "effective_mode": mode,
-        "forced_by_winner_take_all_mstep": forced_by_legacy_flag,
         "relion_requested": bool(relion_requested),
         "emulate": bool(emulate),
         "score_mode": "normalized_cc" if emulate else "gaussian",
@@ -931,15 +926,6 @@ def main() -> None:
     parser.add_argument("--reconstruction-padding-factor", type=int, default=2)
     parser.add_argument("--disc-type", default="linear_interp")
     parser.add_argument(
-        "--winner-take-all-mstep",
-        action="store_true",
-        help=(
-            "Deprecated diagnostic alias for --firstiter-cc-mode force. "
-            "Use RELION first-iteration winner-take-all reconstruction weights "
-            "while keeping soft evidence stats."
-        ),
-    )
-    parser.add_argument(
         "--firstiter-cc-mode",
         choices=("auto", "force", "off"),
         default="auto",
@@ -947,15 +933,6 @@ def main() -> None:
             "First-iteration CC emulation policy. auto reads RELION's optimiser "
             "CLI and only emulates --firstiter_cc when that command actually "
             "requested it; force is for diagnostics; off disables it."
-        ),
-    )
-    parser.add_argument(
-        "--no-firstiter-cc-pass2-only-best-coarse",
-        action="store_true",
-        help=(
-            "Deprecated no-op retained for old diagnostics. The replay harness now keeps "
-            "normalized-CC firstiter scoring on the regular adaptive significance support "
-            "by default."
         ),
     )
     parser.add_argument(
@@ -1551,7 +1528,7 @@ def main() -> None:
         # single-best-coarse shortcut is kept only as an explicit diagnostic.
         firstiter_cc = bool(firstiter_cc_mode["emulate"]) and bool(
             args.firstiter_cc_pass2_only_best_coarse
-        ) and not bool(args.no_firstiter_cc_pass2_only_best_coarse)
+        )
         adaptive_em_kwargs = dict(common_em_kwargs)
         adaptive_em_kwargs["image_batch_size"] = fine_batch_plan.image_batch_size
         adaptive_em_kwargs["rotation_block_size"] = fine_batch_plan.rotation_block_size
@@ -1963,7 +1940,6 @@ def main() -> None:
         "firstiter_cc_pass2_only_best_coarse": bool(
             firstiter_cc_mode["emulate"]
             and args.firstiter_cc_pass2_only_best_coarse
-            and not args.no_firstiter_cc_pass2_only_best_coarse
         ),
         "firstiter_cc_ini_high_override_angstrom": (
             None

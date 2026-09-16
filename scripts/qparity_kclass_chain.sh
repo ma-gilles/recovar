@@ -33,7 +33,7 @@ for i in $(seq 0 $(($N_ITERS - 1))); do
   # RELION's --firstiter_cc winner-take-all only applies to iter 1 (step 0->1).
   # For step 1->2 onwards RELION uses soft Gaussian scoring, so recovar must too.
   if [[ "${FIRSTITER_CC}" == "yes" && "${i}" -eq 0 ]]; then
-    STEP_ARGS+=(--winner-take-all-mstep)
+    STEP_ARGS+=(--firstiter-cc-mode force)
   fi
   echo "=== chained step ${i} -> ${TARGET} (extra: ${STEP_ARGS[*]}) ==="
   pixi run python "${REPO_ROOT}/scripts/run_k_class_parity.py" \

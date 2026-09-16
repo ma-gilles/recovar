@@ -98,9 +98,7 @@ def test_k_class_replay_firstiter_best_coarse_shortcut_is_diagnostic_only():
     import scripts.run_k_class_parity as run_k_class_parity
 
     source = inspect.getsource(run_k_class_parity.main)
-    assert "--no-firstiter-cc-pass2-only-best-coarse" in source
     assert "--firstiter-cc-pass2-only-best-coarse" in source
-    assert "args.no_firstiter_cc_pass2_only_best_coarse" in source
     assert "args.firstiter_cc_pass2_only_best_coarse" in source
     assert "Patched RELION storeWavg dumps" in source
 
@@ -161,7 +159,6 @@ def test_k_class_replay_auto_firstiter_cc_tracks_relion_cli():
         prev_iter=0,
         target_iter=1,
         firstiter_cc_mode="auto",
-        winner_take_all_mstep=False,
     )
 
     off = _resolve_firstiter_cc_mode(args, {"do_firstiter_cc": False})
@@ -173,20 +170,18 @@ def test_k_class_replay_auto_firstiter_cc_tracks_relion_cli():
     assert on["score_mode"] == "normalized_cc"
 
 
-def test_k_class_replay_legacy_winner_take_all_forces_diagnostic_mode():
+def test_k_class_replay_force_mode_overrides_relion_cli():
     from scripts.run_k_class_parity import _resolve_firstiter_cc_mode
 
     args = SimpleNamespace(
         prev_iter=0,
         target_iter=1,
-        firstiter_cc_mode="auto",
-        winner_take_all_mstep=True,
+        firstiter_cc_mode="force",
     )
 
     mode = _resolve_firstiter_cc_mode(args, {"do_firstiter_cc": False})
 
     assert mode["effective_mode"] == "force"
-    assert mode["forced_by_winner_take_all_mstep"] is True
     assert mode["relion_requested"] is False
     assert mode["emulate"] is True
 
@@ -201,7 +196,6 @@ def test_k_class_replay_firstiter_lowpass_follows_relion_ini_high():
         prev_iter=0,
         target_iter=1,
         firstiter_cc_mode="auto",
-        winner_take_all_mstep=False,
         firstiter_cc_ini_high_angstrom=None,
     )
     mode = _resolve_firstiter_cc_mode(args, {"do_firstiter_cc": True})

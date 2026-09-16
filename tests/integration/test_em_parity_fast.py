@@ -276,7 +276,8 @@ def test_em_parity_fast_kclass_replay(tmp_path):
         # winner-take-all CC scoring (run_it000_optimiser.star command). Match RELION's
         # hard-assignment semantics for parity; otherwise pmax_abs_mean compares soft (recovar)
         # vs hard 1.0 (RELION) and drifts by ~0.1.
-        "--winner-take-all-mstep",
+        "--firstiter-cc-mode",
+        "force",
         # RELION evaluates fine-grid (oversampling=1) poses in pass-2 of every
         # iteration. Match that here: pass-1 finds each class's best coarse
         # pose, pass-2 refines around its 8*4=32 children
