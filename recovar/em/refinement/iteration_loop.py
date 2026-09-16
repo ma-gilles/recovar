@@ -1927,7 +1927,6 @@ def _run_relion_iteration_loop(
                 current_sigma_offset_angstrom_per_half,
                 k,
             )
-            current_translation_range = float(state.translation_range)
             k_class_image_batch_size = batching.image_batch_size
             dense_k_class_rotation_block_size = batching.rotation_block_size
             significance_image_batch_size = None

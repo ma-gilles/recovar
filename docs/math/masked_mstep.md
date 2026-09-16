@@ -288,7 +288,12 @@ block solve that captures the spatially-varying penalty.
 | Naive (homogeneous) | `recovar/reconstruction/homogeneous.py:get_mean_conformation_relion` |
 | Naive (PPCA) | `recovar/ppca/ppca.py:EM_step_half` (standard per-voxel path, line ~1148) |
 | Hard mask PCG | `recovar/reconstruction/pcg_mean.py:pcg_mstep` |
-| Hard mask with K | `bench_mstep.py:solve_hard` |
-| Soft mask with K | `bench_mstep.py:solve_soft` |
-| Gridding kernel K | `bench_mstep.py:compute_G` |
-| Alpha weight M | `bench_mstep.py:build_alpha` |
+| Hard mask with K | no in-tree implementation |
+| Soft mask with K | `recovar/reconstruction/pcg_variants.py:solve` (`use_gridding=True`) |
+| Gridding kernel K | `recovar/reconstruction/pcg_variants.py:compute_gridding_kernel_real` |
+| Alpha weight M | `recovar/reconstruction/pcg_variants.py:build_alpha_weight` |
+
+These four rows previously cited a `bench_mstep.py` prototype that no longer
+exists. Three of them moved into `recovar/reconstruction/pcg_variants.py` under
+new names and are listed above. The hard-mask-with-gridding variant has no
+in-tree implementation; `pcg_variants.solve` is the soft-alpha formulation.

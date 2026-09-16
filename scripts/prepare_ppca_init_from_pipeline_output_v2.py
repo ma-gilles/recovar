@@ -56,10 +56,6 @@ def _full_volume_to_half(vol_full_flat: np.ndarray, volume_shape) -> np.ndarray:
     ).reshape(-1)
 
 
-def _half_size(volume_shape) -> int:
-    return int(np.prod(ftu.volume_shape_to_half_volume_shape(tuple(volume_shape))))
-
-
 def _pipeline_variance_prior(
     params: dict,
     volume_shape,

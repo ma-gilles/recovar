@@ -20,10 +20,6 @@ from recovar import cuda_backproject  # noqa: E402
 from scripts.analyze_vdam_native_translation_boundary import _flat_real_dump  # noqa: E402
 
 
-def _float32_bits(value: float | np.floating) -> int:
-    return int(np.asarray(value, dtype=np.float32).view(np.uint32))
-
-
 def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, float | int]:
     reference = np.asarray(reference, dtype=np.float32)
     candidate = np.asarray(candidate, dtype=np.float32)

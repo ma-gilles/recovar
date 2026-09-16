@@ -21,11 +21,6 @@ def box_size(request):
     return request.param
 
 
-@pytest.fixture
-def rng():
-    return np.random.default_rng(42)
-
-
 class TestMaskShape:
     """Verify recovar's mask shape matches RELION's raised-cosine."""
 

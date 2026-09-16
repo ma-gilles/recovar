@@ -4726,7 +4726,7 @@ def run_local_em_exact(
         (
             reconstruction_take_indices,
             reconstruction_pack_mask_np,
-            reconstruction_counts_np,
+            _,
             reconstruction_row_count,
         ) = _build_nonzero_reconstruction_pack_indices(
             reconstruction_rotation_mask_np,

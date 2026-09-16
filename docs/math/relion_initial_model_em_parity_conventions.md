@@ -8,7 +8,6 @@ algorithm. It is intended as the first checklist for future RELION parity work.
 
 The discussion covers the dense single-volume RELION-parity code paths:
 
-- `recovar/em/initial_model/gpu_pipeline.py`
 - `recovar/em/`
 - `scripts/run_k_class_parity.py`
 - `tests/unit/initial_model/test_estep_fixture.py`
