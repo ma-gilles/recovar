@@ -1564,6 +1564,29 @@ def group_static_active_rows_enabled() -> bool:
     return parse_env_flag(_SPARSE_KCLASS_GROUP_STATIC_ACTIVE_ROWS_ENV, default=False)
 
 
+_SPARSE_KCLASS_FUSED_CHUNK_ENV = "RECOVAR_SPARSE_KCLASS_FUSED_CHUNK"
+
+
+def fused_chunk_enabled() -> bool:
+    """Run the per-chunk score stage of the compact engine as one compiled program.
+
+    The chunk loop dispatches about forty programs per chunk shape, and every
+    chunk shape of an iteration is new (compile inventory, job 13927046; stable
+    windows, job 13952468), so compile and dispatch cost scale with the program
+    count. Step 1 of the fused chunk program: per-class fused-translate raw
+    diff2, the joint minimum over classes, the score conversion and the per-class
+    log normalizers run inside one ``jax.jit`` per chunk shape instead of about
+    ten, and the raw diff2 tensors stay on the device (K x images x pairs float32,
+    a few MB at production sizes) instead of being staged through the host between
+    the class loop and the joint minimum. Same kernels in the same order, so the
+    scores are bit-identical to the loop. Applies to compact-pair chunks scored
+    by the exact RELION Gaussian with the fused-translate kernel and no pass-2
+    dumps or compact-pair checks; other chunks keep the loop. Default off.
+    """
+
+    return parse_env_flag(_SPARSE_KCLASS_FUSED_CHUNK_ENV, default=False)
+
+
 _SPARSE_KCLASS_STABLE_WINDOWS_ENV = "RECOVAR_SPARSE_KCLASS_STABLE_WINDOWS"
 
 
@@ -6261,6 +6284,76 @@ def _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
         initial_diff2,
         current_size=int(current_size),
     )
+
+
+@partial(jax.jit, static_argnames=("current_size", "logical_current_size", "score_real_dtype"))
+def _fused_chunk_scores_and_log_z(
+    unshifted_corrected,
+    corr_img_score,
+    half_weights,
+    translation_angles,
+    relion_full_to_compact,
+    highres_xi2_half,
+    proj_half_by_class,
+    local_rotation_row_by_class,
+    translation_idx_by_class,
+    pair_mask_by_class,
+    rotation_log_prior_by_class,
+    translation_log_prior_by_class,
+    *,
+    current_size,
+    logical_current_size,
+    score_real_dtype,
+):
+    """Score K classes of one compact-pair chunk in one program (see ``fused_chunk_enabled``).
+
+    Returns ``(scores_by_class, class_log_z_by_class, global_min_diff2)`` exactly
+    as the chunk loop forms them: raw fused-translate diff2 per class, the finite
+    common minimum over classes, RELION's XFLOAT diff2-to-score conversion against
+    that minimum, and the per-class log normalizer over valid pairs.
+    """
+
+    raw_by_class = [
+        _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
+            unshifted_corrected,
+            corr_img_score,
+            proj_half,
+            half_weights,
+            translation_angles,
+            local_rotation_row,
+            translation_idx,
+            pair_mask,
+            relion_full_to_compact,
+            highres_xi2_half,
+            current_size=current_size,
+            logical_current_size=logical_current_size,
+        )
+        for proj_half, local_rotation_row, translation_idx, pair_mask in zip(
+            proj_half_by_class, local_rotation_row_by_class, translation_idx_by_class, pair_mask_by_class, strict=True
+        )
+    ]
+    partition_minima = tuple(
+        _relion_cuda_fine_partition_diff2_min_or_inf(raw, mask)
+        for raw, mask in zip(raw_by_class, pair_mask_by_class, strict=True)
+    )
+    global_min_diff2 = _relion_cuda_fine_finite_common_min(partition_minima)
+    scores_by_class = [
+        _relion_cuda_fine_diff2_to_scores(
+            jnp.asarray(raw, dtype=score_real_dtype),
+            rotation_log_prior,
+            translation_log_prior,
+            pair_mask,
+            min_diff2=global_min_diff2,
+        )
+        for raw, rotation_log_prior, translation_log_prior, pair_mask in zip(
+            raw_by_class, rotation_log_prior_by_class, translation_log_prior_by_class, pair_mask_by_class, strict=True
+        )
+    ]
+    class_log_z_by_class = [
+        _logsumexp_pass2_pairs_score_only(score, pair_mask)
+        for score, pair_mask in zip(scores_by_class, pair_mask_by_class, strict=True)
+    ]
+    return scores_by_class, class_log_z_by_class, global_min_diff2
 
 
 @partial(jax.jit, static_argnames=("use_fused_ffi",))
@@ -14399,6 +14492,20 @@ def compute_k_class_pass2_stats_sparse_fused(
         disc_type=disc_type,
         process_fn=experiment_dataset.process_images,
     )
+    fused_chunk_active = bool(
+        fused_chunk_enabled()
+        and use_exact_relion_gaussian
+        and use_compact_fused_translate_scoring
+    )
+    if fused_chunk_enabled() and not fused_chunk_active:
+        logger.info(
+            "sparse K-class fused chunk requested but not applicable to this pass "
+            "(exact Gaussian=%s, fused translate scoring=%s); using the chunk loop",
+            use_exact_relion_gaussian,
+            use_compact_fused_translate_scoring,
+        )
+    elif fused_chunk_active:
+        logger.info("sparse K-class fused chunk: scoring, joint minimum and log normalizers run as one program per chunk shape")
     stable_window_plan = None
     use_stable_windows = bool(
         stable_windows_enabled()
@@ -15651,6 +15758,15 @@ def compute_k_class_pass2_stats_sparse_fused(
                 else direct_score_input
             )
         _add_sparse_group_timing(group_timing, "prepare", time.time() - stage_t0)
+        use_fused_chunk = bool(
+            fused_chunk_active
+            and bucket_uses_compact_pairs
+            and not pass2_dump_rows.size
+            and compact_pair_inputs_by_class_for_check is None
+        )
+        fused_chunk_proj_by_class = []
+        fused_chunk_rows_by_class = []
+        fused_chunk_trans_by_class = []
         scores_by_class = []
         class_score_log_z_bucket = []
         raw_diff2_by_class = []
@@ -15804,7 +15920,14 @@ def compute_k_class_pass2_stats_sparse_fused(
                 elif use_exact_relion_gaussian:
                     local_rotation_row = jnp.asarray(compact_arrays["local_rotation_row"])
                     translation_idx = jnp.asarray(compact_arrays["translation_idx"])
-                    if use_compact_fused_translate_scoring:
+                    if use_fused_chunk:
+                        # Scored after the class loop in one program; keep the
+                        # operands, not the raw diff2 (see ``fused_chunk_enabled``).
+                        fused_chunk_proj_by_class.append(proj_half)
+                        fused_chunk_rows_by_class.append(local_rotation_row)
+                        fused_chunk_trans_by_class.append(translation_idx)
+                        raw_host = None
+                    elif use_compact_fused_translate_scoring:
                         raw_diff2 = _score_pass2_pairs_relion_gpu_diff2_raw_fused_translate(
                             fused_translate_score_input,
                             ctf2_over_nv_score,
@@ -15832,14 +15955,15 @@ def compute_k_class_pass2_stats_sparse_fused(
                             relion_highres_xi2_half,
                             use_fused_ffi=use_relion_fine_diff2_fused_ffi,
                         )
-                    # The joint minimum is not known until every class has
-                    # scored. Offload each raw partition immediately so K
-                    # device-resident raw tensors cannot overlap the K score
-                    # tensors built below.
-                    raw_host, bucket_raw_host_staging_bytes = _stage_raw_diff2_on_host(
-                        raw_diff2,
-                        bucket_raw_host_staging_bytes,
-                    )
+                    if not use_fused_chunk:
+                        # The joint minimum is not known until every class has
+                        # scored. Offload each raw partition immediately so K
+                        # device-resident raw tensors cannot overlap the K score
+                        # tensors built below.
+                        raw_host, bucket_raw_host_staging_bytes = _stage_raw_diff2_on_host(
+                            raw_diff2,
+                            bucket_raw_host_staging_bytes,
+                        )
                     raw_diff2_by_class.append(raw_host)
                     raw_diff2_masks_by_class.append(pair_mask)
                     raw_diff2_rotation_priors_by_class.append(
@@ -16095,7 +16219,30 @@ def compute_k_class_pass2_stats_sparse_fused(
 
         global_min_diff2 = None
         relion_min_diff2_dump = None
-        if use_exact_relion_gaussian:
+        if use_exact_relion_gaussian and use_fused_chunk:
+            if len(fused_chunk_proj_by_class) != n_classes:
+                raise RuntimeError("fused chunk scoring did not collect one projection block per class")
+            scores_by_class, class_score_log_z_bucket, global_min_diff2 = _fused_chunk_scores_and_log_z(
+                fused_translate_score_input,
+                ctf2_over_nv_score,
+                direct_half_weights,
+                relion_score_translation_angles,
+                relion_score_full_to_compact,
+                relion_highres_xi2_half,
+                fused_chunk_proj_by_class,
+                fused_chunk_rows_by_class,
+                fused_chunk_trans_by_class,
+                raw_diff2_masks_by_class,
+                raw_diff2_rotation_priors_by_class,
+                raw_diff2_translation_priors_by_class,
+                current_size=fused_translate_current_size,
+                logical_current_size=fused_translate_logical_current_size,
+                score_real_dtype=jnp.dtype(precision_policy.score_real_dtype),
+            )
+            scores_by_class = list(scores_by_class)
+            class_score_log_z_bucket = list(class_score_log_z_bucket)
+            del raw_diff2_by_class
+        elif use_exact_relion_gaussian:
             if len(raw_diff2_by_class) != n_classes:
                 raise RuntimeError(
                     "RELION Gaussian K-class scoring did not retain one raw diff2 tensor per class"

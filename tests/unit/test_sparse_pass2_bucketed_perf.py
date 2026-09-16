@@ -11270,6 +11270,69 @@ def test_stable_windows_fall_back_to_the_logical_window_without_the_fused_scorer
     _assert_fused_arrays_identical(base, on, "stable windows fallback")
 
 
+def test_fused_chunk_scoring_matches_the_chunk_loop_on_gpu(monkeypatch, caplog, custom_cuda_lib, gpu_device):
+    """Step 1 of the fused chunk program: per-class raw diff2, the joint minimum, the score
+    conversion and the log normalizers in one program. Same kernels in the same order, so
+    every output except the two adjoint volumes (GPU atomics) is bit-identical to the loop."""
+    import jax
+    import recovar.cuda_backproject as cuda_backproject
+    from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    calls = []
+    original = bucketed_mod._fused_chunk_scores_and_log_z
+
+    def spy(*a, **kw):
+        calls.append(len(a[6]))
+        return original(*a, **kw)
+
+    monkeypatch.setattr(bucketed_mod, "_fused_chunk_scores_and_log_z", spy)
+
+    def run(flag):
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_MIN_BUCKET_SIZE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_PAIR_MAX_IMAGES_PER_MICROBATCH", "4")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_FUSED_TRANSLATE", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_COMPACT_ADJOINT_REAL_ROWS", "1")
+        monkeypatch.setenv("RECOVAR_SPARSE_KCLASS_FUSED_CHUNK", flag)
+        calls.clear()
+        kwargs = _fused_kclass_multibucket_fixture(n_images=13)
+        kwargs["accumulate_noise"] = True
+        kwargs["relion_exact_fine_gaussian"] = True
+        kwargs["relion_f32_fine_posterior"] = True
+        kwargs["relion_x_half_mstep"] = True
+        with jax.default_device(gpu_device):
+            return _fused_kclass_result_arrays(bucketed_mod.compute_k_class_pass2_stats_sparse_fused(**kwargs))
+
+    base_a = run("0")
+    assert not calls
+    base_b = run("0")
+    on = run("1")
+    assert calls and all(k == 2 for k in calls), calls[:5]
+    # Which outputs does this configuration reproduce at all? The adjoint volumes
+    # (CUDA atomics) and wsum_img_power (atomic shell scatter-add) differ between two
+    # control runs; every key the control reproduces bit for bit must not move under
+    # the flag, and a key it does not reproduce is held to the same float32 atomics
+    # bound, with the control's own spread reported next to the flag's delta.
+    reproducible, spread = [], {}
+    for k in base_a:
+        a, b = np.asarray(base_a[k]), np.asarray(base_b[k])
+        d = float(np.max(np.abs(np.nan_to_num(a) - np.nan_to_num(b)))) if a.size else 0.0
+        (reproducible.append(k) if d == 0.0 else spread.__setitem__(k, d))
+    assert reproducible, "the two control runs agreed on nothing"
+    _assert_fused_arrays_identical(
+        {k: base_a[k] for k in reproducible}, {k: on[k] for k in reproducible}, "fused chunk scoring",
+    )
+    for k in sorted(spread):
+        x = np.asarray(base_a[k]); y = np.asarray(on[k])
+        scale = float(np.max(np.abs(np.nan_to_num(x)))) or 1.0
+        err = float(np.max(np.abs(np.nan_to_num(y) - np.nan_to_num(x))))
+        np.testing.assert_allclose(np.nan_to_num(y), np.nan_to_num(x), rtol=1e-5, atol=1e-5 * scale,
+                                   err_msg=f"{k}: flag delta {err:.3e} (control spread {spread[k]:.3e}), max|ref|={scale:.3e}")
+
+
 @pytest.mark.parametrize("current_size", [2, 4])  # the fixture box is 8 pixels; both sizes get a physical tail
 def test_stable_windows_match_the_logical_window_on_gpu(monkeypatch, caplog, custom_cuda_lib, gpu_device, current_size):
     """Inside a physical Fourier-window class the compact engine reproduces the logical
