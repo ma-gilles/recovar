@@ -8021,6 +8021,8 @@ def test_fused_sparse_k_class_pass2_matches_existing_two_pass_path(monkeypatch):
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
 
     monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+    # Exercise host staging and its memory limit even when this fixture fits on device.
+    monkeypatch.setattr(bucketed_mod, "_exact_raw_diff2_cache_limit_bytes", lambda *a, **k: 0)
 
     fused_score_results = []
     original_fused_pass2 = bucketed_mod.compute_k_class_pass2_stats_sparse_fused
