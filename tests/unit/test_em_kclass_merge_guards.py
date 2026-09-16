@@ -229,9 +229,16 @@ def test_kclass_weight_trajectories_record_mstep_and_full_posterior_provenance()
 
     from recovar.em.helpers import iteration_history
 
-    history_source = inspect.getsource(iteration_history.RefinementHistory.record_class_weights)
-    assert "self.class_mstep_weight_trajectory.append(mstep_weights)" in history_source
-    assert "self.class_full_posterior_weight_trajectory.append(posterior_weights)" in history_source
+    history = iteration_history.RefinementHistory()
+    mstep = np.asarray([0.25, 0.75], dtype=np.float64)
+    posterior = np.asarray([0.5, 0.5], dtype=np.float64)
+    history.record_class_weights(mstep, posterior)
+    mstep[:] = posterior[:] = 0.0
+    np.testing.assert_array_equal(history.class_weight_trajectory, [[0.25, 0.75]])
+    np.testing.assert_array_equal(history.class_mstep_weight_trajectory, [[0.25, 0.75]])
+    np.testing.assert_array_equal(history.class_full_posterior_weight_trajectory, [[0.5, 0.5]])
+    history.class_weight_trajectory[0][0] = 1.0
+    assert history.class_mstep_weight_trajectory[0][0] == 0.25
 
     source = inspect.getsource(iteration_loop._run_relion_iteration_loop)
     assert "history.record_class_weights(" in source

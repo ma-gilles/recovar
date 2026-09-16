@@ -2439,13 +2439,12 @@ def _run_relion_iteration_loop(
             )
             class_log_priors = np.log(class_weights)
             history.record_class_weights(
-                class_weights.copy(),
-                class_weights.copy(),
+                class_weights,
                 _class_weights_from_posterior(
                     class_full_posterior_per_half,
                     n_classes,
                     class_weights,
-                ).copy(),
+                ),
             )
             logger.info(
                 "K-class occupancies: %s",
@@ -4522,13 +4521,12 @@ def _run_relion_iteration_loop(
             class_weights,
         )
         history.record_class_weights(
-            class_weights.copy(),
-            class_weights.copy(),
+            class_weights,
             _class_weights_from_posterior(
                 final_outs.class_full_posterior,
                 n_classes,
                 class_weights,
-            ).copy(),
+            ),
         )
         _t_final_tau2 = time.time()
         kclass_tau2_frame_scale = float(grid_size) ** 4

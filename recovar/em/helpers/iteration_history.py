@@ -138,10 +138,11 @@ class RefinementHistory:
         self.ave_Pmax_denominator_trajectory.append(ave_pmax_denominator)
         self.pmax_per_image_history.append(per_image_pmax)
 
-    def record_class_weights(self, class_weights, mstep_weights, posterior_weights) -> None:
-        self.class_weight_trajectory.append(class_weights)
-        self.class_mstep_weight_trajectory.append(mstep_weights)
-        self.class_full_posterior_weight_trajectory.append(posterior_weights)
+    def record_class_weights(self, mstep_weights, posterior_weights) -> None:
+        """Snapshot both weight definitions, preserving the two published M-step histories."""
+        self.class_weight_trajectory.append(mstep_weights.copy())
+        self.class_mstep_weight_trajectory.append(mstep_weights.copy())
+        self.class_full_posterior_weight_trajectory.append(posterior_weights.copy())
 
     def record_pose_history(self, euler_snapshot_per_half, translation_snapshot_per_half) -> None:
         self.best_rotation_eulers_history.append(euler_snapshot_per_half)
