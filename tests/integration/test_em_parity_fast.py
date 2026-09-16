@@ -128,6 +128,14 @@ def _log_comparison(name: str, current: float, baseline: float | None, lower_is_
     print(line, file=sys.stderr, flush=True)
 
 
+def _map_correlation(a: np.ndarray, b: np.ndarray) -> float:
+    a = a.ravel()
+    b = b.ravel()
+    a = a - a.mean()
+    b = b - b.mean()
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
+
+
 def _read_baseline(filename: str, key: str) -> float | None:
     path = BASELINES_DIR / filename
     if not path.exists():
@@ -436,19 +444,12 @@ def test_em_parity_fast_k1_coldstart(tmp_path):
     def _load_relion_real(p: Path) -> np.ndarray:
         return np.asarray(_recovar_helpers.load_relion_volume(str(p)), dtype=np.float64)
 
-    def _corr(a: np.ndarray, b: np.ndarray) -> float:
-        a = a.ravel()
-        b = b.ravel()
-        a = a - a.mean()
-        b = b - b.mean()
-        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
-
     recovar_h1 = _load_recovar_real(output_dir / "final_half1.mrc")
     recovar_h2 = _load_recovar_real(output_dir / "final_half2.mrc")
     relion_h1 = _load_relion_real(K1_RELION_DIR / "run_it003_half1_class001.mrc")
     relion_h2 = _load_relion_real(K1_RELION_DIR / "run_it003_half2_class001.mrc")
-    h1_corr = _corr(recovar_h1, relion_h1)
-    h2_corr = _corr(recovar_h2, relion_h2)
+    h1_corr = _map_correlation(recovar_h1, relion_h1)
+    h2_corr = _map_correlation(recovar_h2, relion_h2)
 
     # Read the authoritative optimizer/scheduling scalar, not the arithmetic
     # mean of the per-particle data column.
@@ -572,13 +573,6 @@ def test_em_parity_fast_k1_perturbreplay(tmp_path):
 
     from recovar.utils import helpers as _recovar_helpers
 
-    def _C(a, b):
-        a = a.ravel()
-        b = b.ravel()
-        a = a - a.mean()
-        b = b - b.mean()
-        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
-
     rec_h1 = np.asarray(_recovar_helpers.load_mrc(str(output_dir / "final_half1.mrc")), dtype=np.float64)
     rec_h2 = np.asarray(_recovar_helpers.load_mrc(str(output_dir / "final_half2.mrc")), dtype=np.float64)
     rel_h1 = np.asarray(
@@ -587,8 +581,8 @@ def test_em_parity_fast_k1_perturbreplay(tmp_path):
     rel_h2 = np.asarray(
         _recovar_helpers.load_relion_volume(str(K1_RELION_DIR / "run_it003_half2_class001.mrc")), dtype=np.float64
     )
-    h1_corr = _C(rec_h1, rel_h1)
-    h2_corr = _C(rec_h2, rel_h2)
+    h1_corr = _map_correlation(rec_h1, rel_h1)
+    h2_corr = _map_correlation(rec_h2, rel_h2)
 
     import starfile
 
@@ -704,13 +698,6 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
 
     from recovar.utils import helpers as _recovar_helpers
 
-    def _C(a, b):
-        a = a.ravel()
-        b = b.ravel()
-        a = a - a.mean()
-        b = b - b.mean()
-        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
-
     recov_classes = [
         np.asarray(_recovar_helpers.load_mrc(str(output_dir / f"final_class{c + 1:03d}.mrc")), dtype=np.float64)
         for c in range(4)
@@ -725,7 +712,7 @@ def test_em_parity_fast_kclass_coldstart(tmp_path):
     M = np.zeros((4, 4))
     for i in range(4):
         for j in range(4):
-            M[i, j] = _C(recov_classes[i], relion_classes[j])
+            M[i, j] = _map_correlation(recov_classes[i], relion_classes[j])
     row, col = linear_sum_assignment(-M)
     matched = [float(M[i, j]) for i, j in zip(row, col)]
     mean_corr = float(np.mean(matched))
@@ -846,13 +833,6 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
 
     from recovar.utils import helpers as _recovar_helpers
 
-    def _C(a, b):
-        a = a.ravel()
-        b = b.ravel()
-        a = a - a.mean()
-        b = b - b.mean()
-        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
-
     recov_classes = [
         np.asarray(_recovar_helpers.load_mrc(str(output_dir / f"final_class{c + 1:03d}.mrc")), dtype=np.float64)
         for c in range(4)
@@ -867,7 +847,7 @@ def test_em_parity_fast_kclass_strict_coldstart(tmp_path):
     M = np.zeros((4, 4))
     for i in range(4):
         for j in range(4):
-            M[i, j] = _C(recov_classes[i], relion_classes[j])
+            M[i, j] = _map_correlation(recov_classes[i], relion_classes[j])
     row, col = linear_sum_assignment(-M)
     matched = [float(M[i, j]) for i, j in zip(row, col)]
     mean_corr = float(np.mean(matched))
@@ -1012,13 +992,6 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
 
     from recovar.utils import helpers as _recovar_helpers
 
-    def _C(a, b):
-        a = a.ravel()
-        b = b.ravel()
-        a = a - a.mean()
-        b = b - b.mean()
-        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-30))
-
     recov_classes = [
         np.asarray(_recovar_helpers.load_mrc(str(output_dir / f"final_class{c + 1:03d}.mrc")), dtype=np.float64)
         for c in range(4)
@@ -1033,7 +1006,7 @@ def test_em_parity_fast_kclass_strict_oversample_coldstart(tmp_path):
     M = np.zeros((4, 4))
     for i in range(4):
         for j in range(4):
-            M[i, j] = _C(recov_classes[i], relion_classes[j])
+            M[i, j] = _map_correlation(recov_classes[i], relion_classes[j])
     row, col = linear_sum_assignment(-M)
     matched = [float(M[i, j]) for i, j in zip(row, col)]
     mean_corr = float(np.mean(matched))
