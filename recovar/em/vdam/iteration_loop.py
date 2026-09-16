@@ -177,12 +177,7 @@ def update_image_size_and_resolution_pointers(state: InitialModelState) -> Initi
         maxres += _relion_round(0.25 * float(state.ori_size) / 2.0)
     else:
         maxres += int(state.incr_size)
-    current_size = min(2 * maxres, int(state.ori_size))
-    if current_size < 2:
-        current_size = 2
-    if current_size % 2:
-        current_size += 1
-    current_size = min(current_size, int(state.ori_size))
+    current_size = min(max(2 * maxres, 2), int(state.ori_size))
 
     return replace(state, current_size=int(current_size))
 
