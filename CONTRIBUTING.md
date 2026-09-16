@@ -94,7 +94,7 @@ for broader CPU and applicable GPU checks; full long suites are publication or
 milestone checks, not the default response to a small change. Reuse saved outputs
 for report-only audits. Repeat a scientific run when the source, workload or an
 unresolved failure requires it, and record that reason. The
-[cleanup plan](docs/development/cleanup_plan.md) tracks the current boundaries
+[EM/VDAM scope](docs/development/em_status.md) records its current boundaries
 and qualification gaps.
 
 `pixi run test-fast` selects the repository's unit tier; do not assume every
