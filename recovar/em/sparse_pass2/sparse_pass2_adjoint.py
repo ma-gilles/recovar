@@ -195,6 +195,14 @@ def _accumulate_relion_x_half_per_particle_launches(
         )
     max_rows = int(values.shape[1])
     identity_rotation = jnp.eye(3, dtype=rotations.dtype)
+    # When every particle in this bucket contributes the same number of
+    # rotations there is already a single launch shape, so the ladder collapses
+    # nothing and its traced particle index only adds dispatch cost.  Measured
+    # on the 10k EMPIAR-10097 subset (job 13994732): the --firstiter_cc
+    # iteration, where counts are uniformly 8, regressed 84.3 s -> 107.7 s.
+    # Fall back to the original static slice, which is what the ladder is worth
+    # keeping only where the counts actually vary.
+    uniform_counts = bool(actual_counts.size) and int(actual_counts.max()) == int(actual_counts.min())
     for pool_start in range(0, actual_counts.size, particle_pool_size):
         pool_stop = min(pool_start + particle_pool_size, actual_counts.size)
         value_rows = []
@@ -210,6 +218,17 @@ def _accumulate_relion_x_half_per_particle_launches(
             # (particle, count) pair.  Padding rows carry zero data and zero
             # weight: the fused kernel skips non-positive weights and the JAX
             # adjoint adds exact zeros, so the accumulators are unchanged.
+            if uniform_counts:
+                particle_slice = (
+                    slice(particle_index, particle_index + 1),
+                    slice(0, count),
+                )
+                value_rows.append(values[particle_slice].reshape(count, values.shape[-1]))
+                ctf_rows.append(
+                    ctf_values[particle_slice].reshape(count, ctf_values.shape[-1])
+                )
+                rotation_rows.append(rotations[particle_slice].reshape(count, 3, 3))
+                continue
             capacity = min(_per_particle_launch_capacity(count), max_rows)
             row = jnp.asarray(particle_index, dtype=jnp.int32)
             valid = jnp.arange(capacity, dtype=jnp.int32) < jnp.asarray(count, dtype=jnp.int32)

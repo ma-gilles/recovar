@@ -2498,6 +2498,39 @@ def test_relion_x_half_bp_per_particle_launches_use_power_of_two_row_ladder(monk
     np.testing.assert_allclose(np.asarray(ctf_volume), expected_ctf, rtol=1e-6)
 
 
+def test_relion_x_half_bp_uniform_counts_keep_the_unpadded_static_slice(monkeypatch):
+    """Equal rotation counts already give one launch shape, so no padding is added."""
+
+    from recovar.em.sparse_pass2 import sparse_pass2_adjoint
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
+
+    n_particles, max_rows, n_pixels = 3, 13, 2
+    rng = np.random.default_rng(7)
+    values = jnp.asarray(rng.standard_normal((n_particles, max_rows, n_pixels)), dtype=jnp.complex64)
+    ctf_values = jnp.asarray(rng.random((n_particles, max_rows, n_pixels)) + 0.5, dtype=jnp.float32)
+    rotations = jnp.asarray(rng.standard_normal((n_particles, max_rows, 3, 3)), dtype=jnp.float32)
+    actual_counts = np.asarray([5, 5, 5], dtype=np.int32)  # uniform, and 5 is not a power of two
+    calls = []
+
+    def fake_adjoint_slice_volume_windowed(half_block, window_indices, rotations_block, volume_in, *args, **kwargs):
+        calls.append(np.asarray(half_block).copy())
+        return volume_in + jnp.sum(half_block).real
+
+    monkeypatch.setattr(sparse_pass2_adjoint, "_adjoint_slice_volume_windowed", fake_adjoint_slice_volume_windowed)
+    bucketed_mod._accumulate_relion_x_half_per_particle_launches(
+        values, ctf_values, rotations, actual_counts,
+        jnp.asarray(0.0, dtype=jnp.float32), jnp.asarray(0.0, dtype=jnp.float32),
+        window_indices=jnp.arange(n_pixels, dtype=jnp.int32), image_shape=(8, 8), volume_shape=(8, 8, 8),
+        disc_type="linear_interp", half_volume=True, max_r=2.0, log_label_prefix="test",
+    )
+
+    # 5 rows per launch, not the power-of-two capacity 8: the ladder is bypassed.
+    assert [c.shape[0] for c in calls] == [5, 5, 5, 5, 5, 5]
+    for particle in range(n_particles):
+        np.testing.assert_array_equal(calls[2 * particle], np.asarray(values[particle, :5]))
+        np.testing.assert_array_equal(calls[2 * particle + 1], np.asarray(ctf_values[particle, :5]))
+
+
 def test_relion_x_half_bp_fused_atomics_threads_both_accumulators_per_particle(monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
     from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
