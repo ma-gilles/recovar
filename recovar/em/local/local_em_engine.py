@@ -152,6 +152,7 @@ from recovar.em.local.local_bucket_stages import (
     _reorder_bucket_to_indices,
     _return_local_big_jit_mstep_tensors,
     _unpadded_bucket_rows,
+    build_class_segment_reconstruction_packs,
     encode_hard_assignment,
     validate_local_relion_projector_window,
 )
@@ -2935,6 +2936,7 @@ def run_local_em_exact(
                     )
 
             pack_t0 = time.time()
+            class_packed_adjoint_inputs = None
             reconstruction_rotation_mask_np = np.asarray(reconstruction_rotation_mask, dtype=bool)[:unpadded_batch_size]
             local_mask_np = np.asarray(bucket.local_rotation_mask, dtype=bool)[:unpadded_batch_size]
             # Pack only outputs explicitly returned by the big JIT.  Besides
@@ -3169,6 +3171,41 @@ def run_local_em_exact(
                 packed_summed = _packed_reconstruction_rows(summed[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
                 packed_ctf_probs = _packed_reconstruction_rows(ctf_probs[:unpadded_batch_size], reconstruction_take_indices_jnp, reconstruction_pack_mask_jnp)
                 packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_mstep_rotations_np))
+                if n_classes > 1:
+                    # One joint pack would scatter every class's rows into one volume.
+                    # Pack each class's own segment and keep the gathered rows, so the
+                    # scatter below can run once per class into that class's pair.
+                    class_packed_adjoint_inputs = []
+                    for class_take, class_mask, _counts, _rows in build_class_segment_reconstruction_packs(
+                        reconstruction_rotation_mask_np,
+                        local_mask_np,
+                        probs_sum_t_np,
+                        rotation_block_size,
+                        n_classes=n_classes,
+                        segment_rotation_count=int(bucket.segment_rotation_count),
+                        exact_local_bucket_radix=resolved_exact_local_bucket_radix,
+                    ):
+                        (
+                            class_take_jnp,
+                            class_mask_jnp,
+                            _class_rotations_np,
+                            class_mstep_rotations_np,
+                        ) = _packed_bucket_rotations(
+                            bucket, class_take, class_mask, batch_rows=unpadded_batch_size,
+                        )
+                        class_packed_adjoint_inputs.append((
+                            flatten_bucket_rows(
+                                _packed_reconstruction_rows(
+                                    summed[:unpadded_batch_size], class_take_jnp, class_mask_jnp,
+                                )
+                            ),
+                            flatten_bucket_rows(
+                                _packed_reconstruction_rows(
+                                    ctf_probs[:unpadded_batch_size], class_take_jnp, class_mask_jnp,
+                                )
+                            ),
+                            flatten_bucket_rotations(jnp.asarray(class_mstep_rotations_np)),
+                        ))
             else:
                 probs_sum_t_np = None
                 reconstruction_take_indices = np.broadcast_to(
@@ -3690,6 +3727,56 @@ def run_local_em_exact(
                 if return_profile:
                     _block_until_ready(Ft_y, Ft_ctf)
                 timing.adjoint_y_s += time.time() - adjoint_t0
+            elif sparse_big_jit_backprojection and n_classes > 1 and (
+                not disable_adjoint_y or not disable_adjoint_ctf
+            ):
+                # Each class's packed rows scatter into that class's accumulator pair.
+                adjoint_y_t0 = time.time()
+                if class_packed_adjoint_inputs is None:
+                    raise RuntimeError("class-segmented reconstruction packs were not built")
+                updated_y, updated_ctf = [], []
+                for class_index, (class_summed, class_ctf_probs, class_rotations) in enumerate(
+                    class_packed_adjoint_inputs
+                ):
+                    class_y = Ft_y[class_index]
+                    class_weight = Ft_ctf[class_index]
+                    if not disable_adjoint_y:
+                        class_y, n_adjoint_chunks = _adjoint_slice_volume_maybe_windowed_row_chunks(
+                            class_summed,
+                            mstep_recon_window_indices,
+                            class_rotations,
+                            class_y,
+                            image_shape,
+                            recon_volume_shape,
+                            "linear_interp",
+                            use_window=use_window,
+                            max_r=mstep_adjoint_max_r,
+                            relion_x_half=bool(mstep_relion_x_half),
+                            target_rows=sparse_adjoint_target_rows,
+                        )
+                        sparse_adjoint_chunk_count += int(n_adjoint_chunks)
+                    if not disable_adjoint_ctf:
+                        class_weight, n_adjoint_chunks = _adjoint_slice_volume_maybe_windowed_row_chunks(
+                            class_ctf_probs,
+                            mstep_recon_window_indices,
+                            class_rotations,
+                            class_weight,
+                            image_shape,
+                            recon_volume_shape,
+                            "linear_interp",
+                            use_window=use_window,
+                            max_r=mstep_adjoint_max_r,
+                            relion_x_half=bool(mstep_relion_x_half),
+                            target_rows=sparse_adjoint_target_rows,
+                        )
+                        sparse_adjoint_chunk_count += int(n_adjoint_chunks)
+                    updated_y.append(class_y)
+                    updated_ctf.append(class_weight)
+                Ft_y = jnp.stack(updated_y, axis=0)
+                Ft_ctf = jnp.stack(updated_ctf, axis=0)
+                if return_profile:
+                    _block_until_ready(Ft_y, Ft_ctf)
+                timing.adjoint_y_s += time.time() - adjoint_y_t0
             elif sparse_big_jit_backprojection and (
                 not disable_adjoint_y or not disable_adjoint_ctf
             ):

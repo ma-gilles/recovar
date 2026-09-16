@@ -76,14 +76,22 @@ def _fixture(float64: bool):
     return means, noise, layouts
 
 
-def _run(*, segmented, float64, accumulate_noise=True):
+def _run(*, segmented, float64, accumulate_noise=True, reconstruct_significant_only=False):
     means, noise, layouts = _fixture(float64)
     dataset = MockDataset(N_IMAGES, np.random.default_rng(11))
     kwargs = dict(
         image_batch_size=3,
         rotation_block_size=4,
         current_size=None,
-        reconstruct_significant_only=False,
+        # The production InitialModel option set apart from the reconstruction
+        # selection, which each test chooses: running only with
+        # reconstruct_significant_only=False hid a route that packs surviving rows
+        # across images and, before it was made class-aware, accumulated every class
+        # into one volume on the real path while these tests passed.
+        reconstruct_significant_only=reconstruct_significant_only,
+        adaptive_fraction=0.999,
+        stats_use_reconstruction_probs=True,
+        unweighted_high_shell_image_power=True,
         accumulate_noise=accumulate_noise,
         return_best_pose_details=True,
     )
@@ -250,3 +258,103 @@ def test_segmented_rows_refuse_external_normalization():
             class_log_priors=np.zeros(2), image_batch_size=3, rotation_block_size=4, current_size=None,
             normalization_log_evidence=np.zeros(N_IMAGES), segmented_class_rows=True,
         )
+
+
+
+def test_class_packs_contain_only_their_own_rows():
+    """Row identities, not aggregate weights: each class's pack is exactly its segment.
+
+    The significant-only route packs surviving rows and scatters them outside the
+    bucket program; with one joint pack every class landed in volume 0. Assert the
+    property that failed, exactly and without tolerances: every packed row index of
+    class k lies in class k's segment, the packs are disjoint, and together they hold
+    precisely the rows a single joint pack would have selected.
+    """
+    from recovar.em.local.local_bucket_stages import (
+        _build_nonzero_reconstruction_pack_indices,
+        build_class_segment_reconstruction_packs,
+    )
+
+    rng = np.random.default_rng(131)
+    n_images, n_classes, seg, n_trans = 4, 3, 5, 2
+    rows = n_classes * seg
+    local_mask = rng.random((n_images, rows)) > 0.25
+    significant = rng.random((n_images, rows)) > 0.4
+    probs_sum_t = np.where(rng.random((n_images, rows)) > 0.3, rng.random((n_images, rows)), 0.0)
+
+    packs = build_class_segment_reconstruction_packs(
+        significant, local_mask, probs_sum_t, rotation_block_size=16,
+        n_classes=n_classes, segment_rotation_count=seg,
+    )
+    assert len(packs) == n_classes
+    selected_by_class = []
+    for class_index, (take, mask, counts, row_count) in enumerate(packs):
+        start_row, stop_row = class_index * seg, (class_index + 1) * seg
+        chosen = take[mask]
+        assert chosen.size == int(np.asarray(counts).sum()) == row_count
+        # Every packed row belongs to this class's segment, exactly.
+        assert chosen.size == 0 or (chosen.min() >= start_row and chosen.max() < stop_row), (class_index, chosen)
+        # Per image, the packed rows are the surviving rows of this segment.
+        for image in range(n_images):
+            expected = np.flatnonzero(
+                significant[image, start_row:stop_row] & local_mask[image, start_row:stop_row]
+                & (probs_sum_t[image, start_row:stop_row] > 0.0)
+            ) + start_row
+            np.testing.assert_array_equal(np.sort(take[image][mask[image]]), expected)
+        selected_by_class.append(set(chosen.tolist()))
+
+    # Disjoint, and together exactly the joint selection.
+    for a in range(n_classes):
+        for b in range(a + 1, n_classes):
+            assert not (selected_by_class[a] & selected_by_class[b])
+    joint_take, joint_mask, _counts, _rows = _build_nonzero_reconstruction_pack_indices(
+        significant, local_mask, probs_sum_t, rotation_block_size=16,
+    )
+    joint_rows = {
+        (image, int(row))
+        for image in range(n_images)
+        for row in joint_take[image][joint_mask[image]]
+    }
+    class_rows = {
+        (image, int(row))
+        for class_index, (take, mask, _c, _r) in enumerate(packs)
+        for image in range(n_images)
+        for row in take[image][mask[image]]
+    }
+    assert class_rows == joint_rows
+
+
+@pytest.mark.parametrize("float64", [False, True], ids=["float32", "float64"])
+def test_a_class_without_rows_receives_an_exactly_zero_volume(float64):
+    """An empty class must receive nothing at all, in either precision.
+
+    This is the identity check the aggregate weight comparison could not make: if any
+    of another class's rows reached this volume it would not be exactly zero.
+    """
+    means, noise, layouts = _fixture(float64)
+    # Mask out every candidate of class 1; class 0 keeps its rows.
+    empty = layouts[1]
+    layouts = [
+        layouts[0],
+        type(empty)(**{**empty.__dict__, "sample_mask_flat": np.zeros_like(empty.sample_mask_flat)}),
+    ]
+    dataset = MockDataset(N_IMAGES, np.random.default_rng(11))
+    kwargs = dict(
+        image_batch_size=3, rotation_block_size=4, current_size=None,
+        reconstruct_significant_only=True, adaptive_fraction=0.999,
+        stats_use_reconstruction_probs=True, unweighted_high_shell_image_power=True,
+        accumulate_noise=True, return_best_pose_details=True,
+    )
+    if float64:
+        kwargs.update(use_float64_scoring=True, use_float64_normalization=True, use_float64_projections=True)
+    result = run_local_k_class_em(
+        dataset, means, noise, layouts, "linear_interp",
+        class_log_priors=np.log(np.asarray([0.5, 0.5], dtype=np.float64)),
+        segmented_class_rows=True, **kwargs,
+    )
+    empty_y = np.asarray(result.Ft_y[1])
+    empty_ctf = np.asarray(result.Ft_ctf[1])
+    np.testing.assert_array_equal(empty_y, np.zeros_like(empty_y))
+    np.testing.assert_array_equal(empty_ctf, np.zeros_like(empty_ctf))
+    populated = np.asarray(result.Ft_ctf[0])
+    assert np.abs(populated).max() > 0.0

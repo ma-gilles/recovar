@@ -153,7 +153,12 @@ def test_bucket_rebuilds_preserve_the_class_segmentation():
 
     Both helpers rebuild a LocalBucketSpec field by field, so a class-segmented
     bucket silently became a single class of the same total width on the paths that
-    pad to a planned image count or reorder to returned indices.
+    pad to a planned image count or reorder to returned indices, and the first real
+    run died on it.
+
+    The padding helper returns the bucket untouched when it is already full, so the
+    test picks a partially filled bucket explicitly; an earlier version selected the
+    first bucket, which was full, and never executed the padding path at all.
     """
     from recovar.em.local.local_bucket_stages import _pad_local_big_jit_image_axis, _reorder_bucket_to_indices
 
@@ -165,24 +170,37 @@ def test_bucket_rebuilds_preserve_the_class_segmentation():
     buckets = bucket_class_local_hypothesis_layouts(
         layouts, np.zeros(K), image_batch_size=4, rotation_block_size=64, max_hypotheses_per_microbatch=1 << 16,
     )
-    bucket = buckets[0]
-    assert bucket.n_classes == K and bucket.class_segment_rotation_count is not None
+    assert all(b.n_classes == K and b.class_segment_rotation_count is not None for b in buckets)
 
-    batch = np.zeros((bucket.image_indices.shape[0], 4, 4), dtype=np.float32)
-    ctf = np.zeros((bucket.image_indices.shape[0], 9), dtype=np.float32)
-    padded, _, _, _, padded_batch_size = _pad_local_big_jit_image_axis(bucket, batch, ctf)
+    partial = next(b for b in buckets if int(b.image_indices.shape[0]) < int(b.bucket_image_count))
+    actual_count = int(partial.image_indices.shape[0])
+    batch = np.zeros((actual_count, 4, 4), dtype=np.float32)
+    ctf = np.zeros((actual_count, 9), dtype=np.float32)
+    padded, _, _, valid_image_mask, padded_batch_size = _pad_local_big_jit_image_axis(partial, batch, ctf)
+    # The padding path really ran.
+    assert padded is not partial and padded_batch_size > actual_count
     assert padded.n_classes == K
-    assert padded.segment_rotation_count == bucket.segment_rotation_count
+    assert padded.segment_rotation_count == partial.segment_rotation_count
     assert padded.bucket_rotation_count == K * padded.segment_rotation_count
     assert padded.class_actual_rotation_counts.shape == (padded_batch_size, K)
+    np.testing.assert_array_equal(padded.class_actual_rotation_counts[:actual_count], partial.class_actual_rotation_counts)
+    # The added tail holds no class rows and is not valid.
     np.testing.assert_array_equal(
-        padded.class_actual_rotation_counts[: bucket.image_indices.shape[0]], bucket.class_actual_rotation_counts,
+        padded.class_actual_rotation_counts[actual_count:], np.zeros((padded_batch_size - actual_count, K), dtype=np.int32),
     )
+    assert not padded.local_rotation_mask[actual_count:].any()
+    assert not np.asarray(valid_image_mask)[actual_count:].any()
+    assert np.asarray(valid_image_mask)[:actual_count].all()
 
-    reversed_indices = np.asarray(bucket.image_indices)[::-1]
-    reordered = _reorder_bucket_to_indices(bucket, reversed_indices)
+    # Reordering needs several images to be a nontrivial permutation.
+    multi = max(buckets, key=lambda b: int(b.image_indices.shape[0]))
+    assert int(multi.image_indices.shape[0]) > 1
+    reversed_indices = np.asarray(multi.image_indices)[::-1]
+    reordered = _reorder_bucket_to_indices(multi, reversed_indices)
+    assert reordered is not multi
     assert reordered.n_classes == K
-    assert reordered.segment_rotation_count == bucket.segment_rotation_count
+    assert reordered.segment_rotation_count == multi.segment_rotation_count
     np.testing.assert_array_equal(
-        reordered.class_actual_rotation_counts, np.asarray(bucket.class_actual_rotation_counts)[::-1],
+        reordered.class_actual_rotation_counts, np.asarray(multi.class_actual_rotation_counts)[::-1],
     )
+    np.testing.assert_array_equal(reordered.local_rotation_ids, np.asarray(multi.local_rotation_ids)[::-1])
