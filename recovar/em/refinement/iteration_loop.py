@@ -53,6 +53,7 @@ from recovar.em.diagnostics.frozen_boundary import (
 from recovar.em.diagnostics.iteration import (
     _bpref_device_signature_active_for_numbered_half,
     _maybe_dump_noise_update_debug,
+    _replay_manifest_array,
     _save_bpref_accumulators,
     _save_iteration_intermediates,
     _significance_dump_half_indices,
@@ -2276,28 +2277,22 @@ def _run_relion_iteration_loop(
                     )
                     _manifest = {
                         "effective_rotations": np.asarray(effective_rotations),
-                        "coarse_scoring_rotations": np.asarray(dense_half_kwargs["coarse_scoring_rotations"])
-                        if dense_half_kwargs["coarse_scoring_rotations"] is not None
-                        else np.array([]),
+                        "coarse_scoring_rotations": _replay_manifest_array(
+                            dense_half_kwargs["coarse_scoring_rotations"],
+                        ),
                         "current_translations": np.asarray(current_translations),
-                        "rotation_log_prior": np.asarray(rotation_log_prior_k, dtype=np.float64)
-                        if rotation_log_prior_k is not None
-                        else np.array([]),
-                        "translation_log_prior": np.asarray(translation_log_prior, dtype=np.float64)
-                        if translation_log_prior is not None
-                        else np.array([]),
-                        "image_corrections": np.asarray(relion_half_inputs.image_corrections[k], dtype=np.float64)
-                        if relion_half_inputs.image_corrections[k] is not None
-                        else np.array([]),
-                        "scale_corrections": np.asarray(relion_half_inputs.scale_corrections[k], dtype=np.float64)
-                        if relion_half_inputs.scale_corrections[k] is not None
-                        else np.array([]),
-                        "image_pre_shifts": np.asarray(translation_search_base, dtype=np.float32)
-                        if translation_search_base is not None
-                        else np.array([]),
-                        "absolute_previous_translations": np.asarray(previous_translations_k, dtype=np.float32)
-                        if previous_translations_k is not None
-                        else np.array([]),
+                        "rotation_log_prior": _replay_manifest_array(rotation_log_prior_k, dtype=np.float64),
+                        "translation_log_prior": _replay_manifest_array(translation_log_prior, dtype=np.float64),
+                        "image_corrections": _replay_manifest_array(
+                            relion_half_inputs.image_corrections[k], dtype=np.float64,
+                        ),
+                        "scale_corrections": _replay_manifest_array(
+                            relion_half_inputs.scale_corrections[k], dtype=np.float64,
+                        ),
+                        "image_pre_shifts": _replay_manifest_array(translation_search_base, dtype=np.float32),
+                        "absolute_previous_translations": _replay_manifest_array(
+                            previous_translations_k, dtype=np.float32,
+                        ),
                         "mean_vol_ft": np.asarray(means[k]),
                         "mean_variance": np.asarray(mean_variance_k),
                         "noise_variance": np.asarray(noise_variance_k),
@@ -4450,26 +4445,15 @@ def _run_relion_iteration_loop(
             _manifest = {
                 "effective_rotations": np.asarray(final_effective_rotations, dtype=np.float32),
                 "current_translations": np.asarray(final_current_translations, dtype=np.float32),
-                "rotation_log_prior": np.asarray(final_rotation_log_prior_k, dtype=np.float64)
-                if final_rotation_log_prior_k is not None
-                else np.array([]),
+                "rotation_log_prior": _replay_manifest_array(final_rotation_log_prior_k, dtype=np.float64),
                 "translation_log_prior": np.asarray(final_translation_log_prior, dtype=np.float64),
                 "translation_prior_centers": np.asarray(final_trans_prior_center_for_engine, dtype=np.float64),
-                "image_corrections": np.asarray(relion_half_inputs.image_corrections[k], dtype=np.float64)
-                if relion_half_inputs.image_corrections[k] is not None
-                else np.array([]),
-                "scale_corrections": np.asarray(relion_half_inputs.scale_corrections[k], dtype=np.float64)
-                if relion_half_inputs.scale_corrections[k] is not None
-                else np.array([]),
-                "image_pre_shifts": np.asarray(translation_search_base, dtype=np.float32)
-                if translation_search_base is not None
-                else np.array([]),
-                "absolute_previous_translations": np.asarray(
-                    relion_half_inputs.previous_best_translations[k],
-                    dtype=np.float32,
-                )
-                if relion_half_inputs.previous_best_translations[k] is not None
-                else np.array([]),
+                "image_corrections": _replay_manifest_array(relion_half_inputs.image_corrections[k], dtype=np.float64),
+                "scale_corrections": _replay_manifest_array(relion_half_inputs.scale_corrections[k], dtype=np.float64),
+                "image_pre_shifts": _replay_manifest_array(translation_search_base, dtype=np.float32),
+                "absolute_previous_translations": _replay_manifest_array(
+                    relion_half_inputs.previous_best_translations[k], dtype=np.float32,
+                ),
                 "mean_vol_ft": np.asarray(final_join_means[k]),
                 "mean_variance": np.asarray(mean_variance),
                 "noise_variance": np.asarray(final_noise_variance_per_half[k]),

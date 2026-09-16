@@ -202,6 +202,11 @@ def _save_bpref_accumulators(
     )
 
 
+def _replay_manifest_array(value, dtype=None):
+    """Replay manifests use a float64 empty sentinel regardless of field dtype."""
+    return np.array([]) if value is None else np.asarray(value, dtype=dtype)
+
+
 def _dump_array_or_empty(arr):
     if arr is None:
         return np.empty(0, dtype=np.float32)

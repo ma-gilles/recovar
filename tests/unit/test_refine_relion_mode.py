@@ -12838,6 +12838,7 @@ class TestRelionModeSmokeTest:
                 assert (coarse is None) == double_scoring
                 expected = np.array([]) if coarse is None else np.asarray(coarse)
                 np.testing.assert_array_equal(manifest["coarse_scoring_rotations"], expected)
+                assert manifest["coarse_scoring_rotations"].dtype == expected.dtype
                 for key, grid in zip(("effective_rotations", "current_translations"), scoring_grids[half]):
                     np.testing.assert_array_equal(manifest[key], np.asarray(grid))
                     assert manifest[key].dtype == grid.dtype
