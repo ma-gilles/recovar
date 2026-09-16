@@ -1566,6 +1566,63 @@ def _project_local_class_segments(
     return jnp.concatenate(segments, axis=1).reshape(batch_size * rows, segments[0].shape[-1])
 
 
+def _adjoint_local_class_segments(
+    summed,
+    ctf_probs,
+    recon_window_indices,
+    mstep_rotations,
+    Ft_y,
+    Ft_ctf,
+    image_shape,
+    recon_volume_shape,
+    disc_type,
+    *,
+    n_classes: int,
+    segment_rotation_count: int,
+    batch_size: int,
+    use_window: bool,
+    max_r,
+    disable_adjoint_y: bool,
+    disable_adjoint_ctf: bool,
+    relion_x_half_mstep: bool,
+):
+    """Accumulate class-major segmented rows into per-class reconstruction volumes.
+
+    ``Ft_y``/``Ft_ctf`` carry a leading class axis; each class segment's rows are
+    backprojected into that class's pair, so one bucket pass produces the K-class
+    M-step the per-class engine calls produce today.
+    """
+
+    rows = int(n_classes) * int(segment_rotation_count)
+    summed_rows = summed.reshape(batch_size, rows, summed.shape[-1])
+    ctf_rows = ctf_probs.reshape(batch_size, rows, ctf_probs.shape[-1])
+    rotation_rows = mstep_rotations.reshape(batch_size, rows, 3, 3)
+    updated_y, updated_ctf = [], []
+    for class_index in range(int(n_classes)):
+        start = class_index * int(segment_rotation_count)
+        stop = start + int(segment_rotation_count)
+        segment_values = batch_size * int(segment_rotation_count)
+        class_y, class_ctf = _adjoint_local_mstep_volumes(
+            summed_rows[:, start:stop].reshape(segment_values, summed_rows.shape[-1]),
+            ctf_rows[:, start:stop].reshape(segment_values, ctf_rows.shape[-1]),
+            recon_window_indices,
+            rotation_rows[:, start:stop].reshape(segment_values, 3, 3),
+            Ft_y[class_index],
+            Ft_ctf[class_index],
+            image_shape,
+            recon_volume_shape,
+            disc_type,
+            use_window=use_window,
+            max_r=max_r,
+            disable_adjoint_y=disable_adjoint_y,
+            disable_adjoint_ctf=disable_adjoint_ctf,
+            relion_x_half_mstep=relion_x_half_mstep,
+        )
+        updated_y.append(class_y)
+        updated_ctf.append(class_ctf)
+    return jnp.stack(updated_y, axis=0), jnp.stack(updated_ctf, axis=0)
+
+
 
 class _LocalMstepAccumulators(NamedTuple):
     """The two reconstruction buffers donated at the local JIT boundary."""
@@ -1938,6 +1995,10 @@ def run_local_bucket_big_jit(
             raise ValueError("class-segmented rows do not use K=1 packed/flat local rows")
         if projector_capacity:
             raise ValueError("class-segmented rows do not use the K=1 projector capacity path")
+        if relion_exact_bpref_operands:
+            # The source-ordered native VDAM M-step scatters straight into one volume
+            # pair per call, so it cannot separate class segments yet.
+            raise ValueError("class-segmented rows do not use the source-ordered native VDAM M-step")
         if class_segment_rotation_count is None:
             raise ValueError("class-segmented rows require an explicit class_segment_rotation_count")
         if int(class_segment_rotation_count) * n_classes != int(local_rotations.shape[1]):
@@ -3115,22 +3176,43 @@ def run_local_bucket_big_jit(
         not disable_adjoint_y or not disable_adjoint_ctf
     ):
         flat_summed = summed.reshape(batch_size * local_rotations.shape[1], summed.shape[-1])
-        Ft_y, Ft_ctf = _adjoint_local_mstep_volumes(
-            flat_summed,
-            flat_ctf_probs,
-            mstep_recon_window_indices,
-            flat_mstep_rotations,
-            Ft_y,
-            Ft_ctf,
-            image_shape,
-            recon_volume_shape,
-            disc_type,
-            use_window=use_window,
-            max_r=mstep_max_r,
-            disable_adjoint_y=disable_adjoint_y,
-            disable_adjoint_ctf=disable_adjoint_ctf,
-            relion_x_half_mstep=mstep_relion_x_half,
-        )
+        if n_classes > 1:
+            Ft_y, Ft_ctf = _adjoint_local_class_segments(
+                flat_summed,
+                flat_ctf_probs,
+                mstep_recon_window_indices,
+                flat_mstep_rotations,
+                Ft_y,
+                Ft_ctf,
+                image_shape,
+                recon_volume_shape,
+                disc_type,
+                n_classes=n_classes,
+                segment_rotation_count=int(class_segment_rotation_count),
+                batch_size=batch_size,
+                use_window=use_window,
+                max_r=mstep_max_r,
+                disable_adjoint_y=disable_adjoint_y,
+                disable_adjoint_ctf=disable_adjoint_ctf,
+                relion_x_half_mstep=mstep_relion_x_half,
+            )
+        else:
+            Ft_y, Ft_ctf = _adjoint_local_mstep_volumes(
+                flat_summed,
+                flat_ctf_probs,
+                mstep_recon_window_indices,
+                flat_mstep_rotations,
+                Ft_y,
+                Ft_ctf,
+                image_shape,
+                recon_volume_shape,
+                disc_type,
+                use_window=use_window,
+                max_r=mstep_max_r,
+                disable_adjoint_y=disable_adjoint_y,
+                disable_adjoint_ctf=disable_adjoint_ctf,
+                relion_x_half_mstep=mstep_relion_x_half,
+            )
 
     stats_dtype = reconstruction_probs.real.dtype
     norm_correction_dtype = jnp.float64 if source_faithful_spectrum_norm else stats_dtype

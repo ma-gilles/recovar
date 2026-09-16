@@ -143,3 +143,93 @@ def test_segmented_rows_must_factor_into_classes():
             jnp.zeros((2, 4)), None, local_rotations, lambda v, p, r: r.reshape(r.shape[0], -1),
             n_classes=2, segment_rotation_count=3,
         )
+
+
+def _adjoint_inputs(rng, batch_size, rows, n_pixels, volume_size):
+    return (
+        jnp.asarray(rng.standard_normal((batch_size * rows, n_pixels))
+                    + 1j * rng.standard_normal((batch_size * rows, n_pixels)), dtype=jnp.complex64),
+        jnp.asarray(rng.standard_normal((batch_size * rows, n_pixels)), dtype=jnp.float32),
+        jnp.zeros((volume_size,), dtype=jnp.complex64),
+        jnp.zeros((volume_size,), dtype=jnp.float32),
+    )
+
+
+@pytest.mark.parametrize("n_classes", [2, 3])
+def test_class_segment_adjoint_accumulates_each_class_into_its_own_volume(n_classes):
+    from recovar.em.local.local_big_jit import (
+        _adjoint_local_class_segments,
+        _adjoint_local_mstep_volumes,
+    )
+
+    rng = np.random.default_rng(37)
+    image_shape, volume_shape = (8, 8), (8, 8, 8)
+    n_pixels = image_shape[0] * (image_shape[0] // 2 + 1)
+    # The local M-step accumulates into half-spectrum volumes.
+    volume_size = volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1)
+    batch_size, seg = 2, 3
+    rows = n_classes * seg
+    summed, ctf_probs, zero_y, zero_ctf = _adjoint_inputs(rng, batch_size, rows, n_pixels, volume_size)
+    rotations = _rotations(rng, batch_size, rows).reshape(batch_size * rows, 3, 3)
+    # Start from distinct per-class accumulators so a misrouted segment is visible.
+    start_y = jnp.stack([zero_y + (k + 1) for k in range(n_classes)])
+    start_ctf = jnp.stack([zero_ctf + (k + 1) for k in range(n_classes)])
+
+    got_y, got_ctf = _adjoint_local_class_segments(
+        summed, ctf_probs, None, rotations, start_y, start_ctf,
+        image_shape, volume_shape, "linear_interp",
+        n_classes=n_classes, segment_rotation_count=seg, batch_size=batch_size,
+        use_window=False, max_r=None, disable_adjoint_y=False, disable_adjoint_ctf=False,
+        relion_x_half_mstep=False,
+    )
+    assert got_y.shape == (n_classes, volume_size) and got_ctf.shape == (n_classes, volume_size)
+
+    summed_rows = summed.reshape(batch_size, rows, n_pixels)
+    ctf_rows = ctf_probs.reshape(batch_size, rows, n_pixels)
+    rot_rows = rotations.reshape(batch_size, rows, 3, 3)
+    for k in range(n_classes):
+        sl = slice(k * seg, (k + 1) * seg)
+        want_y, want_ctf = _adjoint_local_mstep_volumes(
+            summed_rows[:, sl].reshape(batch_size * seg, n_pixels),
+            ctf_rows[:, sl].reshape(batch_size * seg, n_pixels),
+            None,
+            rot_rows[:, sl].reshape(batch_size * seg, 3, 3),
+            start_y[k], start_ctf[k], image_shape, volume_shape, "linear_interp",
+            use_window=False, max_r=None, disable_adjoint_y=False, disable_adjoint_ctf=False,
+            relion_x_half_mstep=False,
+        )
+        np.testing.assert_array_equal(np.asarray(got_y[k]), np.asarray(want_y))
+        np.testing.assert_array_equal(np.asarray(got_ctf[k]), np.asarray(want_ctf))
+
+
+def test_class_segment_adjoint_keeps_classes_apart():
+    """Rows of one class must not contribute to another class's volume."""
+    from recovar.em.local.local_big_jit import _adjoint_local_class_segments
+
+    rng = np.random.default_rng(41)
+    image_shape, volume_shape = (8, 8), (8, 8, 8)
+    n_pixels = image_shape[0] * (image_shape[0] // 2 + 1)
+    volume_size = volume_shape[0] * volume_shape[1] * (volume_shape[2] // 2 + 1)
+    batch_size, seg, n_classes = 2, 3, 2
+    rows = n_classes * seg
+    summed, ctf_probs, zero_y, zero_ctf = _adjoint_inputs(rng, batch_size, rows, n_pixels, volume_size)
+    rotations = _rotations(rng, batch_size, rows).reshape(batch_size * rows, 3, 3)
+    start_y = jnp.stack([zero_y] * n_classes)
+    start_ctf = jnp.stack([zero_ctf] * n_classes)
+
+    # Zero every row of class 1: its volume must stay exactly zero while class 0 fills.
+    masked = np.asarray(summed).reshape(batch_size, rows, n_pixels).copy()
+    masked[:, seg:] = 0.0
+    masked_ctf = np.asarray(ctf_probs).reshape(batch_size, rows, n_pixels).copy()
+    masked_ctf[:, seg:] = 0.0
+    got_y, got_ctf = _adjoint_local_class_segments(
+        jnp.asarray(masked.reshape(batch_size * rows, n_pixels)),
+        jnp.asarray(masked_ctf.reshape(batch_size * rows, n_pixels)),
+        None, rotations, start_y, start_ctf, image_shape, volume_shape, "linear_interp",
+        n_classes=n_classes, segment_rotation_count=seg, batch_size=batch_size,
+        use_window=False, max_r=None, disable_adjoint_y=False, disable_adjoint_ctf=False,
+        relion_x_half_mstep=False,
+    )
+    assert np.abs(np.asarray(got_y[0])).max() > 0.0
+    np.testing.assert_array_equal(np.asarray(got_y[1]), np.zeros(volume_size, dtype=np.complex64))
+    np.testing.assert_array_equal(np.asarray(got_ctf[1]), np.zeros(volume_size, dtype=np.float32))
