@@ -386,6 +386,32 @@ class SparseKClassPass2FusedResult(NamedTuple):
 # ---------------------------------------------------------------------------
 
 
+@jax.jit
+def _gather_projection_cache_rows(cache_score, cache_recon, cache_recon_abs2, rotation_indices):
+    """Gather one bucket's score/recon/abs2 projection-cache rows in one program.
+
+    Each gather is otherwise dispatched op-by-op, so every distinct operand shape
+    compiles its own tiny program; a JAX_LOG_COMPILES census of one 10k-subset
+    iteration (job 14010842) counted 158 `gather` compilations among 3,866 eager
+    primitive programs. Jitting changes the fusion boundary, so this is a
+    performance candidate whose equality against the eager form is measured on
+    GPU with fixed operands, not assumed from matching source ops.
+    """
+
+    return (
+        cache_score[rotation_indices],
+        cache_recon[rotation_indices],
+        cache_recon_abs2[rotation_indices],
+    )
+
+
+@jax.jit
+def _gather_projection_cache_score_row(cache_score, rotation_indices):
+    """Score-only variant: the recon caches are not read when score_only is set."""
+
+    return cache_score[rotation_indices]
+
+
 def compute_pass2_stats_sparse_bucketed(
     experiment_dataset,
     volume,
@@ -3240,13 +3266,19 @@ def compute_pass2_stats_sparse_bucketed(
 
         if projection_cache is not None:
             rotation_indices_jax = jnp.asarray(rotation_indices, dtype=jnp.int32)
-            proj_half = projection_cache["score"][rotation_indices_jax]
             if score_only:
+                proj_half = _gather_projection_cache_score_row(
+                    projection_cache["score"], rotation_indices_jax
+                )
                 proj_for_noise = None
                 proj_abs2_for_noise = None
             else:
-                proj_for_noise = projection_cache["recon"][rotation_indices_jax]
-                proj_abs2_for_noise = projection_cache["recon_abs2"][rotation_indices_jax]
+                proj_half, proj_for_noise, proj_abs2_for_noise = _gather_projection_cache_rows(
+                    projection_cache["score"],
+                    projection_cache["recon"],
+                    projection_cache["recon_abs2"],
+                    rotation_indices_jax,
+                )
         else:
             # Project (B*R, 3, 3) -> (B*R, n_half) -> reshape (B, R, n_half)
             projection_kwargs = window_spec.projection_kwargs(

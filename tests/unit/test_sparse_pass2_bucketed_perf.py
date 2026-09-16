@@ -2498,6 +2498,45 @@ def test_relion_x_half_bp_per_particle_launches_use_power_of_two_row_ladder(monk
     np.testing.assert_allclose(np.asarray(ctf_volume), expected_ctf, rtol=1e-6)
 
 
+@pytest.mark.parametrize("dtype", [jnp.complex64, jnp.float32])
+def test_projection_cache_gather_helper_matches_the_eager_form(dtype):
+    """The jitted cache gather returns exactly what the eager indexing returned.
+
+    Jitting changes the fusion boundary, so equality is asserted rather than
+    assumed from matching source ops.  This runs on whatever backend the suite
+    uses; the GPU fixed-operand check is a separate packet, because fusion
+    differences are backend-specific and a CPU pass is not evidence for GPU.
+    """
+
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed_mod
+
+    rng = np.random.default_rng(20260916)
+    rows, pixels = 37, 11
+    def _make():
+        a = rng.standard_normal((rows, pixels))
+        if jnp.issubdtype(dtype, jnp.complexfloating):
+            a = a + 1j * rng.standard_normal((rows, pixels))
+        return jnp.asarray(a, dtype=dtype)
+
+    cache_score, cache_recon, cache_abs2 = _make(), _make(), _make()
+    rotation_indices = jnp.asarray(rng.integers(0, rows, size=(5, 9)), dtype=jnp.int32)
+
+    eager = (
+        cache_score[rotation_indices],
+        cache_recon[rotation_indices],
+        cache_abs2[rotation_indices],
+    )
+    jitted = bucketed_mod._gather_projection_cache_rows(
+        cache_score, cache_recon, cache_abs2, rotation_indices
+    )
+    for got, want in zip(jitted, eager):
+        assert got.dtype == want.dtype and got.shape == want.shape
+        np.testing.assert_array_equal(np.asarray(got), np.asarray(want))
+
+    score_only = bucketed_mod._gather_projection_cache_score_row(cache_score, rotation_indices)
+    np.testing.assert_array_equal(np.asarray(score_only), np.asarray(eager[0]))
+
+
 def test_relion_x_half_bp_uniform_counts_keep_the_unpadded_static_slice(monkeypatch):
     """Equal rotation counts already give one launch shape, so no padding is added."""
 
