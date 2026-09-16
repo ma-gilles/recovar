@@ -1144,25 +1144,19 @@ def _relion_window_centered_half_fourier(vol_half, old_volume_shape, new_volume_
     ) <= max_r2
     vol_half = jnp.where(jnp.asarray(support), vol_half, jnp.zeros((), dtype=vol_half.dtype))
 
-    # The destination rows are a permutation of one contiguous block: the
-    # centered frequency interval spans old_dim - 1 < new_dim, so the modulo in
-    # _relion_centered_axis_scatter_indices cannot map two rows onto each other.
-    # Padding the permuted source writes exactly the same values to the same
-    # positions as the scatter, and keeps XLA from expanding that scatter into a
-    # per-element while loop (32,806,618 sequential trips for 403 -> 760).
+    # The destination rows are the contiguous block [start, start + old_dim): the
+    # centered frequencies are old_dim consecutive integers whose shifts lie in
+    # (-new_dim, 0), so the modulo in _relion_centered_axis_scatter_indices is
+    # order-preserving and cannot collide. Writing the sorted source into that
+    # block is the same write set as a three-axis scatter, which XLA expanded
+    # into a per-element while loop (32,806,618 sequential trips for 403 -> 760).
     order = np.argsort(scatter_idx, kind="stable")
     start = int(scatter_idx[order[0]])
-    if np.array_equal(scatter_idx[order], np.arange(start, start + old_dim)):
-        if not np.array_equal(order, np.arange(old_dim)):
-            gather = jnp.asarray(order, dtype=jnp.int32)
-            vol_half = jnp.take(jnp.take(vol_half, gather, axis=0), gather, axis=1)
-        tail = new_dim - start - old_dim
-        return jnp.pad(vol_half, ((start, tail), (start, tail), (0, new_half_shape[-1] - n_cols)))
-
-    axis_idx = jnp.asarray(scatter_idx, dtype=jnp.int32)
-    col_idx = jnp.arange(n_cols, dtype=jnp.int32)
-    out = jnp.zeros(new_half_shape, dtype=vol_half.dtype)
-    return out.at[axis_idx[:, None, None], axis_idx[None, :, None], col_idx[None, None, :]].set(vol_half)
+    if not np.array_equal(order, np.arange(old_dim)):  # even old_dim: one-step roll
+        gather = jnp.asarray(order, dtype=jnp.int32)
+        vol_half = jnp.take(jnp.take(vol_half, gather, axis=0), gather, axis=1)
+    tail = new_dim - start - old_dim
+    return jnp.pad(vol_half, ((start, tail), (start, tail), (0, new_half_shape[-1] - n_cols)))
 
 
 def _relion_current_size_decenter_mask(volume_shape, radius, *, half_volume):
