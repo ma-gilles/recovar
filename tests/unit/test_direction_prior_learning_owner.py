@@ -36,7 +36,6 @@ def _update(rotation_posterior_per_half, lists, **overrides):
         global_direction_prior_order_per_half=global_order,
         class_direction_prior_per_half=class_prior,
         class_direction_prior_order_per_half=class_order,
-        k_class_enabled=False,
         n_classes=1,
         use_local=False,
         k1_direction_prior_order=ORDER,
@@ -103,7 +102,6 @@ def test_kclass_combines_halves_on_the_exhaustive_grid_with_independent_copies()
         [np.ones(N_ROT), np.ones(N_ROT)],
         lists,
         class_rotation_posterior_per_half=class_posteriors,
-        k_class_enabled=True,
         n_classes=n_classes,
     )
     global_prior, global_order, class_prior, class_order = lists
@@ -125,7 +123,7 @@ def test_kclass_combines_halves_on_the_exhaustive_grid_with_independent_copies()
 )
 def test_kclass_update_requires_global_scoring_on_the_exhaustive_grid(override):
     lists = _lists()
-    kwargs = dict(class_rotation_posterior_per_half=[np.ones((2, N_ROT)), np.ones((2, N_ROT))], k_class_enabled=True, n_classes=2)
+    kwargs = dict(class_rotation_posterior_per_half=[np.ones((2, N_ROT)), np.ones((2, N_ROT))], n_classes=2)
     kwargs.update(override)
     _update([np.ones(N_ROT), np.ones(N_ROT)], lists, **kwargs)
     assert lists == ([None, None], [None, None], [None, None], [None, None])

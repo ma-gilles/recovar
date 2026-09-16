@@ -15,14 +15,14 @@ N_PIX = 768  # HEALPix order 3
 
 
 def _init(prior, **overrides):
-    kwargs = dict(k_class_enabled=False, n_classes=1, dtype=np.float32, log=logging.getLogger(__name__))
+    kwargs = dict(n_classes=1, dtype=np.float32, log=logging.getLogger(__name__))
     kwargs.update(overrides)
     return op.initial_direction_priors_from_snapshot(prior, **kwargs)
 
 
 def test_no_snapshot_prior_leaves_every_half_unset():
     assert _init(None) == ([None, None], [None, None], [None, None], [None, None])
-    assert _init(None, k_class_enabled=True, n_classes=3) == ([None, None], [None, None], [None, None], [None, None])
+    assert _init(None, n_classes=3) == ([None, None], [None, None], [None, None], [None, None])
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
@@ -50,7 +50,7 @@ def test_k1_per_half_list_keeps_a_missing_half_unset():
 def test_kclass_snapshot_yields_per_class_priors_per_half(caplog):
     shared = np.stack([np.linspace(0.0, 1.0, N_PIX), np.linspace(1.0, 2.0, N_PIX)])
     with caplog.at_level(logging.INFO, logger=__name__):
-        global_prior, global_order, class_prior, class_order = _init(shared, k_class_enabled=True, n_classes=2)
+        global_prior, global_order, class_prior, class_order = _init(shared, n_classes=2)
     assert global_prior == [None, None] and global_order == [None, None]
     assert class_order == [3, 3]
     for half in class_prior:
@@ -60,7 +60,7 @@ def test_kclass_snapshot_yields_per_class_priors_per_half(caplog):
 
 def test_kclass_per_half_snapshot_keeps_halves_distinct():
     per_half = np.stack([np.stack([np.linspace(0.0, 1.0, N_PIX)] * 2), np.stack([np.linspace(2.0, 3.0, N_PIX)] * 2)])
-    _, _, class_prior, class_order = _init(per_half, k_class_enabled=True, n_classes=2)
+    _, _, class_prior, class_order = _init(per_half, n_classes=2)
     assert class_order == [3, 3]
     expected = op.normalize_class_direction_prior_per_half(per_half, 2, dtype=np.float32)
     for half, want in zip(class_prior, expected):

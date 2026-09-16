@@ -28,7 +28,6 @@ def _priors(**overrides):
     kwargs = dict(
         use_local=False,
         scoring_healpix_order=ORDER,
-        k_class_enabled=False,
         n_classes=1,
         class_direction_prior=None,
         class_direction_prior_order=None,
@@ -57,7 +56,6 @@ def test_local_search_uses_no_direction_prior_even_when_one_is_learned():
     _none(
         _priors(
             use_local=True,
-            k_class_enabled=True,
             n_classes=2,
             class_direction_prior=np.stack([_prior(1), _prior(2)]),
             class_direction_prior_order=ORDER,
@@ -94,7 +92,7 @@ def test_sealed_sampling_expands_onto_the_captured_direction_rows():
 def test_kclass_uses_per_class_priors_at_the_scoring_order(caplog):
     class_prior = np.stack([_prior(6), _prior(7)])
     with caplog.at_level(logging.INFO, logger=__name__):
-        result = _priors(k_class_enabled=True, n_classes=2, class_direction_prior=class_prior, class_direction_prior_order=ORDER)
+        result = _priors(n_classes=2, class_direction_prior=class_prior, class_direction_prior_order=ORDER)
     assert result.rotation_log_prior is None
     expected = np.stack([op.make_relion_direction_log_prior(class_prior[c], ORDER, dtype=np.float32) for c in range(2)])
     assert result.class_rotation_log_prior.shape == (2, N_ROT)
@@ -110,7 +108,6 @@ def test_kclass_shared_prior_is_copied_to_every_class(class_prior_order, caplog)
     class_prior = None if class_prior_order is None else np.stack([_prior(9), _prior(10)])
     with caplog.at_level(logging.INFO, logger=__name__):
         result = _priors(
-            k_class_enabled=True,
             n_classes=2,
             class_direction_prior=class_prior,
             class_direction_prior_order=class_prior_order,
@@ -126,10 +123,9 @@ def test_kclass_shared_prior_is_copied_to_every_class(class_prior_order, caplog)
 
 
 def test_kclass_without_a_matching_prior_is_uniform():
-    _none(_priors(k_class_enabled=True, n_classes=2))
+    _none(_priors(n_classes=2))
     _none(
         _priors(
-            k_class_enabled=True,
             n_classes=2,
             class_direction_prior=np.stack([_prior(11), _prior(12)]),
             class_direction_prior_order=ORDER + 1,

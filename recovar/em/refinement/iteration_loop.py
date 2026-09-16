@@ -690,7 +690,6 @@ def _run_relion_iteration_loop(
         class_direction_prior_order_per_half,
     ) = initial_direction_priors_from_snapshot(
         replay.init_direction_prior,
-        k_class_enabled=k_class_enabled,
         n_classes=n_classes,
         dtype=_dense_global_scoring_dtype(),
         log=logger,
@@ -1727,7 +1726,6 @@ def _run_relion_iteration_loop(
             half_direction_priors = relion_direction_log_priors_for_half(
                 use_local=use_local,
                 scoring_healpix_order=direction_prior_healpix_order,
-                k_class_enabled=k_class_enabled,
                 n_classes=n_classes,
                 class_direction_prior=class_direction_prior_per_half[_half_idx],
                 class_direction_prior_order=class_direction_prior_order_per_half[_half_idx],
@@ -2938,7 +2936,6 @@ def _run_relion_iteration_loop(
                 global_direction_prior_order_per_half=global_direction_prior_order_per_half,
                 class_direction_prior_per_half=class_direction_prior_per_half,
                 class_direction_prior_order_per_half=class_direction_prior_order_per_half,
-                k_class_enabled=k_class_enabled,
                 n_classes=n_classes,
                 use_local=use_local,
                 k1_direction_prior_order=k1_direction_prior_order,
@@ -4298,7 +4295,6 @@ def _run_relion_iteration_loop(
         final_half_direction_priors = relion_direction_log_priors_for_half(
             use_local=final_use_local,
             scoring_healpix_order=final_direction_prior_healpix_order,
-            k_class_enabled=k_class_enabled,
             n_classes=n_classes,
             class_direction_prior=class_direction_prior_per_half[k],
             class_direction_prior_order=class_direction_prior_order_per_half[k],

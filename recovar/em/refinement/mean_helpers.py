@@ -374,7 +374,6 @@ def update_learned_direction_priors(
     global_direction_prior_order_per_half,
     class_direction_prior_per_half,
     class_direction_prior_order_per_half,
-    k_class_enabled: bool,
     n_classes: int,
     use_local: bool,
     k1_direction_prior_order: int,
@@ -398,7 +397,7 @@ def update_learned_direction_priors(
     single source of grid geometry.
     """
 
-    if not k_class_enabled and all(
+    if n_classes <= 1 and all(
         np.asarray(rot_sum).shape[0] == k1_direction_prior_size for rot_sum in rotation_posterior_per_half
     ):
         for k in range(2):
@@ -421,7 +420,7 @@ def update_learned_direction_priors(
             global_direction_prior_order_per_half[k] = k1_direction_prior_order
     elif (
         not use_local
-        and k_class_enabled
+        and n_classes > 1
         and n_effective_rotations == exhaustive_grid_size
         and all(rot_sum is not None for rot_sum in class_rotation_posterior_per_half)
     ):

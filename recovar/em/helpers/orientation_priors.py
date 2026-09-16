@@ -223,7 +223,7 @@ def relion_half_translation_prior_inputs(
     )
 
 
-def initial_direction_priors_from_snapshot(init_direction_prior, *, k_class_enabled: bool, n_classes: int, dtype: np.dtype, log):
+def initial_direction_priors_from_snapshot(init_direction_prior, *, n_classes: int, dtype: np.dtype, log):
     """Initialize per-half direction priors from a RELION snapshot.
 
     A restart from a RELION model carries the previous iteration's
@@ -242,7 +242,7 @@ def initial_direction_priors_from_snapshot(init_direction_prior, *, k_class_enab
     class_order_per_half = [None, None]
     if init_direction_prior is None:
         return global_prior_per_half, global_order_per_half, class_prior_per_half, class_order_per_half
-    if k_class_enabled:
+    if n_classes > 1:
         class_prior_per_half = normalize_class_direction_prior_per_half(init_direction_prior, n_classes, dtype=dtype)
         for k in range(2):
             if class_prior_per_half[k] is None:
@@ -305,7 +305,6 @@ def relion_direction_log_priors_for_half(
     *,
     use_local: bool,
     scoring_healpix_order,
-    k_class_enabled: bool,
     n_classes: int,
     class_direction_prior,
     class_direction_prior_order,
@@ -341,7 +340,7 @@ def relion_direction_log_priors_for_half(
             return _sealed_direction_log_prior(prior, sealed_sampling_state, dtype=dtype)
         return make_relion_direction_log_prior(prior, scoring_healpix_order, dtype=dtype)
 
-    if k_class_enabled:
+    if n_classes > 1:
         prior = class_direction_prior
         prior_order = class_direction_prior_order
         source = "learned per-class"
