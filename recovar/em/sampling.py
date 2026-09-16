@@ -140,21 +140,6 @@ def build_local_search_grid_metadata(
     else:
         grid_rotations_full = None
 
-    if grid_eulers is None:
-        if grid_rotations_full is None:
-            raise ValueError("grid_eulers or grid_rotations must be provided for custom local-search metadata")
-        dir_vecs_full = np.asarray(grid_rotations_full[:, 2, :], dtype=np.float32)
-        dir_norm = np.linalg.norm(dir_vecs_full, axis=1, keepdims=True)
-        dir_norm = np.where(dir_norm > 0.0, dir_norm, 1.0)
-        dir_vecs_full = dir_vecs_full / dir_norm
-        return {
-            "mode": "full",
-            "dir_vecs_full": np.asarray(dir_vecs_full, dtype=np.float32),
-            "psi_deg_full": relion_psi_from_rotation_matrices(grid_rotations_full),
-            "n_pixels": np.asarray(n_pixels, dtype=np.int64),
-            "n_psi": np.asarray(n_psi, dtype=np.int64),
-        }
-
     grid_eulers = np.asarray(grid_eulers, dtype=np.float32).reshape(-1, 3)
     if grid_eulers.shape[0] != expected:
         raise ValueError(
