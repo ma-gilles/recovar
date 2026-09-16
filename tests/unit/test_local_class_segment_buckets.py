@@ -146,3 +146,43 @@ def test_class_segments_never_compile_more_shapes_than_per_class_buckets(seed):
     per_class_calls = sum(len(bucket_local_hypothesis_layout(layouts[k], **kwargs)) for k in range(K))
     segmented_calls = len(bucket_class_local_hypothesis_layouts(layouts, np.zeros(K), **kwargs))
     assert segmented_calls <= per_class_calls
+
+
+def test_bucket_rebuilds_preserve_the_class_segmentation():
+    """Image-axis padding and reordering must not erase the row axis's class layout.
+
+    Both helpers rebuild a LocalBucketSpec field by field, so a class-segmented
+    bucket silently became a single class of the same total width on the paths that
+    pad to a planned image count or reorder to returned indices.
+    """
+    from recovar.em.local.local_bucket_stages import _pad_local_big_jit_image_axis, _reorder_bucket_to_indices
+
+    rng = np.random.default_rng(101)
+    n_images, K = 5, 3
+    counts = rng.integers(1, 6, (n_images, K))
+    tlp = rng.standard_normal((n_images, 5)).astype(np.float32)
+    layouts = [_layout(rng, counts[:, k], translation_log_priors=tlp) for k in range(K)]
+    buckets = bucket_class_local_hypothesis_layouts(
+        layouts, np.zeros(K), image_batch_size=4, rotation_block_size=64, max_hypotheses_per_microbatch=1 << 16,
+    )
+    bucket = buckets[0]
+    assert bucket.n_classes == K and bucket.class_segment_rotation_count is not None
+
+    batch = np.zeros((bucket.image_indices.shape[0], 4, 4), dtype=np.float32)
+    ctf = np.zeros((bucket.image_indices.shape[0], 9), dtype=np.float32)
+    padded, _, _, _, padded_batch_size = _pad_local_big_jit_image_axis(bucket, batch, ctf)
+    assert padded.n_classes == K
+    assert padded.segment_rotation_count == bucket.segment_rotation_count
+    assert padded.bucket_rotation_count == K * padded.segment_rotation_count
+    assert padded.class_actual_rotation_counts.shape == (padded_batch_size, K)
+    np.testing.assert_array_equal(
+        padded.class_actual_rotation_counts[: bucket.image_indices.shape[0]], bucket.class_actual_rotation_counts,
+    )
+
+    reversed_indices = np.asarray(bucket.image_indices)[::-1]
+    reordered = _reorder_bucket_to_indices(bucket, reversed_indices)
+    assert reordered.n_classes == K
+    assert reordered.segment_rotation_count == bucket.segment_rotation_count
+    np.testing.assert_array_equal(
+        reordered.class_actual_rotation_counts, np.asarray(bucket.class_actual_rotation_counts)[::-1],
+    )

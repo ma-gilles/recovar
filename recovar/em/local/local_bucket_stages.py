@@ -906,6 +906,15 @@ def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_param
             if bucket.local_sample_mask is None
             else pad_axis(bucket.local_sample_mask, 0, padded_batch_size, value=False).astype(bool)
         ),
+        # Padding the image axis must not lose the row axis's class segmentation:
+        # without it the bucket would be read as a single class of the same width.
+        n_classes=int(bucket.n_classes),
+        class_segment_rotation_count=bucket.class_segment_rotation_count,
+        class_actual_rotation_counts=(
+            None
+            if bucket.class_actual_rotation_counts is None
+            else pad_axis(bucket.class_actual_rotation_counts, 0, padded_batch_size, value=0).astype(np.int32)
+        ),
     )
     padded_batch_data, padded_ctf_params, valid_image_mask, _, _ = pad_batch_data_ctf_and_valid_mask(
         batch_data,
@@ -1161,6 +1170,15 @@ def _reorder_bucket_to_indices(bucket: LocalBucketSpec, returned_indices: np.nda
         ),
         local_sample_mask=(
             None if bucket.local_sample_mask is None else np.asarray(bucket.local_sample_mask[order], dtype=bool)
+        ),
+        # Reordering images leaves the row axis's class segmentation intact; the
+        # per-image class counts follow the same order.
+        n_classes=int(bucket.n_classes),
+        class_segment_rotation_count=bucket.class_segment_rotation_count,
+        class_actual_rotation_counts=(
+            None
+            if bucket.class_actual_rotation_counts is None
+            else np.asarray(bucket.class_actual_rotation_counts[order], dtype=np.int32)
         ),
     )
 

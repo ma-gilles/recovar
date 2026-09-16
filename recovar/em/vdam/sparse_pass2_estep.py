@@ -185,12 +185,14 @@ def _compact_sparse_pass2_enabled(n_classes: int, pass2_engine: str = "auto") ->
     """
 
     engine = str(pass2_engine).strip().lower()
-    if engine not in {"auto", "local", "compact"}:
+    if engine not in {"auto", "local", "compact", "local_segmented"}:
         raise ValueError(
-            "InitialModel pass2_engine must be one of 'auto', 'local', or "
-            f"'compact', got {pass2_engine!r}"
+            "InitialModel pass2_engine must be one of 'auto', 'local', "
+            f"'local_segmented', or 'compact', got {pass2_engine!r}"
         )
     if engine != "auto":
+        # ``local_segmented`` is the exact-local engine scoring every class in one
+        # pass over class-segmented rows; it is a local route, not the compact one.
         return engine == "compact"
     return int(n_classes) > 1
 
@@ -954,6 +956,9 @@ def _run_sparse_pass2_initial_model_estep(
                     config.noise_variance,
                     local_layout,
                     config.disc_type,
+                    segmented_class_rows=(
+                        str(config.pass2_engine).strip().lower() == "local_segmented" and state.K > 1
+                    ),
                     class_log_priors=class_log_priors,
                     class_log_evidence=(
                         np.asarray(_full_stats["class_log_evidence_per_image"], dtype=np.float64)
@@ -1133,7 +1138,11 @@ def _run_sparse_pass2_initial_model_estep(
         meta["halfset_ids"] = (0, 1)
         meta["joint_halfset_particle_stream"] = True
     _add_accumulator_weight_meta(meta, accumulators, state.K)
-    meta["pass2_engine"] = "compact" if use_compact_sparse_pass2 else "local"
+    meta["pass2_engine"] = (
+        "compact"
+        if use_compact_sparse_pass2
+        else str(config.pass2_engine).strip().lower().replace("auto", "local")
+    )
     meta["requested_relion_wavg_sequential_cuda"] = bool(
         config.relion_wavg_sequential_cuda
     )
