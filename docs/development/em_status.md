@@ -2,7 +2,7 @@
 
 Current decisions belong here; update this page when a decision changes, not for
 every test or publication. Detailed receipts belong behind links. The
-[previous page is preserved byte-for-byte](em_cleanup_history_20260910_a2ab056cb.md)
+[previous page is preserved byte-for-byte](https://github.com/ma-gilles/recovar-experiments/blob/2375c7e1647edbef212d6d61d00ef06c2250c07e/docs/development/em_cleanup_history_20260910_a2ab056cb.md)
 at `a2ab056cb`, including one paragraph per earlier checkpoint; its historical
 next actions are superseded here.
 
@@ -209,7 +209,7 @@ Historical failures stay open: API13641893 has6 failures (older13634313:12),
 normalization13636581 has4 GPU bytewise failures, PR180 CPU has25 failures, and
 K1 matched-noise replay has6 Pmax failures with incomplete margins/oracle identity.
 K4 job13560356 failed2:0 at10/class2. Partial repairs do not qualify those panels.
-[Complete failure ledger](em_cleanup_history_20260909_f0a8804e2.md#unresolved-validation-gates).
+[Complete failure ledger](https://github.com/ma-gilles/recovar-experiments/blob/2375c7e1647edbef212d6d61d00ef06c2250c07e/docs/development/em_cleanup_history_20260909_f0a8804e2.md#unresolved-validation-gates).
 The optional M-step rotation override cleared by class-prior layout remains a
 [separate correctness question](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/k_class_input_owner_20260909/result.json).
 Buffer lifetime changes likewise require measured evidence, not cleanup assumptions.
