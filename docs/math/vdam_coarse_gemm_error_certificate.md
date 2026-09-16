@@ -458,9 +458,9 @@ worst-case effects.  FP64 makes the first nearly irrelevant; candidate-specific
 
 ## Empirical evidence is not the certificate
 
-The [all-particle GF46 FP32 diagnostic](../perf/vdam_coarse_gemm_streaming_selector_13329608.md)
+The [all-particle GF46 FP32 diagnostic](https://github.com/ma-gilles/recovar-experiments/blob/9d86b5d87e402a5c92a2c44f06468fa9d5fcd5fb/docs/perf/vdam_coarse_gemm_streaming_selector_13329608.md)
 observed a maximum absolute direct delta of `3.3125` over `1,069,056,000`
-finite pairs.  The [all-particle promoted-FP64 diagnostic](../perf/vdam_coarse_gemm_streaming_fp64_13330442.md)
+finite pairs.  The [all-particle promoted-FP64 diagnostic](https://github.com/ma-gilles/recovar-experiments/blob/9d86b5d87e402a5c92a2c44f06468fa9d5fcd5fb/docs/perf/vdam_coarse_gemm_streaming_fp64_13330442.md)
 observed `1.5`; an earlier clean timing gate observed `0.6875` on its smaller
 gate surface and a `4.512x` coarse comparison speedup over direct.  These
 measurements support the precision recommendation, but none is a bound for a
