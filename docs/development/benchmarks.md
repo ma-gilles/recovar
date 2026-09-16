@@ -119,30 +119,30 @@ Keep enough small evidence to reproduce and audit a result after scratch cleanup
 
 ## Recorded source comparisons
 
-The [K1 case25 archive from 7 September 2026](evidence/k1-case25-20260907/README.md)
+The [K1 case25 archive from 7 September 2026](https://github.com/ma-gilles/recovar-experiments/blob/fa34e207ce3f6901dfc3e4f81ca7255da5e3bfa3/docs/development/evidence/k1-case25-20260907/README.md)
 preserves a measured control/candidate pair, commands, fixture identities and
 all shellwise FSC curves. It is a scoped historical run record, not an expected
 baseline or qualification of the current checkout.
 
-The [shared SPA/ET checkpoint](evidence/shared-spa-et-20260907/README.md) preserves
+The [shared SPA/ET checkpoint](https://github.com/ma-gilles/recovar-experiments/blob/fa34e207ce3f6901dfc3e4f81ca7255da5e3bfa3/docs/development/evidence/shared-spa-et-20260907/README.md) preserves
 historical quality/performance comparisons, generated fixture identities and
 six shellwise FSC curves recovered from saved outputs. Its threshold-frequency
 summaries saturate; use the archived curves when reviewing map-quality changes.
 
-The [VDAM coarse-repeat audit from 9 September 2026](evidence/vdam-coarse-repeat-20260909/README.md)
+The [VDAM coarse-repeat audit from 9 September 2026](https://github.com/ma-gilles/recovar-experiments/blob/fa34e207ce3f6901dfc3e4f81ca7255da5e3bfa3/docs/development/evidence/vdam-coarse-repeat-20260909/README.md)
 preserves independent CPU comparisons of 16 saved float32 score outputs, their
 hashes and the exact audit script. Same-input raw winners are stable despite
 score variation; this scoped diagnostic does not qualify trajectory decisions,
 M-step precision or performance.
 
-The [frozen VDAM full201 cell at4f9](evidence/vdam-full200-4f9-20260909/README.md)
+The [frozen VDAM full201 cell at4f9](https://github.com/ma-gilles/recovar-experiments/blob/fa34e207ce3f6901dfc3e4f81ca7255da5e3bfa3/docs/development/evidence/vdam-full200-4f9-20260909/README.md)
 preserves all1,005 shellwise curves/AUCs, commands, source/input/build pins, timing
 boundaries and a self-contained read-only audit. Both map conditions pass at all201
 checkpoints on one3k/128 K1 natural200 H100 pair; strict state parity still fails.
 The1.4883× wall ratio is one measured pair, not representative speed qualification.
 This is historical evidence, not a baseline replacement or later-tip acceptance.
 
-The [frozen canonical-pixel real-prefix cell at5ca9](evidence/vdam-canonical-pixel-prefix20-20260910/README.md)
+The [frozen canonical-pixel real-prefix cell at5ca9](https://github.com/ma-gilles/recovar-experiments/blob/fa34e207ce3f6901dfc3e4f81ca7255da5e3bfa3/docs/development/evidence/vdam-canonical-pixel-prefix20-20260910/README.md)
 now has integrator-verified source/input pins,21 exact FSC integrals, a worst-cell
 raw-map recheck and initial-map byte equality. All0–20 cross-map conditions pass
 on real10076 10k/256 K1; count/Pmax differences remain. This closes the missing
