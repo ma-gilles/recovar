@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import pathlib
 import time
 from dataclasses import replace
 from typing import Any
@@ -150,6 +151,29 @@ def _initial_model_relion_f32_fine_posterior_enabled(
         and int(oversampling_order) > 0
         and backend_enabled
     )
+
+
+_CLASS_CANDIDATE_COUNT_DUMP_ENV = "RECOVAR_VDAM_CLASS_CANDIDATE_COUNT_DUMP_DIR"
+
+
+def _maybe_dump_class_candidate_counts(class_layouts, *, iteration: int, halfset: int) -> None:
+    """Record the per-image, per-class pass-2 candidate counts when asked.
+
+    Diagnostic only, default off. The counts decide how a shared class-segment
+    width pads relative to per-class widths, which is a layout design question
+    that cannot be answered from a synthetic distribution.
+    """
+
+    directory = os.environ.get(_CLASS_CANDIDATE_COUNT_DUMP_ENV)
+    if not directory or not class_layouts:
+        return
+    target = pathlib.Path(directory)
+    target.mkdir(parents=True, exist_ok=True)
+    counts = np.stack(
+        [np.asarray(layout.rotation_counts, dtype=np.int64) for layout in class_layouts],
+        axis=1,
+    )
+    np.save(target / f"class_candidate_counts_it{int(iteration):03d}_half{int(halfset)}.npy", counts)
 
 
 def _compact_sparse_pass2_enabled(n_classes: int, pass2_engine: str = "auto") -> bool:
@@ -808,6 +832,11 @@ def _run_sparse_pass2_initial_model_estep(
                     )
                 local_layouts.append(_initial_model_pass2_layout(class_layout))
             local_layout = tuple(local_layouts)
+            _maybe_dump_class_candidate_counts(
+                local_layouts,
+                iteration=int(group_kwargs.get("debug_iteration", -1)),
+                halfset=int(halfset_idx),
+            )
 
         t0 = time.time()
         from recovar.em.sparse_pass2 import sparse_pass2_posterior as sparse_diagnostics

@@ -119,3 +119,30 @@ def test_class_layouts_must_share_translations_and_priors():
         bucket_class_local_hypothesis_layouts([a, b], [0.0, 0.0], image_batch_size=2, rotation_block_size=64)
     with pytest.raises(ValueError, match="entries"):
         bucket_class_local_hypothesis_layouts([a], [0.0, 0.0], image_batch_size=2, rotation_block_size=64)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
+def test_class_segments_never_compile_more_shapes_than_per_class_buckets(seed):
+    """The segment width comes from each image's widest class, so the shape set can only shrink.
+
+    Every compiled bucket shape is one XLA program per stage. Per-class layouts
+    contribute one shape per distinct padded count over all (image, class) pairs;
+    class-segmented rows contribute one per distinct padded count of the per-image
+    maxima, which is a subset. This is the compile-cost argument for one pass.
+    """
+    rng = np.random.default_rng(seed)
+    n_images, K = 60, 4
+    # Heavy-tailed, class-dependent candidate counts, as adaptive pass 2 produces.
+    counts = np.maximum(1, (rng.lognormal(3.0, 1.1, (n_images, K)) * (1 + rng.random(K))).astype(int))
+    tlp = rng.standard_normal((n_images, 5)).astype(np.float32)
+    layouts = [_layout(rng, counts[:, k], translation_log_priors=tlp) for k in range(K)]
+    kwargs = dict(image_batch_size=8, rotation_block_size=256, max_hypotheses_per_microbatch=1 << 20)
+
+    per_class = {b.bucket_rotation_count for k in range(K) for b in bucket_local_hypothesis_layout(layouts[k], **kwargs)}
+    segmented = {b.bucket_rotation_count for b in bucket_class_local_hypothesis_layouts(layouts, np.zeros(K), **kwargs)}
+    assert len(segmented) <= len(per_class), (sorted(segmented), sorted(per_class))
+
+    # And one pass over the data replaces the per-class passes.
+    per_class_calls = sum(len(bucket_local_hypothesis_layout(layouts[k], **kwargs)) for k in range(K))
+    segmented_calls = len(bucket_class_local_hypothesis_layouts(layouts, np.zeros(K), **kwargs))
+    assert segmented_calls <= per_class_calls
