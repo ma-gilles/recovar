@@ -2964,7 +2964,7 @@ def _run_relion_iteration_loop(
             (debug.save_intermediates_dir is not None and not debug.save_intermediates_skip_unregularized)
             or _parity_dump.is_active()
         )
-        unreg_result = compute_unregularized_halfmaps_and_align_signs(
+        unreg_means = compute_unregularized_halfmaps_and_align_signs(
             means=means,
             previous_means=previous_means,
             Ft_y_per_half=(Ft_y_0, Ft_y_1),
@@ -2981,7 +2981,6 @@ def _run_relion_iteration_loop(
             need_unreg_means=need_unreg_means,
             accumulator_volume_shape=mstep_accumulator_shape,
         )
-        unreg_means = unreg_result.unregularized_means
 
         # K>1 uses the shared per-class data_vs_prior curve to drive growth;
         # K=1 keeps the split-half FSC history.

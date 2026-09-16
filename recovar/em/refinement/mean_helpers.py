@@ -10,7 +10,6 @@ from __future__ import annotations
 import logging
 import os
 import time
-from dataclasses import dataclass as _dataclass
 
 import jax.numpy as jnp
 import numpy as np
@@ -789,24 +788,6 @@ def _reconstruct_and_postprocess_means(
 # ---------------------------------------------------------------------------
 
 
-@_dataclass
-class UnregularizedHalfmapResult:
-    """Unregularized half-maps + sign-flip telemetry.
-
-    ``unregularized_means`` is a 2-element list, one per half. For K-class
-    refinement both halves point at the same shared K-stack (RELION's
-    Class3D shares one mean across halves).
-
-    ``aligned_means`` is the input ``means`` argument after sign alignment
-    against ``previous_means`` (passed in so the caller can pick it up;
-    the helper also mutates ``means`` in place for convenience).
-    """
-
-    unregularized_means: list
-    aligned_means: list
-    any_sign_flipped: bool
-
-
 def compute_unregularized_halfmaps_and_align_signs(
     *,
     means: list,
@@ -824,9 +805,12 @@ def compute_unregularized_halfmaps_and_align_signs(
     minres_map: int,
     need_unreg_means: bool,
     accumulator_volume_shape=None,
-) -> UnregularizedHalfmapResult:
+) -> list:
     """Reconstruct unregularized half-maps (only when diagnostics need them)
     and sign-align the regularized means against the previous-iter reference.
+
+    Mutates the caller-owned ``means`` list in place and returns the two
+    unregularized maps (or ``[None, None]`` when diagnostics are disabled).
 
     For K-class refinement both halves share the same Iref-derived
     prior, so the unregularized accumulator is the combined Ft_y/Ft_ctf
@@ -877,7 +861,6 @@ def compute_unregularized_halfmaps_and_align_signs(
     else:
         unreg_means = [None, None]
 
-    any_sign_flipped = False
     if k_class_enabled:
         aligned_classes = []
         unreg_classes = [] if unreg_means[0] is not None else None
@@ -891,7 +874,6 @@ def compute_unregularized_halfmaps_and_align_signs(
             if unreg_classes is not None:
                 unreg_classes.append(-unreg_means[0][class_idx] if sign_flipped else unreg_means[0][class_idx])
             if sign_flipped:
-                any_sign_flipped = True
                 logger.info("Aligned shared class-%d volume sign to the previous reference", class_idx + 1)
         shared_aligned = jnp.stack(aligned_classes, axis=0)
         means[0] = shared_aligned
@@ -909,15 +891,10 @@ def compute_unregularized_halfmaps_and_align_signs(
             if sign_flipped and unreg_means[k] is not None:
                 unreg_means[k] = -unreg_means[k]
             if sign_flipped:
-                any_sign_flipped = True
                 logger.info("Aligned half-%d volume sign to the previous reference", k + 1)
     logger.info(
         "Unregularized reconstruction (2 halves): %.1fs%s",
         time.time() - _t_unreg,
         "" if need_unreg_means else " (skipped; diagnostics disabled)",
     )
-    return UnregularizedHalfmapResult(
-        unregularized_means=unreg_means,
-        aligned_means=means,
-        any_sign_flipped=any_sign_flipped,
-    )
+    return unreg_means
