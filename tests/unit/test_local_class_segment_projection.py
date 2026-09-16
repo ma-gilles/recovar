@@ -248,7 +248,7 @@ def test_class_segment_statistics_match_per_class_reductions(n_classes):
     probs = jnp.exp(scores - log_z[:, None, None])
     recon = probs * jnp.asarray(rng.random((batch_size, rows, n_trans)) > 0.4, dtype=probs.dtype)
 
-    mass, best, recon_mass = _class_segment_statistics(
+    mass, best, recon_mass, evidence = _class_segment_statistics(
         probs, scores, recon, n_classes=n_classes, segment_rotation_count=seg,
     )
     for k in range(n_classes):
@@ -257,11 +257,10 @@ def test_class_segment_statistics_match_per_class_reductions(n_classes):
         np.testing.assert_allclose(np.asarray(best[:, k]), np.asarray(jnp.max(scores[:, sl], axis=(1, 2))), rtol=0, atol=0)
         np.testing.assert_allclose(np.asarray(recon_mass[:, k]), np.asarray(jnp.sum(recon[:, sl], axis=(1, 2))), rtol=0, atol=0)
 
-    # The per-class log evidence identity the design relies on.
-    per_class_log_evidence = np.asarray(log_z)[:, None] + np.log(np.asarray(mass))
+    # The per-class log evidence is the direct per-class logsumexp.
     direct = np.stack([np.asarray(jax.scipy.special.logsumexp(
         scores[:, k * seg:(k + 1) * seg].reshape(batch_size, -1), axis=1)) for k in range(n_classes)], axis=1)
-    np.testing.assert_allclose(per_class_log_evidence, direct, rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(evidence), direct, rtol=1e-5, atol=1e-5)
     # And the responsibilities are a partition of unity.
     np.testing.assert_allclose(np.asarray(mass).sum(axis=1), np.ones(batch_size), rtol=1e-6, atol=1e-6)
 
@@ -272,3 +271,68 @@ def test_class_segment_statistics_reject_rows_that_do_not_factor():
     probs = jnp.zeros((2, 7, 3))
     with pytest.raises(ValueError, match="class-segmented rows must be"):
         _class_segment_statistics(probs, probs, None, n_classes=2, segment_rotation_count=3)
+
+
+@pytest.mark.parametrize("use_float64", [True, False])
+def test_class_evidence_survives_posterior_underflow(use_float64):
+    """Four populated classes decades apart: masses underflow, evidence must not.
+
+    Reported by the lead against the first implementation, which derived the
+    per-class evidence from the joint posterior as log_Z + log(mass) and returned
+    -inf for three populated classes in both precisions.
+    """
+    from recovar.em.local.local_big_jit import _class_segment_statistics
+
+    n_classes, seg, n_trans = 4, 1, 1
+    scores = jnp.asarray(np.array([[[0.0], [-1000.0], [-2000.0], [-3000.0]]]), dtype=jnp.float32)
+    log_z = jax.scipy.special.logsumexp(scores.reshape(1, -1), axis=1)
+    probs = jnp.exp(scores - log_z[:, None, None])
+
+    mass, best, _recon, evidence = _class_segment_statistics(
+        probs, scores, None, n_classes=n_classes, segment_rotation_count=seg,
+        use_float64_normalization=use_float64,
+    )
+    # The masses do underflow; that is correct for a normalized responsibility.
+    np.testing.assert_allclose(np.asarray(mass)[0], [1.0, 0.0, 0.0, 0.0], rtol=0, atol=0)
+    # The evidence must still be the direct per-class logsumexp.
+    np.testing.assert_allclose(np.asarray(evidence)[0], [0.0, -1000.0, -2000.0, -3000.0], rtol=1e-6, atol=1e-4)
+    np.testing.assert_allclose(np.asarray(best)[0], [0.0, -1000.0, -2000.0, -3000.0], rtol=0, atol=0)
+    assert np.isfinite(np.asarray(evidence)).all()
+
+
+def test_empty_class_reports_minus_infinity_evidence():
+    """A segment with no finite score is the genuinely empty class."""
+    from recovar.em.local.local_big_jit import _class_segment_statistics
+
+    scores = jnp.asarray(np.array([[[0.0, -2.0], [-np.inf, -np.inf], [-5.0, -7.0]]]), dtype=jnp.float32)
+    probs = jnp.exp(scores - jax.scipy.special.logsumexp(scores.reshape(1, -1), axis=1)[:, None, None])
+    probs = jnp.where(jnp.isfinite(probs), probs, 0.0)
+    _mass, _best, _recon, evidence = _class_segment_statistics(
+        probs, scores, None, n_classes=3, segment_rotation_count=1,
+    )
+    got = np.asarray(evidence)[0]
+    assert np.isneginf(got[1])
+    np.testing.assert_allclose(got[[0, 2]], [
+        float(jax.scipy.special.logsumexp(scores[0, 0])),
+        float(jax.scipy.special.logsumexp(scores[0, 2])),
+    ], rtol=1e-6, atol=1e-5)
+
+
+def test_class_evidence_matches_direct_logsumexp_on_wide_score_ranges():
+    from recovar.em.local.local_big_jit import _class_segment_statistics
+
+    rng = np.random.default_rng(67)
+    batch_size, n_classes, seg, n_trans = 3, 4, 3, 2
+    # Decade-scale class offsets on top of ordinary within-class spread.
+    base = rng.standard_normal((batch_size, n_classes * seg, n_trans)) * 2.0
+    offsets = np.repeat(np.array([0.0, -60.0, -400.0, -1500.0]), seg)[None, :, None]
+    scores = jnp.asarray(base + offsets, dtype=jnp.float32)
+    probs = jnp.exp(scores - jax.scipy.special.logsumexp(scores.reshape(batch_size, -1), axis=1)[:, None, None])
+    _mass, _best, _recon, evidence = _class_segment_statistics(
+        probs, scores, None, n_classes=n_classes, segment_rotation_count=seg,
+    )
+    direct = np.stack([
+        np.asarray(jax.scipy.special.logsumexp(scores[:, k * seg:(k + 1) * seg].reshape(batch_size, -1), axis=1))
+        for k in range(n_classes)
+    ], axis=1)
+    np.testing.assert_allclose(np.asarray(evidence), direct, rtol=1e-6, atol=1e-3)

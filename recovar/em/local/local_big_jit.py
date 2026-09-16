@@ -1630,19 +1630,24 @@ def _class_segment_statistics(
     *,
     n_classes: int,
     segment_rotation_count: int,
+    use_float64_normalization: bool = True,
 ):
     """Reduce class-major segmented rows to the per-class quantities K-class EM needs.
 
     With one joint posterior over ``(class, rotation, translation)`` the per-class
-    statistics follow from segment reductions, exactly and without a second pass:
+    statistics are segment reductions, so one pass replaces the probe pass per class:
 
-    * ``class_probs_sum[b, k]`` is class k's posterior mass, i.e. RELION's per-class
-      responsibility, and the per-class log evidence is
-      ``log_Z + log(class_probs_sum)`` because the probabilities are already
-      normalized by the joint ``log_Z``;
-    * ``class_best_log_score[b, k]`` is the best unnormalized score within class k,
-      which the per-class engine calls report today;
-    * ``class_reconstruction_probs_sum[b, k]`` is the same mass over the pruned
+    * ``class_log_evidence[b, k]`` is class k's log evidence, reduced from the
+      unnormalized scores with that segment's own maximum. Deriving it instead from
+      the joint posterior as ``log_Z + log(mass)`` loses every class whose mass
+      underflows: four populated classes scoring 0, -1000, -2000, -3000 give masses
+      1, 0, 0, 0 in float32 and float64 alike, and the evidence would read -inf for
+      three of them. A class is reported as -inf only when the segment holds no
+      finite score at all, which is the empty-class case.
+    * ``class_probs_sum[b, k]`` is class k's posterior mass, RELION's responsibility,
+      which correctly underflows to zero for a negligible class;
+    * ``class_best_log_score[b, k]`` is the best unnormalized score within class k;
+    * ``class_reconstruction_probs_sum[b, k]`` is the mass over the pruned
       reconstruction posterior.
     """
 
@@ -1659,11 +1664,26 @@ def _class_segment_statistics(
         return values.reshape(batch_size, n_classes, segment_rotation_count, values.shape[-1])
 
     class_probs_sum = jnp.sum(segments(probs), axis=(2, 3))
-    class_best_log_score = jnp.max(segments(scores), axis=(2, 3))
     class_reconstruction_probs_sum = (
         None if reconstruction_probs is None else jnp.sum(segments(reconstruction_probs), axis=(2, 3))
     )
-    return class_probs_sum, class_best_log_score, class_reconstruction_probs_sum
+
+    segment_scores = segments(scores).reshape(batch_size, n_classes, segment_rotation_count * scores.shape[-1])
+    class_best_log_score = jnp.max(segment_scores, axis=2)
+    class_has_score = jnp.isfinite(class_best_log_score)
+    shift = jnp.where(class_has_score, class_best_log_score, jnp.zeros_like(class_best_log_score))
+    accumulation_dtype = jnp.float64 if use_float64_normalization else segment_scores.dtype
+    shifted = jnp.exp((segment_scores - shift[..., None]).astype(accumulation_dtype))
+    shifted = jnp.where(jnp.isfinite(shifted), shifted, jnp.zeros_like(shifted))
+    segment_sum = jnp.sum(shifted, axis=2)
+    class_has_mass = class_has_score & jnp.isfinite(segment_sum) & (segment_sum > 0.0)
+    safe_sum = jnp.where(class_has_mass, segment_sum, jnp.ones_like(segment_sum))
+    class_log_evidence = jnp.where(
+        class_has_mass,
+        shift.astype(accumulation_dtype) + jnp.log(safe_sum),
+        jnp.asarray(-jnp.inf, dtype=accumulation_dtype),
+    )
+    return class_probs_sum, class_best_log_score, class_reconstruction_probs_sum, class_log_evidence
 
 
 
@@ -1716,6 +1736,7 @@ class _LocalBigJitCore(NamedTuple):
     class_probs_sum: jax.Array | None = None
     class_best_log_score: jax.Array | None = None
     class_reconstruction_probs_sum: jax.Array | None = None
+    class_log_evidence: jax.Array | None = None
 
 
 class _LocalDeferredMstep(NamedTuple):
@@ -3159,15 +3180,18 @@ def run_local_bucket_big_jit(
             class_probs_sum,
             class_best_log_score,
             class_reconstruction_probs_sum,
+            class_log_evidence,
         ) = _class_segment_statistics(
             debug_probs,
             debug_scores,
             reconstruction_probs,
             n_classes=n_classes,
             segment_rotation_count=int(class_segment_rotation_count),
+            use_float64_normalization=use_float64_normalization,
         )
     else:
-        class_probs_sum = class_best_log_score = class_reconstruction_probs_sum = None
+        class_probs_sum = class_best_log_score = None
+        class_reconstruction_probs_sum = class_log_evidence = None
     source_ordered_vdam_scattered = bool(
         source_ordered_vdam_mstep
         and not return_mstep_tensors
@@ -3396,6 +3420,7 @@ def run_local_bucket_big_jit(
                 class_probs_sum=class_probs_sum,
                 class_best_log_score=class_best_log_score,
                 class_reconstruction_probs_sum=class_reconstruction_probs_sum,
+                class_log_evidence=class_log_evidence,
             )
         )
         if return_source_vdam_operands:
