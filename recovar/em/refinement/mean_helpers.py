@@ -577,7 +577,6 @@ def _reconstruct_and_postprocess_means(
     mean_signal_variance_shells,
     mean_signal_variance_per_half,
     n_classes: int,
-    k_class_enabled: bool,
     cs,
     iteration: int,
     grid_size: int,
@@ -608,7 +607,7 @@ def _reconstruct_and_postprocess_means(
 
     _t_recon = time.time()
     cs_int = int(cs) if cs is not None else None
-    if k_class_enabled:
+    if n_classes > 1:
         shared_class_maps = []
         for class_idx in range(n_classes):
             logger.info(
@@ -690,7 +689,7 @@ def _reconstruct_and_postprocess_means(
                 "RECOVAR_PREMASK_DUMP_PRESERVE_DTYPE", ""
             ).strip().lower() not in {"", "0", "false", "no", "off"}
             _premask_fourier = np.asarray(means[k])
-            if k_class_enabled:
+            if n_classes > 1:
                 _premask_real = np.stack(
                     [
                         np.asarray(
@@ -732,7 +731,7 @@ def _reconstruct_and_postprocess_means(
         # not commute: masking in real space after the Fourier low-pass adds a
         # small, deterministic high-shell tail.
         if relion_firstiter_cc_this_iter:
-            if k_class_enabled:
+            if n_classes > 1:
                 means[k] = jnp.stack(
                     [
                         _apply_relion_initial_lowpass_filter(
@@ -761,9 +760,9 @@ def _reconstruct_and_postprocess_means(
                 radius=flatten_radius,
                 radius_p=flatten_radius + relion_width_mask_edge,
                 offset=jnp.zeros(3),
-                dtype=(means[k].real.dtype if not k_class_enabled else means[k][0].real.dtype),
+                dtype=(means[k].real.dtype if n_classes <= 1 else means[k][0].real.dtype),
             )
-            if k_class_enabled:
+            if n_classes > 1:
                 flattened_classes = []
                 for class_idx in range(n_classes):
                     vol_real = fourier_transform_utils.get_idft3(means[k][class_idx].reshape(volume_shape))
@@ -797,7 +796,6 @@ def compute_unregularized_halfmaps_and_align_signs(
     Ft_ctf_combined,
     volume_shape,
     n_classes: int,
-    k_class_enabled: bool,
     tau2_fudge: float,
     padding_factor: int,
     projection_padding_factor: int,
@@ -823,7 +821,7 @@ def compute_unregularized_halfmaps_and_align_signs(
 
     _t_unreg = time.time()
     if need_unreg_means:
-        if k_class_enabled:
+        if n_classes > 1:
             unreg_shared = jnp.stack(
                 [
                     _reconstruct_volume_eager(
@@ -860,7 +858,7 @@ def compute_unregularized_halfmaps_and_align_signs(
     else:
         unreg_means = [None, None]
 
-    if k_class_enabled:
+    if n_classes > 1:
         aligned_classes = []
         unreg_classes = [] if unreg_means[0] is not None else None
         for class_idx in range(n_classes):

@@ -152,7 +152,6 @@ def _reconstruct_iteration1_maps(
         mean_signal_variance_shells=None,
         mean_signal_variance_per_half=tau_per_half,
         n_classes=1,
-        k_class_enabled=False,
         cs=current_size,
         iteration=0,
         grid_size=volume_shape[0],

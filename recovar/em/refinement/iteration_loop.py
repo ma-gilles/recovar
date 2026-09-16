@@ -1939,7 +1939,6 @@ def _run_relion_iteration_loop(
                     image_shape=experiment_datasets[k].image_shape,
                     cs_for_engine=cs_for_engine,
                     coarse_cs=coarse_cs,
-                    k_class_enabled=k_class_enabled,
                     safe_batch_sizes=_safe_batch_sizes,
                 )
                 k_class_image_batch_size = adaptive_batch_plan.pass2_image_batch_size
@@ -2843,7 +2842,6 @@ def _run_relion_iteration_loop(
             mean_signal_variance_shells=mean_signal_variance_shells if k_class_enabled else None,
             mean_signal_variance_per_half=mean_signal_variance_per_half if not k_class_enabled else None,
             n_classes=n_classes,
-            k_class_enabled=k_class_enabled,
             cs=current_size,
             iteration=iteration,
             grid_size=grid_size,
@@ -2971,7 +2969,6 @@ def _run_relion_iteration_loop(
             Ft_ctf_combined=Ft_ctf_combined if k_class_enabled else None,
             volume_shape=volume_shape,
             n_classes=n_classes,
-            k_class_enabled=k_class_enabled,
             tau2_fudge=tau2_fudge,
             padding_factor=PADDING_FACTOR,
             projection_padding_factor=PROJECTION_PADDING_FACTOR,

@@ -175,7 +175,6 @@ def _plan_adaptive_dense_batch_sizes(
     image_shape,
     cs_for_engine,
     coarse_cs,
-    k_class_enabled: bool,
     safe_batch_sizes,
 ) -> _AdaptiveDenseBatchSizes:
     """Plan adaptive dense microbatches from each pass' Fourier window."""
@@ -187,7 +186,7 @@ def _plan_adaptive_dense_batch_sizes(
         image_shape_for_batch=image_shape,
         current_size_for_batch=cs_for_engine,
     )
-    if k_class_enabled:
+    if n_classes > 1:
         pass2_image_batch_size = min(
             pass2_image_batch_size,
             _safe_firstiter_cc_image_batch_size(
