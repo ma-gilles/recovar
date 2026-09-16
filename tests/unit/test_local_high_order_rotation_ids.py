@@ -11,7 +11,7 @@ the int64 contract at every host-side boundary of the id flow.
 import numpy as np
 import pytest
 
-from recovar.em.local import local_bucket_stages, local_em_engine, local_layout, local_projection_cache
+from recovar.em.local import local_bucket_stages, local_layout, local_projection_cache
 
 
 def test_parent_expanded_child_ids_exceeding_int32_stay_positive_int64():
@@ -19,11 +19,12 @@ def test_parent_expanded_child_ids_exceeding_int32_stay_positive_int64():
     # RELION eulers (rot, tilt, psi) in degrees: psi near 360 selects the last
     # psi index so the encoded ids land near the top of the id space.
     prior_eulers = np.array([[12.0, 80.0, 359.5]], dtype=np.float64)
+    # Sigmas are radians; narrow support still exercises ids beyond int32.
     entries = local_layout._build_parent_expanded_local_entries(
         prior_eulers,
         fine_order,
-        sigma_rot=0.3,
-        sigma_psi=0.3,
+        sigma_rot=np.deg2rad(0.3),
+        sigma_psi=np.deg2rad(0.3),
         oversampling_order=1,
     )
     rotation_ids_flat = np.asarray(entries[2])
