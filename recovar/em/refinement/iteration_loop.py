@@ -3476,7 +3476,6 @@ def _run_relion_iteration_loop(
             noise_stats_per_half_per_class=noise_stats_per_half_per_class,
             current_sigma_offset_angstrom_per_half=current_sigma_offset_angstrom_per_half,
             n_classes=n_classes,
-            k_class_enabled=k_class_enabled,
             state_fallback_offsets_angstrom=state.current_changes_optimal_offsets_angstrom,
         )
         current_sigma_offset_angstrom = sigma_offset_result.current_sigma_offset_angstrom

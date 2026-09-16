@@ -52,7 +52,6 @@ def update_c1_sigma_offset_from_posterior(
     noise_stats_per_half_per_class,
     current_sigma_offset_angstrom_per_half,
     n_classes: int,
-    k_class_enabled: bool,
     state_fallback_offsets_angstrom: float,
 ) -> SigmaOffsetUpdateResult:
     """RELION C1 posterior-weighted ``sigma_offset`` update per half-set.
@@ -98,7 +97,7 @@ def update_c1_sigma_offset_from_posterior(
     if len(per_half_values) != 2:
         raise ValueError(f"noise_stats_per_half must contain two halves, got {len(per_half_values)}")
     per_half_sigma_offset = np.asarray(per_half_values, dtype=np.float64)
-    if k_class_enabled:
+    if n_classes > 1:
         shared_sigma_offset = _sigma_offset_from_moment(
             pooled_wsum,
             pooled_sumw,
@@ -112,7 +111,7 @@ def update_c1_sigma_offset_from_posterior(
     # only to help diagnose skewed class posteriors without changing the live
     # shared translation prior.
     per_class_sigma_offset = None
-    if k_class_enabled:
+    if n_classes > 1:
         per_class_w = np.zeros(n_classes, dtype=np.float64)
         per_class_n = np.zeros(n_classes, dtype=np.float64)
         for half_per_class in noise_stats_per_half_per_class:
