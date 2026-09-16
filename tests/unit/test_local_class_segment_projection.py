@@ -233,3 +233,42 @@ def test_class_segment_adjoint_keeps_classes_apart():
     assert np.abs(np.asarray(got_y[0])).max() > 0.0
     np.testing.assert_array_equal(np.asarray(got_y[1]), np.zeros(volume_size, dtype=np.complex64))
     np.testing.assert_array_equal(np.asarray(got_ctf[1]), np.zeros(volume_size, dtype=np.float32))
+
+
+@pytest.mark.parametrize("n_classes", [2, 4])
+def test_class_segment_statistics_match_per_class_reductions(n_classes):
+    """Per-class evidence, best score and reconstruction mass come from one joint pass."""
+    from recovar.em.local.local_big_jit import _class_segment_statistics
+
+    rng = np.random.default_rng(53)
+    batch_size, seg, n_trans = 3, 5, 4
+    rows = n_classes * seg
+    scores = jnp.asarray(rng.standard_normal((batch_size, rows, n_trans)) * 3.0, dtype=jnp.float32)
+    log_z = jax.scipy.special.logsumexp(scores.reshape(batch_size, -1), axis=1)
+    probs = jnp.exp(scores - log_z[:, None, None])
+    recon = probs * jnp.asarray(rng.random((batch_size, rows, n_trans)) > 0.4, dtype=probs.dtype)
+
+    mass, best, recon_mass = _class_segment_statistics(
+        probs, scores, recon, n_classes=n_classes, segment_rotation_count=seg,
+    )
+    for k in range(n_classes):
+        sl = slice(k * seg, (k + 1) * seg)
+        np.testing.assert_allclose(np.asarray(mass[:, k]), np.asarray(jnp.sum(probs[:, sl], axis=(1, 2))), rtol=0, atol=0)
+        np.testing.assert_allclose(np.asarray(best[:, k]), np.asarray(jnp.max(scores[:, sl], axis=(1, 2))), rtol=0, atol=0)
+        np.testing.assert_allclose(np.asarray(recon_mass[:, k]), np.asarray(jnp.sum(recon[:, sl], axis=(1, 2))), rtol=0, atol=0)
+
+    # The per-class log evidence identity the design relies on.
+    per_class_log_evidence = np.asarray(log_z)[:, None] + np.log(np.asarray(mass))
+    direct = np.stack([np.asarray(jax.scipy.special.logsumexp(
+        scores[:, k * seg:(k + 1) * seg].reshape(batch_size, -1), axis=1)) for k in range(n_classes)], axis=1)
+    np.testing.assert_allclose(per_class_log_evidence, direct, rtol=1e-5, atol=1e-5)
+    # And the responsibilities are a partition of unity.
+    np.testing.assert_allclose(np.asarray(mass).sum(axis=1), np.ones(batch_size), rtol=1e-6, atol=1e-6)
+
+
+def test_class_segment_statistics_reject_rows_that_do_not_factor():
+    from recovar.em.local.local_big_jit import _class_segment_statistics
+
+    probs = jnp.zeros((2, 7, 3))
+    with pytest.raises(ValueError, match="class-segmented rows must be"):
+        _class_segment_statistics(probs, probs, None, n_classes=2, segment_rotation_count=3)

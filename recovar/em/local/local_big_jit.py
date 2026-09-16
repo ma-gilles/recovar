@@ -1623,6 +1623,49 @@ def _adjoint_local_class_segments(
     return jnp.stack(updated_y, axis=0), jnp.stack(updated_ctf, axis=0)
 
 
+def _class_segment_statistics(
+    probs,
+    scores,
+    reconstruction_probs,
+    *,
+    n_classes: int,
+    segment_rotation_count: int,
+):
+    """Reduce class-major segmented rows to the per-class quantities K-class EM needs.
+
+    With one joint posterior over ``(class, rotation, translation)`` the per-class
+    statistics follow from segment reductions, exactly and without a second pass:
+
+    * ``class_probs_sum[b, k]`` is class k's posterior mass, i.e. RELION's per-class
+      responsibility, and the per-class log evidence is
+      ``log_Z + log(class_probs_sum)`` because the probabilities are already
+      normalized by the joint ``log_Z``;
+    * ``class_best_log_score[b, k]`` is the best unnormalized score within class k,
+      which the per-class engine calls report today;
+    * ``class_reconstruction_probs_sum[b, k]`` is the same mass over the pruned
+      reconstruction posterior.
+    """
+
+    batch_size = int(probs.shape[0])
+    rows = int(probs.shape[1])
+    n_classes = int(n_classes)
+    segment_rotation_count = int(segment_rotation_count)
+    if rows != n_classes * segment_rotation_count:
+        raise ValueError(
+            f"class-segmented rows must be {n_classes} x {segment_rotation_count}, got {rows}"
+        )
+
+    def segments(values):
+        return values.reshape(batch_size, n_classes, segment_rotation_count, values.shape[-1])
+
+    class_probs_sum = jnp.sum(segments(probs), axis=(2, 3))
+    class_best_log_score = jnp.max(segments(scores), axis=(2, 3))
+    class_reconstruction_probs_sum = (
+        None if reconstruction_probs is None else jnp.sum(segments(reconstruction_probs), axis=(2, 3))
+    )
+    return class_probs_sum, class_best_log_score, class_reconstruction_probs_sum
+
+
 
 class _LocalMstepAccumulators(NamedTuple):
     """The two reconstruction buffers donated at the local JIT boundary."""
@@ -1669,6 +1712,10 @@ class _LocalBigJitCore(NamedTuple):
     reconstruction_sample_mask: jax.Array
     reconstruction_rotation_mask: jax.Array
     reconstruction_row_count: jax.Array
+    # Per-class segment reductions; None unless the bucket carries class-segmented rows.
+    class_probs_sum: jax.Array | None = None
+    class_best_log_score: jax.Array | None = None
+    class_reconstruction_probs_sum: jax.Array | None = None
 
 
 class _LocalDeferredMstep(NamedTuple):
@@ -3107,6 +3154,20 @@ def run_local_bucket_big_jit(
         sequential_translation_reduction=relion_sequential_mstep_reduction,
         scores_override=direct_scores,
     )
+    if n_classes > 1:
+        (
+            class_probs_sum,
+            class_best_log_score,
+            class_reconstruction_probs_sum,
+        ) = _class_segment_statistics(
+            debug_probs,
+            debug_scores,
+            reconstruction_probs,
+            n_classes=n_classes,
+            segment_rotation_count=int(class_segment_rotation_count),
+        )
+    else:
+        class_probs_sum = class_best_log_score = class_reconstruction_probs_sum = None
     source_ordered_vdam_scattered = bool(
         source_ordered_vdam_mstep
         and not return_mstep_tensors
@@ -3332,6 +3393,9 @@ def run_local_bucket_big_jit(
                 reconstruction_sample_mask=reconstruction_sample_mask,
                 reconstruction_rotation_mask=reconstruction_rotation_mask,
                 reconstruction_row_count=reconstruction_row_count,
+                class_probs_sum=class_probs_sum,
+                class_best_log_score=class_best_log_score,
+                class_reconstruction_probs_sum=class_reconstruction_probs_sum,
             )
         )
         if return_source_vdam_operands:
