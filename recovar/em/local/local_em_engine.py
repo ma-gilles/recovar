@@ -1553,7 +1553,15 @@ def run_local_em_exact(
     disabled_group_ids = jnp.zeros(1, dtype=jnp.int32)
     disabled_noise_shell_indices = jnp.zeros(n_half, dtype=jnp.int32)
 
-    local_support_rows = int(np.sum(local_layout.rotation_counts))
+    # In class mode the representative layout holds one class's rows, but the bucket
+    # carries every class, so the support that decides the reconstruction route must
+    # count them all. Otherwise a class-segmented run could take a different
+    # reconstruction route than the per-class run of the same problem.
+    local_support_rows = int(
+        sum(int(np.sum(layout.rotation_counts)) for layout in class_layouts)
+        if class_layouts is not None
+        else np.sum(local_layout.rotation_counts)
+    )
     significant_backprojection_candidate = (
         reconstruct_significant_only
         and n_images > 0

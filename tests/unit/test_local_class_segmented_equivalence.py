@@ -36,7 +36,11 @@ N_IMAGES = 6
 NOISE_VARIANCE = 1.0e3
 TRANSLATIONS = np.asarray([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
 CANONICAL_EULERS = np.asarray([360.0, 0.0, 0.0], dtype=np.float64)
-ROWS_BY_CLASS = ([3, 1, 2, 2, 1, 3], [1, 3, 2, 2, 3, 1])
+# Enough candidate rows that the significant-only reconstruction route is actually
+# selected: it needs local support of at least n_images / 0.25 rows. With the earlier
+# 12 rows the engine took the dense in-bucket adjoint instead, so the tests never
+# reached the route that had the class-routing bug.
+ROWS_BY_CLASS = ([7, 5, 6, 6, 5, 7], [5, 7, 6, 6, 7, 5])
 
 
 def _layout(counts, *, seed, n_global=4):
@@ -142,6 +146,19 @@ def _assert_published_dtypes_match(segmented, baseline, expected_real):
         got = np.asarray(getattr(segmented.aggregate_noise_stats, field)).dtype
         assert got == expected_real, (field, got)
         assert got == np.asarray(getattr(baseline.aggregate_noise_stats, field)).dtype, field
+
+
+def _assert_sparse_reconstruction_route_was_used(result):
+    """Fail loudly if the fixture silently took the dense adjoint instead.
+
+    The significant-only route is the one that packs surviving rows and scatters them
+    outside the bucket program; it is selected only when the local support is large
+    enough. A fixture below that size tests the other route and proves nothing about
+    this one.
+    """
+    profile = result.profile_summary or {}
+    chunks = int(profile.get("sparse_adjoint_chunk_count", 0))
+    assert chunks > 0, f"the significant-only reconstruction route was not exercised: {chunks} sparse chunks"
 
 
 def _assert_every_class_is_populated(result):
@@ -325,25 +342,29 @@ def test_class_packs_contain_only_their_own_rows():
 
 
 @pytest.mark.parametrize("float64", [False, True], ids=["float32", "float64"])
-def test_a_class_without_rows_receives_an_exactly_zero_volume(float64):
+@pytest.mark.parametrize("empty_class", [0, 1])
+def test_a_class_without_rows_receives_an_exactly_zero_volume(float64, empty_class):
     """An empty class must receive nothing at all, in either precision.
 
-    This is the identity check the aggregate weight comparison could not make: if any
-    of another class's rows reached this volume it would not be exactly zero.
+    Both classes are exercised deliberately. Emptying only class 1 cannot detect the
+    bug this guards: when every class's rows were scattered into volume 0, class 1
+    came back zero anyway and such a test passed. Emptying class 0 while class 1 is
+    populated fails against that implementation, because volume 0 would hold class
+    1's rows.
     """
     means, noise, layouts = _fixture(float64)
-    # Mask out every candidate of class 1; class 0 keeps its rows.
-    empty = layouts[1]
-    layouts = [
-        layouts[0],
-        type(empty)(**{**empty.__dict__, "sample_mask_flat": np.zeros_like(empty.sample_mask_flat)}),
-    ]
+    empty = layouts[empty_class]
+    emptied = type(empty)(**{**empty.__dict__, "sample_mask_flat": np.zeros_like(empty.sample_mask_flat)})
+    layouts = [emptied if index == empty_class else layout for index, layout in enumerate(layouts)]
     dataset = MockDataset(N_IMAGES, np.random.default_rng(11))
     kwargs = dict(
         image_batch_size=3, rotation_block_size=4, current_size=None,
         reconstruct_significant_only=True, adaptive_fraction=0.999,
         stats_use_reconstruction_probs=True, unweighted_high_shell_image_power=True,
         accumulate_noise=True, return_best_pose_details=True,
+        # The profile carries the sparse chunk count, which is how this test proves it
+        # reached the significant-only scatter rather than the dense adjoint.
+        return_profile=True,
     )
     if float64:
         kwargs.update(use_float64_scoring=True, use_float64_normalization=True, use_float64_projections=True)
@@ -352,9 +373,10 @@ def test_a_class_without_rows_receives_an_exactly_zero_volume(float64):
         class_log_priors=np.log(np.asarray([0.5, 0.5], dtype=np.float64)),
         segmented_class_rows=True, **kwargs,
     )
-    empty_y = np.asarray(result.Ft_y[1])
-    empty_ctf = np.asarray(result.Ft_ctf[1])
+    _assert_sparse_reconstruction_route_was_used(result)
+    empty_y = np.asarray(result.Ft_y[empty_class])
+    empty_ctf = np.asarray(result.Ft_ctf[empty_class])
     np.testing.assert_array_equal(empty_y, np.zeros_like(empty_y))
     np.testing.assert_array_equal(empty_ctf, np.zeros_like(empty_ctf))
-    populated = np.asarray(result.Ft_ctf[0])
+    populated = np.asarray(result.Ft_ctf[1 - empty_class])
     assert np.abs(populated).max() > 0.0
