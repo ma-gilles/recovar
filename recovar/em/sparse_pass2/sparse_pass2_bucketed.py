@@ -2203,9 +2203,15 @@ def compute_pass2_stats_sparse_bucketed(
                 relion_wavg_atomic_scale_xa_pixels_np = None
                 relion_wavg_atomic_scale_aa_pixels_np = None
                 relion_wavg_atomic_diff2_pixels_np = None
+                # These two accumulators are device reductions summed once per
+                # chunk.  Holding them on the device avoids a blocking pull per
+                # chunk (measured 5.0% of the iteration-2 wall at
+                # sparse_pass2_bucketed.py:2476, job 14003681) and avoids
+                # pushing them straight back for the weighted-shell calls below.
+                # The add order is unchanged, so the float64 sums are identical.
                 if translation_sqdist_ang is not None or translated_wavg_norm:
-                    chunk_translation_posterior_total = np.zeros((batch, n_fine_trans), dtype=np.float64)
-                chunk_support_mass = np.zeros((batch,), dtype=np.float64)
+                    chunk_translation_posterior_total = jnp.zeros((batch, n_fine_trans), dtype=jnp.float64)
+                chunk_support_mass = jnp.zeros((batch,), dtype=jnp.float64)
                 shifted_noise_split = (
                     shifted_noise.reshape(batch, n_fine_trans, -1)
                     if half_spectrum_scoring
@@ -2473,11 +2479,12 @@ def compute_pass2_stats_sparse_bucketed(
                 if accumulate_noise:
                     noise_probs = mstep_probs if use_relion_fine_mstep_prune and not score_only else probs
                     if translation_sqdist_ang is not None or translated_wavg_norm:
-                        chunk_translation_posterior_total += np.asarray(
-                            jnp.sum(noise_probs, axis=1),
-                            dtype=np.float64,
-                        )
-                    chunk_support_mass += np.asarray(jnp.sum(noise_probs, axis=(1, 2)), dtype=np.float64)
+                        chunk_translation_posterior_total = chunk_translation_posterior_total + jnp.sum(
+                            noise_probs, axis=1
+                        ).astype(jnp.float64)
+                    chunk_support_mass = chunk_support_mass + jnp.sum(
+                        noise_probs, axis=(1, 2)
+                    ).astype(jnp.float64)
                     summed_masked_noise = compute_local_weighted_sums(noise_probs, shifted_noise_split)
                     if parse_env_flag("RECOVAR_NOISE_DTYPE_DEBUG", default=False):
                         logger.info(
@@ -3037,7 +3044,7 @@ def compute_pass2_stats_sparse_bucketed(
                 weighted_img_shells, weighted_img_per_image = _weighted_image_power_shells_and_per_image(
                     processed_score_half_for_noise,
                     shell_indices_half,
-                    jnp.asarray(chunk_support_mass, dtype=jnp.float32),
+                    chunk_support_mass.astype(jnp.float32),
                     shell_count=n_shells,
                     norm_unweighted_shell_cutoff=None if current_size is None else int(current_size // 2),
                     norm_unweighted_high_shell=relion_norm_high_shell,
@@ -3049,7 +3056,7 @@ def compute_pass2_stats_sparse_bucketed(
                         weighted_img_per_image,
                         processed_score_half_for_noise,
                         raw_translated_wavg_for_norm,
-                        jnp.asarray(chunk_translation_posterior_total, dtype=jnp.float32),
+                        chunk_translation_posterior_total.astype(jnp.float32),
                         shell_indices_half,
                         window_indices,
                         shell_cutoff=int(current_size // 2),
@@ -3087,7 +3094,7 @@ def compute_pass2_stats_sparse_bucketed(
                         weighted_img_per_image,
                         dtype=np.float64,
                     )
-                noise_sumw_total += float(np.sum(chunk_support_mass, dtype=np.float64))
+                noise_sumw_total += float(jnp.sum(chunk_support_mass, dtype=jnp.float64))
 
                 if chunked_scale_aa_target_rows.size:
                     dump_dir = os.environ.get(pass2_diagnostics._PASS2_DUMP_DIR_ENV)
@@ -3167,7 +3174,11 @@ def compute_pass2_stats_sparse_bucketed(
 
             if accumulate_noise and translation_sqdist_ang is not None:
                 noise_sigma2_offset_total += float(
-                    np.sum(chunk_translation_posterior_total * translation_sqdist_ang, dtype=np.float64),
+                    jnp.sum(
+                        chunk_translation_posterior_total
+                        * jnp.asarray(translation_sqdist_ang, dtype=jnp.float64),
+                        dtype=jnp.float64,
+                    )
                 )
 
             actual_counts_arr = np.asarray(actual_counts, dtype=np.int64)
@@ -3984,9 +3995,15 @@ def compute_pass2_stats_sparse_bucketed(
         if accumulate_noise:
             noise_probs = reconstruction_probs if use_relion_fine_mstep_prune else probs
             if translation_sqdist_ang is not None:
-                translation_posterior = np.asarray(jnp.sum(noise_probs, axis=1), dtype=np.float64)
+                # Unchunked twin of the chunked accumulator above: reduce on the
+                # device and fold once, matching `support_mass` just below,
+                # which was already device-resident.
                 noise_sigma2_offset_total += float(
-                    np.sum(translation_posterior * translation_sqdist_ang, dtype=np.float64)
+                    jnp.sum(
+                        jnp.sum(noise_probs, axis=1).astype(jnp.float64)
+                        * jnp.asarray(translation_sqdist_ang, dtype=jnp.float64),
+                        dtype=jnp.float64,
+                    )
                 )
             # RELION support-weights image power inside current_size, while
             # its power_img tail is unweighted above current_size.
