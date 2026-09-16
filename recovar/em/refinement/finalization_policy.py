@@ -18,12 +18,6 @@ def _final_all_data_grid_correct_enabled(*, logger) -> bool:
     return parse_env_flag_or_false(_FINAL_ALL_DATA_GRID_CORRECT_ENV, logger=logger)
 
 
-def _final_all_data_after_max_iter_enabled(*, logger) -> bool:
-    """Return whether diagnostics force final all-data after iteration-cap exit."""
-
-    return parse_env_flag_or_false(_FINAL_ALL_DATA_AFTER_MAX_ITER_ENV, logger=logger)
-
-
 def _should_run_final_all_data_iteration(
     *,
     logger,
@@ -39,7 +33,10 @@ def _should_run_final_all_data_iteration(
         return False
     if bool(has_converged):
         return True
-    if not (_final_all_data_after_max_iter_enabled(logger=logger) and int(iteration) >= int(max_iter)):
+    if not (
+        parse_env_flag_or_false(_FINAL_ALL_DATA_AFTER_MAX_ITER_ENV, logger=logger)
+        and int(iteration) >= int(max_iter)
+    ):
         return False
     if bool(k_class_enabled):
         logger.warning(

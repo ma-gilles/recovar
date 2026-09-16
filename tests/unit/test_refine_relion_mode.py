@@ -520,7 +520,6 @@ def test_final_all_data_grid_correct_env_defaults_to_gui_quality(monkeypatch):
 def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
     env_name = "RECOVAR_FINAL_ALL_DATA_AFTER_MAX_ITER"
     monkeypatch.delenv(env_name, raising=False)
-    assert finalization_policy._final_all_data_after_max_iter_enabled(logger=iteration_loop_module.logger) is False
     assert (
         finalization_policy._should_run_final_all_data_iteration(
             logger=iteration_loop_module.logger,
@@ -533,7 +532,6 @@ def test_final_all_data_after_max_iter_env_defaults_to_disabled(monkeypatch):
     )
 
     monkeypatch.setenv(env_name, "1")
-    assert finalization_policy._final_all_data_after_max_iter_enabled(logger=iteration_loop_module.logger) is True
     assert (
         finalization_policy._should_run_final_all_data_iteration(
             logger=iteration_loop_module.logger,
