@@ -18,7 +18,7 @@ The 88 fixed K1 capture scripts have their own [source/hash inventory and archiv
 
 The seven fixed report-builder files have a separate [source/hash inventory and archive](/scratch/gpfs/CRYOEM/gilleslab/em_work/codex/em_fixed_report_retirement_20260912/result.json).
 
-Their original experiment reports remain in `docs/perf/` and the parity dashboard.
+Their frozen reports are preserved in the private [experiment archive](https://github.com/ma-gilles/recovar-experiments/tree/f34b8e79320116a9965954156f4edfe14257929a), with original paths and hashes in its manifest. The parity dashboard links to immutable archived reports.
 Restore the recorded experiment source and environment for reproduction; do not
 assume that these historical hardware/binary/input contracts qualify newer code.
 
