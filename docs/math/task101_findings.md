@@ -302,7 +302,7 @@ dataset (from `run_it005..008_half1_model.star`):
 RELION's iter-6 σ² actually **decreases** slightly because the finer grid
 improves pose assignment accuracy and reduces noise residual.
 
-Recovar post-Task-100 (from `plan_relion_parity_v3.md`):
+Recovar post-Task-100 (from [archived April parity plan](https://github.com/ma-gilles/recovar-experiments/blob/4eb52139dc45b7f402e4a75a0b6d78567b20b002/docs/math/plan_relion_parity_v3.md)):
 
 | iter | shell-5 σ² | Δ vs iter 5 |
 |:---:|---:|---:|
@@ -463,7 +463,7 @@ projections.
   — RELION's per-particle call site
 
 ### Docs
-- `/scratch/gpfs/GILLES/mg6942/recovar_relion_parity_audit/docs/math/plan_relion_parity_v3.md:981-1044`
+- [archived Task100/101 findings](https://github.com/ma-gilles/recovar-experiments/blob/4eb52139dc45b7f402e4a75a0b6d78567b20b002/docs/math/plan_relion_parity_v3.md#L981-L1044)
   — Task #100 bug history and residual numbers
 - `/home/mg6942/.claude/projects/-home-mg6942/memory/feedback_recovar_grid_rot_tilt_swap.md`
   — Prior documentation of the rot/tilt swap

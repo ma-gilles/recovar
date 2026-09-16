@@ -14,7 +14,7 @@ Late-iter parity (iter 13→14) was solved on `b187e439`, but on the rebase bran
 | `_apply_relion_initial_lowpass_filter` + iter-1 refilter | **mixed** | Iter-1 firstiter_cc handling mirrors RELION; the *refilter* is a recovar approximation. |
 | **Pre-Wiener tau2 update from init FSC (1.5e3 → 1.6e6 max)** | **recovar-specific approximation — top suspect** | Not in RELION. RELION derives tau2 from actual backprojected weights post-M-step (`BackProjector::updateSSNRarrays`). Recovar's pre-reconstruction tau2 update is a downstream approximation that is documented in `relion_parity_deep_dive.md` as known to "poison downstream noise/statistics." |
 
-## 2. Expected iter-2 ave_Pmax behavior (per `plan_relion_parity_v3.md` 1k/64 baseline)
+## 2. Expected iter-2 ave_Pmax behavior (per [archived April parity plan](https://github.com/ma-gilles/recovar-experiments/blob/4eb52139dc45b7f402e4a75a0b6d78567b20b002/docs/math/plan_relion_parity_v3.md) 1k/64 baseline)
 
 | iter | recovar Pmax | RELION Pmax | gap |
 |---:|---:|---:|---:|
@@ -26,7 +26,7 @@ Late-iter parity (iter 13→14) was solved on `b187e439`, but on the rebase bran
 
 The catastrophic collapse to ~0 we observe contradicts the v3 baseline AND late-iter parity (iter 13→14 was stable on `b187e439`). The bug must live in the **iter-1 → iter-2 transition** introduced by the rebase.
 
-## 3. Canonical smoke test (from `plan_relion_parity_v3.md:848-873`)
+## 3. Canonical smoke test (from [archived smoke-test recipe](https://github.com/ma-gilles/recovar-experiments/blob/4eb52139dc45b7f402e4a75a0b6d78567b20b002/docs/math/plan_relion_parity_v3.md#L848-L873))
 
 ```bash
 # Tiny: 1k particles, 64 box, healpix_order=3
