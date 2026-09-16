@@ -1357,10 +1357,9 @@ def apply_iter_replay_overrides(
                         )
                         _relion_direction_prior_order = state.healpix_order
                     if k_class_enabled:
-                        class_direction_prior_per_half[_half_idx] = normalize_class_direction_prior_per_half(
-                            [_relion_direction_prior, None] if _half_idx == 0 else [None, _relion_direction_prior],
-                            n_classes,
-                        )[_half_idx]
+                        class_direction_prior_per_half[_half_idx] = normalize_class_direction_prior(
+                            _relion_direction_prior, n_classes,
+                        )
                         class_direction_prior_order_per_half[_half_idx] = _relion_direction_prior_order
                         logger.info(
                             "Replay override: class direction prior half-%d <- %s (%d classes, %d directions)",

@@ -124,6 +124,7 @@ from recovar.em.helpers.orientation_priors import (
     infer_direction_prior_healpix_order,
     initial_direction_priors_from_snapshot,
     make_relion_translation_log_prior,
+    normalize_class_direction_prior,
     normalize_class_direction_prior_per_half,
     normalize_direction_prior_per_half,
     relion_direction_log_priors_for_half,
@@ -3808,11 +3809,9 @@ def _run_relion_iteration_loop(
                         )
                         _prior_order_k = state.healpix_order
                     if k_class_enabled:
-                        class_direction_prior_per_half[_half_idx] = normalize_class_direction_prior_per_half(
-                            [_prior_k, None] if _half_idx == 0 else [None, _prior_k],
-                            n_classes,
-                            dtype=_final_replay_prior_dtype,
-                        )[_half_idx]
+                        class_direction_prior_per_half[_half_idx] = normalize_class_direction_prior(
+                            _prior_k, n_classes, dtype=_final_replay_prior_dtype,
+                        )
                         class_direction_prior_order_per_half[_half_idx] = _prior_order_k
                     else:
                         global_direction_prior_per_half[_half_idx] = _prior_k
