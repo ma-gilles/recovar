@@ -6,7 +6,6 @@ the pose tie-break keys and rescore winner slots, and the opt-ins that
 select the exact path.
 """
 
-import os
 from typing import NamedTuple
 
 import jax
@@ -61,12 +60,7 @@ def _repeat_pad_batch_axis(value, target_size: int):
 def _relion_acc_double_floorf_quirk_enabled() -> bool:
     """Match RELION's texture-free ACC projector coordinate flooring."""
 
-    token = os.environ.get(_RELION_ACC_DOUBLE_FLOORF_QUIRK_ENV, "0").strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(f"Unsupported {_RELION_ACC_DOUBLE_FLOORF_QUIRK_ENV}={token!r}")
+    return parse_env_strict_flag(_RELION_ACC_DOUBLE_FLOORF_QUIRK_ENV)
 
 
 def _k1_relion_exact_coarse_operands_enabled(*, default: bool = False) -> bool:
@@ -81,18 +75,7 @@ def _k1_relion_exact_coarse_skip_generic_operands_enabled(
 ) -> bool:
     """Return whether exact coarse operands bypass overwritten generic operands."""
 
-    token = os.environ.get(
-        _K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS_ENV,
-        "1" if default else "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        "Unsupported "
-        f"{_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_K1_RELION_EXACT_COARSE_SKIP_GENERIC_OPERANDS_ENV, default=default)
 
 
 def _resolve_k1_relion_exact_coarse_skip_generic_operands(
