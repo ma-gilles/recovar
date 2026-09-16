@@ -1515,6 +1515,57 @@ def _project_local_half_spectrum(
         force_jax=projection_force_jax,
     )
 
+def _class_volume(volume, class_index: int, n_classes: int):
+    """Select one class's volume from a stacked ``[K, ...]`` operand."""
+
+    if volume is None:
+        return None
+    if int(volume.shape[0]) != int(n_classes):
+        raise ValueError(
+            f"class-segmented projection expects a leading class axis of {n_classes}, "
+            f"got operand with shape {tuple(volume.shape)}"
+        )
+    return volume[class_index]
+
+
+def _project_local_class_segments(
+    mean_for_proj,
+    relion_projector_half,
+    local_rotations,
+    project_rows,
+    *,
+    n_classes: int,
+    segment_rotation_count: int,
+):
+    """Project class-major segmented rows, each segment from its own class volume.
+
+    Rows are laid out class-major per image (``bucket_class_local_hypothesis_layouts``):
+    class ``k`` owns rows ``[k*seg, (k+1)*seg)``. Each segment is projected with that
+    class's volume and the segments are concatenated back into the single row axis the
+    rest of the bucket program consumes, so the joint class-by-pose posterior stays one
+    reduction over rows and every segment keeps a static shape.
+    """
+
+    batch_size = int(local_rotations.shape[0])
+    rows = int(local_rotations.shape[1])
+    segment_rotation_count = int(segment_rotation_count)
+    if rows != int(n_classes) * segment_rotation_count:
+        raise ValueError(
+            f"class-segmented rows must be {n_classes} x {segment_rotation_count}, got {rows}"
+        )
+    segments = []
+    for class_index in range(int(n_classes)):
+        start = class_index * segment_rotation_count
+        segment_rotations = local_rotations[:, start : start + segment_rotation_count]
+        projected = project_rows(
+            _class_volume(mean_for_proj, class_index, n_classes),
+            _class_volume(relion_projector_half, class_index, n_classes),
+            segment_rotations.reshape(batch_size * segment_rotation_count, 3, 3),
+        )
+        segments.append(projected.reshape(batch_size, segment_rotation_count, projected.shape[-1]))
+    return jnp.concatenate(segments, axis=1).reshape(batch_size * rows, segments[0].shape[-1])
+
+
 
 class _LocalMstepAccumulators(NamedTuple):
     """The two reconstruction buffers donated at the local JIT boundary."""
@@ -1697,6 +1748,8 @@ def _split_local_big_jit_carry(result):
         "return_debug_scores",
         "return_debug_operands",
         "unweighted_high_shell_image_power",
+        "n_classes",
+        "class_segment_rotation_count",
     ),
 )
 def run_local_bucket_big_jit(
@@ -1821,6 +1874,8 @@ def run_local_bucket_big_jit(
     return_debug_scores: bool = False,
     return_debug_operands: bool = False,
     unweighted_high_shell_image_power: bool = False,
+    n_classes: int = 1,
+    class_segment_rotation_count: int | None = None,
 ):
     """Run one exact-local bucket in a single compiled numeric boundary.
 
@@ -1868,6 +1923,28 @@ def run_local_bucket_big_jit(
         or return_deferred_mstep_inputs
     ):
         raise ValueError("score_only local big-JIT requires disabled adjoints, no noise, and no M-step outputs")
+    n_classes = int(n_classes)
+    if n_classes < 1:
+        raise ValueError("n_classes must be positive")
+    if n_classes > 1:
+        # Class-segmented rows carry every class of one image in a single bucket, so the
+        # projection is the only stage that needs the class identity. The row-packing and
+        # projection-cache opt-ins below index rows by (image, rotation row) alone and are
+        # K=1 exact-RELION paths; refuse them here rather than silently projecting a row
+        # from the wrong class.
+        if use_relion_projection_cache:
+            raise ValueError("class-segmented rows do not use the K=1 local projection cache")
+        if use_flat_local_rows or use_packed_local_projection or use_fused_pair_fine_score:
+            raise ValueError("class-segmented rows do not use K=1 packed/flat local rows")
+        if projector_capacity:
+            raise ValueError("class-segmented rows do not use the K=1 projector capacity path")
+        if class_segment_rotation_count is None:
+            raise ValueError("class-segmented rows require an explicit class_segment_rotation_count")
+        if int(class_segment_rotation_count) * n_classes != int(local_rotations.shape[1]):
+            raise ValueError(
+                f"class-segmented rows must be {n_classes} x {int(class_segment_rotation_count)}, "
+                f"got {int(local_rotations.shape[1])}"
+            )
     flat_local_row_plan = jnp.asarray(flat_local_row_plan)
     if use_flat_local_rows:
         if not relion_exact_fine_diff2:
@@ -2302,26 +2379,40 @@ def run_local_bucket_big_jit(
         cache_rows = relion_projection_cache_id_map[safe_rotation_ids]
         proj_half_flat = relion_projection_cache[cache_rows]
     else:
-        proj_half_flat = _project_local_half_spectrum(
-            mean_for_proj,
-            relion_projector_half,
-            flat_rotations,
-            projection_pixel_indices if use_compact_relion_projector_projection else None,
-            image_shape,
-            proj_volume_shape,
-            disc_type,
-            projection_half_volume=projection_half_volume,
-            projection_max_r=projection_max_r,
-            relion_projector_output_size=relion_projector_output_size,
-            projection_relion_texture_interp=projection_relion_texture_interp,
-            projection_force_jax=projection_force_jax,
-            projection_mask_current_image_disk=projection_mask_current_image_disk,
-            use_relion_projector=use_relion_projector,
-            relion_projector_r_max=relion_projector_r_max,
-            projection_padding_factor=projection_padding_factor,
-            projector_capacity=projector_capacity,
-            runtime_projector_r_max=runtime_projector_r_max,
-        )
+
+        def _project_rows(volume, projector_half, rotations):
+            return _project_local_half_spectrum(
+                volume,
+                projector_half,
+                rotations,
+                projection_pixel_indices if use_compact_relion_projector_projection else None,
+                image_shape,
+                proj_volume_shape,
+                disc_type,
+                projection_half_volume=projection_half_volume,
+                projection_max_r=projection_max_r,
+                relion_projector_output_size=relion_projector_output_size,
+                projection_relion_texture_interp=projection_relion_texture_interp,
+                projection_force_jax=projection_force_jax,
+                projection_mask_current_image_disk=projection_mask_current_image_disk,
+                use_relion_projector=use_relion_projector,
+                relion_projector_r_max=relion_projector_r_max,
+                projection_padding_factor=projection_padding_factor,
+                projector_capacity=projector_capacity,
+                runtime_projector_r_max=runtime_projector_r_max,
+            )
+
+        if n_classes > 1:
+            proj_half_flat = _project_local_class_segments(
+                mean_for_proj,
+                relion_projector_half,
+                local_rotations,
+                _project_rows,
+                n_classes=n_classes,
+                segment_rotation_count=int(class_segment_rotation_count),
+            )
+        else:
+            proj_half_flat = _project_rows(mean_for_proj, relion_projector_half, flat_rotations)
     if use_window:
         if use_compact_relion_projector_projection:
             score_projection_rows = proj_half_flat[:, projection_score_take_indices]
