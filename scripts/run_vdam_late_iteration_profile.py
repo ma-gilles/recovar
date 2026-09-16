@@ -27,6 +27,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Iterator
 
+from scripts.file_hash import sha256_file
+
 _PROFILE_BOOLEAN_TRUE = frozenset({"1", "true", "yes", "on"})
 _PROFILE_BOOLEAN_FALSE = frozenset({"0", "false", "no", "off"})
 _PROFILE_GEMM_MACRO_ENV = "RECOVAR_COARSE_GAUSSIAN_GEMM_MACRO"
@@ -146,14 +148,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
 def _validate_reused_native_inputs(
     manifest_path: Path,
     current_paths: list[Path],
@@ -196,7 +190,7 @@ def _validate_reused_native_inputs(
             source_path = source_matches[0]
             role = str(suffix)
 
-        digest = _sha256(path)
+        digest = sha256_file(path)
         if digest != expected[source_path]:
             raise RuntimeError(f"reused native input changed: {raw_path}")
         records.append(
@@ -235,7 +229,7 @@ def _validate_static_input_manifest(manifest_path: Path) -> dict[str, str]:
                     f"conflicting duplicate static-input manifest path: {key}"
                 )
             continue
-        digest = _sha256(path)
+        digest = sha256_file(path)
         if digest != expected:
             raise RuntimeError(f"static input changed: {key}")
         observed[key] = digest
@@ -1514,7 +1508,7 @@ def _profile_metadata(
     return {
         "output_prefix": str(output_prefix.resolve()),
         "meta_path": str(meta_path.resolve()),
-        "meta_sha256": _sha256(meta_path),
+        "meta_sha256": sha256_file(meta_path),
         "continuation_path": str(continuation_path.resolve()),
         "iteration_profile": profile,
         "sparse_pass2_profile": meta.get("sparse_pass2_profile_summary"),
@@ -1870,7 +1864,7 @@ def main(argv: list[str] | None = None) -> int:
     reports: dict[str, dict[str, object]] = {}
     target_iteration = int(args.checkpoint_iteration) + 1
     qualified_static_manifest_sha256 = (
-        _sha256(static_input_manifest)
+        sha256_file(static_input_manifest)
         if static_input_manifest is not None
         else None
     )
@@ -1878,8 +1872,8 @@ def main(argv: list[str] | None = None) -> int:
         _validate_static_input_manifest(static_input_manifest)
         if static_input_manifest is not None
         else {
-            str(checkpoint): _sha256(checkpoint),
-            str(input_star): _sha256(input_star),
+            str(checkpoint): sha256_file(checkpoint),
+            str(input_star): sha256_file(input_star),
         }
     )
     initial_model_command: Callable[[list[str]], int] | None = None
@@ -1894,15 +1888,15 @@ def main(argv: list[str] | None = None) -> int:
             )
             if (
                 static_input_manifest is not None
-                and _sha256(static_input_manifest) != qualified_static_manifest_sha256
+                and sha256_file(static_input_manifest) != qualified_static_manifest_sha256
             ):
                 raise RuntimeError(f"{label} static-input manifest changed")
             static_inputs_before = (
                 _validate_static_input_manifest(static_input_manifest)
                 if static_input_manifest is not None
                 else {
-                    str(checkpoint): _sha256(checkpoint),
-                    str(input_star): _sha256(input_star),
+                    str(checkpoint): sha256_file(checkpoint),
+                    str(input_star): sha256_file(input_star),
                 }
             )
             if static_inputs_before != qualified_static_inputs:
@@ -1940,15 +1934,15 @@ def main(argv: list[str] | None = None) -> int:
             )
             if (
                 static_input_manifest is not None
-                and _sha256(static_input_manifest) != qualified_static_manifest_sha256
+                and sha256_file(static_input_manifest) != qualified_static_manifest_sha256
             ):
                 raise RuntimeError(f"{label} static-input manifest changed")
             static_inputs_after = (
                 _validate_static_input_manifest(static_input_manifest)
                 if static_input_manifest is not None
                 else {
-                    str(checkpoint): _sha256(checkpoint),
-                    str(input_star): _sha256(input_star),
+                    str(checkpoint): sha256_file(checkpoint),
+                    str(input_star): sha256_file(input_star),
                 }
             )
             if static_inputs_after != qualified_static_inputs:
@@ -2010,9 +2004,9 @@ def main(argv: list[str] | None = None) -> int:
         "profiled_iteration": target_iteration,
         "nr_iter_schedule": int(args.nr_iter),
         "checkpoint_optimiser": str(checkpoint),
-        "checkpoint_optimiser_sha256": _sha256(checkpoint),
+        "checkpoint_optimiser_sha256": sha256_file(checkpoint),
         "input_star": str(input_star),
-        "input_star_sha256": _sha256(input_star),
+        "input_star_sha256": sha256_file(input_star),
         "data_dir": str(data_dir),
         "static_input_manifest": (
             str(static_input_manifest) if static_input_manifest is not None else None

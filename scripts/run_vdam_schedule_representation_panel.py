@@ -12,10 +12,10 @@ from typing import Sequence
 
 import jax
 
+from scripts.file_hash import sha256_file
 from scripts.run_vdam_late_iteration_profile import (
     _all_optimized_q32_environment,
     _recovar_argv,
-    _sha256,
 )
 
 SCHEMA = "recovar.vdam_schedule_representation_panel.v1"
@@ -163,9 +163,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "schema": SCHEMA,
         "classification": "diagnostic_schedule_representation_qualification",
         "input_star": str(args.input_star),
-        "input_star_sha256": _sha256(args.input_star),
+        "input_star_sha256": sha256_file(args.input_star),
         "checkpoint_optimiser": str(args.checkpoint_optimiser),
-        "checkpoint_optimiser_sha256": _sha256(args.checkpoint_optimiser),
+        "checkpoint_optimiser_sha256": sha256_file(args.checkpoint_optimiser),
         "checkpoint_iteration": int(args.checkpoint_iteration),
         "profiled_iteration": int(args.checkpoint_iteration) + 1,
         "environment_without_block_capacity": {

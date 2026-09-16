@@ -24,13 +24,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Mapping, Sequence
 
+from scripts.file_hash import sha256_file
 from scripts.run_vdam_late_iteration_profile import (
     _effects_barrier,
     _process_resource_delta,
     _process_resource_snapshot,
     _profile_metadata,
     _recovar_argv,
-    _sha256,
 )
 
 SCHEMA = "recovar.local_mstep_donation_ab.v4"
@@ -489,7 +489,7 @@ def _input_manifest_payload_from_named_paths(
                 "relative_name": relative_name,
                 "source_name": path.name,
                 "size_bytes": int(path.stat().st_size),
-                "sha256": _sha256(path),
+                "sha256": sha256_file(path),
             }
         )
     return {
@@ -525,7 +525,7 @@ def _verify_input_manifest(
     expected_particle_stacks: Sequence[Path],
 ) -> dict[str, Any]:
     manifest_path = manifest_path.resolve(strict=True)
-    observed_sha256 = _sha256(manifest_path)
+    observed_sha256 = sha256_file(manifest_path)
     if observed_sha256 != expected_sha256:
         raise RuntimeError(
             f"GF46 input-manifest SHA mismatch: expected {expected_sha256}, got {observed_sha256}"
@@ -621,7 +621,7 @@ def _verify_launch_manifest(path: Path, expected_sha256: str) -> dict[str, Any]:
     path = path.resolve(strict=True)
     if re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None:
         raise RuntimeError("expected launch-manifest digest is not a lowercase SHA-256")
-    observed_sha256 = _sha256(path)
+    observed_sha256 = sha256_file(path)
     if observed_sha256 != expected_sha256:
         raise RuntimeError(
             "donation launch-manifest SHA mismatch: "
@@ -687,7 +687,7 @@ def _directory_manifest(root: Path) -> dict[str, Any]:
                     "relative_name": relative_name,
                     "type": "file",
                     "size_bytes": int(path.stat().st_size),
-                    "sha256": _sha256(path),
+                    "sha256": sha256_file(path),
                 }
             )
         else:
@@ -1067,7 +1067,7 @@ def _science_outputs(prefix: Path, iteration: int) -> dict[str, dict[str, Any]]:
         result[name] = {
             "path": str(path.resolve()),
             "size_bytes": path.stat().st_size,
-            "sha256": _sha256(path),
+            "sha256": sha256_file(path),
         }
     result["output_prefix"] = {"path": str(prefix.resolve())}
     return result
@@ -1238,12 +1238,12 @@ def main(argv: list[str] | None = None) -> int:
         "profiled_iteration": target_iteration,
         "nr_iter_schedule": int(args.nr_iter),
         "checkpoint_optimiser": str(args.checkpoint_optimiser),
-        "checkpoint_optimiser_sha256": _sha256(args.checkpoint_optimiser),
+        "checkpoint_optimiser_sha256": sha256_file(args.checkpoint_optimiser),
         "input_star": str(args.input_star),
-        "input_star_sha256": _sha256(args.input_star),
+        "input_star_sha256": sha256_file(args.input_star),
         "data_dir": str(args.data_dir),
         "particle_stacks": [
-            {"path": str(path), "sha256": _sha256(path)}
+            {"path": str(path), "sha256": sha256_file(path)}
             for path in args.expected_particle_stack
         ],
         "numeric_policy": {

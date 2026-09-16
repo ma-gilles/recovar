@@ -21,20 +21,13 @@ from pathlib import Path
 
 import numpy as np
 
+from scripts.file_hash import sha256_file
 from scripts.run_vdam_late_iteration_profile import (
     _process_resource_snapshot,
     _raw_image_cache_loader_topology,
 )
 
 SCHEMA = "recovar.vdam_raw_cache_memory_probe.v1"
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _array_bytes(array: np.ndarray) -> memoryview:
@@ -130,7 +123,7 @@ def probe(
             "schema": SCHEMA,
             "classification": "untimed_memory_and_bitwise_equivalence_canary",
             "input_star": str(input_star),
-            "input_star_sha256": _sha256(input_star),
+            "input_star_sha256": sha256_file(input_star),
             "data_dir": str(data_dir),
             "cache_dir_env": os.environ.get("RECOVAR_CACHE_DIR"),
             "comparison_batch_size": int(comparison_batch_size),
