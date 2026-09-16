@@ -4691,6 +4691,13 @@ def _run_relion_iteration_loop(
         final_current_size,
         n_classes,
     )
+    final_reconstruction_kwargs = dict(
+        tau2_fudge=tau2_fudge,
+        projection_padding_factor=PROJECTION_PADDING_FACTOR,
+        minres_map=RELION_MINRES_MAP,
+        current_size=final_current_size,
+        accumulator_volume_shape=final_mstep_accumulator_shape,
+    )
     final_unfiltered_means_for_output = None
     if k_class_enabled:
         final_class_means = jnp.stack(
@@ -4701,12 +4708,8 @@ def _run_relion_iteration_loop(
                     volume_shape,
                     PADDING_FACTOR,
                     tau=final_mean_variance_shells[class_idx],
-                    tau2_fudge=tau2_fudge,
-                    projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                    **final_reconstruction_kwargs,
                     grid_correct=final_grid_correct,
-                    minres_map=RELION_MINRES_MAP,
-                    current_size=final_current_size,
-                    accumulator_volume_shape=final_mstep_accumulator_shape,
                     tau_is_1d=True,
                 ).reshape(-1)
                 for class_idx in range(n_classes)
@@ -4726,12 +4729,8 @@ def _run_relion_iteration_loop(
             volume_shape,
             PADDING_FACTOR,
             tau=final_mean_variance,
-            tau2_fudge=tau2_fudge,
-            projection_padding_factor=PROJECTION_PADDING_FACTOR,
+            **final_reconstruction_kwargs,
             grid_correct=final_grid_correct,
-            minres_map=RELION_MINRES_MAP,
-            current_size=final_current_size,
-            accumulator_volume_shape=final_mstep_accumulator_shape,
         ).reshape(-1)
         final_means_for_output = [
             _reconstruct_volume_eager(
@@ -4740,12 +4739,8 @@ def _run_relion_iteration_loop(
                 volume_shape,
                 PADDING_FACTOR,
                 tau=final_mean_variance,
-                tau2_fudge=tau2_fudge,
-                projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                **final_reconstruction_kwargs,
                 grid_correct=final_grid_correct,
-                minres_map=RELION_MINRES_MAP,
-                current_size=final_current_size,
-                accumulator_volume_shape=final_mstep_accumulator_shape,
             ).reshape(-1)
             for half_ctf, half_y in (
                 (final_Ft_ctf_0, final_Ft_y_0),
@@ -4767,13 +4762,9 @@ def _run_relion_iteration_loop(
                 volume_shape,
                 PADDING_FACTOR,
                 tau=None,
-                tau2_fudge=tau2_fudge,
-                projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                **final_reconstruction_kwargs,
                 use_spherical_mask=True,
                 grid_correct=True,
-                minres_map=RELION_MINRES_MAP,
-                current_size=final_current_size,
-                accumulator_volume_shape=final_mstep_accumulator_shape,
             ).reshape(-1)
             for half_ctf, half_y in (
                 (final_unfiltered_Ft_ctf_0, final_unfiltered_Ft_y_0),

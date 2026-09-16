@@ -761,7 +761,8 @@ def test_final_all_data_iteration_stays_on_shared_dense_scoring_path():
     assert "cs_for_engine=final_current_size" in final_block
     # Four call sites: K-class, merged K1, regularized half pair and unfiltered
     # half pair. The convergence smoke test checks the five executed K1 calls.
-    assert final_reconstruct_block.count("current_size=final_current_size") == 4
+    assert final_reconstruct_block.count("current_size=final_current_size") == 1
+    assert final_reconstruct_block.count("**final_reconstruction_kwargs") == 4
     assert final_reconstruct_block.count("tau=None") == 1
     assert final_reconstruct_block.count("use_spherical_mask=True") == 1
     assert "do_map=false only omits the tau2 prior" in final_reconstruct_block
