@@ -270,6 +270,7 @@ def _accumulate_class_segment_statistics(
     per_class_best_pose_rotations,
     per_class_best_pose_translations,
     per_class_best_pose_rotation_ids,
+    per_class_best_pose_eulers_deg,
     probs_sum_t,
     unpadded_batch_size: int,
     class_log_evidence_per_image,
@@ -335,6 +336,13 @@ def _accumulate_class_segment_statistics(
             per_class_best_pose_rotations[class_index, image_indices] = rotations[np.arange(rows), winner_row]
             per_class_best_pose_translations[class_index, image_indices] = translations[winner_trans]
             per_class_best_pose_rotation_ids[class_index, image_indices] = winner_rotation_ids
+        if per_class_best_pose_eulers_deg is not None:
+            source_eulers = unpadded_rows["local_source_eulers"]
+            if source_eulers is None:
+                raise RuntimeError("source Euler metadata was lost before class-segmented publication")
+            per_class_best_pose_eulers_deg[class_index, image_indices] = np.asarray(
+                source_eulers, dtype=np.float64,
+            )[:rows][np.arange(rows), winner_row]
 
 
 def run_local_em_exact(
@@ -988,8 +996,14 @@ def run_local_em_exact(
     class_rotation_posterior_sums = None
     class_assignments = None
     if n_classes > 1:
-        class_log_evidence_per_image = np.zeros((n_classes, n_images), dtype=np.float64)
-        class_best_log_score_per_image = np.zeros((n_classes, n_images), dtype=np.float64)
+        # Match the single-class buffers' precision: the reductions happen in the
+        # engine's normalization dtype and are published at the scoring dtype.
+        class_log_evidence_per_image = np.zeros(
+            (n_classes, n_images), dtype=precision_policy.score_real_dtype,
+        )
+        class_best_log_score_per_image = np.zeros(
+            (n_classes, n_images), dtype=precision_policy.score_real_dtype,
+        )
         class_posterior_sums = np.zeros(n_classes, dtype=np.float64)
         class_rotation_posterior_sums = np.zeros(
             (n_classes, int(local_layout.n_global_rotations)), dtype=np.float64,
@@ -1012,11 +1026,19 @@ def run_local_em_exact(
         per_class_best_pose_rotation_ids = (
             np.zeros((n_classes, n_images), dtype=np.int64) if return_best_pose_details else None
         )
+        # Canonical source Euler angles reach STAR metadata and local search, so they
+        # travel with the winning row instead of being rebuilt from its matrix.
+        per_class_best_pose_eulers_deg = (
+            np.zeros((n_classes, n_images, 3), dtype=np.float64)
+            if (return_best_pose_details and local_layout.source_eulers_flat is not None)
+            else None
+        )
     else:
         per_class_hard_assignments = None
         per_class_best_pose_rotations = None
         per_class_best_pose_translations = None
         per_class_best_pose_rotation_ids = None
+        per_class_best_pose_eulers_deg = None
     best_pose_rotations = (
         np.empty((n_images, 3, 3), dtype=precision_policy.score_real_dtype) if return_best_pose_details else None
     )
@@ -4305,6 +4327,7 @@ def run_local_em_exact(
                     per_class_best_pose_rotations=per_class_best_pose_rotations,
                     per_class_best_pose_translations=per_class_best_pose_translations,
                     per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
+                    per_class_best_pose_eulers_deg=per_class_best_pose_eulers_deg,
                     probs_sum_t=(
                         postprocess_rows(stats_probs_sum_t)
                         if stats_probs_sum_t_np is None
@@ -5800,6 +5823,7 @@ def run_local_em_exact(
         per_class_best_pose_rotations=per_class_best_pose_rotations,
         per_class_best_pose_translations=per_class_best_pose_translations,
         per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
+        per_class_best_pose_eulers_deg=per_class_best_pose_eulers_deg,
         best_pose_rotations=best_pose_rotations if return_best_pose_details else None,
         best_pose_translations=best_pose_translations if return_best_pose_details else None,
         best_pose_rotation_ids=best_pose_rotation_ids if return_best_pose_details else None,

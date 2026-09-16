@@ -247,6 +247,7 @@ class LocalEMResult:
     per_class_best_pose_rotations: np.ndarray | None = None
     per_class_best_pose_translations: np.ndarray | None = None
     per_class_best_pose_rotation_ids: np.ndarray | None = None
+    per_class_best_pose_eulers_deg: np.ndarray | None = None
 
 
 @dataclass(frozen=True)

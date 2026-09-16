@@ -1079,6 +1079,7 @@ def _score_normalize_support(
     adaptive_fraction: float,
     max_significants: int,
     scores_override=None,
+    cast_internal_normalizer_to_score_dtype: bool = False,
 ):
     """Score, normalize, and form posterior support inside the fused bucket JIT."""
 
@@ -1151,6 +1152,13 @@ def _score_normalize_support(
         row_has_mass = row_has_score & jnp.isfinite(sum_exp) & (sum_exp > 0.0)
         safe_sum_exp = jnp.where(row_has_mass, sum_exp, 1.0)
         log_Z = jnp.where(row_has_mass, best_log_score + jnp.log(safe_sum_exp), 0.0)
+        if cast_internal_normalizer_to_score_dtype:
+            # A caller that supplies an external normalizer has it cast to the score
+            # precision above, which keeps the posterior and every M-step tensor at the
+            # scoring dtype. A joint class-by-pose pass computes its own normalizer
+            # instead, so it applies the same boundary or the accumulators it feeds
+            # would silently promote.
+            log_Z = log_Z.astype(scores.real.dtype)
     scores_for_probs = jnp.where(row_has_mass[:, None, None], scores, -jnp.inf)
     probs = jnp.exp(scores_for_probs - log_Z[:, None, None])
     probs = jnp.where(row_has_mass[:, None, None] & jnp.isfinite(probs), probs, 0.0)
@@ -1276,6 +1284,7 @@ def _score_normalize_mstep(
     max_significants: int,
     sequential_translation_reduction: bool = False,
     scores_override=None,
+    cast_internal_normalizer_to_score_dtype: bool = False,
 ):
     """Score, normalize, and form M-step tensors inside the fused bucket JIT."""
 
@@ -1315,6 +1324,7 @@ def _score_normalize_mstep(
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
         scores_override=scores_override,
+        cast_internal_normalizer_to_score_dtype=cast_internal_normalizer_to_score_dtype,
     )
     summed, ctf_probs = compute_local_mstep_sums(
         reconstruction_probs,
@@ -3194,6 +3204,9 @@ def run_local_bucket_big_jit(
         max_significants=max_significants,
         sequential_translation_reduction=relion_sequential_mstep_reduction,
         scores_override=direct_scores,
+        # Class-segmented rows normalize jointly instead of receiving the joint
+        # normalizer from a per-class caller; keep that caller's precision boundary.
+        cast_internal_normalizer_to_score_dtype=n_classes > 1,
     )
     if n_classes > 1:
         (

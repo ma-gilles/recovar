@@ -2094,9 +2094,13 @@ def _run_local_k_class_em_segmented(
     if output.class_log_evidence_per_image is None:
         raise RuntimeError("class-segmented execution returned no per-class statistics")
 
+    # Follow the existing K-class convention: the class log evidence is float64 for
+    # the responsibility algebra, while every published per-image statistic keeps the
+    # engine's scoring precision, which is what the per-class route returns and what
+    # downstream consumers read.
     class_log_evidence = np.asarray(output.class_log_evidence_per_image, dtype=np.float64)
-    class_best_log_score = np.asarray(output.class_best_log_score_per_image, dtype=np.float64)
-    joint_log_evidence = np.asarray(output.stats.log_evidence_per_image, dtype=np.float64)
+    class_best_log_score = np.asarray(output.class_best_log_score_per_image)
+    joint_log_evidence = np.asarray(output.stats.log_evidence_per_image)
     # Every class's Pmax is measured against the joint normalizer, which is what the
     # per-class M-step calls do when they are given the joint log evidence.
     with np.errstate(over="ignore"):
@@ -2137,6 +2141,14 @@ def _run_local_k_class_em_segmented(
             None
             if output.per_class_best_pose_rotation_ids is None
             else list(output.per_class_best_pose_rotation_ids)
+        ),
+        # Canonical source Eulers are published to STAR metadata and read back by
+        # local search, so they are carried from the winning row, never rebuilt from
+        # its rotation matrix.
+        per_class_best_pose_eulers_deg=(
+            None
+            if output.per_class_best_pose_eulers_deg is None
+            else list(output.per_class_best_pose_eulers_deg)
         ),
         profile_summary=output.profile if return_profile else None,
     )
