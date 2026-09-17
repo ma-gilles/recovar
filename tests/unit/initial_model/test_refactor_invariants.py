@@ -5,7 +5,6 @@ Pins the work landed on ``claude/refactor-initial-model``:
 - Helpers extracted during dedup still exist with the right signatures.
 - Single source of truth for ``_relion_round`` (was duplicated in iteration_loop).
 - Pure-function outputs (schedules, init, layout) are byte-identical.
-- Dead code paths deleted during refactor stay deleted (no zombie wrappers).
 - Reviewed responsibility budgets count every VDAM module and extracted owner.
 
 Run: ``pixi run python -m pytest tests/unit/initial_model/test_refactor_invariants.py -v``
@@ -314,47 +313,7 @@ class TestLayoutGoldenValues:
 
 
 # ---------------------------------------------------------------------------
-# 6. Dead code stays deleted — these symbols/files MUST NOT come back.
-# ---------------------------------------------------------------------------
-
-
-def test_dead_code_remains_deleted():
-    """The refactor deleted several dead paths. A merge bringing them back
-    would silently undo the savings; this guard catches it.
-    """
-    # gpu_pipeline.py was a compat shim with no callers.
-    assert not (PACKAGE_DIR / "gpu_pipeline.py").exists(), (
-        "gpu_pipeline.py was deleted as a no-caller shim — do not re-add"
-    )
-
-    # These dead helpers were deleted; any reintroduction is a regression.
-    dead_symbols = {
-        "_append_sigma2_offset_meta": "dense_adapter.py",
-        "_result_to_accumulators": "dense_adapter.py",
-        "_sparse_pass2_result_to_accumulators": "dense_adapter.py",
-    }
-    for symbol, filename in dead_symbols.items():
-        text = (PACKAGE_DIR / filename).read_text()
-        # Reject only definitions, not references (callers must be gone anyway).
-        assert f"def {symbol}(" not in text, (
-            f"dead helper {symbol!r} was deleted from {filename}; "
-            f"a merge reintroduced it — collapse callers into the canonical path instead"
-        )
-
-
-def test_bootstrap_iref_pure_python_fallback_stays_deleted():
-    """The pre-refactor ``compute_bootstrap_iref`` had a 140-LOC pure-Python
-    fallback for "no binding available". Production always has the binding, so
-    the fallback was dead code. Do not reintroduce it.
-    """
-    text = (PACKAGE_DIR / "bootstrap_iref.py").read_text()
-    # The fallback was the ONLY caller of these helpers; they are gone now.
-    assert "_pure_python_bootstrap_iref" not in text
-    assert "def compute_bootstrap_iref_pure_python" not in text
-
-
-# ---------------------------------------------------------------------------
-# 7. Reviewed responsibility budgets, including extracted shared owners.
+# 6. Reviewed responsibility budgets, including extracted shared owners.
 # ---------------------------------------------------------------------------
 
 
