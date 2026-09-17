@@ -20,8 +20,10 @@ def _require(condition: bool, message: str) -> None:
 # Support direct execution, sibling imports, and the scripts package.
 if not __package__:
     from file_hash import sha256_file as _sha256
+    from fsc_metrics import array_difference_metrics as _metric
 else:
     from scripts.file_hash import sha256_file as _sha256
+    from scripts.fsc_metrics import array_difference_metrics as _metric
 
 
 def _parse_native_rows(
@@ -49,20 +51,6 @@ def _parse_native_rows(
             rows.append(row)
     _require(rows, f"empty native noise dump: {path}")
     return rows
-
-
-def _metric(candidate: np.ndarray, reference: np.ndarray) -> dict[str, float | int]:
-    candidate = np.asarray(candidate, dtype=np.float64)
-    reference = np.asarray(reference, dtype=np.float64)
-    _require(candidate.shape == reference.shape and candidate.size > 0, "metric topology mismatch")
-    residual = candidate - reference
-    return {
-        "count": int(candidate.size),
-        "relative_l2": float(np.linalg.norm(residual) / max(np.linalg.norm(reference), np.finfo(float).tiny)),
-        "median_abs": float(np.median(np.abs(residual))),
-        "p95_abs": float(np.percentile(np.abs(residual), 95)),
-        "max_abs": float(np.max(np.abs(residual))),
-    }
 
 
 def _positive_ratio(candidate: np.ndarray, reference: np.ndarray) -> dict[str, float | int | None]:
