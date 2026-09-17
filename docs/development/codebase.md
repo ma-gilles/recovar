@@ -14,7 +14,7 @@ The [development contract](../../AGENTS.md) defines change scope and validation.
 | RELION-style K1/K-class refinement | [`scripts/run_full_refinement.py`](../../scripts/run_full_refinement.py) resolves inputs and options | [`iteration_loop.refine_single_volume`](../../recovar/em/refinement/iteration_loop.py); despite the name, this controller also handles K-class refinement |
 | Pose-marginal PPCA refinement | [`refinement_loop`](../../recovar/em/ppca_refinement/refinement_loop.py) exposes dense and local refinement loops | [`dense_dataset`](../../recovar/em/ppca_refinement/dense_dataset.py), [`local_dataset`](../../recovar/em/ppca_refinement/local_dataset.py), and their fused kernels |
 | InitialModel/VDAM | [`vdam.iteration_loop.run_vdam_iterations`](../../recovar/em/vdam/iteration_loop.py) | Initial-model schedules, subset selection, state and reconstruction |
-| Earlier EM reference routines | Import directly from the owning module; `recovar.em` performs no workflow imports | [`states`](../../recovar/em/reference/states.py), [`iterations`](../../recovar/em/reference/iterations.py), and the E-step/M-step and heterogeneity modules |
+| Earlier and independent EM references | Import directly from the owning module; `recovar.em` performs no workflow imports | [`states`](../../recovar/em/reference/states.py), [`iterations`](../../recovar/em/reference/iterations.py), the E-step/M-step and heterogeneity modules, and the independent [normalized-CC](../../recovar/em/reference/normalized_cc_replay.py) and [Gaussian-reduction](../../recovar/em/reference/gaussian_reduction_replay.py) replays |
 
 Pipeline PPCA and pose-marginal PPCA have different entry points and state
 contracts. Choose the implementation reached by the actual command. The
@@ -38,7 +38,7 @@ their semantics already match:
 | `helpers/` | Shared array layouts, operators, batching, precision and statistics |
 | `relion/` | Runtime RELION metadata, normalization, CTF and native adapters |
 | `diagnostics/` | Optional capture writers, replay and intervention tools |
-| `reference/` | Independent earlier EM/covariance formulations and their example notebook |
+| `reference/` | Independent earlier EM/covariance formulations and deterministic numerical replays |
 | `ppca_refinement/` | Pose-marginal PPCA workflow and its K-class bridge |
 
 RELION diagnostic checkpoint restoration lives in [`relion/vdam_checkpoint.py`](../../recovar/em/relion/vdam_checkpoint.py), separate from the VDAM execution driver. Native moment/reference and BPref overrides, including post-M-step reference-map replay, live in [`diagnostics/vdam_mstep_replay.py`](../../recovar/em/diagnostics/vdam_mstep_replay.py); [`vdam/mstep_single_class.py`](../../recovar/em/vdam/mstep_single_class.py) retains the reconstruction transaction and its numerical boundary calls.
