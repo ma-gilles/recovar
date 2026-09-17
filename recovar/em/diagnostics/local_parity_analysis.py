@@ -392,8 +392,6 @@ class CandidateMapping:
     denominator_mask: np.ndarray
     fine_threshold_mask: np.ndarray
     reconstruction_mask: np.ndarray
-    relion_local_rot_id: np.ndarray
-    recovar_local_rot_id: np.ndarray
     pixel_support_equal: bool
     psi_support_equal: bool
 
@@ -578,8 +576,6 @@ def build_relion_recovar_candidate_mapping(relion_npz, recovar_npz, image_positi
         denominator_mask=denominator_mask,
         fine_threshold_mask=fine_threshold_mask,
         reconstruction_mask=reconstruction_mask,
-        relion_local_rot_id=relion_rot_id,
-        recovar_local_rot_id=recovar_local_rot_id,
         pixel_support_equal=pixel_support_equal,
         psi_support_equal=psi_support_equal,
     )
