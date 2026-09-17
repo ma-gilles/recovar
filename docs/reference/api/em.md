@@ -5,7 +5,7 @@ heterogeneous reconstruction.
 
 ## states
 
-EM state containers: EMState, SGDState, HeterogeneousEMState.
+Reference state containers for homogeneous and heterogeneous EM.
 
 ::: recovar.em.reference.states
     options:
