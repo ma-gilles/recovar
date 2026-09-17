@@ -1053,7 +1053,11 @@ def test_k1_coarse_gaussian_exact_operand_flags_honor_default_and_opt_out(monkey
     monkeypatch.setenv("RECOVAR_K1_COARSE_FUSED_PROJECTOR", "1")
     assert significance._k1_coarse_fused_projector_enabled()
     assert significance._k1_coarse_fused_projector_supports_padding(1)
-    assert not significance._k1_coarse_fused_projector_supports_padding(2)
+    # The fused kernel now scales rotated coordinates by the Projector padding
+    # factor (RELION project3Dmodel), so RELION --pad 2 no longer falls back to
+    # the materialised-projection rectangular diff2 path.
+    assert significance._k1_coarse_fused_projector_supports_padding(2)
+    assert not significance._k1_coarse_fused_projector_supports_padding(0)
 
     monkeypatch.delenv("RECOVAR_RELION_COARSE_CANONICAL_REDUCTION", raising=False)
     assert not significance._relion_coarse_canonical_reduction_enabled()

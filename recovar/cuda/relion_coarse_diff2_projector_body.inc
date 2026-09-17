@@ -103,11 +103,16 @@
                     + R[1] * static_cast<float>(reference_y);
                 const float rk2 = R[5] * static_cast<float>(reference_x)
                     + R[2] * static_cast<float>(reference_y);
-                if (static_cast<int>(rk0 * rk0 + rk1 * rk1 + rk2 * rk2)
+                // RELION AccProjectorKernel::project3Dmodel scales the rotated
+                // coordinates by the Projector padding factor and tests them
+                // against maxR2_padded = (maxR * padding_factor)^2 before the
+                // texture fetch.  padding_factor == 1.0f reproduces the former
+                // pad-1 arithmetic bitwise.
+                float xp = rk0 * padding_factor;
+                float yp = rk1 * padding_factor;
+                float zp = rk2 * padding_factor;
+                if (static_cast<int>(xp * xp + yp * yp + zp * zp)
                     <= model_max_r2) {
-                    float xp = rk0;
-                    float yp = rk1;
-                    float zp = rk2;
                     float imag_sign = 1.0f;
                     if (xp < 0.0f) {
                         xp = -xp;

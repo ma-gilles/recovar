@@ -3892,6 +3892,7 @@ def _validate_relion_coarse_prehalf_weight(
         "current_size",
         "physical_image_size",
         "model_max_r",
+        "padding_factor",
         "canonical_reduction",
         "single_lane_canonical",
         "prehalf_weight",
@@ -3909,6 +3910,7 @@ def relion_coarse_diff2_projector_f32(
     current_size: int,
     physical_image_size: int,
     model_max_r: int,
+    padding_factor: int = 1,
     canonical_reduction: bool = False,
     single_lane_canonical: bool = False,
     prehalf_weight: bool = False,
@@ -3969,6 +3971,7 @@ def relion_coarse_diff2_projector_f32(
         current_size=np.int64(current_size),
         physical_image_size=np.int64(physical_image_size),
         model_max_r=np.int64(model_max_r),
+        padding_factor=np.int64(int(padding_factor)),
         canonical_reduction=np.int64(bool(canonical_reduction)),
         single_lane_canonical=np.int64(bool(single_lane_canonical)),
         prehalf_weight=np.int64(bool(prehalf_weight)),
@@ -3981,6 +3984,7 @@ def relion_coarse_diff2_projector_f32(
         "current_size",
         "physical_image_size",
         "model_max_r",
+        "padding_factor",
         "canonical_reduction",
         "single_lane_canonical",
         "prehalf_weight",
@@ -3998,6 +4002,7 @@ def relion_coarse_diff2_projector_multistream_f32(
     current_size: int,
     physical_image_size: int,
     model_max_r: int,
+    padding_factor: int = 1,
     actual_batch_size: jax.Array,
     canonical_reduction: bool = True,
     single_lane_canonical: bool = False,
@@ -4059,6 +4064,7 @@ def relion_coarse_diff2_projector_multistream_f32(
         current_size=np.int64(current_size),
         physical_image_size=np.int64(physical_image_size),
         model_max_r=np.int64(model_max_r),
+        padding_factor=np.int64(int(padding_factor)),
         canonical_reduction=np.int64(bool(canonical_reduction)),
         single_lane_canonical=np.int64(bool(single_lane_canonical)),
         prehalf_weight=np.int64(bool(prehalf_weight)),
@@ -4071,6 +4077,7 @@ def relion_coarse_diff2_projector_multistream_f32(
         "current_size",
         "physical_image_size",
         "model_max_r",
+        "padding_factor",
         "prehalf_weight",
     ),
 )
@@ -4086,6 +4093,7 @@ def relion_coarse_diff2_projector_lanes_f32(
     current_size: int,
     physical_image_size: int,
     model_max_r: int,
+    padding_factor: int = 1,
     prehalf_weight: bool = False,
 ) -> tuple[jax.Array, jax.Array]:
     """Expose pre-atomic lanes from the shared fused coarse projector.
@@ -4131,6 +4139,7 @@ def relion_coarse_diff2_projector_lanes_f32(
         current_size=np.int64(current_size),
         physical_image_size=np.int64(physical_image_size),
         model_max_r=np.int64(model_max_r),
+        padding_factor=np.int64(int(padding_factor)),
         prehalf_weight=np.int64(bool(prehalf_weight)),
     )
 

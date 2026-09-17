@@ -641,10 +641,10 @@ def _resolve_coarse_gaussian_score_backend(
 def _k1_coarse_fused_projector_supports_padding(padding_factor: int) -> bool:
     """Whether the fused CUDA projector implements this RELION padding."""
 
-    # The fused kernel stages the compact pad-1 Projector texture and samples
-    # unscaled Fourier coordinates.  The general texture-projector path below
-    # infers and applies larger padding factors from the projector shape.
-    return int(padding_factor) == 1
+    # The fused kernel stages the compact Projector texture over the padded
+    # radius and scales the rotated coordinates by ``padding_factor`` before the
+    # texture fetch, as RELION's AccProjectorKernel::project3Dmodel does.
+    return int(padding_factor) >= 1
 
 
 def _capture_offset_free_and_absolute_float32_scores(scores, log_score_offset):
@@ -2251,6 +2251,7 @@ def _compute_k_class_significance_batched(
             current_size=score_size,
             physical_image_size=int(image_shape[0]),
             model_max_r=int(relion_projector_r_max),
+            padding_factor=int(projection_padding_factor),
             canonical_reduction=coarse_canonical_reduction_enabled,
             single_lane_canonical=coarse_single_lane_canonical_enabled,
             **coarse_projector_kwargs,

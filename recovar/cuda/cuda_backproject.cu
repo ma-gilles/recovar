@@ -7259,6 +7259,7 @@ ffi::Error RelionCoarseDiff2ProjectorF32Impl(
     int64_t current_size,
     int64_t physical_image_size,
     int64_t model_max_r,
+    int64_t padding_factor,
     int64_t canonical_reduction,
     int64_t single_lane_canonical,
     int64_t prehalf_weight,
@@ -7287,6 +7288,9 @@ ffi::Error RelionCoarseDiff2ProjectorF32Impl(
         full_to_compact,
         output);
     if (validation.failure()) return validation;
+    if (padding_factor <= 0)
+        return ffi::Error::InvalidArgument(
+            "RelionCoarseDiff2Projector: padding_factor must be positive");
 
     const auto projector_dims = projector_full.dimensions();
     const auto rotation_dims = rotations.dimensions();
@@ -7315,7 +7319,8 @@ ffi::Error RelionCoarseDiff2ProjectorF32Impl(
             model_max_r,
             -static_cast<float>(physical_image_size * physical_image_size),
             image_dims[0],
-            0);
+            0,
+            static_cast<int>(padding_factor));
     } else if (single_lane_canonical) {
         err = launch_relion_coarse_diff2_projector_f32<false, true, true>(
             stream,
@@ -7337,7 +7342,8 @@ ffi::Error RelionCoarseDiff2ProjectorF32Impl(
             model_max_r,
             -static_cast<float>(physical_image_size * physical_image_size),
             image_dims[0],
-            0);
+            0,
+            static_cast<int>(padding_factor));
     } else if (canonical_reduction) {
         err = launch_relion_coarse_diff2_projector_f32<false, true>(
             stream,
@@ -7359,7 +7365,8 @@ ffi::Error RelionCoarseDiff2ProjectorF32Impl(
             model_max_r,
             -static_cast<float>(physical_image_size * physical_image_size),
             image_dims[0],
-            0);
+            0,
+            static_cast<int>(padding_factor));
     } else {
         err = launch_relion_coarse_diff2_projector_f32(
             stream,
@@ -7381,7 +7388,8 @@ ffi::Error RelionCoarseDiff2ProjectorF32Impl(
             model_max_r,
             -static_cast<float>(physical_image_size * physical_image_size),
             image_dims[0],
-            0);
+            0,
+            static_cast<int>(padding_factor));
     }
     if (err != cudaSuccess)
         return ffi::Error::Internal(
@@ -7396,6 +7404,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("current_size")
         .Attr<int64_t>("physical_image_size")
         .Attr<int64_t>("model_max_r")
+        .Attr<int64_t>("padding_factor")
         .Attr<int64_t>("canonical_reduction")
         .Attr<int64_t>("single_lane_canonical")
         .Attr<int64_t>("prehalf_weight")
@@ -7414,6 +7423,7 @@ ffi::Error RelionCoarseDiff2ProjectorMultistreamF32Impl(
     int64_t current_size,
     int64_t physical_image_size,
     int64_t model_max_r,
+    int64_t padding_factor,
     int64_t canonical_reduction,
     int64_t single_lane_canonical,
     int64_t prehalf_weight,
@@ -7443,6 +7453,9 @@ ffi::Error RelionCoarseDiff2ProjectorMultistreamF32Impl(
         full_to_compact,
         output);
     if (validation.failure()) return validation;
+    if (padding_factor <= 0)
+        return ffi::Error::InvalidArgument(
+            "RelionCoarseDiff2Projector: padding_factor must be positive");
     if (actual_batch_size.element_type() != ffi::DataType::S32 ||
         actual_batch_size.dimensions().size() != 0)
         return ffi::Error::InvalidArgument(
@@ -7498,7 +7511,8 @@ ffi::Error RelionCoarseDiff2ProjectorMultistreamF32Impl(
             model_max_r,
             -static_cast<float>(physical_image_size * physical_image_size),
             actual_batch_size_host,
-            kRelionVdamWorkerStreams);
+            kRelionVdamWorkerStreams,
+            static_cast<int>(padding_factor));
     } else if (single_lane_canonical) {
         err = launch_relion_coarse_diff2_projector_f32<false, true, true>(
             stream,
@@ -7520,7 +7534,8 @@ ffi::Error RelionCoarseDiff2ProjectorMultistreamF32Impl(
             model_max_r,
             -static_cast<float>(physical_image_size * physical_image_size),
             actual_batch_size_host,
-            kRelionVdamWorkerStreams);
+            kRelionVdamWorkerStreams,
+            static_cast<int>(padding_factor));
     } else if (canonical_reduction) {
         err = launch_relion_coarse_diff2_projector_f32<false, true>(
             stream,
@@ -7542,7 +7557,8 @@ ffi::Error RelionCoarseDiff2ProjectorMultistreamF32Impl(
             model_max_r,
             -static_cast<float>(physical_image_size * physical_image_size),
             actual_batch_size_host,
-            kRelionVdamWorkerStreams);
+            kRelionVdamWorkerStreams,
+            static_cast<int>(padding_factor));
     } else {
         err = launch_relion_coarse_diff2_projector_f32<false, false>(
             stream,
@@ -7564,7 +7580,8 @@ ffi::Error RelionCoarseDiff2ProjectorMultistreamF32Impl(
             model_max_r,
             -static_cast<float>(physical_image_size * physical_image_size),
             actual_batch_size_host,
-            kRelionVdamWorkerStreams);
+            kRelionVdamWorkerStreams,
+            static_cast<int>(padding_factor));
     }
     if (err != cudaSuccess)
         return ffi::Error::Internal(
@@ -7580,6 +7597,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("current_size")
         .Attr<int64_t>("physical_image_size")
         .Attr<int64_t>("model_max_r")
+        .Attr<int64_t>("padding_factor")
         .Attr<int64_t>("canonical_reduction")
         .Attr<int64_t>("single_lane_canonical")
         .Attr<int64_t>("prehalf_weight")
@@ -7599,6 +7617,7 @@ ffi::Error RelionCoarseDiff2ProjectorLanesF32Impl(
     int64_t current_size,
     int64_t physical_image_size,
     int64_t model_max_r,
+    int64_t padding_factor,
     int64_t prehalf_weight,
     ffi::AnyBuffer projector_full,
     ffi::AnyBuffer rotations,
@@ -7618,6 +7637,7 @@ ffi::Error RelionCoarseDiff2ProjectorLanesF32Impl(
         current_size,
         physical_image_size,
         model_max_r,
+        padding_factor,
         0,
         0,
         prehalf_weight,
@@ -7630,6 +7650,9 @@ ffi::Error RelionCoarseDiff2ProjectorLanesF32Impl(
         full_to_compact,
         output);
     if (validation.failure()) return validation;
+    if (padding_factor <= 0)
+        return ffi::Error::InvalidArgument(
+            "RelionCoarseDiff2Projector: padding_factor must be positive");
 
     if (lane_partials->element_type() != ffi::DataType::F32)
         return ffi::Error::InvalidArgument(
@@ -7669,7 +7692,8 @@ ffi::Error RelionCoarseDiff2ProjectorLanesF32Impl(
             model_max_r,
             -static_cast<float>(physical_image_size * physical_image_size),
             image_dims[0],
-            0);
+            0,
+            static_cast<int>(padding_factor));
     } else {
         err = launch_relion_coarse_diff2_projector_f32<true>(
             stream,
@@ -7691,7 +7715,8 @@ ffi::Error RelionCoarseDiff2ProjectorLanesF32Impl(
             model_max_r,
             -static_cast<float>(physical_image_size * physical_image_size),
             image_dims[0],
-            0);
+            0,
+            static_cast<int>(padding_factor));
     }
     if (err != cudaSuccess)
         return ffi::Error::Internal(
@@ -7707,6 +7732,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("current_size")
         .Attr<int64_t>("physical_image_size")
         .Attr<int64_t>("model_max_r")
+        .Attr<int64_t>("padding_factor")
         .Attr<int64_t>("prehalf_weight")
         .Arg<ffi::AnyBuffer>()
         .Arg<ffi::AnyBuffer>()
