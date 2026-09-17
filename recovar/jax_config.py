@@ -55,11 +55,17 @@ if not _jax_cache_disabled and not os.environ.get("JAX_COMPILATION_CACHE_DIR"):
         os.path.expanduser("~/.cache/recovar/jax_compile"),
     )
     os.environ["JAX_COMPILATION_CACHE_DIR"] = _default_cache_dir
-    os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0.01")
     try:
         os.makedirs(_default_cache_dir, exist_ok=True)
     except OSError:
         pass
+if not _jax_cache_disabled:
+    # Apply the 10 ms threshold whether recovar or the caller chose the cache
+    # directory. JAX's own default is 1.0 s, which silently excludes the
+    # 0.1-0.3 s per-bucket EM programs from the persistent cache (measured
+    # 2026-09-17: a warm rerun with an explicit JAX_COMPILATION_CACHE_DIR
+    # persisted 6 programs and gained nothing).
+    os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0.01")
 
 import jax
 
