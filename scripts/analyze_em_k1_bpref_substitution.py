@@ -14,7 +14,6 @@ normalized L2 and amplitude fits are secondary.  Correlation is not computed.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -34,6 +33,7 @@ if __package__:
         downsample_recovar_accumulator,
         load_relion_dump,
     )
+    from scripts.file_hash import sha256_file as _sha256
 else:
     from analyze_em_k1_tau2_substitution import (
         _general,
@@ -47,6 +47,7 @@ else:
         downsample_recovar_accumulator,
         load_relion_dump,
     )
+    from file_hash import sha256_file as _sha256
 
 OUTPUT_SCHEMA = "recovar.em_k1_bpref_substitution.v1"
 
@@ -54,14 +55,6 @@ OUTPUT_SCHEMA = "recovar.em_k1_bpref_substitution.v1"
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def load_relion_raw(path: Path, *, value_dtype: np.dtype) -> tuple[np.ndarray, np.ndarray]:
