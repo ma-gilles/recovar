@@ -286,14 +286,14 @@ def audit(
             raise AuditError(f"current_sizes must be positive; got {current_sizes.tolist()}")
 
         class_weights = _finite_array(npz, "class_weights", ndim=1)
-        class_weight_trajectory = _finite_array(npz, "class_weight_trajectory", ndim=2)
-        if class_weights.shape != (N_CLASSES,) or class_weight_trajectory.shape != (
+        class_mstep_weight_trajectory = _finite_array(npz, "class_mstep_weight_trajectory", ndim=2)
+        if class_weights.shape != (N_CLASSES,) or class_mstep_weight_trajectory.shape != (
             len(numbered_iterations),
             N_CLASSES,
         ):
             raise AuditError(
                 "RECOVAR results are not a complete K=4 trajectory: "
-                f"class_weights={class_weights.shape} trajectory={class_weight_trajectory.shape}"
+                f"class_weights={class_weights.shape} trajectory={class_mstep_weight_trajectory.shape}"
             )
 
         result_hashes = {

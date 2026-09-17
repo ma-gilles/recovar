@@ -18,9 +18,6 @@ def add_significant_count_artifacts(save_dict, significant_counts, half_indices,
         if counts is None:
             continue
         counts_half_order = np.asarray(counts)
-        # Keep the legacy key value/shape/dtype-compatible: it has always
-        # stored the concatenated half-1, half-2 refinement-loop order.
-        save_dict[f"sig_counts_iter_{iteration:03d}"] = counts_half_order
         save_dict[f"sig_counts_half_order_iter_{iteration:03d}"] = counts_half_order
         flat_counts = counts_half_order.reshape(-1)
         if flat_counts.shape[0] != half_order_indices.shape[0]:
@@ -74,7 +71,6 @@ class RefinementHistory:
     smallest_change_offsets_trajectory: list = field(default_factory=list)
     best_rotation_eulers_history: list = field(default_factory=list)
     best_translations_history: list = field(default_factory=list)
-    class_weight_trajectory: list = field(default_factory=list)
     class_mstep_weight_trajectory: list = field(default_factory=list)
     class_full_posterior_weight_trajectory: list = field(default_factory=list)
     class_assignment_history: list = field(default_factory=list)
@@ -139,8 +135,7 @@ class RefinementHistory:
         self.pmax_per_image_history.append(per_image_pmax)
 
     def record_class_weights(self, mstep_weights, posterior_weights) -> None:
-        """Snapshot both weight definitions, preserving the two published M-step histories."""
-        self.class_weight_trajectory.append(mstep_weights.copy())
+        """Snapshot the M-step and full-posterior class-weight definitions."""
         self.class_mstep_weight_trajectory.append(mstep_weights.copy())
         self.class_full_posterior_weight_trajectory.append(posterior_weights.copy())
 
@@ -209,13 +204,7 @@ class RefinementHistory:
         self.smallest_change_offsets_trajectory.append(smallest_change_offsets)
 
     def to_dict(self) -> dict:
-        """Return the trajectory entries of the function's result dict.
-
-        Reproduces the exact key strings (including two pre-existing
-        aliased-duplicate keys) that all three ``return {...}`` sites in
-        ``refine_single_volume`` have always used, so callers can
-        merge this in with ``**history.to_dict()`` unchanged.
-        """
+        """Return the trajectory entries of the function's result dict."""
         return {
             "fsc": self.fsc_history[-1] if self.fsc_history else None,
             "current_sizes": self.current_sizes,
@@ -239,10 +228,8 @@ class RefinementHistory:
             "tau2_ssnr_trajectory": self.tau2_ssnr_trajectory,
             "sigma_offset_used_trajectory": self.sigma_offset_used_trajectory,
             "sigma_offset_used_per_half_trajectory": self.sigma_offset_used_per_half_trajectory,
-            "sigma_offset_used_trajectory_per_half": self.sigma_offset_used_per_half_trajectory,
             "sigma_offset_trajectory": self.sigma_offset_trajectory,
             "sigma_offset_per_half_trajectory": self.sigma_offset_per_half_trajectory,
-            "sigma_offset_trajectory_per_half": self.sigma_offset_per_half_trajectory,
             "per_class_sigma_offset_trajectory": self.per_class_sigma_offset_trajectory,
             "direction_prior_trajectory_per_half": self.direction_prior_trajectory_per_half,
             "rotation_posterior_trajectory_per_half": self.rotation_posterior_trajectory_per_half,
@@ -257,7 +244,6 @@ class RefinementHistory:
             "smallest_change_offsets_trajectory": self.smallest_change_offsets_trajectory,
             "best_rotation_eulers_history": self.best_rotation_eulers_history,
             "best_translations_history": self.best_translations_history,
-            "class_weight_trajectory": self.class_weight_trajectory,
             "class_mstep_weight_trajectory": self.class_mstep_weight_trajectory,
             "class_full_posterior_weight_trajectory": self.class_full_posterior_weight_trajectory,
             "class_assignment_history": self.class_assignment_history,
