@@ -4,13 +4,13 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from scripts.file_hash import sha256_file as _sha256
 from scripts.analyze_em_k1_coarse_pass1_boundary import (
     _map_relion_table,
     _translation_permutation,
@@ -52,14 +52,6 @@ CLASSIFICATION = (
     "raw_coarse_residual_is_corr_img_score_weight_dominated_"
     "not_pixel_correction"
 )
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def score_transfer_factorial_bases(
