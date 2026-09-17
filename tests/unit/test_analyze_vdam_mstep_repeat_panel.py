@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from scripts.analyze_vdam_mstep_boundary import _stages_for_iteration, analyze
-from scripts.analyze_vdam_mstep_repeat_panel import analyze_repeat_panel
+from scripts.analyze_vdam_mstep_repeat_panel import SCHEMA, analyze_repeat_panel
 
 
 def _write_native(path: Path, values: np.ndarray, *, complex_values: bool) -> None:
@@ -45,16 +45,15 @@ def test_analyze_vdam_mstep_repeat_panel_reports_native_floor_ratios(tmp_path):
 
     report = analyze_repeat_panel(arm_a, arm_b)
 
+    assert report["schema"] == SCHEMA
     assert report["status"] == "complete"
     stage = "raw_accumulator_weight_half0"
     assert report["native_repeat"][stage]["relative_l2"] == pytest.approx(0.05)
     assert report["recovar_repeat"][stage]["relative_l2"] == pytest.approx(0.2 / 2.2)
-    assert report["native_floor_ratios"][stage][
-        "cross_arm_a_over_native_repeat"
-    ] == pytest.approx(2.0)
-    assert report["native_floor_ratios"][stage][
-        "cross_arm_b_over_native_repeat"
-    ] == pytest.approx(20.0 / 7.0)
+    assert report["native_floor_ratios"][stage] == {
+        "cross_arm_a_over_native_repeat": pytest.approx(2.0),
+        "cross_arm_b_over_native_repeat": pytest.approx(20.0 / 7.0),
+    }
 
 
 def test_analyze_vdam_mstep_repeat_panel_rejects_unmatched_cross_report(tmp_path):
@@ -69,3 +68,50 @@ def test_analyze_vdam_mstep_repeat_panel_rejects_unmatched_cross_report(tmp_path
 
     with pytest.raises(ValueError, match="expected iteration=1"):
         analyze_repeat_panel(arm_a, arm_b)
+
+
+def test_repeat_panel_runner_pins_same_gpu_and_nested_capture_contract():
+    runner = (
+        Path(__file__).parents[2]
+        / "scripts/run_vdam_fullschedule_mstep_repeat_panel.sbatch"
+    ).read_text()
+    required = (
+        "#SBATCH --constraint=h100",
+        "#SBATCH --gres=gpu:h100:1",
+        '${EXPECTED_REPO_HEAD:?pin the tracked source head}',
+        '${RECOVAR_CUDA_LIB_SOURCE:?set the immutable qualified CUDA binary}',
+        'mapfile -t visible_gpu_uuids < <(nvidia-smi --query-gpu=uuid',
+        'gpu_uuid_before=${visible_gpu_uuids[0]//[[:space:]]/}',
+        'for arm in a b; do',
+        "scripts/run_vdam_fullschedule_mstep_boundary.sbatch",
+        'RUN_SUCCESS_${SLURM_JOB_ID}',
+        "scripts.analyze_vdam_mstep_repeat_panel",
+        'status --porcelain=v1 --untracked-files=no',
+        'sha256sum "${REPORT}"',
+        "RELION_VDAM_BLOCK_TRACE_REPLAY",
+        "RECOVAR_RELION_VDAM_WORKER_REPLAY_TOPOLOGY",
+        "RECOVAR_VDAM_CANDIDATE_BLOCK_TRACE_CAPTURE",
+        "RECOVAR_VDAM_CANDIDATE_BLOCK_MAP_CAPTURE",
+        "scripts.analyze_vdam_mapped_block_chronology",
+    )
+    missing = [token for token in required if token not in runner]
+    assert not missing, f"M-step repeat panel lost provenance/same-GPU gates: {missing}"
+
+
+def test_repeat_panel_reports_zero_repeat_error_without_floor_ratios(tmp_path):
+    arm_a = tmp_path / "a"
+    arm_b = tmp_path / "b"
+    _make_arm(arm_a, native_delta=0.0, recovar_delta=0.0)
+    _make_arm(arm_b, native_delta=0.0, recovar_delta=0.0)
+
+    report = analyze_repeat_panel(arm_a, arm_b)
+
+    assert report["schema"] == SCHEMA
+    assert report["native_repeat"]["raw_accumulator_data_half0"]["relative_l2"] == 0.0
+    assert report["recovar_repeat"]["raw_accumulator_weight_half1"]["relative_l2"] == 0.0
+    assert report["native_floor_ratios"]["raw_accumulator_data_half0"] == {
+        "cross_arm_a_over_native_repeat": None,
+        "cross_arm_b_over_native_repeat": None,
+    }
+    assert report["cross_arm_a"]["all_stages_bitwise_exact"] is True
+    assert report["cross_arm_b"]["all_stages_bitwise_exact"] is True
