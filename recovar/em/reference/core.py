@@ -1,19 +1,15 @@
 """Core EM iteration logic: cross-correlation, residual computation."""
 
 import functools
-import logging
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from scipy.spatial.transform import Rotation as R
 
 from recovar import core
+from recovar.core import fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
-
-logger = logging.getLogger(__name__)
-
 
 # Probabilities will be 4 dimensional:
 IMAGE_AXIS = 0
@@ -27,9 +23,6 @@ NORM_FFT = "backward"
 # batch volumes
 batch_vol_rot_slice_volume = jax.vmap(core.slice_volume, in_axes=(0, VOL_AXIS, None, None, None), out_axes=1)
 batch_vol_slice_volume = jax.vmap(core.slice_volume, in_axes=(0, None, None, None, None), out_axes=1)
-
-
-import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 
 def crosscorr_from_ft(many_images, one_image, image_shape):
@@ -127,17 +120,3 @@ def hard_assignment_idx_to_pose(indices, rotation_grid, translation_grid):
     predicted_trans = translation_grid[maxpos_vect[:, 1]]
     predicted_pose = rotation_grid[maxpos_vect[:, 0]]
     return predicted_pose, predicted_trans
-
-
-def estimate_error_from_hard_assignment(hard_assignment, gt_pose, gt_trans, rotation_grid, translation_grid):
-    predicted_pose, predicted_trans = hard_assignment_idx_to_pose(hard_assignment, rotation_grid, translation_grid)
-    predicted_pose = R.from_matrix(predicted_pose)
-    gt_pose = R.from_matrix(gt_pose)
-    error = (predicted_pose * gt_pose.inv()).magnitude() / np.pi * 180
-
-    mean_angle_error = np.mean(error)
-    mean_trans_error = np.mean(np.linalg.norm(predicted_trans - gt_trans, axis=-1))
-    logger.info("mean trans error: %s pixels", mean_trans_error)
-    logger.info("mean angle error: %s degrees", mean_angle_error)
-
-    return mean_angle_error, mean_trans_error

@@ -24,11 +24,11 @@ from typing import Any, Callable, Sequence
 import numpy as np
 
 try:
-    from scripts.fsc_metrics import normalized_fsc_auc, shell_fsc
+    from scripts.fsc_metrics import centered_corr, normalized_fsc_auc, shell_fsc
 except ModuleNotFoundError as error:
     if error.name != "scripts":
         raise
-    from fsc_metrics import normalized_fsc_auc, shell_fsc
+    from fsc_metrics import centered_corr, normalized_fsc_auc, shell_fsc
 
 # This reporter only reads files and computes NumPy FSCs. Force CPU before
 # importing RECOVAR helpers so JAX does not initialize a busy Slurm GPU.
@@ -187,19 +187,6 @@ def _load_optional(path: Path | None, load_fn: LoadFn, label: str, notes: list[s
     except Exception as exc:
         notes.append(f"failed to load {label} at {path}: {exc}")
         return None
-
-
-def centered_corr(lhs: np.ndarray, rhs: np.ndarray) -> float:
-    a = np.asarray(lhs, dtype=np.float64).reshape(-1)
-    b = np.asarray(rhs, dtype=np.float64).reshape(-1)
-    if a.size != b.size:
-        return float("nan")
-    a = a - float(np.mean(a))
-    b = b - float(np.mean(b))
-    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
-    if denom <= 0.0 or not math.isfinite(denom):
-        return float("nan")
-    return float(np.dot(a, b) / denom)
 
 
 def integer_shift_to_align_lhs_to_rhs(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:

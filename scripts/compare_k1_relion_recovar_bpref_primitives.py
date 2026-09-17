@@ -27,11 +27,12 @@ from recovar.em.sparse_pass2.sparse_pass2_bucket_io import _relion_translation_a
 from recovar.utils.file_hash import sha256_file
 
 if __package__:
-    from .analyze_k1_bpref_factor_boundary import _pixel_coordinates, _translation_map
+    from .analyze_k1_bpref_factor_boundary import _metric, _pixel_coordinates, _translation_map
     from .parse_relion_dump_dir import _read_real_2d
     from .validate_relion_bpref_factor_capture import load_factor_capture
 else:
     from analyze_k1_bpref_factor_boundary import (  # type: ignore[no-redef]
+        _metric,
         _pixel_coordinates,
         _translation_map,
     )
@@ -84,23 +85,6 @@ def _load_selection(path: Path) -> tuple[dict[str, Any], int, float, int]:
     _require(particle_diameter_ang > 0.0, "particle diameter must be positive")
     _require(width_mask_edge_px > 0, "mask-edge width must be positive")
     return selection, image_size, particle_diameter_ang, width_mask_edge_px
-
-
-def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, Any]:
-    left = np.asarray(reference)
-    right = np.asarray(candidate)
-    _require(left.shape == right.shape and left.size > 0, "comparison shape changed or is empty")
-    delta = right.astype(np.complex128) - left.astype(np.complex128)
-    denominator = max(float(np.linalg.norm(left.astype(np.complex128))), np.finfo(np.float64).tiny)
-    return {
-        "shape": list(left.shape),
-        "reference_dtype": str(left.dtype),
-        "candidate_dtype": str(right.dtype),
-        "exact_equal": bool(np.array_equal(left, right)),
-        "mismatch_count": int(np.count_nonzero(left != right)),
-        "relative_l2_over_reference": float(np.linalg.norm(delta) / denominator),
-        "max_abs": float(np.max(np.abs(delta), initial=0.0)),
-    }
 
 
 def _standard_half_indices(centered_indices: np.ndarray, image_size: int) -> np.ndarray:

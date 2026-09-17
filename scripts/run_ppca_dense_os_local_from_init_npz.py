@@ -133,7 +133,7 @@ def _parse_args() -> argparse.Namespace:
         help=(
             "Prior source. 'pipeline-mean-prior' replicates the pipeline's "
             "covariance Wiener form: prior_W = mean_prior * REG_INIT_MULTIPLIER "
-            "/ noise / n_pcs. Requires init built with prepare_ppca_init_from_pipeline_output_v2.py."
+            "/ noise / n_pcs. Requires init built with prepare_ppca_init_from_pipeline_output.py."
         ),
     )
     parser.add_argument("--gt-prior-box-power", type=float, default=0.0)
@@ -354,7 +354,7 @@ def main() -> None:
             if field not in z.files:
                 raise ValueError(
                     f"--prior-from-init {args.prior_from_init} requires '{field}' in {prior_init_npz}; "
-                    "rebuild with prepare_ppca_init_from_pipeline_output_v2.py"
+                    "rebuild with prepare_ppca_init_from_pipeline_output.py"
                 )
             variance_array = np.asarray(z[field], dtype=np.float64)
         if variance_array.shape != (half_size,):
@@ -399,7 +399,7 @@ def main() -> None:
             if "pipeline_mean_prior_half_voxel" not in z.files:
                 raise ValueError(
                     f"--prior-from-init pipeline-mean-prior requires 'pipeline_mean_prior_half_voxel' "
-                    f"in {prior_init_npz}; rebuild with prepare_ppca_init_from_pipeline_output_v2.py "
+                    f"in {prior_init_npz}; rebuild with prepare_ppca_init_from_pipeline_output.py "
                     "(it recomputes mean_prior from saved half-maps if pipeline didn't save it)"
                 )
             mean_prior_half = np.asarray(z["pipeline_mean_prior_half_voxel"], dtype=np.float64).reshape(-1)
@@ -434,7 +434,7 @@ def main() -> None:
             if mask_field not in z.files:
                 raise ValueError(
                     f"--postprocess-mask-source {args.postprocess_mask_source} requires '{mask_field}' "
-                    f"in {mask_npz}; rebuild with prepare_ppca_init_from_pipeline_output_v2.py"
+                    f"in {mask_npz}; rebuild with prepare_ppca_init_from_pipeline_output.py"
                 )
             external_mask_volume = np.asarray(z[mask_field], dtype=np.float32)
         if external_mask_volume.shape != tuple(dataset.volume_shape):

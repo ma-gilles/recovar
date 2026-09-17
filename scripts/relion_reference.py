@@ -51,6 +51,28 @@ def centered_correlation(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.real(np.vdot(af, bf)) / (np.linalg.norm(af) * np.linalg.norm(bf) + 1e-30))
 
 
+def relion_score_replay(
+    raw_diff2: np.ndarray,
+    rotation_prior: np.ndarray,
+    translation_prior: np.ndarray,
+    min_diff2: np.float32,
+) -> np.ndarray:
+    """Replay RELION's float32 prior/min/raw operation order."""
+    return np.subtract(
+        np.add(
+            np.add(
+                np.asarray(rotation_prior, dtype=np.float32),
+                np.asarray(translation_prior, dtype=np.float32),
+                dtype=np.float32,
+            ),
+            np.float32(min_diff2),
+            dtype=np.float32,
+        ),
+        np.asarray(raw_diff2, dtype=np.float32),
+        dtype=np.float32,
+    )
+
+
 def read_bpref_dump(p: Path) -> np.ndarray:
     with open(p, "rb") as f:
         nz, ny, nx = struct.unpack("qqq", f.read(24))
