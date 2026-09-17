@@ -1672,10 +1672,14 @@ def _compute_k_class_significance_batched(
             in _COARSE_GAUSSIAN_FUSED_SCORE_BACKENDS
             or coarse_gaussian_fused_full_fallback_armed
         ):
+            # RELION uploads the (RFLOAT) padded Projector data as XFLOAT
+            # textures (AccProjector::setMdlData); the fused kernel takes the
+            # same float32 texture, so narrow the pad-2 complex128 projector
+            # here instead of rejecting it at the FFI boundary.
             coarse_gaussian_projector_full_by_class = [
                 relion_projector_half_to_texture_full(
                     relion_projector_half[class_index],
-                )
+                ).astype(jnp.complex64)
                 for class_index in range(n_classes)
             ]
             coarse_gaussian_translation_angles = jnp.asarray(
