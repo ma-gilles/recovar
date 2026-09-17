@@ -35,6 +35,25 @@ def _force_exact_local_standard_gpu_default(monkeypatch):
     monkeypatch.setattr(local_batch_planning, "_visible_gpu_memory_bytes", lambda: None)
 
 
+def _identity_layout(rotation_counts, *, n_trans):
+    """Build identity poses for the requested per-image neighborhood sizes."""
+    rotation_counts = np.asarray(rotation_counts, dtype=np.int32)
+    offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
+    total = int(offsets[-1])
+    return LocalHypothesisLayout(
+        n_global_rotations=total,
+        n_pixels=1,
+        n_psi=1,
+        rotation_offsets=offsets,
+        rotation_ids_flat=np.arange(total, dtype=np.int32),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (total, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(total, dtype=np.float32),
+        rotation_counts=rotation_counts,
+        translation_grid=np.zeros((n_trans, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((len(rotation_counts), n_trans), dtype=np.float32),
+    )
+
+
 def test_exact_local_microbatch_default_matches_profiled_256_window(monkeypatch):
     _force_exact_local_standard_gpu_default(monkeypatch)
     monkeypatch.delenv(EXACT_LOCAL_TARGET_ROW_PIXELS_ENV, raising=False)
@@ -68,19 +87,7 @@ def test_exact_local_score_only_cap_covers_100k_parent_tile(monkeypatch):
     monkeypatch.delenv(EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV, raising=False)
     monkeypatch.setattr(local_batch_planning, "_visible_gpu_memory_bytes", lambda: 80 * 1024**3)
 
-    rotation_counts = np.asarray([198], dtype=np.int32)
-    layout = LocalHypothesisLayout(
-        n_global_rotations=198,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=np.asarray([0, 198], dtype=np.int64),
-        rotation_ids_flat=np.arange(198, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (198, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(198, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((9, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((1, 9), dtype=np.float32),
-    )
+    layout = _identity_layout(np.asarray([198], dtype=np.int32), n_trans=9)
     runtime_free_bytes = int(46.4 * 1024**3)
     cap = _exact_local_effective_max_hypotheses_per_microbatch(
         None,
@@ -112,19 +119,7 @@ def test_exact_local_score_only_cap_preserves_smaller_bucket_shape(monkeypatch):
     monkeypatch.delenv(EXACT_LOCAL_AUTO_MICROBATCH_BOOST_ENV, raising=False)
     monkeypatch.setattr(local_batch_planning, "_visible_gpu_memory_bytes", lambda: 80 * 1024**3)
 
-    rotation_counts = np.asarray([198], dtype=np.int32)
-    layout = LocalHypothesisLayout(
-        n_global_rotations=198,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=np.asarray([0, 198], dtype=np.int64),
-        rotation_ids_flat=np.arange(198, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (198, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(198, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((9, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((1, 9), dtype=np.float32),
-    )
+    layout = _identity_layout(np.asarray([198], dtype=np.int32), n_trans=9)
     cap = _exact_local_effective_max_hypotheses_per_microbatch(
         None,
         4003,
@@ -237,21 +232,7 @@ def test_exact_local_microbatch_batches_full_parent_256_pass2(monkeypatch):
 
     n_images = 12
     local_rotations = 1416
-    rotation_counts = np.full(n_images, local_rotations, dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    total_rotations = int(rotation_offsets[-1])
-    layout = LocalHypothesisLayout(
-        n_global_rotations=total_rotations,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=np.arange(total_rotations, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (total_rotations, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(total_rotations, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((84, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((n_images, 84), dtype=np.float32),
-    )
+    layout = _identity_layout(np.full(n_images, local_rotations, dtype=np.int32), n_trans=84)
 
     buckets = bucket_local_hypothesis_layout(
         layout,
@@ -274,21 +255,7 @@ def test_exact_local_microbatch_boosts_high_res_local_batch_without_full_floor(m
 
     n_images = 13
     local_rotations = 1536
-    rotation_counts = np.full(n_images, local_rotations, dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    total_rotations = int(rotation_offsets[-1])
-    layout = LocalHypothesisLayout(
-        n_global_rotations=total_rotations,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=np.arange(total_rotations, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (total_rotations, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(total_rotations, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((116, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((n_images, 116), dtype=np.float32),
-    )
+    layout = _identity_layout(np.full(n_images, local_rotations, dtype=np.int32), n_trans=116)
 
     base_cap = _exact_local_max_hypotheses_per_microbatch(
         None,
@@ -331,21 +298,7 @@ def test_exact_local_microbatch_boost_can_be_disabled_for_mstep_pass2(monkeypatc
 
     n_images = 13
     local_rotations = 1536
-    rotation_counts = np.full(n_images, local_rotations, dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    total_rotations = int(rotation_offsets[-1])
-    layout = LocalHypothesisLayout(
-        n_global_rotations=total_rotations,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=np.arange(total_rotations, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (total_rotations, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(total_rotations, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((116, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((n_images, 116), dtype=np.float32),
-    )
+    layout = _identity_layout(np.full(n_images, local_rotations, dtype=np.int32), n_trans=116)
 
     base_cap = _exact_local_max_hypotheses_per_microbatch(
         None,
@@ -404,21 +357,7 @@ def test_exact_local_microbatch_env_override_keeps_lower_cap(monkeypatch):
 
     n_images = 13
     local_rotations = 1536
-    rotation_counts = np.full(n_images, local_rotations, dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    total_rotations = int(rotation_offsets[-1])
-    layout = LocalHypothesisLayout(
-        n_global_rotations=total_rotations,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=np.arange(total_rotations, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (total_rotations, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(total_rotations, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((116, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((n_images, 116), dtype=np.float32),
-    )
+    layout = _identity_layout(np.full(n_images, local_rotations, dtype=np.int32), n_trans=116)
 
     cap = _exact_local_effective_max_hypotheses_per_microbatch(
         None,
@@ -440,20 +379,7 @@ def test_exact_local_microbatch_env_override_keeps_lower_cap(monkeypatch):
 
 
 def test_exact_local_xhalf_tail_microbatch_respects_outer_planner_tile():
-    rotation_counts = np.asarray([128, 766], dtype=np.int32)
-    rotation_offsets = np.asarray([0, 128, 894], dtype=np.int64)
-    layout = LocalHypothesisLayout(
-        n_global_rotations=894,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=np.arange(894, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (894, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(894, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((116, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((2, 116), dtype=np.float32),
-    )
+    layout = _identity_layout(np.asarray([128, 766], dtype=np.int32), n_trans=116)
 
     cap = _exact_local_xhalf_tail_microbatch_cap(
         15_500,
@@ -466,20 +392,7 @@ def test_exact_local_xhalf_tail_microbatch_respects_outer_planner_tile():
 
 
 def test_exact_local_xhalf_tail_microbatch_keeps_cap_for_planned_neighborhoods():
-    rotation_counts = np.asarray([64, 136], dtype=np.int32)
-    rotation_offsets = np.asarray([0, 64, 200], dtype=np.int64)
-    layout = LocalHypothesisLayout(
-        n_global_rotations=200,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=np.arange(200, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (200, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(200, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((116, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((2, 116), dtype=np.float32),
-    )
+    layout = _identity_layout(np.asarray([64, 136], dtype=np.int32), n_trans=116)
 
     assert (
         _exact_local_xhalf_tail_microbatch_cap(
@@ -494,21 +407,7 @@ def test_exact_local_xhalf_tail_microbatch_keeps_cap_for_planned_neighborhoods()
 
 def test_exact_local_xhalf_projection_cap_matches_case10_proven_bucket_boundary(monkeypatch):
     monkeypatch.delenv(EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV, raising=False)
-    rotation_counts = np.asarray([128, 256, 520], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    total_rotations = int(rotation_offsets[-1])
-    layout = LocalHypothesisLayout(
-        n_global_rotations=total_rotations,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=np.arange(total_rotations, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (total_rotations, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(total_rotations, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((116, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((3, 116), dtype=np.float32),
-    )
+    layout = _identity_layout(np.asarray([128, 256, 520], dtype=np.int32), n_trans=116)
 
     cap = _exact_local_xhalf_projection_microbatch_cap(
         14_171,
@@ -533,19 +432,7 @@ def test_exact_local_xhalf_projection_cap_matches_case10_proven_bucket_boundary(
 
 def test_exact_local_xhalf_projection_cap_preserves_one_exact_neighborhood(monkeypatch):
     monkeypatch.setenv(EXACT_LOCAL_XHALF_PROJECTION_TARGET_ROW_PIXELS_ENV, "1000")
-    rotation_counts = np.asarray([520], dtype=np.int32)
-    layout = LocalHypothesisLayout(
-        n_global_rotations=520,
-        n_pixels=1,
-        n_psi=1,
-        rotation_offsets=np.asarray([0, 520], dtype=np.int64),
-        rotation_ids_flat=np.arange(520, dtype=np.int32),
-        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (520, 3, 3)).copy(),
-        rotation_log_priors_flat=np.zeros(520, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=np.zeros((116, 2), dtype=np.float32),
-        translation_log_priors=np.zeros((1, 116), dtype=np.float32),
-    )
+    layout = _identity_layout(np.asarray([520], dtype=np.int32), n_trans=116)
 
     assert (
         _exact_local_xhalf_projection_microbatch_cap(

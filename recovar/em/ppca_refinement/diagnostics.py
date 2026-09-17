@@ -14,7 +14,7 @@ from __future__ import annotations
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.em.ppca_refinement.config import MeanRegularizationConfig
+from recovar.em.ppca_refinement.mean_regularization import MeanRegularizationConfig
 
 __all__ = [
     "build_iteration_diagnostics",

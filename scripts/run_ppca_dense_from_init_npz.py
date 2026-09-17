@@ -22,18 +22,18 @@ from recovar.core import fourier_transform_utils as ftu
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
-    MeanRegularizationConfig,
-    PostprocessConfig,
     ScheduleConfig,
     ScoringConfig,
     SparsePass2Config,
 )
+from recovar.em.ppca_refinement.postprocess import PostprocessConfig
 from recovar.em.ppca_refinement.dense_dataset import coerce_augmented_half_volumes, run_dense_ppca_fused_em_iteration
 from recovar.em.ppca_refinement.initialization import (
     loading_row_norm_variance_prior,
     volume_power_variance_prior,
 )
 from recovar.em.ppca_refinement.mean_regularization import (
+    MeanRegularizationConfig,
     KCLASS_RELION_MINRES_MAP,
     relion_style_mean_precision_from_stats,
 )
