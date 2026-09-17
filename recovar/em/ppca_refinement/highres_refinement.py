@@ -28,6 +28,7 @@ from recovar.em.ppca_refinement.local_dataset import (
     run_local_ppca_halfset_pose_scoring_iteration,
 )
 from recovar.em.ppca_refinement.mean_regularization import MeanRegularizationConfig
+from recovar.em.ppca_refinement.pose_selection import rotation_angle_degrees
 from recovar.em.ppca_refinement.postprocess import PostprocessConfig
 from recovar.em.ppca_refinement.ppca_bridge import PPCAKClassScheduleBridge, make_ppca_kclass_schedule_bridge
 from recovar.em.ppca_refinement.refinement_loop import (
@@ -219,12 +220,6 @@ def _canonicalize_pose_diagnostics_by_image_index(pose_diagnostics: dict) -> dic
     return out
 
 
-def _rotation_angle_deg(a: np.ndarray, b: np.ndarray) -> float:
-    rel = np.asarray(a, dtype=np.float64).T @ np.asarray(b, dtype=np.float64)
-    cos_angle = (float(np.trace(rel)) - 1.0) * 0.5
-    return float(np.rad2deg(np.arccos(np.clip(cos_angle, -1.0, 1.0))))
-
-
 def _pose_probe_delta_diagnostics(
     reference_diagnostics: dict,
     candidate_diagnostics: dict,
@@ -282,13 +277,13 @@ def _pose_probe_delta_diagnostics(
             ref_mats = np.asarray(ref_mats, dtype=np.float32)[ref_order][valid]
             cand_mats = np.asarray(cand_mats, dtype=np.float32)[cand_order][valid]
             angles = np.asarray(
-                [_rotation_angle_deg(r0, r1) for r0, r1 in zip(ref_mats, cand_mats, strict=True)],
+                [rotation_angle_degrees(r0, r1) for r0, r1 in zip(ref_mats, cand_mats, strict=True)],
                 dtype=np.float32,
             )
         else:
             angles = np.asarray(
                 [
-                    _rotation_angle_deg(ref_rots_grid[int(r0)], cand_rots_grid[int(r1)])
+                    rotation_angle_degrees(ref_rots_grid[int(r0)], cand_rots_grid[int(r1)])
                     for r0, r1 in zip(ref_rot[valid], cand_rot[valid], strict=True)
                 ],
                 dtype=np.float32,
@@ -1057,5 +1052,3 @@ def run_highres_ppca_refinement_with_kclass_pose_hierarchy(
             "bridge_history": bridge.history,
         },
     )
-
-
