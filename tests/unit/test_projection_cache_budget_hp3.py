@@ -136,3 +136,29 @@ def test_large_bucket_pow2_rung_is_opt_in(monkeypatch):
     assert pow2[:3] == default[:3]
     assert pow2[3:] == [8192, 16384, 32768, 131072, 262144]
     assert all(p >= d for p, d in zip(pow2, default))  # never smaller than the shared quantiser
+
+
+def test_min_chunk_images_promotes_remainders_to_the_next_bucket_size(monkeypatch):
+    from recovar.em.scoring import sparse_bucket_arrays as sba
+
+    # 11 images at size 16 (counts 9..16), 5 images at size 32, 3 at size 64
+    counts = [9, 10, 11, 12, 13, 14, 15, 16, 16, 16, 16] + [20, 24, 28, 30, 32] + [40, 50, 60]
+    per_image_inputs = {"oversampled_rots": [np.zeros((int(c), 3, 3), dtype=np.float32) for c in counts]}
+    order = np.arange(len(counts), dtype=np.int64)
+    kw = dict(n_fine_trans=4, rotation_block_size_for_quantization=5000, max_hypotheses_per_microbatch=10**9,
+              max_images_per_microbatch=8, processing_order_override=order, processing_order_group_by_bucket_size=True,
+              group_chunk_image_rungs=True)
+    monkeypatch.delenv("RECOVAR_SPARSE_PASS2_MIN_CHUNK_IMAGES", raising=False)
+    base = sba._bucket_pass2_inputs(per_image_inputs, **kw)
+    assert [(b["bucket_size"], len(b["image_indices"])) for b in base] == [(16, 8), (16, 2), (16, 1), (32, 4), (32, 1), (64, 2), (64, 1)]
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MIN_CHUNK_IMAGES", "4")
+    promoted = sba._bucket_pass2_inputs(per_image_inputs, **kw)
+    # size-16 remainders (2, 1) join the size-32 run: 3 + 5 = 8 images -> one full chunk; size-64 keeps its tail (last size)
+    assert [(b["bucket_size"], len(b["image_indices"])) for b in promoted] == [(16, 8), (32, 8), (64, 2), (64, 1)]
+    covered = np.sort(np.concatenate([b["image_indices"] for b in promoted]))
+    np.testing.assert_array_equal(covered, order)  # every image exactly once
+    # promoted images lead the size-32 run, then the size-32 images in their original order
+    np.testing.assert_array_equal(promoted[1]["image_indices"], np.array([8, 9, 10, 11, 12, 13, 14, 15]))
+    # every image's own rotation count fits its bucket
+    for b in promoted:
+        assert all(counts[int(i)] <= b["bucket_size"] for i in b["image_indices"])
