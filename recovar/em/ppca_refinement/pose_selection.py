@@ -21,15 +21,6 @@ class TopPoseSelection:
     posterior: np.ndarray
 
 
-def pack_pose_ids(rotation_ids, translation_ids, n_translations: int) -> np.ndarray:
-    """Pack poses in the K-class convention ``rotation_id * n_trans + trans``."""
-
-    return np.asarray(rotation_ids, dtype=np.int64) * int(n_translations) + np.asarray(
-        translation_ids,
-        dtype=np.int64,
-    )
-
-
 def top_pose_candidate_count(config: PoseSelectionConfig, n_candidates: int) -> int:
     """Number of raw candidates to retain before CPU-side distinct filtering."""
 
