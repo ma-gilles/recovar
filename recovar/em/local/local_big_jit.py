@@ -1468,7 +1468,7 @@ def _project_local_half_spectrum(
     projection_half_volume: bool,
     projection_max_r,
     relion_projector_output_size: int,
-    projection_relion_texture_interp: bool,
+    projection_relion_texture_interp: bool | None,
     projection_force_jax: bool,
     projection_mask_current_image_disk: bool = True,
     use_relion_projector: bool,
@@ -1498,6 +1498,15 @@ def _project_local_half_spectrum(
             centered_rows=True,
             dense_scale=True,
             mask_current_image_disk=projection_mask_current_image_disk,
+            # Honour the caller's interpolator choice, as the eager RELION-projector
+            # branch does. Omitting it here made the two routes project the same
+            # volume with different interpolators whenever a caller asked for the
+            # manual fallback, which is how the per-class route's probe and M-step
+            # passes came to score identical candidates differently. None, the
+            # default, still resolves to RELION's texture interpolator. The floorf
+            # quirk is not threaded here: it only applies to that fallback and
+            # carrying it would add another compile-time argument.
+            relion_texture_interp=projection_relion_texture_interp,
             **projector_kwargs,
         )
         return proj_half
