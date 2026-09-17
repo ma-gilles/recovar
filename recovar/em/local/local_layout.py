@@ -22,7 +22,6 @@ from recovar.em.helpers.batch_planning import (
 )
 from recovar.em.helpers.orientation_priors import make_relion_translation_log_prior
 from recovar.em.helpers.shape_buckets import coarse_bucket, power_bucket
-from recovar.em.scoring.significant_samples import significant_sample_ids
 from recovar.em.sampling import (
     _normalized_log_weights,
     _wrapped_abs_diff_deg,
@@ -36,6 +35,7 @@ from recovar.em.sampling import (
     rotation_grid_size,
     rotation_indices_to_relion_eulers,
 )
+from recovar.em.scoring.significant_samples import significant_sample_ids
 
 EXACT_LOCAL_BUCKET_QUANTUM_ENV = "RECOVAR_EXACT_LOCAL_BUCKET_QUANTUM"
 EXACT_LOCAL_BUCKET_RADIX_ENV = "RECOVAR_EXACT_LOCAL_BUCKET_RADIX"
@@ -1915,7 +1915,7 @@ def bucket_local_hypothesis_layout(
             np.eye(3, dtype=rotations_dtype),
             (batch_size, int(bucket_size), 3, 3),
         ).copy()
-        padded_mstep_rotations = np.broadcast_to(
+        padded_mstep_rotations = None if layout.mstep_rotations_flat is None else np.broadcast_to(
             np.eye(3, dtype=mstep_rotations_flat.dtype),
             (batch_size, int(bucket_size), 3, 3),
         ).copy()
@@ -1947,7 +1947,8 @@ def bucket_local_hypothesis_layout(
             padded_rotations[row, :count] = layout.rotations_flat[start_off:end_off]
             if padded_source_eulers is not None:
                 padded_source_eulers[row, :count] = layout.source_eulers_flat[start_off:end_off]
-            padded_mstep_rotations[row, :count] = mstep_rotations_flat[start_off:end_off]
+            if padded_mstep_rotations is not None:
+                padded_mstep_rotations[row, :count] = mstep_rotations_flat[start_off:end_off]
             padded_rotation_ids[row, :count] = layout.rotation_ids_flat[start_off:end_off]
             padded_log_prior[row, :count] = layout.rotation_log_priors_flat[start_off:end_off]
             padded_mask[row, :count] = True
