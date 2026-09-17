@@ -5382,84 +5382,47 @@ def main():
         np.asarray(half1_idx, dtype=np.int64),
         np.asarray(half2_idx, dtype=np.int64),
     ]
-    for i, iter_eulers in enumerate(result.get("best_rotation_eulers_history", [])):
-        half_arrays = _pose_history_half_arrays(iter_eulers, dtype=np.float32)
+    for prefix, trailing_shape in (
+        ("best_rotation_eulers", (3,)),
+        ("best_translations", (2,)),
+    ):
+        for i, iter_poses in enumerate(result.get(f"{prefix}_history", [])):
+            half_arrays = _pose_history_half_arrays(iter_poses, dtype=np.float32)
+            if half_arrays is None or all(arr is None for arr in half_arrays):
+                continue
+            compact = []
+            for k, arr in enumerate(half_arrays):
+                if arr is None:
+                    continue
+                save_dict[f"{prefix}_iter_{i:03d}_half{k}"] = arr
+                compact.append(arr)
+            if compact:
+                save_dict[f"{prefix}_iter_{i:03d}"] = np.concatenate(compact, axis=0)
+            by_image = _pose_history_by_image(iter_poses, half_indices, n_images, trailing_shape, dtype=np.float32)
+            if by_image is not None:
+                save_dict[f"{prefix}_by_image_iter_{i:03d}"] = by_image
+                save_dict[f"{prefix}_final_by_image"] = by_image
+
+    for result_key, prefix, trailing_shape in (
+        ("final_all_data_best_rotation_eulers", "best_rotation_eulers", (3,)),
+        ("final_all_data_best_translations", "best_translations", (2,)),
+        ("final_all_data_max_posterior", "pmax", ()),
+    ):
+        final_values = result.get(result_key)
+        half_arrays = _pose_history_half_arrays(final_values, dtype=np.float32)
         if half_arrays is None or all(arr is None for arr in half_arrays):
             continue
         compact = []
         for k, arr in enumerate(half_arrays):
             if arr is None:
                 continue
-            save_dict[f"best_rotation_eulers_iter_{i:03d}_half{k}"] = arr
+            save_dict[f"{prefix}_final_all_data_half{k}"] = arr
             compact.append(arr)
         if compact:
-            save_dict[f"best_rotation_eulers_iter_{i:03d}"] = np.concatenate(compact, axis=0)
-        by_image = _pose_history_by_image(iter_eulers, half_indices, n_images, (3,), dtype=np.float32)
+            save_dict[f"{prefix}_final_all_data"] = np.concatenate(compact, axis=0)
+        by_image = _pose_history_by_image(final_values, half_indices, n_images, trailing_shape, dtype=np.float32)
         if by_image is not None:
-            save_dict[f"best_rotation_eulers_by_image_iter_{i:03d}"] = by_image
-            save_dict["best_rotation_eulers_final_by_image"] = by_image
-
-    for i, iter_trans in enumerate(result.get("best_translations_history", [])):
-        half_arrays = _pose_history_half_arrays(iter_trans, dtype=np.float32)
-        if half_arrays is None or all(arr is None for arr in half_arrays):
-            continue
-        compact = []
-        for k, arr in enumerate(half_arrays):
-            if arr is None:
-                continue
-            save_dict[f"best_translations_iter_{i:03d}_half{k}"] = arr
-            compact.append(arr)
-        if compact:
-            save_dict[f"best_translations_iter_{i:03d}"] = np.concatenate(compact, axis=0)
-        by_image = _pose_history_by_image(iter_trans, half_indices, n_images, (2,), dtype=np.float32)
-        if by_image is not None:
-            save_dict[f"best_translations_by_image_iter_{i:03d}"] = by_image
-            save_dict["best_translations_final_by_image"] = by_image
-
-    final_all_data_eulers = result.get("final_all_data_best_rotation_eulers")
-    final_all_data_euler_halves = _pose_history_half_arrays(final_all_data_eulers, dtype=np.float32)
-    if final_all_data_euler_halves is not None and not all(arr is None for arr in final_all_data_euler_halves):
-        compact = []
-        for k, arr in enumerate(final_all_data_euler_halves):
-            if arr is None:
-                continue
-            save_dict[f"best_rotation_eulers_final_all_data_half{k}"] = arr
-            compact.append(arr)
-        if compact:
-            save_dict["best_rotation_eulers_final_all_data"] = np.concatenate(compact, axis=0)
-        by_image = _pose_history_by_image(final_all_data_eulers, half_indices, n_images, (3,), dtype=np.float32)
-        if by_image is not None:
-            save_dict["best_rotation_eulers_final_all_data_by_image"] = by_image
-
-    final_all_data_trans = result.get("final_all_data_best_translations")
-    final_all_data_trans_halves = _pose_history_half_arrays(final_all_data_trans, dtype=np.float32)
-    if final_all_data_trans_halves is not None and not all(arr is None for arr in final_all_data_trans_halves):
-        compact = []
-        for k, arr in enumerate(final_all_data_trans_halves):
-            if arr is None:
-                continue
-            save_dict[f"best_translations_final_all_data_half{k}"] = arr
-            compact.append(arr)
-        if compact:
-            save_dict["best_translations_final_all_data"] = np.concatenate(compact, axis=0)
-        by_image = _pose_history_by_image(final_all_data_trans, half_indices, n_images, (2,), dtype=np.float32)
-        if by_image is not None:
-            save_dict["best_translations_final_all_data_by_image"] = by_image
-
-    final_all_data_pmax = result.get("final_all_data_max_posterior")
-    final_all_data_pmax_halves = _pose_history_half_arrays(final_all_data_pmax, dtype=np.float32)
-    if final_all_data_pmax_halves is not None and not all(arr is None for arr in final_all_data_pmax_halves):
-        compact = []
-        for k, arr in enumerate(final_all_data_pmax_halves):
-            if arr is None:
-                continue
-            save_dict[f"pmax_final_all_data_half{k}"] = arr
-            compact.append(arr)
-        if compact:
-            save_dict["pmax_final_all_data"] = np.concatenate(compact, axis=0)
-        by_image = _pose_history_by_image(final_all_data_pmax, half_indices, n_images, (), dtype=np.float32)
-        if by_image is not None:
-            save_dict["pmax_final_all_data_by_image"] = by_image
+            save_dict[f"{prefix}_final_all_data_by_image"] = by_image
 
     git_provenance = git_worktree_provenance()
     save_dict["git_commit"] = np.asarray(git_provenance["head"])
