@@ -2882,6 +2882,9 @@ def run_local_em_exact(
                         summed=summed[:unpadded_batch_size],
                         ctf_probs=ctf_probs[:unpadded_batch_size],
                         rotations=_local_mstep_rotations(unpadded_bucket),
+                        # Row-aligned with local_rotation_ids below; the layout
+                        # emits ids and matrices together.
+                        candidate_rotations=unpadded_bucket.local_rotations,
                         actual_counts=unpadded_bucket.actual_rotation_counts,
                         # Diagnostic-only: the segmented layout already carries per-class
                         # valid counts and the segment stride; forwarding them lets the
@@ -5107,6 +5110,7 @@ def run_local_em_exact(
                     summed=summed,
                     ctf_probs=ctf_probs,
                     rotations=_local_mstep_rotations(bucket),
+                    candidate_rotations=bucket.local_rotations,
                     actual_counts=bucket.actual_rotation_counts,
                     # Same diagnostic-only forwarding as the big-JIT call site above;
                     # both local routes can reach a class-segmented bucket.
