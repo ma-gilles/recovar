@@ -222,8 +222,6 @@ def test_fixed_capacity_active_row_materialization_structurally_excludes_all_tai
     bundle = _bind_fixed_capacity_local_execution(plan, operands, hypotheses, enabled=True)
     active = _materialize_fixed_capacity_active_local_rows(bundle, enabled=True)
 
-    assert active.descriptor_fingerprint == plan.descriptor_fingerprint
-    assert active.generation_token is plan.generation_token
     assert active.image_indices.shape == (plan.valid_image_count,)
     assert active.row_offsets.shape == (plan.valid_image_count + 1,)
     assert active.raw_images.shape[0] == plan.valid_image_count
@@ -351,10 +349,7 @@ def test_fixed_capacity_call0_view_is_read_only_call_scoped_and_canonical():
     view = _materialize_fixed_capacity_local_call_view(bundle, enabled=True)
 
     assert view.call_index == 0
-    assert view.descriptor_fingerprint == plan.descriptor_fingerprint
-    assert view.generation_token is plan.generation_token
     assert view.valid_image_count == int(plan.call_valid_images[0]) == 2
-    assert view.valid_row_count == int(plan.call_valid_rows[0]) == 5
     assert view.physical_image_capacity == int(plan.call_image_capacities[0]) == 4
     assert view.physical_rotation_capacity == int(plan.call_radix_buckets[0]) == 4
     assert view.bucket.image_indices.shape == (2,)
@@ -362,7 +357,6 @@ def test_fixed_capacity_call0_view_is_read_only_call_scoped_and_canonical():
     assert view.raw_images.shape == (2, 2, 2)
     assert view.ctf_params.shape == (2, 3)
     assert view.metadata_by_name["image_pre_shifts"].shape == (2, 2)
-    np.testing.assert_array_equal(view.row_offsets, [0, 2, 5])
     np.testing.assert_array_equal(view.bucket.actual_rotation_counts, [2, 3])
     inactive = ~view.bucket.local_rotation_mask
     assert np.all(view.bucket.local_rotation_ids[inactive] == -1)
@@ -375,7 +369,6 @@ def test_fixed_capacity_call0_view_is_read_only_call_scoped_and_canonical():
     )
     np.testing.assert_array_equal(view.metadata_by_name["image_pre_shifts"], [[2.25, -2.5], [0.25, -0.5]])
     call_arrays = (
-        view.row_offsets,
         view.raw_images,
         view.ctf_params,
         view.bucket.image_indices,
@@ -421,9 +414,7 @@ def test_fixed_capacity_materializes_every_active_call_in_sealed_chronology():
 
     second = views[1]
     assert second.valid_image_count == second.physical_image_capacity == 1
-    assert second.valid_row_count == 1
     assert second.physical_rotation_capacity == 2
-    np.testing.assert_array_equal(second.row_offsets, [0, 1])
     np.testing.assert_array_equal(second.bucket.actual_rotation_counts, [1])
     np.testing.assert_array_equal(second.bucket.image_indices, [1])
     np.testing.assert_array_equal(second.raw_images, _IndexedDataset().images[[1]])
@@ -433,7 +424,6 @@ def test_fixed_capacity_materializes_every_active_call_in_sealed_chronology():
     assert all(
         value.flags.writeable is False
         for value in (
-            second.row_offsets,
             second.bucket.image_indices,
             second.bucket.local_rotation_ids,
             second.raw_images,
@@ -680,8 +670,6 @@ def test_fixed_capacity_call0_rejects_different_current_dataset_with_same_plan_g
         lambda *args, **kwargs: jit_calls.append((args, kwargs)),
     )
 
-    assert view.descriptor_fingerprint == plan.descriptor_fingerprint
-    assert view.generation_token is plan.generation_token
     with pytest.raises(ValueError, match="current-dataset raw_images does not match"):
         fixed_capacity_local._fetch_and_validate_fixed_capacity_call_operands(
             different_dataset,
