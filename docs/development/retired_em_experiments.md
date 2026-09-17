@@ -25,3 +25,8 @@ assume that these historical hardware/binary/input contracts qualify newer code.
 Maintained workflow entry points, generic profilers, shared analyzers, GT/FSC
 measurement tools and fixture generators are retained. The active EM/VDAM agents
 continue to own their frozen performance experiments and artifacts.
+
+The July K4 host-backend baseline and its two frozen-result assertions are
+preserved with their [original test context](https://github.com/ma-gilles/recovar-experiments/tree/cd74e768fbab01fa00728d967a29da021319709c/experiments/k4_backend_history_202607).
+The reusable trajectory comparator and its five behavior tests remain, as does
+the newer snapshot consumed by current scorecards.
