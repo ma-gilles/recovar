@@ -409,6 +409,20 @@ def _soft_posterior_block_bpref_active(
     return bool(prototype_enabled and live_per_particle_launches and not winner_take_all)
 
 
+_CANDIDATE_DENSITY_LOG_ENV = "RECOVAR_SPARSE_PASS2_LOG_CANDIDATE_DENSITY"
+
+
+def _candidate_density_logging_enabled() -> bool:
+    """Log the admitted fraction of pass-2 (row, translation) cells.
+
+    Diagnostic only and default off: it pulls each bucket's candidate mask to
+    the host.  Used to compare our fine-pass candidate set against RELION's
+    coarse-significant set.
+    """
+
+    return parse_env_flag(_CANDIDATE_DENSITY_LOG_ENV, default=False)
+
+
 def compute_pass2_stats_sparse_bucketed(
     experiment_dataset,
     volume,
@@ -1466,6 +1480,25 @@ def compute_pass2_stats_sparse_bucketed(
             candidate_mask = bucket_arrays["candidate_mask"]
             parent_map_padded = bucket_arrays["parent_map"]
             actual_counts = bucket_arrays["actual_counts"]
+        if _candidate_density_logging_enabled():
+            # Diagnostic only: how many of the (row, translation) cells this
+            # bucket scores are admitted by the candidate mask.  RELION's fine
+            # pass evaluates only its coarse-significant pairs, so this ratio
+            # sizes the pruning headroom.  Default off; it forces one device
+            # pull per bucket.
+            _mask_host = np.asarray(candidate_mask)
+            _cells = int(_mask_host.size)
+            _valid = int(_mask_host.sum())
+            logger.info(
+                "Sparse pass-2 candidate density: images=%d rows=%d translations=%d "
+                "cells=%d valid=%d frac=%.4f",
+                _mask_host.shape[0],
+                _mask_host.shape[1],
+                _mask_host.shape[2] if _mask_host.ndim > 2 else 1,
+                _cells,
+                _valid,
+                _valid / max(_cells, 1),
+            )
         target_particle_rows = (
             bpref_diagnostics._bpref_contribution_target_rows(experiment_dataset, image_indices)
             if device_signature_requested

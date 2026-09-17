@@ -164,3 +164,14 @@ def test_min_chunk_images_promotes_remainders_to_the_next_bucket_size(monkeypatc
     # every image's own rotation count fits its bucket
     for b in promoted:
         assert all(counts[int(i)] <= b["bucket_size"] for i in b["image_indices"])
+
+
+def test_candidate_density_logging_is_default_off(monkeypatch):
+    """The pass-2 candidate-density diagnostic must not run in production."""
+    from recovar.em.sparse_pass2 import sparse_pass2_bucketed as bucketed
+
+    monkeypatch.delenv(bucketed._CANDIDATE_DENSITY_LOG_ENV, raising=False)
+    assert bucketed._candidate_density_logging_enabled() is False
+    monkeypatch.setenv(bucketed._CANDIDATE_DENSITY_LOG_ENV, "1")
+    assert bucketed._candidate_density_logging_enabled() is True
+    assert bucketed._CANDIDATE_DENSITY_LOG_ENV == "RECOVAR_SPARSE_PASS2_LOG_CANDIDATE_DENSITY"
