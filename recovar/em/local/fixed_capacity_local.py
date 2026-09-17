@@ -560,8 +560,6 @@ class _FixedCapacityLocalExecutionBundle:
 class _FixedCapacityActiveLocalRows:
     """Poison-free active prefixes structurally ready for a future executor."""
 
-    descriptor_fingerprint: str
-    generation_token: _FixedCapacityLocalGenerationToken
     image_indices: np.ndarray
     row_offsets: np.ndarray
     raw_images: np.ndarray
@@ -581,13 +579,9 @@ class _FixedCapacityLocalCallView:
     """Read-only canonical view of one sealed physical call."""
 
     call_index: int
-    descriptor_fingerprint: str
-    generation_token: _FixedCapacityLocalGenerationToken
     physical_image_capacity: int
     physical_rotation_capacity: int
     valid_image_count: int
-    valid_row_count: int
-    row_offsets: np.ndarray
     bucket: LocalBucketSpec
     raw_images: np.ndarray
     ctf_params: np.ndarray
@@ -860,8 +854,6 @@ def _materialize_fixed_capacity_active_local_rows(
         {name: np.asarray(value)[:valid_images] for name, value in bundle.operands.metadata_by_name.items()}
     )
     return _FixedCapacityActiveLocalRows(
-        descriptor_fingerprint=fingerprint,
-        generation_token=bundle.generation_token,
         image_indices=bundle.plan.image_indices[:valid_images],
         row_offsets=bundle.plan.row_offsets[: valid_images + 1],
         raw_images=bundle.operands.raw_images[:valid_images],
@@ -1124,13 +1116,9 @@ def _materialize_fixed_capacity_local_call_view(
         raise ValueError("fixed-capacity call operand slices must be read-only")
     return _FixedCapacityLocalCallView(
         call_index=call_index,
-        descriptor_fingerprint=bundle.descriptor_fingerprint,
-        generation_token=bundle.generation_token,
         physical_image_capacity=physical_images,
         physical_rotation_capacity=physical_rotations,
         valid_image_count=valid_images,
-        valid_row_count=valid_rows,
-        row_offsets=local_row_offsets,
         bucket=bucket,
         raw_images=raw_images,
         ctf_params=ctf_params,
