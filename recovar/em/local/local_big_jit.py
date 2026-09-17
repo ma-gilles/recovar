@@ -2007,7 +2007,7 @@ def run_local_bucket_big_jit(
     use_compact_relion_projector_projection: bool,
     use_relion_projection_cache: bool,
     relion_projector_output_size: int,
-    projection_relion_texture_interp: bool,
+    projection_relion_texture_interp: bool | None,
     projection_force_jax: bool,
     projection_mask_current_image_disk: bool = True,
     relion_exact_bpref_operands: bool = False,
