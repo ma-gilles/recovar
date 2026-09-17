@@ -189,7 +189,7 @@ from recovar.em.refinement.projector_preparation import (
     prepare_initial_real_references,
 )
 from recovar.em.refinement.refinement_options import RefinementOptions, with_validated_sampling_schedule
-from recovar.em.relion.relion_metadata import _relion_metadata_translations
+from recovar.em.relion.relion_metadata import _relion_metadata_translations, read_relion_sampling_metadata
 from recovar.em.relion.relion_normalization import update_relion_norm_scale_corrections
 from recovar.em.relion.relion_worker_scale import (
     _dispatch_relion_follower_scale_for_final_all_data,
@@ -208,7 +208,6 @@ from recovar.em.sampling import (
     relion_sampling_perturbation_for_iteration,
     rotation_grid_size,
 )
-from recovar.em.relion.relion_metadata import read_relion_sampling_metadata
 from recovar.reconstruction.regularization import (
     compute_current_size_relion,
     fsc_to_relion_ssnr,
@@ -2491,8 +2490,8 @@ def refine_single_volume(
             # Dense RECOVAR accumulators live in the historical unnormalised
             # image frame: RELION BPref weight = Ft_ctf * N^4. Equivalently,
             # keep Ft_y/Ft_ctf in RECOVAR frame and scale RELION tau2 by N^4
-            # before the Wiener solve. See initial_model/gpu_pipeline.py's
-            # bp_weight_frame_scale for the same frame conversion.
+            # before the Wiener solve. The same frame conversion is documented
+            # in docs/math/ab_initio_initial_model_algorithm.md.
             kclass_tau2_frame_scale = float(grid_size) ** 4
             replay_class_tau2, replay_tau2_enabled, kclass_tau2_source = replay_policy._class_tau2_replay(
                 iteration=iteration,
