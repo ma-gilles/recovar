@@ -1,6 +1,4 @@
-"""EM state containers: EMState, SGDState, HeterogeneousEMState."""
-
-import logging
+"""Reference state containers for homogeneous and heterogeneous EM."""
 
 import jax
 import numpy as np
@@ -13,8 +11,6 @@ from recovar.reconstruction import relion_functions
 from .e_step import compute_pose_probabilities
 from .heterogeneity import compute_H_B, compute_projected_covariance_rhs_lhs, solve_covariance
 from .m_step import accumulate_mean_statistics
-
-logger = logging.getLogger(__name__)
 
 
 class EMState:
@@ -44,91 +40,6 @@ class EMState:
         self.mean = relion_functions.post_process_from_filter(
             experiment_dataset, self.Ft_CTF, self.Ft_y, tau=self.mean_variance, disc_type=disc_type
         ).reshape(-1)
-
-
-class SGDState:
-    name = "SGD"
-    sgd_batchsize = 100
-
-    @staticmethod
-    def sgd_projection(value):
-        return value
-
-    def __init__(self, mean, mean_variance, noise_variance):
-        self.mean = mean
-        self.mean_variance = mean_variance
-        self.noise_variance = noise_variance
-        self.update = 0
-
-    def E_step(self, experiment_dataset, rotations, translations, disc_type, big_image_batch):
-        probabilities = compute_pose_probabilities(
-            experiment_dataset, self.mean, rotations, translations, self.noise_variance, disc_type, big_image_batch
-        )
-        return probabilities
-
-    def M_step(
-        self,
-        experiment_dataset,
-        probabilities,
-        rotations,
-        translations,
-        disc_type,
-        big_image_batch,
-        iter,
-        volume_mask=None,
-    ):
-
-        Ft_y_this, Ft_CTF_this = accumulate_mean_statistics(
-            experiment_dataset, probabilities, rotations, translations, self.noise_variance, disc_type, big_image_batch
-        )
-        n_images_batch = len(big_image_batch)
-
-        mean = self.mean
-        mu = 0.9
-        grad = (
-            2 * ((Ft_CTF_this) * mean - Ft_y_this) * experiment_dataset.n_images / n_images_batch
-            + 2 / self.mean_variance * mean
-        )
-
-        step = 1 / max(np.max(np.abs(Ft_CTF_this)), np.finfo(np.float32).tiny)
-        self.update = mu * self.update + (1 - mu) * step * grad
-        if np.isnan(self.update).any() or np.isinf(self.update).any():
-            logger.error("|update|: %s", np.linalg.norm(self.update))
-
-        if iter % 10 == 0:
-            logger.debug("|dx| / |x|: %s", np.linalg.norm(self.update) / np.linalg.norm(mean))
-            logger.debug("|prior|/ grad: %s", np.linalg.norm(2 / self.mean_variance * mean) / np.linalg.norm(grad))
-            logger.debug("|x|: %s", np.linalg.norm(mean))
-            logger.debug("|dx|: %s", np.linalg.norm(self.update))
-        mean -= self.update * 0.1
-        mean = self.sgd_projection(mean)
-
-        std_multiplier = 10
-        mean = np.clip(
-            mean.real, -std_multiplier * np.sqrt(self.mean_variance), std_multiplier * np.sqrt(self.mean_variance)
-        ) + 1j * np.clip(
-            mean.imag, -std_multiplier * np.sqrt(self.mean_variance), std_multiplier * np.sqrt(self.mean_variance)
-        )
-
-        if (
-            np.isnan(mean).any()
-            or np.isinf(mean).any()
-            or np.isnan(np.linalg.norm(mean))
-            or np.isinf(np.linalg.norm(mean))
-        ):
-            logger.error("|dx| / |x|: %s", np.linalg.norm(self.update) / np.linalg.norm(mean))
-            logger.error("|prior|/ grad: %s", np.linalg.norm(2 / self.mean_variance * mean) / np.linalg.norm(grad))
-            logger.error("|x|: %s", np.linalg.norm(mean))
-            logger.error("|dx|: %s", np.linalg.norm(self.update))
-
-            raise ValueError(
-                f"NaN/Inf detected in mean estimate. |update|={np.linalg.norm(self.update)}, |x|={np.linalg.norm(mean)}"
-            )
-
-        self.mean = mean
-
-    def finish_up_M_step(self, experiment_dataset, disc_type):
-        pass
 
 
 class HeterogeneousEMState:
@@ -187,7 +98,6 @@ class HeterogeneousEMState:
             rotations,
             translations,
             self.noise_variance,
-            None,
             self.picked_frequency_indices,
             big_image_batch,
             self.covariance_options["disc_type"],
@@ -205,7 +115,6 @@ class HeterogeneousEMState:
                 rotations,
                 translations,
                 probabilities,
-                None,
                 self.noise_variance,
                 disc_type_mean=self.covariance_options["disc_type"],
                 disc_type_u=self.covariance_options["disc_type_u"],
