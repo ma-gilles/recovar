@@ -234,11 +234,8 @@ def test_kclass_weight_trajectories_record_mstep_and_full_posterior_provenance()
     posterior = np.asarray([0.5, 0.5], dtype=np.float64)
     history.record_class_weights(mstep, posterior)
     mstep[:] = posterior[:] = 0.0
-    np.testing.assert_array_equal(history.class_weight_trajectory, [[0.25, 0.75]])
     np.testing.assert_array_equal(history.class_mstep_weight_trajectory, [[0.25, 0.75]])
     np.testing.assert_array_equal(history.class_full_posterior_weight_trajectory, [[0.5, 0.5]])
-    history.class_weight_trajectory[0][0] = 1.0
-    assert history.class_mstep_weight_trajectory[0][0] == 0.25
 
     source = inspect.getsource(iteration_loop.refine_single_volume)
     assert "history.record_class_weights(" in source

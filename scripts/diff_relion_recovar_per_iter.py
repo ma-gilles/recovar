@@ -403,7 +403,7 @@ def extract_recovar_per_shell(recovar, it):
     out = {}
     fsc_key = f"fsc_iter_{nnn}"
     dvp_key = f"data_vs_prior_iter_{nnn}"
-    sig_key = f"sig_counts_iter_{nnn}"
+    sig_key = f"sig_counts_half_order_iter_{nnn}"
     noise_key = f"noise_radial_iter_{nnn}"
     tau2_key = f"tau2_radial_iter_{nnn}"
     sigma2_key = f"tau2_sigma2_iter_{nnn}"

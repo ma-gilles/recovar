@@ -235,7 +235,6 @@ def test_significant_count_artifacts_expose_source_image_order():
         n_images=5,
     )
 
-    np.testing.assert_array_equal(save_dict["sig_counts_iter_000"], counts_half_order)
     np.testing.assert_array_equal(
         save_dict["sig_counts_half_order_iter_000"], counts_half_order
     )
@@ -243,7 +242,6 @@ def test_significant_count_artifacts_expose_source_image_order():
         save_dict["sig_counts_by_image_iter_000"],
         np.asarray([10, 20, 40, 30, 50], dtype=np.int32),
     )
-    assert "sig_counts_iter_001" not in save_dict
 
 
 def test_gt_postprocess_command_uses_module_with_pythonpath_unset(monkeypatch, tmp_path):

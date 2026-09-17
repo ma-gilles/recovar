@@ -5195,7 +5195,6 @@ def main():
     # Save K-class metadata when available (n_classes>1).
     for key in (
         "class_weights",
-        "class_weight_trajectory",
         "class_mstep_weight_trajectory",
         "class_full_posterior_weight_trajectory",
     ):

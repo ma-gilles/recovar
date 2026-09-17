@@ -321,7 +321,7 @@ def test_pose_history_by_image_restores_original_particle_order():
         )
 
 
-def test_significant_count_artifacts_preserve_legacy_half_order_and_add_image_order():
+def test_significant_count_artifacts_save_half_and_image_order():
     half_indices = [
         np.asarray([2, 0, 4], dtype=np.int64),
         np.asarray([1, 3], dtype=np.int64),
@@ -336,7 +336,6 @@ def test_significant_count_artifacts_preserve_legacy_half_order_and_add_image_or
         n_images=5,
     )
 
-    np.testing.assert_array_equal(artifacts["sig_counts_iter_000"], counts_half_order)
     np.testing.assert_array_equal(
         artifacts["sig_counts_half_order_iter_000"],
         counts_half_order,
@@ -345,8 +344,7 @@ def test_significant_count_artifacts_preserve_legacy_half_order_and_add_image_or
         artifacts["sig_counts_by_image_iter_000"],
         np.asarray([0, 10, 20, 30, 40], dtype=np.int32),
     )
-    assert artifacts["sig_counts_iter_000"].dtype == counts_half_order.dtype
-    assert "sig_counts_iter_001" not in artifacts
+    assert artifacts["sig_counts_half_order_iter_000"].dtype == counts_half_order.dtype
     assert "sig_counts_half_order_iter_001" not in artifacts
     assert "sig_counts_by_image_iter_001" not in artifacts
 
