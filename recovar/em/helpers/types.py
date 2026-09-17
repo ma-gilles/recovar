@@ -203,7 +203,6 @@ class EMProfileStats(NamedTuple):
     n_blocks: int
     n_windowed: int
     use_window: bool
-    reused_pass1_projections: bool
     sparse_pass2_total_blocks: int
     sparse_pass2_skipped_blocks: int
     sparse_pass2_omitted_mass_upper_mean: float

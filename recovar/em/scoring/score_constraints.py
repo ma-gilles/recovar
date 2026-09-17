@@ -44,7 +44,6 @@ class DenseScoreConstraints:
     per_image_candidate_mask: bool
     candidate_mask_count: int | None
     candidate_mask_size: int | None
-    n_images: int
     n_rot: int
     n_trans: int
     prior_dtype: object = np.float32
@@ -169,7 +168,6 @@ class DenseScoreConstraints:
             per_image_candidate_mask=per_image_candidate_mask,
             candidate_mask_count=candidate_mask_count,
             candidate_mask_size=candidate_mask_size,
-            n_images=int(n_images),
             n_rot=int(n_rot),
             n_trans=int(n_trans),
             prior_dtype=dtype,
