@@ -9,10 +9,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
-try:
-    from scripts.analyze_vdam_late_profile_pair import _compile_log_summary
-except ModuleNotFoundError:  # Direct ``python scripts/...py`` execution.
-    from analyze_vdam_late_profile_pair import _compile_log_summary
+from scripts.analyze_vdam_late_profile_pair import _compile_log_summary
 
 
 def _load_mapping(path: Path) -> dict[str, Any]:

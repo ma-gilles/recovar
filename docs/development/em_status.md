@@ -105,3 +105,11 @@ Reusable global-winner analysis and its numerical coverage remain in this reposi
 The rejected August case-4/5/10 treatment-prefix report, inputs, generator and
 exclusive report tests are in the [experiment archive](https://github.com/ma-gilles/recovar-experiments/tree/a9cd2fb51fc1b1637a830cc7dcf1e60e4632e681/experiments/k1_selected_treatment_prefix_20260822).
 Its original **0/3** outcome is preserved; current qualification gates are unchanged.
+
+The three standalone flat-row, packed-job and selected-pair fine-score microbenchmarks
+now accompany their retired launchers in the [experiment archive](https://github.com/ma-gilles/recovar-experiments/tree/4616987362407186ca8fdecbc93a47ff0356ec2c/scripts).
+Production kernels and their numerical tests remain here.
+
+The standalone stable-window/prehalf microbenchmarks and historical eight-arm
+analyzer, with their exclusive tests, are also [archived](https://github.com/ma-gilles/recovar-experiments/tree/e1e9dc2496664220a5f97c8a0cc2fb70724b9399/experiments/standalone_benchmark_tools).
+Their numerical production tests and reusable profiling tools remain maintained here.
