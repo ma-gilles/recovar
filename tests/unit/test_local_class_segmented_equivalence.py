@@ -380,3 +380,28 @@ def test_a_class_without_rows_receives_an_exactly_zero_volume(float64, empty_cla
     np.testing.assert_array_equal(empty_ctf, np.zeros_like(empty_ctf))
     populated = np.asarray(result.Ft_ctf[1 - empty_class])
     assert np.abs(populated).max() > 0.0
+
+
+@pytest.mark.parametrize("segmented", [False, True])
+def test_the_pre_cast_normalizer_is_materialized_only_for_the_capture(segmented, monkeypatch):
+    """Both routes must pay nothing for the diagnostic when it is switched off.
+
+    The pre-cast normalizer has no production consumer. The per-class route once
+    copied it on every call and the segmented engine once returned it from every
+    big-JIT bucket, so each published run carried a device output and a host pull
+    that nothing read. Assert the switched-off value is absent, and that the same
+    switch still produces a usable array, so a gate that never fires also fails.
+    """
+    monkeypatch.delenv("RECOVAR_VDAM_KCLASS_STATS_DUMP_DIR", raising=False)
+    off = _run(segmented=segmented, float64=False)
+    assert off.uncast_log_evidence_per_image is None
+
+    monkeypatch.setenv("RECOVAR_VDAM_KCLASS_STATS_DUMP_DIR", "/nonexistent-capture-target")
+    on = _run(segmented=segmented, float64=False)
+    captured = on.uncast_log_evidence_per_image
+    assert captured is not None
+    assert captured.shape == (N_IMAGES,)
+    assert np.all(np.isfinite(captured))
+    np.testing.assert_allclose(
+        captured, off.stats.log_evidence_per_image, rtol=1e-6, atol=1e-6,
+    )

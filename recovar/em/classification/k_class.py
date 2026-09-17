@@ -32,6 +32,7 @@ from recovar.em.classification.k_class_results import (
     _zero_subset_noise_stats,
 )
 from recovar.em.dense.em_engine import run_em
+from recovar.em.diagnostics import initial_model_capture
 from recovar.em.diagnostics.coarse_score_diagnostics import (
     _coarse_selector_audit_from_full_stats,
     _with_coarse_significance_diagnostics,
@@ -2359,8 +2360,13 @@ def run_local_k_class_em(
     if normalization_log_evidence_np is not None:
         global_log_evidence = normalization_log_evidence_np
     # The same diagnostic quantity for this route: the normalizer before the engine
-    # casts it to the scoring dtype. No production consumer.
-    uncast_global_log_evidence = np.asarray(global_log_evidence, dtype=np.float64).copy()
+    # casts it to the scoring dtype. No production consumer, so it is only
+    # materialized when the K-class statistics capture is switched on.
+    uncast_global_log_evidence = (
+        np.asarray(global_log_evidence, dtype=np.float64).copy()
+        if initial_model_capture.k_class_statistics_capture_enabled()
+        else None
+    )
 
     results = _PerClassResults(
         accumulate_noise=accumulate_noise,

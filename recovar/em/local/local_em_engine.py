@@ -15,7 +15,7 @@ import numpy as np
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.dense.deferred_noise_pack import pack_noise_pixel_capacity
-from recovar.em.diagnostics import bpref_diagnostics, vdam_replay
+from recovar.em.diagnostics import bpref_diagnostics, initial_model_capture, vdam_replay
 from recovar.em.diagnostics.local_bpref_capture import (
     _bpref_capture_priors,
     _bucket_contains_debug_target,
@@ -992,7 +992,12 @@ def run_local_em_exact(
     significant_counts = np.empty(n_images, dtype=np.int32) if return_significant_counts else None
     rotation_posterior_sums = np.zeros(int(local_layout.n_global_rotations), dtype=np.float64)
     # Diagnostic: the normalizer as reduced, before the cast to the scoring dtype.
-    uncast_log_evidence_per_image = np.zeros(n_images, dtype=np.float64)
+    # Requested only when a capture directory is configured, so production returns and
+    # transfers exactly what it did before.
+    capture_uncast_normalizer = initial_model_capture.k_class_statistics_capture_enabled()
+    uncast_log_evidence_per_image = (
+        np.zeros(n_images, dtype=np.float64) if capture_uncast_normalizer else None
+    )
     class_log_evidence_per_image = None
     class_best_log_score_per_image = None
     class_posterior_sums = None
@@ -2429,6 +2434,7 @@ def run_local_em_exact(
             big_jit_static_options = dict(
                 n_classes=n_classes,
                 class_segment_rotation_count=(bucket.segment_rotation_count if n_classes > 1 else None),
+                return_uncast_normalizer=capture_uncast_normalizer,
                 mask_mode=big_jit_mask_mode,
                 score_with_masked_images=score_with_masked_images,
                 apply_integer_pre_shift=apply_integer_pre_shift,
@@ -4438,13 +4444,16 @@ def run_local_em_exact(
                     class_rotation_posterior_sums=class_rotation_posterior_sums,
                     class_assignments=class_assignments,
                 )
-            if bucket_uncast_log_Z is not None:
+            if bucket_uncast_log_Z is not None and uncast_log_evidence_per_image is not None:
                 uncast_rows = np.asarray(
                     postprocess_rows(bucket_uncast_log_Z), dtype=np.float64,
                 )[:unpadded_batch_size]
+                # Trim to the valid image rows before selecting the column: when host
+                # publication retains the padded rows, reshaping first selects the
+                # wrong rows (four physical rows with two valid would take rows 0 and 2).
                 offset_rows = -0.5 * np.asarray(
                     postprocess_rows(batch_norm), dtype=np.float64,
-                ).reshape(unpadded_batch_size, -1)[:unpadded_batch_size, 0]
+                )[:unpadded_batch_size].reshape(unpadded_batch_size, -1)[:, 0]
                 uncast_log_evidence_per_image[
                     np.asarray(unpadded_bucket.image_indices, dtype=np.int64)
                 ] = uncast_rows + offset_rows

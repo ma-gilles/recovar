@@ -214,6 +214,9 @@ SEALED_STATIC_ARGNAMES = (
     "return_debug_scores",
     "return_debug_operands",
     "unweighted_high_shell_image_power",
+    "n_classes",
+    "class_segment_rotation_count",
+    "return_uncast_normalizer",
 )
 
 _MEMORY_ANALYSIS_FIELDS = (

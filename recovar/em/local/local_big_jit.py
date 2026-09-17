@@ -1916,6 +1916,7 @@ def _split_local_big_jit_carry(result):
         "unweighted_high_shell_image_power",
         "n_classes",
         "class_segment_rotation_count",
+        "return_uncast_normalizer",
     ),
 )
 def run_local_bucket_big_jit(
@@ -2042,6 +2043,7 @@ def run_local_bucket_big_jit(
     unweighted_high_shell_image_power: bool = False,
     n_classes: int = 1,
     class_segment_rotation_count: int | None = None,
+    return_uncast_normalizer: bool = False,
 ):
     """Run one exact-local bucket in a single compiled numeric boundary.
 
@@ -2919,6 +2921,7 @@ def run_local_bucket_big_jit(
             _reconstruction_probs,
             probs_sum_t,
             reconstruction_probs_sum_t,
+            uncast_log_Z,
         ) = _score_normalize_support(
             shifted_score_split,
             ctf2_over_nv_score,
@@ -3032,6 +3035,7 @@ def run_local_bucket_big_jit(
             reconstruction_probs,
             probs_sum_t,
             reconstruction_probs_sum_t,
+            uncast_log_Z,
         ) = _score_normalize_support(
             shifted_score_split,
             ctf2_over_nv_score,
@@ -3470,7 +3474,7 @@ def run_local_bucket_big_jit(
                 class_reconstruction_probs_sum=class_reconstruction_probs_sum,
                 class_log_evidence=class_log_evidence,
                 class_best_argmax=class_best_argmax,
-                uncast_log_Z=uncast_log_Z,
+                uncast_log_Z=uncast_log_Z if return_uncast_normalizer else None,
             )
         )
         if return_source_vdam_operands:
@@ -3527,7 +3531,7 @@ def run_local_bucket_big_jit(
             class_reconstruction_probs_sum=class_reconstruction_probs_sum,
             class_log_evidence=class_log_evidence,
             class_best_argmax=class_best_argmax,
-            uncast_log_Z=uncast_log_Z,
+            uncast_log_Z=uncast_log_Z if return_uncast_normalizer else None,
         )
     )
     return _append_debug_outputs(
