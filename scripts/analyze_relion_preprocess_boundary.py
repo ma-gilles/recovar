@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -12,6 +11,7 @@ from typing import Any
 
 import numpy as np
 
+from scripts.file_hash import sha256_file as _sha256
 from scripts.validate_relion_preprocess_capture import (
     RelionPreprocessCapture,
 )
@@ -26,14 +26,6 @@ STRICT_REPLAY_COUNT = 3
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def relion_fourier_to_recovar_centered(

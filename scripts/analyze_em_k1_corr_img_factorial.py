@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 from pathlib import Path
@@ -12,6 +11,7 @@ from typing import Any
 
 import numpy as np
 
+from scripts.file_hash import sha256_file as _sha256
 from scripts.analyze_em_k1_coarse_pass1_boundary import (
     _map_relion_table,
     _translation_permutation,
@@ -54,14 +54,6 @@ CLASSIFICATION = (
 EFFECTIVE_CTF_IMAGINARY_MAX_ABS = 2.0e-5
 ACTUAL_ARM_REPLAY_RELATIVE_L2 = 1.0e-14
 STACK_NAME = re.compile(r"(?P<stack>[1-9][0-9]*)@")
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _validate_parent(path: Path) -> dict[str, Any]:
