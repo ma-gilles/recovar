@@ -7,6 +7,7 @@ share. ``sparse_pass2_bucketed`` prepares every bucket through this owner.
 
 from __future__ import annotations
 
+import functools
 import logging
 from functools import partial
 
@@ -34,13 +35,25 @@ from recovar.em.sparse_pass2.sparse_pass2_scoring import (
 logger = logging.getLogger(__name__)
 
 
-def _half_translation_phase_table_for_indices(translations, image_shape, pixel_indices):
+@functools.lru_cache(maxsize=8)
+def _scaled_half_lattice_cached(image_shape):
+    """Scaled packed-half frequency lattice, computed once per image shape.
+
+    Same device arithmetic as before (byte-identical result); the eager JAX
+    grid/meshgrid/index chain was being re-dispatched for every bucket of the
+    sparse pass (~3% of a warm ordinary iteration on the 10k subset).
+    """
+
     lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
-        image_shape,
+        tuple(int(size) for size in image_shape),
         voxel_size=1,
         scaled=True,
     )
-    lattice_half = jnp.asarray(lattice_half)
+    return jnp.asarray(lattice_half)
+
+
+def _half_translation_phase_table_for_indices(translations, image_shape, pixel_indices):
+    lattice_half = _scaled_half_lattice_cached(tuple(int(size) for size in image_shape))
     lattice_window = lattice_half[jnp.asarray(pixel_indices, dtype=jnp.int32)]
     phase_arg = jnp.einsum(
         "td,pd->tp",
