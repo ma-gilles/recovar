@@ -5,12 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import subprocess
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from scripts.analyzer_provenance import allocated_gpu_uuid as _allocated_gpu_uuid
 from scripts.file_hash import sha256_file as _sha256
 from scripts.validate_relion_preprocess_capture import (
     RelionPreprocessCapture,
@@ -296,24 +296,6 @@ def build_report_from_arrays(
             ]["material_relative_l2_count"],
         },
     }
-
-
-def _allocated_gpu_uuid(expected_gpu_uuid: str) -> str:
-    completed = subprocess.run(
-        [
-            "nvidia-smi",
-            "-i",
-            expected_gpu_uuid,
-            "--query-gpu=uuid",
-            "--format=csv,noheader",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    actual = completed.stdout.strip()
-    _require(actual == expected_gpu_uuid, "allocated GPU UUID mismatch")
-    return actual
 
 
 def run_gpu_analysis(
