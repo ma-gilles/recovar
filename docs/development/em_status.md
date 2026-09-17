@@ -97,3 +97,7 @@ maintained workflow tools and unique numerical tests, rather than status histori
 The [original PR158 VDAM reuse plan](https://github.com/ma-gilles/recovar-experiments/blob/342c5c2164bd3595fe7748b66a6453439afc9af5/docs/math/vdam_relion_parity_reuse_plan.md)
 preserves the historical ownership map and suite contract. Its retired package paths
 and proposed work are historical; use the current codebase map and task queue above.
+
+The fixed July case-11 six-arm report sealer is preserved in the
+[experiment archive](https://github.com/ma-gilles/recovar-experiments/blob/7e8c1543c057a8590f119448fd658f92daf10c64/scripts/seal_six_arm_global_membership_repeat_join.py).
+Reusable global-winner analysis and its numerical coverage remain in this repository.
