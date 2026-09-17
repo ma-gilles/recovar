@@ -83,7 +83,6 @@ def test_relion_firstiter_cc_keeps_cross_scale_correction():
     score_corr, norm_corr = _relion_image_correction_factors(
         batch_corr,
         batch_scale,
-        score_mode="normalized_cc",
     )
 
     np.testing.assert_allclose(np.asarray(score_corr), np.asarray(batch_corr))
