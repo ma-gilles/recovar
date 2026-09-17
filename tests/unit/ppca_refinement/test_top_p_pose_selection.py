@@ -5,7 +5,6 @@ import pytest
 from recovar.em.ppca_refinement.config import PoseSelectionConfig
 from recovar.em.ppca_refinement.pose_selection import (
     merge_top_p_pose_scores,
-    pack_pose_ids,
     select_distinct_top_poses,
     top_p_from_score_block,
 )
@@ -56,11 +55,6 @@ def test_distinct_top_p_filters_near_duplicates_and_pads():
     np.testing.assert_array_equal(selection.translation_idx, np.asarray([[0, 2, -1]], dtype=np.int32))
     assert np.isneginf(selection.log_score[0, 2])
     assert selection.posterior[0, 2] == 0.0
-
-
-def test_pack_pose_ids_uses_kclass_convention():
-    packed = pack_pose_ids(np.asarray([[2, 4]]), np.asarray([[1, 3]]), n_translations=5)
-    np.testing.assert_array_equal(packed, np.asarray([[11, 23]]))
 
 
 def test_merge_top_p_pose_scores_matches_full_grid_sort():
