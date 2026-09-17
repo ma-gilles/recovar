@@ -669,6 +669,9 @@ def _maybe_dump_bpref_contribution_rows(
     inline_projector_data_volumes=None,
     inline_projector_weight_volumes=None,
     reconstruction_group_ids=None,
+    relion_cuda_preprocess_radius=None,
+    relion_cuda_preprocess_cosine_width=None,
+    preprocess_path=None,
 ):
     """Dump posterior-reduced active rows for whole-accumulator scatter replay.
 
@@ -1006,6 +1009,19 @@ def _maybe_dump_bpref_contribution_rows(
             np.nan if shadow_reduction_agreement is None else shadow_reduction_agreement["normalized_max_bound"]
         ),
         high_precision_operand_bundle=np.bool_(high_precision_operand_bundle),
+        # Which engine preprocessing implementation produced the scored images.
+        # Empty for every caller that does not supply it.
+        preprocess_path=np.str_("" if preprocess_path is None else str(preprocess_path)),
+        # relion_preprocess_real_f32 masks with these two scalars rather than an
+        # array; NaN records "no parametric mask applied on this path".
+        relion_cuda_preprocess_radius=np.float64(
+            np.nan if relion_cuda_preprocess_radius is None
+            else float(relion_cuda_preprocess_radius)
+        ),
+        relion_cuda_preprocess_cosine_width=np.float64(
+            np.nan if relion_cuda_preprocess_cosine_width is None
+            else float(relion_cuda_preprocess_cosine_width)
+        ),
         raw_real_images=raw_real_images,
         raw_source_dtype=np.asarray(raw_source_dtype),
         raw_source_shape=np.asarray(raw_real_images.shape, dtype=np.int64),

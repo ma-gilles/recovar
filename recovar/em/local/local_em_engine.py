@@ -2908,11 +2908,31 @@ def run_local_em_exact(
                             capture_static_kwargs,
                             experiment_dataset=experiment_dataset,
                             image_shape=image_shape,
+                            # local_big_jit.py:2195 gates relion_preprocess_real_f32 on
+                            # exact operands AND a positive mask radius, so this site can run
+                            # real RELION CUDA preprocessing. It must not share the split
+                            # site's label.
+                            preprocess_path=(
+                                "big_jit_relion_cuda"
+                                if (relion_exact_bpref_operands
+                                    and relion_cuda_preprocess_radius > 0.0)
+                                else "big_jit_jax"
+                            ),
+                            relion_preprocess_normalization=image_only_corrections_arg,
+                            relion_cuda_preprocess_radius=relion_cuda_preprocess_radius,
+                            relion_cuda_preprocess_cosine_width=relion_cuda_preprocess_cosine_width,
+                            applied_image_mask=(
+                                big_jit_image_mask_arg if relion_exact_bpref_operands else None
+                            ),
+                            applied_image_mask_mode=(
+                                big_jit_mask_mode if relion_exact_bpref_operands else None
+                            ),
                             raw_batch_data=batch_data,
                             ctf_params=ctf_params,
                             noise_variance_half=noise_variance_half,
                             image_pre_shifts=image_pre_shifts,
                             integer_pre_shifts=integer_pre_shifts,
+                            real_space_pre_shift_applied=integer_pre_shifts is not None,
                             image_corrections=image_corrections,
                             scale_corrections=scale_corrections,
                             image_indices=unpadded_bucket.image_indices,
@@ -5108,6 +5128,17 @@ def run_local_em_exact(
                         capture_static_kwargs,
                         experiment_dataset=experiment_dataset,
                         image_shape=image_shape,
+                        # local_preprocessing._process_half: the exact flag selects
+                        # _big_jit_preprocess_half, which bypasses backend preprocessing.
+                        preprocess_path=(
+                            "split_exact" if relion_exact_bpref_operands else "split_backend"
+                        ),
+                        applied_image_mask=(
+                            big_jit_image_mask_arg if relion_exact_bpref_operands else None
+                        ),
+                        applied_image_mask_mode=(
+                            big_jit_mask_mode if relion_exact_bpref_operands else None
+                        ),
                         raw_batch_data=batch_data,
                         ctf_params=ctf_params,
                         noise_variance_half=noise_variance_half,
@@ -5117,6 +5148,10 @@ def run_local_em_exact(
                             np.asarray(bucket.image_indices, dtype=np.int32),
                             batch=batch_data,
                         ),
+                        # prepare_local_bucket reports whether it applied the real-space
+                        # shift, including the processed_half_cache case where the integer
+                        # array is no longer available.
+                        real_space_pre_shift_applied=real_space_pre_shift_applied,
                         image_corrections=image_corrections,
                         scale_corrections=scale_corrections,
                         image_indices=bucket.image_indices,

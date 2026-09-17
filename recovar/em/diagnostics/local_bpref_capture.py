@@ -113,6 +113,10 @@ def _bpref_capture_priors(scores, probs_shape, *, bucket, rotation_log_prior) ->
 
 
 _HIGH_PRECISION_OPERAND_BUNDLE_ENV = "RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE"
+# The preprocessing implementations a capture bucket can actually have run.
+_PREPROCESS_PATHS = frozenset(
+    {"big_jit_relion_cuda", "big_jit_jax", "split_exact", "split_backend"}
+)
 
 
 def _require_lossless_float32(name: str, values):
@@ -141,11 +145,18 @@ def _exact_local_bpref_operand_bundle(
     *,
     experiment_dataset,
     image_shape,
+    preprocess_path: str,
+    relion_preprocess_normalization=None,
+    relion_cuda_preprocess_radius=None,
+    relion_cuda_preprocess_cosine_width=None,
+    applied_image_mask,
+    applied_image_mask_mode,
     raw_batch_data,
     ctf_params,
     noise_variance_half,
     image_pre_shifts,
     integer_pre_shifts,
+    real_space_pre_shift_applied: bool,
     image_corrections,
     scale_corrections,
     image_indices,
@@ -153,33 +164,32 @@ def _exact_local_bpref_operand_bundle(
 ) -> dict:
     """Attach the engine's own image-side operands when explicitly requested.
 
-    Exact-local search reaches the shared contribution schema through a route
-    that historically declared these operands absent.  The existing
-    ``RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE`` request already selects them
-    on the bucketed sparse-pass-2 route; honour the same request here so a replay
-    can *check* a host reconstruction against the operands the kernel actually
-    received instead of assuming they agree.
+    Exact-local search reaches the shared contribution schema through a route that
+    historically declared these operands absent. The existing
+    ``RECOVAR_BPREF_HIGH_PRECISION_OPERAND_BUNDLE`` request already selects them on the
+    bucketed sparse-pass-2 route; honour the same request here so a replay can *check* a
+    host reconstruction against the operands the kernel actually received.
 
-    Every field this returns is either read from the live engine state or
-    rejected.  Three limits are deliberate and fail closed rather than being
-    filled in:
+    ``exact_preprocess_branch`` is the branch ``local_preprocessing._process_half``
+    actually took, passed in by the caller. It is never inferred from the dataset's
+    backend: ``relion_exact_bpref_operands`` selects ``_big_jit_preprocess_half`` and
+    deliberately bypasses backend preprocessing, so a ``relion_cuda``-configured dataset
+    can run a bucket to which no backend normalization was applied. Reading the backend
+    instead would refuse that bucket wrongly, and on the ordinary branch it would let a
+    real normalization pass unrecorded.
 
-    * ``ctf_mode`` stays ``"not-captured"``.  The bucketed route reads it from
-      ``config.ctf``; the exact-local route has no such object in scope, so the
-      sentinel is the truthful value and no CTF policy is claimed here.
-    * ``relion_preprocess_normalization_factors`` is recorded as unit only when
-      RELION CUDA preprocessing is off, which is exactly the bucketed route's own
-      convention for "no normalization applied".  When that preprocessing is on
-      the real factors are not observable on this route, so the request is
-      refused rather than answered with ones.
-    * A non-integral ``image_pre_shifts`` means the engine applied Fourier phase
-      shifts, not RELION's zero-filled real-space integer shift.  Recording zeros
-      there would claim the wrong shift path, so it is refused.
+    Refusals preserved, each for an operand this route cannot observe:
 
-    When the request is absent this returns ``static_kwargs`` unchanged, so the
-    default capture keeps declaring the operands absent rather than guessing.
-    Nothing here participates in scoring or M-step arithmetic, and the caller
-    stays outside every JIT boundary.
+    * ordinary branch on a RELION-CUDA-preprocessed dataset -- real normalization factors
+      are applied inside ``prepare_batch_preprocess_operands`` and are not forwarded here;
+    * a pre-shift that was applied without an available integer array (the
+      ``processed_half_cache`` case), which zeros would misdescribe as no shift;
+    * non-integral ``image_pre_shifts``, where the engine applies Fourier phase shifts;
+    * an operand whose precision does not round-trip the writer's float32 storage.
+
+    With the request absent this returns ``static_kwargs`` unchanged. Nothing here
+    participates in scoring or M-step arithmetic, and the caller stays outside every JIT
+    boundary.
     """
 
     if not parse_env_flag(_HIGH_PRECISION_OPERAND_BUNDLE_ENV, default=False):
@@ -191,12 +201,59 @@ def _exact_local_bpref_operand_bundle(
         )
     rows = int(unpadded_batch_size)
     indices = np.asarray(image_indices, dtype=np.int64)[:rows]
-    relion_cuda_preprocess = bool(uses_relion_cuda_image_preprocessing(experiment_dataset))
-    if relion_cuda_preprocess:
+
+    # The preprocessing implementation this bucket actually ran, named by its call site.
+    # relion_exact_bpref_operands alone does NOT identify it: on the split site that flag
+    # selects local_preprocessing._big_jit_preprocess_half, which bypasses backend
+    # preprocessing, while on the big-JIT site the same flag (with a positive mask radius)
+    # selects cuda_backproject.relion_preprocess_real_f32 -- real RELION CUDA
+    # preprocessing. Labelling both from that one flag inverts the big-JIT case.
+    if preprocess_path not in _PREPROCESS_PATHS:
         raise RuntimeError(
-            "BPref operand bundle cannot describe a RELION CUDA preprocessed bucket: its "
-            "normalization factors are applied inside preprocessing and are not observable "
-            "on the exact-local route, so they cannot be recorded as unit factors"
+            f"BPref operand bundle requires an explicit preprocessing path, one of "
+            f"{sorted(_PREPROCESS_PATHS)}; got {preprocess_path!r}"
+        )
+    backend_is_relion_cuda = bool(uses_relion_cuda_image_preprocessing(experiment_dataset))
+    relion_cuda_preprocess_applied = preprocess_path == "big_jit_relion_cuda"
+
+    if preprocess_path == "big_jit_relion_cuda":
+        # local_big_jit.py:2257 normalizes with image_only_corrections and masks with a
+        # parametric radius/cosine width. Both are recorded: the normalization as the
+        # factor array, the mask as the two scalar fields the writer now carries.
+        if relion_preprocess_normalization is None:
+            raise RuntimeError(
+                "BPref operand bundle on the big-JIT RELION CUDA path requires the actual "
+                "image_only_corrections passed to relion_preprocess_real_f32; unit factors "
+                "would claim a normalization this bucket did not use"
+            )
+        if relion_cuda_preprocess_radius is None or relion_cuda_preprocess_cosine_width is None:
+            raise RuntimeError(
+                "BPref operand bundle on the big-JIT RELION CUDA path requires the actual "
+                "mask radius and cosine width passed to relion_preprocess_real_f32; the "
+                "scored images were masked parametrically and cannot be described without them"
+            )
+        normalization_factors = _require_lossless_float32(
+            "relion_preprocess_normalization",
+            np.asarray(relion_preprocess_normalization)[:rows],
+        )
+    elif preprocess_path == "split_backend" and backend_is_relion_cuda:
+        raise RuntimeError(
+            "BPref operand bundle cannot describe this bucket: it took the ordinary "
+            "local_preprocessing branch on a RELION-CUDA-preprocessed dataset, whose real "
+            "normalization factors are applied inside prepare_batch_preprocess_operands and "
+            "are not forwarded to this capture boundary. Recording unit factors would claim "
+            "a preprocessing policy this bucket did not use."
+        )
+    else:
+        # split_exact bypasses backend preprocessing; big_jit_jax has a zero mask radius
+        # so relion_preprocess_real_f32 is not reached. No normalization was applied.
+        normalization_factors = np.ones(rows, dtype=np.float32)
+
+    if real_space_pre_shift_applied and integer_pre_shifts is None:
+        raise RuntimeError(
+            "BPref operand bundle cannot describe this bucket's pre-shift: a real-space shift "
+            "was applied but the integer array is unavailable here (processed_half_cache), and "
+            "zeros would claim that no shift was applied"
         )
     if image_pre_shifts is not None and integer_pre_shifts is None:
         raise RuntimeError(
@@ -204,12 +261,27 @@ def _exact_local_bpref_operand_bundle(
             "applies Fourier phase shifts on this path, which the integer_pre_shifts field "
             "cannot represent without claiming the wrong shift path"
         )
-    score_with_masked_images = bool(static_kwargs["score_with_masked_images"])
-    image_mask, image_mask_mode = resolve_image_mask_for_half_preprocess(
-        experiment_dataset, image_shape, require_mask=score_with_masked_images
-    )
-    # Absent corrections are not guessed: the engine multiplies by nothing, which
-    # is exactly the unit operand the bucketed route also records for this case.
+
+    # The mask the bucket actually used. local_preprocessing resolves it only on the
+    # exact branch; re-resolving here would invent one for the ordinary branch.
+    if relion_cuda_preprocess_applied:
+        # No array mask exists on this path; the two scalars are the record.
+        image_mask = np.zeros((0,), dtype=np.float32)
+        image_mask_mode = "relion_cuda_parametric"
+    elif applied_image_mask is None:
+        if bool(static_kwargs["score_with_masked_images"]):
+            raise RuntimeError(
+                "BPref operand bundle requires the image mask this bucket scored with, but "
+                "none was supplied while score_with_masked_images is set"
+            )
+        image_mask = np.zeros((0,), dtype=np.float32)
+        image_mask_mode = "no-mask-applied"
+    else:
+        image_mask = np.asarray(applied_image_mask, dtype=np.float32)
+        image_mask_mode = str(applied_image_mask_mode)
+
+    # Absent corrections are not guessed: the engine multiplies by nothing, which is
+    # exactly the unit operand the bucketed route also records for this case.
     batch_image_corrections = (
         np.ones(rows, dtype=np.float32)
         if image_corrections is None
@@ -235,10 +307,28 @@ def _exact_local_bpref_operand_bundle(
         ),
         "batch_image_corrections": batch_image_corrections,
         "batch_scale_corrections": batch_scale_corrections,
-        "relion_preprocess_normalization_factors": np.ones(rows, dtype=np.float32),
-        "relion_cuda_preprocess": relion_cuda_preprocess,
+        "relion_preprocess_normalization_factors": normalization_factors,
+        # The parametric mask relion_preprocess_real_f32 applied, or None on the
+        # paths that never reach it (the writer records NaN there).
+        # The engine path is its own explicit field, never folded into a mode string:
+        # existing replayers compare image_mask_mode verbatim.
+        "preprocess_path": preprocess_path,
+        "relion_cuda_preprocess_radius": (
+            relion_cuda_preprocess_radius if relion_cuda_preprocess_applied else None
+        ),
+        "relion_cuda_preprocess_cosine_width": (
+            relion_cuda_preprocess_cosine_width if relion_cuda_preprocess_applied
+            else None
+        ),
+        "relion_cuda_preprocess": relion_cuda_preprocess_applied,
         "image_mask": image_mask,
         "image_mask_mode": image_mask_mode,
+        # The exact branch builds the CTF from the source STAR
+        # (_relion_exact_ctf_half_from_source_star_host), not from these ctf_params, so a
+        # replay must know which construction produced the scored CTF.
+        "ctf_mode": ("relion_exact_source_star"
+                     if preprocess_path in ("split_exact", "big_jit_relion_cuda", "big_jit_jax")
+                     else str(static_kwargs["ctf_mode"])),
     }
 
 

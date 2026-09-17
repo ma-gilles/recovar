@@ -78,13 +78,18 @@ INTEGRAL_SHIFTS[IMAGE_INDICES] = [[1.0, -2.0], [-3.0, 4.0]]
 N_IMAGES = 16
 ALL_CORR = (np.arange(N_IMAGES, dtype=np.float32) + 0.125)
 ALL_SCALE = (np.arange(N_IMAGES, dtype=np.float32) + 0.875)
+MASK = np.linspace(0.0, 1.0, 16, dtype=np.float32).reshape(IMAGE_SHAPE)
 
 
 def _bundle(**over):
     kw = dict(
-        experiment_dataset=_FakeDataset(), image_shape=IMAGE_SHAPE, raw_batch_data=RAW,
+        experiment_dataset=_FakeDataset(), image_shape=IMAGE_SHAPE,
+        preprocess_path="split_exact",
+        applied_image_mask=MASK, applied_image_mask_mode="relion_background_fill",
+        raw_batch_data=RAW,
         ctf_params=CTF, noise_variance_half=NOISE_HALF,
         image_pre_shifts=INTEGRAL_SHIFTS, integer_pre_shifts=PRE_SHIFTS,
+        real_space_pre_shift_applied=True,
         image_corrections=None, scale_corrections=None, image_indices=IMAGE_INDICES,
         unpadded_batch_size=UNPADDED,
     )
@@ -155,7 +160,8 @@ def test_present_corrections_are_indexed_by_image_id_not_by_row():
 def test_absent_pre_shifts_record_explicit_zero_shifts():
     """No shift at all is genuinely a zero shift; only that case may record zeros."""
     with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
-        out = _bundle(image_pre_shifts=None, integer_pre_shifts=None)
+        out = _bundle(image_pre_shifts=None, integer_pre_shifts=None,
+                      real_space_pre_shift_applied=False)
     assert np.array_equal(out["integer_pre_shifts"], np.zeros((UNPADDED, 2), dtype=np.int32))
 
 
@@ -166,7 +172,8 @@ def test_fourier_phase_shift_path_is_refused_not_recorded_as_zero():
     fractional[IMAGE_INDICES[0]] = [0.5, -1.25]
     with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
         with pytest.raises(RuntimeError, match="non-integral image_pre_shifts"):
-            _bundle(image_pre_shifts=fractional, integer_pre_shifts=None)
+            _bundle(image_pre_shifts=fractional, integer_pre_shifts=None,
+                    real_space_pre_shift_applied=False)
 
 
 def test_recorded_integer_shifts_match_the_helper_the_kernel_path_uses():
@@ -183,16 +190,6 @@ def test_recorded_integer_shifts_match_the_helper_the_kernel_path_uses():
     assert np.array_equal(out["integer_pre_shifts"], np.array([[1, -2], [-3, 4]], dtype=np.int32))
 
 
-def test_relion_cuda_preprocessed_bucket_is_refused():
-    """Its normalization factors are not observable here, so ones would be a claim."""
-    with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
-        with mock.patch.object(
-            local_bpref_capture, "uses_relion_cuda_image_preprocessing", return_value=True
-        ):
-            with pytest.raises(RuntimeError, match="RELION CUDA preprocessed"):
-                _bundle()
-
-
 def test_recorded_preprocessing_policy_fields_are_not_inherited_claims():
     with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
         out = _bundle()
@@ -201,8 +198,8 @@ def test_recorded_preprocessing_policy_fields_are_not_inherited_claims():
     assert np.array_equal(
         out["relion_preprocess_normalization_factors"], np.ones(UNPADDED, dtype=np.float32)
     )
-    # config.ctf is not in scope on the exact-local route, so no CTF mode is claimed.
-    assert out["ctf_mode"] == "not-captured"
+    # On the exact branch the CTF comes from the source STAR, which the metadata says.
+    assert out["ctf_mode"] == "relion_exact_source_star"
 
 
 def test_corrections_that_do_not_round_trip_to_float32_are_rejected():
@@ -230,24 +227,118 @@ def test_float64_raw_images_that_do_not_round_trip_are_rejected():
             _bundle(raw_batch_data=lossy)
 
 
-def test_masked_scoring_without_a_dataset_mask_fails_closed():
+def test_masked_scoring_without_a_supplied_mask_fails_closed():
+    """The mask must be the one the bucket scored with; none may be invented here."""
     static = _static_kwargs(score_with_masked_images=True)
     with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
-        with pytest.raises(ValueError, match="requires an image mask"):
-            _bundle(static_kwargs=static, experiment_dataset=_MasklessDataset())
+        with pytest.raises(RuntimeError, match="requires the image mask this bucket scored with"):
+            _bundle(static_kwargs=static, applied_image_mask=None)
 
 
-def test_mask_requirement_follows_score_with_masked_images():
-    static = _static_kwargs(score_with_masked_images=True)
+def test_supplied_mask_is_recorded_verbatim_not_re_resolved():
     with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
         with mock.patch.object(
             local_bpref_capture, "resolve_image_mask_for_half_preprocess",
-            return_value=(np.full(IMAGE_SHAPE, 0.5, dtype=np.float32), "soft"),
-        ) as resolver:
-            out = _bundle(static_kwargs=static)
-    assert resolver.call_args.kwargs["require_mask"] is True
-    assert out["image_mask_mode"] == "soft"
-    assert np.asarray(out["image_mask"]).shape == IMAGE_SHAPE
+            side_effect=AssertionError("the bundle must not re-resolve the mask"),
+        ):
+            out = _bundle(static_kwargs=_static_kwargs(score_with_masked_images=True))
+    assert np.array_equal(out["image_mask"], MASK)
+    assert out["image_mask_mode"] == "relion_background_fill"
+
+
+# --- the selected preprocessing branch, never the dataset backend -------------------
+
+def test_exact_branch_on_relion_cuda_dataset_is_accepted():
+    """local_preprocessing._process_half takes _big_jit_preprocess_half when
+    relion_exact_bpref_operands is set, bypassing backend preprocessing entirely, so a
+    relion_cuda-CONFIGURED dataset still has no normalization applied to this bucket."""
+    with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
+        with mock.patch.object(
+            local_bpref_capture, "uses_relion_cuda_image_preprocessing", return_value=True
+        ):
+            out = _bundle(preprocess_path="split_exact")
+    assert out["high_precision_operand_bundle"] is True
+    # The metadata describes what was APPLIED, not how the dataset is configured.
+    assert out["relion_cuda_preprocess"] is False
+    assert np.array_equal(
+        out["relion_preprocess_normalization_factors"], np.ones(UNPADDED, dtype=np.float32)
+    )
+    assert out["ctf_mode"] == "relion_exact_source_star"
+
+
+def test_big_jit_cuda_path_requires_the_kernels_normalization_operand():
+    with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
+        with pytest.raises(RuntimeError, match="image_only_corrections"):
+            _bundle(preprocess_path="big_jit_relion_cuda",
+                    relion_cuda_preprocess_radius=37.5,
+                    relion_cuda_preprocess_cosine_width=3.25,
+                    static_kwargs=_static_kwargs(score_with_masked_images=False))
+
+
+def test_big_jit_cuda_path_records_the_real_normalization_when_unmasked():
+    norm = np.linspace(0.5, 1.5, UNPADDED, dtype=np.float32)
+    with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
+        out = _bundle(preprocess_path="big_jit_relion_cuda",
+                      relion_preprocess_normalization=norm,
+                      relion_cuda_preprocess_radius=37.5,
+                      relion_cuda_preprocess_cosine_width=3.25,
+                      static_kwargs=_static_kwargs(score_with_masked_images=False))
+    assert out["relion_cuda_preprocess"] is True
+    assert np.array_equal(out["relion_preprocess_normalization_factors"], norm)
+    assert out["relion_cuda_preprocess_radius"] == 37.5
+    assert out["relion_cuda_preprocess_cosine_width"] == 3.25
+
+
+def test_unknown_preprocess_path_is_refused():
+    with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
+        with pytest.raises(RuntimeError, match="explicit preprocessing path"):
+            _bundle(preprocess_path="whatever")
+
+
+def test_ordinary_branch_on_relion_cuda_dataset_is_refused():
+    """Here the backend really does normalize, and those factors never reach this
+    boundary, so unit factors would claim a policy the bucket did not use."""
+    with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
+        with mock.patch.object(
+            local_bpref_capture, "uses_relion_cuda_image_preprocessing", return_value=True
+        ):
+            with pytest.raises(RuntimeError, match="ordinary local_preprocessing branch"):
+                _bundle(preprocess_path="split_backend")
+
+
+def test_ordinary_branch_without_relion_cuda_is_accepted():
+    with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
+        with mock.patch.object(
+            local_bpref_capture, "uses_relion_cuda_image_preprocessing", return_value=False
+        ):
+            out = _bundle(preprocess_path="split_backend")
+    assert out["relion_cuda_preprocess"] is False
+    # No exact-branch CTF construction was used, so no such claim is made.
+    assert out["ctf_mode"] == "not-captured"
+
+
+def test_branch_is_never_inferred_from_the_dataset_backend():
+    """Same dataset, both branches: the outcomes must differ, which is only possible if
+    the branch is threaded in rather than read off the backend."""
+    with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
+        with mock.patch.object(
+            local_bpref_capture, "uses_relion_cuda_image_preprocessing", return_value=True
+        ):
+            accepted = _bundle(preprocess_path="split_exact")
+            with pytest.raises(RuntimeError):
+                _bundle(preprocess_path="split_backend")
+    assert accepted["high_precision_operand_bundle"] is True
+
+
+# --- shifts: a cached application must not be recorded as no shift ------------------
+
+def test_applied_shift_without_an_integer_array_is_refused():
+    """processed_half_cache applies the shift and then reports integer_pre_shifts=None;
+    zeros there would claim the bucket was never shifted."""
+    with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
+        with pytest.raises(RuntimeError, match="pre-shift"):
+            _bundle(image_pre_shifts=None, integer_pre_shifts=None,
+                    real_space_pre_shift_applied=True)
 
 
 # --- the writer serializes the bundle instead of zero-length arrays ------------------
