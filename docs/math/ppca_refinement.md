@@ -198,3 +198,7 @@ frames, weighted covariance scale and path-versus-preloaded loading.
 iteration; it does not establish source-level RELION replay parity. Production
 alignment, masked/preconditioned PCG, and full real-data dense-to-local
 qualification remain separate work; archival does not mark them complete.
+
+The completed May bandwidth experiment (scripts, negative results and plot) is
+preserved in the [experiment archive](https://github.com/ma-gilles/recovar-experiments/tree/545be1075145aa93c8da2a13c8dd5526aa45f51d/recovar/scripts/experiments/ppca_init_bandwidth_2026_05).
+Its historical workdir defaults and external data requirements remain recorded there.
