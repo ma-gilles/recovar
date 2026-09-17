@@ -73,7 +73,7 @@ GUI excluded**, before new-engine development. Root instructions also apply.
   Never label intentional differences strict parity or tune until outputs agree.
 - Preserve the reviewed final-grid-correction default (off); the strict target
   specifies on. Resolve this discrepancy separately with explicit qualification.
-  Preserve `split_E_M_v2` reading state.Ft_y/Ft_CTF after finish_up_M_step.
+  Preserve `run_halfset_em_iteration` reading state.Ft_y/Ft_CTF after finish_up_M_step.
 
 ## Validation and hardware
 

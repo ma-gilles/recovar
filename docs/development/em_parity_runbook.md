@@ -144,7 +144,7 @@ gives an unmasked resolution of 6.650052 A while the modern ordering gives
   record the effective setting. Resolving this scientific-policy discrepancy
   requires a separate, explicitly qualified change. Do not label the off path
   as satisfying the on-policy contract.
-- Preserve shared contracts: `split_E_M_v2` reads `state.Ft_y` and
+- Preserve shared contracts: `run_halfset_em_iteration` reads `state.Ft_y` and
   `state.Ft_CTF` after `finish_up_M_step`.
 
 Detailed source findings and dump variables belong in

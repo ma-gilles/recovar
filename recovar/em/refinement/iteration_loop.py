@@ -326,7 +326,7 @@ def refine_single_volume(
     Parameters
     ----------
     experiment_datasets : list of 2 dataset objects
-        Half-set datasets (same format as split_E_M_v2 expects).
+        Half-set datasets (same format as run_halfset_em_iteration expects).
     init_volume : list of 2 jnp.ndarray, shape (volume_size,) or jnp.ndarray, shape (volume_size,)
         Initial volume in Fourier space for each half-set.
     init_noise_variance : jnp.ndarray, shape (2,image_size)

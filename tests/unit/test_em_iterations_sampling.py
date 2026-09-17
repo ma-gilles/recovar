@@ -534,7 +534,7 @@ def test_rotation_grid_size_matches_grid_shape():
         assert em_sampling.rotation_grid_size(order) == grid.shape[0]
 
 
-def test_E_M_batches_2_small_memory_forces_single_image_batches():
+def test_run_batched_em_iteration_small_memory_forces_single_image_batches():
     class _Dataset:
         n_units = 5
 
@@ -561,7 +561,7 @@ def test_E_M_batches_2_small_memory_forces_single_image_batches():
     translations = np.zeros((3, 2), dtype=np.float32)
     state = _State()
 
-    out_state, hard = em_iterations.E_M_batches_2(
+    out_state, hard = em_iterations.run_batched_em_iteration(
         _Dataset(),
         state,
         rotations,
@@ -577,7 +577,7 @@ def test_E_M_batches_2_small_memory_forces_single_image_batches():
     assert all(shape[0] == 1 for _idx, shape in state.calls)
 
 
-def test_E_M_batches_2_sgd_uses_explicit_sgd_batchsize():
+def test_run_batched_em_iteration_sgd_uses_explicit_sgd_batchsize():
     class _Dataset:
         n_units = 5
 
@@ -600,7 +600,7 @@ def test_E_M_batches_2_sgd_uses_explicit_sgd_batchsize():
     rotations = np.zeros((1, 3, 3), dtype=np.float32)
     translations = np.zeros((1, 2), dtype=np.float32)
     state = _State()
-    _out_state, hard = em_iterations.E_M_batches_2(
+    _out_state, hard = em_iterations.run_batched_em_iteration(
         _Dataset(),
         state,
         rotations,
@@ -613,7 +613,7 @@ def test_E_M_batches_2_sgd_uses_explicit_sgd_batchsize():
     np.testing.assert_array_equal(hard, np.zeros((5,), dtype=np.int64))
 
 
-def test_E_M_batches_2_sgd_float_batchsize_is_safely_cast_to_int():
+def test_run_batched_em_iteration_sgd_float_batchsize_is_safely_cast_to_int():
     class _Dataset:
         n_units = 5
 
@@ -637,7 +637,7 @@ def test_E_M_batches_2_sgd_float_batchsize_is_safely_cast_to_int():
     translations = np.zeros((1, 2), dtype=np.float32)
     state = _State()
 
-    _out_state, hard = em_iterations.E_M_batches_2(
+    _out_state, hard = em_iterations.run_batched_em_iteration(
         _Dataset(),
         state,
         rotations,
@@ -651,12 +651,12 @@ def test_E_M_batches_2_sgd_float_batchsize_is_safely_cast_to_int():
     np.testing.assert_array_equal(hard, np.zeros((5,), dtype=np.int64))
 
 
-def test_E_M_batches_2_rejects_invalid_hidden_or_sgd_batchsize():
+def test_run_batched_em_iteration_rejects_invalid_hidden_or_sgd_batchsize():
     dataset = SimpleNamespace(n_units=3)
     state = SimpleNamespace(name="SGD", sgd_batchsize=0, E_step=lambda *_: None, M_step=lambda *_: None)
 
     with pytest.raises(ValueError, match="at least one rotation"):
-        em_iterations.E_M_batches_2(
+        em_iterations.run_batched_em_iteration(
             dataset,
             state,
             rotations=np.zeros((0, 3, 3), dtype=np.float32),
@@ -665,7 +665,7 @@ def test_E_M_batches_2_rejects_invalid_hidden_or_sgd_batchsize():
         )
 
     with pytest.raises(ValueError, match="at least one translation"):
-        em_iterations.E_M_batches_2(
+        em_iterations.run_batched_em_iteration(
             dataset,
             state,
             rotations=np.zeros((1, 3, 3), dtype=np.float32),
@@ -674,7 +674,7 @@ def test_E_M_batches_2_rejects_invalid_hidden_or_sgd_batchsize():
         )
 
     with pytest.raises(ValueError, match="batch size must be >= 1"):
-        em_iterations.E_M_batches_2(
+        em_iterations.run_batched_em_iteration(
             dataset,
             state,
             rotations=np.zeros((1, 3, 3), dtype=np.float32),
@@ -683,7 +683,7 @@ def test_E_M_batches_2_rejects_invalid_hidden_or_sgd_batchsize():
         )
 
 
-def test_split_E_M_v2_updates_state_means_noise_and_pose_assignments(monkeypatch):
+def test_run_halfset_em_iteration_updates_state_means_noise_and_pose_assignments(monkeypatch):
     class _Dataset:
         def __init__(self, n_units, voxel_size):
             self.n_units = n_units
@@ -722,7 +722,7 @@ def test_split_E_M_v2_updates_state_means_noise_and_pose_assignments(monkeypatch
     h1 = np.array([1, 0, 1, 0], dtype=np.int32)
     monkeypatch.setattr(
         em_iterations,
-        "E_M_batches_2",
+        "run_batched_em_iteration",
         lambda ds, st, _rots, _trs, _disc: (st, h0 if ds is d0 else h1),
     )
     monkeypatch.setattr(
@@ -754,7 +754,7 @@ def test_split_E_M_v2_updates_state_means_noise_and_pose_assignments(monkeypatch
 
     rotations = np.zeros((2, 3, 3), dtype=np.float32)
     translations = np.zeros((2, 2), dtype=np.float32)
-    out_states, pix_res, hard = em_iterations.split_E_M_v2(
+    out_states, pix_res, hard = em_iterations.run_halfset_em_iteration(
         [d0, d1],
         [s0, s1],
         rotations,
@@ -783,7 +783,7 @@ def test_split_E_M_v2_updates_state_means_noise_and_pose_assignments(monkeypatch
     assert d1.translations.shape == (4, 2)
 
 
-def test_split_E_M_v2_heterogeneous_branch_updates_covariance_prior_and_masks_u(monkeypatch):
+def test_run_halfset_em_iteration_heterogeneous_branch_updates_covariance_prior_and_masks_u(monkeypatch):
     class _Dataset:
         def __init__(self):
             self.n_units = 3
@@ -837,7 +837,7 @@ def test_split_E_M_v2_heterogeneous_branch_updates_covariance_prior_and_masks_u(
     h1 = np.array([2, 1, 0], dtype=np.int32)
     monkeypatch.setattr(
         em_iterations,
-        "E_M_batches_2",
+        "run_batched_em_iteration",
         lambda ds, st, _rots, _trs, _disc: (st, h0 if ds is d0 else h1),
     )
     monkeypatch.setattr(
@@ -879,7 +879,7 @@ def test_split_E_M_v2_heterogeneous_branch_updates_covariance_prior_and_masks_u(
 
     rotations = np.zeros((3, 3, 3), dtype=np.float32)
     translations = np.zeros((2, 2), dtype=np.float32)
-    out_states, pix_res, hard = em_iterations.split_E_M_v2(
+    out_states, pix_res, hard = em_iterations.run_halfset_em_iteration(
         [d0, d1],
         [s0, s1],
         rotations,
