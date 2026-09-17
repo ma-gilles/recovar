@@ -34,3 +34,8 @@ the newer snapshot consumed by current scorecards.
 The fixed case-10 top-24 Pmax-error capture panel and its data-integrity tests
 are preserved in the [experiment archive](https://github.com/ma-gilles/recovar-experiments/tree/dec2c992dc986095e5ed61ba38b48496c8cc2ef7/docs/math/em_k1_case10_it2_capture_panel_v1.json).
 This retires a historical selection, not the reusable capture or identity checks.
+
+The first-iteration M-step repeatability launcher/analyzer and its recorded result
+are [archived](https://github.com/ma-gilles/recovar-experiments/tree/cce8ed8b61bdc754414195f5640608fb9d64e28d/experiments/vdam_mstep_repeatability_20260821).
+Use the maintained full-schedule repeat-panel workflow; its tests now retain the
+zero-repeat-error case alongside provenance rejection and nonzero repeat ratios.
