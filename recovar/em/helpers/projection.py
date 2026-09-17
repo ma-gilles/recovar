@@ -735,7 +735,6 @@ def compute_projections_block(
     return_abs2: bool = True,
     relion_texture_interp: bool = True,
     force_jax: bool = False,
-    relion_acc_double_floorf_quirk: bool = False,  # noqa: ARG001 - accepted, not applicable here
 ):
     """Forward-slice one rotation block and optionally compute ``|proj|^2``.
 
@@ -743,11 +742,8 @@ def compute_projections_block(
     materialize it. Exact-local paths can pass ``return_abs2=False`` and compute
     norms on demand when that saves memory.
 
-    ``relion_acc_double_floorf_quirk`` is accepted only so callers can pass a
-    shared ``projection_kwargs`` dict without filtering; this path slices
-    recovar's own centered-grid volume (not RELION ``Projector::data``), so
-    the RELION GPU floorf-narrowing quirk (``recovar.core.relion_project``)
-    does not apply here and this flag has no effect.
+    This path slices RECOVAR's centered-grid volume. RELION projector options
+    belong to ``compute_relion_projector_projections_block``.
     """
     proj_half = project_half_spectrum(
         volume,
