@@ -820,8 +820,42 @@ def compute_noise_block(
     return noise_shells, a2_shells, xa_shells
 
 
+_IMAGE_AXIS_LADDER_FINE_STEP = 4
+_IMAGE_AXIS_LADDER_FINE_LIMIT = 32
+
+
+def image_axis_ladder_size(n_images: int) -> int:
+    """Round a per-bucket image count up to the image-axis ladder.
+
+    Step 4 up to 32, powers of two above. Chosen from the measured distribution
+    of per-bucket image counts on the 10k EMPIAR-10097 subset (job 14010842):
+    39 distinct counts, 36 of them in 1..40, three large (126, 194, 220). This
+    ladder cuts distinct operand signatures for the per-image pass-2 functions
+    from 168 to 57 (2.9x) for 22.6% padding waste; a step-8 variant reaches 37
+    signatures but costs 37.3% waste, and padding waste is paid every iteration
+    while compilation is partly amortised.
+    """
+
+    n = int(n_images)
+    if n <= 0:
+        return 0
+    if n <= _IMAGE_AXIS_LADDER_FINE_LIMIT:
+        return -(-n // _IMAGE_AXIS_LADDER_FINE_STEP) * _IMAGE_AXIS_LADDER_FINE_STEP
+    return 1 << (n - 1).bit_length()
+
+
+def pad_image_axis(array, padded_images: int):
+    """Pad a leading per-image axis with exact zeros, or return it unchanged."""
+
+    n = int(array.shape[0])
+    if padded_images <= n:
+        return array
+    pad = [(0, int(padded_images) - n)] + [(0, 0)] * (array.ndim - 1)
+    return jnp.pad(array, pad)
+
+
 @jax.jit
-def compute_norm_residual_per_image(
+def _compute_norm_residual_per_image_core(
     proj_half,
     proj_abs2_half,
     summed_masked,
@@ -852,7 +886,7 @@ def compute_norm_residual_per_image(
 
 
 @jax.jit
-def compute_scale_correction_terms_per_image(
+def _compute_scale_correction_terms_per_image_core(
     proj_half,
     proj_abs2_half,
     summed_masked,
@@ -889,6 +923,50 @@ def compute_scale_correction_terms_per_image(
     xa_terms = noise_variance_half[None, None, :] * cross_terms.real
     xa_per_image = jnp.sum(xa_terms, axis=(1, 2)) / safe_scale
     return xa_per_image, aa_per_image
+
+def compute_norm_residual_per_image(proj_half, proj_abs2_half, summed_masked, ctf_probs, noise_variance_half):
+    """Per-image norm residual, evaluated on the image-axis ladder.
+
+    The jitted core retraces on every distinct (images, rotations, pixels)
+    signature, and the image axis is the only unpadded one (measured: 39 distinct
+    counts against 9 rotation and 3 pixel values). Padding the leading axis to a
+    ladder rung and slicing the result back leaves the returned per-image values
+    identical: the core reduces over axes (1, 2) only, never over the image axis,
+    so padded rows cannot contribute to any real image's value, and their own
+    outputs are discarded here. Physical particle order, masks, dtypes and
+    reduction order are untouched.
+    """
+
+    n = int(proj_half.shape[0])
+    padded = image_axis_ladder_size(n)
+    if padded == n:
+        return _compute_norm_residual_per_image_core(
+            proj_half, proj_abs2_half, summed_masked, ctf_probs, noise_variance_half
+        )
+    out = _compute_norm_residual_per_image_core(
+        pad_image_axis(proj_half, padded),
+        pad_image_axis(proj_abs2_half, padded),
+        pad_image_axis(summed_masked, padded),
+        pad_image_axis(ctf_probs, padded),
+        noise_variance_half,
+    )
+    return out[:n]
+
+
+def compute_scale_correction_terms_per_image(*args, **kwargs):
+    """Per-image scale-correction terms on the image-axis ladder (see above)."""
+
+    n = int(args[0].shape[0])
+    padded = image_axis_ladder_size(n)
+    if padded == n:
+        return _compute_scale_correction_terms_per_image_core(*args, **kwargs)
+    padded_args = [
+        pad_image_axis(a, padded) if hasattr(a, "ndim") and a.ndim >= 1 and int(a.shape[0]) == n else a
+        for a in args
+    ]
+    xa, aa = _compute_scale_correction_terms_per_image_core(*padded_args, **kwargs)
+    return xa[:n], aa[:n]
+
 
 
 def relion_scale_correction_pixel_mask(data_vs_prior, shell_indices, *, n_shells=None):
