@@ -3532,6 +3532,7 @@ def compute_pass2_stats_sparse_bucketed(
             _mark_bucket_group_chunk_done(bucket_size, batch)
             continue
         local_score_log_z = None
+        bucket_log_z = None
         if (
             score_only
             and normalization_log_z_np is None
@@ -3550,6 +3551,24 @@ def compute_pass2_stats_sparse_bucketed(
             )
             if use_exact_relion_gaussian:
                 bucket_log_z = bucket_log_z - score_log_offset_jax
+        else:
+            if use_cuda_posterior:
+                local_score_log_z = cuda_logsumexp_pass2_bucket_score_only(scores)
+            else:
+                local_score_log_z = _logsumexp_pass2_bucket_score_only(scores)
+            bucket_other_log_z = jnp.asarray(
+                normalization_other_score_log_z_np[image_indices],
+                dtype=local_score_log_z.dtype,
+            )
+            if not use_exact_relion_gaussian:
+                bucket_log_z = jnp.logaddexp(local_score_log_z, bucket_other_log_z)
+            else:
+                bucket_log_z_absolute = jnp.logaddexp(
+                    local_score_log_z + score_log_offset_jax,
+                    bucket_other_log_z,
+                )
+                bucket_log_z = bucket_log_z_absolute - score_log_offset_jax
+        if bucket_log_z is not None:
             if (
                 use_cuda_fused_posterior
                 and not winner_take_all
@@ -3573,23 +3592,6 @@ def compute_pass2_stats_sparse_bucketed(
                 log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
                     _normalize_pass2_bucket_with_log_z(scores, bucket_log_z)
                 )
-        else:
-            local_score_log_z = _logsumexp_pass2_bucket_score_only(scores)
-            bucket_other_log_z = jnp.asarray(
-                normalization_other_score_log_z_np[image_indices],
-                dtype=local_score_log_z.dtype,
-            )
-            if not use_exact_relion_gaussian:
-                bucket_log_z = jnp.logaddexp(local_score_log_z, bucket_other_log_z)
-            else:
-                bucket_log_z_absolute = jnp.logaddexp(
-                    local_score_log_z + score_log_offset_jax,
-                    bucket_other_log_z,
-                )
-                bucket_log_z = bucket_log_z_absolute - score_log_offset_jax
-            log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
-                _normalize_pass2_bucket_with_log_z(scores, bucket_log_z)
-            )
         if winner_take_all:
             if probs is not None:
                 probs = _winner_take_all_bucket_probs(scores, best_argmax, best_log_score_bucket)
