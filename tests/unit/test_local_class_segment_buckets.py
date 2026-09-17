@@ -33,7 +33,10 @@ def _layout(rng, counts, n_trans=5, n_global=48, with_optional=True, translation
             if translation_log_priors is None else translation_log_priors
         ),
         rotation_posterior_ids_flat=rng.integers(0, n_global, total).astype(np.int32) if with_optional else None,
-        sample_mask_flat=rng.random((total, n_trans)) > 0.3 if with_optional else None,
+        sample_mask_bits=(
+            np.packbits(rng.random((total, n_trans)) > 0.3, axis=1, bitorder="little")
+            if with_optional else None
+        ),
         mstep_rotations_flat=rng.standard_normal((total, 3, 3)).astype(np.float32) if with_optional else None,
         source_eulers_flat=rng.standard_normal((total, 3)) if with_optional else None,
     )
@@ -99,7 +102,7 @@ def test_class_segments_are_class_major_with_one_segment_width_per_bucket():
                 np.testing.assert_array_equal(b.local_mstep_rotations[row, lo:hi], layout.mstep_rotations_flat[s0:s1])
                 np.testing.assert_array_equal(b.local_rotation_ids[row, lo:hi], layout.rotation_ids_flat[s0:s1])
                 np.testing.assert_array_equal(b.local_rotation_posterior_ids[row, lo:hi], layout.rotation_posterior_ids_flat[s0:s1])
-                np.testing.assert_array_equal(b.local_sample_mask[row, lo:hi], layout.sample_mask_flat[s0:s1])
+                np.testing.assert_array_equal(b.local_sample_mask[row, lo:hi], layout.sample_mask_rows(s0, s1))
                 np.testing.assert_allclose(
                     b.local_rotation_log_prior[row, lo:hi],
                     (layout.rotation_log_priors_flat[s0:s1].astype(np.float64) + priors[k]).astype(np.float32),

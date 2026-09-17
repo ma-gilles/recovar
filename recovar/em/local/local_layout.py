@@ -1649,7 +1649,7 @@ def bucket_class_local_hypothesis_layouts(
             raise ValueError(f"class {k} layout uses different translation log priors than class 0")
         if (layout.rotation_posterior_ids_flat is None) != (first.rotation_posterior_ids_flat is None):
             raise ValueError("class layouts must agree on carrying posterior ids")
-        if (layout.sample_mask_flat is None) != (first.sample_mask_flat is None):
+        if (layout.sample_mask_bits is None) != (first.sample_mask_bits is None):
             raise ValueError("class layouts must agree on carrying sample masks")
         if (layout.source_eulers_flat is None) != (first.source_eulers_flat is None):
             raise ValueError("class layouts must agree on carrying source eulers")
@@ -1728,7 +1728,7 @@ def bucket_class_local_hypothesis_layouts(
         padded_log_prior = np.full((batch_size, bucket_size), -1e30, dtype=log_prior_dtype)
         padded_mask = np.zeros((batch_size, bucket_size), dtype=bool)
         padded_posterior_ids = None if first.rotation_posterior_ids_flat is None else np.full((batch_size, bucket_size), -1, dtype=np.int32)
-        padded_sample_mask = None if first.sample_mask_flat is None else np.zeros((batch_size, bucket_size, n_trans), dtype=bool)
+        padded_sample_mask = None if first.sample_mask_bits is None else np.zeros((batch_size, bucket_size, n_trans), dtype=bool)
         padded_source_eulers = None if first.source_eulers_flat is None else np.zeros((batch_size, bucket_size, 3), dtype=np.float64)
         for row, image_idx in enumerate(image_indices.tolist()):
             for k, layout in enumerate(class_layouts):
@@ -1749,7 +1749,7 @@ def bucket_class_local_hypothesis_layouts(
                 if padded_posterior_ids is not None:
                     padded_posterior_ids[row, lo:hi] = layout.rotation_posterior_ids_flat[start_off:end_off]
                 if padded_sample_mask is not None:
-                    padded_sample_mask[row, lo:hi, :] = layout.sample_mask_flat[start_off:end_off]
+                    padded_sample_mask[row, lo:hi, :] = layout.sample_mask_rows(start_off, end_off)
                 if padded_source_eulers is not None:
                     padded_source_eulers[row, lo:hi] = layout.source_eulers_flat[start_off:end_off]
         bucket_specs.append(

@@ -45,7 +45,9 @@ def _layout(rng, counts, translation_log_priors=None, rotation_posterior_ids_fla
             rng.integers(0, N_GLOBAL, total).astype(np.int32)
             if rotation_posterior_ids_flat is None else rotation_posterior_ids_flat
         ),
-        sample_mask_flat=rng.random((total, N_TRANS)) > 0.3,
+        sample_mask_bits=np.packbits(
+            rng.random((total, N_TRANS)) > 0.3, axis=1, bitorder="little"
+        ),
         mstep_rotations_flat=rng.standard_normal((total, 3, 3)).astype(np.float32),
         source_eulers_flat=rng.standard_normal((total, 3)),
     )

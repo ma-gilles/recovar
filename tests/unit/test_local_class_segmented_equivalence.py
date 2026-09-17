@@ -64,7 +64,9 @@ def _layout(counts, *, seed, n_global=4):
         translation_grid=TRANSLATIONS,
         translation_log_priors=np.zeros((N_IMAGES, n_trans), dtype=np.float32),
         rotation_posterior_ids_flat=ids,
-        sample_mask_flat=np.ones((total, n_trans), dtype=bool),
+        sample_mask_bits=np.packbits(
+            np.ones((total, n_trans), dtype=bool), axis=1, bitorder="little"
+        ),
         source_eulers_flat=source_eulers,
     )
 
@@ -371,7 +373,7 @@ def test_a_class_without_rows_receives_an_exactly_zero_volume(float64, empty_cla
     """
     means, noise, layouts = _fixture(float64)
     empty = layouts[empty_class]
-    emptied = type(empty)(**{**empty.__dict__, "sample_mask_flat": np.zeros_like(empty.sample_mask_flat)})
+    emptied = type(empty)(**{**empty.__dict__, "sample_mask_bits": np.zeros_like(empty.sample_mask_bits)})
     layouts = [emptied if index == empty_class else layout for index, layout in enumerate(layouts)]
     dataset = MockDataset(N_IMAGES, np.random.default_rng(11))
     kwargs = dict(
