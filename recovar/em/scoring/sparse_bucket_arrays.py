@@ -20,10 +20,15 @@ from recovar.em.helpers.shape_buckets import power_of_two_bucket
 _LARGE_BUCKET_POW2_ENV = "RECOVAR_SPARSE_PASS2_LARGE_BUCKET_POW2"
 _LARGE_BUCKET_POW2_THRESHOLD = 1024
 _MIN_CHUNK_IMAGES_ENV = "RECOVAR_SPARSE_PASS2_MIN_CHUNK_IMAGES"
+# Default on (2026-09-17): matched hp3 arm 14074207 vs 14055202: cold iteration 79.4 s
+# vs 98.2 s (302 vs 652 compilations), warm 67.5 s vs 71.4 s; best poses bitwise
+# identical, maps 4-6e-7 relative.  Set the env var to 0 to restore largest-first
+# remainder chunks.
+_DEFAULT_MIN_CHUNK_IMAGES = 8
 
 
 def _min_chunk_images_for_pass() -> int:
-    """Smallest image count a size-grouped chunk may have (default 0 = off).
+    """Smallest image count a size-grouped chunk may have (default 8; env 0 = off).
 
     Measurement knob (2026-09-17): every pass-2 helper compiles once per
     (chunk image count, bucket size) pair, and the power-of-two rung chunker's
@@ -36,7 +41,7 @@ def _min_chunk_images_for_pass() -> int:
 
     raw = os.environ.get(_MIN_CHUNK_IMAGES_ENV, "").strip()
     if not raw:
-        return 0
+        return _DEFAULT_MIN_CHUNK_IMAGES
     value = int(raw)
     if value < 0:
         raise ValueError(f"{_MIN_CHUNK_IMAGES_ENV} must be non-negative, got {value}")

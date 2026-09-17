@@ -109,9 +109,13 @@ def test_run_chunking_default_and_rungs():
         assert sum(chunks, []) == run
 
 
-def test_bucket_builder_rungs_yield_power_of_two_image_counts():
+def test_bucket_builder_rungs_yield_power_of_two_image_counts(monkeypatch):
     import numpy as np
     from recovar.em.scoring.sparse_bucket_arrays import _bucket_pass2_inputs
+
+    # This test pins the rung split itself; remainder promotion (default on) is
+    # covered separately, so switch it off here.
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MIN_CHUNK_IMAGES", "0")
 
     rng = np.random.default_rng(0)
     n = 37

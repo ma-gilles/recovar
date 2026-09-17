@@ -148,11 +148,13 @@ def test_min_chunk_images_promotes_remainders_to_the_next_bucket_size(monkeypatc
     kw = dict(n_fine_trans=4, rotation_block_size_for_quantization=5000, max_hypotheses_per_microbatch=10**9,
               max_images_per_microbatch=8, processing_order_override=order, processing_order_group_by_bucket_size=True,
               group_chunk_image_rungs=True)
-    monkeypatch.delenv("RECOVAR_SPARSE_PASS2_MIN_CHUNK_IMAGES", raising=False)
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MIN_CHUNK_IMAGES", "0")  # explicit off = legacy largest-first remainders
     base = sba._bucket_pass2_inputs(per_image_inputs, **kw)
     assert [(b["bucket_size"], len(b["image_indices"])) for b in base] == [(16, 8), (16, 2), (16, 1), (32, 4), (32, 1), (64, 2), (64, 1)]
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MIN_CHUNK_IMAGES", "4")
     promoted = sba._bucket_pass2_inputs(per_image_inputs, **kw)
+    monkeypatch.delenv("RECOVAR_SPARSE_PASS2_MIN_CHUNK_IMAGES", raising=False)
+    assert sba._min_chunk_images_for_pass() == 8  # default on
     # size-16 remainders (2, 1) join the size-32 run: 3 + 5 = 8 images -> one full chunk; size-64 keeps its tail (last size)
     assert [(b["bucket_size"], len(b["image_indices"])) for b in promoted] == [(16, 8), (32, 8), (64, 2), (64, 1)]
     covered = np.sort(np.concatenate([b["image_indices"] for b in promoted]))
