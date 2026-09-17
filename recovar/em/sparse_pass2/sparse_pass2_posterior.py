@@ -17,6 +17,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.helpers.env_flags import parse_env_flag
+from recovar.em.helpers.image_axis_ladder import image_axis_ladder_size, pad_image_tensor, slice_image_axis
 from recovar.em.helpers.oversampling import _find_significant_mask_full_sort, _relion_cuda_f32_tail_target
 
 _RELION_FINE_ROTATION_EXECUTION_ORDER_ENV = (
@@ -102,7 +103,7 @@ def _normalize_pass2_pairs_with_log_z(pair_scores, pair_mask, global_log_z):
 
 
 @jax.jit
-def _logsumexp_pass2_bucket_score_only(scores):
+def _logsumexp_pass2_bucket_score_only_core(scores):
     """Compute per-image sparse pass-2 logZ only."""
     scores = jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
     flat = scores.reshape(scores.shape[0], -1)
@@ -116,6 +117,21 @@ def _logsumexp_pass2_bucket_score_only(scores):
     has_mass = has_finite_score & (sum_exp > 0) & jnp.isfinite(sum_exp)
     safe_sum_exp = jnp.where(has_mass, sum_exp, 1.0)
     return jnp.where(has_mass, safe_best_log_score + jnp.log(safe_sum_exp), -jnp.inf)
+
+
+
+def _logsumexp_pass2_bucket_score_only(scores):
+    """Per-image sparse pass-2 logZ on the image-axis ladder.
+
+    Padded rows are filled with ``-inf`` scores, which the core maps to a
+    ``-inf`` logZ without touching any other row; they are sliced off here.
+    """
+
+    n = int(scores.shape[0])
+    padded = image_axis_ladder_size(n)
+    if padded == n:
+        return _logsumexp_pass2_bucket_score_only_core(scores)
+    return _logsumexp_pass2_bucket_score_only_core(pad_image_tensor(scores, n, padded, -jnp.inf))[:n]
 
 
 @jax.jit
@@ -179,7 +195,7 @@ def _winner_take_all_pair_probs(pair_scores, best_pair_argmax, best_log_score):
 
 
 @jax.jit
-def _normalize_pass2_bucket_with_log_z(scores, log_z):
+def _normalize_pass2_bucket_with_log_z_core(scores, log_z):
     """Normalize sparse candidate scores with a precomputed full-grid log-Z."""
     scores = jnp.where(jnp.isfinite(scores), scores, -jnp.inf)
     flat = scores.reshape(scores.shape[0], -1)
@@ -193,6 +209,28 @@ def _normalize_pass2_bucket_with_log_z(scores, log_z):
     max_posterior = jnp.where(has_finite_score & jnp.isfinite(max_posterior), max_posterior, 0.0)
     best_log_score = jnp.where(has_finite_score, best_log_score, -jnp.inf)
     return safe_log_z, probs, best_log_score, best_argmax, max_posterior
+
+
+
+def _normalize_pass2_bucket_with_log_z(scores, log_z):
+    """Normalize sparse candidate scores on the image-axis ladder.
+
+    Padded rows carry ``-inf`` scores and ``-inf`` logZ, so the core marks them
+    as having no finite score and emits zeros for them; all five outputs are
+    sliced back to the real images.
+    """
+
+    n = int(scores.shape[0])
+    padded = image_axis_ladder_size(n)
+    if padded == n:
+        return _normalize_pass2_bucket_with_log_z_core(scores, log_z)
+    return slice_image_axis(
+        _normalize_pass2_bucket_with_log_z_core(
+            pad_image_tensor(scores, n, padded, -jnp.inf),
+            pad_image_tensor(jnp.asarray(log_z), n, padded, -jnp.inf),
+        ),
+        n,
+    )
 
 
 @jax.jit
@@ -231,7 +269,7 @@ def _relion_pass2_reconstruction_probs(probs, *, adaptive_fraction: float):
 
 
 @partial(jax.jit, static_argnames=("adaptive_fraction", "keep_all"))
-def _relion_f32_fine_posterior(
+def _relion_f32_fine_posterior_core(
     scores,
     *,
     adaptive_fraction: float,
@@ -356,6 +394,45 @@ def _relion_f32_fine_posterior(
         n_significant,
         sum_weight,
         threshold,
+    )
+
+
+
+def _relion_f32_fine_posterior(
+    scores,
+    *,
+    adaptive_fraction: float,
+    normalization_sum_weight=None,
+    keep_all: bool = False,
+):
+    """RELION f32 fine posterior on the image-axis ladder.
+
+    Padded rows carry ``-inf`` scores: no finite weight, zero raw weights,
+    zero sum weight and therefore no mass, independent of the other rows.
+    A per-image ``normalization_sum_weight`` is padded with ones. The six
+    outputs are sliced back to the real images.
+    """
+
+    n = int(scores.shape[0])
+    padded = image_axis_ladder_size(n)
+    if padded == n:
+        return _relion_f32_fine_posterior_core(
+            scores,
+            adaptive_fraction=adaptive_fraction,
+            normalization_sum_weight=normalization_sum_weight,
+            keep_all=keep_all,
+        )
+    sum_weight = normalization_sum_weight
+    if sum_weight is not None:
+        sum_weight = pad_image_tensor(jnp.asarray(sum_weight), n, padded, 1.0)
+    return slice_image_axis(
+        _relion_f32_fine_posterior_core(
+            pad_image_tensor(jnp.asarray(scores), n, padded, -jnp.inf),
+            adaptive_fraction=adaptive_fraction,
+            normalization_sum_weight=sum_weight,
+            keep_all=keep_all,
+        ),
+        n,
     )
 
 
