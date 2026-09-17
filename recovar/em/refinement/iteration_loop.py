@@ -204,11 +204,11 @@ from recovar.em.sampling import (
     apply_relion_rotation_perturbation,
     apply_relion_translation_perturbation,
     build_local_search_grid_metadata,
-    read_relion_sampling_metadata,
     relion_angular_sampling_deg,
     relion_sampling_perturbation_for_iteration,
     rotation_grid_size,
 )
+from recovar.em.relion.relion_metadata import read_relion_sampling_metadata
 from recovar.reconstruction.regularization import (
     compute_current_size_relion,
     fsc_to_relion_ssnr,

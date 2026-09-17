@@ -1474,7 +1474,10 @@ def _build_replay_iteration_overrides(
     def _read_model_direction_prior(model_path, model):
         if not _model_has_class_direction_priors(model):
             return None
-        from recovar.em.sampling import read_relion_direction_prior, read_relion_direction_priors
+        from recovar.em.relion.relion_metadata import (
+            read_relion_direction_prior,
+            read_relion_direction_priors,
+        )
 
         has_multiple_classes = any(
             str(key).startswith("model_pdf_orient_class_") and not str(key).endswith("_1")
@@ -1975,7 +1978,7 @@ def _attach_relion_projector_capture(
 ):
     """Attach one sealed live projector to its exact numbered replay slot."""
 
-    from recovar.em.sampling import read_relion_model_metadata
+    from recovar.em.relion.relion_metadata import read_relion_model_metadata
 
     capture_iteration = int(capture_iteration)
     init_relion_iteration = int(init_relion_iteration)
@@ -2354,7 +2357,7 @@ def _resolve_optimizer_random_seed(explicit_seed, relion_optimiser_star):
         return int(explicit_seed), "explicit CLI"
 
     if relion_optimiser_star is not None:
-        from recovar.em.sampling import read_relion_optimiser_metadata
+        from recovar.em.relion.relion_metadata import read_relion_optimiser_metadata
 
         metadata = read_relion_optimiser_metadata(relion_optimiser_star)
         relion_seed = metadata.get("random_seed")
@@ -3720,7 +3723,7 @@ def main():
     )
     relion_firstiter_ini_high_angstrom = None
     if optimiser_star is not None:
-        from recovar.em.sampling import read_relion_optimiser_metadata
+        from recovar.em.relion.relion_metadata import read_relion_optimiser_metadata
 
         expected_accuracy_do_ctf_correction = read_relion_optimiser_metadata(
             optimiser_star,
@@ -4391,7 +4394,7 @@ def main():
                 "diagnostic final-only substitution requires unnumbered run_optimiser.star "
                 f"and run_sampling.star in {final_replay_dir}"
             )
-        from recovar.em.sampling import read_relion_optimiser_metadata
+        from recovar.em.relion.relion_metadata import read_relion_optimiser_metadata
 
         final_optimiser_metadata = read_relion_optimiser_metadata(final_optimiser_path)
         if not bool(final_optimiser_metadata.get("has_converged", False)):

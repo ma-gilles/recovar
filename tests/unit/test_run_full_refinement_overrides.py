@@ -718,7 +718,7 @@ def test_attach_relion_projector_capture_targets_exact_replay_slot(tmp_path, mon
         observed.update(kwargs)
         return expected_state
 
-    monkeypatch.setattr("recovar.em.sampling.read_relion_model_metadata", fake_model_metadata)
+    monkeypatch.setattr("recovar.em.relion.relion_metadata.read_relion_model_metadata", fake_model_metadata)
     monkeypatch.setattr(run_full_refinement, "build_relion_projector_replay_state", fake_build)
     overrides = [{"slot": index} for index in range(4)]
 
@@ -788,7 +788,7 @@ def test_attach_relion_projector_capture_accepts_immediate_validated_frozen_rest
     (relion_dir / "run_it003_half1_model.star").write_text("model\n")
     expected_state = {"source_manifest_sha256": "a" * 64}
     monkeypatch.setattr(
-        "recovar.em.sampling.read_relion_model_metadata",
+        "recovar.em.relion.relion_metadata.read_relion_model_metadata",
         lambda path: {"current_image_size": 42},
     )
     monkeypatch.setattr(
