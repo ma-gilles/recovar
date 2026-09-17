@@ -47,7 +47,6 @@ class DenseScoreConstraints:
     n_images: int
     n_rot: int
     n_trans: int
-    n_rot_padded: int
     prior_dtype: object = np.float32
 
     @classmethod
@@ -173,7 +172,6 @@ class DenseScoreConstraints:
             n_images=int(n_images),
             n_rot=int(n_rot),
             n_trans=int(n_trans),
-            n_rot_padded=int(n_rot_padded),
             prior_dtype=dtype,
         )
 
