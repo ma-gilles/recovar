@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -50,10 +49,10 @@ def _require(condition: bool, message: str) -> None:
 
 # Support direct execution, sibling imports, and the scripts package.
 if not __package__:
-    from analyzer_provenance import clean_repo_head
+    from analyzer_provenance import allocated_gpu_uuid as _allocated_gpu_uuid, clean_repo_head
     from file_hash import sha256_file as _sha256
 else:
-    from scripts.analyzer_provenance import clean_repo_head
+    from scripts.analyzer_provenance import allocated_gpu_uuid as _allocated_gpu_uuid, clean_repo_head
     from scripts.file_hash import sha256_file as _sha256
 
 
@@ -198,24 +197,6 @@ def analyze_replay_arrays(
             "map_gate": "not evaluated by this preprocessing replay diagnostic",
         },
     }
-
-
-def _allocated_gpu_uuid(expected_gpu_uuid: str) -> str:
-    completed = subprocess.run(
-        [
-            "nvidia-smi",
-            "-i",
-            expected_gpu_uuid,
-            "--query-gpu=uuid",
-            "--format=csv,noheader",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    actual = completed.stdout.strip()
-    _require(actual == expected_gpu_uuid, "allocated GPU UUID mismatch")
-    return actual
 
 
 def _load_bundle(
