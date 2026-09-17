@@ -28,7 +28,6 @@ def _state():
         W_prior=jnp.zeros((1, 0), dtype=jnp.float32),
         mean_prior=jnp.ones((1,), dtype=jnp.float32),
         noise_variance=jnp.ones((1,), dtype=jnp.float32),
-        z_prior_precision_diag=jnp.zeros((0,), dtype=jnp.float32),
         schedule_state=None,
     )
 
