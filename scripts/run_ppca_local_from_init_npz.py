@@ -193,7 +193,6 @@ def _run_local_with_halfset_fsc_schedule(
                 means_aligned=True,
                 resolution_supports=False,
                 no_halfset_drift=False,
-                fsc=fsc,
                 diagnostics={"reason": "empty_fsc"},
             )
         current_cs = int(state.schedule_state.current_size)
@@ -204,7 +203,6 @@ def _run_local_with_halfset_fsc_schedule(
             resolution_supports=bool(np.isfinite(fsc[test_shell]))
             and float(fsc[test_shell]) >= float(args.fsc_threshold),
             no_halfset_drift=bool(np.isfinite(fsc[test_shell])),
-            fsc=fsc,
             diagnostics={
                 "current_cs": int(current_cs),
                 "test_shell_current_cs": int(test_shell),
