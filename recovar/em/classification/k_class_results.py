@@ -8,13 +8,13 @@ scoring engine or controller.
 
 from __future__ import annotations
 
-import os
 from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.em.helpers.env_flags import parse_env_binary_flag
 from recovar.em.helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
 
 _K1_POSE_PUBLISH_DIRECT_ENV = "RECOVAR_K1_POSE_PUBLISH_DIRECT"
@@ -72,10 +72,7 @@ def _stack_or_none(values):
 
 
 def _k1_pose_publish_direct_requested() -> bool:
-    token = os.environ.get(_K1_POSE_PUBLISH_DIRECT_ENV, "0").strip()
-    if token not in {"0", "1"}:
-        raise ValueError(f"{_K1_POSE_PUBLISH_DIRECT_ENV} must be 0 or 1")
-    return token == "1"
+    return parse_env_binary_flag(_K1_POSE_PUBLISH_DIRECT_ENV)
 
 
 
