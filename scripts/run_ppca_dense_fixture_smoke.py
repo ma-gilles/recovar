@@ -22,9 +22,9 @@ from recovar.em.sampling import (
     get_relion_rotation_grid_eulers,
     get_rotation_grid_at_order,
     get_translation_grid,
-    read_relion_sampling_metadata,
     relion_angular_sampling_deg,
 )
+from recovar.em.relion.relion_metadata import read_relion_sampling_metadata
 from recovar.reconstruction import noise as recon_noise
 
 

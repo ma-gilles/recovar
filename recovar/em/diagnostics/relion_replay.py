@@ -40,12 +40,14 @@ from recovar.em.refinement.noise_updates import (
 from recovar.em.refinement.refinement_options import RefinementOptions
 from recovar.em.sampling import (
     _translation_grid_for_class_count,
+    relion_sampling_perturbation_for_iteration,
+)
+from recovar.em.relion.relion_metadata import (
     read_relion_direction_prior,
     read_relion_direction_priors,
     read_relion_model_metadata,
     read_relion_optimiser_metadata,
     read_relion_sampling_metadata,
-    relion_sampling_perturbation_for_iteration,
 )
 
 logger = logging.getLogger(__name__)

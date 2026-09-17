@@ -22,6 +22,8 @@ REQUIRED_BUNDLE_FIELDS = {
     "image_corrections",
     "image_mask",
     "image_mask_mode",
+    "relion_cuda_preprocess_radius",
+    "relion_cuda_preprocess_cosine_width",
     "image_shape",
     "integer_pre_shifts",
     "iteration",
@@ -220,7 +222,12 @@ def _load_bundle(
         "native-lane bundle requires RELION CUDA preprocessing",
     )
     _require(bool(values["score_with_masked_images"]), "bundle did not score masked images")
-    _require(str(values["image_mask_mode"]) == "relion_background_fill", "mask mode changed")
+    # relion_preprocess_real_f32 masks parametrically, so the big-JIT CUDA path records
+    # "relion_cuda_parametric" with radius/cosine-width scalars instead of an array mask.
+    _require(
+        str(values["image_mask_mode"]) in ("relion_background_fill", "relion_cuda_parametric"),
+        "mask mode changed",
+    )
     _require(int(values["iteration"]) == expected_iteration, "bundle iteration changed")
     _require(
         int(values["class_index"]) + 1 == expected_class_one_based,
@@ -256,9 +263,22 @@ def _load_bundle(
     image_shape = tuple(int(value) for value in np.asarray(values["image_shape"]))
     _require(raw.shape[1:] == image_shape, "raw image topology changed")
     _require(image_shape[0] == image_shape[1], "raw image must be square")
+    # relion_preprocess_real_f32 masks with two scalars, so a big-JIT CUDA capture
+    # truthfully stores an empty array. Validate whichever contract the payload declares;
+    # requiring an array unconditionally rejects the correct parametric payload.
+    mask_mode = str(values["image_mask_mode"])
     mask = np.asarray(values["image_mask"])
-    _require(mask.shape == image_shape and mask.dtype == np.float32, "stored mask changed")
-    _require(float(mask.min()) == 0.0 and float(mask.max()) == 1.0, "stored mask range changed")
+    if mask_mode == "relion_cuda_parametric":
+        radius = float(np.asarray(values["relion_cuda_preprocess_radius"]))
+        width = float(np.asarray(values["relion_cuda_preprocess_cosine_width"]))
+        # The kernel divides by cosine_width (relion_preprocess.cuh:69), so zero is
+        # invalid, not merely degenerate.
+        _require(np.isfinite(radius) and radius > 0.0, "captured mask radius is invalid")
+        _require(np.isfinite(width) and width > 0.0, "captured mask cosine width is invalid")
+        _require(mask.size == 0, "parametric mask payload also carries an array mask")
+    else:
+        _require(mask.shape == image_shape and mask.dtype == np.float32, "stored mask changed")
+        _require(float(mask.min()) == 0.0 and float(mask.max()) == 1.0, "stored mask range changed")
     return values
 
 
@@ -298,7 +318,42 @@ def run_gpu_replays(
         np.isfinite(mask_edge_width_pixels) and mask_edge_width_pixels > 0.0,
         "mask edge width must be finite and positive",
     )
-    mask_radius_pixels = particle_diameter_angstrom / (2.0 * voxel_size)
+    cli_mask_radius_pixels = particle_diameter_angstrom / (2.0 * voxel_size)
+    captured_radius = float(np.asarray(values["relion_cuda_preprocess_radius"]))
+    captured_width = float(np.asarray(values["relion_cuda_preprocess_cosine_width"]))
+    if str(values["image_mask_mode"]) == "relion_cuda_parametric":
+        # Replay the geometry the kernel actually used. The CLI derivation is kept as a
+        # cross-check rather than as the source: a disagreement means the replay and the
+        # capture are not describing the same mask, which must fail rather than be
+        # silently resolved in favour of either one.
+        _require(
+            np.isfinite(captured_radius) and captured_radius > 0.0,
+            "captured mask radius is invalid",
+        )
+        _require(
+            np.isfinite(captured_width) and captured_width > 0.0,
+            "captured mask cosine width is invalid",
+        )
+        _require(
+            captured_radius == cli_mask_radius_pixels,
+            f"captured mask radius {captured_radius!r} differs from the CLI-derived "
+            f"{cli_mask_radius_pixels!r}",
+        )
+        _require(
+            captured_width == mask_edge_width_pixels,
+            f"captured mask cosine width {captured_width!r} differs from the CLI "
+            f"{mask_edge_width_pixels!r}",
+        )
+        mask_radius_pixels = captured_radius
+        mask_edge_width_pixels = captured_width
+    else:
+        # Array-mask payloads record NaN for both scalars; the CLI derivation is the
+        # only geometry available and the existing assumption is kept explicit.
+        _require(
+            not np.isfinite(captured_radius) and not np.isfinite(captured_width),
+            "non-parametric payload carries mask scalars",
+        )
+        mask_radius_pixels = cli_mask_radius_pixels
     images = jnp.asarray(values["raw_real_images"], dtype=jnp.float32)
     normalization = jnp.asarray(
         values["relion_preprocess_normalization_factors"],

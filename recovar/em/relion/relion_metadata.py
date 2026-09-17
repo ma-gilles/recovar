@@ -1,4 +1,4 @@
-"""RELION translation and noise-shell metadata helpers."""
+"""RELION STAR readers, translation metadata and noise-shell helpers."""
 
 from __future__ import annotations
 
@@ -72,3 +72,166 @@ def _radial_profile_from_noise_variance(noise_variance, image_shape):
     np.add.at(radial, radial_dist[: noise_np.size], noise_np)
     np.add.at(counts, radial_dist[: noise_np.size], 1.0)
     return radial / np.maximum(counts, 1.0)
+
+
+def read_relion_perturbation_from_sampling_star(sampling_star_path):
+    """Read _rlnSamplingPerturbInstance and _rlnSamplingPerturbFactor from a RELION sampling.star.
+
+    Used for exact parity replay: feed recovar the same perturbation RELION used at iter N.
+
+    Returns
+    -------
+    (random_perturbation, perturbation_factor) : tuple of float
+    """
+    import re
+
+    text = open(sampling_star_path).read()
+    m_inst = re.search(r"_rlnSamplingPerturbInstance\s+(\S+)", text)
+    m_fac = re.search(r"_rlnSamplingPerturbFactor\s+(\S+)", text)
+    if not m_inst or not m_fac:
+        raise ValueError(f"Missing perturb fields in {sampling_star_path}")
+    return float(m_inst.group(1)), float(m_fac.group(1))
+
+
+def read_relion_sampling_metadata(sampling_star_path):
+    """Read the full set of RELION sampling metadata needed for replay:
+    ``(random_perturbation, perturbation_factor, healpix_order, offset_range, offset_step)``.
+
+    ``offset_range`` and ``offset_step`` are in the same units RELION writes
+    (Angstroms at scale-0, or as configured). ``healpix_order`` is the order
+    RELION actually used at that iter.
+    """
+    import re
+
+    text = open(sampling_star_path).read()
+
+    def _grab(name, cast=float):
+        m = re.search(rf"_{name}\s+(\S+)", text)
+        if not m:
+            raise ValueError(f"Missing {name} in {sampling_star_path}")
+        return cast(m.group(1))
+
+    return dict(
+        random_perturbation=_grab("rlnSamplingPerturbInstance"),
+        perturbation_factor=_grab("rlnSamplingPerturbFactor"),
+        healpix_order=_grab("rlnHealpixOrder", int),
+        psi_step=_grab("rlnPsiStep"),
+        offset_range=_grab("rlnOffsetRange"),
+        offset_step=_grab("rlnOffsetStep"),
+    )
+
+
+def read_relion_model_metadata(model_star_path):
+    """Read RELION model star fields needed for replay.
+
+    Returns ``current_image_size`` and ``current_resolution`` from the
+    model star file.  These are written by ``updateCurrentResolution`` +
+    ``updateImageSizeAndResolutionPointers`` at the start of each RELION
+    iteration and stored in the ``data_model_general`` table.
+
+    Local-search replay also needs the orientational prior widths from
+    the same table.  Older/minimal fixtures may omit those fields, so the
+    sigma values are optional and returned as ``None`` when absent.
+    """
+    import re
+
+    text = open(model_star_path).read()
+
+    def _grab(name, cast=float):
+        m = re.search(rf"_{name}\s+(\S+)", text)
+        if not m:
+            raise ValueError(f"Missing {name} in {model_star_path}")
+        return cast(m.group(1))
+
+    def _grab_optional(name, cast=float):
+        m = re.search(rf"_{name}\s+(\S+)", text)
+        if not m:
+            return None
+        return cast(m.group(1))
+
+    return dict(
+        current_image_size=_grab("rlnCurrentImageSize", int),
+        current_resolution=_grab("rlnCurrentResolution"),
+        orientational_prior_mode=_grab_optional("rlnOrientationalPriorMode", int),
+        sigma_prior_rot_angle=_grab_optional("rlnSigmaPriorRotAngle"),
+        sigma_prior_tilt_angle=_grab_optional("rlnSigmaPriorTiltAngle"),
+        sigma_prior_psi_angle=_grab_optional("rlnSigmaPriorPsiAngle"),
+    )
+
+
+def read_relion_optimiser_metadata(optimiser_star_path):
+    """Read RELION optimiser fields needed for exact replay control flow."""
+    import re
+
+    text = open(optimiser_star_path).read()
+
+    def _grab(name, cast=float, default=None):
+        m = re.search(rf"_{name}\s+(\S+)", text)
+        if not m:
+            return default
+        return cast(m.group(1))
+
+    return dict(
+        random_seed=_grab("rlnRandomSeed", int),
+        overall_accuracy_rotations=_grab("rlnOverallAccuracyRotations"),
+        overall_accuracy_translations_angst=_grab("rlnOverallAccuracyTranslationsAngst"),
+        has_converged=_grab("rlnHasConverged", int),
+        number_iter_without_resolution_gain=_grab("rlnNumberOfIterWithoutResolutionGain", int),
+        number_iter_without_changing_assignments=_grab("rlnNumberOfIterWithoutChangingAssignments", int),
+        changes_optimal_orientations=_grab("rlnChangesOptimalOrientations"),
+        changes_optimal_offsets=_grab("rlnChangesOptimalOffsets"),
+        changes_optimal_classes=_grab("rlnChangesOptimalClasses"),
+        smallest_changes_orientations=_grab("rlnSmallestChangesOrientations"),
+        smallest_changes_offsets=_grab("rlnSmallestChangesOffsets"),
+        smallest_changes_classes=_grab("rlnSmallestChangesClasses"),
+        do_correct_ctf=_grab("rlnDoCorrectCtf", int),
+    )
+
+
+def read_relion_direction_prior(model_star_path, *, dtype=np.float32):
+    """Read RELION's saved orientation distribution from ``model.star``."""
+    import numpy as np
+    import starfile
+
+    data = starfile.read(str(model_star_path))
+    if not isinstance(data, dict) or "model_pdf_orient_class_1" not in data:
+        raise ValueError(f"Missing model_pdf_orient_class_1 in {model_star_path}")
+    df = data["model_pdf_orient_class_1"]
+    if "rlnOrientationDistribution" not in df.columns:
+        raise ValueError(f"Missing rlnOrientationDistribution in {model_star_path}")
+    return np.asarray(df["rlnOrientationDistribution"], dtype=dtype)
+
+
+def read_relion_direction_priors(model_star_path, n_classes=None, *, dtype=np.float32):
+    """Read all RELION per-class orientation distributions from ``model.star``."""
+    import re
+
+    import numpy as np
+    import starfile
+
+    data = starfile.read(str(model_star_path))
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected STAR dictionary in {model_star_path}")
+    if n_classes is None:
+        class_keys = sorted(
+            (
+                key
+                for key in data
+                if re.fullmatch(r"model_pdf_orient_class_\d+", str(key))
+            ),
+            key=lambda key: int(str(key).rsplit("_", 1)[1]),
+        )
+    else:
+        class_keys = [f"model_pdf_orient_class_{idx + 1}" for idx in range(int(n_classes))]
+    if not class_keys:
+        raise ValueError(f"Missing model_pdf_orient_class_* tables in {model_star_path}")
+
+    priors = []
+    for key in class_keys:
+        if key not in data:
+            raise ValueError(f"Missing {key} in {model_star_path}")
+        df = data[key]
+        if "rlnOrientationDistribution" not in df.columns:
+            raise ValueError(f"Missing rlnOrientationDistribution in {key} of {model_star_path}")
+        priors.append(np.asarray(df["rlnOrientationDistribution"], dtype=dtype))
+    return np.stack(priors, axis=0)

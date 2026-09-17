@@ -1396,7 +1396,10 @@ def main():
         RelionParityOptions,
         ReplayState,
     )
-    from recovar.em.sampling import read_relion_optimiser_metadata, read_relion_sampling_metadata
+    from recovar.em.relion.relion_metadata import (
+        read_relion_optimiser_metadata,
+        read_relion_sampling_metadata,
+    )
     from recovar.output.output import save_volume
     from recovar.reconstruction import noise as recon_noise
     from recovar.reconstruction import regularization
