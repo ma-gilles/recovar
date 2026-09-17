@@ -11533,3 +11533,6 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(PerImageBackproject,
                                   .Arg<ffi::AnyBuffer>()
                                   .Arg<ffi::AnyBuffer>()
                                   .Ret<ffi::AnyBuffer>());
+
+// Fused sparse pass-2 posterior handlers (needs relion_ampere_inclusive_sum_f32).
+#include "sparse_pass2_posterior.cuh"

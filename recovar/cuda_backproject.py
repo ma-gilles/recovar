@@ -59,6 +59,7 @@ _CUDA_BUILD_SOURCE_NAMES = (
     "relion_preprocess.cuh",
     "relion_vdam_mstep.cuh",
     "relion_scoring.cuh",
+    "sparse_pass2_posterior.cuh",
     "cuda_backproject.cu",
     "relion_coarse_diff2_projector_body.inc",
     "Makefile",
@@ -572,6 +573,8 @@ _TARGET_BPREF_PARTICLE_PACK = "cuda_bpref_particle_pack"
 _TARGET_DEFERRED_VDAM_HOST_PACK = "cuda_deferred_vdam_host_pack"
 _TARGET_NOISE_PIXEL_PACK = "cuda_noise_pixel_pack"
 _TARGET_NOISE_RESIDUAL_STATISTICS = "recovar_noise_residual_statistics"
+_TARGET_SPARSE_PASS2_LOG_Z_F64 = "recovar_sparse_pass2_log_z_f64"
+_TARGET_SPARSE_PASS2_POSTERIOR_F32 = "recovar_sparse_pass2_posterior_f32"
 _TARGET_RELION_VDAM_MSTEP_SUMS_F32 = "cuda_relion_vdam_mstep_sums_f32"
 _TARGET_RELION_VDAM_MSTEP_DENOMINATOR_F32 = (
     "cuda_relion_vdam_mstep_denominator_f32"
@@ -1134,6 +1137,14 @@ _OPTIONAL_FFI_REGISTRATIONS = {
     _TARGET_BPREF_PARTICLE_PACK: (
         "BprefParticlePack",
         "CUDA BPref packing requires an explicit build with BprefParticlePack",
+    ),
+    _TARGET_SPARSE_PASS2_LOG_Z_F64: (
+        "SparsePass2LogZF64",
+        "The fused sparse pass-2 log-Z requires an explicit CUDA build with SparsePass2LogZF64",
+    ),
+    _TARGET_SPARSE_PASS2_POSTERIOR_F32: (
+        "SparsePass2PosteriorF32",
+        "The fused sparse pass-2 posterior requires an explicit CUDA build with SparsePass2PosteriorF32",
     ),
 }
 
@@ -1848,6 +1859,111 @@ def relion_cub_sort_scan_batched_f32(
         (output_type, output_type),
     )(values)
 
+
+def _sparse_pass2_scores_geometry(scores: jax.Array) -> tuple[int, int]:
+    """Validate a fused sparse pass-2 score block and return ``(rows, row_size)``."""
+
+    if scores.dtype != jnp.float32:
+        raise TypeError(f"scores must be float32, got {scores.dtype}")
+    if scores.ndim < 2 or any(int(d) < 1 for d in scores.shape):
+        raise ValueError(f"scores must be a nonempty (B, ...) array, got {scores.shape}")
+    rows = int(scores.shape[0])
+    row_size = int(np.prod(scores.shape[1:]))
+    if rows > np.iinfo(np.int32).max or row_size > np.iinfo(np.int32).max:
+        raise ValueError(f"scores {scores.shape} exceed the CUDA/CUB row limits")
+    return rows, row_size
+
+
+def _require_sparse_pass2_cuda_backend(label: str) -> None:
+    if jax.default_backend() != "gpu":
+        raise RuntimeError(f"{label} requires a JAX GPU backend")
+    if not custom_cuda_requested():
+        raise RuntimeError(f"{label} was requested but custom CUDA is disabled")
+
+
+@jax.jit
+def sparse_pass2_log_z_f64(scores: jax.Array) -> jax.Array:
+    """Per-image float64 log-sum-exp of float32 sparse pass-2 scores.
+
+    Runtime-shaped replacement for ``_logsumexp_pass2_bucket_score_only``:
+    rows without a finite score return ``-inf``. The float64 sum uses a fixed
+    block tree rather than XLA's reduction order.
+    """
+
+    rows, _ = _sparse_pass2_scores_geometry(scores)
+    _require_sparse_pass2_cuda_backend("Fused sparse pass-2 log-Z")
+    _ensure_optional_ffi(_TARGET_SPARSE_PASS2_LOG_Z_F64)
+    return jax.ffi.ffi_call(
+        _TARGET_SPARSE_PASS2_LOG_Z_F64,
+        jax.ShapeDtypeStruct((rows,), jnp.float64),
+    )(scores)
+
+
+# Byte size of the device-side per-row state record of SparsePass2PosteriorF32.
+_SPARSE_PASS2_ROW_STATE_BYTES = 40
+
+
+@functools.partial(jax.jit, static_argnames=("adaptive_fraction", "keep_all", "use_external_sum_weight"))
+def sparse_pass2_posterior_f32(
+    scores: jax.Array,
+    log_z: jax.Array,
+    external_sum_weight: jax.Array,
+    *,
+    adaptive_fraction: float,
+    keep_all: bool,
+    use_external_sum_weight: bool,
+) -> tuple[jax.Array, ...]:
+    """Fused ``_normalize_pass2_bucket_with_log_z`` + ``_relion_f32_fine_posterior``.
+
+    Returns ``(log_z, best_log_score, best_argmax, max_posterior, probs,
+    normalized_weights, reconstruction_probs, mask, n_significant, sum_weight,
+    threshold)`` with the dtypes of the XLA path: ``log_z``/``probs`` float64,
+    ``best_argmax`` int64, ``n_significant`` int32, the rest float32/bool.
+    ``max_posterior`` is the maximum pruned reconstruction probability, the
+    value the RELION float32 path reports as Pmax.  The RELION significance
+    boundary reuses the CUB radix sort and pinned Ampere scan of
+    :func:`relion_cub_sort_scan_batched_f32`.
+    """
+
+    rows, _ = _sparse_pass2_scores_geometry(scores)
+    if log_z.dtype != jnp.float64 or log_z.shape != (rows,):
+        raise TypeError(f"log_z must be float64 with shape ({rows},), got {log_z.dtype} {log_z.shape}")
+    if external_sum_weight.dtype != jnp.float32 or external_sum_weight.shape != (rows,):
+        raise TypeError(
+            f"external_sum_weight must be float32 with shape ({rows},), got "
+            f"{external_sum_weight.dtype} {external_sum_weight.shape}"
+        )
+    if type(keep_all) is not bool or type(use_external_sum_weight) is not bool:
+        raise TypeError("keep_all and use_external_sum_weight must be static Python bools")
+    _require_sparse_pass2_cuda_backend("Fused sparse pass-2 posterior")
+    _ensure_optional_ffi(_TARGET_SPARSE_PASS2_POSTERIOR_F32)
+    full = scores.shape
+    outputs = (
+        jax.ShapeDtypeStruct((rows,), jnp.float64),   # log_z
+        jax.ShapeDtypeStruct((rows,), jnp.float32),   # best_log_score
+        jax.ShapeDtypeStruct((rows,), jnp.int64),     # best_argmax
+        jax.ShapeDtypeStruct((rows,), jnp.float32),   # max_posterior
+        jax.ShapeDtypeStruct(full, jnp.float64),      # probs
+        jax.ShapeDtypeStruct(full, jnp.float32),      # normalized_weights
+        jax.ShapeDtypeStruct(full, jnp.float32),      # reconstruction_probs
+        jax.ShapeDtypeStruct(full, jnp.bool_),        # mask
+        jax.ShapeDtypeStruct((rows,), jnp.int32),     # n_significant
+        jax.ShapeDtypeStruct((rows,), jnp.float32),   # sum_weight
+        jax.ShapeDtypeStruct((rows,), jnp.float32),   # threshold
+        jax.ShapeDtypeStruct(full, jnp.float32),      # raw weights (scratch)
+        jax.ShapeDtypeStruct(full, jnp.float32),      # sorted (scratch)
+        jax.ShapeDtypeStruct(full, jnp.float32),      # cumulative (scratch)
+        jax.ShapeDtypeStruct((rows, _SPARSE_PASS2_ROW_STATE_BYTES), jnp.uint8),  # row state
+    )
+    result = jax.ffi.ffi_call(_TARGET_SPARSE_PASS2_POSTERIOR_F32, outputs)(
+        scores,
+        log_z,
+        external_sum_weight,
+        adaptive_fraction=np.float32(adaptive_fraction),
+        keep_all=np.int64(keep_all),
+        use_external_sum_weight=np.int64(use_external_sum_weight),
+    )
+    return tuple(result[:11])
 
 @jax.jit
 def relion_cub_positive_sort_scan_f32(
