@@ -4789,16 +4789,6 @@ def main():
                 relion_scale_follower_count=relion_scale_followers,
                 relion_scale_follower_owners_by_iteration=relion_scale_follower_owners_by_iteration,
                 relion_follower_scale_replay=relion_follower_scale_replay,
-                init_relion_particle_ids=(
-                    None
-                    if native_group_layout is None
-                    else list(native_group_layout.particle_ids_per_half)
-                ),
-                init_relion_optics_group_ids=(
-                    None
-                    if native_group_layout is None
-                    else list(native_group_layout.optics_group_ids_per_half)
-                ),
                 init_relion_optics_group_count=(
                     None if native_group_layout is None else native_group_layout.n_optics_groups
                 ),

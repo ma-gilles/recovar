@@ -206,8 +206,6 @@ class ReplayState:
     final_replay_source_iteration: int | None = None
     init_reference_real: Any | None = None
     init_refinement_state_fields: Any | None = None
-    init_relion_particle_ids: Any | None = None
-    init_relion_optics_group_ids: Any | None = None
     init_relion_optics_group_count: Any | None = None
     relion_scale_follower_count: int = 0
     relion_scale_follower_owners_by_iteration: Any | None = None
