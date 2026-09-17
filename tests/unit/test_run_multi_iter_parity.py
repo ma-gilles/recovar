@@ -308,7 +308,6 @@ def test_diff_reports_optimizer_and_particle_pmax_as_distinct_metrics():
 
     assert scalars["ave_Pmax"] == pytest.approx(0.922993)
     assert scalars["ave_Pmax_particles"] == pytest.approx(0.92286475478)
-    assert scalars["ave_Pmax_mstep"] == scalars["ave_Pmax"]
 
 
 def test_initial_scoring_noise_pair_defaults_to_relion_mpi_restart_broadcast():

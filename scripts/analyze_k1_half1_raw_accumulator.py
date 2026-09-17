@@ -236,14 +236,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--recovar-bpref",
-        "--recovar-prejoin",
         dest="recovar_bpref",
         type=Path,
         required=True,
-        help=(
-            "RECOVAR BPref dump. --recovar-prejoin remains as a compatibility alias; "
-            "the archive schema determines the actual stage."
-        ),
+        help="RECOVAR BPref dump; the archive schema determines the actual stage.",
     )
     parser.add_argument("--recovar-repeat", type=Path)
     parser.add_argument("--native-data", type=Path, required=True)
