@@ -199,14 +199,11 @@ def _finish_refinement_iteration(
     candidate_state = schedule_state.replace(
         previous_best_pose_indices=schedule_state.best_pose_indices,
         best_pose_indices=best_pose_indices,
-        halfset_mean_fsc=comparison.fsc,
         halfset_means_aligned=comparison.means_aligned,
         halfset_resolution_supports=comparison.resolution_supports,
         no_halfset_drift=comparison.no_halfset_drift,
         kclass_schedule_allows=kclass_allows and proposed_size > current_size,
         pmax_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "pmax_mean"),
-        logZ_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "logZ_mean"),
-        nsig_mean=_mean_halfset_diagnostic(updated.pose_diagnostics, "nsig_mean"),
         W_subspace_agreement=W_agreement,
     )
     decision = evaluate_halfset_resolution_gate(
