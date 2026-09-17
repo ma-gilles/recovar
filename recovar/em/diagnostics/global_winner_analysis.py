@@ -27,7 +27,6 @@ class WinnerSummary:
     margin: np.ndarray
     class_scores: np.ndarray
     class_pose_indices: np.ndarray
-    class_second_scores: np.ndarray
     class_second_pose_indices: np.ndarray
     class_within_pose_margin: np.ndarray
     class_posterior_mass: np.ndarray
@@ -198,7 +197,6 @@ def load_recovar_summary(path: str | Path, *, label: str) -> WinnerSummary:
         margin=margin,
         class_scores=class_scores,
         class_pose_indices=class_pose,
-        class_second_scores=class_second_scores,
         class_second_pose_indices=class_second_pose,
         class_within_pose_margin=class_within_pose_margin,
         class_posterior_mass=class_posterior_mass,
@@ -454,7 +452,6 @@ def load_relion_summary(
         margin=margin[order],
         class_scores=class_scores[order],
         class_pose_indices=class_pose[order],
-        class_second_scores=class_second_scores[order],
         class_second_pose_indices=class_second_pose[order],
         class_within_pose_margin=class_within_pose_margin[order],
         class_posterior_mass=class_posterior_mass[order],
