@@ -12,7 +12,7 @@ GUI excluded**, before new-engine development. Root instructions also apply.
   preparation. Establish one measurable question and its cheapest useful check.
 - Before validation, record HEAD, branch, `git status --short --branch`,
   `git diff HEAD --stat`, diff SHA-256 and untracked inputs. Confirm required
-  ancestors with `recovar.utils.parity_provenance`. Names are not provenance.
+  ancestors with `recovar.em.diagnostics.parity_provenance`. Names are not provenance.
 - Preserve unrelated changes, pinned PR158 controls and every queued/running
   source snapshot. One writer per source/build; consult the status-linked board.
   The primary owns integration and claims. Parallel work requires authorization

@@ -16,9 +16,9 @@ test contexts that need an exception.
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import sys
-import hashlib
 from pathlib import Path
 
 # Load-bearing parity fix commits. If any of these is NOT an ancestor of

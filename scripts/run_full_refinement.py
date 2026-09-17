@@ -47,6 +47,7 @@ from recovar.em.diagnostics.frozen_boundary import (
     validate_fixed_diagnostic_boundary_runtime_config,
     verify_fixed_diagnostic_boundary_sources,
 )
+from recovar.em.diagnostics.parity_provenance import _safe_git_commit, git_worktree_provenance
 from recovar.em.diagnostics.relion_projector_capture import build_relion_projector_replay_state
 from recovar.em.diagnostics.state_swap_probe import (
     add_state_swap_probe_arguments,
@@ -69,7 +70,6 @@ from recovar.em.relion.relion_worker_scale import (
     verify_relion_dispatch_schedule_oracle,
 )
 from recovar.utils.file_hash import sha256_file as _sha256_file
-from recovar.utils.parity_provenance import _safe_git_commit, git_worktree_provenance
 
 logging.basicConfig(
     level=logging.INFO,
