@@ -423,10 +423,24 @@ def maybe_write_debug_noise_component_dump(
     return pending_targets
 
 
-def _child_ordinals_from_parent_ids(parent_ids: np.ndarray) -> np.ndarray:
-    """Return RELION-style child ordinal within each repeated parent id."""
+def _child_ordinals_from_parent_ids(parent_ids: np.ndarray, *, groups=None) -> np.ndarray:
+    """Return RELION-style child ordinal within each repeated parent id.
+
+    ``groups`` counts within each group separately. Class-segmented buckets need
+    that because the layout copies each class's parent ids unchanged, so the same
+    parent appears once per class: counted in one pass, class 1's first child of
+    parent 7 would be numbered as a later child of class 0's parent 7, and the
+    oversampling factor derived from these ordinals would be inflated by K.
+    """
 
     parent_ids = np.asarray(parent_ids, dtype=np.int32).reshape(-1)
+    if groups is not None:
+        groups = np.asarray(groups).reshape(-1)
+        child_ordinals = np.zeros(parent_ids.shape[0], dtype=np.int32)
+        for group in np.unique(groups):
+            selected = np.flatnonzero(groups == group)
+            child_ordinals[selected] = _child_ordinals_from_parent_ids(parent_ids[selected])
+        return child_ordinals
     child_ordinals = np.zeros(parent_ids.shape[0], dtype=np.int32)
     seen: dict[int, int] = {}
     for idx, parent_id in enumerate(parent_ids.tolist()):
@@ -497,6 +511,7 @@ def _local_candidate_metadata(
     bucket,
     row: int,
     candidate_rows,
+    candidate_class_indices=None,
 ):
     """Return local metadata, retaining F64 source angles when available.
 
@@ -510,7 +525,9 @@ def _local_candidate_metadata(
         if bucket.local_rotation_posterior_ids is not None
         else local_rotation_ids
     )
-    local_rotation_child_indices = _child_ordinals_from_parent_ids(local_rotation_parent_ids)
+    local_rotation_child_indices = _child_ordinals_from_parent_ids(
+        local_rotation_parent_ids, groups=candidate_class_indices,
+    )
     local_rotation_matrices = np.asarray(bucket.local_rotations[row, candidate_rows], dtype=np.float32)
     source_eulers = getattr(bucket, "local_source_eulers", None)
     if source_eulers is not None:
@@ -664,6 +681,7 @@ def maybe_write_debug_fused_posterior_dump(
             bucket=bucket,
             row=row,
             candidate_rows=candidate_rows,
+            candidate_class_indices=candidate_class_indices,
         )
         n_trans = int(metadata["translation_grid"].shape[0])
         posterior = np.asarray(probs_np[compact_row, candidate_rows, :], dtype=np.float32)
@@ -994,6 +1012,7 @@ def maybe_write_debug_score_dump(
             bucket=bucket,
             row=row,
             candidate_rows=candidate_rows,
+            candidate_class_indices=candidate_class_indices,
         )
         local_rotation_ids = metadata["local_rotation_ids"]
         local_rotation_parent_ids = metadata["local_rotation_parent_ids"]
