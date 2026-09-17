@@ -57,7 +57,6 @@ class DensePPCAFusedEMResult(NamedTuple):
 class DenseImageStats(NamedTuple):
     alpha_aug_acc: jax.Array
     G_aug_tri_acc: jax.Array
-    log_evidence: jax.Array
 
 
 class PosteriorDiagnostics(NamedTuple):
@@ -265,7 +264,7 @@ def dense_pose_ppca_E_step_blocked(
     )
     alpha_aug_acc = jnp.einsum("btr,btrp->bp", gamma.astype(alpha.dtype), alpha)
     G_aug_tri_acc = jnp.einsum("btr,btrk->bk", gamma.astype(G_tri.dtype), G_tri)
-    return DenseImageStats(alpha_aug_acc=alpha_aug_acc, G_aug_tri_acc=G_aug_tri_acc, log_evidence=diagnostics.logZ), diagnostics
+    return DenseImageStats(alpha_aug_acc=alpha_aug_acc, G_aug_tri_acc=G_aug_tri_acc), diagnostics
 
 
 @jax.jit
