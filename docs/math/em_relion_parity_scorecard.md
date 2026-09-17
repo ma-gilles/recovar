@@ -94,13 +94,11 @@ Each row contains four class-level FSC-AUC checks at the frozen `0.995` gate. A 
 | `strict-k1-v11-20260814` | 2026-08-14T14:46:03+00:00 | `e791e87502b5` | 30 | +1 | 4 | 0 |
 | `strict-k1-v12-20260821` | 2026-08-21T05:30:00+00:00 | `fdec6f931d22` | 31 | +1 | 3 | 0 |
 
-<!-- BEGIN MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 ## Archived experiment history
 
 The [original post-snapshot diagnostics](https://github.com/ma-gilles/recovar-experiments/blob/6ced5f78857ad7cc75d5eee257ccbaa8dc17ffe7/docs/math/em_relion_parity_scorecard.md#current-k1-case-7-bounded-metric)
 retain the historical interventions, failed runs and evidence hashes. Their source-specific
 results do not qualify the current implementation or change the frozen suite above.
-<!-- END MANUAL POST-SNAPSHOT DIAGNOSTICS -->
 
 ## Non-scoring regenerated-data diagnostics
 
@@ -119,8 +117,7 @@ Generate this PR-ready table with:
 pixi run python scripts/summarize_em_relion_parity_scorecard.py
 ```
 
-Verify that the checked scorecard, frozen snapshot, and marked live-diagnostics
-appendix are current with:
+Verify that the checked scorecard and frozen snapshots are current with:
 
 ```bash
 pixi run python scripts/summarize_em_relion_parity_scorecard.py \
