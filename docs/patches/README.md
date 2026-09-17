@@ -133,10 +133,10 @@ mkdir -p $RECOVAR_DEBUG_DUMP_DIR
     [...exact fixture args...] --random_seed 1776701668
 ```
 
-The dumps are consumed by
-`tests/unit/initial_model/test_bootstrap_iref_fixture.py::test_bootstrap_iref_matches_fresh_relion_dump`
-which achieves **CC = 0.999313** vs same-build RELION (machine-precision
-parity modulo FFTW planner non-determinism).
+The historical fixture comparison achieved **CC = 0.999313** against the
+same RELION build (machine-precision parity modulo FFTW planner
+non-determinism). Its unavailable April fixture suite and binary reader are
+preserved in the private experiment archive at revision `2a43af1`.
 
 ## File format
 
@@ -149,7 +149,7 @@ int64 nx
 <nz * ny * nx elements>   # complex128 (if 16 bytes/elem) or float64 (if 8)
 ```
 
-Python reader: see `tests/unit/initial_model/test_bootstrap_iref_fixture.py::_read_binary_dump`.
+The archived `test_bootstrap_iref_fixture.py` contains the matching Python reader.
 
 ## Why not vendor the patched RELION
 

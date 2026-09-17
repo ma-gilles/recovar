@@ -1,9 +1,8 @@
 #!/usr/bin/env python
 """Diagnose RELION InitialModel iter-1 E-step -> BPref parity.
 
-This intentionally mirrors
-``tests/unit/initial_model/test_estep_fixture.py::test_estep_bpref_forward_parity``
-but writes reusable diagnostics instead of only asserting a regression floor.
+This standalone diagnostic writes reusable evidence for the historical
+InitialModel E-step/BPref boundary.
 
 The first question this answers is whether the low BPref CC is caused by the
 BackProjector/layout conversion itself, or by upstream choices such as
