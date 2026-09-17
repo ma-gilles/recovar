@@ -10,9 +10,9 @@ from pathlib import Path
 import numpy as np
 
 if __package__:
-    from scripts.summarize_em_completion_bench import normalized_fsc_auc, shell_fsc
+    from scripts.fsc_metrics import normalized_fsc_auc, shell_fsc
 else:
-    from summarize_em_completion_bench import normalized_fsc_auc, shell_fsc
+    from fsc_metrics import normalized_fsc_auc, shell_fsc
 
 ARMS = (
     "no_dump_cache_on",

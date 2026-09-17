@@ -25,9 +25,9 @@ from recovar.utils import helpers
 from recovar.utils.file_hash import sha256_file as _sha256
 
 if __package__:
-    from scripts.summarize_em_completion_bench import normalized_fsc_auc, shell_fsc
+    from scripts.fsc_metrics import normalized_fsc_auc, shell_fsc
 else:
-    from summarize_em_completion_bench import normalized_fsc_auc, shell_fsc
+    from fsc_metrics import normalized_fsc_auc, shell_fsc
 
 
 SCHEMA = "em_k4_native_bpref_reconstruct_audit_v1"

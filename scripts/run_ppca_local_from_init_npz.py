@@ -758,7 +758,6 @@ def main() -> None:
     iter_summaries = []
     t_all = time.time()
     prev_iter_local_hp_order: int | None = None
-    prev_iter_current_size: int | None = None
     for iter_idx in range(1, int(args.n_iters) + 1):
         iter_local_hp_order = int(_schedule_value(local_healpix_order_schedule, target_local_hp, iter_idx - 1))
         iter_current_size = int(_schedule_value(current_size_schedule, int(args.current_size), iter_idx - 1))
@@ -884,7 +883,6 @@ def main() -> None:
             pose_npz = dict(pose_arrays)
             pose_npz["rotation_grid"] = get_rotation_grid_at_order(int(iter_local_hp_order))
             prev_iter_local_hp_order = int(iter_local_hp_order)
-            prev_iter_current_size = int(iter_current_size)
             final_result = result
             continue
 
@@ -1029,7 +1027,6 @@ def main() -> None:
         pose_npz = dict(pose_arrays)
         pose_npz["rotation_grid"] = get_rotation_grid_at_order(int(iter_local_hp_order))
         prev_iter_local_hp_order = int(iter_local_hp_order)
-        prev_iter_current_size = int(iter_current_size)
         final_result = result
 
     if final_result is None:

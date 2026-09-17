@@ -24,11 +24,11 @@ from typing import Any, Callable, Sequence
 import numpy as np
 
 try:
-    from scripts.fsc_metrics import centered_corr, normalized_fsc_auc, shell_fsc
+    from scripts.fsc_metrics import centered_corr, first_shell_below, normalized_fsc_auc, shell_fsc
 except ModuleNotFoundError as error:
     if error.name != "scripts":
         raise
-    from fsc_metrics import centered_corr, normalized_fsc_auc, shell_fsc
+    from fsc_metrics import centered_corr, first_shell_below, normalized_fsc_auc, shell_fsc
 
 # This reporter only reads files and computes NumPy FSCs. Force CPU before
 # importing RECOVAR helpers so JAX does not initialize a busy Slurm GPU.
@@ -240,14 +240,6 @@ def finite_max(*values: Any) -> float:
         if np.isfinite(parsed):
             finite.append(parsed)
     return max(finite) if finite else float("nan")
-
-
-def first_shell_below(values: np.ndarray, threshold: float) -> int | None:
-    values = np.asarray(values, dtype=np.float64)
-    for shell in range(1, values.size):
-        if np.isfinite(values[shell]) and float(values[shell]) < float(threshold):
-            return int(shell)
-    return None
 
 
 def map_metrics(lhs: np.ndarray, rhs: np.ndarray, *, include_fsc: bool = True) -> dict[str, Any]:

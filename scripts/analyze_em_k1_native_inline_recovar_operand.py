@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 
 import numpy as np
 
+from scripts import validate_relion_coarse_inline_capture as inline_validator
+from scripts import validate_relion_coarse_lane_capture as lane_validator
+from scripts import validate_relion_coarse_operand_capture as operand_validator
+from scripts import validate_relion_coarse_pass1_components as component_validator
 from scripts.analyze_em_k1_coarse_pass1_boundary import (
     _relion_parent_to_recovar,
     _translation_permutation,
@@ -19,10 +22,7 @@ from scripts.analyze_em_k1_live_reference_counterfactual import (
     relion_reference_on_recovar_window,
     relion_values_on_recovar_window,
 )
-from scripts import validate_relion_coarse_inline_capture as inline_validator
-from scripts import validate_relion_coarse_lane_capture as lane_validator
-from scripts import validate_relion_coarse_operand_capture as operand_validator
-from scripts import validate_relion_coarse_pass1_components as component_validator
+from scripts.file_hash import sha256_file as _sha256
 
 DOMINANCE_FRACTION = 0.5
 
@@ -30,14 +30,6 @@ DOMINANCE_FRACTION = 0.5
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _difference_metrics(actual: np.ndarray, expected: np.ndarray) -> dict[str, float]:

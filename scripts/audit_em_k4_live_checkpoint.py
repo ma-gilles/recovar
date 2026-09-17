@@ -17,6 +17,11 @@ from typing import Any
 
 import numpy as np
 
+if not __package__:
+    from file_hash import sha256_file as _sha256
+else:
+    from scripts.file_hash import sha256_file as _sha256
+
 SCHEMA = "recovar.em_k4_live_checkpoint.v2"
 META_KEYS = (
     "iteration",
@@ -70,14 +75,6 @@ def _require_file(path: Path) -> Path:
     if not path.is_file():
         raise AuditError(f"missing checkpoint artifact: {path}")
     return path
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _load_meta(path: Path) -> dict[str, Any]:

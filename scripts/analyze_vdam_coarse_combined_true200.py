@@ -28,10 +28,10 @@ from scripts.analyze_em_k1_map_amplitude_trajectory import (
     summarize_fourier_pair,
 )
 from scripts.audit_em_particle_state_distribution import _angular_error_deg
+from scripts.fsc_metrics import first_shell_below
 from scripts.summarize_em_completion_bench import (
     _load_relion_volume,
     _read_gpu_monitor,
-    first_shell_below,
     normalized_fsc_auc,
     shell_fsc,
 )

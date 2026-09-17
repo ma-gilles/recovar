@@ -10,6 +10,22 @@ from typing import Any
 import numpy as np
 
 
+def array_difference_metrics(candidate: np.ndarray, reference: np.ndarray) -> dict[str, float | int]:
+    """Summarize an array difference after float64 conversion."""
+    candidate = np.asarray(candidate, dtype=np.float64)
+    reference = np.asarray(reference, dtype=np.float64)
+    if candidate.shape != reference.shape or candidate.size == 0:
+        raise ValueError("metric topology mismatch")
+    residual = candidate - reference
+    return {
+        "count": int(candidate.size),
+        "relative_l2": float(np.linalg.norm(residual) / max(np.linalg.norm(reference), np.finfo(float).tiny)),
+        "median_abs": float(np.median(np.abs(residual))),
+        "p95_abs": float(np.percentile(np.abs(residual), 95)),
+        "max_abs": float(np.max(np.abs(residual))),
+    }
+
+
 def centered_corr(lhs: np.ndarray, rhs: np.ndarray) -> float:
     """Return centered correlation, or NaN for incompatible or constant arrays."""
     a = np.asarray(lhs, dtype=np.float64).reshape(-1)
@@ -22,6 +38,15 @@ def centered_corr(lhs: np.ndarray, rhs: np.ndarray) -> float:
     if denom <= 0.0 or not math.isfinite(denom):
         return float("nan")
     return float(np.dot(a, b) / denom)
+
+
+def first_shell_below(values: np.ndarray, threshold: float) -> int | None:
+    """Return the first finite non-DC shell below a threshold."""
+    values = np.asarray(values, dtype=np.float64)
+    for shell in range(1, values.size):
+        if np.isfinite(values[shell]) and float(values[shell]) < float(threshold):
+            return int(shell)
+    return None
 
 
 def shell_fsc(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
@@ -45,7 +70,6 @@ def shell_fsc(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
     out = np.full(numerator.shape, np.nan, dtype=np.float64)
     np.divide(numerator, denom, out=out, where=denom > 0.0)
     return out[: n // 2 - 1]
-
 
 
 def normalized_fsc_auc(values: Any, axis: Any | None = None) -> float:

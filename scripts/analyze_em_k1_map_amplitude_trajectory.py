@@ -13,13 +13,17 @@ than map correlation.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
+
+if not __package__:
+    from file_hash import sha256_file as _sha256
+else:
+    from scripts.file_hash import sha256_file as _sha256
 
 OUTPUT_SCHEMA = "recovar.em_k1_map_amplitude_trajectory.v1"
 
@@ -192,14 +196,6 @@ def summarize_fourier_pair(
         "shell_scale_explained_fraction": explained_fraction,
         "shells": shell_rows,
     }
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _load_recovar_map(path: Path) -> np.ndarray:

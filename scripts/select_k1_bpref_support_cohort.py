@@ -11,17 +11,14 @@ from pathlib import Path
 
 import numpy as np
 
+try:
+    from scripts.file_hash import sha256_file as _sha256_file
+except ModuleNotFoundError:
+    from file_hash import sha256_file as _sha256_file  # type: ignore[no-redef]
+
 HEADER = struct.Struct("<16s40Q")
 HEADER_MAGIC = b"RLNBPREV1HEADER\0"
 DEFAULT_SEED = "k1-bpref-support-cohort-v1"
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _load_relion_identities(directory: Path) -> dict[int, tuple[int, int]]:
