@@ -11,12 +11,16 @@ expectation.  Correlation is not computed.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+if not __package__:
+    from file_hash import sha256_file as _sha256
+else:
+    from scripts.file_hash import sha256_file as _sha256
 
 SCHEMA = "em-k1-final-grid-fsc-deficit-v2"
 TRAJECTORY_SCHEMAS = {
@@ -35,14 +39,6 @@ CLASSIFICATION = (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def normalized_non_dc_fsc_auc(curve: np.ndarray) -> float:
