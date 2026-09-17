@@ -35,7 +35,6 @@ class HalfsetMeanComparison:
     means_aligned: bool
     resolution_supports: bool
     no_halfset_drift: bool
-    fsc: np.ndarray | None = None
     diagnostics: dict = field(default_factory=dict)
 
 
@@ -85,7 +84,6 @@ def compare_halfset_means_by_fsc(
             means_aligned=bool(means_aligned),
             resolution_supports=False,
             no_halfset_drift=False,
-            fsc=fsc,
             diagnostics={"reason": "empty_fsc"},
         )
     shell = min(max(int(proposed_current_size) // 2 - 1, 0), fsc.size - 1)
@@ -95,7 +93,6 @@ def compare_halfset_means_by_fsc(
         means_aligned=bool(means_aligned),
         resolution_supports=finite and shell_value >= float(fsc_threshold),
         no_halfset_drift=finite,
-        fsc=fsc,
         diagnostics={
             "proposed_shell": int(shell),
             "fsc_at_proposed_shell": shell_value,

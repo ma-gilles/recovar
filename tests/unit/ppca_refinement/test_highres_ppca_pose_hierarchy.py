@@ -88,7 +88,6 @@ def _blocked_comparator(state, proposed_size):
         means_aligned=True,
         resolution_supports=False,
         no_halfset_drift=True,
-        fsc=np.asarray([1.0], dtype=np.float32),
         diagnostics={"blocked": True},
     )
 

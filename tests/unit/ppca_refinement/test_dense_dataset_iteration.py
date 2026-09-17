@@ -479,7 +479,6 @@ def test_dense_ppca_refinement_loop_advances_current_size_when_gates_pass(tiny_i
             means_aligned=True,
             resolution_supports=True,
             no_halfset_drift=True,
-            fsc=np.ones((proposed_current_size // 2,), dtype=np.float32),
         )
 
     final_state, records = run_dense_ppca_refinement_loop(
@@ -521,7 +520,6 @@ def test_dense_ppca_refinement_loop_blocks_on_halfset_gate(tiny_inputs):
             means_aligned=True,
             resolution_supports=False,
             no_halfset_drift=True,
-            fsc=np.zeros((proposed_current_size // 2,), dtype=np.float32),
         )
 
     final_state, records = run_dense_ppca_refinement_loop(
@@ -771,7 +769,6 @@ def test_exact_local_refinement_loop_uses_same_resolution_gate(tiny_inputs):
             means_aligned=True,
             resolution_supports=True,
             no_halfset_drift=True,
-            fsc=np.ones((proposed_current_size // 2,), dtype=np.float32),
         )
 
     final_state, records = run_local_ppca_refinement_loop(
@@ -809,7 +806,6 @@ def test_dense_ppca_wrapper_uses_production_kclass_schedule_bridge(tiny_inputs):
             means_aligned=True,
             resolution_supports=True,
             no_halfset_drift=True,
-            fsc=np.ones((proposed_current_size // 2,), dtype=np.float32),
         )
 
     final_state, records, bridge = run_dense_ppca_refinement_with_kclass_schedule(
