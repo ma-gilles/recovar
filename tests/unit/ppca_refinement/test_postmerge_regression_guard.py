@@ -279,7 +279,7 @@ class TestConfigDataclassDefaults:
         names = [f.name for f in fields(cls)]
         assert names == [
             "score_with_masked_images",
-            "half_spectrum_scoring",
+            "relion_unit_half_weights",
             "square_window",
             "relion_texture_interp",
             "class_log_prior",
@@ -288,7 +288,7 @@ class TestConfigDataclassDefaults:
         defaults = {f.name: _resolve_default(f) for f in fields(cls)}
         assert defaults == {
             "score_with_masked_images": False,
-            "half_spectrum_scoring": False,
+            "relion_unit_half_weights": False,
             "square_window": False,
             "relion_texture_interp": True,
             "class_log_prior": 0.0,

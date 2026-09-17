@@ -184,7 +184,7 @@ def prepare_dense_ppca_dataset_inputs(
     q: int | None = None,
     volume_domain: str = "auto",
     current_size: int | None = None,
-    half_spectrum_scoring: bool = False,
+    relion_unit_half_weights: bool = False,
     square_window: bool = False,
 ) -> DensePPCADatasetBlockInputs:
     """Resolve augmented volumes and Fourier-window masks for dense PPCA."""
@@ -209,7 +209,7 @@ def prepare_dense_ppca_dataset_inputs(
     )
     half_weights = make_scoring_half_image_weights(
         image_shape,
-        relion_half_sum=half_spectrum_scoring,
+        relion_half_sum=relion_unit_half_weights,
     )
     score_mask = _mask_from_indices(n_half, window_spec.score_indices) * half_weights
     recon_mask = _mask_from_indices(n_half, window_spec.recon_indices)
@@ -379,7 +379,7 @@ def iter_dense_ppca_dataset_blocks(
     image_scale_corrections: np.ndarray | None = None,
     class_log_prior: float = 0.0,
     score_with_masked_images: bool = False,
-    half_spectrum_scoring: bool = False,
+    relion_unit_half_weights: bool = False,
     square_window: bool = False,
     relion_texture_interp: bool = True,
     skip_empty_pose_blocks: bool = False,
@@ -404,7 +404,7 @@ def iter_dense_ppca_dataset_blocks(
         q=q,
         volume_domain=volume_domain,
         current_size=current_size,
-        half_spectrum_scoring=half_spectrum_scoring,
+        relion_unit_half_weights=relion_unit_half_weights,
         square_window=square_window,
     )
     config = ForwardModelConfig.from_dataset(
@@ -650,7 +650,7 @@ def compute_dense_ppca_adaptive_significance(
         image_scale_corrections=scoring.image_scale_corrections,
         class_log_prior=scoring.class_log_prior,
         score_with_masked_images=scoring.score_with_masked_images,
-        half_spectrum_scoring=scoring.half_spectrum_scoring,
+        relion_unit_half_weights=scoring.relion_unit_half_weights,
         square_window=scoring.square_window,
         relion_texture_interp=scoring.relion_texture_interp,
         skip_empty_pose_blocks=skip_empty_pose_blocks,
@@ -835,7 +835,7 @@ def run_dense_ppca_fused_em_iteration(
         image_scale_corrections=scoring.image_scale_corrections,
         class_log_prior=scoring.class_log_prior,
         score_with_masked_images=scoring.score_with_masked_images,
-        half_spectrum_scoring=scoring.half_spectrum_scoring,
+        relion_unit_half_weights=scoring.relion_unit_half_weights,
         square_window=scoring.square_window,
         relion_texture_interp=scoring.relion_texture_interp,
         skip_empty_pose_blocks=skip_empty_pose_blocks,

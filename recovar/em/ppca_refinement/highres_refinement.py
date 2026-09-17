@@ -629,7 +629,7 @@ def run_highres_ppca_refinement_with_kclass_pose_hierarchy(
     local_mstep_top_k: int = 1,
     local_mstep_min_pmax: float = 0.999,
     score_with_masked_images: bool = False,
-    half_spectrum_scoring: bool = False,
+    relion_unit_half_weights: bool = False,
     square_window: bool = False,
     image_scale_corrections: np.ndarray | None = None,
     mean_reg: MeanRegularizationConfig | None = None,
@@ -678,7 +678,7 @@ def run_highres_ppca_refinement_with_kclass_pose_hierarchy(
     )
     scoring = ScoringConfig(
         score_with_masked_images=score_with_masked_images,
-        half_spectrum_scoring=half_spectrum_scoring,
+        relion_unit_half_weights=relion_unit_half_weights,
         square_window=square_window,
         image_scale_corrections=image_scale_corrections,
     )
