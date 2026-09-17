@@ -1,7 +1,5 @@
 """Core EM iteration logic: cross-correlation, residual computation."""
 
-import functools
-
 import equinox as eqx
 import jax
 import jax.numpy as jnp
@@ -42,40 +40,9 @@ def norm_squared_residuals_from_ft_one_image(many_images, one_image, image_shape
 norm_squared_residuals_from_ft = jax.vmap(norm_squared_residuals_from_ft_one_image, in_axes=(0, 0, None))
 
 
-@functools.partial(jax.jit, static_argnums=[4, 6, 8])
-def compute_dot_products(
-    projections, batch, translations, CTF_params, ctf, noise_variance, process_images, voxel_size, image_shape
-):
-    """
-    Computes -2 * y_i.T @ (S_s C_i * Proj_j) for i,j,s
-    where C_i is CTF, S_s are shifts, and Proj_j are projections, y_i are batch (unprocessed)
-    """
-    batch = process_images(batch, apply_image_mask=False)
-    batch_norm = jnp.linalg.norm(batch / jnp.sqrt(noise_variance), axis=(-1), keepdims=True) ** 2
-
-    batch *= ctf(CTF_params, image_shape, voxel_size) / noise_variance
-    result = jnp.empty((batch.shape[0], projections.shape[0], translations.shape[0]), dtype=jnp.float32)
-
-    # Compute IP for each shift (memory-efficient over computing all shifted images at once).
-    shifted_images = core.batch_trans_translate_images(
-        batch, jnp.repeat(translations[None], batch.shape[0], axis=0), image_shape
-    )
-    n_shifted_images = np.prod(shifted_images.shape[:-1])
-    result = -2 * (jnp.conj(shifted_images).reshape(n_shifted_images, shifted_images.shape[-1]) @ projections.T).real
-    result = result.reshape(batch.shape[0], translations.shape[0], projections.shape[0]) + batch_norm[:, None]
-    result = result.swapaxes(1, 2)
-
-    return result
-
-
-# ============================================================================
-# Equinox-based EM core API
-# ============================================================================
-
-
 @eqx.filter_jit
 def compute_dot_products_eqx(config: ForwardModelConfig, projections, batch, translations, ctf_params, noise_variance):
-    """Equinox version of compute_dot_products (9 → 6 params)."""
+    """Compute image/projection dot products over the translation grid."""
     batch = config.process_fn(batch, apply_image_mask=False)
     batch_norm = jnp.linalg.norm(batch / jnp.sqrt(noise_variance), axis=(-1), keepdims=True) ** 2
     batch *= config.compute_ctf(ctf_params) / noise_variance
@@ -91,28 +58,9 @@ def compute_dot_products_eqx(config: ForwardModelConfig, projections, batch, tra
 
 @eqx.filter_jit
 def compute_CTFed_proj_norms_eqx(config: ForwardModelConfig, projections, ctf_params, noise_variance):
-    """Equinox version of compute_CTFed_proj_norms (6 → 4 params)."""
+    """Compute noise-weighted squared-CTF projection norms."""
     CTFs = config.compute_ctf(ctf_params) ** 2 / noise_variance
     return CTFs @ projections.T
-
-
-# ============================================================================
-# Legacy EM core API
-# ============================================================================
-
-
-@functools.partial(jax.jit, static_argnums=[2, 5])
-def compute_CTFed_proj_norms(projections, CTF_params, ctf, noise_variance, voxel_size, image_shape):
-    """
-    Computes  |C_i Proj_j|^2 for i,j by writing it as a mat-mat
-    where C_i is CTF, S_s are shifts, and Proj_j are projections
-    """
-    CTFs = ctf(CTF_params, image_shape, voxel_size) ** 2 / noise_variance
-
-    result = CTFs @ projections.T
-
-    return result
-
 
 def hard_assignment_idx_to_pose(indices, rotation_grid, translation_grid):
     square_shape = (rotation_grid.shape[0], translation_grid.shape[0])
