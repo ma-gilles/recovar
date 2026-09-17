@@ -83,7 +83,7 @@ for detailed module contracts. Start with the boundary being changed:
 | Fixed-capacity hypothesis packing and execution binding | [`fixed_capacity_local.py`](../../recovar/em/local/fixed_capacity_local.py) |
 | Class routing and joint result assembly | [`k_class.py`](../../recovar/em/classification/k_class.py), [`k_class_results.py`](../../recovar/em/classification/k_class_results.py) |
 | Replay selection and final-pass admission | [`relion_replay.py`](../../recovar/em/diagnostics/relion_replay.py), [`finalization_policy.py`](../../recovar/em/refinement/finalization_policy.py) |
-| Coarse/sparse scoring | [`helpers/significance.py`](../../recovar/em/scoring/significance.py), [`helpers/sparse_pass2_bucketed.py`](../../recovar/em/sparse_pass2/sparse_pass2_bucketed.py) |
+| Coarse/sparse scoring | [`scoring/significance.py`](../../recovar/em/scoring/significance.py), [`sparse_pass2/sparse_pass2_bucketed.py`](../../recovar/em/sparse_pass2/sparse_pass2_bucketed.py) |
 
 Import execution APIs directly from their defining modules; helpers must not
 initialize controllers or scoring engines. During structural cleanup preserve
@@ -100,6 +100,8 @@ Production engines call them at the existing capture boundaries. The package
 initializer imports nothing; the individual writers still use shared numerical
 utilities and the BPref capture context. This is an ownership boundary, not a
 claim that all diagnostics have already been removed from normal import paths.
+Local operand comparison and parity-worktree provenance also live there; they
+are EM/RELION diagnostics rather than general RECOVAR utilities.
 
 [`recovar/relion_bind`](../../recovar/relion_bind/__init__.py) currently mixes
 native runtime dependencies with independent validation interfaces. RELION-style
