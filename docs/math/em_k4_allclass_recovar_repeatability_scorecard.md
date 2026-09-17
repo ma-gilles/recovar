@@ -36,7 +36,6 @@ Code references:
 
 - `scripts/analyze_em_k4_allclass_recovar_repeatability.py`
 - `scripts/summarize_em_k4_allclass_recovar_repeatability_scorecard.py`
-- `scripts/report_em_parity_progress.py`
 
 To validate:
 
