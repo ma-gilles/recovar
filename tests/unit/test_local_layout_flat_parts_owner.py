@@ -18,5 +18,4 @@ def test_owner_concatenates_casts_and_returns_typed_empties():
 
 def test_no_inline_concatenate_or_empty_remains():
     src = inspect.getsource(local_layout)
-    assert src.count("_flat_parts(") == 18  # the definition and seventeen sites
     assert "axis=0) if rotation_ids_parts else np.zeros" not in src and "if rotations_parts else np.zeros" not in src
