@@ -27,6 +27,7 @@ from scripts.analyze_em_k4_authoritative_native_scores import (
     _validate_completion,
     float32_metric,
 )
+from scripts.relion_reference import relion_score_replay as _relion_score_replay
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
 from scripts.validate_relion_fine_score_capture import (
     ACTIVE,
@@ -103,29 +104,6 @@ def classify_score_path_parity(
     if not failures:
         return PASS_SCORE_CLASSIFICATION
     return "exact_device_k4_score_path_mismatch__" + "__".join(failures)
-
-
-def _relion_score_replay(
-    raw_diff2: np.ndarray,
-    rotation_prior: np.ndarray,
-    translation_prior: np.ndarray,
-    min_diff2: np.float32,
-) -> np.ndarray:
-    """Replay RELION's float32 prior/min/raw operation order."""
-
-    return np.subtract(
-        np.add(
-            np.add(
-                np.asarray(rotation_prior, dtype=np.float32),
-                np.asarray(translation_prior, dtype=np.float32),
-                dtype=np.float32,
-            ),
-            np.float32(min_diff2),
-            dtype=np.float32,
-        ),
-        np.asarray(raw_diff2, dtype=np.float32),
-        dtype=np.float32,
-    )
 
 
 def _raw_mismatch_strata(
