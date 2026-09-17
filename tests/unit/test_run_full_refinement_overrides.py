@@ -44,7 +44,6 @@ from scripts.run_full_refinement import (
     _load_init_noise_radial_npz,
     _load_init_previous_best_poses_npz,
     _load_initial_noise_cache,
-    _load_native_group_ids_per_half,
     _load_relion_it000_model_stars,
     _load_replay_group_particles,
     _make_frozen_boundary_noise_variance,
@@ -1128,33 +1127,6 @@ _rlnDoSplitRandomHalves                                  0
 _rlnTau2FudgeArg                                          4.000000
 """
     assert _parse_relion_tau2_fudge(text) == pytest.approx(4.0)
-
-
-def test_load_native_group_ids_per_half_reads_particles_star(tmp_path):
-    pd = pytest.importorskip("pandas")
-    starfile = pytest.importorskip("starfile")
-
-    starfile.write(
-        {
-            "particles": pd.DataFrame(
-                {
-                    "rlnImageName": ["1@x.mrcs", "2@x.mrcs", "3@x.mrcs", "4@x.mrcs"],
-                    "rlnGroupNumber": [1, 2, 3, 2],
-                },
-            ),
-        },
-        tmp_path / "particles.star",
-    )
-
-    got = _load_native_group_ids_per_half(
-        tmp_path / "particles.star",
-        half1_idx=np.asarray([0, 2], dtype=np.int64),
-        half2_idx=np.asarray([1, 3], dtype=np.int64),
-    )
-
-    assert got is not None
-    np.testing.assert_array_equal(got[0], np.asarray([0, 2], dtype=np.int64))
-    np.testing.assert_array_equal(got[1], np.asarray([1, 1], dtype=np.int64))
 
 
 def test_native_group_layout_prefers_supplied_relion_groups_and_maps_exact_identities():

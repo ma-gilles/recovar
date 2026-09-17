@@ -213,9 +213,6 @@ def extract_relion_scalars(relion_iter):
         mg = model["model_general"]
         out["current_size"] = int(mg.get("rlnCurrentImageSize", 0) or 0)
         out["ave_Pmax"] = float(mg.get("rlnAveragePmax", float("nan")))
-        # Backward-compatible alias for older consumers. Despite the historic
-        # name, this is the authoritative optimizer/scheduling scalar.
-        out["ave_Pmax_mstep"] = out["ave_Pmax"]
         out["current_resolution"] = float(mg.get("rlnCurrentResolution", float("nan")))
         out["log_likelihood"] = float(mg.get("rlnLogLikelihood", float("nan")))
         out["norm_correction_avg"] = float(mg.get("rlnNormCorrectionAverage", float("nan")))

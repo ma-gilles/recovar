@@ -1009,17 +1009,6 @@ def _resolve_native_group_layout(
     )
 
 
-def _load_native_group_ids_per_half(particles_star, half1_idx, half2_idx):
-    """Compatibility wrapper for a single particles STAR group layout."""
-
-    import starfile as _starfile
-
-    data = _starfile.read(str(particles_star))
-    particles = data["particles"] if isinstance(data, dict) else data
-    layout = _resolve_native_group_layout(particles, half1_idx, half2_idx)
-    return None if layout is None else list(layout.group_ids_per_half)
-
-
 def _load_replay_group_particles(relion_dir, *, init_relion_iteration=0):
     """Load the first authoritative replay data STAR carrying group labels."""
 
