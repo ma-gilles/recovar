@@ -29,14 +29,9 @@ def test_ffi_registrations_cover_all_target_constants():
     targets_in_table = {target for target, _symbol in cb._FFI_REGISTRATIONS}
     target_constants = {v for k, v in vars(cb).items() if k.startswith("_TARGET_") and isinstance(v, str)}
     optional_targets = {
-        cb._TARGET_PROJECT_RELION_HALF_RUNTIME,
-        cb._TARGET_PROJECT_RELION_HALF_IMAGE_RADIUS,
-        cb._TARGET_RELION_VDAM_MSTEP_FUSED_PROJECTOR_CAPACITY_X_HALF,
+        *cb._OPTIONAL_FFI_REGISTRATIONS,
         cb._TARGET_RELION_WAVG_NATIVE_PREFIX_F32,
         cb._TARGET_RELION_WAVG_NATIVE_PREFIX_DEBUG_F32,
-        cb._TARGET_NOISE_PIXEL_PACK,
-        cb._TARGET_DEFERRED_VDAM_HOST_PACK,
-        cb._TARGET_BPREF_PARTICLE_PACK,
         cb._TARGET_RELION_COARSE_POSTERIOR_TRANSACTION_F32,
         cb._TARGET_RELION_COARSE_SHARED_PRETRANSLATED_RUNTIME_F32,
     }
