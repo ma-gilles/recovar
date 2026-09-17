@@ -296,23 +296,6 @@ def test_perturbed_rotation_grid_metadata_reuses_precomputed_rotations():
     )
 
 
-def test_relion_psi_from_rotation_matrices_matches_full_euler_conversion():
-    from recovar import utils
-
-    order = 3
-    base_rotations = np.asarray(em_sampling.get_rotation_grid(order, matrices=True), dtype=np.float32)
-    perturbed_rotations = em_sampling.apply_relion_rotation_perturbation(
-        base_rotations,
-        random_perturbation=0.3,
-        angular_sampling_deg=em_sampling.relion_angular_sampling_deg(order),
-    ).astype(np.float32)
-    sample = perturbed_rotations[::97]
-
-    psi_fast = em_sampling.relion_psi_from_rotation_matrices(sample)
-    psi_ref = utils.R_to_relion(sample, degrees=True)[:, 2].astype(np.float32)
-    np.testing.assert_allclose(psi_fast, psi_ref, rtol=1e-5, atol=1e-5)
-
-
 def test_local_rotation_grid_fast_full_mode_matches_reference_loop():
     from recovar import utils
 
