@@ -906,6 +906,15 @@ def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_param
             if bucket.local_sample_mask is None
             else pad_axis(bucket.local_sample_mask, 0, padded_batch_size, value=False).astype(bool)
         ),
+        # Padding the image axis must not lose the row axis's class segmentation:
+        # without it the bucket would be read as a single class of the same width.
+        n_classes=int(bucket.n_classes),
+        class_segment_rotation_count=bucket.class_segment_rotation_count,
+        class_actual_rotation_counts=(
+            None
+            if bucket.class_actual_rotation_counts is None
+            else pad_axis(bucket.class_actual_rotation_counts, 0, padded_batch_size, value=0).astype(np.int32)
+        ),
     )
     padded_batch_data, padded_ctf_params, valid_image_mask, _, _ = pad_batch_data_ctf_and_valid_mask(
         batch_data,
@@ -1162,6 +1171,15 @@ def _reorder_bucket_to_indices(bucket: LocalBucketSpec, returned_indices: np.nda
         local_sample_mask=(
             None if bucket.local_sample_mask is None else np.asarray(bucket.local_sample_mask[order], dtype=bool)
         ),
+        # Reordering images leaves the row axis's class segmentation intact; the
+        # per-image class counts follow the same order.
+        n_classes=int(bucket.n_classes),
+        class_segment_rotation_count=bucket.class_segment_rotation_count,
+        class_actual_rotation_counts=(
+            None
+            if bucket.class_actual_rotation_counts is None
+            else np.asarray(bucket.class_actual_rotation_counts[order], dtype=np.int32)
+        ),
     )
 
 
@@ -1197,6 +1215,56 @@ def _build_reconstruction_pack_indices(
             take_indices[row, :count] = selected
             padded_pack_mask[row, :count] = True
     return take_indices, padded_pack_mask, actual_counts, int(np.sum(actual_counts, dtype=np.int64))
+
+
+def build_class_segment_reconstruction_packs(
+    significant_rotation_mask: np.ndarray,
+    local_rotation_mask: np.ndarray,
+    probs_sum_t: np.ndarray,
+    rotation_block_size: int,
+    *,
+    n_classes: int,
+    segment_rotation_count: int,
+    exact_local_bucket_radix: int | None = None,
+):
+    """Pack the surviving reconstruction rows of each class separately.
+
+    The significant-only route packs the rows that can contribute to the M-step and
+    scatters them into one accumulator pair. Class-segmented rows carry every class
+    on the same row axis, so one joint pack would scatter every class into one
+    volume. Pack each class's own segment instead, which is the same work the
+    per-class route already does, and return take indices addressing the full row
+    axis so the caller gathers and rotates exactly as before.
+
+    Returns one ``(take_indices, pack_mask, actual_counts, row_count)`` per class.
+    """
+
+    significant_rotation_mask = np.asarray(significant_rotation_mask, dtype=bool)
+    local_rotation_mask = np.asarray(local_rotation_mask, dtype=bool)
+    probs_sum_t = np.asarray(probs_sum_t)
+    rows = int(local_rotation_mask.shape[1])
+    n_classes = int(n_classes)
+    segment_rotation_count = int(segment_rotation_count)
+    if rows != n_classes * segment_rotation_count:
+        raise ValueError(
+            f"class-segmented rows must be {n_classes} x {segment_rotation_count}, got {rows}"
+        )
+    packs = []
+    for class_index in range(n_classes):
+        start = class_index * segment_rotation_count
+        stop = start + segment_rotation_count
+        take, mask, counts, row_count = _build_nonzero_reconstruction_pack_indices(
+            significant_rotation_mask[:, start:stop],
+            local_rotation_mask[:, start:stop],
+            probs_sum_t[:, start:stop],
+            rotation_block_size,
+            exact_local_bucket_radix=exact_local_bucket_radix,
+        )
+        # Address the bucket's full row axis so the gathers below need no further
+        # knowledge of the segmentation; padded slots keep their masked-out value.
+        take = np.where(mask, take.astype(np.int64) + start, 0).astype(np.int32)
+        packs.append((take, mask, counts, int(row_count)))
+    return packs
 
 
 def _build_nonzero_reconstruction_pack_indices(

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import pathlib
 import time
 from dataclasses import replace
 from typing import Any
@@ -17,6 +18,10 @@ import numpy as np
 
 from recovar.em import sampling
 from recovar.em.classification.k_class import _run_sparse_k_class_adaptive_pass2, run_local_k_class_em
+from recovar.em.diagnostics.initial_model_capture import (
+    _maybe_dump_class_candidate_counts,
+    _maybe_dump_k_class_statistics,
+)
 from recovar.em.diagnostics import bpref_diagnostics
 from recovar.em.diagnostics.coarse_gaussian_diagnostics import _initial_model_coarse_gemm_diagnostic_scopes
 from recovar.em.diagnostics.coarse_score_diagnostics import (
@@ -161,12 +166,14 @@ def _compact_sparse_pass2_enabled(n_classes: int, pass2_engine: str = "auto") ->
     """
 
     engine = str(pass2_engine).strip().lower()
-    if engine not in {"auto", "local", "compact"}:
+    if engine not in {"auto", "local", "compact", "local_segmented"}:
         raise ValueError(
-            "InitialModel pass2_engine must be one of 'auto', 'local', or "
-            f"'compact', got {pass2_engine!r}"
+            "InitialModel pass2_engine must be one of 'auto', 'local', "
+            f"'local_segmented', or 'compact', got {pass2_engine!r}"
         )
     if engine != "auto":
+        # ``local_segmented`` is the exact-local engine scoring every class in one
+        # pass over class-segmented rows; it is a local route, not the compact one.
         return engine == "compact"
     return int(n_classes) > 1
 
@@ -808,6 +815,11 @@ def _run_sparse_pass2_initial_model_estep(
                     )
                 local_layouts.append(_initial_model_pass2_layout(class_layout))
             local_layout = tuple(local_layouts)
+            _maybe_dump_class_candidate_counts(
+                local_layouts,
+                iteration=int(group_kwargs.get("debug_iteration", -1)),
+                halfset=int(halfset_idx),
+            )
 
         t0 = time.time()
         from recovar.em.sparse_pass2 import sparse_pass2_posterior as sparse_diagnostics
@@ -925,6 +937,9 @@ def _run_sparse_pass2_initial_model_estep(
                     config.noise_variance,
                     local_layout,
                     config.disc_type,
+                    segmented_class_rows=(
+                        str(config.pass2_engine).strip().lower() == "local_segmented" and state.K > 1
+                    ),
                     class_log_priors=class_log_priors,
                     class_log_evidence=(
                         np.asarray(_full_stats["class_log_evidence_per_image"], dtype=np.float64)
@@ -1070,6 +1085,14 @@ def _run_sparse_pass2_initial_model_estep(
             full_stats=_full_stats,
             selector_audit=coarse_selector_audit,
         )
+        _maybe_dump_k_class_statistics(
+            result,
+            iteration=int(group_kwargs.get("debug_iteration", -1)),
+            halfset=int(halfset_idx),
+            # This half's own particle ids. Passing the first group's ids for every
+            # half mislabelled the second half's rows and inflated the particle count.
+            image_indices=image_indices,
+        )
         halfset_results[int(halfset_idx)] = result
         accumulators.extend(
             _arrays_to_accumulators(
@@ -1104,7 +1127,11 @@ def _run_sparse_pass2_initial_model_estep(
         meta["halfset_ids"] = (0, 1)
         meta["joint_halfset_particle_stream"] = True
     _add_accumulator_weight_meta(meta, accumulators, state.K)
-    meta["pass2_engine"] = "compact" if use_compact_sparse_pass2 else "local"
+    meta["pass2_engine"] = (
+        "compact"
+        if use_compact_sparse_pass2
+        else str(config.pass2_engine).strip().lower().replace("auto", "local")
+    )
     meta["requested_relion_wavg_sequential_cuda"] = bool(
         config.relion_wavg_sequential_cuda
     )

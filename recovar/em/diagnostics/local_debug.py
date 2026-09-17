@@ -423,10 +423,24 @@ def maybe_write_debug_noise_component_dump(
     return pending_targets
 
 
-def _child_ordinals_from_parent_ids(parent_ids: np.ndarray) -> np.ndarray:
-    """Return RELION-style child ordinal within each repeated parent id."""
+def _child_ordinals_from_parent_ids(parent_ids: np.ndarray, *, groups=None) -> np.ndarray:
+    """Return RELION-style child ordinal within each repeated parent id.
+
+    ``groups`` counts within each group separately. Class-segmented buckets need
+    that because the layout copies each class's parent ids unchanged, so the same
+    parent appears once per class: counted in one pass, class 1's first child of
+    parent 7 would be numbered as a later child of class 0's parent 7, and the
+    oversampling factor derived from these ordinals would be inflated by K.
+    """
 
     parent_ids = np.asarray(parent_ids, dtype=np.int32).reshape(-1)
+    if groups is not None:
+        groups = np.asarray(groups).reshape(-1)
+        child_ordinals = np.zeros(parent_ids.shape[0], dtype=np.int32)
+        for group in np.unique(groups):
+            selected = np.flatnonzero(groups == group)
+            child_ordinals[selected] = _child_ordinals_from_parent_ids(parent_ids[selected])
+        return child_ordinals
     child_ordinals = np.zeros(parent_ids.shape[0], dtype=np.int32)
     seen: dict[int, int] = {}
     for idx, parent_id in enumerate(parent_ids.tolist()):
@@ -466,12 +480,38 @@ def _infer_grouped_child_layout(values: np.ndarray) -> tuple[np.ndarray, np.ndar
     return parent, child, 1
 
 
+def _local_candidate_rows(bucket, row: int):
+    """Return the bucket rows this image's real candidates occupy, and their class.
+
+    A class-segmented bucket places class ``k`` at rows ``[k*seg, k*seg + count_k)``
+    and pads the rest of each segment, while ``actual_rotation_counts`` holds the
+    sum over classes. A contiguous prefix of that sum runs off the end of class 0
+    into its padding and on into the next class, so the rows are enumerated one
+    segment at a time. A single-class bucket has no segments and keeps the prefix
+    it has always used, with no class attribution.
+    """
+
+    class_counts = getattr(bucket, "class_actual_rotation_counts", None)
+    if class_counts is None:
+        return np.arange(int(bucket.actual_rotation_counts[row]), dtype=np.int64), None
+    counts = [int(c) for c in np.asarray(class_counts)[row].tolist()]
+    segment = int(bucket.segment_rotation_count)
+    rows = np.concatenate(
+        [k * segment + np.arange(c, dtype=np.int64) for k, c in enumerate(counts)]
+    ) if counts else np.zeros(0, dtype=np.int64)
+    classes = np.concatenate(
+        [np.full(c, k, dtype=np.int32) for k, c in enumerate(counts)]
+    ) if counts else np.zeros(0, dtype=np.int32)
+    return rows, classes
+
+
 def _local_candidate_metadata(
     *,
     local_layout,
     bucket,
     row: int,
-    actual_count: int,
+    candidate_rows,
+    candidate_class_indices=None,
 ):
     """Return local metadata, retaining F64 source angles when available.
 
@@ -479,17 +519,19 @@ def _local_candidate_metadata(
     F32 matrix-derived Euler fallback. Compute matrices remain unchanged.
     """
 
-    local_rotation_ids = np.asarray(bucket.local_rotation_ids[row, :actual_count], dtype=np.int32)
+    local_rotation_ids = np.asarray(bucket.local_rotation_ids[row, candidate_rows], dtype=np.int32)
     local_rotation_parent_ids = (
-        np.asarray(bucket.local_rotation_posterior_ids[row, :actual_count], dtype=np.int32)
+        np.asarray(bucket.local_rotation_posterior_ids[row, candidate_rows], dtype=np.int32)
         if bucket.local_rotation_posterior_ids is not None
         else local_rotation_ids
     )
-    local_rotation_child_indices = _child_ordinals_from_parent_ids(local_rotation_parent_ids)
-    local_rotation_matrices = np.asarray(bucket.local_rotations[row, :actual_count], dtype=np.float32)
+    local_rotation_child_indices = _child_ordinals_from_parent_ids(
+        local_rotation_parent_ids, groups=candidate_class_indices,
+    )
+    local_rotation_matrices = np.asarray(bucket.local_rotations[row, candidate_rows], dtype=np.float32)
     source_eulers = getattr(bucket, "local_source_eulers", None)
     if source_eulers is not None:
-        local_rotation_eulers = np.asarray(source_eulers[row, :actual_count], dtype=np.float64)
+        local_rotation_eulers = np.asarray(source_eulers[row, candidate_rows], dtype=np.float64)
         local_rotation_eulers_source = "source_eulers"
     else:
         local_rotation_eulers = np.asarray(
@@ -497,7 +539,7 @@ def _local_candidate_metadata(
             dtype=np.float32,
         )
         local_rotation_eulers_source = "matrix_derived"
-    rotation_mask = np.asarray(bucket.local_rotation_mask[row, :actual_count], dtype=bool)
+    rotation_mask = np.asarray(bucket.local_rotation_mask[row, candidate_rows], dtype=bool)
     translation_grid = np.asarray(local_layout.translation_grid, dtype=np.float32)
     n_trans = int(translation_grid.shape[0])
     translation_indices = np.arange(n_trans, dtype=np.int32)
@@ -632,19 +674,25 @@ def maybe_write_debug_fused_posterior_dump(
     for compact_row, row in enumerate(target_rows):
         original_idx = int(original_image_indices[row])
         local_idx = int(bucket.image_indices[row])
-        actual_count = int(bucket.actual_rotation_counts[row])
+        candidate_rows, candidate_class_indices = _local_candidate_rows(bucket, row)
+        actual_count = int(candidate_rows.size)
         metadata = _local_candidate_metadata(
             local_layout=local_layout,
             bucket=bucket,
             row=row,
-            actual_count=actual_count,
+            candidate_rows=candidate_rows,
+            candidate_class_indices=candidate_class_indices,
         )
         n_trans = int(metadata["translation_grid"].shape[0])
-        posterior = np.asarray(probs_np[compact_row, :actual_count, :], dtype=np.float32)
+        posterior = np.asarray(probs_np[compact_row, candidate_rows, :], dtype=np.float32)
         best_flat = int(best_argmax_np[compact_row])
         best_rotation_index = best_flat // n_trans
         best_translation_index = best_flat % n_trans
-        best_in_actual = 0 <= best_rotation_index < actual_count
+        # ``best_rotation_index`` is a bucket row, and with class segments the real
+        # rows are not a prefix, so membership is tested against them directly.
+        best_row_positions = np.flatnonzero(candidate_rows == best_rotation_index)
+        best_in_actual = bool(best_row_positions.size)
+        best_rotation_index = int(best_row_positions[0]) if best_in_actual else best_rotation_index
         best_global_id = (
             int(metadata["local_rotation_ids"][best_rotation_index])
             if best_in_actual
@@ -661,11 +709,11 @@ def maybe_write_debug_fused_posterior_dump(
             posterior.shape,
         )
         reconstruction_sample_mask_row = np.asarray(
-            reconstruction_sample_mask_np[compact_row, :actual_count, :],
+            reconstruction_sample_mask_np[compact_row, candidate_rows, :],
             dtype=bool,
         )
         reconstruction_rotation_mask_row = np.asarray(
-            reconstruction_rotation_mask_np[compact_row, :actual_count],
+            reconstruction_rotation_mask_np[compact_row, candidate_rows],
             dtype=bool,
         )
         iteration_label = int(debug_iteration or -1)
@@ -677,7 +725,7 @@ def maybe_write_debug_fused_posterior_dump(
         score_payload = {}
         if scores_np is not None:
             rotation_log_prior = np.asarray(
-                bucket.local_rotation_log_prior[row, :actual_count],
+                bucket.local_rotation_log_prior[row, candidate_rows],
                 dtype=np.float32,
             )
             translation_log_prior = np.asarray(
@@ -685,7 +733,7 @@ def maybe_write_debug_fused_posterior_dump(
                 dtype=np.float32,
             )
             total_scores = np.asarray(
-                scores_np[compact_row, :actual_count, :],
+                scores_np[compact_row, candidate_rows, :],
                 dtype=np.float32,
             )
             raw_scores = total_scores - rotation_log_prior[:, None] - translation_log_prior[None, :]
@@ -957,12 +1005,14 @@ def maybe_write_debug_score_dump(
     for compact_row, row in enumerate(target_rows):
         original_idx = int(original_image_indices[row])
         local_idx = int(bucket.image_indices[row])
-        actual_count = int(bucket.actual_rotation_counts[row])
+        candidate_rows, candidate_class_indices = _local_candidate_rows(bucket, row)
+        actual_count = int(candidate_rows.size)
         metadata = _local_candidate_metadata(
             local_layout=local_layout,
             bucket=bucket,
             row=row,
-            actual_count=actual_count,
+            candidate_rows=candidate_rows,
+            candidate_class_indices=candidate_class_indices,
         )
         local_rotation_ids = metadata["local_rotation_ids"]
         local_rotation_parent_ids = metadata["local_rotation_parent_ids"]
@@ -970,20 +1020,20 @@ def maybe_write_debug_score_dump(
         local_rotation_matrices = metadata["local_rotation_matrices"]
         local_rotation_eulers = metadata["local_rotation_eulers"]
         rotation_mask = metadata["rotation_mask"]
-        rotation_log_prior = np.asarray(bucket.local_rotation_log_prior[row, :actual_count], dtype=np.float32)
+        rotation_log_prior = np.asarray(bucket.local_rotation_log_prior[row, candidate_rows], dtype=np.float32)
         translation_log_prior = np.asarray(bucket.translation_log_prior[row], dtype=np.float32)
-        total_scores = np.asarray(scores_np[compact_row, :actual_count, :], dtype=score_dtype)
+        total_scores = np.asarray(scores_np[compact_row, candidate_rows, :], dtype=score_dtype)
         raw_scores = total_scores - rotation_log_prior[:, None] - translation_log_prior[None, :]
         raw_scores = np.where(rotation_mask[:, None], raw_scores, -np.inf)
-        posterior = np.asarray(probs_np[compact_row, :actual_count, :], dtype=probability_dtype)
+        posterior = np.asarray(probs_np[compact_row, candidate_rows, :], dtype=probability_dtype)
         reconstruction_posterior = (
             np.asarray(
-                reconstruction_probs_np[compact_row, :actual_count, :],
+                reconstruction_probs_np[compact_row, candidate_rows, :],
                 dtype=reconstruction_probability_dtype,
             )
             if reconstruction_probs_np is not None
             else np.where(
-                reconstruction_sample_mask_np[compact_row, :actual_count, :],
+                reconstruction_sample_mask_np[compact_row, candidate_rows, :],
                 posterior,
                 0.0,
             )
@@ -1007,11 +1057,11 @@ def maybe_write_debug_score_dump(
             posterior.shape,
         )
         reconstruction_sample_mask_row = np.asarray(
-            reconstruction_sample_mask_np[compact_row, :actual_count, :],
+            reconstruction_sample_mask_np[compact_row, candidate_rows, :],
             dtype=bool,
         )
         reconstruction_rotation_mask_row = np.asarray(
-            reconstruction_rotation_mask_np[compact_row, :actual_count],
+            reconstruction_rotation_mask_np[compact_row, candidate_rows],
             dtype=bool,
         )
 
@@ -1108,6 +1158,7 @@ def maybe_write_debug_score_dump(
             "current_size": np.array([int(current_size) if current_size is not None else -1], dtype=np.int32),
             "debug_iteration": np.array([iteration_label], dtype=np.int32),
             "n_rot": np.array([actual_count], dtype=np.int32),
+            "candidate_bucket_rows": candidate_rows.astype(np.int64),
             "n_trans": np.array([n_trans], dtype=np.int32),
             "grid_n_pixels": np.array([int(local_layout.n_pixels)], dtype=np.int32),
             "grid_n_psi": np.array([int(local_layout.n_psi)], dtype=np.int32),
@@ -1135,17 +1186,17 @@ def maybe_write_debug_score_dump(
                 )
             if proj_weighted_np is not None:
                 payload["debug_proj_weighted"] = np.asarray(
-                    proj_weighted_np[compact_row, :actual_count, :],
+                    proj_weighted_np[compact_row, candidate_rows, :],
                     dtype=proj_weighted_np.dtype,
                 )
             if proj_for_noise_np is not None:
                 payload["debug_proj_for_recon"] = np.asarray(
-                    proj_for_noise_np[compact_row, :actual_count, :],
+                    proj_for_noise_np[compact_row, candidate_rows, :],
                     dtype=proj_for_noise_np.dtype,
                 )
             if proj_abs2_weighted_np is not None:
                 payload["debug_proj_abs2_weighted"] = np.asarray(
-                    proj_abs2_weighted_np[compact_row, :actual_count, :],
+                    proj_abs2_weighted_np[compact_row, candidate_rows, :],
                     dtype=proj_abs2_weighted_np.dtype,
                 )
             if wavg_cutoff_triplet_np is not None:
@@ -1153,6 +1204,10 @@ def maybe_write_debug_score_dump(
                     wavg_cutoff_triplet_np[compact_row],
                     dtype=np.float64,
                 )
+        if candidate_class_indices is not None:
+            # Which class each listed candidate belongs to. Absent for single-class
+            # buckets, where every candidate belongs to the only class there is.
+            payload["candidate_class_indices"] = candidate_class_indices
         np.savez_compressed(dump_path, **payload)
         if requested_iterations is None:
             pending_targets.remove(original_idx)

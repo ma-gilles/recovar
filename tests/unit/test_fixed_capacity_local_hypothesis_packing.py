@@ -171,9 +171,12 @@ def _assert_program_bitwise_matches_bucket_prefixes(program, buckets):
                 ("local_mstep_rotations", "local_mstep_rotations"),
                 ("local_rotation_log_prior", "local_rotation_log_prior"),
             ):
+                expected = getattr(bucket, bucket_field)
+                if bucket_field == "local_mstep_rotations" and expected is None:
+                    expected = bucket.local_rotations
                 _assert_bitwise_equal(
                     getattr(program, program_field)[row_start:row_stop],
-                    getattr(bucket, bucket_field)[local_image, :count],
+                    expected[local_image, :count],
                 )
             _assert_bitwise_equal(
                 program.translation_log_prior[physical_image],

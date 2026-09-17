@@ -257,11 +257,13 @@ def make_parser() -> argparse.ArgumentParser:
         "--pass2-engine",
         "--pass2_engine",
         dest="pass2_engine",
-        choices=("auto", "local", "compact"),
+        choices=("auto", "local", "local_segmented", "compact"),
         default=DEFAULTS.pass2_engine,
         help=(
             "Adaptive pass-2 implementation: auto keeps exact local K=1 and "
-            "uses joint compact class-by-pose scoring for K>1"
+            "uses joint compact class-by-pose scoring for K>1; local_segmented "
+            "runs the exact-local engine over class-segmented rows so every class "
+            "is scored in one pass"
         ),
     )
     parser.add_argument(

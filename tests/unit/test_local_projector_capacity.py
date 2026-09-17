@@ -89,7 +89,7 @@ def _local_kwargs(q, pf, radius):
         projection_half_volume=False,
         projection_max_r=q // 2,
         relion_projector_output_size=q,
-        projection_relion_texture_interp=False,
+        projection_relion_texture_interp=True,
         projection_force_jax=False,
         projection_mask_current_image_disk=False,
         use_relion_projector=True,

@@ -50,6 +50,11 @@ class KClassEMResult(NamedTuple):
     per_class_best_pose_eulers_deg: tuple[np.ndarray, ...] | None = None
     best_pose_eulers_deg: np.ndarray | None = None
 
+    # Diagnostic only, no production consumer: the joint normalizer as reduced,
+    # before the cast to the scoring dtype that both routes apply. Published so a
+    # precision comparison can separate the reduction from the cast.
+    uncast_log_evidence_per_image: np.ndarray | None = None
+
 
 def _logsumexp_np(values: np.ndarray, axis: int) -> np.ndarray:
     max_value = np.max(values, axis=axis, keepdims=True)
@@ -248,6 +253,9 @@ def _assemble_result(
     per_class_best_pose_rotation_ids=None,
     profile_summary: dict | None = None,
     class_posterior_sums_override=None,
+    aggregate_noise_stats_override=None,
+    uncast_log_evidence_per_image=None,
+    joint_max_posterior_per_image=None,
     firstiter_winner_take_all: bool = False,
     host_accumulators: bool = False,
     host_stats_publication: bool = False,
@@ -316,6 +324,17 @@ def _assemble_result(
             per_class_stats[0].max_posterior_per_image,
             dtype=np.float64,
         ).copy()
+    elif joint_max_posterior_per_image is not None:
+        # A single engine call that scored every class jointly already produced the
+        # authoritative joint posterior, in the engine's own score coordinates.  The
+        # generic branch below rebuilds it as ``best - logZ`` in absolute
+        # log-evidence coordinates, where the float32 grid is ~1000x coarser than in
+        # the engine frame, so the rebuild loses the arithmetic boundary exactly as it
+        # would for K=1.  Carry the engine value through instead.  This is supplied
+        # only by the class-segmented route, where one call owns the joint
+        # normalization; the per-class route has no such value because its classes are
+        # scored in independent calls.
+        joint_pmax = np.asarray(joint_max_posterior_per_image, dtype=np.float64).copy()
     else:
         finite_joint_best = np.isfinite(global_best_scores) & np.isfinite(global_log_evidence)
         joint_log_pmax = global_best_scores[finite_joint_best] - global_log_evidence[finite_joint_best]
@@ -368,9 +387,21 @@ def _assemble_result(
     else:
         stacked_new_means = jnp.stack([jnp.asarray(mean) for mean in new_means], axis=0)
 
-    aggregate_noise_stats = _sum_k_class_noise_stats(
-        noise_stats, class_mstep_posterior_sums, host_arrays=host_stats_publication
-    )
+    if aggregate_noise_stats_override is not None:
+        if noise_stats is not None:
+            raise ValueError("aggregate noise statistics replace per-class noise statistics")
+        # RELION accumulates one group-indexed wsum_sigma2_noise inside its class
+        # loop, so a pass that scores every class jointly produces that sum directly
+        # and there is no per-class noise to combine. Its sum_weight is RELION's
+        # joint class-by-pose mass, which is what the per-class path reconstructs by
+        # rescaling. Take it as given rather than splitting it back into classes.
+        aggregate_noise_stats = aggregate_noise_stats_override._replace(
+            sumw=float(np.sum(np.asarray(class_mstep_posterior_sums, dtype=np.float64))),
+        )
+    else:
+        aggregate_noise_stats = _sum_k_class_noise_stats(
+            noise_stats, class_mstep_posterior_sums, host_arrays=host_stats_publication
+        )
     profile_summary_out = None
     if profile_summary is not None:
         profile_summary_out = dict(profile_summary)
@@ -414,6 +445,7 @@ def _assemble_result(
         per_class_best_pose_eulers_deg=(
             None if per_class_best_pose_eulers_deg is None else tuple(per_class_best_pose_eulers_deg)
         ),
+        uncast_log_evidence_per_image=uncast_log_evidence_per_image,
         best_pose_eulers_deg=best_pose_eulers_deg,
         best_pose_rotations=best_pose_rotations,
         best_pose_translations=best_pose_translations,

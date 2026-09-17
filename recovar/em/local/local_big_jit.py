@@ -1079,6 +1079,7 @@ def _score_normalize_support(
     adaptive_fraction: float,
     max_significants: int,
     scores_override=None,
+    cast_internal_normalizer_to_score_dtype: bool = False,
 ):
     """Score, normalize, and form posterior support inside the fused bucket JIT."""
 
@@ -1123,6 +1124,9 @@ def _score_normalize_support(
 
     flat_scores = scores.reshape(scores.shape[0], -1)
     best_log_score = jnp.max(flat_scores, axis=1)
+    # Diagnostic only: the normalizer as reduced, before any cast. Set in the branch
+    # that reduces it internally; None elsewhere means "the value below is uncast".
+    uncast_log_Z = None
     row_has_score = jnp.isfinite(best_log_score) & valid_image_mask
     if has_normalization_log_z and has_normalization_max_posterior:
         raise ValueError(
@@ -1151,6 +1155,19 @@ def _score_normalize_support(
         row_has_mass = row_has_score & jnp.isfinite(sum_exp) & (sum_exp > 0.0)
         safe_sum_exp = jnp.where(row_has_mass, sum_exp, 1.0)
         log_Z = jnp.where(row_has_mass, best_log_score + jnp.log(safe_sum_exp), 0.0)
+        # Diagnostic only: the normalizer as reduced, before the cast below. Returning
+        # it changes no production value; it lets a comparison separate a difference in
+        # the reduction from a difference introduced by the cast.
+        uncast_log_Z = log_Z
+        if cast_internal_normalizer_to_score_dtype:
+            # A caller that supplies an external normalizer has it cast to the score
+            # precision above, which keeps the posterior and every M-step tensor at the
+            # scoring dtype. A joint class-by-pose pass computes its own normalizer
+            # instead, so it applies the same boundary or the accumulators it feeds
+            # would silently promote.
+            log_Z = log_Z.astype(scores.real.dtype)
+    if uncast_log_Z is None:
+        uncast_log_Z = log_Z
     scores_for_probs = jnp.where(row_has_mass[:, None, None], scores, -jnp.inf)
     probs = jnp.exp(scores_for_probs - log_Z[:, None, None])
     probs = jnp.where(row_has_mass[:, None, None] & jnp.isfinite(probs), probs, 0.0)
@@ -1246,6 +1263,7 @@ def _score_normalize_support(
         reconstruction_probs,
         probs_sum_t,
         reconstruction_probs_sum_t,
+        uncast_log_Z,
     )
 
 
@@ -1276,6 +1294,7 @@ def _score_normalize_mstep(
     max_significants: int,
     sequential_translation_reduction: bool = False,
     scores_override=None,
+    cast_internal_normalizer_to_score_dtype: bool = False,
 ):
     """Score, normalize, and form M-step tensors inside the fused bucket JIT."""
 
@@ -1292,6 +1311,7 @@ def _score_normalize_mstep(
         reconstruction_probs,
         probs_sum_t,
         reconstruction_probs_sum_t,
+        uncast_log_Z,
     ) = _score_normalize_support(
         shifted_score_split,
         ctf2_over_nv_score,
@@ -1315,6 +1335,7 @@ def _score_normalize_mstep(
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
         scores_override=scores_override,
+        cast_internal_normalizer_to_score_dtype=cast_internal_normalizer_to_score_dtype,
     )
     summed, ctf_probs = compute_local_mstep_sums(
         reconstruction_probs,
@@ -1339,6 +1360,7 @@ def _score_normalize_mstep(
         ctf_probs,
         scores,
         probs,
+        uncast_log_Z,
     )
 
 
@@ -1468,7 +1490,7 @@ def _project_local_half_spectrum(
     projection_half_volume: bool,
     projection_max_r,
     relion_projector_output_size: int,
-    projection_relion_texture_interp: bool,
+    projection_relion_texture_interp: bool | None,
     projection_force_jax: bool,
     projection_mask_current_image_disk: bool = True,
     use_relion_projector: bool,
@@ -1498,6 +1520,15 @@ def _project_local_half_spectrum(
             centered_rows=True,
             dense_scale=True,
             mask_current_image_disk=projection_mask_current_image_disk,
+            # Honour the caller's interpolator choice, as the eager RELION-projector
+            # branch does. Omitting it here made the two routes project the same
+            # volume with different interpolators whenever a caller asked for the
+            # manual fallback, which is how the per-class route's probe and M-step
+            # passes came to score identical candidates differently. None, the
+            # default, still resolves to RELION's texture interpolator. The floorf
+            # quirk is not threaded here: it only applies to that fallback and
+            # carrying it would add another compile-time argument.
+            relion_texture_interp=projection_relion_texture_interp,
             **projector_kwargs,
         )
         return proj_half
@@ -1514,6 +1545,194 @@ def _project_local_half_spectrum(
         relion_texture_interp=projection_relion_texture_interp,
         force_jax=projection_force_jax,
     )
+
+def _class_volume(volume, class_index: int, n_classes: int, *, per_class: bool = True):
+    """Select one class's volume from a stacked ``[K, ...]`` operand.
+
+    Only the operand the projection route actually reads carries a class axis: the
+    other is the unused placeholder the bucket program always receives, and it is
+    passed through untouched.
+    """
+
+    if volume is None or not per_class:
+        return volume
+    if int(volume.shape[0]) != int(n_classes):
+        raise ValueError(
+            f"class-segmented projection expects a leading class axis of {n_classes}, "
+            f"got operand with shape {tuple(volume.shape)}"
+        )
+    return volume[class_index]
+
+
+def _project_local_class_segments(
+    mean_for_proj,
+    relion_projector_half,
+    local_rotations,
+    project_rows,
+    *,
+    n_classes: int,
+    segment_rotation_count: int,
+    mean_is_per_class: bool = True,
+    projector_is_per_class: bool = True,
+):
+    """Project class-major segmented rows, each segment from its own class volume.
+
+    Rows are laid out class-major per image (``bucket_class_local_hypothesis_layouts``):
+    class ``k`` owns rows ``[k*seg, (k+1)*seg)``. Each segment is projected with that
+    class's volume and the segments are concatenated back into the single row axis the
+    rest of the bucket program consumes, so the joint class-by-pose posterior stays one
+    reduction over rows and every segment keeps a static shape.
+    """
+
+    batch_size = int(local_rotations.shape[0])
+    rows = int(local_rotations.shape[1])
+    segment_rotation_count = int(segment_rotation_count)
+    if rows != int(n_classes) * segment_rotation_count:
+        raise ValueError(
+            f"class-segmented rows must be {n_classes} x {segment_rotation_count}, got {rows}"
+        )
+    segments = []
+    for class_index in range(int(n_classes)):
+        start = class_index * segment_rotation_count
+        segment_rotations = local_rotations[:, start : start + segment_rotation_count]
+        projected = project_rows(
+            _class_volume(mean_for_proj, class_index, n_classes, per_class=mean_is_per_class),
+            _class_volume(relion_projector_half, class_index, n_classes, per_class=projector_is_per_class),
+            segment_rotations.reshape(batch_size * segment_rotation_count, 3, 3),
+        )
+        segments.append(projected.reshape(batch_size, segment_rotation_count, projected.shape[-1]))
+    return jnp.concatenate(segments, axis=1).reshape(batch_size * rows, segments[0].shape[-1])
+
+
+def _adjoint_local_class_segments(
+    summed,
+    ctf_probs,
+    recon_window_indices,
+    mstep_rotations,
+    Ft_y,
+    Ft_ctf,
+    image_shape,
+    recon_volume_shape,
+    disc_type,
+    *,
+    n_classes: int,
+    segment_rotation_count: int,
+    batch_size: int,
+    use_window: bool,
+    max_r,
+    disable_adjoint_y: bool,
+    disable_adjoint_ctf: bool,
+    relion_x_half_mstep: bool,
+):
+    """Accumulate class-major segmented rows into per-class reconstruction volumes.
+
+    ``Ft_y``/``Ft_ctf`` carry a leading class axis; each class segment's rows are
+    backprojected into that class's pair, so one bucket pass produces the K-class
+    M-step the per-class engine calls produce today.
+    """
+
+    rows = int(n_classes) * int(segment_rotation_count)
+    summed_rows = summed.reshape(batch_size, rows, summed.shape[-1])
+    ctf_rows = ctf_probs.reshape(batch_size, rows, ctf_probs.shape[-1])
+    rotation_rows = mstep_rotations.reshape(batch_size, rows, 3, 3)
+    updated_y, updated_ctf = [], []
+    for class_index in range(int(n_classes)):
+        start = class_index * int(segment_rotation_count)
+        stop = start + int(segment_rotation_count)
+        segment_values = batch_size * int(segment_rotation_count)
+        class_y, class_ctf = _adjoint_local_mstep_volumes(
+            summed_rows[:, start:stop].reshape(segment_values, summed_rows.shape[-1]),
+            ctf_rows[:, start:stop].reshape(segment_values, ctf_rows.shape[-1]),
+            recon_window_indices,
+            rotation_rows[:, start:stop].reshape(segment_values, 3, 3),
+            Ft_y[class_index],
+            Ft_ctf[class_index],
+            image_shape,
+            recon_volume_shape,
+            disc_type,
+            use_window=use_window,
+            max_r=max_r,
+            disable_adjoint_y=disable_adjoint_y,
+            disable_adjoint_ctf=disable_adjoint_ctf,
+            relion_x_half_mstep=relion_x_half_mstep,
+        )
+        updated_y.append(class_y)
+        updated_ctf.append(class_ctf)
+    return jnp.stack(updated_y, axis=0), jnp.stack(updated_ctf, axis=0)
+
+
+def _class_segment_statistics(
+    probs,
+    scores,
+    reconstruction_probs,
+    *,
+    n_classes: int,
+    segment_rotation_count: int,
+    use_float64_normalization: bool = True,
+):
+    """Reduce class-major segmented rows to the per-class quantities K-class EM needs.
+
+    With one joint posterior over ``(class, rotation, translation)`` the per-class
+    statistics are segment reductions, so one pass replaces the probe pass per class:
+
+    * ``class_log_evidence[b, k]`` is class k's log evidence, reduced from the
+      unnormalized scores with that segment's own maximum. Deriving it instead from
+      the joint posterior as ``log_Z + log(mass)`` loses every class whose mass
+      underflows: four populated classes scoring 0, -1000, -2000, -3000 give masses
+      1, 0, 0, 0 in float32 and float64 alike, and the evidence would read -inf for
+      three of them. A class is reported as -inf only when the segment holds no
+      finite score at all, which is the empty-class case.
+    * ``class_probs_sum[b, k]`` is class k's posterior mass, RELION's responsibility,
+      which correctly underflows to zero for a negligible class;
+    * ``class_best_log_score[b, k]`` and ``class_best_argmax[b, k]`` are the best
+      unnormalized score within class k and where it sits in that segment;
+    * ``class_reconstruction_probs_sum[b, k]`` is the mass over the pruned
+      reconstruction posterior.
+    """
+
+    batch_size = int(probs.shape[0])
+    rows = int(probs.shape[1])
+    n_classes = int(n_classes)
+    segment_rotation_count = int(segment_rotation_count)
+    if rows != n_classes * segment_rotation_count:
+        raise ValueError(
+            f"class-segmented rows must be {n_classes} x {segment_rotation_count}, got {rows}"
+        )
+
+    def segments(values):
+        return values.reshape(batch_size, n_classes, segment_rotation_count, values.shape[-1])
+
+    class_probs_sum = jnp.sum(segments(probs), axis=(2, 3))
+    class_reconstruction_probs_sum = (
+        None if reconstruction_probs is None else jnp.sum(segments(reconstruction_probs), axis=(2, 3))
+    )
+
+    segment_scores = segments(scores).reshape(batch_size, n_classes, segment_rotation_count * scores.shape[-1])
+    class_best_log_score = jnp.max(segment_scores, axis=2)
+    # Winner within the class, in the same (row, translation) encoding the joint
+    # argmax uses, so a per-class best pose decodes with the segment's own rows.
+    class_best_argmax = jnp.argmax(segment_scores, axis=2)
+    class_has_score = jnp.isfinite(class_best_log_score)
+    shift = jnp.where(class_has_score, class_best_log_score, jnp.zeros_like(class_best_log_score))
+    accumulation_dtype = jnp.float64 if use_float64_normalization else segment_scores.dtype
+    shifted = jnp.exp((segment_scores - shift[..., None]).astype(accumulation_dtype))
+    shifted = jnp.where(jnp.isfinite(shifted), shifted, jnp.zeros_like(shifted))
+    segment_sum = jnp.sum(shifted, axis=2)
+    class_has_mass = class_has_score & jnp.isfinite(segment_sum) & (segment_sum > 0.0)
+    safe_sum = jnp.where(class_has_mass, segment_sum, jnp.ones_like(segment_sum))
+    class_log_evidence = jnp.where(
+        class_has_mass,
+        shift.astype(accumulation_dtype) + jnp.log(safe_sum),
+        jnp.asarray(-jnp.inf, dtype=accumulation_dtype),
+    )
+    return (
+        class_probs_sum,
+        class_best_log_score,
+        class_reconstruction_probs_sum,
+        class_log_evidence,
+        class_best_argmax,
+    )
+
 
 
 class _LocalMstepAccumulators(NamedTuple):
@@ -1561,6 +1780,13 @@ class _LocalBigJitCore(NamedTuple):
     reconstruction_sample_mask: jax.Array
     reconstruction_rotation_mask: jax.Array
     reconstruction_row_count: jax.Array
+    # Per-class segment reductions; None unless the bucket carries class-segmented rows.
+    class_probs_sum: jax.Array | None = None
+    class_best_log_score: jax.Array | None = None
+    class_reconstruction_probs_sum: jax.Array | None = None
+    class_log_evidence: jax.Array | None = None
+    class_best_argmax: jax.Array | None = None
+    uncast_log_Z: jax.Array | None = None
 
 
 class _LocalDeferredMstep(NamedTuple):
@@ -1697,6 +1923,9 @@ def _split_local_big_jit_carry(result):
         "return_debug_scores",
         "return_debug_operands",
         "unweighted_high_shell_image_power",
+        "n_classes",
+        "class_segment_rotation_count",
+        "return_uncast_normalizer",
     ),
 )
 def run_local_bucket_big_jit(
@@ -1778,7 +2007,7 @@ def run_local_bucket_big_jit(
     use_compact_relion_projector_projection: bool,
     use_relion_projection_cache: bool,
     relion_projector_output_size: int,
-    projection_relion_texture_interp: bool,
+    projection_relion_texture_interp: bool | None,
     projection_force_jax: bool,
     projection_mask_current_image_disk: bool = True,
     relion_exact_bpref_operands: bool = False,
@@ -1821,6 +2050,9 @@ def run_local_bucket_big_jit(
     return_debug_scores: bool = False,
     return_debug_operands: bool = False,
     unweighted_high_shell_image_power: bool = False,
+    n_classes: int = 1,
+    class_segment_rotation_count: int | None = None,
+    return_uncast_normalizer: bool = False,
 ):
     """Run one exact-local bucket in a single compiled numeric boundary.
 
@@ -1868,6 +2100,32 @@ def run_local_bucket_big_jit(
         or return_deferred_mstep_inputs
     ):
         raise ValueError("score_only local big-JIT requires disabled adjoints, no noise, and no M-step outputs")
+    n_classes = int(n_classes)
+    if n_classes < 1:
+        raise ValueError("n_classes must be positive")
+    if n_classes > 1:
+        # Class-segmented rows carry every class of one image in a single bucket, so the
+        # projection is the only stage that needs the class identity. The row-packing and
+        # projection-cache opt-ins below index rows by (image, rotation row) alone and are
+        # K=1 exact-RELION paths; refuse them here rather than silently projecting a row
+        # from the wrong class.
+        if use_relion_projection_cache:
+            raise ValueError("class-segmented rows do not use the K=1 local projection cache")
+        if use_flat_local_rows or use_packed_local_projection or use_fused_pair_fine_score:
+            raise ValueError("class-segmented rows do not use K=1 packed/flat local rows")
+        if projector_capacity:
+            raise ValueError("class-segmented rows do not use the K=1 projector capacity path")
+        if relion_exact_bpref_operands:
+            # The source-ordered native VDAM M-step scatters straight into one volume
+            # pair per call, so it cannot separate class segments yet.
+            raise ValueError("class-segmented rows do not use the source-ordered native VDAM M-step")
+        if class_segment_rotation_count is None:
+            raise ValueError("class-segmented rows require an explicit class_segment_rotation_count")
+        if int(class_segment_rotation_count) * n_classes != int(local_rotations.shape[1]):
+            raise ValueError(
+                f"class-segmented rows must be {n_classes} x {int(class_segment_rotation_count)}, "
+                f"got {int(local_rotations.shape[1])}"
+            )
     flat_local_row_plan = jnp.asarray(flat_local_row_plan)
     if use_flat_local_rows:
         if not relion_exact_fine_diff2:
@@ -2302,26 +2560,42 @@ def run_local_bucket_big_jit(
         cache_rows = relion_projection_cache_id_map[safe_rotation_ids]
         proj_half_flat = relion_projection_cache[cache_rows]
     else:
-        proj_half_flat = _project_local_half_spectrum(
-            mean_for_proj,
-            relion_projector_half,
-            flat_rotations,
-            projection_pixel_indices if use_compact_relion_projector_projection else None,
-            image_shape,
-            proj_volume_shape,
-            disc_type,
-            projection_half_volume=projection_half_volume,
-            projection_max_r=projection_max_r,
-            relion_projector_output_size=relion_projector_output_size,
-            projection_relion_texture_interp=projection_relion_texture_interp,
-            projection_force_jax=projection_force_jax,
-            projection_mask_current_image_disk=projection_mask_current_image_disk,
-            use_relion_projector=use_relion_projector,
-            relion_projector_r_max=relion_projector_r_max,
-            projection_padding_factor=projection_padding_factor,
-            projector_capacity=projector_capacity,
-            runtime_projector_r_max=runtime_projector_r_max,
-        )
+
+        def _project_rows(volume, projector_half, rotations):
+            return _project_local_half_spectrum(
+                volume,
+                projector_half,
+                rotations,
+                projection_pixel_indices if use_compact_relion_projector_projection else None,
+                image_shape,
+                proj_volume_shape,
+                disc_type,
+                projection_half_volume=projection_half_volume,
+                projection_max_r=projection_max_r,
+                relion_projector_output_size=relion_projector_output_size,
+                projection_relion_texture_interp=projection_relion_texture_interp,
+                projection_force_jax=projection_force_jax,
+                projection_mask_current_image_disk=projection_mask_current_image_disk,
+                use_relion_projector=use_relion_projector,
+                relion_projector_r_max=relion_projector_r_max,
+                projection_padding_factor=projection_padding_factor,
+                projector_capacity=projector_capacity,
+                runtime_projector_r_max=runtime_projector_r_max,
+            )
+
+        if n_classes > 1:
+            proj_half_flat = _project_local_class_segments(
+                mean_for_proj,
+                relion_projector_half,
+                local_rotations,
+                _project_rows,
+                n_classes=n_classes,
+                segment_rotation_count=int(class_segment_rotation_count),
+                mean_is_per_class=not use_relion_projector,
+                projector_is_per_class=bool(use_relion_projector),
+            )
+        else:
+            proj_half_flat = _project_rows(mean_for_proj, relion_projector_half, flat_rotations)
     if use_window:
         if use_compact_relion_projector_projection:
             score_projection_rows = proj_half_flat[:, projection_score_take_indices]
@@ -2656,6 +2930,7 @@ def run_local_bucket_big_jit(
             _reconstruction_probs,
             probs_sum_t,
             reconstruction_probs_sum_t,
+            uncast_log_Z,
         ) = _score_normalize_support(
             shifted_score_split,
             ctf2_over_nv_score,
@@ -2769,6 +3044,7 @@ def run_local_bucket_big_jit(
             reconstruction_probs,
             probs_sum_t,
             reconstruction_probs_sum_t,
+            uncast_log_Z,
         ) = _score_normalize_support(
             shifted_score_split,
             ctf2_over_nv_score,
@@ -2928,6 +3204,7 @@ def run_local_bucket_big_jit(
         ctf_probs,
         debug_scores,
         debug_probs,
+        uncast_log_Z,
     ) = _score_normalize_mstep(
         shifted_score_split,
         ctf2_over_nv_score,
@@ -2954,7 +3231,28 @@ def run_local_bucket_big_jit(
         max_significants=max_significants,
         sequential_translation_reduction=relion_sequential_mstep_reduction,
         scores_override=direct_scores,
+        # Class-segmented rows normalize jointly instead of receiving the joint
+        # normalizer from a per-class caller; keep that caller's precision boundary.
+        cast_internal_normalizer_to_score_dtype=n_classes > 1,
     )
+    if n_classes > 1:
+        (
+            class_probs_sum,
+            class_best_log_score,
+            class_reconstruction_probs_sum,
+            class_log_evidence,
+            class_best_argmax,
+        ) = _class_segment_statistics(
+            debug_probs,
+            debug_scores,
+            reconstruction_probs,
+            n_classes=n_classes,
+            segment_rotation_count=int(class_segment_rotation_count),
+            use_float64_normalization=use_float64_normalization,
+        )
+    else:
+        class_probs_sum = class_best_log_score = class_best_argmax = None
+        class_reconstruction_probs_sum = class_log_evidence = None
     source_ordered_vdam_scattered = bool(
         source_ordered_vdam_mstep
         and not return_mstep_tensors
@@ -3024,22 +3322,43 @@ def run_local_bucket_big_jit(
         not disable_adjoint_y or not disable_adjoint_ctf
     ):
         flat_summed = summed.reshape(batch_size * local_rotations.shape[1], summed.shape[-1])
-        Ft_y, Ft_ctf = _adjoint_local_mstep_volumes(
-            flat_summed,
-            flat_ctf_probs,
-            mstep_recon_window_indices,
-            flat_mstep_rotations,
-            Ft_y,
-            Ft_ctf,
-            image_shape,
-            recon_volume_shape,
-            disc_type,
-            use_window=use_window,
-            max_r=mstep_max_r,
-            disable_adjoint_y=disable_adjoint_y,
-            disable_adjoint_ctf=disable_adjoint_ctf,
-            relion_x_half_mstep=mstep_relion_x_half,
-        )
+        if n_classes > 1:
+            Ft_y, Ft_ctf = _adjoint_local_class_segments(
+                flat_summed,
+                flat_ctf_probs,
+                mstep_recon_window_indices,
+                flat_mstep_rotations,
+                Ft_y,
+                Ft_ctf,
+                image_shape,
+                recon_volume_shape,
+                disc_type,
+                n_classes=n_classes,
+                segment_rotation_count=int(class_segment_rotation_count),
+                batch_size=batch_size,
+                use_window=use_window,
+                max_r=mstep_max_r,
+                disable_adjoint_y=disable_adjoint_y,
+                disable_adjoint_ctf=disable_adjoint_ctf,
+                relion_x_half_mstep=mstep_relion_x_half,
+            )
+        else:
+            Ft_y, Ft_ctf = _adjoint_local_mstep_volumes(
+                flat_summed,
+                flat_ctf_probs,
+                mstep_recon_window_indices,
+                flat_mstep_rotations,
+                Ft_y,
+                Ft_ctf,
+                image_shape,
+                recon_volume_shape,
+                disc_type,
+                use_window=use_window,
+                max_r=mstep_max_r,
+                disable_adjoint_y=disable_adjoint_y,
+                disable_adjoint_ctf=disable_adjoint_ctf,
+                relion_x_half_mstep=mstep_relion_x_half,
+            )
 
     stats_dtype = reconstruction_probs.real.dtype
     norm_correction_dtype = jnp.float64 if source_faithful_spectrum_norm else stats_dtype
@@ -3159,6 +3478,12 @@ def run_local_bucket_big_jit(
                 reconstruction_sample_mask=reconstruction_sample_mask,
                 reconstruction_rotation_mask=reconstruction_rotation_mask,
                 reconstruction_row_count=reconstruction_row_count,
+                class_probs_sum=class_probs_sum,
+                class_best_log_score=class_best_log_score,
+                class_reconstruction_probs_sum=class_reconstruction_probs_sum,
+                class_log_evidence=class_log_evidence,
+                class_best_argmax=class_best_argmax,
+                uncast_log_Z=uncast_log_Z if return_uncast_normalizer else None,
             )
         )
         if return_source_vdam_operands:
@@ -3210,6 +3535,12 @@ def run_local_bucket_big_jit(
             reconstruction_sample_mask=reconstruction_sample_mask,
             reconstruction_rotation_mask=reconstruction_rotation_mask,
             reconstruction_row_count=reconstruction_row_count,
+            class_probs_sum=class_probs_sum,
+            class_best_log_score=class_best_log_score,
+            class_reconstruction_probs_sum=class_reconstruction_probs_sum,
+            class_log_evidence=class_log_evidence,
+            class_best_argmax=class_best_argmax,
+            uncast_log_Z=uncast_log_Z if return_uncast_normalizer else None,
         )
     )
     return _append_debug_outputs(

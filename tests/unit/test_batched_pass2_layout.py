@@ -1,5 +1,7 @@
 """Exact batch invariance for shared pass-2 orientation construction."""
 
+import weakref
+
 import numpy as np
 import pytest
 
@@ -7,6 +9,34 @@ from recovar.em import sampling
 from recovar.em.local import local_layout
 
 pytestmark = pytest.mark.unit
+
+
+def test_pass2_buckets_reuse_scoring_rotations_without_mstep_override():
+    layout = local_layout.build_pass2_hypothesis_layout(
+        [None, np.array([0])],
+        n_coarse_rotations=sampling.rotation_grid_size(0),
+        n_coarse_translations=1, nside_level=0,
+        translations=np.zeros((1, 2), dtype=np.float32),
+        translation_step=1.0, oversampling_order=1,
+    )
+    buckets = local_layout.bucket_local_hypothesis_layout(layout, 2, 32)
+    planned = local_layout.LocalBucketSequence(layout, local_layout.plan_local_hypothesis_buckets(layout, 2, 32))
+    first = planned[0]
+    released = weakref.ref(first)
+    del first
+    assert released() is None  # The sequence must not cache materialized buckets.
+    assert len(planned) == len(buckets)
+    np.testing.assert_array_equal(planned[-1].local_rotations, buckets[-1].local_rotations)
+    np.testing.assert_array_equal(planned[1:][0].local_rotations, buckets[1].local_rotations)
+    for bucket in buckets:
+        assert bucket.local_mstep_rotations is None
+        assert local_layout._local_mstep_rotations(bucket) is bucket.local_rotations
+        for row, image in enumerate(bucket.image_indices):
+            start, stop = layout.rotation_offsets[image:image + 2]
+            np.testing.assert_array_equal(
+                local_layout._local_mstep_rotations(bucket)[row, :stop - start],
+                layout.rotations_flat[start:stop],
+            )
 
 
 @pytest.mark.parametrize("order", [0, 1, 2])
