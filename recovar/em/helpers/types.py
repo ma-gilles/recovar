@@ -186,7 +186,6 @@ class EMProfileStats(NamedTuple):
     pass2_score_s: float
     pass2_postprocess_s: float
     mstep_s: float
-    window_scatter_s: float
     adjoint_y_s: float
     adjoint_ctf_s: float
     noise_s: float
