@@ -32,7 +32,7 @@ def _same(a, b):
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_cold_start_uses_flat_score_prior_and_zero_engine_center(dtype):
     inputs = _build(None, dtype=dtype)
-    assert inputs.prior_center is None and inputs.local_prior_center is None and inputs.sigma_center is None
+    assert inputs.prior_center is None and inputs.local_prior_center is None
     _same(inputs.engine_prior_center, np.zeros(2, dtype=dtype))
     _same(inputs.prior_translations, np.asarray(BASE, dtype=dtype))
 
@@ -45,8 +45,7 @@ def test_centers_match_the_separate_relion_formulas(dtype):
     _same(inputs.local_prior_center, inputs.prior_center)
     assert inputs.local_prior_center is not inputs.prior_center
     assert not np.shares_memory(inputs.local_prior_center, inputs.prior_center)
-    _same(inputs.sigma_center, op.relion_sigma_offset_prior_center(previous, dtype=dtype))
-    assert inputs.engine_prior_center is inputs.sigma_center
+    _same(inputs.engine_prior_center, op.relion_sigma_offset_prior_center(previous, dtype=dtype))
     assert previous.tolist() == [[0.6, -1.4], [2.5, 0.49], [-0.5, 0.5]]
 
 
