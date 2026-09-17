@@ -17,6 +17,7 @@ import numpy as np
 
 from recovar.em.helpers.deterministic_reduce import deterministic_reductions_enabled
 from recovar.em.helpers.env_flags import parse_env_flag
+from recovar.em.helpers.image_axis_ladder import image_axis_ladder_size, pad_image_tensor, slice_image_axis
 from recovar.em.helpers.half_spectrum import bin_shell_values_jax
 
 _RELION_FINE_DIFF2_FUSED_FFI_ENV = "RECOVAR_RELION_FINE_DIFF2_FUSED_FFI"
@@ -943,7 +944,7 @@ def _relion_powerclass_noise_terms(
 
 
 @jax.jit
-def _relion_cuda_fine_diff2_min(diff2, candidate_mask):
+def _relion_cuda_fine_diff2_min_core(diff2, candidate_mask):
     """Return one finite XFLOAT minimum per image over a raw diff2 tensor."""
 
     minimum = _relion_cuda_fine_partition_diff2_min_or_inf(diff2, candidate_mask)
@@ -952,6 +953,24 @@ def _relion_cuda_fine_diff2_min(diff2, candidate_mask):
         minimum,
         jnp.asarray(0.0, dtype=minimum.dtype),
     )
+
+
+
+def _relion_cuda_fine_diff2_min(diff2, candidate_mask):
+    """Per-image finite XFLOAT diff2 minimum on the image-axis ladder.
+
+    Padded rows carry ``+inf`` diff2 and a false candidate mask, so the core
+    reports them as all-invalid (minimum 0) without affecting other rows.
+    """
+
+    n = int(diff2.shape[0])
+    padded = image_axis_ladder_size(n)
+    if padded == n:
+        return _relion_cuda_fine_diff2_min_core(diff2, candidate_mask)
+    return _relion_cuda_fine_diff2_min_core(
+        pad_image_tensor(jnp.asarray(diff2), n, padded, jnp.inf),
+        pad_image_tensor(jnp.asarray(candidate_mask, dtype=bool), n, padded, False),
+    )[:n]
 
 
 @jax.jit
@@ -1018,7 +1037,7 @@ def _relion_cuda_fine_log_evidence_offset(min_diff2):
 
 
 @jax.jit
-def _relion_cuda_fine_diff2_to_scores(
+def _relion_cuda_fine_diff2_to_scores_core(
     diff2,
     rotation_log_prior,
     translation_log_prior,
@@ -1066,6 +1085,39 @@ def _relion_cuda_fine_diff2_to_scores(
     scores = scores - diff2
     scores = jnp.where(valid & jnp.isfinite(scores), scores, -jnp.inf)
     return scores
+
+
+
+def _relion_cuda_fine_diff2_to_scores(
+    diff2,
+    rotation_log_prior,
+    translation_log_prior,
+    candidate_mask,
+    *,
+    min_diff2=None,
+):
+    """RELION XFLOAT diff2-to-score conversion on the image-axis ladder.
+
+    Only operands that own the image axis are padded (``+inf`` diff2, false
+    mask, zero priors and zero external minimum); priors passed with a
+    broadcast leading axis of 1 are left alone. Padded rows come out as
+    ``-inf`` scores and are sliced off.
+    """
+
+    n = int(diff2.shape[0])
+    padded = image_axis_ladder_size(n)
+    if padded == n:
+        return _relion_cuda_fine_diff2_to_scores_core(
+            diff2, rotation_log_prior, translation_log_prior, candidate_mask, min_diff2=min_diff2
+        )
+    external_min = None if min_diff2 is None else pad_image_tensor(jnp.asarray(min_diff2), n, padded, 0.0)
+    return _relion_cuda_fine_diff2_to_scores_core(
+        pad_image_tensor(jnp.asarray(diff2), n, padded, jnp.inf),
+        pad_image_tensor(jnp.asarray(rotation_log_prior), n, padded, 0.0),
+        pad_image_tensor(jnp.asarray(translation_log_prior), n, padded, 0.0),
+        pad_image_tensor(jnp.asarray(candidate_mask, dtype=bool), n, padded, False),
+        min_diff2=external_min,
+    )[:n]
 
 
 @partial(jax.jit, static_argnames=("use_fused_ffi",))

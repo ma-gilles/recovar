@@ -16,6 +16,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.helpers.env_flags import parse_env_flag
+from recovar.em.helpers.image_axis_ladder import image_axis_ladder_size, pad_image_tensor, slice_image_axis
 from recovar.em.helpers.fourier_window import make_fourier_window_indices_np, relion_fftw_order_for_square_score_window
 from recovar.em.helpers.half_spectrum import bin_shell_values_jax, make_relion_noise_shell_indices_half
 from recovar.em.sparse_pass2.sparse_pass2_policy import _RELION_POWERCLASS_SPECTRUM_NORM_ENV
@@ -382,7 +383,7 @@ def _relion_wavg_rectangle_image_power(raw_shifted, posterior):
 
 
 @jax.jit
-def _relion_wavg_rectangle_triplet_terms(
+def _relion_wavg_rectangle_triplet_terms_core(
     exact_triplet_terms,
     raw_shifted_rectangle,
     posterior,
@@ -414,6 +415,34 @@ def _relion_wavg_rectangle_triplet_terms(
     )
     rectangle_terms = rectangle_terms.at[..., 2].set(image_power)
     return rectangle_terms.at[:, :, exact_positions, :].set(exact_terms)
+
+
+
+def _relion_wavg_rectangle_triplet_terms(
+    exact_triplet_terms,
+    raw_shifted_rectangle,
+    posterior,
+    exact_positions,
+):
+    """Embed exact Wavg terms on the image-axis ladder.
+
+    The three per-image operands are zero-padded; ``exact_positions`` is a
+    pixel-axis operand and is never padded. Padded rows produce zero terms and
+    are sliced off.
+    """
+
+    n = int(exact_triplet_terms.shape[0])
+    padded = image_axis_ladder_size(n)
+    if padded == n:
+        return _relion_wavg_rectangle_triplet_terms_core(
+            exact_triplet_terms, raw_shifted_rectangle, posterior, exact_positions
+        )
+    return _relion_wavg_rectangle_triplet_terms_core(
+        pad_image_tensor(jnp.asarray(exact_triplet_terms), n, padded),
+        pad_image_tensor(jnp.asarray(raw_shifted_rectangle), n, padded),
+        pad_image_tensor(jnp.asarray(posterior), n, padded),
+        exact_positions,
+    )[:n]
 
 
 def _relion_wavg_direct_norm_per_image(
@@ -512,7 +541,7 @@ def _relion_wavg_atomic_triplet_terms(
 
 
 @jax.jit
-def _relion_wavg_sequential_triplet_terms_jax(
+def _relion_wavg_sequential_triplet_terms_jax_core(
     proj,
     raw_ctf,
     scale,
@@ -598,6 +627,34 @@ def _relion_wavg_sequential_triplet_terms_jax(
     xa = (xa_raw / safe_scale[:, None, None]).astype(jnp.float32)
     aa = (aa_raw / (safe_scale[:, None, None] ** 2)).astype(jnp.float32)
     return jnp.stack((xa, aa, diff2), axis=-1)
+
+
+
+def _relion_wavg_sequential_triplet_terms_jax(
+    proj,
+    raw_ctf,
+    scale,
+    raw_shifted_images,
+    posterior,
+):
+    """RELION Wavg translation-loop accumulators on the image-axis ladder.
+
+    All five operands own the image axis; projections, CTF, shifted images and
+    posteriors are zero-padded and the per-image scale is padded with ones.
+    Padded rows accumulate exact zeros and are sliced off.
+    """
+
+    n = int(proj.shape[0])
+    padded = image_axis_ladder_size(n)
+    if padded == n:
+        return _relion_wavg_sequential_triplet_terms_jax_core(proj, raw_ctf, scale, raw_shifted_images, posterior)
+    return _relion_wavg_sequential_triplet_terms_jax_core(
+        pad_image_tensor(jnp.asarray(proj), n, padded),
+        pad_image_tensor(jnp.asarray(raw_ctf), n, padded),
+        pad_image_tensor(jnp.asarray(scale).reshape(-1), n, padded, 1.0),
+        pad_image_tensor(jnp.asarray(raw_shifted_images), n, padded),
+        pad_image_tensor(jnp.asarray(posterior), n, padded),
+    )[:n]
 
 
 def _relion_wavg_sequential_triplet_terms(

@@ -13,6 +13,11 @@ from recovar import core
 from recovar.cuda_backproject import cuda_available as _cuda_projection_available
 from recovar.cuda_backproject import project_indexed
 from recovar.em.helpers.half_spectrum import bin_shell_values_jax
+from recovar.em.helpers.image_axis_ladder import (
+    image_axis_ladder_size,
+    pad_image_axis,
+    pad_image_tensor as _pad_image_tensor_shared,
+)
 
 DEFAULT_PROJECTION_MAX_R = object()
 _RELION_PROJECTOR_TEXTURE_ENV = "RECOVAR_RELION_PROJECTOR_TEXTURE_INTERP"
@@ -820,38 +825,10 @@ def compute_noise_block(
     return noise_shells, a2_shells, xa_shells
 
 
-_IMAGE_AXIS_LADDER_FINE_STEP = 4
-_IMAGE_AXIS_LADDER_FINE_LIMIT = 32
+def _pad_image_tensor(array, n_images: int, padded_images: int):
+    """Pad a per-image tensor to the ladder rung; leave broadcast operands alone."""
 
-
-def image_axis_ladder_size(n_images: int) -> int:
-    """Round a per-bucket image count up to the image-axis ladder.
-
-    Step 4 up to 32, powers of two above. Chosen from the measured distribution
-    of per-bucket image counts on the 10k EMPIAR-10097 subset (job 14010842):
-    39 distinct counts, 36 of them in 1..40, three large (126, 194, 220). This
-    ladder cuts distinct operand signatures for the per-image pass-2 functions
-    from 168 to 57 (2.9x) for 22.6% padding waste; a step-8 variant reaches 37
-    signatures but costs 37.3% waste, and padding waste is paid every iteration
-    while compilation is partly amortised.
-    """
-
-    n = int(n_images)
-    if n <= 0:
-        return 0
-    if n <= _IMAGE_AXIS_LADDER_FINE_LIMIT:
-        return -(-n // _IMAGE_AXIS_LADDER_FINE_STEP) * _IMAGE_AXIS_LADDER_FINE_STEP
-    return 1 << (n - 1).bit_length()
-
-
-def pad_image_axis(array, padded_images: int):
-    """Pad a leading per-image axis with exact zeros, or return it unchanged."""
-
-    n = int(array.shape[0])
-    if padded_images <= n:
-        return array
-    pad = [(0, int(padded_images) - n)] + [(0, 0)] * (array.ndim - 1)
-    return jnp.pad(array, pad)
+    return _pad_image_tensor_shared(array, n_images, padded_images)
 
 
 @jax.jit
@@ -923,20 +900,6 @@ def _compute_scale_correction_terms_per_image_core(
     xa_terms = noise_variance_half[None, None, :] * cross_terms.real
     xa_per_image = jnp.sum(xa_terms, axis=(1, 2)) / safe_scale
     return xa_per_image, aa_per_image
-
-def _pad_image_tensor(array, n_images: int, padded_images: int):
-    """Pad a per-image tensor to the ladder rung; leave broadcast operands alone.
-
-    A tensor owns the image axis only when its leading dimension equals the
-    bucket's image count. Operands carried with a broadcast leading axis of 1
-    (for example a shared ``ctf_probs``) broadcast against the padded axis by
-    themselves and must not be padded. Pixel-axis operands never reach here.
-    """
-
-    if int(array.shape[0]) != int(n_images):
-        return array
-    return pad_image_axis(array, padded_images)
-
 
 def compute_norm_residual_per_image(proj_half, proj_abs2_half, summed_masked, ctf_probs, noise_variance_half):
     """Per-image norm residual, evaluated on the image-axis ladder.
