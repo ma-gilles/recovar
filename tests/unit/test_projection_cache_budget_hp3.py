@@ -86,3 +86,39 @@ def test_flatten_bucket_rotations_is_host_side_for_numpy_and_not_jitted():
     dev = lb.flatten_bucket_rotations(jnp.asarray(rots))
     assert dev.shape == (6, 3, 3)
     np.testing.assert_array_equal(np.asarray(dev), rots.reshape(6, 3, 3))
+
+
+def test_per_particle_launch_rung_is_power_of_two_at_or_above_count():
+    from recovar.em.sparse_pass2.sparse_pass2_adjoint import _per_particle_launch_rung
+
+    assert [_per_particle_launch_rung(c, 4096) for c in (0, 1, 2, 3, 4, 5, 100, 1000)] == [0, 1, 2, 4, 4, 8, 128, 1024]
+    assert _per_particle_launch_rung(3000, 2048) == 2048  # never beyond the bucket rows
+
+
+def test_per_particle_launches_pad_to_rungs_with_zeroed_spare_rows(monkeypatch):
+    import jax.numpy as jnp
+    from recovar.em.sparse_pass2 import sparse_pass2_adjoint as adjoint_mod
+
+    values = (1.0 + jnp.arange(2 * 6 * 2, dtype=jnp.float32)).reshape(2, 6, 2).astype(jnp.complex64)
+    ctf_values = (100.0 + jnp.arange(2 * 6 * 2, dtype=jnp.float32)).reshape(2, 6, 2)
+    rotations = jnp.arange(2 * 6 * 9, dtype=jnp.float32).reshape(2, 6, 3, 3)
+    actual_counts = np.asarray([3, 5], dtype=np.int32)  # rungs 4 and 8 -> 8 capped to 6 bucket rows
+    calls = []
+
+    def fake_adjoint(block, window_indices, rotations_block, volume, image_shape, volume_shape, disc_type, half_image, half_volume, max_r, relion_x_half):
+        calls.append((np.asarray(block).copy(), np.asarray(rotations_block).copy()))
+        return volume
+
+    monkeypatch.setattr(adjoint_mod, "_adjoint_slice_volume_windowed", fake_adjoint)
+    monkeypatch.delenv("RECOVAR_RELION_X_HALF_BP_PARTICLE_POOL_SIZE", raising=False)
+    adjoint_mod._accumulate_relion_x_half_per_particle_launches(
+        values, ctf_values, rotations, actual_counts, jnp.zeros((4,), jnp.complex64), jnp.zeros((4,), jnp.float32),
+        window_indices=jnp.arange(2), image_shape=(8, 8), volume_shape=(8, 8, 8), disc_type="linear_interp",
+        half_volume=True, max_r=4.0, log_label_prefix="test",
+    )
+    assert [c[0].shape[0] for c in calls] == [4, 4, 6, 6]
+    # particle 0: rows 0-2 live, row 3 zeroed; particle 1: rows 0-4 live, row 5 zeroed
+    np.testing.assert_array_equal(calls[0][0][:3], np.asarray(values[0, :3])); assert np.all(calls[0][0][3:] == 0)
+    np.testing.assert_array_equal(calls[1][0][:3], np.asarray(ctf_values[0, :3])); assert np.all(calls[1][0][3:] == 0)
+    np.testing.assert_array_equal(calls[2][0][:5], np.asarray(values[1, :5])); assert np.all(calls[2][0][5:] == 0)
+    np.testing.assert_array_equal(calls[0][1], np.asarray(rotations[0, :4]))

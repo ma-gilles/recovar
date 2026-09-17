@@ -63,6 +63,28 @@ def _adjoint_block_chunk_rows(flat_block, *, max_block_bytes: int) -> int:
     return max(1, int(max_block_bytes) // row_bytes)
 
 
+def _per_particle_launch_rung(count: int, limit: int) -> int:
+    """Rows per particle-owned adjoint launch: the power of two at or above ``count``.
+
+    Every particle used to launch with exactly its own ``count`` rows, so a
+    10k-particle iteration compiled (or fetched from the persistent cache) a
+    fresh adjoint program for every distinct count: ~20k compilations and
+    ~1000 s per iteration on the exact per-particle path (control census).
+    Padding to a power of two bounds the distinct launch shapes per bucket to
+    about log2(bucket rows) while the caller zeroes the spare rows, so the
+    per-particle accumulation order and every contribution are unchanged.
+    """
+
+    count = int(count)
+    limit = int(limit)
+    if count <= 0:
+        return 0
+    rung = 1
+    while rung < count:
+        rung *= 2
+    return min(rung, limit)
+
+
 def _accumulate_relion_x_half_per_particle_launches(
     values,
     ctf_values,
@@ -195,15 +217,23 @@ def _accumulate_relion_x_half_per_particle_launches(
             count = int(actual_counts[particle_index])
             if count <= 0:
                 continue
+            rung = _per_particle_launch_rung(count, int(values.shape[1]))
             particle_slice = (
                 slice(particle_index, particle_index + 1),
-                slice(0, count),
+                slice(0, rung),
             )
-            value_rows.append(values[particle_slice].reshape(count, values.shape[-1]))
-            ctf_rows.append(
-                ctf_values[particle_slice].reshape(count, ctf_values.shape[-1])
-            )
-            rotation_rows.append(rotations[particle_slice].reshape(count, 3, 3))
+            particle_values = values[particle_slice].reshape(rung, values.shape[-1])
+            particle_ctf = ctf_values[particle_slice].reshape(rung, ctf_values.shape[-1])
+            if rung > count:
+                # Spare rung rows carry zero contributions regardless of what
+                # the padded bucket holds there; the scatter of exact zeros
+                # leaves the accumulators bitwise unchanged.
+                live_row = (jnp.arange(rung) < count)[:, None]
+                particle_values = jnp.where(live_row, particle_values, 0)
+                particle_ctf = jnp.where(live_row, particle_ctf, 0)
+            value_rows.append(particle_values)
+            ctf_rows.append(particle_ctf)
+            rotation_rows.append(rotations[particle_slice].reshape(rung, 3, 3))
         if not value_rows:
             continue
         particle_values = jnp.concatenate(value_rows, axis=0)
