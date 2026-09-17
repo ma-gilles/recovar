@@ -1073,7 +1073,7 @@ def run_local_em_exact(
             values = probs_np[row]
             values = values[values > 0.0]
             if values.size:
-                reconstruction_probability_values_by_image[int(image_index)].append(values.copy())
+                reconstruction_probability_values_by_image[int(image_index)].append(values)
 
     # The cap model already accounts for the active score/reconstruction
     # windows and the x-half M-step row footprint, but RELION projector x-half
