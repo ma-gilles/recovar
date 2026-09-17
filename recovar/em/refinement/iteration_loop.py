@@ -291,17 +291,15 @@ def _initial_coarse_grids(
             int(rotation_eulers.shape[0]),
             int(current_translations.shape[0]),
         )
-    elif translations is None:
-        rotations, rotation_eulers = sampling._relion_rotation_grid_float32(healpix_order, dtype=dtype)
-        base_translations = sampling._relion_base_translation_grid(
-            init_translation_range,
-            init_translation_step,
-            n_classes=n_classes,
-            voxel_size=voxel_size,
-        )
-        current_translations = jnp.asarray(base_translations, dtype=dtype)
     else:
         rotations, rotation_eulers = sampling._relion_rotation_grid_float32(healpix_order, dtype=dtype)
+        if translations is None:
+            translations = sampling._relion_base_translation_grid(
+                init_translation_range,
+                init_translation_step,
+                n_classes=n_classes,
+                voxel_size=voxel_size,
+            )
         base_translations = np.asarray(translations, dtype=np.float64)
         current_translations = jnp.asarray(translations, dtype=dtype)
     return _CoarseGrids(rotations, rotation_eulers, base_translations, current_translations, int(healpix_order))
