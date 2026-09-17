@@ -16,14 +16,9 @@ from typing import Any
 
 import numpy as np
 
-try:
-    from scripts.analyze_k1_fine_score_boundary import _rotation_map, _translation_map
-    from scripts.validate_relion_bpref_factor_capture import load_factor_capture
-    from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
-except ModuleNotFoundError:  # pragma: no cover - direct script execution
-    from analyze_k1_fine_score_boundary import _rotation_map, _translation_map
-    from validate_relion_bpref_factor_capture import load_factor_capture
-    from validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
+from scripts.analyze_k1_fine_score_boundary import _rotation_map, _translation_map
+from scripts.validate_relion_bpref_factor_capture import load_factor_capture
+from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
 
 REPORT_SCHEMA = "recovar.em.k1_native_fine_operand_boundary.v1"
@@ -35,11 +30,7 @@ def _require(condition: bool, message: str) -> None:
         raise ValueError(message)
 
 
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
+from scripts.file_hash import sha256_file as _sha256
 
 
 def _one(directory: Path, pattern: str) -> Path:
