@@ -54,7 +54,6 @@ from recovar.em.sampling import (
 class HighresPPCARefinementResult:
     final_state: PoseMarginalPPCAEMState
     iteration_records: list[PPCARefinementIterationRecord]
-    bridge: PPCAKClassScheduleBridge
     diagnostics: dict
 
 
@@ -1037,7 +1036,6 @@ def run_highres_ppca_refinement_with_kclass_pose_hierarchy(
     return HighresPPCARefinementResult(
         final_state=state,
         iteration_records=records,
-        bridge=bridge,
         diagnostics={
             "stage_history": stage_history,
             "n_pose_warmup_iterations": int(n_pose_warmup_iterations),
