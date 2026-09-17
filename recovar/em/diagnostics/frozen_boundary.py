@@ -158,10 +158,6 @@ V3_REQUIRED_FIXED_SOURCE_NAMES = frozenset(
         "recovar_source_manifest",
     }
 )
-# Compatibility alias for callers that only need the fixed-name subset. Fixed
-# v3 bundles additionally contain one or more ``particle_stack:<index>`` rows.
-V3_REQUIRED_SOURCE_NAMES = V3_REQUIRED_FIXED_SOURCE_NAMES
-
 _V3_SOURCE_ROLES = {
     "particle_star": "input_metadata_and_optics",
     "relion_half_star": "input_half_identity_validation",
