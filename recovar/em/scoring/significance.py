@@ -40,6 +40,7 @@ from recovar.em.helpers.env_flags import (
     parse_env_binary_flag,
     parse_env_int_set,
     parse_env_strict_flag,
+    parse_env_true_flag,
 )
 from recovar.em.helpers.projection import compute_projections_block
 from recovar.em.helpers.projection_cache import build_projection_cache
@@ -703,8 +704,7 @@ def _pass1_fused_enabled() -> bool:
     ``RECOVAR_PASS1_FUSED=1`` to opt in. Bit-identical to the unfused path
     when active (same ops, same order, same dtypes).
     """
-    mode = os.environ.get(_SIGNIFICANCE_FUSED_PASS1_ENV, "0").strip().lower()
-    return mode in {"1", "true", "yes", "on"}
+    return parse_env_true_flag(_SIGNIFICANCE_FUSED_PASS1_ENV)
 
 
 @partial(
