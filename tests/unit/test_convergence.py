@@ -39,7 +39,6 @@ from recovar.em.helpers.convergence import (
     relion_mpi_hidden_variable_change_is_small,
     resolution_required_angular_sampling,
     resolution_triggers_angular_refinement,
-    should_refine_angular_sampling,
     update_angular_sampling,
     update_refinement_state,
 )
@@ -50,6 +49,11 @@ from recovar.em.sampling import (
 
 # Use the same logger supplied by the refinement controller without importing it.
 _REFINEMENT_LOGGER = logging.getLogger("recovar.em.refinement.iteration_loop")
+
+
+def _refines_angular_sampling(state: RefinementState) -> bool:
+    """Whether the production transition advances the HEALPix order."""
+    return update_angular_sampling(state).healpix_order > state.healpix_order
 
 
 # =========================================================================
@@ -376,7 +380,7 @@ class TestShouldRefineAngularSampling:
             nr_iter_wo_resol_gain=5,
             nr_iter_wo_assignment_changes=5,
         )
-        assert should_refine_angular_sampling(state) is False
+        assert _refines_angular_sampling(state) is False
 
     def test_not_refine_when_resolution_improving(self):
         state = RefinementState(
@@ -385,7 +389,7 @@ class TestShouldRefineAngularSampling:
             nr_iter_wo_resol_gain=0,
             nr_iter_wo_assignment_changes=5,
         )
-        assert should_refine_angular_sampling(state) is False
+        assert _refines_angular_sampling(state) is False
 
     def test_not_refine_when_assignments_unstable(self):
         state = RefinementState(
@@ -394,7 +398,7 @@ class TestShouldRefineAngularSampling:
             nr_iter_wo_resol_gain=4,
             nr_iter_wo_assignment_changes=0,
         )
-        assert should_refine_angular_sampling(state) is False
+        assert _refines_angular_sampling(state) is False
 
     def test_refine_when_stalled_and_stable(self):
         state = RefinementState(
@@ -403,7 +407,7 @@ class TestShouldRefineAngularSampling:
             nr_iter_wo_resol_gain=MAX_NR_ITER_WO_RESOL_GAIN,
             nr_iter_wo_assignment_changes=MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
         )
-        assert should_refine_angular_sampling(state) is True
+        assert _refines_angular_sampling(state) is True
 
     def test_not_refine_beyond_75pct_acc_rot(self):
         """Don't refine if current step < 75% of estimated accuracy."""
@@ -416,7 +420,7 @@ class TestShouldRefineAngularSampling:
         )
         # effective_step at order 5 = 360 / (6 * 32) = 1.875 deg
         # 75% of 1.0 = 0.75; 1.875 > 0.75, so should refine
-        assert should_refine_angular_sampling(state) is True
+        assert _refines_angular_sampling(state) is True
 
         # Now set acc_rot large enough that step < 0.75 * acc_rot
         state2 = RefinementState(
@@ -428,7 +432,7 @@ class TestShouldRefineAngularSampling:
         )
         # effective_step at order 6 = 360 / (6 * 64) = 0.9375 deg
         # 0.9375 > 0.75 so should still refine
-        assert should_refine_angular_sampling(state2) is True
+        assert _refines_angular_sampling(state2) is True
 
         # Make acc_rot so that step is below threshold
         state3 = RefinementState(
@@ -440,7 +444,7 @@ class TestShouldRefineAngularSampling:
         )
         # effective_step at order 6 = 0.9375 deg; 0.75 * 0.5 = 0.375
         # 0.9375 > 0.375, so should still refine
-        assert should_refine_angular_sampling(state3) is True
+        assert _refines_angular_sampling(state3) is True
 
         state4 = RefinementState(
             healpix_order=6,
@@ -451,7 +455,7 @@ class TestShouldRefineAngularSampling:
         )
         # effective_step at order 6 = 0.9375 deg; 0.75 * 2.0 = 1.5
         # 0.9375 < 1.5, so RELION considers angular sampling fine enough.
-        assert should_refine_angular_sampling(state4) is False
+        assert _refines_angular_sampling(state4) is False
 
     def test_does_not_refine_when_measured_acc_rot_is_already_fine_enough(self):
         state = RefinementState(
@@ -466,7 +470,7 @@ class TestShouldRefineAngularSampling:
         )
 
         assert resolution_triggers_angular_refinement(state) is False
-        assert should_refine_angular_sampling(state) is False
+        assert _refines_angular_sampling(state) is False
 
     def test_resolution_based_trigger_requires_relion_auto_resol_angles_flag(self):
         state = RefinementState(
@@ -482,11 +486,11 @@ class TestShouldRefineAngularSampling:
         )
 
         assert resolution_triggers_angular_refinement(state) is False
-        assert should_refine_angular_sampling(state) is False
+        assert _refines_angular_sampling(state) is False
 
         state.auto_resolution_based_angles = True
         assert resolution_triggers_angular_refinement(state) is True
-        assert should_refine_angular_sampling(state) is True
+        assert _refines_angular_sampling(state) is True
 
     def test_resolution_based_trigger_does_not_enter_local_search_directly(self):
         state = RefinementState(
@@ -503,10 +507,10 @@ class TestShouldRefineAngularSampling:
         )
 
         assert resolution_triggers_angular_refinement(state) is False
-        assert should_refine_angular_sampling(state) is False
+        assert _refines_angular_sampling(state) is False
 
         state.nr_iter_wo_resol_gain = MAX_NR_ITER_WO_RESOL_GAIN
-        assert should_refine_angular_sampling(state) is True
+        assert _refines_angular_sampling(state) is True
 
 
 class TestRefineAngularSampling:
@@ -1368,10 +1372,10 @@ class TestRefinementPolicy:
         )
 
         monkeypatch.delenv("RECOVAR_EM_LOW_PMAX_REFINE_GUARD", raising=False)
-        assert should_refine_angular_sampling(state)
+        assert _refines_angular_sampling(state)
 
         monkeypatch.setenv("RECOVAR_EM_LOW_PMAX_REFINE_GUARD", "1")
-        assert not should_refine_angular_sampling(state)
+        assert not _refines_angular_sampling(state)
 
         confident = RefinementState(
             healpix_order=4,
@@ -1387,7 +1391,7 @@ class TestRefinementPolicy:
             ave_Pmax=0.30,
             acc_rot=float("inf"),
         )
-        assert should_refine_angular_sampling(confident)
+        assert _refines_angular_sampling(confident)
 
     def test_low_pmax_refinement_guard_can_cover_prelocal_transition(self, monkeypatch):
         state = RefinementState(
@@ -1408,10 +1412,10 @@ class TestRefinementPolicy:
 
         monkeypatch.setenv("RECOVAR_EM_LOW_PMAX_REFINE_GUARD", "1")
         monkeypatch.delenv("RECOVAR_EM_LOW_PMAX_REFINE_REQUIRE_LOCAL", raising=False)
-        assert should_refine_angular_sampling(state)
+        assert _refines_angular_sampling(state)
 
         monkeypatch.setenv("RECOVAR_EM_LOW_PMAX_REFINE_REQUIRE_LOCAL", "0")
-        assert not should_refine_angular_sampling(state)
+        assert not _refines_angular_sampling(state)
 
     def test_local_search_keeps_exhaustive_grid_at_last_prelocal_order(self):
         state = RefinementState(healpix_order=4, auto_local_healpix_order=4)
