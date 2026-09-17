@@ -231,51 +231,6 @@ def build_compact_pair_index_arrays(
     }
 
 
-def build_compact_fine_job_plan(
-    candidate_masks,
-    reference_row_lookup,
-    *,
-    job_bucket_size: int | None = None,
-    job_block_size_for_quantization: int = 5000,
-):
-    """Pack all selected fine hypotheses into one global source-order plan.
-
-    The mature pair encoder quantizes a separate capacity for every image and
-    therefore executes ``B * max(P_i)`` slots.  This companion ABI preserves
-    the identical image-major, rotation-major, translation-major order while
-    quantizing only the total selected count.  Rows encode ``(image,
-    projected-reference row, dense rotation row, translation)``; an all-``-1``
-    tail is inert static padding for JAX compilation reuse.
-    """
-
-    candidate_masks = tuple(np.asarray(mask, dtype=bool) for mask in candidate_masks)
-    if not candidate_masks:
-        raise ValueError("compact fine jobs require at least one image mask")
-    first_shape = candidate_masks[0].shape
-    if len(first_shape) != 2 or first_shape[0] <= 0 or first_shape[1] <= 0:
-        raise ValueError("compact fine-job masks must have nonempty (rotation, translation) shape")
-    if any(mask.shape != first_shape for mask in candidate_masks):
-        raise ValueError("compact fine-job masks must share one dense shape")
-
-    batch_size = len(candidate_masks)
-    rotation_count, _ = first_shape
-    reference_row_lookup = np.asarray(reference_row_lookup)
-    if reference_row_lookup.dtype != np.int32 or reference_row_lookup.shape != (batch_size, rotation_count):
-        raise ValueError(
-            "compact fine-job reference lookup must be int32 with shape "
-            f"{(batch_size, rotation_count)}, got "
-            f"{reference_row_lookup.shape} {reference_row_lookup.dtype}"
-        )
-
-    pair_arrays = build_compact_pair_index_arrays(candidate_masks)
-    return build_compact_fine_job_plan_from_pair_arrays(
-        pair_arrays,
-        reference_row_lookup,
-        job_bucket_size=job_bucket_size,
-        job_block_size_for_quantization=job_block_size_for_quantization,
-    )
-
-
 def build_compact_fine_job_plan_from_pair_arrays(
     pair_arrays,
     reference_row_lookup,
