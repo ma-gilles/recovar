@@ -2882,6 +2882,11 @@ def run_local_em_exact(
                         ctf_probs=ctf_probs[:unpadded_batch_size],
                         rotations=_local_mstep_rotations(unpadded_bucket),
                         actual_counts=unpadded_bucket.actual_rotation_counts,
+                        # Diagnostic-only: the segmented layout already carries per-class
+                        # valid counts and the segment stride; forwarding them lets the
+                        # writer attribute rows to classes instead of taking a prefix.
+                        class_actual_rotation_counts=unpadded_bucket.class_actual_rotation_counts,
+                        class_segment_rotation_count=unpadded_bucket.class_segment_rotation_count,
                         rotation_indices=unpadded_bucket.local_rotation_ids,
                         fine_translations=local_layout.translation_grid,
                         scores=debug_scores_unpadded,
@@ -5067,6 +5072,10 @@ def run_local_em_exact(
                     ctf_probs=ctf_probs,
                     rotations=_local_mstep_rotations(bucket),
                     actual_counts=bucket.actual_rotation_counts,
+                    # Same diagnostic-only forwarding as the big-JIT call site above;
+                    # both local routes can reach a class-segmented bucket.
+                    class_actual_rotation_counts=bucket.class_actual_rotation_counts,
+                    class_segment_rotation_count=bucket.class_segment_rotation_count,
                     rotation_indices=bucket.local_rotation_ids,
                     fine_translations=local_layout.translation_grid,
                     scores=scores,

@@ -662,6 +662,8 @@ def _maybe_dump_bpref_contribution_rows(
     shadow_reduction_agreement,
     device_signature_active: bool | None = None,
     class_index: int = 0,
+    class_actual_rotation_counts=None,
+    class_segment_rotation_count=None,
     mstep_shifted_recon=None,
     mstep_ctf2_over_nv=None,
     inline_projector_data_volumes=None,
@@ -790,12 +792,65 @@ def _maybe_dump_bpref_contribution_rows(
         raise ValueError("BPref contribution dump actual_counts shape mismatch")
 
     rotation_rows = np.arange(summed_np.shape[1], dtype=np.int64)[None, :]
-    valid = rotation_rows < actual_counts_np[:, None]
+    # A class-segmented bucket places class k at rows [k*seg, k*seg + count_k) and pads
+    # the rest of each segment, so the contiguous prefix below would run off the end of
+    # class 0 into its padding and on into class 1. When the caller supplies the segment
+    # geometry, enumerate one segment at a time and record which class each active row
+    # belongs to; otherwise keep the single-class prefix unchanged.
+    active_class_indices = None
+    emitted_class_index = class_index
+    emitted_class_scope = "single-class-prefix"
+    if class_actual_rotation_counts is None:
+        valid = rotation_rows < actual_counts_np[:, None]
+    else:
+        class_counts_np = _select_particle_axis(class_actual_rotation_counts).astype(np.int64, copy=False)
+        if class_counts_np.ndim != 2 or class_counts_np.shape[0] != summed_np.shape[0]:
+            raise ValueError("BPref contribution dump class_actual_rotation_counts shape mismatch")
+        if class_segment_rotation_count is None:
+            raise ValueError("BPref contribution dump requires class_segment_rotation_count with per-class counts")
+        segment = int(class_segment_rotation_count)
+        n_classes = int(class_counts_np.shape[1])
+        if segment <= 0 or segment * n_classes > int(summed_np.shape[1]):
+            raise ValueError("BPref contribution dump class segment geometry does not fit the bucket")
+        if np.any(class_counts_np > segment):
+            raise ValueError("BPref contribution dump per-class count exceeds the segment length")
+        valid = np.zeros((summed_np.shape[0], summed_np.shape[1]), dtype=bool)
+        row_class = np.full((summed_np.shape[0], summed_np.shape[1]), -1, dtype=np.int32)
+        for k in range(n_classes):
+            in_segment = (rotation_rows >= k * segment) & (
+                rotation_rows < k * segment + class_counts_np[:, k][:, None]
+            )
+            valid |= in_segment
+            row_class = np.where(in_segment, np.int32(k), row_class)
+        # One-based RELION label, evaluated by the shared selector so this route obeys
+        # the same request as the bucketed engine.
+        keep = np.zeros(n_classes, dtype=bool)
+        for k in range(n_classes):
+            keep[k] = bool(_bpref_contribution_class_enabled(k))
+        if not keep.any():
+            raise ValueError(
+                f"{_BPREF_CONTRIBUTION_DUMP_CLASS_ENV} selects no class in a {n_classes}-class bucket"
+            )
+        selected = np.zeros_like(valid)
+        for k in np.nonzero(keep)[0]:
+            selected |= valid & (row_class == np.int32(k))
+        valid = selected
+        active_class_indices = row_class
+        kept = [int(k) for k in np.nonzero(keep)[0]]
+        # A legacy reader looks at the scalar class_index. Give it the selected class
+        # when exactly one is in scope, and an explicit sentinel when several are, so a
+        # mixed-class file can never be read as class 0.
+        emitted_class_index = kept[0] if len(kept) == 1 else -1
+        emitted_class_scope = (
+            f"segmented-class{kept[0]:03d}" if len(kept) == 1 else "segmented-mixed-classes"
+        )
     # Preserve every valid rotation row, including exact-zero rows.  A strict
     # RELION/RECOVAR four-arm replay must distinguish a genuine support/value
     # difference from a row silently omitted by the diagnostic writer.
     active = valid
     active_particle_rows, active_rotation_rows = np.nonzero(active)
+    if active_class_indices is not None:
+        active_class_indices = active_class_indices[active_particle_rows, active_rotation_rows]
     rotation_indices_np = _select_particle_axis(rotation_indices).astype(np.int64, copy=False)
     if rotation_indices_np.ndim == 1:
         rotation_indices_np = np.broadcast_to(rotation_indices_np[None, :], summed_np.shape[:2])
@@ -892,7 +947,26 @@ def _maybe_dump_bpref_contribution_rows(
         half=np.int32(context_half),
         rank=np.int32(int(os.environ.get("RECOVAR_BPREF_CONTRIBUTION_RANK", "0"))),
         pass_index=np.int32(2),
-        class_index=np.int32(class_index),
+        # The emitted scalar identifies what this file holds, not the call default:
+        # the selected class when one is in scope, -1 when several are.
+        class_index=np.int32(emitted_class_index),
+        # Self-describing scope, so a reader never has to trust a directory name or an
+        # environment variable.
+        class_scope=np.asarray(emitted_class_scope),
+        requested_class_one_based=np.asarray(
+            os.environ.get(_BPREF_CONTRIBUTION_DUMP_CLASS_ENV, "").strip()
+        ),
+        active_class_indices=(
+            np.zeros(0, dtype=np.int32) if active_class_indices is None
+            else np.asarray(active_class_indices, dtype=np.int32)
+        ),
+        class_actual_rotation_counts=(
+            np.zeros((0, 0), dtype=np.int64) if class_actual_rotation_counts is None
+            else _select_particle_axis(class_actual_rotation_counts).astype(np.int64, copy=False)
+        ),
+        class_segment_rotation_count=np.int64(
+            -1 if class_segment_rotation_count is None else int(class_segment_rotation_count)
+        ),
         run_id=np.asarray(run_id),
         current_size=np.int64(current_size),
         # ``current_size`` is the scoring window. During fresh firstiter-CC,
