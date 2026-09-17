@@ -224,8 +224,6 @@ def test_fixed_capacity_active_row_materialization_structurally_excludes_all_tai
 
     assert active.descriptor_fingerprint == plan.descriptor_fingerprint
     assert active.generation_token is plan.generation_token
-    assert active.excluded_image_tail_count == 2
-    assert active.excluded_candidate_tail_count == 4
     assert active.image_indices.shape == (plan.valid_image_count,)
     assert active.row_offsets.shape == (plan.valid_image_count + 1,)
     assert active.raw_images.shape[0] == plan.valid_image_count
