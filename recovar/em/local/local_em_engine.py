@@ -366,7 +366,7 @@ def run_local_em_exact(
     use_float64_scoring: bool = False,
     use_float64_normalization: bool = True,
     use_float64_projections: bool = False,
-    projection_relion_texture_interp: bool = False,
+    projection_relion_texture_interp: bool | None = None,
     projection_relion_acc_double_floorf_quirk: bool = False,
     projection_force_jax: bool = False,
     projection_mask_current_image_disk: bool = True,
@@ -956,6 +956,13 @@ def run_local_em_exact(
     )
     n_windowed = window_spec.n_score
     projection_kwargs = window_spec.projection_kwargs()
+    # None means "resolve as strict parity does", which is RELION's CUDA texture
+    # interpolator when it is available. Passing an explicit False here forced the
+    # manual diagnostic fallback on the eager RELION-projector branch while the
+    # big-JIT branch left it unset and took the texture path, so the two routes
+    # projected the same volume with different interpolators: 0.15 percent of the
+    # projection magnitude, which moved identical candidates' scores by up to 0.047.
+    # local_projection_cache and half_scoring already carry None for this meaning.
     projection_kwargs["relion_texture_interp"] = projection_relion_texture_interp
     projection_kwargs["relion_acc_double_floorf_quirk"] = projection_relion_acc_double_floorf_quirk
     projection_kwargs["force_jax"] = bool(projection_force_jax)
