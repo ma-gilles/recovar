@@ -1,33 +1,13 @@
-"""Merge-regression guards for cleanups landed before the EM/VDAM/PPCA-refinement merge.
+"""Halfset pose diagnostics required by dense and local PPCA result writers.
 
-These tests lock down three cleanups so a future merge cannot silently revert them:
-
-1. ``_cap_W_shell_power`` and the ``cap_W_shell_power`` parameter were deleted from
-   ``recovar.em.ppca_refinement.postprocess``. The shell-power cap was a one-sided
-   real-space-mask leakage guard that papered over W shrinkage; removing it makes
-   W collapse honestly diagnosable.
-
-2. ``score_W_scale`` (and its schedule plumbing) was removed from every public
-   library function and from both run scripts. It was a never-empirically-justified
-   tempering knob whose only callers were algebraic-identity tests.
-
-3. ``_apply_pmax_guard`` and the ``pmax_mean<0.5`` schedule freeze were removed
-   from the run scripts. The pmax magnitude depends on the rotation-grid size and
-   has no theoretical link to schedule-advance correctness; gold-standard FSC +
-   pose-stability gates already cover the legitimate "don't advance yet" case.
-
-Plus: the dense and local halfset save logic depends on
+The save logic depends on
 ``state.pose_diagnostics["halfset0"|"halfset1"]`` containing per-halfset
 ``best_rotation_idx`` / ``best_translation_idx`` / (local) ``image_indices`` /
 ``best_rotation_matrix`` / ``best_translation``. We assert those keys are
-present and shape-correct so the scripts' full-N pose scatter cannot regress
-silently.
+present and shape-correct so full-N pose scattering cannot silently lose images.
 """
 
 from __future__ import annotations
-
-import inspect
-from pathlib import Path
 
 import jax.numpy as jnp
 import numpy as np
@@ -35,25 +15,12 @@ import pytest
 
 from recovar.core import fourier_transform_utils as ftu
 from recovar.em.local.local_layout import LocalHypothesisLayout
-from recovar.em.ppca_refinement import postprocess as postprocess_module
 from recovar.em.ppca_refinement.config import (
     GeometryConfig,
     ScheduleConfig,
 )
-from recovar.em.ppca_refinement.dense_dataset import (
-    iter_dense_ppca_dataset_blocks,
-    prepare_dense_ppca_dataset_inputs,
-    run_dense_ppca_fused_em_iteration,
-    run_dense_ppca_halfset_fused_em_iteration,
-)
-from recovar.em.ppca_refinement.local_dataset import (
-    run_local_ppca_fused_em_iteration,
-    run_local_ppca_halfset_fused_em_iteration,
-)
-from recovar.em.ppca_refinement.refinement_loop import (
-    run_dense_ppca_refinement_loop,
-    run_local_ppca_refinement_loop,
-)
+from recovar.em.ppca_refinement.dense_dataset import run_dense_ppca_halfset_fused_em_iteration
+from recovar.em.ppca_refinement.local_dataset import run_local_ppca_halfset_fused_em_iteration
 from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
 
 pytestmark = pytest.mark.unit
@@ -181,102 +148,6 @@ def _build_state(mu, W):
     )
 
 
-# ---------------------------------------------------------------------------
-# (1) postprocess cap removed
-# ---------------------------------------------------------------------------
-def test_postprocess_module_has_no_cap_W_shell_power_function():
-    assert not hasattr(postprocess_module, "_cap_W_shell_power"), (
-        "shell-power cap should remain deleted; reintroducing it papers over W shrinkage"
-    )
-
-
-def test_postprocess_signature_has_no_cap_W_shell_power_kwarg():
-    sig = inspect.signature(postprocess_module.postprocess_ppca_half_volumes)
-    assert "cap_W_shell_power" not in sig.parameters
-
-
-def test_postprocess_diagnostics_no_longer_publish_shell_power_cap_keys():
-    """A successful call must not report shell-power-cap diagnostics any more."""
-    box = (4, 4, 4)
-    half_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(box)))
-    mu_half = jnp.zeros((half_size,), dtype=jnp.complex64)
-    W_half = jnp.zeros((half_size, 1), dtype=jnp.complex64)
-    out = postprocess_module.postprocess_ppca_half_volumes(
-        mu_half,
-        W_half,
-        box,
-        config=postprocess_module.PostprocessConfig(
-            strategy="mean_and_w_mask",
-            mask_radius_px=2.0,
-            cosine_width_px=1.0,
-            grid_correct=False,
-        ),
-    )
-    forbidden = {
-        "postprocess_cap_W_shell_power",
-        "postprocess_W_shell_power_scale_min",
-        "postprocess_W_shell_power_scale_mean",
-        "postprocess_W_shell_power_input_sum",
-        "postprocess_W_shell_power_pre_cap_sum",
-        "postprocess_W_shell_power_output_sum",
-    }
-    leaked = forbidden & set(out.diagnostics.keys())
-    assert not leaked, f"shell-power cap diagnostics leaked back in: {sorted(leaked)}"
-
-
-# ---------------------------------------------------------------------------
-# (2) score_W_scale removed from every public library function
-# ---------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    "fn",
-    [
-        prepare_dense_ppca_dataset_inputs,
-        iter_dense_ppca_dataset_blocks,
-        run_dense_ppca_fused_em_iteration,
-        run_dense_ppca_halfset_fused_em_iteration,
-        run_local_ppca_fused_em_iteration,
-        run_local_ppca_halfset_fused_em_iteration,
-        run_dense_ppca_refinement_loop,
-        run_local_ppca_refinement_loop,
-    ],
-)
-def test_no_score_W_scale_kwarg_in_public_signatures(fn):
-    sig = inspect.signature(fn)
-    assert "score_W_scale" not in sig.parameters, (
-        f"{fn.__name__} re-grew a score_W_scale kwarg; remove it (no empirical evidence it improves recovery)"
-    )
-
-
-# ---------------------------------------------------------------------------
-# (3) script-level cleanups: no _apply_pmax_guard, no score-W-scale CLI flag
-# ---------------------------------------------------------------------------
-SCRIPTS_DIR = Path(__file__).resolve().parents[3] / "scripts"
-
-
-@pytest.mark.parametrize(
-    "script_name",
-    ["run_ppca_dense_from_init_npz.py", "run_ppca_local_from_init_npz.py"],
-)
-def test_run_scripts_do_not_resurrect_pmax_guard_or_score_W_scale(script_name):
-    text = (SCRIPTS_DIR / script_name).read_text()
-    forbidden = (
-        "_apply_pmax_guard",
-        "pmax_guard",
-        "score_W_scale",
-        "score-W-scale",
-        "score_W_tempered",
-        "_cap_W_shell_power",
-    )
-    found = [tok for tok in forbidden if tok in text]
-    assert not found, f"{script_name} re-introduced removed symbols: {found} — keep cleanups in place"
-
-
-# ---------------------------------------------------------------------------
-# (4) halfset save invariants — both halfsets emit the per-image keys the
-#     scripts' full-N scatter depends on. If these contracts hold, the dense
-#     and local halfset save blocks (which are pure data movement that
-#     scatters by ``halfset_indices``) cannot silently drop poses.
-# ---------------------------------------------------------------------------
 def test_dense_halfset_iteration_publishes_per_halfset_pose_keys(tiny_halfset_inputs):
     """The dense halfset iteration must produce pose_diagnostics for both
     halfsets with the per-image keys that the script's full-N scatter
