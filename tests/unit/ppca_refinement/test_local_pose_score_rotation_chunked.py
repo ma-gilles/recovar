@@ -118,10 +118,4 @@ def test_chunked_skips_when_chunk_size_exceeds_R():
         Y1, proj_aug, ctf2_over_noise, y_norm, pose_log_prior,
         significance_threshold=1e-3, top_pose_count=2, rotation_chunk_size=64,
     )
-    # rotation_posterior_sums is zeroed in chunked path; on the delegated case
-    # it should match the reference (one-shot kernel).
-    np.testing.assert_allclose(
-        np.asarray(delegated.rotation_posterior_sums),
-        np.asarray(ref.rotation_posterior_sums),
-        rtol=1e-5,
-    )
+    np.testing.assert_array_equal(np.asarray(delegated.pmax), np.asarray(ref.pmax))

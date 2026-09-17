@@ -66,7 +66,6 @@ class PosteriorDiagnostics(NamedTuple):
     best_translation_idx: jax.Array
     n_significant_per_image: jax.Array
     best_log_score_per_image: jax.Array
-    rotation_posterior_sums: jax.Array
     top_rotation_idx: jax.Array
     top_translation_idx: jax.Array
     top_log_score_per_image: jax.Array
@@ -389,7 +388,6 @@ def _score_gamma_and_moments(
         best_translation_idx=(best_flat // R).astype(jnp.int32),
         n_significant_per_image=jnp.sum(gamma > float(significance_threshold), axis=(1, 2)).astype(jnp.int32),
         best_log_score_per_image=jnp.max(score_flat, axis=-1).astype(jnp.float32),
-        rotation_posterior_sums=jnp.sum(gamma, axis=(0, 1)).astype(jnp.float32),
         top_rotation_idx=top_rot,
         top_translation_idx=top_trans,
         top_log_score_per_image=top_scores,
