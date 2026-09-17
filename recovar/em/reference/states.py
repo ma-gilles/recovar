@@ -17,19 +17,15 @@ from .m_step import accumulate_mean_statistics
 logger = logging.getLogger(__name__)
 
 
-## Probably should implement these so we don't have to pass around so many arguments
 class EMState:
-    mean = None
-    mean_variance = None
-    noise_variance = None
     name = "EM"
-    Ft_CTF = 0
-    Ft_y = 0
 
     def __init__(self, mean, mean_variance, noise_variance):
         self.mean = mean
         self.mean_variance = mean_variance
         self.noise_variance = noise_variance
+        self.Ft_y = 0
+        self.Ft_CTF = 0
 
     def E_step(self, experiment_dataset, rotations, translations, disc_type, big_image_batch):
         probabilities = compute_pose_probabilities(
@@ -51,18 +47,18 @@ class EMState:
 
 
 class SGDState:
-    mean = None
-    mean_variance = None
-    noise_variance = None
-    update = 0
     name = "SGD"
-    sgd_projection = lambda x: x
     sgd_batchsize = 100
+
+    @staticmethod
+    def sgd_projection(value):
+        return value
 
     def __init__(self, mean, mean_variance, noise_variance):
         self.mean = mean
         self.mean_variance = mean_variance
         self.noise_variance = noise_variance
+        self.update = 0
 
     def E_step(self, experiment_dataset, rotations, translations, disc_type, big_image_batch):
         probabilities = compute_pose_probabilities(
@@ -136,32 +132,6 @@ class SGDState:
 
 
 class HeterogeneousEMState:
-    # Mean stuff
-    mean = None
-    mean_prior = None
-    Ft_y = 0
-    Ft_CTF = 0
-
-    # Covariance stuff
-    H = 0
-    B = 0
-    cov_cols = None
-    covariance_prior = None
-    covariance_options = None
-    picked_frequency_indices = None
-
-    # Projected covariance stuff
-    projected_cov_lhs = 0
-    projected_cov_rhs = 0
-    subspace = None
-
-    # PCA stuff
-    u = None
-    s = None
-
-    # Other stuff
-    volume_mask = None
-    noise_variance = None
     name = "HeterogeneousEM"
 
     def __init__(self, mean, mean_variance, noise_variance):
@@ -169,8 +139,22 @@ class HeterogeneousEMState:
         self.mean = mean
         self.mean_variance = mean_variance
         self.noise_variance = noise_variance
-        grid_size = utils.guess_grid_size_from_vol_size(mean.size)
-        self.volume_mask = mask_fn.raised_cosine_mask(3 * [grid_size], grid_size // 2 - 3, grid_size // 2, -1)
+        self.Ft_y = 0
+        self.Ft_CTF = 0
+        self.H = 0
+        self.B = 0
+        self.projected_cov_lhs = 0
+        self.projected_cov_rhs = 0
+        self.cov_cols = None
+        self.covariance_prior = None
+        self.covariance_options = None
+        self.picked_frequency_indices = None
+        self.subspace = None
+        self.u = None
+        self.s = None
+        self.volume_mask = mask_fn.raised_cosine_mask(
+            3 * [self.grid_size], self.grid_size // 2 - 3, self.grid_size // 2, -1
+        )
 
     def E_step(self, experiment_dataset, rotations, translations, disc_type, big_image_batch):
         probabilities = compute_pose_probabilities(
