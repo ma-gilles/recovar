@@ -1164,41 +1164,21 @@ def maybe_write_debug_score_dump(
             "grid_n_psi": np.array([int(local_layout.n_psi)], dtype=np.int32),
         }
         if dump_operands:
-            if shifted_score_np is not None:
-                payload["debug_shifted_score"] = np.asarray(
-                    shifted_score_np[compact_row],
-                    dtype=shifted_score_np.dtype,
-                )
-            if shifted_recon_np is not None:
-                payload["debug_shifted_recon"] = np.asarray(
-                    shifted_recon_np[compact_row],
-                    dtype=shifted_recon_np.dtype,
-                )
-            if ctf2_over_nv_np is not None:
-                payload["debug_ctf2_over_nv"] = np.asarray(
-                    ctf2_over_nv_np[compact_row],
-                    dtype=ctf2_over_nv_np.dtype,
-                )
-            if ctf2_over_nv_recon_np is not None:
-                payload["debug_ctf2_over_nv_recon"] = np.asarray(
-                    ctf2_over_nv_recon_np[compact_row],
-                    dtype=ctf2_over_nv_recon_np.dtype,
-                )
-            if proj_weighted_np is not None:
-                payload["debug_proj_weighted"] = np.asarray(
-                    proj_weighted_np[compact_row, candidate_rows, :],
-                    dtype=proj_weighted_np.dtype,
-                )
-            if proj_for_noise_np is not None:
-                payload["debug_proj_for_recon"] = np.asarray(
-                    proj_for_noise_np[compact_row, candidate_rows, :],
-                    dtype=proj_for_noise_np.dtype,
-                )
-            if proj_abs2_weighted_np is not None:
-                payload["debug_proj_abs2_weighted"] = np.asarray(
-                    proj_abs2_weighted_np[compact_row, candidate_rows, :],
-                    dtype=proj_abs2_weighted_np.dtype,
-                )
+            for name, values in (
+                ("debug_shifted_score", shifted_score_np),
+                ("debug_shifted_recon", shifted_recon_np),
+                ("debug_ctf2_over_nv", ctf2_over_nv_np),
+                ("debug_ctf2_over_nv_recon", ctf2_over_nv_recon_np),
+            ):
+                if values is not None:
+                    payload[name] = np.asarray(values[compact_row], dtype=values.dtype)
+            for name, values in (
+                ("debug_proj_weighted", proj_weighted_np),
+                ("debug_proj_for_recon", proj_for_noise_np),
+                ("debug_proj_abs2_weighted", proj_abs2_weighted_np),
+            ):
+                if values is not None:
+                    payload[name] = np.asarray(values[compact_row, candidate_rows, :], dtype=values.dtype)
             if wavg_cutoff_triplet_np is not None:
                 payload["debug_wavg_cutoff_triplet_xa_aa_diff2"] = np.asarray(
                     wavg_cutoff_triplet_np[compact_row],
