@@ -14,14 +14,14 @@ from recovar.em.helpers.batch_planning import _plan_fixed_capacity_whole_local, 
 from recovar.em.local import fixed_capacity_local, local_big_jit, local_bucket_stages, local_em_engine
 from recovar.em.local.fixed_capacity_local import (
     _bind_fixed_capacity_local_execution,
+    _fixed_capacity_calls_from_local_buckets,
     _materialize_fixed_capacity_active_local_rows,
     _materialize_fixed_capacity_local_call_view,
+    _pack_fixed_capacity_local_hypothesis_program,
 )
 from recovar.em.local.local_caches import _assemble_fixed_capacity_local_operands_once
 from recovar.em.local.local_layout import (
     LocalBucketSpec,
-    _fixed_capacity_calls_from_local_buckets,
-    _pack_fixed_capacity_local_hypothesis_program,
 )
 
 pytestmark = pytest.mark.unit
@@ -877,7 +877,7 @@ def test_local_em_caller_allocates_and_forwards_fresh_donated_accumulators_per_r
     source = inspect.getsource(local_em_engine.run_local_em_exact)
     allocation_y = source.index("Ft_y = jnp.zeros(")
     allocation_ctf = source.index("Ft_ctf = jnp.zeros(")
-    bucket_loop = source.index("for bucket_index, bucket in enumerate(bucket_specs):")
+    bucket_loop = source.index("for bucket_index in range(len(bucket_specs)):")
     argument_tuple = source.index("big_jit_arguments = (")
     invocation = source.index("_invoke_local_bucket_big_jit(")
 
