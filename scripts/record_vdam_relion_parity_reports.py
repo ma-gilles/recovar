@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import subprocess
 from collections import Counter
@@ -12,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 if __package__:
+    from scripts.file_hash import sha256_file
     from scripts.summarize_vdam_relion_parity_scorecard import (
         DEFAULT_OUTPUT,
         DEFAULT_SCORECARD,
@@ -20,6 +20,7 @@ if __package__:
         render_markdown,
     )
 else:
+    from file_hash import sha256_file
     from summarize_vdam_relion_parity_scorecard import (
         DEFAULT_OUTPUT,
         DEFAULT_SCORECARD,
@@ -30,14 +31,6 @@ else:
 
 AUDIT_SCHEMA = "recovar.vdam_relion_fsc_trajectory_audit.v1"
 LEDGER_SCHEMA = "recovar.vdam_relion_parity_evidence_ledger.v1"
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _load_object(path: Path, label: str) -> dict:
@@ -83,7 +76,7 @@ def _case_update(report_path: Path, expected_source_case_id: str) -> tuple[dict,
     job_id = str(provenance.get("slurm_job_id", ""))
     if not job_id:
         raise ValueError(f"{case_id}: missing Slurm job ID in {provenance_path}")
-    report_sha256 = _sha256(report_path)
+    report_sha256 = sha256_file(report_path)
     checkpoint_results = {
         str(iteration): "pass" if bool(by_iteration[iteration].get("pass")) else "fail"
         for iteration in REQUIRED_CHECKPOINTS
@@ -170,7 +163,7 @@ def record_reports(
     ledger_path.write_text(json.dumps(ledger, indent=2, sort_keys=True) + "\n")
     snapshot_evidence = {
         "ledger_path": str(ledger_path.resolve()),
-        "ledger_sha256": _sha256(ledger_path),
+        "ledger_sha256": sha256_file(ledger_path),
         "source_head": source_head,
     }
     snapshot = {

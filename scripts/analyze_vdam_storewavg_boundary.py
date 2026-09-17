@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import struct
 from pathlib import Path
 
 import numpy as np
+
+from scripts.file_hash import sha256_file
 
 SCHEMA = "recovar.vdam_storewavg_boundary.v1"
 
@@ -17,14 +18,6 @@ SCHEMA = "recovar.vdam_storewavg_boundary.v1"
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _flat(path: Path, dtype: np.dtype) -> np.ndarray:
@@ -510,10 +503,10 @@ def _load_native_particle_bpref(
     artifacts = {
         "native_particle_bpref_prefix": prefix,
         "native_particle_bpref_dims": dims.tolist(),
-        "native_particle_bpref_dims_sha256": _sha256(dims_path),
-        "native_particle_bpref_real_sha256": _sha256(real_path),
-        "native_particle_bpref_imag_sha256": _sha256(imag_path),
-        "native_particle_bpref_weight_sha256": _sha256(weight_path),
+        "native_particle_bpref_dims_sha256": sha256_file(dims_path),
+        "native_particle_bpref_real_sha256": sha256_file(real_path),
+        "native_particle_bpref_imag_sha256": sha256_file(imag_path),
+        "native_particle_bpref_weight_sha256": sha256_file(weight_path),
     }
     return (real + 1j * imag).astype(np.complex64), weight.astype(np.float32), artifacts
 
@@ -628,7 +621,7 @@ def analyze(
             "artifacts": {
                 "native_directory": str(native_directory.resolve()),
                 "recovar_capture": str(recovar_capture.resolve()),
-                "recovar_capture_sha256": _sha256(recovar_capture),
+                "recovar_capture_sha256": sha256_file(recovar_capture),
             },
             "device": str(jax.devices()[0]),
         }
@@ -858,26 +851,26 @@ def analyze(
         "artifacts": {
             "native_directory": str(native_directory.resolve()),
             "native_unmasked_image": str(native_image_path.resolve()),
-            "native_unmasked_image_sha256": _sha256(native_image_path),
+            "native_unmasked_image_sha256": sha256_file(native_image_path),
             "native_inverse_noise": str(native_inverse_noise_path.resolve()),
-            "native_inverse_noise_sha256": _sha256(native_inverse_noise_path),
+            "native_inverse_noise_sha256": sha256_file(native_inverse_noise_path),
             **(
                 {
                     "native_sigma2_noise": str(native_sigma2_noise_path.resolve()),
-                    "native_sigma2_noise_sha256": _sha256(native_sigma2_noise_path),
+                    "native_sigma2_noise_sha256": sha256_file(native_sigma2_noise_path),
                     "native_sigma2_fudge": str(native_sigma2_fudge_path.resolve()),
-                    "native_sigma2_fudge_sha256": _sha256(native_sigma2_fudge_path),
+                    "native_sigma2_fudge_sha256": sha256_file(native_sigma2_fudge_path),
                 }
                 if native_sigma2_noise_path is not None
                 and native_sigma2_fudge_path is not None
                 else {"native_inverse_noise_includes_dc": True}
             ),
             "recovar_capture": str(recovar_capture.resolve()),
-            "recovar_capture_sha256": _sha256(recovar_capture),
+            "recovar_capture_sha256": sha256_file(recovar_capture),
             **(
                 {
                     "recovar_production_score_dump": str(recovar_score_dump.resolve()),
-                    "recovar_production_score_dump_sha256": _sha256(recovar_score_dump),
+                    "recovar_production_score_dump_sha256": sha256_file(recovar_score_dump),
                 }
                 if recovar_score_dump is not None
                 else {}
