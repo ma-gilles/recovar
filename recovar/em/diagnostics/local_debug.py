@@ -17,11 +17,11 @@ from recovar.em.helpers.half_spectrum import bin_shell_values_np
 
 def _local_layout_sample_counts(layout):
     """Count allowed rotation/translation pairs in each image for reporting."""
-    if layout.sample_mask_flat is None:
+    if layout.sample_mask_bits is None:
         return np.asarray(layout.rotation_counts, dtype=np.int64) * int(layout.translation_grid.shape[0])
     return np.asarray(
         [
-            int(np.count_nonzero(layout.sample_mask_flat[start:stop]))
+            int(np.count_nonzero(layout.sample_mask_rows(start, stop)))
             for start, stop in zip(layout.rotation_offsets[:-1], layout.rotation_offsets[1:])
         ],
         dtype=np.int64,
@@ -45,8 +45,8 @@ def log_local_adaptive_support(logger, parent_layout, significant_sample_indices
     parent_samples_per_image = np.asarray(
         [
             (
-                int(np.count_nonzero(parent_layout.sample_mask_flat[start:stop]))
-                if parent_layout.sample_mask_flat is not None
+                int(np.count_nonzero(parent_layout.sample_mask_rows(start, stop)))
+                if parent_layout.sample_mask_bits is not None
                 else int(stop - start) * int(current_translations.shape[0])
             )
             if sig is None

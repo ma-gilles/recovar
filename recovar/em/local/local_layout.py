@@ -139,9 +139,18 @@ class LocalHypothesisLayout:
     translation_grid: np.ndarray
     translation_log_priors: np.ndarray
     rotation_posterior_ids_flat: np.ndarray | None = None
-    sample_mask_flat: np.ndarray | None = None
+    sample_mask_bits: np.ndarray | None = None  # uint8, translation bits packed little-endian
     mstep_rotations_flat: np.ndarray | None = None
     source_eulers_flat: np.ndarray | None = None
+
+    def sample_mask_rows(self, start=0, stop=None) -> np.ndarray | None:
+        """Expand only the requested rotation rows to the kernel's boolean mask."""
+        if self.sample_mask_bits is None:
+            return None
+        return np.unpackbits(
+            self.sample_mask_bits[start:stop], axis=1,
+            count=int(self.translation_grid.shape[0]), bitorder="little",
+        ).view(np.bool_)
 
     @property
     def n_images(self) -> int:
@@ -937,7 +946,7 @@ def build_local_adaptive_pass2_hypothesis_layout(
         rotation_ids_parts.append(oversampled_rot_indices)
         posterior_ids_parts.append(parent_posterior_ids)
         log_prior_parts.append(selected_parent_log_prior[parent_map].astype(dtype, copy=False))
-        sample_mask_parts.append(sample_mask)
+        sample_mask_parts.append(None if sample_mask is None else np.packbits(sample_mask, axis=1, bitorder="little"))
 
     fine_metadata = build_local_search_grid_metadata(fine_healpix_order)
     rotations_flat = _flat_parts(rotations_parts, empty_shape=(0, 3, 3), dtype=dtype)
@@ -946,16 +955,17 @@ def build_local_adaptive_pass2_hypothesis_layout(
     posterior_ids_flat = _flat_parts(posterior_ids_parts, empty_shape=0, dtype=np.int32)
     rotation_log_priors_flat = _flat_parts(log_prior_parts, empty_shape=0, dtype=dtype)
     if not sample_mask_parts:
-        sample_mask_flat = np.zeros((0, n_fine_trans), dtype=bool)
+        sample_mask_bits = np.zeros((0, (n_fine_trans + 7) // 8), dtype=np.uint8)
     elif all(sample_mask is None for sample_mask in sample_mask_parts):
         # ``None`` is the exact-local engine's compact representation of full
         # per-rotation/per-translation support. Avoid materializing massive
         # all-ones masks for RELION full-parent local pass 2.
-        sample_mask_flat = None
+        sample_mask_bits = None
     else:
-        sample_mask_flat = np.concatenate(
+        sample_mask_bits = np.concatenate(
             [
-                np.ones((int(count), n_fine_trans), dtype=bool) if sample_mask is None else sample_mask
+                np.packbits(np.ones((int(count), n_fine_trans), dtype=bool), axis=1, bitorder="little")
+                if sample_mask is None else sample_mask
                 for sample_mask, count in zip(sample_mask_parts, counts, strict=True)
             ],
             axis=0,
@@ -979,7 +989,7 @@ def build_local_adaptive_pass2_hypothesis_layout(
             :, fine_translation_parent
         ],
         rotation_posterior_ids_flat=posterior_ids_flat,
-        sample_mask_flat=sample_mask_flat,
+        sample_mask_bits=sample_mask_bits,
         mstep_rotations_flat=mstep_rotations_flat,
     )
 
@@ -1188,16 +1198,7 @@ def build_pass2_hypothesis_layout(
     rotation_ids_flat = np.empty(n_rows, dtype=np.int64)
     posterior_ids_flat = np.empty(n_rows, dtype=np.int32)
     rotation_log_priors_flat = np.empty(n_rows, dtype=dtype)
-    # Match concatenate's storage order: only nonsingleton input axes decide it.
-    column_major_mask = (
-        n_fine_translations > 1
-        and np.any(counts > 1)
-        and all(
-            count <= 1 or (not full and coarse_trans.size)
-            for count, (_, _, coarse_trans, full) in zip(counts, coarse_rows, strict=True)
-        )
-    )
-    sample_mask_flat = np.empty((n_rows, n_fine_translations), dtype=bool, order="F" if column_major_mask else "C")
+    sample_mask_bits = np.empty((n_rows, (n_fine_translations + 7) // 8), dtype=np.uint8)
     source_eulers_flat = np.empty_like(shared_eulers, shape=(n_rows, 3)) if shared_eulers is not None else None
     if not n_images:
         source_eulers_flat = np.empty((0, 3), dtype=np.float64)
@@ -1243,7 +1244,7 @@ def build_pass2_hypothesis_layout(
         rotation_ids_flat[target] = oversampled_rot_indices
         posterior_ids_flat[target] = coarse_parent_ids
         rotation_log_priors_flat[target] = local_rotation_log_prior
-        sample_mask_flat[target] = sample_mask
+        sample_mask_bits[target] = np.packbits(sample_mask, axis=1, bitorder="little")
         if source_eulers_flat is not None:
             source_eulers_flat[target] = shared_eulers[rows]
 
@@ -1269,7 +1270,7 @@ def build_pass2_hypothesis_layout(
             dtype=dtype,
         ),
         rotation_posterior_ids_flat=posterior_ids_flat,
-        sample_mask_flat=sample_mask_flat,
+        sample_mask_bits=sample_mask_bits,
     )
 
 
@@ -1457,7 +1458,7 @@ def materialize_local_bucket(layout: LocalHypothesisLayout, plan: LocalBucketPla
     )
     padded_sample_mask = (
         None
-        if layout.sample_mask_flat is None
+        if layout.sample_mask_bits is None
         else np.zeros(
             (batch_size, int(bucket_size), int(layout.translation_grid.shape[0])),
             dtype=bool,
@@ -1483,7 +1484,7 @@ def materialize_local_bucket(layout: LocalHypothesisLayout, plan: LocalBucketPla
         if padded_posterior_ids is not None:
             padded_posterior_ids[row, :count] = layout.rotation_posterior_ids_flat[start_off:end_off]
         if padded_sample_mask is not None:
-            padded_sample_mask[row, :count, :] = layout.sample_mask_flat[start_off:end_off]
+            padded_sample_mask[row, :count, :] = layout.sample_mask_rows(start_off, end_off)
 
     return LocalBucketSpec(
         image_indices=image_indices,

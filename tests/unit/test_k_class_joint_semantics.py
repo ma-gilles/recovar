@@ -2019,7 +2019,7 @@ def test_local_k_class_single_class_skips_score_probe(monkeypatch):
         translation_grid=np.zeros((1, 2), dtype=np.float32),
         translation_log_priors=np.zeros((2, 1), dtype=np.float32),
         rotation_posterior_ids_flat=np.asarray([0, 1], dtype=np.int32),
-        sample_mask_flat=np.ones((2, 1), dtype=bool),
+        sample_mask_bits=np.packbits(np.ones((2, 1), dtype=bool), axis=1, bitorder="little"),
     )
 
     def fake_run_local_em_exact(
@@ -2104,7 +2104,7 @@ def test_local_k_class_accepts_per_class_layouts_and_external_evidence(monkeypat
             translation_grid=np.zeros((1, 2), dtype=np.float32),
             translation_log_priors=np.zeros((2, 1), dtype=np.float32),
             rotation_posterior_ids_flat=np.asarray([0, 1], dtype=np.int32),
-            sample_mask_flat=np.ones((2, 1), dtype=bool),
+            sample_mask_bits=np.packbits(np.ones((2, 1), dtype=bool), axis=1, bitorder="little"),
         )
 
     def fake_run_local_em_exact(

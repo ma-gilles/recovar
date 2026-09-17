@@ -310,13 +310,15 @@ def test_k1_local_full_parent_diagnostic_counts_unmasked_parent_layout(parent_ma
         rotation_counts=counts,
         rotation_offsets=offsets,
         translation_grid=translations,
-        sample_mask_flat=mask if parent_masked else None,
+        sample_mask_bits=np.packbits(mask, axis=1, bitorder="little") if parent_masked else None,
+        sample_mask_rows=lambda start, stop: mask[start:stop],
     )
     fine_layout = SimpleNamespace(
         rotation_counts=counts,
         rotation_offsets=offsets,
         translation_grid=translations,
-        sample_mask_flat=mask if fine_masked else None,
+        sample_mask_bits=np.packbits(mask, axis=1, bitorder="little") if fine_masked else None,
+        sample_mask_rows=lambda start, stop: mask[start:stop],
     )
     selected = [] if empty else [None, np.array([], dtype=np.int64), np.array([0, 0, 1, 2])]
     records = []
@@ -349,9 +351,10 @@ def test_local_denominator_diagnostic_counts_masked_and_empty_support(masked, em
         rotation_counts=np.array([] if empty else [2, 0, 1], dtype=np.int32),
         rotation_offsets=np.array([0] if empty else [0, 2, 2, 3], dtype=np.int64),
         translation_grid=np.zeros((3, 2), dtype=np.float32),
-        sample_mask_flat=(
-            np.array([[True, False, True], [False, True, False], [True, True, False]]) if masked else None
-        ),
+        sample_mask_bits=np.array([[5], [2], [3]], dtype=np.uint8) if masked else None,
+        sample_mask_rows=lambda start, stop: np.array(
+            [[True, False, True], [False, True, False], [True, True, False]]
+        )[start:stop],
     )
     records = []
     local_debug.log_local_denominator_support(
@@ -537,13 +540,13 @@ def test_k1_local_search_records_parent_counts_without_changing_fine_mstep(
     parent_layout = SimpleNamespace(
         rotation_counts=np.array([2, 2], dtype=np.int32),
         rotation_offsets=np.array([0, 2, 4], dtype=np.int64),
-        sample_mask_flat=None,
+        sample_mask_bits=None,
         translation_grid=np.zeros((1, 2), dtype=np.float32),
     )
     fine_layout = SimpleNamespace(
         rotation_counts=np.array([2, 2], dtype=np.int32),
         rotation_offsets=np.array([0, 2, 4], dtype=np.int64),
-        sample_mask_flat=None,
+        sample_mask_bits=None,
         translation_grid=np.zeros((4, 2), dtype=np.float32),
     )
 

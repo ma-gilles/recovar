@@ -88,8 +88,8 @@ def test_adaptive_ppca_builds_exact_fine_support_from_coarse_significance(monkey
     assert observed["compute_calls"] == 2
     assert observed["adaptive_fraction"] == 0.75
     for layout in observed["layouts"]:
-        assert layout.sample_mask_flat is not None
-        assert layout.sample_mask_flat.shape[1] == 2
-        assert np.all(np.sum(layout.sample_mask_flat, axis=(0, 1)) >= 1)
+        assert layout.sample_mask_rows() is not None
+        assert layout.sample_mask_rows().shape[1] == 2
+        assert np.all(np.sum(layout.sample_mask_rows(), axis=(0, 1)) >= 1)
     assert updated.pose_diagnostics["halfset0"]["path"] == "adaptive"
     assert updated.pose_diagnostics["halfset0"]["adaptive_fine_translation_count"] == 2
