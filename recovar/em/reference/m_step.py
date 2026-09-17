@@ -31,7 +31,7 @@ def sum_up_translate_one_image(image, probabilities, translations, image_shape, 
 
 
 @eqx.filter_jit
-def sum_up_images_fixed_rots_eqx(
+def accumulate_fixed_rotation_mstep(
     config: ForwardModelConfig,
     batch,
     probabilities,
@@ -136,7 +136,7 @@ def M_with_precompute(
         end_idx = start_idx + len(batch_image_indices)
 
         for rot_indices in utils.index_batch_iter(n_rotations, rotation_batch):
-            Ft_y, Ft_ctf = sum_up_images_fixed_rots_eqx(
+            Ft_y, Ft_ctf = accumulate_fixed_rotation_mstep(
                 config,
                 batch,
                 probabilities[start_idx:end_idx, rot_indices[0] : rot_indices[-1] + 1],

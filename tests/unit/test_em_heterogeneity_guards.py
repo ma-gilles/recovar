@@ -124,7 +124,7 @@ def test_compute_H_B_small_rotation_count_avoids_zero_internal_batches(monkeypat
     )
     monkeypatch.setattr(
         hetero,
-        "sum_up_images_fixed_rots_covariance_precompute_eqx",
+        "prepare_fixed_rotation_covariance",
         lambda _config, _images, _translations, ctf_params: (
             jnp.zeros((len(ctf_params), 2, 4), dtype=jnp.complex64),
             jnp.ones((len(ctf_params), 4), dtype=jnp.float32),
@@ -132,7 +132,7 @@ def test_compute_H_B_small_rotation_count_avoids_zero_internal_batches(monkeypat
     )
     monkeypatch.setattr(
         hetero,
-        "sum_up_images_fixed_rots_covariance_with_precompute_eqx",
+        "accumulate_fixed_rotation_covariance",
         lambda _config, _shifted, _mean_proj, _ctf, _grid, _prob, _rots, _noise, _picked, H=0, B=0, **_k: (
             H + jnp.ones_like(H),
             B + (1.0 + 0j) * jnp.ones_like(B),
@@ -234,7 +234,7 @@ def test_compute_projected_covariance_rhs_lhs_small_rotation_count_avoids_zero_b
     )
     monkeypatch.setattr(
         hetero,
-        "reduce_covariance_est_inner_eqx",
+        "reduce_covariance_normal_equations",
         lambda _config, _mean_proj, _u_proj, _prob, _batch, _translations, _ctf_params, _noise: (
             jnp.eye(2, dtype=jnp.float32),
             jnp.ones((2, 2), dtype=jnp.float32),

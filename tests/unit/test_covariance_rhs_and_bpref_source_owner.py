@@ -11,7 +11,7 @@ from recovar.em.vdam import layout
 
 def test_covariance_accumulators_share_the_image_owner():
     classic = inspect.getsource(hetero.sum_up_images_fixed_rots_covariance_with_precompute)
-    eqx = inspect.getsource(hetero.sum_up_images_fixed_rots_covariance_with_precompute_eqx)
+    eqx = inspect.getsource(hetero.accumulate_fixed_rotation_covariance)
     for source in (classic, eqx):
         assert source.count("images = _fixed_rotation_covariance_images(") == 1
         assert "e2_p1 = " not in source and "noise_piece" not in source
