@@ -93,3 +93,7 @@ Keep completed experiment scripts, reports and results in
 [recovar-experiments](https://github.com/ma-gilles/recovar-experiments), with source
 identity and reproduction records. Main should retain implementation guides,
 maintained workflow tools and unique numerical tests, rather than status histories.
+
+The [original PR158 VDAM reuse plan](https://github.com/ma-gilles/recovar-experiments/blob/342c5c2164bd3595fe7748b66a6453439afc9af5/docs/math/vdam_relion_parity_reuse_plan.md)
+preserves the historical ownership map and suite contract. Its retired package paths
+and proposed work are historical; use the current codebase map and task queue above.
