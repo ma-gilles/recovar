@@ -2208,8 +2208,8 @@ def run_local_k_class_em(
                 )
             class_log_evidence.append(np.asarray(probe.stats.log_evidence_per_image, dtype=np.float64))
             if support_values_by_class is not None:
-                profile = probe.profile
-                support_values_by_class.append(tuple(profile["reconstruction_probability_values_by_image"]))
+                support_values_by_class.append(tuple(probe.profile["reconstruction_probability_values_by_image"]))
+            del probe
         class_log_evidence_np = np.stack(class_log_evidence, axis=0)
         normalization_log_evidence_np = _logsumexp_np(class_log_evidence_np, axis=0)
         if support_values_by_class is not None:
@@ -2219,6 +2219,7 @@ def run_local_k_class_em(
                 normalization_log_evidence_np,
                 float(base_engine_kwargs.get("adaptive_fraction", 0.999)),
             )
+            del support_values_by_class
 
     global_log_evidence = _logsumexp_np(class_log_evidence_np, axis=0)
     if normalization_log_evidence_np is not None:
