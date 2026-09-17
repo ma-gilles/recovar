@@ -23,16 +23,13 @@ if __package__:
         centered_fourier,
         summarize_fourier_pair,
     )
-    from scripts.summarize_em_completion_bench import (
-        normalized_fsc_auc,
-        shell_fsc,
-    )
+    from scripts.fsc_metrics import normalized_fsc_auc, shell_fsc
 else:
     from analyze_em_k1_map_amplitude_trajectory import (
         centered_fourier,
         summarize_fourier_pair,
     )
-    from summarize_em_completion_bench import normalized_fsc_auc, shell_fsc
+    from fsc_metrics import normalized_fsc_auc, shell_fsc
 
 OUTPUT_SCHEMA = "recovar.em_k1_tau2_substitution.v1"
 

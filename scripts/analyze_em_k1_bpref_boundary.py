@@ -28,7 +28,7 @@ if __package__:
         load_relion_dump,
     )
     from scripts.file_hash import sha256_file as _sha256
-    from scripts.summarize_em_completion_bench import normalized_fsc_auc
+    from scripts.fsc_metrics import normalized_fsc_auc
 else:
     from analyze_em_k1_tau2_substitution import map_metrics
     from compare_iter1_bpref_accum import (
@@ -37,7 +37,7 @@ else:
         load_relion_dump,
     )
     from file_hash import sha256_file as _sha256
-    from summarize_em_completion_bench import normalized_fsc_auc
+    from fsc_metrics import normalized_fsc_auc
 
 OUTPUT_SCHEMA = "recovar.em_k1_bpref_boundary.v1"
 
