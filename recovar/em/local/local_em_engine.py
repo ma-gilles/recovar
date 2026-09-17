@@ -2193,18 +2193,18 @@ def run_local_em_exact(
             normalization_log_z_arg = (
                 jnp.asarray(
                     pad_axis(normalization_log_z_np[bucket_image_indices], 0, batch_size, value=0),
-                    dtype=(jnp.float64 if use_float64_normalization else jnp.float32),
+                    dtype=(precision_policy.normalization_real_dtype),
                 )
                 if normalization_log_z_np is not None
-                else jnp.zeros(batch_size, dtype=(jnp.float64 if use_float64_normalization else jnp.float32))
+                else jnp.zeros(batch_size, dtype=(precision_policy.normalization_real_dtype))
             )
             normalization_log_evidence_arg = (
                 jnp.asarray(
                     pad_axis(normalization_log_evidence_np[bucket_image_indices], 0, batch_size, value=0),
-                    dtype=(jnp.float64 if use_float64_normalization else jnp.float32),
+                    dtype=(precision_policy.normalization_real_dtype),
                 )
                 if normalization_log_evidence_np is not None
-                else jnp.zeros(batch_size, dtype=(jnp.float64 if use_float64_normalization else jnp.float32))
+                else jnp.zeros(batch_size, dtype=(precision_policy.normalization_real_dtype))
             )
             normalization_max_posterior_arg = (
                 jnp.asarray(
@@ -2214,7 +2214,7 @@ def run_local_em_exact(
                         batch_size,
                         value=0,
                     ),
-                    dtype=(jnp.float64 if use_float64_normalization else jnp.float32),
+                    dtype=(precision_policy.normalization_real_dtype),
                 )
                 if normalization_max_posterior_np is not None
                 else jnp.zeros(batch_size, dtype=jnp.float32)

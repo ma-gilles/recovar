@@ -80,7 +80,8 @@ def _fixture(float64: bool):
     return means, noise, layouts
 
 
-def _run(*, segmented, float64, accumulate_noise=True, reconstruct_significant_only=False):
+def _run(*, segmented, float64, accumulate_noise=True, reconstruct_significant_only=False,
+         use_float64_normalization=True):
     means, noise, layouts = _fixture(float64)
     dataset = MockDataset(N_IMAGES, np.random.default_rng(11))
     kwargs = dict(
@@ -99,8 +100,9 @@ def _run(*, segmented, float64, accumulate_noise=True, reconstruct_significant_o
         accumulate_noise=accumulate_noise,
         return_best_pose_details=True,
     )
+    kwargs["use_float64_normalization"] = bool(use_float64_normalization)
     if float64:
-        kwargs.update(use_float64_scoring=True, use_float64_normalization=True, use_float64_projections=True)
+        kwargs.update(use_float64_scoring=True, use_float64_projections=True)
     return run_local_k_class_em(
         dataset,
         means,
@@ -113,7 +115,7 @@ def _run(*, segmented, float64, accumulate_noise=True, reconstruct_significant_o
     )
 
 
-def _assert_published_dtypes_match(segmented, baseline, expected_real):
+def _assert_published_dtypes_match(segmented, baseline, expected_real, expected_normalization_real):
     """The result contract includes its precision; a joint pass must not promote it.
 
     The per-class route hands each M-step call the joint normalizer, which the engine
@@ -129,14 +131,24 @@ def _assert_published_dtypes_match(segmented, baseline, expected_real):
     for name in ("class_responsibilities", "class_posterior_sums"):
         assert np.asarray(getattr(segmented, name)).dtype == expected_real, name
         assert np.asarray(getattr(segmented, name)).dtype == np.asarray(getattr(baseline, name)).dtype, name
+    # The joint statistics keep the published contract: _assemble_result still calls
+    # make_relion_stats with image_dtype=output_dtype, so all three stay at the
+    # scoring dtype and that assertion is independent of anything below.
+    #
+    # Per class, log_evidence_per_image is a normalizer and follows the normalization
+    # policy, because the value is formed in double and a scoring-dtype buffer
+    # narrowed it per class before the driver reduced over classes. The winning score
+    # and the maximum posterior are scores and stay at the scoring dtype. Both arms
+    # must agree with each other on every field either way.
     for stats_name in ("log_evidence_per_image", "best_log_score_per_image", "max_posterior_per_image"):
         got = np.asarray(getattr(segmented.stats, stats_name)).dtype
         assert got == expected_real, (stats_name, got)
         assert got == np.asarray(getattr(baseline.stats, stats_name)).dtype, stats_name
+        expected_field = expected_normalization_real if stats_name == "log_evidence_per_image" else expected_real
         for class_index in range(2):
             per_class = np.asarray(getattr(segmented.per_class_stats[class_index], stats_name)).dtype
             assert per_class == np.asarray(getattr(baseline.per_class_stats[class_index], stats_name)).dtype
-            assert per_class == expected_real, (stats_name, class_index, per_class)
+            assert per_class == expected_field, (stats_name, class_index, per_class)
     for class_index in range(2):
         assert (
             np.asarray(segmented.per_class_stats[class_index].rotation_posterior_sums).dtype
@@ -176,12 +188,13 @@ def _assert_every_class_is_populated(result):
         assert angular.sum() > 0.1, (class_index, angular)
 
 
+@pytest.mark.parametrize("use_float64_normalization", [True, False], ids=["norm64", "norm32"])
 @pytest.mark.parametrize(
     "float64, rtol, atol_scale",
     [(False, 1e-6, 1e-6), (True, 1e-12, 1e-12)],
     ids=["float32", "float64"],
 )
-def test_segmented_pass_matches_per_class_calls(float64, rtol, atol_scale):
+def test_segmented_pass_matches_per_class_calls(float64, rtol, atol_scale, use_float64_normalization):
     recorded = []
     original = local_big_jit._class_segment_statistics
 
@@ -189,10 +202,10 @@ def test_segmented_pass_matches_per_class_calls(float64, rtol, atol_scale):
         recorded.append(str(scores.dtype))
         return original(probs, scores, reconstruction_probs, **kwargs)
 
-    baseline = _run(segmented=False, float64=float64)
+    baseline = _run(segmented=False, float64=float64, use_float64_normalization=use_float64_normalization)
     local_big_jit._class_segment_statistics = record_dtypes
     try:
-        segmented = _run(segmented=True, float64=float64)
+        segmented = _run(segmented=True, float64=float64, use_float64_normalization=use_float64_normalization)
     finally:
         local_big_jit._class_segment_statistics = original
 
@@ -201,7 +214,11 @@ def test_segmented_pass_matches_per_class_calls(float64, rtol, atol_scale):
     assert set(recorded) == {"float64" if float64 else "float32"}, recorded
     _assert_every_class_is_populated(baseline)
     _assert_every_class_is_populated(segmented)
-    _assert_published_dtypes_match(segmented, baseline, np.float64 if float64 else np.float32)
+    expected_real = np.float64 if float64 else np.float32
+    # Policy-derived, not hardcoded: with the normalization policy at single precision
+    # the per-class normalizer must follow it down, not stay at double.
+    expected_normalization_real = np.float64 if use_float64_normalization else expected_real
+    _assert_published_dtypes_match(segmented, baseline, expected_real, expected_normalization_real)
 
     def close(got, want, label):
         got = np.asarray(got)

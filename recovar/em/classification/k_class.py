@@ -2104,8 +2104,20 @@ def _run_local_k_class_em_segmented(
     joint_log_evidence = np.asarray(output.stats.log_evidence_per_image)
     # Every class's Pmax is measured against the joint normalizer, which is what the
     # per-class M-step calls do when they are given the joint log evidence.
+    #
+    # The normalizer is now published at the normalization dtype, which is wider than
+    # the scoring dtype by default. Pmax is a scoring quantity, so the operand is cast
+    # to the winning score's dtype before the subtraction, reproducing the precision
+    # this subtraction and exponential had when the normalizer was itself narrowed.
+    # Casting only the final result would leave the subtraction and the exponential at
+    # the wider precision and silently change them.
+    joint_log_evidence_for_posterior = joint_log_evidence.astype(
+        class_best_log_score.dtype, copy=False,
+    )
     with np.errstate(over="ignore"):
-        class_max_posterior = np.exp(class_best_log_score - joint_log_evidence[None, :])
+        class_max_posterior = np.exp(
+            class_best_log_score - joint_log_evidence_for_posterior[None, :]
+        )
     class_rotation_posterior_sums = np.asarray(output.class_rotation_posterior_sums, dtype=np.float64)
     # Every per-class M-step call in the per-class route is given the joint log
     # evidence as its normalizer, so each class's RelionStats reports that joint
