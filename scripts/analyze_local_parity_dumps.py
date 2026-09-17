@@ -15,7 +15,7 @@ import numpy as np
 
 def _load_parity_analysis_module():
     repo_root = Path(__file__).resolve().parents[1]
-    module_path = repo_root / "recovar" / "utils" / "local_parity_analysis.py"
+    module_path = repo_root / "recovar" / "em" / "diagnostics" / "local_parity_analysis.py"
     spec = importlib.util.spec_from_file_location("local_parity_analysis", module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
