@@ -5250,20 +5250,11 @@ def main():
         for i, dvp in enumerate(result["data_vs_prior_trajectory"]):
             save_dict[f"data_vs_prior_iter_{i:03d}"] = np.asarray(dvp)
 
-    # Per-iter per-shell sigma2_noise and tau2 (added 2026-04 for RELION parity diff)
-    if "noise_radial_trajectory" in result:
-        for i, nr in enumerate(result["noise_radial_trajectory"]):
-            if nr is not None:
-                save_dict[f"noise_radial_iter_{i:03d}"] = np.asarray(nr, dtype=np.float64)
-    if "noise_radial_per_half_trajectory" in result:
-        for i, nr_half in enumerate(result["noise_radial_per_half_trajectory"]):
-            if nr_half is not None:
-                save_dict[f"noise_radial_per_half_iter_{i:03d}"] = np.asarray(nr_half, dtype=np.float64)
-    if "tau2_radial_trajectory" in result:
-        for i, t2 in enumerate(result["tau2_radial_trajectory"]):
-            if t2 is not None:
-                save_dict[f"tau2_radial_iter_{i:03d}"] = np.asarray(t2, dtype=np.float64)
+    # Per-iteration shell profiles share the same float64 artifact format.
     for result_key, prefix in [
+        ("noise_radial_trajectory", "noise_radial_iter"),
+        ("noise_radial_per_half_trajectory", "noise_radial_per_half_iter"),
+        ("tau2_radial_trajectory", "tau2_radial_iter"),
         ("tau2_sigma2_trajectory", "tau2_sigma2_iter"),
         ("tau2_avg_weight_trajectory", "tau2_avg_weight_iter"),
         ("tau2_shell_sum_trajectory", "tau2_shell_sum_iter"),
@@ -5298,49 +5289,33 @@ def main():
         save_dict["fsc_final_all_data"] = np.asarray(result["final_all_data_fsc"], dtype=np.float32)
     if "final_all_data_ran" in result:
         save_dict["final_all_data_ran"] = np.asarray(result["final_all_data_ran"], dtype=np.bool_)
-    for result_key, save_key in (
-        ("tau2_radial_final_all_data", "tau2_radial_final_all_data"),
-        ("tau2_fsc_used_final_all_data", "tau2_fsc_used_final_all_data"),
-        ("tau2_ssnr_final_all_data", "tau2_ssnr_final_all_data"),
+    for key in (
+        "tau2_radial_final_all_data",
+        "tau2_fsc_used_final_all_data",
+        "tau2_ssnr_final_all_data",
     ):
-        if result.get(result_key) is not None:
-            save_dict[save_key] = np.asarray(result[result_key], dtype=np.float64)
-    if "final_all_data_sampling_perturbation" in result:
-        save_dict["final_all_data_sampling_perturbation"] = np.asarray(
-            result["final_all_data_sampling_perturbation"],
-            dtype=np.float32,
-        )
-    if "final_all_data_sampling_perturbation_applied" in result:
-        save_dict["final_all_data_sampling_perturbation_applied"] = np.asarray(
-            result["final_all_data_sampling_perturbation_applied"],
-            dtype=np.bool_,
-        )
-    if "final_all_data_sampling_relion_iteration" in result:
-        save_dict["final_all_data_sampling_relion_iteration"] = np.asarray(
-            result["final_all_data_sampling_relion_iteration"],
-            dtype=np.int32,
-        )
+        if result.get(key) is not None:
+            save_dict[key] = np.asarray(result[key], dtype=np.float64)
+    for key, dtype in (
+        ("final_all_data_sampling_perturbation", np.float32),
+        ("final_all_data_sampling_perturbation_applied", np.bool_),
+        ("final_all_data_sampling_relion_iteration", np.int32),
+    ):
+        if key in result:
+            save_dict[key] = np.asarray(result[key], dtype=dtype)
     if result.get("final_all_data_sampling_star") is not None:
         save_dict["final_all_data_sampling_star"] = np.asarray(str(result["final_all_data_sampling_star"]))
     if result.get("final_all_data_sampling_star_source") is not None:
         save_dict["final_all_data_sampling_star_source"] = np.asarray(
             str(result["final_all_data_sampling_star_source"])
         )
-    if "final_all_data_sampling_offset_range" in result:
-        save_dict["final_all_data_sampling_offset_range"] = np.asarray(
-            result["final_all_data_sampling_offset_range"],
-            dtype=np.float32,
-        )
-    if "final_all_data_sampling_offset_step" in result:
-        save_dict["final_all_data_sampling_offset_step"] = np.asarray(
-            result["final_all_data_sampling_offset_step"],
-            dtype=np.float32,
-        )
-    if "final_all_data_grid_correct" in result:
-        save_dict["final_all_data_grid_correct"] = np.asarray(
-            result["final_all_data_grid_correct"],
-            dtype=np.bool_,
-        )
+    for key, dtype in (
+        ("final_all_data_sampling_offset_range", np.float32),
+        ("final_all_data_sampling_offset_step", np.float32),
+        ("final_all_data_grid_correct", np.bool_),
+    ):
+        if key in result:
+            save_dict[key] = np.asarray(result[key], dtype=dtype)
     if result.get("final_all_data_gridding_correct") is not None:
         save_dict["final_all_data_gridding_correct"] = np.asarray(
             str(result["final_all_data_gridding_correct"])
