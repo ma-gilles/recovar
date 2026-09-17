@@ -1641,15 +1641,6 @@ def build_pass2_hypothesis_layout(
     n_images = len(significant_sample_indices)
     rotation_log_prior_np = None if rotation_log_prior is None else np.asarray(rotation_log_prior, dtype=dtype)
 
-    offsets = np.zeros(n_images + 1, dtype=np.int64)
-    counts = np.zeros(n_images, dtype=np.int32)
-    rotations_parts: list[np.ndarray] = []
-    source_eulers_parts: list[np.ndarray | None] = []
-    rotation_ids_parts: list[np.ndarray] = []
-    posterior_ids_parts: list[np.ndarray] = []
-    log_prior_parts: list[np.ndarray] = []
-    sample_mask_parts: list[np.ndarray] = []
-
     coarse_rows = []
     for image_idx, sig_samples in enumerate(significant_sample_indices):
         if sig_samples is None:
@@ -1705,6 +1696,30 @@ def build_pass2_hypothesis_layout(
         raise RuntimeError("Pass-2 oversampling must retain contiguous children per parent")
     child_offsets = np.arange(children_per_parent, dtype=np.int64)
 
+    # Allocate the final layout once; retaining every image's arrays until
+    # concatenation otherwise doubles the largest host allocations.
+    counts = np.asarray([row[0].size * children_per_parent for row in coarse_rows], dtype=np.int32)
+    offsets = np.zeros(n_images + 1, dtype=np.int64)
+    np.cumsum(counts, dtype=np.int64, out=offsets[1:])
+    n_rows = int(offsets[-1])
+    rotations_flat = np.empty_like(shared_rotations, shape=(n_rows, 3, 3), dtype=dtype)
+    rotation_ids_flat = np.empty(n_rows, dtype=np.int64)
+    posterior_ids_flat = np.empty(n_rows, dtype=np.int32)
+    rotation_log_priors_flat = np.empty(n_rows, dtype=dtype)
+    # Match concatenate's storage order: only nonsingleton input axes decide it.
+    column_major_mask = (
+        n_fine_translations > 1
+        and np.any(counts > 1)
+        and all(
+            count <= 1 or (not full and coarse_trans.size)
+            for count, (_, _, coarse_trans, full) in zip(counts, coarse_rows, strict=True)
+        )
+    )
+    sample_mask_flat = np.empty((n_rows, n_fine_translations), dtype=bool, order="F" if column_major_mask else "C")
+    source_eulers_flat = np.empty_like(shared_eulers, shape=(n_rows, 3)) if shared_eulers is not None else None
+    if not n_images:
+        source_eulers_flat = np.empty((0, 3), dtype=np.float64)
+
     for image_idx, (unique_rot, coarse_rot, coarse_trans, use_full_candidate_mask) in enumerate(coarse_rows):
         shared_positions = np.searchsorted(shared_parent_ids, unique_rot)
         rows = (shared_positions[:, None] * children_per_parent + child_offsets).reshape(-1)
@@ -1741,20 +1756,15 @@ def build_pass2_hypothesis_layout(
         if not np.any(sample_mask) and not allow_empty:
             raise ValueError(f"Image {image_idx} has no valid sparse pass-2 candidates after oversampling")
 
-        counts[image_idx] = int(oversampled_rots.shape[0])
-        offsets[image_idx + 1] = offsets[image_idx] + oversampled_rots.shape[0]
-        rotations_parts.append(oversampled_rots)
-        source_eulers_parts.append(None if shared_eulers is None else shared_eulers[rows])
-        rotation_ids_parts.append(oversampled_rot_indices)
-        posterior_ids_parts.append(coarse_parent_ids)
-        log_prior_parts.append(local_rotation_log_prior)
-        sample_mask_parts.append(sample_mask)
+        target = slice(offsets[image_idx], offsets[image_idx + 1])
+        rotations_flat[target] = oversampled_rots
+        rotation_ids_flat[target] = oversampled_rot_indices
+        posterior_ids_flat[target] = coarse_parent_ids
+        rotation_log_priors_flat[target] = local_rotation_log_prior
+        sample_mask_flat[target] = sample_mask
+        if source_eulers_flat is not None:
+            source_eulers_flat[target] = shared_eulers[rows]
 
-    rotations_flat = _flat_parts(rotations_parts, empty_shape=(0, 3, 3), dtype=dtype)
-    rotation_ids_flat = _flat_parts(rotation_ids_parts, empty_shape=0, dtype=np.int64, cast=np.int64)
-    posterior_ids_flat = _flat_parts(posterior_ids_parts, empty_shape=0, dtype=np.int32)
-    rotation_log_priors_flat = _flat_parts(log_prior_parts, empty_shape=0, dtype=dtype)
-    sample_mask_flat = _flat_parts(sample_mask_parts, empty_shape=(0, n_fine_translations), dtype=bool)
     n_pixels = 12 * (2 ** int(nside_level)) ** 2
 
     return LocalHypothesisLayout(
@@ -1764,11 +1774,7 @@ def build_pass2_hypothesis_layout(
         rotation_offsets=offsets,
         rotation_ids_flat=rotation_ids_flat,
         rotations_flat=rotations_flat,
-        source_eulers_flat=(
-            np.concatenate(source_eulers_parts)
-            if source_eulers_parts and all(x is not None for x in source_eulers_parts)
-            else (np.empty((0, 3), dtype=np.float64) if not source_eulers_parts else None)
-        ),
+        source_eulers_flat=source_eulers_flat,
         rotation_log_priors_flat=rotation_log_priors_flat,
         rotation_counts=counts,
         translation_grid=fine_translations,
