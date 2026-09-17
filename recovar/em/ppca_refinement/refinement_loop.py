@@ -182,7 +182,7 @@ def _finish_refinement_iteration(
 ) -> tuple[PoseMarginalPPCAEMState, PPCARefinementIterationRecord]:
     """Apply the shared halfset gate and record its resolution decision.
 
-    See ``docs/math/ppca_angle_refine_plan_2026_05_05.md#halfset-resolution-gate``.
+    See ``docs/math/ppca_refinement.md#halfset-resolution-gate``.
     """
     W_agreement = loading_subspace_agreement(
         np.asarray(updated.W_half[0]).T,
