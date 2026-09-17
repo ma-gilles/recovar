@@ -155,15 +155,14 @@ class HalfTranslationPriorInputs:
     ``prior_center`` and ``local_prior_center`` are independent arrays with the
     same ``pdf_offset`` center in search-grid pixels (``None`` on cold start);
     the dense score log-prior uses the first and the local adapter the second.
-    ``sigma_center`` is the ``wsum_sigma2_offset`` accumulation center in pixels
-    (``None`` on cold start) and ``engine_prior_center`` its zero-centered
-    cold-start substitute. ``prior_translations`` are the translations the
-    score log-prior is evaluated on.
+    ``engine_prior_center`` is the ``wsum_sigma2_offset`` accumulation center
+    in pixels, with the cold-start ``None`` replaced by zero.
+    ``prior_translations`` are the translations the score log-prior is
+    evaluated on.
     """
 
     prior_center: np.ndarray | None
     local_prior_center: np.ndarray | None
-    sigma_center: np.ndarray | None
     engine_prior_center: np.ndarray
     prior_translations: np.ndarray
 
@@ -217,7 +216,6 @@ def relion_half_translation_prior_inputs(
     return HalfTranslationPriorInputs(
         prior_center=prior_center,
         local_prior_center=local_prior_center,
-        sigma_center=sigma_center,
         engine_prior_center=engine_prior_center,
         prior_translations=prior_translations,
     )
