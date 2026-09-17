@@ -8,12 +8,16 @@ capture, never by RELION's shuffled ``part_id`` or a physical row number.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 from pathlib import Path
 
 import numpy as np
+
+try:
+    from scripts.file_hash import sha256_file as _sha256
+except ModuleNotFoundError:
+    from file_hash import sha256_file as _sha256  # type: ignore[no-redef]
 
 if __package__:
     from scripts.analyze_k1_native_wavg_pixels import (
@@ -32,14 +36,6 @@ else:
 _WEIGHTS_RE = re.compile(
     r"img(?P<img>\d+)_part(?P<part>\d+)_storeWavg_weights\.bin"
 )
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _ordered_f32(values: np.ndarray) -> np.ndarray:

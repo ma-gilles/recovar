@@ -20,6 +20,11 @@ from pathlib import Path
 
 import numpy as np
 
+try:
+    from scripts.file_hash import sha256_file as _sha256_file
+except ModuleNotFoundError:
+    from file_hash import sha256_file as _sha256_file  # type: ignore[no-redef]
+
 SIGNATURE_MAGIC = "RECOVAR_DEVICE_SCATTER_SIGNATURE"
 SIGNATURE_SCHEMA = "recovar-device-scatter-signature-v1"
 PANEL_MAGIC = "RECOVAR_DEVICE_PANEL_NATIVE"
@@ -126,14 +131,6 @@ def _scalar(values: dict[str, np.ndarray], key: str):
     if value.shape != ():
         raise ValueError(f"field {key!r} must be scalar, got {value.shape}")
     return value.item()
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 * 1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _sha256_named_arrays(items) -> str:

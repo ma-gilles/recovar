@@ -10,7 +10,6 @@ so a small unstable subgroup cannot be hidden by a p95 summary.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -18,21 +17,13 @@ from typing import Any
 import numpy as np
 
 from scripts import audit_em_particle_state_distribution as particle_audit
+from scripts.file_hash import sha256_file as _sha256
 from scripts.relion_reference import euler_matrices
-
 
 SCHEMA = "em_hidden_change_distribution_v1"
 ARRAY_SCHEMA = "em_hidden_change_distribution_arrays_v1"
 DEFAULT_THRESHOLDS_DEG = (0.01, 0.1, 1.0, 5.0, 20.0, 80.0)
 DEFAULT_TOP_FRACTIONS = (0.001, 0.005, 0.01, 0.05, 0.1)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _relion_change_per_particle(previous_eulers: np.ndarray, current_eulers: np.ndarray) -> np.ndarray:

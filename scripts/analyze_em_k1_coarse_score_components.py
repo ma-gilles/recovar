@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -17,6 +16,7 @@ from scripts.analyze_em_k1_coarse_pass1_boundary import (
     _relion_prior_support,
     _translation_permutation,
 )
+from scripts.file_hash import sha256_file as _sha256
 from scripts.validate_relion_coarse_pass1_capture import validate_directory
 
 ROTATION_DOMINANCE_FRACTION = 0.5
@@ -25,14 +25,6 @@ ROTATION_DOMINANCE_FRACTION = 0.5
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with Path(path).open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def decompose_additive_score_residual(values: np.ndarray) -> dict[str, Any]:
