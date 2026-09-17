@@ -22,16 +22,16 @@ from pathlib import Path
 import numpy as np
 
 from recovar.em.diagnostics.gt_metrics import DEFAULT_GT_ALIGN_HEALPIX_ORDER, DEFAULT_GT_ALIGN_MAX_SHELL
+from recovar.em.diagnostics.parity_provenance import (
+    _safe_git_commit,
+)
+from recovar.em.diagnostics.parity_provenance import (
+    assert_parity_ancestors_or_exit as _print_provenance_banner_and_assert_parity_ancestors,
+)
 from recovar.em.helpers.iteration_history import add_significant_count_artifacts
 from recovar.em.relion.initial_noise import (
     read_relion_single_optics_sigma2_noise,
     relion_mpi_process_start_scoring_noise_pair,
-)
-from recovar.utils.parity_provenance import (
-    _safe_git_commit,
-)
-from recovar.utils.parity_provenance import (
-    assert_parity_ancestors_or_exit as _print_provenance_banner_and_assert_parity_ancestors,
 )
 
 sys.stdout.reconfigure(line_buffering=True)

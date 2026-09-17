@@ -77,7 +77,7 @@ def _require_fixture(*paths: Path) -> None:
 
 def _assert_parity_ancestors_or_skip() -> None:
     """Hard-fail the test (don't skip) if the parity-fix commits are missing."""
-    from recovar.utils.parity_provenance import (
+    from recovar.em.diagnostics.parity_provenance import (
         ParityAncestryError,
         assert_parity_ancestors,
         print_provenance_banner,

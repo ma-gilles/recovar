@@ -782,7 +782,7 @@ def _runtime_provenance(repo_root: Path) -> dict[str, Any]:
     import jax
 
     import recovar
-    from recovar.utils.parity_provenance import (
+    from recovar.em.diagnostics.parity_provenance import (
         REQUIRED_PARITY_ANCESTORS,
         assert_parity_ancestors,
     )

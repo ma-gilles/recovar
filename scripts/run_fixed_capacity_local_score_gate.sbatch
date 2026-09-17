@@ -43,7 +43,7 @@ SOURCE_FILES=(
   recovar/cuda/Makefile
   recovar/cuda/cuda_backproject.cu
   recovar/cuda_backproject.py
-  recovar/utils/parity_provenance.py
+  recovar/em/diagnostics/parity_provenance.py
   recovar/em/helpers/batch_planning.py
   recovar/em/local/fixed_capacity_local.py
   recovar/em/local/local_big_jit.py
@@ -164,7 +164,7 @@ import pathlib
 import jax
 import recovar
 from recovar import cuda_backproject
-from recovar.utils.parity_provenance import assert_parity_ancestors
+from recovar.em.diagnostics.parity_provenance import assert_parity_ancestors
 
 repo = pathlib.Path(os.environ["RECOVAR_EXPECTED_REPO_ROOT"]).resolve()
 assert str(pathlib.Path(recovar.__file__).resolve()).startswith(str(repo) + "/")

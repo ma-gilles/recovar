@@ -186,7 +186,7 @@ readonly -a SOURCE_FILES=(
   recovar/em/vdam/driver.py
   recovar/em/vdam/iteration_loop.py
   recovar/em/vdam/schedules.py
-  recovar/utils/parity_provenance.py
+  recovar/em/diagnostics/parity_provenance.py
   recovar/commands/initial_model.py
   scripts/run_vdam_late_iteration_profile.py
   scripts/run_local_mstep_donation_ab.py
@@ -357,7 +357,7 @@ import jax
 import recovar
 from recovar import cuda_backproject
 from recovar.relion_bind import _relion_bind_core as relion_bind_core
-from recovar.utils.parity_provenance import assert_parity_ancestors
+from recovar.em.diagnostics.parity_provenance import assert_parity_ancestors
 
 repo = pathlib.Path(os.environ["RECOVAR_EXPECTED_REPO_ROOT"]).resolve()
 pixi_env = (repo / ".pixi" / "envs" / "default").resolve()
