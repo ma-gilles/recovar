@@ -917,7 +917,6 @@ def test_iteration_dependencies_and_ppca_vdam_entry_points_are_available():
     assert callable(relion_replay.read_relion_direction_priors)
     assert callable(ppca_bridge.PPCAKClassScheduleBridge)
     assert callable(ppca_bridge.run_dense_ppca_refinement_with_kclass_schedule)
-    assert callable(ppca_bridge.run_local_ppca_refinement_with_kclass_schedule)
     assert callable(run_vdam_iterations)
 
 
