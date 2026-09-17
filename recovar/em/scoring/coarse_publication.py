@@ -8,6 +8,7 @@ import numpy as np
 
 from recovar.em.helpers.oversampling import relion_cuda_f32_coarse_posterior
 from recovar.em.scoring.coarse_gemm_hybrid import map_coarse_gemm_hybrid_compact_mask_to_global_pose_ids
+from recovar.em.scoring.scoring import _update_logsumexp
 
 
 def _packed_support_prefix(support, count):
@@ -177,8 +178,6 @@ def publish_coarse_rows(
     existing single-table reduction. Only final statistics/support cross to the
     host, matching the significance engine's public output boundary.
     """
-    from recovar.em.scoring.significance import _update_logsumexp
-
     if posterior_backend not in ("jax", "cuda"):
         raise ValueError("Unknown coarse posterior backend")
     if posterior_backend == "cuda" and tie_score_ulps != 0:
