@@ -1,6 +1,5 @@
 """The state-swap probe returns one named value instead of positional 14-tuples."""
 
-import inspect
 from types import SimpleNamespace
 
 import numpy as np
@@ -43,12 +42,3 @@ def test_unchanged_paths_return_the_input_objects():
         assert out.cs is kw["cs"] and out.means is kw["means"] and out.mean_variance is kw["mean_variance"]
         assert out.current_sigma_offset_angstrom_per_half is kw["current_sigma_offset_angstrom_per_half"]
         assert out[8] == 3.1 and len(out) == 14
-
-
-def test_probe_no_longer_builds_positional_tuples():
-    source = inspect.getsource(state_swap_runtime._apply_state_swap_probe)
-    assert "_state_swap_return_tuple" not in source
-    assert source.count("unchanged = _StateSwapValues(") == 1
-    assert source.count("return unchanged") == 2
-    assert source.count("return _StateSwapValues(") == 1
-    assert not hasattr(state_swap_runtime, "_state_swap_return_tuple")

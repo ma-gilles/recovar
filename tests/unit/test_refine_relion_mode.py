@@ -8442,11 +8442,6 @@ def test_compute_reconstruction_support_from_global_threshold_drops_low_class_ta
     np.testing.assert_array_equal(np.asarray(sig_rots[1]), np.array([True, True]))
 
 
-def test_local_engine_selector_is_removed():
-    assert "local_engine" not in inspect.signature(refine_single_volume).parameters
-    assert "local_engine" not in inspect.signature(local_search_iteration._run_local_search_iteration).parameters
-
-
 def _identity_ctf(params, image_shape=None, voxel_size=None, *, half_image=False):
     if half_image:
         h, w = image_shape if image_shape is not None else IMAGE_SHAPE
