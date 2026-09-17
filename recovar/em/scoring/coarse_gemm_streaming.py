@@ -355,7 +355,7 @@ def _analytic_support_from_ranked(
     valid = np.isfinite(retained_scores) & (retained_ids >= 0)
     valid_count = int(np.count_nonzero(valid))
     if valid_count == 0 or not np.isfinite(log_z):
-        return np.empty((0,), dtype=np.int32), math_nan(), False, 0, math_nan()
+        return np.empty((0,), dtype=np.int32), float("nan"), False, 0, float("nan")
 
     retained_scores = retained_scores[:valid_count]
     retained_ids = retained_ids[:valid_count]
@@ -378,12 +378,6 @@ def _analytic_support_from_ranked(
     coverage = bool(tie_complete and (cap_proves_cutoff or posterior_proves_cutoff or all_candidates_retained))
     cutoff_excess = float(cumulative[cutoff_index] - float(adaptive_fraction))
     return selected_ids, cutoff_score, coverage, cutoff_index + 1, cutoff_excess
-
-
-def math_nan() -> float:
-    """A named NaN keeps fail-closed summary branches easy to audit."""
-
-    return float("nan")
 
 
 def _ranked_lookup(
@@ -722,12 +716,12 @@ def summarize_coarse_gemm_streaming_state(
         if direct_valid_count:
             integers["direct_winner_candidate_id"][row] = int(direct_ids[row, 0])
             floats["direct_winner_margin"][row] = (
-                math_nan() if direct_valid_count < 2 else float(direct_scores[row, 0] - direct_scores[row, 1])
+                float("nan") if direct_valid_count < 2 else float(direct_scores[row, 0] - direct_scores[row, 1])
             )
         if macro_valid_count:
             integers["macro_winner_candidate_id"][row] = int(macro_ids[row, 0])
             floats["macro_winner_margin"][row] = (
-                math_nan() if macro_valid_count < 2 else float(macro_scores[row, 0] - macro_scores[row, 1])
+                float("nan") if macro_valid_count < 2 else float(macro_scores[row, 0] - macro_scores[row, 1])
             )
         if winner_coverage:
             booleans["winner_equal"][row] = bool(direct_ids[row, 0] == macro_ids[row, 0])
