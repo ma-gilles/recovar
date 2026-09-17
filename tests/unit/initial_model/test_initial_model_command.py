@@ -125,7 +125,7 @@ def test_parser_accepts_important_overrides():
             "--padding-factor",
             "2",
             "--pass2-engine",
-            "compact",
+            "local_segmented",
             "--no-relion-wavg-sequential-cuda",
             "--exact-local-bucket-radix",
             "2",
@@ -162,7 +162,7 @@ def test_parser_accepts_important_overrides():
     assert options["offset_range_px"] == 4.5
     assert options["offset_step_px"] == 1.5
     assert options["padding_factor"] == 2
-    assert options["pass2_engine"] == "compact"
+    assert options["pass2_engine"] == "local_segmented"
     assert options["relion_wavg_sequential_cuda"] is False
     assert options["exact_local_bucket_radix"] == 2
     assert options["exact_local_physical_order_chunk_size"] == 220

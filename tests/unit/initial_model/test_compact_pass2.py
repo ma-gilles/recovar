@@ -1,4 +1,4 @@
-"""Focused contracts for InitialModel local/compact pass-2 routing."""
+"""Focused contracts for the single InitialModel pass-2 engine."""
 
 from __future__ import annotations
 
@@ -7,44 +7,17 @@ from typing import NamedTuple
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from helpers.mstep_reference import numpy_relion_f32_mstep_sums
 
 from recovar.em.helpers.types import make_relion_stats
-from helpers.mstep_reference import numpy_relion_f32_mstep_sums
 from recovar.em.sparse_pass2.sparse_pass2_compact_pair_sums import _compact_pair_weighted_rotation_sums
 from recovar.em.sparse_pass2.sparse_pass2_window import (
     subtract_projected_reference_from_sparse_mstep_rotation_sums,
     subtract_projected_reference_from_sparse_mstep_sums,
 )
-from recovar.em.vdam.sparse_pass2_estep import (
-    _collapse_compact_pass2_rotation_stats_to_directions,
-    _compact_sparse_pass2_enabled,
-)
+from recovar.em.vdam.sparse_pass2_estep import _resolve_pass2_engine
 
 pytestmark = pytest.mark.unit
-
-
-def test_compact_sparse_pass2_auto_routes_k1_local_and_kclass_compact():
-    assert _compact_sparse_pass2_enabled(1) is False
-    assert _compact_sparse_pass2_enabled(2) is True
-    assert _compact_sparse_pass2_enabled(4) is True
-
-
-def test_explicit_pass2_engine_selects_local_or_compact():
-    for n_classes in (1, 2, 4):
-        assert _compact_sparse_pass2_enabled(n_classes, "compact") is True
-        assert _compact_sparse_pass2_enabled(n_classes, "local") is False
-
-    with pytest.raises(ValueError, match="pass2_engine"):
-        _compact_sparse_pass2_enabled(2, "unknown")
-
-
-def test_compact_sparse_pass2_is_not_k1_scoped():
-    from inspect import getsource
-
-    from recovar.em.vdam import dense_adapter
-
-    source = getsource(dense_adapter._run_sparse_pass2_initial_model_estep)
-    assert "compact sparse pass 2 is currently qualified only for K=1" not in source
 
 
 def test_sparse_residual_mstep_matches_vdam_formula():
@@ -134,23 +107,15 @@ def _stats(rotation_sums):
     )
 
 
-def test_compact_rotation_statistics_collapse_psi_into_vdam_directions():
-    result = _StatsResult(
-        stats=_stats([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),
-        per_class_stats=(_stats([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]),),
-    )
-
-    collapsed = _collapse_compact_pass2_rotation_stats_to_directions(result, n_psi=3)
-
-    np.testing.assert_array_equal(collapsed.stats.rotation_posterior_sums, [6.0, 15.0])
-    np.testing.assert_array_equal(
-        collapsed.per_class_stats[0].rotation_posterior_sums,
-        [6.0, 15.0],
-    )
 
 
-def test_compact_rotation_statistics_reject_incompatible_psi_count():
-    result = _StatsResult(stats=_stats([1.0, 2.0, 3.0]), per_class_stats=(_stats([1.0, 2.0, 3.0]),))
+def test_one_engine_serves_k1_and_kclass():
+    """The compact sparse pass-2 route is gone: every selector resolves to the exact-local
+    engine, which scores all classes in one pass over class-segmented rows."""
+    for token in ("auto", "local", "local_segmented", " AUTO "):
+        assert _resolve_pass2_engine(token) in {"auto", "local", "local_segmented"}
 
-    with pytest.raises(ValueError, match="not divisible"):
-        _collapse_compact_pass2_rotation_stats_to_directions(result, n_psi=2)
+
+def test_compact_engine_is_no_longer_selectable():
+    with pytest.raises(ValueError, match="must be one of 'auto', 'local' or 'local_segmented'"):
+        _resolve_pass2_engine("compact")

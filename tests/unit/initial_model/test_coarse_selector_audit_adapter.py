@@ -161,10 +161,10 @@ def test_sparse_adapter_extracts_before_pass2_and_seals_before_meta():
     source = getsource(dense_adapter._run_sparse_pass2_initial_model_estep)
 
     extraction = source.index("coarse_selector_audit = _coarse_selector_audit_from_full_stats(")
-    pass2 = min(
-        source.index("result = _run_sparse_k_class_adaptive_pass2("),
-        source.index("result = run_local_k_class_em("),
-    )
+    # One engine: the compact sparse pass-2 route and its
+    # _run_sparse_k_class_adaptive_pass2 call site are gone, so there is a single
+    # scoring call to order against.
+    pass2 = source.index("result = run_local_k_class_em(")
     sealing = source.index("result = _with_initial_model_coarse_diagnostics(")
     result_storage = source.index("halfset_results[int(halfset_idx)] = result")
 
