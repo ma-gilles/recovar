@@ -65,11 +65,8 @@ class ProjectionCachePlan:
     row_count: int
     pixel_count: int
     cache_dtype: np.dtype
-    requested_max_chunk_rows: int
     chunk_rows: int
-    row_alignment: int
     chunk_count_per_table: int
-    transient_specs: tuple[ProjectionCacheTransientSpec, ...]
     table_bytes: int
     retained_bytes: int
     projection_block_bytes: int
@@ -199,11 +196,8 @@ def plan_projection_cache(
         row_count=rows,
         pixel_count=pixels,
         cache_dtype=dtype,
-        requested_max_chunk_rows=requested,
         chunk_rows=chunk_rows,
-        row_alignment=alignment,
         chunk_count_per_table=(rows + chunk_rows - 1) // chunk_rows,
-        transient_specs=specs,
         table_bytes=table_bytes,
         retained_bytes=retained_bytes,
         projection_block_bytes=projection_block_bytes,
