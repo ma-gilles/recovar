@@ -72,3 +72,17 @@ def test_cache_build_rotations_per_call_scales_scoring_budget(monkeypatch):
     assert _projection_cache_build_max_rotations_per_call(None, 294912) is None
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTED_ROTATIONS", "4096")
     assert _projection_cache_build_max_rotations_per_call(809, 294912) == 4096
+
+
+def test_flatten_bucket_rotations_is_host_side_for_numpy_and_not_jitted():
+    from recovar.em.local import local_backprojection as lb
+
+    rots = np.arange(2 * 3 * 9, dtype=np.float32).reshape(2, 3, 3, 3)
+    out = lb.flatten_bucket_rotations(rots)
+    assert isinstance(out, np.ndarray) and out.shape == (6, 3, 3)
+    np.testing.assert_array_equal(out, rots.reshape(6, 3, 3))
+    assert not hasattr(lb.flatten_bucket_rotations, "lower")  # plain function, not a jit wrapper
+    import jax.numpy as jnp
+    dev = lb.flatten_bucket_rotations(jnp.asarray(rots))
+    assert dev.shape == (6, 3, 3)
+    np.testing.assert_array_equal(np.asarray(dev), rots.reshape(6, 3, 3))

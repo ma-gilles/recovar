@@ -1738,11 +1738,11 @@ def compute_pass2_stats_sparse_bucketed(
                 ctf2_over_nv_recon = ctf2_over_nv_half_with_dc
                 shifted_noise = shifted_score_half_with_dc
 
-        flat_rotations = flatten_bucket_rotations(jnp.asarray(rotations))
+        flat_rotations = flatten_bucket_rotations(rotations)
         flat_backproject_rotations = (
             flat_rotations
             if mstep_rotations is rotations
-            else flatten_bucket_rotations(jnp.asarray(mstep_rotations))
+            else flatten_bucket_rotations(mstep_rotations)
         )
         rotation_chunk_size = None
         identity_full_projection_cache_rows = False
@@ -1821,7 +1821,7 @@ def compute_pass2_stats_sparse_bucketed(
             def _score_rotation_chunk(start, stop, *, need_recon, raw_diff2=False, min_diff2=None):
                 rot_count = int(stop - start)
                 if projection_cache is None:
-                    rotations_chunk = jnp.asarray(rotations[:, start:stop])
+                    rotations_chunk = rotations[:, start:stop]
                     flat_rotations_chunk = flatten_bucket_rotations(rotations_chunk)
                     projection_kwargs = _projection_kwargs_for_relion_score_window(
                         window_spec.projection_kwargs(return_abs2=False),
@@ -2478,7 +2478,7 @@ def compute_pass2_stats_sparse_bucketed(
                             )
                         contribution_summed_chunks.append(dump_summed)
                         contribution_ctf_prob_chunks.append(dump_ctf_probs)
-                    flat_chunk_rotations = flatten_bucket_rotations(jnp.asarray(mstep_rotations[:, start:stop]))
+                    flat_chunk_rotations = flatten_bucket_rotations(mstep_rotations[:, start:stop])
                     if use_window:
                         Ft_y_total = _accumulate_adjoint_block_chunked(
                             flatten_bucket_rows(summed),
@@ -6041,11 +6041,11 @@ def compute_k_class_pass2_stats_sparse_fused(
         stage_t0 = time.time()
         for class_index, arrays in enumerate(class_bucket_arrays):
             class_bucket_size = int(arrays["bucket_size"])
-            flat_rotations = flatten_bucket_rotations(jnp.asarray(arrays["rotations"]))
+            flat_rotations = flatten_bucket_rotations(arrays["rotations"])
             flat_backproject_rotations_by_class.append(
                 flat_rotations
                 if arrays["mstep_rotations"] is arrays["rotations"]
-                else flatten_bucket_rotations(jnp.asarray(arrays["mstep_rotations"]))
+                else flatten_bucket_rotations(arrays["mstep_rotations"])
             )
             cache = projection_cache_by_class[class_index]
             defer_compact_recon_projection = False
