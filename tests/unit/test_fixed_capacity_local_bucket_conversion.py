@@ -12,7 +12,12 @@ from recovar.em.helpers.batch_planning import (
     _plan_fixed_capacity_whole_local,
     _seal_fixed_capacity_physical_order,
 )
-from recovar.em.local.local_layout import LocalBucketSpec, _fixed_capacity_calls_from_local_buckets
+from recovar.em.local.fixed_capacity_local import (
+    _fixed_capacity_calls_from_local_buckets,
+)
+from recovar.em.local.local_layout import (
+    LocalBucketSpec,
+)
 
 pytestmark = pytest.mark.unit
 
