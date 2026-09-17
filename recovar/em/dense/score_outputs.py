@@ -193,8 +193,7 @@ def _scatter_dense_k_class_result(
     if class_mass_for_priors is None:
         class_mass_for_priors = k_class_result.class_posterior_sums
     outputs.class_posterior[k] = np.asarray(class_mass_for_priors, dtype=np.float64)
-    if outputs.class_full_posterior is not None:
-        outputs.class_full_posterior[k] = np.asarray(k_class_result.class_posterior_sums, dtype=np.float64)
+    outputs.class_full_posterior[k] = np.asarray(k_class_result.class_posterior_sums, dtype=np.float64)
     # Collapse fine-grid rotation posteriors to coarse via the parent map
     # when iter-1 firstiter_cc routes through the adaptive 2-pass engine
     # with adaptive_oversampling > 0; downstream
