@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import logging
 
+import functools
+
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -83,6 +86,29 @@ def _per_particle_launch_rung(count: int, limit: int) -> int:
     while rung < count:
         rung *= 2
     return min(rung, limit)
+
+
+@functools.partial(jax.jit, static_argnames=("rung",))
+def _particle_launch_rows(values, ctf_values, rotations, particle_index, count, *, rung: int):
+    """Rows of one particle-owned launch: ``rung`` rows, live rows ``< count``.
+
+    ``particle_index`` and ``count`` are traced scalars so one compiled program
+    serves every particle of a bucket shape at a given rung; static Python
+    slicing compiled a separate program per (particle index, count).
+    """
+
+    def take(array):
+        return jax.lax.dynamic_index_in_dim(array, particle_index, axis=0, keepdims=False)[:rung]
+
+    particle_values = take(values)
+    particle_ctf = take(ctf_values)
+    particle_rotations = take(rotations)
+    live_row = (jnp.arange(rung) < count)[:, None]
+    return (
+        jnp.where(live_row, particle_values, 0),
+        jnp.where(live_row, particle_ctf, 0),
+        particle_rotations,
+    )
 
 
 def _accumulate_relion_x_half_per_particle_launches(
@@ -218,22 +244,20 @@ def _accumulate_relion_x_half_per_particle_launches(
             if count <= 0:
                 continue
             rung = _per_particle_launch_rung(count, int(values.shape[1]))
-            particle_slice = (
-                slice(particle_index, particle_index + 1),
-                slice(0, rung),
+            # Spare rung rows carry zero contributions regardless of what the
+            # padded bucket holds there; the scatter of exact zeros leaves the
+            # accumulators bitwise unchanged.
+            particle_values, particle_ctf, particle_rotations = _particle_launch_rows(
+                values,
+                ctf_values,
+                rotations,
+                jnp.int32(particle_index),
+                jnp.int32(count),
+                rung=rung,
             )
-            particle_values = values[particle_slice].reshape(rung, values.shape[-1])
-            particle_ctf = ctf_values[particle_slice].reshape(rung, ctf_values.shape[-1])
-            if rung > count:
-                # Spare rung rows carry zero contributions regardless of what
-                # the padded bucket holds there; the scatter of exact zeros
-                # leaves the accumulators bitwise unchanged.
-                live_row = (jnp.arange(rung) < count)[:, None]
-                particle_values = jnp.where(live_row, particle_values, 0)
-                particle_ctf = jnp.where(live_row, particle_ctf, 0)
             value_rows.append(particle_values)
             ctf_rows.append(particle_ctf)
-            rotation_rows.append(rotations[particle_slice].reshape(rung, 3, 3))
+            rotation_rows.append(particle_rotations)
         if not value_rows:
             continue
         particle_values = jnp.concatenate(value_rows, axis=0)
