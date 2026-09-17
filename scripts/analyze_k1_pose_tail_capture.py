@@ -12,33 +12,16 @@ import starfile
 
 # Support direct execution, sibling imports, and the scripts package.
 if not __package__:
+    from relion_reference import euler_matrices
     from file_hash import sha256_file as _sha256
 else:
+    from scripts.relion_reference import euler_matrices
     from scripts.file_hash import sha256_file as _sha256
 
 
 def _particle_table(path: Path):
     value = starfile.read(path)
     return value["particles"] if isinstance(value, dict) else value
-
-
-def _relion_euler_to_matrix(eulers_deg: np.ndarray) -> np.ndarray:
-    eulers = np.asarray(eulers_deg, dtype=np.float64).reshape(-1, 3)
-    alpha, beta, gamma = np.deg2rad(eulers).T
-    ca, cb, cg = np.cos(alpha), np.cos(beta), np.cos(gamma)
-    sa, sb, sg = np.sin(alpha), np.sin(beta), np.sin(gamma)
-    cc, cs, sc, ss = cb * ca, cb * sa, sb * ca, sb * sa
-    matrices = np.empty((eulers.shape[0], 3, 3), dtype=np.float64)
-    matrices[:, 0, 0] = cg * cc - sg * sa
-    matrices[:, 0, 1] = cg * cs + sg * ca
-    matrices[:, 0, 2] = -cg * sb
-    matrices[:, 1, 0] = -sg * cc - cg * sa
-    matrices[:, 1, 1] = -sg * cs + cg * ca
-    matrices[:, 1, 2] = sg * sb
-    matrices[:, 2, 0] = sc
-    matrices[:, 2, 1] = ss
-    matrices[:, 2, 2] = cb
-    return matrices
 
 
 def _relion_matrix_to_euler(matrix: np.ndarray) -> np.ndarray:
@@ -77,7 +60,7 @@ def _relion_matrix_to_euler(matrix: np.ndarray) -> np.ndarray:
 
 def _angular_error_deg(lhs_matrix: np.ndarray, rhs_eulers: np.ndarray) -> float:
     lhs = np.asarray(lhs_matrix, dtype=np.float64).reshape(3, 3)
-    rhs = _relion_euler_to_matrix(rhs_eulers)[0]
+    rhs = euler_matrices(rhs_eulers)[0]
     relative = lhs @ rhs.T
     cosine = np.clip((np.trace(relative) - 1.0) * 0.5, -1.0, 1.0)
     skew = np.asarray(
