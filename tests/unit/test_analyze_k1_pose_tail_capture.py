@@ -5,12 +5,13 @@ import pandas as pd
 import pytest
 import starfile
 
-from scripts.analyze_k1_pose_tail_capture import _relion_euler_to_matrix, analyze
+from scripts.analyze_k1_pose_tail_capture import analyze
+from scripts.relion_reference import euler_matrices
 
 
 def test_pose_tail_capture_recovers_winner_and_compares_relion_state(tmp_path: Path):
     eulers = np.asarray([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]])
-    rotations = _relion_euler_to_matrix(eulers).astype(np.float32)
+    rotations = euler_matrices(eulers).astype(np.float32)
     capture = tmp_path / "capture.npz"
     np.savez(
         capture,
