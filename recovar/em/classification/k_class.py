@@ -38,6 +38,7 @@ from recovar.em.diagnostics.coarse_score_diagnostics import (
     _with_coarse_significance_diagnostics,
 )
 from recovar.em.diagnostics.local_debug import score_dump_label
+from recovar.em.helpers.env_flags import parse_env_flag
 from recovar.em.helpers.half_volume_mstep import relion_backprojector_volume_shape
 from recovar.em.helpers.normalization_inputs import optional_normalization_vector
 from recovar.em.helpers.scale_groups import prepare_scale_correction_groups
@@ -71,13 +72,6 @@ class _DenseKClassScoreProbeResult(NamedTuple):
     per_class_stats: tuple[RelionStats, ...]
     class_assignments: np.ndarray
     coarse_selector_audit: dict | None = None
-
-
-def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
-    value = os.environ.get(name)
-    if value is None:
-        return bool(default)
-    return value.strip().lower() not in {"0", "false", "no", "off"}
 
 
 _PASS1_TOP2_DEBUG_INDICES_ENV = "RECOVAR_PASS1_TOP2_DEBUG_INDICES"
@@ -285,7 +279,7 @@ def _use_fused_sparse_k_class_pass2(n_classes: int) -> bool:
     # parity route for first-iteration/default-GUI refinements.  Multi-class
     # runs still default to the fused path, and K=1 fused remains available for
     # explicit experiments via RECOVAR_SPARSE_KCLASS_FUSED=1.
-    return _env_flag_enabled("RECOVAR_SPARSE_KCLASS_FUSED", default=int(n_classes) > 1)
+    return parse_env_flag("RECOVAR_SPARSE_KCLASS_FUSED", default=int(n_classes) > 1)
 
 
 def _apply_bpref_particle_order_policy(
@@ -362,8 +356,8 @@ def _compact_sparse_pass2_preferred_over_dense(n_classes: int, n_images: int) ->
         or _env_value_or_none("RECOVAR_K_CLASS_DENSE_PASS2_MEAN_SUPPORT_FRACTION") is not None
     ):
         return False
-    compact_pair_check = _env_flag_enabled("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK", default=False)
-    compact_pairs = _env_flag_enabled(
+    compact_pair_check = parse_env_flag("RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS_CHECK", default=False)
+    compact_pairs = parse_env_flag(
         "RECOVAR_SPARSE_KCLASS_COMPACT_PAIRS",
         default=not compact_pair_check,
     )
@@ -3007,7 +3001,7 @@ def run_dense_k_class_em_adaptive(
     device_signature_configured = bool(
         os.environ.get("RECOVAR_BPREF_DEVICE_SIGNATURE_DUMP_DIR", "").strip()
     )
-    fused_atomic_env_enabled = _env_flag_enabled(_RELION_X_HALF_BP_FUSED_ATOMICS_ENV)
+    fused_atomic_env_enabled = parse_env_flag(_RELION_X_HALF_BP_FUSED_ATOMICS_ENV)
     fused_atomic_diagnostic_requested = bool(
         fused_atomic_env_enabled
         and (bpref_device_signature_active or not device_signature_configured)
