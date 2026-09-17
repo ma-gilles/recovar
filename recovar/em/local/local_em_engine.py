@@ -994,7 +994,10 @@ def run_local_em_exact(
     Ft_y = jnp.zeros(accumulator_shape, dtype=recon_y_accum_dtype)
     Ft_ctf = jnp.zeros(accumulator_shape, dtype=recon_ctf_accum_dtype)
     hard_assignment = np.empty(n_images, dtype=np.int64)
-    log_evidence_per_image = np.empty(n_images, dtype=precision_policy.score_real_dtype)
+    # A normalizer, not a score: allocate it at the normalization dtype. The value
+    # assigned in local_bucket_stages is formed in double, and a scoring-dtype buffer
+    # narrows it per class before the driver reduces over classes.
+    log_evidence_per_image = np.empty(n_images, dtype=precision_policy.normalization_real_dtype)
     best_log_score_per_image = np.empty(n_images, dtype=precision_policy.score_real_dtype)
     max_posterior_per_image = np.empty(n_images, dtype=precision_policy.score_real_dtype)
     significant_counts = np.empty(n_images, dtype=np.int32) if return_significant_counts else None
