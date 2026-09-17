@@ -16,7 +16,6 @@ import numpy as np
 from recovar.em.diagnostics import bpref_diagnostics
 from recovar.em.helpers.env_flags import parse_env_flag
 from recovar.em.helpers.preprocessing import (
-    resolve_image_mask_for_half_preprocess,
     uses_relion_cuda_image_preprocessing,
 )
 from recovar.em.local.local_layout import LocalBucketSpec
