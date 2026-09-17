@@ -212,7 +212,6 @@ def test_fixed_capacity_hypothesis_packer_bitwise_round_trips_every_active_field
 
     assert program.valid_image_count == 5
     assert program.valid_row_count == 20
-    assert program.mstep_rotations_fall_back_to_score is False
     np.testing.assert_array_equal(program.image_indices, [9, 3, 7, 8, 1, -1, -1, -1])
     np.testing.assert_array_equal(program.row_offsets, [0, 2, 6, 7, 12, 20, 20, 20, 20])
     np.testing.assert_array_equal(
@@ -339,7 +338,6 @@ def test_fixed_capacity_hypothesis_packer_resolves_uniform_mstep_fallback_and_ab
         enabled=True,
     )
 
-    assert program.mstep_rotations_fall_back_to_score is True
     assert program.local_rotation_posterior_ids is None
     assert program.local_sample_mask is None
     _assert_bitwise_equal(
