@@ -36,7 +36,11 @@ from recovar.em.diagnostics.coarse_score_diagnostics import (
     _validate_coarse_selector_audit,
 )
 from recovar.em.helpers.batch_fetch import original_image_indices
-from recovar.em.helpers.env_flags import parse_env_int_set, parse_env_strict_flag
+from recovar.em.helpers.env_flags import (
+    parse_env_binary_flag,
+    parse_env_int_set,
+    parse_env_strict_flag,
+)
 from recovar.em.helpers.projection import compute_projections_block
 from recovar.em.helpers.projection_cache import build_projection_cache
 from recovar.em.relion.relion_coarse_operands import (
@@ -505,11 +509,7 @@ def _k1_coarse_multistream_worker_count(*, default: int = 0) -> int:
 
 def _coarse_max_posterior_physical_batch_enabled() -> bool:
     """Keep the physical row count through coarse Pmax publication."""
-    name = "RECOVAR_COARSE_MAX_POSTERIOR_PHYSICAL_BATCH"
-    token = os.environ.get(name, "0").strip()
-    if token not in {"0", "1"}:
-        raise ValueError(f"Unsupported {name}={token!r}")
-    return token == "1"
+    return parse_env_binary_flag("RECOVAR_COARSE_MAX_POSTERIOR_PHYSICAL_BATCH")
 
 
 def _coarse_max_posterior_for_host(
@@ -540,18 +540,7 @@ def _coarse_significance_support_audit_enabled(
 
 def _coarse_significance_support_audit_ids_enabled() -> bool:
     """Whether a support audit also retains its exact selected IDs."""
-
-    token = os.environ.get(
-        _COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS_ENV,
-        "0",
-    ).strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        f"Unsupported {_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS_ENV}={token!r}",
-    )
+    return parse_env_strict_flag(_COARSE_SIGNIFICANCE_SUPPORT_AUDIT_IDS_ENV)
 
 
 class _CoarseGaussianScoreBackend(str, Enum):
