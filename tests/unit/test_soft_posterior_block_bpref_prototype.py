@@ -93,3 +93,39 @@ def test_block_and_per_particle_paths_accumulate_the_same_active_rows(monkeypatc
     bl_data = active_rows(seen["block"][0:1]); bl_ctf = active_rows(seen["block"][1:2])
     assert pp_data == bl_data and len(pp_data) == int(counts.sum())
     assert pp_ctf == bl_ctf and len(pp_ctf) == int(counts.sum())
+
+
+def test_run_chunking_default_and_rungs():
+    from recovar.em.scoring.sparse_bucket_arrays import _split_run_into_chunks
+
+    run = list(range(11))
+    assert [len(c) for c in _split_run_into_chunks(run, 8, image_rungs=False)] == [8, 3]
+    assert [len(c) for c in _split_run_into_chunks(run, 8, image_rungs=True)] == [8, 2, 1]
+    assert [len(c) for c in _split_run_into_chunks(list(range(6)), 8, image_rungs=True)] == [4, 2]
+    assert [len(c) for c in _split_run_into_chunks(list(range(16)), 8, image_rungs=True)] == [8, 8]
+    # every image appears exactly once, in order
+    for rungs in (False, True):
+        chunks = _split_run_into_chunks(run, 8, image_rungs=rungs)
+        assert sum(chunks, []) == run
+
+
+def test_bucket_builder_rungs_yield_power_of_two_image_counts():
+    import numpy as np
+    from recovar.em.scoring.sparse_bucket_arrays import _bucket_pass2_inputs
+
+    rng = np.random.default_rng(0)
+    n = 37
+    counts = rng.integers(600, 9000, size=n)
+    per_image_inputs = {"oversampled_rots": [np.zeros((int(c), 3, 3), dtype=np.float32) for c in counts]}
+    common = dict(n_fine_trans=84, rotation_block_size_for_quantization=4096, max_hypotheses_per_microbatch=7_653_710,
+                  max_images_per_microbatch=212, processing_order_override=np.arange(n), processing_order_group_by_bucket_size=True)
+    plain = _bucket_pass2_inputs(per_image_inputs, **common)
+    rungs = _bucket_pass2_inputs(per_image_inputs, **common, group_chunk_image_rungs=True)
+    covered = sorted(int(i) for b in rungs for i in b["image_indices"])
+    assert covered == list(range(n))
+    for b in rungs:
+        k = len(b["image_indices"])
+        assert k & (k - 1) == 0, k  # power of two
+    # same padded rotation rows per image (grouping unchanged; only chunk boundaries move)
+    rows = lambda bs: sum(int(b["bucket_size"]) * len(b["image_indices"]) for b in bs)
+    assert rows(plain) == rows(rungs)

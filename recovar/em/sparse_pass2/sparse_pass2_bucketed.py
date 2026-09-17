@@ -876,10 +876,19 @@ def compute_pass2_stats_sparse_bucketed(
     processing_order_chunk_size = 1
     processing_order_group_by_bucket_size = False
     processing_order_batch_consecutive_bucket_sizes = False
+    soft_posterior_block_bpref_bucketing = _soft_posterior_block_bpref_active(
+        prototype_enabled=soft_posterior_block_bpref_prototype,
+        live_per_particle_launches=bool(relion_x_half_mstep and use_per_particle_launches),
+        winner_take_all=winner_take_all,
+    )
     if processing_order_override is not None:
+        # PROTOTYPE: with block BPref accumulation the launch boundary no longer
+        # follows the physical particle order, so the 220-particle mixed-support
+        # chunks (which pad every particle to the widest support in the chunk)
+        # buy nothing; group by support size unless the env says otherwise.
         processing_order_group_by_bucket_size = parse_env_flag(
             _BPREF_EXECUTION_GROUP_BY_BUCKET_SIZE_ENV,
-            default=False,
+            default=soft_posterior_block_bpref_bucketing,
         )
         (
             processing_order_chunk_size,
@@ -933,6 +942,9 @@ def compute_pass2_stats_sparse_bucketed(
         processing_order_group_by_bucket_size=processing_order_group_by_bucket_size,
         processing_order_batch_consecutive_bucket_sizes=(
             processing_order_batch_consecutive_bucket_sizes
+        ),
+        group_chunk_image_rungs=bool(
+            soft_posterior_block_bpref_bucketing and processing_order_group_by_bucket_size
         ),
     )
     buckets = _prioritize_stopped_pass2_dump_buckets(
