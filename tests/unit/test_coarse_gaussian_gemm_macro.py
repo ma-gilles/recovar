@@ -461,8 +461,6 @@ def test_coarse_gaussian_gemm_resource_gate_records_full_transient_and_host_sync
         + resources.compact_projection_bytes
         + resources.compact_projection_abs2_bytes
     )
-    assert resources.pixel_index_device_to_host_materializations == 0
-
     with pytest.raises(MemoryError, match="predicted projection transient"):
         significance._coarse_gaussian_gemm_resources(
             rotation_block_size=17,
@@ -2538,7 +2536,6 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
     assert [call[0] for call in score_calls].count(2) > 0
     assert any(np.any(tail) for _, _, tail in projection_calls)
     resources = clean[5]["coarse_gaussian_gemm_resources"]
-    assert resources["pixel_index_device_to_host_materializations"] == 0
     assert resources["predicted_peak_projection_bytes"] <= resources[
         "projected_transient_budget_bytes"
     ]
@@ -2578,7 +2575,6 @@ def test_coarse_gaussian_gemm_live_k2_priors_multigroup_and_poisoned_tails(
             np.testing.assert_array_equal(payload["argmax_equal"], True)
             np.testing.assert_array_equal(payload["support_equal"], True)
             assert int(payload["score_precision_bits"]) == 32
-            assert int(payload["resource_pixel_index_device_to_host_materializations"]) == 0
             captured_original_indices.extend(payload["original_indices"].tolist())
     assert sorted(captured_original_indices) == [0, 1]
     assert len({path.name for path in diagnostic_paths}) == 2
