@@ -10,6 +10,20 @@ from typing import Any
 import numpy as np
 
 
+def centered_corr(lhs: np.ndarray, rhs: np.ndarray) -> float:
+    """Return centered correlation, or NaN for incompatible or constant arrays."""
+    a = np.asarray(lhs, dtype=np.float64).reshape(-1)
+    b = np.asarray(rhs, dtype=np.float64).reshape(-1)
+    if a.size != b.size:
+        return float("nan")
+    a = a - float(np.mean(a))
+    b = b - float(np.mean(b))
+    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+    if denom <= 0.0 or not math.isfinite(denom):
+        return float("nan")
+    return float(np.dot(a, b) / denom)
+
+
 def shell_fsc(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
     """Return canonical RECOVAR FSC shells, excluding Nyquist edges."""
     a = np.asarray(lhs, dtype=np.float64)
@@ -66,4 +80,3 @@ def normalized_fsc_auc(values: Any, axis: Any | None = None) -> float:
     x_norm = (x - x[0]) / span
     integrate = getattr(np, "trapezoid", np.trapz)
     return float(integrate(y, x_norm))
-

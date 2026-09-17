@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
 import struct
 import sys
@@ -21,11 +20,11 @@ from typing import Any
 import numpy as np
 
 try:
-    from scripts.fsc_metrics import normalized_fsc_auc, shell_fsc
+    from scripts.fsc_metrics import centered_corr, normalized_fsc_auc, shell_fsc
 except ModuleNotFoundError as error:
     if error.name != "scripts":
         raise
-    from fsc_metrics import normalized_fsc_auc, shell_fsc
+    from fsc_metrics import centered_corr, normalized_fsc_auc, shell_fsc
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -140,19 +139,6 @@ def read_relion_spectrum(path: Path) -> np.ndarray:
         if values.size != int(count) or stream.read(1):
             raise ValueError(f"RELION spectrum payload size does not match length {count}: {path}")
     return values
-
-
-def centered_corr(lhs: np.ndarray, rhs: np.ndarray) -> float:
-    a = np.asarray(lhs, dtype=np.float64).reshape(-1)
-    b = np.asarray(rhs, dtype=np.float64).reshape(-1)
-    if a.size != b.size:
-        return float("nan")
-    a = a - float(np.mean(a))
-    b = b - float(np.mean(b))
-    denom = float(np.linalg.norm(a) * np.linalg.norm(b))
-    if denom <= 0.0 or not math.isfinite(denom):
-        return float("nan")
-    return float(np.dot(a, b) / denom)
 
 
 def first_shell_below(values: np.ndarray, threshold: float) -> int | None:
