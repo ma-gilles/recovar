@@ -143,6 +143,7 @@ from recovar.em.sparse_pass2.sparse_pass2_bucket_plan import (
 from recovar.em.sparse_pass2.sparse_pass2_budget import (
     _EXACT_RAW_DIFF2_CACHE_MAX_BYTES,
     _compact_pair_dense_mstep_max_bytes_for_pass,
+    _projection_cache_build_max_rotations_per_call,
     _device_free_memory_bytes,
     _dtype_itemsize,
     _exact_raw_diff2_cache_estimated_bytes,
@@ -1205,6 +1206,10 @@ def compute_pass2_stats_sparse_bucketed(
         max_projection_cache_bytes = _projection_cache_max_bytes_for_pass(device_memory_bytes)
         if _projection_cache_fits_budget(transient_projection_bytes, max_projection_cache_bytes):
             cache_t0 = time.time()
+            cache_build_max_rotations = _projection_cache_build_max_rotations_per_call(
+                max_projected_rotations_per_projection_call,
+                n_fine_rot,
+            )
             if use_window:
                 projection_kwargs = _projection_kwargs_for_relion_score_window(
                     window_spec.projection_kwargs(return_abs2=False),
@@ -1222,7 +1227,7 @@ def compute_pass2_stats_sparse_bucketed(
                     disc_type,
                     score_indices=window_indices,
                     recon_indices=None if score_only else recon_window_indices,
-                    max_projected_rotations=max_projected_rotations_per_projection_call,
+                    max_projected_rotations=cache_build_max_rotations,
                     output_complex_dtype=precision_policy.score_complex_dtype,
                     output_abs2_dtype=precision_policy.score_real_dtype,
                     relion_projector_half=relion_projector_half,
@@ -1246,7 +1251,7 @@ def compute_pass2_stats_sparse_bucketed(
                     image_shape,
                     proj_volume_shape,
                     disc_type,
-                    max_projected_rotations=max_projected_rotations_per_projection_call,
+                    max_projected_rotations=cache_build_max_rotations,
                     output_complex_dtype=precision_policy.score_complex_dtype,
                     output_abs2_dtype=precision_policy.score_real_dtype,
                     relion_projector_half=relion_projector_half,
@@ -1260,10 +1265,11 @@ def compute_pass2_stats_sparse_bucketed(
                     "recon_abs2": None if score_only else proj_abs2_cache_flat,
                 }
             logger.info(
-                "Sparse pass-2 projection cache: cached %d fine rotations in %.2fs (estimated transient %.2f GiB)",
+                "Sparse pass-2 projection cache: cached %d fine rotations in %.2fs (estimated transient %.2f GiB, %s rotations per call)",
                 n_fine_rot,
                 time.time() - cache_t0,
                 transient_projection_bytes / float(1024**3),
+                "all" if cache_build_max_rotations is None else str(int(cache_build_max_rotations)),
             )
         else:
             logger.info(

@@ -595,6 +595,35 @@ def _max_projected_rotations_per_call_for_pass(
     return max(1, int(max_bytes) // int(bytes_per_rotation))
 
 
+_PROJECTION_CACHE_BUILD_ROTATION_MULTIPLIER = 4
+
+
+def _projection_cache_build_max_rotations_per_call(
+    per_call_max_rotations: int | None,
+    n_fine_rotations: int,
+) -> int | None:
+    """Rotations per projection call while building the fine-projection cache.
+
+    The per-chunk budget ``per_call_max_rotations`` is sized for the scoring
+    loop, where per-image translation tiles, score blocks and Wavg operands are
+    live next to the projection intermediates.  The cache build runs before
+    any of those exist, so it may project several times more rotations per
+    call: at HEALPix order 3 (294912 fine rotations, current_size 92) the
+    build took 19.9 s per half at 809 rotations per call and 3.6 s at 4096
+    (jobs 14051847 / 14052595), while the scoring-loop budget kept the peak
+    memory profile unchanged.  An explicit
+    ``RECOVAR_SPARSE_PASS2_MAX_PROJECTED_ROTATIONS`` still applies verbatim.
+    """
+
+    if per_call_max_rotations is None:
+        return None
+    override = _optional_positive_int_env(_MAX_PROJECTED_ROTATIONS_ENV)
+    if override is not None:
+        return int(override)
+    scaled = int(per_call_max_rotations) * _PROJECTION_CACHE_BUILD_ROTATION_MULTIPLIER
+    return max(1, min(int(n_fine_rotations), scaled))
+
+
 def _projection_budget_pixels_for_pass(
     n_half_pixels: int,
     *,

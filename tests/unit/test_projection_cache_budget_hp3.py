@@ -60,3 +60,15 @@ def test_cache_cap_change_leaves_per_call_rotation_budget_alone(monkeypatch):
 def test_env_override_still_wins(monkeypatch):
     monkeypatch.setenv("RECOVAR_SPARSE_PASS2_PROJECTION_CACHE_MAX_BYTES", "654321")
     assert _projection_cache_max_bytes_for_pass(_H100_BYTES) == 654321
+
+
+def test_cache_build_rotations_per_call_scales_scoring_budget(monkeypatch):
+    from recovar.em.sparse_pass2.sparse_pass2_budget import _projection_cache_build_max_rotations_per_call
+
+    _clear_env(monkeypatch)
+    assert _projection_cache_build_max_rotations_per_call(809, 294912) == 4 * 809
+    # never more rotations than the fine grid holds, never below one
+    assert _projection_cache_build_max_rotations_per_call(809, 1000) == 1000
+    assert _projection_cache_build_max_rotations_per_call(None, 294912) is None
+    monkeypatch.setenv("RECOVAR_SPARSE_PASS2_MAX_PROJECTED_ROTATIONS", "4096")
+    assert _projection_cache_build_max_rotations_per_call(809, 294912) == 4096
