@@ -424,7 +424,7 @@ class RefinementState:
     acc_trans: float = float("inf")
     voxel_size_angstrom: float = 1.0
     # Particle diameter in Å (used for the resolution-based acc_rot proxy
-    # in should_refine_angular_sampling). Set by the caller via
+    # in update_angular_sampling). Set by the caller via
     # update_refinement_state(..., particle_diameter_angstrom=...).
     particle_diameter_angstrom: float = 0.0
 
@@ -898,57 +898,6 @@ def check_convergence(state: RefinementState) -> bool:
 # ---------------------------------------------------------------------------
 # Angular step refinement
 # ---------------------------------------------------------------------------
-
-
-def should_refine_angular_sampling(state: RefinementState) -> bool:
-    """Check whether angular sampling should be refined (HEALPix order incremented).
-
-    Mirrors RELION ``MlOptimiser::updateAngularSampling`` at
-    ``ml_optimiser.cpp:9772-9790``:
-
-    .. code-block:: cpp
-
-        do_proceed_resolution = nr_iter_wo_resol_gain >= MAX_NR_ITER_WO_RESOL_GAIN;
-        do_proceed_hidden_variables = nr_iter_wo_large_hidden_variable_changes
-                                      >= MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES;
-        if (do_proceed_resolution && do_proceed_hidden_variables) { bump }
-
-    Refinement triggers when:
-    1. Resolution stalled for >= MAX_NR_ITER_WO_RESOL_GAIN iterations
-    2. The RELION-exact ``nr_iter_wo_large_hidden_variable_changes`` counter
-       (B3+B4) >= MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES.  When that
-       counter has not been populated yet (very early iterations or callers
-       that don't pass rotation matrices to ``update_refinement_state``),
-       fall back to ``nr_iter_wo_assignment_changes``.
-    3. Current angular step is NOT already finer than 75% of acc_rot
-    4. ``healpix_order`` is below the RECOVAR hard cap. The cap only prevents
-       runaway grid growth; it is not a RELION convergence criterion.
-
-    Parameters
-    ----------
-    state : RefinementState
-        Current refinement state.
-
-    Returns
-    -------
-    bool
-        True if angular sampling should be refined.
-    """
-    if state.has_fine_enough_angular_sampling:
-        return False
-
-    if state.healpix_order >= state.max_healpix_order:
-        logger.info(
-            "Angular sampling reached max_healpix_order=%d; not refining further "
-            "(RELION fine-enough criterion not yet met)",
-            state.max_healpix_order,
-        )
-        return False
-
-    if not _angular_sampling_update_is_ready(state):
-        return False
-
-    return not _angular_sampling_is_fine_enough_now(state)
 
 
 def _angular_sampling_update_is_ready(state: RefinementState) -> bool:
