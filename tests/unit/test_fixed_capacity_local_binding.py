@@ -353,8 +353,6 @@ def test_fixed_capacity_call0_view_is_read_only_call_scoped_and_canonical():
     assert view.call_index == 0
     assert view.descriptor_fingerprint == plan.descriptor_fingerprint
     assert view.generation_token is plan.generation_token
-    assert view.call_image_offset == int(plan.call_image_offsets[0]) == 0
-    assert view.call_row_offset == int(plan.call_row_offsets[0]) == 0
     assert view.valid_image_count == int(plan.call_valid_images[0]) == 2
     assert view.valid_row_count == int(plan.call_valid_rows[0]) == 5
     assert view.physical_image_capacity == int(plan.call_image_capacities[0]) == 4
@@ -407,8 +405,6 @@ def test_fixed_capacity_materializes_every_active_call_in_sealed_chronology():
     )
 
     assert [view.call_index for view in views] == [0, 1]
-    assert [view.call_image_offset for view in views] == [0, 2]
-    assert [view.call_row_offset for view in views] == [0, 5]
     np.testing.assert_array_equal(
         np.concatenate([view.bucket.image_indices for view in views]),
         plan.image_indices[: plan.valid_image_count],

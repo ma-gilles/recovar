@@ -583,8 +583,6 @@ class _FixedCapacityLocalCallView:
     call_index: int
     descriptor_fingerprint: str
     generation_token: _FixedCapacityLocalGenerationToken
-    call_image_offset: int
-    call_row_offset: int
     physical_image_capacity: int
     physical_rotation_capacity: int
     valid_image_count: int
@@ -1128,8 +1126,6 @@ def _materialize_fixed_capacity_local_call_view(
         call_index=call_index,
         descriptor_fingerprint=bundle.descriptor_fingerprint,
         generation_token=bundle.generation_token,
-        call_image_offset=image_offset,
-        call_row_offset=row_offset,
         physical_image_capacity=physical_images,
         physical_rotation_capacity=physical_rotations,
         valid_image_count=valid_images,
