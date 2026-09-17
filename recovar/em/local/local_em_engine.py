@@ -2201,7 +2201,10 @@ def run_local_em_exact(
                 use_compact_relion_projector_projection=bool(compact_relion_projector_big_jit),
                 use_relion_projection_cache=bool(relion_projection_cache.enabled),
                 relion_projector_output_size=int(big_jit_relion_projector_output_size),
-                projection_relion_texture_interp=bool(projection_relion_texture_interp),
+                # Not bool(): None is the tri-state "resolve as strict parity does",
+                # and collapsing it to False here selects the manual interpolator on
+                # the big-JIT route, which is the production scoring path.
+                projection_relion_texture_interp=projection_relion_texture_interp,
                 projection_force_jax=bool(projection_force_jax),
                 projection_mask_current_image_disk=bool(projection_mask_current_image_disk),
                 relion_exact_bpref_operands=relion_exact_bpref_operands,
