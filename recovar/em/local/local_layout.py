@@ -1785,7 +1785,17 @@ def build_pass2_hypothesis_layout(
     )
 
 
-def bucket_local_hypothesis_layout(
+@dataclass(frozen=True)
+class LocalBucketPlan:
+    """Image order and padded capacities, without per-candidate array storage."""
+
+    image_indices: np.ndarray
+    bucket_image_count: int
+    bucket_rotation_count: int
+    actual_rotation_counts: np.ndarray
+
+
+def plan_local_hypothesis_buckets(
     layout: LocalHypothesisLayout,
     image_batch_size: int,
     rotation_block_size: int,
@@ -1796,16 +1806,8 @@ def bucket_local_hypothesis_layout(
     preserve_image_order: bool = False,
     exact_local_bucket_radix: int | None = None,
     consecutive_mixed_bucket_size: int | None = None,
-) -> list[LocalBucketSpec]:
-    """Bucket images by exact local-rotation count for static-shape execution.
-
-    Preserves ``layout``'s own array dtypes throughout rather than forcing
-    float32: ``layout`` was built by ``build_local_hypothesis_layout``/
-    ``build_local_adaptive_pass2_hypothesis_layout``, which already thread a
-    caller-controlled ``dtype`` (float64 under double-precision scoring).
-    Forcing float32 here -- on the hot bucket-padding path -- would silently
-    discard that upstream precision before every JIT scoring call.
-    """
+) -> list[LocalBucketPlan]:
+    """Plan static bucket shapes and image order without allocating candidate arrays."""
 
     image_batch_size = int(max(1, image_batch_size))
     max_hypotheses_per_microbatch = int(max(1, max_hypotheses_per_microbatch))
@@ -1856,10 +1858,9 @@ def bucket_local_hypothesis_layout(
         if preserve_image_order
         else np.lexsort((layout.rotation_counts, bucket_sizes)).astype(np.int32)
     )
-    bucket_specs: list[LocalBucketSpec] = []
 
     if processing_order.size == 0:
-        return bucket_specs
+        return []
 
     planned_groups: list[tuple[np.ndarray, int, int]] = []
     if consecutive_mixed_bucket_size is not None:
@@ -1908,74 +1909,121 @@ def bucket_local_hypothesis_layout(
                     )
                 )
 
-    for image_indices, bucket_size, max_images in planned_groups:
-        actual_counts = layout.rotation_counts[image_indices].astype(np.int32, copy=False)
-        batch_size = int(image_indices.shape[0])
-        padded_rotations = np.broadcast_to(
-            np.eye(3, dtype=rotations_dtype),
-            (batch_size, int(bucket_size), 3, 3),
-        ).copy()
-        padded_mstep_rotations = None if layout.mstep_rotations_flat is None else np.broadcast_to(
+    return [
+        LocalBucketPlan(indices, max_images, size, layout.rotation_counts[indices].astype(np.int32, copy=False))
+        for indices, size, max_images in planned_groups
+    ]
+
+
+def materialize_local_bucket(layout: LocalHypothesisLayout, plan: LocalBucketPlan) -> LocalBucketSpec:
+    """Construct one bucket with the layout dtypes and planned physical order."""
+
+    image_indices = plan.image_indices
+    bucket_size = plan.bucket_rotation_count
+    max_images = plan.bucket_image_count
+    rotations_dtype = np.asarray(layout.rotations_flat).dtype
+    mstep_rotations_flat = (
+        np.asarray(layout.rotations_flat, dtype=rotations_dtype)
+        if layout.mstep_rotations_flat is None
+        else np.asarray(layout.mstep_rotations_flat)
+    )
+    actual_counts = plan.actual_rotation_counts
+    batch_size = int(image_indices.shape[0])
+    padded_rotations = np.broadcast_to(
+        np.eye(3, dtype=rotations_dtype),
+        (batch_size, int(bucket_size), 3, 3),
+    ).copy()
+    padded_mstep_rotations = (
+        None
+        if layout.mstep_rotations_flat is None
+        else np.broadcast_to(
             np.eye(3, dtype=mstep_rotations_flat.dtype),
             (batch_size, int(bucket_size), 3, 3),
         ).copy()
-        padded_rotation_ids = np.full((batch_size, int(bucket_size)), -1, dtype=np.int64)
-        padded_log_prior = np.full((batch_size, int(bucket_size)), -1e30, dtype=np.asarray(layout.rotation_log_priors_flat).dtype)
-        padded_mask = np.zeros((batch_size, int(bucket_size)), dtype=bool)
-        padded_posterior_ids = (
-            None
-            if layout.rotation_posterior_ids_flat is None
-            else np.full((batch_size, int(bucket_size)), -1, dtype=np.int32)
+    )
+    padded_rotation_ids = np.full((batch_size, int(bucket_size)), -1, dtype=np.int64)
+    padded_log_prior = np.full(
+        (batch_size, int(bucket_size)), -1e30, dtype=np.asarray(layout.rotation_log_priors_flat).dtype
+    )
+    padded_mask = np.zeros((batch_size, int(bucket_size)), dtype=bool)
+    padded_posterior_ids = (
+        None
+        if layout.rotation_posterior_ids_flat is None
+        else np.full((batch_size, int(bucket_size)), -1, dtype=np.int32)
+    )
+    padded_sample_mask = (
+        None
+        if layout.sample_mask_flat is None
+        else np.zeros(
+            (batch_size, int(bucket_size), int(layout.translation_grid.shape[0])),
+            dtype=bool,
         )
-        padded_sample_mask = (
-            None
-            if layout.sample_mask_flat is None
-            else np.zeros(
-                (batch_size, int(bucket_size), int(layout.translation_grid.shape[0])),
-                dtype=bool,
-            )
-        )
+    )
 
-        padded_source_eulers = (
-            None if layout.source_eulers_flat is None else np.zeros((batch_size, int(bucket_size), 3), dtype=np.float64)
-        )
+    padded_source_eulers = (
+        None if layout.source_eulers_flat is None else np.zeros((batch_size, int(bucket_size), 3), dtype=np.float64)
+    )
 
-        for row, image_idx in enumerate(image_indices.tolist()):
-            start_off = int(layout.rotation_offsets[image_idx])
-            end_off = int(layout.rotation_offsets[image_idx + 1])
-            count = end_off - start_off
-            padded_rotations[row, :count] = layout.rotations_flat[start_off:end_off]
-            if padded_source_eulers is not None:
-                padded_source_eulers[row, :count] = layout.source_eulers_flat[start_off:end_off]
-            if padded_mstep_rotations is not None:
-                padded_mstep_rotations[row, :count] = mstep_rotations_flat[start_off:end_off]
-            padded_rotation_ids[row, :count] = layout.rotation_ids_flat[start_off:end_off]
-            padded_log_prior[row, :count] = layout.rotation_log_priors_flat[start_off:end_off]
-            padded_mask[row, :count] = True
-            if padded_posterior_ids is not None:
-                padded_posterior_ids[row, :count] = layout.rotation_posterior_ids_flat[start_off:end_off]
-            if padded_sample_mask is not None:
-                padded_sample_mask[row, :count, :] = layout.sample_mask_flat[start_off:end_off]
+    for row, image_idx in enumerate(image_indices.tolist()):
+        start_off = int(layout.rotation_offsets[image_idx])
+        end_off = int(layout.rotation_offsets[image_idx + 1])
+        count = end_off - start_off
+        padded_rotations[row, :count] = layout.rotations_flat[start_off:end_off]
+        if padded_source_eulers is not None:
+            padded_source_eulers[row, :count] = layout.source_eulers_flat[start_off:end_off]
+        if padded_mstep_rotations is not None:
+            padded_mstep_rotations[row, :count] = mstep_rotations_flat[start_off:end_off]
+        padded_rotation_ids[row, :count] = layout.rotation_ids_flat[start_off:end_off]
+        padded_log_prior[row, :count] = layout.rotation_log_priors_flat[start_off:end_off]
+        padded_mask[row, :count] = True
+        if padded_posterior_ids is not None:
+            padded_posterior_ids[row, :count] = layout.rotation_posterior_ids_flat[start_off:end_off]
+        if padded_sample_mask is not None:
+            padded_sample_mask[row, :count, :] = layout.sample_mask_flat[start_off:end_off]
 
-        bucket_specs.append(
-            LocalBucketSpec(
-                image_indices=image_indices,
-                bucket_image_count=int(max_images),
-                bucket_rotation_count=int(bucket_size),
-                actual_rotation_counts=actual_counts,
-                local_rotation_ids=padded_rotation_ids,
-                local_rotations=padded_rotations,
-                local_source_eulers=padded_source_eulers,
-                local_rotation_log_prior=padded_log_prior,
-                local_rotation_mask=padded_mask,
-                translation_log_prior=np.asarray(layout.translation_log_priors[image_indices]),
-                local_mstep_rotations=padded_mstep_rotations,
-                local_rotation_posterior_ids=padded_posterior_ids,
-                local_sample_mask=padded_sample_mask,
-            )
-        )
+    return LocalBucketSpec(
+        image_indices=image_indices,
+        bucket_image_count=int(max_images),
+        bucket_rotation_count=int(bucket_size),
+        actual_rotation_counts=actual_counts,
+        local_rotation_ids=padded_rotation_ids,
+        local_rotations=padded_rotations,
+        local_source_eulers=padded_source_eulers,
+        local_rotation_log_prior=padded_log_prior,
+        local_rotation_mask=padded_mask,
+        translation_log_prior=np.asarray(layout.translation_log_priors[image_indices]),
+        local_mstep_rotations=padded_mstep_rotations,
+        local_rotation_posterior_ids=padded_posterior_ids,
+        local_sample_mask=padded_sample_mask,
+    )
 
-    return bucket_specs
+
+def bucket_local_hypothesis_layout(
+    layout: LocalHypothesisLayout,
+    image_batch_size: int,
+    rotation_block_size: int,
+    *,
+    max_hypotheses_per_microbatch: int = 32768,
+    unify_bucket_sizes: bool | None = None,
+    large_bucket_quantum: int | None = None,
+    preserve_image_order: bool = False,
+    exact_local_bucket_radix: int | None = None,
+    consecutive_mixed_bucket_size: int | None = None,
+) -> list[LocalBucketSpec]:
+    """Materialize all local buckets; use plans for bounded-memory iteration."""
+
+    plans = plan_local_hypothesis_buckets(
+        layout,
+        image_batch_size,
+        rotation_block_size,
+        max_hypotheses_per_microbatch=max_hypotheses_per_microbatch,
+        unify_bucket_sizes=unify_bucket_sizes,
+        large_bucket_quantum=large_bucket_quantum,
+        preserve_image_order=preserve_image_order,
+        exact_local_bucket_radix=exact_local_bucket_radix,
+        consecutive_mixed_bucket_size=consecutive_mixed_bucket_size,
+    )
+    return [materialize_local_bucket(layout, plan) for plan in plans]
 
 
 def _local_search_engine_rotation_block_size(rotation_block_size: int) -> int:
