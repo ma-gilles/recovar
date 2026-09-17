@@ -20,11 +20,11 @@ from typing import Any
 import numpy as np
 
 try:
-    from scripts.fsc_metrics import centered_corr, normalized_fsc_auc, shell_fsc
+    from scripts.fsc_metrics import centered_corr, first_shell_below, normalized_fsc_auc, shell_fsc
 except ModuleNotFoundError as error:
     if error.name != "scripts":
         raise
-    from fsc_metrics import centered_corr, normalized_fsc_auc, shell_fsc
+    from fsc_metrics import centered_corr, first_shell_below, normalized_fsc_auc, shell_fsc
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -139,14 +139,6 @@ def read_relion_spectrum(path: Path) -> np.ndarray:
         if values.size != int(count) or stream.read(1):
             raise ValueError(f"RELION spectrum payload size does not match length {count}: {path}")
     return values
-
-
-def first_shell_below(values: np.ndarray, threshold: float) -> int | None:
-    values = np.asarray(values, dtype=np.float64)
-    for shell in range(1, values.size):
-        if np.isfinite(values[shell]) and float(values[shell]) < float(threshold):
-            return int(shell)
-    return None
 
 
 def map_metrics(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, Any]:
