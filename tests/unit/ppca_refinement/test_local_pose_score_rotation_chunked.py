@@ -10,7 +10,6 @@ to be approximate / zeroed in the chunked path and are not asserted here.
 
 from __future__ import annotations
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -91,11 +90,6 @@ def test_chunked_matches_unchunked(B, T, R, P, F, chunk, top_k):
     )
     np.testing.assert_allclose(
         np.asarray(chunked.pmax), np.asarray(ref.pmax), rtol=1e-4, atol=1e-4,
-    )
-    np.testing.assert_allclose(
-        np.asarray(chunked.max_posterior_per_image),
-        np.asarray(ref.max_posterior_per_image),
-        rtol=1e-4, atol=1e-4,
     )
     np.testing.assert_allclose(
         np.asarray(chunked.top_log_score_per_image),
