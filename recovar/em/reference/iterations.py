@@ -11,14 +11,14 @@ from recovar.em.reference.core import hard_assignment_idx_to_pose
 logger = logging.getLogger(__name__)
 
 
-def E_M_batches_2(
+def run_batched_em_iteration(
     experiment_dataset, state_obj, rotations, translations, disc_type, memory_to_use=128, volume_mask=None
 ):
 
     if rotations.shape[0] <= 0:
-        raise ValueError("E_M_batches_2 requires at least one rotation")
+        raise ValueError("run_batched_em_iteration requires at least one rotation")
     if translations.shape[0] <= 0:
-        raise ValueError("E_M_batches_2 requires at least one translation")
+        raise ValueError("run_batched_em_iteration requires at least one translation")
     total_hidden = rotations.shape[0] * translations.shape[0]
     logger.info(
         "starting precomp proj. Num rotations %s, num translations %s. Total = %s",
@@ -56,7 +56,7 @@ def E_M_batches_2(
     return state_obj, hard_assignment
 
 
-def split_E_M_v2(
+def run_halfset_em_iteration(
     experiment_datasets,
     state_objs,
     rotations,
@@ -67,7 +67,7 @@ def split_E_M_v2(
 
     hard_assignments = 2 * [None]
     for i, experiment_dataset in enumerate(experiment_datasets):
-        state_objs[i], hard_assignments[i] = E_M_batches_2(
+        state_objs[i], hard_assignments[i] = run_batched_em_iteration(
             experiment_dataset, state_objs[i], rotations, translations, disc_type
         )
         state_objs[i].finish_up_M_step(experiment_dataset, disc_type)
