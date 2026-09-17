@@ -16,7 +16,13 @@ from typing import Any
 import numpy as np
 
 from recovar.em import sampling
-from recovar.em.classification.k_class import _run_sparse_k_class_adaptive_pass2, run_local_k_class_em
+
+# _run_sparse_k_class_adaptive_pass2 is re-exported: test_refactor_invariants pins it as
+# the single shared K-class entry point, so it must stay importable from here.
+from recovar.em.classification.k_class import (  # noqa: F401
+    _run_sparse_k_class_adaptive_pass2,
+    run_local_k_class_em,
+)
 from recovar.em.diagnostics import bpref_diagnostics
 from recovar.em.diagnostics.coarse_gaussian_diagnostics import _initial_model_coarse_gemm_diagnostic_scopes
 from recovar.em.diagnostics.coarse_score_diagnostics import (
@@ -30,10 +36,8 @@ from recovar.em.helpers.resolution import compute_coarse_image_size
 from recovar.em.local.local_layout import build_pass2_hypothesis_layout
 from recovar.em.sampling import (
     get_oversampled_rotation_grid_from_samples,
-    get_oversampled_translation_grid,
     get_translation_grid,
     relion_angular_sampling_deg,
-    rotation_grid_n_in_planes,
     rotation_grid_size,
 )
 from recovar.em.scoring.significance import _compute_k_class_significance_batched
@@ -152,23 +156,21 @@ def _initial_model_relion_f32_fine_posterior_enabled(
     )
 
 
-def _compact_sparse_pass2_enabled(n_classes: int, pass2_engine: str = "auto") -> bool:
-    """Resolve the InitialModel pass-2 engine without changing K=1 defaults.
+def _resolve_pass2_engine(pass2_engine: str = "auto") -> str:
+    """Validate the InitialModel pass-2 engine selector.
 
-    ``auto`` keeps the source-faithful local K=1 reduction and uses the joint
-    class-by-pose compact engine for K>1. Explicit modes use this same option
-    for diagnostic comparisons.
+    One engine serves K=1 and K>1: the exact-local route scores every class in a single
+    pass over class-segmented rows, so ``auto`` and ``local_segmented`` select the same
+    path and ``local`` remains the explicit single-class spelling.
     """
 
     engine = str(pass2_engine).strip().lower()
-    if engine not in {"auto", "local", "compact"}:
+    if engine not in {"auto", "local", "local_segmented"}:
         raise ValueError(
-            "InitialModel pass2_engine must be one of 'auto', 'local', or "
-            f"'compact', got {pass2_engine!r}"
+            "InitialModel pass2_engine must be one of 'auto', 'local' or "
+            f"'local_segmented', got {pass2_engine!r}"
         )
-    if engine != "auto":
-        return engine == "compact"
-    return int(n_classes) > 1
+    return engine
 
 
 _SPARSE_PASS2_CONTROL_KEYS = {
@@ -344,30 +346,6 @@ def _initial_model_pass2_layout(layout):
     )
 
 
-def _collapse_compact_pass2_rotation_stats_to_directions(result, n_psi: int):
-    """Convert shared-EM coarse orientation statistics to VDAM direction bins."""
-
-    n_psi = int(n_psi)
-    if n_psi <= 0:
-        raise ValueError(f"n_psi must be positive, got {n_psi}")
-
-    def _collapse(stats):
-        values = np.asarray(stats.rotation_posterior_sums, dtype=np.float64)
-        if values.size % n_psi:
-            raise ValueError(
-                "compact pass-2 rotation posterior count is not divisible by "
-                f"n_psi={n_psi}: {values.size}"
-            )
-        direction_sums = values.reshape(-1, n_psi).sum(axis=1)
-        return stats._replace(rotation_posterior_sums=direction_sums)
-
-    per_class_stats = tuple(_collapse(stats) for stats in result.per_class_stats)
-    return result._replace(
-        per_class_stats=per_class_stats,
-        stats=_collapse(result.stats),
-    )
-
-
 def _class_pass2_rotation_log_prior(group_kwargs: dict[str, Any], class_index: int) -> np.ndarray | None:
     class_prior = group_kwargs.get("class_rotation_log_prior")
     if class_prior is None:
@@ -476,10 +454,7 @@ def _run_sparse_pass2_initial_model_estep(
     max_significants = int(options.get("max_significants", -1))
     random_perturbation = float(options.get("random_perturbation", 0.0))
     return_profile = bool(options.get("return_profile", False))
-    use_compact_sparse_pass2 = _compact_sparse_pass2_enabled(
-        state.K,
-        config.pass2_engine,
-    )
+    _resolve_pass2_engine(config.pass2_engine)
     if int(config.exact_local_bucket_radix) not in (2, 4):
         raise ValueError("InitialModel exact_local_bucket_radix must be 2 or 4")
     if int(config.exact_local_physical_order_chunk_size) not in (0,) and int(
@@ -503,7 +478,6 @@ def _run_sparse_pass2_initial_model_estep(
         raise ValueError("relion_projector_r_max is required with relion_projector_half_by_class")
     if config.stable_fourier_window_shapes and (
         state.K != 1
-        or use_compact_sparse_pass2
         or not config.relion_bpref_frame
         or not use_exact_relion_projector
         or not config.relion_wavg_sequential_cuda
@@ -520,7 +494,6 @@ def _run_sparse_pass2_initial_model_estep(
         and state.K == 1
         and config.relion_bpref_frame
         and use_exact_relion_projector
-        and not use_compact_sparse_pass2
         and joint_halfset_ids is not None
         and uses_relion_cuda_image_preprocessing(experiment_dataset)
     )
@@ -757,8 +730,6 @@ def _run_sparse_pass2_initial_model_estep(
         # RELION reuses the coarse pass-1 pdf_offset for all oversampled pass-2 children.
         pass2_translation_log_prior = pass1_translation_log_prior
 
-        if use_compact_sparse_pass2 and k1_zero_oversampling:
-            raise ValueError("InitialModel compact sparse pass 2 does not yet support oversampling_order=0")
 
         local_layout = None
         fine_source_eulers = None
@@ -766,48 +737,30 @@ def _run_sparse_pass2_initial_model_estep(
         fine_rotation_parent = None
         fine_translations = None
         fine_translation_parent = None
-        if use_compact_sparse_pass2:
-            fine_rotations, fine_rotation_parent, _fine_rotation_ids, fine_source_eulers = (
-                get_oversampled_rotation_grid_from_samples(
-                    np.arange(n_coarse_rotations, dtype=np.int64),
-                    healpix_order,
-                    oversampling_order=oversampling_order,
-                    random_perturbation=random_perturbation,
-                    return_rotation_indices=True,
-                    return_source_eulers=True,
-                    rotation_index_order="relion_hidden",
-                )
-            )
-            fine_translations, fine_translation_parent = get_oversampled_translation_grid(
+        local_layouts = []
+        for class_index in range(state.K):
+            class_layout = build_pass2_hypothesis_layout(
+                significant_sample_indices[class_index],
+                n_coarse_rotations,
+                int(coarse_translations.shape[0]),
+                healpix_order,
                 coarse_translations,
-                translation_step,
                 oversampling_order=oversampling_order,
+                translation_step=translation_step,
+                rotation_log_prior=_class_pass2_rotation_log_prior(group_kwargs, class_index),
+                translation_log_prior=pass2_translation_log_prior,
+                fine_translation_log_prior=None,
+                random_perturbation=random_perturbation,
+                rotation_index_order="relion_hidden",
+                allow_empty=True,
             )
-        else:
-            local_layouts = []
-            for class_index in range(state.K):
-                class_layout = build_pass2_hypothesis_layout(
-                    significant_sample_indices[class_index],
-                    n_coarse_rotations,
-                    int(coarse_translations.shape[0]),
-                    healpix_order,
-                    coarse_translations,
-                    oversampling_order=oversampling_order,
-                    translation_step=translation_step,
-                    rotation_log_prior=_class_pass2_rotation_log_prior(group_kwargs, class_index),
-                    translation_log_prior=pass2_translation_log_prior,
-                    fine_translation_log_prior=None,
-                    random_perturbation=random_perturbation,
-                    rotation_index_order="relion_hidden",
-                    allow_empty=True,
+            if config.relion_projector_frame and not use_exact_relion_projector:
+                class_layout = replace(
+                    class_layout,
+                    rotations_flat=_relion_projector_dense_rotations(class_layout.rotations_flat),
                 )
-                if config.relion_projector_frame and not use_exact_relion_projector:
-                    class_layout = replace(
-                        class_layout,
-                        rotations_flat=_relion_projector_dense_rotations(class_layout.rotations_flat),
-                    )
-                local_layouts.append(_initial_model_pass2_layout(class_layout))
-            local_layout = tuple(local_layouts)
+            local_layouts.append(_initial_model_pass2_layout(class_layout))
+        local_layout = tuple(local_layouts)
 
         t0 = time.time()
         from recovar.em.sparse_pass2 import sparse_pass2_posterior as sparse_diagnostics
@@ -818,7 +771,7 @@ def _run_sparse_pass2_initial_model_estep(
         )
         exact_local_runtime_policy_active = bool(
             exact_local_runtime_policy_active
-            or (not use_compact_sparse_pass2 and use_exact_local_relion_operands)
+            or use_exact_local_relion_operands
         )
         use_exact_fine_diff2 = bool(
             state.K == 1
@@ -852,199 +805,133 @@ def _run_sparse_pass2_initial_model_estep(
             half=int(halfset_idx) + 1,
         )
         try:
-            if use_compact_sparse_pass2:
-                compact_engine_kwargs = dict(group_kwargs)
-                compact_engine_kwargs.update(
-                    {
-                        "translation_log_prior": pass2_translation_log_prior,
-                        "mstep_relion_x_half": bool(config.relion_bpref_frame),
-                        "mstep_subtract_ctf_projection": bool(
-                            group_kwargs.get("reconstruction_subtract_projected_reference", False)
-                        ),
-                        "relion_fine_mstep_prune": oversampling_order > 0,
-                        "relion_fine_mstep_keep_all": oversampling_order == 0,
-                        "adaptive_fraction": adaptive_fraction,
-                        "relion_projector_half": relion_projector_half_by_class,
-                        "relion_projector_r_max": relion_projector_r_max,
-                        # InitialModel's small changing subsets benefit from a
-                        # stable compact-pair shape policy. Environment
-                        # overrides remain authoritative for diagnostics.
-                        "compact_pair_min_bucket_size_default": 1,
-                        "compact_pair_tail_coalesce_max_images_default": 1024,
-                        "compact_pair_tail_coalesce_max_inflation_default": 8.0,
-                        "compact_pair_tail_coalesce_min_bucket_size_default": 1,
-                    }
-                )
-                if oversampling_order == 0:
-                    if "relion_f32_sum_weight" in _full_stats:
-                        compact_engine_kwargs[
-                            "relion_f32_normalization_sum_weight"
-                        ] = np.asarray(
-                            _full_stats["relion_f32_sum_weight"],
-                            dtype=np.float32,
-                        )
-                    else:
-                        # CPU/reference scorers do not expose the native CUDA
-                        # denominator. Preserve their mathematically
-                        # equivalent log-evidence normalization fallback.
-                        compact_engine_kwargs["normalization_log_evidence"] = np.asarray(
-                            _full_stats["normalization_log_evidence"],
-                            dtype=np.float64,
-                        )
-                compact_engine_kwargs["fine_source_eulers_override"] = fine_source_eulers
-                result = _run_sparse_k_class_adaptive_pass2(
-                    group_dataset,
-                    means,
-                    mean_variance,
-                    config.noise_variance,
-                    coarse_rotations_for_pass1,
-                    coarse_translations,
-                    np.asarray(fine_rotations, dtype=np.float32),
-                    None,
-                    np.asarray(fine_rotation_parent, dtype=np.int64),
-                    np.asarray(fine_translations),
-                    np.asarray(fine_translation_parent, dtype=np.int64),
-                    significant_sample_indices,
-                    config.disc_type,
-                    class_log_priors=class_log_priors,
-                    accumulate_noise=True,
-                    return_best_pose_details=True,
-                    coarse_healpix_order=healpix_order,
+            result = run_local_k_class_em(
+                group_dataset,
+                means,
+                config.noise_variance,
+                local_layout,
+                config.disc_type,
+                segmented_class_rows=state.K > 1,
+                class_log_priors=class_log_priors,
+                class_log_evidence=(
+                    np.asarray(_full_stats["class_log_evidence_per_image"], dtype=np.float64)
+                    if k1_zero_oversampling
+                    else None
+                ),
+                normalization_max_posterior=(
+                    np.asarray(_full_stats["max_posterior_per_image"], dtype=np.float64)
+                    if k1_zero_oversampling
+                    else None
+                ),
+                image_batch_size=config.image_batch_size,
+                rotation_block_size=config.rotation_block_size,
+                current_size=group_kwargs.get("current_size"),
+                accumulate_noise=True,
+                projection_padding_factor=int(group_kwargs.get("projection_padding_factor", 1)),
+                reconstruction_padding_factor=int(group_kwargs.get("reconstruction_padding_factor", 1)),
+                score_with_masked_images=bool(group_kwargs.get("score_with_masked_images", False)),
+                half_spectrum_scoring=bool(group_kwargs.get("half_spectrum_scoring", False)),
+                use_float64_scoring=bool(group_kwargs.get("use_float64_scoring", False)),
+                use_float64_normalization=True,
+                use_float64_projections=bool(group_kwargs.get("use_float64_projections", False)),
+                do_gridding_correction=bool(group_kwargs.get("do_gridding_correction", False)),
+                square_window=bool(group_kwargs.get("square_window", False)),
+                recon_exact_radius=bool(group_kwargs.get("recon_exact_radius", True)),
+                image_corrections=group_kwargs.get("image_corrections"),
+                scale_corrections=group_kwargs.get("scale_corrections"),
+                image_pre_shifts=group_kwargs.get("image_pre_shifts"),
+                # InitialModel adds the unmodeled image-power spectrum once per particle.
+                unweighted_high_shell_image_power=True,
+                mstep_subtract_ctf_projection=bool(
+                    group_kwargs.get("reconstruction_subtract_projected_reference", False)
+                ),
+                mstep_relion_x_half=bool(config.relion_bpref_frame),
+                # InitialModel consumes these accumulators on the host. Host
+                # x=0 enforcement and layout expansion avoid compiling two
+                # new volume-shaped JAX programs at every resolution step.
+                host_accumulator_finalize=True,
+                relion_f32_fine_posterior=_initial_model_relion_f32_fine_posterior_enabled(
+                    n_classes=state.K,
+                    relion_bpref_frame=config.relion_bpref_frame,
                     oversampling_order=oversampling_order,
-                    random_perturbation=random_perturbation,
-                    engine_kwargs=compact_engine_kwargs,
-                )
-                result = _collapse_compact_pass2_rotation_stats_to_directions(
-                    result,
-                    rotation_grid_n_in_planes(healpix_order),
-                )
-            else:
-                result = run_local_k_class_em(
-                    group_dataset,
-                    means,
-                    config.noise_variance,
-                    local_layout,
-                    config.disc_type,
-                    class_log_priors=class_log_priors,
-                    class_log_evidence=(
-                        np.asarray(_full_stats["class_log_evidence_per_image"], dtype=np.float64)
-                        if k1_zero_oversampling
-                        else None
-                    ),
-                    normalization_max_posterior=(
-                        np.asarray(_full_stats["max_posterior_per_image"], dtype=np.float64)
-                        if k1_zero_oversampling
-                        else None
-                    ),
-                    image_batch_size=config.image_batch_size,
-                    rotation_block_size=config.rotation_block_size,
-                    current_size=group_kwargs.get("current_size"),
-                    accumulate_noise=True,
-                    projection_padding_factor=int(group_kwargs.get("projection_padding_factor", 1)),
-                    reconstruction_padding_factor=int(group_kwargs.get("reconstruction_padding_factor", 1)),
-                    score_with_masked_images=bool(group_kwargs.get("score_with_masked_images", False)),
-                    half_spectrum_scoring=bool(group_kwargs.get("half_spectrum_scoring", False)),
-                    use_float64_scoring=bool(group_kwargs.get("use_float64_scoring", False)),
-                    use_float64_normalization=True,
-                    use_float64_projections=bool(group_kwargs.get("use_float64_projections", False)),
-                    do_gridding_correction=bool(group_kwargs.get("do_gridding_correction", False)),
-                    square_window=bool(group_kwargs.get("square_window", False)),
-                    recon_exact_radius=bool(group_kwargs.get("recon_exact_radius", True)),
-                    image_corrections=group_kwargs.get("image_corrections"),
-                    scale_corrections=group_kwargs.get("scale_corrections"),
-                    image_pre_shifts=group_kwargs.get("image_pre_shifts"),
-                    # InitialModel adds the unmodeled image-power spectrum once per particle.
-                    unweighted_high_shell_image_power=True,
-                    mstep_subtract_ctf_projection=bool(
-                        group_kwargs.get("reconstruction_subtract_projected_reference", False)
-                    ),
-                    mstep_relion_x_half=bool(config.relion_bpref_frame),
-                    # InitialModel consumes these accumulators on the host. Host
-                    # x=0 enforcement and layout expansion avoid compiling two
-                    # new volume-shaped JAX programs at every resolution step.
-                    host_accumulator_finalize=True,
-                    relion_f32_fine_posterior=_initial_model_relion_f32_fine_posterior_enabled(
-                        n_classes=state.K,
-                        relion_bpref_frame=config.relion_bpref_frame,
-                        oversampling_order=oversampling_order,
-                        backend_enabled=sparse_diagnostics.relion_x_half_f32_fine_posterior_enabled(default=True),
-                    ),
-                    # RELION's symbolic pass 2 at os0 retains every sample selected
-                    # by pass 1. It does not apply another adaptive-fraction prune.
-                    reconstruct_significant_only=not k1_zero_oversampling,
-                    adaptive_fraction=adaptive_fraction,
-                    debug_iteration=int(group_kwargs.get("debug_iteration", -1)),
-                    # RELION's gradient InitialModel cap defines the coarse pass-1
-                    # support only. Fine pass-2 reconstruction uses adaptive_fraction
-                    # without reapplying maximum_significants.
-                    max_significants=-1,
-                    # A joint halfset stream must remain one physical bucket
-                    # sequence; changing bucket shapes would restart RELION's
-                    # pool-of-three phase at an artificial FFI boundary.
-                    unify_local_bucket_sizes=(
-                        int(config.exact_local_physical_order_chunk_size) == 0
-                        if reconstruction_group_ids is not None
-                        else _env_enabled(_UNIFY_LOCAL_BUCKET_SIZES_ENV, default=True)
-                    ),
-                    stats_use_reconstruction_probs=True,
-                    class_posterior_sums_from_noise=False,
-                    return_profile=return_profile,
-                    return_best_pose_details=True,
-                    translation_prior_centers=group_kwargs.get("translation_prior_centers"),
-                    relion_projector_half=relion_projector_half_by_class,
-                    relion_projector_r_max=relion_projector_r_max,
-                    projection_mask_current_image_disk=bool(
-                        group_kwargs.get("projection_mask_current_image_disk", True)
-                    ),
-                    relion_exact_bpref_operands=bool(use_exact_local_relion_operands),
-                    preserve_bpref_particle_order=bool(
-                        use_exact_local_relion_operands and config.relion_bpref_frame
-                    ),
-                    reconstruction_group_ids=reconstruction_group_ids,
-                    reconstruction_group_count=(
-                        2 if reconstruction_group_ids is not None else None
-                    ),
-                    relion_exact_fine_diff2=use_exact_fine_diff2,
-                    relion_exact_score_translation=use_exact_fine_diff2,
-                    _flat_local_rows_enabled=use_flat_local_rows,
-                    _stable_flat_row_capacity_enabled=(
-                        use_stable_flat_row_capacity
-                    ),
-                    _packed_local_projection_enabled=use_packed_local_projection,
-                    fused_pair_fine_score=use_fused_pair_fine_score,
-                    _defer_packed_vdam_enabled=bool(
-                        use_packed_local_projection
-                        and _env_enabled(_DEFER_PACKED_VDAM_ENV)
-                    ),
-                    _packed_final_noise_enabled=bool(
-                        use_exact_fine_diff2
-                        and _env_enabled(_FLAT_LOCAL_ROWS_ENV)
-                        and _env_enabled(_PACKED_LOCAL_PROJECTION_ENV)
-                        and _env_enabled(_DEFER_PACKED_VDAM_ENV)
-                        and _env_enabled(_PACKED_FINAL_NOISE_ENV)
-                    ),
-                    relion_wavg_sequential_cuda=(
-                        bool(config.relion_wavg_sequential_cuda)
-                        if use_exact_local_relion_operands
-                        else None
-                    ),
-                    exact_local_bucket_radix=(
-                        int(config.exact_local_bucket_radix)
-                        if use_exact_local_relion_operands
-                        else None
-                    ),
-                    stable_fourier_window_shapes=bool(
-                        config.stable_fourier_window_shapes
-                        and use_exact_local_relion_operands
-                        and use_exact_fine_diff2
-                    ),
-                    consecutive_mixed_bucket_size=(
-                        int(config.exact_local_physical_order_chunk_size)
-                        if reconstruction_group_ids is not None
-                        and int(config.exact_local_physical_order_chunk_size) > 0
-                        else None
-                    ),
-                )
+                    backend_enabled=sparse_diagnostics.relion_x_half_f32_fine_posterior_enabled(default=True),
+                ),
+                # RELION's symbolic pass 2 at os0 retains every sample selected
+                # by pass 1. It does not apply another adaptive-fraction prune.
+                reconstruct_significant_only=not k1_zero_oversampling,
+                adaptive_fraction=adaptive_fraction,
+                debug_iteration=int(group_kwargs.get("debug_iteration", -1)),
+                # RELION's gradient InitialModel cap defines the coarse pass-1
+                # support only. Fine pass-2 reconstruction uses adaptive_fraction
+                # without reapplying maximum_significants.
+                max_significants=-1,
+                # A joint halfset stream must remain one physical bucket
+                # sequence; changing bucket shapes would restart RELION's
+                # pool-of-three phase at an artificial FFI boundary.
+                unify_local_bucket_sizes=(
+                    int(config.exact_local_physical_order_chunk_size) == 0
+                    if reconstruction_group_ids is not None
+                    else _env_enabled(_UNIFY_LOCAL_BUCKET_SIZES_ENV, default=True)
+                ),
+                stats_use_reconstruction_probs=True,
+                class_posterior_sums_from_noise=False,
+                return_profile=return_profile,
+                return_best_pose_details=True,
+                translation_prior_centers=group_kwargs.get("translation_prior_centers"),
+                relion_projector_half=relion_projector_half_by_class,
+                relion_projector_r_max=relion_projector_r_max,
+                projection_mask_current_image_disk=bool(
+                    group_kwargs.get("projection_mask_current_image_disk", True)
+                ),
+                relion_exact_bpref_operands=bool(use_exact_local_relion_operands),
+                preserve_bpref_particle_order=bool(
+                    use_exact_local_relion_operands and config.relion_bpref_frame
+                ),
+                reconstruction_group_ids=reconstruction_group_ids,
+                reconstruction_group_count=(
+                    2 if reconstruction_group_ids is not None else None
+                ),
+                relion_exact_fine_diff2=use_exact_fine_diff2,
+                relion_exact_score_translation=use_exact_fine_diff2,
+                _flat_local_rows_enabled=use_flat_local_rows,
+                _stable_flat_row_capacity_enabled=(
+                    use_stable_flat_row_capacity
+                ),
+                _packed_local_projection_enabled=use_packed_local_projection,
+                fused_pair_fine_score=use_fused_pair_fine_score,
+                _defer_packed_vdam_enabled=bool(
+                    use_packed_local_projection
+                    and _env_enabled(_DEFER_PACKED_VDAM_ENV)
+                ),
+                _packed_final_noise_enabled=bool(
+                    use_exact_fine_diff2
+                    and _env_enabled(_FLAT_LOCAL_ROWS_ENV)
+                    and _env_enabled(_PACKED_LOCAL_PROJECTION_ENV)
+                    and _env_enabled(_DEFER_PACKED_VDAM_ENV)
+                    and _env_enabled(_PACKED_FINAL_NOISE_ENV)
+                ),
+                relion_wavg_sequential_cuda=(
+                    bool(config.relion_wavg_sequential_cuda)
+                    if use_exact_local_relion_operands
+                    else None
+                ),
+                exact_local_bucket_radix=(
+                    int(config.exact_local_bucket_radix)
+                    if use_exact_local_relion_operands
+                    else None
+                ),
+                stable_fourier_window_shapes=bool(
+                    config.stable_fourier_window_shapes
+                    and use_exact_local_relion_operands
+                    and use_exact_fine_diff2
+                ),
+                consecutive_mixed_bucket_size=(
+                    int(config.exact_local_physical_order_chunk_size)
+                    if reconstruction_group_ids is not None
+                    and int(config.exact_local_physical_order_chunk_size) > 0
+                    else None
+                ),
+            )
         finally:
             bpref_diagnostics.clear_bpref_contribution_dump_context()
         pass2_time_s += time.time() - t0
@@ -1104,7 +991,7 @@ def _run_sparse_pass2_initial_model_estep(
         meta["halfset_ids"] = (0, 1)
         meta["joint_halfset_particle_stream"] = True
     _add_accumulator_weight_meta(meta, accumulators, state.K)
-    meta["pass2_engine"] = "compact" if use_compact_sparse_pass2 else "local"
+    meta["pass2_engine"] = str(config.pass2_engine).strip().lower().replace("auto", "local")
     meta["requested_relion_wavg_sequential_cuda"] = bool(
         config.relion_wavg_sequential_cuda
     )
