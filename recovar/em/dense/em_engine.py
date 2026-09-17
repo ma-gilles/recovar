@@ -2165,7 +2165,6 @@ def run_em(
             n_blocks=int(n_blocks),
             n_windowed=int(n_windowed),
             use_window=bool(use_window),
-            reused_pass1_projections=True,
             **sparse_profile.profile_kwargs(),
         )
     else:
