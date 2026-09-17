@@ -5111,32 +5111,20 @@ def main():
     ):
         if result.get(key) is not None:
             save_dict[key] = np.asarray(result[key], dtype=dtype)
-    if "ave_Pmax_trajectory" in result:
-        save_dict["ave_Pmax_trajectory"] = np.asarray(
-            result["ave_Pmax_trajectory"],
-            dtype=np.float64,
-        )
-    for trajectory_key in (
-        "frac_changed_trajectory",
-        "acc_rot_trajectory",
-        "acc_trans_trajectory",
-        "smallest_change_angles_trajectory",
-        "smallest_change_offsets_trajectory",
-    ):
-        if trajectory_key in result:
-            save_dict[trajectory_key] = np.asarray(result[trajectory_key], dtype=np.float64)
-    for trajectory_key, trajectory_dtype in (
+    for key, dtype in (
+        ("ave_Pmax_trajectory", np.float64),
+        ("frac_changed_trajectory", np.float64),
+        ("acc_rot_trajectory", np.float64),
+        ("acc_trans_trajectory", np.float64),
+        ("smallest_change_angles_trajectory", np.float64),
+        ("smallest_change_offsets_trajectory", np.float64),
         ("acc_rot_per_class_trajectory", np.float64),
         ("acc_trans_per_class_trajectory", np.float64),
         ("expected_accuracy_class_counts_trajectory", np.int64),
+        ("expected_accuracy_status_trajectory", np.str_),
     ):
-        if trajectory_key in result:
-            save_dict[trajectory_key] = np.asarray(result[trajectory_key], dtype=trajectory_dtype)
-    if "expected_accuracy_status_trajectory" in result:
-        save_dict["expected_accuracy_status_trajectory"] = np.asarray(
-            result["expected_accuracy_status_trajectory"],
-            dtype=np.str_,
-        )
+        if key in result:
+            save_dict[key] = np.asarray(result[key], dtype=dtype)
     for indices_key in (
         "expected_accuracy_trial_local_indices",
         "expected_accuracy_trial_particle_ids",
@@ -5160,26 +5148,14 @@ def main():
             result["final_all_data_expected_accuracy_status"],
             dtype=np.str_,
         )
-    if "sigma_offset_trajectory" in result:
-        save_dict["sigma_offset_trajectory"] = np.asarray(
-            result["sigma_offset_trajectory"],
-            dtype=np.float64,
-        )
-    if "sigma_offset_per_half_trajectory" in result:
-        save_dict["sigma_offset_per_half_trajectory"] = np.asarray(
-            result["sigma_offset_per_half_trajectory"],
-            dtype=object,
-        )
-    if "sigma_offset_used_trajectory" in result:
-        save_dict["sigma_offset_used_trajectory"] = np.asarray(
-            result["sigma_offset_used_trajectory"],
-            dtype=np.float64,
-        )
-    if "sigma_offset_used_per_half_trajectory" in result:
-        save_dict["sigma_offset_used_per_half_trajectory"] = np.asarray(
-            result["sigma_offset_used_per_half_trajectory"],
-            dtype=object,
-        )
+    for key, dtype in (
+        ("sigma_offset_trajectory", np.float64),
+        ("sigma_offset_per_half_trajectory", object),
+        ("sigma_offset_used_trajectory", np.float64),
+        ("sigma_offset_used_per_half_trajectory", object),
+    ):
+        if key in result:
+            save_dict[key] = np.asarray(result[key], dtype=dtype)
     if result.get("direction_prior_trajectory_per_half") is not None:
         save_dict["direction_prior_trajectory_per_half"] = np.asarray(
             result["direction_prior_trajectory_per_half"], dtype=object
@@ -5224,18 +5200,14 @@ def main():
         )
 
     # Save K-class metadata when available (n_classes>1).
-    if result.get("class_weights") is not None:
-        save_dict["class_weights"] = np.asarray(result["class_weights"], dtype=np.float64)
-    if result.get("class_weight_trajectory") is not None:
-        save_dict["class_weight_trajectory"] = np.asarray(result["class_weight_trajectory"], dtype=np.float64)
-    if result.get("class_mstep_weight_trajectory") is not None:
-        save_dict["class_mstep_weight_trajectory"] = np.asarray(
-            result["class_mstep_weight_trajectory"], dtype=np.float64
-        )
-    if result.get("class_full_posterior_weight_trajectory") is not None:
-        save_dict["class_full_posterior_weight_trajectory"] = np.asarray(
-            result["class_full_posterior_weight_trajectory"], dtype=np.float64
-        )
+    for key in (
+        "class_weights",
+        "class_weight_trajectory",
+        "class_mstep_weight_trajectory",
+        "class_full_posterior_weight_trajectory",
+    ):
+        if result.get(key) is not None:
+            save_dict[key] = np.asarray(result[key], dtype=np.float64)
     if result.get("class_assignments") is not None and any(c is not None for c in result["class_assignments"]):
         for k, ca in enumerate(result["class_assignments"]):
             if ca is not None:
