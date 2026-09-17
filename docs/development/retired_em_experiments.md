@@ -30,3 +30,7 @@ The July K4 host-backend baseline and its two frozen-result assertions are
 preserved with their [original test context](https://github.com/ma-gilles/recovar-experiments/tree/cd74e768fbab01fa00728d967a29da021319709c/experiments/k4_backend_history_202607).
 The reusable trajectory comparator and its five behavior tests remain, as does
 the newer snapshot consumed by current scorecards.
+
+The fixed case-10 top-24 Pmax-error capture panel and its data-integrity tests
+are preserved in the [experiment archive](https://github.com/ma-gilles/recovar-experiments/tree/dec2c992dc986095e5ed61ba38b48496c8cc2ef7/docs/math/em_k1_case10_it2_capture_panel_v1.json).
+This retires a historical selection, not the reusable capture or identity checks.
