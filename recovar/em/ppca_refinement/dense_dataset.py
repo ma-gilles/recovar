@@ -81,7 +81,6 @@ class DensePPCADatasetBlockInputs(NamedTuple):
     q: int
     image_shape: tuple[int, int]
     volume_shape: tuple[int, int, int]
-    half_volume_size: int
     score_mask: jax.Array
     recon_mask: jax.Array
     score_indices: jax.Array | None
@@ -218,7 +217,6 @@ def prepare_dense_ppca_dataset_inputs(
         q=q,
         image_shape=image_shape,
         volume_shape=volume_shape,
-        half_volume_size=int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape))),
         score_mask=score_mask.astype(jnp.float32),
         recon_mask=recon_mask.astype(jnp.float32),
         score_indices=window_spec.score_indices,
