@@ -19,6 +19,11 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import NamedTuple, cast
 
+try:
+    from scripts.file_hash import sha256_file
+except ModuleNotFoundError:
+    from file_hash import sha256_file  # type: ignore[no-redef]
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SCORECARD = REPO_ROOT / "docs" / "math" / "em_relion_parity_scorecard_v1.json"
 DEFAULT_FIXTURE_MANIFEST = REPO_ROOT / "docs" / "math" / "em_relion_parity_fixture_manifest_v2.json"
@@ -65,14 +70,6 @@ class ProposalEvidence(NamedTuple):
     case_root: Path
     science_job: str
     audit_job: str
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def frozen_case_definitions_sha256(cases: list[dict]) -> str:
