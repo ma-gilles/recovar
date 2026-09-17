@@ -145,6 +145,8 @@ def _exact_local_bpref_operand_bundle(
     experiment_dataset,
     image_shape,
     preprocess_path: str,
+    exact_source_star_ctf: bool,
+    production_ctf=None,
     relion_preprocess_normalization=None,
     relion_cuda_preprocess_radius=None,
     relion_cuda_preprocess_cosine_width=None,
@@ -279,6 +281,23 @@ def _exact_local_bpref_operand_bundle(
         image_mask = np.asarray(applied_image_mask, dtype=np.float32)
         image_mask_mode = str(applied_image_mask_mode)
 
+    if exact_source_star_ctf:
+        ctf_mode = "relion_exact_source_star"
+        ctf_dose_per_tilt = float(static_kwargs["ctf_dose_per_tilt"])
+        ctf_angle_per_tilt = float(static_kwargs["ctf_angle_per_tilt"])
+    else:
+        # config.compute_ctf_half evaluates config.ctf; record that evaluator the same way
+        # the bucketed route does, so the capture describes an actual CTF construction.
+        if production_ctf is None:
+            raise RuntimeError(
+                "BPref operand bundle on a non-exact CTF path requires the production "
+                "config.ctf evaluator; the static 'not-captured' sentinel does not describe "
+                "how compute_ctf_half built the CTF"
+            )
+        ctf_mode = str(getattr(getattr(production_ctf, "mode", "legacy"), "name", "legacy"))
+        ctf_dose_per_tilt = float(getattr(production_ctf, "dose_per_tilt", 0.0))
+        ctf_angle_per_tilt = float(getattr(production_ctf, "angle_per_tilt", 0.0))
+
     # Absent corrections are not guessed: the engine multiplies by nothing, which is
     # exactly the unit operand the bucketed route also records for this case.
     batch_image_corrections = (
@@ -325,9 +344,15 @@ def _exact_local_bpref_operand_bundle(
         # The exact branch builds the CTF from the source STAR
         # (_relion_exact_ctf_half_from_source_star_host), not from these ctf_params, so a
         # replay must know which construction produced the scored CTF.
-        "ctf_mode": ("relion_exact_source_star"
-                     if preprocess_path in ("split_exact", "big_jit_relion_cuda", "big_jit_jax")
-                     else str(static_kwargs["ctf_mode"])),
+        # CTF construction is independent of the preprocessing route: local_big_jit.py:2224
+        # takes the source-STAR CTF only when relion_exact_bpref_operands is set, and falls
+        # back to config.compute_ctf_half otherwise. big_jit_jax covers both, so the route
+        # cannot be used to infer this. On the non-exact branch the actual evaluator is
+        # described rather than left at the static "not-captured" sentinel, which says
+        # nothing about how the CTF was built.
+        "ctf_mode": ctf_mode,
+        "ctf_dose_per_tilt": ctf_dose_per_tilt,
+        "ctf_angle_per_tilt": ctf_angle_per_tilt,
     }
 
 

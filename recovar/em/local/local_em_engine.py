@@ -2921,12 +2921,14 @@ def run_local_em_exact(
                             relion_preprocess_normalization=image_only_corrections_arg,
                             relion_cuda_preprocess_radius=relion_cuda_preprocess_radius,
                             relion_cuda_preprocess_cosine_width=relion_cuda_preprocess_cosine_width,
-                            applied_image_mask=(
-                                big_jit_image_mask_arg if relion_exact_bpref_operands else None
-                            ),
-                            applied_image_mask_mode=(
-                                big_jit_mask_mode if relion_exact_bpref_operands else None
-                            ),
+                            # The big-JIT kernel call always receives big_jit_image_mask_arg
+                            # (resolved unconditionally at :1529), so the capture must too;
+                            # gating it on the exact flag starved the masked non-exact path.
+                            applied_image_mask=big_jit_image_mask_arg,
+                            applied_image_mask_mode=big_jit_mask_mode,
+                            exact_source_star_ctf=relion_exact_bpref_operands,
+                            # The evaluator this route's config actually uses.
+                            production_ctf=big_jit_config.ctf,
                             raw_batch_data=batch_data,
                             ctf_params=ctf_params,
                             noise_variance_half=noise_variance_half,
@@ -5133,12 +5135,18 @@ def run_local_em_exact(
                         preprocess_path=(
                             "split_exact" if relion_exact_bpref_operands else "split_backend"
                         ),
+                        # local_preprocessing resolves its own mask only on the exact
+                        # branch; the ordinary branch masks inside the backend, which this
+                        # boundary cannot observe.
                         applied_image_mask=(
                             big_jit_image_mask_arg if relion_exact_bpref_operands else None
                         ),
                         applied_image_mask_mode=(
                             big_jit_mask_mode if relion_exact_bpref_operands else None
                         ),
+                        exact_source_star_ctf=relion_exact_bpref_operands,
+                        # The evaluator this route's config actually uses.
+                        production_ctf=config.ctf,
                         raw_batch_data=batch_data,
                         ctf_params=ctf_params,
                         noise_variance_half=noise_variance_half,

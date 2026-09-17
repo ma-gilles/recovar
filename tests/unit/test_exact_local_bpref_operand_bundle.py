@@ -81,10 +81,23 @@ ALL_SCALE = (np.arange(N_IMAGES, dtype=np.float32) + 0.875)
 MASK = np.linspace(0.0, 1.0, 16, dtype=np.float32).reshape(IMAGE_SHAPE)
 
 
+class _CtfEvaluator:
+    """Shaped like config.ctf: a named mode plus tilt-series fields."""
+
+    class mode:
+        name = "SPA"
+
+    dose_per_tilt = 0.0
+    angle_per_tilt = 0.0
+
+
+CTF_EVAL = _CtfEvaluator()
+
+
 def _bundle(**over):
     kw = dict(
         experiment_dataset=_FakeDataset(), image_shape=IMAGE_SHAPE,
-        preprocess_path="split_exact",
+        preprocess_path="split_exact", exact_source_star_ctf=True,
         applied_image_mask=MASK, applied_image_mask_mode="relion_background_fill",
         raw_batch_data=RAW,
         ctf_params=CTF, noise_variance_half=NOISE_HALF,
@@ -235,13 +248,9 @@ def test_masked_scoring_without_a_supplied_mask_fails_closed():
             _bundle(static_kwargs=static, applied_image_mask=None)
 
 
-def test_supplied_mask_is_recorded_verbatim_not_re_resolved():
+def test_supplied_mask_is_recorded_verbatim():
     with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
-        with mock.patch.object(
-            local_bpref_capture, "resolve_image_mask_for_half_preprocess",
-            side_effect=AssertionError("the bundle must not re-resolve the mask"),
-        ):
-            out = _bundle(static_kwargs=_static_kwargs(score_with_masked_images=True))
+        out = _bundle(static_kwargs=_static_kwargs(score_with_masked_images=True))
     assert np.array_equal(out["image_mask"], MASK)
     assert out["image_mask_mode"] == "relion_background_fill"
 
@@ -256,7 +265,7 @@ def test_exact_branch_on_relion_cuda_dataset_is_accepted():
         with mock.patch.object(
             local_bpref_capture, "uses_relion_cuda_image_preprocessing", return_value=True
         ):
-            out = _bundle(preprocess_path="split_exact")
+            out = _bundle(preprocess_path="split_exact", exact_source_star_ctf=True)
     assert out["high_precision_operand_bundle"] is True
     # The metadata describes what was APPLIED, not how the dataset is configured.
     assert out["relion_cuda_preprocess"] is False
@@ -269,7 +278,7 @@ def test_exact_branch_on_relion_cuda_dataset_is_accepted():
 def test_big_jit_cuda_path_requires_the_kernels_normalization_operand():
     with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
         with pytest.raises(RuntimeError, match="image_only_corrections"):
-            _bundle(preprocess_path="big_jit_relion_cuda",
+            _bundle(preprocess_path="big_jit_relion_cuda", exact_source_star_ctf=True,
                     relion_cuda_preprocess_radius=37.5,
                     relion_cuda_preprocess_cosine_width=3.25,
                     static_kwargs=_static_kwargs(score_with_masked_images=False))
@@ -278,7 +287,7 @@ def test_big_jit_cuda_path_requires_the_kernels_normalization_operand():
 def test_big_jit_cuda_path_records_the_real_normalization_when_unmasked():
     norm = np.linspace(0.5, 1.5, UNPADDED, dtype=np.float32)
     with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
-        out = _bundle(preprocess_path="big_jit_relion_cuda",
+        out = _bundle(preprocess_path="big_jit_relion_cuda", exact_source_star_ctf=True,
                       relion_preprocess_normalization=norm,
                       relion_cuda_preprocess_radius=37.5,
                       relion_cuda_preprocess_cosine_width=3.25,
@@ -289,10 +298,42 @@ def test_big_jit_cuda_path_records_the_real_normalization_when_unmasked():
     assert out["relion_cuda_preprocess_cosine_width"] == 3.25
 
 
+def test_k_gt_1_capture_path_records_a_non_exact_ctf_and_keeps_its_mask():
+    """At K>1 use_exact_local_relion_operands is False (sparse_pass2_estep.py:826-830
+    requires state.K == 1), so every K=4 capture runs big_jit_jax with
+    config.compute_ctf_half and the array mask resolved at local_em_engine.py:1529."""
+    with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
+        out = _bundle(preprocess_path="big_jit_jax", exact_source_star_ctf=False,
+                      production_ctf=CTF_EVAL,
+                      static_kwargs=_static_kwargs(score_with_masked_images=True))
+    assert out["high_precision_operand_bundle"] is True
+    assert out["relion_cuda_preprocess"] is False
+    # The evaluator's own mode, not the sentinel and not the exact-path label.
+    assert out["ctf_mode"] == "SPA"
+    assert out["ctf_dose_per_tilt"] == 0.0 and out["ctf_angle_per_tilt"] == 0.0
+    assert np.array_equal(out["image_mask"], MASK)
+    assert out["image_mask_mode"] == "relion_background_fill"
+
+
+def test_big_jit_jax_with_exact_operands_does_report_the_source_star_ctf():
+    with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
+        out = _bundle(preprocess_path="big_jit_jax", exact_source_star_ctf=True,
+                      static_kwargs=_static_kwargs(score_with_masked_images=True))
+    assert out["ctf_mode"] == "relion_exact_source_star"
+
+
+def test_non_exact_path_without_the_production_evaluator_is_refused():
+    """The static sentinel describes no CTF construction, so it may not stand in."""
+    with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
+        with pytest.raises(RuntimeError, match="production config.ctf evaluator"):
+            _bundle(preprocess_path="big_jit_jax", exact_source_star_ctf=False,
+                    production_ctf=None)
+
+
 def test_unknown_preprocess_path_is_refused():
     with mock.patch.dict(os.environ, {BUNDLE_ENV: "1"}, clear=False):
         with pytest.raises(RuntimeError, match="explicit preprocessing path"):
-            _bundle(preprocess_path="whatever")
+            _bundle(preprocess_path="whatever", exact_source_star_ctf=False)
 
 
 def test_ordinary_branch_on_relion_cuda_dataset_is_refused():
@@ -303,7 +344,8 @@ def test_ordinary_branch_on_relion_cuda_dataset_is_refused():
             local_bpref_capture, "uses_relion_cuda_image_preprocessing", return_value=True
         ):
             with pytest.raises(RuntimeError, match="ordinary local_preprocessing branch"):
-                _bundle(preprocess_path="split_backend")
+                _bundle(preprocess_path="split_backend", exact_source_star_ctf=False,
+                      production_ctf=CTF_EVAL)
 
 
 def test_ordinary_branch_without_relion_cuda_is_accepted():
@@ -311,10 +353,12 @@ def test_ordinary_branch_without_relion_cuda_is_accepted():
         with mock.patch.object(
             local_bpref_capture, "uses_relion_cuda_image_preprocessing", return_value=False
         ):
-            out = _bundle(preprocess_path="split_backend")
+            out = _bundle(preprocess_path="split_backend", exact_source_star_ctf=False,
+                          production_ctf=CTF_EVAL)
     assert out["relion_cuda_preprocess"] is False
-    # No exact-branch CTF construction was used, so no such claim is made.
-    assert out["ctf_mode"] == "not-captured"
+    # No exact-branch CTF construction was used, so the evaluator's own mode is recorded
+    # rather than the exact-path label or the sentinel that describes nothing.
+    assert out["ctf_mode"] == "SPA"
 
 
 def test_branch_is_never_inferred_from_the_dataset_backend():
@@ -324,9 +368,10 @@ def test_branch_is_never_inferred_from_the_dataset_backend():
         with mock.patch.object(
             local_bpref_capture, "uses_relion_cuda_image_preprocessing", return_value=True
         ):
-            accepted = _bundle(preprocess_path="split_exact")
+            accepted = _bundle(preprocess_path="split_exact", exact_source_star_ctf=True)
             with pytest.raises(RuntimeError):
-                _bundle(preprocess_path="split_backend")
+                _bundle(preprocess_path="split_backend", exact_source_star_ctf=False,
+                      production_ctf=CTF_EVAL)
     assert accepted["high_precision_operand_bundle"] is True
 
 
