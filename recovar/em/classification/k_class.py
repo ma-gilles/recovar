@@ -2135,6 +2135,9 @@ def _run_local_k_class_em_segmented(
     )
     return _assemble_result(
         class_log_evidence=class_log_evidence,
+        # One engine call scored every class jointly, so its joint max posterior is
+        # authoritative; see _assemble_result for why it is not rebuilt downstream.
+        joint_max_posterior_per_image=np.asarray(output.stats.max_posterior_per_image),
         new_means=None,
         Ft_y=[output.Ft_y[class_index] for class_index in range(n_classes)],
         Ft_ctf=[output.Ft_ctf[class_index] for class_index in range(n_classes)],

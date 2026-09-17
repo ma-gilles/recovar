@@ -255,6 +255,7 @@ def _assemble_result(
     class_posterior_sums_override=None,
     aggregate_noise_stats_override=None,
     uncast_log_evidence_per_image=None,
+    joint_max_posterior_per_image=None,
     firstiter_winner_take_all: bool = False,
     host_accumulators: bool = False,
     host_stats_publication: bool = False,
@@ -323,6 +324,17 @@ def _assemble_result(
             per_class_stats[0].max_posterior_per_image,
             dtype=np.float64,
         ).copy()
+    elif joint_max_posterior_per_image is not None:
+        # A single engine call that scored every class jointly already produced the
+        # authoritative joint posterior, in the engine's own score coordinates.  The
+        # generic branch below rebuilds it as ``best - logZ`` in absolute
+        # log-evidence coordinates, where the float32 grid is ~1000x coarser than in
+        # the engine frame, so the rebuild loses the arithmetic boundary exactly as it
+        # would for K=1.  Carry the engine value through instead.  This is supplied
+        # only by the class-segmented route, where one call owns the joint
+        # normalization; the per-class route has no such value because its classes are
+        # scored in independent calls.
+        joint_pmax = np.asarray(joint_max_posterior_per_image, dtype=np.float64).copy()
     else:
         finite_joint_best = np.isfinite(global_best_scores) & np.isfinite(global_log_evidence)
         joint_log_pmax = global_best_scores[finite_joint_best] - global_log_evidence[finite_joint_best]
