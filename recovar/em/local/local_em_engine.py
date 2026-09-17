@@ -166,12 +166,13 @@ from recovar.em.local.local_caches import (
     _validate_native_half_batch,
 )
 from recovar.em.local.local_layout import (
+    LocalBucketSequence,
     LocalHypothesisLayout,
     _exact_bucket_rotation_size,
     _local_mstep_rotations,
     _resolve_exact_local_bucket_radix,
     bucket_class_local_hypothesis_layouts,
-    bucket_local_hypothesis_layout,
+    plan_local_hypothesis_buckets,
 )
 from recovar.em.local.local_physical_grid import (
     _accumulate_relion_physical_particle_grid,
@@ -1377,11 +1378,17 @@ def run_local_em_exact(
         consecutive_mixed_bucket_size=consecutive_mixed_bucket_size,
     )
     if n_classes > 1:
+        # The plan-then-materialize path is single-layout, so the class-segmented
+        # route keeps its eager bucketer until that planner covers classes. Its
+        # memory benefit does not reach this route yet.
         bucket_specs = bucket_class_local_hypothesis_layouts(
             class_layouts, class_log_priors_np, **bucket_build_kwargs,
         )
+        bucket_metadata_source = bucket_specs
     else:
-        bucket_specs = bucket_local_hypothesis_layout(local_layout, **bucket_build_kwargs)
+        bucket_plans = plan_local_hypothesis_buckets(local_layout, **bucket_build_kwargs)
+        bucket_specs = LocalBucketSequence(local_layout, bucket_plans)
+        bucket_metadata_source = bucket_plans
     timing.bucket_build_s += time.time() - bucket_build_t0
     debug_target_only_targets: set[int] = set()
     if debug_score_dump_filter_matches:
@@ -1400,7 +1407,7 @@ def run_local_em_exact(
     )
     debug_target_only_original_bucket_count = len(bucket_specs)
     debug_target_only_original_image_count = int(
-        sum(int(bucket.image_indices.shape[0]) for bucket in bucket_specs)
+        sum(int(bucket.image_indices.shape[0]) for bucket in bucket_metadata_source)
     )
     if debug_score_dump_target_only:
         filter_t0 = time.time()
@@ -1433,9 +1440,10 @@ def run_local_em_exact(
             raise ValueError(
                 "fixed-capacity score-only execution requires every authoritative local call"
             )
+    bucket_metadata = bucket_specs.plans if isinstance(bucket_specs, LocalBucketSequence) else bucket_specs
     flat_local_row_capacities = (
         _plan_flat_local_row_capacities(
-            bucket_specs,
+            bucket_metadata,
             rotation_block_size=rotation_block_size,
             exact_local_bucket_radix=resolved_exact_local_bucket_radix,
             stable_rectangular_capacity=stable_flat_row_capacity_enabled,
@@ -1450,11 +1458,11 @@ def run_local_em_exact(
     )
     if bucket_specs:
         bucket_rotation_counts = np.asarray(
-            [int(bucket.bucket_rotation_count) for bucket in bucket_specs],
+            [int(bucket.bucket_rotation_count) for bucket in bucket_metadata],
             dtype=np.int64,
         )
         bucket_image_counts = np.asarray(
-            [int(bucket.image_indices.shape[0]) for bucket in bucket_specs],
+            [int(bucket.image_indices.shape[0]) for bucket in bucket_metadata],
             dtype=np.int64,
         )
         unique_bucket_counts, unique_bucket_freq = np.unique(bucket_rotation_counts, return_counts=True)
@@ -1488,7 +1496,7 @@ def run_local_em_exact(
             bool(mstep_relion_x_half),
         )
     local_progress = LocalBucketProgress(
-        bucket_specs, total_local_rotations=total_local_rotations, n_trans=n_trans,
+        bucket_metadata, total_local_rotations=total_local_rotations, n_trans=n_trans,
     )
 
     raw_batch_cache = None
@@ -1789,7 +1797,10 @@ def run_local_em_exact(
     fixed_capacity_whole_initial_carry = None
     fixed_capacity_whole_static_options = None
     fixed_capacity_whole_preparation_s = 0.0
-    for bucket_index, bucket in enumerate(bucket_specs):
+    for bucket_index in range(len(bucket_specs)):
+        bucket_build_t0 = time.time()
+        bucket = bucket_specs[bucket_index]
+        timing.bucket_build_s += time.time() - bucket_build_t0
         if (
             projection_cache_plan.groups
             and relion_projection_cache_group_cursor < len(projection_cache_plan.groups)

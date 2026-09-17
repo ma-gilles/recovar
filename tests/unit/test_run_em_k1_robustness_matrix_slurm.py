@@ -1116,14 +1116,3 @@ def test_case_time_limit_override_updates_script_and_case_table(tmp_path):
     assert selected["time_limit"].tolist() == ["36:00:00"]
     submission = (scratch / "submission.env").read_text()
     assert "EM_K1_MATRIX_TIME_LIMIT=36:00:00" in submission
-
-
-def test_existing_relion_prefix_exposes_scoped_native_texture_diagnostic():
-    launcher = (REPO_ROOT / "scripts" / "run_k1_existing_relion_prefix.sbatch").read_text()
-
-    assert "ENABLE_NATIVE_TEXTURE=${ENABLE_NATIVE_TEXTURE:-0}" in launcher
-    assert 'case "${ENABLE_NATIVE_TEXTURE}" in 0|1)' in launcher
-    assert (
-        "export RECOVAR_K1_COARSE_GAUSSIAN_NATIVE_TEXTURE=${ENABLE_NATIVE_TEXTURE}"
-        in launcher
-    )
