@@ -562,8 +562,6 @@ class _FixedCapacityActiveLocalRows:
 
     descriptor_fingerprint: str
     generation_token: _FixedCapacityLocalGenerationToken
-    excluded_image_tail_count: int
-    excluded_candidate_tail_count: int
     image_indices: np.ndarray
     row_offsets: np.ndarray
     raw_images: np.ndarray
@@ -866,8 +864,6 @@ def _materialize_fixed_capacity_active_local_rows(
     return _FixedCapacityActiveLocalRows(
         descriptor_fingerprint=fingerprint,
         generation_token=bundle.generation_token,
-        excluded_image_tail_count=bundle.plan.physical_image_capacity - valid_images,
-        excluded_candidate_tail_count=bundle.plan.physical_row_capacity - valid_rows,
         image_indices=bundle.plan.image_indices[:valid_images],
         row_offsets=bundle.plan.row_offsets[: valid_images + 1],
         raw_images=bundle.operands.raw_images[:valid_images],
