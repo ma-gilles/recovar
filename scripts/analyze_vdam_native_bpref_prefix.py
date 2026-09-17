@@ -4,12 +4,13 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 from pathlib import Path
 
 import numpy as np
+
+from scripts.file_hash import sha256_file
 
 from scripts.analyze_vdam_storewavg_boundary import (
     _match_rotations,
@@ -36,14 +37,6 @@ def _flat_u64(path: Path, dtype: np.dtype) -> np.ndarray:
     values = np.frombuffer(payload, dtype=dtype, offset=8).copy()
     _require(values.size == count, f"prefix-array size mismatch: {path}")
     return values
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(8 << 20), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def _quantiles(values: list[float]) -> dict[str, float]:
@@ -290,7 +283,7 @@ def analyze(
         "artifacts": {
             "native_directory": str(native_directory.resolve()),
             "recovar_captures": [
-                {"path": str(path.resolve()), "sha256": _sha256(path)} for path in recovar_capture_paths
+                {"path": str(path.resolve()), "sha256": sha256_file(path)} for path in recovar_capture_paths
             ],
         },
     }
