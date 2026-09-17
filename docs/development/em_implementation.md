@@ -346,7 +346,9 @@ the test-only call-0 wrappers are removed. Canonical byte/dtype checks, poisoned
 rejection and authoritative dataset fetch order remain mandatory. Bucket geometry
 and the dtype-preserving adjoint rotation accessor belong to
 [`local_layout.py`](../../recovar/em/local/local_layout.py).
-Both owners import independently of execution modules.
+Both owners import independently of execution modules. The
+[original executor proposal](https://github.com/ma-gilles/recovar-experiments/blob/6d3fbd7905047a6bb48fe483a6fca14995c89cae/docs/math/shared_fixed_capacity_local_executor_plan_20260831.md)
+is archived as historical design context.
 
 Scale-group ID validation and full-axis sizing have one host owner,
 [`helpers/scale_groups.py`](../../recovar/em/helpers/scale_groups.py).
