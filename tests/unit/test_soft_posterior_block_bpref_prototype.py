@@ -129,3 +129,34 @@ def test_bucket_builder_rungs_yield_power_of_two_image_counts():
     # same padded rotation rows per image (grouping unchanged; only chunk boundaries move)
     rows = lambda bs: sum(int(b["bucket_size"]) * len(b["image_indices"]) for b in bs)
     assert rows(plain) == rows(rungs)
+
+
+def test_default_chunking_returns_ndarray_views_and_parent_memberships():
+    import numpy as np
+    from recovar.em.scoring.sparse_bucket_arrays import _bucket_pass2_inputs, _split_run_into_chunks
+
+    run = np.arange(11, dtype=np.int64)
+    chunks = _split_run_into_chunks(run, 8, image_rungs=False)
+    assert [c.tolist() for c in chunks] == [list(range(8)), [8, 9, 10]]
+    assert all(isinstance(c, np.ndarray) and c.dtype == np.int64 for c in chunks)
+    assert chunks[0].base is run or np.shares_memory(chunks[0], run)  # view, not a copy
+    # default (non-rung) builder output equals the parent's cap/remainder chunking exactly
+    rng = np.random.default_rng(1)
+    n = 53
+    counts = rng.integers(600, 9000, size=n)
+    per_image_inputs = {"oversampled_rots": [np.zeros((int(c), 3, 3), dtype=np.float32) for c in counts]}
+    common = dict(n_fine_trans=84, rotation_block_size_for_quantization=4096, max_hypotheses_per_microbatch=7_653_710,
+                  max_images_per_microbatch=212, processing_order_override=np.arange(n), processing_order_group_by_bucket_size=True)
+    got = _bucket_pass2_inputs(per_image_inputs, **common)
+    # reference: parent behaviour re-implemented inline (cap, cap, ..., remainder within each size run)
+    from recovar.em.local.local_layout import _exact_bucket_rotation_size
+    sizes = np.asarray([_exact_bucket_rotation_size(int(c), 4096) for c in counts])
+    order = np.arange(n)
+    expected = []
+    for size in np.unique(sizes[order]):
+        idx = order[sizes[order] == size]
+        cap = max(1, min(212, 7_653_710 // (int(size) * 84)))
+        for start in range(0, idx.shape[0], cap):
+            expected.append((int(size), idx[start:start + cap].tolist()))
+    assert [(int(b["bucket_size"]), b["image_indices"].tolist()) for b in got] == expected
+    assert all(b["image_indices"].dtype == np.int64 for b in got)

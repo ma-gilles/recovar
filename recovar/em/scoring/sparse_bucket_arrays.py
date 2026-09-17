@@ -35,25 +35,24 @@ def _largest_power_of_two_at_most(value: int) -> int:
 def _split_run_into_chunks(run, max_per_chunk, *, image_rungs: bool):
     """Split one support-size run of image indices into bucket chunks.
 
-    Default: consecutive chunks of ``max_per_chunk`` images plus one remainder.
-    ``image_rungs``: chunks of power-of-two image counts not above
-    ``max_per_chunk``, largest first (e.g. 11 images, cap 8 -> 8, 2, 1), so the
-    set of (images, rotation size) bucket shapes is fixed across iterations.
+    Default: consecutive ``max_per_chunk``-image slices plus one remainder,
+    exactly as before (ndarray slices are returned as views; no copy).
+    ``image_rungs``: power-of-two image counts not above ``max_per_chunk``,
+    largest first (e.g. 11 images, cap 8 -> 8, 2, 1), so the set of
+    (images, rotation size) bucket shapes is fixed across iterations.
     """
 
-    run = list(run)
     cap = max(1, int(max_per_chunk))
+    n = len(run)
+    if not image_rungs:
+        return [run[start : start + cap] for start in range(0, n, cap)]
     chunks = []
     start = 0
-    while start < len(run):
-        remaining = len(run) - start
-        take = min(cap, remaining)
-        if image_rungs:
-            take = _largest_power_of_two_at_most(take)
+    while start < n:
+        take = _largest_power_of_two_at_most(min(cap, n - start))
         chunks.append(run[start : start + take])
         start += take
     return chunks
-
 
 
 def _bucket_pass2_inputs(
