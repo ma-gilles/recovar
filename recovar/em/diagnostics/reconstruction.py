@@ -87,6 +87,7 @@ def write_kclass_mstep(
         "no",
         "off",
     }
+    dump_dtype = None if _preserve_kclass_dump_dtype else np.complex64
     np.savez(
         pathlib.Path(output_dir) / f"recovar_kclass_mstep_it{iteration + 1:03d}_c{class_idx + 1:02d}.npz",
         iteration=np.int32(iteration + 1),
@@ -101,34 +102,18 @@ def write_kclass_mstep(
         previous_mean=np.asarray(previous_means[0][class_idx], dtype=np.complex64),
         previous_mean_half0=np.asarray(previous_means[0][class_idx], dtype=np.complex64),
         previous_mean_half1=np.asarray(previous_means[1][class_idx], dtype=np.complex64),
-        Ft_y_combined=(
-            np.asarray(Ft_y_combined[class_idx])
-            if _preserve_kclass_dump_dtype
-            else np.asarray(Ft_y_combined[class_idx], dtype=np.complex64)
-        ),
+        Ft_y_combined=np.asarray(Ft_y_combined[class_idx], dtype=dump_dtype),
         Ft_ctf_0=(
-            (
-                np.asarray(Ft_ctf_0[class_idx])
-                if _preserve_kclass_dump_dtype
-                else np.asarray(Ft_ctf_0[class_idx], dtype=np.complex64)
-            )
+            np.asarray(Ft_ctf_0[class_idx], dtype=dump_dtype)
             if Ft_ctf_0 is not None
             else np.empty(0, dtype=np.complex64)
         ),
         Ft_ctf_1=(
-            (
-                np.asarray(Ft_ctf_1[class_idx])
-                if _preserve_kclass_dump_dtype
-                else np.asarray(Ft_ctf_1[class_idx], dtype=np.complex64)
-            )
+            np.asarray(Ft_ctf_1[class_idx], dtype=dump_dtype)
             if Ft_ctf_1 is not None
             else np.empty(0, dtype=np.complex64)
         ),
-        Ft_ctf_combined=(
-            np.asarray(Ft_ctf_combined[class_idx])
-            if _preserve_kclass_dump_dtype
-            else np.asarray(Ft_ctf_combined[class_idx], dtype=np.complex64)
-        ),
+        Ft_ctf_combined=np.asarray(Ft_ctf_combined[class_idx], dtype=dump_dtype),
         dump_preserve_dtype=np.int32(int(_preserve_kclass_dump_dtype)),
         tau2_shells=np.asarray(tau2_shells_recovar_frame_k, dtype=np.float64),
         tau2_shells_relion=np.asarray(tau2_shells_relion_frame_k, dtype=np.float64),
