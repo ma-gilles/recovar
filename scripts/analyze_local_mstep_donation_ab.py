@@ -973,7 +973,7 @@ def analyze(
             raise RuntimeError(f"arm report GF46 input-manifest SHA drifted: {path}")
         if report.get("input_hashes") != input_manifest.get("hashes"):
             raise RuntimeError(f"arm report input hashes disagree with its manifest: {path}")
-        resolved_inputs = _validate_transitive_input_contract(
+        _validate_transitive_input_contract(
             report=report,
             input_manifest=input_manifest,
             launch_payload=launch_payload,

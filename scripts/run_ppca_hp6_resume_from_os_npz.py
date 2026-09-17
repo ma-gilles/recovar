@@ -53,7 +53,6 @@ from recovar.utils.json_utils import to_jsonable
 from scripts.run_ppca_dense_os_local_from_init_npz import (
     _build_top_p_layout_from_arrays,
     _layout_summary,
-    _pose_selection,
     _save_pose_npz,
     _top_p_subset_summary,
 )
@@ -83,11 +82,6 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--current-size", type=int, default=256)
     parser.add_argument("--top-p-poses", type=int, default=4)
     parser.add_argument("--top-p-report-widths", default="2,3,4")
-    parser.add_argument("--top-p-candidate-pool-factor", type=int, default=8)
-    parser.add_argument("--top-p-min-candidate-pool", type=int, default=32)
-    parser.add_argument("--top-p-max-log-score-gap", type=float, default=25.0)
-    parser.add_argument("--top-p-min-angle-deg", type=float, default=1.0)
-    parser.add_argument("--top-p-min-translation-px", type=float, default=0.0)
     parser.add_argument("--final-translation-source", choices=("coarse", "adaptive"), default="coarse")
     parser.add_argument("--translation-source", choices=("grid", "simulation-info-unique"), default="simulation-info-unique")
     parser.add_argument("--offset-range-px", type=float, default=0.0)
@@ -211,7 +205,6 @@ def main() -> None:
     final_translations = _translations_from_source(args, simulation_info, n_images)
 
     noise_variance = _load_noise_variance(args.simulation_info, dataset.image_shape)
-    pose_selection = _pose_selection(args)
     image_scale_corrections = None
     if args.image_scale_source == "simulation-info-contrast":
         if simulation_info is None or "per_image_contrast" not in simulation_info:

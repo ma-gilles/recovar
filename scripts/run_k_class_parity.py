@@ -589,7 +589,6 @@ def _relion_bpref_maps_from_sparse_support(
 
     from recovar.core.configs import ForwardModelConfig
     from recovar.em.helpers.batch_fetch import fetch_indexed_batch
-    from recovar.em.helpers.dtype_policy import DensePrecisionPolicy
     from recovar.em.helpers.fourier_window import make_fourier_window_spec
     from recovar.em.helpers.half_spectrum import make_scoring_half_image_weights
     from recovar.em.helpers.projection import compute_projections_block as _compute_projections_block
@@ -670,7 +669,6 @@ def _relion_bpref_maps_from_sparse_support(
         disc_type=disc_type,
         process_fn=experiment_dataset.process_images,
     )
-    precision_policy = DensePrecisionPolicy(use_float64_scoring=use_float64_scoring)
     window_spec = make_fourier_window_spec(
         image_shape,
         current_size,
