@@ -877,7 +877,7 @@ def test_local_em_caller_allocates_and_forwards_fresh_donated_accumulators_per_r
     source = inspect.getsource(local_em_engine.run_local_em_exact)
     allocation_y = source.index("Ft_y = jnp.zeros(")
     allocation_ctf = source.index("Ft_ctf = jnp.zeros(")
-    bucket_loop = source.index("for bucket_index, bucket in enumerate(bucket_specs):")
+    bucket_loop = source.index("for bucket_index in range(len(bucket_specs)):")
     argument_tuple = source.index("big_jit_arguments = (")
     invocation = source.index("_invoke_local_bucket_big_jit(")
 
