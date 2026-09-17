@@ -13,17 +13,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from scripts.file_hash import sha256_file as _sha256
 from scripts.analyze_em_k1_live_reference_counterfactual import (  # noqa: E402
     relion_reference_on_recovar_window,
     relion_values_on_recovar_window,
@@ -31,6 +25,7 @@ from scripts.analyze_em_k1_live_reference_counterfactual import (  # noqa: E402
 from scripts.compare_relion_recovar_estep_dump import (  # noqa: E402
     _nearest_rotation_rows_by_matrix,
 )
+from scripts.file_hash import sha256_file as _sha256
 
 SCHEMA = "em-k1-fine-top-pair-operands-v1"
 INERTNESS_SCHEMA = "em-recovar-intermediate-capture-inertness-v1"

@@ -5,16 +5,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from recovar import cuda_backproject  # noqa: E402
 from scripts.analyze_vdam_native_translation_boundary import _flat_real_dump  # noqa: E402

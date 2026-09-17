@@ -204,7 +204,7 @@ for case in cases:
 PY
 
 harness_started=$(date +%s.%N)
-printf '%q ' "${PIXI_PY}" scripts/run_fixed_capacity_local_score_gate.py \
+printf '%q ' "${PIXI_PY}" -m scripts.run_fixed_capacity_local_score_gate \
   --output-dir "${HARNESS_OUTPUT}" \
   --expected-repo-head "${EXPECTED_REPO_HEAD}" \
   --expected-gpu-uuid "${selected_gpu_uuid}" \
@@ -213,7 +213,7 @@ printf '%q ' "${PIXI_PY}" scripts/run_fixed_capacity_local_score_gate.py \
 printf '\n' >> "${PROVENANCE}/harness_command.txt"
 (
   cd "${REPO_ROOT}"
-  "${PIXI_PY}" scripts/run_fixed_capacity_local_score_gate.py \
+  "${PIXI_PY}" -m scripts.run_fixed_capacity_local_score_gate \
     --output-dir "${HARNESS_OUTPUT}" \
     --expected-repo-head "${EXPECTED_REPO_HEAD}" \
     --expected-gpu-uuid "${selected_gpu_uuid}" \

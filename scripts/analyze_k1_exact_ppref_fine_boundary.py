@@ -6,17 +6,12 @@ from __future__ import annotations
 import argparse
 import json
 import struct
-import sys
 from pathlib import Path
 from typing import Any
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from recovar.em.helpers.projection import compute_relion_projector_projections_block
 from recovar.em.sparse_pass2.sparse_pass2_scoring import (
@@ -59,7 +54,9 @@ def _load_ppref(path: Path) -> tuple[np.ndarray, dict[str, Any]]:
     shape = (int(header[7]), int(header[6]), int(header[5]))
     _require(int(np.prod(shape)) == count, "PPref dimensions differ from element count")
     ppref = (payload[0::2] + 1j * payload[1::2]).astype(np.complex64).reshape(shape)
-    signed = lambda value: int(np.asarray(value, dtype=np.uint64).view(np.int64).item())
+    def signed(value):
+        return int(np.asarray(value, dtype=np.uint64).view(np.int64).item())
+
     metadata = {
         "version": int(header[0]),
         "iteration": int(header[1]),

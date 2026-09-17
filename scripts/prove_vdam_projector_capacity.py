@@ -17,17 +17,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import sys
 from pathlib import Path
 from typing import Iterable
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 from recovar.em.helpers.fourier_window import stable_fourier_window_current_size  # noqa: E402
 from recovar.em.helpers.projection import project_relion_projector_half_spectrum  # noqa: E402
