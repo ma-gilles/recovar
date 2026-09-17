@@ -682,48 +682,12 @@ def _reconstruct_and_postprocess_means(
         # Diagnostic: dump pre-mask Wiener output when env var set.
         _premask_dump = os.environ.get("RECOVAR_PREMASK_DUMP_DIR")
         if _premask_dump:
-            import pathlib
+            from recovar.em.diagnostics.reconstruction import write_premask_mean
 
-            pathlib.Path(_premask_dump).mkdir(parents=True, exist_ok=True)
-            _preserve_premask_dtype = os.environ.get(
-                "RECOVAR_PREMASK_DUMP_PRESERVE_DTYPE", ""
-            ).strip().lower() not in {"", "0", "false", "no", "off"}
-            _premask_fourier = np.asarray(means[k])
-            if n_classes > 1:
-                _premask_real = np.stack(
-                    [
-                        np.asarray(
-                            fourier_transform_utils.get_idft3(
-                                means[k][class_idx].reshape(volume_shape)
-                            )
-                        ).real
-                        for class_idx in range(n_classes)
-                    ],
-                    axis=0,
-                )
-            else:
-                _premask_real = np.asarray(
-                    fourier_transform_utils.get_idft3(means[k].reshape(volume_shape))
-                ).real
-            np.savez(
-                pathlib.Path(_premask_dump) / f"recovar_premask_it{iteration + 1:03d}_half{k + 1}.npz",
-                iteration=np.int32(iteration + 1),
-                half=np.int32(k + 1),
-                current_size=np.int32(cs),
-                grid_size=np.int32(grid_size),
-                voxel_size=np.float32(cryo.voxel_size),
-                volume_shape=np.asarray(volume_shape, dtype=np.int32),
-                means_premask=(
-                    _premask_fourier
-                    if _preserve_premask_dtype
-                    else np.asarray(_premask_fourier, dtype=np.complex64)
-                ),
-                means_premask_real=(
-                    _premask_real
-                    if _preserve_premask_dtype
-                    else np.asarray(_premask_real, dtype=np.float32)
-                ),
-                dump_preserve_dtype=np.int32(int(_preserve_premask_dtype)),
+            write_premask_mean(
+                means[k], output_dir=_premask_dump, half_index=k, iteration=iteration,
+                current_size=cs, grid_size=grid_size, voxel_size=cryo.voxel_size,
+                volume_shape=volume_shape, n_classes=n_classes,
             )
 
         # RELION filters Iref inside maximizationOtherParameters, then calls
