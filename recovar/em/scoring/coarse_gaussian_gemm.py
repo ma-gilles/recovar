@@ -290,7 +290,6 @@ class CoarseGaussianGemmResources(NamedTuple):
     compact_projection_abs2_bytes: int
     predicted_peak_projection_bytes: int
     projected_transient_budget_bytes: int
-    pixel_index_device_to_host_materializations: int
 
 
 def _coarse_gaussian_gemm_projected_transient_budget_bytes(
@@ -375,7 +374,6 @@ def _coarse_gaussian_gemm_resources(
         compact_projection_abs2_bytes=int(abs2_bytes),
         predicted_peak_projection_bytes=int(predicted_peak),
         projected_transient_budget_bytes=int(budget_bytes),
-        pixel_index_device_to_host_materializations=0,
     )
     if resources.predicted_peak_projection_bytes > resources.projected_transient_budget_bytes:
         raise MemoryError(
