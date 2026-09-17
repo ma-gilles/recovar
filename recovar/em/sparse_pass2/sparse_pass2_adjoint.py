@@ -44,9 +44,6 @@ _SPARSE_KCLASS_GROUP_PAIR_BUCKETS_BY_ROTATION_SIGNATURE_ENV = (
 _RELION_X_HALF_BP_PARTICLE_POOL_SIZE_ENV = (
     "RECOVAR_K1_RELION_X_HALF_BP_PARTICLE_POOL_SIZE"
 )
-_RELION_X_HALF_BP_SOFT_PARTICLE_POOL_SIZE_ENV = (
-    "RECOVAR_K1_RELION_X_HALF_BP_SOFT_PARTICLE_POOL_SIZE"
-)
 
 
 _active_flat_gather_chunk_log_keys: set[tuple[str, int, int, int, int]] = set()
@@ -213,31 +210,7 @@ def _accumulate_relion_x_half_per_particle_launches(
     particle_pool_size = (
         _optional_positive_int_env(_RELION_X_HALF_BP_PARTICLE_POOL_SIZE_ENV) or 1
     )
-    soft_pool_size = (
-        _optional_positive_int_env(_RELION_X_HALF_BP_SOFT_PARTICLE_POOL_SIZE_ENV) or 1
-    )
-    soft_particle_pooling = bool(
-        soft_pool_size > 1 and not winner_take_all and particle_pool_size == 1
-    )
-    if soft_particle_pooling:
-        # Default-off measurement arm (2026-09-17): RELION dispatches each MPI
-        # pool of particles through one backprojection kernel whose atomics
-        # interleave across the pool; the accepted per-particle path launches
-        # one kernel per particle.  Pooling keeps every particle's rows, its
-        # rung padding and the pool order, and changes only the cross-particle
-        # atomic interleaving, so it is a numerical change to be qualified
-        # against the exact path's own run-to-run band before any default.
-        particle_pool_size = int(soft_pool_size)
-        logger.warning(
-            "RECOVAR soft-posterior x-half particle pooling enabled via %s=%d: "
-            "%d particles per adjoint launch (label=%s); numerics differ from "
-            "the one-launch-per-particle path at the atomic-interleaving level",
-            _RELION_X_HALF_BP_SOFT_PARTICLE_POOL_SIZE_ENV,
-            particle_pool_size,
-            particle_pool_size,
-            log_label_prefix,
-        )
-    elif particle_pool_size > 1:
+    if particle_pool_size > 1:
         if not (winner_take_all and strict_particle_order and use_fused_atomics):
             raise RuntimeError(
                 "RELION particle-pool diagnostic requires fresh K=1 winner-take-all, "
@@ -287,14 +260,6 @@ def _accumulate_relion_x_half_per_particle_launches(
             rotation_rows.append(particle_rotations)
         if not value_rows:
             continue
-        if soft_particle_pooling and len(value_rows) > 1:
-            total_rows = sum(int(rows.shape[0]) for rows in value_rows)
-            pool_rung = _per_particle_launch_rung(total_rows, total_rows * 2)
-            if pool_rung > total_rows:
-                spare = pool_rung - total_rows
-                value_rows.append(jnp.zeros((spare,) + tuple(value_rows[0].shape[1:]), value_rows[0].dtype))
-                ctf_rows.append(jnp.zeros((spare,) + tuple(ctf_rows[0].shape[1:]), ctf_rows[0].dtype))
-                rotation_rows.append(jnp.broadcast_to(rotation_rows[-1][-1:], (spare, 3, 3)))
         particle_values = jnp.concatenate(value_rows, axis=0)
         particle_ctf_values = jnp.concatenate(ctf_rows, axis=0)
         particle_rotations = jnp.concatenate(rotation_rows, axis=0)
