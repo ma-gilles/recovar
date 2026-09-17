@@ -662,12 +662,10 @@ def _global_pass1_relion_projector_texture_enabled() -> bool:
     Coarse significance defaults to RELION's texture projector.  Set the
     environment flag to false to force the manual/JAX diagnostic fallback.
     """
-    token = os.environ.get(_GLOBAL_PASS1_RELION_PROJECTOR_TEXTURE_ENV, "1").strip().lower()
-    if token in {"0", "false", "no", "off"}:
-        return False
-    if token in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(f"Unsupported {_GLOBAL_PASS1_RELION_PROJECTOR_TEXTURE_ENV}={token!r}")
+    return parse_env_strict_flag(
+        _GLOBAL_PASS1_RELION_PROJECTOR_TEXTURE_ENV,
+        default=True,
+    )
 
 
 def _firstiter_cc_tree_top2_rescore_max_margin() -> float | None:
