@@ -9,8 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-
-MODULE_PATH = Path(__file__).resolve().parents[2] / "recovar" / "utils" / "local_parity_analysis.py"
+MODULE_PATH = Path(__file__).resolve().parents[2] / "recovar" / "em" / "diagnostics" / "local_parity_analysis.py"
 SPEC = importlib.util.spec_from_file_location("local_parity_analysis", MODULE_PATH)
 parity = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
