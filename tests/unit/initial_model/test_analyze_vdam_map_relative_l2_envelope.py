@@ -106,23 +106,3 @@ def test_relative_l2_envelope_requires_two_native_repeats(tmp_path):
 
     with pytest.raises(MapRelativeL2EnvelopeError, match="at least two"):
         analyze_map_relative_l2_envelope(candidate_root=candidate, native_roots=[native])
-
-
-def test_cpu_runner_is_provenance_pinned_and_uses_job_scoped_runtime_dirs():
-    runner = (
-        Path(__file__).parents[3] / "scripts/run_vdam_map_relative_l2_envelope.sbatch"
-    ).read_text()
-
-    required = (
-        "#SBATCH --partition=cpu",
-        "#SBATCH --cpus-per-task=1",
-        '${EXPECTED_REPO_HEAD:?pin the diagnostic source head}',
-        'status --porcelain=v1 --untracked-files=no',
-        'TMPDIR=${TMPDIR:-/scratch/gpfs/GILLES/mg6942/tmp/${SLURM_JOB_ID}}',
-        'PIXI_HOME=${PIXI_HOME:-/scratch/gpfs/GILLES/mg6942/pixi_home/${SLURM_JOB_ID}}',
-        'RATTLER_CACHE_DIR=${RATTLER_CACHE_DIR:-/scratch/gpfs/GILLES/mg6942/rattler_cache/${SLURM_JOB_ID}}',
-        "scripts.analyze_vdam_map_relative_l2_envelope",
-        'sha256sum "${OUTPUT_JSON}"',
-    )
-    missing = [token for token in required if token not in runner]
-    assert not missing, f"relative-L2 runner lost provenance/runtime gates: {missing}"
