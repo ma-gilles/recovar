@@ -74,25 +74,6 @@ def _radial_profile_from_noise_variance(noise_variance, image_shape):
     return radial / np.maximum(counts, 1.0)
 
 
-def read_relion_perturbation_from_sampling_star(sampling_star_path):
-    """Read _rlnSamplingPerturbInstance and _rlnSamplingPerturbFactor from a RELION sampling.star.
-
-    Used for exact parity replay: feed recovar the same perturbation RELION used at iter N.
-
-    Returns
-    -------
-    (random_perturbation, perturbation_factor) : tuple of float
-    """
-    import re
-
-    text = open(sampling_star_path).read()
-    m_inst = re.search(r"_rlnSamplingPerturbInstance\s+(\S+)", text)
-    m_fac = re.search(r"_rlnSamplingPerturbFactor\s+(\S+)", text)
-    if not m_inst or not m_fac:
-        raise ValueError(f"Missing perturb fields in {sampling_star_path}")
-    return float(m_inst.group(1)), float(m_fac.group(1))
-
-
 def read_relion_sampling_metadata(sampling_star_path):
     """Read the full set of RELION sampling metadata needed for replay:
     ``(random_perturbation, perturbation_factor, healpix_order, offset_range, offset_step)``.
