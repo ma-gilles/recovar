@@ -40,6 +40,15 @@ def centered_corr(lhs: np.ndarray, rhs: np.ndarray) -> float:
     return float(np.dot(a, b) / denom)
 
 
+def first_shell_below(values: np.ndarray, threshold: float) -> int | None:
+    """Return the first finite non-DC shell below a threshold."""
+    values = np.asarray(values, dtype=np.float64)
+    for shell in range(1, values.size):
+        if np.isfinite(values[shell]) and float(values[shell]) < float(threshold):
+            return int(shell)
+    return None
+
+
 def shell_fsc(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:
     """Return canonical RECOVAR FSC shells, excluding Nyquist edges."""
     a = np.asarray(lhs, dtype=np.float64)
