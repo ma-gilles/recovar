@@ -12,6 +12,7 @@ import numpy as np
 from recovar import core
 from recovar.cuda_backproject import cuda_available as _cuda_projection_available
 from recovar.cuda_backproject import project_indexed
+from recovar.em.helpers.env_flags import parse_env_strict_flag
 from recovar.em.helpers.half_spectrum import bin_shell_values_jax
 
 DEFAULT_PROJECTION_MAX_R = object()
@@ -239,11 +240,8 @@ def _relion_projector_texture_enabled(
     enabled: bool | None = None,
 ) -> bool:
     if enabled is None:
-        token = os.environ.get(_RELION_PROJECTOR_TEXTURE_ENV, "1").strip().lower()
-        if token in {"0", "false", "no", "off"}:
+        if not parse_env_strict_flag(_RELION_PROJECTOR_TEXTURE_ENV, default=True):
             return False
-        if token not in {"1", "true", "yes", "on"}:
-            raise ValueError(f"Unsupported {_RELION_PROJECTOR_TEXTURE_ENV}={token!r}")
     elif not bool(enabled):
         return False
     shape = tuple(int(value) for value in volume_relion_half.shape)
