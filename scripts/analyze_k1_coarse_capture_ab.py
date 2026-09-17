@@ -9,6 +9,8 @@ from pathlib import Path
 
 import numpy as np
 
+from scripts.file_hash import sha256_file as _sha256
+
 ORDERED_FIELDS = (
     "rotations",
     "translations",
@@ -73,13 +75,6 @@ def _available_ordered_fields(
         field for field in ORDERED_FIELDS if field in control_set and field in candidate_set
     ]
     return available, missing_control, missing_candidate
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _bit_equal(lhs: np.ndarray, rhs: np.ndarray) -> np.ndarray:

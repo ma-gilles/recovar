@@ -18,27 +18,13 @@ from typing import Any
 import numpy as np
 import starfile
 
-if __package__:
-    from .validate_relion_bpref_factor_capture import fnv1a64, load_factor_capture
-    from .validate_relion_fine_operand_capture import (
-        _cuda_fine_half_squared_difference,
-        _fma_float32,
-    )
-    from .validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
-else:
-    from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
-        fnv1a64,
-        load_factor_capture,
-    )
-    from validate_relion_fine_score_capture import (  # type: ignore[no-redef]
-        ACTIVE,
-        load_fine_score_capture,
-    )
-    from validate_relion_fine_operand_capture import (  # type: ignore[no-redef]
-        _cuda_fine_half_squared_difference,
-        _fma_float32,
-    )
-
+from scripts.file_hash import sha256_file as _sha256
+from scripts.validate_relion_bpref_factor_capture import fnv1a64, load_factor_capture
+from scripts.validate_relion_fine_operand_capture import (
+    _cuda_fine_half_squared_difference,
+    _fma_float32,
+)
+from scripts.validate_relion_fine_score_capture import ACTIVE, load_fine_score_capture
 
 SELECTION_SCHEMAS = {
     "recovar.em.k1_fine_score_panel.v1",
@@ -64,13 +50,6 @@ EXACT_BOUNDARY_ORDER = (
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, Any]:

@@ -20,6 +20,8 @@ import numpy as np
 import pandas as pd
 import starfile
 
+from scripts.file_hash import sha256_file as _sha256
+
 SCHEMA = "em_relion_iteration1_particle_state_inertness_v3"
 IDENTITY_FIELD = "rlnImageName"
 PARTICLE_FIELDS = (
@@ -34,13 +36,6 @@ PARTICLE_FIELDS = (
 )
 MAP_FSC_AUC_THRESHOLD = 0.999999
 MAX_MISMATCH_EXAMPLES = 16
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _json_scalar(value: Any) -> int | float | str | bool | None:

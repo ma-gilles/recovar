@@ -16,14 +16,8 @@ from typing import Any
 
 import numpy as np
 
-if __package__:
-    from .validate_relion_bpref_factor_capture import fnv1a64, load_factor_capture
-else:
-    from validate_relion_bpref_factor_capture import (  # type: ignore[no-redef]
-        fnv1a64,
-        load_factor_capture,
-    )
-
+from scripts.file_hash import sha256_file as _sha256
+from scripts.validate_relion_bpref_factor_capture import fnv1a64, load_factor_capture
 
 SELECTION_SCHEMA = "recovar.em.k1_bpref_factor_panel.v1"
 INERTNESS_SCHEMA = "recovar.em.k1_bpref_factor_capture_inertness.v1"
@@ -38,13 +32,6 @@ RELATIVE_L2_BOUND = 1.0e-7
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, Any]:

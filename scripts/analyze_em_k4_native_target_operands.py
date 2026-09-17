@@ -24,6 +24,7 @@ from scripts.analyze_em_k4_authoritative_native_scores import (
     _rotation_permutation,
     _validate_completion,
 )
+from scripts.file_hash import sha256_file as _sha256
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture
 from scripts.validate_relion_fine_operand_capture import (
     load_fine_operand_capture,
@@ -44,13 +45,6 @@ EXPECTED_NATIVE_TARGET_ROTATION = 1_210
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def classify_native_target_operands(

@@ -28,10 +28,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
 
-if not __package__:
-    from relion_reference import euler_matrices
-else:
-    from scripts.relion_reference import euler_matrices
+from scripts.relion_reference import euler_matrices
 
 SCHEMA = "em_particle_state_distribution_audit_v1"
 ARRAY_SCHEMA = "em_particle_state_distribution_arrays_v1"

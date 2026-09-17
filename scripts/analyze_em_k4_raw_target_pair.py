@@ -24,6 +24,7 @@ from scripts.analyze_em_k4_raw_diff2_parity import (
     PASS_SCORE_CLASSIFICATION,
 )
 from scripts.analyze_em_k4_raw_diff2_parity import SCHEMA as RAW_SCHEMA
+from scripts.file_hash import sha256_file as _sha256
 
 SCHEMA = "relion-k4-it2-raw-target-pair-v1"
 OPERAND_SCHEMA = "relion-k4-it2-native-target-operand-audit-v1"
@@ -36,13 +37,6 @@ SHARED_INPUTS = ("factor", "fine_score", "recovar_pass2", "native_completion")
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def classify_raw_target_pair(

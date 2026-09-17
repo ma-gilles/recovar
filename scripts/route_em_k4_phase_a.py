@@ -26,6 +26,7 @@ from scripts.analyze_em_k4_raw_diff2_parity import (
 from scripts.analyze_em_k4_raw_diff2_parity import (
     SCHEMA as PHASE_A_SCHEMA,
 )
+from scripts.file_hash import sha256_file as _sha256
 
 SCHEMA = "recovar-k4-phase-a-causal-route-v1"
 WRAPPED_PHASE_A_SCHEMA = "recovar-k4-postdet-samea100-phase-a-analysis-v1"
@@ -45,13 +46,6 @@ JOINT_POSTERIOR_ROUTE = "multiclass_joint_posterior_capture"
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _unwrap_phase_a(

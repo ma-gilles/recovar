@@ -14,19 +14,13 @@ from scripts.analyze_em_k1_bpref_membership_cohort import (
     MASS_RELATIVE_L2_TOLERANCE,
 )
 from scripts.analyze_k1_bpref_contributor_membership import match_rotations
+from scripts.file_hash import sha256_file as _sha256
 from scripts.validate_relion_bpref_rotation_mass import validate_directory
 
 
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _quantiles(values: list[float]) -> dict[str, float]:

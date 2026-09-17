@@ -11,14 +11,9 @@ from typing import Any
 import numpy as np
 import starfile
 
+from scripts.file_hash import sha256_file as _sha256
+
 REPORT_SCHEMA = "recovar.em.k1_direction_prior_serialization.v1"
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _metric(reference: np.ndarray, candidate: np.ndarray) -> dict[str, Any]:

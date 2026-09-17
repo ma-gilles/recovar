@@ -9,19 +9,13 @@ from pathlib import Path
 
 import numpy as np
 
+from scripts.file_hash import sha256_file as _sha256
 from scripts.validate_relion_bpref_factor_capture import load_factor_capture, validate_directory
 
 
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _metric(lhs: np.ndarray, rhs: np.ndarray) -> dict[str, object]:

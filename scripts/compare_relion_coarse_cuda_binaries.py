@@ -11,10 +11,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
+from scripts.file_hash import sha256_file as _sha256
 
 _CASES = (
     (8, 1, 128, 21),

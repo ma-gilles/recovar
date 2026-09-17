@@ -11,6 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
+from scripts.file_hash import sha256_file as _sha256
+
 SCHEMA = "recovar.em_k1_pass2_ab.v1"
 FILENAME = re.compile(r"pass2_orig(?P<particle>[0-9]{6})_cs(?P<size>[0-9]{3})[.]npz")
 GROUP_FIELDS = {
@@ -49,13 +51,6 @@ GROUP_FIELDS = {
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise ValueError(message)
-
-
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.file_hash import sha256_file as _sha256
 
 
 def _discover(directory: Path, expected_count: int, current_size: int) -> dict[int, Path]:

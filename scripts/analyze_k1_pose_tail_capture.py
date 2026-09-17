@@ -10,13 +10,8 @@ from pathlib import Path
 import numpy as np
 import starfile
 
-# Support direct execution, sibling imports, and the scripts package.
-if not __package__:
-    from relion_reference import euler_matrices
-    from file_hash import sha256_file as _sha256
-else:
-    from scripts.relion_reference import euler_matrices
-    from scripts.file_hash import sha256_file as _sha256
+from scripts.file_hash import sha256_file as _sha256
+from scripts.relion_reference import euler_matrices
 
 
 def _particle_table(path: Path):
@@ -36,7 +31,10 @@ def _relion_matrix_to_euler(matrix: np.ndarray) -> np.ndarray:
         alpha = np.arctan2(selected[:, 2, 1], selected[:, 2, 0])
         sign_sb = np.empty_like(gamma)
         small = np.abs(np.sin(gamma)) < np.finfo(np.float32).eps
-        sign = lambda value: np.where(value >= 0.0, 1.0, -1.0)
+
+        def sign(value):
+            return np.where(value >= 0.0, 1.0, -1.0)
+
         sign_sb[small] = sign(-selected[small, 0, 2] / np.cos(gamma[small]))
         sign_sb[~small] = np.where(
             np.sin(gamma[~small]) > 0.0,
